@@ -158,8 +158,6 @@
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::Join;
-
 fn main() {
 
     // define a new timely dataflow computation.
@@ -189,8 +187,6 @@ fn main() {
 <p>To arrange a collection, we just call one of several <code>arrange</code> methods. In this case, we will arrange "by key", because we want to take our <code>(x, y)</code> pairs and arrange them by x. Once we have done this, there are just a few additional cosmetic changes to make to our program to use this arranged data in each join:</p>
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
-
-use differential_dataflow::operators::JoinCore;
 
 fn main() {
 

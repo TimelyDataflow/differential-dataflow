@@ -159,8 +159,6 @@
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::JoinCore;
-
 fn main() {
 
     // define a new timely dataflow computation.
@@ -193,8 +191,6 @@ fn main() {
 <p>We can show off arrangement by self in our "friends of friends" example by adding some requirements to our <code>(x, y, z)</code> output triples. Let's imagine that in addition, we want each of the other four "knows" relationships, in addition to the two we start with ("x knows y" and "y knows z").</p>
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
-
-use differential_dataflow::operators::JoinCore;
 
 fn main() {
 
@@ -239,8 +235,6 @@ fn main() {
 <p>You may need to return from an arrangement to a collection (a stream of updates). An arrangement's <code>as_collection()</code> method allows this.</p>
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
-
-use differential_dataflow::operators::{Join, JoinCore};
 
 fn main() {
 

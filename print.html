@@ -196,7 +196,6 @@ differential-dataflow = "=0.19.1"
 extern crate differential_dataflow;
 
 use differential_dataflow::input::InputSession;
-use differential_dataflow::operators::Join;
 
 fn main() {
 
@@ -474,7 +473,6 @@ Echidnatron%
 </span><span class="boring">use timely::dataflow::Scope;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">use differential_dataflow::operators::Join;
 </span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
 </span><span class="boring">where G::Timestamp: Lattice
 </span><span class="boring">{
@@ -597,7 +595,6 @@ Echidnatron%
 </span><span class="boring">extern crate differential_dataflow;
 </span><span class="boring">use timely::dataflow::Scope;
 </span><span class="boring">use differential_dataflow::VecCollection;
-</span><span class="boring">use differential_dataflow::operators::Join;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
 </span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
 </span><span class="boring">where G::Timestamp: Lattice
@@ -664,7 +661,7 @@ Echidnatron%
 </span><span class="boring">extern crate differential_dataflow;
 </span><span class="boring">use timely::dataflow::Scope;
 </span><span class="boring">use differential_dataflow::VecCollection;
-</span><span class="boring">use differential_dataflow::operators::{Join, Iterate};
+</span><span class="boring">use differential_dataflow::operators::Iterate;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
 </span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
 </span><span class="boring">where G::Timestamp: Lattice
@@ -701,7 +698,6 @@ Echidnatron%
 </span><span class="boring">extern crate differential_dataflow;
 </span><span class="boring">use timely::dataflow::Scope;
 </span><span class="boring">use differential_dataflow::VecCollection;
-</span><span class="boring">use differential_dataflow::operators::Join;
 </span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
 </span><span class="boring">fn example&lt;G: Scope&gt;(manages: &amp;VecCollection&lt;G, (u64, u64)&gt;)
@@ -916,8 +912,6 @@ Echidnatron%
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::Join;
-
 fn main() {
 
     // define a new timely dataflow computation.
@@ -947,8 +941,6 @@ fn main() {
 <p>To arrange a collection, we just call one of several <code>arrange</code> methods. In this case, we will arrange "by key", because we want to take our <code>(x, y)</code> pairs and arrange them by x. Once we have done this, there are just a few additional cosmetic changes to make to our program to use this arranged data in each join:</p>
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
-
-use differential_dataflow::operators::JoinCore;
 
 fn main() {
 
@@ -986,8 +978,6 @@ fn main() {
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::JoinCore;
-
 fn main() {
 
     // define a new timely dataflow computation.
@@ -1020,8 +1010,6 @@ fn main() {
 <p>We can show off arrangement by self in our "friends of friends" example by adding some requirements to our <code>(x, y, z)</code> output triples. Let's imagine that in addition, we want each of the other four "knows" relationships, in addition to the two we start with ("x knows y" and "y knows z").</p>
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
-
-use differential_dataflow::operators::JoinCore;
 
 fn main() {
 
@@ -1067,8 +1055,6 @@ fn main() {
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::{Join, JoinCore};
-
 fn main() {
 
     // define a new timely dataflow computation.
@@ -1106,8 +1092,6 @@ fn main() {
 <p>The following example demonstrates going from an interactive input session (<code>input</code>) to an arrangement (<code>trace</code>) returned from the dataflow and available for use by others.</p>
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
-
-use differential_dataflow::operators::JoinCore;
 
 fn main() {
 
@@ -1195,7 +1179,6 @@ Reach out if you worry this was wrong, and we can discuss alternatives!</p>
 <pre><pre class="playground"><code class="language-rust">extern crate timely;
 extern crate differential_dataflow;
 
-use differential_dataflow::operators::Join;
 use differential_dataflow::operators::Iterate;
 
 fn main() {
@@ -1220,7 +1203,7 @@ fn main() {
                 let knows = knows.enter(&amp;reach.scope());
                 let query = query.enter(&amp;reach.scope());
 
-                knows.join_map(reach, |x,y,q| (*y,*q))
+                knows.join_core(&amp;reach.arrange_by_key(), |x,y,q| [(*y,*q)])
                      .concat(&amp;query)
                      .distinct()
             });
