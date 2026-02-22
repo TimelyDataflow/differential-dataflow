@@ -121,7 +121,7 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
         let (handle, stream) = self.new_input();
         let source = data.to_stream(self).as_collection();
 
-        (InputSession::from(handle), stream.as_collection().concat(&source))
+        (InputSession::from(handle), stream.as_collection().concat(source))
     }}
 
 /// An input session wrapping a single timely dataflow capability.

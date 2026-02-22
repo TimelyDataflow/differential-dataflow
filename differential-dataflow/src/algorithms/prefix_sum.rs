@@ -13,10 +13,10 @@ pub trait PrefixSum<G: Scope, K, D> {
     /// The prefix sum is data-parallel, in the sense that the sums are computed independently for
     /// each key of type `K`. For a single prefix sum this type can be `()`, but this permits the
     /// more general accumulation of multiple independent sequences.
-    fn prefix_sum<F>(&self, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static;
+    fn prefix_sum<F>(self, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static;
 
     /// Determine the prefix sum at each element of `location`.
-    fn prefix_sum_at<F>(&self, locations: VecCollection<G, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static;
+    fn prefix_sum_at<F>(self, locations: VecCollection<G, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static;
 }
 
 impl<G, K, D> PrefixSum<G, K, D> for VecCollection<G, ((usize, K), D)>
@@ -25,11 +25,11 @@ where
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
 {
-    fn prefix_sum<F>(&self, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
-        self.prefix_sum_at(self.map(|(x,_)| x), zero, combine)
+    fn prefix_sum<F>(self, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
+        self.clone().prefix_sum_at(self.map(|(x,_)| x), zero, combine)
     }
 
-    fn prefix_sum_at<F>(&self, locations: VecCollection<G, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
+    fn prefix_sum_at<F>(self, locations: VecCollection<G, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
 
         let combine1 = ::std::rc::Rc::new(combine);
         let combine2 = combine1.clone();
@@ -51,13 +51,13 @@ where
     let unit_ranges = collection.map(|((index, key), data)| ((index, 0, key), data));
 
     unit_ranges
-        .iterate(|ranges|
+        .iterate(|ranges| {
 
             // Each available range, of size less than usize::max_value(), advertises itself as the range
             // twice as large, aligned to integer multiples of its size. Each range, which may contain at
             // most two elements, then summarizes itself using the `combine` function. Finally, we re-add
             // the initial `unit_ranges` intervals, so that the set of ranges grows monotonically.
-
+            let scope = ranges.scope();
             ranges
                 .filter(|&((_pos, log, _), _)| log < 64)
                 .map(|((pos, log, key), data)| ((pos >> 1, log + 1, key), (pos, data)))
@@ -66,8 +66,8 @@ where
                     if input.len() > 1 { result = combine(key, &result, &(input[1].0).1); }
                     output.push((result, 1));
                 })
-                .concat(&unit_ranges.enter(&ranges.scope()))
-        )
+                .concat(unit_ranges.enter(&scope))
+        })
 }
 
 /// Produces the accumulated values at each of the `usize` locations in `queries`.
@@ -115,17 +115,17 @@ where
     // Acquire each requested range.
     let full_ranges =
         ranges
-            .semijoin(&requests);
+            .semijoin(requests);
 
     // Each requested range should exist, even if as a zero range, for correct reconstruction.
     let zero_ranges =
         full_ranges
             .map(move |((idx, log, key), _)| ((idx, log, key), zero0.clone()))
             .negate()
-            .concat(&requests.map(move |(idx, log, key)| ((idx, log, key), zero1.clone())));
+            .concat(requests.map(move |(idx, log, key)| ((idx, log, key), zero1.clone())));
 
     // Merge occupied and empty ranges.
-    let used_ranges = full_ranges.concat(&zero_ranges);
+    let used_ranges = full_ranges.concat(zero_ranges);
 
     // Each key should initiate a value of `zero` at position `0`.
     let init_states =
@@ -141,8 +141,8 @@ where
                 .map(|((pos, log, key), data)| ((pos << log, key), (log, data)))
                 .join_map(states, move |&(pos, ref key), &(log, ref data), state|
                     ((pos + (1 << log), key.clone()), combine(key, state, data)))
-                .concat(&init_states.enter(&states.scope()))
+                .concat(init_states.enter(&states.scope()))
                 .distinct()
         })
-        .semijoin(&queries)
+        .semijoin(queries)
 }

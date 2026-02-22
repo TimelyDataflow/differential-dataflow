@@ -8,7 +8,7 @@
 //! manually. The higher-level of programming allows differential dataflow to provide efficient
 //! implementations, and to support efficient incremental updates to the collections.
 
-use timely::{Container, Data};
+use timely::Container;
 use timely::progress::Timestamp;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -23,7 +23,7 @@ use crate::difference::Abelian;
 /// in order to expose some of this functionality (e.g. negation, timestamp manipulation). Other actions
 /// on the containers, and streams of containers, are left to the container implementor to describe.
 #[derive(Clone)]
-pub struct Collection<G: Scope, C> {
+pub struct Collection<G: Scope, C: 'static> {
     /// The underlying timely dataflow stream.
     ///
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
@@ -70,46 +70,16 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///         .assert_eq(&data);
     /// });
     /// ```
-    pub fn concat(&self, other: &Self) -> Self {
+    pub fn concat(self, other: Self) -> Self {
         self.inner
-            .concat(&other.inner)
-            .as_collection()
-    }
-    /// Creates a new collection accumulating the contents of the two collections.
-    ///
-    /// Despite the name, differential dataflow collections are unordered. This method is so named because the
-    /// implementation is the concatenation of the stream of updates, but it corresponds to the addition of the
-    /// two collections.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use differential_dataflow::input::Input;
-    ///
-    /// ::timely::example(|scope| {
-    ///
-    ///     let data = scope.new_collection_from(1 .. 10).1;
-    ///
-    ///     let odds = data.filter(|x| x % 2 == 1);
-    ///     let evens = data.filter(|x| x % 2 == 0);
-    ///
-    ///     odds.concatenate(Some(evens))
-    ///         .assert_eq(&data);
-    /// });
-    /// ```
-    pub fn concatenate<I>(&self, sources: I) -> Self
-    where
-        I: IntoIterator<Item=Self>
-    {
-        self.inner
-            .concatenate(sources.into_iter().map(|x| x.inner))
+            .concat(other.inner)
             .as_collection()
     }
     // Brings a Collection into a nested region.
     ///
     /// This method is a specialization of `enter` to the case where the nested scope is a region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn enter_region<'a>(&self, child: &Child<'a, G, <G as ScopeParent>::Timestamp>) -> Collection<Child<'a, G, <G as ScopeParent>::Timestamp>, C> {
+    pub fn enter_region<'a>(self, child: &Child<'a, G, <G as ScopeParent>::Timestamp>) -> Collection<Child<'a, G, <G as ScopeParent>::Timestamp>, C> {
         self.inner
             .enter(child)
             .as_collection()
@@ -132,7 +102,7 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///          .inspect_container(|event| println!("event: {:?}", event));
     /// });
     /// ```
-    pub fn inspect_container<F>(&self, func: F) -> Self
+    pub fn inspect_container<F>(self, func: F) -> Self
     where
         F: FnMut(Result<(&G::Timestamp, &C), &[G::Timestamp]>)+'static,
     {
@@ -144,7 +114,7 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///
     /// This probe is used to determine when the state of the Collection has stabilized and can
     /// be read out.
-    pub fn probe(&self) -> probe::Handle<G::Timestamp> {
+    pub fn probe(self) -> probe::Handle<G::Timestamp> {
         self.inner
             .probe()
     }
@@ -154,7 +124,7 @@ impl<G: Scope, C: Container> Collection<G, C> {
     /// In addition, a probe is also often use to limit the number of rounds of input in flight at any moment; a
     /// computation can wait until the probe has caught up to the input before introducing more rounds of data, to
     /// avoid swamping the system.
-    pub fn probe_with(&self, handle: &probe::Handle<G::Timestamp>) -> Self {
+    pub fn probe_with(self, handle: &probe::Handle<G::Timestamp>) -> Self {
         Self::new(self.inner.probe_with(handle))
     }
     /// The scope containing the underlying timely dataflow stream.
@@ -185,7 +155,7 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///         .assert_eq(&evens);
     /// });
     /// ```
-    pub fn negate(&self) -> Self where C: containers::Negate {
+    pub fn negate(self) -> Self where C: containers::Negate {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
             .unary(Pipeline, "Negate", move |_,_| move |input, output| {
@@ -214,7 +184,7 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn enter<'a, T>(&self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, <C as containers::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
+    pub fn enter<'a, T>(self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, <C as containers::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
     where
         C: containers::Enter<<G as ScopeParent>::Timestamp, T, InnerContainer: Container>,
         T: Refines<<G as ScopeParent>::Timestamp>,
@@ -248,7 +218,7 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///     data.results_in(summary1);
     /// });
     /// ```
-    pub fn results_in(&self, step: <G::Timestamp as Timestamp>::Summary) -> Self
+    pub fn results_in(self, step: <G::Timestamp as Timestamp>::Summary) -> Self
     where
         C: containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
     {
@@ -290,7 +260,7 @@ where
     ///     data.assert_eq(&result);
     /// });
     /// ```
-    pub fn leave(&self) -> Collection<G, <C as containers::Leave<T, G::Timestamp>>::OuterContainer> {
+    pub fn leave(self) -> Collection<G, <C as containers::Leave<T, G::Timestamp>>::OuterContainer> {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
             .leave()
@@ -302,13 +272,13 @@ where
 }
 
 /// Methods requiring a region as the scope.
-impl<G: Scope, C: Container+Data> Collection<Child<'_, G, G::Timestamp>, C>
+impl<G: Scope, C: Container+Clone + 'static> Collection<Child<'_, G, G::Timestamp>, C>
 {
     /// Returns the value of a Collection from a nested region to its containing scope.
     ///
     /// This method is a specialization of `leave` to the case that of a nested region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn leave_region(&self) -> Collection<G, C> {
+    pub fn leave_region(self) -> Collection<G, C> {
         self.inner
             .leave()
             .as_collection()
@@ -321,7 +291,6 @@ pub mod vec {
 
     use std::hash::Hash;
 
-    use timely::Data;
     use timely::progress::Timestamp;
     use timely::order::Product;
     use timely::dataflow::scopes::child::Iterative;
@@ -368,9 +337,9 @@ pub mod vec {
         ///          .assert_empty();
         /// });
         /// ```
-        pub fn map<D2, L>(&self, mut logic: L) -> Collection<G, D2, R>
+        pub fn map<D2, L>(self, mut logic: L) -> Collection<G, D2, R>
         where
-            D2: Data,
+            D2: Clone + 'static,
             L: FnMut(D) -> D2 + 'static,
         {
             self.inner
@@ -395,7 +364,7 @@ pub mod vec {
         ///          .assert_empty();
         /// });
         /// ```
-        pub fn map_in_place<L>(&self, mut logic: L) -> Collection<G, D, R>
+        pub fn map_in_place<L>(self, mut logic: L) -> Collection<G, D, R>
         where
             L: FnMut(&mut D) + 'static,
         {
@@ -419,10 +388,10 @@ pub mod vec {
         ///          .flat_map(|x| 0 .. x);
         /// });
         /// ```
-        pub fn flat_map<I, L>(&self, mut logic: L) -> Collection<G, I::Item, R>
+        pub fn flat_map<I, L>(self, mut logic: L) -> Collection<G, I::Item, R>
         where
             G::Timestamp: Clone,
-            I: IntoIterator<Item: Data>,
+            I: IntoIterator<Item: Clone + 'static>,
             L: FnMut(D) -> I + 'static,
         {
             self.inner
@@ -443,7 +412,7 @@ pub mod vec {
         ///          .assert_empty();
         /// });
         /// ```
-        pub fn filter<L>(&self, mut logic: L) -> Collection<G, D, R>
+        pub fn filter<L>(self, mut logic: L) -> Collection<G, D, R>
         where
             L: FnMut(&D) -> bool + 'static,
         {
@@ -471,9 +440,9 @@ pub mod vec {
         ///     x1.assert_eq(&x2);
         /// });
         /// ```
-        pub fn explode<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+        pub fn explode<D2, R2, I, L>(self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
         where
-            D2: Data,
+            D2: Clone + 'static,
             R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
             I: IntoIterator<Item=(D2,R2)>,
             L: FnMut(D)->I+'static,
@@ -505,10 +474,10 @@ pub mod vec {
         ///           );
         /// });
         /// ```
-        pub fn join_function<D2, R2, I, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+        pub fn join_function<D2, R2, I, L>(self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
         where
             G::Timestamp: Lattice,
-            D2: Data,
+            D2: Clone + 'static,
             R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
             I: IntoIterator<Item=(D2,G::Timestamp,R2)>,
             L: FnMut(D)->I+'static,
@@ -540,7 +509,7 @@ pub mod vec {
         ///     data.assert_eq(&result);
         /// });
         /// ```
-        pub fn enter_at<'a, T, F>(&self, child: &Iterative<'a, G, T>, mut initial: F) -> Collection<Iterative<'a, G, T>, D, R>
+        pub fn enter_at<'a, T, F>(self, child: &Iterative<'a, G, T>, mut initial: F) -> Collection<Iterative<'a, G, T>, D, R>
         where
             T: Timestamp+Hash,
             F: FnMut(&D) -> T + Clone + 'static,
@@ -562,7 +531,7 @@ pub mod vec {
         /// ordered, they should have the same order or compare equal once `func` is applied to them (this
         /// is because we advance the timely capability with the same logic, and it must remain `less_equal`
         /// to all of the data timestamps).
-        pub fn delay<F>(&self, func: F) -> Collection<G, D, R>
+        pub fn delay<F>(self, func: F) -> Collection<G, D, R>
         where
             G::Timestamp: Hash,
             F: FnMut(&G::Timestamp) -> G::Timestamp + Clone + 'static,
@@ -599,7 +568,7 @@ pub mod vec {
         ///          .inspect(|x| println!("error: {:?}", x));
         /// });
         /// ```
-        pub fn inspect<F>(&self, func: F) -> Collection<G, D, R>
+        pub fn inspect<F>(self, func: F) -> Collection<G, D, R>
         where
             F: FnMut(&(D, G::Timestamp, R))+'static,
         {
@@ -625,7 +594,7 @@ pub mod vec {
         ///          .inspect_batch(|t,xs| println!("errors @ {:?}: {:?}", t, xs));
         /// });
         /// ```
-        pub fn inspect_batch<F>(&self, mut func: F) -> Collection<G, D, R>
+        pub fn inspect_batch<F>(self, mut func: F) -> Collection<G, D, R>
         where
             F: FnMut(&G::Timestamp, &[(D, G::Timestamp, R)])+'static,
         {
@@ -653,7 +622,7 @@ pub mod vec {
         ///          .assert_empty();
         /// });
         /// ```
-        pub fn assert_empty(&self)
+        pub fn assert_empty(self)
         where
             D: crate::ExchangeData+Hashable,
             R: crate::ExchangeData+Hashable + Semigroup,
@@ -665,7 +634,7 @@ pub mod vec {
     }
 
     /// Methods requiring an Abelian difference, to support negation.
-    impl<G: Scope<Timestamp: Data>, D: Clone+'static, R: Abelian+'static> Collection<G, D, R> {
+    impl<G: Scope<Timestamp: Clone + 'static>, D: Clone+'static, R: Abelian+'static> Collection<G, D, R> {
         /// Assert if the collections are ever different.
         ///
         /// Because this is a dataflow fragment, the test is only applied as the computation is run. If the computation
@@ -689,7 +658,7 @@ pub mod vec {
         ///         .assert_eq(&data);
         /// });
         /// ```
-        pub fn assert_eq(&self, other: &Self)
+        pub fn assert_eq(self, other: Self)
         where
             D: crate::ExchangeData+Hashable,
             R: crate::ExchangeData+Hashable,
@@ -738,13 +707,13 @@ pub mod vec {
         ///          });
         /// });
         /// ```
-        pub fn reduce<L, V2: crate::Data, R2: Ord+Abelian+'static>(&self, logic: L) -> Collection<G, (K, V2), R2>
+        pub fn reduce<L, V2: crate::Data, R2: Ord+Abelian+'static>(self, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
             self.reduce_named("Reduce", logic)
         }
 
         /// As `reduce` with the ability to name the operator.
-        pub fn reduce_named<L, V2: crate::Data, R2: Ord+Abelian+'static>(&self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+        pub fn reduce_named<L, V2: crate::Data, R2: Ord+Abelian+'static>(self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
             use crate::trace::implementations::{ValBuilder, ValSpine};
 
@@ -777,7 +746,7 @@ pub mod vec {
         ///          .trace;
         /// });
         /// ```
-        pub fn reduce_abelian<L, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+        pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: for<'a> Trace<Key<'a>= &'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp, Diff: Abelian>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
@@ -795,9 +764,9 @@ pub mod vec {
         /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
         /// and it may not be safe to index into the first element.
         /// At least one of the two collections will be non-empty.
-        pub fn reduce_core<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+        pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            V: Data,
+            V: Clone + 'static,
             T2: for<'a> Trace<Key<'a>=&'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
@@ -828,7 +797,7 @@ pub mod vec {
         ///          .distinct();
         /// });
         /// ```
-        pub fn distinct(&self) -> Collection<G, K, isize> {
+        pub fn distinct(self) -> Collection<G, K, isize> {
             self.distinct_core()
         }
 
@@ -837,7 +806,7 @@ pub mod vec {
         /// This method allows `distinct` to produce collections whose difference
         /// type is something other than an `isize` integer, for example perhaps an
         /// `i32`.
-        pub fn distinct_core<R2: Ord+Abelian+'static+From<i8>>(&self) -> Collection<G, K, R2> {
+        pub fn distinct_core<R2: Ord+Abelian+'static+From<i8>>(self) -> Collection<G, K, R2> {
             self.threshold_named("Distinct", |_,_| R2::from(1i8))
         }
 
@@ -859,12 +828,12 @@ pub mod vec {
         ///          .threshold(|_,c| c % 2);
         /// });
         /// ```
-        pub fn threshold<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(&self, thresh: F) -> Collection<G, K, R2> {
+        pub fn threshold<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(self, thresh: F) -> Collection<G, K, R2> {
             self.threshold_named("Threshold", thresh)
         }
 
         /// A `threshold` with the ability to name the operator.
-        pub fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(&self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
+        pub fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
             use crate::trace::implementations::{KeyBuilder, KeySpine};
 
             self.arrange_by_self_named(&format!("Arrange: {}", name))
@@ -895,14 +864,14 @@ pub mod vec {
         ///          .count();
         /// });
         /// ```
-        pub fn count(&self) -> Collection<G, (K, R), isize> { self.count_core() }
+        pub fn count(self) -> Collection<G, (K, R), isize> { self.count_core() }
 
         /// Count for general integer differences.
         ///
         /// This method allows `count` to produce collections whose difference
         /// type is something other than an `isize` integer, for example perhaps an
         /// `i32`.
-        pub fn count_core<R2: Ord + Abelian + From<i8> + 'static>(&self) -> Collection<G, (K, R), R2> {
+        pub fn count_core<R2: Ord + Abelian + From<i8> + 'static>(self) -> Collection<G, (K, R), R2> {
             use crate::trace::implementations::{ValBuilder, ValSpine};
             self.arrange_by_self_named("Arrange: Count")
                 .reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
@@ -913,7 +882,7 @@ pub mod vec {
     /// Methods which require data be arrangeable.
     impl<G, D, R> Collection<G, D, R>
     where
-        G: Scope<Timestamp: Data+Lattice>,
+        G: Scope<Timestamp: Clone + 'static+Lattice>,
         D: crate::ExchangeData+Hashable,
         R: crate::ExchangeData+Semigroup,
     {
@@ -937,14 +906,14 @@ pub mod vec {
         ///      .assert_empty();
         /// });
         /// ```
-        pub fn consolidate(&self) -> Self {
+        pub fn consolidate(self) -> Self {
             use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine};
             self.consolidate_named::<KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>,_>("Consolidate", |key,&()| key.clone())
         }
 
         /// As `consolidate` but with the ability to name the operator, specify the trace type,
         /// and provide the function `reify` to produce owned keys and values..
-        pub fn consolidate_named<Ba, Bu, Tr, F>(&self, name: &str, reify: F) -> Self
+        pub fn consolidate_named<Ba, Bu, Tr, F>(self, name: &str, reify: F) -> Self
         where
             Ba: crate::trace::Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
             Tr: for<'a> crate::trace::Trace<Time=G::Timestamp,Diff=R>+'static,
@@ -980,7 +949,7 @@ pub mod vec {
         ///      .consolidate_stream();
         /// });
         /// ```
-        pub fn consolidate_stream(&self) -> Self {
+        pub fn consolidate_stream(self) -> Self {
 
             use timely::dataflow::channels::pact::Pipeline;
             use timely::dataflow::operators::Operator;
@@ -1011,14 +980,14 @@ pub mod vec {
         V: crate::ExchangeData,
         R: crate::ExchangeData + Semigroup,
     {
-        fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
         where
             Ba: crate::trace::Batcher<Input=Vec<((K, V), G::Timestamp, R)>, Time=G::Timestamp> + 'static,
             Bu: crate::trace::Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
             Tr: crate::trace::Trace<Time=G::Timestamp> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, Bu, _>(&self.inner, exchange, name)
+            crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, Bu, _>(self.inner, exchange, name)
         }
     }
 
@@ -1026,14 +995,14 @@ pub mod vec {
     where
         G: Scope<Timestamp: Lattice+Ord>,
     {
-        fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
         where
             Ba: crate::trace::Batcher<Input=Vec<((K,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
             Bu: crate::trace::Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
             Tr: crate::trace::Trace<Time=G::Timestamp> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_,_,Ba,Bu,_>(&self.map(|k| (k, ())).inner, exchange, name)
+            crate::operators::arrange::arrangement::arrange_core::<_,_,Ba,Bu,_>(self.map(|k| (k, ())).inner, exchange, name)
         }
     }
 
@@ -1047,12 +1016,12 @@ pub mod vec {
         /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
         /// This trace is current for all times completed by the output stream, which can be used to
         /// safely identify the stable times and values in the trace.
-        pub fn arrange_by_key(&self) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
+        pub fn arrange_by_key(self) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
             self.arrange_by_key_named("ArrangeByKey")
         }
 
         /// As `arrange_by_key` but with the ability to name the arrangement.
-        pub fn arrange_by_key_named(&self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
+        pub fn arrange_by_key_named(self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
             self.arrange_named::<ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
         }
     }
@@ -1066,12 +1035,12 @@ pub mod vec {
         /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
         /// This trace is current for all times complete in the output stream, which can be used to safely
         /// identify the stable times and values in the trace.
-        pub fn arrange_by_self(&self) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
+        pub fn arrange_by_self(self) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
             self.arrange_by_self_named("ArrangeBySelf")
         }
 
         /// As `arrange_by_self` but with the ability to name the arrangement.
-        pub fn arrange_by_self_named(&self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
+        pub fn arrange_by_self_named(self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
             self.map(|k| (k, ()))
                 .arrange_named::<KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(name)
         }
@@ -1103,7 +1072,7 @@ pub mod vec {
         ///      .assert_eq(&z);
         /// });
         /// ```
-        pub fn join<V2, R2>(&self, other: &Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Multiply<R2>>::Output>
+        pub fn join<V2, R2>(self, other: Collection<G, (K,V2), R2>) -> Collection<G, (K,(V,V2)), <R as Multiply<R2>>::Output>
         where
             K:  crate::ExchangeData,
             V2: crate::ExchangeData,
@@ -1130,11 +1099,11 @@ pub mod vec {
         ///      .assert_eq(&z);
         /// });
         /// ```
-        pub fn join_map<V2: crate::ExchangeData, R2: crate::ExchangeData+Semigroup, D: crate::Data, L>(&self, other: &Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
+        pub fn join_map<V2: crate::ExchangeData, R2: crate::ExchangeData+Semigroup, D: crate::Data, L>(self, other: Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
         where R: Multiply<R2, Output: Semigroup+'static>, L: FnMut(&K, &V, &V2)->D+'static {
             let arranged1 = self.arrange_by_key();
             let arranged2 = other.arrange_by_key();
-            arranged1.join_core(&arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
+            arranged1.join_core(arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
         }
 
         /// Matches pairs `(key, val)` and `key` based on `key`, producing the former with frequencies multiplied.
@@ -1158,11 +1127,11 @@ pub mod vec {
         ///      .assert_eq(&z);
         /// });
         /// ```
-        pub fn semijoin<R2: crate::ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
+        pub fn semijoin<R2: crate::ExchangeData+Semigroup>(self, other: Collection<G, K, R2>) -> Collection<G, (K, V), <R as Multiply<R2>>::Output>
         where R: Multiply<R2, Output: Semigroup+'static> {
             let arranged1 = self.arrange_by_key();
             let arranged2 = other.arrange_by_self();
-            arranged1.join_core(&arranged2, |k,v,_| Some((k.clone(), v.clone())))
+            arranged1.join_core(arranged2, |k,v,_| Some((k.clone(), v.clone())))
         }
 
         /// Subtracts the semijoin with `other` from `self`.
@@ -1190,9 +1159,9 @@ pub mod vec {
         ///      .assert_eq(&z);
         /// });
         /// ```
-        pub fn antijoin<R2: crate::ExchangeData+Semigroup>(&self, other: &Collection<G, K, R2>) -> Collection<G, (K, V), R>
+        pub fn antijoin<R2: crate::ExchangeData+Semigroup>(self, other: Collection<G, K, R2>) -> Collection<G, (K, V), R>
         where R: Multiply<R2, Output=R>, R: Abelian+'static {
-            self.concat(&self.semijoin(other).negate())
+            self.clone().concat(self.semijoin(other).negate())
         }
 
         /// Joins two arranged collections with the same key type.
@@ -1223,7 +1192,7 @@ pub mod vec {
         ///      .assert_eq(&z);
         /// });
         /// ```
-        pub fn join_core<Tr2,I,L> (&self, stream2: &Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
+        pub fn join_core<Tr2,I,L> (self, stream2: Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
         where
             Tr2: for<'a> crate::trace::TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
             R: Multiply<Tr2::Diff, Output: Semigroup+'static>,
@@ -1239,16 +1208,16 @@ pub mod vec {
 /// Conversion to a differential dataflow Collection.
 pub trait AsCollection<G: Scope, C> {
     /// Converts the type to a differential dataflow collection.
-    fn as_collection(&self) -> Collection<G, C>;
+    fn as_collection(self) -> Collection<G, C>;
 }
 
-impl<G: Scope, C: Clone> AsCollection<G, C> for StreamCore<G, C> {
+impl<G: Scope, C> AsCollection<G, C> for StreamCore<G, C> {
     /// Converts the type to a differential dataflow collection.
     ///
     /// By calling this method, you guarantee that the timestamp invariant (as documented on
     /// [Collection]) is upheld. This method will not check it.
-    fn as_collection(&self) -> Collection<G, C> {
-        Collection::<G,C>::new(self.clone())
+    fn as_collection(self) -> Collection<G, C> {
+        Collection::<G,C>::new(self)
     }
 }
 

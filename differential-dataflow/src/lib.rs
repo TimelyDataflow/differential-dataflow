@@ -85,12 +85,12 @@ pub use difference::Abelian as Diff;
 /// Most differential dataflow operators require the ability to cancel corresponding updates, and the
 /// way that they do this is by putting the data in a canonical form. The `Ord` trait allows us to sort
 /// the data, at which point we can consolidate updates for equivalent records.
-pub trait Data : timely::Data + Ord + Debug { }
-impl<T: timely::Data + Ord + Debug> Data for T { }
+pub trait Data : Ord + Debug + Clone + 'static { }
+impl<T: Ord + Debug + Clone + 'static> Data for T { }
 
 /// Data types exchangeable in differential dataflow.
-pub trait ExchangeData : timely::ExchangeData + Ord + Debug { }
-impl<T: timely::ExchangeData + Ord + Debug> ExchangeData for T { }
+pub trait ExchangeData : timely::ExchangeData + Ord + Debug + Clone + 'static { }
+impl<T: timely::ExchangeData + Ord + Debug + Clone + 'static> ExchangeData for T { }
 
 pub mod hashable;
 pub mod operators;

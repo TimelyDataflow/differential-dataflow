@@ -54,7 +54,7 @@ where
 
         use crate::collection::AsCollection;
 
-        let init = self.map(|record| (0, record));
+        let init = self.clone().map(|record| (0, record));
         timely::dataflow::operators::generic::operator::empty(&init.scope())
             .as_collection()
             .iterate(|diff|
@@ -80,7 +80,7 @@ where
                     })
                     .map(|(_hash, pair)| pair)
             )
-            .concat(&init)
+            .concat(init)
             .map(|pair| { let hash = pair.hashed(); (pair.1, hash) })
     }
 }
@@ -109,8 +109,10 @@ mod tests {
             timely::dataflow::operators::generic::operator::empty(&init.scope())
                 .as_collection()
                 .iterate(|diff|
-                    init.enter(&diff.scope())
-                        .concat(&diff)
+                    init
+                        .clone()
+                        .enter(&diff.scope())
+                        .concat(diff)
                         .map(|(round, num)| ((round + num) / 10, (round, num)))
                         .reduce(|_hash, input, output| {
                             println!("Input: {:?}", input);
@@ -129,7 +131,7 @@ mod tests {
                         .inspect(|x| println!("{:?}", x))
                         .map(|(_hash, pair)| pair)
                 )
-                .concat(&init)
+                .concat(init)
                 .map(|(round, num)| { (num, (round + num) / 10) })
                 .map(|(_data, id)| id)
                 .threshold(|_id,cnt| if cnt > &1 { *cnt } else { 0 })
