@@ -26,7 +26,7 @@ fn main() {
                          .semijoin(attend)
                          .map(|(_,y)| y)
                          .threshold_total(|_,w| if w >= &3 { 1 } else { 0 })
-                         .concat(&organizers.enter(&attend.scope()))
+                         .concat(organizers.enter(&attend.scope()))
                          .consolidate()
                 })
                 .map(|_| ())

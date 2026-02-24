@@ -182,7 +182,7 @@ fn scc_differential(
 
             let (edge_input, edges) = scope.new_collection();
 
-            _strongly_connected(&edges)
+            _strongly_connected(edges)
                 .consolidate()
                 .inner
                 .capture_into(send);
@@ -215,45 +215,47 @@ fn scc_differential(
         .collect()
 }
 
-fn _strongly_connected<G>(graph: &VecCollection<G, Edge>) -> VecCollection<G, Edge>
+fn _strongly_connected<G>(graph: VecCollection<G, Edge>) -> VecCollection<G, Edge>
 where
     G: Scope<Timestamp: Lattice+Ord+Hash>,
 {
-    graph.iterate(|inner| {
+    graph.clone().iterate(|inner| {
         let edges = graph.enter(&inner.scope());
-        let trans = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
-        _trim_edges(&_trim_edges(inner, &edges), &trans)
+        let trans = edges.clone().map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
+        _trim_edges(_trim_edges(inner, edges), trans)
     })
 }
 
-fn _trim_edges<G>(cycle: &VecCollection<G, Edge>, edges: &VecCollection<G, Edge>) -> VecCollection<G, Edge>
+fn _trim_edges<G>(cycle: VecCollection<G, Edge>, edges: VecCollection<G, Edge>) -> VecCollection<G, Edge>
 where
     G: Scope<Timestamp: Lattice+Ord+Hash>,
 {
-    let nodes = edges.map_in_place(|x| x.0 = x.1)
+    let nodes = edges.clone()
+                     .map_in_place(|x| x.0 = x.1)
                      .consolidate();
 
-    let labels = _reachability(&cycle, &nodes);
+    let labels = _reachability(cycle, nodes);
 
     edges.consolidate()
          // .inspect(|x| println!("pre-join: {:?}", x))
-         .join_map(&labels, |&e1,&e2,&l1| (e2,(e1,l1)))
-         .join_map(&labels, |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
+         .join_map(labels.clone(), |&e1,&e2,&l1| (e2,(e1,l1)))
+         .join_map(labels.clone(), |&e2,&(e1,l1),&l2| ((e1,e2),(l1,l2)))
          .filter(|&(_,(l1,l2))| l1 == l2)
          .map(|((x1,x2),_)| (x2,x1))
 }
 
-fn _reachability<G>(edges: &VecCollection<G, Edge>, nodes: &VecCollection<G, (Node, Node)>) -> VecCollection<G, Edge>
+fn _reachability<G>(edges: VecCollection<G, Edge>, nodes: VecCollection<G, (Node, Node)>) -> VecCollection<G, Edge>
 where
     G: Scope<Timestamp: Lattice+Ord+Hash>,
 {
-    edges.filter(|_| false)
+    edges.clone()   // <-- wth is this.
+         .filter(|_| false)
          .iterate(|inner| {
              let edges = edges.enter(&inner.scope());
              let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0 as u64).leading_zeros() as u64));
 
-             inner.join_map(&edges, |_k,l,d| (*d,*l))
-                  .concat(&nodes)
+             inner.join_map(edges, |_k,l,d| (*d,*l))
+                  .concat(nodes)
                   .reduce(|_, s, t| t.push((*s[0].0, 1)))
 
          })

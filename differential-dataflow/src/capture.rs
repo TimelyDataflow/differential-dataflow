@@ -227,7 +227,7 @@ pub mod source {
     use std::rc::Rc;
     use std::marker::{Send, Sync};
     use std::sync::Arc;
-    use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
+    use timely::dataflow::{Scope, StreamVec, operators::{Capability, CapabilitySet}};
     use timely::dataflow::operators::generic::OutputBuilder;
     use timely::progress::Timestamp;
     use timely::scheduling::SyncActivator;
@@ -253,7 +253,7 @@ pub mod source {
     pub fn build<G, B, I, D, T, R>(
         scope: G,
         source_builder: B,
-    ) -> (Box<dyn std::any::Any + Send + Sync>, Stream<G, (D, T, R)>)
+    ) -> (Box<dyn std::any::Any + Send + Sync>, StreamVec<G, (D, T, R)>)
     where
         G: Scope<Timestamp = T>,
         B: FnOnce(SyncActivator) -> I,
@@ -390,7 +390,7 @@ pub mod source {
 
         // Step 2: The UPDATES operator.
         let mut updates_op = OperatorBuilder::new("CDCV2_Updates".to_string(), scope.clone());
-        let mut input = updates_op.new_input(&updates, Exchange::new(|x: &(D, T, R)| x.hashed()));
+        let mut input = updates_op.new_input(updates, Exchange::new(|x: &(D, T, R)| x.hashed()));
         let (changes_out, changes) = updates_op.new_output();
         let mut changes_out = OutputBuilder::from(changes_out);
         let (counts_out, counts) = updates_op.new_output();
@@ -440,11 +440,11 @@ pub mod source {
         // Step 3: The PROGRESS operator.
         let mut progress_op = OperatorBuilder::new("CDCV2_Progress".to_string(), scope.clone());
         let mut input = progress_op.new_input(
-            &progress,
+            progress,
             Exchange::new(|x: &(usize, Progress<T>)| x.0 as u64),
         );
         let mut counts =
-            progress_op.new_input(&counts, Exchange::new(|x: &(T, i64)| (x.0).hashed()));
+            progress_op.new_input(counts, Exchange::new(|x: &(T, i64)| (x.0).hashed()));
         let (frontier_out, frontier) = progress_op.new_output();
         let mut frontier_out = OutputBuilder::from(frontier_out);
         progress_op.build(move |_capability| {
@@ -468,12 +468,12 @@ pub mod source {
                 // Drain all relevant update counts in to the mutable antichain tracking its frontier.
                 counts.for_each(|cap, counts| {
                     updates_frontier.update_iter(counts.iter().cloned());
-                    capability = Some(cap.retain());
+                    capability = Some(cap.retain(0));
                 });
                 // Drain all progress statements into the queue out of which we will work.
                 input.for_each(|cap, progress| {
                     progress_queue.extend(progress.iter().map(|x| (x.1).clone()));
-                    capability = Some(cap.retain());
+                    capability = Some(cap.retain(0));
                 });
 
                 // Extract and act on actionable progress messages.
@@ -524,7 +524,7 @@ pub mod source {
         // Step 4: The FEEDBACK operator.
         let mut feedback_op = OperatorBuilder::new("CDCV2_Feedback".to_string(), scope.clone());
         let mut input = feedback_op.new_input(
-            &frontier,
+            frontier,
             Exchange::new(|x: &(usize, ChangeBatch<T>)| x.0 as u64),
         );
         feedback_op.build(move |_capability| {
@@ -560,7 +560,7 @@ pub mod sink {
 
     use timely::order::PartialOrder;
     use timely::progress::{Antichain, ChangeBatch, Timestamp};
-    use timely::dataflow::{Scope, Stream};
+    use timely::dataflow::{Scope, StreamVec};
     use timely::dataflow::channels::pact::{Exchange, Pipeline};
     use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
 
@@ -574,7 +574,7 @@ pub mod sink {
     /// performed before calling the method, the recorded output may not be correctly
     /// reconstructed by readers.
     pub fn build<G, BS, D, T, R>(
-        stream: &Stream<G, (D, T, R)>,
+        stream: StreamVec<G, (D, T, R)>,
         sink_hash: u64,
         updates_sink: Weak<RefCell<BS>>,
         progress_sink: Weak<RefCell<BS>>,
@@ -590,7 +590,7 @@ pub mod sink {
         // and so any record we see is in fact guaranteed to happen.
         let mut builder = OperatorBuilder::new("UpdatesWriter".to_owned(), stream.scope());
         let reactivator = stream.scope().activator_for(builder.operator_info().address);
-        let mut input = builder.new_input(stream, Pipeline);
+        let mut input = builder.new_input(stream.clone(), Pipeline);
         let (updates_out, updates) = builder.new_output();
         let mut updates_out = OutputBuilder::from(updates_out);
 
@@ -645,7 +645,7 @@ pub mod sink {
         // We use a lower-level builder here to get access to the operator address, for rescheduling.
         let mut builder = OperatorBuilder::new("ProgressWriter".to_owned(), stream.scope());
         let reactivator = stream.scope().activator_for(builder.operator_info().address);
-        let mut input = builder.new_input(&updates, Exchange::new(move |_| sink_hash));
+        let mut input = builder.new_input(updates, Exchange::new(move |_| sink_hash));
         let should_write = stream.scope().index() == (sink_hash as usize) % stream.scope().peers();
 
         // We now record the numbers of updates at each timestamp between lower and upper bounds.
@@ -742,7 +742,7 @@ pub mod sink {
 //     use crate::lattice::Lattice;
 
 //     /// Creates a Kafka source from supplied configuration information.
-//     pub fn create_source<G, D, T, R>(scope: G, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any>, Stream<G, (D, T, R)>)
+//     pub fn create_source<G, D, T, R>(scope: G, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any>, StreamVec<G, (D, T, R)>)
 //     where
 //         G: Scope<Timestamp = T>,
 //         D: ExchangeData + Hash + for<'a> serde::Deserialize<'a>,
@@ -757,7 +757,7 @@ pub mod sink {
 //         })
 //     }
 
-//     pub fn create_sink<G, D, T, R>(stream: &Stream<G, (D, T, R)>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
+//     pub fn create_sink<G, D, T, R>(stream: &StreamVec<G, (D, T, R)>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
 //     where
 //         G: Scope<Timestamp = T>,
 //         D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,

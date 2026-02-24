@@ -1,5 +1,5 @@
 use timely::order::Product;
-use timely::dataflow::{*, operators::Filter};
+use timely::dataflow::{*, operators::vec::Filter};
 
 use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
@@ -33,7 +33,7 @@ fn main() {
 
         worker.dataflow::<Time,_,_>(|scope| {
             let edges = input.to_collection(scope);
-            pagerank(iterations, &edges)
+            pagerank(iterations, edges)
                 .filter(move |_| inspect)
                 .consolidate()
                 .inspect(|x| println!("{:?}", x))
@@ -77,17 +77,19 @@ fn main() {
 
 // Returns a weighted collection in which the weight of each node is proportional
 // to its PageRank in the input graph `edges`.
-fn pagerank<G>(iters: Iter, edges: &VecCollection<G, Edge, Diff>) -> VecCollection<G, Node, Diff>
+fn pagerank<G>(iters: Iter, edges: VecCollection<G, Edge, Diff>) -> VecCollection<G, Node, Diff>
 where
     G: Scope<Timestamp: Lattice>,
 {
     // initialize many surfers at each node.
     let nodes =
-    edges.flat_map(|(x,y)| Some(x).into_iter().chain(Some(y)))
+    edges.clone()
+         .flat_map(|(x,y)| Some(x).into_iter().chain(Some(y)))
          .distinct();
 
     // snag out-degrees for each node.
-    let degrs = edges.map(|(src,_dst)| src)
+    let degrs = edges.clone()
+                     .map(|(src,_dst)| src)
                      .count();
 
     edges.scope().iterative::<Iter,_,_>(|inner| {
@@ -98,7 +100,7 @@ where
         let degrs = degrs.enter(inner);
 
         // Initial and reset numbers of surfers at each node.
-        let inits = nodes.explode(|node| Some((node, 6_000_000)));
+        let inits = nodes.clone().explode(|node| Some((node, 6_000_000)));
         let reset = nodes.explode(|node| Some((node, 1_000_000)));
 
         // Define a recursive variable to track surfers.
@@ -107,15 +109,15 @@ where
 
         // Match each surfer with the degree, scale numbers down.
         let to_push =
-        degrs.semijoin(&ranks)
+        degrs.semijoin(ranks.clone())
              .threshold(|(_node, degr), rank| (5 * rank) / (6 * degr))
              .map(|(node, _degr)| node);
 
         // Propagate surfers along links, blend in reset surfers.
         let mut pushed =
-        edges.semijoin(&to_push)
+        edges.semijoin(to_push)
              .map(|(_node, dest)| dest)
-             .concat(&reset)
+             .concat(reset)
              .consolidate();
 
         if iters > 0 {
@@ -127,7 +129,7 @@ where
         }
 
         // Bind the recursive variable, return its limit.
-        ranks.set(&pushed);
+        ranks.set(pushed.clone());
         pushed.leave()
     })
 }

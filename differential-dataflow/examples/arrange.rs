@@ -107,14 +107,14 @@ fn main() {
             let roots = roots.map(|x| (x, 0));
 
             // repeatedly update minimal distances each node can be reached from each root
-            roots.iterate(|dists| {
+            roots.clone().iterate(|dists| {
 
                 let edges = edges.enter(&dists.scope());
                 let roots = roots.enter(&dists.scope());
 
                 dists.arrange_by_key()
-                     .join_core(&edges, |_k,l,d| Some((*d, l+1)))
-                     .concat(&roots)
+                     .join_core(edges, |_k,l,d| Some((*d, l+1)))
+                     .concat(roots)
                      .reduce(|_, s, t| t.push((*s[0].0, 1)))
             })
             .map(|(_node, dist)| dist)
@@ -131,9 +131,9 @@ fn main() {
             let (input, query) = scope.new_collection();
 
             query.map(|x| (x, x))
-                 .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                 .join_core(&edges, |_n, &q, &d| Some((d, q)))
-                 .join_core(&edges, |_n, &q, &d| Some((d, q)))
+                 .join_core(edges.clone(), |_n, &q, &d| Some((d, q)))
+                 .join_core(edges.clone(), |_n, &q, &d| Some((d, q)))
+                 .join_core(edges.clone(), |_n, &q, &d| Some((d, q)))
                  .filter(move |_| inspect)
                  .map(|x| x.1)
                  .consolidate()

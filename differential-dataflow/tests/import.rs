@@ -138,7 +138,7 @@ fn test_import_completed_dataflow() {
                     .as_collection(|k,v| (k.clone(), v.clone()))
                     .inner
                     .exchange(|_| 0);
-                let probe = stream.probe();
+                let probe = stream.clone().probe(); // <-- ack terrible!
                 let captured = stream.capture();
                 (probe, captured,)
             });

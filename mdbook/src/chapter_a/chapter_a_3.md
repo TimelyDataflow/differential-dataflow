@@ -11,8 +11,9 @@ Instead of loading all of our changes and only waiting for the result, we can lo
 
         // if (m2, m1) and (m1, p), then output (m1, (m2, p))
         manages
+            .clone()
             .map(|(m2, m1)| (m1, m2))
-            .join(&manages)
+            .join(manages)
             // .inspect(|x| println!("{:?}", x))
             .probe()
     });

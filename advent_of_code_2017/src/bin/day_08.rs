@@ -1111,7 +1111,7 @@ wui inc -120 if i > -2038";
 
                     valid
                         .prefix_sum_at(edits.map(|(key,_)| key), 0, |_k,x,y| *x + *y)
-                        .join(&edits)
+                        .join(edits)
                         .filter(|&(_, sum, ((ref src_cmp, src_val), _))| match src_cmp.as_str() {
                             ">"  => sum > src_val,
                             ">=" => sum >= src_val,

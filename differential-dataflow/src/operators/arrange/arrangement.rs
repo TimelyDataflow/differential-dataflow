@@ -17,9 +17,11 @@
 //! see ill-defined data at times for which the trace is not complete. (All current implementations
 //! commit only completed data to the trace).
 
-use timely::dataflow::operators::{Enter, Map};
+use timely::dataflow::operators::{Enter, vec::Map};
 use timely::order::PartialOrder;
-use timely::dataflow::{Scope, Stream, StreamCore};
+use timely::dataflow::Stream as StreamCore;
+use timely::dataflow::StreamVec as Stream;
+use timely::dataflow::Scope;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::progress::Timestamp;
@@ -87,14 +89,14 @@ where
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
-    pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
+    pub fn enter<'a, TInner>(self, child: &Child<'a, G, TInner>)
         -> Arranged<Child<'a, G, TInner>, TraceEnter<Tr, TInner>>
         where
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone,
     {
         Arranged {
             stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
-            trace: TraceEnter::make_from(self.trace.clone()),
+            trace: TraceEnter::make_from(self.trace),
         }
     }
 
@@ -102,11 +104,11 @@ where
     ///
     /// This method only applies to *regions*, which are subscopes with the same timestamp
     /// as their containing scope. In this case, the trace type does not need to change.
-    pub fn enter_region<'a>(&self, child: &Child<'a, G, G::Timestamp>)
+    pub fn enter_region<'a>(self, child: &Child<'a, G, G::Timestamp>)
         -> Arranged<Child<'a, G, G::Timestamp>, Tr> {
         Arranged {
             stream: self.stream.enter(child),
-            trace: self.trace.clone(),
+            trace: self.trace,
         }
     }
 
@@ -115,7 +117,7 @@ where
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
-    pub fn enter_at<'a, TInner, F, P>(&self, child: &Child<'a, G, TInner>, logic: F, prior: P)
+    pub fn enter_at<'a, TInner, F, P>(self, child: &Child<'a, G, TInner>, logic: F, prior: P)
         -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
@@ -125,7 +127,7 @@ where
         let logic1 = logic.clone();
         let logic2 = logic.clone();
         Arranged {
-            trace: TraceEnterAt::make_from(self.trace.clone(), logic1, prior),
+            trace: TraceEnterAt::make_from(self.trace, logic1, prior),
             stream: self.stream.enter(child).map(move |bw| BatchEnterAt::make_from(bw, logic2.clone())),
         }
     }
@@ -135,7 +137,7 @@ where
     /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
-    pub fn as_collection<D: Data, L>(&self, mut logic: L) -> VecCollection<G, D, Tr::Diff>
+    pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<G, D, Tr::Diff>
         where
             L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> D+'static,
     {
@@ -147,7 +149,7 @@ where
     /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
-    pub fn as_vecs(&self) -> VecCollection<G, (Tr::KeyOwn, Tr::ValOwn), Tr::Diff>
+    pub fn as_vecs(self) -> VecCollection<G, (Tr::KeyOwn, Tr::ValOwn), Tr::Diff>
     where
         Tr::KeyOwn: crate::ExchangeData,
         Tr::ValOwn: crate::ExchangeData,
@@ -159,12 +161,12 @@ where
     ///
     /// The supplied logic may produce an iterator over output values, allowing either
     /// filtering or flat mapping as part of the extraction.
-    pub fn flat_map_ref<I, L>(&self, logic: L) -> VecCollection<G, I::Item, Tr::Diff>
+    pub fn flat_map_ref<I, L>(self, logic: L) -> VecCollection<G, I::Item, Tr::Diff>
         where
             I: IntoIterator<Item: Data>,
             L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
     {
-        Self::flat_map_batches(&self.stream, logic)
+        Self::flat_map_batches(self.stream, logic)
     }
 
     /// Extracts elements from a stream of batches as a collection.
@@ -174,7 +176,7 @@ where
     ///
     /// This method exists for streams of batches without the corresponding arrangement.
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
-    pub fn flat_map_batches<I, L>(stream: &Stream<G, Tr::Batch>, mut logic: L) -> VecCollection<G, I::Item, Tr::Diff>
+    pub fn flat_map_batches<I, L>(stream: Stream<G, Tr::Batch>, mut logic: L) -> VecCollection<G, I::Item, Tr::Diff>
     where
         I: IntoIterator<Item: Data>,
         L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
@@ -214,7 +216,7 @@ where
     /// A convenience method to join and produce `VecCollection` output.
     ///
     /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
-    pub fn join_core<T2,I,L>(&self, other: &Arranged<G,T2>, mut result: L) -> VecCollection<G,I::Item,<T1::Diff as Multiply<T2::Diff>>::Output>
+    pub fn join_core<T2,I,L>(self, other: Arranged<G,T2>, mut result: L) -> VecCollection<G,I::Item,<T1::Diff as Multiply<T2::Diff>>::Output>
     where
         T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>,Time=T1::Time>+Clone+'static,
         T1::Diff: Multiply<T2::Diff, Output: Semigroup+'static>,
@@ -249,7 +251,7 @@ where
     T1: TraceReader + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, Bu, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         T1: TraceReader<KeyOwn: Ord>,
         T2: for<'a> Trace<
@@ -272,7 +274,7 @@ where
     }
 
     /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, Bu, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
         T1: TraceReader<KeyOwn: Ord>,
         T2: for<'a> Trace<
@@ -299,22 +301,22 @@ where
     ///
     /// This method only applies to *regions*, which are subscopes with the same timestamp
     /// as their containing scope. In this case, the trace type does not need to change.
-    pub fn leave_region(&self) -> Arranged<G, Tr> {
+    pub fn leave_region(self) -> Arranged<G, Tr> {
         use timely::dataflow::operators::Leave;
         Arranged {
             stream: self.stream.leave(),
-            trace: self.trace.clone(),
+            trace: self.trace,
         }
     }
 }
 
 /// A type that can be arranged as if a collection of updates.
-pub trait Arrange<G, C>
+pub trait Arrange<G, C> : Sized
 where
     G: Scope<Timestamp: Lattice>,
 {
     /// Arranges updates into a shared trace.
-    fn arrange<Ba, Bu, Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange<Ba, Bu, Tr>(self) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
@@ -324,7 +326,7 @@ where
     }
 
     /// Arranges updates into a shared trace, with a supplied name.
-    fn arrange_named<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
@@ -337,7 +339,7 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: &StreamCore<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: StreamCore<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp: Lattice>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
@@ -398,7 +400,7 @@ where
             // when we realize that time intervals are complete.
 
             input.for_each(|cap, data| {
-                capabilities.insert(cap.retain());
+                capabilities.insert(cap.retain(0));
                 batcher.push_container(data);
             });
 

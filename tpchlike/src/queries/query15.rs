@@ -93,7 +93,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .suppliers()
         .map(|s| (s.supp_key, (s.name, s.address, s.phone)))
-        .join(&top_suppliers)
+        .join(top_suppliers)
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
 }
@@ -148,7 +148,7 @@ where
         .count_total();
 
     top_suppliers
-        .join_core(&arrangements.supplier, |_sk,&rev,s| Some((s.supp_key, s.name, s.address, s.phone, rev)))
+        .join_core(arrangements.supplier, |_sk,&rev,s| Some((s.supp_key, s.name, s.address, s.phone, rev)))
         .count_total()
         .probe_with(probe);
 }

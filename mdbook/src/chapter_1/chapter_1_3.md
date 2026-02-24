@@ -16,7 +16,7 @@ Let's describe an iterative computation that starts from manager-employee relati
             // if x manages y, and y manages z, then x manages z (transitively).
             manages
                 .map(|(x, y)| (y, x))
-                .join(&manages)
+                .join(manages)
                 .map(|(y, x, z)| (x, z))
         });
 ```
@@ -70,7 +70,7 @@ To create an iterative computation, we now need to define some variables that ca
         let step =
         variable
             .map(|(x, y)| (y, x))
-            .join(&variable)
+            .join(variable)
             .map(|(y, x, z)| (x, z));
 
         variable.set(step);
@@ -95,7 +95,7 @@ Finally, we probably want to return the final value of the variable, what it con
         let step =
         variable
             .map(|(x, y)| (y, x))
-            .join(&variable)
+            .join(variable)
             .map(|(y, x, z)| (x, z));
 
         variable

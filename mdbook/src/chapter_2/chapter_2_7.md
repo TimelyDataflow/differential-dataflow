@@ -11,16 +11,17 @@ As an example, we can take our `manages` relation and determine for all employee
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::Iterate;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
+# fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
 # {
     manages   // transitive contains (manager, person) for many hops.
         .iterate(|transitive| {
             transitive
+                .clone()
                 .map(|(mk, m1)| (m1, mk))
-                .join(&transitive)
+                .join(transitive.clone())
                 .map(|(m1, (mk, p))| (mk, p))
-                .concat(&transitive)
+                .concat(transitive)
                 .distinct()
         });
 # }
@@ -47,19 +48,20 @@ In the example above, we could rewrite
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: Scope>(manages: &VecCollection<G, (u64, u64)>)
+# fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
 # where G::Timestamp: Lattice
 # {
     manages   // transitive contains (manager, person) for many hops.
+        .clone()
         .iterate(|transitive| {
 
             let manages = manages.enter(&transitive.scope());
 
             transitive
                 .map(|(mk, m1)| (m1, mk))
-                .join(&manages)
+                .join(manages.clone())
                 .map(|(m1, (mk, p))| (mk, p))
-                .concat(&manages)
+                .concat(manages)
                 .distinct()
         });
 # }
@@ -93,13 +95,13 @@ As an example, the implementation of the `iterate` operator looks something like
 # {
 #     (*variable).clone()
 # }
-# fn example<'a, G: Scope<Timestamp=u64>>(collection: &VecCollection<G, (u64, u64)>) //, logic: impl Fn(&VecVariable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>)
+# fn example<'a, G: Scope<Timestamp=u64>>(collection: VecCollection<G, (u64, u64)>) //, logic: impl Fn(&VecVariable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>)
 #    where G::Timestamp: Lattice
 # {
     collection.scope().scoped("inner", |subgraph| {
         let variable = VecVariable::new_from(collection.enter(subgraph), 1);
         let result = logic(&variable);
-        variable.set(&result);
+        variable.set(result.clone());
         result.leave()
     });
 # }

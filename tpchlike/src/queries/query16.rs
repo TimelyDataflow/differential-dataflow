@@ -64,7 +64,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let parts = collections
         .partsupps()
         .map(|ps| (ps.supp_key, ps.part_key))
-        .antijoin(&suppliers)
+        .antijoin(suppliers)
         .map(|(_supp_key, part_key)| part_key);
 
     collections
@@ -75,7 +75,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .semijoin(&parts)
+        .semijoin(parts)
         .map(|(_, brand_type_size)| brand_type_size)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
@@ -113,14 +113,14 @@ where
         .inner
         .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
         .as_collection()
-        .join_core(&arrangements.part, |_pk,&sk,p| {
+        .join_core(arrangements.part, |_pk,&sk,p| {
             if !starts_with(&p.brand, b"Brand#45") && !starts_with(&p.typ.as_bytes(), b"MEDIUM POLISHED") && [49, 14, 23, 45, 19, 3, 36, 9].contains(&p.size) {
                 Some((sk, (p.brand, p.typ, p.size)))
             }
             else { None }
 
         })
-        .antijoin(&suppliers)
+        .antijoin(suppliers)
         .map(|(_sk, stuff)| stuff)
         .count_total()
         .probe_with(probe);

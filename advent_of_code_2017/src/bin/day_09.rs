@@ -64,7 +64,7 @@ fn main() {
             let values = pp_broadcast(ranges, 0, [0, 1, 2, 3], |state, trans| trans[*state]);
 
             // line up (position, symbol, state).
-            let symbols_state = input.join(&values);
+            let symbols_state = input.join(values);
 
             // restrict the positions down to those that are neither '!' nor themselves cancelled.
             let active = symbols_state.filter(|&(_, symbol, state)| symbol != '!' && (state == 0 || state == 1));
@@ -78,7 +78,7 @@ fn main() {
             parens
                 .filter(|&(_pos, symbol, _)| symbol == '}')
                 .map(|(pos, symbol, _)| (pos, symbol))
-                .join(&values)
+                .join(values)
                 .explode(|(_pos, _sym, sum)| Some(((), sum)))
                 .consolidate()
                 .inspect(|x| println!("part1: {:?}", x.2));
@@ -120,7 +120,7 @@ where
                     if input.len() > 1 { result = combine(result, &(input[1].0).1); }
                     output.push((result, 1));
                 })
-                .concat(&unit_ranges.enter(&ranges.scope()))
+                .concat(unit_ranges.enter(&ranges.scope()))
         )
 }
 
@@ -141,9 +141,9 @@ where
     let zero_ranges =
         ranges
             .map(move |((pos, log),_)| ((pos, if log > 0 { log - 1 } else { 0 }), zero.clone()))
-            .antijoin(&ranges.map(|((pos, log),_)| (pos, log)));
+            .antijoin(ranges.map(|((pos, log),_)| (pos, log)));
 
-    let aggregates = ranges.concat(&zero_ranges);
+    let aggregates = ranges.concat(zero_ranges);
 
     let init_state =
     Some(((0, seed), Default::default(), 1))
@@ -157,7 +157,7 @@ where
                 .enter(&state.scope())
                 .map(|((pos, log), data)| (pos, (log, data)))
                 .join_map(state, move |&pos, &(log, ref data), state| (pos + (1 << log), combine(state, data)))
-                .concat(&init_state.enter(&state.scope()))
+                .concat(init_state.enter(&state.scope()))
                 .distinct()
         })
         .consolidate()

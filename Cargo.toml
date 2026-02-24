@@ -3,15 +3,15 @@ members = [
     "differential-dataflow",
     # "advent_of_code_2017",
     "dogsdogsdogs",
-    "experiments",
-    "interactive",
-    "server",
-    "server/dataflows/degr_dist",
-    "server/dataflows/neighborhood",
-    "server/dataflows/random_graph",
-    "server/dataflows/reachability",
+    #"experiments",
+    #"interactive",
+    #"server",
+    #"server/dataflows/degr_dist",
+    #"server/dataflows/neighborhood",
+    #"server/dataflows/random_graph",
+    #"server/dataflows/reachability",
     #"tpchlike",
-    "doop",
+    #"doop",
     "mdbook",
 ]
 resolver = "2"
@@ -21,9 +21,9 @@ edition = "2021"
 
 [workspace.dependencies]
 differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.19.1" }
-timely = { version = "0.26", default-features = false }
+#timely = { version = "0.26", default-features = false }
 columnar = { version = "0.11", default-features = false }
-#timely = { path = "../timely-dataflow/timely/", default-features = false }
+timely = { path = "../timely-dataflow/timely/", default-features = false }
 
 [profile.release]
 opt-level = 3

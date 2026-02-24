@@ -26,7 +26,7 @@ use crate::trace::TraceReader;
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
-pub fn reduce_trace<G, T1, Bu, T2, L>(trace: &Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+pub fn reduce_trace<G, T1, Bu, T2, L>(trace: Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader<KeyOwn: Ord> + Clone + 'static,
@@ -40,15 +40,16 @@ where
     let stream = {
 
         let result_trace = &mut result_trace;
+        let scope = trace.stream.scope();
         trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
 
             // Acquire a logger for arrange events.
-            let logger = trace.stream.scope().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+            let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
-            let activator = Some(trace.stream.scope().activator_for(operator_info.address.clone()));
+            let activator = Some(scope.activator_for(operator_info.address.clone()));
             let mut empty = T2::new(operator_info.clone(), logger.clone(), activator);
             // If there is default exert logic set, install it.
-            if let Some(exert_logic) = trace.stream.scope().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
+            if let Some(exert_logic) = scope.config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty.set_exert_logic(exert_logic);
             }
 
@@ -80,7 +81,7 @@ where
             let mut output_upper = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
             let mut output_lower = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
-            let id = trace.stream.scope().index();
+            let id = scope.index();
 
             move |(input, _frontier), output| {
 
@@ -123,7 +124,7 @@ where
                     // Ensure that `capabilities` covers the capability of the batch.
                     capabilities.retain(|cap| !capability.time().less_than(cap.time()));
                     if !capabilities.iter().any(|cap| cap.time().less_equal(capability.time())) {
-                        capabilities.push(capability.retain());
+                        capabilities.push(capability.retain(0));
                     }
                 });
 
@@ -654,7 +655,7 @@ mod history_replay {
                         //         self.output_buffer.push(((*value).clone(), -diff));
                         //     }
                         //     else {
-                        //         self.temporary.push(next_time.join(&time));
+                        //         self.temporary.push(next_time.join(time));
                         //     }
                         // }
 

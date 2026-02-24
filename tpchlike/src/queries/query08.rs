@@ -62,8 +62,8 @@ pub fn query<G: Scope>(collections: &mut Collections<G>, probe: &mut ProbeHandle
 where G::Timestamp: Lattice+TotalOrder+Ord {
 
     let regions = collections.regions().filter(|r| starts_with(&r.name, b"AMERICA")).map(|r| r.region_key);
-    let nations1 = collections.nations().map(|n| (n.region_key, n.nation_key)).semijoin(&regions).map(|x| x.1);
-    let customers = collections.customers().map(|c| (c.nation_key, c.cust_key)).semijoin(&nations1).map(|x| x.1);
+    let nations1 = collections.nations().map(|n| (n.region_key, n.nation_key)).semijoin(regions).map(|x| x.1);
+    let customers = collections.customers().map(|c| (c.nation_key, c.cust_key)).semijoin(nations1).map(|x| x.1);
     let orders =
     collections
         .orders()
@@ -73,7 +73,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .semijoin(&customers)
+        .semijoin(customers)
         .map(|x| x.1);
 
     let nations2 = collections.nations.map(|n| (n.nation_key, starts_with(&n.name, b"BRAZIL")));
@@ -81,7 +81,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
-        .join(&nations2)
+        .join(nations2)
         .map(|(_, (supp_key, is_name))| (supp_key, is_name));
 
     let parts = collections.parts().filter(|p| p.typ.as_str() == "ECONOMY ANODIZED STEEL").map(|p| p.part_key);
@@ -89,11 +89,11 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .lineitems()
         .explode(|l| Some(((l.part_key, (l.supp_key, l.order_key)), ((l.extended_price * (100 - l.discount)) as isize / 100))))
-        .semijoin(&parts)
+        .semijoin(parts)
         .map(|(_part_key, (supp_key, order_key))| (order_key, supp_key))
-        .join(&orders)
+        .join(orders)
         .map(|(_order_key, (supp_key, order_date))| (supp_key, order_date))
-        .join(&suppliers)
+        .join(suppliers)
         .explode(|(_, (order_date, is_name))| Some((order_date, DiffPair::new(if is_name { 1 } else { 0 }, 1))))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
@@ -114,23 +114,23 @@ where
     experiment
         .lineitem(scope)
         .explode(|l| Some(((l.part_key, (l.order_key, l.supp_key)), ((l.extended_price * (100 - l.discount)) as isize / 100))))
-        .join_core(&arrangements.part, |_pk,&(ok,sk),p| {
+        .join_core(arrangements.part, |_pk,&(ok,sk),p| {
             if p.typ.as_str() == "ECONOMY ANODIZED STEEL" { Some((ok,sk)) } else { None }
         })
-        .join_core(&arrangements.order, |_ok,&sk,o| {
+        .join_core(arrangements.order, |_ok,&sk,o| {
             if create_date(1995,1,1) <= o.order_date && o.order_date <= create_date(1996, 12, 31) {
                 Some((o.cust_key, (sk,o.order_date >> 16)))
             }
             else { None }
         })
-        .join_core(&arrangements.customer, |_ck,&(sk,yr),c| Some((c.nation_key, (sk,yr))))
-        .join_core(&arrangements.nation, |_nk,&(sk,yr),n| Some((n.region_key, (sk,yr))))
-        .join_core(&arrangements.region, |_rk,&(sk,yr),r| {
+        .join_core(arrangements.customer, |_ck,&(sk,yr),c| Some((c.nation_key, (sk,yr))))
+        .join_core(arrangements.nation, |_nk,&(sk,yr),n| Some((n.region_key, (sk,yr))))
+        .join_core(arrangements.region, |_rk,&(sk,yr),r| {
             if starts_with(&r.name, b"AMERICA") { Some((sk,yr,true)) } else { Some((sk,yr,false)) }
         })
         .explode(|(sk,yr,is_name)| Some(((sk,yr), DiffPair::new(if is_name { 1 } else { 0 }, 1))))
-        .join_core(&arrangements.supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
-        .join_core(&arrangements.nation, |_nk,&yr,n| Some((n.name,yr)))
+        .join_core(arrangements.supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
+        .join_core(arrangements.nation, |_nk,&yr,n| Some((n.name,yr)))
         .count_total()
         .probe_with(probe);
 }

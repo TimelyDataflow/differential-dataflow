@@ -53,7 +53,7 @@ For example, let's imagine we want to construct many new dataflows each of which
             // Import arrangement, extract keys from `query`.
             trace
                 .import(scope)
-                .semijoin(&query)
+                .semijoin(query)
                 .consolidate()
                 .inspect(move |x| println!("{:?}\t{:?}", timer.elapsed(), x))
                 .probe_with(&mut probe);

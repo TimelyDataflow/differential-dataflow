@@ -74,19 +74,19 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .customers()
         .map(|c| (c.nation_key, c.cust_key))
-        .join_map(&nations, |_, &cust_key, &name| (cust_key, name));
+        .join_map(nations, |_, &cust_key, &name| (cust_key, name));
 
     let orders =
     collections
         .orders()
         .map(|o| (o.cust_key, o.order_key))
-        .join_map(&customers, |_, &order_key, &name| (order_key, name));
+        .join_map(customers, |_, &order_key, &name| (order_key, name));
 
     let suppliers =
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
-        .join_map(&nations, |_, &supp_key, &name| (supp_key, name));
+        .join_map(nations, |_, &supp_key, &name| (supp_key, name));
 
     collections
         .lineitems()
@@ -96,8 +96,8 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .join_map(&suppliers, |_, &(order_key, ship_date), &name_s| (order_key, (ship_date, name_s)))
-        .join_map(&orders, |_, &(ship_date, name_s), &name_c| (name_s, name_c, ship_date >> 16))
+        .join_map(suppliers, |_, &(order_key, ship_date), &name_s| (order_key, (ship_date, name_s)))
+        .join_map(orders, |_, &(ship_date, name_s), &name_c| (name_s, name_c, ship_date >> 16))
         .filter(|x| x.0 != x.1)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
@@ -123,8 +123,8 @@ where
             }
             else { None }
         )
-        .join_core(&arrangements.supplier, |_sk,&(ok,sd),s| Some((s.nation_key,(ok,sd))))
-        .join_core(&arrangements.nation, |_nk,&(ok,sd),n| {
+        .join_core(arrangements.supplier, |_sk,&(ok,sd),s| Some((s.nation_key,(ok,sd))))
+        .join_core(arrangements.nation, |_nk,&(ok,sd),n| {
             if starts_with(&n.name, b"FRANCE") || starts_with(&n.name, b"GERMANY") {
                 Some((ok,(sd,n.name)))
             }
@@ -132,9 +132,9 @@ where
                 None
             }
         })
-        .join_core(&arrangements.order, |_ok,&(sd,n1),o| Some((o.cust_key,(sd,n1))))
-        .join_core(&arrangements.customer, |_ck,&(sd,n1),c| Some((c.nation_key,(sd,n1))))
-        .join_core(&arrangements.nation, |_nk,&(sd,n1),n| {
+        .join_core(arrangements.order, |_ok,&(sd,n1),o| Some((o.cust_key,(sd,n1))))
+        .join_core(arrangements.customer, |_ck,&(sd,n1),c| Some((c.nation_key,(sd,n1))))
+        .join_core(arrangements.nation, |_nk,&(sd,n1),n| {
             if starts_with(&n.name, b"FRANCE") || starts_with(&n.name, b"GERMANY") {
                 Some((sd,n1,n.name))
             }

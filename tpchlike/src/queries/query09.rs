@@ -66,15 +66,15 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .lineitems()
         .map(|l| (l.part_key, (l.supp_key, l.order_key, l.extended_price * (100 - l.discount) / 100, l.quantity)))
-        .semijoin(&parts)
+        .semijoin(parts)
         .map(|(part_key, (supp_key, order_key, revenue, quantity))| ((part_key, supp_key), (order_key, revenue, quantity)))
-        .join(&collections.partsupps().map(|ps| ((ps.part_key, ps.supp_key), ps.supplycost)))
+        .join(collections.partsupps().map(|ps| ((ps.part_key, ps.supp_key), ps.supplycost)))
         .explode(|((_part_key, supp_key), ((order_key, revenue, quantity), supplycost))|
             Some(((order_key, supp_key), ((revenue - supplycost * quantity) as isize)))
         )
-        .join_map(&collections.orders().map(|o| (o.order_key, o.order_date >> 16)), |_, &supp_key, &order_year| (supp_key, order_year))
-        .join_map(&collections.suppliers().map(|s| (s.supp_key, s.nation_key)), |_, &order_year, &nation_key| (nation_key, order_year))
-        .join(&collections.nations().map(|n| (n.nation_key, n.name)))
+        .join_map(collections.orders().map(|o| (o.order_key, o.order_date >> 16)), |_, &supp_key, &order_year| (supp_key, order_year))
+        .join_map(collections.suppliers().map(|s| (s.supp_key, s.nation_key)), |_, &order_year, &nation_key| (nation_key, order_year))
+        .join(collections.nations().map(|n| (n.nation_key, n.name)))
         .count_total()
         .probe_with(probe);
 }
@@ -93,17 +93,17 @@ where
     experiment
         .lineitem(scope)
         .map(|l| (l.part_key, (l.supp_key, l.order_key, l.extended_price * (100 - l.discount) / 100, l.quantity)))
-        .join_core(&arrangements.part, |&pk,&(sk,ok,ep,qu),p| {
+        .join_core(arrangements.part, |&pk,&(sk,ok,ep,qu),p| {
             if substring(&p.name.as_bytes(), b"green") {
                 Some(((pk,sk),(ok,ep,qu)))
             }
             else { None }
         })
-        .join_core(&arrangements.partsupp, |&(_pk,sk),&(ok,ep,qu),s| Some((ok, (sk, ep - (qu * s.supplycost)))))
+        .join_core(arrangements.partsupp, |&(_pk,sk),&(ok,ep,qu),s| Some((ok, (sk, ep - (qu * s.supplycost)))))
         .explode(|(ok,(sk,am))| Some(((ok,sk), am as isize)))
-        .join_core(&arrangements.order, |_ok,&sk,o| Some((sk,o.order_date >> 16)))
-        .join_core(&arrangements.supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
-        .join_core(&arrangements.nation, |_nk,&yr,n| Some((n.name,yr)))
+        .join_core(arrangements.order, |_ok,&sk,o| Some((sk,o.order_date >> 16)))
+        .join_core(arrangements.supplier, |_sk,&yr,s| Some((s.nation_key, yr)))
+        .join_core(arrangements.nation, |_nk,&yr,n| Some((n.name,yr)))
         .count_total()
         .probe_with(probe);
 }

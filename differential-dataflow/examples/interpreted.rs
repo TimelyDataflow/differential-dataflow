@@ -31,21 +31,21 @@ fn main() {
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
         worker.dataflow::<(),_,_>(|scope| {
-            interpret(&VecCollection::new(edges.to_stream(scope)), &[(0,2), (1,2)]);
+            interpret(VecCollection::new(edges.to_stream(scope)), &[(0,2), (1,2)]);
         });
 
     }).unwrap();
 }
 
-fn interpret<G>(edges: &VecCollection<G, Edge>, relations: &[(usize, usize)]) -> VecCollection<G, Vec<Node>>
+fn interpret<G>(edges: VecCollection<G, Edge>, relations: &[(usize, usize)]) -> VecCollection<G, Vec<Node>>
 where
     G: Scope<Timestamp: Lattice+Hash+Ord>,
 {
 
     // arrange the edge relation three ways.
-    let as_self = edges.arrange_by_self();
-    let forward = edges.arrange_by_key();
-    let reverse = edges.map_in_place(|x| ::std::mem::swap(&mut x.0, &mut x.1))
+    let as_self = edges.clone().arrange_by_self();
+    let forward = edges.clone().arrange_by_key();
+    let reverse = edges.clone().map_in_place(|x| ::std::mem::swap(&mut x.0, &mut x.1))
                        .arrange_by_key();
 
     let mut field_present = ::std::collections::HashSet::new();
@@ -65,14 +65,14 @@ where
                 // Both variables are bound, so this is a semijoin.
                 results
                     .map(move |vec| ((vec[src], vec[dst]), vec))
-                    .join_core(&as_self, |_key, vec, &()| Some(vec.clone()))
+                    .join_core(as_self.clone(), |_key, vec, &()| Some(vec.clone()))
             }
             (true, false) => {
                 // Only `src` is bound, so we must use `forward` to propose `dst`.
                 field_present.insert(dst);
                 results
                     .map(move |vec| (vec[src], vec))
-                    .join_core(&forward, move |_src_val, vec, &dst_val| {
+                    .join_core(forward.clone(), move |_src_val, vec, &dst_val| {
                         let mut temp = vec.clone();
                         while temp.len() <= dst { temp.push(0); }
                         temp[dst] = dst_val;
@@ -84,7 +84,7 @@ where
                 field_present.insert(src);
                 results
                     .map(move |vec| (vec[dst], vec))
-                    .join_core(&reverse, move |_dst_val, vec, &src_val| {
+                    .join_core(reverse.clone(), move |_dst_val, vec, &src_val| {
                         let mut temp = vec.clone();
                         while temp.len() <= src { temp.push(0); }
                         temp[src] = src_val;

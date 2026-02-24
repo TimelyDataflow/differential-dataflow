@@ -34,8 +34,8 @@ fn main() {
 
                     inner
                         .map(|(a,b)| (b,a))
-                        .join_core(&edges, |_b,&a,&c| Some((a,c)))
-                        .concat(&nodes)
+                        .join_core(edges, |_b,&a,&c| Some((a,c)))
+                        .concat(nodes)
                         .distinct()
                 })
                 .probe();

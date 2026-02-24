@@ -71,15 +71,15 @@ pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
     ///          });
     /// });
     /// ```
-    fn iterate<F>(&self, logic: F) -> VecCollection<G, D, R>
+    fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(&VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>;
+        for<'a> F: FnOnce(VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>;
 }
 
 impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for VecCollection<G, D, R> {
-    fn iterate<F>(&self, logic: F) -> VecCollection<G, D, R>
+    fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(&VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
     {
         self.inner.scope().scoped("Iterate", |subgraph| {
             // create a new variable, apply logic, bind variable, return.
@@ -89,22 +89,19 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterat
             // diffs produced; `result` is post-consolidation, and means fewer
             // records are yielded out of the loop.
             let variable = Variable::new_from(self.enter(subgraph), Product::new(Default::default(), 1));
-            let result = logic(&variable);
-            variable.set(&result);
+            let result = logic(variable.clone());
+            variable.set(result.clone());
             result.leave()
         })
     }
 }
 
 impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
-    fn iterate<F>(&self, logic: F) -> VecCollection<G, D, R>
+    fn iterate<F>(mut self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(&VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
     {
-        // TODO: This makes me think we have the wrong ownership pattern here.
-        let mut clone = self.clone();
-        clone
-            .scoped("Iterate", |subgraph| {
+        self.scoped("Iterate", |subgraph| {
                 // create a new variable, apply logic, bind variable, return.
                 //
                 // this could be much more succinct if we returned the collection
@@ -112,8 +109,8 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
                 // diffs produced; `result` is post-consolidation, and means fewer
                 // records are yielded out of the loop.
                 let variable = SemigroupVariable::new(subgraph, Product::new(Default::default(), 1));
-                let result = logic(&variable);
-                variable.set(&result);
+                let result = logic(variable.clone());
+                variable.set(result.clone());
                 result.leave()
             }
         )
@@ -144,9 +141,10 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
 ///     scope.iterative::<u64,_,_>(|nested| {
 ///         let summary = Product::new(Default::default(), 1);
 ///         let variable = Variable::new_from(numbers.enter(nested), summary);
-///         let result = variable.map(|x| if x % 2 == 0 { x/2 } else { x })
+///         let result = variable.clone()
+///                              .map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                              .consolidate();
-///         variable.set(&result)
+///         variable.set(result)
 ///                 .leave()
 ///     });
 /// })
@@ -165,7 +163,7 @@ where
 /// A `Variable` specialized to a vector container of update triples (data, time, diff).
 pub type VecVariable<G, D, R> = Variable<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
 
-impl<G, C: Container> Variable<G, C>
+impl<G, C: Container + Clone> Variable<G, C>
 where
     G: Scope<Timestamp: Lattice>,
     C: crate::collection::containers::Negate + crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
@@ -183,7 +181,7 @@ where
     /// Creates a new `Variable` from a supplied `source` stream.
     pub fn new_from(source: Collection<G, C>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (feedback, updates) = source.inner.scope().feedback(step.clone());
-        let collection = Collection::<G, C>::new(updates).concat(&source);
+        let collection = Collection::<G, C>::new(updates).concat(source.clone());
         Variable { collection, feedback, source: Some(source), step }
     }
 
@@ -191,12 +189,12 @@ where
     ///
     /// This method binds the `Variable` to be equal to the supplied collection,
     /// which may be recursively defined in terms of the variable itself.
-    pub fn set(self, result: &Collection<G, C>) -> Collection<G, C> {
+    pub fn set(self, result: Collection<G, C>) -> Collection<G, C> where C: Clone {
         let mut in_result = result.clone();
-        if let Some(source) = &self.source {
-            in_result = in_result.concat(&source.negate());
+        if let Some(source) = self.source.clone() {
+            in_result = in_result.concat(source.negate());
         }
-        self.set_concat(&in_result)
+        self.set_concat(in_result)
     }
 
     /// Set the definition of the `Variable` to a collection concatenated to `self`.
@@ -208,7 +206,7 @@ where
     ///
     /// This behavior can also be achieved by using `new` to create an empty initial
     /// collection, and then using `self.set(self.concat(result))`.
-    pub fn set_concat(self, result: &Collection<G, C>) -> Collection<G, C> {
+    pub fn set_concat(self, result: Collection<G, C>) -> Collection<G, C> {
         let step = self.step;
         result
             .results_in(step)
@@ -255,7 +253,7 @@ where
     }
 
     /// Adds a new source of data to `self`.
-    pub fn set(self, result: &Collection<G, C>) -> Collection<G, C> {
+    pub fn set(self, result: Collection<G, C>) -> Collection<G, C> {
         let step = self.step;
         result
             .results_in(step)

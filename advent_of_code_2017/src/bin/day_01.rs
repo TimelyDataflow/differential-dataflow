@@ -16,7 +16,7 @@ fn main() {
         let index = worker.index();
         let peers = worker.peers();
 
-        let worker_input = 
+        let worker_input =
         input
             .iter()
             .map(|digit| digit - b'0')
@@ -28,17 +28,17 @@ fn main() {
 
             let digits = scope.new_collection_from(worker_input).1;
 
-            // The two parts ask to line up elements with the next one in the sequence (part 1) and 
-            // the one half way around the sequence (part 2). To find matches, we will shift the 
-            // associated position field while keeping the part identifier as a field (`1` or `2` 
+            // The two parts ask to line up elements with the next one in the sequence (part 1) and
+            // the one half way around the sequence (part 2). To find matches, we will shift the
+            // associated position field while keeping the part identifier as a field (`1` or `2`
             // respectively). We then restrict both by the original `digits` to find matches.
 
             let part1 = digits.map(move |(digit, position)| ((digit, (position + 1) % length), 1));
             let part2 = digits.map(move |(digit, position)| ((digit, (position + length/2) % length), 2));
 
             part1
-                .concat(&part2)                                                         // merge collections.
-                .semijoin(&digits)                                                      // restrict to matches.
+                .concat(part2)                                                         // merge collections.
+                .semijoin(digits)                                                      // restrict to matches.
                 .explode(|((digit, _pos), part)| Some((part, digit as isize)))          // `part` with weight `digit`.
                 .consolidate()                                                          // consolidate weights by `part`.
                 .inspect(|elt| println!("part {} accumulation: {:?}", elt.0, elt.2));   // check out answers.

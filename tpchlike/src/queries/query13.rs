@@ -50,7 +50,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .customers()
         .map(|c| c.cust_key)
-        .concat(&orders)
+        .concat(orders)
         .count_total()
         .map(|(_cust_key, count)| (count-1) as usize)
         .count_total()
@@ -89,7 +89,7 @@ where
         .inner
         .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
         .as_collection()
-        .concat(&orders)
+        .concat(orders)
         .count_total()
         .map(|(_cust_key, count)| (count-1) as usize)
         .count_total()

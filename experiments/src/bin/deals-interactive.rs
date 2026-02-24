@@ -218,8 +218,8 @@ where G::Timestamp: Lattice{
         .iterate(|inner|
             edges
                 .enter(&inner.scope())
-                .join_core(&inner.arrange_by_key(), |_,&y,&q| [(y,q)])
-                .concat(&tc_1.enter(&inner.scope()).map(|x| (x,x)))
+                .join_core(inner.arrange_by_key(), |_,&y,&q| [(y,q)])
+                .concat(tc_1.enter(&inner.scope()).map(|x| (x,x)))
                 .distinct()
         )
         .map(|(x,q)| (q,x));
@@ -231,8 +231,8 @@ where G::Timestamp: Lattice{
             edges
                 .as_collection(|&k,&v| (v,k))
                 .enter(&inner.scope())
-                .join_core(&inner.arrange_by_key(), |_,&y,&q| [(y,q)])
-                .concat(&tc_2.enter(&inner.scope()).map(|x| (x,x)))
+                .join_core(inner.arrange_by_key(), |_,&y,&q| [(y,q)])
+                .concat(tc_2.enter(&inner.scope()).map(|x| (x,x)))
                 .distinct()
         )
         .map(|(x,q)| (q,x));
@@ -247,17 +247,17 @@ where G::Timestamp: Lattice{
             edges
                 .as_collection(|&k,&v| (v,k))
                 .enter(&inner.scope())
-                .semijoin(&inner)
+                .semijoin(inner)
                 .map(|(_x,y)| y)
-                .concat(&sg_x.enter(&inner.scope()))
+                .concat(sg_x.enter(&inner.scope()))
                 .distinct()
         );
 
     let magic_edges =
     edges
-        .join_core(&magic.arrange_by_self(), |k,v,_| [(k.clone(), v.clone())])
+        .join_core(magic.arrange_by_self(), |k,v,_| [(k.clone(), v.clone())])
         .map(|(x,y)|(y,x))
-        .semijoin(&magic)
+        .semijoin(magic)
         .map(|(x,y)|(y,x));
 
     let query3 =
@@ -271,15 +271,15 @@ where G::Timestamp: Lattice{
 
             let result =
             inner
-                .join_map(&magic_edges, |_x,&y,&cx| (y,cx))
-                .join_core(&edges, |_y,&cx,&cy| Some((cx,cy)))
-                .concat(&magic.map(|x| (x,x)))
+                .join_map(magic_edges, |_x,&y,&cx| (y,cx))
+                .join_core(edges, |_y,&cx,&cy| Some((cx,cy)))
+                .concat(magic.map(|x| (x,x)))
                 .distinct();
 
             // result.map(|_| ()).consolidate().inspect(|x| println!("\t{:?}", x));
             result
         })
-        .semijoin(&sg_x);
+        .semijoin(sg_x);
 
-    query1.concat(&query2).concat(&query3).map(|(q,_)| q)
+    query1.concat(query2).concat(query3).map(|(q,_)| q)
 }

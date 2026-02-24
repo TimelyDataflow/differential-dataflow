@@ -53,7 +53,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .semijoin(&lineitems)
+        .semijoin(lineitems)
         .map(|(_k,v)| v)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
@@ -75,7 +75,7 @@ where
         .lineitem(scope)
         .flat_map(|l| if l.commit_date < l.receipt_date { Some((l.order_key, ())) } else { None })
         .distinct_total()
-        .join_core(&arrangements.order, |_k,&(),o| {
+        .join_core(arrangements.order, |_k,&(),o| {
             if o.order_date >= ::types::create_date(1993, 7, 1) && o.order_date < ::types::create_date(1993, 10, 1) {
                 Some(o.order_priority)
             }

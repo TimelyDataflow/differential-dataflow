@@ -48,7 +48,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .lineitems()
         .map(|x| (x.part_key, (x.quantity, x.extended_price)))
-        .semijoin(&parts)
+        .semijoin(parts)
         .reduce(|_k, s, t| {
 
             // determine the total and count of quantity.
@@ -79,7 +79,7 @@ where
     experiment
         .lineitem(scope)
         .map(|x| (x.part_key, (x.quantity, x.extended_price)))
-        .join_core(&arrangements.part, |&pk,&(qu,ep),p| {
+        .join_core(arrangements.part, |&pk,&(qu,ep),p| {
             if &p.brand[..8] == b"Brand#23" && &p.container[..7] == b"MED BOX" {
                 Some((pk,(qu,ep)))
             }

@@ -2014,7 +2014,7 @@ fn main() {
         let index = worker.index();
         let peers = worker.peers();
 
-        let worker_input = 
+        let worker_input =
         input
             .lines()
             .enumerate()
@@ -2032,14 +2032,14 @@ fn main() {
             let edges = scope.new_collection_from(worker_input).1;
             let nodes = edges.map(|(src, _tgt)| (src, src)).distinct();
 
-            let labels = 
+            let labels =
             nodes
                 .iterate(|label| {
                     let edges = edges.enter(&label.scope());
                     let nodes = nodes.enter(&label.scope());
                     label
-                        .join_map(&edges, |_src, &lbl, &tgt| (tgt, lbl))
-                        .concat(&nodes)
+                        .join_map(edges, |_src, &lbl, &tgt| (tgt, lbl))
+                        .concat(nodes)
                         .group(|_, input, output| output.push((*input[0].0, 1)))
                 })
                 .map(|(_src, lbl)| lbl);
@@ -2048,13 +2048,13 @@ fn main() {
                 .filter(|&lbl| lbl == 0)
                 .consolidate()
                 .inspect(|x| println!("part1: {:?}", x.2));
-                
+
             labels
                 .distinct()
                 .map(|_| ())
                 .consolidate()
                 .inspect(|x| println!("part2: {:?}", x.2));
-                
+
         });
 
     }).unwrap();
