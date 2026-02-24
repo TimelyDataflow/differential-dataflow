@@ -1,4 +1,4 @@
-use timely::dataflow::operators::{ToStream, Partition, Accumulate, Inspect, Probe};
+use timely::dataflow::operators::{ToStream, vec::{Partition, count::Accumulate}, Inspect, Probe};
 use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::input::Input;
@@ -32,7 +32,7 @@ fn main() {
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
         let index = worker.dataflow::<usize,_,_>(|scope| {
-            CollectionIndex::index(&Collection::new(edges.to_stream(scope)))
+            CollectionIndex::index(Collection::new(edges.to_stream(scope)))
         });
 
         let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x);
@@ -46,22 +46,22 @@ fn main() {
 
             // determine stream of (prefix, count, index) indicating relation with fewest extensions.
             let counts  = edges.map(|p| (p, usize::max_value(), usize::max_value()));
-            let counts0 = index_xz.count(&counts,  0);
-            let counts1 = index_yz.count(&counts0, 1);
+            let counts0 = index_xz.count(counts,  0);
+            let counts1 = index_yz.count(counts0, 1);
 
             // partition by index.
             let parts = counts1.inner.partition(2, |((p, _c, i),t,d)| (i as u64,(p,t,d)));
 
             // propose extensions using relation based on index.
-            let propose0 = index_xz.propose(&parts[0].as_collection());
-            let propose1 = index_yz.propose(&parts[1].as_collection());
+            let propose0 = index_xz.propose(parts[0].clone().as_collection());
+            let propose1 = index_yz.propose(parts[1].clone().as_collection());
 
             // validate proposals with the other index.
-            let validate0 = index_yz.validate(&propose0);
-            let validate1 = index_xz.validate(&propose1);
+            let validate0 = index_yz.validate(propose0);
+            let validate1 = index_xz.validate(propose1);
 
             validate0
-                .concat(&validate1)
+                .concat(validate1)
                 .inner
                 .count()
                 .inspect(move |x| println!("{:?}", x))

@@ -14,7 +14,7 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeData, R: Semigroup> {
+pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeData, R: Semigroup> : Sized {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -30,7 +30,7 @@ pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeDat
     ///          .count_total();
     /// });
     /// ```
-    fn count_total(&self) -> VecCollection<G, (K, R), isize> {
+    fn count_total(self) -> VecCollection<G, (K, R), isize> {
         self.count_total_core()
     }
 
@@ -39,14 +39,14 @@ pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeDat
     /// This method allows `count_total` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2>;
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, R), R2>;
 }
 
 impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for VecCollection<G, K, R>
 where
     G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> VecCollection<G, (K, R), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")
             .count_total_core()
     }
@@ -63,7 +63,7 @@ where
     >+Clone+'static,
     K: ExchangeData,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(&self) -> VecCollection<G, (K, T1::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, T1::Diff), R2> {
 
         let mut trace = self.trace.clone();
 
@@ -85,7 +85,7 @@ where
                 let mut cap = None;
                 input.for_each(|capability, batches| {
                     if cap.is_none() {                          // NB: Assumes batches are in-order
-                        cap = Some(capability.retain());
+                        cap = Some(capability.retain(0));
                     }
                     for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());  // NB: Assumes batches are in-order

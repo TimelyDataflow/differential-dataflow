@@ -126,15 +126,16 @@ where
     // Translate node and edge transitions into a common Location to Location edge with an associated Summary.
     let nodes = nodes.map(|(target, source, summary)| (Location::from(target), (Location::from(source), summary)));
     let edges = edges.map(|(source, target)| (Location::from(source), (Location::from(target), Default::default())));
-    let transitions: VecCollection<G, (Location, (Location, T::Summary))> = nodes.concat(&edges);
+    let transitions: VecCollection<G, (Location, (Location, T::Summary))> = nodes.concat(edges);
 
     times
-        .iterate(|reach| {
+        .clone()
+        .iterate(|scope, reach| {
             transitions
-                .enter(&reach.scope())
-                .join_map(&reach, |_from, (dest, summ), time| (dest.clone(), summ.results_in(time)))
+                .enter(&scope)
+                .join_map(reach, |_from, (dest, summ), time| (dest.clone(), summ.results_in(time)))
                 .flat_map(|(dest, time)| time.map(move |time| (dest, time)))
-                .concat(&times.enter(&reach.scope()))
+                .concat(times.enter(&scope))
                 .reduce(|_location, input, output: &mut Vec<(T, isize)>| {
                     // retain the lower envelope of times.
                     for (t1, _count1) in input.iter() {
@@ -159,6 +160,7 @@ where
     // Start from trivial reachability from each input to itself.
     let zero_inputs =
     edges
+        .clone()
         .map(|(_source, target)| Location::from(target))
         .filter(|location| location.node == 0)
         .map(|location| (location, (location, Default::default())));
@@ -166,15 +168,16 @@ where
     // Retain node connections along "default" timestamp summaries.
     let nodes = nodes.map(|(target, source, summary)| (Location::from(source), (Location::from(target), summary)));
     let edges = edges.map(|(source, target)| (Location::from(target), (Location::from(source), Default::default())));
-    let transitions: VecCollection<G, (Location, (Location, T::Summary))> = nodes.concat(&edges);
+    let transitions: VecCollection<G, (Location, (Location, T::Summary))> = nodes.concat(edges);
 
     zero_inputs
-        .iterate(|summaries| {
+        .clone()
+        .iterate(|scope, summaries| {
             transitions
-                .enter(&summaries.scope())
+                .enter(&scope)
                 .join_map(summaries, |_middle, (from, summ1), (to, summ2)| (from.clone(), to.clone(), summ1.followed_by(summ2)))
                 .flat_map(|(from, to, summ)| summ.map(move |summ| (from, (to, summ))))
-                .concat(&zero_inputs.enter(&summaries.scope()))
+                .concat(zero_inputs.enter(&scope))
                 .map(|(from, (to, summary))| ((from, to), summary))
                 .reduce(|_from_to, input, output| {
                     for (summary, _count) in input.iter() {
@@ -209,18 +212,19 @@ where
         }
     });
     let edges = edges.map(|(source, target)| (Location::from(source), Location::from(target)));
-    let transitions: VecCollection<G, (Location, Location)> = nodes.concat(&edges);
+    let transitions: VecCollection<G, (Location, Location)> = nodes.concat(edges);
 
     // Repeatedly restrict to locations with an incoming path.
     transitions
-        .iterate(|locations| {
+        .clone()
+        .iterate(|scope, locations| {
             let active =
             locations
                 .map(|(_source, target)| target)
                 .distinct();
             transitions
-                .enter(&locations.scope())
-                .semijoin(&active)
+                .enter(&scope)
+                .semijoin(active)
         })
         .consolidate()
 }

@@ -64,7 +64,7 @@ impl<'a, G: Scope, D: Data+Hashable> Relation<'a, G, D> where G::Timestamp : Lat
         Self::new_from(&::timely::dataflow::operators::generic::operator::empty(scope).as_collection())
     }
     /// Creates a new variable initialized with `source`.
-    pub fn new_from(source: &VecCollection<Child<'a, G, Iter>, D, Diff>) -> Self {
+    pub fn new_from(source: VecCollection<Child<'a, G, Iter>, D, Diff>) -> Self {
         use ::timely::order::Product;
         let variable = VecVariable::new_from(source.clone(), Product::new(Default::default(), 1));
         Relation {
@@ -73,7 +73,7 @@ impl<'a, G: Scope, D: Data+Hashable> Relation<'a, G, D> where G::Timestamp : Lat
         }
     }
     /// Concatenates `production` into the definition of the variable.
-    pub fn add_production(&mut self, production: &VecCollection<Child<'a, G, Iter>, D, Diff>) {
+    pub fn add_production(&mut self, production: VecCollection<Child<'a, G, Iter>, D, Diff>) {
         self.current = self.current.concat(production);
     }
     /// Finalizes the variable, connecting its recursive definition.
@@ -81,7 +81,7 @@ impl<'a, G: Scope, D: Data+Hashable> Relation<'a, G, D> where G::Timestamp : Lat
     /// Failure to call `complete` on a variable results in a non-recursively defined
     /// collection, whose contents are just its initial `source` data.
     pub fn complete(self) {
-        self.variable.set(&self.current.threshold(|_,_| 1));
+        self.variable.set(self.current.threshold(|_,_| 1));
     }
 }
 
@@ -114,7 +114,7 @@ impl StringInterner {
             *self.map.get(string).unwrap()
         }
     }
-    pub fn concat(&mut self, id1: Symbol, id2: Symbol) -> Symbol {
+    pub fn concat(mut self, id1: Symbol, id2: Symbol) -> Symbol {
         let string = self.vec[id1 as usize].to_owned() + &self.vec[id2 as usize];
         self.intern(&string)
     }
@@ -317,16 +317,16 @@ fn main() {
             // Main schema
             let isType: VecCollection<_,Type> =
             ClassType
-                .concat(&ArrayType)
-                .concat(&InterfaceType)
-                .concat(&ApplicationClass)
-                .concat(&_NormalHeap.map(|(_id,ty)| ty));
+                .concat(ArrayType)
+                .concat(InterfaceType)
+                .concat(ApplicationClass)
+                .concat(_NormalHeap.map(|(_id,ty)| ty));
 
             let isReferenceType: VecCollection<_,ReferenceType> =
             ClassType
-                .concat(&ArrayType)
-                .concat(&InterfaceType)
-                .concat(&ApplicationClass);
+                .concat(ArrayType)
+                .concat(InterfaceType)
+                .concat(ApplicationClass);
 
             let Field_DeclaringType = _Field.map(|(sig,dec,_,_)| (sig,dec));
             let Method_DeclaringType = _Method.map(|(meth,_,_,dec,_,_,_)| (meth,dec));
@@ -343,9 +343,9 @@ fn main() {
             let temp4 = interner.borrow_mut().intern("java.lang.String[]");
             let HeapAllocation_Type =
             _NormalHeap
-                .concat(&_StringConstant.map(move |s| (s, temp1.clone())))
-                .concat(&scope.new_collection_from_raw(Some(((temp3.clone(), temp4.clone()), 0, 1))).1)
-                .concat(&scope.new_collection_from_raw(Some(((temp2.clone(), temp1b.clone()), 0, 1))).1);
+                .concat(_StringConstant.map(move |s| (s, temp1.clone())))
+                .concat(scope.new_collection_from_raw(Some(((temp3.clone(), temp4.clone()), 0, 1))).1)
+                .concat(scope.new_collection_from_raw(Some(((temp2.clone(), temp1b.clone()), 0, 1))).1);
 
             // NOTE: Unused
             // let MainMethodArgArray: VecCollection<_,HeapAllocation> = scope.new_collection_from_raw(Some(temp3.clone())).1;
@@ -354,18 +354,18 @@ fn main() {
 
             let Instruction_Method = //: VecCollection<_,(Instruction, Method)> =
             _AssignHeapAllocation.map(|x| (x.0, x.4))
-                .concat(&_AssignLocal.map(|x| (x.0, x.4)))
-                .concat(&_AssignCast.map(|x| (x.0, x.5)))
-                .concat(&_StaticMethodInvocation.map(|x| (x.0, x.3)))
-                .concat(&_SpecialMethodInvocation.map(|x| (x.0, x.4)))
-                .concat(&_VirtualMethodInvocation.map(|x| (x.0, x.4)))
-                .concat(&_StoreInstanceField.map(|x| (x.0, x.5)))
-                .concat(&_LoadInstanceField.map(|x| (x.0, x.5)))
-                .concat(&_StoreStaticField.map(|x| (x.0, x.4)))
-                .concat(&_LoadStaticField.map(|x| (x.0, x.4)))
-                .concat(&_StoreArrayIndex.map(|x| (x.0, x.4)))
-                .concat(&_LoadArrayIndex.map(|x| (x.0, x.4)))
-                .concat(&_Return.map(|x| (x.0, x.3)))
+                .concat(_AssignLocal.map(|x| (x.0, x.4)))
+                .concat(_AssignCast.map(|x| (x.0, x.5)))
+                .concat(_StaticMethodInvocation.map(|x| (x.0, x.3)))
+                .concat(_SpecialMethodInvocation.map(|x| (x.0, x.4)))
+                .concat(_VirtualMethodInvocation.map(|x| (x.0, x.4)))
+                .concat(_StoreInstanceField.map(|x| (x.0, x.5)))
+                .concat(_LoadInstanceField.map(|x| (x.0, x.5)))
+                .concat(_StoreStaticField.map(|x| (x.0, x.4)))
+                .concat(_LoadStaticField.map(|x| (x.0, x.4)))
+                .concat(_StoreArrayIndex.map(|x| (x.0, x.4)))
+                .concat(_LoadArrayIndex.map(|x| (x.0, x.4)))
+                .concat(_Return.map(|x| (x.0, x.3)))
                 .distinct()
                 .arrange_by_key();
 
@@ -374,9 +374,9 @@ fn main() {
 
             let FieldInstruction_Signature: VecCollection<_,(FieldInstruction, Field)> =
             _StoreInstanceField.map(|x| (x.0, x.4))
-                .concat(&_LoadInstanceField.map(|x| (x.0, x.4)))
-                .concat(&_StoreStaticField.map(|x| (x.0, x.3)))
-                .concat(&_LoadStaticField.map(|x| (x.0, x.3)));
+                .concat(_LoadInstanceField.map(|x| (x.0, x.4)))
+                .concat(_StoreStaticField.map(|x| (x.0, x.3)))
+                .concat(_LoadStaticField.map(|x| (x.0, x.3)));
 
             let LoadInstanceField_Base = _LoadInstanceField.map(|x| (x.0, x.3));
             let LoadInstanceField_To = _LoadInstanceField.map(|x| (x.0, x.2));
@@ -392,8 +392,8 @@ fn main() {
 
             let AssignInstruction_To: VecCollection<_,(AssignInstruction, Var)> =
             _AssignHeapAllocation.map(|x| (x.0, x.3))
-                .concat(&_AssignLocal.map(|x| (x.0, x.3)))
-                .concat(&_AssignCast.map(|x| (x.0, x.3)));
+                .concat(_AssignLocal.map(|x| (x.0, x.3)))
+                .concat(_AssignCast.map(|x| (x.0, x.3)));
 
             let AssignCast_From = _AssignCast.map(|x| (x.0, x.2));
             let AssignCast_Type = _AssignCast.map(|x| (x.0, x.4));
@@ -403,13 +403,13 @@ fn main() {
             let ReturnNonvoid_Var = _Return.map(|x| (x.0, x.2));
             let MethodInvocation_Method: VecCollection<_,(MethodInvocation, Method)> =
             _StaticMethodInvocation.map(|x| (x.0, x.2))
-                .concat(&_SpecialMethodInvocation.map(|x| (x.0, x.2)))
-                .concat(&_VirtualMethodInvocation.map(|x| (x.0, x.2)));
+                .concat(_SpecialMethodInvocation.map(|x| (x.0, x.2)))
+                .concat(_VirtualMethodInvocation.map(|x| (x.0, x.2)));
 
             let VirtualMethodInvocation_Base = _VirtualMethodInvocation.map(|x| (x.0, x.3));
             let SpecialMethodInvocation_Base = _SpecialMethodInvocation.map(|x| (x.0, x.3));
             // NOTE: Unused
-            // let MethodInvocation_Base = VirtualMethodInvocation_Base.concat(&SpecialMethodInvocation_Base);
+            // let MethodInvocation_Base = VirtualMethodInvocation_Base.concat(SpecialMethodInvocation_Base);
 
             // Fat schema
 
@@ -421,9 +421,9 @@ fn main() {
             let LoadInstanceField: VecCollection<_,(Var, Field, Var, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&LoadInstanceField_Base)
-                .join(&FieldInstruction_Signature)
-                .join(&LoadInstanceField_To)
+                .join(LoadInstanceField_Base)
+                .join(FieldInstruction_Signature)
+                .join(LoadInstanceField_To)
                 .map(|(_insn, (((inmethod, base), sig), to))| (base, sig, to, inmethod));
 
             // StoreInstanceField(?from, ?base, ?sig, ?inmethod) :-
@@ -434,9 +434,9 @@ fn main() {
             let StoreInstanceField: VecCollection<_,(Var, Var, Field, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&StoreInstanceField_From)
-                .join(&StoreInstanceField_Base)
-                .join(&FieldInstruction_Signature)
+                .join(StoreInstanceField_From)
+                .join(StoreInstanceField_Base)
+                .join(FieldInstruction_Signature)
                 .map(|(_insn, (((inmethod, from), base), sig))| (from, base, sig, inmethod));
 
             // LoadStaticField(?sig, ?to, ?inmethod) :-
@@ -446,8 +446,8 @@ fn main() {
             let LoadStaticField: VecCollection<_,(Field, Var, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&FieldInstruction_Signature)
-                .join(&LoadStaticField_To)
+                .join(FieldInstruction_Signature)
+                .join(LoadStaticField_To)
                 .map(|(_insn, ((inmethod, sig), to))| (sig, to, inmethod));
 
             // StoreStaticField(?from, ?sig, ?inmethod) :-
@@ -457,8 +457,8 @@ fn main() {
             let StoreStaticField: VecCollection<_,(Var, Field, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&StoreStaticField_From)
-                .join(&FieldInstruction_Signature)
+                .join(StoreStaticField_From)
+                .join(FieldInstruction_Signature)
                 .map(|(_insn, ((inmethod, from), sig))| (from, sig, inmethod));
 
             // LoadArrayIndex(?base, ?to, ?inmethod) :-
@@ -468,8 +468,8 @@ fn main() {
             let LoadArrayIndex: VecCollection<_,(Var, Var, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&LoadArrayIndex_Base)
-                .join(&LoadArrayIndex_To)
+                .join(LoadArrayIndex_Base)
+                .join(LoadArrayIndex_To)
                 .map(|(_insn, ((inmethod, base), to))| (base, to, inmethod));
 
             // StoreArrayIndex(?from, ?base, ?inmethod) :-
@@ -479,8 +479,8 @@ fn main() {
             let StoreArrayIndex: VecCollection<_,(Var, Var, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&StoreArrayIndex_From)
-                .join(&StoreArrayIndex_Base)
+                .join(StoreArrayIndex_From)
+                .join(StoreArrayIndex_Base)
                 .map(|(_insn, ((inmethod, from), base))| (from, base, inmethod));
 
             // AssignCast(?type, ?from, ?to, ?inmethod) :-
@@ -491,9 +491,9 @@ fn main() {
             let AssignCast: VecCollection<_,(Type, Var, Var, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&AssignCast_From)
-                .join(&AssignInstruction_To)
-                .join(&AssignCast_Type)
+                .join(AssignCast_From)
+                .join(AssignInstruction_To)
+                .join(AssignCast_Type)
                 .map(|(_insn, (((inmethod, from), to), ty))| (ty, from, to, inmethod));
 
             // AssignLocal(?from, ?to, ?inmethod) :-
@@ -503,8 +503,8 @@ fn main() {
             let AssignLocal: VecCollection<_,(Var, Var, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&AssignInstruction_To)
-                .join(&AssignLocal_From)
+                .join(AssignInstruction_To)
+                .join(AssignLocal_From)
                 .map(|(_insn, ((inmethod, to), from))| (from, to, inmethod));
 
             // AssignHeapAllocation(?heap, ?to, ?inmethod) :-
@@ -514,8 +514,8 @@ fn main() {
             let AssignHeapAllocation: VecCollection<_,(HeapAllocation, Var, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&AssignHeapAllocation_Heap)
-                .join(&AssignInstruction_To)
+                .join(AssignHeapAllocation_Heap)
+                .join(AssignInstruction_To)
                 .map(|(_insn, ((inmethod, heap), to))| (heap, to, inmethod));
 
             // ReturnVar(?var, ?method) :-
@@ -524,7 +524,7 @@ fn main() {
             let ReturnVar: VecCollection<_,(Var, Method)> =
             Instruction_Method
                 .as_vecs()
-                .join(&ReturnNonvoid_Var)
+                .join(ReturnNonvoid_Var)
                 .map(|(_insn, (inmethod, var))| (var, inmethod));
 
             // StaticMethodInvocation(?invocation, ?signature, ?inmethod) :-
@@ -533,8 +533,8 @@ fn main() {
             //  MethodInvocation_Method(?invocation, ?signature).
             let StaticMethodInvocation: VecCollection<_,(MethodInvocation, Method, Method)> =
             Instruction_Method
-                .join_core(&isStaticMethodInvocation_Insn.arrange_by_self(), |k,v,_| [(k.clone(), v.clone())])
-                .join(&MethodInvocation_Method)
+                .join_core(isStaticMethodInvocation_Insn.arrange_by_self(), |k,v,_| [(k.clone(), v.clone())])
+                .join(MethodInvocation_Method)
                 .map(|(invocation, (inmethod, sig))| (invocation, sig, inmethod));
 
             // VirtualMethodInvocation_SimpleName(?invocation, ?simplename),
@@ -545,14 +545,14 @@ fn main() {
             //  Method_Descriptor(?signature, ?descriptor).
             let VirtualTemp =
             MethodInvocation_Method
-                .semijoin(&isVirtualMethodInvocation_Insn)
+                .semijoin(isVirtualMethodInvocation_Insn)
                 .map(|(invocation, signature)| (signature, invocation));
             let VirtualMethodInvocation_SimpleName =
             VirtualTemp
-                .join_map(&Method_SimpleName, |_sig, inv, name| (inv.clone(), name.clone()));
+                .join_map(Method_SimpleName, |_sig, inv, name| (inv.clone(), name.clone()));
             let VirtualMethodInvocation_Descriptor =
             VirtualTemp
-                .join_map(&Method_Descriptor, |_sig, inv, desc| (inv.clone(), desc.clone()));
+                .join_map(Method_Descriptor, |_sig, inv, desc| (inv.clone(), desc.clone()));
 
             let (MethodImplemented, MainMethodDeclaration, MethodLookup, SupertypeOf) = scope.scoped("Basic", |scope| {
 
@@ -610,9 +610,9 @@ fn main() {
                 let temp = interner.borrow_mut().intern("abstract");
                 let MethodImplemented =
                 Method_SimpleName
-                    .antijoin(&Method_Modifier.filter(move |x| x.0 == temp).map(|x| x.1).distinct())
-                    .join(&Method_Descriptor)
-                    .join(&Method_DeclaringType)
+                    .antijoin(Method_Modifier.filter(move |x| x.0 == temp).map(|x| x.1).distinct())
+                    .join(Method_Descriptor)
+                    .join(Method_DeclaringType)
                     .map(|(method, ((simple, desc), ty))| (simple, desc, ty, method))
                     .threshold(|_,_| 1 as Diff);
                     // .distinct();
@@ -624,13 +624,13 @@ fn main() {
                 //  MethodLookup(?simplename, ?descriptor, ?supertype, ?method),
                 //  ! MethodImplemented(?simplename, ?descriptor, ?type, _).
                 let MethodLookupClone = MethodLookup.clone();
-                MethodLookup.add_production(&MethodImplemented);
+                MethodLookup.add_production(MethodImplemented);
                 MethodLookup.add_production(
-                    &DirectSuperclass.concat(&DirectSuperinterface)
+                    DirectSuperclass.concat(DirectSuperinterface)
                         .map(|x| (x.1, x.0))
-                        .join(&MethodLookupClone.map(|x| (x.2, (x.0, x.1, x.3))))
+                        .join(MethodLookupClone.map(|x| (x.2, (x.0, x.1, x.3))))
                         .map(|(_superty, (ty, (name, desc, method)))| ((name, desc, ty), method))
-                        .antijoin(&MethodImplemented.map(|x| (x.0, x.1, x.2)).threshold(|_,_| 1))
+                        .antijoin(MethodImplemented.map(|x| (x.0, x.1, x.2)).threshold(|_,_| 1))
                         .map(|((name, desc, ty), method)| (name, desc, ty, method))
                 );
 
@@ -643,8 +643,8 @@ fn main() {
                 // Subclass(?c, ?a) :- DirectSubclass(?a, ?c).
                 // Subclass(?c, ?a) :- Subclass(?b, ?a),DirectSubclass(?b, ?c).
                 let SubclassClone = Subclass.clone();
-                Subclass.add_production(&DirectSubclass.map(|x| (x.1, x.0)));
-                Subclass.add_production(&SubclassClone.join_map(&DirectSubclass, |_b, a, c| (c.clone(), a.clone())));
+                Subclass.add_production(DirectSubclass.map(|x| (x.1, x.0)));
+                Subclass.add_production(SubclassClone.join_map(DirectSubclass, |_b, a, c| (c.clone(), a.clone())));
 
                 // Superclass(?c, ?a) :- Subclass(?a, ?c).
                 let _Superclass = Subclass.map(|x| (x.1, x.0));
@@ -653,17 +653,17 @@ fn main() {
                 // Superinterface(?k, ?c) :- DirectSuperinterface(?c, ?j),Superinterface(?k, ?j).
                 // Superinterface(?k, ?c) :- DirectSuperclass(?c, ?super),Superinterface(?k, ?super).
                 let SuperinterfaceClone = Superinterface.clone();
-                Superinterface.add_production(&DirectSuperinterface.map(|x| (x.1, x.0)));
+                Superinterface.add_production(DirectSuperinterface.map(|x| (x.1, x.0)));
                 Superinterface.add_production(
-                    &DirectSuperinterface
+                    DirectSuperinterface
                         .map(|x| (x.1, x.0))
-                        .join(&SuperinterfaceClone.map(|x| (x.1, x.0)))
+                        .join(SuperinterfaceClone.map(|x| (x.1, x.0)))
                         .map(|(_j, (c, k))| (k, c))
                 );
                 Superinterface.add_production(
-                    &DirectSuperclass
+                    DirectSuperclass
                         .map(|x| (x.1, x.0))
-                        .join(&SuperinterfaceClone.map(|x| (x.1, x.0)))
+                        .join(SuperinterfaceClone.map(|x| (x.1, x.0)))
                         .map(|(_j, (c, k))| (k, c))
                 );
 
@@ -672,21 +672,21 @@ fn main() {
 
                 let SubtypeOfClone = SubtypeOf.clone();
                 // SubtypeOf(?s, ?s) :- isClassType(?s).
-                SubtypeOf.add_production(&ClassType.map(|x| (x.clone(), x)));
+                SubtypeOf.add_production(ClassType.map(|x| (x.clone(), x)));
                 // SubtypeOf(?s, ?t) :- Subclass(?t, ?s).
-                SubtypeOf.add_production(&Subclass.map(|x| (x.1, x.0)));
+                SubtypeOf.add_production(Subclass.map(|x| (x.1, x.0)));
                 // SubtypeOf(?s, ?t) :- isClassType(?s),Superinterface(?t, ?s).
-                SubtypeOf.add_production(&Superinterface.map(|x| (x.1, x.0)).semijoin(&ClassType));
+                SubtypeOf.add_production(Superinterface.map(|x| (x.1, x.0)).semijoin(ClassType));
                 // SubtypeOf(?s, ?t) :- isInterfaceType(?s),isType(?t),?t = "java.lang.Object".
                 let temp = interner.borrow_mut().intern("java.lang.Object");
-                SubtypeOf.add_production(&InterfaceType.map(move |x| (x, temp.clone())));
+                SubtypeOf.add_production(InterfaceType.map(move |x| (x, temp.clone())));
                 // SubtypeOf(?s, ?s) :- isInterfaceType(?s).
-                SubtypeOf.add_production(&InterfaceType.map(|x| (x.clone(), x)));
+                SubtypeOf.add_production(InterfaceType.map(|x| (x.clone(), x)));
                 // SubtypeOf(?s, ?t) :- isInterfaceType(?s),Superinterface(?t, ?s).
-                SubtypeOf.add_production(&Superinterface.map(|x| (x.1, x.0)).semijoin(&InterfaceType));
+                SubtypeOf.add_production(Superinterface.map(|x| (x.1, x.0)).semijoin(InterfaceType));
                 // SubtypeOf(?s, ?t) :- isArrayType(?s),isType(?t),?t = "java.lang.Object".
                 let temp = interner.borrow_mut().intern("java.lang.Object");
-                SubtypeOf.add_production(&ArrayType.map(move |x| (x, temp.clone())));
+                SubtypeOf.add_production(ArrayType.map(move |x| (x, temp.clone())));
                 // SubtypeOf(?s, ?t) :-
                 //  ComponentType(?s, ?sc),
                 //  ComponentType(?t, ?tc),
@@ -694,20 +694,20 @@ fn main() {
                 //  isReferenceType(?tc),
                 //  SubtypeOf(?sc, ?tc).
                 SubtypeOf.add_production(
-                    &ComponentType.map(|x| (x.1, x.0))
-                        .semijoin(&isReferenceType)
-                        .join_map(&SubtypeOfClone, |_sc, s, tc| (tc.clone(), s.clone()))
-                        .semijoin(&isReferenceType)
-                        .join_map(&ComponentType.map(|x| (x.1, x.0)), |_tc, s, t| (s.clone(), t.clone()))
+                    ComponentType.map(|x| (x.1, x.0))
+                        .semijoin(isReferenceType)
+                        .join_map(SubtypeOfClone, |_sc, s, tc| (tc.clone(), s.clone()))
+                        .semijoin(isReferenceType)
+                        .join_map(ComponentType.map(|x| (x.1, x.0)), |_tc, s, t| (s.clone(), t.clone()))
                 );
                 // SubtypeOf(?s, ?t) :- isArrayType(?s),isInterfaceType(?t),isType(?t),?t = "java.lang.Cloneable".
                 let temp = interner.borrow_mut().intern("java.lang.Cloneable");
-                SubtypeOf.add_production(&ArrayType.map(move |x| (x, temp.clone())));
+                SubtypeOf.add_production(ArrayType.map(move |x| (x, temp.clone())));
                 // SubtypeOf(?s, ?t) :- isArrayType(?s),isInterfaceType(?t),isType(?t),?t = "java.io.Serializable".
                 let temp = interner.borrow_mut().intern("java.io.Serializable");
-                SubtypeOf.add_production(&ArrayType.map(move |x| (x, temp.clone())));
+                SubtypeOf.add_production(ArrayType.map(move |x| (x, temp.clone())));
                 // SubtypeOf(?t, ?t) :- isType(?t).
-                SubtypeOf.add_production(&isType.map(|x| (x.clone(), x)));
+                SubtypeOf.add_production(isType.map(|x| (x.clone(), x)));
 
                 // SubtypeOfDifferent(?s, ?t) :- SubtypeOf(?s, ?t),?s != ?t.
                 let _SubtypeOfDifferent = SubtypeOf.filter(|x| x.0 != x.1);
@@ -732,13 +732,13 @@ fn main() {
                 let MainMethodDeclaration =
                 Method_DeclaringType
                     .map(|x| (x.1, x.0))
-                    .semijoin(&MainClass)
+                    .semijoin(MainClass)
                     .map(|x| (x.1, ()))
                     .filter(move |x| x.0 != temp1 && x.0 != temp2 && x.0 != temp3)
-                    .semijoin(&Method_SimpleName.filter(move |x| x.1 == temp4).map(|x| x.0))
-                    .semijoin(&Method_Descriptor.filter(move |x| x.1 == temp5).map(|x| x.0))
-                    .semijoin(&Method_Modifier.filter(move |x| x.0 == temp6).map(|x| x.1))
-                    .semijoin(&Method_Modifier.filter(move |x| x.0 == temp7).map(|x| x.1))
+                    .semijoin(Method_SimpleName.filter(move |x| x.1 == temp4).map(|x| x.0))
+                    .semijoin(Method_Descriptor.filter(move |x| x.1 == temp5).map(|x| x.0))
+                    .semijoin(Method_Modifier.filter(move |x| x.0 == temp6).map(|x| x.1))
+                    .semijoin(Method_Modifier.filter(move |x| x.0 == temp7).map(|x| x.1))
                     .map(|x| x.0);
 
                 let result = (MethodImplemented.leave(), MainMethodDeclaration.leave(), MethodLookup.leave(), SupertypeOf.leave());
@@ -806,7 +806,7 @@ fn main() {
                     Instruction_Method
                         .as_collection(|inv,meth| (meth.clone(), inv.clone()))
                         // .map(|(inv,meth)| (meth,inv))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|(_meth,inv)| (inv, ()));
 
                 // // NOTE: Cheating, but to test what is broken.
@@ -826,21 +826,21 @@ fn main() {
 
                 let InitializedClassClone = InitializedClass.clone();
                 // InitializedClass(?superclass) :- InitializedClass(?class),DirectSuperclass(?class, ?superclass).
-                InitializedClass.add_production(&DirectSuperclass.semijoin(&InitializedClassClone).map(|x| x.1));
+                InitializedClass.add_production(DirectSuperclass.semijoin(InitializedClassClone).map(|x| x.1));
                 // InitializedClass(?superinterface) :- InitializedClass(?classOrInterface),DirectSuperinterface(?classOrInterface, ?superinterface).
-                InitializedClass.add_production(&DirectSuperinterface.semijoin(&InitializedClassClone).map(|x| x.1));
+                InitializedClass.add_production(DirectSuperinterface.semijoin(InitializedClassClone).map(|x| x.1));
                 // InitializedClass(?class) :- basic.MainMethodDeclaration(?method),Method_DeclaringType(?method, ?class).
-                InitializedClass.add_production(&Method_DeclaringType.semijoin(&MainMethodDeclaration).map(|x| x.1));
+                InitializedClass.add_production(Method_DeclaringType.semijoin(MainMethodDeclaration).map(|x| x.1));
                 // InitializedClass(?class) :-
                 //  Reachable(?inmethod),
                 //  AssignHeapAllocation(?heap, _, ?inmethod),
                 //  HeapAllocation_Type(?heap, ?class).
                 InitializedClass.add_production(
-                    &AssignHeapAllocation
+                    AssignHeapAllocation
                         .map(|(heap,_,inmethod)| (inmethod,heap))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|(_inmethod,heap)| (heap, ()))
-                        .join_map(&HeapAllocation_Type, |_,(),class| class.clone())
+                        .join_map(HeapAllocation_Type, |_,(),class| class.clone())
                 );
                 // InitializedClass(?class) :-
                 //  Reachable(?inmethod),
@@ -849,10 +849,10 @@ fn main() {
                 //  MethodInvocation_Method(?invocation, ?signature),
                 //  Method_DeclaringType(?signature, ?class).
                 InitializedClass.add_production(
-                    &Reachable_Invocation
-                        .semijoin(&isStaticMethodInvocation_Insn)
-                        .join_map(&MethodInvocation_Method, |_,(),sig| (sig.clone(), ()))
-                        .join_map(&Method_DeclaringType, |_,(),class| class.clone())
+                    Reachable_Invocation
+                        .semijoin(isStaticMethodInvocation_Insn)
+                        .join_map(MethodInvocation_Method, |_,(),sig| (sig.clone(), ()))
+                        .join_map(Method_DeclaringType, |_,(),class| class.clone())
                 );
 
                 // InitializedClass(?classOrInterface) :-
@@ -860,26 +860,26 @@ fn main() {
                 //  StoreStaticField(_, ?signature, ?inmethod),
                 //  Field_DeclaringType(?signature, ?classOrInterface).
                 InitializedClass.add_production(
-                    &StoreStaticField
+                    StoreStaticField
                         .map(|(_,sig,meth)| (meth,sig))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|(_meth,sig)| (sig, ()))
-                        .join_map(&Field_DeclaringType, |_,(),class| class.clone())
+                        .join_map(Field_DeclaringType, |_,(),class| class.clone())
                 );
                 // InitializedClass(?classOrInterface) :-
                 //  Reachable(?inmethod),
                 //  LoadStaticField(?signature, _, ?inmethod),
                 //  Field_DeclaringType(?signature, ?classOrInterface).
                 InitializedClass.add_production(
-                    &LoadStaticField
+                    LoadStaticField
                         .map(|x| (x.2, x.0))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|x| (x.1, ()))
-                        .join_map(&Field_DeclaringType, |_,_,class| class.clone())
+                        .join_map(Field_DeclaringType, |_,_,class| class.clone())
                 );
 
                 // Reachable(?clinit) :- InitializedClass(?class),ClassInitializer(?class, ?clinit).
-                Reachable.add_production(&ClassInitializer.semijoin(&InitializedClass).map(|x| x.1));
+                Reachable.add_production(ClassInitializer.semijoin(InitializedClass).map(|x| x.1));
 
                 // Main (value-based) analysis
                 let mut Assign = Relation::<_,(Var, Var)>::new(scope);
@@ -900,17 +900,17 @@ fn main() {
                 let ArrayIndexPointsTo =
                 StoreArrayIndex
                     .map(|(f,b,m)| (m,(f,b)))
-                    .semijoin(&Reachable)
+                    .semijoin(Reachable)
                     .map(|(_m,(f,b))| (b,f))
-                    .join_core(&VarPointsToRev, |_b,f,bh| Some((f.clone(), bh.clone())))
-                    .join_core(&VarPointsToRev, |_f,bh,h| Some((h.clone(), bh.clone())))
-                    .join(&HeapAllocation_Type)
+                    .join_core(VarPointsToRev, |_b,f,bh| Some((f.clone(), bh.clone())))
+                    .join_core(VarPointsToRev, |_f,bh,h| Some((h.clone(), bh.clone())))
+                    .join(HeapAllocation_Type)
                     .map(|(h,(bh,ht))| (bh,(h,ht)))
-                    .join(&HeapAllocation_Type)
+                    .join(HeapAllocation_Type)
                     .map(|(bh,((h,ht),bht))| (bht,(h,ht,bh)))
-                    .join(&ComponentType)
+                    .join(ComponentType)
                     .map(|(_,((h,ht,bh),ct))| ((ct,ht),(bh,h)))
-                    .semijoin(&SupertypeOf)
+                    .semijoin(SupertypeOf)
                     .map(|(_,(bh,h))| (bh,h));
 
                 // Assign(?actual, ?formal) :-
@@ -918,11 +918,11 @@ fn main() {
                 //  FormalParam(?index, ?method, ?formal),
                 //  ActualParam(?index, ?invocation, ?actual).
                 Assign.add_production(
-                    &CallGraphEdge
+                    CallGraphEdge
                         .map(|x| (x.1, x.0))
-                        .join(&FormalParam.map(|x| (x.1, (x.0, x.2))))
+                        .join(FormalParam.map(|x| (x.1, (x.0, x.2))))
                         .map(|(_method, (inv, (index, formal)))| ((index, inv), formal))
-                        .join(&ActualParam.map(|x| ((x.0, x.1), x.2)))
+                        .join(ActualParam.map(|x| ((x.0, x.1), x.2)))
                         .map(|(_ind_inv, (formal, actual))| (actual, formal))
                 );
                 // Assign(?return, ?local) :-
@@ -930,10 +930,10 @@ fn main() {
                 //  ReturnVar(?return, ?method),
                 //  AssignReturnValue(?invocation, ?local).
                 Assign.add_production(
-                    &CallGraphEdge
-                        .join(&AssignReturnValue)
+                    CallGraphEdge
+                        .join(AssignReturnValue)
                         .map(|(_inv, (meth, local))| (meth, local))
-                        .join(&ReturnVar.map(|x| (x.1, x.0)))
+                        .join(ReturnVar.map(|x| (x.1, x.0)))
                         .map(|(_meth, (local, ret))| (ret, local))
                 );
 
@@ -945,13 +945,13 @@ fn main() {
                 let InstanceFieldPointsTo =
                 StoreInstanceField
                     .map(|(from, base, fld, meth)| (meth, (from, base, fld)))
-                    .semijoin(&Reachable)
+                    .semijoin(Reachable)
                     .map(|(_, (from, base, fld))| (from, (base, fld)))
-                    .join_core(&VarPointsToRev, |_from,(base,fld),heap| Some((base.clone(), (fld.clone(), heap.clone()))))
-                    .join_core(&VarPointsToRev, |_base,(fld,heap),baseheap| Some((heap.clone(), fld.clone(), baseheap.clone())));
+                    .join_core(VarPointsToRev, |_from,(base,fld),heap| Some((base.clone(), (fld.clone(), heap.clone()))))
+                    .join_core(VarPointsToRev, |_base,(fld,heap),baseheap| Some((heap.clone(), fld.clone(), baseheap.clone())));
 
                 // SIMPLIFICATION: ALL CGE DERIVATIONS PRODUCE REACHABILITY.
-                Reachable.add_production(&CallGraphEdge.map(|x| x.1));
+                Reachable.add_production(CallGraphEdge.map(|x| x.1));
 
                 // CallGraphEdge(?invocation, ?toMethod) :-
                 //  Reachable(?inMethod),
@@ -963,16 +963,16 @@ fn main() {
                 //  VirtualMethodInvocation_Descriptor(?invocation, ?descriptor),
                 //  basic.MethodLookup(?simplename, ?descriptor, ?heaptype, ?toMethod).
                 CallGraphEdge.add_production(
-                    &Reachable_Invocation
-                        .join(&VirtualMethodInvocation_Base)
+                    Reachable_Invocation
+                        .join(VirtualMethodInvocation_Base)
                         .map(|(inv, ((), base))| (base, inv))
-                        .join_core(&VarPointsToRev, |_base,inv,heap| Some((heap.clone(), inv.clone())))
-                        .join(&HeapAllocation_Type)
+                        .join_core(VarPointsToRev, |_base,inv,heap| Some((heap.clone(), inv.clone())))
+                        .join(HeapAllocation_Type)
                         .map(|(_heap, (inv, heaptype))| (inv, heaptype))
-                        .join(&VirtualMethodInvocation_SimpleName)
-                        .join(&VirtualMethodInvocation_Descriptor)
+                        .join(VirtualMethodInvocation_SimpleName)
+                        .join(VirtualMethodInvocation_Descriptor)
                         .map(|(inv, ((heaptype, simplename), descriptor))| ((simplename, descriptor, heaptype), inv))
-                        .join(&MethodLookup.map(|(s,d,h,t)| ((s,d,h),t)))
+                        .join(MethodLookup.map(|(s,d,h,t)| ((s,d,h),t)))
                         .map(|(_, (inv, to))| (inv, to))
                 );
 
@@ -980,9 +980,9 @@ fn main() {
                 //  Reachable(?inmethod),
                 //  StaticMethodInvocation(?invocation, ?tomethod, ?inmethod).
                 CallGraphEdge.add_production(
-                    &StaticMethodInvocation
+                    StaticMethodInvocation
                         .map(|x| (x.2, (x.0, x.1)))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|(_inmethod, (inv, to))| (inv, to))
                 );
 
@@ -996,18 +996,18 @@ fn main() {
                 //  ThisVar(?tomethod, ?this).
                 let temp =
                 Reachable_Invocation
-                    .join(&SpecialMethodInvocation_Base)
-                    .join(&MethodInvocation_Method)
+                    .join(SpecialMethodInvocation_Base)
+                    .join(MethodInvocation_Method)
                     .map(|(inv, (((), base), tomethod))| (base, (inv,tomethod)))
-                    .join_core(&VarPointsToRev, |_base,(inv,tomethod),heap| Some((tomethod.clone(), (inv.clone(), heap.clone()))))
-                    .join(&ThisVar)
+                    .join_core(VarPointsToRev, |_base,(inv,tomethod),heap| Some((tomethod.clone(), (inv.clone(), heap.clone()))))
+                    .join(ThisVar)
                     .map(|(tomethod, ((inv,heap),this))| (inv, tomethod, heap, this));
 
-                CallGraphEdge.add_production(&temp.map(|(i,t,_,_)| (i,t)));
-                VarPointsTo.add_production(&temp.map(|(_,_,h,t)| (h,t)));
+                CallGraphEdge.add_production(temp.map(|(i,t,_,_)| (i,t)));
+                VarPointsTo.add_production(temp.map(|(_,_,h,t)| (h,t)));
 
                 // Reachable(?method) :- basic.MainMethodDeclaration(?method).
-                Reachable.add_production(&MainMethodDeclaration);
+                Reachable.add_production(MainMethodDeclaration);
 
                 // StaticFieldPointsTo(?heap, ?fld) :-
                 //  Reachable(?inmethod),
@@ -1016,26 +1016,26 @@ fn main() {
                 let StaticFieldPointsTo =
                 StoreStaticField
                     .map(|(from, fld, meth)| (meth, (from, fld)))
-                    .semijoin(&Reachable)
+                    .semijoin(Reachable)
                     .map(|(_meth, (from, fld))| (from, fld))
-                    .join_core(&VarPointsToRev, |_from,fld,heap| Some((heap.clone(), fld.clone())));
+                    .join_core(VarPointsToRev, |_from,fld,heap| Some((heap.clone(), fld.clone())));
 
                 let VarPointsToClone = VarPointsTo.clone();
                 // VarPointsTo(?heap, ?var) :-
                 //  AssignHeapAllocation(?heap, ?var, ?inMethod),
                 //  Reachable(?inMethod).
                 VarPointsTo.add_production(
-                    &AssignHeapAllocation
+                    AssignHeapAllocation
                         .map(|x| (x.2, (x.0, x.1)))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|x| x.1)
                 );
 
                 // VarPointsTo(?heap, ?to) :- Assign(?from, ?to),VarPointsTo(?heap, ?from).
                 VarPointsTo.add_production(
-                    &VarPointsToClone
+                    VarPointsToClone
                         .map(|x| (x.1, x.0))
-                        .join(&Assign)
+                        .join(Assign)
                         .map(|(_from, (heap, to))| (heap, to))
                 );
 
@@ -1044,11 +1044,11 @@ fn main() {
                 //  AssignLocal(?from, ?to, ?inmethod),
                 //  VarPointsTo(?heap, ?from).
                 VarPointsTo.add_production(
-                    &AssignLocal
+                    AssignLocal
                         .map(|(from, to, meth)| (meth, (from, to)))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|(_, (from, to))| (from, to))
-                        .join_core(&VarPointsToRev, |_from,to,heap| Some((heap.clone(), to.clone())))
+                        .join_core(VarPointsToRev, |_from,to,heap| Some((heap.clone(), to.clone())))
                 );
 
                 // VarPointsTo(?heap, ?to) :-
@@ -1058,15 +1058,15 @@ fn main() {
                 //  HeapAllocation_Type(?heap, ?heaptype),
                 //  VarPointsTo(?heap, ?from).
                 VarPointsTo.add_production(
-                    &AssignCast
+                    AssignCast
                         .map(|(ty,f,to,m)| (m, (ty,f,to)))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|(_m, (ty,f,to))| (ty, (f,to)))
-                        .join(&SupertypeOf)
+                        .join(SupertypeOf)
                         .map(|(_ty, ((f,to), heaptype))| (heaptype, (f,to)))
-                        .join(&HeapAllocation_Type.map(|x| (x.1, x.0)))
+                        .join(HeapAllocation_Type.map(|x| (x.1, x.0)))
                         .map(|(_heaptype, ((f,to),heap))| ((heap, f), to))
-                        .semijoin(&VarPointsToClone)
+                        .semijoin(VarPointsToClone)
                         .map(|((heap, _f), to)| (heap, to))
                 );
 
@@ -1080,19 +1080,19 @@ fn main() {
                 //  ComponentType(?baseheaptype, ?basecomponenttype),
                 //  basic.SupertypeOf(?type, ?basecomponenttype).
                 VarPointsTo.add_production(
-                    &LoadArrayIndex
+                    LoadArrayIndex
                         .map(|(b,t,m)| (m, (b,t)))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|(_m, (b,t))| (b,t))
-                        .join_core(&VarPointsToRev, |_base,to,baseheap| Some((baseheap.clone(), to.clone())))
-                        .join(&ArrayIndexPointsTo)
-                        .join(&HeapAllocation_Type)
+                        .join_core(VarPointsToRev, |_base,to,baseheap| Some((baseheap.clone(), to.clone())))
+                        .join(ArrayIndexPointsTo)
+                        .join(HeapAllocation_Type)
                         .map(|(_baseheap, ((to, heap), baseheaptype))| (to, (heap, baseheaptype)))
-                        .join(&Var_Type)
+                        .join(Var_Type)
                         .map(|(to, ((h,bht),ty))| (bht,(to,h,ty)))
-                        .join(&ComponentType)
+                        .join(ComponentType)
                         .map(|(_bht, ((to,h,ty),bct))| ((ty,bct), (to,h)))
-                        .semijoin(&SupertypeOf)
+                        .semijoin(SupertypeOf)
                         .map(|(_, (to,h))| (h,to))
                 );
 
@@ -1102,12 +1102,12 @@ fn main() {
                 //  VarPointsTo(?baseheap, ?base),
                 //  InstanceFieldPointsTo(?heap, ?signature, ?baseheap).
                 VarPointsTo.add_production(
-                    &LoadInstanceField
+                    LoadInstanceField
                         .map(|(b,s,t,m)| (m, (b,s,t)))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|(_m, (b,s,t))| (b,(s,t)))
-                        .join_core(&VarPointsToRev, |_b,(s,t),bh| Some(((s.clone(),bh.clone()), t.clone())))
-                        .join(&InstanceFieldPointsTo.map(|(h,s,bh)| ((s,bh),h)))
+                        .join_core(VarPointsToRev, |_b,(s,t),bh| Some(((s.clone(),bh.clone()), t.clone())))
+                        .join(InstanceFieldPointsTo.map(|(h,s,bh)| ((s,bh),h)))
                         .map(|(_, (t,h))| (h,t))
                 );
 
@@ -1116,11 +1116,11 @@ fn main() {
                 //  LoadStaticField(?fld, ?to, ?inmethod),
                 //  StaticFieldPointsTo(?heap, ?fld).
                 VarPointsTo.add_production(
-                    &LoadStaticField
+                    LoadStaticField
                         .map(|(f,t,m)| (m, (f,t)))
-                        .semijoin(&Reachable)
+                        .semijoin(Reachable)
                         .map(|(_m,(f,t))| (f,t))
-                        .join(&StaticFieldPointsTo.map(|x| (x.1, x.0)))
+                        .join(StaticFieldPointsTo.map(|x| (x.1, x.0)))
                         .map(|(_f,(t,h))| (h,t))
                 );
 
@@ -1135,17 +1135,17 @@ fn main() {
                 //  basic.MethodLookup(?simplename, ?descriptor, ?heaptype, ?toMethod),
                 //  ThisVar(?toMethod, ?this).
                 VarPointsTo.add_production(
-                    &Reachable_Invocation
-                        .join(&VirtualMethodInvocation_Base)
-                        .join(&VirtualMethodInvocation_SimpleName)
-                        .join(&VirtualMethodInvocation_Descriptor)
+                    Reachable_Invocation
+                        .join(VirtualMethodInvocation_Base)
+                        .join(VirtualMethodInvocation_SimpleName)
+                        .join(VirtualMethodInvocation_Descriptor)
                         .map(|(_inv, ((((), base), simplename), descriptor))| (base, (simplename, descriptor)))
-                        .join_core(&VarPointsToRev, |_base,(name,desc),heap| Some((heap.clone(), (name.clone(), desc.clone()))))
-                        .join(&HeapAllocation_Type)
+                        .join_core(VarPointsToRev, |_base,(name,desc),heap| Some((heap.clone(), (name.clone(), desc.clone()))))
+                        .join(HeapAllocation_Type)
                         .map(|(heap,((name,desc),heaptype))| ((name,desc,heaptype),heap))
-                        .join(&MethodLookup.map(|(n,d,h,t)| ((n,d,h),t)))
+                        .join(MethodLookup.map(|(n,d,h,t)| ((n,d,h),t)))
                         .map(|((_n,_d,_t),(heap,to_method))| (to_method, heap))
-                        .join(&ThisVar)
+                        .join(ThisVar)
                         .map(|(_to_method, (heap, this))| (heap,this))
                 );
 

@@ -37,7 +37,7 @@ use std::time::Instant;
 
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::{Scope, ScopeParent, StreamCore};
+use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::{Capability, Operator, generic::Session};
 use timely::progress::Antichain;
@@ -74,7 +74,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// once out of the "delta flow region", the updates will be `delay`d to the
 /// times specified in the payloads.
 pub fn half_join<G, K, V, R, Tr, FF, CF, DOut, S>(
-    stream: &VecCollection<G, (K, V, G::Timestamp), R>,
+    stream: VecCollection<G, (K, V, G::Timestamp), R>,
     arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
@@ -139,13 +139,13 @@ type SessionFor<'a, 'b, G, CB> =
 /// records. Note this is not the number of *output* records, owing mainly to
 /// the number of matched records being easiest to record with low overhead.
 pub fn half_join_internal_unsafe<G, K, V, R, Tr, FF, CF, Y, S, CB>(
-    stream: &VecCollection<G, (K, V, G::Timestamp), R>,
+    stream: VecCollection<G, (K, V, G::Timestamp), R>,
     mut arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
     yield_function: Y,
     mut output_func: S,
-) -> StreamCore<G, CB::Container>
+) -> Stream<G, CB::Container>
 where
     G: Scope<Timestamp = Tr::Time>,
     K: Hashable + ExchangeData,
@@ -170,16 +170,17 @@ where
     // Stash for (time, diff) accumulation.
     let mut output_buffer = Vec::new();
 
-    stream.inner.binary_frontier(&arrangement_stream, exchange, Pipeline, "HalfJoin", move |_,info| {
+    let scope = stream.scope();
+    stream.inner.binary_frontier(arrangement_stream, exchange, Pipeline, "HalfJoin", move |_,info| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
-        let activator = stream.scope().activator_for(info.address);
+        let activator = scope.activator_for(info.address);
 
         move |(input1, frontier1), (input2, frontier2), output| {
 
             // drain the first input, stashing requests.
             input1.for_each(|capability, data| {
-                stash.entry(capability.retain())
+                stash.entry(capability.retain(0))
                     .or_insert(Vec::new())
                     .append(data)
             });

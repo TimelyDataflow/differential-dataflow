@@ -13,7 +13,7 @@ use differential_dataflow::trace::TraceReader;
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
 pub fn validate<G, K, V, Tr, F, P>(
-    extensions: &VecCollection<G, (P, V), Tr::Diff>,
+    extensions: VecCollection<G, (P, V), Tr::Diff>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
 ) -> VecCollection<G, (P, V), Tr::Diff>

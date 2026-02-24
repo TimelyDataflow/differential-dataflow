@@ -11,7 +11,7 @@ use differential_dataflow::operators::iterate::Variable;
 
 fn main() {
 
-    let input = 
+    let input =
 "2
 0
 0
@@ -1051,7 +1051,7 @@ fn main() {
         let index = worker.index();
         let peers = worker.peers();
 
-        let worker_input = 
+        let worker_input =
         input
             .split('\n')
             .map(|phrase| phrase.parse::<isize>().unwrap())
@@ -1070,27 +1070,27 @@ fn main() {
                 let address = Variable::from(address.enter(nested));
 
                 // (addr, jump, steps)
-                let instruction = program.join(&address);
+                let instruction = program.join(address);
 
                 fn part1(jump: isize) -> isize { jump+1 }
                 // fn part2(jump: isize) -> isize { if jump >= 3 { jump-1 } else { jump+1 } }
 
-                let new_program = 
+                let new_program =
                 instruction
                     .map(move |(addr, jump, _)| (addr, part1(jump)))
-                    .concat(&instruction.map(|(addr, jump, _)| (addr, jump)).negate())
-                    .concat(&program)
+                    .concat(instruction.map(|(addr, jump, _)| (addr, jump)).negate())
+                    .concat(program)
                     .consolidate();
 
-                let new_address = 
+                let new_address =
                 instruction
                     .map(|(addr, jump, steps)| (addr + jump, steps + 1))
-                    .concat(&instruction.map(|(addr, _, steps)| (addr, steps)).negate())
-                    .concat(&address)
+                    .concat(instruction.map(|(addr, _, steps)| (addr, steps)).negate())
+                    .concat(address)
                     .consolidate();
 
-                program.set(&new_program);
-                address.set(&new_address)
+                program.set(new_program);
+                address.set(new_address)
                        .leave()
             })
             .consolidate()

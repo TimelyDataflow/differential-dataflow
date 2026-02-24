@@ -43,7 +43,7 @@ fn main() {
             let (supp_in, supp) = scope.new_input();
 
             if window {
-                line = line.map(|(x,y,z): (LineItem, usize, isize)| (x,y+1,-z)).concat(&line);
+                line = line.map(|(x,y,z): (LineItem, usize, isize)| (x,y+1,-z)).concat(line);
             }
 
             let collections = Collections::new(

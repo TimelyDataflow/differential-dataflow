@@ -60,8 +60,8 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .explode(|l| Some((l.order_key, l.quantity as isize)))
         .count_total()
         .filter(|&(_key, cnt)| cnt > 300)
-        .join_map(&orders, |&o_key, &quant, &(cust_key, date, price)| (cust_key, (o_key, date, price, quant)))
-        .join(&collections.customers().map(|c| (c.cust_key, c.name)))
+        .join_map(orders, |&o_key, &quant, &(cust_key, date, price)| (cust_key, (o_key, date, price, quant)))
+        .join(collections.customers().map(|c| (c.cust_key, c.name)))
         .probe_with(probe);
 }
 
@@ -81,8 +81,8 @@ where
         .explode(|l| Some((l.order_key, l.quantity as isize)))
         .count_total()
         .filter(|&(_key, cnt)| cnt > 300)
-        .join_core(&arrangements.order, |_ok,&cnt,o| Some((o.cust_key, (o.order_date, o.total_price, cnt))))
-        .join_core(&arrangements.customer, |&ck,&(od,tp,cnt),c| Some((ck,c.name,od,tp,cnt)))
+        .join_core(arrangements.order, |_ok,&cnt,o| Some((o.cust_key, (o.order_date, o.total_price, cnt))))
+        .join_core(arrangements.customer, |&ck,&(od,tp,cnt),c| Some((ck,c.name,od,tp,cnt)))
         .count_total()
         .probe_with(probe);
 }

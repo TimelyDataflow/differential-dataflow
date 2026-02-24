@@ -84,9 +84,9 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))
-        .antijoin(&collections.orders().map(|o| o.cust_key).distinct_total())
+        .antijoin(collections.orders().map(|o| o.cust_key).distinct_total())
         .map(|(_, (cc, acct))| (cc, acct as isize))
-        .join_core(&averages, |&cc, &acct, &pair| {
+        .join_core(averages, |&cc, &acct, &pair| {
             let acct : isize = acct;
             let pair : DiffPair<isize, isize> = pair;
             if acct > (pair.element1 / pair.element2) { Some((cc, acct)) } else { None }
@@ -146,9 +146,9 @@ where
 
     customers
         .map(|(cc, acct, key)| (key, (cc, acct)))
-        .antijoin(&orders)
+        .antijoin(orders)
         .map(|(_, (cc, acct))| (cc, acct as isize))
-        .join_core(&averages, |&cc, &acct, &pair| {
+        .join_core(averages, |&cc, &acct, &pair| {
             let acct : isize = acct;
             let pair : DiffPair<isize, isize> = pair;
             if acct > (pair.element1 / pair.element2) { Some((cc, acct)) } else { None }

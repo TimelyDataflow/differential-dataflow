@@ -16,10 +16,10 @@ fn main() {
     //
     // The next odd square is arrived at by following four edges, each of which has length
     // equal to the even number between the odd numbers. To determine the position of any
-    // given number, we can subtract the largest odd square from it and then subtract the 
+    // given number, we can subtract the largest odd square from it and then subtract the
     // multiples of the even length, at which point we have a distance along an edge, from
     // which we can determine coordinates.
-    // 
+    //
     // Similarly, we can determine the sequence number from the coordinates, by determining
     // which layer the point is in, adding the appropriate squared odd number, and then some
     // cases to figure out where the point is in the sequence along that layer.
@@ -40,7 +40,7 @@ fn main() {
 
             values
                 .map(|_val| ((0, 0), (1, 1)))
-                .iterate(|inner| {
+                .iterate(|_scope, inner| {
 
                     inner
                         .filter(move |&(_, (_, val))| val < input)  // stop working when we've gotten enough
@@ -90,7 +90,7 @@ fn sequence(input: (isize, isize)) -> isize {
         if -input.1 > layer { layer = -input.1; }
 
         // input exists in layer from ((2 * layer - 1)^2, (2 * layer + 1)^2].
-        // note: excludes first number, includes last number. 
+        // note: excludes first number, includes last number.
 
         let base = (2 * layer - 1) * (2 * layer - 1);
 

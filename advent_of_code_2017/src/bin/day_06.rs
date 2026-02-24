@@ -12,7 +12,7 @@ fn main() {
 
     timely::execute_from_args(std::env::args(), move |worker| {
 
-        let worker_input = 
+        let worker_input =
         input
             .split_whitespace()
             .map(|phrase| phrase.parse::<u8>().unwrap())
@@ -22,9 +22,9 @@ fn main() {
 
             let banks = scope.new_collection_from(Some(worker_input)).1;
 
-            let stable = banks.iterate(|iter|
+            let stable = banks.iterate(|scope, iter|
                 iter.map_in_place(|banks| recycle(banks))
-                    .concat(&banks.enter(&iter.scope()))
+                    .concat(banks.enter(&scope))
                     .distinct()
             );
 
@@ -36,14 +36,14 @@ fn main() {
             // determine the repeated state by stepping all states and subtracting.
             let loop_point = stable
                 .map_in_place(|banks| recycle(banks))
-                .concat(&stable.negate())
-                .concat(&banks);
+                .concat(stable.negate())
+                .concat(banks);
 
             // restart iteration from known repeated element.
-            loop_point                
-                .iterate(|iter|
+            loop_point
+                .iterate(|scope, iter|
                     iter.map_in_place(|banks| recycle(banks))
-                        .concat(&loop_point.enter(&iter.scope()))
+                        .concat(loop_point.enter(&scope))
                         .distinct()
                 )
                 .map(|_| ((),()))
@@ -67,5 +67,5 @@ fn recycle(banks: &mut [u8]) {
     let banks_len = banks.len();
     for i in 1 .. (redistribute + 1) {
         banks[(max_idx + i) % banks_len] += 1;
-    }    
+    }
 }

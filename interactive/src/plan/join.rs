@@ -95,7 +95,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
         let arrange2 = trace2.import(scope);
 
         arrange1
-            .join_core(&arrange2, |keys, vals1, vals2| {
+            .join_core(arrange2, |keys, vals1, vals2| {
                 Some(
                     keys.iter().cloned()
                         .chain(vals1.iter().cloned())

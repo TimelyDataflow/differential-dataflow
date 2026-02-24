@@ -27,7 +27,7 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
     ///          .assert_empty();
     /// });
     /// ```
-    fn identifiers(&self) -> VecCollection<G, (D, u64), R>;
+    fn identifiers(self) -> VecCollection<G, (D, u64), R>;
 }
 
 impl<G, D, R> Identifiers<G, D, R> for VecCollection<G, D, R>
@@ -36,7 +36,7 @@ where
     D: ExchangeData + ::std::hash::Hash,
     R: ExchangeData + Abelian,
 {
-    fn identifiers(&self) -> VecCollection<G, (D, u64), R> {
+    fn identifiers(self) -> VecCollection<G, (D, u64), R> {
 
         // The design here is that we iteratively develop a collection
         // of pairs (round, record), where each pair is a proposal that
@@ -57,8 +57,9 @@ where
         let init = self.map(|record| (0, record));
         timely::dataflow::operators::generic::operator::empty(&init.scope())
             .as_collection()
-            .iterate(|diff|
-                init.enter(&diff.scope())
+            .iterate(|scope, diff|
+                init.clone()
+                    .enter(&scope)
                     .concat(diff)
                     .map(|pair| (pair.hashed(), pair))
                     .reduce(|_hash, input, output| {
@@ -80,7 +81,7 @@ where
                     })
                     .map(|(_hash, pair)| pair)
             )
-            .concat(&init)
+            .concat(init)
             .map(|pair| { let hash = pair.hashed(); (pair.1, hash) })
     }
 }
@@ -108,9 +109,10 @@ mod tests {
             let init = input.map(|record| (0, record));
             timely::dataflow::operators::generic::operator::empty(&init.scope())
                 .as_collection()
-                .iterate(|diff|
-                    init.enter(&diff.scope())
-                        .concat(&diff)
+                .iterate(|scope, diff|
+                    init.clone()
+                        .enter(&scope)
+                        .concat(diff)
                         .map(|(round, num)| ((round + num) / 10, (round, num)))
                         .reduce(|_hash, input, output| {
                             println!("Input: {:?}", input);
@@ -129,7 +131,7 @@ mod tests {
                         .inspect(|x| println!("{:?}", x))
                         .map(|(_hash, pair)| pair)
                 )
-                .concat(&init)
+                .concat(init)
                 .map(|(round, num)| { (num, (round + num) / 10) })
                 .map(|(_data, id)| id)
                 .threshold(|_id,cnt| if cnt > &1 { *cnt } else { 0 })

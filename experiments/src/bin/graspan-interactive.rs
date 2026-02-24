@@ -27,15 +27,15 @@ fn main() {
             let probe =
             nodes
                 .filter(|_| false)
-                .iterate(|inner| {
+                .iterate(|scope, inner| {
 
-                    let nodes = nodes.enter(&inner.scope());
-                    let edges = edges.enter(&inner.scope());
+                    let nodes = nodes.enter(&scope);
+                    let edges = edges.enter(&scope);
 
                     inner
                         .map(|(a,b)| (b,a))
-                        .join_core(&edges, |_b,&a,&c| Some((a,c)))
-                        .concat(&nodes)
+                        .join_core(edges, |_b,&a,&c| Some((a,c)))
+                        .concat(nodes)
                         .distinct()
                 })
                 .probe();

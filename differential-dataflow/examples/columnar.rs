@@ -1,7 +1,7 @@
 //! Wordcount based on `columnar`.
 
 use timely::container::{ContainerBuilder, PushInto};
-use timely::dataflow::InputHandleCore;
+use timely::dataflow::InputHandle;
 use timely::dataflow::ProbeHandle;
 
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
@@ -25,8 +25,8 @@ fn main() {
     // initializes and runs a timely dataflow.
     timely::execute_from_args(std::env::args(), move |worker| {
 
-        let mut data_input = <InputHandleCore<_, Builder>>::new_with_builder();
-        let mut keys_input = <InputHandleCore<_, Builder>>::new_with_builder();
+        let mut data_input = <InputHandle<_, Builder>>::new_with_builder();
+        let mut keys_input = <InputHandle<_, Builder>>::new_with_builder();
         let mut probe = ProbeHandle::new();
 
         // create a new input, exchange data, and inspect its output
@@ -39,10 +39,10 @@ fn main() {
             let data_pact = KeyPact { hashfunc: |k: columnar::Ref<'_, Vec<u8>>| k.hashed() };
             let keys_pact = KeyPact { hashfunc: |k: columnar::Ref<'_, Vec<u8>>| k.hashed() };
 
-            let data = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(&data, data_pact, "Data");
-            let keys = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(&keys, keys_pact, "Keys");
+            let data = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(data, data_pact, "Data");
+            let keys = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(keys, keys_pact, "Keys");
 
-            keys.join_core(&data, |_k, (), ()| { Option::<()>::None })
+            keys.join_core(data, |_k, (), ()| { Option::<()>::None })
                 .probe_with(&mut probe);
         });
 

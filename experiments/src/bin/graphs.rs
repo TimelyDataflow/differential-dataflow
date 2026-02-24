@@ -95,16 +95,16 @@ fn reach<G: Scope<Timestamp = ()>> (
 
     let graph = graph.import(&roots.scope());
 
-    roots.iterate(|inner| {
+    roots.iterate(|scope, inner| {
 
-        let graph = graph.enter(&inner.scope());
-        let roots = roots.enter(&inner.scope());
+        let graph = graph.enter(&scope);
+        let roots = roots.enter(&scope);
 
-        // let reach = inner.concat(&roots).distinct_total().arrange_by_self();
-        // graph.join_core(&reach, |_src,&dst,&()| Some(dst))
+        // let reach = inner.concat(roots).distinct_total().arrange_by_self();
+        // graph.join_core(reach, |_src,&dst,&()| Some(dst))
 
-        graph.join_core(&inner.arrange_by_self(), |_src,&dst,&()| Some(dst))
-             .concat(&roots)
+        graph.join_core(inner.arrange_by_self(), |_src,&dst,&()| Some(dst))
+             .concat(roots)
              .distinct_total()
     })
 }
@@ -118,13 +118,13 @@ fn bfs<G: Scope<Timestamp = ()>> (
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));
 
-    roots.iterate(|inner| {
+    roots.iterate(|scope, inner| {
 
-        let graph = graph.enter(&inner.scope());
-        let roots = roots.enter(&inner.scope());
+        let graph = graph.enter(&scope);
+        let roots = roots.enter(&scope);
 
-        graph.join_core(&inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
-             .concat(&roots)
+        graph.join_core(inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
+             .concat(roots)
              .reduce(|_key, input, output| output.push((*input[0].0,1)))
     })
 }
@@ -144,16 +144,16 @@ fn bfs<G: Scope<Timestamp = ()>> (
 
 //     // each edge should exist in both directions.
 //     let edges = edges.map_in_place(|x| mem::swap(&mut x.0, &mut x.1))
-//                      .concat(&edges);
+//                      .concat(edges);
 
 //     // don't actually use these labels, just grab the type
 //     nodes.filter(|_| false)
-//          .iterate(|inner| {
-//              let edges = edges.enter(&inner.scope());
-//              let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.1.leading_zeros() as u64));
+//          .iterate(|scope, inner| {
+//              let edges = edges.enter(&scope);
+//              let nodes = nodes.enter_at(&scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
 
-//             inner.join_map(&edges, |_k,l,d| (*d,*l))
-//                  .concat(&nodes)
+//             inner.join_map(edges, |_k,l,d| (*d,*l))
+//                  .concat(nodes)
 //                  .group(|_, s, t| { t.push((*s[0].0, 1)); } )
 //          })
 // }

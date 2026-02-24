@@ -35,16 +35,16 @@ where
     TOuter: Timestamp,
 {
     /// Enters a dynamically created scope which has `level` timestamp coordinates.
-    pub fn enter_dynamic(&self, _level: usize) -> Self {
-        (*self).clone()
+    pub fn enter_dynamic(self, _level: usize) -> Self {
+        self
     }
     /// Leaves a dynamically created scope which has `level` timestamp coordinates.
-    pub fn leave_dynamic(&self, level: usize) -> Self {
+    pub fn leave_dynamic(self, level: usize) -> Self {
         // Create a unary operator that will strip all but `level-1` timestamp coordinates.
         let mut builder = OperatorBuilder::new("LeaveDynamic".to_string(), self.scope());
         let (output, stream) = builder.new_output();
         let mut output = OutputBuilder::from(output);
-        let mut input = builder.new_input_connection(&self.inner, Pipeline, [(0, Antichain::from_elem(Product { outer: Default::default(), inner: PointStampSummary { retain: Some(level - 1), actions: Vec::new() } }))]);
+        let mut input = builder.new_input_connection(self.inner, Pipeline, [(0, Antichain::from_elem(Product { outer: Default::default(), inner: PointStampSummary { retain: Some(level - 1), actions: Vec::new() } }))]);
 
         builder.build(move |_capability| move |_frontier| {
             let mut output = output.activate();
@@ -53,7 +53,7 @@ where
                 let mut vec = std::mem::take(&mut new_time.inner).into_inner();
                 vec.truncate(level - 1);
                 new_time.inner = PointStamp::new(vec);
-                let new_cap = cap.delayed(&new_time);
+                let new_cap = cap.delayed(&new_time, 0);
                 for (_data, time, _diff) in data.iter_mut() {
                     let mut vec = std::mem::take(&mut time.inner).into_inner();
                     vec.truncate(level - 1);

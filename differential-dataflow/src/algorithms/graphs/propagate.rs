@@ -13,7 +13,7 @@ use crate::difference::{Abelian, Multiply};
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate<G, N, L, R>(edges: &VecCollection<G, (N,N), R>, nodes: &VecCollection<G,(N,L),R>) -> VecCollection<G,(N,L),R>
+pub fn propagate<G, N, L, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>) -> VecCollection<G,(N,L),R>
 where
     G: Scope<Timestamp: Lattice+Ord+Hash>,
     N: ExchangeData+Hash,
@@ -22,7 +22,7 @@ where
     R: From<i8>,
     L: ExchangeData,
 {
-    propagate_core(&edges.arrange_by_key(), nodes, |_label| 0)
+    propagate_core(edges.arrange_by_key(), nodes, |_label| 0)
 }
 
 /// Propagates labels forward, retaining the minimum label.
@@ -30,7 +30,7 @@ where
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate_at<G, N, L, F, R>(edges: &VecCollection<G, (N,N), R>, nodes: &VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
+pub fn propagate_at<G, N, L, F, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
     G: Scope<Timestamp: Lattice+Ord+Hash>,
     N: ExchangeData+Hash,
@@ -40,7 +40,7 @@ where
     L: ExchangeData,
     F: Fn(&L)->u64+Clone+'static,
 {
-    propagate_core(&edges.arrange_by_key(), nodes, logic)
+    propagate_core(edges.arrange_by_key(), nodes, logic)
 }
 
 use crate::trace::TraceReader;
@@ -51,7 +51,7 @@ use crate::operators::arrange::arrangement::Arranged;
 /// This variant takes a pre-arranged edge collection, to facilitate re-use, and allows
 /// a method `logic` to specify the rounds in which we introduce various labels. The output
 /// of `logic should be a number in the interval \[0,64\],
-pub fn propagate_core<G, N, L, Tr, F, R>(edges: &Arranged<G,Tr>, nodes: &VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
+pub fn propagate_core<G, N, L, Tr, F, R>(edges: Arranged<G,Tr>, nodes: VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
     G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
@@ -69,11 +69,11 @@ where
     // iterative computation so that the arrangement produced by `reduce` can be re-used.
 
     // nodes.filter(|_| false)
-    //      .iterate(|inner| {
-    //          let edges = edges.enter(&inner.scope());
-    //          let nodes = nodes.enter_at(&inner.scope(), move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as u64));
-    //          inner.join_map(&edges, |_k,l,d| (d.clone(),l.clone()))
-    //               .concat(&nodes)
+    //      .iterate(|scope, inner| {
+    //          let edges = edges.enter(&scope);
+    //          let nodes = nodes.enter_at(&scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as u64));
+    //          inner.join_map(edges, |_k,l,d| (d.clone(),l.clone()))
+    //               .concat(nodes)
     //               .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))
     //      })
 
@@ -91,14 +91,16 @@ where
 
         let labels =
         proposals
-            .concat(&nodes)
+            .collection()
+            .concat(nodes)
             .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1_i8))));
 
         let propagate: VecCollection<_, (N, L), R> =
         labels
-            .join_core(&edges, |_k, l: &L, d| Some((d.clone(), l.clone())));
+            .clone()
+            .join_core(edges, |_k, l: &L, d| Some((d.clone(), l.clone())));
 
-        proposals.set(&propagate);
+        proposals.set(propagate);
 
         labels
             .as_collection(|k,v| (k.clone(), v.clone()))

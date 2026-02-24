@@ -121,11 +121,11 @@ fn reach<G: Scope<Timestamp = ()>> (
         let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
 
         let result =
-        graph.join_core(&inner.arrange_by_self(), |_src,&dst,&()| Some(dst))
-             .concat(&roots)
+        graph.join_core(inner.arrange_by_self(), |_src,&dst,&()| Some(dst))
+             .concat(roots)
              .threshold_total(|_,_| 1);
 
-        inner.set(&result);
+        inner.set(result);
         result.leave()
     })
 }
@@ -146,11 +146,11 @@ fn bfs<G: Scope<Timestamp = ()>> (
 
         let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
         let result =
-        graph.join_core(&inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
-             .concat(&roots)
+        graph.join_core(inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
+             .concat(roots)
              .reduce(|_key, input, output| output.push((*input[0].0,1)));
 
-        inner.set(&result);
+        inner.set(result);
         result.leave()
     })
 }
@@ -167,7 +167,7 @@ fn connected_components<G: Scope<Timestamp = ()>>(
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes_f = forward.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
     let nodes_r = reverse.flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
-    let nodes = nodes_f.concat(&nodes_r).consolidate().map(|x| (x,x));
+    let nodes = nodes_f.concat(nodes_r).consolidate().map(|x| (x,x));
 
     scope.iterative(|scope| {
 
@@ -179,8 +179,8 @@ fn connected_components<G: Scope<Timestamp = ()>>(
         let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
 
         let labels = inner.arrange_by_key();
-        let f_prop = labels.join_core(&forward, |_k,l,d| Some((*d,*l)));
-        let r_prop = labels.join_core(&reverse, |_k,l,d| Some((*d,*l)));
+        let f_prop = labels.join_core(forward, |_k,l,d| Some((*d,*l)));
+        let r_prop = labels.join_core(reverse, |_k,l,d| Some((*d,*l)));
 
         use timely::dataflow::operators::{Map, Concat, Delay};
 
@@ -188,14 +188,14 @@ fn connected_components<G: Scope<Timestamp = ()>>(
         nodes
             .inner
             .map_in_place(|dtr| (dtr.1).inner = 256 * ((((::std::mem::size_of::<Node>() * 8) as u32) - (dtr.0).1.leading_zeros())))
-            .concat(&inner.filter(|_| false).inner)
+            .concat(inner.filter(|_| false).inner)
             .delay(|dtr,_| dtr.1.clone())
             .as_collection()
-            .concat(&f_prop)
-            .concat(&r_prop)
+            .concat(f_prop)
+            .concat(r_prop)
             .reduce(|_, s, t| { t.push((*s[0].0, 1)); });
 
-        inner.set(&result);
+        inner.set(result);
         result.leave()
     })
 }

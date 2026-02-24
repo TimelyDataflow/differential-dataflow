@@ -13,9 +13,9 @@ Differential dataflow provides a binary `join` operator that matches records in 
 In the example above, we might write
 
 ```rust
-edges.join(&edges)
+edges.join(edges)
      .map(|(a,(b,c))| ((b,c),a))
-     .semijoin(&edges)
+     .semijoin(edges)
      .map(|((b,c),a)| (a,b,c));
 ```
 

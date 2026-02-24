@@ -44,13 +44,13 @@ fn main() {
                 let labels = SemigroupVariable::new(inner, Product::new(Default::default(), 1));
 
                 let next =
-                labels.join_core(&edges, |_b, a, c| Some((*c, *a)))
-                      .concat(&nodes)
+                labels.join_core(edges, |_b, a, c| Some((*c, *a)))
+                      .concat(nodes)
                       .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                     //   .distinct_total_core::<Diff>();
                       .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None });
 
-                labels.set(&next);
+                labels.set(next);
                 next.leave()
             });
 

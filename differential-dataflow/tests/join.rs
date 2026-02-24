@@ -1,4 +1,4 @@
-use timely::dataflow::operators::{ToStream, Capture, Map};
+use timely::dataflow::operators::{ToStream, Capture, vec::Map};
 use timely::dataflow::operators::capture::Extract;
 use differential_dataflow::AsCollection;
 
@@ -18,7 +18,7 @@ fn join() {
                         .as_collection();
 
         // should produce triples `(0,0,'a')` and `(1,2,'B')`.
-        col1.join(&col2).inner.capture()
+        col1.join(col2).inner.capture()
     });
 
     let extracted = data.extract();
@@ -35,7 +35,7 @@ fn join_map() {
         let col2 = vec![((0,'a'), Default::default(),1),((1,'B'), Default::default(),1)].into_iter().to_stream(scope).as_collection();
 
         // should produce records `(0 + 0,'a')` and `(1 + 2,'B')`.
-        col1.join_map(&col2, |k,v1,v2| (*k + *v1, *v2)).inner.capture()
+        col1.join_map(col2, |k,v1,v2| (*k + *v1, *v2)).inner.capture()
     });
 
     let extracted = data.extract();
@@ -50,7 +50,7 @@ fn semijoin() {
         let col2 = vec![(0, Default::default(),1)].into_iter().to_stream(scope).as_collection();
 
         // should retain record `(0,0)` and discard `(1,2)`.
-        col1.semijoin(&col2).inner.capture()
+        col1.semijoin(col2).inner.capture()
     });
 
     let extracted = data.extract();
@@ -65,7 +65,7 @@ fn antijoin() {
         let col2 = vec![(0, Default::default(),1)].into_iter().to_stream(scope).as_collection();
 
         // should retain record `(1,2)` and discard `(0,0)`.
-        col1.antijoin(&col2).consolidate().inner.capture()
+        col1.antijoin(col2).consolidate().inner.capture()
     });
     let extracted = data.extract();
     assert_eq!(extracted.len(), 1);
@@ -89,10 +89,10 @@ fn join_scaling(scale: u64) {
                              .as_collection()
                              .count();
 
-        let odds = counts.filter(|x| x.1 % 2 == 1);
+        let odds = counts.clone().filter(|x| x.1 % 2 == 1);
         let evens = counts.filter(|x| x.1 % 2 == 0);
 
-        odds.join(&evens).inner.capture()
+        odds.join(evens).inner.capture()
     });
 
     let extracted = data.extract();

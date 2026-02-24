@@ -27,9 +27,9 @@ fn main() {
             let knows = knows.arrange_by_key();
 
             // Same logic as before, with a new method name.
-            query.join_core(&knows, |x, q, y| Some((*y, (*x, *q))))
-                .join_core(&knows, |y, (x, q), z| Some((*q, (*x, *y, *z))))
-                .inspect(|result| println!("result {:?}", result));
+            query.join_core(knows.clone(), |x, q, y| Some((*y, (*x, *q))))
+                 .join_core(knows.clone(), |y, (x, q), z| Some((*q, (*x, *y, *z))))
+                 .inspect(|result| println!("result {:?}", result));
         });
 
         # // to help with type inference ...
@@ -63,21 +63,21 @@ fn main() {
             let query = query.to_collection(scope);
 
             // Arrange the data first! (by key and self).
-            let knows_by_key = knows.arrange_by_key();
-            let knows_by_self = knows.arrange_by_self();
+            let knows_by_key = knows.clone().arrange_by_key();
+            let knows_by_self = knows.clone().arrange_by_self();
 
             // The same outputs as in the previous example.
             let candidates =
-            query.join_core(&knows_by_key, |x,q,y| Some((*y,(*x,*q))))
-                 .join_core(&knows_by_key, |y,(x,q),z| Some((*q,(*x,*y,*z))));
+            query.join_core(knows_by_key.clone(), |x,q,y| Some((*y,(*x,*q))))
+                 .join_core(knows_by_key.clone(), |y,(x,q),z| Some((*q,(*x,*y,*z))));
 
             // Repeatedly put pairs of nodes as keys, and semijoin with knows.
             candidates
                 .map(|(q,(x,y,z))| ((x,z),(q,y)))
-                .join_core(&knows_by_self, |&(x,z),&(q,y),&()| Some(((y,z),(q,x))))
-                .join_core(&knows_by_self, |&(y,z),&(q,x),&()| Some(((z,x),(q,y))))
-                .join_core(&knows_by_self, |&(z,x),&(q,y),&()| Some(((y,x),(q,z))))
-                .join_core(&knows_by_self, |&(y,x),&(q,z),&()| Some((q,(x,y,z))))
+                .join_core(knows_by_self.clone(), |&(x,z),&(q,y),&()| Some(((y,z),(q,x))))
+                .join_core(knows_by_self.clone(), |&(y,z),&(q,x),&()| Some(((z,x),(q,y))))
+                .join_core(knows_by_self.clone(), |&(z,x),&(q,y),&()| Some(((y,x),(q,z))))
+                .join_core(knows_by_self.clone(), |&(y,x),&(q,z),&()| Some((q,(x,y,z))))
                 .inspect(|result| println!("result {:?}", result));
 
         });
@@ -120,8 +120,8 @@ fn main() {
             let knows = knows.as_collection(|k,v| (*k,*v));
 
             // Same logic as before, with a new method name.
-            query.join_map(&knows, |x,q,y| (*y,(*x,*q)))
-                 .join_map(&knows, |y,(x,q),z| (*q,(*x,*y,*z)))
+            query.join_map(knows.clone(), |x,q,y| (*y,(*x,*q)))
+                 .join_map(knows.clone(), |y,(x,q),z| (*q,(*x,*y,*z)))
                  .inspect(|result| println!("result {:?}", result));
 
         });

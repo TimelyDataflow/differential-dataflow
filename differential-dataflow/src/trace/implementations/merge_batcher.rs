@@ -239,7 +239,7 @@ pub mod container {
     use std::marker::PhantomData;
     use timely::container::{PushInto, SizableContainer};
     use timely::progress::frontier::{Antichain, AntichainRef};
-    use timely::{Accountable, Data, PartialOrder};
+    use timely::{Accountable, PartialOrder};
     use timely::container::DrainContainer;
     use crate::trace::implementations::merge_batcher::Merger;
 
@@ -325,7 +325,7 @@ pub mod container {
 
     impl<MC, CQ> Merger for ContainerMerger<MC, CQ>
     where
-        for<'a> MC: MergerChunk<TimeOwned: Ord + PartialOrder + Data> + Clone + PushInto<<MC as DrainContainer>::Item<'a>> + 'static,
+        for<'a> MC: MergerChunk<TimeOwned: Ord + PartialOrder + Clone + 'static> + Clone + PushInto<<MC as DrainContainer>::Item<'a>> + 'static,
         CQ: ContainerQueue<MC>,
     {
         type Time = MC::TimeOwned;

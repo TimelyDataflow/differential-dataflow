@@ -45,7 +45,7 @@ fn unoptimized() {
             let nodes =
             assignment
                 .flat_map(|(a,b)| vec![a,b])
-                .concat(&dereference.flat_map(|(a,b)| vec![a,b]));
+                .concat(dereference.flat_map(|(a,b)| vec![a,b]));
 
             let dereference = dereference.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
 
@@ -65,11 +65,11 @@ fn unoptimized() {
 
                     // VA(a,b) <- VF(x,a),VF(x,b)
                     // VA(a,b) <- VF(x,a),MA(x,y),VF(y,b)
-                    let value_alias_next = value_flow_arranged.join_core(&value_flow_arranged, |_,&a,&b| Some((a,b)));
-                    let value_alias_next = value_flow_arranged.join_core(&memory_alias_arranged, |_,&a,&b| Some((b,a)))
+                    let value_alias_next = value_flow_arranged.join_core(value_flow_arranged, |_,&a,&b| Some((a,b)));
+                    let value_alias_next = value_flow_arranged.join_core(memory_alias_arranged, |_,&a,&b| Some((b,a)))
                                                               .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                                                              .join_core(&value_flow_arranged, |_,&a,&b| Some((a,b)))
-                                                              .concat(&value_alias_next);
+                                                              .join_core(value_flow_arranged, |_,&a,&b| Some((a,b)))
+                                                              .concat(value_alias_next);
 
                     // VF(a,a) <-
                     // VF(a,b) <- A(a,x),VF(x,b)
@@ -78,11 +78,11 @@ fn unoptimized() {
                     assignment
                         .map(|(a,b)| (b,a))
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                        .join_core(&memory_alias_arranged, |_,&a,&b| Some((b,a)))
-                        .concat(&assignment.map(|(a,b)| (b,a)))
+                        .join_core(memory_alias_arranged, |_,&a,&b| Some((b,a)))
+                        .concat(assignment.map(|(a,b)| (b,a)))
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                        .join_core(&value_flow_arranged, |_,&a,&b| Some((a,b)))
-                        .concat(&nodes.map(|n| (n,n)));
+                        .join_core(value_flow_arranged, |_,&a,&b| Some((a,b)))
+                        .concat(nodes.map(|n| (n,n)));
 
                     let value_flow_next =
                     value_flow_next
@@ -94,9 +94,9 @@ fn unoptimized() {
                     // MA(a,b) <- D(x,a),VA(x,y),D(y,b)
                     let memory_alias_next: VecCollection<_,_,Present> =
                     value_alias_next
-                        .join_core(&dereference, |_x,&y,&a| Some((y,a)))
+                        .join_core(dereference, |_x,&y,&a| Some((y,a)))
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                        .join_core(&dereference, |_y,&a,&b| Some((a,b)));
+                        .join_core(dereference, |_y,&a,&b| Some((a,b)));
 
                     let memory_alias_next: VecCollection<_,_,Present>  =
                     memory_alias_next
@@ -105,8 +105,8 @@ fn unoptimized() {
                         .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                         ;
 
-                    value_flow.set(&value_flow_next);
-                    memory_alias.set(&memory_alias_next);
+                    value_flow.set(value_flow_next);
+                    memory_alias.set(memory_alias_next);
 
                     (value_flow_next.leave(), memory_alias_next.leave(), value_alias_next.leave())
                 });
@@ -170,7 +170,7 @@ fn optimized() {
             let nodes =
             assignment
                 .flat_map(|(a,b)| vec![a,b])
-                .concat(&dereference.flat_map(|(a,b)| vec![a,b]));
+                .concat(dereference.flat_map(|(a,b)| vec![a,b]));
 
             let dereference = dereference.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
 
@@ -195,11 +195,11 @@ fn optimized() {
                     assignment
                         .map(|(a,b)| (b,a))
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                        .join_core(&memory_alias_arranged, |_,&a,&b| Some((b,a)))
-                        .concat(&assignment.map(|(a,b)| (b,a)))
+                        .join_core(memory_alias_arranged, |_,&a,&b| Some((b,a)))
+                        .concat(assignment.map(|(a,b)| (b,a)))
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                        .join_core(&value_flow_arranged, |_,&a,&b| Some((a,b)))
-                        .concat(&nodes.map(|n| (n,n)))
+                        .join_core(value_flow_arranged, |_,&a,&b| Some((a,b)))
+                        .concat(nodes.map(|n| (n,n)))
                         .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
                         // .distinct_total_core::<Diff>()
                         .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
@@ -210,28 +210,28 @@ fn optimized() {
                     value_flow
                         .map(|(a,b)| (b,a))
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                        .join_core(&dereference, |_x,&a,&b| Some((a,b)))
+                        .join_core(dereference, |_x,&a,&b| Some((a,b)))
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
 
                     // MA(a,b) <- VFD(x,a),VFD(y,b)
                     // MA(a,b) <- VFD(x,a),MA(x,y),VFD(y,b)
                     let memory_alias_next =
                     value_flow_deref
-                        .join_core(&value_flow_deref, |_y,&a,&b| Some((a,b)));
+                        .join_core(value_flow_deref, |_y,&a,&b| Some((a,b)));
 
                     let memory_alias_next =
                     memory_alias_arranged
-                        .join_core(&value_flow_deref, |_x,&y,&a| Some((y,a)))
+                        .join_core(value_flow_deref, |_x,&y,&a| Some((y,a)))
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                        .join_core(&value_flow_deref, |_y,&a,&b| Some((a,b)))
-                        .concat(&memory_alias_next)
+                        .join_core(value_flow_deref, |_y,&a,&b| Some((a,b)))
+                        .concat(memory_alias_next)
                         .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
                         // .distinct_total_core::<Diff>()
                         .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
                         ;
 
-                    value_flow.set(&value_flow_next);
-                    memory_alias.set(&memory_alias_next);
+                    value_flow.set(value_flow_next);
+                    memory_alias.set(memory_alias_next);
 
                     (value_flow_next.leave(), memory_alias_next.leave())
                 });

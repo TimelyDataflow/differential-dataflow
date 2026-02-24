@@ -81,7 +81,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .arrange_by_key();
 
     orders
-        .join_core(&lineitems, |_, _, &ship_mode| Some(ship_mode))
+        .join_core(lineitems, |_, _, &ship_mode| Some(ship_mode))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
@@ -108,7 +108,7 @@ where
             }
             else { None }
         )
-        .join_core(&arrangements.order, |_ok,&sm,o| {
+        .join_core(arrangements.order, |_ok,&sm,o| {
             Some((sm, starts_with(&o.order_priority, b"1-URGENT") || starts_with(&o.order_priority, b"2-HIGH")))
         })
         .explode(|(sm,priority)| Some((sm, if priority { DiffPair::new(1, 0) } else { DiffPair::new(1, 0) })))

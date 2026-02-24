@@ -15,8 +15,9 @@ For example, recall our example of interacting with our management computation, 
 
         // if (m2, m1) and (m1, p), then output (m1, (m2, p))
         manages
+            .clone()
             .map(|(m2, m1)| (m1, m2))
-            .join(&manages)
+            .join(manages)
             .probe()
     });
 ```

@@ -38,10 +38,10 @@ fn main() {
                 let reverse = reverse.enter(inner);
 
                 // Without using wrappers yet, maintain an "old" and a "new" copy of edges.
-                let alt_forward = CollectionIndex::index(&forward);
-                let alt_reverse = CollectionIndex::index(&reverse);
-                let neu_forward = CollectionIndex::index(&forward.delay(|time| AltNeu::neu(time.time.clone())));
-                let neu_reverse = CollectionIndex::index(&reverse.delay(|time| AltNeu::neu(time.time.clone())));
+                let alt_forward = CollectionIndex::index(forward.clone());
+                let alt_reverse = CollectionIndex::index(reverse.clone());
+                let neu_forward = CollectionIndex::index(forward.clone().delay(|time| AltNeu::neu(time.time.clone())));
+                let neu_reverse = CollectionIndex::index(reverse.clone().delay(|time| AltNeu::neu(time.time.clone())));
 
                 // For each relation, we form a delta query driven by changes to that relation.
                 //
@@ -55,6 +55,7 @@ fn main() {
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
                 let changes1 =
                 forward
+                    .clone()
                     .extend(&mut [
                         &mut neu_forward.extend_using(|(_a,b)| *b),
                         &mut neu_forward.extend_using(|(a,_b)| *a),
@@ -64,6 +65,7 @@ fn main() {
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
                 let changes2 =
                 forward
+                    .clone()
                     .extend(&mut [
                         &mut alt_reverse.extend_using(|(b,_c)| *b),
                         &mut neu_reverse.extend_using(|(_b,c)| *c),
@@ -78,7 +80,7 @@ fn main() {
                     ])
                     .map(|((a,c),b)| (a,b,c));
 
-                changes1.concat(&changes2).concat(&changes3).leave()
+                changes1.concat(changes2).concat(changes3).leave()
             });
 
             triangles

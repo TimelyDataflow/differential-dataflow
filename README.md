@@ -21,8 +21,8 @@ Alternately, here is a fragment that computes the set of nodes reachable from a 
 
 ```rust
 let reachable =
-roots.iterate(|reach|
-    edges.enter(&reach.scope())
+roots.iterate(|scope, reach|
+    edges.enter(&scope)
          .semijoin(reach)
          .map(|(src, dst)| dst)
          .concat(reach)
@@ -328,7 +328,7 @@ Here is a direct implementation, in which we repeatedly take determine the set o
 let k = 5;
 
 // iteratively thin edges.
-edges.iterate(|inner| {
+edges.iterate(|scope, inner| {
 
     // determine the active vertices        /-- this is a lie --\
     let active = inner.flat_map(|(src,dst)| [src,dst].into_iter())
@@ -337,7 +337,7 @@ edges.iterate(|inner| {
                       .map(|(node,_)| node);
 
     // keep edges between active vertices
-    edges.enter(&inner.scope())
+    edges.enter(&scope)
          .semijoin(active)
          .map(|(src,dst)| (dst,src))
          .semijoin(active)

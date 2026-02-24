@@ -1,4 +1,4 @@
-use timely::dataflow::operators::{ToStream, Capture, Map};
+use timely::dataflow::operators::{ToStream, Capture, vec::Map};
 use timely::dataflow::operators::capture::Extract;
 use differential_dataflow::AsCollection;
 

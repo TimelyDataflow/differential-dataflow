@@ -1,6 +1,7 @@
 use std::hash::Hash;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
+use timely::dataflow::operators::vec::count::Accumulate;
 
 use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
@@ -31,13 +32,13 @@ fn main() {
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
         worker.dataflow::<(),_,_>(|scope| {
-            triangles(&VecCollection::new(edges.to_stream(scope))).inner.count().inspect(|x| println!("{:?}", x));
+            triangles(VecCollection::new(edges.to_stream(scope))).inner.count().inspect(|x| println!("{:?}", x));
         });
 
     }).unwrap();
 }
 
-fn triangles<G: Scope>(edges: &VecCollection<G, Edge>) -> VecCollection<G, (Node, Node, Node)>
+fn triangles<G: Scope>(edges: VecCollection<G, Edge>) -> VecCollection<G, (Node, Node, Node)>
 where
     G: Scope<Timestamp: Lattice+Hash+Ord>,
 {
@@ -45,9 +46,9 @@ where
     let edges = edges.filter(|&(src, dst)| src < dst);
 
     // arrange the edge relation three ways.
-    let as_self = edges.arrange_by_self();
-    let forward = edges.arrange_by_key();
-    let reverse = edges.map_in_place(|x| ::std::mem::swap(&mut x.0, &mut x.1))
+    let as_self = edges.clone().arrange_by_self();
+    let forward = edges.clone().arrange_by_key();
+    let reverse = edges.clone().map_in_place(|x| ::std::mem::swap(&mut x.0, &mut x.1))
                        .arrange_by_key();
 
     // arrange the count of extensions from each source.
@@ -55,11 +56,11 @@ where
                       .arrange_by_self();
 
     // extract ((src, dst), idx) tuples with weights equal to the number of extensions.
-    let cand_count1 = forward.join_core(&counts, |&src, &dst, &()| Some(((src, dst), 1)));
-    let cand_count2 = reverse.join_core(&counts, |&dst, &src, &()| Some(((src, dst), 2)));
+    let cand_count1 = forward.clone().join_core(counts.clone(), |&src, &dst, &()| Some(((src, dst), 1)));
+    let cand_count2 = reverse.join_core(counts, |&dst, &src, &()| Some(((src, dst), 2)));
 
     // determine for each (src, dst) tuple which index would propose the fewest extensions.
-    let winners = cand_count1.concat(&cand_count2)
+    let winners = cand_count1.concat(cand_count2)
                              .reduce(|_srcdst, counts, output| {
                                  if counts.len() == 2 {
                                      let mut min_cnt = isize::max_value();
@@ -75,17 +76,18 @@ where
                              });
 
     // select tuples with the first relation minimizing the proposals, join, then intersect.
-    let winners1 = winners.flat_map(|((src, dst), index)| if index == 1 { Some((src, dst)) } else { None })
-                          .join_core(&forward, |&src, &dst, &ext| Some(((dst, ext), src)))
-                          .join_core(&as_self, |&(dst, ext), &src, &()| Some(((dst, ext), src)))
+    let winners1 = winners.clone()
+                          .flat_map(|((src, dst), index)| if index == 1 { Some((src, dst)) } else { None })
+                          .join_core(forward.clone(), |&src, &dst, &ext| Some(((dst, ext), src)))
+                          .join_core(as_self.clone(), |&(dst, ext), &src, &()| Some(((dst, ext), src)))
                           .map(|((dst, ext), src)| (src, dst, ext));
 
     // select tuples with the second relation minimizing the proposals, join, then intersect.
     let winners2 = winners.flat_map(|((src, dst), index)| if index == 2 { Some((dst, src)) } else { None })
-                          .join_core(&forward, |&dst, &src, &ext| Some(((src, ext), dst)))
-                          .join_core(&as_self, |&(src, ext), &dst, &()| Some(((src, ext), dst)))
+                          .join_core(forward.clone(), |&dst, &src, &ext| Some(((src, ext), dst)))
+                          .join_core(as_self, |&(src, ext), &dst, &()| Some(((src, ext), dst)))
                           .map(|((src, ext), dst)| (src, dst, ext));
 
     // collect and return results.
-    winners1.concat(&winners2)
+    winners1.concat(winners2)
 }

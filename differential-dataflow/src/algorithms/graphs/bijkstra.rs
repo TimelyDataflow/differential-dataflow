@@ -19,14 +19,14 @@ use crate::operators::iterate::Variable;
 /// Goals that cannot reach from the source to the target are relatively expensive, as
 /// the entire graph must be explored to confirm this. A graph connectivity pre-filter
 /// could be good insurance here.
-pub fn bidijkstra<G, N>(edges: &VecCollection<G, (N,N)>, goals: &VecCollection<G, (N,N)>) -> VecCollection<G, ((N,N), u32)>
+pub fn bidijkstra<G, N>(edges: VecCollection<G, (N,N)>, goals: VecCollection<G, (N,N)>) -> VecCollection<G, ((N,N), u32)>
 where
     G: Scope<Timestamp: Lattice+Ord>,
     N: ExchangeData+Hash,
 {
-    let forward = edges.arrange_by_key();
+    let forward = edges.clone().arrange_by_key();
     let reverse = edges.map(|(x,y)| (y,x)).arrange_by_key();
-    bidijkstra_arranged(&forward, &reverse, goals)
+    bidijkstra_arranged(forward, reverse, goals)
 }
 
 use crate::trace::TraceReader;
@@ -34,9 +34,9 @@ use crate::operators::arrange::Arranged;
 
 /// Bi-directional Dijkstra search using arranged forward and reverse edge collections.
 pub fn bidijkstra_arranged<G, N, Tr>(
-    forward: &Arranged<G, Tr>,
-    reverse: &Arranged<G, Tr>,
-    goals: &VecCollection<G, (N,N)>
+    forward: Arranged<G, Tr>,
+    reverse: Arranged<G, Tr>,
+    goals: VecCollection<G, (N,N)>
 ) -> VecCollection<G, ((N,N), u32)>
 where
     G: Scope<Timestamp=Tr::Time>,
@@ -55,11 +55,11 @@ where
         // is a corresponding destination or source that has not yet been reached.
 
         // forward and reverse (node, (root, dist))
-        let forward = Variable::new_from(goals.map(|(x,_)| (x.clone(),(x.clone(),0))).enter(inner), Product::new(Default::default(), 1));
-        let reverse = Variable::new_from(goals.map(|(_,y)| (y.clone(),(y.clone(),0))).enter(inner), Product::new(Default::default(), 1));
+        let forward = Variable::new_from(goals.clone().map(|(x,_)| (x.clone(),(x.clone(),0))).enter(inner), Product::new(Default::default(), 1));
+        let reverse = Variable::new_from(goals.clone().map(|(_,y)| (y.clone(),(y.clone(),0))).enter(inner), Product::new(Default::default(), 1));
 
-        forward.map(|_| ()).consolidate().inspect(|x| println!("forward: {:?}", x));
-        reverse.map(|_| ()).consolidate().inspect(|x| println!("reverse: {:?}", x));
+        forward.collection().map(|_| ()).consolidate().inspect(|x| println!("forward: {:?}", x));
+        reverse.collection().map(|_| ()).consolidate().inspect(|x| println!("reverse: {:?}", x));
 
         let goals = goals.enter(inner);
         // let edges = edges.enter(inner);
@@ -71,50 +71,54 @@ where
         // This is a cyclic join, which should scare us a bunch.
         let reached =
         forward
-            .join_map(&reverse, |_, (src,d1), (dst,d2)| ((src.clone(), dst.clone()), *d1 + *d2))
+            .collection()
+            .join_map(reverse.collection(), |_, (src,d1), (dst,d2)| ((src.clone(), dst.clone()), *d1 + *d2))
             .reduce(|_key, s, t| t.push((*s[0].0, 1)))
-            .semijoin(&goals);
+            .semijoin(goals.clone());
 
         let active =
         reached
+            .clone()
             .negate()
             .map(|(srcdst,_)| srcdst)
-            .concat(&goals)
+            .concat(goals)
             .consolidate();
 
         // Let's expand out forward queries that are active.
-        let forward_active = active.map(|(x,_y)| x).distinct();
+        let forward_active = active.clone().map(|(x,_y)| x).distinct();
         let forward_next =
         forward
+            .collection()
             .map(|(med, (src, dist))| (src, (med, dist)))
-            .semijoin(&forward_active)
+            .semijoin(forward_active)
             .map(|(src, (med, dist))| (med, (src, dist)))
-            .join_core(&forward_edges, |_med, (src, dist), next| Some((next.clone(), (src.clone(), *dist+1))))
-            .concat(&forward)
+            .join_core(forward_edges, |_med, (src, dist), next| Some((next.clone(), (src.clone(), *dist+1))))
+            .concat(forward.collection())
             .map(|(next, (src, dist))| ((next, src), dist))
             .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next, src), dist)| (next, (src, dist)));
 
-        forward_next.map(|_| ()).consolidate().inspect(|x| println!("forward_next: {:?}", x));
+        forward_next.clone().map(|_| ()).consolidate().inspect(|x| println!("forward_next: {:?}", x));
 
-        forward.set(&forward_next);
+        forward.set(forward_next);
 
         // Let's expand out reverse queries that are active.
         let reverse_active = active.map(|(_x,y)| y).distinct();
         let reverse_next =
         reverse
+            .collection()
             .map(|(med, (rev, dist))| (rev, (med, dist)))
-            .semijoin(&reverse_active)
+            .semijoin(reverse_active)
             .map(|(rev, (med, dist))| (med, (rev, dist)))
-            .join_core(&reverse_edges, |_med, (rev, dist), next| Some((next.clone(), (rev.clone(), *dist+1))))
-            .concat(&reverse)
+            .join_core(reverse_edges, |_med, (rev, dist), next| Some((next.clone(), (rev.clone(), *dist+1))))
+            .concat(reverse.collection())
             .map(|(next, (rev, dist))| ((next, rev), dist))
             .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next,rev), dist)| (next, (rev, dist)));
 
-        reverse_next.map(|_| ()).consolidate().inspect(|x| println!("reverse_next: {:?}", x));
+        reverse_next.clone().map(|_| ()).consolidate().inspect(|x| println!("reverse_next: {:?}", x));
 
-        reverse.set(&reverse_next);
+        reverse.set(reverse_next);
 
         reached.leave()
     })

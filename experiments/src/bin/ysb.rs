@@ -74,7 +74,7 @@ fn main() {
 
             let probe =
             links
-                .semijoin(&views)
+                .semijoin(views)
                 .map(|(_ad, campaign)| campaign)
                 .consolidate()
                 .inspect(move |x| if inspect { println!("{:?}:\t{:?}", x.0, x.2); })

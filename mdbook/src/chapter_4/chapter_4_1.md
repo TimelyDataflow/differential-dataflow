@@ -14,12 +14,12 @@ Let's write this computation starting from a collection `edges`, using different
                       .distinct();
 
     labels
-        .iterate(|inner| {
-            let labels = labels.enter(inner.scope());
-            let edges = edges.enter(inner.scope());
-            inner.join(&edges)
+        .iterate(|scope, inner| {
+            let labels = labels.enter(&scope);
+            let edges = edges.enter(&scope);
+            inner.join(edges)
                  .map(|(_src,(lbl,dst))| (dst,lbl))
-                 .concat(&labels)
+                 .concat(labels)
                  .reduce(|_dst, lbls, out| {
                      let min_lbl =
                      lbls.iter()

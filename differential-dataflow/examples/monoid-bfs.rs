@@ -55,7 +55,7 @@ fn main() {
             let (root_input, roots) = scope.new_collection();
             let (edge_input, graph) = scope.new_collection();
 
-            let mut result = bfs(&graph, &roots);
+            let mut result = bfs(graph, roots);
 
             if !inspect {
                 result = result.filter(|_| false);
@@ -122,7 +122,7 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G>(edges: &VecCollection<G, Edge, MinSum>, roots: &VecCollection<G, Node, MinSum>) -> VecCollection<G, Node, MinSum>
+fn bfs<G>(edges: VecCollection<G, Edge, MinSum>, roots: VecCollection<G, Node, MinSum>) -> VecCollection<G, Node, MinSum>
 where
     G: Scope<Timestamp: Lattice+Ord>,
 {
@@ -140,9 +140,10 @@ where
 
         let result =
         variable
+            .collection()
             .map(|n| (n,()))
-            .join_map(&edges, |_k,&(),d| *d)
-            .concat(&roots)
+            .join_map(edges, |_k,&(),d| *d)
+            .concat(roots)
             .map(|x| (x,()))
             .reduce_core::<_,KeyBuilder<_,_,_>,KeySpine<_,_,_>>("Reduce", |_key, input, output, updates| {
                 if output.is_empty() || input[0].1 < output[0].1 {
@@ -151,7 +152,7 @@ where
             })
             .as_collection(|k,()| *k);
 
-        variable.set(&result);
+        variable.set(result.clone());
         result.leave()
      })
 }

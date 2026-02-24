@@ -28,13 +28,13 @@ fn main() {
             let (edges_input, edges) = scope.new_collection();
 
             // Graph oriented both ways, indexed by key.
-            let forward_key = edges.arrange_by_key();
-            let reverse_key = edges.map(|(x,y)| (y,x))
+            let forward_key = edges.clone().arrange_by_key();
+            let reverse_key = edges.clone().map(|(x,y)| (y,x))
                                    .arrange_by_key();
 
             // Graph oriented both ways, indexed by (key, val).
-            let forward_self = edges.arrange_by_self();
-            let reverse_self = edges.map(|(x,y)| (y,x))
+            let forward_self = edges.clone().arrange_by_self();
+            let reverse_self = edges.clone().map(|(x,y)| (y,x))
                                     .arrange_by_self();
 
             // // Graph oriented both ways, counts of distinct vals for each key.
@@ -46,16 +46,16 @@ fn main() {
             let (triangles_prev, triangles_next) = scope.scoped::<AltNeu<usize>,_,_>("DeltaQuery (Triangles)", |inner| {
 
                 // Grab the stream of changes.
-                let changes = edges.enter(inner);
+                let changes = edges.clone().enter(inner);
 
                 // Each relation we'll need.
-                let forward_key_alt = forward_key.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
+                let forward_key_alt = forward_key.clone().enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
                 let reverse_key_alt = reverse_key.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
                 let forward_key_neu = forward_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
                 // let reverse_key_neu = reverse_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
 
                 // let forward_self_alt = forward_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
-                let reverse_self_alt = reverse_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
+                let reverse_self_alt = reverse_self.clone().enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
                 let forward_self_neu = forward_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
                 let reverse_self_neu = reverse_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
 
@@ -76,21 +76,21 @@ fn main() {
 
                 // Prior technology
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 = propose(&changes, forward_key_neu.clone(), key2.clone());
-                let changes1 = validate(&changes1, forward_self_neu.clone(), key1.clone());
+                let changes1 = propose(changes.clone(), forward_key_neu.clone(), key2.clone());
+                let changes1 = validate(changes1, forward_self_neu.clone(), key1.clone());
                 let changes1 = changes1.map(|((a,b),c)| (a,b,c));
 
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 = propose(&changes, reverse_key_alt.clone(), key1.clone());
-                let changes2 = validate(&changes2, reverse_self_neu.clone(), key2.clone());
+                let changes2 = propose(changes.clone(), reverse_key_alt.clone(), key1.clone());
+                let changes2 = validate(changes2, reverse_self_neu.clone(), key2.clone());
                 let changes2 = changes2.map(|((b,c),a)| (a,b,c));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = propose(&changes, forward_key_alt.clone(), key1.clone());
-                let changes3 = validate(&changes3, reverse_self_alt.clone(), key2.clone());
+                let changes3 = propose(changes, forward_key_alt.clone(), key1.clone());
+                let changes3 = validate(changes3, reverse_self_alt.clone(), key2.clone());
                 let changes3 = changes3.map(|((a,c),b)| (a,b,c));
 
-                let prev_changes = changes1.concat(&changes2).concat(&changes3).leave();
+                let prev_changes = changes1.concat(changes2).concat(changes3).leave();
 
                 // New ideas
                 let d_edges = edges.differentiate(inner);
@@ -98,29 +98,31 @@ fn main() {
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
                 let changes1 =
                 d_edges
+                    .clone()
                     .map(|(x,y)| (y,x))
-                    .join_core(&forward_key_neu, |b,a,c| Some(((*a, *c), *b)))
-                    .join_core(&forward_self_neu, |(a,c), b, &()| Some((*a,*b,*c)));
+                    .join_core(forward_key_neu, |b,a,c| Some(((*a, *c), *b)))
+                    .join_core(forward_self_neu.clone(), |(a,c), b, &()| Some((*a,*b,*c)));
 
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
                 let changes2 =
                 d_edges
-                    .join_core(&reverse_key_alt, |b,c,a| Some(((*a, *c), *b)))
-                    .join_core(&forward_self_neu, |(a,c), b, &()| Some((*a,*b,*c)));
+                    .clone()
+                    .join_core(reverse_key_alt, |b,c,a| Some(((*a, *c), *b)))
+                    .join_core(forward_self_neu, |(a,c), b, &()| Some((*a,*b,*c)));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
                 let changes3 =
                 d_edges
-                    .join_core(&forward_key_alt, |a,c,b| Some(((*c, *b), *a)))
-                    .join_core(&reverse_self_alt, |(c,b), a, &()| Some((*a,*b,*c)));
+                    .join_core(forward_key_alt, |a,c,b| Some(((*c, *b), *a)))
+                    .join_core(reverse_self_alt, |(c,b), a, &()| Some((*a,*b,*c)));
 
-                let next_changes = changes1.concat(&changes2).concat(&changes3).integrate();
+                let next_changes = changes1.concat(changes2).concat(changes3).integrate();
 
                 (prev_changes, next_changes)
             });
 
             // Test if our two methods do the same thing.
-            triangles_prev.assert_eq(&triangles_next);
+            triangles_prev.clone().assert_eq(triangles_next);
 
             triangles_prev
                 .filter(move |_| inspect)

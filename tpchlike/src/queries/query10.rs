@@ -73,15 +73,15 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .semijoin(&lineitems)
+        .semijoin(lineitems)
         .map(|(_, cust_key)| cust_key);
 
     collections
         .customers()
         .map(|c| (c.cust_key, (c.name, c.phone, c.address, c.comment, c.nation_key)))
-        .semijoin(&orders)
+        .semijoin(orders)
         .map(|(cust_key, (name, phn, addr, comm, nation_key))| (nation_key, (cust_key, name, phn, addr, comm)))
-        .join(&collections.nations().map(|n| (n.nation_key, n.name)))
+        .join(collections.nations().map(|n| (n.nation_key, n.name)))
         .count_total()
         .probe_with(probe);
 }
@@ -106,17 +106,17 @@ where
             else { None }
         )
         .arrange_by_self()
-        .join_core(&arrangements.order, |_ok,&(),o| {
+        .join_core(arrangements.order, |_ok,&(),o| {
             if create_date(1993,10,1) < o.order_date && o.order_date <= create_date(1994,1,1) {
                 Some(o.cust_key)
             }
             else { None }
         })
         .arrange_by_self()
-        .join_core(&arrangements.customer, |&ck,&(),c| {
+        .join_core(arrangements.customer, |&ck,&(),c| {
             Some((c.nation_key, (ck,c.name,c.acctbal,c.address,c.phone,c.comment)))
         })
-        .join_core(&arrangements.nation, |_nk,&data,n| Some((n.name, data)))
+        .join_core(arrangements.nation, |_nk,&data,n| Some((n.name, data)))
         .count_total()
         .probe_with(probe);
 }

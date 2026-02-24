@@ -78,13 +78,13 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     let parts2 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#23") && 1 <= size && size <= 10 && (starts_with(&container, b"MED BAG") || starts_with(&container, b"MED BOX") || starts_with(&container, b"MED PKG") || starts_with(&container, b"MED PACK"))).map(|x| x.0).arrange_by_self();
     let parts3 = parts.filter(|&(_key, (brand, container, size))| starts_with(&brand, b"Brand#34") && 1 <= size && size <= 15 && (starts_with(&container, b"LG CASE") || starts_with(&container, b"LG BOX") || starts_with(&container, b"LG PACK") || starts_with(&container, b"LG PKG"))).map(|x| x.0).arrange_by_self();
 
-    let result1 = lines1.join_core(&parts1, |_,_,_| Some(()));
-    let result2 = lines2.join_core(&parts2, |_,_,_| Some(()));
-    let result3 = lines3.join_core(&parts3, |_,_,_| Some(()));
+    let result1 = lines1.join_core(parts1, |_,_,_| Some(()));
+    let result2 = lines2.join_core(parts2, |_,_,_| Some(()));
+    let result3 = lines3.join_core(parts3, |_,_,_| Some(()));
 
     result1
-        .concat(&result2)
-        .concat(&result3)
+        .concat(result2)
+        .concat(result3)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
@@ -109,7 +109,7 @@ where
             }
             else { None }
         )
-        .join_core(&arrangements.part, |_pk,&qu,p| {
+        .join_core(arrangements.part, |_pk,&qu,p| {
             if qu >= 1  && qu <= 11 && (starts_with(&p.brand, b"Brand#12") && 1 <= p.size && p.size <= 5  && (starts_with(&p.container, b"SM CASE") || starts_with(&p.container, b"SM BOX") || starts_with(&p.container, b"SM PACK") || starts_with(&p.container, b"MED PKG")))
             && qu >= 10 && qu <= 20 && (starts_with(&p.brand, b"Brand#23") && 1 <= p.size && p.size <= 10 && (starts_with(&p.container, b"MED BAG") || starts_with(&p.container, b"MED BOX") || starts_with(&p.container, b"MED PKG") || starts_with(&p.container, b"MED PACK")))
             && qu >= 20 && qu <= 30 && (starts_with(&p.brand, b"Brand#12") && 1 <= p.size && p.size <= 15 && (starts_with(&p.container, b"LG CASE") || starts_with(&p.container, b"LG BOX") || starts_with(&p.container, b"LG PACK") || starts_with(&p.container, b"LG PKG")))

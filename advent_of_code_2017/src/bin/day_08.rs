@@ -1105,13 +1105,13 @@ wui inc -120 if i > -2038";
             edits
                 .filter(|_| false)
                 .map(|_| ((0, String::new()), 0))
-                .iterate(|valid| {
+                .iterate(|scope, valid| {
 
-                    let edits = edits.enter(&valid.scope());
+                    let edits = edits.enter(&scope);
 
                     valid
                         .prefix_sum_at(edits.map(|(key,_)| key), 0, |_k,x,y| *x + *y)
-                        .join(&edits)
+                        .join(edits)
                         .filter(|&(_, sum, ((ref src_cmp, src_val), _))| match src_cmp.as_str() {
                             ">"  => sum > src_val,
                             ">=" => sum >= src_val,

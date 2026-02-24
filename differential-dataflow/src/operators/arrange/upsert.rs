@@ -59,7 +59,7 @@
 //!         use differential_dataflow::operators::arrange::upsert;
 //!
 //!         let stream = scope.input_from(&mut input);
-//!         let arranged = upsert::arrange_from_upsert::<_, ValBuilder<Key, Val, _, _>, ValSpine<Key, Val, _, _>>(&stream, &"test");
+//!         let arranged = upsert::arrange_from_upsert::<_, ValBuilder<Key, Val, _, _>, ValSpine<Key, Val, _, _>>(stream, &"test");
 //!
 //!         arranged
 //!             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -128,7 +128,7 @@ use super::TraceAgent;
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
 pub fn arrange_from_upsert<G, Bu, Tr>(
-    stream: &Stream<G, (Tr::KeyOwn, Option<Tr::ValOwn>, G::Timestamp)>,
+    stream: Stream<G, Vec<(Tr::KeyOwn, Option<Tr::ValOwn>, G::Timestamp)>>,
     name: &str,
 ) -> Arranged<G, TraceAgent<Tr>>
 where
@@ -150,18 +150,19 @@ where
 
         let exchange = Exchange::new(move |update: &(Tr::KeyOwn,Option<Tr::ValOwn>,G::Timestamp)| (update.0).hashed().into());
 
+        let scope = stream.scope();
         stream.unary_frontier(exchange, name, move |_capability, info| {
 
             // Acquire a logger for arrange events.
-            let logger = stream.scope().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+            let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             // Tracks the lower envelope of times in `priority_queue`.
             let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
             // Form the trace we will both use internally and publish.
-            let activator = Some(stream.scope().activator_for(info.address.clone()));
+            let activator = Some(scope.activator_for(info.address.clone()));
             let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
 
-            if let Some(exert_logic) = stream.scope().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+            if let Some(exert_logic) = scope.config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty_trace.set_exert_logic(exert_logic);
             }
 
@@ -180,7 +181,7 @@ where
 
                 // Stash capabilities and associated data (ordered by time).
                 input.for_each(|cap, data| {
-                    capabilities.insert(cap.retain());
+                    capabilities.insert(cap.retain(0));
                     for (key, val, time) in data.drain(..) {
                         priority_queue.push(std::cmp::Reverse((time, key, val)))
                     }
