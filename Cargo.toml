@@ -18,6 +18,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
+rust-version = "1.86"
 
 [workspace.dependencies]
 differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.19.1" }
