@@ -5,6 +5,9 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 edition.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 bincode = "1"
 serde = { version = "1", features = ["derive"]}

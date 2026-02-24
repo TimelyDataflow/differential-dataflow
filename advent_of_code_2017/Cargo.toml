@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 differential-dataflow = { workspace = true }
 timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }

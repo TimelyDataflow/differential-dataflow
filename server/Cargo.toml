@@ -5,6 +5,9 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 edition.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 libloading = "0.8"
 differential-dataflow = { workspace = true }
