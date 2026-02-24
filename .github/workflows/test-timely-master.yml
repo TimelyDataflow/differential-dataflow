@@ -36,7 +36,7 @@ jobs:
 
   notify:
     name: Notify failed build
-    if: failure() && github.event.pull_request == null
+    if: failure() && github.repository == 'TimelyDataflow/differential-dataflow'
     needs: [tests]
     permissions:
       contents: read
