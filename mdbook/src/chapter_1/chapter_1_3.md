@@ -12,7 +12,7 @@ Let's describe an iterative computation that starts from manager-employee relati
 
 ```rust,ignore
     manager_employee
-        .iterate(|manages| {
+        .iterate(|_scope, manages| {
             // if x manages y, and y manages z, then x manages z (transitively).
             manages
                 .map(|(x, y)| (y, x))

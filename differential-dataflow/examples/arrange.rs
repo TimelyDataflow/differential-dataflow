@@ -107,10 +107,10 @@ fn main() {
             let roots = roots.map(|x| (x, 0));
 
             // repeatedly update minimal distances each node can be reached from each root
-            roots.clone().iterate(|dists| {
+            roots.clone().iterate(|scope, dists| {
 
-                let edges = edges.enter(&dists.scope());
-                let roots = roots.enter(&dists.scope());
+                let edges = edges.enter(&scope);
+                let roots = roots.enter(&scope);
 
                 dists.arrange_by_key()
                      .join_core(edges, |_k,l,d| Some((*d, l+1)))

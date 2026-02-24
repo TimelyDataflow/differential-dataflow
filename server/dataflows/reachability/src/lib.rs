@@ -19,9 +19,9 @@ pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<()
     let (_input, roots) = dataflow.new_collection_from(Some(source));
 
     // repeatedly update minimal distances each node can be reached from each root
-    roots.iterate(|dists| {
-        let edges = edges.enter(&dists.scope());
-        let roots = roots.enter(&dists.scope());
+    roots.iterate(|scope, dists| {
+        let edges = edges.enter(&scope);
+        let roots = roots.enter(&scope);
         dists.arrange_by_self()
              .join_core(edges, |_src, _, &dst| Some(dst))
              .concat(roots)

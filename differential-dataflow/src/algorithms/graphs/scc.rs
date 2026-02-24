@@ -21,9 +21,9 @@ where
     R: Multiply<R, Output=R>,
     R: From<i8>,
 {
-    graph.clone().iterate(|edges| {
+    graph.clone().iterate(|scope, edges| {
         // keep edges from active edge destinations.
-        let graph = graph.enter(&edges.scope());
+        let graph = graph.enter(&scope);
         let active =
         edges.map(|(_src,dst)| dst)
              .threshold(|_,c| if c.is_zero() { R::from(0_i8) } else { R::from(1_i8) });
@@ -41,8 +41,8 @@ where
     R: Multiply<R, Output=R>,
     R: From<i8>
 {
-    graph.clone().iterate(|inner| {
-        let edges = graph.enter(&inner.scope());
+    graph.clone().iterate(|scope, inner| {
+        let edges = graph.enter(&scope);
         let trans = edges.clone().map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
         trim_edges(trim_edges(inner, edges), trans)
     })

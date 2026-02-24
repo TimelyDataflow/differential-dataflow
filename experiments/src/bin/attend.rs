@@ -21,12 +21,12 @@ fn main() {
                                   .threshold_total(|_,w| if w.1 == 0 { 1 } else { 0 });
 
             organizers
-                .iterate(|attend| {
-                    graph.enter(&attend.scope())
+                .iterate(|scope, attend| {
+                    graph.enter(&scope)
                          .semijoin(attend)
                          .map(|(_,y)| y)
                          .threshold_total(|_,w| if w >= &3 { 1 } else { 0 })
-                         .concat(organizers.enter(&attend.scope()))
+                         .concat(organizers.enter(&scope))
                          .consolidate()
                 })
                 .map(|_| ())

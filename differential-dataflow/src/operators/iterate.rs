@@ -51,10 +51,13 @@ pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
     /// Iteratively apply `logic` to the source collection until convergence.
     ///
     /// Importantly, this method does not automatically consolidate results.
-    /// It may be important to conclude with `consolidate()` to ensure that
-    /// logically empty collections that contain cancelling records do not
-    /// result in non-termination. Operators like `reduce`, `distinct`, and
-    /// `count` also perform consolidation, and are safe to conclude with.
+    /// It may be important to conclude the closure you supply with `consolidate()` to ensure that
+    /// logically empty collections that contain cancelling records do not result in non-termination.
+    /// Operators like `reduce`, `distinct`, and `count` also perform consolidation, and are safe to conclude with.
+    ///
+    /// The closure is also passed a copy of the inner scope, to facilitate importing external collections.
+    /// It can also be acquired by calling `.scope()` on the closure's collection argument, but the code
+    /// can be awkward to write fluently.
     ///
     /// # Examples
     ///
@@ -65,7 +68,7 @@ pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
     /// ::timely::example(|scope| {
     ///
     ///     scope.new_collection_from(1 .. 10u32).1
-    ///          .iterate(|values| {
+    ///          .iterate(|_scope, values| {
     ///              values.map(|x| if x % 2 == 0 { x/2 } else { x })
     ///                    .consolidate()
     ///          });
@@ -73,13 +76,13 @@ pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
     /// ```
     fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>;
+        for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>;
 }
 
 impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for VecCollection<G, D, R> {
     fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
     {
         self.inner.scope().scoped("Iterate", |subgraph| {
             // create a new variable, apply logic, bind variable, return.
@@ -89,7 +92,8 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterat
             // diffs produced; `result` is post-consolidation, and means fewer
             // records are yielded out of the loop.
             let variable = Variable::new_from(self.enter(subgraph), Product::new(Default::default(), 1));
-            let result = logic(variable.clone());
+            let inner_scope = variable.scope();
+            let result = logic(inner_scope, variable.clone());
             variable.set(result.clone());
             result.leave()
         })
@@ -99,7 +103,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterat
 impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
     fn iterate<F>(mut self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
     {
         self.scoped("Iterate", |subgraph| {
                 // create a new variable, apply logic, bind variable, return.
@@ -109,7 +113,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
                 // diffs produced; `result` is post-consolidation, and means fewer
                 // records are yielded out of the loop.
                 let variable = SemigroupVariable::new(subgraph, Product::new(Default::default(), 1));
-                let result = logic(variable.clone());
+                let result = logic(subgraph.clone(), variable.clone());
                 variable.set(result.clone());
                 result.leave()
             }

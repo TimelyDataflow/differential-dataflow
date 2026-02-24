@@ -69,9 +69,9 @@ where
     // iterative computation so that the arrangement produced by `reduce` can be re-used.
 
     // nodes.filter(|_| false)
-    //      .iterate(|inner| {
-    //          let edges = edges.enter(&inner.scope());
-    //          let nodes = nodes.enter_at(&inner.scope(), move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as u64));
+    //      .iterate(|scope, inner| {
+    //          let edges = edges.enter(&scope);
+    //          let nodes = nodes.enter_at(&scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as u64));
     //          inner.join_map(edges, |_k,l,d| (d.clone(),l.clone()))
     //               .concat(nodes)
     //               .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))

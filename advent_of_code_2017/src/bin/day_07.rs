@@ -1103,11 +1103,11 @@ tvhftq (35)";
             let parents = input.flat_map(|(name,_,links)| links.into_iter().map(move |link| (link,name.to_string())));
 
             let total_weights: VecCollection<_,String> = weights
-                .iterate(|inner| {
-                    parents.enter(&inner.scope())
+                .iterate(|scope, inner| {
+                    parents.enter(&scope)
                            .semijoin(inner)
                            .map(|(_, parent)| parent)
-                           .concat(weights.enter(&inner.scope()))
+                           .concat(weights.enter(&scope))
                 });
 
             parents

@@ -376,10 +376,10 @@ where G::Timestamp: Lattice + std::hash::Hash {
     // don't actually use these labels, just grab the type
     nodes
         .filter(|_| false)
-        .iterate(|inner| {
+        .iterate(|scope, inner| {
 
-            let graph = graph.enter(&inner.scope());
-            let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - r.1.leading_zeros() as u64));
+            let graph = graph.enter(&scope);
+            let nodes = nodes.enter_at(&scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
 
             let inner = inner.arrange_by_key();
 

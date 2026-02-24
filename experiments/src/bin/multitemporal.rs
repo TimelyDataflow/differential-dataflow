@@ -33,10 +33,10 @@ fn main() {
                              // .inspect(|x| println!("edge: {:?}", x))
                              ;
 
-            roots.iterate(|inner| {
+            roots.iterate(|scope, inner| {
 
-                let edges = edges.enter(&inner.scope());
-                let roots = roots.enter(&inner.scope());
+                let edges = edges.enter(&scope);
+                let roots = roots.enter(&scope);
 
                 edges
                     .semijoin(inner)

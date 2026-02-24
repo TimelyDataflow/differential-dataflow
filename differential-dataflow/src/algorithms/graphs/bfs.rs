@@ -32,10 +32,10 @@ where
     let nodes = roots.map(|x| (x, 0));
 
     // repeatedly update minimal distances each node can be reached from each root
-    nodes.clone().iterate(|inner| {
+    nodes.clone().iterate(|scope, inner| {
 
-        let edges = edges.enter(&inner.scope());
-        let nodes = nodes.enter(&inner.scope());
+        let edges = edges.enter(&scope);
+        let nodes = nodes.enter(&scope);
 
         inner.join_core(edges, |_k,l,d| Some((d.clone(), l+1)))
              .concat(nodes)

@@ -105,7 +105,7 @@ where
     let unit_ranges = collection.map(|(index, data)| ((index, 0), data));
 
     unit_ranges
-        .iterate(|ranges|
+        .iterate(|scope, ranges|
 
             // Each available range, of size less than usize::max_value(), advertises itself as the range
             // twice as large, aligned to integer multiples of its size. Each range, which may contain at
@@ -120,7 +120,7 @@ where
                     if input.len() > 1 { result = combine(result, &(input[1].0).1); }
                     output.push((result, 1));
                 })
-                .concat(unit_ranges.enter(&ranges.scope()))
+                .concat(unit_ranges.enter(&scope))
         )
 }
 
@@ -151,13 +151,13 @@ where
         .as_collection();
 
     init_state
-        .iterate(|state| {
+        .iterate(|scope, state| {
             aggregates
                 .filter(|&((_, log),_)| log < 64)    // the log = 64 interval doesn't help us here (overflows).
-                .enter(&state.scope())
+                .enter(&scope)
                 .map(|((pos, log), data)| (pos, (log, data)))
                 .join_map(state, move |&pos, &(log, ref data), state| (pos + (1 << log), combine(state, data)))
-                .concat(init_state.enter(&state.scope()))
+                .concat(init_state.enter(&scope))
                 .distinct()
         })
         .consolidate()

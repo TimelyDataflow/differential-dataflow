@@ -219,8 +219,8 @@ fn _strongly_connected<G>(graph: VecCollection<G, Edge>) -> VecCollection<G, Edg
 where
     G: Scope<Timestamp: Lattice+Ord+Hash>,
 {
-    graph.clone().iterate(|inner| {
-        let edges = graph.enter(&inner.scope());
+    graph.clone().iterate(|scope, inner| {
+        let edges = graph.enter(&scope);
         let trans = edges.clone().map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
         _trim_edges(_trim_edges(inner, edges), trans)
     })
@@ -250,9 +250,9 @@ where
 {
     edges.clone()   // <-- wth is this.
          .filter(|_| false)
-         .iterate(|inner| {
-             let edges = edges.enter(&inner.scope());
-             let nodes = nodes.enter_at(&inner.scope(), |r| 256 * (64 - (r.0 as u64).leading_zeros() as u64));
+         .iterate(|scope, inner| {
+             let edges = edges.enter(&scope);
+             let nodes = nodes.enter_at(&scope, |r| 256 * (64 - (r.0 as u64).leading_zeros() as u64));
 
              inner.join_map(edges, |_k,l,d| (*d,*l))
                   .concat(nodes)

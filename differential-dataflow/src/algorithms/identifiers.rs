@@ -57,9 +57,9 @@ where
         let init = self.map(|record| (0, record));
         timely::dataflow::operators::generic::operator::empty(&init.scope())
             .as_collection()
-            .iterate(|diff|
+            .iterate(|scope, diff|
                 init.clone()
-                    .enter(&diff.scope())
+                    .enter(&scope)
                     .concat(diff)
                     .map(|pair| (pair.hashed(), pair))
                     .reduce(|_hash, input, output| {
@@ -109,9 +109,9 @@ mod tests {
             let init = input.map(|record| (0, record));
             timely::dataflow::operators::generic::operator::empty(&init.scope())
                 .as_collection()
-                .iterate(|diff|
+                .iterate(|scope, diff|
                     init.clone()
-                        .enter(&diff.scope())
+                        .enter(&scope)
                         .concat(diff)
                         .map(|(round, num)| ((round + num) / 10, (round, num)))
                         .reduce(|_hash, input, output| {

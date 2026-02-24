@@ -22,9 +22,9 @@ fn main() {
 
             let banks = scope.new_collection_from(Some(worker_input)).1;
 
-            let stable = banks.iterate(|iter|
+            let stable = banks.iterate(|scope, iter|
                 iter.map_in_place(|banks| recycle(banks))
-                    .concat(banks.enter(&iter.scope()))
+                    .concat(banks.enter(&scope))
                     .distinct()
             );
 
@@ -41,9 +41,9 @@ fn main() {
 
             // restart iteration from known repeated element.
             loop_point
-                .iterate(|iter|
+                .iterate(|scope, iter|
                     iter.map_in_place(|banks| recycle(banks))
-                        .concat(loop_point.enter(&iter.scope()))
+                        .concat(loop_point.enter(&scope))
                         .distinct()
                 )
                 .map(|_| ((),()))

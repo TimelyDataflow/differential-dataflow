@@ -15,7 +15,7 @@ As an example, we can take our `manages` relation and determine for all employee
 # where G::Timestamp: Lattice
 # {
     manages   // transitive contains (manager, person) for many hops.
-        .iterate(|transitive| {
+        .iterate(|_scope, transitive| {
             transitive
                 .clone()
                 .map(|(mk, m1)| (m1, mk))
@@ -53,9 +53,9 @@ In the example above, we could rewrite
 # {
     manages   // transitive contains (manager, person) for many hops.
         .clone()
-        .iterate(|transitive| {
+        .iterate(|scope, transitive| {
 
-            let manages = manages.enter(&transitive.scope());
+            let manages = manages.enter(&scope);
 
             transitive
                 .map(|(mk, m1)| (m1, mk))
