@@ -58,8 +58,8 @@ where
         let forward = Variable::new_from(goals.clone().map(|(x,_)| (x.clone(),(x.clone(),0))).enter(inner), Product::new(Default::default(), 1));
         let reverse = Variable::new_from(goals.clone().map(|(_,y)| (y.clone(),(y.clone(),0))).enter(inner), Product::new(Default::default(), 1));
 
-        forward.clone().map(|_| ()).consolidate().inspect(|x| println!("forward: {:?}", x));
-        reverse.clone().map(|_| ()).consolidate().inspect(|x| println!("reverse: {:?}", x));
+        forward.collection().map(|_| ()).consolidate().inspect(|x| println!("forward: {:?}", x));
+        reverse.collection().map(|_| ()).consolidate().inspect(|x| println!("reverse: {:?}", x));
 
         let goals = goals.enter(inner);
         // let edges = edges.enter(inner);
@@ -71,8 +71,8 @@ where
         // This is a cyclic join, which should scare us a bunch.
         let reached =
         forward
-            .clone()
-            .join_map(reverse.clone(), |_, (src,d1), (dst,d2)| ((src.clone(), dst.clone()), *d1 + *d2))
+            .collection()
+            .join_map(reverse.collection(), |_, (src,d1), (dst,d2)| ((src.clone(), dst.clone()), *d1 + *d2))
             .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .semijoin(goals.clone());
 
@@ -88,12 +88,12 @@ where
         let forward_active = active.clone().map(|(x,_y)| x).distinct();
         let forward_next =
         forward
-            .clone()
+            .collection()
             .map(|(med, (src, dist))| (src, (med, dist)))
             .semijoin(forward_active)
             .map(|(src, (med, dist))| (med, (src, dist)))
             .join_core(forward_edges, |_med, (src, dist), next| Some((next.clone(), (src.clone(), *dist+1))))
-            .concat(forward.clone())
+            .concat(forward.collection())
             .map(|(next, (src, dist))| ((next, src), dist))
             .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next, src), dist)| (next, (src, dist)));
@@ -106,12 +106,12 @@ where
         let reverse_active = active.map(|(_x,y)| y).distinct();
         let reverse_next =
         reverse
-            .clone()
+            .collection()
             .map(|(med, (rev, dist))| (rev, (med, dist)))
             .semijoin(reverse_active)
             .map(|(rev, (med, dist))| (med, (rev, dist)))
             .join_core(reverse_edges, |_med, (rev, dist), next| Some((next.clone(), (rev.clone(), *dist+1))))
-            .concat(reverse.clone())
+            .concat(reverse.collection())
             .map(|(next, (rev, dist))| ((next, rev), dist))
             .reduce(|_key, s, t| t.push((*s[0].0, 1)))
             .map(|((next,rev), dist)| (next, (rev, dist)));

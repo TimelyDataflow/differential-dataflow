@@ -109,7 +109,7 @@ where
 
         // Match each surfer with the degree, scale numbers down.
         let to_push =
-        degrs.semijoin(ranks.clone())
+        degrs.semijoin(ranks.collection())
              .threshold(|(_node, degr), rank| (5 * rank) / (6 * degr))
              .map(|(node, _degr)| node);
 

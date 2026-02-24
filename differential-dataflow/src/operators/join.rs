@@ -79,11 +79,12 @@ where
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
 
-    arranged1.stream.clone().binary_frontier(arranged2.stream.clone(), Pipeline, Pipeline, "Join", move |capability, info| {
+    let scope = arranged1.stream.scope();
+    arranged1.stream.binary_frontier(arranged2.stream, Pipeline, Pipeline, "Join", move |capability, info| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         use timely::scheduling::Activator;
-        let activations = arranged1.stream.scope().activations().clone();
+        let activations = scope.activations().clone();
         let activator = Activator::new(info.address, activations);
 
         // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.

@@ -117,7 +117,7 @@ where
 
         let next =
         label
-            .clone()
+            .collection()
             .join_map(edges, |_k,l,d| (*d, l+1))
             .concat(nodes)
             .reduce(|_, s, t| t.push((*s[0].0, 1)))

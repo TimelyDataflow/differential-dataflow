@@ -31,7 +31,6 @@
 //! it multiple times.
 
 use std::fmt::Debug;
-use std::ops::Deref;
 
 use timely::Container;
 use timely::progress::Timestamp;
@@ -92,8 +91,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterat
             // diffs produced; `result` is post-consolidation, and means fewer
             // records are yielded out of the loop.
             let variable = Variable::new_from(self.enter(subgraph), Product::new(Default::default(), 1));
-            let inner_scope = variable.scope();
-            let result = logic(inner_scope, variable.clone());
+            let result = logic(subgraph.clone(), variable.collection());
             variable.set(result.clone());
             result.leave()
         })
@@ -113,7 +111,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
                 // diffs produced; `result` is post-consolidation, and means fewer
                 // records are yielded out of the loop.
                 let variable = SemigroupVariable::new(subgraph, Product::new(Default::default(), 1));
-                let result = logic(subgraph.clone(), variable.clone());
+                let result = logic(subgraph.clone(), variable.collection());
                 variable.set(result.clone());
                 result.leave()
             }
@@ -145,7 +143,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
 ///     scope.iterative::<u64,_,_>(|nested| {
 ///         let summary = Product::new(Default::default(), 1);
 ///         let variable = Variable::new_from(numbers.enter(nested), summary);
-///         let result = variable.clone()
+///         let result = variable.collection()
 ///                              .map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                              .consolidate();
 ///         variable.set(result)
@@ -167,7 +165,7 @@ where
 /// A `Variable` specialized to a vector container of update triples (data, time, diff).
 pub type VecVariable<G, D, R> = Variable<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
 
-impl<G, C: Container + Clone> Variable<G, C>
+impl<G, C: Container> Variable<G, C>
 where
     G: Scope<Timestamp: Lattice>,
     C: crate::collection::containers::Negate + crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
@@ -183,7 +181,7 @@ where
     }
 
     /// Creates a new `Variable` from a supplied `source` stream.
-    pub fn new_from(source: Collection<G, C>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+    pub fn new_from(source: Collection<G, C>, step: <G::Timestamp as Timestamp>::Summary) -> Self where C: Clone {
         let (feedback, updates) = source.inner.scope().feedback(step.clone());
         let collection = Collection::<G, C>::new(updates).concat(source.clone());
         Variable { collection, feedback, source: Some(source), step }
@@ -193,12 +191,11 @@ where
     ///
     /// This method binds the `Variable` to be equal to the supplied collection,
     /// which may be recursively defined in terms of the variable itself.
-    pub fn set(self, result: Collection<G, C>) -> Collection<G, C> where C: Clone {
-        let mut in_result = result.clone();
-        if let Some(source) = self.source.clone() {
-            in_result = in_result.concat(source.negate());
+    pub fn set(mut self, mut result: Collection<G, C>) -> Collection<G, C> where C: Clone {
+        if let Some(source) = self.source.take() {
+            result = result.concat(source.negate());
         }
-        self.set_concat(in_result)
+        self.set_concat(result)
     }
 
     /// Set the definition of the `Variable` to a collection concatenated to `self`.
@@ -219,13 +216,11 @@ where
 
         self.collection
     }
-}
 
-impl<G: Scope<Timestamp: Lattice>, C: Container> Deref for Variable<G, C> {
-    type Target = Collection<G, C>;
-    fn deref(&self) -> &Self::Target {
-        &self.collection
-    }
+    /// Acquires a copy of the collection the variable presents as.
+    ///
+    /// This is the intended way to use the contents of the `Variable`.
+    pub fn collection(&self) -> Collection<G, C> where C: Clone { self.collection.clone() }
 }
 
 /// A recursively defined collection that only "grows".
@@ -266,11 +261,9 @@ where
 
         self.collection
     }
-}
 
-impl<G: Scope, C: Container> Deref for SemigroupVariable<G, C> where G::Timestamp: Lattice {
-    type Target = Collection<G, C>;
-    fn deref(&self) -> &Self::Target {
-        &self.collection
-    }
+    /// Acquires a copy of the collection the variable presents as.
+    ///
+    /// This is the intended way to use the contents of the `SemigroupVariable`.
+    pub fn collection(&self) -> Collection<G, C> where C: Clone { self.collection.clone() }
 }

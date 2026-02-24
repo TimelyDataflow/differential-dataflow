@@ -113,14 +113,14 @@ impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
     /// The collection arranged in the forward direction.
     pub fn forward(&mut self) -> &Arrange<G, Node, Node, Diff> {
         if self.forward.is_none() {
-            self.forward = Some(self.variable.clone().arrange_by_key());
+            self.forward = Some(self.variable.collection().arrange_by_key());
         }
         self.forward.as_ref().unwrap()
     }
     /// The collection arranged in the reverse direction.
     pub fn reverse(&mut self) -> &Arrange<G, Node, Node, Diff> {
         if self.reverse.is_none() {
-            self.reverse = Some(self.variable.clone().map(|(x,y)| (y,x)).arrange_by_key());
+            self.reverse = Some(self.variable.collection().map(|(x,y)| (y,x)).arrange_by_key());
         }
         self.reverse.as_ref().unwrap()
     }
@@ -169,7 +169,7 @@ impl Query {
             // create variables and result handles for each named relation.
             for (name, (input, collection)) in input_map {
                 let edge_variable = EdgeVariable::from(collection.enter(subscope), Product::new(Default::default(), 1));
-                let trace = edge_variable.variable.clone().leave().arrange_by_self().trace;
+                let trace = edge_variable.variable.collection().leave().arrange_by_self().trace;
                 result_map.insert(name.clone(), RelationHandles { input, trace });
                 variable_map.insert(name.clone(), edge_variable);
             }

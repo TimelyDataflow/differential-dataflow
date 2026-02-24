@@ -140,7 +140,7 @@ where
 
         let result =
         variable
-            .clone()
+            .collection()
             .map(|n| (n,()))
             .join_map(edges, |_k,&(),d| *d)
             .concat(roots)

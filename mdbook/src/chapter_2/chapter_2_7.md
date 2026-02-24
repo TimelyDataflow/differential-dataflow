@@ -93,7 +93,7 @@ As an example, the implementation of the `iterate` operator looks something like
 # fn logic<'a, G: Scope>(variable: &VecVariable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>
 # where G::Timestamp: Lattice
 # {
-#     (*variable).clone()
+#     (*variable).collection()
 # }
 # fn example<'a, G: Scope<Timestamp=u64>>(collection: VecCollection<G, (u64, u64)>) //, logic: impl Fn(&VecVariable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>)
 #    where G::Timestamp: Lattice

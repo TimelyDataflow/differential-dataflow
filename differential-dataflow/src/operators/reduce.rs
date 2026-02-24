@@ -655,7 +655,7 @@ mod history_replay {
                         //         self.output_buffer.push(((*value).clone(), -diff));
                         //     }
                         //     else {
-                        //         self.temporary.push(next_time.join(time));
+                        //         self.temporary.push(next_time.join(&time));
                         //     }
                         // }
 

@@ -56,7 +56,7 @@ fn main() {
         scope.iterative::<u64,_,_>(|nested| {
             let summary = Product::new(Default::default(), 1);
             let variable = Variable::new_from(numbers.enter(nested), summary);
-            let mapped: Collection<_, _> = variable.clone().inner.unary(Pipeline, "Map", |_,_| {
+            let mapped: Collection<_, _> = variable.collection().inner.unary(Pipeline, "Map", |_,_| {
                 |input, output| {
                     input.for_each(|time, data| {
                         let mut session = output.session(&time);

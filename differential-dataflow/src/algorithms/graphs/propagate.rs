@@ -91,7 +91,7 @@ where
 
         let labels =
         proposals
-            .clone()
+            .collection()
             .concat(nodes)
             .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1_i8))));
 
