@@ -101,7 +101,7 @@
 use std::collections::{BinaryHeap, BTreeMap};
 
 use timely::order::{PartialOrder, TotalOrder};
-use timely::dataflow::{Scope, StreamVec as Stream};
+use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::Exchange;
 use timely::progress::Timestamp;
@@ -128,7 +128,7 @@ use super::TraceAgent;
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
 pub fn arrange_from_upsert<G, Bu, Tr>(
-    stream: Stream<G, (Tr::KeyOwn, Option<Tr::ValOwn>, G::Timestamp)>,
+    stream: Stream<G, Vec<(Tr::KeyOwn, Option<Tr::ValOwn>, G::Timestamp)>>,
     name: &str,
 ) -> Arranged<G, TraceAgent<Tr>>
 where

@@ -227,7 +227,7 @@ pub mod source {
     use std::rc::Rc;
     use std::marker::{Send, Sync};
     use std::sync::Arc;
-    use timely::dataflow::{Scope, StreamVec, operators::{Capability, CapabilitySet}};
+    use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
     use timely::dataflow::operators::generic::OutputBuilder;
     use timely::progress::Timestamp;
     use timely::scheduling::SyncActivator;
@@ -253,7 +253,7 @@ pub mod source {
     pub fn build<G, B, I, D, T, R>(
         scope: G,
         source_builder: B,
-    ) -> (Box<dyn std::any::Any + Send + Sync>, StreamVec<G, (D, T, R)>)
+    ) -> (Box<dyn std::any::Any + Send + Sync>, Stream<G, Vec<(D, T, R)>>)
     where
         G: Scope<Timestamp = T>,
         B: FnOnce(SyncActivator) -> I,
@@ -560,7 +560,7 @@ pub mod sink {
 
     use timely::order::PartialOrder;
     use timely::progress::{Antichain, ChangeBatch, Timestamp};
-    use timely::dataflow::{Scope, StreamVec};
+    use timely::dataflow::{Scope, Stream};
     use timely::dataflow::channels::pact::{Exchange, Pipeline};
     use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
 
@@ -574,7 +574,7 @@ pub mod sink {
     /// performed before calling the method, the recorded output may not be correctly
     /// reconstructed by readers.
     pub fn build<G, BS, D, T, R>(
-        stream: StreamVec<G, (D, T, R)>,
+        stream: Stream<G, Vec<(D, T, R)>>,
         sink_hash: u64,
         updates_sink: Weak<RefCell<BS>>,
         progress_sink: Weak<RefCell<BS>>,
@@ -742,7 +742,7 @@ pub mod sink {
 //     use crate::lattice::Lattice;
 
 //     /// Creates a Kafka source from supplied configuration information.
-//     pub fn create_source<G, D, T, R>(scope: G, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any>, StreamVec<G, (D, T, R)>)
+//     pub fn create_source<G, D, T, R>(scope: G, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any>, Stream<G, Vec<(D, T, R)>>)
 //     where
 //         G: Scope<Timestamp = T>,
 //         D: ExchangeData + Hash + for<'a> serde::Deserialize<'a>,
@@ -757,7 +757,7 @@ pub mod sink {
 //         })
 //     }
 
-//     pub fn create_sink<G, D, T, R>(stream: &StreamVec<G, (D, T, R)>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
+//     pub fn create_sink<G, D, T, R>(stream: &Stream<G, Vec<(D, T, R)>>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
 //     where
 //         G: Scope<Timestamp = T>,
 //         D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,

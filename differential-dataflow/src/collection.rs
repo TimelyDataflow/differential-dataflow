@@ -11,9 +11,8 @@
 use timely::Container;
 use timely::progress::Timestamp;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::*;
-use timely::dataflow::Stream as StreamCore;
 
 use crate::difference::Abelian;
 
@@ -32,7 +31,7 @@ pub struct Collection<G: Scope, C: 'static> {
     /// The timestamp in the data is required to always be at least the timestamp _of_ the data, in
     /// the timely-dataflow sense. If this invariant is not upheld, differential operators may behave
     /// unexpectedly.
-    pub inner: StreamCore<G, C>,
+    pub inner: Stream<G, C>,
 }
 
 impl<G: Scope, C> Collection<G, C> {
@@ -45,7 +44,7 @@ impl<G: Scope, C> Collection<G, C> {
     ///
     /// This stream should satisfy the timestamp invariant as documented on [Collection]; this
     /// method does not check it.
-    pub fn new(stream: StreamCore<G, C>) -> Self { Self { inner: stream } }
+    pub fn new(stream: Stream<G, C>) -> Self { Self { inner: stream } }
 }
 impl<G: Scope, C: Container> Collection<G, C> {
     /// Creates a new collection accumulating the contents of the two collections.
@@ -1248,7 +1247,7 @@ pub trait AsCollection<G: Scope, C> {
     fn as_collection(self) -> Collection<G, C>;
 }
 
-impl<G: Scope, C> AsCollection<G, C> for StreamCore<G, C> {
+impl<G: Scope, C> AsCollection<G, C> for Stream<G, C> {
     /// Converts the type to a differential dataflow collection.
     ///
     /// By calling this method, you guarantee that the timestamp invariant (as documented on

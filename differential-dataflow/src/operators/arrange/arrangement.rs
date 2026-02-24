@@ -19,9 +19,7 @@
 
 use timely::dataflow::operators::{Enter, vec::Map};
 use timely::order::PartialOrder;
-use timely::dataflow::Stream as StreamCore;
-use timely::dataflow::StreamVec as Stream;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::progress::Timestamp;
@@ -54,7 +52,7 @@ where
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
-    pub stream: Stream<G, Tr::Batch>,
+    pub stream: Stream<G, Vec<Tr::Batch>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Tr,
     // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
@@ -134,7 +132,7 @@ where
 
     /// Flattens the stream into a `Collection`.
     ///
-    /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
+    /// The underlying `Stream<G, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<G, D, Tr::Diff>
@@ -146,7 +144,7 @@ where
 
     /// Flattens the stream into a `Collection`.
     ///
-    /// The underlying `Stream<G, BatchWrapper<T::Batch>>` is a much more efficient way to access the data,
+    /// The underlying `Stream<G, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_vecs(self) -> VecCollection<G, (Tr::KeyOwn, Tr::ValOwn), Tr::Diff>
@@ -176,7 +174,7 @@ where
     ///
     /// This method exists for streams of batches without the corresponding arrangement.
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
-    pub fn flat_map_batches<I, L>(stream: Stream<G, Tr::Batch>, mut logic: L) -> VecCollection<G, I::Item, Tr::Diff>
+    pub fn flat_map_batches<I, L>(stream: Stream<G, Vec<Tr::Batch>>, mut logic: L) -> VecCollection<G, I::Item, Tr::Diff>
     where
         I: IntoIterator<Item: Data>,
         L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
@@ -339,7 +337,7 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: StreamCore<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp: Lattice>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,

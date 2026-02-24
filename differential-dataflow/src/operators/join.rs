@@ -9,8 +9,7 @@ use timely::{Accountable, ContainerBuilder};
 use timely::container::PushInto;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
-use timely::dataflow::Stream as StreamCore;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::generic::{Operator, OutputBuilderSession, Session};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
@@ -67,7 +66,7 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
 ///
 /// [`AsCollection`]: crate::collection::AsCollection
-pub fn join_traces<G, T1, T2, L, CB>(arranged1: Arranged<G,T1>, arranged2: Arranged<G,T2>, mut result: L) -> StreamCore<G, CB::Container>
+pub fn join_traces<G, T1, T2, L, CB>(arranged1: Arranged<G,T1>, arranged2: Arranged<G,T2>, mut result: L) -> Stream<G, CB::Container>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader+Clone+'static,
