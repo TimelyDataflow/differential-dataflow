@@ -11,6 +11,9 @@ documentation = "https://docs.rs/differential-dogs3"
 homepage = "https://github.com/TimelyDataflow/differential-dataflow"
 repository = "https://github.com/TimelyDataflow/differential-dataflow.git"
 
+[lints]
+workspace = true
+
 [dependencies]
 timely = { workspace = true }
 differential-dataflow = { workspace = true }
