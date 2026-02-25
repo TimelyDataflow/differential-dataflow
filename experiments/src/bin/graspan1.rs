@@ -9,7 +9,7 @@ use differential_dataflow::input::Input;
 use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder, ValSpine};
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::iterate::Variable;
 
 type Node = u32;
 type Time = ();
@@ -41,7 +41,7 @@ fn main() {
                 let nodes = nodes.enter(inner).map(|(a,b)| (b,a));
                 let edges = edges.enter(inner);
 
-                let labels = SemigroupVariable::new(inner, Product::new(Default::default(), 1));
+                let labels = Variable::new(inner, Product::new(Default::default(), 1));
 
                 let next =
                 labels.join_core(edges, |_b, a, c| Some((*c, *a)))

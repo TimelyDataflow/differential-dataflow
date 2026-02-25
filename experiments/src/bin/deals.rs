@@ -10,7 +10,7 @@ use differential_dataflow::trace::implementations::{ValSpine, KeySpine, KeyBatch
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::difference::Present;
 
 type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R>>>;
@@ -88,7 +88,7 @@ fn tc<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> V
     // repeatedly update minimal distances each node can be reached from each root
     edges.stream.scope().iterative::<Iter,_,_>(|scope| {
 
-            let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
+            let inner = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(&inner.scope());
 
             let result =
@@ -115,7 +115,7 @@ fn sg<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> V
     // repeatedly update minimal distances each node can be reached from each root
     peers.scope().iterative::<Iter,_,_>(|scope| {
 
-            let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
+            let inner = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(&inner.scope());
             let peers = peers.enter(&inner.scope());
 

@@ -110,7 +110,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
                 // wrapped by `variable`, but it also results in substantially more
                 // diffs produced; `result` is post-consolidation, and means fewer
                 // records are yielded out of the loop.
-                let (variable, collection) = SemigroupVariable::new(subgraph, Product::new(Default::default(), 1));
+                let (variable, collection) = Variable::new(subgraph, Product::new(Default::default(), 1));
                 let result = logic(subgraph.clone(), collection);
                 variable.set(result.clone());
                 result.leave()
@@ -166,7 +166,7 @@ pub type VecVariable<G, D, R> = Variable<G, Vec<(D, <G as ScopeParent>::Timestam
 impl<G, C: Container> Variable<G, C>
 where
     G: Scope<Timestamp: Lattice>,
-    C: crate::collection::containers::Negate + crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
+    C: crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
 {
     /// Creates a new initially empty `Variable`.
     ///
@@ -179,10 +179,10 @@ where
     }
 
     /// Creates a new `Variable` from a supplied `source` stream.
-    pub fn new_from(source: Collection<G, C>, step: <G::Timestamp as Timestamp>::Summary) -> (Self, Collection<G, C>) where C: Clone {
+    pub fn new_from(source: Collection<G, C>, step: <G::Timestamp as Timestamp>::Summary) -> (Self, Collection<G, C>) where C: Clone + crate::collection::containers::Negate {
         let (feedback, updates) = source.inner.scope().feedback(step.clone());
         let collection = Collection::<G, C>::new(updates).concat(source.clone());
-        (Variable { feedback, source: Some(source), step }, collection)
+        (Variable { feedback, source: Some(source.negate()), step }, collection)
     }
 
     /// Set the definition of the `Variable` to a collection.
@@ -191,61 +191,10 @@ where
     /// which may be recursively defined in terms of the variable itself.
     pub fn set(mut self, mut result: Collection<G, C>) {
         if let Some(source) = self.source.take() {
-            result = result.concat(source.negate());
+            result = result.concat(source);
         }
-        self.set_concat(result)
-    }
-
-    /// Set the definition of the `Variable` to a collection concatenated to `self`.
-    ///
-    /// This method is a specialization of `set` which has the effect of concatenating
-    /// `result` and `self` before calling `set`. This method avoids some dataflow
-    /// complexity related to retracting the initial input, and will do less work in
-    /// that case.
-    ///
-    /// This behavior can also be achieved by using `new` to create an empty initial
-    /// collection, and then using `self.set(self.concat(result))`.
-    pub fn set_concat(self, result: Collection<G, C>) {
-        let step = self.step;
         result
-            .results_in(step)
-            .inner
-            .connect_loop(self.feedback);
-    }
-}
-
-/// A recursively defined collection that only "grows".
-///
-/// `SemigroupVariable` is a weakening of `Variable` to allow difference types
-/// that do not implement `Abelian` and only implement `Semigroup`. This means
-/// that it can be used in settings where the difference type does not support
-/// negation.
-pub struct SemigroupVariable<G, C>
-where
-    G: Scope<Timestamp: Lattice>,
-    C: Container,
-{
-    feedback: Handle<G, C>,
-    step: <G::Timestamp as Timestamp>::Summary,
-}
-
-impl<G, C: Container> SemigroupVariable<G, C>
-where
-    G: Scope<Timestamp: Lattice>,
-    C: crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
-{
-    /// Creates a new initially empty `SemigroupVariable`.
-    pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> (Self, Collection<G, C>) {
-        let (feedback, updates) = scope.feedback(step.clone());
-        let collection = Collection::<G,C>::new(updates);
-        (SemigroupVariable { feedback, step }, collection)
-    }
-
-    /// Adds a new source of data to `self`.
-    pub fn set(self, result: Collection<G, C>) {
-        let step = self.step;
-        result
-            .results_in(step)
+            .results_in(self.step)
             .inner
             .connect_loop(self.feedback);
     }

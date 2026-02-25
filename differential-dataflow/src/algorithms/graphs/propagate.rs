@@ -79,7 +79,7 @@ where
 
     nodes.scope().iterative::<usize,_,_>(|scope| {
 
-        use crate::operators::iterate::SemigroupVariable;
+        use crate::operators::iterate::Variable;
         use crate::trace::implementations::{ValBuilder, ValSpine};
 
         use timely::order::Product;
@@ -87,7 +87,7 @@ where
         let edges = edges.enter(scope);
         let nodes = nodes.enter_at(scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as usize));
 
-        let (proposals_bind, proposals) = SemigroupVariable::new(scope, Product::new(Default::default(), 1usize));
+        let (proposals_bind, proposals) = Variable::new(scope, Product::new(Default::default(), 1usize));
 
         let labels =
         proposals

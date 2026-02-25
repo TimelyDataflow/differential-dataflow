@@ -4,7 +4,7 @@ use std::fs::File;
 use timely::dataflow::Scope;
 use timely::order::Product;
 
-use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::iterate::Variable;
 
 use differential_dataflow::VecCollection;
 use differential_dataflow::input::Input;
@@ -57,8 +57,8 @@ fn unoptimized() {
                     let assignment = assignment.enter(scope);
                     let dereference = dereference.enter(scope);
 
-                    let value_flow = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
-                    let memory_alias = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
+                    let value_flow = Variable::new(scope, Product::new(Default::default(), 1));
+                    let memory_alias = Variable::new(scope, Product::new(Default::default(), 1));
 
                     let value_flow_arranged = value_flow.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
                     let memory_alias_arranged = memory_alias.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
@@ -182,8 +182,8 @@ fn optimized() {
                     let assignment = assignment.enter(scope);
                     let dereference = dereference.enter(scope);
 
-                    let value_flow = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
-                    let memory_alias = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
+                    let value_flow = Variable::new(scope, Product::new(Default::default(), 1));
+                    let memory_alias = Variable::new(scope, Product::new(Default::default(), 1));
 
                     let value_flow_arranged = value_flow.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
                     let memory_alias_arranged = memory_alias.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
