@@ -105,11 +105,11 @@ where
 
         // Define a recursive variable to track surfers.
         // We start from `inits` and cycle only `iters`.
-        let ranks = Variable::new_from(inits, Product::new(Default::default(), 1));
+        let (ranks_bind, ranks) = Variable::new_from(inits, Product::new(Default::default(), 1));
 
         // Match each surfer with the degree, scale numbers down.
         let to_push =
-        degrs.semijoin(ranks.collection())
+        degrs.semijoin(ranks)
              .threshold(|(_node, degr), rank| (5 * rank) / (6 * degr))
              .map(|(node, _degr)| node);
 
@@ -129,7 +129,7 @@ where
         }
 
         // Bind the recursive variable, return its limit.
-        ranks.set(pushed.clone());
+        ranks_bind.set(pushed.clone());
         pushed.leave()
     })
 }

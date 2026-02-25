@@ -6,7 +6,7 @@ use timely::dataflow::operators::ToStream;
 use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::AsCollection;
 
 use graph_map::GraphMMap;
@@ -118,7 +118,7 @@ fn reach<G: Scope<Timestamp = ()>> (
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
 
-        let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
+        let inner = Variable::new(scope, Product::new(Default::default(), 1));
 
         let result =
         graph.join_core(inner.arrange_by_self(), |_src,&dst,&()| Some(dst))
@@ -144,7 +144,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
 
-        let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
+        let inner = Variable::new(scope, Product::new(Default::default(), 1));
         let result =
         graph.join_core(inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
              .concat(roots)
@@ -176,7 +176,7 @@ fn connected_components<G: Scope<Timestamp = ()>>(
         let reverse = reverse.enter(scope);
         let nodes = nodes.enter(scope);
 
-        let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
+        let inner = Variable::new(scope, Product::new(Default::default(), 1));
 
         let labels = inner.arrange_by_key();
         let f_prop = labels.join_core(forward, |_k,l,d| Some((*d,*l)));

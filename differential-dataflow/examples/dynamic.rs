@@ -113,20 +113,18 @@ where
 
         // Create a variable for label iteration.
         let inner = feedback_summary::<usize>(1, 1);
-        let label = Variable::new_from(nodes.clone(), Product { outer: Default::default(), inner });
+        let (label_bind, label) = Variable::new_from(nodes.clone(), Product { outer: Default::default(), inner });
 
         let next =
         label
-            .collection()
             .join_map(edges, |_k,l,d| (*d, l+1))
             .concat(nodes)
             .reduce(|_, s, t| t.push((*s[0].0, 1)))
             ;
 
-        label.set(next.clone());
+        label_bind.set(next.clone());
         // Leave the dynamic iteration, stripping off the last timestamp coordinate.
-        next
-            .leave_dynamic(1)
+        next.leave_dynamic(1)
             .inspect(|x| println!("{:?}", x))
             .leave()
     })
