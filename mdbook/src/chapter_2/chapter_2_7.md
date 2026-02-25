@@ -90,17 +90,17 @@ As an example, the implementation of the `iterate` operator looks something like
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
-# fn logic<'a, G: Scope>(variable: &VecVariable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>
+# fn logic<'a, G: Scope>(collection: VecCollection<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>
 # where G::Timestamp: Lattice
 # {
-#     (*variable).collection()
+#     collection
 # }
 # fn example<'a, G: Scope<Timestamp=u64>>(collection: VecCollection<G, (u64, u64)>) //, logic: impl Fn(&VecVariable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>)
 #    where G::Timestamp: Lattice
 # {
     collection.scope().scoped("inner", |subgraph| {
-        let variable = VecVariable::new_from(collection.enter(subgraph), 1);
-        let result = logic(&variable);
+        let (variable, collection) = VecVariable::new_from(collection.enter(subgraph), 1);
+        let result = logic(collection);
         variable.set(result.clone());
         result.leave()
     });

@@ -87,11 +87,10 @@ where
         let edges = edges.enter(scope);
         let nodes = nodes.enter_at(scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as usize));
 
-        let proposals = SemigroupVariable::new(scope, Product::new(Default::default(), 1usize));
+        let (proposals_bind, proposals) = SemigroupVariable::new(scope, Product::new(Default::default(), 1usize));
 
         let labels =
         proposals
-            .collection()
             .concat(nodes)
             .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1_i8))));
 
@@ -100,7 +99,7 @@ where
             .clone()
             .join_core(edges, |_k, l: &L, d| Some((d.clone(), l.clone())));
 
-        proposals.set(propagate);
+        proposals_bind.set(propagate);
 
         labels
             .as_collection(|k,v| (k.clone(), v.clone()))

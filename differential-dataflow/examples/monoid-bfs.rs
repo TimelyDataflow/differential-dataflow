@@ -133,14 +133,13 @@ where
         use differential_dataflow::trace::implementations::{KeySpine, KeyBuilder};
 
         use timely::order::Product;
-        let variable = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
+        let (variable, collection) = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
 
         let edges = edges.enter(scope);
         let roots = roots.enter(scope);
 
         let result =
-        variable
-            .collection()
+        collection
             .map(|n| (n,()))
             .join_map(edges, |_k,&(),d| *d)
             .concat(roots)
