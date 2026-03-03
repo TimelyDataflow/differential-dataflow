@@ -72,7 +72,7 @@ fn main() {
             let (views_input, views) = scope.new_collection();
             let (links_input, links) = scope.new_collection();
 
-            let probe =
+            let (probe, _) =
             links
                 .semijoin(views)
                 .map(|(_ad, campaign)| campaign)

@@ -33,7 +33,7 @@ fn main() {
                              // .inspect(|x| println!("edge: {:?}", x))
                              ;
 
-            roots.iterate(|scope, inner| {
+            roots.clone().iterate(|scope, inner| {
 
                 let edges = edges.enter(&scope);
                 let roots = roots.enter(&scope);
@@ -223,10 +223,10 @@ mod pair {
     // This extends the `PartialOrder` implementation with additional structure.
     use differential_dataflow::lattice::Lattice;
     impl<S: Lattice, T: Lattice> Lattice for Pair<S, T> {
-        fn join(self, other: &Self) -> Self {
+        fn join(&self, other: &Self) -> Self {
             Pair {
-                first: self.first.join(other.first),
-                second: self.second.join(other.second),
+                first: self.first.join(&other.first),
+                second: self.second.join(&other.second),
             }
         }
         fn meet(&self, other: &Self) -> Self {
@@ -312,12 +312,12 @@ mod vector {
     // This extends the `PartialOrder` implementation with additional structure.
     use differential_dataflow::lattice::Lattice;
     impl<T: Lattice+Timestamp+Clone> Lattice for Vector<T> {
-        fn join(self, other: &Self) -> Self {
+        fn join(&self, other: &Self) -> Self {
             let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
             let max_len = ::std::cmp::max(self.vector.len(), other.vector.len());
             let mut vector = Vec::with_capacity(max_len);
             for index in 0 .. min_len {
-                vector.push(self.vector[index].join(other.vector[index]));
+                vector.push(self.vector[index].join(&other.vector[index]));
             }
             for time in &self.vector[min_len..] {
                 vector.push(time.clone());

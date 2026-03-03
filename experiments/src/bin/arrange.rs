@@ -51,11 +51,11 @@ fn main() {
             let (handle, data) = scope.new_collection();
 
             let probe = match comp {
-                Comp::Nothing => data.probe(),
-                Comp::Exchange => data.inner.exchange(|&(x,_,_): &((usize,()),_,_)| x.0 as u64).probe(),
-                Comp::Arrange => data.arrange_by_self().stream.probe(),
-                Comp::Count => data.arrange_by_self().count_total().probe(),
-                Comp::Distinct => data.arrange_by_self().distinct_total().probe(),
+                Comp::Nothing => data.probe().0,
+                Comp::Exchange => data.inner.exchange(|&(x,_,_): &((usize,()),_,_)| x.0 as u64).probe().0,
+                Comp::Arrange => data.arrange_by_self().stream.probe().0,
+                Comp::Count => data.arrange_by_self().count_total().probe().0,
+                Comp::Distinct => data.arrange_by_self().distinct_total().probe().0,
             };
 
             (handle, probe)

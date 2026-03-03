@@ -23,8 +23,8 @@ pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<()
 
     query
         .map(|x| (x, x))
-        .join_core(edges, |_n, &q, &d| Some((d, q)))   // one hop
-        .join_core(edges, |_n, &q, &d| Some((d, q)))   // two hops
+        .join_core(edges.clone(), |_n, &q, &d| Some((d, q)))   // one hop
+        .join_core(edges.clone(), |_n, &q, &d| Some((d, q)))   // two hops
         .join_core(edges, |_n, &q, &d| Some((d, q)))   // three hops
         .map(|x| x.1)
         .consolidate()

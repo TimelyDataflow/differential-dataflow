@@ -95,7 +95,7 @@ fn reach<G: Scope<Timestamp = ()>> (
 
     let graph = graph.import(&roots.scope());
 
-    roots.iterate(|scope, inner| {
+    roots.clone().iterate(|scope, inner| {
 
         let graph = graph.enter(&scope);
         let roots = roots.enter(&scope);
@@ -118,7 +118,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));
 
-    roots.iterate(|scope, inner| {
+    roots.clone().iterate(|scope, inner| {
 
         let graph = graph.enter(&scope);
         let roots = roots.enter(&scope);

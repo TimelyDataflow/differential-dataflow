@@ -24,12 +24,13 @@ fn main() {
 
             // a N c  <-  a N b && b E c
             // N(a,c) <-  N(a,b), E(b, c)
-            let probe =
+            let nodes2 = nodes.clone();
+            let (probe, _) =
             nodes
                 .filter(|_| false)
                 .iterate(|scope, inner| {
 
-                    let nodes = nodes.enter(&scope);
+                    let nodes = nodes2.enter(&scope);
                     let edges = edges.enter(&scope);
 
                     inner
