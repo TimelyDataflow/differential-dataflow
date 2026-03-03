@@ -45,8 +45,8 @@ fn main() {
             // each edge should exist in both directions.
             let graph = graph.arrange_by_key();
 
-            let probe =
-            interactive(&graph, query1, query2, query3)
+            let (probe, _) =
+            interactive(graph, query1, query2, query3)
                 .filter(move |_| inspect)
                 // .map(|_| ())
                 .consolidate()
@@ -205,7 +205,7 @@ fn main() {
 }
 
 fn interactive<G: Scope>(
-    edges: &Arrange<G, Node, Node, isize>,
+    edges: Arrange<G, Node, Node, isize>,
     tc_1: VecCollection<G, Node>,
     tc_2: VecCollection<G, Node>,
     sg_x: VecCollection<G, Node>
@@ -213,26 +213,30 @@ fn interactive<G: Scope>(
 where G::Timestamp: Lattice{
 
     // descendants of tc_1:
+    let tc_1_enter = tc_1.clone();
+    let edges_q1 = edges.clone();
     let query1 =
     tc_1.map(|x| (x,x))
         .iterate(|scope, inner|
-            edges
+            edges_q1
                 .enter(&scope)
                 .join_core(inner.arrange_by_key(), |_,&y,&q| [(y,q)])
-                .concat(tc_1.enter(&scope).map(|x| (x,x)))
+                .concat(tc_1_enter.enter(&scope).map(|x| (x,x)))
                 .distinct()
         )
         .map(|(x,q)| (q,x));
 
     // ancestors of tc_2:
+    let tc_2_enter = tc_2.clone();
+    let edges_q2 = edges.clone();
     let query2 =
     tc_2.map(|x| (x,x))
         .iterate(|scope, inner|
-            edges
+            edges_q2
                 .as_collection(|&k,&v| (v,k))
                 .enter(&scope)
                 .join_core(inner.arrange_by_key(), |_,&y,&q| [(y,q)])
-                .concat(tc_2.enter(&scope).map(|x| (x,x)))
+                .concat(tc_2_enter.enter(&scope).map(|x| (x,x)))
                 .distinct()
         )
         .map(|(x,q)| (q,x));
@@ -242,31 +246,35 @@ where G::Timestamp: Lattice{
     // sg(X,Y) <- magic(X), par(X,Xp), par(Y,Yp), sg(Xp,Yp).
 
     // ancestors of sg_x:
+    let sg_x_enter = sg_x.clone();
+    let sg_x_semijoin = sg_x.clone();
+    let edges_magic = edges.clone();
     let magic =
     sg_x.iterate(|scope, inner|
-            edges
+            edges_magic
                 .as_collection(|&k,&v| (v,k))
                 .enter(&scope)
                 .semijoin(inner)
                 .map(|(_x,y)| y)
-                .concat(sg_x.enter(&scope))
+                .concat(sg_x_enter.enter(&scope))
                 .distinct()
         );
 
     let magic_edges =
-    edges
-        .join_core(magic.arrange_by_self(), |k,v,_| [(k.clone(), v.clone())])
+    edges.clone()
+        .join_core(magic.clone().arrange_by_self(), |k,v,_| [(k.clone(), v.clone())])
         .map(|(x,y)|(y,x))
-        .semijoin(magic)
+        .semijoin(magic.clone())
         .map(|(x,y)|(y,x));
 
+    let magic_enter = magic.clone();
     let query3 =
     magic
         .map(|x| (x,x))   // for query q, sg(x,x)
         .iterate(|scope, inner| {
 
             let edges = edges.enter(&scope);
-            let magic = magic.enter(&scope);
+            let magic = magic_enter.enter(&scope);
             let magic_edges = magic_edges.enter(&scope);
 
             let result =
@@ -279,7 +287,7 @@ where G::Timestamp: Lattice{
             // result.map(|_| ()).consolidate().inspect(|x| println!("\t{:?}", x));
             result
         })
-        .semijoin(sg_x);
+        .semijoin(sg_x_semijoin);
 
     query1.concat(query2).concat(query3).map(|(q,_)| q)
 }

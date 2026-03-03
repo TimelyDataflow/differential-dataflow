@@ -46,7 +46,7 @@ fn main() {
             let (graph_input, graph) = scope.new_collection();
 
             let state_indexed = state.arrange_by_key();
-            let graph_indexed = graph.map(|(src, dst)| (dst, src))
+            let graph_indexed = graph.clone().map(|(src, dst)| (dst, src))
                                      .concat(graph)
                                      .arrange_by_key();
 
@@ -74,14 +74,14 @@ fn main() {
                     query
                         .map(|(x,_)| x)
                         .arrange_by_self()
-                        .join_core(graph_indexed, |&query, &(), &friend| Some((friend, query)))
+                        .join_core(graph_indexed.clone(), |&query, &(), &friend| Some((friend, query)))
                         .join_core(graph_indexed, |_friend, &query, &friend2| Some((friend2, query)))
                         .join_core(state_indexed, |_friend2, &query, &state| Some((query, state)))
                         .probe_with(&mut probe);
                 },
                 4 => {
                     // Q4: Shortest path queries:
-                    three_hop(&graph_indexed, &graph_indexed, &query)
+                    three_hop(graph_indexed.clone(), graph_indexed, query)
                         .probe_with(&mut probe);
                 }
                 x => { panic!("Unknown mode: {:?}; must be: 1, 2, 3, 4", x); }
@@ -230,22 +230,22 @@ type Arrange<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopePare
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn three_hop<G: Scope>(
-    forward_graph: &Arrange<G, Node, Node, isize>,
-    reverse_graph: &Arrange<G, Node, Node, isize>,
+    forward_graph: Arrange<G, Node, Node, isize>,
+    reverse_graph: Arrange<G, Node, Node, isize>,
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
-    let sources = goals.map(|(x,_)| x);
+    let sources = goals.clone().map(|(x,_)| x);
     let targets = goals.map(|(_,y)| y);
 
     // Q3: Two-hop lookups on `state`:
     let forward0 = sources.map(|x| (x, (x,0)));
-    let forward1 = forward0.join_core(forward_graph, |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
-    let forward2 = forward1.join_core(forward_graph, |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
+    let forward1 = forward0.clone().join_core(forward_graph.clone(), |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
+    let forward2 = forward1.clone().join_core(forward_graph, |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
 
     let reverse0 = targets.map(|x| (x, (x,0)));
-    let reverse1 = reverse0.join_core(reverse_graph, |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
-    let reverse2 = reverse1.join_core(reverse_graph, |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
+    let reverse1 = reverse0.clone().join_core(reverse_graph.clone(), |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
+    let reverse2 = reverse1.clone().join_core(reverse_graph, |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
 
     let forward = forward0.concat(forward1).concat(forward2);
     let reverse = reverse0.concat(reverse1).concat(reverse2);
