@@ -30,7 +30,7 @@ pub trait Input : TimelyInput {
     ///     let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
     ///         // create input handle and collection.
     ///         let (handle, data) = scope.new_collection();
-    ///         let probe = data.map(|x| x * 2)
+    ///         let (probe, _) = data.map(|x| x * 2)
     ///                         .inspect(|x| println!("{:?}", x))
     ///                         .probe();
     ///         (handle, probe)
@@ -56,7 +56,7 @@ pub trait Input : TimelyInput {
     ///     let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
     ///         // create input handle and collection.
     ///          let (handle, data) = scope.new_collection_from(0 .. 10);
-    ///          let probe = data.map(|x| x * 2)
+    ///          let (probe, _) = data.map(|x| x * 2)
     ///                          .inspect(|x| println!("{:?}", x))
     ///                          .probe();
     ///          (handle, probe)
@@ -82,7 +82,7 @@ pub trait Input : TimelyInput {
     ///     let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
     ///         // create input handle and collection.
     ///         let (handle, data) = scope.new_collection_from(0 .. 10);
-    ///         let probe = data.map(|x| x * 2)
+    ///         let (probe, _) = data.map(|x| x * 2)
     ///                         .inspect(|x| println!("{:?}", x))
     ///                         .probe();
     ///         (handle, probe)
@@ -142,7 +142,7 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
 ///     let (mut handle, probe) = worker.dataflow(|scope| {
 ///         // create input handle and collection.
 ///         let (handle, data) = scope.new_collection_from(0 .. 10);
-///         let probe = data.map(|x| x * 2)
+///         let (probe, _) = data.map(|x| x * 2)
 ///                         .inspect(|x| println!("{:?}", x))
 ///                         .probe();
 ///         (handle, probe)
