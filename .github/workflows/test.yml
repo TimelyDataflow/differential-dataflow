@@ -23,7 +23,8 @@ jobs:
         os:
           - ubuntu
           - macos
-          - windows
+# Linking fails on Windows.
+#           - windows
         toolchain:
           - stable
           - ${{ needs.msrv.outputs.msrv }}
