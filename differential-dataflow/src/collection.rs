@@ -144,9 +144,9 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///
     /// This probe is used to determine when the state of the Collection has stabilized and can
     /// be read out.
-    pub fn probe(self) -> probe::Handle<G::Timestamp> {
-        self.inner
-            .probe()
+    pub fn probe(self) -> (probe::Handle<G::Timestamp>, Self) {
+        let (handle, stream) = self.inner.probe();
+        (handle, stream.as_collection())
     }
     /// Attaches a timely dataflow probe to the output of a Collection.
     ///

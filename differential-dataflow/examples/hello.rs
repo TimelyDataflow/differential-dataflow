@@ -36,7 +36,7 @@ fn main() {
                 .count_total();
 
             // show us something about the collection, notice when done.
-            let probe =
+            let (probe, _) =
             out_degr_distr
                 .filter(move |_| inspect)
                 .inspect(|x| println!("observed: {:?}", x))

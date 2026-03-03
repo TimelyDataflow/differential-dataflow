@@ -72,7 +72,8 @@ fn main() {
             let thresholded_similarities = jaccard_similarities
                 .filter(|(_item_pair, jaccard)| *jaccard > 0.05);
 
-            thresholded_similarities.probe()
+            let (probe, _) = thresholded_similarities.probe();
+            probe
         });
 
         let num_interactions: usize = std::env::args().nth(1)
