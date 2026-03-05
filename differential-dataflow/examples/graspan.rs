@@ -81,6 +81,7 @@ type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Tim
 /// completely defined, in support of recursively defined productions.
 pub struct EdgeVariable<G: Scope<Timestamp: Lattice>> {
     variable: VecVariable<G, Edge, Diff>,
+    collection: VecCollection<G, Edge, Diff>,
     current: VecCollection<G, Edge, Diff>,
     forward: Option<Arrange<G, Node, Node, Diff>>,
     reverse: Option<Arrange<G, Node, Node, Diff>>,
@@ -88,18 +89,19 @@ pub struct EdgeVariable<G: Scope<Timestamp: Lattice>> {
 
 impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
     /// Creates a new variable initialized with `source`.
-    pub fn from(source: &VecCollection<G, Edge>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
-        let variable = VecVariable::new(&mut source.scope(), step);
+    pub fn from(source: VecCollection<G, Edge>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+        let (variable, collection) = VecVariable::new(&mut source.scope(), step);
         EdgeVariable {
-            variable: variable,
+            variable,
+            collection,
             current: source.clone(),
             forward: None,
             reverse: None,
         }
     }
     /// Concatenates `production` into the definition of the variable.
-    pub fn add_production(&mut self, production: &VecCollection<G, Edge, Diff>) {
-        self.current = self.current.concat(production);
+    pub fn add_production(&mut self, production: VecCollection<G, Edge, Diff>) {
+        self.current = self.current.clone().concat(production);
     }
     /// Finalizes the variable, connecting its recursive definition.
     ///
@@ -108,19 +110,19 @@ impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
     pub fn complete(self) {
         let distinct = self.current.distinct();
         // distinct.map(|_| ()).consolidate().inspect(|x| println!("{:?}", x));
-        self.variable.set(&distinct);
+        self.variable.set(distinct);
     }
     /// The collection arranged in the forward direction.
     pub fn forward(&mut self) -> &Arrange<G, Node, Node, Diff> {
         if self.forward.is_none() {
-            self.forward = Some(self.variable.arrange_by_key());
+            self.forward = Some(self.collection.clone().arrange_by_key());
         }
         self.forward.as_ref().unwrap()
     }
     /// The collection arranged in the reverse direction.
     pub fn reverse(&mut self) -> &Arrange<G, Node, Node, Diff> {
         if self.reverse.is_none() {
-            self.reverse = Some(self.variable.map(|(x,y)| (y,x)).arrange_by_key());
+            self.reverse = Some(self.collection.clone().map(|(x,y)| (y,x)).arrange_by_key());
         }
         self.reverse.as_ref().unwrap()
     }
@@ -168,8 +170,8 @@ impl Query {
 
             // create variables and result handles for each named relation.
             for (name, (input, collection)) in input_map {
-                let edge_variable = EdgeVariable::from(&collection.enter(subscope), Product::new(Default::default(), 1));
-                let trace = edge_variable.variable.leave().arrange_by_self().trace;
+                let edge_variable = EdgeVariable::from(collection.enter(subscope), Product::new(Default::default(), 1));
+                let trace = edge_variable.collection.clone().leave().arrange_by_self().trace;
                 result_map.insert(name.clone(), RelationHandles { input, trace });
                 variable_map.insert(name.clone(), edge_variable);
             }
@@ -191,8 +193,8 @@ impl Query {
 
                     for relation in rule[1..].iter() {
                         let to_join = match relation {
-                            Relation::Forward(name) => variable_map.get_mut(name).unwrap().forward(),
-                            Relation::Reverse(name) => variable_map.get_mut(name).unwrap().reverse(),
+                            Relation::Forward(name) => variable_map.get_mut(name).unwrap().forward().clone(),
+                            Relation::Reverse(name) => variable_map.get_mut(name).unwrap().reverse().clone(),
                         };
 
                         transposed =
@@ -202,7 +204,7 @@ impl Query {
                     }
 
                     // Reverse the direction before adding it as a production.
-                    variable_map.get_mut(name).unwrap().add_production(&transposed.as_collection(|&dst,&src| (src,dst)));
+                    variable_map.get_mut(name).unwrap().add_production(transposed.as_collection(|&dst,&src| (src,dst)));
                 }
             }
 

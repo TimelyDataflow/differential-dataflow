@@ -67,9 +67,9 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .map(|o| (o.cust_key, (o.order_key, o.order_date, o.ship_priority)));
 
     orders
-        .semijoin(&customers)
+        .semijoin(customers)
         .map(|(_, (order_key, order_date, ship_priority))| (order_key, (order_date, ship_priority)))
-        .semijoin(&lineitems)
+        .semijoin(lineitems)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
@@ -94,7 +94,7 @@ where
             }
             else { None }
         )
-        .join_core(&arrangements.order, |_k, &(), o| {
+        .join_core(arrangements.order, |_k, &(), o| {
             if o.order_date < create_date(1995, 3, 15) {
                 Some((o.cust_key, (o.order_key, o.order_date, o.ship_priority)))
             }
@@ -102,7 +102,7 @@ where
                 None
             }
         })
-        .join_core(&arrangements.customer, |_k,o,c| {
+        .join_core(arrangements.customer, |_k,o,c| {
             if starts_with(&c.mktsegment[..], b"BUILDING") {
                 Some(o.clone())
             }

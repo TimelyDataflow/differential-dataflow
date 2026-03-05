@@ -43,7 +43,7 @@ The `concat` operator merges two collections together, essentially adding the oc
 
 ```rust,ignore
     collection1
-        .concat(&collection2)
+        .concat(collection2)
         .count()
 ```
 
@@ -58,7 +58,7 @@ Join has a lot of uses, but one common example is to "look up" data. If we have 
 ```rust,ignore
     let deliver_to =
     ordered_by
-        .join(&person_address)
+        .join(person_address)
         .map(|(person, package, address)| (package, address));
 ```
 
@@ -68,7 +68,7 @@ Alternately, we can use the same relation to find people living at a given addre
     let can_sign_for =
     deliver_to
         .map(|(package, address)| (address, package))
-        .join(&person_address.map(|(p,a)| (a,p)))
+        .join(person_address.map(|(p,a)| (a,p)))
         .map(|(address, package, person)| (package, person));
 ```
 

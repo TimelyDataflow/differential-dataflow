@@ -10,7 +10,7 @@ use differential_dataflow::trace::implementations::{ValSpine, KeySpine, KeyBatch
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::difference::Present;
 
 type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R>>>;
@@ -44,8 +44,8 @@ fn main() {
             let graph = graph.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
 
             match program.as_str() {
-                "tc"    => tc(&graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
-                "sg"    => sg(&graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("sg count: {:?}", x)).probe(),
+                "tc"    => tc(graph.clone()).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
+                "sg"    => sg(graph).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("sg count: {:?}", x)).probe(),
                 _       => panic!("must specify one of 'tc', 'sg'.")
             };
 
@@ -83,54 +83,54 @@ fn main() {
 use timely::order::Product;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn tc<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
+fn tc<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
 
     // repeatedly update minimal distances each node can be reached from each root
     edges.stream.scope().iterative::<Iter,_,_>(|scope| {
 
-            let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
-            let edges = edges.enter(&inner.scope());
+            let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
+            let edges = edges.enter(scope);
 
             let result =
-            inner
+            inner_collection
                 .map(|(x,y)| (y,x))
                 .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                .join_core(&edges, |_y,&x,&z| Some((x, z)))
-                .concat(&edges.as_collection(|&k,&v| (k,v)))
+                .join_core(edges.clone(), |_y,&x,&z| Some((x, z)))
+                .concat(edges.as_collection(|&k,&v| (k,v)))
                 .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
-                .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
+                .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                 ;
 
-            inner.set(&result);
+            inner.set(result.clone());
             result.leave()
         }
     )
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn sg<G: Scope<Timestamp=()>>(edges: &EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
+fn sg<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
 
-    let peers = edges.join_core(&edges, |_,&x,&y| Some((x,y))).filter(|&(x,y)| x != y);
+    let peers = edges.clone().join_core(edges.clone(), |_,&x,&y| Some((x,y))).filter(|&(x,y)| x != y);
 
     // repeatedly update minimal distances each node can be reached from each root
     peers.scope().iterative::<Iter,_,_>(|scope| {
 
-            let inner = SemigroupVariable::new(scope, Product::new(Default::default(), 1));
-            let edges = edges.enter(&inner.scope());
-            let peers = peers.enter(&inner.scope());
+            let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
+            let edges = edges.enter(scope);
+            let peers = peers.enter(scope);
 
             let result =
-            inner
+            inner_collection
                 .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                .join_core(&edges, |_,&x,&z| Some((x, z)))
+                .join_core(edges.clone(), |_,&x,&z| Some((x, z)))
                 .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
-                .join_core(&edges, |_,&x,&z| Some((x, z)))
-                .concat(&peers)
+                .join_core(edges, |_,&x,&z| Some((x, z)))
+                .concat(peers)
                 .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
-                .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None })
+                .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                 ;
 
-            inner.set(&result);
+            inner.set(result.clone());
             result.leave()
         }
     )

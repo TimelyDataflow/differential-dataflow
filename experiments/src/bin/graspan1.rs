@@ -9,7 +9,7 @@ use differential_dataflow::input::Input;
 use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder, ValSpine};
 use differential_dataflow::operators::*;
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::iterate::SemigroupVariable;
+use differential_dataflow::operators::iterate::Variable;
 
 type Node = u32;
 type Time = ();
@@ -41,16 +41,16 @@ fn main() {
                 let nodes = nodes.enter(inner).map(|(a,b)| (b,a));
                 let edges = edges.enter(inner);
 
-                let labels = SemigroupVariable::new(inner, Product::new(Default::default(), 1));
+                let (labels, labels_collection) = Variable::new(inner, Product::new(Default::default(), 1));
 
                 let next =
-                labels.join_core(&edges, |_b, a, c| Some((*c, *a)))
-                      .concat(&nodes)
+                labels_collection.join_core(edges, |_b, a, c| Some((*c, *a)))
+                      .concat(nodes)
                       .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                     //   .distinct_total_core::<Diff>();
-                      .threshold_semigroup(|_,_,x| if x.is_none() { Some(Present) } else { None });
+                      .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None });
 
-                labels.set(&next);
+                labels.set(next.clone());
                 next.leave()
             });
 

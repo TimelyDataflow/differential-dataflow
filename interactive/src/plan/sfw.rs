@@ -248,11 +248,11 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
                     changes =
                     if join_idx < index {
                         let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |_| unimplemented!());
-                        differential_dogs3::operators::propose(&changes, arrangement, key_selector)
+                        differential_dogs3::operators::propose(changes, arrangement, key_selector)
                     }
                     else {
                         let arrangement = trace.import(scope).enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |_| unimplemented!());
-                        differential_dogs3::operators::propose(&changes, arrangement, key_selector)
+                        differential_dogs3::operators::propose(changes, arrangement, key_selector)
                     }
                     .map(|(mut prefix, extensions)| { prefix.extend(extensions.into_iter()); prefix })
                     ;

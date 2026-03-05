@@ -7,8 +7,8 @@
 //! than are evident from the logical times, which appear to execute in sequence.
 
 use timely::progress::Timestamp;
-use timely::dataflow::operators::Input as TimelyInput;
-use timely::dataflow::operators::input::Handle;
+use timely::dataflow::operators::vec::Input as TimelyInput;
+use timely::dataflow::operators::vec::input::Handle;
 use timely::dataflow::scopes::ScopeParent;
 
 use crate::Data;
@@ -30,7 +30,7 @@ pub trait Input : TimelyInput {
     ///     let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
     ///         // create input handle and collection.
     ///         let (handle, data) = scope.new_collection();
-    ///         let probe = data.map(|x| x * 2)
+    ///         let (probe, _) = data.map(|x| x * 2)
     ///                         .inspect(|x| println!("{:?}", x))
     ///                         .probe();
     ///         (handle, probe)
@@ -56,7 +56,7 @@ pub trait Input : TimelyInput {
     ///     let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
     ///         // create input handle and collection.
     ///          let (handle, data) = scope.new_collection_from(0 .. 10);
-    ///          let probe = data.map(|x| x * 2)
+    ///          let (probe, _) = data.map(|x| x * 2)
     ///                          .inspect(|x| println!("{:?}", x))
     ///                          .probe();
     ///          (handle, probe)
@@ -82,7 +82,7 @@ pub trait Input : TimelyInput {
     ///     let (mut handle, probe) = worker.dataflow::<(),_,_>(|scope| {
     ///         // create input handle and collection.
     ///         let (handle, data) = scope.new_collection_from(0 .. 10);
-    ///         let probe = data.map(|x| x * 2)
+    ///         let (probe, _) = data.map(|x| x * 2)
     ///                         .inspect(|x| println!("{:?}", x))
     ///                         .probe();
     ///         (handle, probe)
@@ -121,7 +121,7 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
         let (handle, stream) = self.new_input();
         let source = data.to_stream(self).as_collection();
 
-        (InputSession::from(handle), stream.as_collection().concat(&source))
+        (InputSession::from(handle), stream.as_collection().concat(source))
     }}
 
 /// An input session wrapping a single timely dataflow capability.
@@ -142,7 +142,7 @@ impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice {
 ///     let (mut handle, probe) = worker.dataflow(|scope| {
 ///         // create input handle and collection.
 ///         let (handle, data) = scope.new_collection_from(0 .. 10);
-///         let probe = data.map(|x| x * 2)
+///         let (probe, _) = data.map(|x| x * 2)
 ///                         .inspect(|x| println!("{:?}", x))
 ///                         .probe();
 ///         (handle, probe)

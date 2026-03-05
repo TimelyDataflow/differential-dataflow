@@ -84,7 +84,7 @@ fn main() {
             data.flat_map(move |(pos, wid)| (0..limit).filter(move |x| (x + pos) % (2 * (wid-1)) == 0))
                 .distinct()
                 .negate()
-                .concat(&scope.new_collection_from(0 .. limit).1)
+                .concat(scope.new_collection_from(0 .. limit).1)
                 .consolidate()
                 .inspect(|x| println!("part2: {:?}", x.0));
         });

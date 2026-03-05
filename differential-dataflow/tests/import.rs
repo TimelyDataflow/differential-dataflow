@@ -113,7 +113,8 @@ fn test_import_completed_dataflow() {
                 let (input, edges) = scope.new_input();
                 let arranged = edges.as_collection()
                                     .arrange_by_key();
-                (input, arranged.trace.clone(), arranged.stream.probe())
+                let (probe, _) = arranged.stream.probe();
+                (input, arranged.trace.clone(), probe)
             });
 
             for (t, changes) in input_epochs.into_iter().enumerate() {
@@ -138,7 +139,7 @@ fn test_import_completed_dataflow() {
                     .as_collection(|k,v| (k.clone(), v.clone()))
                     .inner
                     .exchange(|_| 0);
-                let probe = stream.probe();
+                let (probe, stream) = stream.probe();
                 let captured = stream.capture();
                 (probe, captured,)
             });
@@ -175,7 +176,8 @@ fn test_import_stalled_dataflow() {
                 .to_collection(scope)
                 .arrange_by_self();
 
-            (arranged.trace, arranged.stream.probe())
+            let (probe, _) = arranged.stream.probe();
+            (arranged.trace, probe)
         });
 
         input.insert("Hello".to_owned());
@@ -190,7 +192,8 @@ fn test_import_stalled_dataflow() {
         worker.step_while(|| probe1.less_than(input.time()));
 
         let probe2 = worker.dataflow(|scope| {
-            trace.import(scope).stream.probe()
+            let (probe, _) = trace.import(scope).stream.probe();
+            probe
         });
 
         worker.step();

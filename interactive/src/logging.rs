@@ -46,7 +46,7 @@ where
         let mut demux = OperatorBuilder::new("Timely Logging Demux".to_string(), scope.clone());
 
         use timely::dataflow::channels::pact::Pipeline;
-        let mut input = demux.new_input(&input_stream, Pipeline);
+        let mut input = demux.new_input(input_stream, Pipeline);
 
         let (operates_out, operates) = demux.new_output();
         let mut operates_out = OutputBuilder::from(operates_out);
@@ -75,7 +75,7 @@ where
                 let mut park = park_out.activate();
                 let mut text = text_out.activate();
 
-                input.for_each(|time, data| {
+                input.for_each(|time, data: &mut Vec<(Duration, usize, TimelyEvent)>| {
 
                     let mut operates_session = operates.session(&time);
                     let mut channels_session = channels.session(&time);
@@ -233,7 +233,7 @@ where
         let mut demux = OperatorBuilder::new("Differential Logging Demux".to_string(), scope.clone());
 
         use timely::dataflow::channels::pact::Pipeline;
-        let mut input = demux.new_input(&input, Pipeline);
+        let mut input = demux.new_input(input, Pipeline);
 
         let (batch_out, batch) = demux.new_output();
         let mut batch_out = OutputBuilder::from(batch_out);
@@ -247,7 +247,7 @@ where
                 let mut batch = batch_out.activate();
                 let mut merge = merge_out.activate();
 
-                input.for_each(|time, data| {
+                input.for_each(|time, data: &mut Vec<(Duration, usize, DifferentialEvent)>| {
 
                     let mut batch_session = batch.session(&time);
                     let mut merge_session = merge.session(&time);

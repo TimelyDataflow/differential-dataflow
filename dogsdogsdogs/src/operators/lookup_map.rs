@@ -18,7 +18,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
 pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
-    prefixes: &VecCollection<G, D, R>,
+    prefixes: VecCollection<G, D, R>,
     mut arrangement: Arranged<G, Tr>,
     key_selector: F,
     mut output_func: S,
@@ -59,11 +59,11 @@ where
     let mut key1: K = supplied_key1;
     let mut key2: K = supplied_key2;
 
-    prefixes.inner.binary_frontier(&propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |(input1, frontier1), (input2, frontier2), output| {
+    prefixes.inner.binary_frontier(propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |(input1, frontier1), (input2, frontier2), output| {
 
         // drain the first input, stashing requests.
         input1.for_each(|capability, data| {
-            stash.entry(capability.retain())
+            stash.entry(capability.retain(0))
                  .or_insert(Vec::new())
                  .extend(data.drain(..))
         });

@@ -3,7 +3,7 @@
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::order::Product;
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use differential_dataflow::{AsCollection, Collection};
 use differential_dataflow::input::Input;
@@ -33,7 +33,7 @@ impl<C: ResultsIn<TS>, TS> ResultsIn<TS> for ContainerWrapper<C> {
     #[inline(always)] fn results_in(self, step: &TS) -> Self { ContainerWrapper(self.0.results_in(step)) }
 }
 
-fn wrap<G: Scope, C: timely::Container>(stream: &StreamCore<G, C>) -> StreamCore<G, ContainerWrapper<C>> {
+fn wrap<G: Scope, C: timely::Container>(stream: Stream<G, C>) -> Stream<G, ContainerWrapper<C>> {
     let mut builder = OperatorBuilder::new("Wrap".to_string(), stream.scope());
     let (mut output, stream_out) = builder.new_output();
     let mut input = builder.new_input(stream, Pipeline);
@@ -51,12 +51,12 @@ fn main() {
     timely::example(|scope| {
 
         let numbers = scope.new_collection_from(1 .. 10u32).1;
-        let numbers: Collection<_, _>  = wrap(&numbers.inner).as_collection();
+        let numbers: Collection<_, _>  = wrap(numbers.inner).as_collection();
 
         scope.iterative::<u64,_,_>(|nested| {
             let summary = Product::new(Default::default(), 1);
-            let variable = Variable::new_from(numbers.enter(nested), summary);
-            let mapped: Collection<_, _> = variable.inner.unary(Pipeline, "Map", |_,_| {
+            let (variable, collection) = Variable::new_from(numbers.enter(nested), summary);
+            let mapped: Collection<_, _> = collection.clone().inner.unary(Pipeline, "Map", |_,_| {
                 |input, output| {
                     input.for_each(|time, data| {
                         let mut session = output.session(&time);
@@ -75,9 +75,9 @@ fn main() {
                     });
                 }
             }).as_collection().consolidate();
-            let result = wrap(&result.inner).as_collection();
-            variable.set(&result)
-                .leave()
+            let result = wrap(result.inner).as_collection();
+            variable.set(result);
+            collection.leave()
         });
     })
 }

@@ -72,9 +72,9 @@ fn main() {
             let (views_input, views) = scope.new_collection();
             let (links_input, links) = scope.new_collection();
 
-            let probe =
+            let (probe, _) =
             links
-                .semijoin(&views)
+                .semijoin(views)
                 .map(|(_ad, campaign)| campaign)
                 .consolidate()
                 .inspect(move |x| if inspect { println!("{:?}:\t{:?}", x.0, x.2); })

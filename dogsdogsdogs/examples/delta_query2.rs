@@ -1,8 +1,8 @@
 use timely::dataflow::Scope;
 use timely::order::Product;
 use timely::dataflow::operators::probe::Handle;
-use timely::dataflow::operators::UnorderedInput;
-use timely::dataflow::operators::Map;
+use timely::dataflow::operators::vec::UnorderedInput;
+use timely::dataflow::operators::vec::Map;
 use differential_dataflow::AsCollection;
 
 fn main() {
@@ -16,7 +16,7 @@ fn main() {
             // Nested scope as `Product<usize, usize>` doesn't refine `()`, because .. coherence.
             scope.scoped("InnerScope", |inner| {
 
-                use timely::dataflow::operators::unordered_input::UnorderedHandle;
+                use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;
 
                 let ((input1, capability1), data1): ((UnorderedHandle<Product<usize, usize>, ((usize, usize), Product<usize, usize>, isize)>, _), _) = inner.new_unordered_input();
                 let ((input2, capability2), data2): ((UnorderedHandle<Product<usize, usize>, ((usize, usize), Product<usize, usize>, isize)>, _), _) = inner.new_unordered_input();
@@ -25,8 +25,8 @@ fn main() {
                 let edges2 = data2.as_collection();
 
                 // Graph oriented both ways, indexed by key.
-                let forward1 = edges1.arrange_by_key();
-                let forward2 = edges2.arrange_by_key();
+                let forward1 = edges1.clone().arrange_by_key();
+                let forward2 = edges2.clone().arrange_by_key();
 
                 // Grab the stream of changes. Stash the initial time as payload.
                 let changes1 = edges1.inner.map(|((k,v),t,r)| ((k,v,t.clone()),t,r)).as_collection();
@@ -41,7 +41,7 @@ fn main() {
 
                 let path1 =
                 half_join(
-                    &changes1,
+                    changes1,
                     forward2,
                     closure,
                     |t1,t2| t1.lt(t2),  // This one ignores concurrent updates.
@@ -50,7 +50,7 @@ fn main() {
 
                 let path2 =
                 half_join(
-                    &changes2,
+                    changes2,
                     forward1,
                     closure,
                     |t1,t2| t1.le(t2),  // This one can "see" concurrent updates.
@@ -59,7 +59,7 @@ fn main() {
 
                 // Delay updates until the worked payload time.
                 // This should be at least the ignored update time.
-                path1.concat(&path2)
+                path1.concat(path2)
                     .inner.map(|(((k,v),t),_,r)| ((k,v),t,r)).as_collection()
                     .inspect(|x| println!("{:?}", x))
                     .probe_with(&mut probe);

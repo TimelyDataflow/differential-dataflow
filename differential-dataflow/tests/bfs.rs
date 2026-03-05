@@ -163,7 +163,7 @@ fn bfs_differential(
             let (root_input, roots) = scope.new_collection();
             let (edge_input, edges) = scope.new_collection();
 
-            bfs(&edges, &roots).map(|(_, dist)| dist)
+            bfs(edges, roots).map(|(_, dist)| dist)
                                .count()
                                .map(|(x,y)| (x, y as usize))
                                .inner
@@ -202,7 +202,7 @@ fn bfs_differential(
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G>(edges: &VecCollection<G, Edge>, roots: &VecCollection<G, Node>) -> VecCollection<G, (Node, usize)>
+fn bfs<G>(edges: VecCollection<G, Edge>, roots: VecCollection<G, Node>) -> VecCollection<G, (Node, usize)>
 where
     G: Scope<Timestamp: Lattice+Ord>,
 {
@@ -210,13 +210,13 @@ where
     let nodes = roots.map(|x| (x, 0));
 
     // repeatedly update minimal distances each node can be reached from each root
-    nodes.iterate(|inner| {
+    nodes.clone().iterate(|scope, inner| {
 
-        let edges = edges.enter(&inner.scope());
-        let nodes = nodes.enter(&inner.scope());
+        let edges = edges.enter(&scope);
+        let nodes = nodes.enter(&scope);
 
-        inner.join_map(&edges, |_k,l,d| (*d, l+1))
-             .concat(&nodes)
+        inner.join_map(edges, |_k,l,d| (*d, l+1))
+             .concat(nodes)
              .reduce(|_, s, t| t.push((*s[0].0, 1)))
      })
 }

@@ -75,7 +75,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .semijoin(&partkeys)
+        .semijoin(partkeys)
         .explode(|l| Some(((((l.0 as u64) << 32) + (l.1).0 as u64, ()), (l.1).1 as isize)))
         .reduce_abelian::<_,ValSpine<_,_,_,_>>("Reduce", |_k,s,t| t.push((s[0].1, 1)));
 
@@ -83,9 +83,9 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .partsupps()
         .map(|ps| (ps.part_key, (ps.supp_key, ps.availqty)))
-        .semijoin(&partkeys)
+        .semijoin(partkeys)
         .map(|(part_key, (supp_key, avail))| (((part_key as u64) << 32) + (supp_key as u64), avail))
-        .join_core(&available, |&key, &avail1, &avail2| {
+        .join_core(available, |&key, &avail1, &avail2| {
             let key: u64 = key;
             let avail2: isize = avail2;
             if avail1 > avail2 as i32 / 2 {
@@ -99,9 +99,9 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .suppliers()
         .map(|s| (s.supp_key, (s.name, s.address, s.nation_key)))
-        .semijoin(&suppliers)
+        .semijoin(suppliers)
         .map(|(_, (name, addr, nation))| (nation, (name, addr)))
-        .join(&nations)
+        .join(nations)
         .probe_with(probe);
 }
 
@@ -124,16 +124,16 @@ where
             }
             else { None }
         )
-        .join_core(&arrangements.part, |&pk,&sk,p|
+        .join_core(arrangements.part, |&pk,&sk,p|
             if p.name.as_bytes() == b"forest" { Some((pk,sk)) } else { None }
         )
         .count_total()
-        .join_core(&arrangements.partsupp, |&(_pk,sk),tot,ps| {
+        .join_core(arrangements.partsupp, |&(_pk,sk),tot,ps| {
             if (ps.availqty as isize) > tot / 2 { Some((sk, ())) } else { None }
         })
         .distinct_total()
-        .join_core(&arrangements.supplier, |_sk,&(),s| Some((s.nation_key, (s.name, s.address))))
-        .join_core(&arrangements.nation, |_nk,&(nm,ad),n|
+        .join_core(arrangements.supplier, |_sk,&(),s| Some((s.nation_key, (s.name, s.address))))
+        .join_core(arrangements.nation, |_nk,&(nm,ad),n|
             if starts_with(&n.name, b"CANADA") { Some((nm,ad)) } else { None }
         )
         .probe_with(probe);

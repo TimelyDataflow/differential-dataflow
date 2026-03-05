@@ -12,7 +12,7 @@ use differential_dataflow::trace::TraceReader;
 /// associated count in `arrangement`. If the found count is less than `count`,
 /// the `count` and `index` fields are overwritten with their new values.
 pub fn count<G, Tr, K, R, F, P>(
-    prefixes: &VecCollection<G, (P, usize, usize), R>,
+    prefixes: VecCollection<G, (P, usize, usize), R>,
     arrangement: Arranged<G, Tr>,
     key_selector: F,
     index: usize,

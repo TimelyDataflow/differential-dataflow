@@ -17,16 +17,18 @@ fn main() {
 
             let (input, graph) = scope.new_collection();
 
+            let graph2 = graph.clone();
             let organizers = graph.explode(|(x,y)| Some((x, (1,0))).into_iter().chain(Some((y, (0,1))).into_iter()))
                                   .threshold_total(|_,w| if w.1 == 0 { 1 } else { 0 });
 
             organizers
-                .iterate(|attend| {
-                    graph.enter(&attend.scope())
+                .clone()
+                .iterate(|scope, attend| {
+                    graph2.enter(&scope)
                          .semijoin(attend)
                          .map(|(_,y)| y)
                          .threshold_total(|_,w| if w >= &3 { 1 } else { 0 })
-                         .concat(&organizers.enter(&attend.scope()))
+                         .concat(organizers.enter(&scope))
                          .consolidate()
                 })
                 .map(|_| ())

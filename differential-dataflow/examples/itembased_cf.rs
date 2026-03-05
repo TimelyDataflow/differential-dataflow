@@ -18,6 +18,7 @@ fn main() {
 
             // Find all users with less than 500 interactions
             let users_with_enough_interactions = interactions
+                .clone()
                 .map(|(user, _item)| user)
                 .count_total()
                 .filter(move |(_user, count): &(u32, isize)| *count < 500)
@@ -25,9 +26,10 @@ fn main() {
 
             // Remove users with too many interactions
             let remaining_interactions = interactions
-                .semijoin(&users_with_enough_interactions);
+                .semijoin(users_with_enough_interactions);
 
             let num_interactions_per_item = remaining_interactions
+                .clone()
                 .map(|(_user, item)| item)
                 .count_total();
 
@@ -35,7 +37,8 @@ fn main() {
 
             // Compute the number of cooccurrences of each item pair
             let cooccurrences = arranged_remaining_interactions
-                .join_core(&arranged_remaining_interactions, |_user, &item_a, &item_b| {
+                .clone()
+                .join_core(arranged_remaining_interactions, |_user, &item_a, &item_b| {
                     if item_a > item_b { Some((item_a, item_b)) } else { None }
                 })
                 .count();
@@ -48,12 +51,12 @@ fn main() {
                 // Find the number of interactions for item_a
                 .map(|((item_a, item_b), num_cooc)| (item_a, (item_b, num_cooc)))
                 .join_core(
-                    &arranged_num_interactions_per_item,
+                    arranged_num_interactions_per_item.clone(),
                     |&item_a, &(item_b, num_cooc), &occ_a| Some((item_b, (item_a, num_cooc, occ_a)))
                 )
                 // Find the number of interactions for item_b
                 .join_core(
-                    &arranged_num_interactions_per_item,
+                    arranged_num_interactions_per_item,
                     |&item_b, &(item_a, num_cooc, occ_a), &occ_b| {
                         Some(((item_a, item_b), (num_cooc, occ_a, occ_b)))
                     },
@@ -69,7 +72,8 @@ fn main() {
             let thresholded_similarities = jaccard_similarities
                 .filter(|(_item_pair, jaccard)| *jaccard > 0.05);
 
-            thresholded_similarities.probe()
+            let (probe, _) = thresholded_similarities.probe();
+            probe
         });
 
         let num_interactions: usize = std::env::args().nth(1)

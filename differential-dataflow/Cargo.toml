@@ -14,6 +14,10 @@ keywords = ["differential", "dataflow"]
 license = "MIT"
 readme = "../README.md"
 edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [dev-dependencies]
 rand="0.4"

@@ -34,7 +34,7 @@ fn main() {
             //                  .count_total();
 
             // show us something about the collection, notice when done.
-            let probe = if inspect {
+            let (probe, _) = if inspect {
                 degrs.inspect(|x| println!("observed: {:?}", x))
                      .probe()
             }

@@ -2,7 +2,7 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::ProbeHandle;
 
-use timely::dataflow::operators::unordered_input::UnorderedInput;
+use timely::dataflow::operators::vec::unordered_input::UnorderedInput;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::operators::*;
@@ -33,15 +33,15 @@ fn main() {
                              // .inspect(|x| println!("edge: {:?}", x))
                              ;
 
-            roots.iterate(|inner| {
+            roots.clone().iterate(|scope, inner| {
 
-                let edges = edges.enter(&inner.scope());
-                let roots = roots.enter(&inner.scope());
+                let edges = edges.enter(&scope);
+                let roots = roots.enter(&scope);
 
                 edges
-                    .semijoin(&inner)
+                    .semijoin(inner)
                     .map(|(_s,d)| d)
-                    .concat(&roots)
+                    .concat(roots)
                     .distinct()
             })
             .consolidate()

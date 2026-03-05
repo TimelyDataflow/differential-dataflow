@@ -22,8 +22,8 @@ fn main() {
             let query = query.to_collection(scope);
 
             // Hop from x to y, then from y to z.
-            query.join_map(&knows, |x,q,y| (*y,*q))
-                 .join_map(&knows, |y,q,z| (*q,*z))
+            query.join_map(knows.clone(), |x,q,y| (*y,*q))
+                 .join_map(knows.clone(), |y,q,z| (*q,*z))
                  .inspect(|result| println!("result {:?}", result));
 
         });
@@ -60,8 +60,8 @@ fn main() {
             let knows = knows.arrange_by_key();
 
             // Same logic as before, with a new method name.
-            query.join_core(&knows, |x,q,y| Some((*y,*q)))
-                 .join_core(&knows, |y,q,z| Some((*q,*z)))
+            query.join_core(knows.clone(), |x,q,y| Some((*y,*q)))
+                 .join_core(knows.clone(), |y,q,z| Some((*q,*z)))
                  .inspect(|result| println!("result {:?}", result));
 
         });

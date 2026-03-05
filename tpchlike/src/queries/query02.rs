@@ -80,14 +80,14 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .nations()
         .map(|x| (x.region_key, (x.nation_key, x.name)))
-        .semijoin(&regions)
+        .semijoin(regions)
         .map(|(_region_key, (nation_key, name))| (nation_key, name));
 
     let suppliers =
     collections
         .suppliers()
         .map(|x| (x.nation_key, (x.acctbal, x.name, x.address, x.phone, x.comment, x.supp_key)))
-        .semijoin(&nations.map(|x| x.0))
+        .semijoin(nations.map(|x| x.0))
         .map(|(nat, (acc, nam, add, phn, com, key))| (key, (nat, acc, nam, add, phn, com)));
 
     let parts =
@@ -99,20 +99,20 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .partsupps()
         .map(|x| (x.supp_key, (x.part_key, x.supplycost)))
-        .semijoin(&suppliers.map(|x| x.0))
+        .semijoin(suppliers.map(|x| x.0))
         .map(|(supp, (part, supply_cost))| (part, (supply_cost, supp)))
-        .semijoin(&parts.map(|x| x.0))
+        .semijoin(parts.map(|x| x.0))
         .reduce(|_x, s, t| {
             let minimum = (s[0].0).0;
             t.extend(s.iter().take_while(|x| (x.0).0 == minimum).map(|&(&x,w)| (x,w)));
         });
 
     partsupps
-        .join(&parts)
+        .join(parts)
         .map(|(part_key, ((cost, supp), mfgr))| (supp, (cost, part_key, mfgr)))
-        .join(&suppliers)
+        .join(suppliers)
         .map(|(_supp, ((cost, part, mfgr), (nat, acc, nam, add, phn, com)))| (nat, (cost, part, mfgr, acc, nam, add, phn, com)))
-        .join(&nations)
+        .join(nations)
         .probe_with(probe);
 }
 
@@ -138,9 +138,9 @@ where
         .inner
         .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
         .as_collection()
-        .join_core(&arrangements.supplier, |&sk, &(pk,sc), s| Some((s.nation_key, (pk,sc,sk))))
-        .join_core(&arrangements.nation, |_nk, &(pk,sc,sk), n| Some((n.region_key, (pk,sc,sk,n.name))))
-        .join_core(&arrangements.region, |_rk, &(pk,sc,sk,nm), r| {
+        .join_core(arrangements.supplier, |&sk, &(pk,sc), s| Some((s.nation_key, (pk,sc,sk))))
+        .join_core(arrangements.nation, |_nk, &(pk,sc,sk), n| Some((n.region_key, (pk,sc,sk,n.name))))
+        .join_core(arrangements.region, |_rk, &(pk,sc,sk,nm), r| {
             if starts_with(&r.name[..], b"EUROPE") { Some((pk,(sc,sk,nm))) } else { None }
         });
 
@@ -152,7 +152,7 @@ where
         });
 
     cheapest_suppliers
-        .join_core(&arrangements.part, |&pk,&(sc,sk,nm),p| {
+        .join_core(arrangements.part, |&pk,&(sc,sk,nm),p| {
             if substring(p.typ.as_str().as_bytes(), b"BRASS") && p.size == 15 {
                 Some((sk, (sc,pk,nm,p.mfgr)))
             }
@@ -160,7 +160,7 @@ where
                 None
             }
         })
-        .join_core(&arrangements.supplier, |_sk,&(sc,pk,nm,pm),s| {
+        .join_core(arrangements.supplier, |_sk,&(sc,pk,nm,pm),s| {
             Some((sc,pk,nm,pm,s.acctbal,s.name,s.address,s.phone,s.comment))
         })
         .probe_with(probe);

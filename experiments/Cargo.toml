@@ -3,7 +3,11 @@ name = "experiments"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 edition.workspace = true
+rust-version.workspace = true
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 core_affinity = "0.5.9"

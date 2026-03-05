@@ -40,7 +40,7 @@ fn main() {
             let roots = roots.to_collection(scope);
             let graph = graph.to_collection(scope);
 
-            bfs(&graph, &roots)
+            bfs(graph, roots)
                 .filter(move |_| inspect)
                 .map(|(_,l)| l)
                 .consolidate()
@@ -105,7 +105,7 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G>(edges: &VecCollection<G, Edge>, roots: &VecCollection<G, Node>) -> VecCollection<G, (Node, u32)>
+fn bfs<G>(edges: VecCollection<G, Edge>, roots: VecCollection<G, Node>) -> VecCollection<G, (Node, u32)>
 where
     G: Scope<Timestamp: Lattice+Ord>,
 {
@@ -113,13 +113,13 @@ where
     let nodes = roots.map(|x| (x, 0));
 
     // repeatedly update minimal distances each node can be reached from each root
-    nodes.iterate(|inner| {
+    nodes.clone().iterate(|scope, inner| {
 
-        let edges = edges.enter(&inner.scope());
-        let nodes = nodes.enter(&inner.scope());
+        let edges = edges.enter(&scope);
+        let nodes = nodes.enter(&scope);
 
-        inner.join_map(&edges, |_k,l,d| (*d, l+1))
-             .concat(&nodes)
+        inner.join_map(edges, |_k,l,d| (*d, l+1))
+             .concat(nodes)
              .reduce(|_, s, t| t.push((*s[0].0, 1)))
      })
 }

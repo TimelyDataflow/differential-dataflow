@@ -59,13 +59,13 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .suppliers()
         .map(|s| (s.nation_key, s.supp_key))
-        .semijoin(&nations)
+        .semijoin(nations)
         .map(|s| s.1);
 
     collections
         .partsupps()
         .explode(|x| Some(((x.supp_key, x.part_key), (x.supplycost as isize) * (x.availqty as isize))))
-        .semijoin(&suppliers)
+        .semijoin(suppliers)
         .map(|(_, part_key)| ((), part_key))
         .reduce(|_part_key, s, t| {
             let threshold: isize = s.iter().map(|x| x.1 as isize).sum::<isize>() / 10000;
@@ -98,8 +98,8 @@ where
         .map(move |(d,t,r)| (d, ::std::cmp::max(t,round),r))
         .as_collection()
         .explode(|((sk,pk),prod)| Some(((sk,pk),prod)))
-        .join_core(&arrangements.supplier, |_sk,&pk,s| Some((s.nation_key, pk)))
-        .join_core(&arrangements.nation, |_nk,&pk,n|
+        .join_core(arrangements.supplier, |_sk,&pk,s| Some((s.nation_key, pk)))
+        .join_core(arrangements.nation, |_nk,&pk,n|
             if starts_with(&n.name, b"GERMANY") { Some(((), pk)) } else { None }
         )
         .reduce(|_part_key, s, t| {

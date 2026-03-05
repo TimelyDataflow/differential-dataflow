@@ -1,7 +1,7 @@
 use std::io::BufRead;
 
 use timely::dataflow::ProbeHandle;
-use timely::dataflow::operators::unordered_input::UnorderedInput;
+use timely::dataflow::operators::vec::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Probe;
 use timely::progress::frontier::AntichainRef;
 use timely::PartialOrder;

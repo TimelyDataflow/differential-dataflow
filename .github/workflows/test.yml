@@ -6,16 +6,28 @@ on:
   pull_request:
 
 jobs:
+  msrv:
+    name: Determine MSRV
+    runs-on: ubuntu-latest
+    outputs:
+      msrv: ${{ steps.msrv.outputs.msrv }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: msrv
+        run: echo "msrv=$(grep '^rust-version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: msrv
     strategy:
       matrix:
         os:
           - ubuntu
           - macos
-          # - windows
+# Linking fails on Windows.
+#           - windows
         toolchain:
           - stable
-          - 1.79
+          - ${{ needs.msrv.outputs.msrv }}
     name: cargo test on ${{ matrix.os }}, rust ${{ matrix.toolchain }}
     runs-on: ${{ matrix.os }}-latest
     steps:
@@ -27,3 +39,17 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: Cargo doc test
         run: cargo test --doc
+
+  # Check for clippy warnings
+  clippy:
+    name: Cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+      - name: Cargo clippy
+        run: cargo clippy --workspace --all-targets
+        env:
+          RUSTFLAGS: "" # Don't make test fail on clippy

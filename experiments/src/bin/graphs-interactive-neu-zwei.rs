@@ -46,8 +46,8 @@ fn main() {
             let (graph_input, graph) = scope.new_collection();
 
             let state_indexed = state.arrange_by_key();
-            let graph_indexed = graph.map(|(src, dst)| (dst, src))
-                                     .concat(&graph)
+            let graph_indexed = graph.clone().map(|(src, dst)| (dst, src))
+                                     .concat(graph)
                                      .arrange_by_key();
 
             match mode {
@@ -57,7 +57,7 @@ fn main() {
                     query
                         .map(|(x,_)| x)
                         .arrange_by_self()
-                        .join_core(&state_indexed, |&query, &(), &state| Some((query, state)))
+                        .join_core(state_indexed, |&query, &(), &state| Some((query, state)))
                         .probe_with(&mut probe);
                 },
                 2 => {
@@ -65,8 +65,8 @@ fn main() {
                     query
                         .map(|(x,_)| x)
                         .arrange_by_self()
-                        .join_core(&graph_indexed, |&query, &(), &friend| Some((friend, query)))
-                        .join_core(&state_indexed, |_friend, &query, &state| Some((query, state)))
+                        .join_core(graph_indexed, |&query, &(), &friend| Some((friend, query)))
+                        .join_core(state_indexed, |_friend, &query, &state| Some((query, state)))
                         .probe_with(&mut probe);
                 },
                 3 => {
@@ -74,14 +74,14 @@ fn main() {
                     query
                         .map(|(x,_)| x)
                         .arrange_by_self()
-                        .join_core(&graph_indexed, |&query, &(), &friend| Some((friend, query)))
-                        .join_core(&graph_indexed, |_friend, &query, &friend2| Some((friend2, query)))
-                        .join_core(&state_indexed, |_friend2, &query, &state| Some((query, state)))
+                        .join_core(graph_indexed.clone(), |&query, &(), &friend| Some((friend, query)))
+                        .join_core(graph_indexed, |_friend, &query, &friend2| Some((friend2, query)))
+                        .join_core(state_indexed, |_friend2, &query, &state| Some((query, state)))
                         .probe_with(&mut probe);
                 },
                 4 => {
                     // Q4: Shortest path queries:
-                    three_hop(&graph_indexed, &graph_indexed, &query)
+                    three_hop(graph_indexed.clone(), graph_indexed, query)
                         .probe_with(&mut probe);
                 }
                 x => { panic!("Unknown mode: {:?}; must be: 1, 2, 3, 4", x); }
@@ -230,28 +230,28 @@ type Arrange<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopePare
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn three_hop<G: Scope>(
-    forward_graph: &Arrange<G, Node, Node, isize>,
-    reverse_graph: &Arrange<G, Node, Node, isize>,
-    goals: &VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
+    forward_graph: Arrange<G, Node, Node, isize>,
+    reverse_graph: Arrange<G, Node, Node, isize>,
+    goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
-    let sources = goals.map(|(x,_)| x);
+    let sources = goals.clone().map(|(x,_)| x);
     let targets = goals.map(|(_,y)| y);
 
     // Q3: Two-hop lookups on `state`:
     let forward0 = sources.map(|x| (x, (x,0)));
-    let forward1 = forward0.join_core(&forward_graph, |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
-    let forward2 = forward1.join_core(&forward_graph, |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
+    let forward1 = forward0.clone().join_core(forward_graph.clone(), |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
+    let forward2 = forward1.clone().join_core(forward_graph, |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
 
     let reverse0 = targets.map(|x| (x, (x,0)));
-    let reverse1 = reverse0.join_core(&reverse_graph, |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
-    let reverse2 = reverse1.join_core(&reverse_graph, |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
+    let reverse1 = reverse0.clone().join_core(reverse_graph.clone(), |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
+    let reverse2 = reverse1.clone().join_core(reverse_graph, |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
 
-    let forward = forward0.concat(&forward1).concat(&forward2);
-    let reverse = reverse0.concat(&reverse1).concat(&reverse2);
+    let forward = forward0.concat(forward1).concat(forward2);
+    let reverse = reverse0.concat(reverse1).concat(reverse2);
 
     forward
-        .join_map(&reverse, |_,&(source, dist1),&(target, dist2)| ((source, target), dist1 + dist2))
+        .join_map(reverse, |_,&(source, dist1),&(target, dist2)| ((source, target), dist1 + dist2))
         .reduce(|_st,input,output| output.push((*input[0].0,1)))
 }
 
@@ -259,7 +259,7 @@ where G::Timestamp: Lattice+Ord {
 // fn bidijkstra<G: Scope>(
 //     forward_graph: &Arrange<G, Node, Node, isize>,
 //     reverse_graph: &Arrange<G, Node, Node, isize>,
-//     goals: &VecCollection<G, (Node, Node)>,
+//     goals: VecCollection<G, (Node, Node)>,
 //     bound: u64) -> VecCollection<G, ((Node, Node), u32)>
 // where G::Timestamp: Lattice+Ord {
 
@@ -284,15 +284,15 @@ where G::Timestamp: Lattice+Ord {
 //         // This is a cyclic join, which should scare us a bunch.
 //         let reached =
 //         forward
-//             .join_map(&reverse, |_, &(src,d1), &(dst,d2)| ((src, dst), d1 + d2))
+//             .join_map(reverse, |_, &(src,d1), &(dst,d2)| ((src, dst), d1 + d2))
 //             .reduce(|_key, s, t| t.push((*s[0].0, 1)))
-//             .semijoin(&goals);
+//             .semijoin(goals);
 
 //         let active =
 //         reached
 //             .negate()
 //             .map(|(srcdst,_)| srcdst)
-//             .concat(&goals)
+//             .concat(goals)
 //             .consolidate();
 
 //         // Let's expand out forward queries that are active.
@@ -300,30 +300,30 @@ where G::Timestamp: Lattice+Ord {
 //         let forward_next =
 //         forward
 //             .map(|(med, (src, dist))| (src, (med, dist)))
-//             .semijoin(&forward_active)
+//             .semijoin(forward_active)
 //             .map(|(src, (med, dist))| (med, (src, dist)))
-//             .join_core(&forward_graph, |_med, &(src, dist), &next| Some((next, (src, dist+1))))
-//             .concat(&forward)
+//             .join_core(forward_graph, |_med, &(src, dist), &next| Some((next, (src, dist+1))))
+//             .concat(forward)
 //             .map(|(next, (src, dist))| ((next, src), dist))
 //             .reduce(|_key, s, t| t.push((*s[0].0, 1)))
 //             .map(|((next, src), dist)| (next, (src, dist)));
 
-//         forward.set(&forward_next);
+//         forward.set(forward_next);
 
 //         // Let's expand out reverse queries that are active.
 //         let reverse_active = active.map(|(_x,y)| y).distinct();
 //         let reverse_next =
 //         reverse
 //             .map(|(med, (rev, dist))| (rev, (med, dist)))
-//             .semijoin(&reverse_active)
+//             .semijoin(reverse_active)
 //             .map(|(rev, (med, dist))| (med, (rev, dist)))
-//             .join_core(&reverse_graph, |_med, &(rev, dist), &next| Some((next, (rev, dist+1))))
-//             .concat(&reverse)
+//             .join_core(reverse_graph, |_med, &(rev, dist), &next| Some((next, (rev, dist+1))))
+//             .concat(reverse)
 //             .map(|(next, (rev, dist))| ((next, rev), dist))
 //             .reduce(|_key, s, t| t.push((*s[0].0, 1)))
 //             .map(|((next,rev), dist)| (next, (rev, dist)));
 
-//         reverse.set(&reverse_next);
+//         reverse.set(reverse_next);
 
 //         reached.leave()
 //     })

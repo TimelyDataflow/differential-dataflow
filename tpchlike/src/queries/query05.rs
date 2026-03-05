@@ -57,21 +57,21 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
     collections
         .nations()
         .map(|x| (x.region_key, x.nation_key))
-        .semijoin(&regions)
+        .semijoin(regions)
         .map(|(_region_key, nation_key)| nation_key);
 
     let suppliers =
     collections
         .suppliers()
         .map(|x| (x.nation_key, x.supp_key))
-        .semijoin(&nations)
+        .semijoin(nations)
         .map(|(_nat, supp)| (supp, _nat));
 
     let customers =
     collections
         .customers()
         .map(|c| (c.nation_key, c.cust_key))
-        .semijoin(&nations)
+        .semijoin(nations)
         .map(|c| (c.1, c.0));
 
     let orders =
@@ -83,18 +83,18 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             }
             else { None }
         )
-        .join(&customers)
+        .join(customers)
         .map(|o| o.1);
 
     let lineitems = collections
         .lineitems()
         .explode(|l| Some(((l.order_key, l.supp_key), (l.extended_price * (100 - l.discount) / 100) as isize)))
-        .join(&orders)
+        .join(orders)
         .map(|(_order, (supp, nat))| (supp, nat));
 
     suppliers
         .map(|x| (x, ()))
-        .semijoin(&lineitems)
+        .semijoin(lineitems)
         .map(|((_supp, nat), ())| nat)
         .count_total()
         // .inspect(|x| println!("{:?}", x))
@@ -115,21 +115,21 @@ where
     experiment
         .lineitem(scope)
         .explode(|l| Some(((l.order_key, l.supp_key), (l.extended_price * (100 - l.discount) / 100) as isize)))
-        .join_core(&arrangements.order, |_ok, &sk, o| {
+        .join_core(arrangements.order, |_ok, &sk, o| {
             if o.order_date >= create_date(1994, 1, 1) && o.order_date < create_date(1995, 1, 1) {
                 Some((o.cust_key, sk))
             }
             else { None }
         })
-        .join_core(&arrangements.customer, |_ck, &sk, c| Some((sk,c.nation_key)))
-        .join_core(&arrangements.supplier, |_sk, &nk, s| {
+        .join_core(arrangements.customer, |_ck, &sk, c| Some((sk,c.nation_key)))
+        .join_core(arrangements.supplier, |_sk, &nk, s| {
             if s.nation_key == nk {
                 Some((nk, ()))
             }
             else { None }
         })
-        .join_core(&arrangements.nation, |_nk, &(), n| Some((n.region_key, n.name)))
-        .join_core(&arrangements.region, |_rk, &name, r| {
+        .join_core(arrangements.nation, |_nk, &(), n| Some((n.region_key, n.name)))
+        .join_core(arrangements.region, |_rk, &name, r| {
             if starts_with(&r.name[..], b"ASIA") { Some(name) } else { None }
         })
         .count_total()

@@ -52,7 +52,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
         .parts()
         .explode(|p| Some((p.part_key, DiffPair::new(1, if starts_with(&p.typ.as_bytes(), b"PROMO") { 1 } else { 0 }))))
         .arrange_by_self()
-        .join_core(&lineitems, |&_part_key, _, _| Some(()))
+        .join_core(lineitems, |&_part_key, _, _| Some(()))
         .count_total()
         // .inspect(|x| println!("{:?}", x))
         .probe_with(probe);
@@ -78,7 +78,7 @@ where
             else { None }
         )
         .arrange_by_self()
-        .join_core(&arrangements.part, |_pk,&(),p| Some(DiffPair::new(1, if starts_with(&p.typ.as_bytes(), b"PROMO") { 1 } else { 0 })))
+        .join_core(arrangements.part, |_pk,&(),p| Some(DiffPair::new(1, if starts_with(&p.typ.as_bytes(), b"PROMO") { 1 } else { 0 })))
         .explode(|dp| Some(((),dp)))
         .count_total()
         .probe_with(probe);
