@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.1...differential-dataflow-v0.20.0) - 2026-03-05
+
+### Other
+
+- Update release notes for 0.20 ([#680](https://github.com/TimelyDataflow/differential-dataflow/pull/680))
+- Pull in probe changes ([#677](https://github.com/TimelyDataflow/differential-dataflow/pull/677))
+- Break `Variable` into `(Variable, Collection)` ([#674](https://github.com/TimelyDataflow/differential-dataflow/pull/674))
+- Update github workflows ([#673](https://github.com/TimelyDataflow/differential-dataflow/pull/673))
+- Set MSRV to 1.86 ([#672](https://github.com/TimelyDataflow/differential-dataflow/pull/672))
+- Differential corrected atop candidate timely 0.27 ([#671](https://github.com/TimelyDataflow/differential-dataflow/pull/671))
+- Test mdbook like a crate ([#669](https://github.com/TimelyDataflow/differential-dataflow/pull/669))
+- Migrate Join logic away from traits ([#668](https://github.com/TimelyDataflow/differential-dataflow/pull/668))
+- More `VecCollection` demotion ([#667](https://github.com/TimelyDataflow/differential-dataflow/pull/667))
+- Implement utility traits for Rc collections ([#666](https://github.com/TimelyDataflow/differential-dataflow/pull/666))
+- Deprioritize the `Vec` container ([#664](https://github.com/TimelyDataflow/differential-dataflow/pull/664))
+
 Substantial superficial but breaking changes due to the adoption of timely `0.27`.
 Primarily that the `Stream` contained by `Collection` is not `Clone` by default, and is now conventionally passed owned rather than by reference.
 The necessary fix-ups are to convert to owned collections, and where needed to clone the collection, which requires that its container implement `Clone`.

@@ -1,6 +1,6 @@
 [package]
 name = "differential-dogs3"
-version = "0.19.1"
+version = "0.20.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 license = "MIT"
 edition.workspace = true
