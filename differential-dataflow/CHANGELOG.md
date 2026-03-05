@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.1...differential-dataflow-v0.20.0) - 2026-03-05
+
+### Other
+
+- Update release notes for 0.20 ([#680](https://github.com/TimelyDataflow/differential-dataflow/pull/680))
+- Pull in probe changes ([#677](https://github.com/TimelyDataflow/differential-dataflow/pull/677))
+- Break `Variable` into `(Variable, Collection)` ([#674](https://github.com/TimelyDataflow/differential-dataflow/pull/674))
+- Update github workflows ([#673](https://github.com/TimelyDataflow/differential-dataflow/pull/673))
+- Set MSRV to 1.86 ([#672](https://github.com/TimelyDataflow/differential-dataflow/pull/672))
+- Differential corrected atop candidate timely 0.27 ([#671](https://github.com/TimelyDataflow/differential-dataflow/pull/671))
+- Test mdbook like a crate ([#669](https://github.com/TimelyDataflow/differential-dataflow/pull/669))
+- Migrate Join logic away from traits ([#668](https://github.com/TimelyDataflow/differential-dataflow/pull/668))
+- More `VecCollection` demotion ([#667](https://github.com/TimelyDataflow/differential-dataflow/pull/667))
+- Implement utility traits for Rc collections ([#666](https://github.com/TimelyDataflow/differential-dataflow/pull/666))
+- Deprioritize the `Vec` container ([#664](https://github.com/TimelyDataflow/differential-dataflow/pull/664))
+
+Substantial superficial but breaking changes due to the adoption of timely `0.27`.
+Primarily that the `Stream` contained by `Collection` is not `Clone` by default, and is now conventionally passed owned rather than by reference.
+The necessary fix-ups are to convert to owned collections, and where needed to clone the collection, which requires that its container implement `Clone`.
+
+Related, the `Variable` types is broken into a pair `(Variable, Collection)`, where the latter is the usable collection the type would previously `Deref` to, and the former is the connection point to bind the variable's definition.
+The `SemigroupVariable` was removed, as it is now redundant with `Variable::new()`, which does not require `Negate` (the main difference between the two variables).
+
+Several steps were taken to "deprioritize" collections with vector containers.
+Many traits defined only on vector collections were removed in favor of inherent methods.
+Traits and methods that produce vector collections were (and continue to be) reconsidered to avoid routing users into that opinion.
+All prior functionality is available, though in some cases it requires explicit indication of preferred container types (internally, only in "demo" cases).
+
+The `probe` operator was updated to track timely changes that have it return a pair of handle and collection, rather than only a handle.
+This aligns more with the "owned collection" idiom.
+
+
 ## [0.19.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.0...differential-dataflow-v0.19.1) - 2026-02-06
 
 ### Other
