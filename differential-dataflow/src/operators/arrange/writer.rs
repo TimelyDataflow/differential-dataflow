@@ -68,7 +68,9 @@ impl<Tr: Trace> TraceWriter<Tr> {
         let mut borrow = self.queues.borrow_mut();
         for queue in borrow.iter_mut() {
             if let Some(pair) = queue.upgrade() {
-                pair.1.borrow_mut().push_back(TraceReplayInstruction::Batch(batch.clone(), hint.clone()));
+                if !batch.is_empty() {
+                    pair.1.borrow_mut().push_back(TraceReplayInstruction::Batch(batch.clone(), hint.clone()));
+                }
                 pair.1.borrow_mut().push_back(TraceReplayInstruction::Frontier(batch.upper().clone()));
                 pair.0.activate();
             }
