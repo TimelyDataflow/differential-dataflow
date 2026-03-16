@@ -19,13 +19,14 @@ pub fn validate<G, K, V, Tr, F, P>(
 ) -> VecCollection<G, (P, V), Tr::Diff>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: for<'a> TraceReader<
-        KeyOwn = (K, V),
+    Tr: TraceReader<
+        Key = (K, V),
         Time: std::hash::Hash,
-        Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
+        Diff : Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
-    K: Ord+Hash+Clone+Default + 'static,
-    V: ExchangeData+Hash+Default,
+    for<'a> Tr::Diff: Semigroup<columnar::Ref<'a, Tr::Diff>>,
+    K: Ord+Hash+Clone+Default+differential_dataflow::Data + 'static,
+    V: ExchangeData+Hash+Default+differential_dataflow::Data,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
 {

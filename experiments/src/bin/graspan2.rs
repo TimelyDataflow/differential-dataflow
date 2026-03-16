@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 

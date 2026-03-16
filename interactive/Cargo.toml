@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 bincode = "1"
+columnar = { workspace = true }
 serde = { version = "1", features = ["derive"]}
 differential-dataflow = { workspace = true }
 differential-dogs3 = { path = "../dogsdogsdogs" }

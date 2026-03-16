@@ -144,7 +144,7 @@ where
         // TODO: This could/should be arrangement to arrangement, via `reduce_abelian`, but the types are a mouthful at the moment.
         let counts = arranged
             .clone()
-            .as_collection(|k,_v| k.clone())
+            .as_collection(|k,_v| { let kv: (K, V) = columnar::Columnar::into_owned(k); kv })
             .distinct()
             .map(|(k, _v)| k)
             .arrange_by_self()
@@ -187,6 +187,7 @@ where
     V: ExchangeData+Hash+Default,
     P: ExchangeData,
     R: Monoid+Multiply<Output = R>+ExchangeData,
+    for<'a> R: differential_dataflow::difference::Semigroup<columnar::Ref<'a, R>>,
     F: Fn(&P)->K+Clone+'static,
 {
     type Prefix = P;

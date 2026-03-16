@@ -103,7 +103,7 @@ fn reach<G: Scope<Timestamp = ()>> (
         // let reach = inner.concat(roots).distinct_total().arrange_by_self();
         // graph.join_core(reach, |_src,&dst,&()| Some(dst))
 
-        graph.join_core(inner.arrange_by_self(), |_src,&dst,&()| Some(dst))
+        graph.join_core(inner.arrange_by_self(), |_src,dst,()| Some(dst))
              .concat(roots)
              .distinct_total()
     })
@@ -123,7 +123,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
         let graph = graph.enter(&scope);
         let roots = roots.enter(&scope);
 
-        graph.join_core(inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
+        graph.join_core(inner.arrange_by_key(), |_src,dest,dist| [(dest, dist+1)])
              .concat(roots)
              .reduce(|_key, input, output| output.push((*input[0].0,1)))
     })

@@ -141,8 +141,8 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
                 .get_unkeyed(&plan)
                 .expect("Surely we just ensured this")
                 .import(scope)
-                .as_collection(|val,&()| val.clone())
-                .map(move |tuple| attributes_init.iter().map(|&(attr,_)|
+                .as_collection(|val,()| columnar::Columnar::into_owned(val))
+                .map(move |tuple: Vec<V>| attributes_init.iter().map(|&(attr,_)|
                     tuple[attr].clone()).collect::<Vec<_>>()
                 );
 

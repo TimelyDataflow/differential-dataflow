@@ -39,7 +39,7 @@ fn main() {
 
 fn interpret<G>(edges: VecCollection<G, Edge>, relations: &[(usize, usize)]) -> VecCollection<G, Vec<Node>>
 where
-    G: Scope<Timestamp: Lattice+Hash+Ord>,
+    G: Scope<Timestamp: Lattice+Hash+Ord+differential_dataflow::Data>,
 {
 
     // arrange the edge relation three ways.
@@ -65,7 +65,7 @@ where
                 // Both variables are bound, so this is a semijoin.
                 results
                     .map(move |vec| ((vec[src], vec[dst]), vec))
-                    .join_core(as_self.clone(), |_key, vec, &()| Some(vec.clone()))
+                    .join_core(as_self.clone(), |_key, vec, _| Some(columnar::Columnar::into_owned(vec)))
             }
             (true, false) => {
                 // Only `src` is bound, so we must use `forward` to propose `dst`.
@@ -73,7 +73,7 @@ where
                 results
                     .map(move |vec| (vec[src], vec))
                     .join_core(forward.clone(), move |_src_val, vec, &dst_val| {
-                        let mut temp = vec.clone();
+                        let mut temp: Vec<Node> = columnar::Columnar::into_owned(vec);
                         while temp.len() <= dst { temp.push(0); }
                         temp[dst] = dst_val;
                         Some(temp)
@@ -85,7 +85,7 @@ where
                 results
                     .map(move |vec| (vec[dst], vec))
                     .join_core(reverse.clone(), move |_dst_val, vec, &src_val| {
-                        let mut temp = vec.clone();
+                        let mut temp: Vec<Node> = columnar::Columnar::into_owned(vec);
                         while temp.len() <= src { temp.push(0); }
                         temp[src] = src_val;
                         Some(temp)

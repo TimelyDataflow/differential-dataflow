@@ -172,7 +172,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                     let output = input.reduce_abelian::<_,KeyBuilder<_,_,_>,KeySpine<_,_,_>>("Distinct", move |_,_,t| t.push(((), 1)));
 
                     arrangements.set_unkeyed(&self, &output.trace);
-                    output.as_collection(|k,&()| k.clone())
+                    output.as_collection(|k,()| columnar::Columnar::into_owned(k))
 
                 },
                 Plan::Concat(concat) => {
@@ -192,7 +192,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                 }
                 Plan::Consolidate(consolidate) => {
                     if let Some(mut trace) = arrangements.get_unkeyed(&self) {
-                        trace.import(scope).as_collection(|k,&()| k.clone())
+                        trace.import(scope).as_collection(|k,()| columnar::Columnar::into_owned(k))
                     }
                     else {
                         consolidate.render(scope, collections, arrangements).consolidate()
@@ -209,7 +209,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                         .get_unkeyed(self)
                         .expect(&format!("Failed to find source collection: {:?}", source))
                         .import(scope)
-                        .as_collection(|k,()| k.to_vec())
+                        .as_collection(|k,()| columnar::Columnar::into_owned(k))
                 },
                 Plan::Inspect(text, plan) => {
                     let text = text.clone();

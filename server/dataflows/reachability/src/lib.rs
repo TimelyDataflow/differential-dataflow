@@ -23,7 +23,7 @@ pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<()
         let edges = edges.enter(&scope);
         let roots = roots.enter(&scope);
         dists.arrange_by_self()
-             .join_core(edges, |_src, _, &dst| Some(dst))
+             .join_core(edges, |_src, _, dst| Some(dst))
              .concat(roots)
              .distinct()
     })

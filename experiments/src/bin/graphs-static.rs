@@ -85,7 +85,7 @@ fn main() {
         let mut reverse = worker.dataflow(|scope| {
             forward
                 .import(scope)
-                .as_collection(|&k,&v| (v,k))
+                .as_collection(|&k,&v| (v, k))
                 .arrange_by_key()
                 .trace
         });
@@ -121,7 +121,7 @@ fn reach<G: Scope<Timestamp = ()>> (
         let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
 
         let result =
-        graph.join_core(inner_collection.arrange_by_self(), |_src,&dst,&()| Some(dst))
+        graph.join_core(inner_collection.arrange_by_self(), |_src,&dst,()| Some(dst))
              .concat(roots)
              .threshold_total(|_,_| 1);
 
@@ -179,8 +179,8 @@ fn connected_components<G: Scope<Timestamp = ()>>(
         let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
 
         let labels = inner_collection.clone().arrange_by_key();
-        let f_prop = labels.clone().join_core(forward, |_k,l,d| Some((*d,*l)));
-        let r_prop = labels.join_core(reverse, |_k,l,d| Some((*d,*l)));
+        let f_prop = labels.clone().join_core(forward, |_k,l: &Node,d| Some((*d,*l)));
+        let r_prop = labels.join_core(reverse, |_k,l: &Node,d| Some((*d,*l)));
 
         use timely::dataflow::operators::vec::{Map, Delay};
         use timely::dataflow::operators::Concat;

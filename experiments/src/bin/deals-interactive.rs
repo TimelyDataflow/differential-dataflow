@@ -210,7 +210,7 @@ fn interactive<G: Scope>(
     tc_2: VecCollection<G, Node>,
     sg_x: VecCollection<G, Node>
 ) -> VecCollection<G, Node>
-where G::Timestamp: Lattice{
+where G::Timestamp: Lattice+differential_dataflow::Data{
 
     // descendants of tc_1:
     let tc_1_enter = tc_1.clone();
@@ -233,7 +233,7 @@ where G::Timestamp: Lattice{
     tc_2.map(|x| (x,x))
         .iterate(|scope, inner|
             edges_q2
-                .as_collection(|&k,&v| (v,k))
+                .as_collection(|&k,&v| (v, k))
                 .enter(&scope)
                 .join_core(inner.arrange_by_key(), |_,&y,&q| [(y,q)])
                 .concat(tc_2_enter.enter(&scope).map(|x| (x,x)))
@@ -252,7 +252,7 @@ where G::Timestamp: Lattice{
     let magic =
     sg_x.iterate(|scope, inner|
             edges_magic
-                .as_collection(|&k,&v| (v,k))
+                .as_collection(|&k,&v| (v, k))
                 .enter(&scope)
                 .semijoin(inner)
                 .map(|(_x,y)| y)

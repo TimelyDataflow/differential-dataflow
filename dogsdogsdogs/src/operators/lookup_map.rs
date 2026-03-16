@@ -10,7 +10,7 @@ use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable}
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::{BatchContainer, Coltainer};
 
 /// Proposes extensions to a stream of prefixes.
 ///
@@ -28,18 +28,19 @@ pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
 ) -> VecCollection<G, DOut, ROut>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: for<'a> TraceReader<
-        KeyOwn = K,
+    Tr: TraceReader<
+        Key = K,
         Time: std::hash::Hash,
-        Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
+        Diff : Monoid+ExchangeData,
     >+Clone+'static,
-    K: Hashable + Ord + 'static,
+    for<'a> Tr::Diff: Semigroup<columnar::Ref<'a, Tr::Diff>>,
+    K: Hashable + Ord + differential_dataflow::Data + 'static,
     F: FnMut(&D, &mut K)+Clone+'static,
     D: ExchangeData,
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid + 'static,
-    S: FnMut(&D, &R, Tr::Val<'_>, &Tr::Diff)->(DOut, ROut)+'static,
+    S: FnMut(&D, &R, columnar::Ref<'_, Tr::Val>, &Tr::Diff)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -91,17 +92,20 @@ where
 
                     let (mut cursor, storage) = trace.cursor();
                     // Key container to stage keys for comparison.
-                    let mut key_con = Tr::KeyContainer::with_capacity(1);
+                    let mut key_con = Coltainer::<Tr::Key>::with_capacity(1);
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !frontier2.less_equal(time) {
                             logic2(prefix, &mut key1);
                             key_con.clear(); key_con.push_own(&key1);
-                            cursor.seek_key(&storage, key_con.index(1));
-                            if cursor.get_key(&storage) == Some(key_con.index(1)) {
+                            cursor.seek_key(&storage, key_con.index(0));
+                            if cursor.get_key(&storage) == Some(key_con.index(0)) {
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::Diff::zero();
                                     cursor.map_times(&storage, |t, d| {
-                                        if Tr::owned_time(t).less_equal(time) { count.plus_equals(&d); }
+                                        if <Tr::Time as columnar::Columnar>::into_owned(t).less_equal(time) {
+                                            let d: Tr::Diff = columnar::Columnar::into_owned(d);
+                                            count.plus_equals(&d);
+                                        }
                                     });
                                     if !count.is_zero() {
                                         let (dout, rout) = output_func(prefix, diff, value, &count);

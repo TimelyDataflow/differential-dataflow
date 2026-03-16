@@ -96,12 +96,12 @@ impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
 
         arrange1
             .join_core(arrange2, |keys, vals1, vals2| {
-                Some(
-                    keys.iter().cloned()
-                        .chain(vals1.iter().cloned())
-                        .chain(vals2.iter().cloned())
-                        .collect()
-                )
+                use columnar::common::Index as ColumnarIndex;
+                let mut result = Vec::new();
+                for i in 0..keys.len() { result.push(columnar::Columnar::into_owned(keys.get(i))); }
+                for i in 0..vals1.len() { result.push(columnar::Columnar::into_owned(vals1.get(i))); }
+                for i in 0..vals2.len() { result.push(columnar::Columnar::into_owned(vals2.get(i))); }
+                Some(result)
             })
     }
 }

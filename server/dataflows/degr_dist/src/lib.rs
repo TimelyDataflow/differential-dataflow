@@ -16,7 +16,7 @@ pub fn build((dataflow, handles, probe, _timer, args): Environment) -> Result<()
         .get_mut::<Rc<RefCell<Option<TraceHandle>>>>(&args[0])?
         .borrow_mut().as_mut().unwrap()
         .import(dataflow)
-        .as_collection(|&src,_dst| src)
+        .as_collection(|src,_dst| src)
         .count_total()
         .map(|(_deg, cnt)| cnt as usize)
         .count_total()

@@ -44,7 +44,7 @@ fn main() {
                 let (labels, labels_collection) = Variable::new(inner, Product::new(Default::default(), 1));
 
                 let next =
-                labels_collection.join_core(edges, |_b, a, c| Some((*c, *a)))
+                labels_collection.join_core(edges, |_b, a: &Node, c: &Node| Some((*c, *a)))
                       .concat(nodes)
                       .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                     //   .distinct_total_core::<Diff>();

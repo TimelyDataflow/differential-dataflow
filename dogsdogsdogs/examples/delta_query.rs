@@ -55,9 +55,12 @@ fn main() {
                 // let reverse_key_neu = reverse_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
 
                 // let forward_self_alt = forward_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
-                let reverse_self_alt = reverse_self.clone().enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
-                let forward_self_neu = forward_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
-                let reverse_self_neu = reverse_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
+                fn to_alt(_: (&u32, &u32), _: (), t: usize) -> AltNeu<usize> { AltNeu::alt(t) }
+                fn to_neu(_: (&u32, &u32), _: (), t: usize) -> AltNeu<usize> { AltNeu::neu(t) }
+                fn prior(t: &AltNeu<usize>) -> usize { t.time.saturating_sub(1) }
+                let reverse_self_alt = reverse_self.clone().enter_at(inner, to_alt, prior);
+                let forward_self_neu = forward_self.enter_at(inner, to_neu, prior);
+                let reverse_self_neu = reverse_self.enter_at(inner, to_neu, prior);
 
                 // For each relation, we form a delta query driven by changes to that relation.
                 //
@@ -101,20 +104,20 @@ fn main() {
                     .clone()
                     .map(|(x,y)| (y,x))
                     .join_core(forward_key_neu, |b,a,c| Some(((*a, *c), *b)))
-                    .join_core(forward_self_neu.clone(), |(a,c), b, &()| Some((*a,*b,*c)));
+                    .join_core(forward_self_neu.clone(), |(a,c), b, _| Some((*a,*b,*c)));
 
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
                 let changes2 =
                 d_edges
                     .clone()
                     .join_core(reverse_key_alt, |b,c,a| Some(((*a, *c), *b)))
-                    .join_core(forward_self_neu, |(a,c), b, &()| Some((*a,*b,*c)));
+                    .join_core(forward_self_neu, |(a,c), b, _| Some((*a,*b,*c)));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
                 let changes3 =
                 d_edges
                     .join_core(forward_key_alt, |a,c,b| Some(((*c, *b), *a)))
-                    .join_core(reverse_self_alt, |(c,b), a, &()| Some((*a,*b,*c)));
+                    .join_core(reverse_self_alt, |(c,b), a, _| Some((*a,*b,*c)));
 
                 let next_changes = changes1.concat(changes2).concat(changes3).integrate();
 

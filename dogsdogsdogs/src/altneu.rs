@@ -14,7 +14,8 @@
 use serde::{Deserialize, Serialize};
 
 /// A pair of timestamps, partially ordered by the product order.
-#[derive(Debug, Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, columnar::Columnar)]
+#[columnar(derive(Eq, PartialEq, Ord, PartialOrd))]
 pub struct AltNeu<T> {
     pub time: T,
     pub neu: bool,  // alt < neu in timestamp comparisons.

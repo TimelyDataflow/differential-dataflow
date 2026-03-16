@@ -40,7 +40,7 @@ fn main() {
 
 fn triangles<G: Scope>(edges: VecCollection<G, Edge>) -> VecCollection<G, (Node, Node, Node)>
 where
-    G: Scope<Timestamp: Lattice+Hash+Ord>,
+    G: Scope<Timestamp: Lattice+Hash+Ord+differential_dataflow::Data>,
 {
     // only use forward-pointing edges.
     let edges = edges.filter(|&(src, dst)| src < dst);
@@ -56,8 +56,8 @@ where
                       .arrange_by_self();
 
     // extract ((src, dst), idx) tuples with weights equal to the number of extensions.
-    let cand_count1 = forward.clone().join_core(counts.clone(), |&src, &dst, &()| Some(((src, dst), 1)));
-    let cand_count2 = reverse.join_core(counts, |&dst, &src, &()| Some(((src, dst), 2)));
+    let cand_count1 = forward.clone().join_core(counts.clone(), |&src, &dst, _| Some(((src, dst), 1)));
+    let cand_count2 = reverse.join_core(counts, |&dst, &src, _| Some(((src, dst), 2)));
 
     // determine for each (src, dst) tuple which index would propose the fewest extensions.
     let winners = cand_count1.concat(cand_count2)
@@ -79,13 +79,13 @@ where
     let winners1 = winners.clone()
                           .flat_map(|((src, dst), index)| if index == 1 { Some((src, dst)) } else { None })
                           .join_core(forward.clone(), |&src, &dst, &ext| Some(((dst, ext), src)))
-                          .join_core(as_self.clone(), |&(dst, ext), &src, &()| Some(((dst, ext), src)))
+                          .join_core(as_self.clone(), |(&dst, &ext), &src, _| Some(((dst, ext), src)))
                           .map(|((dst, ext), src)| (src, dst, ext));
 
     // select tuples with the second relation minimizing the proposals, join, then intersect.
     let winners2 = winners.flat_map(|((src, dst), index)| if index == 2 { Some((dst, src)) } else { None })
                           .join_core(forward.clone(), |&dst, &src, &ext| Some(((src, ext), dst)))
-                          .join_core(as_self, |&(src, ext), &dst, &()| Some(((src, ext), dst)))
+                          .join_core(as_self, |(&src, &ext), &dst, _| Some(((src, ext), dst)))
                           .map(|((src, ext), dst)| (src, dst, ext));
 
     // collect and return results.

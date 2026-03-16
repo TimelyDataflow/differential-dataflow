@@ -64,20 +64,20 @@ fn main() {
 
                 // Q1: Point lookups on `state`:
                 q1  .arrange_by_self()
-                    .join_core(state_indexed.clone(), |&query, &(), &state| Some((query, state)))
+                    .join_core(state_indexed.clone(), |query, (), state| Some((query, state)))
                     .probe_with(&mut probe);
 
                 // Q2: One-hop lookups on `state`:
                 q2  .arrange_by_self()
-                    .join_core(graph_indexed.clone(), |&query, &(), &friend| Some((friend, query)))
-                    .join_core(state_indexed.clone(), |_friend, &query, &state| Some((query, state)))
+                    .join_core(graph_indexed.clone(), |query, (), friend| Some((friend, query)))
+                    .join_core(state_indexed.clone(), |_friend, query, state| Some((query, state)))
                     .probe_with(&mut probe);
 
                 // Q3: Two-hop lookups on `state`:
                 q3  .arrange_by_self()
-                    .join_core(graph_indexed.clone(), |&query, &(), &friend| Some((friend, query)))
-                    .join_core(graph_indexed.clone(), |_friend, &query, &friend2| Some((friend2, query)))
-                    .join_core(state_indexed, |_friend2, &query, &state| Some((query, state)))
+                    .join_core(graph_indexed.clone(), |query, (), friend| Some((friend, query)))
+                    .join_core(graph_indexed.clone(), |_friend, query, friend2| Some((friend2, query)))
+                    .join_core(state_indexed, |_friend2, query, state| Some((query, state)))
                     .probe_with(&mut probe);
 
                 // Q4: Shortest path queries:
@@ -93,20 +93,20 @@ fn main() {
 
                 // Q1: Point lookups on `state`:
                 q1  .arrange_by_self()
-                    .join_core(state.clone().arrange_by_key(), |&query, &(), &state| Some((query, state)))
+                    .join_core(state.clone().arrange_by_key(), |query, (), state| Some((query, state)))
                     .probe_with(&mut probe);
 
                 // Q2: One-hop lookups on `state`:
                 q2  .arrange_by_self()
-                    .join_core(graph.clone().arrange_by_key(), |&query, &(), &friend| Some((friend, query)))
-                    .join_core(state.clone().arrange_by_key(), |_friend, &query, &state| Some((query, state)))
+                    .join_core(graph.clone().arrange_by_key(), |query, (), friend| Some((friend, query)))
+                    .join_core(state.clone().arrange_by_key(), |_friend, query, state| Some((query, state)))
                     .probe_with(&mut probe);
 
                 // Q3: Two-hop lookups on `state`:
                 q3  .arrange_by_self()
-                    .join_core(graph.clone().arrange_by_key(), |&query, &(), &friend| Some((friend, query)))
-                    .join_core(graph.clone().arrange_by_key(), |_friend, &query, &friend2| Some((friend2, query)))
-                    .join_core(state.arrange_by_key(), |_friend2, &query, &state| Some((query, state)))
+                    .join_core(graph.clone().arrange_by_key(), |query, (), friend| Some((friend, query)))
+                    .join_core(graph.clone().arrange_by_key(), |_friend, query, friend2| Some((friend2, query)))
+                    .join_core(state.arrange_by_key(), |_friend2, query, state| Some((query, state)))
                     .probe_with(&mut probe);
 
                 // Q4: Shortest path queries:
@@ -298,19 +298,19 @@ fn three_hop<G: Scope>(
     forward_graph: Arrange<G, Node, Node, isize>,
     reverse_graph: Arrange<G, Node, Node, isize>,
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: Lattice+Ord+differential_dataflow::Data {
 
     let sources = goals.clone().map(|(x,_)| x);
     let targets = goals.map(|(_,y)| y);
 
     // Q3: Two-hop lookups on `state`:
     let forward0 = sources.map(|x| (x, (x,0)));
-    let forward1 = forward0.clone().join_core(forward_graph.clone(), |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
-    let forward2 = forward1.clone().join_core(forward_graph, |&_, &(source,dist), &friend| Some((friend, (source, dist+1))));
+    let forward1 = forward0.clone().join_core(forward_graph.clone(), { fn step(_: usize, val: (usize, &u32), friend: usize) -> Option<(usize, (usize, u32))> { Some((friend, (val.0, *val.1+1))) } step });
+    let forward2 = forward1.clone().join_core(forward_graph, { fn step(_: usize, val: (usize, &u32), friend: usize) -> Option<(usize, (usize, u32))> { Some((friend, (val.0, *val.1+1))) } step });
 
     let reverse0 = targets.map(|x| (x, (x,0)));
-    let reverse1 = reverse0.clone().join_core(reverse_graph.clone(), |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
-    let reverse2 = reverse1.clone().join_core(reverse_graph, |&_, &(target,dist), &friend| Some((friend, (target, dist+1))));
+    let reverse1 = reverse0.clone().join_core(reverse_graph.clone(), { fn step(_: usize, val: (usize, &u32), friend: usize) -> Option<(usize, (usize, u32))> { Some((friend, (val.0, *val.1+1))) } step });
+    let reverse2 = reverse1.clone().join_core(reverse_graph, { fn step(_: usize, val: (usize, &u32), friend: usize) -> Option<(usize, (usize, u32))> { Some((friend, (val.0, *val.1+1))) } step });
 
     let forward = forward0.concat(forward1).concat(forward2);
     let reverse = reverse0.concat(reverse1).concat(reverse2);
@@ -325,7 +325,7 @@ fn _bidijkstra<G: Scope>(
     forward_graph: Arrange<G, Node, Node, isize>,
     reverse_graph: Arrange<G, Node, Node, isize>,
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: Lattice+Ord+differential_dataflow::Data {
 
     goals.scope().iterative::<Iter,_,_>(|inner| {
 
@@ -349,7 +349,7 @@ where G::Timestamp: Lattice+Ord {
         let reached =
         forward_collection.clone()
             .join_map(reverse_collection.clone(), |_, &(src,d1), &(dst,d2)| ((src, dst), d1 + d2))
-            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
+            .reduce(|_key, s, t: &mut Vec<(u32, isize)>| t.push((*s[0].0, 1)))
             .semijoin(goals.clone());
 
         let active =
@@ -366,10 +366,10 @@ where G::Timestamp: Lattice+Ord {
             .map(|(med, (src, dist))| (src, (med, dist)))
             .semijoin(forward_active)
             .map(|(src, (med, dist))| (med, (src, dist)))
-            .join_core(forward_graph, |_med, &(src, dist), &next| Some((next, (src, dist+1))))
+            .join_core(forward_graph, { fn step(_: usize, val: (usize, &u32), next: usize) -> Option<(usize, (usize, u32))> { Some((next, (val.0, *val.1+1))) } step })
             .concat(forward_collection)
             .map(|(next, (src, dist))| ((next, src), dist))
-            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
+            .reduce(|_key, s, t: &mut Vec<(u32, isize)>| t.push((*s[0].0, 1)))
             .map(|((next, src), dist)| (next, (src, dist)));
 
         forward.set(forward_next);
@@ -381,10 +381,10 @@ where G::Timestamp: Lattice+Ord {
             .map(|(med, (rev, dist))| (rev, (med, dist)))
             .semijoin(reverse_active)
             .map(|(rev, (med, dist))| (med, (rev, dist)))
-            .join_core(reverse_graph, |_med, &(rev, dist), &next| Some((next, (rev, dist+1))))
+            .join_core(reverse_graph, { fn step(_: usize, val: (usize, &u32), next: usize) -> Option<(usize, (usize, u32))> { Some((next, (val.0, *val.1+1))) } step })
             .concat(reverse_collection)
             .map(|(next, (rev, dist))| ((next, rev), dist))
-            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
+            .reduce(|_key, s, t: &mut Vec<(u32, isize)>| t.push((*s[0].0, 1)))
             .map(|((next,rev), dist)| (next, (rev, dist)));
 
         reverse.set(reverse_next);

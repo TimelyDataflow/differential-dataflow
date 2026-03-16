@@ -171,7 +171,8 @@ fn main() {
 mod pair {
 
     /// A pair of timestamps, partially ordered by the product order.
-    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, columnar::Columnar)]
+    #[columnar(derive(Eq, PartialEq, Ord, PartialOrd))]
     pub struct Pair<S, T> {
         pub first: S,
         pub second: T,
