@@ -79,7 +79,7 @@ fn main() {
 // to its PageRank in the input graph `edges`.
 fn pagerank<G>(iters: Iter, edges: VecCollection<G, Edge, Diff>) -> VecCollection<G, Node, Diff>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+columnar::Columnar>,
 {
     // initialize many surfers at each node.
     let nodes =

@@ -40,7 +40,7 @@ fn main() {
 
 fn triangles<G: Scope>(edges: VecCollection<G, Edge>) -> VecCollection<G, (Node, Node, Node)>
 where
-    G: Scope<Timestamp: Lattice+Hash+Ord>,
+    G: Scope<Timestamp: Lattice+Hash+Ord+columnar::Columnar>,
 {
     // only use forward-pointing edges.
     let edges = edges.filter(|&(src, dst)| src < dst);

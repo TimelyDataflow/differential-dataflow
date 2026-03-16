@@ -136,7 +136,7 @@ fn main() {
 mod pair {
 
     /// A pair of timestamps, partially ordered by the product order.
-    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, columnar::Columnar)]
     pub struct Pair<S, T> {
         pub first: S,
         pub second: T,
@@ -223,7 +223,7 @@ mod vector {
     use serde::{Deserialize, Serialize};
 
     /// A pair of timestamps, partially ordered by the product order.
-    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize)]
+    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize, columnar::Columnar)]
     pub struct Vector<T> {
         pub vector: Vec<T>,
     }

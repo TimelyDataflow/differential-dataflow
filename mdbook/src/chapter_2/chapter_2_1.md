@@ -11,7 +11,7 @@ As an example, our example program used `map` to reverse the pairs of identifier
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
-# where G::Timestamp: Lattice
+# where G::Timestamp: Lattice + columnar::Columnar
 # {
     manages
         .clone()
@@ -30,7 +30,7 @@ If instead we had just written
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
-# where G::Timestamp: Lattice
+# where G::Timestamp: Lattice + columnar::Columnar
 # {
     manages
         .map(|(m2, m1)| m2);

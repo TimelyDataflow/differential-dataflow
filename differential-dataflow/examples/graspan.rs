@@ -79,7 +79,7 @@ type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Tim
 ///
 /// An edge variable provides arranged representations of its contents, even before they are
 /// completely defined, in support of recursively defined productions.
-pub struct EdgeVariable<G: Scope<Timestamp: Lattice>> {
+pub struct EdgeVariable<G: Scope<Timestamp: Lattice+columnar::Columnar>> {
     variable: VecVariable<G, Edge, Diff>,
     collection: VecCollection<G, Edge, Diff>,
     current: VecCollection<G, Edge, Diff>,
@@ -87,7 +87,7 @@ pub struct EdgeVariable<G: Scope<Timestamp: Lattice>> {
     reverse: Option<Arrange<G, Node, Node, Diff>>,
 }
 
-impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
+impl<G: Scope<Timestamp: Lattice+columnar::Columnar>> EdgeVariable<G> {
     /// Creates a new variable initialized with `source`.
     pub fn from(source: VecCollection<G, Edge>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
         let (variable, collection) = VecVariable::new(&mut source.scope(), step);
@@ -129,7 +129,7 @@ impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
 }
 
 /// Handles to inputs and outputs of a computation.
-pub struct RelationHandles<T: Timestamp+Lattice> {
+pub struct RelationHandles<T: Timestamp+Lattice+columnar::Columnar> {
     /// An input handle supporting arbitrary changes.
     pub input: InputSession<T, Edge, Diff>,
     /// An output trace handle which can be used in other computations.
@@ -153,7 +153,7 @@ impl Query {
     /// Creates a dataflow implementing the query, and returns input and trace handles.
     pub fn render_in<G>(&self, scope: &mut G) -> BTreeMap<String, RelationHandles<G::Timestamp>>
     where
-        G: Scope<Timestamp: Lattice+::timely::order::TotalOrder>,
+        G: Scope<Timestamp: Lattice+columnar::Columnar+::timely::order::TotalOrder>,
     {
         // Create new input (handle, stream) pairs
         let mut input_map = BTreeMap::new();

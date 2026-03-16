@@ -11,7 +11,7 @@ use differential_dataflow::lattice::Lattice;
 type Node = u32;
 type Edge = (Node, Node);
 
-#[derive(Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+#[derive(Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash, columnar::Columnar)]
 pub struct MinSum {
     value: u32,
 }
@@ -124,7 +124,7 @@ fn main() {
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn bfs<G>(edges: VecCollection<G, Edge, MinSum>, roots: VecCollection<G, Node, MinSum>) -> VecCollection<G, Node, MinSum>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
 {
     // repeatedly update minimal distances each node can be reached from each root
     roots.scope().iterative::<u32,_,_>(|scope| {

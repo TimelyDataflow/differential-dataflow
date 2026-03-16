@@ -12,7 +12,7 @@ As an example, we can take our `manages` relation and determine for all employee
 # use differential_dataflow::operators::Iterate;
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
-# where G::Timestamp: Lattice
+# where G::Timestamp: Lattice + columnar::Columnar
 # {
     manages   // transitive contains (manager, person) for many hops.
         .iterate(|_scope, transitive| {
@@ -49,7 +49,7 @@ In the example above, we could rewrite
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
-# where G::Timestamp: Lattice
+# where G::Timestamp: Lattice + columnar::Columnar
 # {
     manages   // transitive contains (manager, person) for many hops.
         .clone()
@@ -91,12 +91,12 @@ As an example, the implementation of the `iterate` operator looks something like
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
 # fn logic<'a, G: Scope>(collection: VecCollection<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>
-# where G::Timestamp: Lattice
+# where G::Timestamp: Lattice + columnar::Columnar
 # {
 #     collection
 # }
 # fn example<'a, G: Scope<Timestamp=u64>>(collection: VecCollection<G, (u64, u64)>) //, logic: impl Fn(&VecVariable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>)
-#    where G::Timestamp: Lattice
+#    where G::Timestamp: Lattice + columnar::Columnar
 # {
     collection.scope().scoped("inner", |subgraph| {
         let (variable, collection) = VecVariable::new_from(collection.enter(subgraph), 1);

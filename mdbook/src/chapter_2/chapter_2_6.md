@@ -11,7 +11,7 @@ For example, to produce for each manager their managee with the lowest identifie
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: VecCollection<G, (u64, u64), i64>)
-# where G::Timestamp: Lattice
+# where G::Timestamp: Lattice + columnar::Columnar
 # {
     manages
         .reduce(|_key, input, output| {

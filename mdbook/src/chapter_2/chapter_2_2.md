@@ -11,7 +11,7 @@ As an example, we might select out those management relation where the manager h
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
-# where G::Timestamp: Lattice
+# where G::Timestamp: Lattice + columnar::Columnar
 # {
     manages
         .filter(|&(m2, m1)| m2 > m1);

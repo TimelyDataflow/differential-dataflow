@@ -33,7 +33,7 @@ pub trait HashOrdered: Hashable { }
 impl<'a, T: std::hash::Hash + HashOrdered> HashOrdered for &'a T { }
 
 /// A hash-ordered wrapper that modifies `Ord` and `PartialOrd`.
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default, Serialize, Deserialize, columnar::Columnar)]
 pub struct HashWrapper<T: std::hash::Hash + Hashable> {
     /// The inner value, freely modifiable.
     pub inner: T

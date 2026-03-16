@@ -13,7 +13,7 @@ As an example, if we were to inspect
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
-# where G::Timestamp: Lattice
+# where G::Timestamp: Lattice + columnar::Columnar
 # {
     manages
         .clone()
@@ -39,7 +39,7 @@ However, by introducing `consolidate`
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
 # fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
-# where G::Timestamp: Lattice
+# where G::Timestamp: Lattice + columnar::Columnar
 # {
     manages
         .clone()
