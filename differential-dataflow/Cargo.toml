@@ -28,7 +28,6 @@ mimalloc = "0.1.48"
 
 [dependencies]
 columnar = { workspace = true }
-columnation = "0.1.1"
 fnv="1.0.2"
 paste = "1.0"
 serde = { version = "1.0", features = ["derive"] }

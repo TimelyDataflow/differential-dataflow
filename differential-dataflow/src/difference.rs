@@ -181,10 +181,6 @@ mod present {
     impl super::Semigroup for Present {
         fn plus_equals(&mut self, _rhs: &Self) { }
     }
-
-    impl columnation::Columnation for Present {
-       type InnerRegion = columnation::CopyRegion<Present>;
-    }
 }
 
 // Pair implementations.
