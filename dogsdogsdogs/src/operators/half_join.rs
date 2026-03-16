@@ -49,7 +49,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::trace::implementations::BatchContainer;
 
 /// A binary equijoin that responds to updates on only its first input.
 ///
@@ -330,7 +329,7 @@ where
     let mut key_con = Vec::<Tr::Key>::with_capacity(1);
     let mut time_con = Vec::<Tr::Time>::with_capacity(1);
     for time in frontier.iter() {
-        time_con.push_own(time);
+        time_con.push(time.clone());
     }
 
     // Process proposals one at a time, stopping if we should yield.
@@ -338,7 +337,7 @@ where
         // Use TOTAL ORDER to allow the release of `time`.
         yielded = yielded || yield_function(timer, *work);
 
-        if !yielded && !(0 .. time_con.len()).any(|i| comparison(time_con.index(i), initial)) {
+        if !yielded && !(0 .. time_con.len()).any(|i| comparison(&time_con[i], initial)) {
             key_con.clear(); key_con.push(key.clone());
             cursor.seek_key(&storage, &key_con[0]);
             if cursor.get_key(&storage) == key_con.get(0) {

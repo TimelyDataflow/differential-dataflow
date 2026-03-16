@@ -10,7 +10,6 @@ use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable}
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::trace::implementations::BatchContainer;
 
 /// Proposes extensions to a stream of prefixes.
 ///
