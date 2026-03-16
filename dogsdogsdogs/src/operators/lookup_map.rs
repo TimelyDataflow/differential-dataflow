@@ -28,10 +28,11 @@ pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
 ) -> VecCollection<G, DOut, ROut>
 where
     G: Scope<Timestamp=Tr::Time>,
+    K: Clone,
     Tr: for<'a> TraceReader<
-        KeyOwn = K,
+        Key = K,
         Time: std::hash::Hash,
-        Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
+        Diff : Semigroup<&'a Tr::Diff>+Monoid+ExchangeData,
     >+Clone+'static,
     K: Hashable + Ord + 'static,
     F: FnMut(&D, &mut K)+Clone+'static,
@@ -39,7 +40,7 @@ where
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid + 'static,
-    S: FnMut(&D, &R, Tr::Val<'_>, &Tr::Diff)->(DOut, ROut)+'static,
+    S: FnMut(&D, &R, &Tr::Val, &Tr::Diff)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -91,17 +92,17 @@ where
 
                     let (mut cursor, storage) = trace.cursor();
                     // Key container to stage keys for comparison.
-                    let mut key_con = Tr::KeyContainer::with_capacity(1);
+                    let mut key_con = Vec::<Tr::Key>::with_capacity(1);
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !frontier2.less_equal(time) {
                             logic2(prefix, &mut key1);
-                            key_con.clear(); key_con.push_own(&key1);
-                            cursor.seek_key(&storage, key_con.index(1));
-                            if cursor.get_key(&storage) == Some(key_con.index(1)) {
+                            key_con.clear(); key_con.push(key1.clone());
+                            cursor.seek_key(&storage, &key_con[1]);
+                            if cursor.get_key(&storage) == Some(&key_con[1]) {
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::Diff::zero();
                                     cursor.map_times(&storage, |t, d| {
-                                        if Tr::owned_time(t).less_equal(time) { count.plus_equals(&d); }
+                                        if t.clone().less_equal(time) { count.plus_equals(&d); }
                                     });
                                     if !count.is_zero() {
                                         let (dout, rout) = output_func(prefix, diff, value, &count);

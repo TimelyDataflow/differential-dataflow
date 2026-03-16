@@ -85,14 +85,14 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<KeyOwn = K, Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Key = K, Time: std::hash::Hash>+Clone+'static,
     R: Mul<Tr::Diff, Output: Semigroup>,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
-    CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
+    CF: Fn(&Tr::Time, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
-    S: FnMut(&K, &V, Tr::Val<'_>)->DOut+'static,
+    S: FnMut(&K, &V, &Tr::Val)->DOut+'static,
 {
-    let output_func = move |session: &mut SessionFor<G, _>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &G::Timestamp, diff1: &R, output: &mut Vec<(G::Timestamp, Tr::Diff)>| {
+    let output_func = move |session: &mut SessionFor<G, _>, k: &K, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, diff1: &R, output: &mut Vec<(G::Timestamp, Tr::Diff)>| {
         for (time, diff2) in output.drain(..) {
             let diff = diff1.clone() * diff2.clone();
             let dout = (output_func(k, v1, v2), time.clone());
@@ -151,11 +151,11 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<KeyOwn = K, Time: std::hash::Hash>+Clone+'static,
+    Tr: for<'a> TraceReader<Key = K, Time: std::hash::Hash>+Clone+'static,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
-    CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
+    CF: Fn(&Tr::Time, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
+    S: FnMut(&mut SessionFor<G, CB>, &K, &V, &Tr::Val, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
 {
     // No need to block physical merging for this operator.
@@ -312,12 +312,12 @@ fn process_proposals<G, Tr, CF, Y, S, CB, K, V, R>(
 ) -> bool
 where
     G: Scope<Timestamp = Tr::Time>,
-    Tr: for<'a> TraceReader<KeyOwn = K>,
-    CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
+    Tr: for<'a> TraceReader<Key = K>,
+    CF: Fn(&Tr::Time, &Tr::Time) -> bool + 'static,
     Y: Fn(Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
+    S: FnMut(&mut SessionFor<G, CB>, &K, &V, &Tr::Val, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
-    K: Ord,
+    K: Ord + Clone + 'static,
     V: Ord,
     R: Monoid,
 {
@@ -327,8 +327,8 @@ where
     let (mut cursor, storage) = trace.cursor();
     let mut yielded = false;
 
-    let mut key_con = Tr::KeyContainer::with_capacity(1);
-    let mut time_con = Tr::TimeContainer::with_capacity(1);
+    let mut key_con = Vec::<Tr::Key>::with_capacity(1);
+    let mut time_con = Vec::<Tr::Time>::with_capacity(1);
     for time in frontier.iter() {
         time_con.push_own(time);
     }
@@ -339,15 +339,15 @@ where
         yielded = yielded || yield_function(timer, *work);
 
         if !yielded && !(0 .. time_con.len()).any(|i| comparison(time_con.index(i), initial)) {
-            key_con.clear(); key_con.push_own(&key);
-            cursor.seek_key(&storage, key_con.index(0));
+            key_con.clear(); key_con.push(key.clone());
+            cursor.seek_key(&storage, &key_con[0]);
             if cursor.get_key(&storage) == key_con.get(0) {
                 while let Some(val2) = cursor.get_val(&storage) {
                     cursor.map_times(&storage, |t, d| {
                         if comparison(t, initial) {
-                            let mut t = Tr::owned_time(t);
+                            let mut t = t.clone();
                             t.join_assign(time);
-                            output_buffer.push((t, Tr::owned_diff(d)))
+                            output_buffer.push((t, d.clone()))
                         }
                     });
                     consolidate(&mut output_buffer);
