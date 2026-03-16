@@ -109,18 +109,21 @@ impl<B: BatchReader> BatchFrontier<B> {
 }
 
 /// Wrapper to provide cursor to nested scope.
-pub struct CursorFrontier<C, T> {
+pub struct CursorFrontier<C, T: columnar::Columnar> {
     cursor: C,
     since: Antichain<T>,
-    until: Antichain<T>
+    until: Antichain<T>,
+    /// Container for synthesized times, used by `map_times`.
+    times: T::Container,
 }
 
-impl<C, T: Clone> CursorFrontier<C, T> {
+impl<C, T: Clone + columnar::Columnar> CursorFrontier<C, T> {
     fn new(cursor: C, since: AntichainRef<T>, until: AntichainRef<T>) -> Self {
         CursorFrontier {
             cursor,
             since: since.to_owned(),
             until: until.to_owned(),
+            times: Default::default(),
         }
     }
 }
@@ -145,22 +148,26 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
 
     #[inline]
     fn map_times<L: FnMut(columnar::Ref<'_, Self::Time>, columnar::Ref<'_, Self::Diff>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        // TODO: The frontier cursor advances times by the `since` frontier and filters by `until`.
-        // This produces an owned C::Time value, but we need to pass it as columnar::Ref<'_, C::Time>.
-        // There is no generic Columnar method to convert owned -> Ref without a container.
+        use columnar::{Push, Clear, Borrow, Index};
         let since = self.since.borrow();
         let until = self.until.borrow();
-        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
+        self.times.clear();
+        let mut diffs = Vec::new();
         self.cursor.map_times(storage, |time, diff| {
-            temp = <C::Time as columnar::Columnar>::into_owned(time);
+            let mut temp = <C::Time as columnar::Columnar>::into_owned(time);
             temp.advance_by(since);
             if !until.less_equal(&temp) {
-                // FIXME: Need to convert &temp (owned C::Time) to columnar::Ref<'_, C::Time>.
-                // This requires a Columnar::as_ref or similar facility.
-                let _ = diff;
-                todo!("frontier cursor map_times needs design work for columnar refs")
+                self.times.push(&temp);
+                diffs.push(<C::Diff as columnar::Columnar>::into_owned(diff));
             }
-        })
+        });
+        let times_borrowed = self.times.borrow();
+        for (i, diff_owned) in diffs.iter().enumerate() {
+            
+            let mut diff_container = <C::Diff as columnar::Columnar>::Container::default();
+            columnar::Push::push(&mut diff_container, diff_owned);
+            logic(times_borrowed.get(i), diff_container.borrow().get(0));
+        }
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
@@ -180,6 +187,8 @@ pub struct BatchCursorFrontier<C: Cursor> {
     cursor: C,
     since: Antichain<C::Time>,
     until: Antichain<C::Time>,
+    /// Container for synthesized times, used by `map_times`.
+    times: <C::Time as columnar::Columnar>::Container,
 }
 
 impl<C: Cursor> BatchCursorFrontier<C> {
@@ -188,6 +197,7 @@ impl<C: Cursor> BatchCursorFrontier<C> {
             cursor,
             since: since.to_owned(),
             until: until.to_owned(),
+            times: Default::default(),
         }
     }
 }
@@ -212,18 +222,26 @@ impl<C: Cursor<Storage: BatchReader>> Cursor for BatchCursorFrontier<C> {
 
     #[inline]
     fn map_times<L: FnMut(columnar::Ref<'_, Self::Time>, columnar::Ref<'_, Self::Diff>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        // Same TODO as CursorFrontier::map_times above.
+        use columnar::{Push, Clear, Borrow, Index};
         let since = self.since.borrow();
         let until = self.until.borrow();
-        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
+        self.times.clear();
+        let mut diffs = Vec::new();
         self.cursor.map_times(&storage.batch, |time, diff| {
-            temp = <C::Time as columnar::Columnar>::into_owned(time);
+            let mut temp = <C::Time as columnar::Columnar>::into_owned(time);
             temp.advance_by(since);
             if !until.less_equal(&temp) {
-                let _ = diff;
-                todo!("frontier batch cursor map_times needs design work for columnar refs")
+                self.times.push(&temp);
+                diffs.push(<C::Diff as columnar::Columnar>::into_owned(diff));
             }
-        })
+        });
+        let times_borrowed = self.times.borrow();
+        for (i, diff_owned) in diffs.iter().enumerate() {
+            
+            let mut diff_container = <C::Diff as columnar::Columnar>::Container::default();
+            columnar::Push::push(&mut diff_container, diff_owned);
+            logic(times_borrowed.get(i), diff_container.borrow().get(0));
+        }
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }

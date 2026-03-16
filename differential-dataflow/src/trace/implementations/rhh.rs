@@ -16,7 +16,7 @@ use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
-use super::{Update, Coltainer, OffsetList};
+use super::Update;
 
 use self::val_batch::{RhhValBatch, RhhValBuilder};
 
@@ -71,12 +71,12 @@ mod val_batch {
 
     use std::convert::TryInto;
     use std::marker::PhantomData;
-    use timely::container::PushInto;
+    
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::hashable::Hashable;
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, Data, Coltainer, OffsetList};
+    use crate::trace::implementations::{BatchContainer, Coltainer, OffsetList};
 
     use super::{Update, HashOrdered};
 

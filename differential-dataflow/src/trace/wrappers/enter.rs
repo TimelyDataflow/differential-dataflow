@@ -150,16 +150,17 @@ where
 }
 
 /// Wrapper to provide cursor to nested scope.
-pub struct CursorEnter<C, TInner> {
-    phantom: ::std::marker::PhantomData<TInner>,
+pub struct CursorEnter<C: Cursor, TInner: columnar::Columnar> {
     cursor: C,
+    /// Container for synthesized times, used by `map_times`.
+    times: TInner::Container,
 }
 
-impl<C, TInner> CursorEnter<C, TInner> {
+impl<C: Cursor, TInner: columnar::Columnar> CursorEnter<C, TInner> {
     fn new(cursor: C) -> Self {
         CursorEnter {
-            phantom: ::std::marker::PhantomData,
             cursor,
+            times: Default::default(),
         }
     }
 }
@@ -186,17 +187,24 @@ where
 
     #[inline]
     fn map_times<L: FnMut(columnar::Ref<'_, TInner>, columnar::Ref<'_, Self::Diff>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        // TODO: The enter cursor creates new TInner values by converting from the outer time.
-        // This requires TInner to be stored somewhere so we can return a columnar::Ref to it.
-        // For now this is a compilation placeholder that will need a design solution.
-        // One approach: store a TInner container in the cursor and push/borrow from it.
+        use columnar::{Clear, Borrow, Index};
+        // Collect synthesized times into a container, then replay with refs.
+        self.times.clear();
+        let mut diffs = Vec::new();
         self.cursor.map_times(storage, |time, diff| {
             let inner_time = TInner::to_inner(<C::Time as columnar::Columnar>::into_owned(time));
-            // FIXME: We need to return a columnar::Ref<'_, TInner> but we have an owned TInner.
-            // This won't compile until we solve the owned→ref problem for synthesized times.
-            let _ = (inner_time, diff);
-            todo!("enter cursor map_times needs design work for columnar refs")
-        })
+            <TInner::Container as columnar::Push<&TInner>>::push(&mut self.times, &inner_time);
+            diffs.push(<C::Diff as columnar::Columnar>::into_owned(diff));
+        });
+        let times_borrowed = self.times.borrow();
+        for (i, diff_owned) in diffs.iter().enumerate() {
+            // Push diff into a temporary container to get a Ref.
+
+            
+            let mut diff_container = <C::Diff as columnar::Columnar>::Container::default();
+            columnar::Push::push(&mut diff_container, diff_owned);
+            logic(times_borrowed.get(i), diff_container.borrow().get(0));
+        }
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
@@ -210,16 +218,17 @@ where
 }
 
 /// Wrapper to provide cursor to nested scope.
-pub struct BatchCursorEnter<C, TInner> {
-    phantom: ::std::marker::PhantomData<TInner>,
+pub struct BatchCursorEnter<C: Cursor, TInner: columnar::Columnar> {
     cursor: C,
+    /// Container for synthesized times, used by `map_times`.
+    times: TInner::Container,
 }
 
-impl<C, TInner> BatchCursorEnter<C, TInner> {
+impl<C: Cursor, TInner: columnar::Columnar> BatchCursorEnter<C, TInner> {
     fn new(cursor: C) -> Self {
         BatchCursorEnter {
-            phantom: ::std::marker::PhantomData,
             cursor,
+            times: Default::default(),
         }
     }
 }
@@ -245,12 +254,21 @@ where
 
     #[inline]
     fn map_times<L: FnMut(columnar::Ref<'_, TInner>, columnar::Ref<'_, Self::Diff>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        // Same TODO as CursorEnter::map_times above.
+        use columnar::{Clear, Borrow, Index};
+        self.times.clear();
+        let mut diffs = Vec::new();
         self.cursor.map_times(&storage.batch, |time, diff| {
             let inner_time = TInner::to_inner(<C::Time as columnar::Columnar>::into_owned(time));
-            let _ = (inner_time, diff);
-            todo!("enter cursor map_times needs design work for columnar refs")
-        })
+            <TInner::Container as columnar::Push<&TInner>>::push(&mut self.times, &inner_time);
+            diffs.push(<C::Diff as columnar::Columnar>::into_owned(diff));
+        });
+        let times_borrowed = self.times.borrow();
+        for (i, diff_owned) in diffs.iter().enumerate() {
+            
+            let mut diff_container = <C::Diff as columnar::Columnar>::Container::default();
+            columnar::Push::push(&mut diff_container, diff_owned);
+            logic(times_borrowed.get(i), diff_container.borrow().get(0));
+        }
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }

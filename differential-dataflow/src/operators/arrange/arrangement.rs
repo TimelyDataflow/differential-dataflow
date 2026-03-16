@@ -30,7 +30,6 @@ use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, BatchReader, Batcher, Builder, Cursor};
-use crate::trace::implementations::Coltainer;
 use crate::trace::implementations::merge_batcher::container::MergerChunk;
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};

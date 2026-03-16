@@ -383,7 +383,7 @@ mod history_replay {
 
     use crate::lattice::Lattice;
     use crate::trace::Cursor;
-    use crate::trace::implementations::Coltainer;
+    
     use crate::operators::ValueHistory;
 
     use super::{PerKeyCompute, sort_dedup};

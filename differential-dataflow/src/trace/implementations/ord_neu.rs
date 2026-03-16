@@ -15,7 +15,7 @@ use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::rc_blanket_impls::RcBuilder;
 
-use super::{Update, Data, Coltainer, OffsetList};
+use super::Update;
 
 pub use self::val_batch::{OrdValBatch, OrdValBuilder};
 pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
@@ -217,11 +217,11 @@ pub mod layers {
 pub mod val_batch {
 
     use std::marker::PhantomData;
-    use timely::container::PushInto;
+    
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, Data, Coltainer, OffsetList};
+    use crate::trace::implementations::{BatchContainer, Coltainer, OffsetList};
     use super::{Update, Vals, Upds, layers::UpdsBuilder};
 
     /// Storage for an ordered collection of `(key, val, time, diff)` updates.
@@ -628,11 +628,11 @@ pub mod val_batch {
 pub mod key_batch {
 
     use std::marker::PhantomData;
-    use timely::container::PushInto;
+    
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, Data, Coltainer, OffsetList};
+    use crate::trace::implementations::{BatchContainer, Coltainer, OffsetList};
     use super::{Update, Upds, layers::UpdsBuilder};
 
     /// Storage for an ordered collection of `(key, time, diff)` updates.
