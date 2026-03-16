@@ -15,7 +15,7 @@ use super::propagate::propagate;
 /// Iteratively removes nodes with no in-edges.
 pub fn trim<G, N, R>(graph: VecCollection<G, (N,N), R>) -> VecCollection<G, (N,N), R>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Scope<Timestamp: Lattice+Ord+crate::Data>,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
@@ -35,7 +35,7 @@ where
 /// Returns the subset of edges in the same strongly connected component.
 pub fn strongly_connected<G, N, R>(graph: VecCollection<G, (N,N), R>) -> VecCollection<G, (N,N), R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Scope<Timestamp: Lattice+Ord+Hash+crate::Data>,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
@@ -51,7 +51,7 @@ where
 fn trim_edges<G, N, R>(cycle: VecCollection<G, (N,N), R>, edges: VecCollection<G, (N,N), R>)
     -> VecCollection<G, (N,N), R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Scope<Timestamp: Lattice+Ord+Hash+crate::Data>,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
@@ -66,7 +66,7 @@ where
     let labels = propagate(cycle, nodes);
 
     edges.join_map(labels.clone(), |e1,e2,l1| (e2.clone(),(e1.clone(),l1.clone())))
-         .join_map(labels, |e2,(e1,l1),l2| ((e1.clone(),e2.clone()),(l1.clone(),l2.clone())))
+         .join_map(labels, |e2,&(ref e1, ref l1),l2| ((e1.clone(),e2.clone()),(l1.clone(),l2.clone())))
          .filter(|(_,(l1,l2))| l1 == l2)
          .map(|((x1,x2),_)| (x2,x1))
 }

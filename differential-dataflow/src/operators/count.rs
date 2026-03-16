@@ -44,7 +44,8 @@ pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeDat
 
 impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for VecCollection<G, K, R>
 where
-    G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
+    G: Scope<Timestamp: TotalOrder+Lattice+Ord+crate::Data>,
+    R: for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
     fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")
@@ -55,11 +56,11 @@ where
 impl<G, K, T1> CountTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<
-        Key<'a> = &'a K,
-        Val<'a>=&'a (),
+    T1: TraceReader<
+        Key = K,
+        Val = (),
         Time: TotalOrder,
-        Diff: ExchangeData+Semigroup<T1::DiffGat<'a>>
+        Diff: ExchangeData,
     >+Clone+'static,
     K: ExchangeData,
 {
@@ -108,23 +109,25 @@ where
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
+                                let diff = <T1::Diff as columnar::Columnar>::into_owned(diff);
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(T1::owned_diff(diff)); }
+                                if count.is_none() { count = Some(diff); }
                             });
                         }
 
                         batch_cursor.map_times(&batch_storage, |time, diff| {
 
+                            let diff = <T1::Diff as columnar::Columnar>::into_owned(diff);
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.clone(), count.clone()), T1::owned_time(time), R2::from(-1i8)));
+                                    session.give(((<T1::Key as columnar::Columnar>::into_owned(key), count.clone()), <T1::Time as columnar::Columnar>::into_owned(time), R2::from(-1i8)));
                                 }
                             }
                             count.as_mut().map(|c| c.plus_equals(&diff));
-                            if count.is_none() { count = Some(T1::owned_diff(diff)); }
+                            if count.is_none() { count = Some(diff); }
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.clone(), count.clone()), T1::owned_time(time), R2::from(1i8)));
+                                    session.give(((<T1::Key as columnar::Columnar>::into_owned(key), count.clone()), <T1::Time as columnar::Columnar>::into_owned(time), R2::from(1i8)));
                                 }
                             }
                         });

@@ -32,7 +32,7 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
 
 impl<G, D, R> Identifiers<G, D, R> for VecCollection<G, D, R>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+crate::Data>,
     D: ExchangeData + ::std::hash::Hash,
     R: ExchangeData + Abelian,
 {
@@ -64,19 +64,19 @@ where
                     .map(|pair| (pair.hashed(), pair))
                     .reduce(|_hash, input, output| {
                         // keep round-positive records as changes.
-                        let ((round, record), count) = &input[0];
-                        if *round > 0 {
+                        let (&(round, ref record), ref count) = input[0];
+                        if round > 0 {
                             let mut neg_count = count.clone();
                             neg_count.negate();
-                            output.push(((0, record.clone()), neg_count));
-                            output.push(((*round, record.clone()), count.clone()));
+                            output.push(((0i32, record.clone()), neg_count));
+                            output.push(((round, record.clone()), count.clone()));
                         }
                         // if any losers, increment their rounds.
-                        for ((round, record), count) in input[1..].iter() {
+                        for (&(round, ref record), ref count) in input[1..].iter() {
                             let mut neg_count = count.clone();
                             neg_count.negate();
-                            output.push(((0, record.clone()), neg_count));
-                            output.push(((*round+1, record.clone()), count.clone()));
+                            output.push(((0i32, record.clone()), neg_count));
+                            output.push(((round+1, record.clone()), count.clone()));
                         }
                     })
                     .map(|(_hash, pair)| pair)
@@ -119,13 +119,13 @@ mod tests {
                             // keep round-positive records as changes.
                             let ((round, record), count) = &input[0];
                             if *round > 0 {
-                                output.push(((0, record.clone()), -*count));
-                                output.push(((*round, record.clone()), *count));
+                                output.push(((0, columnar::Columnar::into_owned(record.clone())), -*count));
+                                output.push(((*round, columnar::Columnar::into_owned(record.clone())), *count));
                             }
                             // if any losers, increment their rounds.
                             for ((round, record), count) in input[1..].iter() {
-                                output.push(((0, record.clone()), -*count));
-                                output.push(((*round+1, record.clone()), *count));
+                                output.push(((0, columnar::Columnar::into_owned(record.clone())), -*count));
+                                output.push(((*round+1, columnar::Columnar::into_owned(record.clone())), *count));
                             }
                         })
                         .inspect(|x| println!("{:?}", x))

@@ -22,7 +22,7 @@ pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: Exchang
     fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<G, K, R2>
     where
         R2: Semigroup+'static,
-        F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
+        F: for<'a> FnMut(columnar::Ref<'a, K>,&R,Option<&R>)->Option<R2>+'static,
         ;
     /// Reduces the collection to one occurrence of each distinct element.
     ///
@@ -39,11 +39,14 @@ pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: Exchang
     ///          .threshold_total(|_,c| c % 2);
     /// });
     /// ```
-    fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(self, mut thresh: F) -> VecCollection<G, K, R2> {
+    fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(self, mut thresh: F) -> VecCollection<G, K, R2>
+    where K: columnar::Columnar,
+    {
         self.threshold_semigroup(move |key, new, old| {
-            let mut new = thresh(key, new);
+            let key_own = <K as columnar::Columnar>::into_owned(key);
+            let mut new = thresh(&key_own, new);
             if let Some(old) = old {
-                let mut add = thresh(key, old);
+                let mut add = thresh(&key_own, old);
                 add.negate();
                 new.plus_equals(&add);
             }
@@ -86,12 +89,12 @@ pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: Exchang
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<G, K, R> for VecCollection<G, K, R>
 where
-    G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
+    G: Scope<Timestamp: TotalOrder+Lattice+Ord+crate::Data>,
 {
     fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<G, K, R2>
     where
         R2: Semigroup+'static,
-        F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
+        F: for<'a> FnMut(columnar::Ref<'a, K>,&R,Option<&R>)->Option<R2>+'static,
     {
         self.arrange_by_self_named("Arrange: ThresholdTotal")
             .threshold_semigroup(thresh)
@@ -101,18 +104,18 @@ where
 impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<
-        Key<'a>=&'a K,
-        Val<'a>=&'a (),
+    T1: TraceReader<
+        Key = K,
+        Val = (),
         Time: TotalOrder,
-        Diff : ExchangeData + Semigroup<T1::DiffGat<'a>>,
+        Diff: ExchangeData,
     >+Clone+'static,
     K: ExchangeData,
 {
     fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<G, K, R2>
     where
         R2: Semigroup+'static,
-        F: for<'a> FnMut(T1::Key<'a>,&T1::Diff,Option<&T1::Diff>)->Option<R2>+'static,
+        F: for<'a> FnMut(columnar::Ref<'a, T1::Key>,&T1::Diff,Option<&T1::Diff>)->Option<R2>+'static,
     {
 
         let mut trace = self.trace.clone();
@@ -159,8 +162,9 @@ where
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
+                                let diff = <T1::Diff as columnar::Columnar>::into_owned(diff);
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(T1::owned_diff(diff)); }
+                                if count.is_none() { count = Some(diff); }
                             });
                         }
 
@@ -168,6 +172,7 @@ where
                         // If the result is non-zero, send it along.
                         batch_cursor.map_times(&batch_storage, |time, diff| {
 
+                            let diff = <T1::Diff as columnar::Columnar>::into_owned(diff);
                             let difference =
                             match &count {
                                 Some(old) => {
@@ -175,7 +180,7 @@ where
                                     temp.plus_equals(&diff);
                                     thresh(key, &temp, Some(old))
                                 },
-                                None => { thresh(key, &T1::owned_diff(diff), None) },
+                                None => { thresh(key, &diff, None) },
                             };
 
                             // Either add or assign `diff` to `count`.
@@ -183,12 +188,12 @@ where
                                 count.plus_equals(&diff);
                             }
                             else {
-                                count = Some(T1::owned_diff(diff));
+                                count = Some(diff);
                             }
 
                             if let Some(difference) = difference {
                                 if !difference.is_zero() {
-                                    session.give((key.clone(), T1::owned_time(time), difference));
+                                    session.give((<T1::Key as columnar::Columnar>::into_owned(key), <T1::Time as columnar::Columnar>::into_owned(time), difference));
                                 }
                             }
                         });
