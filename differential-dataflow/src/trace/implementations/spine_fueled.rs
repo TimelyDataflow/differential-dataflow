@@ -99,12 +99,12 @@ pub struct Spine<B: Batch> {
     exert_logic: Option<ExertionLogic>,
 }
 
-use crate::trace::WithLayout;
-impl<B: Batch> WithLayout for Spine<B> {
-    type Layout = B::Layout;
-}
-
 impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
+
+    type Key = B::Key;
+    type Val = B::Val;
+    type Time = B::Time;
+    type Diff = B::Diff;
 
     type Batch = B;
     type Storage = Vec<B>;

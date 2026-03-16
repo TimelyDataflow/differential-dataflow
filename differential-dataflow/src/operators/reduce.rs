@@ -19,6 +19,7 @@ use timely::dataflow::operators::Capability;
 use crate::operators::arrange::{Arranged, TraceAgent};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
+use crate::trace::implementations::Coltainer;
 use crate::trace::implementations::containers::BatchContainer;
 use crate::trace::implementations::merge_batcher::container::MergerChunk;
 use crate::trace::TraceReader;
@@ -29,10 +30,10 @@ use crate::trace::TraceReader;
 pub fn reduce_trace<G, T1, Bu, T2, L>(trace: Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: TraceReader<KeyOwn: Ord> + Clone + 'static,
-    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, KeyOwn=T1::KeyOwn, ValOwn: Data, Time=T1::Time> + 'static,
-    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
-    L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn,T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
+    T1: TraceReader<Key: Ord> + Clone + 'static,
+    T2: Trace<Key=T1::Key, Val: Data, Time=T1::Time> + 'static,
+    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::Key, T2::Val), T2::Time, T2::Diff)>>,
+    L: FnMut(columnar::Ref<'_, T1::Key>, &[(columnar::Ref<'_, T1::Val>, T1::Diff)], &mut Vec<(T2::Val,T2::Diff)>, &mut Vec<(T2::Val, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
 
@@ -67,7 +68,7 @@ where
 
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
             // as well as capabilities for these times (or their lower envelope, at least).
-            let mut interesting = Vec::<(T1::KeyOwn, G::Timestamp)>::new();
+            let mut interesting = Vec::<(T1::Key, G::Timestamp)>::new();
             let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
 
             // buffers and logic for computing per-key interesting times "efficiently".
@@ -146,8 +147,8 @@ where
                         // We first extract those times from this list that lie in the interval we will process.
                         sort_dedup(&mut interesting);
                         // `exposed` contains interesting (key, time)s now below `upper_limit`
-                        let mut exposed_keys = T1::KeyContainer::with_capacity(0);
-                        let mut exposed_time = T1::TimeContainer::with_capacity(0);
+                        let mut exposed_keys = Coltainer::<T1::Key>::with_capacity(0);
+                        let mut exposed_time = Coltainer::<T1::Time>::with_capacity(0);
                         // Keep pairs greater or equal to `upper_limit`, and "expose" other pairs.
                         interesting.retain(|(key, time)| {
                             if upper_limit.less_equal(time) { true } else {
@@ -166,7 +167,7 @@ where
                         //
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
-                        let mut buffers = Vec::<(G::Timestamp, Vec<(T2::ValOwn, G::Timestamp, T2::Diff)>)>::new();
+                        let mut buffers = Vec::<(G::Timestamp, Vec<(T2::Val, G::Timestamp, T2::Diff)>)>::new();
                         let mut builders = Vec::new();
                         for cap in capabilities.iter() {
                             buffers.push((cap.time().clone(), Vec::new()));
@@ -211,7 +212,7 @@ where
 
                             // Populate `interesting_times` with synthetic interesting times (below `upper_limit`) for this key.
                             while exposed_keys.get(exposed_position) == Some(key) {
-                                interesting_times.push(T1::owned_time(exposed_time.index(exposed_position)));
+                                interesting_times.push(<T1::Time as columnar::Columnar>::into_owned(exposed_time.index(exposed_position)));
                                 exposed_position += 1;
                             }
 
@@ -238,7 +239,7 @@ where
                             // Record future warnings about interesting times (and assert they should be "future").
                             for time in new_interesting_times.drain(..) {
                                 debug_assert!(upper_limit.less_equal(&time));
-                                interesting.push((T1::owned_key(key), time));
+                                interesting.push((<T1::Key as columnar::Columnar>::into_owned(key), time));
                             }
 
                             // Sort each buffer by value and move into the corresponding builder.
@@ -248,7 +249,7 @@ where
                             for index in 0 .. buffers.len() {
                                 buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                                 for (val, time, diff) in buffers[index].1.drain(..) {
-                                    buffer.push_into(((T1::owned_key(key), val), time, diff));
+                                    buffer.push_into(((<T1::Key as columnar::Columnar>::into_owned(key), val), time, diff));
                                     builders[index].push(&mut buffer);
                                     buffer.clear();
                                 }
@@ -348,14 +349,14 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
 trait PerKeyCompute<'a, C1, C2, C3, V>
 where
     C1: Cursor,
-    C2: for<'b> Cursor<Key<'a> = C1::Key<'a>, ValOwn = V, Time = C1::Time>,
-    C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
-    V: Clone + Ord,
+    C2: Cursor<Key = C1::Key, Val = V, Time = C1::Time>,
+    C3: Cursor<Key = C1::Key, Val = C1::Val, Time = C1::Time, Diff = C1::Diff>,
+    V: crate::Data,
 {
     fn new() -> Self;
     fn compute<L>(
         &mut self,
-        key: C1::Key<'a>,
+        key: columnar::Ref<'a, C1::Key>,
         source_cursor: (&mut C1, &'a C1::Storage),
         output_cursor: (&mut C2, &'a C2::Storage),
         batch_cursor: (&mut C3, &'a C3::Storage),
@@ -366,8 +367,8 @@ where
         new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
     where
         L: FnMut(
-            C1::Key<'a>,
-            &[(C1::Val<'a>, C1::Diff)],
+            columnar::Ref<'a, C1::Key>,
+            &[(columnar::Ref<'a, C1::Val>, C1::Diff)],
             &mut Vec<(V, C2::Diff)>,
             &mut Vec<(V, C2::Diff)>,
         );
@@ -382,6 +383,7 @@ mod history_replay {
 
     use crate::lattice::Lattice;
     use crate::trace::Cursor;
+    use crate::trace::implementations::Coltainer;
     use crate::operators::ValueHistory;
 
     use super::{PerKeyCompute, sort_dedup};
@@ -391,14 +393,14 @@ mod history_replay {
     pub struct HistoryReplayer<'a, C1, C2, C3, V>
     where
         C1: Cursor,
-        C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
-        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
+        C2: Cursor<Key = C1::Key, Time = C1::Time>,
+        C3: Cursor<Key = C1::Key, Val = C1::Val, Time = C1::Time, Diff = C1::Diff>,
         V: Clone + Ord,
     {
         input_history: ValueHistory<'a, C1>,
         output_history: ValueHistory<'a, C2>,
         batch_history: ValueHistory<'a, C3>,
-        input_buffer: Vec<(C1::Val<'a>, C1::Diff)>,
+        input_buffer: Vec<(columnar::Ref<'a, C1::Val>, C1::Diff)>,
         output_buffer: Vec<(V, C2::Diff)>,
         update_buffer: Vec<(V, C2::Diff)>,
         output_produced: Vec<((V, C2::Time), C2::Diff)>,
@@ -411,9 +413,9 @@ mod history_replay {
     impl<'a, C1, C2, C3, V> PerKeyCompute<'a, C1, C2, C3, V> for HistoryReplayer<'a, C1, C2, C3, V>
     where
         C1: Cursor,
-        C2: for<'b> Cursor<Key<'a> = C1::Key<'a>, ValOwn = V, Time = C1::Time>,
-        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
-        V: Clone + Ord,
+        C2: Cursor<Key = C1::Key, Val = V, Time = C1::Time>,
+        C3: Cursor<Key = C1::Key, Val = C1::Val, Time = C1::Time, Diff = C1::Diff>,
+        V: crate::Data,
     {
         fn new() -> Self {
             HistoryReplayer {
@@ -433,7 +435,7 @@ mod history_replay {
         #[inline(never)]
         fn compute<L>(
             &mut self,
-            key: C1::Key<'a>,
+            key: columnar::Ref<'a, C1::Key>,
             (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
             (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
             (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
@@ -444,8 +446,8 @@ mod history_replay {
             new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
         where
             L: FnMut(
-                C1::Key<'a>,
-                &[(C1::Val<'a>, C1::Diff)],
+                columnar::Ref<'a, C1::Key>,
+                &[(columnar::Ref<'a, C1::Val>, C1::Diff)],
                 &mut Vec<(V, C2::Diff)>,
                 &mut Vec<(V, C2::Diff)>,
             )
@@ -460,7 +462,7 @@ mod history_replay {
             // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| C3::owned_time(time));
+            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| <C3::Time as columnar::Columnar>::into_owned(time));
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -497,23 +499,23 @@ mod history_replay {
             // Load the input and output histories.
             let mut input_replay = if let Some(meet) = meet.as_ref() {
                 self.input_history.replay_key(source_cursor, source_storage, key, |time| {
-                    let mut time = C1::owned_time(time);
+                    let mut time = <C1::Time as columnar::Columnar>::into_owned(time);
                     time.join_assign(meet);
                     time
                 })
             }
             else {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| C1::owned_time(time))
+                self.input_history.replay_key(source_cursor, source_storage, key, |time| <C1::Time as columnar::Columnar>::into_owned(time))
             };
             let mut output_replay = if let Some(meet) = meet.as_ref() {
                 self.output_history.replay_key(output_cursor, output_storage, key, |time| {
-                    let mut time = C2::owned_time(time);
+                    let mut time = <C2::Time as columnar::Columnar>::into_owned(time);
                     time.join_assign(meet);
                     time
                 })
             }
             else {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| C2::owned_time(time))
+                self.output_history.replay_key(output_cursor, output_storage, key, |time| <C2::Time as columnar::Columnar>::into_owned(time))
             };
 
             self.synth_times.clear();
@@ -618,7 +620,7 @@ mod history_replay {
                         meet.as_ref().map(|meet| output_replay.advance_buffer_by(meet));
                         for &((value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push((C2::owned_val(value), diff.clone()));
+                                self.output_buffer.push((<C2::Val as columnar::Columnar>::into_owned(value), diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));

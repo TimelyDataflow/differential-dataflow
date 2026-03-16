@@ -15,7 +15,7 @@ use crate::difference::{Abelian, Multiply};
 /// method to limit the introduction of labels.
 pub fn propagate<G, N, L, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>) -> VecCollection<G,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Scope<Timestamp: Lattice+Ord+Hash+crate::Data>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -32,7 +32,7 @@ where
 /// method to limit the introduction of labels.
 pub fn propagate_at<G, N, L, F, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Scope<Timestamp: Lattice+Ord+Hash+crate::Data>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -59,7 +59,7 @@ where
     R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time:Hash, Diff=R>+Clone+'static,
+    Tr: TraceReader<Key=N, Val=N, Time:Hash, Diff=R>+Clone+'static,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified
@@ -92,17 +92,17 @@ where
         let labels =
         proposals
             .concat(nodes)
-            .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>("Propagate", |_, s, t| t.push((s[0].0.clone(), R::from(1_i8))));
+            .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>("Propagate", |_, s, t| t.push((<L as columnar::Columnar>::into_owned(s[0].0), R::from(1_i8))));
 
         let propagate: VecCollection<_, (N, L), R> =
         labels
             .clone()
-            .join_core(edges, |_k, l: &L, d| Some((d.clone(), l.clone())));
+            .join_core(edges, |_k, l, d| Some((<N as columnar::Columnar>::into_owned(d), <L as columnar::Columnar>::into_owned(l))));
 
         proposals_bind.set(propagate);
 
         labels
-            .as_collection(|k,v| (k.clone(), v.clone()))
+            .as_collection(|k,v| (<N as columnar::Columnar>::into_owned(k), <L as columnar::Columnar>::into_owned(v)))
             .leave()
     })
 }

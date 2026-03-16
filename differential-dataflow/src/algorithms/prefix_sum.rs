@@ -21,7 +21,7 @@ pub trait PrefixSum<G: Scope, K, D> {
 
 impl<G, K, D> PrefixSum<G, K, D> for VecCollection<G, ((usize, K), D)>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+crate::Data>,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
 {
@@ -42,7 +42,7 @@ where
 /// Accumulate data in `collection` into all powers-of-two intervals containing them.
 pub fn aggregate<G, K, D, F>(collection: VecCollection<G, ((usize, K), D)>, combine: F) -> VecCollection<G, ((usize, usize, K), D)>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+crate::Data>,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,
@@ -64,8 +64,10 @@ where
                 .filter(|&((_pos, log, _), _)| log < 64)
                 .map(|((pos, log, key), data)| ((pos >> 1, log + 1, key), (pos, data)))
                 .reduce(move |&(_pos, _log, ref key), input, output| {
-                    let mut result = (input[0].0).1.clone();
-                    if input.len() > 1 { result = combine(key, &result, &(input[1].0).1); }
+                    let mut result: D = (input[0].0).1.clone();
+                    if input.len() > 1 {
+                        result = combine(key, &result, &(input[1].0).1);
+                    }
                     output.push((result, 1));
                 })
                 .concat(unit_ranges)
@@ -79,7 +81,7 @@ pub fn broadcast<G, K, D, F>(
     zero: D,
     combine: F) -> VecCollection<G, ((usize, K), D)>
 where
-    G: Scope<Timestamp: Lattice + Ord + ::std::fmt::Debug>,
+    G: Scope<Timestamp: Lattice + Ord + ::std::fmt::Debug + crate::Data>,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,
@@ -146,8 +148,9 @@ where
             used_ranges
                 .enter(&scope)
                 .map(|((pos, log, key), data)| ((pos << log, key), (log, data)))
-                .join_map(states, move |&(pos, ref key), &(log, ref data), state|
-                    ((pos + (1 << log), key.clone()), combine(key, state, data)))
+                .join_map(states, move |&(pos, ref key), &(log, ref data), state| {
+                    ((pos + (1 << log), key.clone()), combine(key, state, data))
+                })
                 .concat(init_states)
                 .distinct()
         })

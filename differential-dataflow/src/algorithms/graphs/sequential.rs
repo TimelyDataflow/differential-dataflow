@@ -11,7 +11,7 @@ use crate::hashable::Hashable;
 
 fn _color<G, N>(edges: VecCollection<G, (N,N)>) -> VecCollection<G,(N,Option<u32>)>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Scope<Timestamp: Lattice+Ord+Hash+crate::Data>,
     N: ExchangeData+Hash,
 {
     // need some bogus initial values.
@@ -45,7 +45,7 @@ pub fn sequence<G, N, V, F>(
     edges: VecCollection<G, (N,N)>,
     logic: F) -> VecCollection<G, (N,Option<V>)>
 where
-    G: Scope<Timestamp: Lattice+Hash+Ord>,
+    G: Scope<Timestamp: Lattice+Hash+Ord+crate::Data>,
     N: ExchangeData+Hashable,
     V: ExchangeData,
     F: Fn(&N, &[(&V, isize)])->V+'static
@@ -66,12 +66,12 @@ where
             let reverse = edges.filter(|edge| edge.0 > edge.1);
 
             // new state goes along forward edges, old state along reverse edges
-            let new_messages = new_state.join_map(forward, |_k,v,d| (d.clone(),v.clone()));
+            let new_messages = new_state.join_map(forward, |_k,v,d| (d.clone(), v.clone()));
 
-            let incomplete = new_messages.clone().filter(|x| x.1.is_none()).map(|x| x.0).distinct();
+            let incomplete = new_messages.clone().filter(|x: &(N, Option<V>)| x.1.is_none()).map(|x: (N, Option<V>)| x.0).distinct();
             let new_messages = new_messages.filter(|x| x.1.is_some()).map(|x| (x.0, x.1.unwrap()));
 
-            let old_messages = old_state.join_map(reverse, |_k,v,d| (d.clone(),v.clone()));
+            let old_messages = old_state.join_map(reverse, |_k,v,d| (d.clone(), v.clone()));
 
             let messages = new_messages.concat(old_messages).antijoin(incomplete.clone());
 
@@ -82,7 +82,10 @@ where
             messages
                 // .concat(old_messages)  // /-- possibly too clever: None if any inputs None.
                 // .antijoin(incomplete)
-                .reduce(move |k, vs, t| t.push((Some(logic(k,vs)),1)))
+                .reduce(move |k, vs, t| {
+                    let vs_ref: Vec<(&V, isize)> = vs.iter().map(|(v, r)| (*v, *r)).collect();
+                    t.push((Some(logic(k, &vs_ref)), 1))
+                })
                 .concat(incomplete.map(|x| (x, None)))
         })
 }

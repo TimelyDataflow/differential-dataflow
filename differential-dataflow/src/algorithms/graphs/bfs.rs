@@ -11,7 +11,7 @@ use crate::lattice::Lattice;
 /// Returns pairs (node, dist) indicating distance of each node from a root.
 pub fn bfs<G, N>(edges: VecCollection<G, (N,N)>, roots: VecCollection<G, N>) -> VecCollection<G, (N,u32)>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Scope<Timestamp: Lattice+Ord+crate::Data>,
     N: ExchangeData+Hash,
 {
     let edges = edges.arrange_by_key();
@@ -26,7 +26,7 @@ pub fn bfs_arranged<G, N, Tr>(edges: Arranged<G, Tr>, roots: VecCollection<G, N>
 where
     G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,
+    Tr: TraceReader<Key=N, Val=N, Diff=isize>+Clone+'static,
 {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));
@@ -37,8 +37,8 @@ where
         let edges = edges.enter(&scope);
         let nodes = nodes.enter(&scope);
 
-        inner.join_core(edges, |_k,l,d| Some((d.clone(), l+1)))
+        inner.join_core(edges, |_k,l,d| Some((<N as columnar::Columnar>::into_owned(d), l+1)))
              .concat(nodes)
-             .reduce(|_, s, t| t.push((*s[0].0, 1)))
+             .reduce(|_, s, t| t.push((columnar::Columnar::into_owned(s[0].0), 1)))
      })
 }

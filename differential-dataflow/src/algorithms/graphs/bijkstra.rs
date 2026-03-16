@@ -21,7 +21,7 @@ use crate::operators::iterate::Variable;
 /// could be good insurance here.
 pub fn bidijkstra<G, N>(edges: VecCollection<G, (N,N)>, goals: VecCollection<G, (N,N)>) -> VecCollection<G, ((N,N), u32)>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Scope<Timestamp: Lattice+Ord+crate::Data>,
     N: ExchangeData+Hash,
 {
     let forward = edges.clone().arrange_by_key();
@@ -41,7 +41,7 @@ pub fn bidijkstra_arranged<G, N, Tr>(
 where
     G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,
+    Tr: TraceReader<Key=N, Val=N, Diff=isize>+Clone+'static,
 {
     forward
         .stream
@@ -72,8 +72,8 @@ where
         let reached =
         forward
             .clone()
-            .join_map(reverse.clone(), |_, (src,d1), (dst,d2)| ((src.clone(), dst.clone()), *d1 + *d2))
-            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
+            .join_map(reverse.clone(), |_, &(ref src, d1), &(ref dst, d2)| ((src.clone(), dst.clone()), d1 + d2))
+            .reduce(|_key, s, t| t.push((<u32 as columnar::Columnar>::into_owned(s[0].0), 1)))
             .semijoin(goals.clone());
 
         let active =
@@ -92,10 +92,13 @@ where
             .map(|(med, (src, dist))| (src, (med, dist)))
             .semijoin(forward_active)
             .map(|(src, (med, dist))| (med, (src, dist)))
-            .join_core(forward_edges, |_med, (src, dist), next| Some((next.clone(), (src.clone(), *dist+1))))
+            .join_core(forward_edges, |_med, srcdist, next| {
+                let (src, dist): (N, u32) = columnar::Columnar::into_owned(srcdist);
+                Some((<N as columnar::Columnar>::into_owned(next), (src, dist+1)))
+            })
             .concat(forward)
             .map(|(next, (src, dist))| ((next, src), dist))
-            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
+            .reduce(|_key, s: &[(columnar::Ref<'_, u32>, isize)], t: &mut Vec<(u32, isize)>| t.push((<u32 as columnar::Columnar>::into_owned(s[0].0), 1)))
             .map(|((next, src), dist)| (next, (src, dist)));
 
         forward_next.clone().map(|_| ()).consolidate().inspect(|x| println!("forward_next: {:?}", x));
@@ -110,10 +113,13 @@ where
             .map(|(med, (rev, dist))| (rev, (med, dist)))
             .semijoin(reverse_active)
             .map(|(rev, (med, dist))| (med, (rev, dist)))
-            .join_core(reverse_edges, |_med, (rev, dist), next| Some((next.clone(), (rev.clone(), *dist+1))))
+            .join_core(reverse_edges, |_med, revdist, next| {
+                let (rev, dist): (N, u32) = columnar::Columnar::into_owned(revdist);
+                Some((<N as columnar::Columnar>::into_owned(next), (rev, dist+1)))
+            })
             .concat(reverse)
             .map(|(next, (rev, dist))| ((next, rev), dist))
-            .reduce(|_key, s, t| t.push((*s[0].0, 1)))
+            .reduce(|_key, s: &[(columnar::Ref<'_, u32>, isize)], t: &mut Vec<(u32, isize)>| t.push((<u32 as columnar::Columnar>::into_owned(s[0].0), 1)))
             .map(|((next,rev), dist)| (next, (rev, dist)));
 
         reverse_next.clone().map(|_| ()).consolidate().inspect(|x| println!("reverse_next: {:?}", x));

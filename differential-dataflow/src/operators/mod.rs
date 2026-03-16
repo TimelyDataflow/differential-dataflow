@@ -20,7 +20,7 @@ use crate::trace::Cursor;
 
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, C: Cursor> {
-    values: Vec<(C::Val<'a>, usize)>,
+    values: Vec<(columnar::Ref<'a, C::Val>, usize)>,
     edits: Vec<(C::Time, C::Diff)>,
 }
 
@@ -36,11 +36,11 @@ impl<'a, C: Cursor> EditList<'a, C> {
     /// Loads the contents of a cursor.
     fn load<L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
     where
-        L: Fn(C::TimeGat<'_>)->C::Time,
+        L: Fn(columnar::Ref<'_, C::Time>)->C::Time,
     {
         self.clear();
         while let Some(val) = cursor.get_val(storage) {
-            cursor.map_times(storage, |time1, diff1| self.push(logic(time1), C::owned_diff(diff1)));
+            cursor.map_times(storage, |time1, diff1| self.push(logic(time1), <C::Diff as columnar::Columnar>::into_owned(diff1)));
             self.seal(val);
             cursor.step_val(storage);
         }
@@ -60,14 +60,14 @@ impl<'a, C: Cursor> EditList<'a, C> {
     }
     /// Associates all edits pushed since the previous `seal_value` call with `value`.
     #[inline]
-    fn seal(&mut self, value: C::Val<'a>) {
+    fn seal(&mut self, value: columnar::Ref<'a, C::Val>) {
         let prev = self.values.last().map(|x| x.1).unwrap_or(0);
         crate::consolidation::consolidate_from(&mut self.edits, prev);
         if self.edits.len() > prev {
             self.values.push((value, self.edits.len()));
         }
     }
-    fn map<F: FnMut(C::Val<'a>, &C::Time, &C::Diff)>(&self, mut logic: F) {
+    fn map<F: FnMut(columnar::Ref<'a, C::Val>, &C::Time, &C::Diff)>(&self, mut logic: F) {
         for index in 0 .. self.values.len() {
             let lower = if index == 0 { 0 } else { self.values[index-1].1 };
             let upper = self.values[index].1;
@@ -81,7 +81,7 @@ impl<'a, C: Cursor> EditList<'a, C> {
 struct ValueHistory<'storage, C: Cursor> {
     edits: EditList<'storage, C>,
     history: Vec<(C::Time, C::Time, usize, usize)>,     // (time, meet, value_index, edit_offset)
-    buffer: Vec<((C::Val<'storage>, C::Time), C::Diff)>,   // where we accumulate / collapse updates.
+    buffer: Vec<((columnar::Ref<'storage, C::Val>, C::Time), C::Diff)>,   // where we accumulate / collapse updates.
 }
 
 impl<'storage, C: Cursor> ValueHistory<'storage, C> {
@@ -99,7 +99,7 @@ impl<'storage, C: Cursor> ValueHistory<'storage, C> {
     }
     fn load<L>(&mut self, cursor: &mut C, storage: &'storage C::Storage, logic: L)
     where
-        L: Fn(C::TimeGat<'_>)->C::Time,
+        L: Fn(columnar::Ref<'_, C::Time>)->C::Time,
     {
         self.edits.load(cursor, storage, logic);
     }
@@ -111,11 +111,11 @@ impl<'storage, C: Cursor> ValueHistory<'storage, C> {
         &'history mut self,
         cursor: &mut C,
         storage: &'storage C::Storage,
-        key: C::Key<'storage>,
+        key: columnar::Ref<'storage, C::Key>,
         logic: L
     ) -> HistoryReplay<'storage, 'history, C>
     where
-        L: Fn(C::TimeGat<'_>)->C::Time,
+        L: Fn(columnar::Ref<'_, C::Time>)->C::Time,
     {
         self.clear();
         cursor.seek_key(storage, key);
@@ -157,11 +157,11 @@ struct HistoryReplay<'storage, 'history, C: Cursor> {
 impl<'storage, 'history, C: Cursor> HistoryReplay<'storage, 'history, C> {
     fn time(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.1) }
-    fn edit(&self) -> Option<(C::Val<'storage>, &C::Time, &C::Diff)> {
+    fn edit(&self) -> Option<(columnar::Ref<'storage, C::Val>, &C::Time, &C::Diff)> {
         self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, &self.replay.edits.edits[e].1))
     }
 
-    fn buffer(&self) -> &[((C::Val<'storage>, C::Time), C::Diff)] {
+    fn buffer(&self) -> &[((columnar::Ref<'storage, C::Val>, C::Time), C::Diff)] {
         &self.replay.buffer[..]
     }
 
