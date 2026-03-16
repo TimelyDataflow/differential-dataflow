@@ -101,18 +101,18 @@ where
 impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<
-        Key<'a>=&'a K,
-        Val<'a>=&'a (),
+    T1: TraceReader<
+        Key = K,
+        Val = (),
         Time: TotalOrder,
-        Diff : ExchangeData + Semigroup<T1::DiffGat<'a>>,
+        Diff: ExchangeData + for<'a> Semigroup<&'a T1::Diff>,
     >+Clone+'static,
     K: ExchangeData,
 {
     fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<G, K, R2>
     where
         R2: Semigroup+'static,
-        F: for<'a> FnMut(T1::Key<'a>,&T1::Diff,Option<&T1::Diff>)->Option<R2>+'static,
+        F: FnMut(&T1::Key,&T1::Diff,Option<&T1::Diff>)->Option<R2>+'static,
     {
 
         let mut trace = self.trace.clone();
@@ -160,7 +160,7 @@ where
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(T1::owned_diff(diff)); }
+                                if count.is_none() { count = Some(diff.clone()); }
                             });
                         }
 
@@ -175,7 +175,7 @@ where
                                     temp.plus_equals(&diff);
                                     thresh(key, &temp, Some(old))
                                 },
-                                None => { thresh(key, &T1::owned_diff(diff), None) },
+                                None => { thresh(key, &diff.clone(), None) },
                             };
 
                             // Either add or assign `diff` to `count`.
@@ -183,12 +183,12 @@ where
                                 count.plus_equals(&diff);
                             }
                             else {
-                                count = Some(T1::owned_diff(diff));
+                                count = Some(diff.clone());
                             }
 
                             if let Some(difference) = difference {
                                 if !difference.is_zero() {
-                                    session.give((key.clone(), T1::owned_time(time), difference));
+                                    session.give((key.clone(), time.clone(), difference));
                                 }
                             }
                         });

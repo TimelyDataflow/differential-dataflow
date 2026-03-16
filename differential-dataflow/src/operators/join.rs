@@ -70,8 +70,8 @@ pub fn join_traces<G, T1, T2, L, CB>(arranged1: Arranged<G,T1>, arranged2: Arran
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader+Clone+'static,
-    T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
-    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut JoinSession<T1::Time, CB, Capability<T1::Time>>)+'static,
+    T2: TraceReader<Key=T1::Key, Time=T1::Time>+Clone+'static,
+    L: FnMut(&T1::Key,&T1::Val,&T2::Val,&G::Timestamp,&T1::Diff,&T2::Diff,&mut JoinSession<T1::Time, CB, Capability<T1::Time>>)+'static,
     CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.
@@ -313,7 +313,7 @@ struct Deferred<T, C1, C2>
 where
     T: Timestamp+Lattice+Ord,
     C1: Cursor<Time=T>,
-    C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
+    C2: Cursor<Key=C1::Key, Time=T>,
 {
     trace: C1,
     trace_storage: C1::Storage,
@@ -326,7 +326,7 @@ where
 impl<T, C1, C2> Deferred<T, C1, C2>
 where
     C1: Cursor<Time=T>,
-    C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
+    C2: Cursor<Key=C1::Key, Time=T>,
     T: Timestamp+Lattice+Ord,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
@@ -348,7 +348,7 @@ where
     #[inline(never)]
     fn work<L, CB: ContainerBuilder>(&mut self, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>, mut logic: L, fuel: &mut usize)
     where
-        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
+        L: FnMut(&C1::Key, &C1::Val, &C2::Val, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
     {
 
         let meet = self.capability.time();
@@ -372,11 +372,11 @@ where
                 Ordering::Equal => {
 
                     thinker.history1.edits.load(trace, trace_storage, |time| {
-                        let mut time = C1::owned_time(time);
+                        let mut time = time.clone();
                         time.join_assign(meet);
                         time
                     });
-                    thinker.history2.edits.load(batch, batch_storage, |time| C2::owned_time(time));
+                    thinker.history2.edits.load(batch, batch_storage, |time| time.clone());
 
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
@@ -422,7 +422,7 @@ where
         }
     }
 
-    fn think<F: FnMut(C1::Val<'a>,C2::Val<'a>,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
+    fn think<F: FnMut(&'a C1::Val,&'a C2::Val,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {

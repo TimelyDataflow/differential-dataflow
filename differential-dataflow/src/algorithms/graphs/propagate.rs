@@ -59,7 +59,7 @@ where
     R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time:Hash, Diff=R>+Clone+'static,
+    Tr: TraceReader<Key=N, Val=N, Time:Hash, Diff=R>+Clone+'static,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified

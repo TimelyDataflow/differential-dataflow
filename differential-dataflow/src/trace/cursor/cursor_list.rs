@@ -94,12 +94,12 @@ impl<C: Cursor> CursorList<C> {
     }
 }
 
-use crate::trace::implementations::WithLayout;
-impl<C: Cursor> WithLayout for CursorList<C> {
-    type Layout = C::Layout;
-}
-
 impl<C: Cursor> Cursor for CursorList<C> {
+
+    type Key = C::Key;
+    type Val = C::Val;
+    type Time = C::Time;
+    type Diff = C::Diff;
 
     type Storage = Vec<C::Storage>;
 
@@ -111,29 +111,29 @@ impl<C: Cursor> Cursor for CursorList<C> {
 
     // accessors
     #[inline]
-    fn key<'a>(&self, storage: &'a Vec<C::Storage>) -> Self::Key<'a> {
+    fn key<'a>(&self, storage: &'a Vec<C::Storage>) -> &'a Self::Key {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.cursors[self.min_key[0]].key_valid(&storage[self.min_key[0]]));
         self.cursors[self.min_key[0]].key(&storage[self.min_key[0]])
     }
     #[inline]
-    fn val<'a>(&self, storage: &'a Vec<C::Storage>) -> Self::Val<'a> {
+    fn val<'a>(&self, storage: &'a Vec<C::Storage>) -> &'a Self::Val {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.val_valid(storage));
         debug_assert!(self.cursors[self.min_val[0]].val_valid(&storage[self.min_val[0]]));
         self.cursors[self.min_val[0]].val(&storage[self.min_val[0]])
     }
     #[inline]
-    fn get_key<'a>(&self, storage: &'a Vec<C::Storage>) -> Option<Self::Key<'a>> {
+    fn get_key<'a>(&self, storage: &'a Vec<C::Storage>) -> Option<&'a Self::Key> {
         self.min_key.get(0).map(|idx| self.cursors[*idx].key(&storage[*idx]))
     }
     #[inline]
-    fn get_val<'a>(&self, storage: &'a Vec<C::Storage>) -> Option<Self::Val<'a>> {
+    fn get_val<'a>(&self, storage: &'a Vec<C::Storage>) -> Option<&'a Self::Val> {
         self.min_val.get(0).map(|idx| self.cursors[*idx].val(&storage[*idx]))
     }
 
     #[inline]
-    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Vec<C::Storage>, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Vec<C::Storage>, mut logic: L) {
         for &index in self.min_val.iter() {
             self.cursors[index].map_times(&storage[index], |t,d| logic(t,d));
         }
@@ -148,7 +148,7 @@ impl<C: Cursor> Cursor for CursorList<C> {
         self.minimize_keys(storage);
     }
     #[inline]
-    fn seek_key(&mut self, storage: &Vec<C::Storage>, key: Self::Key<'_>) {
+    fn seek_key(&mut self, storage: &Vec<C::Storage>, key: &Self::Key) {
         for (cursor, storage) in self.cursors.iter_mut().zip(storage) {
             cursor.seek_key(storage, key);
         }
@@ -164,7 +164,7 @@ impl<C: Cursor> Cursor for CursorList<C> {
         self.minimize_vals(storage);
     }
     #[inline]
-    fn seek_val(&mut self, storage: &Vec<C::Storage>, val: Self::Val<'_>) {
+    fn seek_val(&mut self, storage: &Vec<C::Storage>, val: &Self::Val) {
         for (cursor, storage) in self.cursors.iter_mut().zip(storage) {
             cursor.seek_val(storage, val);
         }

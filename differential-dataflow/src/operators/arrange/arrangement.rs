@@ -119,7 +119,7 @@ where
         -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
-            F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone+'static,
+            F: FnMut(&Tr::Key, &Tr::Val, &Tr::Time)->TInner+Clone+'static,
             P: FnMut(&TInner)->Tr::Time+Clone+'static,
         {
         let logic1 = logic.clone();
@@ -137,7 +137,7 @@ where
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<G, D, Tr::Diff>
         where
-            L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> D+'static,
+            L: FnMut(&Tr::Key, &Tr::Val) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
     }
@@ -147,12 +147,12 @@ where
     /// The underlying `Stream<G, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
-    pub fn as_vecs(self) -> VecCollection<G, (Tr::KeyOwn, Tr::ValOwn), Tr::Diff>
+    pub fn as_vecs(self) -> VecCollection<G, (Tr::Key, Tr::Val), Tr::Diff>
     where
-        Tr::KeyOwn: crate::ExchangeData,
-        Tr::ValOwn: crate::ExchangeData,
+        Tr::Key: crate::ExchangeData,
+        Tr::Val: crate::ExchangeData,
     {
-        self.flat_map_ref(move |key, val| [(Tr::owned_key(key), Tr::owned_val(val))])
+        self.flat_map_ref(move |key, val| [(key.clone(), val.clone())])
     }
 
     /// Extracts elements from an arrangement as a collection.
@@ -162,7 +162,7 @@ where
     pub fn flat_map_ref<I, L>(self, logic: L) -> VecCollection<G, I::Item, Tr::Diff>
         where
             I: IntoIterator<Item: Data>,
-            L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
+            L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
     {
         Self::flat_map_batches(self.stream, logic)
     }
@@ -177,7 +177,7 @@ where
     pub fn flat_map_batches<I, L>(stream: Stream<G, Vec<Tr::Batch>>, mut logic: L) -> VecCollection<G, I::Item, Tr::Diff>
     where
         I: IntoIterator<Item: Data>,
-        L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
+        L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
     {
         stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
             input.for_each(|time, data| {
@@ -189,7 +189,7 @@ where
                         while let Some(val) = cursor.get_val(batch) {
                             for datum in logic(key, val) {
                                 cursor.map_times(batch, |time, diff| {
-                                    session.give((datum.clone(), Tr::owned_time(time), Tr::owned_diff(diff)));
+                                    session.give((datum.clone(), time.clone(), diff.clone()));
                                 });
                             }
                             cursor.step_val(batch);
@@ -216,12 +216,12 @@ where
     /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
     pub fn join_core<T2,I,L>(self, other: Arranged<G,T2>, mut result: L) -> VecCollection<G,I::Item,<T1::Diff as Multiply<T2::Diff>>::Output>
     where
-        T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>,Time=T1::Time>+Clone+'static,
+        T2: TraceReader<Key=T1::Key,Time=T1::Time>+Clone+'static,
         T1::Diff: Multiply<T2::Diff, Output: Semigroup+'static>,
         I: IntoIterator<Item: Data>,
-        L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>)->I+'static
+        L: FnMut(&T1::Key,&T1::Val,&T2::Val)->I+'static
     {
-        let mut result = move |k: T1::Key<'_>, v1: T1::Val<'_>, v2: T2::Val<'_>, t: &G::Timestamp, r1: &T1::Diff, r2: &T2::Diff| {
+        let mut result = move |k: &T1::Key, v1: &T1::Val, v2: &T2::Val, t: &G::Timestamp, r1: &T1::Diff, r2: &T2::Diff| {
             let t = t.clone();
             let r = (r1.clone()).multiply(r2);
             result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
@@ -251,16 +251,15 @@ where
     /// A direct implementation of `ReduceCore::reduce_abelian`.
     pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
     where
-        T1: TraceReader<KeyOwn: Ord>,
-        T2: for<'a> Trace<
-            Key<'a>= T1::Key<'a>,
-            KeyOwn=T1::KeyOwn,
-            ValOwn: Data,
+        T1: TraceReader<Key: Ord>,
+        T2: Trace<
+            Key=T1::Key,
+            Val: Data,
             Time=T1::Time,
             Diff: Abelian,
         >+'static,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::Key, T2::Val), T2::Time, T2::Diff)>>,
+        L: FnMut(&T1::Key, &[(&T1::Val, T1::Diff)], &mut Vec<(T2::Val, T2::Diff)>)+'static,
     {
         self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
             if !input.is_empty() {
@@ -274,15 +273,14 @@ where
     /// A direct implementation of `ReduceCore::reduce_core`.
     pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
-        T1: TraceReader<KeyOwn: Ord>,
-        T2: for<'a> Trace<
-            Key<'a>=T1::Key<'a>,
-            KeyOwn=T1::KeyOwn,
-            ValOwn: Data,
+        T1: TraceReader<Key: Ord>,
+        T2: Trace<
+            Key=T1::Key,
+            Val: Data,
             Time=T1::Time,
         >+'static,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::Key, T2::Val), T2::Time, T2::Diff)>>,
+        L: FnMut(&T1::Key, &[(&T1::Val, T1::Diff)], &mut Vec<(T2::Val, T2::Diff)>, &mut Vec<(T2::Val, T2::Diff)>)+'static,
     {
         use crate::operators::reduce::reduce_trace;
         reduce_trace::<_,_,Bu,_,_>(self, name, logic)

@@ -113,8 +113,6 @@ use crate::trace::{Builder, Description};
 use crate::trace::{self, Trace, TraceReader, Cursor};
 use crate::{ExchangeData, Hashable};
 
-use crate::trace::implementations::containers::BatchContainer;
-
 use super::TraceAgent;
 
 /// Arrange data from a stream of keyed upserts.
@@ -128,18 +126,18 @@ use super::TraceAgent;
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
 pub fn arrange_from_upsert<G, Bu, Tr>(
-    stream: Stream<G, Vec<(Tr::KeyOwn, Option<Tr::ValOwn>, G::Timestamp)>>,
+    stream: Stream<G, Vec<(Tr::Key, Option<Tr::Val>, G::Timestamp)>>,
     name: &str,
 ) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp=Tr::Time>,
-    Tr: for<'a> Trace<
-        KeyOwn: ExchangeData+Hashable+std::hash::Hash,
-        ValOwn: ExchangeData,
+    Tr: Trace<
+        Key: ExchangeData+Hashable+std::hash::Hash,
+        Val: ExchangeData,
         Time: TotalOrder+ExchangeData,
         Diff=isize,
     >+'static,
-    Bu: Builder<Time=G::Timestamp, Input = Vec<((Tr::KeyOwn, Tr::ValOwn), Tr::Time, Tr::Diff)>, Output = Tr::Batch>,
+    Bu: Builder<Time=G::Timestamp, Input = Vec<((Tr::Key, Tr::Val), Tr::Time, Tr::Diff)>, Output = Tr::Batch>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -148,7 +146,7 @@ where
 
         let reader = &mut reader;
 
-        let exchange = Exchange::new(move |update: &(Tr::KeyOwn,Option<Tr::ValOwn>,G::Timestamp)| (update.0).hashed().into());
+        let exchange = Exchange::new(move |update: &(Tr::Key,Option<Tr::Val>,G::Timestamp)| (update.0).hashed().into());
 
         let scope = stream.scope();
         stream.unary_frontier(exchange, name, move |_capability, info| {
@@ -174,7 +172,7 @@ where
             let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
-            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::KeyOwn, Option<Tr::ValOwn>)>>::new();
+            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::Key, Option<Tr::Val>)>>::new();
             let mut updates = Vec::new();
 
             move |(input, frontier), output| {
@@ -234,25 +232,22 @@ where
                                 // new stuff that we add.
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
                                 let mut builder = Bu::new();
-                                let mut key_con = Tr::KeyContainer::with_capacity(1);
                                 for (key, mut list) in to_process {
 
-                                    key_con.clear(); key_con.push_own(&key);
-
                                     // The prior value associated with the key.
-                                    let mut prev_value: Option<Tr::ValOwn> = None;
+                                    let mut prev_value: Option<Tr::Val> = None;
 
                                     // Attempt to find the key in the trace.
-                                    trace_cursor.seek_key(&trace_storage, key_con.index(0));
-                                    if trace_cursor.get_key(&trace_storage).map(|k| k.eq(&key_con.index(0))).unwrap_or(false) {
+                                    trace_cursor.seek_key(&trace_storage, &key);
+                                    if trace_cursor.get_key(&trace_storage).map(|k| k.eq(&key)).unwrap_or(false) {
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;
-                                            trace_cursor.map_times(&trace_storage, |_time, diff| count += Tr::owned_diff(diff));
+                                            trace_cursor.map_times(&trace_storage, |_time, diff| count += diff.clone());
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());
-                                                prev_value = Some(Tr::owned_val(val));
+                                                prev_value = Some(val.clone());
                                             }
                                             trace_cursor.step_val(&trace_storage);
                                         }

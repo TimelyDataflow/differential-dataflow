@@ -11,35 +11,21 @@ use std::cmp::Ordering;
 use serde::{Deserialize, Serialize};
 
 use crate::Hashable;
-use crate::containers::TimelyStack;
-use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
-use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
+use crate::trace::implementations::chunker::VecChunker;
+use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
-use super::{Layout, Vector, TStack};
+use super::Update;
 
 use self::val_batch::{RhhValBatch, RhhValBuilder};
 
 /// A trace implementation using a spine of ordered lists.
-pub type VecSpine<K, V, T, R> = Spine<Rc<RhhValBatch<Vector<((K,V),T,R)>>>>;
+pub type VecSpine<K, V, T, R> = Spine<Rc<RhhValBatch<((K,V),T,R)>>>;
 /// A batcher for ordered lists.
 pub type VecBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecMerger<(K, V), T, R>>;
 /// A builder for ordered lists.
-pub type VecBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
-
-// /// A trace implementation for empty values using a spine of ordered lists.
-// pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
-
-/// A trace implementation backed by columnar storage.
-pub type ColSpine<K, V, T, R> = Spine<Rc<RhhValBatch<TStack<((K,V),T,R)>>>>;
-/// A batcher for columnar storage.
-pub type ColBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColMerger<(K,V),T,R>>;
-/// A builder for columnar storage.
-pub type ColBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>;
-
-// /// A trace implementation backed by columnar storage.
-// pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
+pub type VecBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<((K,V),T,R)>>;
 
 /// A carrier trait indicating that the type's `Ord` and `PartialOrd` implementations are by `Hashable::hashed()`.
 pub trait HashOrdered: Hashable { }
@@ -86,15 +72,13 @@ mod val_batch {
     use std::convert::TryInto;
     use std::marker::PhantomData;
     use serde::{Deserialize, Serialize};
-    use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::hashable::Hashable;
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, BuilderInput};
-    use crate::trace::implementations::layout;
+    use crate::trace::implementations::OffsetList;
 
-    use super::{Layout, HashOrdered};
+    use super::{Update, HashOrdered};
 
     /// Update tuples organized as a Robin Hood Hash map, ordered by `(hash(Key), Key, Val, Time)`.
     ///
@@ -111,9 +95,15 @@ mod val_batch {
     /// We specifically want to use the highest bits of the result (we will) because the low bits have
     /// likely been spent shuffling the data between workers (by key), and are likely low entropy.
     #[derive(Debug, Serialize, Deserialize)]
-    pub struct RhhValStorage<L: Layout>
+    #[serde(bound = "
+        U::Key: Serialize + for<'a> Deserialize<'a>,
+        U::Val: Serialize + for<'a> Deserialize<'a>,
+        U::Time: Serialize + for<'a> Deserialize<'a>,
+        U::Diff: Serialize + for<'a> Deserialize<'a>,
+    ")]
+    pub struct RhhValStorage<U: Update>
     where
-        layout::Key<L>: Default + HashOrdered,
+        U::Key: Default + HashOrdered,
     {
 
         /// The requested capacity for `keys`. We use this when determining where a key with a certain hash
@@ -127,13 +117,13 @@ mod val_batch {
         pub key_count: usize,
 
         /// An ordered list of keys, corresponding to entries in `keys_offs`.
-        pub keys: L::KeyContainer,
+        pub keys: Vec<U::Key>,
         /// Offsets used to provide indexes from keys to values.
         ///
         /// The length of this list is one longer than `keys`, so that we can avoid bounds logic.
-        pub keys_offs: L::OffsetContainer,
+        pub keys_offs: OffsetList,
         /// Concatenated ordered lists of values, bracketed by offsets in `keys_offs`.
-        pub vals: L::ValContainer,
+        pub vals: Vec<U::Val>,
         /// Offsets used to provide indexes from values to updates.
         ///
         /// This list has a special representation that any empty range indicates the singleton
@@ -142,17 +132,17 @@ mod val_batch {
         /// single common update values (e.g. in a snapshot, the minimal time and a diff of one).
         ///
         /// The length of this list is one longer than `vals`, so that we can avoid bounds logic.
-        pub vals_offs: L::OffsetContainer,
+        pub vals_offs: OffsetList,
         /// Concatenated ordered lists of update times, bracketed by offsets in `vals_offs`.
-        pub times: L::TimeContainer,
+        pub times: Vec<U::Time>,
         /// Concatenated ordered lists of update diffs, bracketed by offsets in `vals_offs`.
-        pub diffs: L::DiffContainer,
+        pub diffs: Vec<U::Diff>,
     }
 
-    impl<L: Layout> RhhValStorage<L>
+    impl<U: Update> RhhValStorage<U>
     where
-        layout::Key<L>: Default + HashOrdered,
-        for<'a> layout::KeyRef<'a, L>: HashOrdered,
+        U::Key: Default + HashOrdered,
+        for<'a> &'a U::Key: HashOrdered,
     {
         /// Lower and upper bounds in `self.vals` corresponding to the key at `index`.
         fn values_for_key(&self, index: usize) -> (usize, usize) {
@@ -184,31 +174,24 @@ mod val_batch {
         /// If `offset` is specified, we will insert it at the appropriate location. If it is not specified,
         /// we leave `keys_offs` ready to receive it as the next `push`. This is so that builders that may
         /// not know the final offset at the moment of key insertion can prepare for receiving the offset.
-        fn insert_key(&mut self, key: layout::KeyRef<'_, L>, offset: Option<usize>) {
-            let desired = self.desired_location(&key);
+        fn insert_key(&mut self, key: &U::Key, offset: Option<usize>) {
+            let desired = self.desired_location(key);
             // Were we to push the key now, it would be at `self.keys.len()`, so while that is wrong,
             // push additional blank entries in.
             while self.keys.len() < desired {
                 // We insert a default (dummy) key and repeat the offset to indicate this.
                 let current_offset = self.keys_offs.index(self.keys.len());
-                self.keys.push_own(&<layout::Key<L> as Default>::default());
-                self.keys_offs.push_ref(current_offset);
+                self.keys.push(U::Key::default());
+                self.keys_offs.push(current_offset);
             }
 
             // Now we insert the key. Even if it is no longer the desired location because of contention.
             // If an offset has been supplied we insert it, and otherwise leave it for future determination.
-            self.keys.push_ref(key);
+            self.keys.push(key.clone());
             if let Some(offset) = offset {
-                self.keys_offs.push_ref(offset);
+                self.keys_offs.push(offset);
             }
             self.key_count += 1;
-        }
-
-        /// Inserts a reference to an owned key, inefficiently. Should be removed.
-        fn insert_key_own(&mut self, key: &layout::Key<L>, offset: Option<usize>) {
-            let mut key_con = L::KeyContainer::with_capacity(1);
-            key_con.push_own(&key);
-            self.insert_key(key_con.index(0), offset)
         }
 
         /// Indicates both the desired location and the hash signature of the key.
@@ -220,9 +203,9 @@ mod val_batch {
         }
 
         /// Returns true if one should advance one's index in the search for `key`.
-        fn advance_key(&self, index: usize, key: layout::KeyRef<'_, L>) -> bool {
+        fn advance_key(&self, index: usize, key: &U::Key) -> bool {
             // Ideally this short-circuits, as `self.keys[index]` is bogus data.
-            !self.live_key(index) || self.keys.index(index).lt(&<L::KeyContainer as BatchContainer>::reborrow(key))
+            !self.live_key(index) || self.keys[index].lt(key)
         }
 
         /// Indicates that a key is valid, rather than dead space, by looking for a valid offset range.
@@ -253,25 +236,21 @@ mod val_batch {
     }
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
-    ///
-    /// The `L` parameter captures how the updates should be laid out, and `C` determines which
-    /// merge batcher to select.
     #[derive(Serialize, Deserialize)]
     #[serde(bound = "
-        L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
-        L::ValContainer: Serialize + for<'a> Deserialize<'a>,
-        L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
-        L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
-        L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
+        U::Key: Serialize + for<'a> Deserialize<'a>,
+        U::Val: Serialize + for<'a> Deserialize<'a>,
+        U::Time: Serialize + for<'a> Deserialize<'a>,
+        U::Diff: Serialize + for<'a> Deserialize<'a>,
     ")]
-    pub struct RhhValBatch<L: Layout>
+    pub struct RhhValBatch<U: Update>
     where
-        layout::Key<L>: Default + HashOrdered,
+        U::Key: Default + HashOrdered,
     {
         /// The updates themselves.
-        pub storage: RhhValStorage<L>,
+        pub storage: RhhValStorage<U>,
         /// Description of the update times this layer represents.
-        pub description: Description<layout::Time<L>>,
+        pub description: Description<U::Time>,
         /// The number of updates reflected in the batch.
         ///
         /// We track this separately from `storage` because due to the singleton optimization,
@@ -280,20 +259,17 @@ mod val_batch {
         pub updates: usize,
     }
 
-    impl<L: Layout> WithLayout for RhhValBatch<L>
+    impl<U: Update> BatchReader for RhhValBatch<U>
     where
-        layout::Key<L>: Default + HashOrdered,
-        for<'a> layout::KeyRef<'a, L>: HashOrdered,
+        U::Key: Default + HashOrdered,
+        for<'a> &'a U::Key: HashOrdered,
     {
-        type Layout = L;
-    }
+        type Key = U::Key;
+        type Val = U::Val;
+        type Time = U::Time;
+        type Diff = U::Diff;
 
-    impl<L: Layout> BatchReader for RhhValBatch<L>
-    where
-        layout::Key<L>: Default + HashOrdered,
-        for<'a> layout::KeyRef<'a, L>: HashOrdered,
-    {
-        type Cursor = RhhValCursor<L>;
+        type Cursor = RhhValCursor<U>;
         fn cursor(&self) -> Self::Cursor {
             let mut cursor = RhhValCursor {
                 key_cursor: 0,
@@ -308,17 +284,17 @@ mod val_batch {
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
             self.updates
         }
-        fn description(&self) -> &Description<layout::Time<L>> { &self.description }
+        fn description(&self) -> &Description<U::Time> { &self.description }
     }
 
-    impl<L: Layout> Batch for RhhValBatch<L>
+    impl<U: Update> Batch for RhhValBatch<U>
     where
-        layout::Key<L>: Default + HashOrdered,
-        for<'a> layout::KeyRef<'a, L>: HashOrdered,
+        U::Key: Default + HashOrdered,
+        for<'a> &'a U::Key: HashOrdered,
     {
-        type Merger = RhhValMerger<L>;
+        type Merger = RhhValMerger<U>;
 
-        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
+        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<U::Time>) -> Self::Merger {
             RhhValMerger::new(self, other, compaction_frontier)
         }
 
@@ -326,12 +302,12 @@ mod val_batch {
             use timely::progress::Timestamp;
             Self {
                 storage: RhhValStorage {
-                    keys: L::KeyContainer::with_capacity(0),
-                    keys_offs: L::OffsetContainer::with_capacity(0),
-                    vals: L::ValContainer::with_capacity(0),
-                    vals_offs: L::OffsetContainer::with_capacity(0),
-                    times: L::TimeContainer::with_capacity(0),
-                    diffs: L::DiffContainer::with_capacity(0),
+                    keys: Vec::new(),
+                    keys_offs: OffsetList::with_capacity(0),
+                    vals: Vec::new(),
+                    vals_offs: OffsetList::with_capacity(0),
+                    times: Vec::new(),
+                    diffs: Vec::new(),
                     key_count: 0,
                     key_capacity: 0,
                     divisor: 0,
@@ -343,35 +319,34 @@ mod val_batch {
     }
 
     /// State for an in-progress merge.
-    pub struct RhhValMerger<L: Layout>
+    pub struct RhhValMerger<U: Update>
     where
-        layout::Key<L>: Default + HashOrdered,
+        U::Key: Default + HashOrdered,
     {
         /// Key position to merge next in the first batch.
         key_cursor1: usize,
         /// Key position to merge next in the second batch.
         key_cursor2: usize,
         /// result that we are currently assembling.
-        result: RhhValStorage<L>,
+        result: RhhValStorage<U>,
         /// description
-        description: Description<layout::Time<L>>,
+        description: Description<U::Time>,
 
         /// Local stash of updates, to use for consolidation.
         ///
         /// We could emulate a `ChangeBatch` here, with related compaction smarts.
         /// A `ChangeBatch` itself needs an `i64` diff type, which we have not.
-        update_stash: Vec<(layout::Time<L>, layout::Diff<L>)>,
+        update_stash: Vec<(U::Time, U::Diff)>,
         /// Counts the number of singleton-optimized entries, that we may correctly count the updates.
         singletons: usize,
     }
 
-    impl<L: Layout> Merger<RhhValBatch<L>> for RhhValMerger<L>
+    impl<U: Update> Merger<RhhValBatch<U>> for RhhValMerger<U>
     where
-        layout::Key<L>: Default + HashOrdered,
-        RhhValBatch<L>: Batch<Time=layout::Time<L>>,
-        for<'a> layout::KeyRef<'a, L>: HashOrdered,
+        U::Key: Default + HashOrdered,
+        for<'a> &'a U::Key: HashOrdered,
     {
-        fn new(batch1: &RhhValBatch<L>, batch2: &RhhValBatch<L>, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self {
+        fn new(batch1: &RhhValBatch<U>, batch2: &RhhValBatch<U>, compaction_frontier: AntichainRef<U::Time>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
             use crate::lattice::Lattice;
@@ -388,23 +363,25 @@ mod val_batch {
             let batch1 = &batch1.storage;
             let batch2 = &batch2.storage;
 
+            let keys_capacity = batch1.keys.len() + batch2.keys.len();
+            let vals_capacity = batch1.vals.len() + batch2.vals.len();
+            let times_capacity = batch1.times.len() + batch2.times.len();
+            let diffs_capacity = batch1.diffs.len() + batch2.diffs.len();
+
             let mut storage = RhhValStorage {
-                keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
-                keys_offs: L::OffsetContainer::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
-                vals: L::ValContainer::merge_capacity(&batch1.vals, &batch2.vals),
-                vals_offs: L::OffsetContainer::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
-                times: L::TimeContainer::merge_capacity(&batch1.times, &batch2.times),
-                diffs: L::DiffContainer::merge_capacity(&batch1.diffs, &batch2.diffs),
+                keys: Vec::with_capacity(keys_capacity),
+                keys_offs: OffsetList::with_capacity(batch1.keys_offs.len() + batch2.keys_offs.len()),
+                vals: Vec::with_capacity(vals_capacity),
+                vals_offs: OffsetList::with_capacity(batch1.vals_offs.len() + batch2.vals_offs.len()),
+                times: Vec::with_capacity(times_capacity),
+                diffs: Vec::with_capacity(diffs_capacity),
                 key_count: 0,
                 key_capacity: rhh_cap,
-                divisor: RhhValStorage::<L>::divisor_for_capacity(rhh_cap),
+                divisor: RhhValStorage::<U>::divisor_for_capacity(rhh_cap),
             };
 
-            // Mark explicit types because type inference fails to resolve it.
-            let keys_offs: &mut L::OffsetContainer = &mut storage.keys_offs;
-            keys_offs.push_ref(0);
-            let vals_offs: &mut L::OffsetContainer = &mut storage.vals_offs;
-            vals_offs.push_ref(0);
+            storage.keys_offs.push(0);
+            storage.vals_offs.push(0);
 
             RhhValMerger {
                 key_cursor1: 0,
@@ -415,14 +392,14 @@ mod val_batch {
                 singletons: 0,
             }
         }
-        fn done(self) -> RhhValBatch<L> {
+        fn done(self) -> RhhValBatch<U> {
             RhhValBatch {
                 updates: self.result.times.len() + self.singletons,
                 storage: self.result,
                 description: self.description,
             }
         }
-        fn work(&mut self, source1: &RhhValBatch<L>, source2: &RhhValBatch<L>, fuel: &mut isize) {
+        fn work(&mut self, source1: &RhhValBatch<U>, source2: &RhhValBatch<U>, fuel: &mut isize) {
 
             // An (incomplete) indication of the amount of work we've done so far.
             let starting_updates = self.result.times.len();
@@ -460,10 +437,10 @@ mod val_batch {
     }
 
     // Helper methods in support of merging batches.
-    impl<L: Layout> RhhValMerger<L>
+    impl<U: Update> RhhValMerger<U>
     where
-        layout::Key<L>: Default + HashOrdered,
-        for<'a> layout::KeyRef<'a, L>: HashOrdered,
+        U::Key: Default + HashOrdered,
+        for<'a> &'a U::Key: HashOrdered,
     {
         /// Copy the next key in `source`.
         ///
@@ -472,32 +449,32 @@ mod val_batch {
         /// compacted values and updates.
         ///
         /// The caller should be certain to update the cursor, as this method does not do this.
-        fn copy_key(&mut self, source: &RhhValStorage<L>, cursor: usize) {
+        fn copy_key(&mut self, source: &RhhValStorage<U>, cursor: usize) {
             // Capture the initial number of values to determine if the merge was ultimately non-empty.
             let init_vals = self.result.vals.len();
             let (mut lower, upper) = source.values_for_key(cursor);
             while lower < upper {
                 self.stash_updates_for_val(source, lower);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.push_ref(off);
-                    self.result.vals.push_ref(source.vals.index(lower));
+                    self.result.vals_offs.push(off);
+                    self.result.vals.push(source.vals[lower].clone());
                 }
                 lower += 1;
             }
 
             // If we have pushed any values, copy the key as well.
             if self.result.vals.len() > init_vals {
-                self.result.insert_key(source.keys.index(cursor), Some(self.result.vals.len()));
+                self.result.insert_key(&source.keys[cursor], Some(self.result.vals.len()));
             }
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
         ///
         /// This method only merges a single key. It applies all compaction necessary, and may result in no output
         /// if the updates cancel either directly or after compaction.
-        fn merge_key(&mut self, source1: &RhhValStorage<L>, source2: &RhhValStorage<L>) {
+        fn merge_key(&mut self, source1: &RhhValStorage<U>, source2: &RhhValStorage<U>) {
 
             use ::std::cmp::Ordering;
-            match source1.keys.index(self.key_cursor1).cmp(&source2.keys.index(self.key_cursor2)) {
+            match source1.keys[self.key_cursor1].cmp(&source2.keys[self.key_cursor2]) {
                 Ordering::Less => {
                     self.copy_key(source1, self.key_cursor1);
                     self.key_cursor1 += 1;
@@ -507,7 +484,7 @@ mod val_batch {
                     let (lower1, upper1) = source1.values_for_key(self.key_cursor1);
                     let (lower2, upper2) = source2.values_for_key(self.key_cursor2);
                     if let Some(off) = self.merge_vals((source1, lower1, upper1), (source2, lower2, upper2)) {
-                        self.result.insert_key(source1.keys.index(self.key_cursor1), Some(off));
+                        self.result.insert_key(&source1.keys[self.key_cursor1], Some(off));
                     }
                     // Increment cursors in either case; the keys are merged.
                     self.key_cursor1 += 1;
@@ -525,8 +502,8 @@ mod val_batch {
         /// an offset that should be recorded to indicate the upper extent of the result values.
         fn merge_vals(
             &mut self,
-            (source1, mut lower1, upper1): (&RhhValStorage<L>, usize, usize),
-            (source2, mut lower2, upper2): (&RhhValStorage<L>, usize, usize),
+            (source1, mut lower1, upper1): (&RhhValStorage<U>, usize, usize),
+            (source2, mut lower2, upper2): (&RhhValStorage<U>, usize, usize),
         ) -> Option<usize> {
             // Capture the initial number of values to determine if the merge was ultimately non-empty.
             let init_vals = self.result.vals.len();
@@ -535,13 +512,13 @@ mod val_batch {
                 // if they are non-empty post-consolidation, we write the value.
                 // We could multi-way merge and it wouldn't be very complicated.
                 use ::std::cmp::Ordering;
-                match source1.vals.index(lower1).cmp(&source2.vals.index(lower2)) {
+                match source1.vals[lower1].cmp(&source2.vals[lower2]) {
                     Ordering::Less => {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.push_ref(off);
-                            self.result.vals.push_ref(source1.vals.index(lower1));
+                            self.result.vals_offs.push(off);
+                            self.result.vals.push(source1.vals[lower1].clone());
                         }
                         lower1 += 1;
                     },
@@ -549,8 +526,8 @@ mod val_batch {
                         self.stash_updates_for_val(source1, lower1);
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.push_ref(off);
-                            self.result.vals.push_ref(source1.vals.index(lower1));
+                            self.result.vals_offs.push(off);
+                            self.result.vals.push(source1.vals[lower1].clone());
                         }
                         lower1 += 1;
                         lower2 += 1;
@@ -559,8 +536,8 @@ mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source2, lower2);
                         if let Some(off) = self.consolidate_updates() {
-                            self.result.vals_offs.push_ref(off);
-                            self.result.vals.push_ref(source2.vals.index(lower2));
+                            self.result.vals_offs.push(off);
+                            self.result.vals.push(source2.vals[lower2].clone());
                         }
                         lower2 += 1;
                     },
@@ -570,16 +547,16 @@ mod val_batch {
             while lower1 < upper1 {
                 self.stash_updates_for_val(source1, lower1);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.push_ref(off);
-                    self.result.vals.push_ref(source1.vals.index(lower1));
+                    self.result.vals_offs.push(off);
+                    self.result.vals.push(source1.vals[lower1].clone());
                 }
                 lower1 += 1;
             }
             while lower2 < upper2 {
                 self.stash_updates_for_val(source2, lower2);
                 if let Some(off) = self.consolidate_updates() {
-                    self.result.vals_offs.push_ref(off);
-                    self.result.vals.push_ref(source2.vals.index(lower2));
+                    self.result.vals_offs.push(off);
+                    self.result.vals.push(source2.vals[lower2].clone());
                 }
                 lower2 += 1;
             }
@@ -593,16 +570,16 @@ mod val_batch {
         }
 
         /// Transfer updates for an indexed value in `source` into `self`, with compaction applied.
-        fn stash_updates_for_val(&mut self, source: &RhhValStorage<L>, index: usize) {
+        fn stash_updates_for_val(&mut self, source: &RhhValStorage<U>, index: usize) {
             let (lower, upper) = source.updates_for_value(index);
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
-                let time = source.times.index(i);
-                let diff = source.diffs.index(i);
-                let mut new_time = L::TimeContainer::into_owned(time);
+                let time = &source.times[i];
+                let diff = &source.diffs[i];
+                let mut new_time = time.clone();
                 use crate::lattice::Lattice;
                 new_time.advance_by(self.description.since().borrow());
-                self.update_stash.push((new_time, L::DiffContainer::into_owned(diff)));
+                self.update_stash.push((new_time, diff.clone()));
             }
         }
 
@@ -615,8 +592,7 @@ mod val_batch {
                 // we push nothing and report an unincremented offset to encode this case.
                 let time_diff = self.result.times.last().zip(self.result.diffs.last());
                 let last_eq = self.update_stash.last().zip(time_diff).map(|((t1, d1), (t2, d2))| {
-                    // TODO: The use of `into_owned` is a work-around for not having reference types.
-                    *t1 == L::TimeContainer::into_owned(t2) && *d1 == L::DiffContainer::into_owned(d2)
+                    *t1 == *t2 && *d1 == *d2
                 });
                 if self.update_stash.len() == 1 && last_eq.unwrap_or(false) {
                     // Just clear out update_stash, as we won't drain it here.
@@ -626,8 +602,8 @@ mod val_batch {
                 else {
                     // Conventional; move `update_stash` into `updates`.
                     for (time, diff) in self.update_stash.drain(..) {
-                        self.result.times.push_own(&time);
-                        self.result.diffs.push_own(&diff);
+                        self.result.times.push(time);
+                        self.result.diffs.push(diff);
                     }
                 }
                 Some(self.result.times.len())
@@ -645,49 +621,45 @@ mod val_batch {
     /// Importantly, we should skip over invalid keys, rather than report them as
     /// invalid through `key_valid`: that method is meant to indicate the end of
     /// the cursor, rather than internal state.
-    pub struct RhhValCursor<L: Layout>
+    pub struct RhhValCursor<U: Update>
     where
-        layout::Key<L>: Default + HashOrdered,
+        U::Key: Default + HashOrdered,
     {
         /// Absolute position of the current key.
         key_cursor: usize,
         /// Absolute position of the current value.
         val_cursor: usize,
         /// Phantom marker for Rust happiness.
-        phantom: PhantomData<L>,
+        phantom: PhantomData<U>,
     }
 
-    use crate::trace::implementations::WithLayout;
-    impl<L: Layout> WithLayout for RhhValCursor<L>
+    impl<U: Update> Cursor for RhhValCursor<U>
     where
-        layout::Key<L>: Default + HashOrdered,
-        for<'a> layout::KeyRef<'a, L>: HashOrdered,
+        U::Key: Default + HashOrdered,
+        for<'a> &'a U::Key: HashOrdered,
     {
-        type Layout = L;
-    }
+        type Key = U::Key;
+        type Val = U::Val;
+        type Time = U::Time;
+        type Diff = U::Diff;
 
-    impl<L: Layout> Cursor for RhhValCursor<L>
-    where
-        layout::Key<L>: Default + HashOrdered,
-        for<'a> layout::KeyRef<'a, L>: HashOrdered,
-    {
-        type Storage = RhhValBatch<L>;
+        type Storage = RhhValBatch<U>;
 
-        fn get_key<'a>(&self, storage: &'a RhhValBatch<L>) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
-        fn get_val<'a>(&self, storage: &'a RhhValBatch<L>) -> Option<Self::Val<'a>> { if self.val_valid(storage) { storage.storage.vals.get(self.val_cursor) } else { None } }
-        fn key<'a>(&self, storage: &'a RhhValBatch<L>) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
-        fn val<'a>(&self, storage: &'a RhhValBatch<L>) -> Self::Val<'a> { storage.storage.vals.index(self.val_cursor) }
-        fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &RhhValBatch<L>, mut logic: L2) {
+        fn key<'a>(&self, storage: &'a RhhValBatch<U>) -> &'a U::Key { &storage.storage.keys[self.key_cursor] }
+        fn val<'a>(&self, storage: &'a RhhValBatch<U>) -> &'a U::Val { &storage.storage.vals[self.val_cursor] }
+        fn get_key<'a>(&self, storage: &'a RhhValBatch<U>) -> Option<&'a U::Key> { storage.storage.keys.get(self.key_cursor) }
+        fn get_val<'a>(&self, storage: &'a RhhValBatch<U>) -> Option<&'a U::Val> { if self.val_valid(storage) { storage.storage.vals.get(self.val_cursor) } else { None } }
+        fn map_times<L2: FnMut(&U::Time, &U::Diff)>(&mut self, storage: &RhhValBatch<U>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
-                let time = storage.storage.times.index(index);
-                let diff = storage.storage.diffs.index(index);
+                let time = &storage.storage.times[index];
+                let diff = &storage.storage.diffs[index];
                 logic(time, diff);
             }
         }
-        fn key_valid(&self, storage: &RhhValBatch<L>) -> bool { self.key_cursor < storage.storage.keys.len() }
-        fn val_valid(&self, storage: &RhhValBatch<L>) -> bool { self.val_cursor < storage.storage.values_for_key(self.key_cursor).1 }
-        fn step_key(&mut self, storage: &RhhValBatch<L>){
+        fn key_valid(&self, storage: &RhhValBatch<U>) -> bool { self.key_cursor < storage.storage.keys.len() }
+        fn val_valid(&self, storage: &RhhValBatch<U>) -> bool { self.val_cursor < storage.storage.values_for_key(self.key_cursor).1 }
+        fn step_key(&mut self, storage: &RhhValBatch<U>){
             // We advance the cursor by one for certain, and then as long as we need to find a valid key.
             self.key_cursor += 1;
             storage.storage.advance_to_live_key(&mut self.key_cursor);
@@ -699,9 +671,8 @@ mod val_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key(&mut self, storage: &RhhValBatch<L>, key: Self::Key<'_>) {
-            // self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(key));
-            let desired = storage.storage.desired_location(&key);
+        fn seek_key(&mut self, storage: &RhhValBatch<U>, key: &U::Key) {
+            let desired = storage.storage.desired_location(key);
             // Advance the cursor, if `desired` is ahead of it.
             if self.key_cursor < desired {
                 self.key_cursor = desired;
@@ -719,16 +690,19 @@ mod val_batch {
                 self.rewind_vals(storage);
             }
         }
-        fn step_val(&mut self, storage: &RhhValBatch<L>) {
+        fn step_val(&mut self, storage: &RhhValBatch<U>) {
             self.val_cursor += 1;
             if !self.val_valid(storage) {
                 self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
             }
         }
-        fn seek_val(&mut self, storage: &RhhValBatch<L>, val: Self::Val<'_>) {
-            self.val_cursor += storage.storage.vals.advance(self.val_cursor, storage.storage.values_for_key(self.key_cursor).1, |x| <L::ValContainer as BatchContainer>::reborrow(x).lt(&<L::ValContainer as BatchContainer>::reborrow(val)));
+        fn seek_val(&mut self, storage: &RhhValBatch<U>, val: &U::Val) {
+            let (_, upper) = storage.storage.values_for_key(self.key_cursor);
+            while self.val_cursor < upper && storage.storage.vals[self.val_cursor].lt(val) {
+                self.val_cursor += 1;
+            }
         }
-        fn rewind_keys(&mut self, storage: &RhhValBatch<L>) {
+        fn rewind_keys(&mut self, storage: &RhhValBatch<U>) {
             self.key_cursor = 0;
             storage.storage.advance_to_live_key(&mut self.key_cursor);
 
@@ -736,29 +710,28 @@ mod val_batch {
                 self.rewind_vals(storage)
             }
         }
-        fn rewind_vals(&mut self, storage: &RhhValBatch<L>) {
+        fn rewind_vals(&mut self, storage: &RhhValBatch<U>) {
             self.val_cursor = storage.storage.values_for_key(self.key_cursor).0;
         }
     }
 
     /// A builder for creating layers from unsorted update tuples.
-    pub struct RhhValBuilder<L: Layout, CI>
+    pub struct RhhValBuilder<U: Update>
     where
-        layout::Key<L>: Default + HashOrdered,
+        U::Key: Default + HashOrdered,
     {
-        result: RhhValStorage<L>,
-        singleton: Option<(layout::Time<L>, layout::Diff<L>)>,
+        result: RhhValStorage<U>,
+        singleton: Option<(U::Time, U::Diff)>,
         /// Counts the number of singleton optimizations we performed.
         ///
         /// This number allows us to correctly gauge the total number of updates reflected in a batch,
         /// even though `updates.len()` may be much shorter than this amount.
         singletons: usize,
-        _marker: PhantomData<CI>,
     }
 
-    impl<L: Layout, CI> RhhValBuilder<L, CI>
+    impl<U: Update> RhhValBuilder<U>
     where
-        layout::Key<L>: Default + HashOrdered,
+        U::Key: Default + HashOrdered,
     {
         /// Pushes a single update, which may set `self.singleton` rather than push.
         ///
@@ -771,41 +744,38 @@ mod val_batch {
         /// previously pushed update exactly. In that case, we do not push the update into `updates`.
         /// The update tuple is retained in `self.singleton` in case we see another update and need
         /// to recover the singleton to push it into `updates` to join the second update.
-        fn push_update(&mut self, time: layout::Time<L>, diff: layout::Diff<L>) {
+        fn push_update(&mut self, time: U::Time, diff: U::Diff) {
             // If a just-pushed update exactly equals `(time, diff)` we can avoid pushing it.
-            // TODO: The use of `into_owned` is a bandage for not having references we can compare.
-            if self.result.times.last().map(|t| L::TimeContainer::into_owned(t) == time).unwrap_or(false) && self.result.diffs.last().map(|d| L::DiffContainer::into_owned(d) == diff).unwrap_or(false) {
+            if self.result.times.last().map(|t| *t == time).unwrap_or(false) && self.result.diffs.last().map(|d| *d == diff).unwrap_or(false) {
                 assert!(self.singleton.is_none());
                 self.singleton = Some((time, diff));
             }
             else {
                 // If we have pushed a single element, we need to copy it out to meet this one.
                 if let Some((time, diff)) = self.singleton.take() {
-                    self.result.times.push_own(&time);
-                    self.result.diffs.push_own(&diff);
+                    self.result.times.push(time);
+                    self.result.diffs.push(diff);
                 }
-                self.result.times.push_own(&time);
-                self.result.diffs.push_own(&diff);
+                self.result.times.push(time);
+                self.result.diffs.push(diff);
             }
         }
     }
 
-    impl<L: Layout, CI> Builder for RhhValBuilder<L, CI>
+    impl<U: Update> Builder for RhhValBuilder<U>
     where
-        layout::Key<L>: Default + HashOrdered,
-        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Key<'a> = layout::Key<L>, Time=layout::Time<L>, Diff=layout::Diff<L>>,
-        for<'a> L::ValContainer: PushInto<CI::Val<'a>>,
-        for<'a> layout::KeyRef<'a, L>: HashOrdered,
+        U::Key: Default + HashOrdered,
+        for<'a> &'a U::Key: HashOrdered,
     {
-        type Input = CI;
-        type Time = layout::Time<L>;
-        type Output = RhhValBatch<L>;
+        type Input = Vec<((U::Key, U::Val), U::Time, U::Diff)>;
+        type Time = U::Time;
+        type Output = RhhValBatch<U>;
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
 
             // Double the capacity for RHH; probably excessive.
             let rhh_capacity = 2 * keys;
-            let divisor = RhhValStorage::<L>::divisor_for_capacity(rhh_capacity);
+            let divisor = RhhValStorage::<U>::divisor_for_capacity(rhh_capacity);
             // We want some additive slop, in case we spill over.
             // This number magically chosen based on nothing in particular.
             // Worst case, we will re-alloc and copy if we spill beyond this.
@@ -814,58 +784,56 @@ mod val_batch {
             // We don't introduce zero offsets as they will be introduced by the first `push` call.
             Self {
                 result: RhhValStorage {
-                    keys: L::KeyContainer::with_capacity(keys),
-                    keys_offs: L::OffsetContainer::with_capacity(keys + 1),
-                    vals: L::ValContainer::with_capacity(vals),
-                    vals_offs: L::OffsetContainer::with_capacity(vals + 1),
-                    times: L::TimeContainer::with_capacity(upds),
-                    diffs: L::DiffContainer::with_capacity(upds),
+                    keys: Vec::with_capacity(keys),
+                    keys_offs: OffsetList::with_capacity(keys + 1),
+                    vals: Vec::with_capacity(vals),
+                    vals_offs: OffsetList::with_capacity(vals + 1),
+                    times: Vec::with_capacity(upds),
+                    diffs: Vec::with_capacity(upds),
                     key_count: 0,
                     key_capacity: rhh_capacity,
                     divisor,
                 },
                 singleton: None,
                 singletons: 0,
-                _marker: PhantomData,
             }
         }
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {
-            for item in chunk.drain() {
-                let (key, val, time, diff) = CI::into_parts(item);
+            for ((key, val), time, diff) in chunk.drain(..) {
                 // Perhaps this is a continuation of an already received key.
-                if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
+                if self.result.keys.last().map(|k| key == *k).unwrap_or(false) {
                     // Perhaps this is a continuation of an already received value.
-                    if self.result.vals.last().map(|v| CI::val_eq(&val, v)).unwrap_or(false) {
+                    if self.result.vals.last().map(|v| val == *v).unwrap_or(false) {
                         self.push_update(time, diff);
                     } else {
                         // New value; complete representation of prior value.
-                        self.result.vals_offs.push_ref(self.result.times.len());
+                        self.result.vals_offs.push(self.result.times.len());
                         if self.singleton.take().is_some() { self.singletons += 1; }
                         self.push_update(time, diff);
-                        self.result.vals.push_into(val);
+                        self.result.vals.push(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
-                    self.result.vals_offs.push_ref(self.result.times.len());
+                    self.result.vals_offs.push(self.result.times.len());
                     if self.singleton.take().is_some() { self.singletons += 1; }
-                    self.result.keys_offs.push_ref(self.result.vals.len());
+                    self.result.keys_offs.push(self.result.vals.len());
                     self.push_update(time, diff);
-                    self.result.vals.push_into(val);
+                    self.result.vals.push(val);
                     // Insert the key, but with no specified offset.
-                    self.result.insert_key_own(&key, None);
+                    self.result.insert_key(&key, None);
                 }
             }
         }
 
         #[inline(never)]
-        fn done(mut self, description: Description<Self::Time>) -> RhhValBatch<L> {
+        fn done(mut self, description: Description<Self::Time>) -> RhhValBatch<U> {
             // Record the final offsets
-            self.result.vals_offs.push_ref(self.result.times.len());
+            self.result.vals_offs.push(self.result.times.len());
             // Remove any pending singleton, and if it was set increment our count.
             if self.singleton.take().is_some() { self.singletons += 1; }
-            self.result.keys_offs.push_ref(self.result.vals.len());
+            self.result.keys_offs.push(self.result.vals.len());
             RhhValBatch {
                 updates: self.result.times.len() + self.singletons,
                 storage: self.result,
@@ -874,7 +842,14 @@ mod val_batch {
         }
 
         fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
-            let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
+            let mut keys = 0;
+            let mut vals = 0;
+            let mut upds = 0;
+            for chunk in chain.iter() {
+                keys += chunk.len();
+                vals += chunk.len();
+                upds += chunk.len();
+            }
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);

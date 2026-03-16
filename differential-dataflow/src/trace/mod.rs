@@ -19,8 +19,6 @@ use crate::logging::Logger;
 pub use self::cursor::Cursor;
 pub use self::description::Description;
 
-use crate::trace::implementations::LayoutExt;
-
 /// A type used to express how much effort a trace should exert even in the absence of updates.
 pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize)])->Option<usize>+Send+Sync>;
 
@@ -44,52 +42,29 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize
 /// This is a restricted interface to the more general `Trace` trait, which extends this trait with further methods
 /// to update the contents of the trace. These methods are used to examine the contents, and to update the reader's
 /// capabilities (which may release restrictions on the mutations to the underlying trace and cause work to happen).
-pub trait TraceReader : LayoutExt {
+pub trait TraceReader {
+
+    /// The key type.
+    type Key: Ord + Clone + 'static;
+    /// The value type.
+    type Val: Ord + Clone + 'static;
+    /// The time type.
+    type Time: crate::lattice::Lattice + timely::progress::Timestamp + Ord + Clone;
+    /// The diff type.
+    type Diff: crate::difference::Semigroup + Ord + 'static;
 
     /// The type of an immutable collection of updates.
     type Batch:
         'static +
         Clone +
-        BatchReader +
-        WithLayout<Layout = Self::Layout> +
-        for<'a> LayoutExt<
-            Key<'a> = Self::Key<'a>,
-            KeyOwn = Self::KeyOwn,
-            Val<'a> = Self::Val<'a>,
-            ValOwn = Self::ValOwn,
-            Time = Self::Time,
-            TimeGat<'a> = Self::TimeGat<'a>,
-            Diff = Self::Diff,
-            DiffGat<'a> = Self::DiffGat<'a>,
-            KeyContainer = Self::KeyContainer,
-            ValContainer = Self::ValContainer,
-            TimeContainer = Self::TimeContainer,
-            DiffContainer = Self::DiffContainer,
-        >;
-
+        BatchReader<Key=Self::Key, Val=Self::Val, Time=Self::Time, Diff=Self::Diff>;
 
     /// Storage type for `Self::Cursor`. Likely related to `Self::Batch`.
     type Storage;
 
     /// The type used to enumerate the collections contents.
     type Cursor:
-        Cursor<Storage=Self::Storage> +
-        WithLayout<Layout = Self::Layout> +
-        for<'a> LayoutExt<
-            Key<'a> = Self::Key<'a>,
-            KeyOwn = Self::KeyOwn,
-            Val<'a> = Self::Val<'a>,
-            ValOwn = Self::ValOwn,
-            Time = Self::Time,
-            TimeGat<'a> = Self::TimeGat<'a>,
-            Diff = Self::Diff,
-            DiffGat<'a> = Self::DiffGat<'a>,
-            KeyContainer = Self::KeyContainer,
-            ValContainer = Self::ValContainer,
-            TimeContainer = Self::TimeContainer,
-            DiffContainer = Self::DiffContainer,
-        >;
-
+        Cursor<Key=Self::Key, Val=Self::Val, Time=Self::Time, Diff=Self::Diff, Storage=Self::Storage>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
@@ -237,36 +212,28 @@ pub trait Trace : TraceReader<Batch: Batch> {
     fn close(&mut self);
 }
 
-use crate::trace::implementations::WithLayout;
-
 /// A batch of updates whose contents may be read.
 ///
 /// This is a restricted interface to batches of updates, which support the reading of the batch's contents,
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader : LayoutExt + Sized {
+pub trait BatchReader : Sized {
+
+    /// The key type.
+    type Key: Ord + Clone + 'static;
+    /// The value type.
+    type Val: Ord + Clone + 'static;
+    /// The time type.
+    type Time: crate::lattice::Lattice + timely::progress::Timestamp + Ord + Clone;
+    /// The diff type.
+    type Diff: crate::difference::Semigroup + Ord + 'static;
 
     /// The type used to enumerate the batch's contents.
     type Cursor:
-        Cursor<Storage=Self> +
-        WithLayout<Layout = Self::Layout> +
-        for<'a> LayoutExt<
-            Key<'a> = Self::Key<'a>,
-            KeyOwn = Self::KeyOwn,
-            Val<'a> = Self::Val<'a>,
-            ValOwn = Self::ValOwn,
-            Time = Self::Time,
-            TimeGat<'a> = Self::TimeGat<'a>,
-            Diff = Self::Diff,
-            DiffGat<'a> = Self::DiffGat<'a>,
-            KeyContainer = Self::KeyContainer,
-            ValContainer = Self::ValContainer,
-            TimeContainer = Self::TimeContainer,
-            DiffContainer = Self::DiffContainer,
-        >;
+        Cursor<Key=Self::Key, Val=Self::Val, Time=Self::Time, Diff=Self::Diff, Storage=Self>;
 
-      /// Acquires a cursor to the batch's contents.
+    /// Acquires a cursor to the batch's contents.
     fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
     fn len(&self) -> usize;
@@ -377,11 +344,12 @@ pub mod rc_blanket_impls {
     use timely::progress::{Antichain, frontier::AntichainRef};
     use super::{Batch, BatchReader, Builder, Merger, Cursor, Description};
 
-    impl<B: BatchReader> WithLayout for Rc<B> {
-        type Layout = B::Layout;
-    }
-
     impl<B: BatchReader> BatchReader for Rc<B> {
+
+        type Key = B::Key;
+        type Val = B::Val;
+        type Time = B::Time;
+        type Diff = B::Diff;
 
         /// The type used to enumerate the batch's contents.
         type Cursor = RcBatchCursor<B::Cursor>;
@@ -401,11 +369,6 @@ pub mod rc_blanket_impls {
         cursor: C,
     }
 
-    use crate::trace::implementations::WithLayout;
-    impl<C: Cursor> WithLayout for RcBatchCursor<C> {
-        type Layout = C::Layout;
-    }
-
     impl<C> RcBatchCursor<C> {
         fn new(cursor: C) -> Self {
             RcBatchCursor {
@@ -416,27 +379,32 @@ pub mod rc_blanket_impls {
 
     impl<C: Cursor> Cursor for RcBatchCursor<C> {
 
+        type Key = C::Key;
+        type Val = C::Val;
+        type Time = C::Time;
+        type Diff = C::Diff;
+
         type Storage = Rc<C::Storage>;
 
         #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
         #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-        #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
-        #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
+        #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
+        #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
-        #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { self.cursor.get_key(storage) }
-        #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { self.cursor.get_val(storage) }
+        #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> { self.cursor.get_key(storage) }
+        #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> { self.cursor.get_val(storage) }
 
         #[inline]
-        fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
+        fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L) {
             self.cursor.map_times(storage, logic)
         }
 
         #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-        #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
+        #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
 
         #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-        #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
+        #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(storage, val) }
 
         #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
         #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }

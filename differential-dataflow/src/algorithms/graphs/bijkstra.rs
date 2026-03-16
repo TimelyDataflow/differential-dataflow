@@ -41,7 +41,7 @@ pub fn bidijkstra_arranged<G, N, Tr>(
 where
     G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,
+    Tr: TraceReader<Key=N, Val=N, Diff=isize>+Clone+'static,
 {
     forward
         .stream

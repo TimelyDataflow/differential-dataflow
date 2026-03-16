@@ -9,10 +9,17 @@ pub mod cursor_list;
 
 pub use self::cursor_list::CursorList;
 
-use crate::trace::implementations::LayoutExt;
-
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
-pub trait Cursor : LayoutExt {
+pub trait Cursor {
+
+    /// The key type.
+    type Key: Ord + Clone + 'static;
+    /// The value type.
+    type Val: Ord + Clone + 'static;
+    /// The time type.
+    type Time: crate::lattice::Lattice + timely::progress::Timestamp + Ord + Clone;
+    /// The diff type.
+    type Diff: crate::difference::Semigroup + Ord + 'static;
 
     /// Storage required by the cursor.
     type Storage;
@@ -27,28 +34,28 @@ pub trait Cursor : LayoutExt {
     fn val_valid(&self, storage: &Self::Storage) -> bool;
 
     /// A reference to the current key. Asserts if invalid.
-    fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a>;
+    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key;
     /// A reference to the current value. Asserts if invalid.
-    fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a>;
+    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val;
 
     /// Returns a reference to the current key, if valid.
-    fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>>;
+    fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key>;
     /// Returns a reference to the current value, if valid.
-    fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>>;
+    fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val>;
 
     /// Applies `logic` to each pair of time and difference. Intended for mutation of the
     /// closure's scope.
-    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L);
+    fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, logic: L);
 
     /// Advances the cursor to the next key.
     fn step_key(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified key.
-    fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>);
+    fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key);
 
     /// Advances the cursor to the next value.
     fn step_val(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified value.
-    fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>);
+    fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val);
 
     /// Rewinds the cursor to the first key.
     fn rewind_keys(&mut self, storage: &Self::Storage);
@@ -58,8 +65,8 @@ pub trait Cursor : LayoutExt {
     /// Rewinds the cursor and outputs its contents to a Vec
     fn to_vec<K, IK, V, IV>(&mut self, storage: &Self::Storage, into_key: IK, into_val: IV) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
     where
-        IK: for<'a> Fn(Self::Key<'a>) -> K,
-        IV: for<'a> Fn(Self::Val<'a>) -> V,
+        IK: for<'a> Fn(&'a Self::Key) -> K,
+        IV: for<'a> Fn(&'a Self::Val) -> V,
     {
         let mut out = Vec::new();
         self.rewind_keys(storage);
@@ -68,7 +75,7 @@ pub trait Cursor : LayoutExt {
             while let Some(val) = self.get_val(storage) {
                 let mut kv_out = Vec::new();
                 self.map_times(storage, |ts, r| {
-                    kv_out.push((Self::owned_time(ts), Self::owned_diff(r)));
+                    kv_out.push((ts.clone(), r.clone()));
                 });
                 out.push(((into_key(key), into_val(val)), kv_out));
                 self.step_val(storage);

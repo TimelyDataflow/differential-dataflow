@@ -782,7 +782,7 @@ pub mod vec {
         /// ```
         pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            T2: for<'a> Trace<Key<'a>= &'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp, Diff: Abelian>+'static,
+            T2: Trace<Key=K, Val=V, Time=G::Timestamp, Diff: Abelian>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
         {
@@ -801,7 +801,7 @@ pub mod vec {
         pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             V: Clone+'static,
-            T2: for<'a> Trace<Key<'a>=&'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp>+'static,
+            T2: Trace<Key=K, Val=V, Time=G::Timestamp>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
         {
@@ -953,7 +953,7 @@ pub mod vec {
             Ba: crate::trace::Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
             Tr: for<'a> crate::trace::Trace<Time=G::Timestamp,Diff=R>+'static,
             Bu: crate::trace::Builder<Time=Tr::Time, Input=Ba::Output, Output=Tr::Batch>,
-            F: Fn(Tr::Key<'_>, Tr::Val<'_>) -> D + 'static,
+            F: Fn(&Tr::Key, &Tr::Val) -> D + 'static,
         {
             use crate::operators::arrange::arrangement::Arrange;
             self.map(|k| (k, ()))
@@ -1230,10 +1230,10 @@ pub mod vec {
         /// ```
         pub fn join_core<Tr2,I,L> (self, stream2: Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
         where
-            Tr2: for<'a> crate::trace::TraceReader<Key<'a>=&'a K, Time=G::Timestamp>+Clone+'static,
+            Tr2: crate::trace::TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
             R: Multiply<Tr2::Diff, Output: Semigroup+'static>,
             I: IntoIterator<Item: crate::Data>,
-            L: FnMut(&K,&V,Tr2::Val<'_>)->I+'static,
+            L: FnMut(&K,&V,&Tr2::Val)->I+'static,
         {
             self.arrange_by_key()
                 .join_core(stream2, result)

@@ -31,17 +31,12 @@ impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
     }
 }
 
-impl<Tr: TraceReader> WithLayout for TraceFrontier<Tr> {
-    type Layout = (
-        <Tr::Layout as Layout>::KeyContainer,
-        <Tr::Layout as Layout>::ValContainer,
-        Vec<Tr::Time>,
-        <Tr::Layout as Layout>::DiffContainer,
-        <Tr::Layout as Layout>::OffsetContainer,
-    );
-}
-
 impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
+
+    type Key = Tr::Key;
+    type Val = Tr::Val;
+    type Time = Tr::Time;
+    type Diff = Tr::Diff;
 
     type Batch = BatchFrontier<Tr::Batch>;
     type Storage = Tr::Storage;
@@ -86,17 +81,12 @@ pub struct BatchFrontier<B: BatchReader> {
     until: Antichain<B::Time>,
 }
 
-impl<B: BatchReader> WithLayout for BatchFrontier<B> {
-    type Layout = (
-        <B::Layout as Layout>::KeyContainer,
-        <B::Layout as Layout>::ValContainer,
-        Vec<B::Time>,
-        <B::Layout as Layout>::DiffContainer,
-        <B::Layout as Layout>::OffsetContainer,
-    );
-}
-
 impl<B: BatchReader> BatchReader for BatchFrontier<B> {
+
+    type Key = B::Key;
+    type Val = B::Val;
+    type Time = B::Time;
+    type Diff = B::Diff;
 
     type Cursor = BatchCursorFrontier<B::Cursor>;
 
@@ -125,17 +115,6 @@ pub struct CursorFrontier<C, T> {
     until: Antichain<T>
 }
 
-use crate::trace::implementations::{Layout, WithLayout};
-impl<C: Cursor> WithLayout for CursorFrontier<C, C::Time> {
-    type Layout = (
-        <C::Layout as Layout>::KeyContainer,
-        <C::Layout as Layout>::ValContainer,
-        Vec<C::Time>,
-        <C::Layout as Layout>::DiffContainer,
-        <C::Layout as Layout>::OffsetContainer,
-    );
-}
-
 impl<C, T: Clone> CursorFrontier<C, T> {
     fn new(cursor: C, since: AntichainRef<T>, until: AntichainRef<T>) -> Self {
         CursorFrontier {
@@ -148,24 +127,29 @@ impl<C, T: Clone> CursorFrontier<C, T> {
 
 impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
 
+    type Key = C::Key;
+    type Val = C::Val;
+    type Time = C::Time;
+    type Diff = C::Diff;
+
     type Storage = C::Storage;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
-    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
-    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
 
-    #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { self.cursor.get_key(storage) }
-    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { self.cursor.get_val(storage) }
+    #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> { self.cursor.get_key(storage) }
+    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> { self.cursor.get_val(storage) }
 
     #[inline]
-    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(storage, |time, diff| {
-            C::clone_time_onto(time, &mut temp);
+            temp.clone_from(time);
             temp.advance_by(since);
             if !until.less_equal(&temp) {
                 logic(&temp, diff);
@@ -174,10 +158,10 @@ impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(storage, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
@@ -192,16 +176,6 @@ pub struct BatchCursorFrontier<C: Cursor> {
     until: Antichain<C::Time>,
 }
 
-impl<C: Cursor> WithLayout for BatchCursorFrontier<C> {
-    type Layout = (
-        <C::Layout as Layout>::KeyContainer,
-        <C::Layout as Layout>::ValContainer,
-        Vec<C::Time>,
-        <C::Layout as Layout>::DiffContainer,
-        <C::Layout as Layout>::OffsetContainer,
-    );
-}
-
 impl<C: Cursor> BatchCursorFrontier<C> {
     fn new(cursor: C, since: AntichainRef<C::Time>, until: AntichainRef<C::Time>) -> Self {
         BatchCursorFrontier {
@@ -214,24 +188,29 @@ impl<C: Cursor> BatchCursorFrontier<C> {
 
 impl<C: Cursor<Storage: BatchReader>> Cursor for BatchCursorFrontier<C> {
 
+    type Key = C::Key;
+    type Val = C::Val;
+    type Time = C::Time;
+    type Diff = C::Diff;
+
     type Storage = BatchFrontier<C::Storage>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }
 
-    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(&storage.batch) }
-    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
+    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(&storage.batch) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(&storage.batch) }
 
-    #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { self.cursor.get_key(&storage.batch) }
-    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { self.cursor.get_val(&storage.batch) }
+    #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> { self.cursor.get_key(&storage.batch) }
+    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> { self.cursor.get_val(&storage.batch) }
 
     #[inline]
-    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
+    fn map_times<L: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
         self.cursor.map_times(&storage.batch, |time, diff| {
-            C::clone_time_onto(time, &mut temp);
+            temp.clone_from(time);
             temp.advance_by(since);
             if !until.less_equal(&temp) {
                 logic(&temp, diff);
@@ -240,10 +219,10 @@ impl<C: Cursor<Storage: BatchReader>> Cursor for BatchCursorFrontier<C> {
     }
 
     #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(&storage.batch, key) }
+    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(&storage.batch, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(&storage.batch, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(&storage.batch, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(&storage.batch) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(&storage.batch) }

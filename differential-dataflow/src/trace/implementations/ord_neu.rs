@@ -10,53 +10,29 @@
 
 use std::rc::Rc;
 
-use crate::containers::TimelyStack;
-use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
+use crate::trace::implementations::chunker::VecChunker;
 use crate::trace::implementations::spine_fueled::Spine;
-use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
+use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
 use crate::trace::rc_blanket_impls::RcBuilder;
 
-use super::{Layout, Vector, TStack};
+use super::Update;
 
 pub use self::val_batch::{OrdValBatch, OrdValBuilder};
 pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R)>>>>;
+pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<((K,V),T,R)>>>;
 /// A batcher using ordered lists.
 pub type OrdValBatcher<K, V, T, R> = MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecMerger<(K, V), T, R>>;
 /// A builder using ordered lists.
-pub type RcOrdValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
-
-// /// A trace implementation for empty values using a spine of ordered lists.
-// pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
-
-/// A trace implementation backed by columnar storage.
-pub type ColValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<TStack<((K,V),T,R)>>>>;
-/// A batcher for columnar storage.
-pub type ColValBatcher<K, V, T, R> = MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColMerger<(K,V),T,R>>;
-/// A builder for columnar storage.
-pub type ColValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>;
+pub type RcOrdValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<((K,V),T,R)>>;
 
 /// A trace implementation using a spine of ordered lists.
-pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
+pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<((K,()),T,R)>>>;
 /// A batcher for ordered lists.
 pub type OrdKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, VecChunker<((K,()),T,R)>, VecMerger<(K, ()), T, R>>;
 /// A builder for ordered lists.
-pub type RcOrdKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>;
-
-// /// A trace implementation for empty values using a spine of ordered lists.
-// pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
-
-/// A trace implementation backed by columnar storage.
-pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
-/// A batcher for columnar storage
-pub type ColKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, ColumnationChunker<((K,()),T,R)>, ColMerger<(K,()),T,R>>;
-/// A builder for columnar storage
-pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, TimelyStack<((K,()),T,R)>>>;
-
-// /// A trace implementation backed by columnar storage.
-// pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
+pub type RcOrdKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<((K,()),T,R)>>;
 
 pub use layers::{Vals, Upds};
 /// Layers are containers of lists of some type.
@@ -267,52 +243,45 @@ pub mod layers {
 /// Types related to forming batches with values.
 pub mod val_batch {
 
-    use std::marker::PhantomData;
     use serde::{Deserialize, Serialize};
-    use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, BuilderInput};
-    use crate::trace::implementations::layout;
+    use crate::trace::implementations::BatchContainer;
+    use crate::trace::implementations::OffsetList;
 
-    use super::{Layout, Vals, Upds, layers::UpdsBuilder};
+    use super::{Update, Vals, Upds, layers::UpdsBuilder};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(bound = "
-        L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
-        L::ValContainer: Serialize + for<'a> Deserialize<'a>,
-        L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
-        L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
-        L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
+        U::Key: Serialize + for<'a> Deserialize<'a>,
+        U::Val: Serialize + for<'a> Deserialize<'a>,
+        U::Time: Serialize + for<'a> Deserialize<'a>,
+        U::Diff: Serialize + for<'a> Deserialize<'a>,
     ")]
-    pub struct OrdValStorage<L: Layout> {
+    pub struct OrdValStorage<U: Update> {
         /// An ordered list of keys.
-        pub keys: L::KeyContainer,
+        pub keys: Vec<U::Key>,
         /// For each key in `keys`, a list of values.
-        pub vals: Vals<L::OffsetContainer, L::ValContainer>,
+        pub vals: Vals<OffsetList, Vec<U::Val>>,
         /// For each val in `vals`, a list of (time, diff) updates.
-        pub upds: Upds<L::OffsetContainer, L::TimeContainer, L::DiffContainer>,
+        pub upds: Upds<OffsetList, Vec<U::Time>, Vec<U::Diff>>,
     }
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
-    ///
-    /// The `L` parameter captures how the updates should be laid out, and `C` determines which
-    /// merge batcher to select.
     #[derive(Serialize, Deserialize)]
     #[serde(bound = "
-        L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
-        L::ValContainer: Serialize + for<'a> Deserialize<'a>,
-        L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
-        L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
-        L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
+        U::Key: Serialize + for<'a> Deserialize<'a>,
+        U::Val: Serialize + for<'a> Deserialize<'a>,
+        U::Time: Serialize + for<'a> Deserialize<'a>,
+        U::Diff: Serialize + for<'a> Deserialize<'a>,
     ")]
-    pub struct OrdValBatch<L: Layout> {
+    pub struct OrdValBatch<U: Update> {
         /// The updates themselves.
-        pub storage: OrdValStorage<L>,
+        pub storage: OrdValStorage<U>,
         /// Description of the update times this layer represents.
-        pub description: Description<layout::Time<L>>,
+        pub description: Description<U::Time>,
         /// The number of updates reflected in the batch.
         ///
         /// We track this separately from `storage` because due to the singleton optimization,
@@ -321,18 +290,19 @@ pub mod val_batch {
         pub updates: usize,
     }
 
-    impl<L: Layout> WithLayout for OrdValBatch<L> {
-        type Layout = L;
-    }
+    impl<U: Update> BatchReader for OrdValBatch<U> {
 
-    impl<L: Layout> BatchReader for OrdValBatch<L> {
+        type Key = U::Key;
+        type Val = U::Val;
+        type Time = U::Time;
+        type Diff = U::Diff;
 
-        type Cursor = OrdValCursor<L>;
+        type Cursor = OrdValCursor<U>;
         fn cursor(&self) -> Self::Cursor {
             OrdValCursor {
                 key_cursor: 0,
                 val_cursor: 0,
-                phantom: PhantomData,
+                phantom: std::marker::PhantomData,
             }
         }
         fn len(&self) -> usize {
@@ -340,13 +310,13 @@ pub mod val_batch {
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
             self.updates
         }
-        fn description(&self) -> &Description<layout::Time<L>> { &self.description }
+        fn description(&self) -> &Description<U::Time> { &self.description }
     }
 
-    impl<L: Layout> Batch for OrdValBatch<L> {
-        type Merger = OrdValMerger<L>;
+    impl<U: Update> Batch for OrdValBatch<U> {
+        type Merger = OrdValMerger<U>;
 
-        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
+        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<U::Time>) -> Self::Merger {
             OrdValMerger::new(self, other, compaction_frontier)
         }
 
@@ -354,7 +324,7 @@ pub mod val_batch {
             use timely::progress::Timestamp;
             Self {
                 storage: OrdValStorage {
-                    keys: L::KeyContainer::with_capacity(0),
+                    keys: Vec::new(),
                     vals: Default::default(),
                     upds: Default::default(),
                 },
@@ -365,24 +335,24 @@ pub mod val_batch {
     }
 
     /// State for an in-progress merge.
-    pub struct OrdValMerger<L: Layout> {
+    pub struct OrdValMerger<U: Update> {
         /// Key position to merge next in the first batch.
         key_cursor1: usize,
         /// Key position to merge next in the second batch.
         key_cursor2: usize,
         /// result that we are currently assembling.
-        result: OrdValStorage<L>,
+        result: OrdValStorage<U>,
         /// description
-        description: Description<layout::Time<L>>,
+        description: Description<U::Time>,
         /// Staging area to consolidate owned times and diffs, before sealing.
-        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
+        staging: UpdsBuilder<Vec<U::Time>, Vec<U::Diff>>,
     }
 
-    impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L>
+    impl<U: Update> Merger<OrdValBatch<U>> for OrdValMerger<U>
     where
-        OrdValBatch<L>: Batch<Time=layout::Time<L>>,
+        OrdValBatch<U>: Batch<Time=U::Time>,
     {
-        fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self {
+        fn new(batch1: &OrdValBatch<U>, batch2: &OrdValBatch<U>, compaction_frontier: AntichainRef<U::Time>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
             use crate::lattice::Lattice;
@@ -398,7 +368,7 @@ pub mod val_batch {
                 key_cursor1: 0,
                 key_cursor2: 0,
                 result: OrdValStorage {
-                    keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
+                    keys: Vec::with_capacity(batch1.keys.len() + batch2.keys.len()),
                     vals: Vals::merge_capacity(&batch1.vals, &batch2.vals),
                     upds: Upds::merge_capacity(&batch1.upds, &batch2.upds),
                 },
@@ -406,14 +376,14 @@ pub mod val_batch {
                 staging: UpdsBuilder::default(),
             }
         }
-        fn done(self) -> OrdValBatch<L> {
+        fn done(self) -> OrdValBatch<U> {
             OrdValBatch {
                 updates: self.staging.total(),
                 storage: self.result,
                 description: self.description,
             }
         }
-        fn work(&mut self, source1: &OrdValBatch<L>, source2: &OrdValBatch<L>, fuel: &mut isize) {
+        fn work(&mut self, source1: &OrdValBatch<U>, source2: &OrdValBatch<U>, fuel: &mut isize) {
 
             // An (incomplete) indication of the amount of work we've done so far.
             let starting_updates = self.staging.total();
@@ -444,7 +414,7 @@ pub mod val_batch {
     }
 
     // Helper methods in support of merging batches.
-    impl<L: Layout> OrdValMerger<L> {
+    impl<U: Update> OrdValMerger<U> {
         /// Copy the next key in `source`.
         ///
         /// The method extracts the key in `source` at `cursor`, and merges it in to `self`.
@@ -452,7 +422,7 @@ pub mod val_batch {
         /// compacted values and updates.
         ///
         /// The caller should be certain to update the cursor, as this method does not do this.
-        fn copy_key(&mut self, source: &OrdValStorage<L>, cursor: usize) {
+        fn copy_key(&mut self, source: &OrdValStorage<U>, cursor: usize) {
             // Capture the initial number of values to determine if the merge was ultimately non-empty.
             let init_vals = self.result.vals.vals.len();
             let (mut lower, upper) = source.vals.bounds(cursor);
@@ -474,7 +444,7 @@ pub mod val_batch {
         ///
         /// This method only merges a single key. It applies all compaction necessary, and may result in no output
         /// if the updates cancel either directly or after compaction.
-        fn merge_key(&mut self, source1: &OrdValStorage<L>, source2: &OrdValStorage<L>) {
+        fn merge_key(&mut self, source1: &OrdValStorage<U>, source2: &OrdValStorage<U>) {
             use ::std::cmp::Ordering;
             match source1.keys.index(self.key_cursor1).cmp(&source2.keys.index(self.key_cursor2)) {
                 Ordering::Less => {
@@ -505,8 +475,8 @@ pub mod val_batch {
         /// an offset that should be recorded to indicate the upper extent of the result values.
         fn merge_vals(
             &mut self,
-            (source1, mut lower1, upper1): (&OrdValStorage<L>, usize, usize),
-            (source2, mut lower2, upper2): (&OrdValStorage<L>, usize, usize),
+            (source1, mut lower1, upper1): (&OrdValStorage<U>, usize, usize),
+            (source2, mut lower2, upper2): (&OrdValStorage<U>, usize, usize),
         ) -> Option<usize> {
             // Capture the initial number of values to determine if the merge was ultimately non-empty.
             let init_vals = self.result.vals.vals.len();
@@ -568,53 +538,53 @@ pub mod val_batch {
         }
 
         /// Transfer updates for an indexed value in `source` into `self`, with compaction applied.
-        fn stash_updates_for_val(&mut self, source: &OrdValStorage<L>, index: usize) {
+        fn stash_updates_for_val(&mut self, source: &OrdValStorage<U>, index: usize) {
             let (lower, upper) = source.upds.bounds(index);
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
                 let (time, diff) = source.upds.get_abs(i);
                 use crate::lattice::Lattice;
-                let mut new_time: layout::Time<L> = L::TimeContainer::into_owned(time);
+                let mut new_time = time.clone();
                 new_time.advance_by(self.description.since().borrow());
-                self.staging.push(new_time, L::DiffContainer::into_owned(diff));
+                self.staging.push(new_time, diff.clone());
             }
         }
     }
 
     /// A cursor for navigating a single layer.
-    pub struct OrdValCursor<L: Layout> {
+    pub struct OrdValCursor<U: Update> {
         /// Absolute position of the current key.
         key_cursor: usize,
         /// Absolute position of the current value.
         val_cursor: usize,
         /// Phantom marker for Rust happiness.
-        phantom: PhantomData<L>,
+        phantom: std::marker::PhantomData<U>,
     }
 
-    use crate::trace::implementations::WithLayout;
-    impl<L: Layout> WithLayout for OrdValCursor<L> {
-        type Layout = L;
-    }
+    impl<U: Update> Cursor for OrdValCursor<U> {
 
-    impl<L: Layout> Cursor for OrdValCursor<L> {
+        type Key = U::Key;
+        type Val = U::Val;
+        type Time = U::Time;
+        type Diff = U::Diff;
 
-        type Storage = OrdValBatch<L>;
+        type Storage = OrdValBatch<U>;
 
-        fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
-        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
+        fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> { storage.storage.keys.get(self.key_cursor) }
+        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
 
-        fn key<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
-        fn val<'a>(&self, storage: &'a OrdValBatch<L>) -> Self::Val<'a> { storage.storage.vals.get_abs(self.val_cursor) }
-        fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &OrdValBatch<L>, mut logic: L2) {
+        fn key<'a>(&self, storage: &'a OrdValBatch<U>) -> &'a Self::Key { storage.storage.keys.index(self.key_cursor) }
+        fn val<'a>(&self, storage: &'a OrdValBatch<U>) -> &'a Self::Val { storage.storage.vals.get_abs(self.val_cursor) }
+        fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &OrdValBatch<U>, mut logic: L2) {
             let (lower, upper) = storage.storage.upds.bounds(self.val_cursor);
             for index in lower .. upper {
                 let (time, diff) = storage.storage.upds.get_abs(index);
                 logic(time, diff);
             }
         }
-        fn key_valid(&self, storage: &OrdValBatch<L>) -> bool { self.key_cursor < storage.storage.keys.len() }
-        fn val_valid(&self, storage: &OrdValBatch<L>) -> bool { self.val_cursor < storage.storage.vals.bounds(self.key_cursor).1 }
-        fn step_key(&mut self, storage: &OrdValBatch<L>){
+        fn key_valid(&self, storage: &OrdValBatch<U>) -> bool { self.key_cursor < storage.storage.keys.len() }
+        fn val_valid(&self, storage: &OrdValBatch<U>) -> bool { self.val_cursor < storage.storage.vals.bounds(self.key_cursor).1 }
+        fn step_key(&mut self, storage: &OrdValBatch<U>){
             self.key_cursor += 1;
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
@@ -623,102 +593,93 @@ pub mod val_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key(&mut self, storage: &OrdValBatch<L>, key: Self::Key<'_>) {
-            self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| <L::KeyContainer as BatchContainer>::reborrow(x).lt(&<L::KeyContainer as BatchContainer>::reborrow(key)));
+        fn seek_key(&mut self, storage: &OrdValBatch<U>, key: &Self::Key) {
+            self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(key));
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
             }
         }
-        fn step_val(&mut self, storage: &OrdValBatch<L>) {
+        fn step_val(&mut self, storage: &OrdValBatch<U>) {
             self.val_cursor += 1;
             if !self.val_valid(storage) {
                 self.val_cursor = storage.storage.vals.bounds(self.key_cursor).1;
             }
         }
-        fn seek_val(&mut self, storage: &OrdValBatch<L>, val: Self::Val<'_>) {
-            self.val_cursor += storage.storage.vals.vals.advance(self.val_cursor, storage.storage.vals.bounds(self.key_cursor).1, |x| <L::ValContainer as BatchContainer>::reborrow(x).lt(&<L::ValContainer as BatchContainer>::reborrow(val)));
+        fn seek_val(&mut self, storage: &OrdValBatch<U>, val: &Self::Val) {
+            self.val_cursor += storage.storage.vals.vals.advance(self.val_cursor, storage.storage.vals.bounds(self.key_cursor).1, |x| x.lt(val));
         }
-        fn rewind_keys(&mut self, storage: &OrdValBatch<L>) {
+        fn rewind_keys(&mut self, storage: &OrdValBatch<U>) {
             self.key_cursor = 0;
             if self.key_valid(storage) {
                 self.rewind_vals(storage)
             }
         }
-        fn rewind_vals(&mut self, storage: &OrdValBatch<L>) {
+        fn rewind_vals(&mut self, storage: &OrdValBatch<U>) {
             self.val_cursor = storage.storage.vals.bounds(self.key_cursor).0;
         }
     }
 
     /// A builder for creating layers from unsorted update tuples.
-    pub struct OrdValBuilder<L: Layout, CI> {
+    pub struct OrdValBuilder<U: Update> {
         /// The in-progress result.
         ///
         /// This is public to allow container implementors to set and inspect their container.
-        pub result: OrdValStorage<L>,
-        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
-        _marker: PhantomData<CI>,
+        pub result: OrdValStorage<U>,
+        staging: UpdsBuilder<Vec<U::Time>, Vec<U::Diff>>,
     }
 
-    impl<L, CI> Builder for OrdValBuilder<L, CI>
-    where
-        L: for<'a> Layout<
-            KeyContainer: PushInto<CI::Key<'a>>,
-            ValContainer: PushInto<CI::Val<'a>>,
-        >,
-        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=layout::Time<L>, Diff=layout::Diff<L>>,
-    {
+    impl<U: Update> Builder for OrdValBuilder<U> {
 
-        type Input = CI;
-        type Time = layout::Time<L>;
-        type Output = OrdValBatch<L>;
+        type Input = Vec<((U::Key, U::Val), U::Time, U::Diff)>;
+        type Time = U::Time;
+        type Output = OrdValBatch<U>;
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
             Self {
                 result: OrdValStorage {
-                    keys: L::KeyContainer::with_capacity(keys),
+                    keys: Vec::with_capacity(keys),
                     vals: Vals::with_capacity(keys + 1, vals),
                     upds: Upds::with_capacity(vals + 1, upds),
                 },
                 staging: UpdsBuilder::default(),
-                _marker: PhantomData,
             }
         }
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {
-            for item in chunk.drain() {
-                let (key, val, time, diff) = CI::into_parts(item);
+            // TODO: could iterate by reference to avoid moving data unnecessarily.
+            for ((key, val), time, diff) in chunk.drain(..) {
 
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
-                    self.result.vals.vals.push_into(val);
-                    self.result.keys.push_into(key);
+                    self.result.vals.vals.push(val);
+                    self.result.keys.push(key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
-                else if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
+                else if self.result.keys.last() == Some(&key) {
                     // Perhaps this is a continuation of an already received value.
-                    if self.result.vals.vals.last().map(|v| CI::val_eq(&val, v)).unwrap_or(false) {
+                    if self.result.vals.vals.last() == Some(&val) {
                         self.staging.push(time, diff);
                     } else {
                         // New value; complete representation of prior value.
                         self.staging.seal(&mut self.result.upds);
                         self.staging.push(time, diff);
-                        self.result.vals.vals.push_into(val);
+                        self.result.vals.vals.push(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
                     self.staging.seal(&mut self.result.upds);
                     self.staging.push(time, diff);
                     self.result.vals.offs.push_ref(self.result.vals.vals.len());
-                    self.result.vals.vals.push_into(val);
-                    self.result.keys.push_into(key);
+                    self.result.vals.vals.push(val);
+                    self.result.keys.push(key);
                 }
             }
         }
 
         #[inline(never)]
-        fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<L> {
+        fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<U> {
             self.staging.seal(&mut self.result.upds);
             self.result.vals.offs.push_ref(self.result.vals.vals.len());
             OrdValBatch {
@@ -729,7 +690,29 @@ pub mod val_batch {
         }
 
         fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
-            let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
+            let mut keys = 0;
+            let mut vals = 0;
+            let mut upds = 0;
+            let mut prev_keyval = None;
+            for link in chain.iter() {
+                for ((key, val), _, _) in link.iter() {
+                    if let Some((p_key, p_val)) = prev_keyval {
+                        if p_key != key {
+                            keys += 1;
+                            vals += 1;
+                        } else if p_val != val {
+                            vals += 1;
+                        }
+                    }
+                    upds += 1;
+                    prev_keyval = Some((key, val));
+                }
+            }
+            if prev_keyval.is_some() {
+                keys += 1;
+                vals += 1;
+            }
+
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
@@ -743,49 +726,42 @@ pub mod val_batch {
 /// Types related to forming batches of keys.
 pub mod key_batch {
 
-    use std::marker::PhantomData;
     use serde::{Deserialize, Serialize};
-    use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
-    use crate::trace::implementations::{BatchContainer, BuilderInput};
-    use crate::trace::implementations::layout;
+    use crate::trace::implementations::BatchContainer;
+    use crate::trace::implementations::OffsetList;
 
-    use super::{Layout, Upds, layers::UpdsBuilder};
+    use super::{Update, Upds, layers::UpdsBuilder};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(bound = "
-        L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
-        L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
-        L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
-        L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
+        U::Key: Serialize + for<'a> Deserialize<'a>,
+        U::Time: Serialize + for<'a> Deserialize<'a>,
+        U::Diff: Serialize + for<'a> Deserialize<'a>,
     ")]
-    pub struct OrdKeyStorage<L: Layout> {
+    pub struct OrdKeyStorage<U: Update> {
         /// An ordered list of keys, corresponding to entries in `keys_offs`.
-        pub keys: L::KeyContainer,
+        pub keys: Vec<U::Key>,
         /// For each key in `keys`, a list of (time, diff) updates.
-        pub upds: Upds<L::OffsetContainer, L::TimeContainer, L::DiffContainer>,
+        pub upds: Upds<OffsetList, Vec<U::Time>, Vec<U::Diff>>,
     }
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
-    ///
-    /// The `L` parameter captures how the updates should be laid out, and `C` determines which
-    /// merge batcher to select.
     #[derive(Serialize, Deserialize)]
     #[serde(bound = "
-        L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
-        L::ValContainer: Serialize + for<'a> Deserialize<'a>,
-        L::OffsetContainer: Serialize + for<'a> Deserialize<'a>,
-        L::TimeContainer: Serialize + for<'a> Deserialize<'a>,
-        L::DiffContainer: Serialize + for<'a> Deserialize<'a>,
+        U::Key: Serialize + for<'a> Deserialize<'a>,
+        U::Val: Serialize + for<'a> Deserialize<'a>,
+        U::Time: Serialize + for<'a> Deserialize<'a>,
+        U::Diff: Serialize + for<'a> Deserialize<'a>,
     ")]
-    pub struct OrdKeyBatch<L: Layout> {
+    pub struct OrdKeyBatch<U: Update> {
         /// The updates themselves.
-        pub storage: OrdKeyStorage<L>,
+        pub storage: OrdKeyStorage<U>,
         /// Description of the update times this layer represents.
-        pub description: Description<layout::Time<L>>,
+        pub description: Description<U::Time>,
         /// The number of updates reflected in the batch.
         ///
         /// We track this separately from `storage` because due to the singleton optimization,
@@ -794,25 +770,26 @@ pub mod key_batch {
         pub updates: usize,
 
         /// Single value to return if asked.
-        pub value: L::ValContainer,
+        pub value: Vec<U::Val>,
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> OrdKeyBatch<L> {
+    impl<U: Update<Val: Default>> OrdKeyBatch<U> {
         /// Creates a container with one value, to slot in to `self.value`.
-        pub fn create_value() -> L::ValContainer {
-            let mut value = L::ValContainer::with_capacity(1);
-            value.push_own(&Default::default());
+        pub fn create_value() -> Vec<U::Val> {
+            let mut value = Vec::with_capacity(1);
+            value.push(Default::default());
             value
         }
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> WithLayout for OrdKeyBatch<L> {
-        type Layout = L;
-    }
+    impl<U: Update<Val: Default>> BatchReader for OrdKeyBatch<U> {
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> BatchReader for OrdKeyBatch<L> {
+        type Key = U::Key;
+        type Val = U::Val;
+        type Time = U::Time;
+        type Diff = U::Diff;
 
-        type Cursor = OrdKeyCursor<L>;
+        type Cursor = OrdKeyCursor<U>;
         fn cursor(&self) -> Self::Cursor {
             OrdKeyCursor {
                 key_cursor: 0,
@@ -825,13 +802,13 @@ pub mod key_batch {
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
             self.updates
         }
-        fn description(&self) -> &Description<layout::Time<L>> { &self.description }
+        fn description(&self) -> &Description<U::Time> { &self.description }
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Batch for OrdKeyBatch<L> {
-        type Merger = OrdKeyMerger<L>;
+    impl<U: Update<Val: Default>> Batch for OrdKeyBatch<U> {
+        type Merger = OrdKeyMerger<U>;
 
-        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
+        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<U::Time>) -> Self::Merger {
             OrdKeyMerger::new(self, other, compaction_frontier)
         }
 
@@ -839,7 +816,7 @@ pub mod key_batch {
             use timely::progress::Timestamp;
             Self {
                 storage: OrdKeyStorage {
-                    keys: L::KeyContainer::with_capacity(0),
+                    keys: Vec::new(),
                     upds: Upds::default(),
                 },
                 description: Description::new(lower, upper, Antichain::from_elem(Self::Time::minimum())),
@@ -850,25 +827,25 @@ pub mod key_batch {
     }
 
     /// State for an in-progress merge.
-    pub struct OrdKeyMerger<L: Layout> {
+    pub struct OrdKeyMerger<U: Update> {
         /// Key position to merge next in the first batch.
         key_cursor1: usize,
         /// Key position to merge next in the second batch.
         key_cursor2: usize,
         /// result that we are currently assembling.
-        result: OrdKeyStorage<L>,
+        result: OrdKeyStorage<U>,
         /// description
-        description: Description<layout::Time<L>>,
+        description: Description<U::Time>,
 
         /// Local stash of updates, to use for consolidation.
-        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
+        staging: UpdsBuilder<Vec<U::Time>, Vec<U::Diff>>,
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L>
+    impl<U: Update<Val: Default>> Merger<OrdKeyBatch<U>> for OrdKeyMerger<U>
     where
-        OrdKeyBatch<L>: Batch<Time=layout::Time<L>>,
+        OrdKeyBatch<U>: Batch<Time=U::Time>,
     {
-        fn new(batch1: &OrdKeyBatch<L>, batch2: &OrdKeyBatch<L>, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self {
+        fn new(batch1: &OrdKeyBatch<U>, batch2: &OrdKeyBatch<U>, compaction_frontier: AntichainRef<U::Time>) -> Self {
 
             assert!(batch1.upper() == batch2.lower());
             use crate::lattice::Lattice;
@@ -884,22 +861,22 @@ pub mod key_batch {
                 key_cursor1: 0,
                 key_cursor2: 0,
                 result: OrdKeyStorage {
-                    keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
+                    keys: Vec::with_capacity(batch1.keys.len() + batch2.keys.len()),
                     upds: Upds::merge_capacity(&batch1.upds, &batch2.upds),
                 },
                 description,
                 staging: UpdsBuilder::default(),
             }
         }
-        fn done(self) -> OrdKeyBatch<L> {
+        fn done(self) -> OrdKeyBatch<U> {
             OrdKeyBatch {
                 updates: self.staging.total(),
                 storage: self.result,
                 description: self.description,
-                value: OrdKeyBatch::<L>::create_value(),
+                value: OrdKeyBatch::<U>::create_value(),
             }
         }
-        fn work(&mut self, source1: &OrdKeyBatch<L>, source2: &OrdKeyBatch<L>, fuel: &mut isize) {
+        fn work(&mut self, source1: &OrdKeyBatch<U>, source2: &OrdKeyBatch<U>, fuel: &mut isize) {
 
             // An (incomplete) indication of the amount of work we've done so far.
             let starting_updates = self.staging.total();
@@ -930,7 +907,7 @@ pub mod key_batch {
     }
 
     // Helper methods in support of merging batches.
-    impl<L: Layout> OrdKeyMerger<L> {
+    impl<U: Update> OrdKeyMerger<U> {
         /// Copy the next key in `source`.
         ///
         /// The method extracts the key in `source` at `cursor`, and merges it in to `self`.
@@ -938,7 +915,7 @@ pub mod key_batch {
         /// compacted values and updates.
         ///
         /// The caller should be certain to update the cursor, as this method does not do this.
-        fn copy_key(&mut self, source: &OrdKeyStorage<L>, cursor: usize) {
+        fn copy_key(&mut self, source: &OrdKeyStorage<U>, cursor: usize) {
             self.stash_updates_for_key(source, cursor);
             if self.staging.seal(&mut self.result.upds) {
                 self.result.keys.push_ref(source.keys.index(cursor));
@@ -948,7 +925,7 @@ pub mod key_batch {
         ///
         /// This method only merges a single key. It applies all compaction necessary, and may result in no output
         /// if the updates cancel either directly or after compaction.
-        fn merge_key(&mut self, source1: &OrdKeyStorage<L>, source2: &OrdKeyStorage<L>) {
+        fn merge_key(&mut self, source1: &OrdKeyStorage<U>, source2: &OrdKeyStorage<U>) {
             use ::std::cmp::Ordering;
             match source1.keys.index(self.key_cursor1).cmp(&source2.keys.index(self.key_cursor2)) {
                 Ordering::Less => {
@@ -974,44 +951,44 @@ pub mod key_batch {
         }
 
         /// Transfer updates for an indexed value in `source` into `self`, with compaction applied.
-        fn stash_updates_for_key(&mut self, source: &OrdKeyStorage<L>, index: usize) {
+        fn stash_updates_for_key(&mut self, source: &OrdKeyStorage<U>, index: usize) {
             let (lower, upper) = source.upds.bounds(index);
             for i in lower .. upper {
                 // NB: Here is where we would need to look back if `lower == upper`.
                 let (time, diff) = source.upds.get_abs(i);
                 use crate::lattice::Lattice;
-                let mut new_time = L::TimeContainer::into_owned(time);
+                let mut new_time = time.clone();
                 new_time.advance_by(self.description.since().borrow());
-                self.staging.push(new_time, L::DiffContainer::into_owned(diff));
+                self.staging.push(new_time, diff.clone());
             }
         }
     }
 
     /// A cursor for navigating a single layer.
-    pub struct OrdKeyCursor<L: Layout> {
+    pub struct OrdKeyCursor<U: Update> {
         /// Absolute position of the current key.
         key_cursor: usize,
         /// If the value has been stepped for the key, there are no more values.
         val_stepped: bool,
         /// Phantom marker for Rust happiness.
-        phantom: PhantomData<L>,
+        phantom: std::marker::PhantomData<U>,
     }
 
-    use crate::trace::implementations::WithLayout;
-    impl<L: Layout<ValContainer: BatchContainer>> WithLayout for OrdKeyCursor<L> {
-        type Layout = L;
-    }
+    impl<U: Update<Val: Default>> Cursor for OrdKeyCursor<U> {
 
-    impl<L: for<'a> Layout<ValContainer: BatchContainer<Owned: Default>>> Cursor for OrdKeyCursor<L> {
+        type Key = U::Key;
+        type Val = U::Val;
+        type Time = U::Time;
+        type Diff = U::Diff;
 
-        type Storage = OrdKeyBatch<L>;
+        type Storage = OrdKeyBatch<U>;
 
-        fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
-        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
+        fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> { storage.storage.keys.get(self.key_cursor) }
+        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
 
-        fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { storage.storage.keys.index(self.key_cursor) }
-        fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { storage.value.index(0) }
-        fn map_times<L2: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L2) {
+        fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { storage.storage.keys.index(self.key_cursor) }
+        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { storage.value.index(0) }
+        fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L2) {
             let (lower, upper) = storage.storage.upds.bounds(self.key_cursor);
             for index in lower .. upper {
                 let (time, diff) = storage.storage.upds.get_abs(index);
@@ -1029,8 +1006,8 @@ pub mod key_batch {
                 self.key_cursor = storage.storage.keys.len();
             }
         }
-        fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) {
-            self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| <L::KeyContainer as BatchContainer>::reborrow(x).lt(&<L::KeyContainer as BatchContainer>::reborrow(key)));
+        fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) {
+            self.key_cursor += storage.storage.keys.advance(self.key_cursor, storage.storage.keys.len(), |x| x.lt(key));
             if self.key_valid(storage) {
                 self.rewind_vals(storage);
             }
@@ -1038,7 +1015,7 @@ pub mod key_batch {
         fn step_val(&mut self, _storage: &Self::Storage) {
             self.val_stepped = true;
         }
-        fn seek_val(&mut self, _storage: &Self::Storage, _val: Self::Val<'_>) { }
+        fn seek_val(&mut self, _storage: &Self::Storage, _val: &Self::Val) { }
         fn rewind_keys(&mut self, storage: &Self::Storage) {
             self.key_cursor = 0;
             if self.key_valid(storage) {
@@ -1051,69 +1028,84 @@ pub mod key_batch {
     }
 
     /// A builder for creating layers from unsorted update tuples.
-    pub struct OrdKeyBuilder<L: Layout, CI> {
+    pub struct OrdKeyBuilder<U: Update> {
         /// The in-progress result.
         ///
         /// This is public to allow container implementors to set and inspect their container.
-        pub result: OrdKeyStorage<L>,
-        staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
-        _marker: PhantomData<CI>,
+        pub result: OrdKeyStorage<U>,
+        staging: UpdsBuilder<Vec<U::Time>, Vec<U::Diff>>,
     }
 
-    impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
-    where
-        L: for<'a> Layout<KeyContainer: PushInto<CI::Key<'a>>>,
-        L: Layout<ValContainer: BatchContainer<Owned: Default>>,
-        CI: BuilderInput<L::KeyContainer, L::ValContainer, Time=layout::Time<L>, Diff=layout::Diff<L>>,
-    {
+    impl<U: Update<Val: Default>> Builder for OrdKeyBuilder<U> {
 
-        type Input = CI;
-        type Time = layout::Time<L>;
-        type Output = OrdKeyBatch<L>;
+        type Input = Vec<((U::Key, U::Val), U::Time, U::Diff)>;
+        type Time = U::Time;
+        type Output = OrdKeyBatch<U>;
 
         fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
             Self {
                 result: OrdKeyStorage {
-                    keys: L::KeyContainer::with_capacity(keys),
+                    keys: Vec::with_capacity(keys),
                     upds: Upds::with_capacity(keys+1, upds),
                 },
                 staging: UpdsBuilder::default(),
-                _marker: PhantomData,
             }
         }
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {
-            for item in chunk.drain() {
-                let (key, _val, time, diff) = CI::into_parts(item);
+            // TODO: could iterate by reference to avoid moving data unnecessarily.
+            for ((key, _val), time, diff) in chunk.drain(..) {
                 if self.result.keys.is_empty() {
-                    self.result.keys.push_into(key);
+                    self.result.keys.push(key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
-                else if self.result.keys.last().map(|k| CI::key_eq(&key, k)).unwrap_or(false) {
+                else if self.result.keys.last() == Some(&key) {
                     self.staging.push(time, diff);
                 } else {
                     self.staging.seal(&mut self.result.upds);
                     self.staging.push(time, diff);
-                    self.result.keys.push_into(key);
+                    self.result.keys.push(key);
                 }
             }
         }
 
         #[inline(never)]
-        fn done(mut self, description: Description<Self::Time>) -> OrdKeyBatch<L> {
+        fn done(mut self, description: Description<Self::Time>) -> OrdKeyBatch<U> {
             self.staging.seal(&mut self.result.upds);
             OrdKeyBatch {
                 updates: self.staging.total(),
                 storage: self.result,
                 description,
-                value: OrdKeyBatch::<L>::create_value(),
+                value: OrdKeyBatch::<U>::create_value(),
             }
         }
 
         fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
-            let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
+            let mut keys = 0;
+            let mut vals = 0;
+            let mut upds = 0;
+            let mut prev_keyval = None;
+            for link in chain.iter() {
+                for ((key, val), _, _) in link.iter() {
+                    if let Some((p_key, p_val)) = prev_keyval {
+                        if p_key != key {
+                            keys += 1;
+                            vals += 1;
+                        } else if p_val != val {
+                            vals += 1;
+                        }
+                    }
+                    upds += 1;
+                    prev_keyval = Some((key, val));
+                }
+            }
+            if prev_keyval.is_some() {
+                keys += 1;
+                vals += 1;
+            }
+
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
