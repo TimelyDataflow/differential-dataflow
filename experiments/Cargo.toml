@@ -16,3 +16,4 @@ timely = { workspace = true }
 differential-dataflow = { workspace = true }
 graph_map = { git = "https://github.com/frankmcsherry/graph-map" }
 serde = { version = "1.0", features = ["derive"] }
+columnar = { workspace = true }

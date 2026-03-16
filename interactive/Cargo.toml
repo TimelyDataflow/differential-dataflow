@@ -15,3 +15,4 @@ serde = { version = "1", features = ["derive"]}
 differential-dataflow = { workspace = true }
 differential-dogs3 = { path = "../dogsdogsdogs" }
 timely = { workspace = true }
+columnar = { workspace = true }

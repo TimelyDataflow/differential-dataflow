@@ -28,7 +28,7 @@ impl<Tr: TraceReader + Clone, TInner> Clone for TraceEnter<Tr, TInner> {
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader<Batch: Clone>,
-    TInner: Refines<Tr::Time>+Lattice,
+    TInner: Refines<Tr::Time>+Lattice+columnar::Columnar,
 {
     type Key = Tr::Key;
     type Val = Tr::Val;
@@ -87,7 +87,7 @@ where
 impl<Tr, TInner> TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
-    TInner: Refines<Tr::Time>+Lattice,
+    TInner: Refines<Tr::Time>+Lattice+columnar::Columnar,
 {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr) -> Self {
@@ -110,7 +110,7 @@ pub struct BatchEnter<B, TInner> {
 impl<B, TInner> BatchReader for BatchEnter<B, TInner>
 where
     B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
+    TInner: Refines<B::Time>+Lattice+columnar::Columnar,
 {
     type Key = B::Key;
     type Val = B::Val;
@@ -129,7 +129,7 @@ where
 impl<B, TInner> BatchEnter<B, TInner>
 where
     B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
+    TInner: Refines<B::Time>+Lattice+columnar::Columnar,
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B) -> Self {
@@ -162,7 +162,7 @@ impl<C, TInner> CursorEnter<C, TInner> {
 impl<C, TInner> Cursor for CursorEnter<C, TInner>
 where
     C: Cursor,
-    TInner: Refines<C::Time>+Lattice,
+    TInner: Refines<C::Time>+Lattice+columnar::Columnar,
 {
     type Key = C::Key;
     type Val = C::Val;
@@ -217,7 +217,7 @@ impl<C, TInner> BatchCursorEnter<C, TInner> {
 
 impl<TInner, C: Cursor> Cursor for BatchCursorEnter<C, TInner>
 where
-    TInner: Refines<C::Time>+Lattice,
+    TInner: Refines<C::Time>+Lattice+columnar::Columnar,
 {
     type Key = C::Key;
     type Val = C::Val;

@@ -46,7 +46,7 @@ use crate::difference::{Semigroup, Abelian};
 use crate::lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
-pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
+pub trait Iterate<G: Scope<Timestamp: Lattice+columnar::Columnar>, D: Data, R: Semigroup> {
     /// Iteratively apply `logic` to the source collection until convergence.
     ///
     /// Importantly, this method does not automatically consolidate results.
@@ -78,7 +78,7 @@ pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
         for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>;
 }
 
-impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for VecCollection<G, D, R> {
+impl<G: Scope<Timestamp: Lattice+columnar::Columnar>, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for VecCollection<G, D, R> {
     fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
     where
         for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
@@ -98,7 +98,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterat
     }
 }
 
-impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
+impl<G: Scope<Timestamp: Lattice+columnar::Columnar>, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
     fn iterate<F>(mut self, logic: F) -> VecCollection<G, D, R>
     where
         for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
@@ -189,7 +189,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
 /// large, and the edits to perform are relatively smaller.
 pub struct Variable<G, C>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+columnar::Columnar>,
     C: Container,
 {
     feedback: Handle<G, C>,
@@ -202,7 +202,7 @@ pub type VecVariable<G, D, R> = Variable<G, Vec<(D, <G as ScopeParent>::Timestam
 
 impl<G, C: Container> Variable<G, C>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+columnar::Columnar>,
     C: crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
 {
     /// Creates a new initially empty `Variable` and its associated `Collection`.

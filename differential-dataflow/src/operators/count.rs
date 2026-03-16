@@ -44,7 +44,7 @@ pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeDat
 
 impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for VecCollection<G, K, R>
 where
-    G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
+    G: Scope<Timestamp: TotalOrder+Lattice+Ord+columnar::Columnar>,
 {
     fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")

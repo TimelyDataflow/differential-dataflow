@@ -202,7 +202,7 @@ fn three_hop<G: Scope>(
     forward_graph: Arrange<G, Node, Node, isize>,
     reverse_graph: Arrange<G, Node, Node, isize>,
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: Lattice+Ord+columnar::Columnar {
 
     let sources = goals.clone().map(|(x,_)| x);
     let targets = goals.map(|(_,y)| y);
@@ -229,7 +229,7 @@ fn _bidijkstra<G: Scope>(
     forward_graph: Arrange<G, Node, Node, isize>,
     reverse_graph: Arrange<G, Node, Node, isize>,
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: Lattice+Ord+columnar::Columnar {
 
     goals.scope().iterative::<usize,_,_>(|inner| {
 

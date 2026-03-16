@@ -312,8 +312,8 @@ pub trait ConsolidateLayout: DrainContainer {
 
 impl<D, T, R> ConsolidateLayout for Vec<(D, T, R)>
 where
-    D: Ord + Clone + 'static,
-    T: Ord + Clone + 'static,
+    D: Data,
+    T: Data,
     R: Semigroup + Clone + 'static,
 {
     type Key<'a> = (D, T) where Self: 'a;

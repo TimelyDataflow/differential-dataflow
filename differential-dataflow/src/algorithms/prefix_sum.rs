@@ -21,7 +21,7 @@ pub trait PrefixSum<G: Scope, K, D> {
 
 impl<G, K, D> PrefixSum<G, K, D> for VecCollection<G, ((usize, K), D)>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+columnar::Columnar>,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
 {
@@ -42,7 +42,7 @@ where
 /// Accumulate data in `collection` into all powers-of-two intervals containing them.
 pub fn aggregate<G, K, D, F>(collection: VecCollection<G, ((usize, K), D)>, combine: F) -> VecCollection<G, ((usize, usize, K), D)>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+columnar::Columnar>,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,
@@ -79,7 +79,7 @@ pub fn broadcast<G, K, D, F>(
     zero: D,
     combine: F) -> VecCollection<G, ((usize, K), D)>
 where
-    G: Scope<Timestamp: Lattice + Ord + ::std::fmt::Debug>,
+    G: Scope<Timestamp: Lattice + Ord + columnar::Columnar + ::std::fmt::Debug>,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,

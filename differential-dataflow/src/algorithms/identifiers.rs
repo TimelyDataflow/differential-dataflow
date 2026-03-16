@@ -32,7 +32,7 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
 
 impl<G, D, R> Identifiers<G, D, R> for VecCollection<G, D, R>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+columnar::Columnar>,
     D: ExchangeData + ::std::hash::Hash,
     R: ExchangeData + Abelian,
 {

@@ -210,7 +210,7 @@ fn interactive<G: Scope>(
     tc_2: VecCollection<G, Node>,
     sg_x: VecCollection<G, Node>
 ) -> VecCollection<G, Node>
-where G::Timestamp: Lattice{
+where G::Timestamp: Lattice+columnar::Columnar{
 
     // descendants of tc_1:
     let tc_1_enter = tc_1.clone();

@@ -18,6 +18,7 @@ workspace = true
 timely = { workspace = true }
 differential-dataflow = { workspace = true }
 serde = { version = "1.0", features = ["derive"]}
+columnar = { workspace = true }
 
 [dev-dependencies]
 graph_map = "0.1"

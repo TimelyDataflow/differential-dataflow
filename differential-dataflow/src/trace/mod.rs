@@ -45,13 +45,13 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize
 pub trait TraceReader {
 
     /// The key type.
-    type Key: Ord + Clone + 'static;
+    type Key: crate::Data;
     /// The value type.
-    type Val: Ord + Clone + 'static;
+    type Val: crate::Data;
     /// The time type.
-    type Time: crate::lattice::Lattice + timely::progress::Timestamp + Ord + Clone;
+    type Time: crate::lattice::Lattice + timely::progress::Timestamp + crate::Data;
     /// The diff type.
-    type Diff: crate::difference::Semigroup + Ord + 'static;
+    type Diff: crate::difference::Semigroup + crate::Data;
 
     /// The type of an immutable collection of updates.
     type Batch:
@@ -221,13 +221,13 @@ pub trait Trace : TraceReader<Batch: Batch> {
 pub trait BatchReader : Sized {
 
     /// The key type.
-    type Key: Ord + Clone + 'static;
+    type Key: crate::Data;
     /// The value type.
-    type Val: Ord + Clone + 'static;
+    type Val: crate::Data;
     /// The time type.
-    type Time: crate::lattice::Lattice + timely::progress::Timestamp + Ord + Clone;
+    type Time: crate::lattice::Lattice + timely::progress::Timestamp + crate::Data;
     /// The diff type.
-    type Diff: crate::difference::Semigroup + Ord + 'static;
+    type Diff: crate::difference::Semigroup + crate::Data;
 
     /// The type used to enumerate the batch's contents.
     type Cursor:

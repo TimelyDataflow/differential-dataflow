@@ -509,7 +509,7 @@ pub mod vec {
         /// ```
         pub fn join_function<D2, R2, I, L>(self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
         where
-            G::Timestamp: Lattice,
+            G::Timestamp: Lattice+columnar::Columnar,
             D2: Clone+'static,
             R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
             I: IntoIterator<Item=(D2,G::Timestamp,R2)>,
@@ -660,7 +660,7 @@ pub mod vec {
         where
             D: crate::ExchangeData+Hashable,
             R: crate::ExchangeData+Hashable + Semigroup,
-            G::Timestamp: Lattice+Ord,
+            G::Timestamp: Lattice+Ord+columnar::Columnar,
         {
             self.consolidate()
                 .inspect(|x| panic!("Assertion failed: non-empty collection: {:?}", x));
@@ -696,7 +696,7 @@ pub mod vec {
         where
             D: crate::ExchangeData+Hashable,
             R: crate::ExchangeData+Hashable,
-            G::Timestamp: Lattice+Ord,
+            G::Timestamp: Lattice+Ord+columnar::Columnar,
         {
             self.negate()
                 .concat(other)
@@ -709,7 +709,7 @@ pub mod vec {
 
     impl <G, K, V, R> Collection<G, (K, V), R>
     where
-        G: Scope<Timestamp: Lattice+Ord>,
+        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
         K: crate::ExchangeData+Hashable,
         V: crate::ExchangeData,
         R: crate::ExchangeData+Semigroup,
@@ -741,13 +741,13 @@ pub mod vec {
         ///          });
         /// });
         /// ```
-        pub fn reduce<L, V2: crate::Data, R2: Ord+Abelian+'static>(self, logic: L) -> Collection<G, (K, V2), R2>
+        pub fn reduce<L, V2: crate::Data, R2: crate::Data+Abelian>(self, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
             self.reduce_named("Reduce", logic)
         }
 
         /// As `reduce` with the ability to name the operator.
-        pub fn reduce_named<L, V2: crate::Data, R2: Ord+Abelian+'static>(self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
+        pub fn reduce_named<L, V2: crate::Data, R2: crate::Data+Abelian>(self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
             use crate::trace::implementations::{ValBuilder, ValSpine};
 
@@ -812,7 +812,7 @@ pub mod vec {
 
     impl<G, K, R1> Collection<G, K, R1>
     where
-        G: Scope<Timestamp: Lattice+Ord>,
+        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
         K: crate::ExchangeData+Hashable,
         R1: crate::ExchangeData+Semigroup
     {
@@ -840,7 +840,7 @@ pub mod vec {
         /// This method allows `distinct` to produce collections whose difference
         /// type is something other than an `isize` integer, for example perhaps an
         /// `i32`.
-        pub fn distinct_core<R2: Ord+Abelian+'static+From<i8>>(self) -> Collection<G, K, R2> {
+        pub fn distinct_core<R2: crate::Data+Abelian+From<i8>>(self) -> Collection<G, K, R2> {
             self.threshold_named("Distinct", |_,_| R2::from(1i8))
         }
 
@@ -862,12 +862,12 @@ pub mod vec {
         ///          .threshold(|_,c| c % 2);
         /// });
         /// ```
-        pub fn threshold<R2: Ord+Abelian+'static, F: FnMut(&K, &R1)->R2+'static>(self, thresh: F) -> Collection<G, K, R2> {
+        pub fn threshold<R2: crate::Data+Abelian, F: FnMut(&K, &R1)->R2+'static>(self, thresh: F) -> Collection<G, K, R2> {
             self.threshold_named("Threshold", thresh)
         }
 
         /// A `threshold` with the ability to name the operator.
-        pub fn threshold_named<R2: Ord+Abelian+'static, F: FnMut(&K,&R1)->R2+'static>(self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
+        pub fn threshold_named<R2: crate::Data+Abelian, F: FnMut(&K,&R1)->R2+'static>(self, name: &str, mut thresh: F) -> Collection<G, K, R2> {
             use crate::trace::implementations::{KeyBuilder, KeySpine};
 
             self.arrange_by_self_named(&format!("Arrange: {}", name))
@@ -879,7 +879,7 @@ pub mod vec {
 
     impl<G, K, R> Collection<G, K, R>
     where
-        G: Scope<Timestamp: Lattice+Ord>,
+        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
         K: crate::ExchangeData+Hashable,
         R: crate::ExchangeData+Semigroup
     {
@@ -905,7 +905,7 @@ pub mod vec {
         /// This method allows `count` to produce collections whose difference
         /// type is something other than an `isize` integer, for example perhaps an
         /// `i32`.
-        pub fn count_core<R2: Ord + Abelian + From<i8> + 'static>(self) -> Collection<G, (K, R), R2> {
+        pub fn count_core<R2: crate::Data + Abelian + From<i8>>(self) -> Collection<G, (K, R), R2> {
             use crate::trace::implementations::{ValBuilder, ValSpine};
             self.arrange_by_self_named("Arrange: Count")
                 .reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
@@ -916,7 +916,7 @@ pub mod vec {
     /// Methods which require data be arrangeable.
     impl<G, D, R> Collection<G, D, R>
     where
-        G: Scope<Timestamp: Clone+'static+Lattice>,
+        G: Scope<Timestamp: Clone+'static+Lattice+columnar::Columnar>,
         D: crate::ExchangeData+Hashable,
         R: crate::ExchangeData+Semigroup,
     {
@@ -1011,7 +1011,7 @@ pub mod vec {
 
     impl<G, K, V, R> Arrange<G, Vec<((K, V), G::Timestamp, R)>> for Collection<G, (K, V), R>
     where
-        G: Scope<Timestamp: Lattice>,
+        G: Scope<Timestamp: Lattice+columnar::Columnar>,
         K: crate::ExchangeData + Hashable,
         V: crate::ExchangeData,
         R: crate::ExchangeData + Semigroup,
@@ -1029,7 +1029,7 @@ pub mod vec {
 
     impl<G, K: crate::ExchangeData+Hashable, R: crate::ExchangeData+Semigroup> Arrange<G, Vec<((K, ()), G::Timestamp, R)>> for Collection<G, K, R>
     where
-        G: Scope<Timestamp: Lattice+Ord>,
+        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
     {
         fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
         where
@@ -1045,7 +1045,7 @@ pub mod vec {
 
     impl<G, K: crate::ExchangeData+Hashable, V: crate::ExchangeData, R: crate::ExchangeData+Semigroup> Collection<G, (K,V), R>
     where
-        G: Scope<Timestamp: Lattice+Ord>,
+        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
     {
         /// Arranges a collection of `(Key, Val)` records by `Key`.
         ///
@@ -1064,7 +1064,7 @@ pub mod vec {
 
     impl<G, K: crate::ExchangeData+Hashable, R: crate::ExchangeData+Semigroup> Collection<G, K, R>
     where
-        G: Scope<Timestamp: Lattice+Ord>,
+        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
     {
         /// Arranges a collection of `Key` records by `Key`.
         ///
@@ -1084,7 +1084,7 @@ pub mod vec {
 
     impl<G, K, V, R> Collection<G, (K, V), R>
     where
-        G: Scope<Timestamp: Lattice+Ord>,
+        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
         K: crate::ExchangeData+Hashable,
         V: crate::ExchangeData,
         R: crate::ExchangeData+Semigroup,

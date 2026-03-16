@@ -265,7 +265,7 @@ fn three_hop<G: Scope>(
     forward_graph: Arrange<G, Node, Node, isize>,
     reverse_graph: Arrange<G, Node, Node, isize>,
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: Lattice+Ord+columnar::Columnar {
 
     let sources = goals.clone().map(|(x,_)| x);
     let targets = goals.map(|(_,y)| y);
@@ -292,7 +292,7 @@ fn _bidijkstra<G: Scope>(
     forward_graph: Arrange<G, Node, Node, isize>,
     reverse_graph: Arrange<G, Node, Node, isize>,
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+where G::Timestamp: Lattice+Ord+columnar::Columnar {
 
     goals.scope().iterative::<Iter,_,_>(|inner| {
 
@@ -362,7 +362,7 @@ where G::Timestamp: Lattice+Ord {
 
 
 fn connected_components<G: Scope>(graph: Arrange<G, Node, Node, isize>) -> VecCollection<G, (Node, Node)>
-where G::Timestamp: Lattice + std::hash::Hash {
+where G::Timestamp: Lattice + std::hash::Hash + columnar::Columnar {
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes =

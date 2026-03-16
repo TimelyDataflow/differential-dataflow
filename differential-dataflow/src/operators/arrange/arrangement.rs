@@ -44,7 +44,7 @@ use super::TraceAgent;
 /// computation, memory) required to produce and maintain an indexed representation of a collection.
 pub struct Arranged<G, Tr>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
     Tr: TraceReader+Clone,
 {
     /// A stream containing arranged updates.
@@ -90,7 +90,7 @@ where
     pub fn enter<'a, TInner>(self, child: &Child<'a, G, TInner>)
         -> Arranged<Child<'a, G, TInner>, TraceEnter<Tr, TInner>>
         where
-            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone,
+            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+columnar::Columnar,
     {
         Arranged {
             stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
@@ -118,7 +118,7 @@ where
     pub fn enter_at<'a, TInner, F, P>(self, child: &Child<'a, G, TInner>, logic: F, prior: P)
         -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
-            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
+            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+columnar::Columnar+'static,
             F: FnMut(&Tr::Key, &Tr::Val, &Tr::Time)->TInner+Clone+'static,
             P: FnMut(&TInner)->Tr::Time+Clone+'static,
         {
@@ -309,7 +309,7 @@ where
 /// A type that can be arranged as if a collection of updates.
 pub trait Arrange<G, C> : Sized
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+columnar::Columnar>,
 {
     /// Arranges updates into a shared trace.
     fn arrange<Ba, Bu, Tr>(self) -> Arranged<G, TraceAgent<Tr>>
@@ -337,7 +337,7 @@ where
 /// be consistently by key (though this is the most common).
 pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Scope<Timestamp: Lattice+columnar::Columnar>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
     Ba: Batcher<Time=G::Timestamp,Input: Container> + 'static,
     Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,

@@ -12,9 +12,10 @@
 //! the join.
 
 use serde::{Deserialize, Serialize};
+use columnar::Columnar;
 
 /// A pair of timestamps, partially ordered by the product order.
-#[derive(Debug, Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Columnar)]
 pub struct AltNeu<T> {
     pub time: T,
     pub neu: bool,  // alt < neu in timestamp comparisons.

@@ -66,21 +66,21 @@ use crate::difference::Semigroup;
 /// A type that names constituent update types.
 pub trait Update {
     /// Key by which data are grouped.
-    type Key: Ord + Clone + 'static;
+    type Key: crate::Data;
     /// Values associated with the key.
-    type Val: Ord + Clone + 'static;
+    type Val: crate::Data;
     /// Time at which updates occur.
-    type Time: Ord + Clone + Lattice + timely::progress::Timestamp;
+    type Time: crate::Data + Lattice + timely::progress::Timestamp;
     /// Way in which updates occur.
-    type Diff: Ord + Semigroup + 'static;
+    type Diff: crate::Data + Semigroup;
 }
 
 impl<K,V,T,R> Update for ((K, V), T, R)
 where
-    K: Ord+Clone+'static,
-    V: Ord+Clone+'static,
-    T: Ord+Clone+Lattice+timely::progress::Timestamp,
-    R: Ord+Semigroup+'static,
+    K: crate::Data,
+    V: crate::Data,
+    T: crate::Data+Lattice+timely::progress::Timestamp,
+    R: crate::Data+Semigroup,
 {
     type Key = K;
     type Val = V;

@@ -13,13 +13,13 @@ pub use self::cursor_list::CursorList;
 pub trait Cursor {
 
     /// The key type.
-    type Key: Ord + Clone + 'static;
+    type Key: crate::Data;
     /// The value type.
-    type Val: Ord + Clone + 'static;
+    type Val: crate::Data;
     /// The time type.
-    type Time: crate::lattice::Lattice + timely::progress::Timestamp + Ord + Clone;
+    type Time: crate::lattice::Lattice + timely::progress::Timestamp + crate::Data;
     /// The diff type.
-    type Diff: crate::difference::Semigroup + Ord + 'static;
+    type Diff: crate::difference::Semigroup + crate::Data;
 
     /// Storage required by the cursor.
     type Storage;

@@ -170,8 +170,10 @@ fn main() {
 /// type and its implementations, you can use it as a timestamp type.
 mod pair {
 
+    use columnar::Columnar;
+
     /// A pair of timestamps, partially ordered by the product order.
-    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Columnar)]
     pub struct Pair<S, T> {
         pub first: S,
         pub second: T,
