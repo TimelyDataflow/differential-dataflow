@@ -7,6 +7,7 @@ As an example, our example program used `map` to reverse the pairs of identifier
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
@@ -26,6 +27,7 @@ If instead we had just written
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;

@@ -7,6 +7,7 @@ For example, we might form the symmetric "management relation" by concatenating 
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;

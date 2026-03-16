@@ -7,6 +7,7 @@ Our example from earlier uses a join to match up pairs `(m2, m1)` and `(m1, p)` 
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;

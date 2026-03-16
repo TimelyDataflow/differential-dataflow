@@ -9,6 +9,7 @@ As an example, if we were to inspect
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
@@ -35,6 +36,7 @@ However, by introducing `consolidate`
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;

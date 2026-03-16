@@ -7,6 +7,7 @@ For example, to produce for each manager their managee with the lowest identifie
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;

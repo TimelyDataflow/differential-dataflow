@@ -7,6 +7,7 @@ As an example, we can take our `manages` relation and determine for all employee
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::Iterate;
@@ -44,6 +45,7 @@ In the example above, we could rewrite
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
@@ -84,6 +86,7 @@ As an example, the implementation of the `iterate` operator looks something like
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
+# extern crate columnar;
 # use timely::dataflow::Scope;
 # use timely::dataflow::scopes::Child;
 # use timely::progress::Antichain;
