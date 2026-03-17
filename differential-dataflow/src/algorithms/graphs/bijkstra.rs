@@ -21,7 +21,7 @@ use crate::operators::iterate::Variable;
 /// could be good insurance here.
 pub fn bidijkstra<G, N>(edges: VecCollection<G, (N,N)>, goals: VecCollection<G, (N,N)>) -> VecCollection<G, ((N,N), u32)>
 where
-    G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
+    G: Scope<Timestamp: Lattice+Ord+crate::Data>,
     N: ExchangeData+Hash,
 {
     let forward = edges.clone().arrange_by_key();

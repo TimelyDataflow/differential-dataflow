@@ -44,7 +44,7 @@ use super::TraceAgent;
 /// computation, memory) required to produce and maintain an indexed representation of a collection.
 pub struct Arranged<G, Tr>
 where
-    G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
+    G: Scope<Timestamp: Lattice+Ord+crate::Data>,
     Tr: TraceReader+Clone,
 {
     /// A stream containing arranged updates.
@@ -90,7 +90,7 @@ where
     pub fn enter<'a, TInner>(self, child: &Child<'a, G, TInner>)
         -> Arranged<Child<'a, G, TInner>, TraceEnter<Tr, TInner>>
         where
-            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+columnar::Columnar,
+            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+crate::Data,
     {
         Arranged {
             stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
@@ -118,8 +118,8 @@ where
     pub fn enter_at<'a, TInner, F, P>(self, child: &Child<'a, G, TInner>, logic: F, prior: P)
         -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
-            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+columnar::Columnar+'static,
-            F: FnMut(&Tr::Key, &Tr::Val, &Tr::Time)->TInner+Clone+'static,
+            TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+crate::Data+'static,
+            F: FnMut(&Tr::Key, columnar::Ref<'_,Tr::Val>, &Tr::Time)->TInner+Clone+'static,
             P: FnMut(&TInner)->Tr::Time+Clone+'static,
         {
         let logic1 = logic.clone();
@@ -137,7 +137,7 @@ where
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<G, D, Tr::Diff>
         where
-            L: FnMut(&Tr::Key, &Tr::Val) -> D+'static,
+            L: FnMut(&Tr::Key, columnar::Ref<'_, Tr::Val>) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
     }
@@ -152,7 +152,7 @@ where
         Tr::Key: crate::ExchangeData,
         Tr::Val: crate::ExchangeData,
     {
-        self.flat_map_ref(move |key, val| [(key.clone(), val.clone())])
+        self.flat_map_ref(move |key, val| [(key.clone(), columnar::Columnar::into_owned(val))])
     }
 
     /// Extracts elements from an arrangement as a collection.
@@ -162,7 +162,7 @@ where
     pub fn flat_map_ref<I, L>(self, logic: L) -> VecCollection<G, I::Item, Tr::Diff>
         where
             I: IntoIterator<Item: Data>,
-            L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
+            L: FnMut(&Tr::Key, columnar::Ref<'_, Tr::Val>) -> I+'static,
     {
         Self::flat_map_batches(self.stream, logic)
     }
@@ -177,7 +177,7 @@ where
     pub fn flat_map_batches<I, L>(stream: Stream<G, Vec<Tr::Batch>>, mut logic: L) -> VecCollection<G, I::Item, Tr::Diff>
     where
         I: IntoIterator<Item: Data>,
-        L: FnMut(&Tr::Key, &Tr::Val) -> I+'static,
+        L: FnMut(&Tr::Key, columnar::Ref<'_, Tr::Val>) -> I+'static,
     {
         stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
             input.for_each(|time, data| {
@@ -219,9 +219,9 @@ where
         T2: TraceReader<Key=T1::Key,Time=T1::Time>+Clone+'static,
         T1::Diff: Multiply<T2::Diff, Output: Semigroup+'static>,
         I: IntoIterator<Item: Data>,
-        L: FnMut(&T1::Key,&T1::Val,&T2::Val)->I+'static
+        L: FnMut(&T1::Key,columnar::Ref<'_,T1::Val>,columnar::Ref<'_,T2::Val>)->I+'static
     {
-        let mut result = move |k: &T1::Key, v1: &T1::Val, v2: &T2::Val, t: &G::Timestamp, r1: &T1::Diff, r2: &T2::Diff| {
+        let mut result = move |k: &T1::Key, v1: columnar::Ref<'_,T1::Val>, v2: columnar::Ref<'_,T2::Val>, t: &G::Timestamp, r1: &T1::Diff, r2: &T2::Diff| {
             let t = t.clone();
             let r = (r1.clone()).multiply(r2);
             result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
@@ -259,7 +259,7 @@ where
             Diff: Abelian,
         >+'static,
         Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::Key, T2::Val), T2::Time, T2::Diff)>>,
-        L: FnMut(&T1::Key, &[(&T1::Val, T1::Diff)], &mut Vec<(T2::Val, T2::Diff)>)+'static,
+        L: FnMut(&T1::Key, &[(columnar::Ref<'_,T1::Val>, T1::Diff)], &mut Vec<(T2::Val, T2::Diff)>)+'static,
     {
         self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
             if !input.is_empty() {
@@ -280,7 +280,7 @@ where
             Time=T1::Time,
         >+'static,
         Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::Key, T2::Val), T2::Time, T2::Diff)>>,
-        L: FnMut(&T1::Key, &[(&T1::Val, T1::Diff)], &mut Vec<(T2::Val, T2::Diff)>, &mut Vec<(T2::Val, T2::Diff)>)+'static,
+        L: FnMut(&T1::Key, &[(columnar::Ref<'_,T1::Val>, T1::Diff)], &mut Vec<(T2::Val, T2::Diff)>, &mut Vec<(T2::Val, T2::Diff)>)+'static,
     {
         use crate::operators::reduce::reduce_trace;
         reduce_trace::<_,_,Bu,_,_>(self, name, logic)
@@ -309,7 +309,7 @@ where
 /// A type that can be arranged as if a collection of updates.
 pub trait Arrange<G, C> : Sized
 where
-    G: Scope<Timestamp: Lattice+columnar::Columnar>,
+    G: Scope<Timestamp: Lattice+crate::Data>,
 {
     /// Arranges updates into a shared trace.
     fn arrange<Ba, Bu, Tr>(self) -> Arranged<G, TraceAgent<Tr>>
@@ -337,7 +337,7 @@ where
 /// be consistently by key (though this is the most common).
 pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
-    G: Scope<Timestamp: Lattice+columnar::Columnar>,
+    G: Scope<Timestamp: Lattice+crate::Data>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
     Ba: Batcher<Time=G::Timestamp,Input: Container> + 'static,
     Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,

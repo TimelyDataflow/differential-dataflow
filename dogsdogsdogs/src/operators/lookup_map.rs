@@ -39,7 +39,7 @@ where
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid + 'static,
-    S: FnMut(&D, &R, &Tr::Val, &Tr::Diff)->(DOut, ROut)+'static,
+    S: FnMut(&D, &R, columnar::Ref<'_,Tr::Val>, &Tr::Diff)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());

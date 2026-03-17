@@ -98,7 +98,7 @@ pub trait Input : TimelyInput {
 }
 
 use crate::lattice::Lattice;
-impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice + columnar::Columnar {
+impl<G: TimelyInput> Input for G where <G as ScopeParent>::Timestamp: Lattice + crate::Data {
     fn new_collection<D, R>(&mut self) -> (InputSession<<G as ScopeParent>::Timestamp, D, R>, VecCollection<G, D, R>)
     where
         D: Data, R: Semigroup+'static,

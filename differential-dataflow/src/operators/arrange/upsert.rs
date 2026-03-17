@@ -247,7 +247,7 @@ where
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());
-                                                prev_value = Some(val.clone());
+                                                prev_value = Some(columnar::Columnar::into_owned(val));
                                             }
                                             trace_cursor.step_val(&trace_storage);
                                         }

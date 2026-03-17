@@ -17,7 +17,7 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord+columnar::Columnar>, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
+pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord+crate::Data>, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
     /// Reduces the collection to one occurrence of each distinct element.
     fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<G, K, R2>
     where
@@ -86,7 +86,7 @@ pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord+columnar::Co
 
 impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<G, K, R> for VecCollection<G, K, R>
 where
-    G: Scope<Timestamp: TotalOrder+Lattice+Ord+columnar::Columnar>,
+    G: Scope<Timestamp: TotalOrder+Lattice+Ord+crate::Data>,
 {
     fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<G, K, R2>
     where

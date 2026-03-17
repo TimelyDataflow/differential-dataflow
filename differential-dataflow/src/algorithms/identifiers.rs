@@ -32,7 +32,7 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
 
 impl<G, D, R> Identifiers<G, D, R> for VecCollection<G, D, R>
 where
-    G: Scope<Timestamp: Lattice+columnar::Columnar>,
+    G: Scope<Timestamp: Lattice+crate::Data>,
     D: ExchangeData + ::std::hash::Hash,
     R: ExchangeData + Abelian,
 {
@@ -68,15 +68,15 @@ where
                         if *round > 0 {
                             let mut neg_count = count.clone();
                             neg_count.negate();
-                            output.push(((0, record.clone()), neg_count));
-                            output.push(((*round, record.clone()), count.clone()));
+                            output.push(((0, columnar::Columnar::into_owned(*record)), neg_count));
+                            output.push(((*round, columnar::Columnar::into_owned(*record)), count.clone()));
                         }
                         // if any losers, increment their rounds.
                         for ((round, record), count) in input[1..].iter() {
                             let mut neg_count = count.clone();
                             neg_count.negate();
-                            output.push(((0, record.clone()), neg_count));
-                            output.push(((*round+1, record.clone()), count.clone()));
+                            output.push(((0, columnar::Columnar::into_owned(*record)), neg_count));
+                            output.push(((*round+1, columnar::Columnar::into_owned(*record)), count.clone()));
                         }
                     })
                     .map(|(_hash, pair)| pair)

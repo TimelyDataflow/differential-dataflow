@@ -30,7 +30,7 @@ where
     T1: TraceReader<Key: Ord> + Clone + 'static,
     T2: Trace<Key=T1::Key, Val: Data, Time=T1::Time> + 'static,
     Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: crate::trace::implementations::merge_batcher::container::MergerChunk + PushInto<((T1::Key, T2::Val), T2::Time, T2::Diff)>>,
-    L: FnMut(&T1::Key, &[(&T1::Val, T1::Diff)], &mut Vec<(T2::Val,T2::Diff)>, &mut Vec<(T2::Val, T2::Diff)>)+'static,
+    L: FnMut(&T1::Key, &[(columnar::Ref<'_,T1::Val>, T1::Diff)], &mut Vec<(T2::Val,T2::Diff)>, &mut Vec<(T2::Val, T2::Diff)>)+'static,
 {
     let mut result_trace = None;
 
@@ -364,7 +364,7 @@ where
     where
         L: FnMut(
             &C1::Key,
-            &[(&C1::Val, C1::Diff)],
+            &[(columnar::Ref<'_,C1::Val>, C1::Diff)],
             &mut Vec<(C2::Val, C2::Diff)>,
             &mut Vec<(C2::Val, C2::Diff)>,
         );
@@ -394,7 +394,7 @@ mod history_replay {
         input_history: ValueHistory<'a, C1>,
         output_history: ValueHistory<'a, C2>,
         batch_history: ValueHistory<'a, C3>,
-        input_buffer: Vec<(&'a C1::Val, C1::Diff)>,
+        input_buffer: Vec<(columnar::Ref<'a, C1::Val>, C1::Diff)>,
         output_buffer: Vec<(C2::Val, C2::Diff)>,
         update_buffer: Vec<(C2::Val, C2::Diff)>,
         output_produced: Vec<((C2::Val, C2::Time), C2::Diff)>,
@@ -440,7 +440,7 @@ mod history_replay {
         where
             L: FnMut(
                 &C1::Key,
-                &[(&C1::Val, C1::Diff)],
+                &[(columnar::Ref<'_,C1::Val>, C1::Diff)],
                 &mut Vec<(C2::Val, C2::Diff)>,
                 &mut Vec<(C2::Val, C2::Diff)>,
             )
@@ -601,7 +601,7 @@ mod history_replay {
                         meet.as_ref().map(|meet| output_replay.advance_buffer_by(meet));
                         for &((value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
-                                self.output_buffer.push((value.clone(), diff.clone()));
+                                self.output_buffer.push((columnar::Columnar::into_owned(value), diff.clone()));
                             }
                             else {
                                 self.temporary.push(next_time.join(time));

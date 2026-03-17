@@ -82,11 +82,20 @@ pub use difference::Abelian as Diff;
 
 /// Data type usable in differential dataflow.
 ///
+/// A columnar container whose references can be ordered.
+///
+/// This trait bundles the requirement that a container's `Ref` type implements `Ord`,
+/// which is needed for merge and cursor operations on sorted data.
+pub trait OrdContainer : for<'a> columnar::Container<Ref<'a> : Ord> { }
+impl<C: for<'a> columnar::Container<Ref<'a> : Ord>> OrdContainer for C { }
+
+/// Data type usable in differential dataflow.
+///
 /// Most differential dataflow operators require the ability to cancel corresponding updates, and the
 /// way that they do this is by putting the data in a canonical form. The `Ord` trait allows us to sort
 /// the data, at which point we can consolidate updates for equivalent records.
-pub trait Data : Ord + Debug + Clone + columnar::Columnar + 'static { }
-impl<T: Ord + Debug + Clone + columnar::Columnar + 'static> Data for T { }
+pub trait Data : Ord + Debug + Clone + columnar::Columnar<Container: OrdContainer + Default> + 'static { }
+impl<T: Ord + Debug + Clone + columnar::Columnar<Container: OrdContainer + Default> + 'static> Data for T { }
 
 /// Data types exchangeable in differential dataflow.
 pub trait ExchangeData : timely::ExchangeData + Data { }
@@ -94,7 +103,7 @@ impl<T: timely::ExchangeData + Data> ExchangeData for T { }
 
 pub mod hashable;
 pub mod operators;
-pub mod algorithms;
+// pub mod algorithms;
 pub mod lattice;
 pub mod trace;
 pub mod input;

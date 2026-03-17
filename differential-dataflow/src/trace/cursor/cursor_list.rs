@@ -117,7 +117,7 @@ impl<C: Cursor> Cursor for CursorList<C> {
         self.cursors[self.min_key[0]].key(&storage[self.min_key[0]])
     }
     #[inline]
-    fn val<'a>(&self, storage: &'a Vec<C::Storage>) -> &'a Self::Val {
+    fn val<'a>(&self, storage: &'a Vec<C::Storage>) -> columnar::Ref<'a, Self::Val> {
         debug_assert!(self.key_valid(storage));
         debug_assert!(self.val_valid(storage));
         debug_assert!(self.cursors[self.min_val[0]].val_valid(&storage[self.min_val[0]]));
@@ -128,7 +128,7 @@ impl<C: Cursor> Cursor for CursorList<C> {
         self.min_key.get(0).map(|idx| self.cursors[*idx].key(&storage[*idx]))
     }
     #[inline]
-    fn get_val<'a>(&self, storage: &'a Vec<C::Storage>) -> Option<&'a Self::Val> {
+    fn get_val<'a>(&self, storage: &'a Vec<C::Storage>) -> Option<columnar::Ref<'a, Self::Val>> {
         self.min_val.get(0).map(|idx| self.cursors[*idx].val(&storage[*idx]))
     }
 
@@ -164,7 +164,7 @@ impl<C: Cursor> Cursor for CursorList<C> {
         self.minimize_vals(storage);
     }
     #[inline]
-    fn seek_val(&mut self, storage: &Vec<C::Storage>, val: &Self::Val) {
+    fn seek_val(&mut self, storage: &Vec<C::Storage>, val: columnar::Ref<'_, Self::Val>) {
         for (cursor, storage) in self.cursors.iter_mut().zip(storage) {
             cursor.seek_val(storage, val);
         }

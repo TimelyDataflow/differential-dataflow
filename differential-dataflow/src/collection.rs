@@ -509,7 +509,7 @@ pub mod vec {
         /// ```
         pub fn join_function<D2, R2, I, L>(self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
         where
-            G::Timestamp: Lattice+columnar::Columnar,
+            G::Timestamp: Lattice+crate::Data,
             D2: Clone+'static,
             R2: Semigroup+Multiply<R, Output: Semigroup+'static>,
             I: IntoIterator<Item=(D2,G::Timestamp,R2)>,
@@ -660,7 +660,7 @@ pub mod vec {
         where
             D: crate::ExchangeData+Hashable,
             R: crate::ExchangeData+Hashable + Semigroup,
-            G::Timestamp: Lattice+Ord+columnar::Columnar,
+            G::Timestamp: Lattice+Ord+crate::Data,
         {
             self.consolidate()
                 .inspect(|x| panic!("Assertion failed: non-empty collection: {:?}", x));
@@ -696,7 +696,7 @@ pub mod vec {
         where
             D: crate::ExchangeData+Hashable,
             R: crate::ExchangeData+Hashable,
-            G::Timestamp: Lattice+Ord+columnar::Columnar,
+            G::Timestamp: Lattice+Ord+crate::Data,
         {
             self.negate()
                 .concat(other)
@@ -709,7 +709,7 @@ pub mod vec {
 
     impl <G, K, V, R> Collection<G, (K, V), R>
     where
-        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
+        G: Scope<Timestamp: Lattice+Ord+crate::Data>,
         K: crate::ExchangeData+Hashable,
         V: crate::ExchangeData,
         R: crate::ExchangeData+Semigroup,
@@ -742,18 +742,18 @@ pub mod vec {
         /// });
         /// ```
         pub fn reduce<L, V2: crate::Data, R2: crate::Data+Abelian>(self, logic: L) -> Collection<G, (K, V2), R2>
-        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+        where L: FnMut(&K, &[(columnar::Ref<'_,V>, R)], &mut Vec<(V2, R2)>)+'static {
             self.reduce_named("Reduce", logic)
         }
 
         /// As `reduce` with the ability to name the operator.
         pub fn reduce_named<L, V2: crate::Data, R2: crate::Data+Abelian>(self, name: &str, logic: L) -> Collection<G, (K, V2), R2>
-        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+        where L: FnMut(&K, &[(columnar::Ref<'_,V>, R)], &mut Vec<(V2, R2)>)+'static {
             use crate::trace::implementations::{ValBuilder, ValSpine};
 
             self.arrange_by_key_named(&format!("Arrange: {}", name))
                 .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<K,V2,_,_>>(name, logic)
-                .as_collection(|k,v| (k.clone(), v.clone()))
+                .as_collection(|k,v| (k.clone(), columnar::Columnar::into_owned(v)))
         }
 
         /// Applies `reduce` to arranged data, and returns an arrangement of output data.
@@ -784,7 +784,7 @@ pub mod vec {
         where
             T2: Trace<Key=K, Val=V, Time=G::Timestamp, Diff: Abelian>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
+            L: FnMut(&K, &[(columnar::Ref<'_,V>, R)], &mut Vec<(V, T2::Diff)>)+'static,
         {
             self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
                 if !input.is_empty() { logic(key, input, change); }
@@ -803,7 +803,7 @@ pub mod vec {
             V: Clone+'static,
             T2: Trace<Key=K, Val=V, Time=G::Timestamp>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
+            L: FnMut(&K, &[(columnar::Ref<'_,V>, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
         {
             self.arrange_by_key_named(&format!("Arrange: {}", name))
                 .reduce_core::<_,Bu,_>(name, logic)
@@ -812,7 +812,7 @@ pub mod vec {
 
     impl<G, K, R1> Collection<G, K, R1>
     where
-        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
+        G: Scope<Timestamp: Lattice+Ord+crate::Data>,
         K: crate::ExchangeData+Hashable,
         R1: crate::ExchangeData+Semigroup
     {
@@ -879,7 +879,7 @@ pub mod vec {
 
     impl<G, K, R> Collection<G, K, R>
     where
-        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
+        G: Scope<Timestamp: Lattice+Ord+crate::Data>,
         K: crate::ExchangeData+Hashable,
         R: crate::ExchangeData+Semigroup
     {
@@ -909,14 +909,14 @@ pub mod vec {
             use crate::trace::implementations::{ValBuilder, ValSpine};
             self.arrange_by_self_named("Arrange: Count")
                 .reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
-                .as_collection(|k,c| (k.clone(), c.clone()))
+                .as_collection(|k,c| (k.clone(), columnar::Columnar::into_owned(c)))
         }
     }
 
     /// Methods which require data be arrangeable.
     impl<G, D, R> Collection<G, D, R>
     where
-        G: Scope<Timestamp: Clone+'static+Lattice+columnar::Columnar>,
+        G: Scope<Timestamp: Clone+'static+Lattice+crate::Data>,
         D: crate::ExchangeData+Hashable,
         R: crate::ExchangeData+Semigroup,
     {
@@ -943,7 +943,7 @@ pub mod vec {
         /// ```
         pub fn consolidate(self) -> Self {
             use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine};
-            self.consolidate_named::<KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>,_>("Consolidate", |key,&()| key.clone())
+            self.consolidate_named::<KeyBatcher<_, _, _>,KeyBuilder<_,_,_>, KeySpine<_,_,_>,_>("Consolidate", |key,()| key.clone())
         }
 
         /// As `consolidate` but with the ability to name the operator, specify the trace type,
@@ -953,7 +953,7 @@ pub mod vec {
             Ba: crate::trace::Batcher<Input=Vec<((D,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
             Tr: for<'a> crate::trace::Trace<Time=G::Timestamp,Diff=R>+'static,
             Bu: crate::trace::Builder<Time=Tr::Time, Input=Ba::Output, Output=Tr::Batch>,
-            F: Fn(&Tr::Key, &Tr::Val) -> D + 'static,
+            F: Fn(&Tr::Key, columnar::Ref<'_,Tr::Val>) -> D + 'static,
         {
             use crate::operators::arrange::arrangement::Arrange;
             self.map(|k| (k, ()))
@@ -1011,7 +1011,7 @@ pub mod vec {
 
     impl<G, K, V, R> Arrange<G, Vec<((K, V), G::Timestamp, R)>> for Collection<G, (K, V), R>
     where
-        G: Scope<Timestamp: Lattice+columnar::Columnar>,
+        G: Scope<Timestamp: Lattice+crate::Data>,
         K: crate::ExchangeData + Hashable,
         V: crate::ExchangeData,
         R: crate::ExchangeData + Semigroup,
@@ -1029,7 +1029,7 @@ pub mod vec {
 
     impl<G, K: crate::ExchangeData+Hashable, R: crate::ExchangeData+Semigroup> Arrange<G, Vec<((K, ()), G::Timestamp, R)>> for Collection<G, K, R>
     where
-        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
+        G: Scope<Timestamp: Lattice+Ord+crate::Data>,
     {
         fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
         where
@@ -1045,7 +1045,7 @@ pub mod vec {
 
     impl<G, K: crate::ExchangeData+Hashable, V: crate::ExchangeData, R: crate::ExchangeData+Semigroup> Collection<G, (K,V), R>
     where
-        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
+        G: Scope<Timestamp: Lattice+Ord+crate::Data>,
     {
         /// Arranges a collection of `(Key, Val)` records by `Key`.
         ///
@@ -1064,7 +1064,7 @@ pub mod vec {
 
     impl<G, K: crate::ExchangeData+Hashable, R: crate::ExchangeData+Semigroup> Collection<G, K, R>
     where
-        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
+        G: Scope<Timestamp: Lattice+Ord+crate::Data>,
     {
         /// Arranges a collection of `Key` records by `Key`.
         ///
@@ -1084,7 +1084,7 @@ pub mod vec {
 
     impl<G, K, V, R> Collection<G, (K, V), R>
     where
-        G: Scope<Timestamp: Lattice+Ord+columnar::Columnar>,
+        G: Scope<Timestamp: Lattice+Ord+crate::Data>,
         K: crate::ExchangeData+Hashable,
         V: crate::ExchangeData,
         R: crate::ExchangeData+Semigroup,
@@ -1115,7 +1115,7 @@ pub mod vec {
             R2: crate::ExchangeData+Semigroup,
             R: Multiply<R2, Output: Semigroup+'static>,
         {
-            self.join_map(other, |k,v,v2| (k.clone(),(v.clone(),v2.clone())))
+            self.join_map(other, |k,v,v2| (k.clone(),(columnar::Columnar::into_owned(v),columnar::Columnar::into_owned(v2))))
         }
 
         /// Matches pairs `(key,val1)` and `(key,val2)` based on `key` and then applies a function.
@@ -1136,7 +1136,7 @@ pub mod vec {
         /// });
         /// ```
         pub fn join_map<V2: crate::ExchangeData, R2: crate::ExchangeData+Semigroup, D: crate::Data, L>(self, other: Collection<G, (K, V2), R2>, mut logic: L) -> Collection<G, D, <R as Multiply<R2>>::Output>
-        where R: Multiply<R2, Output: Semigroup+'static>, L: FnMut(&K, &V, &V2)->D+'static {
+        where R: Multiply<R2, Output: Semigroup+'static>, L: FnMut(&K, columnar::Ref<'_,V>, columnar::Ref<'_,V2>)->D+'static {
             let arranged1 = self.arrange_by_key();
             let arranged2 = other.arrange_by_key();
             arranged1.join_core(arranged2, move |k,v1,v2| Some(logic(k,v1,v2)))
@@ -1167,7 +1167,7 @@ pub mod vec {
         where R: Multiply<R2, Output: Semigroup+'static> {
             let arranged1 = self.arrange_by_key();
             let arranged2 = other.arrange_by_self();
-            arranged1.join_core(arranged2, |k,v,_| Some((k.clone(), v.clone())))
+            arranged1.join_core(arranged2, |k,v,_| Some((k.clone(), columnar::Columnar::into_owned(v))))
         }
 
         /// Subtracts the semijoin with `other` from `self`.
@@ -1233,7 +1233,7 @@ pub mod vec {
             Tr2: crate::trace::TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
             R: Multiply<Tr2::Diff, Output: Semigroup+'static>,
             I: IntoIterator<Item: crate::Data>,
-            L: FnMut(&K,&V,&Tr2::Val)->I+'static,
+            L: FnMut(&K,columnar::Ref<'_,V>,columnar::Ref<'_,Tr2::Val>)->I+'static,
         {
             self.arrange_by_key()
                 .join_core(stream2, result)

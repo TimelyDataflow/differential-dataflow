@@ -15,7 +15,7 @@ use crate::difference::{Abelian, Multiply};
 /// method to limit the introduction of labels.
 pub fn propagate<G, N, L, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>) -> VecCollection<G,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash+columnar::Columnar>,
+    G: Scope<Timestamp: Lattice+Ord+Hash+crate::Data>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -32,7 +32,7 @@ where
 /// method to limit the introduction of labels.
 pub fn propagate_at<G, N, L, F, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash+columnar::Columnar>,
+    G: Scope<Timestamp: Lattice+Ord+Hash+crate::Data>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -102,7 +102,7 @@ where
         proposals_bind.set(propagate);
 
         labels
-            .as_collection(|k,v| (k.clone(), v.clone()))
+            .as_collection(|k,v| (k.clone(), columnar::Columnar::into_owned(v)))
             .leave()
     })
 }

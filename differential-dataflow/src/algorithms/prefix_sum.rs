@@ -7,29 +7,29 @@ use crate::lattice::Lattice;
 use crate::operators::*;
 
 /// Extension trait for the prefix_sum method.
-pub trait PrefixSum<G: Scope, K, D> {
+pub trait PrefixSum<G: Scope, K, D: crate::Data> {
     /// Computes the prefix sum for each element in the collection.
     ///
     /// The prefix sum is data-parallel, in the sense that the sums are computed independently for
     /// each key of type `K`. For a single prefix sum this type can be `()`, but this permits the
     /// more general accumulation of multiple independent sequences.
-    fn prefix_sum<F>(self, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static;
+    fn prefix_sum<F>(self, zero: D, combine: F) -> Self where F: Fn(&K,&D,columnar::Ref<'_,D>)->D + 'static;
 
     /// Determine the prefix sum at each element of `location`.
-    fn prefix_sum_at<F>(self, locations: VecCollection<G, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static;
+    fn prefix_sum_at<F>(self, locations: VecCollection<G, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,columnar::Ref<'_,D>)->D + 'static;
 }
 
 impl<G, K, D> PrefixSum<G, K, D> for VecCollection<G, ((usize, K), D)>
 where
-    G: Scope<Timestamp: Lattice+columnar::Columnar>,
+    G: Scope<Timestamp: Lattice+crate::Data>,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
 {
-    fn prefix_sum<F>(self, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
+    fn prefix_sum<F>(self, zero: D, combine: F) -> Self where F: Fn(&K,&D,columnar::Ref<'_,D>)->D + 'static {
         self.clone().prefix_sum_at(self.map(|(x,_)| x), zero, combine)
     }
 
-    fn prefix_sum_at<F>(self, locations: VecCollection<G, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
+    fn prefix_sum_at<F>(self, locations: VecCollection<G, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,columnar::Ref<'_,D>)->D + 'static {
 
         let combine1 = ::std::rc::Rc::new(combine);
         let combine2 = combine1.clone();
@@ -42,10 +42,10 @@ where
 /// Accumulate data in `collection` into all powers-of-two intervals containing them.
 pub fn aggregate<G, K, D, F>(collection: VecCollection<G, ((usize, K), D)>, combine: F) -> VecCollection<G, ((usize, usize, K), D)>
 where
-    G: Scope<Timestamp: Lattice+columnar::Columnar>,
+    G: Scope<Timestamp: Lattice+crate::Data>,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
-    F: Fn(&K,&D,&D)->D + 'static,
+    F: Fn(&K,&D,columnar::Ref<'_,D>)->D + 'static,
 {
     // initial ranges are at each index, and with width 2^0.
     let unit_ranges = collection.map(|((index, key), data)| ((index, 0, key), data));
@@ -64,8 +64,8 @@ where
                 .filter(|&((_pos, log, _), _)| log < 64)
                 .map(|((pos, log, key), data)| ((pos >> 1, log + 1, key), (pos, data)))
                 .reduce(move |&(_pos, _log, ref key), input, output| {
-                    let mut result = (input[0].0).1.clone();
-                    if input.len() > 1 { result = combine(key, &result, &(input[1].0).1); }
+                    let mut result = columnar::Columnar::into_owned((input[0].0).1);
+                    if input.len() > 1 { result = combine(key, &result, (input[1].0).1); }
                     output.push((result, 1));
                 })
                 .concat(unit_ranges)
@@ -79,10 +79,10 @@ pub fn broadcast<G, K, D, F>(
     zero: D,
     combine: F) -> VecCollection<G, ((usize, K), D)>
 where
-    G: Scope<Timestamp: Lattice + Ord + columnar::Columnar + ::std::fmt::Debug>,
+    G: Scope<Timestamp: Lattice + Ord + crate::Data + ::std::fmt::Debug>,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
-    F: Fn(&K,&D,&D)->D + 'static,
+    F: Fn(&K,&D,columnar::Ref<'_,D>)->D + 'static,
 {
 
     let zero0 = zero.clone();
@@ -146,7 +146,7 @@ where
             used_ranges
                 .enter(&scope)
                 .map(|((pos, log, key), data)| ((pos << log, key), (log, data)))
-                .join_map(states, move |&(pos, ref key), &(log, ref data), state|
+                .join_map(states, move |&(pos, ref key), (log, ref data), state|
                     ((pos + (1 << log), key.clone()), combine(key, state, data)))
                 .concat(init_states)
                 .distinct()

@@ -71,7 +71,7 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader+Clone+'static,
     T2: TraceReader<Key=T1::Key, Time=T1::Time>+Clone+'static,
-    L: FnMut(&T1::Key,&T1::Val,&T2::Val,&G::Timestamp,&T1::Diff,&T2::Diff,&mut JoinSession<T1::Time, CB, Capability<T1::Time>>)+'static,
+    L: FnMut(&T1::Key,columnar::Ref<'_,T1::Val>,columnar::Ref<'_,T2::Val>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut JoinSession<T1::Time, CB, Capability<T1::Time>>)+'static,
     CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.
@@ -348,7 +348,7 @@ where
     #[inline(never)]
     fn work<L, CB: ContainerBuilder>(&mut self, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>, mut logic: L, fuel: &mut usize)
     where
-        L: FnMut(&C1::Key, &C1::Val, &C2::Val, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
+        L: FnMut(&C1::Key, columnar::Ref<'_, C1::Val>, columnar::Ref<'_, C2::Val>, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
     {
 
         let meet = self.capability.time();
@@ -422,7 +422,7 @@ where
         }
     }
 
-    fn think<F: FnMut(&'a C1::Val,&'a C2::Val,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
+    fn think<F: FnMut(columnar::Ref<'a, C1::Val>,columnar::Ref<'a, C2::Val>,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {

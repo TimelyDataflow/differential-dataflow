@@ -35,6 +35,36 @@ pub type OrdKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, VecChunker<((K
 pub type RcOrdKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<((K,()),T,R)>>;
 
 pub use layers::{Vals, Upds};
+
+/// Galloping search: reports the number of elements in `[start, end)` satisfying `function`.
+///
+/// This relies on the assumption that `function` transitions from true to false, allowing
+/// exponential search in time logarithmic in the result.
+fn advance<S: columnar::Index>(slice: &S, start: usize, end: usize, function: impl Fn(S::Ref) -> bool) -> usize {
+    let small_limit = 8;
+    if end > start + small_limit && function(slice.get(start + small_limit)) {
+        let mut index = small_limit + 1;
+        if start + index < end && function(slice.get(start + index)) {
+            let mut step = 1;
+            while start + index + step < end && function(slice.get(start + index + step)) {
+                index += step;
+                step <<= 1;
+            }
+            step >>= 1;
+            while step > 0 {
+                if start + index + step < end && function(slice.get(start + index + step)) {
+                    index += step;
+                }
+                step >>= 1;
+            }
+            index += 1;
+        }
+        index
+    } else {
+        let limit = std::cmp::min(end, start + small_limit);
+        (start..limit).filter(|x| function(slice.get(*x))).count()
+    }
+}
 /// Layers are containers of lists of some type.
 ///
 /// The intent is that they "attach" to an outer layer which has as many values
@@ -45,11 +75,10 @@ pub use layers::{Vals, Upds};
 /// We will form tries here by layering `[Keys, Vals, Upds]` or `[Keys, Upds]`.
 pub mod layers {
 
-    use serde::{Deserialize, Serialize};
+    use columnar::{Len, Index};
     use crate::trace::implementations::BatchContainer;
 
     /// A container for non-empty lists of values.
-    #[derive(Debug, Serialize, Deserialize)]
     pub struct Vals<O, V> {
         /// Offsets used to provide indexes from keys to values.
         ///
@@ -59,11 +88,11 @@ pub mod layers {
         pub vals: V,
     }
 
-    impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, V: BatchContainer> Default for Vals<O, V> {
+    impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, V: Default> Default for Vals<O, V> {
         fn default() -> Self { Self::with_capacity(0, 0) }
     }
 
-    impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, V: BatchContainer> Vals<O, V> {
+    impl<O: for<'a> BatchContainer<ReadItem<'a> = usize>, V> Vals<O, V> {
         /// Lower and upper bounds in `self.vals` of the indexed list.
         #[inline(always)] pub fn bounds(&self, index: usize) -> (usize, usize) {
             (self.offs.index(index), self.offs.index(index+1))
@@ -74,32 +103,46 @@ pub mod layers {
         /// The method adds the list's lower bound to the item index, and then calls
         /// `get_abs`. Using absolute indexes within the list's bounds can be more
         /// efficient than using relative indexing.
-        pub fn get_rel(&self, list_idx: usize, item_idx: usize) -> V::ReadItem<'_> {
+        pub fn get_rel(&self, list_idx: usize, item_idx: usize) -> <V::Borrowed<'_> as Index>::Ref
+        where
+            V: columnar::Borrow,
+            for<'a> V::Borrowed<'a>: Index,
+        {
             self.get_abs(self.bounds(list_idx).0 + item_idx)
         }
 
         /// Number of lists in the container.
-        pub fn len(&self) -> usize { self.offs.len() - 1 }
+        pub fn len(&self) -> usize where V: Len { self.offs.len() - 1 }
         /// Retrieves a value using an absolute rather than relative index.
-        pub fn get_abs(&self, index: usize) -> V::ReadItem<'_> {
-            self.vals.index(index)
+        pub fn get_abs(&self, index: usize) -> <V::Borrowed<'_> as Index>::Ref
+        where
+            V: columnar::Borrow,
+            for<'a> V::Borrowed<'a>: Index,
+        {
+            self.vals.borrow().get(index)
         }
         /// Allocates with capacities for a number of lists and values.
-        pub fn with_capacity(o_size: usize, v_size: usize) -> Self {
+        pub fn with_capacity(o_size: usize, _v_size: usize) -> Self
+        where
+            V: Default,
+        {
             let mut offs = <O as BatchContainer>::with_capacity(o_size);
             offs.push_ref(0);
             Self {
                 offs,
-                vals: <V as BatchContainer>::with_capacity(v_size),
+                vals: V::default(),
             }
         }
         /// Allocates with enough capacity to contain two inputs.
-        pub fn merge_capacity(this: &Self, that: &Self) -> Self {
+        pub fn merge_capacity(this: &Self, that: &Self) -> Self
+        where
+            V: Default,
+        {
             let mut offs = <O as BatchContainer>::with_capacity(this.offs.len() + that.offs.len());
             offs.push_ref(0);
             Self {
                 offs,
-                vals: <V as BatchContainer>::merge_capacity(&this.vals, &that.vals),
+                vals: V::default(),
             }
         }
     }
@@ -108,7 +151,6 @@ pub mod layers {
     ///
     /// This container uses the special representiation of an empty slice to stand in for
     /// "the previous single element". An empty slice is an otherwise invalid representation.
-    #[derive(Debug, Serialize, Deserialize)]
     pub struct Upds<O, T, D> {
         /// Offsets used to provide indexes from values to updates.
         pub offs: O,
@@ -243,8 +285,8 @@ pub mod layers {
 /// Types related to forming batches with values.
 pub mod val_batch {
 
-    use serde::{Deserialize, Serialize};
     use timely::progress::{Antichain, frontier::AntichainRef};
+    use columnar::Borrow;
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::BatchContainer;
@@ -253,30 +295,16 @@ pub mod val_batch {
     use super::{Update, Vals, Upds, layers::UpdsBuilder};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(bound = "
-        U::Key: Serialize + for<'a> Deserialize<'a>,
-        U::Val: Serialize + for<'a> Deserialize<'a>,
-        U::Time: Serialize + for<'a> Deserialize<'a>,
-        U::Diff: Serialize + for<'a> Deserialize<'a>,
-    ")]
     pub struct OrdValStorage<U: Update> {
         /// An ordered list of keys.
         pub keys: Vec<U::Key>,
         /// For each key in `keys`, a list of values.
-        pub vals: Vals<OffsetList, Vec<U::Val>>,
+        pub vals: Vals<OffsetList, columnar::ContainerOf<U::Val>>,
         /// For each val in `vals`, a list of (time, diff) updates.
         pub upds: Upds<OffsetList, Vec<U::Time>, Vec<U::Diff>>,
     }
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
-    #[derive(Serialize, Deserialize)]
-    #[serde(bound = "
-        U::Key: Serialize + for<'a> Deserialize<'a>,
-        U::Val: Serialize + for<'a> Deserialize<'a>,
-        U::Time: Serialize + for<'a> Deserialize<'a>,
-        U::Diff: Serialize + for<'a> Deserialize<'a>,
-    ")]
     pub struct OrdValBatch<U: Update> {
         /// The updates themselves.
         pub storage: OrdValStorage<U>,
@@ -424,20 +452,20 @@ pub mod val_batch {
         /// The caller should be certain to update the cursor, as this method does not do this.
         fn copy_key(&mut self, source: &OrdValStorage<U>, cursor: usize) {
             // Capture the initial number of values to determine if the merge was ultimately non-empty.
-            let init_vals = self.result.vals.vals.len();
+            let init_vals = columnar::Len::len(&self.result.vals.vals);
             let (mut lower, upper) = source.vals.bounds(cursor);
             while lower < upper {
                 self.stash_updates_for_val(source, lower);
                 if self.staging.seal(&mut self.result.upds) {
-                    self.result.vals.vals.push_ref(source.vals.get_abs(lower));
+                    columnar::Push::push(&mut self.result.vals.vals, source.vals.get_abs(lower));
                 }
                 lower += 1;
             }
 
             // If we have pushed any values, copy the key as well.
-            if self.result.vals.vals.len() > init_vals {
+            if columnar::Len::len(&self.result.vals.vals) > init_vals {
                 self.result.keys.push_ref(source.keys.index(cursor));
-                self.result.vals.offs.push_ref(self.result.vals.vals.len());
+                self.result.vals.offs.push_ref(columnar::Len::len(&self.result.vals.vals));
             }
         }
         /// Merge the next key in each of `source1` and `source2` into `self`, updating the appropriate cursors.
@@ -479,7 +507,7 @@ pub mod val_batch {
             (source2, mut lower2, upper2): (&OrdValStorage<U>, usize, usize),
         ) -> Option<usize> {
             // Capture the initial number of values to determine if the merge was ultimately non-empty.
-            let init_vals = self.result.vals.vals.len();
+            let init_vals = columnar::Len::len(&self.result.vals.vals);
             while lower1 < upper1 && lower2 < upper2 {
                 // We compare values, and fold in updates for the lowest values;
                 // if they are non-empty post-consolidation, we write the value.
@@ -490,7 +518,7 @@ pub mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source1, lower1);
                         if self.staging.seal(&mut self.result.upds) {
-                            self.result.vals.vals.push_ref(source1.vals.get_abs(lower1));
+                            columnar::Push::push(&mut self.result.vals.vals, source1.vals.get_abs(lower1));
                         }
                         lower1 += 1;
                     },
@@ -498,7 +526,7 @@ pub mod val_batch {
                         self.stash_updates_for_val(source1, lower1);
                         self.stash_updates_for_val(source2, lower2);
                         if self.staging.seal(&mut self.result.upds) {
-                            self.result.vals.vals.push_ref(source1.vals.get_abs(lower1));
+                            columnar::Push::push(&mut self.result.vals.vals, source1.vals.get_abs(lower1));
                         }
                         lower1 += 1;
                         lower2 += 1;
@@ -507,7 +535,7 @@ pub mod val_batch {
                         // Extend stash by updates, with logical compaction applied.
                         self.stash_updates_for_val(source2, lower2);
                         if self.staging.seal(&mut self.result.upds) {
-                            self.result.vals.vals.push_ref(source2.vals.get_abs(lower2));
+                            columnar::Push::push(&mut self.result.vals.vals, source2.vals.get_abs(lower2));
                         }
                         lower2 += 1;
                     },
@@ -517,21 +545,21 @@ pub mod val_batch {
             while lower1 < upper1 {
                 self.stash_updates_for_val(source1, lower1);
                 if self.staging.seal(&mut self.result.upds) {
-                    self.result.vals.vals.push_ref(source1.vals.get_abs(lower1));
+                    columnar::Push::push(&mut self.result.vals.vals, source1.vals.get_abs(lower1));
                 }
                 lower1 += 1;
             }
             while lower2 < upper2 {
                 self.stash_updates_for_val(source2, lower2);
                 if self.staging.seal(&mut self.result.upds) {
-                    self.result.vals.vals.push_ref(source2.vals.get_abs(lower2));
+                    columnar::Push::push(&mut self.result.vals.vals, source2.vals.get_abs(lower2));
                 }
                 lower2 += 1;
             }
 
             // Values being pushed indicate non-emptiness.
-            if self.result.vals.vals.len() > init_vals {
-                Some(self.result.vals.vals.len())
+            if columnar::Len::len(&self.result.vals.vals) > init_vals {
+                Some(columnar::Len::len(&self.result.vals.vals))
             } else {
                 None
             }
@@ -571,10 +599,10 @@ pub mod val_batch {
         type Storage = OrdValBatch<U>;
 
         fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> { storage.storage.keys.get(self.key_cursor) }
-        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
+        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<columnar::Ref<'a, Self::Val>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
 
         fn key<'a>(&self, storage: &'a OrdValBatch<U>) -> &'a Self::Key { storage.storage.keys.index(self.key_cursor) }
-        fn val<'a>(&self, storage: &'a OrdValBatch<U>) -> &'a Self::Val { storage.storage.vals.get_abs(self.val_cursor) }
+        fn val<'a>(&self, storage: &'a OrdValBatch<U>) ->columnar::Ref<'a, Self::Val> { storage.storage.vals.get_abs(self.val_cursor) }
         fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &OrdValBatch<U>, mut logic: L2) {
             let (lower, upper) = storage.storage.upds.bounds(self.val_cursor);
             for index in lower .. upper {
@@ -605,8 +633,11 @@ pub mod val_batch {
                 self.val_cursor = storage.storage.vals.bounds(self.key_cursor).1;
             }
         }
-        fn seek_val(&mut self, storage: &OrdValBatch<U>, val: &Self::Val) {
-            self.val_cursor += storage.storage.vals.vals.advance(self.val_cursor, storage.storage.vals.bounds(self.key_cursor).1, |x| x.lt(val));
+        fn seek_val(&mut self, storage: &OrdValBatch<U>, val: columnar::Ref<'_, Self::Val>) {
+            // Galloping search on the borrowed val container.
+            let upper = storage.storage.vals.bounds(self.key_cursor).1;
+            let borrowed = storage.storage.vals.vals.borrow();
+            self.val_cursor += super::advance(&borrowed, self.val_cursor, upper, |x| x.lt(&<U::Val as columnar::Columnar>::reborrow(val)));
         }
         fn rewind_keys(&mut self, storage: &OrdValBatch<U>) {
             self.key_cursor = 0;
@@ -626,6 +657,8 @@ pub mod val_batch {
         /// This is public to allow container implementors to set and inspect their container.
         pub result: OrdValStorage<U>,
         staging: UpdsBuilder<Vec<U::Time>, Vec<U::Diff>>,
+        /// The last value pushed, for deduplication.
+        last_val: Option<U::Val>,
     }
 
     impl<U: Update> Builder for OrdValBuilder<U> {
@@ -642,37 +675,40 @@ pub mod val_batch {
                     upds: Upds::with_capacity(vals + 1, upds),
                 },
                 staging: UpdsBuilder::default(),
+                last_val: None,
             }
         }
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {
-            // TODO: could iterate by reference to avoid moving data unnecessarily.
             for ((key, val), time, diff) in chunk.drain(..) {
 
                 // Pre-load the first update.
                 if self.result.keys.is_empty() {
-                    self.result.vals.vals.push(val);
+                    columnar::Push::push(&mut self.result.vals.vals, &val);
+                    self.last_val = Some(val);
                     self.result.keys.push(key);
                     self.staging.push(time, diff);
                 }
                 // Perhaps this is a continuation of an already received key.
                 else if self.result.keys.last() == Some(&key) {
                     // Perhaps this is a continuation of an already received value.
-                    if self.result.vals.vals.last() == Some(&val) {
+                    if self.last_val.as_ref() == Some(&val) {
                         self.staging.push(time, diff);
                     } else {
                         // New value; complete representation of prior value.
                         self.staging.seal(&mut self.result.upds);
                         self.staging.push(time, diff);
-                        self.result.vals.vals.push(val);
+                        columnar::Push::push(&mut self.result.vals.vals, &val);
+                        self.last_val = Some(val);
                     }
                 } else {
                     // New key; complete representation of prior key.
                     self.staging.seal(&mut self.result.upds);
                     self.staging.push(time, diff);
-                    self.result.vals.offs.push_ref(self.result.vals.vals.len());
-                    self.result.vals.vals.push(val);
+                    self.result.vals.offs.push_ref(columnar::Len::len(&self.result.vals.vals));
+                    columnar::Push::push(&mut self.result.vals.vals, &val);
+                    self.last_val = Some(val);
                     self.result.keys.push(key);
                 }
             }
@@ -681,7 +717,7 @@ pub mod val_batch {
         #[inline(never)]
         fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<U> {
             self.staging.seal(&mut self.result.upds);
-            self.result.vals.offs.push_ref(self.result.vals.vals.len());
+            self.result.vals.offs.push_ref(columnar::Len::len(&self.result.vals.vals));
             OrdValBatch {
                 updates: self.staging.total(),
                 storage: self.result,
@@ -726,8 +762,8 @@ pub mod val_batch {
 /// Types related to forming batches of keys.
 pub mod key_batch {
 
-    use serde::{Deserialize, Serialize};
     use timely::progress::{Antichain, frontier::AntichainRef};
+    use columnar::{Borrow, Index};
 
     use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
     use crate::trace::implementations::BatchContainer;
@@ -736,12 +772,6 @@ pub mod key_batch {
     use super::{Update, Upds, layers::UpdsBuilder};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(bound = "
-        U::Key: Serialize + for<'a> Deserialize<'a>,
-        U::Time: Serialize + for<'a> Deserialize<'a>,
-        U::Diff: Serialize + for<'a> Deserialize<'a>,
-    ")]
     pub struct OrdKeyStorage<U: Update> {
         /// An ordered list of keys, corresponding to entries in `keys_offs`.
         pub keys: Vec<U::Key>,
@@ -750,13 +780,6 @@ pub mod key_batch {
     }
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
-    #[derive(Serialize, Deserialize)]
-    #[serde(bound = "
-        U::Key: Serialize + for<'a> Deserialize<'a>,
-        U::Val: Serialize + for<'a> Deserialize<'a>,
-        U::Time: Serialize + for<'a> Deserialize<'a>,
-        U::Diff: Serialize + for<'a> Deserialize<'a>,
-    ")]
     pub struct OrdKeyBatch<U: Update> {
         /// The updates themselves.
         pub storage: OrdKeyStorage<U>,
@@ -770,14 +793,14 @@ pub mod key_batch {
         pub updates: usize,
 
         /// Single value to return if asked.
-        pub value: Vec<U::Val>,
+        pub value: columnar::ContainerOf<U::Val>,
     }
 
     impl<U: Update<Val: Default>> OrdKeyBatch<U> {
         /// Creates a container with one value, to slot in to `self.value`.
-        pub fn create_value() -> Vec<U::Val> {
-            let mut value = Vec::with_capacity(1);
-            value.push(Default::default());
+        pub fn create_value() -> columnar::ContainerOf<U::Val> {
+            let mut value = columnar::ContainerOf::<U::Val>::default();
+            columnar::Push::push(&mut value, &U::Val::default());
             value
         }
     }
@@ -984,10 +1007,10 @@ pub mod key_batch {
         type Storage = OrdKeyBatch<U>;
 
         fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> { storage.storage.keys.get(self.key_cursor) }
-        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
+        fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<columnar::Ref<'a, Self::Val>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
 
         fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { storage.storage.keys.index(self.key_cursor) }
-        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { storage.value.index(0) }
+        fn val<'a>(&self, storage: &'a Self::Storage) -> columnar::Ref<'a, Self::Val> { storage.value.borrow().get(0) }
         fn map_times<L2: FnMut(&Self::Time, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L2) {
             let (lower, upper) = storage.storage.upds.bounds(self.key_cursor);
             for index in lower .. upper {
@@ -1015,7 +1038,7 @@ pub mod key_batch {
         fn step_val(&mut self, _storage: &Self::Storage) {
             self.val_stepped = true;
         }
-        fn seek_val(&mut self, _storage: &Self::Storage, _val: &Self::Val) { }
+        fn seek_val(&mut self, _storage: &Self::Storage, _val: columnar::Ref<'_, Self::Val>) { }
         fn rewind_keys(&mut self, storage: &Self::Storage) {
             self.key_cursor = 0;
             if self.key_valid(storage) {

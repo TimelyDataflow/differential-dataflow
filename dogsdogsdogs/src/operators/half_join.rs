@@ -89,9 +89,9 @@ where
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(&Tr::Time, &G::Timestamp) -> bool + 'static,
     DOut: Clone+'static,
-    S: FnMut(&K, &V, &Tr::Val)->DOut+'static,
+    S: FnMut(&K, &V, columnar::Ref<'_,Tr::Val>)->DOut+'static,
 {
-    let output_func = move |session: &mut SessionFor<G, _>, k: &K, v1: &V, v2: &Tr::Val, initial: &G::Timestamp, diff1: &R, output: &mut Vec<(G::Timestamp, Tr::Diff)>| {
+    let output_func = move |session: &mut SessionFor<G, _>, k: &K, v1: &V, v2: columnar::Ref<'_,Tr::Val>, initial: &G::Timestamp, diff1: &R, output: &mut Vec<(G::Timestamp, Tr::Diff)>| {
         for (time, diff2) in output.drain(..) {
             let diff = diff1.clone() * diff2.clone();
             let dout = (output_func(k, v1, v2), time.clone());
@@ -154,7 +154,7 @@ where
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(&Tr::Time, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<G, CB>, &K, &V, &Tr::Val, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
+    S: FnMut(&mut SessionFor<G, CB>, &K, &V, columnar::Ref<'_,Tr::Val>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
 {
     // No need to block physical merging for this operator.
@@ -314,7 +314,7 @@ where
     Tr: for<'a> TraceReader<Key = K>,
     CF: Fn(&Tr::Time, &Tr::Time) -> bool + 'static,
     Y: Fn(Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<G, CB>, &K, &V, &Tr::Val, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
+    S: FnMut(&mut SessionFor<G, CB>, &K, &V, columnar::Ref<'_,Tr::Val>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
     K: Ord + Clone + 'static,
     V: Ord,

@@ -43,9 +43,9 @@ where
 impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader<Batch: Clone>,
-    TInner: Refines<Tr::Time>+Lattice+columnar::Columnar,
+    TInner: Refines<Tr::Time>+Lattice+crate::Data,
     F: 'static,
-    F: FnMut(&Tr::Key, &Tr::Val, &Tr::Time)->TInner+Clone,
+    F: FnMut(&Tr::Key, columnar::Ref<'_,Tr::Val>, &Tr::Time)->TInner+Clone,
     G: FnMut(&TInner)->Tr::Time+Clone+'static,
 {
     type Key = Tr::Key;
@@ -106,7 +106,7 @@ where
 impl<Tr, TInner, F, G> TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
-    TInner: Refines<Tr::Time>+Lattice+columnar::Columnar,
+    TInner: Refines<Tr::Time>+Lattice+crate::Data,
 {
     /// Makes a new trace wrapper
     pub fn make_from(trace: Tr, logic: F, prior: G) -> Self {
@@ -132,8 +132,8 @@ pub struct BatchEnter<B, TInner, F> {
 impl<B, TInner, F> BatchReader for BatchEnter<B, TInner, F>
 where
     B: BatchReader,
-    TInner: Refines<B::Time>+Lattice+columnar::Columnar,
-    F: FnMut(&B::Key, &B::Val, &B::Time)->TInner+Clone,
+    TInner: Refines<B::Time>+Lattice+crate::Data,
+    F: FnMut(&B::Key, columnar::Ref<'_, B::Val>, &B::Time)->TInner+Clone,
 {
     type Key = B::Key;
     type Val = B::Val;
@@ -152,7 +152,7 @@ where
 impl<B, TInner, F> BatchEnter<B, TInner, F>
 where
     B: BatchReader,
-    TInner: Refines<B::Time>+Lattice+columnar::Columnar,
+    TInner: Refines<B::Time>+Lattice+crate::Data,
 {
     /// Makes a new batch wrapper
     pub fn make_from(batch: B, logic: F) -> Self {
@@ -188,8 +188,8 @@ impl<C, TInner, F> CursorEnter<C, TInner, F> {
 impl<C, TInner, F> Cursor for CursorEnter<C, TInner, F>
 where
     C: Cursor,
-    TInner: Refines<C::Time>+Lattice+columnar::Columnar,
-    F: FnMut(&C::Key, &C::Val, &C::Time)->TInner,
+    TInner: Refines<C::Time>+Lattice+crate::Data,
+    F: FnMut(&C::Key, columnar::Ref<'_, C::Val>, &C::Time)->TInner,
 {
     type Key = C::Key;
     type Val = C::Val;
@@ -202,10 +202,10 @@ where
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
 
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(storage) }
-    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(storage) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> columnar::Ref<'a, Self::Val> { self.cursor.val(storage) }
 
     #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> { self.cursor.get_key(storage) }
-    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> { self.cursor.get_val(storage) }
+    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<columnar::Ref<'a, Self::Val>> { self.cursor.get_val(storage) }
 
     #[inline]
     fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
@@ -221,7 +221,7 @@ where
     #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(storage, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(storage, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: columnar::Ref<'_, Self::Val>) { self.cursor.seek_val(storage, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
@@ -248,8 +248,8 @@ impl<C, TInner, F> BatchCursorEnter<C, TInner, F> {
 
 impl<TInner, C: Cursor, F> Cursor for BatchCursorEnter<C, TInner, F>
 where
-    TInner: Refines<C::Time>+Lattice+columnar::Columnar,
-    F: FnMut(&C::Key, &C::Val, &C::Time)->TInner,
+    TInner: Refines<C::Time>+Lattice+crate::Data,
+    F: FnMut(&C::Key, columnar::Ref<'_,C::Val>, &C::Time)->TInner,
 {
     type Key = C::Key;
     type Val = C::Val;
@@ -262,10 +262,10 @@ where
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }
 
     #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key { self.cursor.key(&storage.batch) }
-    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val { self.cursor.val(&storage.batch) }
+    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> columnar::Ref<'a, Self::Val> { self.cursor.val(&storage.batch) }
 
     #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key> { self.cursor.get_key(&storage.batch) }
-    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val> { self.cursor.get_val(&storage.batch) }
+    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<columnar::Ref<'a, Self::Val>> { self.cursor.get_val(&storage.batch) }
 
     #[inline]
     fn map_times<L: FnMut(&TInner, &Self::Diff)>(&mut self, storage: &Self::Storage, mut logic: L) {
@@ -281,7 +281,7 @@ where
     #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: &Self::Key) { self.cursor.seek_key(&storage.batch, key) }
 
     #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val) { self.cursor.seek_val(&storage.batch, val) }
+    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: columnar::Ref<'_, Self::Val>) { self.cursor.seek_val(&storage.batch, val) }
 
     #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(&storage.batch) }
     #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(&storage.batch) }

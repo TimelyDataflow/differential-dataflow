@@ -20,7 +20,7 @@ use crate::trace::Cursor;
 
 /// An accumulation of (value, time, diff) updates.
 struct EditList<'a, C: Cursor> {
-    values: Vec<(&'a C::Val, usize)>,
+    values: Vec<(columnar::Ref<'a, C::Val>, usize)>,
     edits: Vec<(C::Time, C::Diff)>,
 }
 
@@ -60,14 +60,14 @@ impl<'a, C: Cursor> EditList<'a, C> {
     }
     /// Associates all edits pushed since the previous `seal_value` call with `value`.
     #[inline]
-    fn seal(&mut self, value: &'a C::Val) {
+    fn seal(&mut self, value: columnar::Ref<'a, C::Val>) {
         let prev = self.values.last().map(|x| x.1).unwrap_or(0);
         crate::consolidation::consolidate_from(&mut self.edits, prev);
         if self.edits.len() > prev {
             self.values.push((value, self.edits.len()));
         }
     }
-    fn map<F: FnMut(&'a C::Val, &C::Time, &C::Diff)>(&self, mut logic: F) {
+    fn map<F: FnMut(columnar::Ref<'a, C::Val>, &C::Time, &C::Diff)>(&self, mut logic: F) {
         for index in 0 .. self.values.len() {
             let lower = if index == 0 { 0 } else { self.values[index-1].1 };
             let upper = self.values[index].1;
@@ -81,7 +81,7 @@ impl<'a, C: Cursor> EditList<'a, C> {
 struct ValueHistory<'storage, C: Cursor> {
     edits: EditList<'storage, C>,
     history: Vec<(C::Time, C::Time, usize, usize)>,     // (time, meet, value_index, edit_offset)
-    buffer: Vec<((&'storage C::Val, C::Time), C::Diff)>,   // where we accumulate / collapse updates.
+    buffer: Vec<((columnar::Ref<'storage, C::Val>, C::Time), C::Diff)>,   // where we accumulate / collapse updates.
 }
 
 impl<'storage, C: Cursor> ValueHistory<'storage, C> {
@@ -157,11 +157,11 @@ struct HistoryReplay<'storage, 'history, C: Cursor> {
 impl<'storage, 'history, C: Cursor> HistoryReplay<'storage, 'history, C> {
     fn time(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.0) }
     fn meet(&self) -> Option<&C::Time> { self.replay.history.last().map(|x| &x.1) }
-    fn edit(&self) -> Option<(&'storage C::Val, &C::Time, &C::Diff)> {
+    fn edit(&self) -> Option<(columnar::Ref<'storage, C::Val>, &C::Time, &C::Diff)> {
         self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, &self.replay.edits.edits[e].1))
     }
 
-    fn buffer(&self) -> &[((&'storage C::Val, C::Time), C::Diff)] {
+    fn buffer(&self) -> &[((columnar::Ref<'storage, C::Val>, C::Time), C::Diff)] {
         &self.replay.buffer[..]
     }
 

@@ -29,13 +29,13 @@ where
     K: Hashable + Default + Ord + Clone + 'static,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
-    V: Clone + 'static,
+    V: differential_dataflow::Data,
 {
     crate::operators::lookup_map(
         prefixes,
         arrangement,
         move |p: &P, k: &mut K | { *k = key_selector(p); },
-        move |prefix, diff, value, sum| ((prefix.clone(), value.clone()), diff.clone().multiply(sum)),
+        move |prefix, diff, value, sum| ((prefix.clone(), columnar::Columnar::into_owned(value)), diff.clone().multiply(sum)),
         Default::default(),
         Default::default(),
         Default::default(),
@@ -63,13 +63,13 @@ where
     K: Hashable + Default + Ord + Clone + 'static,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
-    V: Clone + 'static,
+    V: differential_dataflow::Data,
 {
     crate::operators::lookup_map(
         prefixes,
         arrangement,
         move |p: &P, k: &mut K| { *k = key_selector(p); },
-        move |prefix, diff, value, _sum| ((prefix.clone(), value.clone()), diff.clone()),
+        move |prefix, diff, value, _sum| ((prefix.clone(), columnar::Columnar::into_owned(value)), diff.clone()),
         Default::default(),
         Default::default(),
         Default::default(),

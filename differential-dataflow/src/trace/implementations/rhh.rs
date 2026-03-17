@@ -646,9 +646,9 @@ mod val_batch {
         type Storage = RhhValBatch<U>;
 
         fn key<'a>(&self, storage: &'a RhhValBatch<U>) -> &'a U::Key { &storage.storage.keys[self.key_cursor] }
-        fn val<'a>(&self, storage: &'a RhhValBatch<U>) -> &'a U::Val { &storage.storage.vals[self.val_cursor] }
+        fn val<'a>(&self, storage: &'a RhhValBatch<U>) -> columnar::Ref<'a, U::Val> { &storage.storage.vals[self.val_cursor] }
         fn get_key<'a>(&self, storage: &'a RhhValBatch<U>) -> Option<&'a U::Key> { storage.storage.keys.get(self.key_cursor) }
-        fn get_val<'a>(&self, storage: &'a RhhValBatch<U>) -> Option<&'a U::Val> { if self.val_valid(storage) { storage.storage.vals.get(self.val_cursor) } else { None } }
+        fn get_val<'a>(&self, storage: &'a RhhValBatch<U>) -> Option<columnar::Ref<'a, U::Val>> { if self.val_valid(storage) { storage.storage.vals.get(self.val_cursor) } else { None } }
         fn map_times<L2: FnMut(&U::Time, &U::Diff)>(&mut self, storage: &RhhValBatch<U>, mut logic: L2) {
             let (lower, upper) = storage.storage.updates_for_value(self.val_cursor);
             for index in lower .. upper {
@@ -696,7 +696,7 @@ mod val_batch {
                 self.val_cursor = storage.storage.values_for_key(self.key_cursor).1;
             }
         }
-        fn seek_val(&mut self, storage: &RhhValBatch<U>, val: &U::Val) {
+        fn seek_val(&mut self, storage: &RhhValBatch<U>, val: columnar::Ref<'_, U::Val>) {
             let (_, upper) = storage.storage.values_for_key(self.key_cursor);
             while self.val_cursor < upper && storage.storage.vals[self.val_cursor].lt(val) {
                 self.val_cursor += 1;

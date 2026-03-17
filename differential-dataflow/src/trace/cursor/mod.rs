@@ -36,12 +36,12 @@ pub trait Cursor {
     /// A reference to the current key. Asserts if invalid.
     fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Key;
     /// A reference to the current value. Asserts if invalid.
-    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Self::Val;
+    fn val<'a>(&self, storage: &'a Self::Storage) -> columnar::Ref<'a, Self::Val>;
 
     /// Returns a reference to the current key, if valid.
     fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Key>;
     /// Returns a reference to the current value, if valid.
-    fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a Self::Val>;
+    fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<columnar::Ref<'a, Self::Val>>;
 
     /// Applies `logic` to each pair of time and difference. Intended for mutation of the
     /// closure's scope.
@@ -55,7 +55,7 @@ pub trait Cursor {
     /// Advances the cursor to the next value.
     fn step_val(&mut self, storage: &Self::Storage);
     /// Advances the cursor to the specified value.
-    fn seek_val(&mut self, storage: &Self::Storage, val: &Self::Val);
+    fn seek_val(&mut self, storage: &Self::Storage, val: columnar::Ref<'_, Self::Val>);
 
     /// Rewinds the cursor to the first key.
     fn rewind_keys(&mut self, storage: &Self::Storage);
@@ -66,7 +66,7 @@ pub trait Cursor {
     fn to_vec<K, IK, V, IV>(&mut self, storage: &Self::Storage, into_key: IK, into_val: IV) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
     where
         IK: for<'a> Fn(&'a Self::Key) -> K,
-        IV: for<'a> Fn(&'a Self::Val) -> V,
+        IV: for<'a> Fn(columnar::Ref<'a, Self::Val>) -> V,
     {
         let mut out = Vec::new();
         self.rewind_keys(storage);
