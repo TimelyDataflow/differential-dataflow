@@ -23,9 +23,9 @@ rust-version = "1.86"
 
 [workspace.dependencies]
 differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.20.0" }
-timely = { version = "0.27", default-features = false }
+#timely = { version = "0.27", default-features = false }
 columnar = { version = "0.11", default-features = false }
-#timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 #timely = { path = "../timely-dataflow/timely/", default-features = false }
 
 [workspace.lints.clippy]

@@ -53,7 +53,7 @@
 //!
 //! ```ignore
 //! loop {
-//!     let time = input.epoch();
+//!     let time = input.time();
 //!     for round in time .. time + 100 {
 //!         input.advance_to(round);
 //!         input.insert((round % 13, round % 7));

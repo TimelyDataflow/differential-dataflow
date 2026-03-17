@@ -258,7 +258,7 @@ impl<T: Timestamp+Clone, D: Data, R: Semigroup+'static> InputSession<T, D, R> {
     /// called, all buffers are flushed and timely dataflow is advised that some logical times are no longer possible.
     pub fn flush(&mut self) {
         self.handle.send_batch(&mut self.buffer);
-        if self.handle.epoch().less_than(&self.time) {
+        if self.handle.time().less_than(&self.time) {
             self.handle.advance_to(self.time.clone());
         }
     }
@@ -269,13 +269,11 @@ impl<T: Timestamp+Clone, D: Data, R: Semigroup+'static> InputSession<T, D, R> {
     /// the session is dropped or flushed. It is not correct to use this time as a basis for a computation's `step_while`
     /// method unless the session has just been flushed.
     pub fn advance_to(&mut self, time: T) {
-        assert!(self.handle.epoch().less_equal(&time));
+        assert!(self.handle.time().less_equal(&time));
         assert!(&self.time.less_equal(&time));
         self.time = time;
     }
 
-    /// Reveals the current time of the session.
-    pub fn epoch(&self) -> &T { &self.time }
     /// Reveals the current time of the session.
     pub fn time(&self) -> &T { &self.time }
 
