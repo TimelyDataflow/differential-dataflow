@@ -92,7 +92,7 @@ impl<Tr: TraceReader> TraceAgentInner<Tr> {
         let reader = TraceAgentInner {
             logical_compaction: trace.borrow().logical_compaction.frontier().to_owned(),
             physical_compaction: trace.borrow().physical_compaction.frontier().to_owned(),
-            trace: trace.clone(),
+            trace: Rc::clone(&trace),
             temp_antichain: Antichain::new(),
             operator,
             logging,
@@ -137,7 +137,7 @@ impl<Tr: TraceReader> Clone for TraceAgentInner<Tr> {
         self.trace.borrow_mut().adjust_physical_compaction(empty_frontier.borrow(), self.physical_compaction.borrow());
 
         TraceAgentInner {
-            trace: self.trace.clone(),
+            trace: Rc::clone(&self.trace),
             logical_compaction: self.logical_compaction.clone(),
             physical_compaction: self.physical_compaction.clone(),
             operator: self.operator.clone(),
