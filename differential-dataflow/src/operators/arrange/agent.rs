@@ -17,17 +17,17 @@ use timely::scheduling::Activator;
 
 use super::{TraceWriter, TraceAgentQueueWriter, TraceAgentQueueReader, Arranged};
 use super::TraceReplayInstruction;
+use super::writer::TraceWriterInner;
 
 use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};
 
 
-/// A `TraceReader` wrapper which can be imported into other dataflows.
+/// Inner agent that maintains the shared trace and compaction state.
 ///
-/// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
-/// from the dataflow in which it was defined, and imported into other dataflows.
-pub struct TraceAgent<Tr: TraceReader> {
+/// A `TraceAgentInner` holds the shared trace and tracks logical and physical
+/// compaction frontiers, without any queue management.
+pub struct TraceAgentInner<Tr: TraceReader> {
     trace: Rc<RefCell<TraceBox<Tr>>>,
-    queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
     logical_compaction: Antichain<Tr::Time>,
     physical_compaction: Antichain<Tr::Time>,
     temp_antichain: Antichain<Tr::Time>,
@@ -37,11 +37,11 @@ pub struct TraceAgent<Tr: TraceReader> {
 }
 
 use crate::trace::implementations::WithLayout;
-impl<Tr: TraceReader> WithLayout for TraceAgent<Tr> {
+impl<Tr: TraceReader> WithLayout for TraceAgentInner<Tr> {
     type Layout = Tr::Layout;
 }
 
-impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
+impl<Tr: TraceReader> TraceReader for TraceAgentInner<Tr> {
 
     type Batch = Tr::Batch;
     type Storage = Tr::Storage;
@@ -75,14 +75,13 @@ impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }
 }
 
-impl<Tr: TraceReader> TraceAgent<Tr> {
-    /// Creates a new agent from a trace reader.
-    pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, TraceWriter<Tr>)
+impl<Tr: TraceReader> TraceAgentInner<Tr> {
+    /// Creates a new inner agent from a trace reader, returning the agent and a matching writer.
+    pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, TraceWriterInner<Tr>)
     where
         Tr: Trace,
     {
         let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
-        let queues = Rc::new(RefCell::new(Vec::new()));
 
         if let Some(logging) = &logging {
             logging.log(
@@ -90,21 +89,134 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
             );
         }
 
-        let reader = TraceAgent {
-            trace: trace.clone(),
-            queues: Rc::downgrade(&queues),
+        let reader = TraceAgentInner {
             logical_compaction: trace.borrow().logical_compaction.frontier().to_owned(),
             physical_compaction: trace.borrow().physical_compaction.frontier().to_owned(),
+            trace: trace.clone(),
             temp_antichain: Antichain::new(),
             operator,
             logging,
         };
 
-        let writer = TraceWriter::new(
+        let writer = TraceWriterInner::new(
             vec![<Tr::Time as Timestamp>::minimum()],
             Rc::downgrade(&trace),
-            queues,
         );
+
+        (reader, writer)
+    }
+
+    /// The [OperatorInfo] of the underlying Timely operator
+    pub fn operator(&self) -> &OperatorInfo {
+        &self.operator
+    }
+
+    /// Obtain a reference to the inner [`TraceBox`]. It is the caller's obligation to maintain
+    /// the trace box and this trace agent's invariants. Specifically, it is undefined behavior
+    /// to mutate the trace box. Keeping strong references can prevent resource reclamation.
+    ///
+    /// This method is subject to changes and removal and should not be considered part of a stable
+    /// interface.
+    pub fn trace_box_unstable(&self) -> Rc<RefCell<TraceBox<Tr>>> {
+        Rc::clone(&self.trace)
+    }
+}
+
+impl<Tr: TraceReader> Clone for TraceAgentInner<Tr> {
+    fn clone(&self) -> Self {
+
+        if let Some(logging) = &self.logging {
+            logging.log(
+                crate::logging::TraceShare { operator: self.operator.global_id, diff: 1 }
+            );
+        }
+
+        // increase counts for wrapped `TraceBox`.
+        let empty_frontier = Antichain::new();
+        self.trace.borrow_mut().adjust_logical_compaction(empty_frontier.borrow(), self.logical_compaction.borrow());
+        self.trace.borrow_mut().adjust_physical_compaction(empty_frontier.borrow(), self.physical_compaction.borrow());
+
+        TraceAgentInner {
+            trace: self.trace.clone(),
+            logical_compaction: self.logical_compaction.clone(),
+            physical_compaction: self.physical_compaction.clone(),
+            operator: self.operator.clone(),
+            logging: self.logging.clone(),
+            temp_antichain: Antichain::new(),
+        }
+    }
+}
+
+impl<Tr: TraceReader> Drop for TraceAgentInner<Tr> {
+    fn drop(&mut self) {
+
+        if let Some(logging) = &self.logging {
+            logging.log(
+                crate::logging::TraceShare { operator: self.operator.global_id, diff: -1 }
+            );
+        }
+
+        // decrement borrow counts to remove all holds
+        let empty_frontier = Antichain::new();
+        self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), empty_frontier.borrow());
+        self.trace.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), empty_frontier.borrow());
+    }
+}
+
+/// A `TraceReader` wrapper which can be imported into other dataflows.
+///
+/// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
+/// from the dataflow in which it was defined, and imported into other dataflows.
+pub struct TraceAgent<Tr: TraceReader> {
+    /// Inner agent maintaining the shared trace and compaction state.
+    inner: TraceAgentInner<Tr>,
+    /// A sequence of private queues into which batches are written.
+    queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
+}
+
+impl<Tr: TraceReader> WithLayout for TraceAgent<Tr> {
+    type Layout = Tr::Layout;
+}
+
+impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
+
+    type Batch = Tr::Batch;
+    type Storage = Tr::Storage;
+    type Cursor = Tr::Cursor;
+
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
+        self.inner.set_logical_compaction(frontier);
+    }
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
+        self.inner.get_logical_compaction()
+    }
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) {
+        self.inner.set_physical_compaction(frontier);
+    }
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
+        self.inner.get_physical_compaction()
+    }
+    fn cursor_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
+        self.inner.cursor_through(frontier)
+    }
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) { self.inner.map_batches(f) }
+}
+
+impl<Tr: TraceReader> TraceAgent<Tr> {
+    /// Creates a new agent from a trace reader.
+    pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, TraceWriter<Tr>)
+    where
+        Tr: Trace,
+    {
+        let queues = Rc::new(RefCell::new(Vec::new()));
+        let (inner, writer_inner) = TraceAgentInner::new(trace, operator, logging);
+
+        let reader = TraceAgent {
+            inner,
+            queues: Rc::downgrade(&queues),
+        };
+
+        let writer = TraceWriter::from_inner(writer_inner, queues);
 
         (reader, writer)
     }
@@ -121,7 +233,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
 
         // add the existing batches from the trace
         let mut upper = None;
-        self.trace
+        self.inner.trace
             .borrow_mut()
             .trace
             .map_batches(|batch| {
@@ -145,7 +257,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
 
     /// The [OperatorInfo] of the underlying Timely operator
     pub fn operator(&self) -> &OperatorInfo {
-        &self.operator
+        self.inner.operator()
     }
 
     /// Obtain a reference to the inner [`TraceBox`]. It is the caller's obligation to maintain
@@ -155,7 +267,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
     /// This method is subject to changes and removal and should not be considered part of a stable
     /// interface.
     pub fn trace_box_unstable(&self) -> Rc<RefCell<TraceBox<Tr>>> {
-        Rc::clone(&self.trace)
+        self.inner.trace_box_unstable()
     }
 }
 
@@ -512,42 +624,11 @@ impl<T> Drop for ShutdownDeadmans<T> {
 
 impl<Tr: TraceReader> Clone for TraceAgent<Tr> {
     fn clone(&self) -> Self {
-
-        if let Some(logging) = &self.logging {
-            logging.log(
-                crate::logging::TraceShare { operator: self.operator.global_id, diff: 1 }
-            );
-        }
-
-        // increase counts for wrapped `TraceBox`.
-        let empty_frontier = Antichain::new();
-        self.trace.borrow_mut().adjust_logical_compaction(empty_frontier.borrow(), self.logical_compaction.borrow());
-        self.trace.borrow_mut().adjust_physical_compaction(empty_frontier.borrow(), self.physical_compaction.borrow());
-
         TraceAgent {
-            trace: self.trace.clone(),
+            inner: self.inner.clone(),
             queues: self.queues.clone(),
-            logical_compaction: self.logical_compaction.clone(),
-            physical_compaction: self.physical_compaction.clone(),
-            operator: self.operator.clone(),
-            logging: self.logging.clone(),
-            temp_antichain: Antichain::new(),
         }
     }
 }
 
-impl<Tr: TraceReader> Drop for TraceAgent<Tr> {
-    fn drop(&mut self) {
-
-        if let Some(logging) = &self.logging {
-            logging.log(
-                crate::logging::TraceShare { operator: self.operator.global_id, diff: -1 }
-            );
-        }
-
-        // decrement borrow counts to remove all holds
-        let empty_frontier = Antichain::new();
-        self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), empty_frontier.borrow());
-        self.trace.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), empty_frontier.borrow());
-    }
-}
+// Drop is handled by TraceAgentInner's Drop impl.

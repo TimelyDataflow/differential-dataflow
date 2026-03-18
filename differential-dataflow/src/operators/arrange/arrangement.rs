@@ -37,6 +37,7 @@ use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 
 use super::TraceAgent;
+use super::agent::TraceAgentInner;
 
 /// An arranged collection of `(K,V)` values.
 ///
@@ -360,38 +361,44 @@ where
     // held by the batcher, which may prevents the operator from sending an
     // empty batch.
 
-    let mut reader: Option<TraceAgent<Tr>> = None;
+    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-    // fabricate a data-parallel operator using the `unary_notify` pattern.
-    let reader_ref = &mut reader;
     let scope = stream.scope();
 
-    let stream = stream.unary_frontier(pact, name, move |_capability, info| {
+    let mut builder = OperatorBuilder::new(name.to_owned(), scope.clone());
+    let operator_info = builder.operator_info();
 
-        // Acquire a logger for arrange events.
-        let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+    let mut input = builder.new_input(stream, pact);
+    builder.set_notify_for(0, timely::progress::operate::FrontierInterest::Always);
+    let (mut output, stream) = builder.new_output();
 
-        // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = Ba::new(logger.clone(), info.global_id);
+    // Acquire a logger for arrange events.
+    let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+
+    // Where we will deposit received updates, and from which we extract batches.
+    let mut batcher = Ba::new(logger.clone(), operator_info.global_id);
+
+    let activator = Some(scope.activator_for(operator_info.address.clone()));
+    let mut empty_trace = Tr::new(operator_info.clone(), logger.clone(), activator);
+    // If there is default exertion logic set, install it.
+    if let Some(exert_logic) = scope.config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+        empty_trace.set_exert_logic(exert_logic);
+    }
+
+    let (trace, mut writer) = TraceAgent::new(empty_trace, operator_info, logger);
+
+    builder.build(move |_capabilities| {
 
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
 
-        let activator = Some(scope.activator_for(info.address.clone()));
-        let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
-        // If there is default exertion logic set, install it.
-        if let Some(exert_logic) = scope.config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
-            empty_trace.set_exert_logic(exert_logic);
-        }
-
-        let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
-
-        *reader_ref = Some(reader_local);
-
         // Initialize to the minimal input frontier.
         let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
 
-        move |(input, frontier), output| {
+        move |frontiers| {
+
+            let frontier = &frontiers[0];
+            let mut output = output.activate();
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
             // We don't have to keep all capabilities, but we need to be able to form output messages
@@ -453,7 +460,7 @@ where
                             writer.insert(batch.clone(), Some(capability.time().clone()));
 
                             // send the batch to downstream consumers, empty or not.
-                            output.session(&capabilities.elements()[index]).give(batch);
+                            output.give(&capabilities.elements()[index], &mut vec![batch]);
                         }
                     }
 
@@ -488,5 +495,121 @@ where
         }
     });
 
-    Arranged { stream, trace: reader.unwrap() }
+    Arranged { stream, trace }
+}
+
+/// Arranges a stream of updates into a private trace, without shared queue distribution.
+///
+/// This variant uses `TraceAgentInner` and `TraceWriterInner` directly, avoiding the
+/// overhead of queue management for listeners. The operator uses `FrontierInterest::IfCapability`,
+/// meaning it will only be notified of frontier changes while it holds capabilities.
+pub fn arrange_private<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgentInner<Tr>>
+where
+    G: Scope<Timestamp: Lattice>,
+    P: ParallelizationContract<G::Timestamp, Ba::Input>,
+    Ba: Batcher<Time=G::Timestamp,Input: Container> + 'static,
+    Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
+    Tr: Trace<Time=G::Timestamp>+'static,
+{
+    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+
+    let scope = stream.scope();
+
+    let mut builder = OperatorBuilder::new(name.to_owned(), scope.clone());
+    let operator_info = builder.operator_info();
+
+    let mut input = builder.new_input(stream, pact);
+    builder.set_notify_for(0, timely::progress::operate::FrontierInterest::IfCapability);
+    let (mut output, stream) = builder.new_output();
+
+    // Acquire a logger for arrange events.
+    let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+
+    // Where we will deposit received updates, and from which we extract batches.
+    let mut batcher = Ba::new(logger.clone(), operator_info.global_id);
+
+    let activator = Some(scope.activator_for(operator_info.address.clone()));
+    let mut empty_trace = Tr::new(operator_info.clone(), logger.clone(), activator);
+    // If there is default exertion logic set, install it.
+    if let Some(exert_logic) = scope.config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+        empty_trace.set_exert_logic(exert_logic);
+    }
+
+    let (trace, mut writer) = TraceAgentInner::new(empty_trace, operator_info, logger);
+
+    builder.build(move |_capabilities| {
+
+        // Capabilities for the lower envelope of updates in `batcher`.
+        let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
+
+        // Initialize to the minimal input frontier.
+        let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
+
+        move |frontiers| {
+
+            let frontier = &frontiers[0];
+            let mut output = output.activate();
+
+            input.for_each(|cap, data| {
+                capabilities.insert(cap.retain(0));
+                batcher.push_container(data);
+            });
+
+            // Assert that the frontier never regresses.
+            assert!(PartialOrder::less_equal(&prev_frontier.borrow(), &frontier.frontier()));
+
+            if prev_frontier.borrow() != frontier.frontier() {
+
+                if capabilities.elements().iter().any(|c| !frontier.less_equal(c.time())) {
+
+                    let mut upper = Antichain::new();
+
+                    for (index, capability) in capabilities.elements().iter().enumerate() {
+
+                        if !frontier.less_equal(capability.time()) {
+
+                            upper.clear();
+                            for time in frontier.frontier().iter() {
+                                upper.insert(time.clone());
+                            }
+                            for other_capability in &capabilities.elements()[(index + 1) .. ] {
+                                upper.insert(other_capability.time().clone());
+                            }
+
+                            let batch = batcher.seal::<Bu>(upper.clone());
+
+                            writer.insert(batch.clone());
+
+                            // send the batch to downstream consumers, empty or not.
+                            output.give(&capabilities.elements()[index], &mut vec![batch]);
+                        }
+                    }
+
+                    let mut new_capabilities = Antichain::new();
+                    for time in batcher.frontier().iter() {
+                        if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
+                            new_capabilities.insert(capability.delayed(time));
+                        }
+                        else {
+                            panic!("failed to find capability");
+                        }
+                    }
+
+                    capabilities = new_capabilities;
+                }
+                else {
+                    // Announce progress updates, even without data.
+                    let _batch = batcher.seal::<Bu>(frontier.frontier().to_owned());
+                    writer.seal(frontier.frontier().to_owned());
+                }
+
+                prev_frontier.clear();
+                prev_frontier.extend(frontier.frontier().iter().cloned());
+            }
+
+            writer.exert();
+        }
+    });
+
+    Arranged { stream, trace }
 }
