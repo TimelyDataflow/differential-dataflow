@@ -1241,6 +1241,21 @@ pub mod vec {
     }
 }
 
+pub use col::Collection as ColCollection;
+/// Specializations of `Collection` that use columnar containers.
+pub mod col {
+
+    use timely::dataflow::ScopeParent;
+
+    use crate::containers::ColContainer;
+
+    /// An evolving collection of `(D, T, R)` updates backed by columnar storage.
+    ///
+    /// This type is analogous to [`super::vec::Collection`] but stores data in a
+    /// columnar layout via `<(D, G::Timestamp, R) as Columnar>::Container`.
+    pub type Collection<G, D, R = isize> = super::Collection<G, ColContainer<(D, <G as ScopeParent>::Timestamp, R)>>;
+}
+
 /// Conversion to a differential dataflow Collection.
 pub trait AsCollection<G: Scope, C> {
     /// Converts the type to a differential dataflow collection.
@@ -1354,6 +1369,113 @@ pub mod containers {
             fn results_in(self, step: &T::Summary) -> Self {
                 use timely::progress::PathSummary;
                 self.into_iter().filter_map(move |(d,t,r)| step.results_in(&t).map(|t| (d,t,r))).collect()
+            }
+        }
+    }
+
+    /// Implementations of container traits for the `ColContainer` container.
+    mod col {
+
+        use columnar::{Columnar, Borrow, Len, Index, Push};
+        use timely::progress::{Timestamp, timestamp::Refines};
+        use crate::collection::Abelian;
+        use crate::containers::ColContainer;
+
+        use super::{Negate, Enter, Leave, ResultsIn};
+
+        // For `(D, T, R): Columnar`, the container is `(D::Container, T::Container, R::Container)`.
+        // From `Columnar`, this container is `Borrow + Clear + Len + Clone + Default`.
+        // `Borrow::Borrowed<'a>` implements `Index<Ref = Borrow::Ref<'a>>` and `Len`.
+        // `Borrow::Ref<'a>` is `Copy` and equals `(Ref<'a, D>, Ref<'a, T>, Ref<'a, R>)`.
+        // The container also implements `Push<Ref<'a>>` and `Push<&'a (D, T, R)>`.
+
+        impl<D, T, R> Negate for ColContainer<(D, T, R)>
+        where
+            D: Columnar,
+            T: Columnar,
+            R: Columnar + Abelian,
+        {
+            fn negate(self) -> Self {
+                let mut result = ColContainer::<(D, T, R)>::default();
+                let borrowed = self.container.borrow();
+                for i in 0..borrowed.len() {
+                    let (d, t, r) = borrowed.get(i);
+                    let mut r_owned = R::into_owned(r);
+                    r_owned.negate();
+                    result.container.0.push(d);
+                    result.container.1.push(t);
+                    result.container.2.push(&r_owned);
+                }
+                result
+            }
+        }
+
+        impl<D, T1, T2, R> Enter<T1, T2> for ColContainer<(D, T1, R)>
+        where
+            D: Columnar,
+            T1: Columnar + Timestamp,
+            T2: Columnar + Refines<T1>,
+            R: Columnar,
+            T2::Container: Push<T2>,
+        {
+            type InnerContainer = ColContainer<(D, T2, R)>;
+            fn enter(self) -> Self::InnerContainer {
+                let mut result = ColContainer::<(D, T2, R)>::default();
+                let borrowed = self.container.borrow();
+                for i in 0..borrowed.len() {
+                    let (d, t, r) = borrowed.get(i);
+                    let t_inner = T2::to_inner(T1::into_owned(t));
+                    result.container.0.push(d);
+                    result.container.1.push(t_inner);
+                    result.container.2.push(r);
+                }
+                result
+            }
+        }
+
+        impl<D, T1, T2, R> Leave<T1, T2> for ColContainer<(D, T1, R)>
+        where
+            D: Columnar,
+            T1: Columnar + Refines<T2>,
+            T2: Columnar + Timestamp,
+            R: Columnar,
+            T2::Container: Push<T2>,
+        {
+            type OuterContainer = ColContainer<(D, T2, R)>;
+            fn leave(self) -> Self::OuterContainer {
+                let mut result = ColContainer::<(D, T2, R)>::default();
+                let borrowed = self.container.borrow();
+                for i in 0..borrowed.len() {
+                    let (d, t, r) = borrowed.get(i);
+                    let t_outer = T1::into_owned(t).to_outer();
+                    result.container.0.push(d);
+                    result.container.1.push(t_outer);
+                    result.container.2.push(r);
+                }
+                result
+            }
+        }
+
+        impl<D, T, R> ResultsIn<T::Summary> for ColContainer<(D, T, R)>
+        where
+            D: Columnar,
+            T: Columnar + Timestamp,
+            R: Columnar,
+            T::Container: Push<T>,
+        {
+            fn results_in(self, step: &T::Summary) -> Self {
+                use timely::progress::PathSummary;
+                let mut result = ColContainer::<(D, T, R)>::default();
+                let borrowed = self.container.borrow();
+                for i in 0..borrowed.len() {
+                    let (d, t, r) = borrowed.get(i);
+                    if let Some(t2) = step.results_in(&T::into_owned(t)) {
+                        result.container.0.push(d);
+                        result.container.1.push(t2);
+                        result.container.2.push(r);
+                    }
+                }
+                result
             }
         }
     }

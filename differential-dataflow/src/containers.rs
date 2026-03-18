@@ -300,3 +300,123 @@ mod container {
         }
     }
 }
+
+/// A container backed by columnar storage.
+///
+/// This type wraps a `<C as Columnar>::Container` and provides the trait
+/// implementations needed to use it as a timely dataflow container. It is
+/// an append-only container: elements are pushed in and then read out by
+/// index, but not mutated in place.
+pub struct ColContainer<C: columnar::Columnar> {
+    /// The underlying columnar container.
+    pub container: C::Container,
+}
+
+impl<C: columnar::Columnar> Default for ColContainer<C> {
+    fn default() -> Self { Self { container: Default::default() } }
+}
+
+impl<C: columnar::Columnar> Clone for ColContainer<C>
+where
+    C::Container: Clone,
+{
+    fn clone(&self) -> Self { Self { container: self.container.clone() } }
+}
+
+impl<C: columnar::Columnar> ColContainer<C> {
+    /// The number of elements in the container.
+    pub fn len(&self) -> usize where C::Container: columnar::Len {
+        columnar::Len::len(&self.container)
+    }
+    /// Whether the container is empty.
+    pub fn is_empty(&self) -> bool where C::Container: columnar::Len {
+        self.len() == 0
+    }
+    /// Clears the container.
+    pub fn clear(&mut self) where C::Container: columnar::Clear {
+        columnar::Clear::clear(&mut self.container)
+    }
+    /// Pushes an element into the container.
+    pub fn push<T>(&mut self, item: T) where C::Container: columnar::Push<T> {
+        columnar::Push::push(&mut self.container, item)
+    }
+}
+
+impl<C: columnar::Columnar> timely::container::Accountable for ColContainer<C>
+where
+    C::Container: columnar::Len,
+{
+    #[inline]
+    fn record_count(&self) -> i64 { self.len() as i64 }
+    #[inline]
+    fn is_empty(&self) -> bool { self.is_empty() }
+}
+
+/// A `ContainerBuilder` that accumulates elements into `ColContainer<C>`.
+///
+/// Elements are pushed into a columnar container, and when it exceeds a
+/// size threshold a completed container is made available.
+pub struct ColContainerBuilder<C: columnar::Columnar> {
+    current: ColContainer<C>,
+    pending: std::collections::VecDeque<ColContainer<C>>,
+    empty: Option<ColContainer<C>>,
+}
+
+impl<C: columnar::Columnar> Default for ColContainerBuilder<C> {
+    fn default() -> Self {
+        Self {
+            current: Default::default(),
+            pending: Default::default(),
+            empty: None,
+        }
+    }
+}
+
+impl<C: columnar::Columnar> ColContainerBuilder<C> {
+    const TARGET_SIZE: usize = 1 << 20;
+}
+
+impl<T, C: columnar::Columnar> PushInto<T> for ColContainerBuilder<C>
+where
+    C::Container: columnar::Push<T> + columnar::Len + columnar::Clear,
+{
+    fn push_into(&mut self, item: T) {
+        columnar::Push::push(&mut self.current.container, item);
+        if self.current.len() >= Self::TARGET_SIZE {
+            self.pending.push_back(std::mem::take(&mut self.current));
+        }
+    }
+}
+
+impl<C: columnar::Columnar> timely::container::ContainerBuilder for ColContainerBuilder<C>
+where
+    C::Container: columnar::Len + columnar::Clear + Clone,
+{
+    type Container = ColContainer<C>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        if let Some(ready) = self.pending.pop_front() {
+            self.empty = Some(ready);
+            self.empty.as_mut()
+        } else {
+            None
+        }
+    }
+
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        if !self.current.is_empty() {
+            self.pending.push_back(std::mem::take(&mut self.current));
+        }
+        if let Some(ready) = self.pending.pop_front() {
+            self.empty = Some(ready);
+            self.empty.as_mut()
+        } else {
+            None
+        }
+    }
+}
+
+impl<C: columnar::Columnar> timely::container::LengthPreservingContainerBuilder for ColContainerBuilder<C>
+where
+    C::Container: columnar::Len + columnar::Clear + Clone,
+{ }

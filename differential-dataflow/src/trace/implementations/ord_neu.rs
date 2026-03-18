@@ -10,8 +10,8 @@
 
 use std::rc::Rc;
 
-use crate::containers::TimelyStack;
-use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
+use crate::containers::{TimelyStack, ColContainer};
+use crate::trace::implementations::chunker::{ColumnationChunker, ColumnarChunker, VecChunker};
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
 use crate::trace::rc_blanket_impls::RcBuilder;
@@ -57,6 +57,11 @@ pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, 
 
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
+
+/// A batcher accepting `ColContainer` input, producing Vec-based key batches.
+pub type ColumnarKeyBatcher<K, T, R> = MergeBatcher<ColContainer<((K,()), T, R)>, ColumnarChunker<((K,()), T, R)>, VecMerger<(K,()), T, R>>;
+/// A batcher accepting `ColContainer` input, producing Vec-based key-value batches.
+pub type ColumnarValBatcher<K, V, T, R> = MergeBatcher<ColContainer<((K,V), T, R)>, ColumnarChunker<((K,V), T, R)>, VecMerger<(K,V), T, R>>;
 
 pub use layers::{Vals, Upds};
 /// Layers are containers of lists of some type.

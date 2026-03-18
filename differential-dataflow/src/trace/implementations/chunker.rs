@@ -235,6 +235,113 @@ where
     }
 }
 
+/// Chunk a stream of `ColContainer` into chains of vectors.
+///
+/// Accepts `ColContainer<(D, T, R)>` as input, reads elements into an
+/// internal `Vec`, sorts, consolidates, and produces `Vec<(D, T, R)>` chunks.
+pub struct ColumnarChunker<T> {
+    pending: Vec<T>,
+    ready: VecDeque<Vec<T>>,
+    empty: Option<Vec<T>>,
+}
+
+impl<T> Default for ColumnarChunker<T> {
+    fn default() -> Self {
+        Self {
+            pending: Vec::default(),
+            ready: VecDeque::default(),
+            empty: None,
+        }
+    }
+}
+
+impl<D, T, R> ColumnarChunker<(D, T, R)>
+where
+    D: Ord,
+    T: Ord,
+    R: Semigroup,
+{
+    const BUFFER_SIZE_BYTES: usize = 8 << 10;
+    fn chunk_capacity() -> usize {
+        let size = ::std::mem::size_of::<(D, T, R)>();
+        if size == 0 {
+            Self::BUFFER_SIZE_BYTES
+        } else if size <= Self::BUFFER_SIZE_BYTES {
+            Self::BUFFER_SIZE_BYTES / size
+        } else {
+            1
+        }
+    }
+
+    fn form_chunk(&mut self) {
+        consolidate_updates(&mut self.pending);
+        if self.pending.len() >= Self::chunk_capacity() {
+            while self.pending.len() > Self::chunk_capacity() {
+                let mut chunk = Vec::with_capacity(Self::chunk_capacity());
+                chunk.extend(self.pending.drain(..chunk.capacity()));
+                self.ready.push_back(chunk);
+            }
+        }
+    }
+}
+
+impl<'a, D, T, R> PushInto<&'a mut crate::containers::ColContainer<(D, T, R)>> for ColumnarChunker<(D, T, R)>
+where
+    D: columnar::Columnar + Ord + Clone,
+    T: columnar::Columnar + Ord + Clone,
+    R: columnar::Columnar + Semigroup + Clone,
+{
+    fn push_into(&mut self, container: &'a mut crate::containers::ColContainer<(D, T, R)>) {
+        use columnar::{Borrow, Index, Len};
+        // Ensure capacity.
+        if self.pending.capacity() < Self::chunk_capacity() * 2 {
+            self.pending.reserve(Self::chunk_capacity() * 2 - self.pending.len());
+        }
+
+        // Read elements from the columnar container into the pending Vec.
+        let borrowed = container.container.borrow();
+        for i in 0..borrowed.len() {
+            let (d, t, r) = borrowed.get(i);
+            self.pending.push((D::into_owned(d), T::into_owned(t), R::into_owned(r)));
+            if self.pending.len() == self.pending.capacity() {
+                self.form_chunk();
+            }
+        }
+        container.clear();
+    }
+}
+
+impl<D, T, R> ContainerBuilder for ColumnarChunker<(D, T, R)>
+where
+    D: Ord + Clone + 'static,
+    T: Ord + Clone + 'static,
+    R: Semigroup + Clone + 'static,
+{
+    type Container = Vec<(D, T, R)>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        if let Some(ready) = self.ready.pop_front() {
+            self.empty = Some(ready);
+            self.empty.as_mut()
+        } else {
+            None
+        }
+    }
+
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        if !self.pending.is_empty() {
+            consolidate_updates(&mut self.pending);
+            while !self.pending.is_empty() {
+                let mut chunk = Vec::with_capacity(Self::chunk_capacity());
+                chunk.extend(self.pending.drain(..std::cmp::min(self.pending.len(), chunk.capacity())));
+                self.ready.push_back(chunk);
+            }
+        }
+        self.empty = self.ready.pop_front();
+        self.empty.as_mut()
+    }
+}
+
 /// Chunk a stream of containers into chains of vectors.
 pub struct ContainerChunker<Output> {
     pending: Output,
