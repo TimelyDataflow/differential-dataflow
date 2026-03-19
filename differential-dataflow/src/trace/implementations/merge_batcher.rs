@@ -603,4 +603,113 @@ pub mod container {
             #[inline] fn clear(&mut self) { TimelyStack::clear(self) }
         }
     }
+
+    pub use col_container::ColumnarMerger;
+    /// Implementations of `ContainerQueue` and `MergerChunk` for `ColContainer` (columnar).
+    pub mod col_container {
+
+        use columnar::Columnar;
+        use timely::progress::{Antichain, frontier::AntichainRef};
+        use timely::container::PushInto;
+
+        use crate::containers::ColContainer;
+        use crate::difference::Semigroup;
+
+        use super::{ContainerQueue, MergerChunk};
+
+        /// A `Merger` implementation backed by `ColContainer` (columnar storage).
+        pub type ColumnarMerger<D, T, R> = super::ContainerMerger<ColContainer<(D, T, R)>, ColContainerQueue<D, T, R>>;
+
+        /// A queue that walks a `ColContainer<(D,T,R)>` by index.
+        pub struct ColContainerQueue<D: Columnar, T: Columnar, R: Columnar> {
+            container: ColContainer<(D, T, R)>,
+            head: usize,
+        }
+
+        impl<D: Columnar, T: Columnar, R: Columnar> ColContainerQueue<D, T, R> {
+            fn peek(&self) -> (columnar::Ref<'_, D>, columnar::Ref<'_, T>, columnar::Ref<'_, R>) {
+                let borrowed = columnar::Borrow::borrow(&self.container.container);
+                columnar::Index::get(&borrowed, self.head)
+            }
+        }
+
+        impl<D, T, R> ContainerQueue<ColContainer<(D, T, R)>> for ColContainerQueue<D, T, R>
+        where
+            D: Columnar,
+            T: Columnar,
+            R: Columnar,
+            for<'a> columnar::Ref<'a, D>: Ord,
+            for<'a> columnar::Ref<'a, T>: Ord,
+        {
+            fn next_or_alloc(&mut self) -> Result<<ColContainer<(D, T, R)> as timely::container::DrainContainer>::Item<'_>, ColContainer<(D, T, R)>> {
+                if self.head >= self.container.len() {
+                    Err(std::mem::take(&mut self.container))
+                } else {
+                    let borrowed = columnar::Borrow::borrow(&self.container.container);
+                    let item = columnar::Index::get(&borrowed, self.head);
+                    self.head += 1;
+                    Ok(item)
+                }
+            }
+            fn is_empty(&self) -> bool {
+                self.head >= self.container.len()
+            }
+            fn cmp_heads(&self, other: &Self) -> std::cmp::Ordering {
+                let (d1, t1, _) = self.peek();
+                let (d2, t2, _) = other.peek();
+                (d1, t1).cmp(&(d2, t2))
+            }
+            fn from(container: ColContainer<(D, T, R)>) -> Self {
+                ColContainerQueue { container, head: 0 }
+            }
+        }
+
+        impl<D, T, R> MergerChunk for ColContainer<(D, T, R)>
+        where
+            D: Columnar + 'static,
+            T: Columnar + Ord + timely::PartialOrder + Clone + 'static,
+            R: Columnar + Default + Semigroup + 'static,
+            for<'a> columnar::Ref<'a, T>: Ord,
+            for<'a> ColContainer<(D, T, R)>: PushInto<(columnar::Ref<'a, D>, columnar::Ref<'a, T>, columnar::Ref<'a, R>)>,
+        {
+            type TimeOwned = T;
+            type DiffOwned = R;
+
+            fn time_kept(
+                (_, time, _): &<Self as timely::container::DrainContainer>::Item<'_>,
+                upper: &AntichainRef<Self::TimeOwned>,
+                frontier: &mut Antichain<Self::TimeOwned>,
+            ) -> bool {
+                let time_owned = T::into_owned(*time);
+                if upper.less_equal(&time_owned) {
+                    frontier.insert(time_owned);
+                    true
+                } else {
+                    false
+                }
+            }
+
+            fn push_and_add<'a>(
+                &mut self,
+                (d1, t1, r1): <Self as timely::container::DrainContainer>::Item<'a>,
+                (_d2, _t2, r2): <Self as timely::container::DrainContainer>::Item<'a>,
+                stash: &mut Self::DiffOwned,
+            ) {
+                use columnar::Push;
+                *stash = R::into_owned(r1);
+                let r2_owned = R::into_owned(r2);
+                stash.plus_equals(&r2_owned);
+                if !stash.is_zero() {
+                    self.container.0.push(d1);
+                    self.container.1.push(t1);
+                    self.container.2.push(stash as &R);
+                }
+            }
+
+            #[inline]
+            fn clear(&mut self) {
+                ColContainer::clear(self);
+            }
+        }
+    }
 }

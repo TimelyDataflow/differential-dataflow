@@ -11,9 +11,10 @@
 use std::rc::Rc;
 
 use crate::containers::{TimelyStack, ColContainer};
-use crate::trace::implementations::chunker::{ColumnationChunker, ColumnarChunker, VecChunker};
+use crate::trace::implementations::chunker::{ColumnationChunker, ColumnarChunker, ColumnarColChunker, VecChunker};
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
+use crate::trace::implementations::merge_batcher::container::col_container::ColumnarMerger;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Layout, Vector, TStack};
@@ -62,6 +63,59 @@ pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, 
 pub type ColumnarKeyBatcher<K, T, R> = MergeBatcher<ColContainer<((K,()), T, R)>, ColumnarChunker<((K,()), T, R)>, VecMerger<(K,()), T, R>>;
 /// A batcher accepting `ColContainer` input, producing Vec-based key-value batches.
 pub type ColumnarValBatcher<K, V, T, R> = MergeBatcher<ColContainer<((K,V), T, R)>, ColumnarChunker<((K,V), T, R)>, VecMerger<(K,V), T, R>>;
+
+/// A batcher accepting `ColContainer` input, staying columnar throughout (chunker and merger).
+pub type ColumnarColKeyBatcher<K, T, R> = MergeBatcher<ColContainer<((K,()), T, R)>, ColumnarColChunker<(K,()), T, R>, ColumnarMerger<(K,()), T, R>>;
+/// A batcher accepting `ColContainer` input, staying columnar throughout (key-value variant).
+pub type ColumnarColValBatcher<K, V, T, R> = MergeBatcher<ColContainer<((K,V), T, R)>, ColumnarColChunker<(K,V), T, R>, ColumnarMerger<(K,V), T, R>>;
+
+/// A builder that accepts `ColContainer` chunks and converts them to `Vec` for an inner builder.
+pub struct ColToVecBuilder<B> {
+    inner: B,
+}
+
+impl<D, T, R, B> crate::trace::Builder for ColToVecBuilder<B>
+where
+    D: columnar::Columnar + Clone + 'static,
+    T: columnar::Columnar + Clone + timely::progress::Timestamp,
+    R: columnar::Columnar + Clone + 'static,
+    B: crate::trace::Builder<Input = Vec<(D, T, R)>, Time = T>,
+{
+    type Input = ColContainer<(D, T, R)>;
+    type Time = T;
+    type Output = B::Output;
+
+    fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
+        ColToVecBuilder { inner: B::with_capacity(keys, vals, upds) }
+    }
+    fn push(&mut self, chunk: &mut Self::Input) {
+        use columnar::{Borrow, Index, Len};
+        let borrowed = chunk.container.borrow();
+        let mut vec = Vec::with_capacity(borrowed.len());
+        for i in 0..borrowed.len() {
+            let (d, t, r) = borrowed.get(i);
+            vec.push((D::into_owned(d), T::into_owned(t), R::into_owned(r)));
+        }
+        self.inner.push(&mut vec);
+    }
+    fn done(self, description: crate::trace::Description<Self::Time>) -> Self::Output {
+        self.inner.done(description)
+    }
+    fn seal(chain: &mut Vec<Self::Input>, description: crate::trace::Description<Self::Time>) -> Self::Output {
+        use columnar::{Borrow, Index, Len};
+        let mut vec_chain: Vec<Vec<(D, T, R)>> = chain.drain(..).map(|col| {
+            let borrowed = col.container.borrow();
+            (0..borrowed.len()).map(|i| {
+                let (d, t, r) = borrowed.get(i);
+                (D::into_owned(d), T::into_owned(t), R::into_owned(r))
+            }).collect()
+        }).collect();
+        B::seal(&mut vec_chain, description)
+    }
+}
+
+/// Builder alias: wraps `RcOrdKeyBuilder` to accept `ColContainer` chunks.
+pub type RcOrdKeyBuilderFromCol<K, T, R> = ColToVecBuilder<RcOrdKeyBuilder<K, T, R>>;
 
 pub use layers::{Vals, Upds};
 /// Layers are containers of lists of some type.

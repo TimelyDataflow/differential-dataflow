@@ -352,6 +352,56 @@ where
     fn is_empty(&self) -> bool { self.is_empty() }
 }
 
+/// An iterator that walks a `ColContainer<(D,T,R)>` by index, yielding columnar refs.
+pub struct ColContainerDrain<'a, D: columnar::Columnar, T: columnar::Columnar, R: columnar::Columnar> {
+    borrowed: <(D::Container, T::Container, R::Container) as columnar::Borrow>::Borrowed<'a>,
+    index: usize,
+    len: usize,
+}
+
+impl<'a, D: columnar::Columnar, T: columnar::Columnar, R: columnar::Columnar> Iterator for ColContainerDrain<'a, D, T, R> {
+    type Item = (columnar::Ref<'a, D>, columnar::Ref<'a, T>, columnar::Ref<'a, R>);
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.len {
+            let item = columnar::Index::get(&self.borrowed, self.index);
+            self.index += 1;
+            Some(item)
+        } else {
+            None
+        }
+    }
+}
+
+impl<D: columnar::Columnar, T: columnar::Columnar, R: columnar::Columnar> timely::container::DrainContainer for ColContainer<(D, T, R)> {
+    type Item<'a> = (columnar::Ref<'a, D>, columnar::Ref<'a, T>, columnar::Ref<'a, R>);
+    type DrainIter<'a> = ColContainerDrain<'a, D, T, R>;
+    fn drain(&mut self) -> Self::DrainIter<'_> {
+        let borrowed = columnar::Borrow::borrow(&self.container);
+        let len = columnar::Len::len(&borrowed);
+        ColContainerDrain { borrowed, index: 0, len }
+    }
+}
+
+impl<D: columnar::Columnar, T: columnar::Columnar, R: columnar::Columnar> timely::container::SizableContainer for ColContainer<(D, T, R)> {
+    fn at_capacity(&self) -> bool {
+        self.len() >= timely::container::buffer::default_capacity::<(D, T, R)>()
+    }
+    fn ensure_capacity(&mut self, _stash: &mut Option<Self>) {
+        // Columnar containers grow dynamically; nothing special needed.
+    }
+}
+
+impl<'a, D: columnar::Columnar, T: columnar::Columnar, R: columnar::Columnar>
+    PushInto<(columnar::Ref<'a, D>, columnar::Ref<'a, T>, columnar::Ref<'a, R>)>
+    for ColContainer<(D, T, R)>
+{
+    #[inline]
+    fn push_into(&mut self, item: (columnar::Ref<'a, D>, columnar::Ref<'a, T>, columnar::Ref<'a, R>)) {
+        columnar::Push::push(&mut self.container, item);
+    }
+}
+
 /// A `ContainerBuilder` that accumulates elements into `ColContainer<C>`.
 ///
 /// Elements are pushed into a columnar container, and when it exceeds a
