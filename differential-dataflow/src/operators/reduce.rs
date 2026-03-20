@@ -20,7 +20,7 @@ use crate::operators::arrange::{Arranged, TraceAgent};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::containers::BatchContainer;
-use crate::trace::implementations::merge_batcher::container::MergerChunk;
+use crate::trace::implementations::merge_batcher::container::InternalMerge;
 use crate::trace::TraceReader;
 
 /// A key-wise reduction of values in an input trace.
@@ -31,7 +31,7 @@ where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader<KeyOwn: Ord> + Clone + 'static,
     T2: for<'a> Trace<Key<'a>=T1::Key<'a>, KeyOwn=T1::KeyOwn, ValOwn: Data, Time=T1::Time> + 'static,
-    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn,T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
 {
     let mut result_trace = None;

@@ -30,7 +30,7 @@ use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, BatchReader, Batcher, Builder, Cursor};
-use crate::trace::implementations::merge_batcher::container::MergerChunk;
+use crate::trace::implementations::merge_batcher::container::InternalMerge;
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
@@ -259,7 +259,7 @@ where
             Time=T1::Time,
             Diff: Abelian,
         >+'static,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
     {
         self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
@@ -281,7 +281,7 @@ where
             ValOwn: Data,
             Time=T1::Time,
         >+'static,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: MergerChunk + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
     {
         use crate::operators::reduce::reduce_trace;
