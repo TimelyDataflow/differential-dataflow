@@ -945,6 +945,46 @@ pub mod container {
                         use columnar::{Borrow, Container, Index, Len, Push};
                         use std::cmp::Ordering;
 
+                        // Check if one side's remainder is entirely before the other's.
+                        // If so, we can bulk-copy it, or swap it in when possible.
+                        {
+                            let b1 = others[0].container.borrow();
+                            let b2 = others[1].container.borrow();
+                            let len1 = b1.len();
+                            let len2 = b2.len();
+                            if positions[0] < len1 && positions[1] < len2 {
+                                let (d1_last, t1_last, _) = b1.get(len1 - 1);
+                                let (d2_first, t2_first, _) = b2.get(positions[1]);
+                                if (&d1_last, &t1_last) < (&d2_first, &t2_first) {
+                                    // Side 0's remainder is entirely before side 1.
+                                    let count = std::cmp::min(len1 - positions[0], *fuel);
+                                    if self.len() == 0 && positions[0] == 0 && count == len1 {
+                                        // Take the whole container.
+                                        std::mem::swap(self, &mut others[0]);
+                                    } else {
+                                        self.container.extend_from_self(b1, positions[0] .. positions[0] + count);
+                                    }
+                                    positions[0] += count;
+                                    *fuel -= count;
+                                    return;
+                                }
+                                let (d1_first, t1_first, _) = b1.get(positions[0]);
+                                let (d2_last, t2_last, _) = b2.get(len2 - 1);
+                                if (&d2_last, &t2_last) < (&d1_first, &t1_first) {
+                                    // Side 1's remainder is entirely before side 0.
+                                    let count = std::cmp::min(len2 - positions[1], *fuel);
+                                    if self.len() == 0 && positions[1] == 0 && count == len2 {
+                                        std::mem::swap(self, &mut others[1]);
+                                    } else {
+                                        self.container.extend_from_self(b2, positions[1] .. positions[1] + count);
+                                    }
+                                    positions[1] += count;
+                                    *fuel -= count;
+                                    return;
+                                }
+                            }
+                        }
+
                         let borrowed1 = others[0].container.borrow();
                         let borrowed2 = others[1].container.borrow();
                         let len1 = borrowed1.len();
