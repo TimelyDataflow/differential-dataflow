@@ -10,8 +10,8 @@
 
 use std::rc::Rc;
 
-use crate::containers::TimelyStack;
-use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker};
+use crate::containers::{TimelyStack, ColContainer};
+use crate::trace::implementations::chunker::{ColumnationChunker, ColumnarColChunker, ContainerChunker};
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::MergeBatcher;
 use crate::trace::implementations::merge_batcher::container::{VecInternalMerger, ColInternalMerger};
@@ -58,6 +58,24 @@ pub type ColKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<TStack<((K,()),T,R)>, 
 
 // /// A trace implementation backed by columnar storage.
 // pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
+
+/// A columnar merger type alias.
+pub type ColumnarInternalMerger<D, T, R> = crate::trace::implementations::merge_batcher::InternalMerger<ColContainer<(D, T, R)>>;
+
+/// A batcher accepting `ColContainer` input, staying columnar throughout.
+pub type ColumnarColKeyBatcher<K, T, R> = MergeBatcher<ColContainer<((K,()), T, R)>, ColumnarColChunker<(K,()), T, R>, ColumnarInternalMerger<(K,()), T, R>>;
+/// A batcher accepting `ColContainer` input, staying columnar throughout (key-value variant).
+pub type ColumnarColValBatcher<K, V, T, R> = MergeBatcher<ColContainer<((K,V), T, R)>, ColumnarColChunker<(K,V), T, R>, ColumnarInternalMerger<(K,V), T, R>>;
+
+/// A spine backed by columnar containers throughout.
+pub type ColumnarKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<super::Columnar<((K,()),T,R)>>>>;
+/// A spine backed by columnar containers throughout (key-value variant).
+pub type ColumnarValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<super::Columnar<((K,V),T,R)>>>>;
+
+/// A builder that accepts `ColContainer` chunks directly into a columnar layout.
+pub type RcColumnarKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<super::Columnar<((K,()),T,R)>, ColContainer<((K,()),T,R)>>>;
+/// A builder that accepts `ColContainer` chunks directly into a columnar layout (key-value variant).
+pub type RcColumnarValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<super::Columnar<((K,V),T,R)>, ColContainer<((K,V),T,R)>>>;
 
 pub use layers::{Vals, Upds};
 /// Layers are containers of lists of some type.

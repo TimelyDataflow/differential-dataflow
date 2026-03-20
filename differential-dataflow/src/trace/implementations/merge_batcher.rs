@@ -616,4 +616,175 @@ pub mod container {
             }
         }
     }
+
+    /// `InternalMerge` implementation for `ColContainer` (columnar).
+    pub mod col_container {
+        use std::cmp::Ordering;
+        use columnar::Columnar;
+        use timely::PartialOrder;
+        use timely::container::SizableContainer;
+        use timely::progress::frontier::{Antichain, AntichainRef};
+
+        use crate::containers::ColContainer;
+        use crate::difference::Semigroup;
+        use super::InternalMerge;
+
+        impl<D, T, R> InternalMerge for ColContainer<(D, T, R)>
+        where
+            D: Columnar + 'static,
+            T: Columnar + Ord + PartialOrder + Clone + 'static,
+            R: Columnar + Default + Semigroup + 'static,
+            for<'a> columnar::Ref<'a, D>: Ord,
+            for<'a> columnar::Ref<'a, T>: Ord,
+        {
+            type TimeOwned = T;
+
+            fn len(&self) -> usize { ColContainer::len(self) }
+            fn clear(&mut self) { ColContainer::clear(self) }
+
+            fn merge_from(
+                &mut self,
+                others: &mut [Self],
+                positions: &mut [usize],
+            ) {
+                match others.len() {
+                    0 => {},
+                    1 => {
+                        use columnar::{Borrow, Container, Len};
+                        let other = &mut others[0];
+                        let pos = &mut positions[0];
+                        if self.len() == 0 && *pos == 0 {
+                            std::mem::swap(self, other);
+                            return;
+                        }
+                        let borrowed = other.container.borrow();
+                        let len = borrowed.len();
+                        if *pos < len {
+                            self.container.extend_from_self(borrowed, *pos .. len);
+                            *pos = len;
+                        }
+                    },
+                    2 => {
+                        use columnar::{Borrow, Container, Index, Len, Push};
+
+                        // Check if one side's remainder is entirely before the other's.
+                        {
+                            let b1 = others[0].container.borrow();
+                            let b2 = others[1].container.borrow();
+                            let len1 = b1.len();
+                            let len2 = b2.len();
+                            if positions[0] < len1 && positions[1] < len2 {
+                                let (d1_last, t1_last, _) = b1.get(len1 - 1);
+                                let (d2_first, t2_first, _) = b2.get(positions[1]);
+                                if (&d1_last, &t1_last) < (&d2_first, &t2_first) {
+                                    let _count = len1 - positions[0];
+                                    if self.len() == 0 && positions[0] == 0 {
+                                        std::mem::swap(self, &mut others[0]);
+                                    } else {
+                                        self.container.extend_from_self(b1, positions[0] .. len1);
+                                    }
+                                    positions[0] = len1;
+                                    return;
+                                }
+                                let (d1_first, t1_first, _) = b1.get(positions[0]);
+                                let (d2_last, t2_last, _) = b2.get(len2 - 1);
+                                if (&d2_last, &t2_last) < (&d1_first, &t1_first) {
+                                    let _count = len2 - positions[1];
+                                    if self.len() == 0 && positions[1] == 0 {
+                                        std::mem::swap(self, &mut others[1]);
+                                    } else {
+                                        self.container.extend_from_self(b2, positions[1] .. len2);
+                                    }
+                                    positions[1] = len2;
+                                    return;
+                                }
+                            }
+                        }
+
+                        let borrowed1 = others[0].container.borrow();
+                        let borrowed2 = others[1].container.borrow();
+                        let len1 = borrowed1.len();
+                        let len2 = borrowed2.len();
+
+                        let mut diff_stash: R;
+
+                        while positions[0] < len1 && positions[1] < len2 && !self.at_capacity() {
+                            let (d1, t1, _r1) = borrowed1.get(positions[0]);
+                            let (d2, t2, _r2) = borrowed2.get(positions[1]);
+                            match (&d1, &t1).cmp(&(&d2, &t2)) {
+                                Ordering::Less => {
+                                    let run_start = positions[0];
+                                    positions[0] += 1;
+                                    while positions[0] < len1 && !self.at_capacity() {
+                                        let (d1, t1, _) = borrowed1.get(positions[0]);
+                                        let (d2, t2, _) = borrowed2.get(positions[1]);
+                                        if (&d1, &t1) < (&d2, &t2) {
+                                            positions[0] += 1;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    self.container.extend_from_self(borrowed1, run_start .. positions[0]);
+                                }
+                                Ordering::Greater => {
+                                    let run_start = positions[1];
+                                    positions[1] += 1;
+                                    while positions[1] < len2 && !self.at_capacity() {
+                                        let (d1, t1, _) = borrowed1.get(positions[0]);
+                                        let (d2, t2, _) = borrowed2.get(positions[1]);
+                                        if (&d2, &t2) < (&d1, &t1) {
+                                            positions[1] += 1;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    self.container.extend_from_self(borrowed2, run_start .. positions[1]);
+                                }
+                                Ordering::Equal => {
+                                    let (_, _, r1) = borrowed1.get(positions[0]);
+                                    let (_, _, r2) = borrowed2.get(positions[1]);
+                                    diff_stash = R::into_owned(r1);
+                                    let r2_owned = R::into_owned(r2);
+                                    diff_stash.plus_equals(&r2_owned);
+                                    if !diff_stash.is_zero() {
+                                        self.container.0.push(d1);
+                                        self.container.1.push(t1);
+                                        self.container.2.push(&diff_stash as &R);
+                                    }
+                                    positions[0] += 1;
+                                    positions[1] += 1;
+                                }
+                            }
+                        }
+                    },
+                    n => unimplemented!("{n}-way merge not yet supported"),
+                }
+            }
+
+            fn extract(
+                &mut self,
+                upper: AntichainRef<T>,
+                frontier: &mut Antichain<T>,
+                keep: &mut Self,
+                ship: &mut Self,
+            ) {
+                use columnar::{Borrow, Index, Len, Push};
+                let borrowed = self.container.borrow();
+                for i in 0..borrowed.len() {
+                    let (d, t, r) = borrowed.get(i);
+                    let time_owned = T::into_owned(t);
+                    if upper.less_equal(&time_owned) {
+                        frontier.insert(time_owned);
+                        keep.container.0.push(d);
+                        keep.container.1.push(t);
+                        keep.container.2.push(r);
+                    } else {
+                        ship.container.0.push(d);
+                        ship.container.1.push(t);
+                        ship.container.2.push(r);
+                    }
+                }
+            }
+        }
+    }
 }
