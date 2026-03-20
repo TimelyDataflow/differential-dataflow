@@ -301,6 +301,13 @@ mod container {
     }
 }
 
+/// A columnar container whose references can be ordered.
+///
+/// This trait alias packages the `for<'a> Container<Ref<'a>: Ord>` bound
+/// that is needed in many places (e.g. `BatchContainer`, `Layout`, `BuilderInput`).
+pub trait OrdContainer : for<'a> columnar::Container<Ref<'a> : Ord> { }
+impl<C: for<'a> columnar::Container<Ref<'a> : Ord>> OrdContainer for C { }
+
 /// A container backed by columnar storage.
 ///
 /// This type wraps a `<C as Columnar>::Container` and provides the trait
@@ -392,12 +399,12 @@ impl<D: columnar::Columnar, T: columnar::Columnar, R: columnar::Columnar> timely
     }
 }
 
-impl<'a, D: columnar::Columnar, T: columnar::Columnar, R: columnar::Columnar>
-    PushInto<(columnar::Ref<'a, D>, columnar::Ref<'a, T>, columnar::Ref<'a, R>)>
-    for ColContainer<(D, T, R)>
+impl<T, C: columnar::Columnar> PushInto<T> for ColContainer<C>
+where
+    C::Container: columnar::Push<T>,
 {
     #[inline]
-    fn push_into(&mut self, item: (columnar::Ref<'a, D>, columnar::Ref<'a, T>, columnar::Ref<'a, R>)) {
+    fn push_into(&mut self, item: T) {
         columnar::Push::push(&mut self.container, item);
     }
 }

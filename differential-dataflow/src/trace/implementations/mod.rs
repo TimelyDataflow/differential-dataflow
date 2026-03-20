@@ -250,6 +250,30 @@ where
     type OffsetContainer = OffsetList;
 }
 
+/// A layout based on columnar containers.
+pub struct Columnar<U: Update> {
+    phantom: std::marker::PhantomData<U>,
+}
+
+impl<U> Layout for Columnar<U>
+where
+    U: Update,
+    U::Key: columnar::Columnar + Clone + Ord,
+    U::Val: columnar::Columnar + Clone + Ord,
+    U::Time: columnar::Columnar + Clone + Ord,
+    U::Diff: columnar::Columnar + Clone + Ord,
+    <U::Key as columnar::Columnar>::Container: crate::containers::OrdContainer,
+    <U::Val as columnar::Columnar>::Container: crate::containers::OrdContainer,
+    <U::Time as columnar::Columnar>::Container: crate::containers::OrdContainer,
+    <U::Diff as columnar::Columnar>::Container: crate::containers::OrdContainer,
+{
+    type KeyContainer = crate::containers::ColContainer<U::Key>;
+    type ValContainer = crate::containers::ColContainer<U::Val>;
+    type TimeContainer = crate::containers::ColContainer<U::Time>;
+    type DiffContainer = crate::containers::ColContainer<U::Diff>;
+    type OffsetContainer = OffsetList;
+}
+
 /// A list of unsigned integers that uses `u32` elements as long as they are small enough, and switches to `u64` once they are not.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Serialize, Deserialize)]
 pub struct OffsetList {
@@ -509,6 +533,66 @@ where
     }
 }
 
+impl<K, KBC, V, VBC, T, R> BuilderInput<KBC, VBC> for crate::containers::ColContainer<((K, V), T, R)>
+where
+    K: columnar::Columnar + Clone + Ord,
+    V: columnar::Columnar + Clone + Ord,
+    T: columnar::Columnar + Clone + Ord + Timestamp + Lattice,
+    R: columnar::Columnar + Clone + Ord + Semigroup,
+    for<'a> columnar::Ref<'a, K>: Ord,
+    for<'a> columnar::Ref<'a, V>: Ord,
+    for<'a> columnar::Ref<'a, T>: Ord,
+    for<'a> columnar::Ref<'a, R>: Ord,
+    KBC: for<'a> BatchContainer<ReadItem<'a>: PartialEq<columnar::Ref<'a, K>>>,
+    VBC: for<'a> BatchContainer<ReadItem<'a>: PartialEq<columnar::Ref<'a, V>>>,
+{
+    type Key<'a> = columnar::Ref<'a, K>;
+    type Val<'a> = columnar::Ref<'a, V>;
+    type Time = T;
+    type Diff = R;
+
+    fn into_parts<'a>(item: Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+        let ((key, val), time, diff) = item;
+        (key, val, T::into_owned(time), R::into_owned(diff))
+    }
+
+    fn key_eq(this: &columnar::Ref<'_, K>, other: KBC::ReadItem<'_>) -> bool {
+        KBC::reborrow(other) == K::reborrow(*this)
+    }
+
+    fn val_eq(this: &columnar::Ref<'_, V>, other: VBC::ReadItem<'_>) -> bool {
+        VBC::reborrow(other) == V::reborrow(*this)
+    }
+
+    fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
+        use columnar::{Borrow, Index, Len};
+        let mut keys = 0;
+        let mut vals = 0;
+        let mut upds = 0;
+        let mut prev_keyval: Option<(columnar::Ref<'_, K>, columnar::Ref<'_, V>)> = None;
+        for link in chain.iter() {
+            let borrowed = link.container.borrow();
+            for i in 0..borrowed.len() {
+                let ((key, val), _, _) = borrowed.get(i);
+                if let Some((p_key, p_val)) = prev_keyval {
+                    if p_key != key {
+                        keys += 1;
+                        vals += 1;
+                    } else if p_val != val {
+                        vals += 1;
+                    }
+                } else {
+                    keys += 1;
+                    vals += 1;
+                }
+                upds += 1;
+                prev_keyval = Some((key, val));
+            }
+        }
+        (keys, vals, upds)
+    }
+}
+
 pub use self::containers::{BatchContainer, SliceContainer};
 
 /// Containers for data that resemble `Vec<T>`, with leaner implementations.
@@ -685,6 +769,45 @@ pub mod containers {
         }
         fn len(&self) -> usize {
             self[..].len()
+        }
+    }
+
+    impl<C> BatchContainer for crate::containers::ColContainer<C>
+    where
+        C: columnar::Columnar + Clone + Ord,
+        C::Container: crate::containers::OrdContainer,
+    {
+        type Owned = C;
+        type ReadItem<'a> = columnar::Ref<'a, C>;
+
+        #[inline(always)]
+        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { C::into_owned(item) }
+        #[inline(always)]
+        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { C::copy_from(other, item); }
+
+        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { C::reborrow(item) }
+
+        fn push_ref(&mut self, item: Self::ReadItem<'_>) { columnar::Push::push(&mut self.container, item) }
+        fn push_own(&mut self, item: &Self::Owned) { columnar::Push::<&C>::push(&mut self.container, item) }
+
+        fn clear(&mut self) { columnar::Clear::clear(&mut self.container) }
+
+        fn with_capacity(_size: usize) -> Self {
+            Default::default()
+        }
+        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            let borrowed1 = columnar::Borrow::borrow(&cont1.container);
+            let borrowed2 = columnar::Borrow::borrow(&cont2.container);
+            let mut new = Self::default();
+            columnar::Container::reserve_for(&mut new.container, std::iter::once(borrowed1).chain(std::iter::once(borrowed2)));
+            new
+        }
+        #[inline(always)]
+        fn index(&self, index: usize) -> Self::ReadItem<'_> {
+            columnar::Index::get(&columnar::Borrow::borrow(&self.container), index)
+        }
+        fn len(&self) -> usize {
+            columnar::Len::len(&self.container)
         }
     }
 

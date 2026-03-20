@@ -117,6 +117,16 @@ where
 /// Builder alias: wraps `RcOrdKeyBuilder` to accept `ColContainer` chunks.
 pub type RcOrdKeyBuilderFromCol<K, T, R> = ColToVecBuilder<RcOrdKeyBuilder<K, T, R>>;
 
+/// A spine backed by columnar containers throughout.
+pub type ColumnarKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<super::Columnar<((K,()),T,R)>>>>;
+/// A spine backed by columnar containers throughout (key-value variant).
+pub type ColumnarValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<super::Columnar<((K,V),T,R)>>>>;
+
+/// A builder that accepts `ColContainer` chunks directly into a columnar layout.
+pub type RcColumnarKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<super::Columnar<((K,()),T,R)>, ColContainer<((K,()),T,R)>>>;
+/// A builder that accepts `ColContainer` chunks directly into a columnar layout (key-value variant).
+pub type RcColumnarValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<super::Columnar<((K,V),T,R)>, ColContainer<((K,V),T,R)>>>;
+
 pub use layers::{Vals, Upds};
 /// Layers are containers of lists of some type.
 ///

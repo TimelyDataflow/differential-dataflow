@@ -369,7 +369,7 @@ impl<D: columnar::Columnar, T: columnar::Columnar, R: columnar::Columnar> Defaul
 }
 
 impl<D: columnar::Columnar, T: columnar::Columnar, R: columnar::Columnar> ColumnarColChunker<D, T, R> {
-    const BUFFER_SIZE_BYTES: usize = 8 << 10;
+    const BUFFER_SIZE_BYTES: usize = 64 << 10;
     fn chunk_capacity() -> usize {
         let size = ::std::mem::size_of::<(D, T, R)>();
         if size == 0 {
