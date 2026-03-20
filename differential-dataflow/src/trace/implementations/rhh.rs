@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Hashable;
 use crate::containers::TimelyStack;
-use crate::trace::implementations::chunker::{ColumnationChunker, VecChunker};
+use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker};
 use crate::trace::implementations::merge_batcher::MergeBatcher;
 use crate::trace::implementations::merge_batcher::container::{VecInternalMerger, ColInternalMerger};
 use crate::trace::implementations::spine_fueled::Spine;
@@ -25,7 +25,7 @@ use self::val_batch::{RhhValBatch, RhhValBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type VecSpine<K, V, T, R> = Spine<Rc<RhhValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher for ordered lists.
-pub type VecBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, VecChunker<((K,V),T,R)>, VecInternalMerger<(K, V), T, R>>;
+pub type VecBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, ContainerChunker<Vec<((K,V),T,R)>>, VecInternalMerger<(K, V), T, R>>;
 /// A builder for ordered lists.
 pub type VecBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
 
