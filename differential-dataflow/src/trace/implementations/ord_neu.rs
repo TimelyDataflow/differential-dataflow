@@ -14,7 +14,7 @@ use crate::containers::{TimelyStack, ColContainer};
 use crate::trace::implementations::chunker::{ColumnationChunker, ColumnarChunker, ColumnarColChunker, VecChunker};
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::{MergeBatcher, VecMerger, ColMerger};
-use crate::trace::implementations::merge_batcher::container::col_container::ColumnarMerger;
+use crate::trace::implementations::merge_batcher::container::col_container::{ColumnarMerger, ColumnarInternalMerger};
 use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Layout, Vector, TStack};
@@ -68,6 +68,11 @@ pub type ColumnarValBatcher<K, V, T, R> = MergeBatcher<ColContainer<((K,V), T, R
 pub type ColumnarColKeyBatcher<K, T, R> = MergeBatcher<ColContainer<((K,()), T, R)>, ColumnarColChunker<(K,()), T, R>, ColumnarMerger<(K,()), T, R>>;
 /// A batcher accepting `ColContainer` input, staying columnar throughout (key-value variant).
 pub type ColumnarColValBatcher<K, V, T, R> = MergeBatcher<ColContainer<((K,V), T, R)>, ColumnarColChunker<(K,V), T, R>, ColumnarMerger<(K,V), T, R>>;
+
+/// A batcher using internal iteration for merging (key variant).
+pub type ColumnarInternalKeyBatcher<K, T, R> = MergeBatcher<ColContainer<((K,()), T, R)>, ColumnarColChunker<(K,()), T, R>, ColumnarInternalMerger<(K,()), T, R>>;
+/// A batcher using internal iteration for merging (key-value variant).
+pub type ColumnarInternalValBatcher<K, V, T, R> = MergeBatcher<ColContainer<((K,V), T, R)>, ColumnarColChunker<(K,V), T, R>, ColumnarInternalMerger<(K,V), T, R>>;
 
 /// A builder that accepts `ColContainer` chunks and converts them to `Vec` for an inner builder.
 pub struct ColToVecBuilder<B> {

@@ -604,8 +604,191 @@ pub mod container {
         }
     }
 
-    pub use col_container::ColumnarMerger;
-    /// Implementations of `ContainerQueue` and `MergerChunk` for `ColContainer` (columnar).
+    /// A container that can merge two sorted, consolidated instances using internal iteration.
+    ///
+    /// Unlike `ContainerQueue` + `MergerChunk` which use external iteration (pulling items
+    /// one at a time), this trait lets the container borrow both inputs once and merge
+    /// efficiently using index arithmetic, galloping, and bulk copies.
+    pub trait InternalMerge: MergerChunk {
+        /// The number of items in this container.
+        fn len(&self) -> usize;
+
+        /// The target number of items per chunk.
+        fn target_size() -> usize;
+
+        /// Merge items from sorted inputs into `self`, advancing positions.
+        /// Decrements `fuel` by the number of items written.
+        ///
+        /// Dispatches based on the number of inputs:
+        /// - **0**: no-op
+        /// - **1**: bulk copy (may swap the input into `self`)
+        /// - **2**: merge two sorted streams
+        ///
+        /// Inputs are mutable to allow optimizations like swapping an entire
+        /// input chunk into the output.
+        fn merge_from(
+            &mut self,
+            others: &mut [Self],
+            positions: &mut [usize],
+            fuel: &mut usize,
+        );
+    }
+
+    /// A merger that uses internal iteration via [`InternalMerge`].
+    pub struct InternalMerger<MC> {
+        _marker: PhantomData<MC>,
+    }
+
+    impl<MC> Default for InternalMerger<MC> {
+        fn default() -> Self { Self { _marker: PhantomData } }
+    }
+
+    impl<MC> InternalMerger<MC> where MC: InternalMerge {
+        #[inline]
+        fn empty(&self, stash: &mut Vec<MC>) -> MC {
+            stash.pop().unwrap_or_else(|| {
+                let mut container = MC::default();
+                container.ensure_capacity(&mut None);
+                container
+            })
+        }
+        #[inline]
+        fn recycle(&self, mut chunk: MC, stash: &mut Vec<MC>) {
+            chunk.clear();
+            stash.push(chunk);
+        }
+        /// Drain remaining items from one side into `result`/`output`.
+        fn drain_side(
+            &self,
+            head: &mut MC,
+            pos: &mut usize,
+            list: &mut std::vec::IntoIter<MC>,
+            result: &mut MC,
+            output: &mut Vec<MC>,
+            stash: &mut Vec<MC>,
+        ) {
+            while *pos < head.len() {
+                let mut fuel = MC::target_size().saturating_sub(result.len());
+                if fuel == 0 { fuel = 1; } // always make progress
+                result.merge_from(
+                    std::slice::from_mut(head),
+                    std::slice::from_mut(pos),
+                    &mut fuel,
+                );
+                if *pos >= head.len() {
+                    let old = std::mem::replace(head, list.next().unwrap_or_default());
+                    self.recycle(old, stash);
+                    *pos = 0;
+                }
+                if result.at_capacity() {
+                    output.push(std::mem::take(result));
+                    *result = self.empty(stash);
+                }
+            }
+        }
+    }
+
+    impl<MC> Merger for InternalMerger<MC>
+    where
+        for<'a> MC: InternalMerge<TimeOwned: Ord + PartialOrder + Clone + 'static>
+            + Clone + PushInto<<MC as DrainContainer>::Item<'a>> + 'static,
+    {
+        type Time = MC::TimeOwned;
+        type Chunk = MC;
+
+        fn merge(&mut self, list1: Vec<MC>, list2: Vec<MC>, output: &mut Vec<MC>, stash: &mut Vec<MC>) {
+            let mut list1 = list1.into_iter();
+            let mut list2 = list2.into_iter();
+
+            let mut heads = [list1.next().unwrap_or_default(), list2.next().unwrap_or_default()];
+            let mut positions = [0usize, 0usize];
+
+            let mut result = self.empty(stash);
+
+            // Main merge loop: both sides have data.
+            while positions[0] < heads[0].len() && positions[1] < heads[1].len() {
+                let mut fuel = MC::target_size().saturating_sub(result.len());
+                if fuel == 0 { fuel = 1; } // always make progress
+                result.merge_from(&mut heads, &mut positions, &mut fuel);
+
+                if positions[0] >= heads[0].len() {
+                    let old = std::mem::replace(&mut heads[0], list1.next().unwrap_or_default());
+                    self.recycle(old, stash);
+                    positions[0] = 0;
+                }
+                if positions[1] >= heads[1].len() {
+                    let old = std::mem::replace(&mut heads[1], list2.next().unwrap_or_default());
+                    self.recycle(old, stash);
+                    positions[1] = 0;
+                }
+                if result.at_capacity() {
+                    output.push(std::mem::take(&mut result));
+                    result = self.empty(stash);
+                }
+            }
+
+            // Drain remaining from side 0.
+            self.drain_side(&mut heads[0], &mut positions[0], &mut list1, &mut result, output, stash);
+            if !result.is_empty() {
+                output.push(std::mem::take(&mut result));
+                result = self.empty(stash);
+            }
+            output.extend(list1);
+
+            // Drain remaining from side 1.
+            self.drain_side(&mut heads[1], &mut positions[1], &mut list2, &mut result, output, stash);
+            if !result.is_empty() {
+                output.push(std::mem::take(&mut result));
+            }
+            output.extend(list2);
+        }
+
+        fn extract(
+            &mut self,
+            merged: Vec<Self::Chunk>,
+            upper: AntichainRef<Self::Time>,
+            frontier: &mut Antichain<Self::Time>,
+            readied: &mut Vec<Self::Chunk>,
+            kept: &mut Vec<Self::Chunk>,
+            stash: &mut Vec<Self::Chunk>,
+        ) {
+            // Reuse the drain-based approach for extract.
+            let mut keep = self.empty(stash);
+            let mut ready = self.empty(stash);
+
+            for mut buffer in merged {
+                for item in buffer.drain() {
+                    if MC::time_kept(&item, &upper, frontier) {
+                        if keep.at_capacity() && !keep.is_empty() {
+                            kept.push(keep);
+                            keep = self.empty(stash);
+                        }
+                        keep.push_into(item);
+                    } else {
+                        if ready.at_capacity() && !ready.is_empty() {
+                            readied.push(ready);
+                            ready = self.empty(stash);
+                        }
+                        ready.push_into(item);
+                    }
+                }
+                self.recycle(buffer, stash);
+            }
+            if !keep.is_empty() {
+                kept.push(keep);
+            }
+            if !ready.is_empty() {
+                readied.push(ready);
+            }
+        }
+
+        fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+            chunk.account()
+        }
+    }
+
+    pub use col_container::{ColumnarMerger, ColumnarInternalMerger};
+    /// Implementations of `ContainerQueue`, `MergerChunk`, and `InternalMerge` for `ColContainer` (columnar).
     pub mod col_container {
 
         use columnar::Columnar;
@@ -711,5 +894,126 @@ pub mod container {
                 ColContainer::clear(self);
             }
         }
+
+        impl<D, T, R> super::InternalMerge for ColContainer<(D, T, R)>
+        where
+            D: Columnar + 'static,
+            T: Columnar + Ord + timely::PartialOrder + Clone + 'static,
+            R: Columnar + Default + Semigroup + 'static,
+            for<'a> columnar::Ref<'a, D>: Ord,
+            for<'a> columnar::Ref<'a, T>: Ord,
+            for<'a> ColContainer<(D, T, R)>: PushInto<(columnar::Ref<'a, D>, columnar::Ref<'a, T>, columnar::Ref<'a, R>)>,
+        {
+            fn len(&self) -> usize {
+                ColContainer::len(self)
+            }
+
+            fn target_size() -> usize {
+                let size = std::mem::size_of::<(D, T, R)>();
+                let target_bytes = 64 << 10;
+                if size == 0 { target_bytes } else { target_bytes / size }
+            }
+
+            fn merge_from(
+                &mut self,
+                others: &mut [Self],
+                positions: &mut [usize],
+                fuel: &mut usize,
+            ) {
+                match others.len() {
+                    0 => {},
+                    1 => {
+                        use columnar::{Borrow, Container, Len};
+                        let other = &mut others[0];
+                        let pos = &mut positions[0];
+                        // If self is empty and the entire input remains, just swap.
+                        if self.len() == 0 && *pos == 0 && other.len() <= *fuel {
+                            std::mem::swap(self, other);
+                            *fuel -= self.len();
+                            return;
+                        }
+                        let borrowed = other.container.borrow();
+                        let len = borrowed.len();
+                        let count = std::cmp::min(len - *pos, *fuel);
+                        if count > 0 {
+                            self.container.extend_from_self(borrowed, *pos .. *pos + count);
+                            *pos += count;
+                            *fuel -= count;
+                        }
+                    },
+                    2 => {
+                        use columnar::{Borrow, Container, Index, Len, Push};
+                        use std::cmp::Ordering;
+
+                        let borrowed1 = others[0].container.borrow();
+                        let borrowed2 = others[1].container.borrow();
+                        let len1 = borrowed1.len();
+                        let len2 = borrowed2.len();
+
+                        let mut diff_stash: R;
+
+                        while positions[0] < len1 && positions[1] < len2 && *fuel > 0 {
+                            let (d1, t1, _r1) = borrowed1.get(positions[0]);
+                            let (d2, t2, _r2) = borrowed2.get(positions[1]);
+                            match (&d1, &t1).cmp(&(&d2, &t2)) {
+                                Ordering::Less => {
+                                    // Scan for the end of the run from side 0.
+                                    let run_start = positions[0];
+                                    positions[0] += 1;
+                                    while positions[0] < len1 && *fuel > (positions[0] - run_start) {
+                                        let (d1, t1, _) = borrowed1.get(positions[0]);
+                                        let (d2, t2, _) = borrowed2.get(positions[1]);
+                                        if (&d1, &t1) < (&d2, &t2) {
+                                            positions[0] += 1;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    let count = positions[0] - run_start;
+                                    self.container.extend_from_self(borrowed1, run_start .. positions[0]);
+                                    *fuel -= count;
+                                }
+                                Ordering::Greater => {
+                                    // Scan for the end of the run from side 1.
+                                    let run_start = positions[1];
+                                    positions[1] += 1;
+                                    while positions[1] < len2 && *fuel > (positions[1] - run_start) {
+                                        let (d1, t1, _) = borrowed1.get(positions[0]);
+                                        let (d2, t2, _) = borrowed2.get(positions[1]);
+                                        if (&d2, &t2) < (&d1, &t1) {
+                                            positions[1] += 1;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    let count = positions[1] - run_start;
+                                    self.container.extend_from_self(borrowed2, run_start .. positions[1]);
+                                    *fuel -= count;
+                                }
+                                Ordering::Equal => {
+                                    let (_, _, r1) = borrowed1.get(positions[0]);
+                                    let (_, _, r2) = borrowed2.get(positions[1]);
+                                    diff_stash = R::into_owned(r1);
+                                    let r2_owned = R::into_owned(r2);
+                                    diff_stash.plus_equals(&r2_owned);
+                                    if !diff_stash.is_zero() {
+                                        self.container.0.push(d1);
+                                        self.container.1.push(t1);
+                                        self.container.2.push(&diff_stash as &R);
+                                        *fuel -= 1;
+                                    }
+                                    positions[0] += 1;
+                                    positions[1] += 1;
+                                }
+                            }
+                        }
+                    },
+                    n => unimplemented!("{n}-way merge not yet supported"),
+                }
+            }
+        }
+
+        /// A `Merger` using internal iteration for `ColContainer`.
+        pub type ColumnarInternalMerger<D, T, R> = super::InternalMerger<ColContainer<(D, T, R)>>;
     }
 }

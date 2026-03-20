@@ -35,13 +35,13 @@ fn main() {
 
             use timely::dataflow::channels::pact::Pipeline;
             use differential_dataflow::trace::implementations::ord_neu::{
-                ColumnarColKeyBatcher, RcColumnarKeyBuilder, ColumnarKeySpine,
+                ColumnarInternalKeyBatcher, RcColumnarKeyBuilder, ColumnarKeySpine,
             };
 
-            let data = arrange_core::<_, _, ColumnarColKeyBatcher<_,_,_>, RcColumnarKeyBuilder<_,_,_>, ColumnarKeySpine<_,_,_>>(
+            let data = arrange_core::<_, _, ColumnarInternalKeyBatcher<_,_,_>, RcColumnarKeyBuilder<_,_,_>, ColumnarKeySpine<_,_,_>>(
                 data, Pipeline, "Data",
             );
-            let keys = arrange_core::<_, _, ColumnarColKeyBatcher<_,_,_>, RcColumnarKeyBuilder<_,_,_>, ColumnarKeySpine<_,_,_>>(
+            let keys = arrange_core::<_, _, ColumnarInternalKeyBatcher<_,_,_>, RcColumnarKeyBuilder<_,_,_>, ColumnarKeySpine<_,_,_>>(
                 keys, Pipeline, "Keys",
             );
 
