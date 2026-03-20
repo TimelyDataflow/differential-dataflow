@@ -7,7 +7,7 @@ use timely::Container;
 use timely::container::{ContainerBuilder, DrainContainer, PushInto, SizableContainer};
 
 use crate::containers::TimelyStack;
-use crate::consolidation::{consolidate_updates, ConsolidateLayout};
+use crate::consolidation::{consolidate_updates, Consolidate};
 use crate::difference::Semigroup;
 
 /// Chunk a stream of vectors into chains of vectors.
@@ -257,7 +257,7 @@ where
     Input: DrainContainer,
     Output: Default
         + SizableContainer
-        + ConsolidateLayout
+        + Consolidate
         + PushInto<Input::Item<'a>>,
 {
     fn push_into(&mut self, container: &'a mut Input) {
@@ -283,7 +283,7 @@ where
 
 impl<Output> ContainerBuilder for ContainerChunker<Output>
 where
-    Output: SizableContainer + ConsolidateLayout + Container,
+    Output: SizableContainer + Consolidate + Container,
 {
     type Container = Output;
 

@@ -331,7 +331,6 @@ pub mod container {
         type Time = MC::TimeOwned;
         type Chunk = MC;
 
-        // TODO: Consider integrating with `ConsolidateLayout`.
         fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>) {
             let mut list1 = list1.into_iter();
             let mut list2 = list2.into_iter();
