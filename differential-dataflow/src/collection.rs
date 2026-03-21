@@ -1023,7 +1023,7 @@ pub mod vec {
             Tr: crate::trace::Trace<Time=G::Timestamp> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, Bu, _>(self.inner, exchange, name)
+            crate::operators::arrange::arrangement::arrange_inter::<_, _, Ba, Bu, _>(self.inner, exchange, name)
         }
     }
 
@@ -1038,7 +1038,7 @@ pub mod vec {
             Tr: crate::trace::Trace<Time=G::Timestamp> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_,_,Ba,Bu,_>(self.map(|k| (k, ())).inner, exchange, name)
+            crate::operators::arrange::arrangement::arrange_inter::<_,_,Ba,Bu,_>(self.map(|k| (k, ())).inner, exchange, name)
         }
     }
 

@@ -4,7 +4,7 @@ use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::InputHandle;
 use timely::dataflow::ProbeHandle;
 
-use differential_dataflow::operators::arrange::arrangement::arrange_core;
+use differential_dataflow::operators::arrange::arrangement::arrange_inter;
 
 use mimalloc::MiMalloc;
 
@@ -39,8 +39,8 @@ fn main() {
             let data_pact = KeyPact { hashfunc: |k: columnar::Ref<'_, Vec<u8>>| k.hashed() };
             let keys_pact = KeyPact { hashfunc: |k: columnar::Ref<'_, Vec<u8>>| k.hashed() };
 
-            let data = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(data, data_pact, "Data");
-            let keys = arrange_core::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(keys, keys_pact, "Keys");
+            let data = arrange_inter::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(data, data_pact, "Data");
+            let keys = arrange_inter::<_,_,KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>(keys, keys_pact, "Keys");
 
             keys.join_core(data, |_k, (), ()| { Option::<()>::None })
                 .probe_with(&mut probe);

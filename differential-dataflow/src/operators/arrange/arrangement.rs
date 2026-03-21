@@ -338,7 +338,11 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+///
+/// Unlike `arrange_intra`, this trace can be imported into other dataflows. To provide this ability
+/// it must be continually scheduled even in the absence of input updates, in order to communicate
+/// its input frontier to the other dataflow. This can result in more scheduling overhead.
+pub fn arrange_inter<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp: Lattice>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
@@ -346,15 +350,40 @@ where
     Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace<Time=G::Timestamp>+'static,
 {
-    arrange_core_with_interest::<G, P, Ba, Bu, Tr>(stream, pact, name, timely::progress::operate::FrontierInterest::Always)
+    arrange_core::<G, P, Ba, Bu, Tr>(stream, pact, name, timely::progress::operate::FrontierInterest::Always)
+}
+
+/// Arranges a stream of updates into a private trace, without shared queue distribution.
+///
+/// This operator arranges a stream of values into a shared trace, whose contents it maintains.
+/// It uses the supplied parallelization contract to distribute the data, which does not need to
+/// be consistently by key (though this is the most common).
+///
+/// Unlike `arrange_inter`, this trace cannot be shared across dataflows, only within dataflows.
+/// It lacks the `import` method that would allow this. By so doing, the operator does not need
+/// to be continually rescheduled in the absence of input updates, which can reduce the scheduling
+/// load.
+pub fn arrange_intra<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgentInner<Tr>>
+where
+    G: Scope<Timestamp: Lattice>,
+    P: ParallelizationContract<G::Timestamp, Ba::Input>,
+    Ba: Batcher<Time=G::Timestamp,Input: Container> + 'static,
+    Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
+    Tr: Trace<Time=G::Timestamp>+'static,
+{
+    let arranged = arrange_core::<G, P, Ba, Bu, Tr>(stream, pact, name, timely::progress::operate::FrontierInterest::IfCapability);
+    Arranged {
+        stream: arranged.stream,
+        trace: arranged.trace.into_inner(),
+    }
 }
 
 /// Arranges a stream of updates by a key, configured with a name, a parallelization contract,
 /// and a frontier interest policy.
 ///
-/// This is the general form of `arrange_core`, which additionally accepts a `FrontierInterest`
-/// parameter controlling when the operator is notified of frontier changes.
-pub fn arrange_core_with_interest<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str, interest: timely::progress::operate::FrontierInterest) -> Arranged<G, TraceAgent<Tr>>
+/// This is the general form that both `arrange_inter` and `arrange_intra` delegate to.
+/// The `FrontierInterest` parameter controls when the operator is notified of frontier changes.
+pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str, interest: timely::progress::operate::FrontierInterest) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope<Timestamp: Lattice>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
@@ -512,23 +541,4 @@ where
     });
 
     Arranged { stream, trace }
-}
-
-/// Arranges a stream of updates into a private trace, without shared queue distribution.
-///
-/// This variant delegates to `arrange_core_with_interest` using `FrontierInterest::IfCapability`,
-/// then extracts the inner `TraceAgentInner`, discarding the queue management layer.
-pub fn arrange_private<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgentInner<Tr>>
-where
-    G: Scope<Timestamp: Lattice>,
-    P: ParallelizationContract<G::Timestamp, Ba::Input>,
-    Ba: Batcher<Time=G::Timestamp,Input: Container> + 'static,
-    Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
-    Tr: Trace<Time=G::Timestamp>+'static,
-{
-    let arranged = arrange_core_with_interest::<G, P, Ba, Bu, Tr>(stream, pact, name, timely::progress::operate::FrontierInterest::IfCapability);
-    Arranged {
-        stream: arranged.stream,
-        trace: arranged.trace.into_inner(),
-    }
 }

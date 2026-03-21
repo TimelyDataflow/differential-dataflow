@@ -25,10 +25,10 @@ fn main() {
                 let (input, stream) = scope.new_input();
                 let stream = scope.region(|inner| {
                     let mut stream = stream.enter(inner);
-                    use differential_dataflow::operators::arrange::arrangement::{arrange_private, arrange_core};
+                    use differential_dataflow::operators::arrange::arrangement::{arrange_intra, arrange_inter};
                     use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder, ValSpine};
-                    stream = if local { arrange_private::<_,_,ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(stream, timely::dataflow::channels::pact::Pipeline, "test").as_collection(|k: &i32,v: &i32| (*k, *v)).inner }
-                    else {              arrange_core::<_,_,ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(stream, timely::dataflow::channels::pact::Pipeline, "test").as_collection(|k: &i32,v: &i32| (*k, *v)).inner };
+                    stream = if local { arrange_intra::<_,_,ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(stream, timely::dataflow::channels::pact::Pipeline, "test").as_collection(|k: &i32,v: &i32| (*k, *v)).inner }
+                    else {              arrange_inter::<_,_,ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>>(stream, timely::dataflow::channels::pact::Pipeline, "test").as_collection(|k: &i32,v: &i32| (*k, *v)).inner };
                     for _step in 0 .. length {
                         stream = stream.filter(|_| false);
                     }
