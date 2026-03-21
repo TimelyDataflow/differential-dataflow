@@ -12,7 +12,7 @@ use crate::trace::{Trace, Batch, BatchReader};
 use crate::trace::wrappers::rc::TraceBox;
 
 
-use super::TraceAgentQueueWriter;
+use super::TraceInterQueueWriter;
 use super::TraceReplayInstruction;
 
 /// Inner write endpoint that maintains the frontier and shared trace.
@@ -86,7 +86,7 @@ pub struct TraceWriter<Tr: Trace> {
     /// Inner writer maintaining the frontier and shared trace.
     inner: TraceWriterInner<Tr>,
     /// A sequence of private queues into which batches are written.
-    queues: Rc<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
+    queues: Rc<RefCell<Vec<TraceInterQueueWriter<Tr>>>>,
 }
 
 impl<Tr: Trace> TraceWriter<Tr> {
@@ -94,7 +94,7 @@ impl<Tr: Trace> TraceWriter<Tr> {
     pub fn new(
         upper: Vec<Tr::Time>,
         trace: Weak<RefCell<TraceBox<Tr>>>,
-        queues: Rc<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>
+        queues: Rc<RefCell<Vec<TraceInterQueueWriter<Tr>>>>
     ) -> Self
     {
         Self { inner: TraceWriterInner::new(upper, trace), queues }
@@ -103,7 +103,7 @@ impl<Tr: Trace> TraceWriter<Tr> {
     /// Creates a new `TraceWriter` from an existing `TraceWriterInner` and queues.
     pub fn from_inner(
         inner: TraceWriterInner<Tr>,
-        queues: Rc<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>
+        queues: Rc<RefCell<Vec<TraceInterQueueWriter<Tr>>>>
     ) -> Self
     {
         Self { inner, queues }

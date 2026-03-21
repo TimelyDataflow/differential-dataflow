@@ -180,7 +180,7 @@ pub fn build((dataflow, handles, probe, timer, args): Environment) -> Result<(),
         })
         .probe_with(probe)
         .as_collection()
-        .arrange_by_key()
+        .arrange_by_key_inter()
         .trace;
 
     // release all blocks on merging.

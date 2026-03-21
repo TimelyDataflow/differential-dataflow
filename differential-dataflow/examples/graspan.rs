@@ -65,10 +65,10 @@ pub struct Query {
 }
 
 use differential_dataflow::trace::implementations::{ValSpine, KeySpine};
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::{Arranged, TraceInter};
 
-type TraceKeyHandle<K,T,R> = TraceAgent<KeySpine<K, T, R>>;
-type TraceValHandle<K,V,T,R> = TraceAgent<ValSpine<K, V, T, R>>;
+type TraceKeyHandle<K,T,R> = TraceInter<KeySpine<K, T, R>>;
+type TraceValHandle<K,V,T,R> = TraceInter<ValSpine<K, V, T, R>>;
 type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Timestamp, R>>;
 
 /// An evolving set of edges.
@@ -115,14 +115,14 @@ impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
     /// The collection arranged in the forward direction.
     pub fn forward(&mut self) -> &Arrange<G, Node, Node, Diff> {
         if self.forward.is_none() {
-            self.forward = Some(self.collection.clone().arrange_by_key());
+            self.forward = Some(self.collection.clone().arrange_by_key_inter());
         }
         self.forward.as_ref().unwrap()
     }
     /// The collection arranged in the reverse direction.
     pub fn reverse(&mut self) -> &Arrange<G, Node, Node, Diff> {
         if self.reverse.is_none() {
-            self.reverse = Some(self.collection.clone().map(|(x,y)| (y,x)).arrange_by_key());
+            self.reverse = Some(self.collection.clone().map(|(x,y)| (y,x)).arrange_by_key_inter());
         }
         self.reverse.as_ref().unwrap()
     }
@@ -171,7 +171,7 @@ impl Query {
             // create variables and result handles for each named relation.
             for (name, (input, collection)) in input_map {
                 let edge_variable = EdgeVariable::from(collection.enter(subscope), Product::new(Default::default(), 1));
-                let trace = edge_variable.collection.clone().leave().arrange_by_self().trace;
+                let trace = edge_variable.collection.clone().leave().arrange_by_self_inter().trace;
                 result_map.insert(name.clone(), RelationHandles { input, trace });
                 variable_map.insert(name.clone(), edge_variable);
             }
@@ -200,7 +200,7 @@ impl Query {
                         transposed =
                         transposed
                             .join_core(to_join, |_k,&x,&y| Some((y,x)))
-                            .arrange_by_key();
+                            .arrange_by_key_inter();
                     }
 
                     // Reverse the direction before adding it as a production.

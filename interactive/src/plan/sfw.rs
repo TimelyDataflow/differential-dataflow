@@ -131,7 +131,7 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
             if arrangements.get_unkeyed(&plan).is_none() {
                 // println!("\tbuilding/caching source plan");
                 let collection = plan.render(scope, collections, arrangements);
-                arrangements.set_unkeyed(plan, &collection.arrange_by_self().trace);
+                arrangements.set_unkeyed(plan, &collection.arrange_by_self_inter().trace);
             }
             else {
                 // println!("\tsource plan found");
@@ -203,7 +203,7 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
                     let arrangement =
                     plan.render(scope, collections, arrangements)
                         .map(move |tuple| (keys_clone.iter().map(|&i| tuple[i].clone()).collect::<Vec<_>>(), tuple))
-                        .arrange_by_key();
+                        .arrange_by_key_inter();
 
                     arrangements.set_keyed(&plan, &keys[..], &arrangement.trace);
                 }

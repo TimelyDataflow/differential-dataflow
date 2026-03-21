@@ -159,13 +159,13 @@ where
         //         });
 
         use differential_dataflow::collection::AsCollection;
-        let operates = operates.as_collection().arrange_by_self().trace;
-        let channels = channels.as_collection().arrange_by_self().trace;
-        let schedule = schedule.as_collection().arrange_by_self().trace;
-        let messages = messages.as_collection().arrange_by_self().trace;
-        let shutdown = shutdown.as_collection().arrange_by_self().trace;
-        let park = park.as_collection().arrange_by_self().trace;
-        let text = text.as_collection().arrange_by_self().trace;
+        let operates = operates.as_collection().arrange_by_self_inter().trace;
+        let channels = channels.as_collection().arrange_by_self_inter().trace;
+        let schedule = schedule.as_collection().arrange_by_self_inter().trace;
+        let messages = messages.as_collection().arrange_by_self_inter().trace;
+        let shutdown = shutdown.as_collection().arrange_by_self_inter().trace;
+        let park = park.as_collection().arrange_by_self_inter().trace;
+        let text = text.as_collection().arrange_by_self_inter().trace;
 
         // let elapsed =
         // duration
@@ -177,7 +177,7 @@ where
         //         (k,time,r)
         //     })
         //     .as_collection()
-        //     .arrange_by_self()
+        //     .arrange_by_self_inter()
         //     .trace;
 
         // let histogram =
@@ -190,7 +190,7 @@ where
         //         (k,time,r)
         //     })
         //     .as_collection()
-        //     .arrange_by_self()
+        //     .arrange_by_self_inter()
         //     .trace;
 
         (operates, channels, schedule, messages, shutdown, park, text)
@@ -273,8 +273,8 @@ where
         });
 
         use differential_dataflow::collection::AsCollection;
-        let batch = batch.as_collection().arrange_by_self().trace;
-        let merge = merge.as_collection().arrange_by_self().trace;
+        let batch = batch.as_collection().arrange_by_self_inter().trace;
+        let merge = merge.as_collection().arrange_by_self_inter().trace;
 
         (merge,batch)
     });

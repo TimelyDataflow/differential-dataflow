@@ -78,7 +78,7 @@ where
                     for Rule { name, plan } in query.rules.into_iter() {
                         let collection =
                         plan.render(scope, &mut collections, &mut manager.traces)
-                            .arrange_by_self();
+                            .arrange_by_self_inter();
 
                         collection.stream.probe_with(&mut manager.probe);
                         let trace = collection.trace;
@@ -104,7 +104,7 @@ where
 
                 let (input, trace) = worker.dataflow(|scope| {
                     let (input, collection) = scope.new_collection_from(updates.into_iter());
-                    let trace = collection.arrange_by_self().trace;
+                    let trace = collection.arrange_by_self_inter().trace;
                     (input, trace)
                 });
 

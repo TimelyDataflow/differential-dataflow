@@ -57,8 +57,8 @@ pub enum TraceReplayInstruction<Tr: TraceReader> {
 
 // Short names for strongly and weakly owned activators and shared queues.
 type BatchQueue<Tr> = VecDeque<TraceReplayInstruction<Tr>>;
-type TraceAgentQueueReader<Tr> = Rc<(Activator, RefCell<BatchQueue<Tr>>)>;
-type TraceAgentQueueWriter<Tr> = Weak<(Activator, RefCell<BatchQueue<Tr>>)>;
+type TraceInterQueueReader<Tr> = Rc<(Activator, RefCell<BatchQueue<Tr>>)>;
+type TraceInterQueueWriter<Tr> = Weak<(Activator, RefCell<BatchQueue<Tr>>)>;
 
 pub mod writer;
 pub mod agent;
@@ -67,6 +67,6 @@ pub mod arrangement;
 pub mod upsert;
 
 pub use self::writer::TraceWriter;
-pub use self::agent::{TraceAgent, ShutdownButton};
+pub use self::agent::{TraceInter, TraceIntra, ShutdownButton};
 
 pub use self::arrangement::{Arranged, Arrange};

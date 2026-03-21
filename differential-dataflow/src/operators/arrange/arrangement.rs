@@ -36,8 +36,8 @@ use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 
-use super::TraceAgent;
-use super::agent::TraceAgentInner;
+use super::TraceInter;
+use super::agent::TraceIntra;
 
 /// An arranged collection of `(K,V)` values.
 ///
@@ -250,7 +250,7 @@ where
     T1: TraceReader + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceInter<T2>>
     where
         T1: TraceReader<KeyOwn: Ord>,
         T2: for<'a> Trace<
@@ -273,7 +273,7 @@ where
     }
 
     /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceInter<T2>>
     where
         T1: TraceReader<KeyOwn: Ord>,
         T2: for<'a> Trace<
@@ -314,8 +314,8 @@ pub trait Arrange<G, C> : Sized
 where
     G: Scope<Timestamp: Lattice>,
 {
-    /// Arranges updates into a shared trace.
-    fn arrange<Ba, Bu, Tr>(self) -> Arranged<G, TraceAgent<Tr>>
+    /// Arranges updates into a trace local to this dataflow.
+    fn arrange<Ba, Bu, Tr>(self) -> Arranged<G, TraceIntra<Tr>>
     where
         Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
@@ -324,8 +324,8 @@ where
         self.arrange_named::<Ba, Bu, Tr>("Arrange")
     }
 
-    /// Arranges updates into a shared trace, with a supplied name.
-    fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    /// Arranges updates into a trace local to this dataflow, with a supplied name.
+    fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceIntra<Tr>>
     where
         Ba: Batcher<Input=C, Time=G::Timestamp> + 'static,
         Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
@@ -342,7 +342,7 @@ where
 /// Unlike `arrange_intra`, this trace can be imported into other dataflows. To provide this ability
 /// it must be continually scheduled even in the absence of input updates, in order to communicate
 /// its input frontier to the other dataflow. This can result in more scheduling overhead.
-pub fn arrange_inter<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+pub fn arrange_inter<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceInter<Tr>>
 where
     G: Scope<Timestamp: Lattice>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
@@ -363,7 +363,7 @@ where
 /// It lacks the `import` method that would allow this. By so doing, the operator does not need
 /// to be continually rescheduled in the absence of input updates, which can reduce the scheduling
 /// load.
-pub fn arrange_intra<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgentInner<Tr>>
+pub fn arrange_intra<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceIntra<Tr>>
 where
     G: Scope<Timestamp: Lattice>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
@@ -383,7 +383,7 @@ where
 ///
 /// This is the general form that both `arrange_inter` and `arrange_intra` delegate to.
 /// The `FrontierInterest` parameter controls when the operator is notified of frontier changes.
-pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str, interest: timely::progress::operate::FrontierInterest) -> Arranged<G, TraceAgent<Tr>>
+pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str, interest: timely::progress::operate::FrontierInterest) -> Arranged<G, TraceInter<Tr>>
 where
     G: Scope<Timestamp: Lattice>,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
@@ -430,7 +430,7 @@ where
         empty_trace.set_exert_logic(exert_logic);
     }
 
-    let (trace, mut writer) = TraceAgent::new(empty_trace, operator_info, logger);
+    let (trace, mut writer) = TraceInter::new(empty_trace, operator_info, logger);
 
     builder.build(move |_capabilities| {
 

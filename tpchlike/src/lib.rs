@@ -115,10 +115,10 @@ impl<G: Scope> Collections<G> {
 
 
 use differential_dataflow::trace::implementations::ValSpine;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::{Arranged, TraceInter};
 
 type ArrangedScope<G, K, T> = Arranged<G, ArrangedIndex<K, T>>;
-type ArrangedIndex<K, T> = TraceAgent<ValSpine<K, T, usize, isize>>;
+type ArrangedIndex<K, T> = TraceInter<ValSpine<K, T, usize, isize>>;
 
 pub struct ArrangementsInScope<G: Scope<Timestamp=usize>> {
     customer:   ArrangedScope<G, usize, Customer>,
@@ -154,37 +154,37 @@ impl Arrangements {
 
         let empty_frontier = timely::progress::Antichain::new();
         let empty_frontier = empty_frontier.borrow();
-        let mut arranged = scope.input_from(&mut inputs.customer).as_collection().map(|x| (x.cust_key, x)).arrange_by_key();
+        let mut arranged = scope.input_from(&mut inputs.customer).as_collection().map(|x| (x.cust_key, x)).arrange_by_key_inter();
         arranged.stream.probe_with(probe);
         arranged.trace.set_physical_compaction(empty_frontier);
         let customer = arranged.trace;
 
-        let mut arranged = scope.input_from(&mut inputs.nation).as_collection().map(|x| (x.nation_key, x)).arrange_by_key();
+        let mut arranged = scope.input_from(&mut inputs.nation).as_collection().map(|x| (x.nation_key, x)).arrange_by_key_inter();
         arranged.stream.probe_with(probe);
         arranged.trace.set_physical_compaction(empty_frontier);
         let nation = arranged.trace;
 
-        let mut arranged = scope.input_from(&mut inputs.order).as_collection().map(|x| (x.order_key, x)).arrange_by_key();
+        let mut arranged = scope.input_from(&mut inputs.order).as_collection().map(|x| (x.order_key, x)).arrange_by_key_inter();
         arranged.stream.probe_with(probe);
         arranged.trace.set_physical_compaction(empty_frontier);
         let order = arranged.trace;
 
-        let mut arranged = scope.input_from(&mut inputs.part).as_collection().map(|x| (x.part_key, x)).arrange_by_key();
+        let mut arranged = scope.input_from(&mut inputs.part).as_collection().map(|x| (x.part_key, x)).arrange_by_key_inter();
         arranged.stream.probe_with(probe);
         arranged.trace.set_physical_compaction(empty_frontier);
         let part = arranged.trace;
 
-        let mut arranged = scope.input_from(&mut inputs.partsupp).as_collection().map(|x| ((x.part_key, x.supp_key), x)).arrange_by_key();
+        let mut arranged = scope.input_from(&mut inputs.partsupp).as_collection().map(|x| ((x.part_key, x.supp_key), x)).arrange_by_key_inter();
         arranged.stream.probe_with(probe);
         arranged.trace.set_physical_compaction(empty_frontier);
         let partsupp = arranged.trace;
 
-        let mut arranged = scope.input_from(&mut inputs.region).as_collection().map(|x| (x.region_key, x)).arrange_by_key();
+        let mut arranged = scope.input_from(&mut inputs.region).as_collection().map(|x| (x.region_key, x)).arrange_by_key_inter();
         arranged.stream.probe_with(probe);
         arranged.trace.set_physical_compaction(empty_frontier);
         let region = arranged.trace;
 
-        let mut arranged = scope.input_from(&mut inputs.supplier).as_collection().map(|x| (x.supp_key, x)).arrange_by_key();
+        let mut arranged = scope.input_from(&mut inputs.supplier).as_collection().map(|x| (x.supp_key, x)).arrange_by_key_inter();
         arranged.stream.probe_with(probe);
         arranged.trace.set_physical_compaction(empty_frontier);
         let supplier = arranged.trace;
@@ -203,25 +203,25 @@ impl Arrangements {
 
     pub fn in_scope<G: Scope<Timestamp=usize>>(&mut self, scope: &mut G, experiment: &mut Experiment) -> ArrangementsInScope<G> {
         let (mut customer, button) = self.customer.import_core(scope, "customer");
-        if !self.arrange { customer = customer.as_collection(|&k,v| (k,v.clone())).arrange_by_key(); }
+        if !self.arrange { customer = customer.as_collection(|&k,v| (k,v.clone())).arrange_by_key_inter(); }
         experiment.buttons.push(button);
         let (mut nation, button) = self.nation.import_core(scope, "nation");
-        if !self.arrange { nation = nation.as_collection(|&k,v| (k,v.clone())).arrange_by_key(); }
+        if !self.arrange { nation = nation.as_collection(|&k,v| (k,v.clone())).arrange_by_key_inter(); }
         experiment.buttons.push(button);
         let (mut order, button) = self.order.import_core(scope, "order");
-        if !self.arrange { order = order.as_collection(|&k,v| (k,v.clone())).arrange_by_key(); }
+        if !self.arrange { order = order.as_collection(|&k,v| (k,v.clone())).arrange_by_key_inter(); }
         experiment.buttons.push(button);
         let (mut part, button) = self.part.import_core(scope, "part");
-        if !self.arrange { part = part.as_collection(|&k,v| (k,v.clone())).arrange_by_key(); }
+        if !self.arrange { part = part.as_collection(|&k,v| (k,v.clone())).arrange_by_key_inter(); }
         experiment.buttons.push(button);
         let (mut partsupp, button) = self.partsupp.import_core(scope, "partsupp");
-        if !self.arrange { partsupp = partsupp.as_collection(|&k,v| (k,v.clone())).arrange_by_key(); }
+        if !self.arrange { partsupp = partsupp.as_collection(|&k,v| (k,v.clone())).arrange_by_key_inter(); }
         experiment.buttons.push(button);
         let (mut region, button) = self.region.import_core(scope, "region");
-        if !self.arrange { region = region.as_collection(|&k,v| (k,v.clone())).arrange_by_key(); }
+        if !self.arrange { region = region.as_collection(|&k,v| (k,v.clone())).arrange_by_key_inter(); }
         experiment.buttons.push(button);
         let (mut supplier, button) = self.supplier.import_core(scope, "supplier");
-        if !self.arrange { supplier = supplier.as_collection(|&k,v| (k,v.clone())).arrange_by_key(); }
+        if !self.arrange { supplier = supplier.as_collection(|&k,v| (k,v.clone())).arrange_by_key_inter(); }
         experiment.buttons.push(button);
 
         ArrangementsInScope {

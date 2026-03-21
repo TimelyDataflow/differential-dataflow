@@ -7,13 +7,13 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 
 use differential_dataflow::trace::implementations::{ValSpine, KeySpine, KeyBatcher, KeyBuilder, ValBatcher, ValBuilder};
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceIntra;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::difference::Present;
 
-type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R>>>;
+type EdgeArranged<G, K, V, R> = Arranged<G, TraceIntra<ValSpine<K, V, <G as ScopeParent>::Timestamp, R>>>;
 
 type Node = u32;
 type Edge = (Node, Node);

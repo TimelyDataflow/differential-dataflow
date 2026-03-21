@@ -8,7 +8,7 @@ use timely::dataflow::operators::Concatenate;
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection};
 use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceInter;
 
 pub mod altneu;
 pub mod calculus;
@@ -93,8 +93,8 @@ impl<G: Scope, R: Monoid+Multiply<Output = R>, P, E> ValidateExtensionMethod<G, 
 
 // These are all defined here so that users can be assured a common layout.
 use differential_dataflow::trace::implementations::{KeySpine, ValSpine};
-type TraceValHandle<K,V,T,R> = TraceAgent<ValSpine<K,V,T,R>>;
-type TraceKeyHandle<K,T,R> = TraceAgent<KeySpine<K,T,R>>;
+type TraceValHandle<K,V,T,R> = TraceInter<ValSpine<K,V,T,R>>;
+type TraceKeyHandle<K,T,R> = TraceInter<KeySpine<K,T,R>>;
 
 pub struct CollectionIndex<K, V, T, R>
 where
@@ -140,16 +140,16 @@ where
     pub fn index<G: Scope<Timestamp = T>>(collection: VecCollection<G, (K, V), R>) -> Self {
         // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
         // counts and validate can share the base arrangement
-        let arranged = collection.clone().arrange_by_self();
+        let arranged = collection.clone().arrange_by_self_inter();
         // TODO: This could/should be arrangement to arrangement, via `reduce_abelian`, but the types are a mouthful at the moment.
         let counts = arranged
             .clone()
             .as_collection(|k,_v| k.clone())
             .distinct()
             .map(|(k, _v)| k)
-            .arrange_by_self()
+            .arrange_by_self_inter()
             .trace;
-        let propose = collection.arrange_by_key().trace;
+        let propose = collection.arrange_by_key_inter().trace;
         let validate = arranged.trace;
 
         CollectionIndex {

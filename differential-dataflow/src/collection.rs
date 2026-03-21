@@ -705,7 +705,7 @@ pub mod vec {
     }
 
     use crate::trace::{Trace, Builder};
-    use crate::operators::arrange::{Arranged, TraceAgent};
+    use crate::operators::arrange::{Arranged, TraceInter, TraceIntra};
 
     impl <G, K, V, R> Collection<G, (K, V), R>
     where
@@ -780,7 +780,7 @@ pub mod vec {
         ///          .trace;
         /// });
         /// ```
-        pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+        pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceInter<T2>>
         where
             T2: for<'a> Trace<Key<'a>= &'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp, Diff: Abelian>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
@@ -798,7 +798,7 @@ pub mod vec {
         /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
         /// and it may not be safe to index into the first element.
         /// At least one of the two collections will be non-empty.
-        pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+        pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceInter<T2>>
         where
             V: Clone+'static,
             T2: for<'a> Trace<Key<'a>=&'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp>+'static,
@@ -1016,14 +1016,14 @@ pub mod vec {
         V: crate::ExchangeData,
         R: crate::ExchangeData + Semigroup,
     {
-        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceIntra<Tr>>
         where
             Ba: crate::trace::Batcher<Input=Vec<((K, V), G::Timestamp, R)>, Time=G::Timestamp> + 'static,
             Bu: crate::trace::Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
             Tr: crate::trace::Trace<Time=G::Timestamp> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_inter::<_, _, Ba, Bu, _>(self.inner, exchange, name)
+            crate::operators::arrange::arrangement::arrange_intra::<_, _, Ba, Bu, _>(self.inner, exchange, name)
         }
     }
 
@@ -1031,14 +1031,14 @@ pub mod vec {
     where
         G: Scope<Timestamp: Lattice+Ord>,
     {
-        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceIntra<Tr>>
         where
             Ba: crate::trace::Batcher<Input=Vec<((K,()),G::Timestamp,R)>, Time=G::Timestamp> + 'static,
             Bu: crate::trace::Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
             Tr: crate::trace::Trace<Time=G::Timestamp> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_inter::<_,_,Ba,Bu,_>(self.map(|k| (k, ())).inner, exchange, name)
+            crate::operators::arrange::arrangement::arrange_intra::<_,_,Ba,Bu,_>(self.map(|k| (k, ())).inner, exchange, name)
         }
     }
 
@@ -1052,13 +1052,24 @@ pub mod vec {
         /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
         /// This trace is current for all times completed by the output stream, which can be used to
         /// safely identify the stable times and values in the trace.
-        pub fn arrange_by_key(self) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
+        pub fn arrange_by_key(self) -> Arranged<G, TraceIntra<ValSpine<K, V, G::Timestamp, R>>> {
             self.arrange_by_key_named("ArrangeByKey")
         }
 
         /// As `arrange_by_key` but with the ability to name the arrangement.
-        pub fn arrange_by_key_named(self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G::Timestamp, R>>> {
+        pub fn arrange_by_key_named(self, name: &str) -> Arranged<G, TraceIntra<ValSpine<K, V, G::Timestamp, R>>> {
             self.arrange_named::<ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
+        }
+
+        /// As `arrange_by_key` but producing a `TraceInter` that can be imported into other dataflows.
+        pub fn arrange_by_key_inter(self) -> Arranged<G, TraceInter<ValSpine<K, V, G::Timestamp, R>>> {
+            self.arrange_by_key_inter_named("ArrangeByKey")
+        }
+
+        /// As `arrange_by_key_inter` but with the ability to name the arrangement.
+        pub fn arrange_by_key_inter_named(self, name: &str) -> Arranged<G, TraceInter<ValSpine<K, V, G::Timestamp, R>>> {
+            let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
+            crate::operators::arrange::arrangement::arrange_inter::<_,_,ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(self.inner, exchange, name)
         }
     }
 
@@ -1071,14 +1082,25 @@ pub mod vec {
         /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
         /// This trace is current for all times complete in the output stream, which can be used to safely
         /// identify the stable times and values in the trace.
-        pub fn arrange_by_self(self) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
+        pub fn arrange_by_self(self) -> Arranged<G, TraceIntra<KeySpine<K, G::Timestamp, R>>> {
             self.arrange_by_self_named("ArrangeBySelf")
         }
 
         /// As `arrange_by_self` but with the ability to name the arrangement.
-        pub fn arrange_by_self_named(self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G::Timestamp, R>>> {
+        pub fn arrange_by_self_named(self, name: &str) -> Arranged<G, TraceIntra<KeySpine<K, G::Timestamp, R>>> {
             self.map(|k| (k, ()))
                 .arrange_named::<KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(name)
+        }
+
+        /// As `arrange_by_self` but producing a `TraceInter` that can be imported into other dataflows.
+        pub fn arrange_by_self_inter(self) -> Arranged<G, TraceInter<KeySpine<K, G::Timestamp, R>>> {
+            self.arrange_by_self_inter_named("ArrangeBySelf")
+        }
+
+        /// As `arrange_by_self_inter` but with the ability to name the arrangement.
+        pub fn arrange_by_self_inter_named(self, name: &str) -> Arranged<G, TraceInter<KeySpine<K, G::Timestamp, R>>> {
+            let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,()),G::Timestamp,R)| (update.0).0.hashed().into());
+            crate::operators::arrange::arrangement::arrange_inter::<_,_,KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(self.map(|k| (k, ())).inner, exchange, name)
         }
     }
 

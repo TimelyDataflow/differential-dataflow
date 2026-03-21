@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::collection::concatenate;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceIntra;
 use differential_dataflow::trace::implementations::{KeySpine, ValSpine};
 use differential_dataflow::{AsCollection, VecCollection};
 
@@ -166,9 +166,9 @@ pub type DiagnosticEvent = Event<Duration, DiagnosticContainer>;
 // ============================================================================
 
 /// A key-value trace: key K, value V, time Duration, diff i64.
-type ValTrace<K, V> = TraceAgent<ValSpine<K, V, Duration, i64>>;
+type ValTrace<K, V> = TraceIntra<ValSpine<K, V, Duration, i64>>;
 /// A key-only trace: key K, time Duration, diff i64.
-type KeyTrace<K> = TraceAgent<KeySpine<K, Duration, i64>>;
+type KeyTrace<K> = TraceIntra<KeySpine<K, Duration, i64>>;
 
 /// Trace handles for timely logging arrangements.
 pub struct TimelyTraces {

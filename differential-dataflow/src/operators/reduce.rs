@@ -16,7 +16,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
-use crate::operators::arrange::{Arranged, TraceAgent};
+use crate::operators::arrange::{Arranged, TraceInter};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::containers::BatchContainer;
@@ -26,7 +26,7 @@ use crate::trace::TraceReader;
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
-pub fn reduce_trace<G, T1, Bu, T2, L>(trace: Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+pub fn reduce_trace<G, T1, Bu, T2, L>(trace: Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceInter<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader<KeyOwn: Ord> + Clone + 'static,
@@ -56,7 +56,7 @@ where
 
             let mut source_trace = trace.trace.clone();
 
-            let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
+            let (mut output_reader, mut output_writer) = TraceInter::new(empty, operator_info, logger);
 
             // let mut output_trace = TraceRc::make_from(agent).0;
             *result_trace = Some(output_reader.clone());

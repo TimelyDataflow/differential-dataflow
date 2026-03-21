@@ -56,7 +56,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
                             .collect::<Vec<_>>(),
                     )
                 )
-                .arrange_by_key();
+                .arrange_by_key_inter();
 
             arrangements.set_keyed(&self.plan1, &keys1[..], &arrangement.trace);
             arrangement.trace
@@ -85,7 +85,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Join<V> {
                             .collect::<Vec<_>>(),
                     )
                 )
-                .arrange_by_key();
+                .arrange_by_key_inter();
 
             arrangements.set_keyed(&self.plan2, &keys2[..], &arrangement.trace);
             arrangement.trace

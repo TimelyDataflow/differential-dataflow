@@ -164,7 +164,7 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
                         trace.import(scope)
                     }
                     else {
-                        let input_arrangement = distinct.render(scope, collections, arrangements).arrange_by_self();
+                        let input_arrangement = distinct.render(scope, collections, arrangements).arrange_by_self_inter();
                         arrangements.set_unkeyed(&distinct, &input_arrangement.trace);
                         input_arrangement
                     };
