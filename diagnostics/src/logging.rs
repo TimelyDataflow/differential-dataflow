@@ -14,13 +14,16 @@
 //! 4. Captures the joined output via `mpsc` for the WebSocket thread.
 //! 5. Registers logging callbacks that push events into the links.
 //!
-//! The WebSocket thread communicates client connect/disconnect via a [`BatchLogger`]
-//! that pushes through an `mpsc` channel, and reads diagnostic updates from
-//! another `mpsc` channel.
+//! The WebSocket thread communicates client connect/disconnect via a
+//! [`ClientInput`] that pushes through an `mpsc` channel, and reads
+//! diagnostic updates from another `mpsc` channel.
+//!
+//! Timestamps use `Duration` (matching timely's logging infrastructure).
+//! Timestamp quantization (rounding to interval boundaries) is done as a DD
+//! `map_in_place` operation on the collections, keeping the logging layer simple.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -34,67 +37,71 @@ use differential_dataflow::{AsCollection, VecCollection};
 use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::capture::{Event, EventLink, EventPusher, Replay, Capture};
+use timely::dataflow::operators::capture::{Event, EventLink, Replay, Capture};
 use timely::dataflow::operators::Exchange;
+use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::{Scope, Stream};
-use timely::logging::{OperatesEvent, StartStop, TimelyEvent, TimelyEventBuilder};
+use timely::logging::{
+    BatchLogger, OperatesEvent, StartStop, TimelyEvent, TimelyEventBuilder,
+};
 use timely::worker::Worker;
-use timely::Container;
 
 use serde::{Serialize, Deserialize};
 
 // ============================================================================
-// BatchLogger
+// ClientInput — manages client connect/disconnect events across threads
 // ============================================================================
 
-/// Batches log events and pushes them through an `EventPusher` with progress
-/// tracking. Timestamps are quantized to `interval_ms` boundaries.
-pub struct BatchLogger<C, P: EventPusher<u64, C>> {
-    time_ms: u64,
-    event_pusher: P,
-    interval_ms: u64,
-    _phantom: PhantomData<C>,
+/// Container type for client connection events: `(client_id, time, diff)`.
+type ClientContainer = Vec<(usize, Duration, i64)>;
+
+/// Sends client connect/disconnect events to the diagnostics dataflow.
+///
+/// The WebSocket server thread uses this to announce clients. On drop,
+/// sends a capability retraction so the dataflow's client input frontier
+/// can advance (important for multi-worker setups where non-server workers
+/// must release their frontier).
+pub struct ClientInput {
+    sender: mpsc::Sender<Event<Duration, ClientContainer>>,
+    time: Duration,
 }
 
-impl<C, P: EventPusher<u64, C>> BatchLogger<C, P> {
-    /// Creates a new batch logger with the given pusher and interval.
-    pub fn new(event_pusher: P, interval_ms: u64) -> Self {
-        BatchLogger {
-            time_ms: 0,
-            event_pusher,
-            interval_ms,
-            _phantom: PhantomData,
+impl ClientInput {
+    /// Announce a client connection.
+    pub fn connect(&mut self, client_id: usize, elapsed: Duration) {
+        let _ = self
+            .sender
+            .send(Event::Messages(self.time, vec![(client_id, elapsed, 1)]));
+        self.advance(elapsed);
+    }
+
+    /// Announce a client disconnection.
+    pub fn disconnect(&mut self, client_id: usize, elapsed: Duration) {
+        let _ = self
+            .sender
+            .send(Event::Messages(self.time, vec![(client_id, elapsed, -1)]));
+        self.advance(elapsed);
+    }
+
+    /// Advance the capability to `elapsed`. Call periodically so the
+    /// dataflow's frontier can progress.
+    pub fn advance(&mut self, elapsed: Duration) {
+        if self.time < elapsed {
+            let _ = self
+                .sender
+                .send(Event::Progress(vec![(elapsed, 1), (self.time, -1)]));
+            self.time = elapsed;
         }
     }
 }
 
-impl<C: Container, P: EventPusher<u64, C>> BatchLogger<C, P> {
-    /// Publish a batch of data at the current time.
-    pub fn publish_batch(&mut self, data: C) {
-        self.event_pusher
-            .push(Event::Messages(self.time_ms, data));
-    }
-
-    /// Advance the capability to cover `time`. Returns true if time advanced.
-    pub fn report_progress(&mut self, time: Duration) -> bool {
-        let time_ms = (time.as_millis() as u64 / self.interval_ms + 1) * self.interval_ms;
-        if self.time_ms < time_ms {
-            self.event_pusher
-                .push(Event::Progress(vec![(time_ms, 1), (self.time_ms, -1)]));
-            self.time_ms = time_ms;
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl<C, P: EventPusher<u64, C>> Drop for BatchLogger<C, P> {
+impl Drop for ClientInput {
     fn drop(&mut self) {
-        self.event_pusher
-            .push(Event::Progress(vec![(self.time_ms, -1)]));
+        let _ = self
+            .sender
+            .send(Event::Progress(vec![(self.time, -1)]));
     }
 }
 
@@ -103,10 +110,6 @@ impl<C, P: EventPusher<u64, C>> Drop for BatchLogger<C, P> {
 // ============================================================================
 
 /// Wraps an `mpsc::Receiver` as an `EventIterator` for use with `Replay`.
-///
-/// This enables cross-thread event sources: one thread pushes events via
-/// `mpsc::Sender` (which implements `EventPusher`), and the dataflow replays
-/// them via this iterator.
 struct MpscEventIterator<T, C> {
     receiver: mpsc::Receiver<Event<T, C>>,
 }
@@ -153,19 +156,19 @@ pub enum DiagnosticUpdate {
 
 /// The container type for captured diagnostic output.
 /// Each element is `((client_id, update), time, diff)`.
-pub type DiagnosticContainer = Vec<((usize, DiagnosticUpdate), u64, i64)>;
+pub type DiagnosticContainer = Vec<((usize, DiagnosticUpdate), Duration, i64)>;
 
 /// The event type received by the WebSocket thread.
-pub type DiagnosticEvent = Event<u64, DiagnosticContainer>;
+pub type DiagnosticEvent = Event<Duration, DiagnosticContainer>;
 
 // ============================================================================
 // Trace handle types
 // ============================================================================
 
-/// A key-value trace: key K, value V, time u64, diff i64.
-type ValTrace<K, V> = TraceAgent<ValSpine<K, V, u64, i64>>;
-/// A key-only trace: key K, time u64, diff i64.
-type KeyTrace<K> = TraceAgent<KeySpine<K, u64, i64>>;
+/// A key-value trace: key K, value V, time Duration, diff i64.
+type ValTrace<K, V> = TraceAgent<ValSpine<K, V, Duration, i64>>;
+/// A key-only trace: key K, time Duration, diff i64.
+type KeyTrace<K> = TraceAgent<KeySpine<K, Duration, i64>>;
 
 /// Trace handles for timely logging arrangements.
 pub struct TimelyTraces {
@@ -194,35 +197,22 @@ pub struct DifferentialTraces {
 // SinkHandle — returned to the caller for WebSocket integration
 // ============================================================================
 
-/// Container type for client connection events.
-type ClientContainer = Vec<(usize, u64, i64)>;
-
 /// Handle for the WebSocket thread to interact with the diagnostics dataflow.
 ///
-/// The WebSocket thread uses `client_logger` to announce client connections
-/// and disconnections, and reads diagnostic updates from `output_receiver`.
-///
-/// **Important:** The WS thread must call `client_logger.report_progress(elapsed)`
+/// **Important:** The WS thread must call `client_input.advance(elapsed)`
 /// periodically (e.g., every 100ms–1s) to advance the client input's frontier.
 /// Without this, the cross-join's output frontier won't advance and the capture
 /// operator will never emit `Event::Progress` messages.
 pub struct SinkHandle {
-    /// Logger for the WS thread to send client connect/disconnect events.
-    ///
-    /// - Connect: `publish_batch(vec![(client_id, time, +1)])`
-    /// - Disconnect: `publish_batch(vec![(client_id, time, -1)])`
-    /// - Must call `report_progress(elapsed)` periodically to advance time.
-    ///
-    /// The `elapsed` should be computed from `start` below.
-    pub client_logger: BatchLogger<ClientContainer, mpsc::Sender<Event<u64, ClientContainer>>>,
+    /// Input for the WS thread to send client connect/disconnect events.
+    pub client_input: ClientInput,
     /// Receiver for diagnostic updates produced by the cross-join.
     ///
     /// Each `Event::Messages(time, vec)` contains `((client_id, update), time, diff)`
     /// triples. The WS thread routes updates to clients by `client_id`.
-    /// `Event::Progress` indicates frontier advancement.
     pub output_receiver: mpsc::Receiver<DiagnosticEvent>,
     /// The reference instant for computing elapsed durations.
-    /// Use `start.elapsed()` when calling `client_logger.report_progress()`.
+    /// Use `start.elapsed()` when calling `client_input.advance()`.
     pub start: Instant,
 }
 
@@ -236,6 +226,36 @@ pub struct LoggingState {
 pub struct LoggingTraces {
     pub timely: TimelyTraces,
     pub differential: DifferentialTraces,
+}
+
+// ============================================================================
+// Timestamp quantization
+// ============================================================================
+
+/// Default quantization interval.
+const INTERVAL: Duration = Duration::from_secs(1);
+
+/// Round a Duration up to the next multiple of `interval`.
+fn quantize(time: Duration, interval: Duration) -> Duration {
+    let nanos = time.as_nanos();
+    let interval_nanos = interval.as_nanos();
+    let rounded = (nanos / interval_nanos + 1) * interval_nanos;
+    Duration::from_nanos(rounded as u64)
+}
+
+/// Quantize timestamps in a collection's inner stream.
+fn quantize_collection<S, D>(
+    collection: VecCollection<S, D, i64>,
+    interval: Duration,
+) -> VecCollection<S, D, i64>
+where
+    S: Scope<Timestamp = Duration>,
+    D: differential_dataflow::Data,
+{
+    collection
+        .inner
+        .map_in_place(move |(_, time, _)| *time = quantize(*time, interval))
+        .as_collection()
 }
 
 // ============================================================================
@@ -257,23 +277,22 @@ pub struct LoggingTraces {
 /// Returns a [`LoggingState`] with trace handles and a [`SinkHandle`] for
 /// the WebSocket thread.
 pub fn register<A: Allocate>(worker: &mut Worker<A>, log_logging: bool) -> LoggingState {
-    let interval_ms: u64 = 1000;
     let start = Instant::now();
 
     // Event links for logging capture (worker-internal, Rc-based).
-    let t_link: Rc<EventLink<u64, Vec<(Duration, TimelyEvent)>>> = Rc::new(EventLink::new());
-    let d_link: Rc<EventLink<u64, Vec<(Duration, DifferentialEvent)>>> =
+    let t_link: Rc<EventLink<Duration, Vec<(Duration, TimelyEvent)>>> = Rc::new(EventLink::new());
+    let d_link: Rc<EventLink<Duration, Vec<(Duration, DifferentialEvent)>>> =
         Rc::new(EventLink::new());
 
     // Cross-thread channels for client input and diagnostic output.
-    let (client_tx, client_rx) = mpsc::channel::<Event<u64, ClientContainer>>();
+    let (client_tx, client_rx) = mpsc::channel::<Event<Duration, ClientContainer>>();
     let (output_tx, output_rx) = mpsc::channel::<DiagnosticEvent>();
 
     if log_logging {
-        install_loggers(worker, t_link.clone(), d_link.clone(), interval_ms);
+        install_loggers(worker, t_link.clone(), d_link.clone());
     }
 
-    let traces = worker.dataflow::<u64, _, _>(|scope| {
+    let traces = worker.dataflow::<Duration, _, _>(|scope| {
         // Replay logging events into the dataflow.
         let timely_stream = Some(t_link.clone()).replay_into(scope);
         let diff_stream = Some(d_link.clone()).replay_into(scope);
@@ -288,8 +307,6 @@ pub fn register<A: Allocate>(worker: &mut Worker<A>, log_logging: bool) -> Loggi
             Some(client_iter).replay_into(scope).as_collection();
 
         // Cross-join: clients × each data collection.
-        // When a client appears at +1, the join produces the full snapshot.
-        // Incremental data updates produce per-client updates for all clients.
         let clients_keyed = clients.map(|c| ((), c));
 
         // Tag all collections and cross-join with clients.
@@ -333,14 +350,8 @@ pub fn register<A: Allocate>(worker: &mut Worker<A>, log_logging: bool) -> Loggi
             .join(all_data)
             .map(|((), (client_id, update))| (client_id, update));
 
-        // Keep client_id in the output so the WS thread can route updates.
-        // Without it, DD would consolidate across clients (e.g., 2 active
-        // clients → 2× diff) and snapshots for new clients would be
-        // indistinguishable from incremental updates for existing ones.
-        //
         // Route all output to worker 0 before capture, since only worker 0
-        // runs the WebSocket server. Without this, the cross-join (keyed by
-        // ()) would send output to hash(()) % peers, which may not be 0.
+        // runs the WebSocket server.
         output.inner.exchange(|_| 0).capture_into(output_tx);
 
         LoggingTraces {
@@ -350,13 +361,16 @@ pub fn register<A: Allocate>(worker: &mut Worker<A>, log_logging: bool) -> Loggi
     });
 
     if !log_logging {
-        install_loggers(worker, t_link, d_link, interval_ms);
+        install_loggers(worker, t_link, d_link);
     }
 
     LoggingState {
         traces,
         sink: SinkHandle {
-            client_logger: BatchLogger::new(client_tx, interval_ms),
+            client_input: ClientInput {
+                sender: client_tx,
+                time: Duration::default(),
+            },
             output_receiver: output_rx,
             start,
         },
@@ -365,28 +379,21 @@ pub fn register<A: Allocate>(worker: &mut Worker<A>, log_logging: bool) -> Loggi
 
 fn install_loggers<A: Allocate>(
     worker: &mut Worker<A>,
-    t_link: Rc<EventLink<u64, Vec<(Duration, TimelyEvent)>>>,
-    d_link: Rc<EventLink<u64, Vec<(Duration, DifferentialEvent)>>>,
-    interval_ms: u64,
+    t_link: Rc<EventLink<Duration, Vec<(Duration, TimelyEvent)>>>,
+    d_link: Rc<EventLink<Duration, Vec<(Duration, DifferentialEvent)>>>,
 ) {
     let mut registry = worker.log_register().expect("Logging not initialized");
 
-    let mut t_batch = BatchLogger::new(t_link, interval_ms);
+    // Use timely's BatchLogger directly — it handles progress tracking
+    // with Duration timestamps, matching the logging framework's epoch.
+    let mut t_batch = BatchLogger::new(t_link);
     registry.insert::<TimelyEventBuilder, _>("timely", move |time, data| {
-        if let Some(data) = data.take() {
-            t_batch.publish_batch(data);
-        } else {
-            t_batch.report_progress(*time);
-        }
+        t_batch.publish_batch(time, data);
     });
 
-    let mut d_batch = BatchLogger::new(d_link, interval_ms);
+    let mut d_batch = BatchLogger::new(d_link);
     registry.insert::<DifferentialEventBuilder, _>("differential/arrange", move |time, data| {
-        if let Some(data) = data.take() {
-            d_batch.publish_batch(data);
-        } else {
-            d_batch.report_progress(*time);
-        }
+        d_batch.publish_batch(time, data);
     });
 }
 
@@ -409,15 +416,14 @@ struct TimelyDemuxState {
 }
 
 /// Build timely logging collections and arrangements.
-/// Returns both trace handles and raw collections (for cross-join).
-fn construct_timely<S: Scope<Timestamp = u64>>(
+fn construct_timely<S: Scope<Timestamp = Duration>>(
     scope: &mut S,
     stream: Stream<S, Vec<(Duration, TimelyEvent)>>,
 ) -> (TimelyTraces, TimelyCollections<S>) {
-    type OpUpdate = ((usize, String, Vec<usize>), u64, i64);
-    type ChUpdate = ((usize, Vec<usize>, (usize, usize), (usize, usize)), u64, i64);
-    type ElUpdate = (usize, u64, i64);
-    type MsgUpdate = (usize, u64, i64);
+    type OpUpdate = ((usize, String, Vec<usize>), Duration, i64);
+    type ChUpdate = ((usize, Vec<usize>, (usize, usize), (usize, usize)), Duration, i64);
+    type ElUpdate = (usize, Duration, i64);
+    type MsgUpdate = (usize, Duration, i64);
 
     let mut demux = OperatorBuilder::new("Timely Demux".to_string(), scope.clone());
     let mut input = demux.new_input(stream, Pipeline);
@@ -463,7 +469,6 @@ fn construct_timely<S: Scope<Timestamp = u64>>(
                                 ts,
                                 1i64,
                             ));
-                            // TODO: retract channels on dataflow shutdown
                         }
                         TimelyEvent::Schedule(e) => match e.start_stop {
                             StartStop::Start => {
@@ -491,10 +496,11 @@ fn construct_timely<S: Scope<Timestamp = u64>>(
         }
     });
 
-    let op_collection = operates.as_collection();
-    let ch_collection = channels.as_collection();
-    let el_collection = elapsed.as_collection();
-    let msg_collection = messages.as_collection();
+    // Quantize timestamps to interval boundaries.
+    let op_collection = quantize_collection(operates.as_collection(), INTERVAL);
+    let ch_collection = quantize_collection(channels.as_collection(), INTERVAL);
+    let el_collection = quantize_collection(elapsed.as_collection(), INTERVAL);
+    let msg_collection = quantize_collection(messages.as_collection(), INTERVAL);
 
     // Arrange for persistence.
     let operators = op_collection.clone()
@@ -541,11 +547,11 @@ struct DifferentialCollections<S: Scope> {
 }
 
 /// Build differential logging collections and arrangements.
-fn construct_differential<S: Scope<Timestamp = u64>>(
+fn construct_differential<S: Scope<Timestamp = Duration>>(
     scope: &mut S,
     stream: Stream<S, Vec<(Duration, DifferentialEvent)>>,
 ) -> (DifferentialTraces, DifferentialCollections<S>) {
-    type Update = (usize, u64, i64);
+    type Update = (usize, Duration, i64);
 
     let mut demux = OperatorBuilder::new("Differential Demux".to_string(), scope.clone());
     let mut input = demux.new_input(stream, Pipeline);
@@ -623,13 +629,14 @@ fn construct_differential<S: Scope<Timestamp = u64>>(
         }
     });
 
-    let bat_coll = batches.as_collection();
-    let rec_coll = records.as_collection();
-    let shr_coll = sharing.as_collection();
-    let br_coll = batcher_records.as_collection();
-    let bs_coll = batcher_size.as_collection();
-    let bc_coll = batcher_capacity.as_collection();
-    let ba_coll = batcher_allocations.as_collection();
+    // Quantize timestamps to interval boundaries.
+    let bat_coll = quantize_collection(batches.as_collection(), INTERVAL);
+    let rec_coll = quantize_collection(records.as_collection(), INTERVAL);
+    let shr_coll = quantize_collection(sharing.as_collection(), INTERVAL);
+    let br_coll = quantize_collection(batcher_records.as_collection(), INTERVAL);
+    let bs_coll = quantize_collection(batcher_size.as_collection(), INTERVAL);
+    let bc_coll = quantize_collection(batcher_capacity.as_collection(), INTERVAL);
+    let ba_coll = quantize_collection(batcher_allocations.as_collection(), INTERVAL);
 
     let traces = DifferentialTraces {
         arrangement_batches: bat_coll.clone().arrange_by_self_named("Arrange ArrangementBatches").trace,

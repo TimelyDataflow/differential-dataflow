@@ -38,9 +38,8 @@
 //! Then open `http://localhost:8000/index.html` and click Connect.
 //! The browser connects to `ws://localhost:51371` for live data.
 //!
-//! **Note:** Currently only worker 0's diagnostics are served. Multi-worker
-//! visibility (for diagnosing scaling or per-worker issues) is a planned
-//! improvement.
+//! With multiple workers (`-w N`), all workers' diagnostics are exchanged
+//! to worker 0 via the DD arrangements, so the browser sees everything.
 //!
 //! # Architecture
 //!

@@ -148,7 +148,7 @@ fn run_server(port: u16, sink: SinkHandle) {
         .set_nonblocking(true)
         .expect("Cannot set non-blocking");
 
-    let mut logger = sink.client_logger;
+    let mut client_input = sink.client_input;
     let receiver = sink.output_receiver;
     let start = sink.start;
 
@@ -169,13 +169,7 @@ fn run_server(port: u16, sink: SinkHandle) {
                             clients.insert(client_id, ws);
 
                             // Announce to the diagnostics dataflow.
-                            let elapsed = start.elapsed();
-                            logger.publish_batch(vec![(
-                                client_id,
-                                elapsed.as_millis() as u64,
-                                1i64,
-                            )]);
-                            logger.report_progress(elapsed);
+                            client_input.connect(client_id, start.elapsed());
                             eprintln!("  assigned client id {client_id}");
                         }
                         Err(e) => eprintln!("WebSocket handshake failed: {e}"),
@@ -235,15 +229,13 @@ fn run_server(port: u16, sink: SinkHandle) {
         }
         for client_id in disconnected {
             clients.remove(&client_id);
-            let elapsed = start.elapsed();
-            logger.publish_batch(vec![(client_id, elapsed.as_millis() as u64, -1i64)]);
-            logger.report_progress(elapsed);
+            client_input.disconnect(client_id, start.elapsed());
             eprintln!("Diagnostics client {client_id} disconnected");
         }
 
         // Advance time periodically even without client events, so the
         // dataflow frontier can progress.
-        logger.report_progress(start.elapsed());
+        client_input.advance(start.elapsed());
 
         std::thread::sleep(FLUSH_INTERVAL);
     }
