@@ -83,7 +83,7 @@ where
 
             let id = scope.index();
 
-            move |(input, _frontier), output| {
+            move |(input, frontier), output| {
 
                 // The `reduce` operator receives fully formed batches, which each serve as an indication
                 // that the frontier has advanced to the upper bound of their description.
@@ -130,6 +130,20 @@ where
 
                 // Pull in any subsequent empty batches we believe to exist.
                 source_trace.advance_upper(&mut upper_limit);
+                // The input frontier may reflect progress not yet visible as empty
+                // batches in the trace, for example when the upstream arrange operator
+                // uses `FrontierInterest::IfCapability` and was not scheduled to seal
+                // empty batches. Since we have drained all available input above, the
+                // frontier is a valid bound: any non-empty batch would have been
+                // delivered on the stream, so the gap between `upper_limit` and the
+                // frontier contains no updates. We take the join (least upper bound) of
+                // both antichains, as with product timestamps neither may dominate the
+                // other, and both represent valid progress information.
+                {
+                    let mut joined = Antichain::new();
+                    crate::lattice::antichain_join_into(&upper_limit.borrow()[..], &frontier.frontier()[..], &mut joined);
+                    upper_limit = joined;
+                }
 
                 // Only if our upper limit has advanced should we do work.
                 if upper_limit != lower_limit {
