@@ -13,6 +13,7 @@ members = [
     #"tpchlike",
     #"doop",
     "mdbook",
+    "diagnostics",
 ]
 resolver = "2"
 
