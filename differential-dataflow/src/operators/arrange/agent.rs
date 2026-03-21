@@ -269,6 +269,11 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
     pub fn trace_box_unstable(&self) -> Rc<RefCell<TraceBox<Tr>>> {
         self.inner.trace_box_unstable()
     }
+
+    /// Extracts the inner `TraceAgentInner`, discarding queue management.
+    pub fn into_inner(self) -> TraceAgentInner<Tr> {
+        self.inner
+    }
 }
 
 impl<Tr: TraceReader+'static> TraceAgent<Tr> {

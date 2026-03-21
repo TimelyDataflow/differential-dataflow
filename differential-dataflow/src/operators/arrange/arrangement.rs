@@ -346,6 +346,22 @@ where
     Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace<Time=G::Timestamp>+'static,
 {
+    arrange_core_with_interest::<G, P, Ba, Bu, Tr>(stream, pact, name, timely::progress::operate::FrontierInterest::Always)
+}
+
+/// Arranges a stream of updates by a key, configured with a name, a parallelization contract,
+/// and a frontier interest policy.
+///
+/// This is the general form of `arrange_core`, which additionally accepts a `FrontierInterest`
+/// parameter controlling when the operator is notified of frontier changes.
+pub fn arrange_core_with_interest<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str, interest: timely::progress::operate::FrontierInterest) -> Arranged<G, TraceAgent<Tr>>
+where
+    G: Scope<Timestamp: Lattice>,
+    P: ParallelizationContract<G::Timestamp, Ba::Input>,
+    Ba: Batcher<Time=G::Timestamp,Input: Container> + 'static,
+    Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
+    Tr: Trace<Time=G::Timestamp>+'static,
+{
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
     // bounds are those frontiers, containing updates at times greater or
@@ -369,7 +385,7 @@ where
     let operator_info = builder.operator_info();
 
     let mut input = builder.new_input(stream, pact);
-    builder.set_notify_for(0, timely::progress::operate::FrontierInterest::Always);
+    builder.set_notify_for(0, interest);
     let (mut output, stream) = builder.new_output();
 
     // Acquire a logger for arrange events.
@@ -500,9 +516,8 @@ where
 
 /// Arranges a stream of updates into a private trace, without shared queue distribution.
 ///
-/// This variant uses `TraceAgentInner` and `TraceWriterInner` directly, avoiding the
-/// overhead of queue management for listeners. The operator uses `FrontierInterest::IfCapability`,
-/// meaning it will only be notified of frontier changes while it holds capabilities.
+/// This variant delegates to `arrange_core_with_interest` using `FrontierInterest::IfCapability`,
+/// then extracts the inner `TraceAgentInner`, discarding the queue management layer.
 pub fn arrange_private<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgentInner<Tr>>
 where
     G: Scope<Timestamp: Lattice>,
@@ -511,105 +526,9 @@ where
     Bu: Builder<Time=G::Timestamp, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace<Time=G::Timestamp>+'static,
 {
-    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-
-    let scope = stream.scope();
-
-    let mut builder = OperatorBuilder::new(name.to_owned(), scope.clone());
-    let operator_info = builder.operator_info();
-
-    let mut input = builder.new_input(stream, pact);
-    builder.set_notify_for(0, timely::progress::operate::FrontierInterest::IfCapability);
-    let (mut output, stream) = builder.new_output();
-
-    // Acquire a logger for arrange events.
-    let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
-
-    // Where we will deposit received updates, and from which we extract batches.
-    let mut batcher = Ba::new(logger.clone(), operator_info.global_id);
-
-    let activator = Some(scope.activator_for(operator_info.address.clone()));
-    let mut empty_trace = Tr::new(operator_info.clone(), logger.clone(), activator);
-    // If there is default exertion logic set, install it.
-    if let Some(exert_logic) = scope.config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
-        empty_trace.set_exert_logic(exert_logic);
+    let arranged = arrange_core_with_interest::<G, P, Ba, Bu, Tr>(stream, pact, name, timely::progress::operate::FrontierInterest::IfCapability);
+    Arranged {
+        stream: arranged.stream,
+        trace: arranged.trace.into_inner(),
     }
-
-    let (trace, mut writer) = TraceAgentInner::new(empty_trace, operator_info, logger);
-
-    builder.build(move |_capabilities| {
-
-        // Capabilities for the lower envelope of updates in `batcher`.
-        let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
-
-        // Initialize to the minimal input frontier.
-        let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
-
-        move |frontiers| {
-
-            let frontier = &frontiers[0];
-            let mut output = output.activate();
-
-            input.for_each(|cap, data| {
-                capabilities.insert(cap.retain(0));
-                batcher.push_container(data);
-            });
-
-            // Assert that the frontier never regresses.
-            assert!(PartialOrder::less_equal(&prev_frontier.borrow(), &frontier.frontier()));
-
-            if prev_frontier.borrow() != frontier.frontier() {
-
-                if capabilities.elements().iter().any(|c| !frontier.less_equal(c.time())) {
-
-                    let mut upper = Antichain::new();
-
-                    for (index, capability) in capabilities.elements().iter().enumerate() {
-
-                        if !frontier.less_equal(capability.time()) {
-
-                            upper.clear();
-                            for time in frontier.frontier().iter() {
-                                upper.insert(time.clone());
-                            }
-                            for other_capability in &capabilities.elements()[(index + 1) .. ] {
-                                upper.insert(other_capability.time().clone());
-                            }
-
-                            let batch = batcher.seal::<Bu>(upper.clone());
-
-                            writer.insert(batch.clone());
-
-                            // send the batch to downstream consumers, empty or not.
-                            output.give(&capabilities.elements()[index], &mut vec![batch]);
-                        }
-                    }
-
-                    let mut new_capabilities = Antichain::new();
-                    for time in batcher.frontier().iter() {
-                        if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
-                            new_capabilities.insert(capability.delayed(time));
-                        }
-                        else {
-                            panic!("failed to find capability");
-                        }
-                    }
-
-                    capabilities = new_capabilities;
-                }
-                else {
-                    // Announce progress updates, even without data.
-                    let _batch = batcher.seal::<Bu>(frontier.frontier().to_owned());
-                    writer.seal(frontier.frontier().to_owned());
-                }
-
-                prev_frontier.clear();
-                prev_frontier.extend(frontier.frontier().iter().cloned());
-            }
-
-            writer.exert();
-        }
-    });
-
-    Arranged { stream, trace }
 }
