@@ -77,7 +77,8 @@ where
     //               .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))
     //      })
 
-    nodes.scope().iterative::<usize,_,_>(|scope| {
+    use timely::order::Product;
+    nodes.scope().scoped::<Product<_, usize>,_,_>("Propagate", |scope| {
 
         use crate::operators::iterate::Variable;
         use crate::trace::implementations::{ValBuilder, ValSpine};
