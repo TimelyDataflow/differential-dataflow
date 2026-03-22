@@ -267,115 +267,7 @@ mod container {
 }
 
 
-pub use storage::ValStorage;
-pub mod storage {
-
-    use std::fmt::Debug;
-    use columnar::{Borrow, Container, ContainerOf, Index, Len, Push};
-    use columnar::Vecs;
-
-    use crate::layout::ColumnarUpdate as Update;
-
-    /// Trie-shaped update storage.
-    #[derive(Debug)]
-    pub struct ValStorage<U: Update> {
-        /// An ordered list of keys.
-        pub keys: ContainerOf<U::Key>,
-        /// For each key in `keys`, a list of values.
-        pub vals: Vecs<ContainerOf<U::Val>>,
-        /// For each val in `vals`, a list of (time, diff) updates.
-        pub upds: Vecs<(ContainerOf<U::Time>, ContainerOf<U::Diff>)>,
-    }
-
-    impl<U: Update> Default for ValStorage<U> { fn default() -> Self { Self { keys: Default::default(), vals: Default::default(), upds: Default::default(), } } }
-    impl<U: Update> Clone for ValStorage<U> { fn clone(&self) -> Self { Self { keys: self.keys.clone(), vals: self.vals.clone(), upds: self.upds.clone(), } } }
-
-    pub type Tuple<U> = (<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff);
-
-    use std::ops::Range;
-    impl<U: Update> ValStorage<U> {
-
-        /// Forms `Self` from sorted update tuples.
-        pub fn form<'a>(mut sorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
-
-            let mut output = Self::default();
-
-            if let Some((key,val,time,diff)) = sorted.next() {
-                output.keys.push(key);
-                output.vals.values.push(val);
-                output.upds.values.push((time, diff));
-                for (key,val,time,diff) in sorted {
-                    let mut differs = false;
-                    // We would now iterate over layers.
-                    // We'll do that manually, as the types are all different.
-                    // Keys first; non-standard logic because they are not (yet) a list of lists.
-                    let keys_len = output.keys.len();
-                    differs |= ContainerOf::<U::Key>::reborrow_ref(key) != output.keys.borrow().get(keys_len-1);
-                    if differs { output.keys.push(key); }
-                    // Vals next
-                    let vals_len = output.vals.values.len();
-                    if differs { output.vals.bounds.push(vals_len as u64); }
-                    differs |= ContainerOf::<U::Val>::reborrow_ref(val) != output.vals.values.borrow().get(vals_len-1);
-                    if differs { output.vals.values.push(val); }
-                    // Upds last
-                    let upds_len = output.upds.values.len();
-                    if differs { output.upds.bounds.push(upds_len as u64); }
-                    // differs |= ContainerOf::<(U::Time,U::Diff)>::reborrow_ref((time,diff)) != output.upds.values.borrow().get(upds_len-1);
-                    differs = true;
-                    if differs { output.upds.values.push((time,diff)); }
-                }
-                // output.keys.bounds.push(vals_len as u64);
-                output.vals.bounds.push(output.vals.values.len() as u64);
-                output.upds.bounds.push(output.upds.values.len() as u64);
-            }
-
-            assert_eq!(output.keys.len(), output.vals.len());
-            assert_eq!(output.vals.values.len(), output.upds.len());
-
-            output
-        }
-
-        pub fn vals_bounds(&self, range: Range<usize>) -> Range<usize> {
-            if !range.is_empty() {
-                let lower = if range.start == 0 { 0 } else { Index::get(self.vals.bounds.borrow(), range.start-1) as usize };
-                let upper = Index::get(self.vals.bounds.borrow(), range.end-1) as usize;
-                lower .. upper
-            } else { range }
-        }
-
-        pub fn upds_bounds(&self, range: Range<usize>) -> Range<usize> {
-            if !range.is_empty() {
-                let lower = if range.start == 0 { 0 } else { Index::get(self.upds.bounds.borrow(), range.start-1) as usize };
-                let upper = Index::get(self.upds.bounds.borrow(), range.end-1) as usize;
-                lower .. upper
-            } else { range }
-        }
-
-        /// Copies `other[range]` into self, keys and all.
-        pub fn extend_from_keys(&mut self, other: &Self, range: Range<usize>) {
-            self.keys.extend_from_self(other.keys.borrow(), range.clone());
-            self.vals.extend_from_self(other.vals.borrow(), range.clone());
-            self.upds.extend_from_self(other.upds.borrow(), other.vals_bounds(range));
-        }
-
-        pub fn extend_from_vals(&mut self, other: &Self, range: Range<usize>) {
-            self.vals.values.extend_from_self(other.vals.values.borrow(), range.clone());
-            self.upds.extend_from_self(other.upds.borrow(), range);
-        }
-    }
-
-    impl<U: Update> timely::Accountable for ValStorage<U> {
-        #[inline] fn record_count(&self) -> i64 { use columnar::Len; self.upds.values.len() as i64 }
-    }
-
-    use timely::dataflow::channels::ContainerBytes;
-    impl<U: Update> ContainerBytes for ValStorage<U> {
-        fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
-        fn length_in_bytes(&self) -> usize { unimplemented!() }
-        fn into_bytes<W: ::std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
-    }
-
-}
+pub use updates::Updates;
 
 pub use column_builder::ValBuilder as ValColBuilder;
 mod column_builder {
@@ -384,7 +276,7 @@ mod column_builder {
     use columnar::{Columnar, Clear, Len, Push};
 
     use crate::layout::ColumnarUpdate as Update;
-    use crate::ValStorage;
+    use crate::Updates;
 
     type TupleContainer<U> = <(<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff) as Columnar>::Container;
 
@@ -393,9 +285,9 @@ mod column_builder {
         /// Container that we're writing to.
         current: TupleContainer<U>,
         /// Empty allocation.
-        empty: Option<ValStorage<U>>,
+        empty: Option<Updates<U>>,
         /// Completed containers pending to be sent.
-        pending: VecDeque<ValStorage<U>>,
+        pending: VecDeque<Updates<U>>,
     }
 
     use timely::container::PushInto;
@@ -408,7 +300,7 @@ mod column_builder {
                 use columnar::{Borrow, Index};
                 let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                 refs.sort();
-                let storage = ValStorage::form(refs.into_iter());
+                let storage = Updates::form(refs.into_iter());
                 self.pending.push_back(storage);
                 self.current.clear();
             }
@@ -427,7 +319,7 @@ mod column_builder {
 
     use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
     impl<U: Update> ContainerBuilder for ValBuilder<U> {
-        type Container = ValStorage<U>;
+        type Container = Updates<U>;
 
         #[inline]
         fn extract(&mut self) -> Option<&mut Self::Container> {
@@ -446,7 +338,7 @@ mod column_builder {
                 use columnar::{Borrow, Index};
                 let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                 refs.sort();
-                let storage = ValStorage::form(refs.into_iter());
+                let storage = Updates::form(refs.into_iter());
                 self.pending.push_back(storage);
                 self.current.clear();
             }
@@ -473,19 +365,19 @@ mod distributor {
     use timely::worker::AsWorker;
 
     use crate::layout::ColumnarUpdate as Update;
-    use crate::ValStorage;
+    use crate::Updates;
 
     pub struct ValDistributor<U: Update, H> {
         marker: std::marker::PhantomData<U>,
         hashfunc: H,
     }
 
-    impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<ValStorage<U>> for ValDistributor<U, H> {
-        fn partition<T: Clone, P: timely::communication::Push<Message<T, ValStorage<U>>>>(&mut self, container: &mut ValStorage<U>, time: &T, pushers: &mut [P]) {
+    impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Updates<U>> for ValDistributor<U, H> {
+        fn partition<T: Clone, P: timely::communication::Push<Message<T, Updates<U>>>>(&mut self, container: &mut Updates<U>, time: &T, pushers: &mut [P]) {
 
-            let in_keys = container.keys.borrow();
+            let in_keys = container.keys.values.borrow();
 
-            let mut outputs: Vec<ValStorage<U>> = (0..pushers.len()).map(|_| ValStorage::default()).collect();
+            let mut outputs: Vec<Updates<U>> = (0..pushers.len()).map(|_| Updates::default()).collect();
             for index in 0 .. in_keys.len() {
                 let key = in_keys.get(index);
                 let idx = ((self.hashfunc)(key) as usize) % pushers.len();
@@ -497,13 +389,13 @@ mod distributor {
                 Message::push_at(&mut output, time.clone(), pusher);
             }
         }
-        fn flush<T: Clone, P: timely::communication::Push<Message<T, ValStorage<U>>>>(&mut self, _time: &T, _pushers: &mut [P]) { }
+        fn flush<T: Clone, P: timely::communication::Push<Message<T, Updates<U>>>>(&mut self, _time: &T, _pushers: &mut [P]) { }
         fn relax(&mut self) { }
     }
 
     pub struct ValPact<H> { pub hashfunc: H }
 
-    impl<T, U, H> ParallelizationContract<T, ValStorage<U>> for ValPact<H>
+    impl<T, U, H> ParallelizationContract<T, Updates<U>> for ValPact<H>
     where
         T: Timestamp,
         U: Update,
@@ -511,13 +403,13 @@ mod distributor {
     {
         type Pusher = Exchange<
             T,
-            LogPusher<Box<dyn timely::communication::Push<Message<T, ValStorage<U>>>>>,
+            LogPusher<Box<dyn timely::communication::Push<Message<T, Updates<U>>>>>,
             ValDistributor<U, H>
         >;
-        type Puller = LogPuller<Box<dyn timely::communication::Pull<Message<T, ValStorage<U>>>>>;
+        type Puller = LogPuller<Box<dyn timely::communication::Pull<Message<T, Updates<U>>>>>;
 
         fn connect<A: AsWorker>(self, allocator: &mut A, identifier: usize, address: Rc<[usize]>, logging: Option<TimelyLogger>) -> (Self::Pusher, Self::Puller) {
-            let (senders, receiver) = allocator.allocate::<Message<T, ValStorage<U>>>(identifier, address);
+            let (senders, receiver) = allocator.allocate::<Message<T, Updates<U>>>(identifier, address);
             let senders = senders.into_iter().enumerate().map(|(i,x)| LogPusher::new(x, allocator.index(), i, identifier, logging.clone())).collect::<Vec<_>>();
             let distributor = ValDistributor {
                 marker: std::marker::PhantomData,
@@ -594,9 +486,9 @@ pub mod arrangement {
         }
     }
 
-    use crate::ValStorage;
+    use crate::Updates;
     use differential_dataflow::trace::implementations::merge_batcher::{MergeBatcher, InternalMerger};
-    type ValBatcher2<U> = MergeBatcher<ValStorage<U>, TrieChunker<ValStorage<U>>, InternalMerger<ValStorage<U>>>;
+    type ValBatcher2<U> = MergeBatcher<Updates<U>, TrieChunker<Updates<U>>, InternalMerger<Updates<U>>>;
     /// A pass-through chunker for already-sorted trie containers.
     ///
     /// Since `ValStorage` is produced sorted by `ValColBuilder`,
@@ -643,21 +535,21 @@ pub mod arrangement {
         use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 
         use crate::ColumnarUpdate as Update;
-        use crate::ValStorage;
+        use crate::Updates;
 
-        impl<U: Update> timely::container::SizableContainer for ValStorage<U> {
+        impl<U: Update> timely::container::SizableContainer for Updates<U> {
             fn at_capacity(&self) -> bool {
                 use columnar::Len;
-                self.upds.values.len() >= 64 * 1024
+                self.diffs.values.len() >= 64 * 1024
             }
             fn ensure_capacity(&mut self, _stash: &mut Option<Self>) { }
         }
 
-        impl<U: Update> InternalMerge for ValStorage<U> {
+        impl<U: Update> InternalMerge for Updates<U> {
 
             type TimeOwned = U::Time;
 
-            fn len(&self) -> usize { self.upds.values.len() }
+            fn len(&self) -> usize { self.diffs.values.len() }
             fn clear(&mut self) { *self = Self::default(); }
 
             #[inline(never)]
@@ -668,11 +560,11 @@ pub mod arrangement {
                         // Bulk copy: take remaining keys from position onward.
                         let other = &mut others[0];
                         let pos = &mut positions[0];
-                        if self.keys.len() == 0 && *pos == 0 {
+                        if self.keys.values.len() == 0 && *pos == 0 {
                             std::mem::swap(self, other);
                             return;
                         }
-                        let other_len = other.keys.len();
+                        let other_len = other.keys.values.len();
                         self.extend_from_keys(other, *pos .. other_len);
                         *pos = other_len;
                     },
@@ -683,8 +575,8 @@ pub mod arrangement {
                         let (left, right) = others.split_at_mut(1);
                         let this = &left[0];
                         let that = &right[0];
-                        let this_keys = this.keys.borrow();
-                        let that_keys = that.keys.borrow();
+                        let this_keys = this.keys.values.borrow();
+                        let that_keys = that.keys.values.borrow();
                         let mut this_key_range = positions[0] .. this_keys.len();
                         let mut that_key_range = positions[1] .. that_keys.len();
 
@@ -711,37 +603,53 @@ pub mod arrangement {
                                                 self.extend_from_vals(this, lower .. this_val_range.start);
                                             },
                                             std::cmp::Ordering::Equal => {
-                                                let updates_len = self.upds.values.len();
-                                                let mut this_upd_range = this.upds_bounds(this_val_range.start .. this_val_range.start+1);
-                                                let mut that_upd_range = that.upds_bounds(that_val_range.start .. that_val_range.start+1);
-                                                while !this_upd_range.is_empty() && !that_upd_range.is_empty() {
-                                                    let (this_time, this_diff) = this.upds.values.borrow().get(this_upd_range.start);
-                                                    let (that_time, that_diff) = that.upds.values.borrow().get(that_upd_range.start);
+                                                let updates_len = self.times.values.len();
+                                                let mut this_time_range = this.times_bounds(this_val_range.start .. this_val_range.start+1);
+                                                let mut that_time_range = that.times_bounds(that_val_range.start .. that_val_range.start+1);
+                                                while !this_time_range.is_empty() && !that_time_range.is_empty() {
+                                                    let this_time = this.times.values.borrow().get(this_time_range.start);
+                                                    let this_diff = this.diffs.values.borrow().get(this_time_range.start);
+                                                    let that_time = that.times.values.borrow().get(that_time_range.start);
+                                                    let that_diff = that.diffs.values.borrow().get(that_time_range.start);
                                                     match this_time.cmp(&that_time) {
                                                         std::cmp::Ordering::Less => {
-                                                            let lower = this_upd_range.start;
-                                                            gallop(this.upds.values.0.borrow(), &mut this_upd_range, |x| x < that_time);
-                                                            self.upds.values.extend_from_self(this.upds.values.borrow(), lower .. this_upd_range.start);
+                                                            let lower = this_time_range.start;
+                                                            gallop(this.times.values.borrow(), &mut this_time_range, |x| x < that_time);
+                                                            self.times.values.extend_from_self(this.times.values.borrow(), lower .. this_time_range.start);
+                                                            self.diffs.extend_from_self(this.diffs.borrow(), lower .. this_time_range.start);
                                                         },
                                                         std::cmp::Ordering::Equal => {
                                                             this_sum.copy_from(this_diff);
                                                             that_sum.copy_from(that_diff);
                                                             this_sum.plus_equals(&that_sum);
-                                                            if !this_sum.is_zero() { self.upds.values.push((this_time, &this_sum)); }
-                                                            this_upd_range.start += 1;
-                                                            that_upd_range.start += 1;
+                                                            if !this_sum.is_zero() {
+                                                                self.times.values.push(this_time);
+                                                                self.diffs.values.push(&this_sum);
+                                                                self.diffs.bounds.push(self.diffs.values.len() as u64);
+                                                            }
+                                                            this_time_range.start += 1;
+                                                            that_time_range.start += 1;
                                                         },
                                                         std::cmp::Ordering::Greater => {
-                                                            let lower = that_upd_range.start;
-                                                            gallop(that.upds.values.0.borrow(), &mut that_upd_range, |x| x < this_time);
-                                                            self.upds.values.extend_from_self(that.upds.values.borrow(), lower .. that_upd_range.start);
+                                                            let lower = that_time_range.start;
+                                                            gallop(that.times.values.borrow(), &mut that_time_range, |x| x < this_time);
+                                                            self.times.values.extend_from_self(that.times.values.borrow(), lower .. that_time_range.start);
+                                                            self.diffs.extend_from_self(that.diffs.borrow(), lower .. that_time_range.start);
                                                         },
                                                     }
                                                 }
-                                                self.upds.values.extend_from_self(this.upds.values.borrow(), this_upd_range);
-                                                self.upds.values.extend_from_self(that.upds.values.borrow(), that_upd_range);
-                                                if self.upds.values.len() > updates_len {
-                                                    self.upds.bounds.push(self.upds.values.len() as u64);
+                                                // Remaining from this side
+                                                if !this_time_range.is_empty() {
+                                                    self.times.values.extend_from_self(this.times.values.borrow(), this_time_range.clone());
+                                                    self.diffs.extend_from_self(this.diffs.borrow(), this_time_range.clone());
+                                                }
+                                                // Remaining from that side
+                                                if !that_time_range.is_empty() {
+                                                    self.times.values.extend_from_self(that.times.values.borrow(), that_time_range.clone());
+                                                    self.diffs.extend_from_self(that.diffs.borrow(), that_time_range.clone());
+                                                }
+                                                if self.times.values.len() > updates_len {
+                                                    self.times.bounds.push(self.times.values.len() as u64);
                                                     self.vals.values.push(this_val);
                                                 }
                                                 this_val_range.start += 1;
@@ -758,7 +666,7 @@ pub mod arrangement {
                                     self.extend_from_vals(that, that_val_range);
                                     if self.vals.values.len() > values_len {
                                         self.vals.bounds.push(self.vals.values.len() as u64);
-                                        self.keys.push(this_key);
+                                        self.keys.values.push(this_key);
                                     }
                                     this_key_range.start += 1;
                                     that_key_range.start += 1;
@@ -796,41 +704,46 @@ pub mod arrangement {
                 ship: &mut Self,
             ) {
                 let mut time = U::Time::default();
-                for key_idx in 0 .. self.keys.len() {
-                    let key = self.keys.borrow().get(key_idx);
+                for key_idx in 0 .. self.keys.values.len() {
+                    let key = self.keys.values.borrow().get(key_idx);
                     let keep_vals_len = keep.vals.values.len();
                     let ship_vals_len = ship.vals.values.len();
                     for val_idx in self.vals_bounds(key_idx..key_idx+1) {
                         let val = self.vals.values.borrow().get(val_idx);
-                        let keep_upds_len = keep.upds.values.len();
-                        let ship_upds_len = ship.upds.values.len();
-                        for upd_idx in self.upds_bounds(val_idx..val_idx+1) {
-                            let (t, diff) = self.upds.values.borrow().get(upd_idx);
+                        let keep_times_len = keep.times.values.len();
+                        let ship_times_len = ship.times.values.len();
+                        for time_idx in self.times_bounds(val_idx..val_idx+1) {
+                            let t = self.times.values.borrow().get(time_idx);
+                            let diff = self.diffs.values.borrow().get(time_idx);
                             time.copy_from(t);
                             if upper.less_equal(&time) {
                                 frontier.insert_ref(&time);
-                                keep.upds.values.push((t, diff));
+                                keep.times.values.push(t);
+                                keep.diffs.values.push(diff);
+                                keep.diffs.bounds.push(keep.diffs.values.len() as u64);
                             }
                             else {
-                                ship.upds.values.push((t, diff));
+                                ship.times.values.push(t);
+                                ship.diffs.values.push(diff);
+                                ship.diffs.bounds.push(ship.diffs.values.len() as u64);
                             }
                         }
-                        if keep.upds.values.len() > keep_upds_len {
-                            keep.upds.bounds.push(keep.upds.values.len() as u64);
+                        if keep.times.values.len() > keep_times_len {
+                            keep.times.bounds.push(keep.times.values.len() as u64);
                             keep.vals.values.push(val);
                         }
-                        if ship.upds.values.len() > ship_upds_len {
-                            ship.upds.bounds.push(ship.upds.values.len() as u64);
+                        if ship.times.values.len() > ship_times_len {
+                            ship.times.bounds.push(ship.times.values.len() as u64);
                             ship.vals.values.push(val);
                         }
                     }
                     if keep.vals.values.len() > keep_vals_len {
                         keep.vals.bounds.push(keep.vals.values.len() as u64);
-                        keep.keys.push(key);
+                        keep.keys.values.push(key);
                     }
                     if ship.vals.values.len() > ship_vals_len {
                         ship.vals.bounds.push(ship.vals.values.len() as u64);
-                        ship.keys.push(key);
+                        ship.keys.values.push(key);
                     }
                 }
             }
@@ -866,23 +779,28 @@ pub mod arrangement {
         use differential_dataflow::trace::implementations::ord_neu::val_batch::{OrdValBatch, OrdValStorage};
         use differential_dataflow::trace::Description;
 
-        use crate::ValStorage;
+        use crate::Updates;
         use crate::layout::ColumnarUpdate as Update;
         use crate::layout::ColumnarLayout as Layout;
         use crate::arrangement::Coltainer;
 
+        use columnar::{Borrow, IndexAs};
+        use columnar::primitive::offsets::Strides;
         use differential_dataflow::trace::implementations::OffsetList;
-        fn vec_u64_to_offset_list(list: Vec<u64>) -> OffsetList {
-            let mut output = OffsetList::with_capacity(list.len());
+        fn strides_to_offset_list(bounds: &Strides, count: usize) -> OffsetList {
+            let mut output = OffsetList::with_capacity(count);
             output.push(0);
-            for item in list { output.push(item as usize); }
+            let bounds_b = bounds.borrow();
+            for i in 0..count {
+                output.push(bounds_b.index_as(i) as usize);
+            }
             output
         }
 
         pub struct ValMirror<U: Update> { marker: std::marker::PhantomData<U> }
         impl<U: Update> differential_dataflow::trace::Builder for ValMirror<U> {
             type Time = U::Time;
-            type Input = ValStorage<U>;
+            type Input = Updates<U>;
             type Output = OrdValBatch<Layout<U>>;
 
             fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self { Self { marker: std::marker::PhantomData } }
@@ -900,17 +818,19 @@ pub mod arrangement {
                 else if chain.len() == 1 {
                     use columnar::Len;
                     let storage = chain.pop().unwrap();
-                    let updates = storage.upds.len();
+                    let updates = storage.diffs.values.len();
+                    let val_offs = strides_to_offset_list(&storage.vals.bounds, storage.keys.values.len());
+                    let time_offs = strides_to_offset_list(&storage.times.bounds, storage.vals.values.len());
                     let storage = OrdValStorage {
-                        keys: Coltainer { container: storage.keys },
+                        keys: Coltainer { container: storage.keys.values },
                         vals: Vals {
-                            offs: vec_u64_to_offset_list(storage.vals.bounds),
+                            offs: val_offs,
                             vals: Coltainer { container: storage.vals.values },
                         },
                         upds: Upds {
-                            offs: vec_u64_to_offset_list(storage.upds.bounds),
-                            times: Coltainer { container: storage.upds.values.0 },
-                            diffs: Coltainer { container: storage.upds.values.1 },
+                            offs: time_offs,
+                            times: Coltainer { container: storage.times.values },
+                            diffs: Coltainer { container: storage.diffs.values },
                         },
                     };
                     OrdValBatch { storage, description, updates }
@@ -922,5 +842,409 @@ pub mod arrangement {
             }
         }
 
+    }
+}
+
+pub mod updates {
+
+    use columnar::{Columnar, Container, ContainerOf, Vecs, Borrow, Index, IndexAs, Len, Push};
+    use columnar::primitive::offsets::Strides;
+    use differential_dataflow::difference::{Semigroup, IsZero};
+
+    use crate::layout::ColumnarUpdate as Update;
+
+    /// A `Vecs` using strided offsets.
+    pub type Lists<C> = Vecs<C, Strides>;
+
+    /// Trie-structured update storage using columnar containers.
+    ///
+    /// Four nested layers of `Lists`:
+    /// - `keys`: lists of keys (outer lists are independent groups)
+    /// - `vals`: per-key, lists of vals
+    /// - `times`: per-val, lists of times
+    /// - `diffs`: per-time, lists of diffs (singletons when consolidated)
+    ///
+    /// A flat unsorted input has stride 1 at every level (one key per entry,
+    /// one val per key, one time per val, one diff per time).
+    /// A fully consolidated trie has a single outer key list, all lists sorted
+    /// and deduplicated, and singleton diff lists.
+    pub struct Updates<U: Update> {
+        pub keys:  Lists<ContainerOf<U::Key>>,
+        pub vals:  Lists<ContainerOf<U::Val>>,
+        pub times: Lists<ContainerOf<U::Time>>,
+        pub diffs: Lists<ContainerOf<U::Diff>>,
+    }
+
+    impl<U: Update> Default for Updates<U> {
+        fn default() -> Self {
+            Self {
+                keys: Default::default(),
+                vals: Default::default(),
+                times: Default::default(),
+                diffs: Default::default(),
+            }
+        }
+    }
+
+    impl<U: Update> std::fmt::Debug for Updates<U> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("Updates").finish()
+        }
+    }
+
+    impl<U: Update> Clone for Updates<U> {
+        fn clone(&self) -> Self {
+            Self {
+                keys: self.keys.clone(),
+                vals: self.vals.clone(),
+                times: self.times.clone(),
+                diffs: self.diffs.clone(),
+            }
+        }
+    }
+
+    pub type Tuple<U> = (<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff);
+
+    /// Returns the value-index range for list `i` given cumulative bounds.
+    #[inline]
+    fn child_range<B: IndexAs<u64>>(bounds: B, i: usize) -> std::ops::Range<usize> {
+        let lower = if i == 0 { 0 } else { bounds.index_as(i - 1) as usize };
+        let upper = bounds.index_as(i) as usize;
+        lower..upper
+    }
+
+    impl<U: Update> Updates<U> {
+
+        pub fn vals_bounds(&self, key_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+            if !key_range.is_empty() {
+                let bounds = self.vals.bounds.borrow();
+                let lower = if key_range.start == 0 { 0 } else { bounds.index_as(key_range.start - 1) as usize };
+                let upper = bounds.index_as(key_range.end - 1) as usize;
+                lower..upper
+            } else { key_range }
+        }
+        pub fn times_bounds(&self, val_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+            if !val_range.is_empty() {
+                let bounds = self.times.bounds.borrow();
+                let lower = if val_range.start == 0 { 0 } else { bounds.index_as(val_range.start - 1) as usize };
+                let upper = bounds.index_as(val_range.end - 1) as usize;
+                lower..upper
+            } else { val_range }
+        }
+        pub fn diffs_bounds(&self, time_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+            if !time_range.is_empty() {
+                let bounds = self.diffs.bounds.borrow();
+                let lower = if time_range.start == 0 { 0 } else { bounds.index_as(time_range.start - 1) as usize };
+                let upper = bounds.index_as(time_range.end - 1) as usize;
+                lower..upper
+            } else { time_range }
+        }
+
+        /// Copies `other[key_range]` into self, keys and all.
+        pub fn extend_from_keys(&mut self, other: &Self, key_range: std::ops::Range<usize>) {
+            self.keys.values.extend_from_self(other.keys.values.borrow(), key_range.clone());
+            self.vals.extend_from_self(other.vals.borrow(), key_range.clone());
+            let val_range = other.vals_bounds(key_range);
+            self.times.extend_from_self(other.times.borrow(), val_range.clone());
+            let time_range = other.times_bounds(val_range);
+            self.diffs.extend_from_self(other.diffs.borrow(), time_range);
+        }
+
+        /// Copies a range of vals (with their times and diffs) from `other` into self.
+        pub fn extend_from_vals(&mut self, other: &Self, val_range: std::ops::Range<usize>) {
+            self.vals.values.extend_from_self(other.vals.values.borrow(), val_range.clone());
+            self.times.extend_from_self(other.times.borrow(), val_range.clone());
+            let time_range = other.times_bounds(val_range);
+            self.diffs.extend_from_self(other.diffs.borrow(), time_range);
+        }
+
+        /// Forms `Self` from sorted update tuples.
+        pub fn form<'a>(mut sorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
+            let mut output = Self::default();
+            if let Some((key, val, time, diff)) = sorted.next() {
+                output.keys.values.push(key);
+                output.vals.values.push(val);
+                output.times.values.push(time);
+                output.diffs.values.push(diff);
+                output.diffs.bounds.push(output.diffs.values.len() as u64);
+                for (key, val, time, diff) in sorted {
+                    let mut differs = false;
+                    // Keys
+                    let keys_len = output.keys.values.len();
+                    differs |= ContainerOf::<U::Key>::reborrow_ref(key) != output.keys.values.borrow().get(keys_len - 1);
+                    if differs { output.keys.values.push(key); }
+                    // Vals
+                    let vals_len = output.vals.values.len();
+                    if differs { output.vals.bounds.push(vals_len as u64); }
+                    differs |= ContainerOf::<U::Val>::reborrow_ref(val) != output.vals.values.borrow().get(vals_len - 1);
+                    if differs { output.vals.values.push(val); }
+                    // Times
+                    let times_len = output.times.values.len();
+                    if differs { output.times.bounds.push(times_len as u64); }
+                    // Always push time and diff
+                    output.times.values.push(time);
+                    output.diffs.values.push(diff);
+                    output.diffs.bounds.push(output.diffs.values.len() as u64);
+                }
+                // Seal the last entries
+                output.vals.bounds.push(output.vals.values.len() as u64);
+                output.times.bounds.push(output.times.values.len() as u64);
+                // Seal the outer key list
+                output.keys.bounds.push(output.keys.values.len() as u64);
+            }
+            output
+        }
+
+        /// Consolidates into canonical trie form:
+        /// single outer key list, all lists sorted and deduplicated,
+        /// diff lists are singletons (or absent if cancelled).
+        pub fn consolidate(self) -> Self {
+
+            let Self { keys, vals, times, diffs } = self;
+
+            let keys_b = keys.borrow();
+            let vals_b = vals.borrow();
+            let times_b = times.borrow();
+            let diffs_b = diffs.borrow();
+
+            // Flatten to index tuples: [key_abs, val_abs, time_abs, diff_abs].
+            let mut tuples: Vec<[usize; 4]> = Vec::new();
+            for outer in 0..Len::len(&keys_b) {
+                for k in child_range(keys_b.bounds, outer) {
+                    for v in child_range(vals_b.bounds, k) {
+                        for t in child_range(times_b.bounds, v) {
+                            for d in child_range(diffs_b.bounds, t) {
+                                tuples.push([k, v, t, d]);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Sort by (key, val, time). Diff is payload.
+            tuples.sort_by(|a, b| {
+                keys_b.values.get(a[0]).cmp(&keys_b.values.get(b[0]))
+                    .then_with(|| vals_b.values.get(a[1]).cmp(&vals_b.values.get(b[1])))
+                    .then_with(|| times_b.values.get(a[2]).cmp(&times_b.values.get(b[2])))
+            });
+
+            // Build consolidated output, bottom-up cancellation.
+            let mut output = Self::default();
+            let mut diff_stash = U::Diff::default();
+            let mut diff_temp = U::Diff::default();
+
+            let mut idx = 0;
+            while idx < tuples.len() {
+                let key_ref = keys_b.values.get(tuples[idx][0]);
+                let key_start_vals = output.vals.values.len();
+
+                // All entries with this key.
+                while idx < tuples.len() && keys_b.values.get(tuples[idx][0]) == key_ref {
+                    let val_ref = vals_b.values.get(tuples[idx][1]);
+                    let val_start_times = output.times.values.len();
+
+                    // All entries with this (key, val).
+                    while idx < tuples.len()
+                        && keys_b.values.get(tuples[idx][0]) == key_ref
+                        && vals_b.values.get(tuples[idx][1]) == val_ref
+                    {
+                        let time_ref = times_b.values.get(tuples[idx][2]);
+
+                        // Sum all diffs for this (key, val, time).
+                        Columnar::copy_from(&mut diff_stash, diffs_b.values.get(tuples[idx][3]));
+                        idx += 1;
+                        while idx < tuples.len()
+                            && keys_b.values.get(tuples[idx][0]) == key_ref
+                            && vals_b.values.get(tuples[idx][1]) == val_ref
+                            && times_b.values.get(tuples[idx][2]) == time_ref
+                        {
+                            Columnar::copy_from(&mut diff_temp, diffs_b.values.get(tuples[idx][3]));
+                            diff_stash.plus_equals(&diff_temp);
+                            idx += 1;
+                        }
+
+                        // Emit time + singleton diff if nonzero.
+                        if !diff_stash.is_zero() {
+                            output.times.values.push(time_ref);
+                            output.diffs.values.push(&diff_stash);
+                            output.diffs.bounds.push(output.diffs.values.len() as u64);
+                        }
+                    }
+
+                    // Seal time list for this val; emit val if any times survived.
+                    if output.times.values.len() > val_start_times {
+                        output.times.bounds.push(output.times.values.len() as u64);
+                        output.vals.values.push(val_ref);
+                    }
+                }
+
+                // Seal val list for this key; emit key if any vals survived.
+                if output.vals.values.len() > key_start_vals {
+                    output.vals.bounds.push(output.vals.values.len() as u64);
+                    output.keys.values.push(key_ref);
+                }
+            }
+
+            // Seal the single outer key list.
+            if !output.keys.values.is_empty() {
+                output.keys.bounds.push(output.keys.values.len() as u64);
+            }
+
+            output
+        }
+
+        /// Push a single flat update `(key, val, time, diff)` as a stride-1 entry.
+        pub fn push<'a>(&mut self, key: columnar::Ref<'a, U::Key>, val: columnar::Ref<'a, U::Val>, time: columnar::Ref<'a, U::Time>, diff: columnar::Ref<'a, U::Diff>) {
+            self.keys.values.push(key);
+            self.keys.bounds.push(self.keys.values.len() as u64);
+            self.vals.values.push(val);
+            self.vals.bounds.push(self.vals.values.len() as u64);
+            self.times.values.push(time);
+            self.times.bounds.push(self.times.values.len() as u64);
+            self.diffs.values.push(diff);
+            self.diffs.bounds.push(self.diffs.values.len() as u64);
+        }
+
+        /// Push a single flat update from owned values.
+        pub fn push_owned(&mut self, key: &U::Key, val: &U::Val, time: &U::Time, diff: &U::Diff) {
+            self.keys.values.push(key);
+            self.keys.bounds.push(self.keys.values.len() as u64);
+            self.vals.values.push(val);
+            self.vals.bounds.push(self.vals.values.len() as u64);
+            self.times.values.push(time);
+            self.times.bounds.push(self.times.values.len() as u64);
+            self.diffs.values.push(diff);
+            self.diffs.bounds.push(self.diffs.values.len() as u64);
+        }
+
+        /// The number of leaf-level diff entries (total updates).
+        pub fn len(&self) -> usize { self.diffs.values.len() }
+
+        /// Iterate all `(key, val, time, diff)` entries as refs.
+        pub fn iter(&self) -> impl Iterator<Item = (
+            columnar::Ref<'_, U::Key>,
+            columnar::Ref<'_, U::Val>,
+            columnar::Ref<'_, U::Time>,
+            columnar::Ref<'_, U::Diff>,
+        )> {
+            let keys_b = self.keys.borrow();
+            let vals_b = self.vals.borrow();
+            let times_b = self.times.borrow();
+            let diffs_b = self.diffs.borrow();
+
+            let mut result = Vec::new();
+            for outer in 0..Len::len(&keys_b) {
+                for k in child_range(keys_b.bounds, outer) {
+                    let key = keys_b.values.get(k);
+                    for v in child_range(vals_b.bounds, k) {
+                        let val = vals_b.values.get(v);
+                        for t in child_range(times_b.bounds, v) {
+                            let time = times_b.values.get(t);
+                            for d in child_range(diffs_b.bounds, t) {
+                                let diff = diffs_b.values.get(d);
+                                result.push((key, val, time, diff));
+                            }
+                        }
+                    }
+                }
+            }
+            result.into_iter()
+        }
+    }
+
+    impl<U: Update> timely::Accountable for Updates<U> {
+        #[inline] fn record_count(&self) -> i64 { self.diffs.values.len() as i64 }
+    }
+
+    impl<U: Update> timely::dataflow::channels::ContainerBytes for Updates<U> {
+        fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
+        fn length_in_bytes(&self) -> usize { unimplemented!() }
+        fn into_bytes<W: std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // (K, V, T, R) = (u64, u64, u64, i64).
+        type TestUpdate = (u64, u64, u64, i64);
+
+        /// Collect entries as owned tuples for easier assertion.
+        fn collect(updates: &Updates<TestUpdate>) -> Vec<(u64, u64, u64, i64)> {
+            updates.iter().map(|(k, v, t, d)| (*k, *v, *t, *d)).collect()
+        }
+
+        #[test]
+        fn test_push_and_consolidate_basic() {
+            let mut updates = Updates::<TestUpdate>::default();
+            updates.push_owned(&1, &10, &100, &1);
+            updates.push_owned(&1, &10, &100, &2);
+            updates.push_owned(&2, &20, &200, &5);
+
+            assert_eq!(updates.len(), 3);
+
+            let consolidated = updates.consolidate();
+            let entries = collect(&consolidated);
+            assert_eq!(entries, vec![(1, 10, 100, 3), (2, 20, 200, 5)]);
+        }
+
+        #[test]
+        fn test_cancellation() {
+            let mut updates = Updates::<TestUpdate>::default();
+            updates.push_owned(&1, &10, &100, &3);
+            updates.push_owned(&1, &10, &100, &-3);
+            updates.push_owned(&2, &20, &200, &1);
+
+            let entries = collect(&updates.consolidate());
+            assert_eq!(entries, vec![(2, 20, 200, 1)]);
+        }
+
+        #[test]
+        fn test_multiple_vals_and_times() {
+            let mut updates = Updates::<TestUpdate>::default();
+            updates.push_owned(&1, &10, &100, &1);
+            updates.push_owned(&1, &10, &200, &2);
+            updates.push_owned(&1, &20, &100, &3);
+            updates.push_owned(&1, &20, &100, &4);
+
+            let entries = collect(&updates.consolidate());
+            assert_eq!(entries, vec![(1, 10, 100, 1), (1, 10, 200, 2), (1, 20, 100, 7)]);
+        }
+
+        #[test]
+        fn test_val_cancellation_propagates() {
+            let mut updates = Updates::<TestUpdate>::default();
+            updates.push_owned(&1, &10, &100, &5);
+            updates.push_owned(&1, &10, &100, &-5);
+            updates.push_owned(&1, &20, &100, &1);
+
+            let entries = collect(&updates.consolidate());
+            assert_eq!(entries, vec![(1, 20, 100, 1)]);
+        }
+
+        #[test]
+        fn test_empty() {
+            let updates = Updates::<TestUpdate>::default();
+            assert_eq!(collect(&updates.consolidate()), vec![]);
+        }
+
+        #[test]
+        fn test_total_cancellation() {
+            let mut updates = Updates::<TestUpdate>::default();
+            updates.push_owned(&1, &10, &100, &1);
+            updates.push_owned(&1, &10, &100, &-1);
+            assert_eq!(collect(&updates.consolidate()), vec![]);
+        }
+
+        #[test]
+        fn test_unsorted_input() {
+            let mut updates = Updates::<TestUpdate>::default();
+            updates.push_owned(&3, &30, &300, &1);
+            updates.push_owned(&1, &10, &100, &2);
+            updates.push_owned(&2, &20, &200, &3);
+
+            let entries = collect(&updates.consolidate());
+            assert_eq!(entries, vec![(1, 10, 100, 2), (2, 20, 200, 3), (3, 30, 300, 1)]);
+        }
     }
 }
