@@ -23,7 +23,7 @@ use smallvec::SmallVec;
 #[columnar(derive(Eq, PartialEq, Ord, PartialOrd))]
 pub struct PointStamp<T> {
     /// A sequence of timestamps corresponding to timestamps in a sequence of nested scopes.
-    vector: SmallVec<[T; 1]>,
+    vector: SmallVec<[T; 2]>,
 }
 
 impl<T: Timestamp> PartialEq<[T]> for PointStamp<T> {
@@ -62,7 +62,7 @@ impl<T: Timestamp> PointStamp<T> {
     /// Create a new sequence.
     ///
     /// This method will modify `vector` to ensure it does not end with `T::minimum()`.
-    pub fn new(mut vector: SmallVec<[T; 1]>) -> Self {
+    pub fn new(mut vector: SmallVec<[T; 2]>) -> Self {
         while vector.last() == Some(&T::minimum()) {
             vector.pop();
         }
@@ -73,7 +73,7 @@ impl<T: Timestamp> PointStamp<T> {
     /// This method is the support way to mutate the contents of `self`, by extracting
     /// the vector and then re-introducing it with `PointStamp::new` to re-establish
     /// the invariant that the vector not end with `T::minimum`.
-    pub fn into_inner(self) -> SmallVec<[T; 1]> {
+    pub fn into_inner(self) -> SmallVec<[T; 2]> {
         self.vector
     }
 }
@@ -225,6 +225,7 @@ impl<T: Timestamp> Timestamp for PointStamp<T> {
 // This extends the `PartialOrder` implementation with additional structure.
 use crate::lattice::Lattice;
 impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
+    #[inline(always)]
     fn join(&self, other: &Self) -> Self {
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
         let max_len = ::std::cmp::max(self.vector.len(), other.vector.len());
@@ -242,6 +243,7 @@ impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
         }
         Self::new(vector)
     }
+    #[inline(always)]
     fn meet(&self, other: &Self) -> Self {
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
         let mut vector = SmallVec::with_capacity(min_len);
@@ -264,7 +266,7 @@ mod columnation {
     }
 
     /// Stack for PointStamp. Part of Columnation implementation.
-    pub struct PointStampStack<R: Region<Item: Columnation+Clone>>(<SmallVec<[R::Item; 1]> as Columnation>::InnerRegion);
+    pub struct PointStampStack<R: Region<Item: Columnation+Clone>>(<SmallVec<[R::Item; 2]> as Columnation>::InnerRegion);
 
     impl<R: Region<Item: Columnation+Clone>> Default for PointStampStack<R> {
         #[inline]
