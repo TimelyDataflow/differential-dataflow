@@ -263,8 +263,8 @@ where
 }
 
 // ---- Row type ----
-type Row = smallvec::SmallVec<[u64; 2]>;
-fn row(vals: &[u64]) -> Row { vals.into() }
+type Row = smallvec::SmallVec<[i64; 2]>;
+fn row(vals: &[i64]) -> Row { vals.into() }
 
 // ---- Helper: run a program ----
 
@@ -460,7 +460,7 @@ fn main() {
             let (program, output) = reachability_program();
             run_program("reachable", program, 2, output, move |_worker, inputs| {
                 for i in 0..n.saturating_sub(1) {
-                    inputs[0].update((row(&[i as u64]), row(&[(i + 1) as u64])), 1);
+                    inputs[0].update((row(&[i as i64]), row(&[(i + 1) as i64])), 1);
                 }
                 inputs[1].update((row(&[0]), row(&[])), 1);
             });
@@ -476,7 +476,7 @@ fn main() {
                     for _ in 0..edges {
                         let src = (lcg(&mut rng) >> 32) % (n as u64);
                         let dst = (lcg(&mut rng) >> 32) % (n as u64);
-                        inputs[0].update((row(&[src]), row(&[dst])), 1);
+                        inputs[0].update((row(&[src as i64]), row(&[dst as i64])), 1);
                     }
                 }
             });
@@ -487,7 +487,7 @@ fn main() {
             run_program("scc_edge", program, 1, output, move |worker, inputs| {
                 if worker == 0 {
                     for i in 0..n {
-                        inputs[0].update((row(&[i as u64]), row(&[((i + 1) % n) as u64])), 1);
+                        inputs[0].update((row(&[i as i64]), row(&[((i + 1) % n) as i64])), 1);
                     }
                 }
             });
@@ -498,9 +498,9 @@ fn main() {
             run_program("scc_edge", program, 1, output, move |worker, inputs| {
                 if worker == 0 {
                     for i in 0..n {
-                        inputs[0].update((row(&[i as u64]), row(&[((i + 1) % n) as u64])), 1);
+                        inputs[0].update((row(&[i as i64]), row(&[((i + 1) % n) as i64])), 1);
                     }
-                    inputs[0].update((row(&[n as u64]), row(&[0])), 1);
+                    inputs[0].update((row(&[n as i64]), row(&[0])), 1);
                 }
             });
         },

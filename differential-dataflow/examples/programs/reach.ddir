@@ -1,0 +1,13 @@
+-- Reachability
+-- Input 0: edges (src ; dst)
+-- Input 1: roots (node ;)
+
+let edges = INPUT 0;
+let roots = INPUT 1;
+
+reach: {
+    let proposals = JOIN(reach, edges, ($2));
+    var reach = CONCAT(roots, proposals);
+}
+
+result reach::reach;

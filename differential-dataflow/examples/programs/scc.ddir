@@ -1,0 +1,38 @@
+-- Strongly Connected Components
+-- Input 0: edges (src ; dst)
+-- Output: edges within SCCs
+
+let edges = INPUT 0;
+let trans = MAP(edges, ($1 ; $0));
+
+outer: {
+    let scc = CONCAT(scc_raw, edges);
+
+    fwd: {
+        let nodes = ENTER_AT(MAP(edges, ($1 ; $1)), $1[0]);
+        let labels = REDUCE(CONCAT(proposals, nodes), MIN);
+        var proposals = JOIN(labels, scc, ($2 ; $1));
+    }
+
+    let fwd_labels = ARRANGE(fwd::labels);
+    let with_src = JOIN(edges, fwd_labels, ($1 ; $0, $2));
+    let matched = JOIN(with_src, fwd_labels, ($0 ; $1, $2));
+    let filtered = FILTER(matched, $1[1] == $1[2]);
+    let trim_fwd = MAP(filtered, ($0 ; $1[0]));
+
+    bwd: {
+        let nodes = ENTER_AT(MAP(trans, ($1 ; $1)), $1[0]);
+        let labels = REDUCE(CONCAT(proposals, nodes), MIN);
+        var proposals = JOIN(labels, trim_fwd, ($2 ; $1));
+    }
+
+    let bwd_labels = ARRANGE(bwd::labels);
+    let with_src2 = JOIN(trans, bwd_labels, ($1 ; $0, $2));
+    let matched2 = JOIN(with_src2, bwd_labels, ($0 ; $1, $2));
+    let filtered2 = FILTER(matched2, $1[1] == $1[2]);
+    let trim_bwd = MAP(filtered2, ($0 ; $1[0]));
+
+    var scc_raw = CONCAT(trim_bwd, NEGATE(edges));
+}
+
+result INSPECT(ARRANGE(MAP(outer::scc, (;))), edges_in_sccs);
