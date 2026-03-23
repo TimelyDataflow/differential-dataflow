@@ -269,6 +269,32 @@ mod container {
 
 pub use updates::Updates;
 
+/// A thin wrapper around `Updates` that tracks the pre-consolidation record count
+/// for timely's exchange accounting. This wrapper is the stream container type;
+/// the `TrieChunker` strips it, passing bare `Updates` into the merge batcher.
+pub struct RecordedUpdates<U: layout::ColumnarUpdate> {
+    pub updates: Updates<U>,
+    pub records: usize,
+}
+
+impl<U: layout::ColumnarUpdate> Default for RecordedUpdates<U> {
+    fn default() -> Self { Self { updates: Default::default(), records: 0 } }
+}
+
+impl<U: layout::ColumnarUpdate> Clone for RecordedUpdates<U> {
+    fn clone(&self) -> Self { Self { updates: self.updates.clone(), records: self.records } }
+}
+
+impl<U: layout::ColumnarUpdate> timely::Accountable for RecordedUpdates<U> {
+    #[inline] fn record_count(&self) -> i64 { self.records as i64 }
+}
+
+impl<U: layout::ColumnarUpdate> timely::dataflow::channels::ContainerBytes for RecordedUpdates<U> {
+    fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
+    fn length_in_bytes(&self) -> usize { unimplemented!() }
+    fn into_bytes<W: std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
+}
+
 pub use column_builder::ValBuilder as ValColBuilder;
 mod column_builder {
 
@@ -276,18 +302,18 @@ mod column_builder {
     use columnar::{Columnar, Clear, Len, Push};
 
     use crate::layout::ColumnarUpdate as Update;
-    use crate::Updates;
+    use crate::{Updates, RecordedUpdates};
 
     type TupleContainer<U> = <(<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff) as Columnar>::Container;
 
-    /// A container builder for `Column<C>`.
+    /// A container builder that produces `RecordedUpdates` (sorted, consolidated trie + record count).
     pub struct ValBuilder<U: Update> {
         /// Container that we're writing to.
         current: TupleContainer<U>,
         /// Empty allocation.
-        empty: Option<Updates<U>>,
+        empty: Option<RecordedUpdates<U>>,
         /// Completed containers pending to be sent.
-        pending: VecDeque<Updates<U>>,
+        pending: VecDeque<RecordedUpdates<U>>,
     }
 
     use timely::container::PushInto;
@@ -296,12 +322,12 @@ mod column_builder {
         fn push_into(&mut self, item: T) {
             self.current.push(item);
             if self.current.len() > 1024 * 1024 {
-                // TODO: Consolidate the batch?
                 use columnar::{Borrow, Index};
+                let records = self.current.len();
                 let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                 refs.sort();
-                let storage = Updates::form(refs.into_iter());
-                self.pending.push_back(storage);
+                let updates = Updates::form(refs.into_iter());
+                self.pending.push_back(RecordedUpdates { updates, records });
                 self.current.clear();
             }
         }
@@ -319,7 +345,7 @@ mod column_builder {
 
     use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
     impl<U: Update> ContainerBuilder for ValBuilder<U> {
-        type Container = Updates<U>;
+        type Container = RecordedUpdates<U>;
 
         #[inline]
         fn extract(&mut self) -> Option<&mut Self::Container> {
@@ -334,12 +360,12 @@ mod column_builder {
         #[inline]
         fn finish(&mut self) -> Option<&mut Self::Container> {
             if !self.current.is_empty() {
-                // TODO: Consolidate the batch?
                 use columnar::{Borrow, Index};
+                let records = self.current.len();
                 let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                 refs.sort();
-                let storage = Updates::form(refs.into_iter());
-                self.pending.push_back(storage);
+                let updates = Updates::form(refs.into_iter());
+                self.pending.push_back(RecordedUpdates { updates, records });
                 self.current.clear();
             }
             self.empty = self.pending.pop_front();
@@ -365,37 +391,61 @@ mod distributor {
     use timely::worker::AsWorker;
 
     use crate::layout::ColumnarUpdate as Update;
-    use crate::Updates;
+    use crate::{Updates, RecordedUpdates};
 
     pub struct ValDistributor<U: Update, H> {
         marker: std::marker::PhantomData<U>,
         hashfunc: H,
+        pre_lens: Vec<usize>,
     }
 
-    impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Updates<U>> for ValDistributor<U, H> {
-        fn partition<T: Clone, P: timely::communication::Push<Message<T, Updates<U>>>>(&mut self, container: &mut Updates<U>, time: &T, pushers: &mut [P]) {
+    impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<RecordedUpdates<U>> for ValDistributor<U, H> {
+        // TODO: For unsorted Updates (stride-1 outer keys), each key is its own outer group,
+        // so the per-group pre_lens snapshot and seal check costs O(keys × workers). Should
+        // either batch keys by destination first, or detect stride-1 outer bounds and use a
+        // simpler single-pass partitioning that seals once at the end.
+        fn partition<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, container: &mut RecordedUpdates<U>, time: &T, pushers: &mut [P]) {
+            use crate::updates::child_range;
 
-            let in_keys = container.keys.values.borrow();
-
+            let keys_b = container.updates.keys.borrow();
             let mut outputs: Vec<Updates<U>> = (0..pushers.len()).map(|_| Updates::default()).collect();
-            for index in 0 .. in_keys.len() {
-                let key = in_keys.get(index);
-                let idx = ((self.hashfunc)(key) as usize) % pushers.len();
-                outputs[idx].extend_from_keys(container, index..index+1);
+
+            // Each outer key group becomes a separate run in the destination.
+            for outer in 0..Len::len(&keys_b) {
+                self.pre_lens.clear();
+                self.pre_lens.extend(outputs.iter().map(|o| o.keys.values.len()));
+                for k in child_range(keys_b.bounds, outer) {
+                    let key = keys_b.values.get(k);
+                    let idx = ((self.hashfunc)(key) as usize) % pushers.len();
+                    outputs[idx].extend_from_keys(&container.updates, k..k+1);
+                }
+                for (output, &pre) in outputs.iter_mut().zip(self.pre_lens.iter()) {
+                    if output.keys.values.len() > pre {
+                        output.keys.bounds.push(output.keys.values.len() as u64);
+                    }
+                }
             }
 
+            // Distribute the input's record count across non-empty outputs.
+            let total_records = container.records;
+            let non_empty: usize = outputs.iter().filter(|o| !o.keys.values.is_empty()).count();
+            let mut first_records = total_records.saturating_sub(non_empty.saturating_sub(1));
             for (pusher, output) in pushers.iter_mut().zip(outputs) {
-                let mut output = output;
-                Message::push_at(&mut output, time.clone(), pusher);
+                if !output.keys.values.is_empty() {
+                    let recorded = RecordedUpdates { updates: output, records: first_records };
+                    first_records = 1;
+                    let mut recorded = recorded;
+                    Message::push_at(&mut recorded, time.clone(), pusher);
+                }
             }
         }
-        fn flush<T: Clone, P: timely::communication::Push<Message<T, Updates<U>>>>(&mut self, _time: &T, _pushers: &mut [P]) { }
+        fn flush<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, _time: &T, _pushers: &mut [P]) { }
         fn relax(&mut self) { }
     }
 
     pub struct ValPact<H> { pub hashfunc: H }
 
-    impl<T, U, H> ParallelizationContract<T, Updates<U>> for ValPact<H>
+    impl<T, U, H> ParallelizationContract<T, RecordedUpdates<U>> for ValPact<H>
     where
         T: Timestamp,
         U: Update,
@@ -403,17 +453,18 @@ mod distributor {
     {
         type Pusher = Exchange<
             T,
-            LogPusher<Box<dyn timely::communication::Push<Message<T, Updates<U>>>>>,
+            LogPusher<Box<dyn timely::communication::Push<Message<T, RecordedUpdates<U>>>>>,
             ValDistributor<U, H>
         >;
-        type Puller = LogPuller<Box<dyn timely::communication::Pull<Message<T, Updates<U>>>>>;
+        type Puller = LogPuller<Box<dyn timely::communication::Pull<Message<T, RecordedUpdates<U>>>>>;
 
         fn connect<A: AsWorker>(self, allocator: &mut A, identifier: usize, address: Rc<[usize]>, logging: Option<TimelyLogger>) -> (Self::Pusher, Self::Puller) {
-            let (senders, receiver) = allocator.allocate::<Message<T, Updates<U>>>(identifier, address);
+            let (senders, receiver) = allocator.allocate::<Message<T, RecordedUpdates<U>>>(identifier, address);
             let senders = senders.into_iter().enumerate().map(|(i,x)| LogPusher::new(x, allocator.index(), i, identifier, logging.clone())).collect::<Vec<_>>();
             let distributor = ValDistributor {
                 marker: std::marker::PhantomData,
                 hashfunc: self.hashfunc,
+                pre_lens: Vec::new(),
             };
             (Exchange::new(senders, distributor), LogPuller::new(receiver, allocator.index(), identifier, logging.clone()))
         }
@@ -486,30 +537,36 @@ pub mod arrangement {
         }
     }
 
-    use crate::Updates;
+    use crate::{Updates, RecordedUpdates};
     use differential_dataflow::trace::implementations::merge_batcher::{MergeBatcher, InternalMerger};
-    type ValBatcher2<U> = MergeBatcher<Updates<U>, TrieChunker<Updates<U>>, InternalMerger<Updates<U>>>;
-    /// A pass-through chunker for already-sorted trie containers.
+    type ValBatcher2<U> = MergeBatcher<RecordedUpdates<U>, TrieChunker<U>, InternalMerger<Updates<U>>>;
+
+    /// A chunker that unwraps `RecordedUpdates` into bare `Updates` for the merge batcher.
+    /// The `records` accounting is discarded here — it has served its purpose for exchange.
     ///
-    /// Since `ValStorage` is produced sorted by `ValColBuilder`,
-    /// the chunker just queues them — no sorting or consolidation needed.
-    pub struct TrieChunker<C> {
-        ready: std::collections::VecDeque<C>,
-        empty: Option<C>,
+    /// IMPORTANT: This chunker assumes the input `Updates` are sorted and consolidated
+    /// (as produced by `ValColBuilder::form`). The downstream `InternalMerge` relies on
+    /// this invariant. If `RecordedUpdates` could carry unsorted data (e.g. from a `map`),
+    /// we would need either a sorting chunker for that case, or a type-level distinction
+    /// (e.g. `RecordedUpdates<U, Consolidated>` vs `RecordedUpdates<U, Unsorted>`) to
+    /// route to the right chunker.
+    pub struct TrieChunker<U: crate::layout::ColumnarUpdate> {
+        ready: std::collections::VecDeque<Updates<U>>,
+        empty: Option<Updates<U>>,
     }
 
-    impl<C> Default for TrieChunker<C> {
+    impl<U: crate::layout::ColumnarUpdate> Default for TrieChunker<U> {
         fn default() -> Self { Self { ready: Default::default(), empty: None } }
     }
 
-    impl<'a, C: Default> timely::container::PushInto<&'a mut C> for TrieChunker<C> {
-        fn push_into(&mut self, container: &'a mut C) {
-            self.ready.push_back(std::mem::take(container));
+    impl<'a, U: crate::layout::ColumnarUpdate> timely::container::PushInto<&'a mut RecordedUpdates<U>> for TrieChunker<U> {
+        fn push_into(&mut self, container: &'a mut RecordedUpdates<U>) {
+            self.ready.push_back(std::mem::take(&mut container.updates));
         }
     }
 
-    impl<C: Default + timely::Container> timely::container::ContainerBuilder for TrieChunker<C> {
-        type Container = C;
+    impl<U: crate::layout::ColumnarUpdate> timely::container::ContainerBuilder for TrieChunker<U> {
+        type Container = Updates<U>;
         fn extract(&mut self) -> Option<&mut Self::Container> {
             if let Some(ready) = self.ready.pop_front() {
                 self.empty = Some(ready);
@@ -523,8 +580,6 @@ pub mod arrangement {
             self.empty.as_mut()
         }
     }
-
-    impl<C: Default + timely::Container> timely::container::LengthPreservingContainerBuilder for TrieChunker<C> { }
 
     pub mod batcher {
 
@@ -907,7 +962,7 @@ pub mod updates {
 
     /// Returns the value-index range for list `i` given cumulative bounds.
     #[inline]
-    fn child_range<B: IndexAs<u64>>(bounds: B, i: usize) -> std::ops::Range<usize> {
+    pub fn child_range<B: IndexAs<u64>>(bounds: B, i: usize) -> std::ops::Range<usize> {
         let lower = if i == 0 { 0 } else { bounds.index_as(i - 1) as usize };
         let upper = bounds.index_as(i) as usize;
         lower..upper
@@ -958,40 +1013,67 @@ pub mod updates {
             self.diffs.extend_from_self(other.diffs.borrow(), time_range);
         }
 
-        /// Forms `Self` from sorted update tuples.
+        /// Forms a consolidated `Updates` from sorted `(key, val, time, diff)` refs.
+        ///
+        /// Follows the same dedup pattern at each level: check if the current
+        /// entry differs from the previous, seal the previous group if so.
+        /// At the time level, equal `(key, val, time)` triples have diffs accumulated.
+        /// The `records` field tracks the input count for exchange accounting.
         pub fn form<'a>(mut sorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
+
             let mut output = Self::default();
+            let mut diff_stash = U::Diff::default();
+            let mut diff_temp = U::Diff::default();
+
             if let Some((key, val, time, diff)) = sorted.next() {
                 output.keys.values.push(key);
                 output.vals.values.push(val);
                 output.times.values.push(time);
-                output.diffs.values.push(diff);
-                output.diffs.bounds.push(output.diffs.values.len() as u64);
+                Columnar::copy_from(&mut diff_stash, diff);
+
                 for (key, val, time, diff) in sorted {
                     let mut differs = false;
-                    // Keys
+                    // Keys: seal vals for previous key if key changed.
                     let keys_len = output.keys.values.len();
                     differs |= ContainerOf::<U::Key>::reborrow_ref(key) != output.keys.values.borrow().get(keys_len - 1);
                     if differs { output.keys.values.push(key); }
-                    // Vals
+                    // Vals: seal times for previous val if key or val changed.
                     let vals_len = output.vals.values.len();
                     if differs { output.vals.bounds.push(vals_len as u64); }
                     differs |= ContainerOf::<U::Val>::reborrow_ref(val) != output.vals.values.borrow().get(vals_len - 1);
                     if differs { output.vals.values.push(val); }
-                    // Times
+                    // Times: seal diffs for previous time if key, val, or time changed.
                     let times_len = output.times.values.len();
                     if differs { output.times.bounds.push(times_len as u64); }
-                    // Always push time and diff
-                    output.times.values.push(time);
-                    output.diffs.values.push(diff);
-                    output.diffs.bounds.push(output.diffs.values.len() as u64);
+                    differs |= ContainerOf::<U::Time>::reborrow_ref(time) != output.times.values.borrow().get(times_len - 1);
+                    if differs {
+                        // Flush accumulated diff for the previous time.
+                        if !diff_stash.is_zero() {
+                            output.diffs.values.push(&diff_stash);
+                        }
+                        // TODO: Else is complicated, as we may want to pop prior values.
+                        //       It is perhaps fine to leave zeros as a thing that won't
+                        //       invalidate merging.
+                        output.diffs.bounds.push(output.diffs.values.len() as u64);
+                        // Start new time.
+                        output.times.values.push(time);
+                        Columnar::copy_from(&mut diff_stash, diff);
+                    } else {
+                        // Same (key, val, time): accumulate diff.
+                        Columnar::copy_from(&mut diff_temp, diff);
+                        diff_stash.plus_equals(&diff_temp);
+                    }
                 }
-                // Seal the last entries
-                output.vals.bounds.push(output.vals.values.len() as u64);
+                // Flush the last accumulated diff and seal all levels.
+                if !diff_stash.is_zero() {
+                    output.diffs.values.push(&diff_stash);
+                }
+                output.diffs.bounds.push(output.diffs.values.len() as u64);
                 output.times.bounds.push(output.times.values.len() as u64);
-                // Seal the outer key list
+                output.vals.bounds.push(output.vals.values.len() as u64);
                 output.keys.bounds.push(output.keys.values.len() as u64);
             }
+
             output
         }
 
@@ -1153,7 +1235,7 @@ pub mod updates {
     }
 
     impl<U: Update> timely::Accountable for Updates<U> {
-        #[inline] fn record_count(&self) -> i64 { self.diffs.values.len() as i64 }
+        #[inline] fn record_count(&self) -> i64 { Len::len(&self.diffs.values) as i64 }
     }
 
     impl<U: Update> timely::dataflow::channels::ContainerBytes for Updates<U> {
