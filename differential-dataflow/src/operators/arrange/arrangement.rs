@@ -131,7 +131,29 @@ where
         }
     }
 
-    /// Flattens the stream into a `Collection`.
+    /// Extracts a collection of any container from the stream of batches.
+    ///
+    /// This method is like `self.stream.flat_map`, except that it produces containers
+    /// directly, rather than form a container of containers as `flat_map` would.
+    pub fn as_container<I, L>(self, mut logic: L) -> crate::Collection<G, I::Item>
+    where
+        I: IntoIterator<Item: Container>,
+        L: FnMut(Tr::Batch) -> I+'static,
+    {
+        self.stream.unary(Pipeline, "AsContainer", move |_,_| move |input, output| {
+            input.for_each(|time, data| {
+                let mut session = output.session(&time);
+                for wrapper in data.drain(..) {
+                    for mut container in logic(wrapper) {
+                        session.give_container(&mut container);
+                    }
+                }
+            });
+        })
+        .as_collection()
+    }
+
+    /// Flattens the stream into a `VecCollection`.
     ///
     /// The underlying `Stream<G, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
@@ -143,7 +165,7 @@ where
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
     }
 
-    /// Flattens the stream into a `Collection`.
+    /// Flattens the stream into a `VecCollection`.
     ///
     /// The underlying `Stream<G, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
@@ -156,7 +178,7 @@ where
         self.flat_map_ref(move |key, val| [(Tr::owned_key(key), Tr::owned_val(val))])
     }
 
-    /// Extracts elements from an arrangement as a collection.
+    /// Extracts elements from an arrangement as a `VecCollection`.
     ///
     /// The supplied logic may produce an iterator over output values, allowing either
     /// filtering or flat mapping as part of the extraction.
@@ -168,7 +190,7 @@ where
         Self::flat_map_batches(self.stream, logic)
     }
 
-    /// Extracts elements from a stream of batches as a collection.
+    /// Extracts elements from a stream of batches as a `VecCollection`.
     ///
     /// The supplied logic may produce an iterator over output values, allowing either
     /// filtering or flat mapping as part of the extraction.
