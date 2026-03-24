@@ -1,8 +1,8 @@
 -- Strongly Connected Components
--- Input 0: edges (src ; dst)
+-- Input 0: edges (src, dst ;)
 -- Output: edges within SCCs
 
-let edges = INPUT 0;
+let edges = MAP(INPUT 0, ($0[0] ; $0[1]));
 let trans = MAP(edges, ($1 ; $0));
 
 outer: {
@@ -35,4 +35,5 @@ outer: {
     var scc_raw = CONCAT(trim_bwd, NEGATE(edges));
 }
 
-result INSPECT(ARRANGE(MAP(outer::scc, (;))), edges_in_sccs);
+result outer::scc;
+-- result INSPECT(ARRANGE(MAP(outer::scc, (;))), edges_in_sccs);

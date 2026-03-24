@@ -1,0 +1,15 @@
+-- Stable Matching (Gale-Shapley) — pipe syntax
+-- input 0: edges (l_node, l_pref, r_node, r_pref ;)
+
+let edges = input 0 | key($0[0] ; $0[1], $0[2], $0[3]);
+
+matching: {
+    let active = edges + removals;
+    let props = active | min;
+    let by_b = props | key($1[1] ; $1[2], $0[0], $1[0]);
+    let accpt = by_b | min;
+    let by_a = accpt | key($1[1] ; $1[2], $0[0], $1[0]);
+    var removals = removals + by_a - props | arrange;
+}
+
+result matching::props | key($0[0] ; $1[1]) | inspect(matched);

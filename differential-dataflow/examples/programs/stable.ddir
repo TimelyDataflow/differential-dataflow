@@ -1,0 +1,22 @@
+-- Stable Matching (Gale-Shapley)
+-- Input 0: edges (l_node, l_pref, r_node, r_pref ;)
+-- Output: matched pairs (l_node ; r_node)
+
+let edges = MAP(INPUT 0, ($0[0] ; $0[1], $0[2], $0[3]));
+-- edges: (a ; pa, b, pb)
+
+matching: {
+    let active = CONCAT(edges, removals);
+
+    -- Each a proposes to best available (min pa).
+    let props = REDUCE(active, MIN);
+    let by_b = MAP(props, ($1[1] ; $1[2], $0[0], $1[0]));
+    -- Each b accepts best proposal (min pb).
+    let accpt = REDUCE(by_b, MIN);
+    let by_a = MAP(accpt, ($1[1] ; $1[2], $0[0], $1[0]));
+
+    -- Rejected = props except accpt. Remove from active.
+    var removals = ARRANGE(CONCAT(removals, by_a, NEGATE(props)));
+}
+
+result INSPECT(MAP(matching::props, ($0[0] ; $1[1])), matched);

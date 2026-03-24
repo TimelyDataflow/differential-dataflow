@@ -1,9 +1,9 @@
 -- Reachability
--- Input 0: edges (src ; dst)
+-- Input 0: edges (src, dst ;)
 -- Input 1: roots (node ;)
 
-let edges = INPUT 0;
-let roots = INPUT 1;
+let edges = MAP(INPUT 0, ($0[0] ; $0[1]));
+let roots = MAP(INPUT 1, ($0[0] ;));
 
 reach: {
     let proposals = JOIN(reach, edges, ($2));

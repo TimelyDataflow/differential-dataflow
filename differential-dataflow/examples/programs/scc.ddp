@@ -1,0 +1,39 @@
+-- Strongly Connected Components — pipe syntax
+-- input 0: edges (src, dst ;)
+
+let edges = input 0 | key($0[0] ; $0[1]);
+let trans = edges | key($1 ; $0);
+
+outer: {
+    let scc = edges + trim;
+
+    fwd: {
+        let nodes = edges | key($1 ; $1) | enter_at($1[0]);
+        let labels = proposals + nodes | min;
+        var proposals = labels | join(scc, ($2 ; $1));
+    }
+
+    let fwd_arr = fwd::labels | arrange;
+    let trim_fwd = edges
+        | join(fwd_arr, ($1 ; $0, $2))
+        | join(fwd_arr, ($0 ; $1, $2))
+        | filter($1[1] == $1[2])
+        | key($0 ; $1[0]);
+
+    bwd: {
+        let nodes = trans | key($1 ; $1) | enter_at($1[0]);
+        let labels = proposals + nodes | min;
+        var proposals = labels | join(trim_fwd, ($2 ; $1));
+    }
+
+    let bwd_arr = bwd::labels | arrange;
+    let trim_bwd = trans
+        | join(bwd_arr, ($1 ; $0, $2))
+        | join(bwd_arr, ($0 ; $1, $2))
+        | filter($1[1] == $1[2])
+        | key($0 ; $1[0]);
+
+    var trim = trim_bwd - edges;
+}
+
+result outer::scc;
