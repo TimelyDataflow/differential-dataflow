@@ -4,7 +4,6 @@
 //! exercising Enter, Leave, Negate, ResultsIn on RecordedUpdates,
 //! and Push on Updates for the reduce builder path.
 
-#[path = "columnar_support.rs"]
 mod columnar_support;
 
 use timely::container::{ContainerBuilder, PushInto};
