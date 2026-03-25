@@ -638,84 +638,191 @@ mod lower {
     pub fn lower(stmts: Vec<Stmt>) -> Program { Lowering::new().lower_program(stmts) }
 }
 
+#[path = "columnar/columnar_support.rs"]
+mod columnar_support;
+use columnar_support::*;
+
+mod columnar {
+    use super::types::*;
+
+    pub use super::columnar_support::*;
+
+    pub type DdirUpdate = (Row, Row, Time, Diff);
+    pub type DdirRecordedUpdates = RecordedUpdates<DdirUpdate>;
+
+    // Aliases matching the old ColVal* names used in the render module.
+    pub type ColValSpine<K, V, T, R> = ValSpine<K, V, T, R>;
+    pub type ColValBatcher<K, V, T, R> = ValBatcher<K, V, T, R>;
+    pub type ColValBuilder<K, V, T, R> = ValBuilder<K, V, T, R>;
+}
+
 mod render {
     use std::collections::HashMap;
     use std::sync::Arc;
     use timely::order::Product;
     use timely::dataflow::Scope;
-    use differential_dataflow::VecCollection;
-    use differential_dataflow::operators::iterate::VecVariable;
+    use differential_dataflow::Collection;
+    use differential_dataflow::operators::iterate::Variable;
     use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
     use differential_dataflow::dynamic::feedback_summary;
-    use differential_dataflow::trace::implementations::ValSpine;
     use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+    use columnar::Columnar;
     use super::types::*;
     use super::ir::*;
 
-    pub type Col<G> = VecCollection<G, (Row, Row), Diff>;
-    type Arr<G> = Arranged<G, TraceAgent<ValSpine<Row, Row, <G as timely::dataflow::scopes::ScopeParent>::Timestamp, Diff>>>;
+    use super::columnar::{DdirUpdate, DdirRecordedUpdates};
+    use super::columnar::{ColValSpine, ColValBuilder};
 
-    enum Rendered<G: Scope<Timestamp: differential_dataflow::lattice::Lattice>> {
+    pub type Col<G> = Collection<G, DdirRecordedUpdates>;
+    type Arr<G> = Arranged<G, TraceAgent<ColValSpine<Row, Row, <G as timely::dataflow::scopes::ScopeParent>::Timestamp, Diff>>>;
+
+    type ConcreteTime = Product<u64, PointStamp<u64>>;
+
+    enum Rendered<G: Scope<Timestamp = ConcreteTime>> {
         Collection(Col<G>),
         Arrangement(Arr<G>),
     }
 
-    impl<G: Scope<Timestamp: differential_dataflow::lattice::Lattice>> Rendered<G> {
-        fn collection(&self) -> Col<G> { match self { Rendered::Collection(c) => c.clone(), Rendered::Arrangement(a) => a.clone().as_collection(|k, v| (k.clone(), v.clone())) } }
-        fn arrange(&self) -> Arr<G> { match self { Rendered::Arrangement(a) => a.clone(), Rendered::Collection(c) => c.clone().arrange_by_key() } }
+    impl<G: Scope<Timestamp = ConcreteTime>> Rendered<G> {
+        fn collection(&self) -> Col<G> {
+            match self {
+                Rendered::Collection(c) => c.clone(),
+                Rendered::Arrangement(a) => {
+                    super::columnar_support::as_recorded_updates::<_, DdirUpdate>(a.clone())
+                }
+            }
+        }
+        fn arrange(&self) -> Arr<G> {
+            match self {
+                Rendered::Arrangement(a) => a.clone(),
+                Rendered::Collection(c) => {
+                    use differential_dataflow::operators::arrange::arrangement::arrange_core;
+                    use super::columnar::ColValBatcher;
+                    arrange_core::<_, _, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
+                }
+            }
+        }
     }
 
-    fn debug_inspect<G: Scope<Timestamp = Product<u64, PointStamp<u64>>>>(col: Col<G>, id: usize, node_desc: &str) -> Col<G> {
+    /// If DDIR_DEBUG is set, wrap a collection with inspect_container that prints each update.
+    fn debug_inspect<G: Scope<Timestamp = ConcreteTime>>(col: Col<G>, id: usize, node_desc: &str) -> Col<G> {
         if std::env::var("DDIR_DEBUG").is_ok() {
             let label = format!("node {} {}", id, node_desc);
-            col.arrange_by_key().as_collection(|k,v| (k.clone(), v.clone())).inspect(move |x| eprintln!("  [{}] {:?}", label, x))
+            col.inspect_container(move |event| {
+                if let Ok((_time, container)) = event {
+                    for (k, v, t, d) in container.updates.iter() {
+                        let k: Row = Columnar::into_owned(k);
+                        let v: Row = Columnar::into_owned(v);
+                        let t: ConcreteTime = Columnar::into_owned(t);
+                        let d: Diff = Columnar::into_owned(d);
+                        eprintln!("  [{}] (({:?}, {:?}), {:?}, {:?})", label, k, v, t, d);
+                    }
+                }
+            })
         } else {
             col
         }
     }
 
     pub fn render_program<G>(program: &Program, scope: &mut G, inputs: &[Col<G>]) -> HashMap<Id, Col<G>>
-    where G: Scope<Timestamp = Product<u64, PointStamp<u64>>>
+    where G: Scope<Timestamp = ConcreteTime>
     {
         let mut nodes: HashMap<Id, Rendered<G>> = HashMap::new();
         let mut level: usize = 0;
-        let mut variables: HashMap<Id, (VecVariable<G, (Row, Row), Diff>, usize)> = HashMap::new();
+        let mut variables: HashMap<Id, (Variable<G, DdirRecordedUpdates>, usize)> = HashMap::new();
         let mut var_levels: HashMap<Id, usize> = HashMap::new();
 
         for (id, node) in program.nodes.iter().enumerate() {
             match node {
-                Node::Input(i) => { let c = debug_inspect(inputs[*i].clone(), id, &format!("Input({})", i)); nodes.insert(id, Rendered::Collection(c)); },
-                Node::Map { input, logic } => { let c = nodes[input].collection(); let l = Arc::clone(logic); let r = c.join_function(move |kv| l(kv)); let r = debug_inspect(r, id, "Map"); nodes.insert(id, Rendered::Collection(r)); },
-                Node::Concat(ids) => { let mut r = nodes[&ids[0]].collection(); for i in &ids[1..] { r = r.concat(nodes[i].collection()); } let r = debug_inspect(r, id, "Concat"); nodes.insert(id, Rendered::Collection(r)); },
-                Node::Arrange(input) => { nodes.insert(id, Rendered::Arrangement(nodes[input].arrange())); },
+                Node::Input(i) => {
+                    let c = debug_inspect(inputs[*i].clone(), id, &format!("Input({})", i));
+                    nodes.insert(id, Rendered::Collection(c));
+                },
+                Node::Map { input, logic } => {
+                    let c = nodes[input].collection();
+                    let l = Arc::clone(logic);
+                    let result = super::columnar::join_function(c, move |k, v, _t, _d| {
+                        let k: Row = Columnar::into_owned(k);
+                        let v: Row = Columnar::into_owned(v);
+                        l((k, v)).into_iter().map(|((k2,v2),t2,d2)| (k2, v2, t2, d2))
+                    });
+                    let result = debug_inspect(result, id, "Map");
+                    nodes.insert(id, Rendered::Collection(result));
+                },
+                Node::Concat(ids) => {
+                    let mut r = nodes[&ids[0]].collection();
+                    for i in &ids[1..] { r = r.concat(nodes[i].collection()); }
+                    let r = debug_inspect(r, id, "Concat");
+                    nodes.insert(id, Rendered::Collection(r));
+                },
+                Node::Arrange(input) => {
+                    nodes.insert(id, Rendered::Arrangement(nodes[input].arrange()));
+                },
                 Node::Join { left, right, logic } => {
                     let l = nodes[left].arrange();
                     let r = nodes[right].arrange();
                     let f = Arc::clone(logic);
-                    let result = debug_inspect(l.join_core(r, move |k, v1, v2| f(k, v1, v2)), id, "Join");
+                    use differential_dataflow::operators::join::join_traces;
+                    use differential_dataflow::collection::AsCollection;
+                    use super::columnar::ValColBuilder;
+                    let stream = join_traces::<_, _, _, _, ValColBuilder<DdirUpdate>>(l, r, move |k, v1, v2, t, d1, d2, c| {
+                        use differential_dataflow::difference::Multiply;
+                        let k: Row = Columnar::into_owned(k);
+                        let v1: Row = Columnar::into_owned(v1);
+                        let v2: Row = Columnar::into_owned(v2);
+                        let d = d1.clone().multiply(d2);
+                        for (k2, v2) in f(&k, &v1, &v2) {
+                            c.give((k2, v2, t.clone(), d.clone()));
+                        }
+                    });
+                    let result = debug_inspect(stream.as_collection(), id, "Join");
                     nodes.insert(id, Rendered::Collection(result));
                 },
                 Node::Reduce { input, logic } => {
                     let a = nodes[input].arrange();
                     let f = Arc::clone(logic);
-                    let reduced = a.reduce_abelian::<_, differential_dataflow::trace::implementations::ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>("Reduce", move |k, v, o| f(k, v, o));
+                    let reduced = a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>>("Reduce", move |k, vals, output| {
+                        let k: Row = Columnar::into_owned(k);
+                        let owned_vals: Vec<(Row, Diff)> = vals.iter().map(|(v, d)| {
+                            (Columnar::into_owned(*v), *d)
+                        }).collect();
+                        let refs: Vec<(&Row, Diff)> = owned_vals.iter().map(|(v, d)| (v, *d)).collect();
+                        f(&k, &refs, output);
+                    });
                     nodes.insert(id, Rendered::Arrangement(reduced));
                 },
                 Node::Variable => {
                     let step: Product<u64, PointStampSummary<u64>> = Product::new(0, feedback_summary::<u64>(level, 1));
-                    let (var, col) = VecVariable::new(scope, step);
+                    let (var, col) = Variable::new(scope, step);
                     let col = debug_inspect(col, id, "Variable");
-                    nodes.insert(id, Rendered::Collection(col)); variables.insert(id, (var, level)); var_levels.insert(id, level);
+                    nodes.insert(id, Rendered::Collection(col));
+                    variables.insert(id, (var, level));
+                    var_levels.insert(id, level);
                 },
                 Node::Inspect { input, label } => {
                     let col = nodes[input].collection();
                     let label = label.clone();
-                    nodes.insert(id, Rendered::Collection(col.inspect(move |x| eprintln!("  [{}] {:?}", label, x.clone()))));
+                    nodes.insert(id, Rendered::Collection(col.inspect_container(move |event| {
+                        if let Ok((_time, container)) = event {
+                            for (k, v, t, d) in container.updates.iter() {
+                                eprintln!("  [{}] ({:?}, {:?}, {:?}, {:?})", label, <Row as Columnar>::into_owned(k), <Row as Columnar>::into_owned(v), <Time as Columnar>::into_owned(t), <Diff as Columnar>::into_owned(d));
+                            }
+                        }
+                    })));
                 },
-                Node::Leave(inner_id, scope_level) => { let c = nodes[inner_id].collection(); let r = debug_inspect(c.leave_dynamic(*scope_level), id, "Leave"); nodes.insert(id, Rendered::Collection(r)); },
+                Node::Leave(inner_id, scope_level) => {
+                    let c = nodes[inner_id].collection();
+                    let result = super::columnar::leave_dynamic(c, *scope_level);
+                    let result = debug_inspect(result, id, "Leave");
+                    nodes.insert(id, Rendered::Collection(result));
+                },
                 Node::Scope => { level += 1; },
                 Node::EndScope => { level -= 1; },
-                Node::Bind { variable, value } => { let c = nodes[value].collection(); let (var, _) = variables.remove(variable).expect("Bind: variable not found"); var.set(c); },
+                Node::Bind { variable, value } => {
+                    let c = nodes[value].collection();
+                    let (var, _) = variables.remove(variable).expect("Bind: variable not found");
+                    var.set(c);
+                },
             }
         }
 
@@ -725,8 +832,9 @@ mod render {
 }
 
 use timely::dataflow::Scope;
-use differential_dataflow::input::Input;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
+
+type DdirOuterUpdate = (Row, Row, u64, Diff);
 
 fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: u64, arity: usize, batch: u64, rounds: Option<u64>) {
     let compiled = lower::lower(stmts);
@@ -735,11 +843,15 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
     let result_id = compiled.result;
 
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
+        use timely::dataflow::InputHandle;
+        use timely::container::PushInto;
+        use columnar_support::ValColBuilder;
+
+        type OuterBuilder = ValColBuilder<DdirOuterUpdate>;
 
         // Register reachability loggers to debug stuck frontiers.
         if std::env::var("DDIR_REACHABILITY").is_ok() {
             use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
-            use differential_dataflow::dynamic::pointstamp::PointStamp;
             type DdirTime = timely::order::Product<u64, PointStamp<u64>>;
             let outer_name = format!("timely/reachability/{}", std::any::type_name::<u64>());
             let inner_name = format!("timely/reachability/{}", std::any::type_name::<DdirTime>());
@@ -783,8 +895,10 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
             let mut handles = Vec::new();
             let mut collections = Vec::new();
             for _ in 0..n_inputs {
-                let (h, c) = scope.new_collection::<(Row, Row), Diff>();
-                handles.push(h); collections.push(c);
+                let mut h = <InputHandle<_, OuterBuilder>>::new_with_builder();
+                let stream = h.to_stream(scope);
+                handles.push(h);
+                collections.push(differential_dataflow::Collection::new(stream));
             }
             let mut probe = timely::dataflow::ProbeHandle::new();
             let output = scope.iterative::<PointStamp<u64>, _, _>(|inner| {
@@ -792,7 +906,11 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
                 let rendered = render::render_program(&compiled, inner, &entered);
                 rendered[&result_id].clone().leave()
             });
-            if std::env::var("DDIR_PRINT").is_ok() { output.inspect(|x| println!("{:?}", x)).probe_with(&mut probe); }
+            if std::env::var("DDIR_PRINT").is_ok() { output.inspect_container(|event| {
+                if let Ok((_time, container)) = event {
+                    for (k, v, t, d) in container.updates.iter() { println!("({:?}, {:?}, {:?}, {:?})", k, v, t, d); }
+                }
+            }).probe_with(&mut probe); }
             else { output.probe_with(&mut probe); }
             (handles, probe)
         });
@@ -800,14 +918,23 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
         let index = worker.index();
         let peers = worker.peers();
 
+        let mut builders: Vec<OuterBuilder> = (0..n_inputs).map(|_| OuterBuilder::default()).collect();
+
         // Initial load: insert edges 0..edges.
         for e in 0..edges {
             if (e as usize) % peers == index {
                 let input_idx = (e as usize) % inputs.len();
-                inputs[input_idx].update(gen_row(e, nodes, arity), 1);
+                let (key, val) = gen_row(e, nodes, arity);
+                let time = *inputs[input_idx].time();
+                builders[input_idx].push_into((key, val, time, 1i64));
             }
         }
-        for i in inputs.iter_mut() { i.advance_to(1); i.flush(); }
+        for (i, h) in inputs.iter_mut().enumerate() {
+            use timely::container::ContainerBuilder;
+            while let Some(container) = builders[i].finish() { h.send_batch(container); }
+            h.advance_to(1);
+            h.flush();
+        }
         while probe.less_than(&1u64) { worker.step(); }
         let elapsed = std::time::Instant::now();
         println!("worker {}: {} loaded ({} edges)", index, name, edges);
@@ -823,15 +950,22 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
                 let add_idx = edges + cursor;
                 if (remove_idx as usize) % peers == index {
                     let input_idx = (remove_idx as usize) % inputs.len();
-                    inputs[input_idx].update(gen_row(remove_idx, nodes, arity), -1);
+                    let (key, val) = gen_row(remove_idx, nodes, arity);
+                    builders[input_idx].push_into((key, val, time, -1i64));
                 }
                 if (add_idx as usize) % peers == index {
                     let input_idx = (add_idx as usize) % inputs.len();
-                    inputs[input_idx].update(gen_row(add_idx, nodes, arity), 1);
+                    let (key, val) = gen_row(add_idx, nodes, arity);
+                    builders[input_idx].push_into((key, val, time, 1i64));
                 }
                 cursor += 1;
             }
-            for i in inputs.iter_mut() { i.advance_to(time); i.flush(); }
+            for (i, h) in inputs.iter_mut().enumerate() {
+                use timely::container::ContainerBuilder;
+                while let Some(container) = builders[i].finish() { h.send_batch(container); }
+                h.advance_to(time);
+                h.flush();
+            }
             while probe.less_than(&time) { worker.step(); }
 
             round += 1;

@@ -7,7 +7,7 @@ let roots = MAP(INPUT 1, ($0[0] ;));
 
 reach: {
     let proposals = JOIN(reach, edges, ($2));
-    var reach = CONCAT(roots, proposals);
+    var reach = REDUCE(CONCAT(roots, proposals), DISTINCT);
 }
 
 result reach::reach;
