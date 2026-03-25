@@ -164,7 +164,7 @@ mod present {
     /// The primary feature of this type is that it has zero size, which reduces the overhead
     /// of differential dataflow's representations for settings where collections either do
     /// not change, or for which records are only added (for example, derived facts in Datalog).
-    #[derive(Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    #[derive(Copy, Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash, columnar::Columnar)]
     pub struct Present;
 
     impl<T: Clone> super::Multiply<T> for Present {
@@ -180,6 +180,10 @@ mod present {
 
     impl super::Semigroup for Present {
         fn plus_equals(&mut self, _rhs: &Self) { }
+    }
+
+    impl columnation::Columnation for Present {
+       type InnerRegion = columnation::CopyRegion<Present>;
     }
 }
 

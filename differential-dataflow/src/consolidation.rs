@@ -10,11 +10,11 @@
 //! you need specific behavior, it may be best to defensively copy, paste, and maintain the
 //! specific behavior you require.
 
-use std::cmp::Ordering;
 use std::collections::VecDeque;
-use timely::container::{ContainerBuilder, DrainContainer, PushInto};
+use columnation::Columnation;
+use timely::container::{ContainerBuilder, PushInto};
 use crate::Data;
-use crate::difference::{IsZero, Semigroup};
+use crate::difference::Semigroup;
 
 /// Sorts and consolidates `vec`.
 ///
@@ -232,115 +232,63 @@ where
     }
 }
 
-/// Layout of containers and their read items to be consolidated.
+/// A container that can sort and consolidate its contents internally.
 ///
-/// This trait specifies behavior to extract keys and diffs from container's read
-/// items. Consolidation accumulates the diffs per key.
+/// The container knows its own layout — how to sort its elements, how to
+/// compare adjacent entries, and how to merge diffs. The caller provides
+/// a `target` container to receive the consolidated output, allowing
+/// reuse of allocations across calls.
 ///
-/// The trait requires `Container` to have access to its `Item` GAT.
-pub trait ConsolidateLayout: DrainContainer {
-    /// Key portion of data, essentially everything minus the diff
-    type Key<'a>: Eq where Self: 'a;
-
-    /// GAT diff type.
-    type Diff<'a>;
-
-    /// Owned diff type.
-    type DiffOwned: for<'a> Semigroup<Self::Diff<'a>>;
-
-    /// Converts a reference diff into an owned diff.
-    fn owned_diff(diff: Self::Diff<'_>) -> Self::DiffOwned;
-
-    /// Deconstruct an item into key and diff. Must be cheap.
-    fn into_parts(item: Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>);
-
-    /// Push an element to a compatible container.
-    ///
-    /// This function is odd to have, so let's explain why it exists. Ideally, the container
-    /// would accept a `(key, diff)` pair and we wouldn't need this function. However, we
-    /// might never be in a position where this is true: Vectors can push any `T`, which would
-    /// collide with a specific implementation for pushing tuples of mixes GATs and owned types.
-    ///
-    /// For this reason, we expose a function here that takes a GAT key and an owned diff, and
-    /// leave it to the implementation to "patch" a suitable item that can be pushed into `self`.
-    fn push_with_diff(&mut self, key: Self::Key<'_>, diff: Self::DiffOwned);
-
-    /// Compare two items by key to sort containers.
-    fn cmp(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering;
-
-    /// Returns the number of items in the container.
+/// After the call, `target` contains the sorted, consolidated data and
+/// `self` may be empty or in an unspecified state (implementations should
+/// document this).
+pub trait Consolidate {
+    /// The number of elements in the container.
     fn len(&self) -> usize;
-
-    /// Clear the container. Afterwards, `len()` should return 0.
+    /// Clear the container.
     fn clear(&mut self);
-
-    /// Consolidate the supplied container.
-    fn consolidate_into(&mut self, target: &mut Self) {
-        // Sort input data
-        let mut permutation = Vec::with_capacity(self.len());
-        permutation.extend(self.drain());
-        permutation.sort_by(|a, b| Self::cmp(a, b));
-
-        // Iterate over the data, accumulating diffs for like keys.
-        let mut iter = permutation.drain(..);
-        if let Some(item) = iter.next() {
-
-            let (k, d) = Self::into_parts(item);
-            let mut prev_key = k;
-            let mut prev_diff = Self::owned_diff(d);
-
-            for item in iter {
-                let (next_key, next_diff) = Self::into_parts(item);
-                if next_key == prev_key {
-                    prev_diff.plus_equals(&next_diff);
-                }
-                else {
-                    if !prev_diff.is_zero() {
-                        target.push_with_diff(prev_key, prev_diff);
-                    }
-                    prev_key = next_key;
-                    prev_diff = Self::owned_diff(next_diff);
-                }
-            }
-
-            if !prev_diff.is_zero() {
-                target.push_with_diff(prev_key, prev_diff);
-            }
-        }
-    }
+    /// Sort and consolidate `self` into `target`.
+    fn consolidate_into(&mut self, target: &mut Self);
 }
 
-impl<D, T, R> ConsolidateLayout for Vec<(D, T, R)>
-where
-    D: Ord + Clone + 'static,
-    T: Ord + Clone + 'static,
-    R: Semigroup + Clone + 'static,
-{
-    type Key<'a> = (D, T) where Self: 'a;
-    type Diff<'a> = R where Self: 'a;
-    type DiffOwned = R;
-
-    fn owned_diff(diff: Self::Diff<'_>) -> Self::DiffOwned { diff }
-
-    fn into_parts((data, time, diff): Self::Item<'_>) -> (Self::Key<'_>, Self::Diff<'_>) {
-        ((data, time), diff)
-    }
-
-    fn cmp<'a>(item1: &Self::Item<'_>, item2: &Self::Item<'_>) -> Ordering {
-        (&item1.0, &item1.1).cmp(&(&item2.0, &item2.1))
-    }
-
-    fn push_with_diff(&mut self, (data, time): Self::Key<'_>, diff: Self::DiffOwned) {
-        self.push((data, time, diff));
-    }
-
-    #[inline] fn len(&self) -> usize { Vec::len(self) }
-    #[inline] fn clear(&mut self) { Vec::clear(self) }
-
-    /// Consolidate the supplied container.
+impl<D: Ord, T: Ord, R: Semigroup> Consolidate for Vec<(D, T, R)> {
+    fn len(&self) -> usize { Vec::len(self) }
+    fn clear(&mut self) { Vec::clear(self) }
     fn consolidate_into(&mut self, target: &mut Self) {
         consolidate_updates(self);
         std::mem::swap(self, target);
+    }
+}
+
+impl<D: Ord + Columnation, T: Ord + Columnation, R: Semigroup + Columnation> Consolidate for crate::containers::TimelyStack<(D, T, R)> {
+    fn len(&self) -> usize { self[..].len() }
+    fn clear(&mut self) { crate::containers::TimelyStack::clear(self) }
+    fn consolidate_into(&mut self, target: &mut Self) {
+        let len = self[..].len();
+        let mut indices: Vec<usize> = (0..len).collect();
+        indices.sort_unstable_by(|&i, &j| {
+            let (d1, t1, _) = &self[i];
+            let (d2, t2, _) = &self[j];
+            (d1, t1).cmp(&(d2, t2))
+        });
+        target.clear();
+        let mut idx = 0;
+        while idx < indices.len() {
+            let (d, t, r) = &self[indices[idx]];
+            let mut r_owned = r.clone();
+            idx += 1;
+            while idx < indices.len() {
+                let (d2, t2, r2) = &self[indices[idx]];
+                if d == d2 && t == t2 {
+                    r_owned.plus_equals(r2);
+                    idx += 1;
+                } else { break; }
+            }
+            if !r_owned.is_zero() {
+                target.copy_destructured(d, t, &r_owned);
+            }
+        }
+        self.clear();
     }
 }
 
