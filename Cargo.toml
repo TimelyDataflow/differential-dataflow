@@ -22,7 +22,7 @@ edition = "2021"
 rust-version = "1.86"
 
 [workspace.dependencies]
-differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.20.0" }
+differential-dataflow = { path = "differential-dataflow", default-features = false, version = "0.21.0" }
 timely = { version = "0.28", default-features = false }
 columnar = { version = "0.12", default-features = false }
 #timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
