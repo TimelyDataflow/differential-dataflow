@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.20.0...differential-dataflow-v0.21.0) - 2026-03-25
+
+### Added
+
+- `Arranged::as_container` convenience method for extracting non-`Vec` containers from arrangements ([#695](https://github.com/TimelyDataflow/differential-dataflow/pull/695))
+- `Columnation` and `Columnar` implementations for the `Present` zero-sized difference type ([#682](https://github.com/TimelyDataflow/differential-dataflow/pull/682))
+
+### Changed
+
+- Update to timely 0.28 and columnar 0.12 ([#698](https://github.com/TimelyDataflow/differential-dataflow/pull/698))
+- Adopt internal iteration for consolidation, merge batching, and trace building, replacing external iteration that leaked internal types through abstractions ([#689](https://github.com/TimelyDataflow/differential-dataflow/pull/689))
+
+### Fixed
+
+- Eliminate a redundant `arrange` in `propagate` and a double scope-import in `scc` ([#692](https://github.com/TimelyDataflow/differential-dataflow/pull/692))
+
+The main theme of this release is internal iteration: consolidation, merging, and trace building now happen behind trait methods rather than exposing container internals outward.
+Dependency updates track timely 0.28 and columnar 0.12.
+
 ## [0.20.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.1...differential-dataflow-v0.20.0) - 2026-03-05
 
 ### Other
