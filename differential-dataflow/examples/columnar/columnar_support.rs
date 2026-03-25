@@ -70,14 +70,17 @@ pub use updates::Updates;
 pub struct RecordedUpdates<U: layout::ColumnarUpdate> {
     pub updates: Updates<U>,
     pub records: usize,
+    /// Whether `updates` is known to be sorted and consolidated
+    /// (no duplicate (key, val, time) triples, no zero diffs).
+    pub consolidated: bool,
 }
 
 impl<U: layout::ColumnarUpdate> Default for RecordedUpdates<U> {
-    fn default() -> Self { Self { updates: Default::default(), records: 0 } }
+    fn default() -> Self { Self { updates: Default::default(), records: 0, consolidated: true } }
 }
 
 impl<U: layout::ColumnarUpdate> Clone for RecordedUpdates<U> {
-    fn clone(&self) -> Self { Self { updates: self.updates.clone(), records: self.records } }
+    fn clone(&self) -> Self { Self { updates: self.updates.clone(), records: self.records, consolidated: self.consolidated } }
 }
 
 impl<U: layout::ColumnarUpdate> timely::Accountable for RecordedUpdates<U> {
@@ -133,7 +136,9 @@ mod container_impls {
                 let t2 = T2::to_inner(t1_owned.clone());
                 new_times.push(&t2);
             }
+            // TODO: Assumes Enter (to_inner) is order-preserving on times.
             RecordedUpdates {
+                consolidated: self.consolidated,
                 updates: Updates {
                     keys: self.updates.keys,
                     vals: self.updates.vals,
@@ -168,6 +173,7 @@ mod container_impls {
             RecordedUpdates {
                 updates: flat.consolidate(),
                 records: self.records,
+                consolidated: true,
             }
         }
     }
@@ -185,7 +191,9 @@ mod container_impls {
                     output.push((k, v, &new_time, d));
                 }
             }
-            RecordedUpdates { updates: output, records: self.records }
+            // TODO: Time advancement may not be order preserving, but .. it could be.
+            // TODO: Before this is consolidated the above would need to be `form`ed.
+            RecordedUpdates { updates: output, records: self.records, consolidated: false }
         }
     }
 }
@@ -222,7 +230,8 @@ mod column_builder {
                 let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                 refs.sort();
                 let updates = Updates::form(refs.into_iter());
-                self.pending.push_back(RecordedUpdates { updates, records });
+                if std::env::var("DDIR_VALIDATE").is_ok() { updates.validate("ValColBuilder::push_into"); }
+                self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
                 self.current.clear();
             }
         }
@@ -260,7 +269,8 @@ mod column_builder {
                 let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
                 refs.sort();
                 let updates = Updates::form(refs.into_iter());
-                self.pending.push_back(RecordedUpdates { updates, records });
+                if std::env::var("DDIR_VALIDATE").is_ok() { updates.validate("ValColBuilder::finish"); }
+                self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
                 self.current.clear();
             }
             self.empty = self.pending.pop_front();
@@ -327,7 +337,7 @@ mod distributor {
             let mut first_records = total_records.saturating_sub(non_empty.saturating_sub(1));
             for (pusher, output) in pushers.iter_mut().zip(outputs) {
                 if !output.keys.values.is_empty() {
-                    let recorded = RecordedUpdates { updates: output, records: first_records };
+                    let recorded = RecordedUpdates { updates: output, records: first_records, consolidated: container.consolidated };
                     first_records = 1;
                     let mut recorded = recorded;
                     Message::push_at(&mut recorded, time.clone(), pusher);
@@ -499,150 +509,21 @@ pub mod arrangement {
 
             type TimeOwned = U::Time;
 
-            fn len(&self) -> usize { self.diffs.values.len() }
+            fn len(&self) -> usize { self.keys.values.len() }
             fn clear(&mut self) { *self = Self::default(); }
 
             #[inline(never)]
             fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) {
-                match others.len() {
-                    0 => {},
-                    1 => {
-                        // Bulk copy: take remaining keys from position onward.
-                        let other = &mut others[0];
-                        let pos = &mut positions[0];
-                        if self.keys.values.len() == 0 && *pos == 0 {
-                            std::mem::swap(self, other);
-                            return;
-                        }
-                        let other_len = other.keys.values.len();
-                        self.extend_from_keys(other, *pos .. other_len);
-                        *pos = other_len;
-                    },
-                    2 => {
-                        let mut this_sum = U::Diff::default();
-                        let mut that_sum = U::Diff::default();
-
-                        let (left, right) = others.split_at_mut(1);
-                        let this = &left[0];
-                        let that = &right[0];
-                        let this_keys = this.keys.values.borrow();
-                        let that_keys = that.keys.values.borrow();
-                        let mut this_key_range = positions[0] .. this_keys.len();
-                        let mut that_key_range = positions[1] .. that_keys.len();
-
-                        while !this_key_range.is_empty() && !that_key_range.is_empty() && !timely::container::SizableContainer::at_capacity(self) {
-                            let this_key = this_keys.get(this_key_range.start);
-                            let that_key = that_keys.get(that_key_range.start);
-                            match this_key.cmp(&that_key) {
-                                std::cmp::Ordering::Less => {
-                                    let lower = this_key_range.start;
-                                    gallop(this_keys, &mut this_key_range, |x| x < that_key);
-                                    self.extend_from_keys(this, lower .. this_key_range.start);
-                                },
-                                std::cmp::Ordering::Equal => {
-                                    let values_len = self.vals.values.len();
-                                    let mut this_val_range = this.vals_bounds(this_key_range.start .. this_key_range.start+1);
-                                    let mut that_val_range = that.vals_bounds(that_key_range.start .. that_key_range.start+1);
-                                    while !this_val_range.is_empty() && !that_val_range.is_empty() {
-                                        let this_val = this.vals.values.borrow().get(this_val_range.start);
-                                        let that_val = that.vals.values.borrow().get(that_val_range.start);
-                                        match this_val.cmp(&that_val) {
-                                            std::cmp::Ordering::Less => {
-                                                let lower = this_val_range.start;
-                                                gallop(this.vals.values.borrow(), &mut this_val_range, |x| x < that_val);
-                                                self.extend_from_vals(this, lower .. this_val_range.start);
-                                            },
-                                            std::cmp::Ordering::Equal => {
-                                                let updates_len = self.times.values.len();
-                                                let mut this_time_range = this.times_bounds(this_val_range.start .. this_val_range.start+1);
-                                                let mut that_time_range = that.times_bounds(that_val_range.start .. that_val_range.start+1);
-                                                while !this_time_range.is_empty() && !that_time_range.is_empty() {
-                                                    let this_time = this.times.values.borrow().get(this_time_range.start);
-                                                    let this_diff = this.diffs.values.borrow().get(this_time_range.start);
-                                                    let that_time = that.times.values.borrow().get(that_time_range.start);
-                                                    let that_diff = that.diffs.values.borrow().get(that_time_range.start);
-                                                    match this_time.cmp(&that_time) {
-                                                        std::cmp::Ordering::Less => {
-                                                            let lower = this_time_range.start;
-                                                            gallop(this.times.values.borrow(), &mut this_time_range, |x| x < that_time);
-                                                            self.times.values.extend_from_self(this.times.values.borrow(), lower .. this_time_range.start);
-                                                            self.diffs.extend_from_self(this.diffs.borrow(), lower .. this_time_range.start);
-                                                        },
-                                                        std::cmp::Ordering::Equal => {
-                                                            this_sum.copy_from(this_diff);
-                                                            that_sum.copy_from(that_diff);
-                                                            this_sum.plus_equals(&that_sum);
-                                                            if !this_sum.is_zero() {
-                                                                self.times.values.push(this_time);
-                                                                self.diffs.values.push(&this_sum);
-                                                                self.diffs.bounds.push(self.diffs.values.len() as u64);
-                                                            }
-                                                            this_time_range.start += 1;
-                                                            that_time_range.start += 1;
-                                                        },
-                                                        std::cmp::Ordering::Greater => {
-                                                            let lower = that_time_range.start;
-                                                            gallop(that.times.values.borrow(), &mut that_time_range, |x| x < this_time);
-                                                            self.times.values.extend_from_self(that.times.values.borrow(), lower .. that_time_range.start);
-                                                            self.diffs.extend_from_self(that.diffs.borrow(), lower .. that_time_range.start);
-                                                        },
-                                                    }
-                                                }
-                                                // Remaining from this side
-                                                if !this_time_range.is_empty() {
-                                                    self.times.values.extend_from_self(this.times.values.borrow(), this_time_range.clone());
-                                                    self.diffs.extend_from_self(this.diffs.borrow(), this_time_range.clone());
-                                                }
-                                                // Remaining from that side
-                                                if !that_time_range.is_empty() {
-                                                    self.times.values.extend_from_self(that.times.values.borrow(), that_time_range.clone());
-                                                    self.diffs.extend_from_self(that.diffs.borrow(), that_time_range.clone());
-                                                }
-                                                if self.times.values.len() > updates_len {
-                                                    self.times.bounds.push(self.times.values.len() as u64);
-                                                    self.vals.values.push(this_val);
-                                                }
-                                                this_val_range.start += 1;
-                                                that_val_range.start += 1;
-                                            },
-                                            std::cmp::Ordering::Greater => {
-                                                let lower = that_val_range.start;
-                                                gallop(that.vals.values.borrow(), &mut that_val_range, |x| x < this_val);
-                                                self.extend_from_vals(that, lower .. that_val_range.start);
-                                            },
-                                        }
-                                    }
-                                    self.extend_from_vals(this, this_val_range);
-                                    self.extend_from_vals(that, that_val_range);
-                                    if self.vals.values.len() > values_len {
-                                        self.vals.bounds.push(self.vals.values.len() as u64);
-                                        self.keys.values.push(this_key);
-                                    }
-                                    this_key_range.start += 1;
-                                    that_key_range.start += 1;
-                                },
-                                std::cmp::Ordering::Greater => {
-                                    let lower = that_key_range.start;
-                                    gallop(that_keys, &mut that_key_range, |x| x < this_key);
-                                    self.extend_from_keys(that, lower .. that_key_range.start);
-                                },
-                            }
-                        }
-                        // Copy remaining from whichever side has data, up to capacity.
-                        while !this_key_range.is_empty() && !timely::container::SizableContainer::at_capacity(self) {
-                            let lower = this_key_range.start;
-                            this_key_range.start = this_key_range.end; // take all remaining
-                            self.extend_from_keys(this, lower .. this_key_range.start);
-                        }
-                        while !that_key_range.is_empty() && !timely::container::SizableContainer::at_capacity(self) {
-                            let lower = that_key_range.start;
-                            that_key_range.start = that_key_range.end;
-                            self.extend_from_keys(that, lower .. that_key_range.start);
-                        }
-                        positions[0] = this_key_range.start;
-                        positions[1] = that_key_range.start;
-                    },
-                    n => unimplemented!("{n}-way merge not supported"),
+                // Slow but correct: collect self + all others (skipping already-consumed updates),
+                // rebuild via form_unsorted which sorts and consolidates.
+                let self_iter = self.iter();
+                let others_iter = others.iter().zip(positions.iter()).flat_map(|(other, pos)| {
+                    other.iter().skip(*pos)
+                });
+                *self = Self::form_unsorted(self_iter.chain(others_iter));
+                // Mark all inputs as fully consumed.
+                for (other, pos) in others.iter().zip(positions.iter_mut()) {
+                    *pos = other.len();
                 }
             }
 
@@ -653,48 +534,34 @@ pub mod arrangement {
                 keep: &mut Self,
                 ship: &mut Self,
             ) {
+                use columnar::Columnar;
+                // Slow but correct: partition, form_unsorted onto keep/ship.
+                let mut keep_vec: Vec<(U::Key, U::Val, U::Time, U::Diff)> = Vec::new();
+                let mut ship_vec: Vec<(U::Key, U::Val, U::Time, U::Diff)> = Vec::new();
+
                 let mut time = U::Time::default();
-                for key_idx in 0 .. self.keys.values.len() {
-                    let key = self.keys.values.borrow().get(key_idx);
-                    let keep_vals_len = keep.vals.values.len();
-                    let ship_vals_len = ship.vals.values.len();
-                    for val_idx in self.vals_bounds(key_idx..key_idx+1) {
-                        let val = self.vals.values.borrow().get(val_idx);
-                        let keep_times_len = keep.times.values.len();
-                        let ship_times_len = ship.times.values.len();
-                        for time_idx in self.times_bounds(val_idx..val_idx+1) {
-                            let t = self.times.values.borrow().get(time_idx);
-                            let diff = self.diffs.values.borrow().get(time_idx);
-                            time.copy_from(t);
-                            if upper.less_equal(&time) {
-                                frontier.insert_ref(&time);
-                                keep.times.values.push(t);
-                                keep.diffs.values.push(diff);
-                                keep.diffs.bounds.push(keep.diffs.values.len() as u64);
-                            }
-                            else {
-                                ship.times.values.push(t);
-                                ship.diffs.values.push(diff);
-                                ship.diffs.bounds.push(ship.diffs.values.len() as u64);
-                            }
-                        }
-                        if keep.times.values.len() > keep_times_len {
-                            keep.times.bounds.push(keep.times.values.len() as u64);
-                            keep.vals.values.push(val);
-                        }
-                        if ship.times.values.len() > ship_times_len {
-                            ship.times.bounds.push(ship.times.values.len() as u64);
-                            ship.vals.values.push(val);
-                        }
+                for (k, v, t, d) in self.iter() {
+                    Columnar::copy_from(&mut time, t);
+                    if upper.less_equal(&time) {
+                        frontier.insert_ref(&time);
+                        keep_vec.push((Columnar::into_owned(k), Columnar::into_owned(v), time.clone(), Columnar::into_owned(d)));
+                    } else {
+                        ship_vec.push((Columnar::into_owned(k), Columnar::into_owned(v), time.clone(), Columnar::into_owned(d)));
                     }
-                    if keep.vals.values.len() > keep_vals_len {
-                        keep.vals.bounds.push(keep.vals.values.len() as u64);
-                        keep.keys.values.push(key);
-                    }
-                    if ship.vals.values.len() > ship_vals_len {
-                        ship.vals.bounds.push(ship.vals.values.len() as u64);
-                        ship.keys.values.push(key);
-                    }
+                }
+
+                // Merge new data into keep/ship: push existing + new into flat Updates, consolidate.
+                if !keep_vec.is_empty() {
+                    let mut flat = Self::default();
+                    for (k, v, t, d) in keep.iter() { flat.push((k, v, t, d)); }
+                    for (k, v, t, d) in keep_vec.iter() { flat.push((k, v, t, d)); }
+                    *keep = flat.consolidate();
+                }
+                if !ship_vec.is_empty() {
+                    let mut flat = Self::default();
+                    for (k, v, t, d) in ship.iter() { flat.push((k, v, t, d)); }
+                    for (k, v, t, d) in ship_vec.iter() { flat.push((k, v, t, d)); }
+                    *ship = flat.consolidate();
                 }
             }
         }
@@ -748,7 +615,7 @@ pub mod arrangement {
         }
 
         pub struct ValMirror<U: Update> {
-            current: Updates<U>,
+            chunks: Vec<Updates<U>>,
         }
         impl<U: Update> differential_dataflow::trace::Builder for ValMirror<U> {
             type Time = U::Time;
@@ -756,63 +623,48 @@ pub mod arrangement {
             type Output = OrdValBatch<Layout<U>>;
 
             fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-                Self { current: Updates::default() }
+                Self { chunks: Vec::new() }
             }
             fn push(&mut self, chunk: &mut Self::Input) {
-                use columnar::Len;
-                let len = chunk.keys.values.len();
-                if len > 0 {
-                    self.current.extend_from_keys(chunk, 0..len);
+                if chunk.len() > 0 {
+                    self.chunks.push(std::mem::take(chunk));
                 }
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                let mut chain = if self.current.len() > 0 {
-                    vec![self.current]
-                } else {
-                    vec![]
-                };
+                let mut chain = self.chunks;
                 Self::seal(&mut chain, description)
             }
             fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
-                if chain.len() == 0 {
+                use columnar::Len;
+
+                // Slow but correct: merge all chain entries via form_unsorted.
+                let merged: Updates<U> = Updates::form_unsorted(chain.iter().flat_map(|c| c.iter()));
+                chain.clear();
+
+                let updates = Len::len(&merged.diffs.values);
+                if updates == 0 {
                     let storage = OrdValStorage {
                         keys: Default::default(),
                         vals: Default::default(),
                         upds: Default::default(),
                     };
                     OrdValBatch { storage, description, updates: 0 }
-                }
-                else if chain.len() == 1 {
-                    use columnar::Len;
-                    let storage = chain.pop().unwrap();
-                    let updates = storage.diffs.values.len();
-                    let val_offs = strides_to_offset_list(&storage.vals.bounds, storage.keys.values.len());
-                    let time_offs = strides_to_offset_list(&storage.times.bounds, storage.vals.values.len());
+                } else {
+                    let val_offs = strides_to_offset_list(&merged.vals.bounds, Len::len(&merged.keys.values));
+                    let time_offs = strides_to_offset_list(&merged.times.bounds, Len::len(&merged.vals.values));
                     let storage = OrdValStorage {
-                        keys: Coltainer { container: storage.keys.values },
+                        keys: Coltainer { container: merged.keys.values },
                         vals: Vals {
                             offs: val_offs,
-                            vals: Coltainer { container: storage.vals.values },
+                            vals: Coltainer { container: merged.vals.values },
                         },
                         upds: Upds {
                             offs: time_offs,
-                            times: Coltainer { container: storage.times.values },
-                            diffs: Coltainer { container: storage.diffs.values },
+                            times: Coltainer { container: merged.times.values },
+                            diffs: Coltainer { container: merged.diffs.values },
                         },
                     };
                     OrdValBatch { storage, description, updates }
-                }
-                else {
-                    use columnar::Len;
-                    let mut merged = chain.remove(0);
-                    for other in chain.drain(..) {
-                        let len = other.keys.values.len();
-                        if len > 0 {
-                            merged.extend_from_keys(&other, 0..len);
-                        }
-                    }
-                    chain.push(merged);
-                    Self::seal(chain, description)
                 }
             }
         }
@@ -888,6 +740,57 @@ pub mod updates {
         lower..upper
     }
 
+    /// A streaming consolidation iterator for sorted `(key, val, time, diff)` data.
+    ///
+    /// Accumulates diffs for equal `(key, val, time)` triples, yielding at most
+    /// one output per distinct triple, with a non-zero accumulated diff.
+    /// Input must be sorted by `(key, val, time)`.
+    pub struct Consolidating<I: Iterator, D> {
+        iter: std::iter::Peekable<I>,
+        diff: D,
+    }
+
+    impl<K, V, T, D, I> Consolidating<I, D>
+    where
+        K: Copy + Eq,
+        V: Copy + Eq,
+        T: Copy + Eq,
+        D: Semigroup + IsZero + Default,
+        I: Iterator<Item = (K, V, T, D)>,
+    {
+        pub fn new(iter: I) -> Self {
+            Self { iter: iter.peekable(), diff: D::default() }
+        }
+    }
+
+    impl<K, V, T, D, I> Iterator for Consolidating<I, D>
+    where
+        K: Copy + Eq,
+        V: Copy + Eq,
+        T: Copy + Eq,
+        D: Semigroup + IsZero + Default + Clone,
+        I: Iterator<Item = (K, V, T, D)>,
+    {
+        type Item = (K, V, T, D);
+        fn next(&mut self) -> Option<Self::Item> {
+            loop {
+                let (k, v, t, d) = self.iter.next()?;
+                self.diff = d;
+                while let Some(&(k2, v2, t2, _)) = self.iter.peek() {
+                    if k2 == k && v2 == v && t2 == t {
+                        let (_, _, _, d2) = self.iter.next().unwrap();
+                        self.diff.plus_equals(&d2);
+                    } else {
+                        break;
+                    }
+                }
+                if !self.diff.is_zero() {
+                    return Some((k, v, t, self.diff.clone()));
+                }
+            }
+        }
+    }
+
     impl<U: Update> Updates<U> {
 
         pub fn vals_bounds(&self, key_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
@@ -933,98 +836,64 @@ pub mod updates {
             self.diffs.extend_from_self(other.diffs.borrow(), time_range);
         }
 
-        /// Forms a consolidated `Updates` from sorted `(key, val, time, diff)` refs.
-        ///
-        /// Tracks a `prev` reference to the previous element. On each new element,
-        /// compares against `prev` to detect key/val/time changes. Only pushes
-        /// accumulated diffs when they are nonzero, and only emits times/vals/keys
-        /// that have at least one nonzero diff beneath them.
-        pub fn form<'a>(mut sorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
+        /// Forms a consolidated `Updates` trie from unsorted `(key, val, time, diff)` refs.
+        pub fn form_unsorted<'a>(unsorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
+            let mut data = unsorted.collect::<Vec<_>>();
+            data.sort();
+            Self::form(data.into_iter())
+        }
 
+        /// Forms a consolidated `Updates` trie from sorted `(key, val, time, diff)` refs.
+        pub fn form<'a>(sorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
+
+            // Step 1: Streaming consolidation — accumulate diffs, drop zeros.
+            let consolidated = Consolidating::new(
+                sorted.map(|(k, v, t, d)| (k, v, t, <U::Diff as Columnar>::into_owned(d)))
+            );
+
+            // Step 2: Build the trie from consolidated, sorted, non-zero data.
             let mut output = Self::default();
-            let mut diff_stash = U::Diff::default();
-            let mut diff_temp = U::Diff::default();
+            let mut updates = consolidated;
+            if let Some((key, val, time, diff)) = updates.next() {
+                let mut prev = (key, val, time);
+                output.keys.values.push(key);
+                output.vals.values.push(val);
+                output.times.values.push(time);
+                output.diffs.values.push(&diff);
+                output.diffs.bounds.push(output.diffs.values.len() as u64);
 
-            if let Some(first) = sorted.next() {
+                // As we proceed, seal up known complete runs.
+                for (key, val, time, diff) in updates {
 
-                let mut prev = first;
-                Columnar::copy_from(&mut diff_stash, prev.3);
-
-                for curr in sorted {
-                    let key_differs = ContainerOf::<U::Key>::reborrow_ref(curr.0) != ContainerOf::<U::Key>::reborrow_ref(prev.0);
-                    let val_differs = key_differs || ContainerOf::<U::Val>::reborrow_ref(curr.1) != ContainerOf::<U::Val>::reborrow_ref(prev.1);
-                    let time_differs = val_differs || ContainerOf::<U::Time>::reborrow_ref(curr.2) != ContainerOf::<U::Time>::reborrow_ref(prev.2);
-
-                    if time_differs {
-                        // Flush the accumulated diff for prev's (key, val, time).
-                        if !diff_stash.is_zero() {
-                            // We have a real update to emit. Push time (and val/key
-                            // if this is the first time under them).
-                            let times_len = output.times.values.len();
-                            let vals_len = output.vals.values.len();
-
-                            if val_differs {
-                                // Seal the previous val's time list, if any times were emitted.
-                                if times_len > 0 {
-                                    output.times.bounds.push(times_len as u64);
-                                }
-                                if key_differs {
-                                    // Seal the previous key's val list, if any vals were emitted.
-                                    if vals_len > 0 {
-                                        output.vals.bounds.push(vals_len as u64);
-                                    }
-                                    output.keys.values.push(prev.0);
-                                }
-                                output.vals.values.push(prev.1);
-                            }
-                            output.times.values.push(prev.2);
-                            output.diffs.values.push(&diff_stash);
-                            output.diffs.bounds.push(output.diffs.values.len() as u64);
-                        }
-                        Columnar::copy_from(&mut diff_stash, curr.3);
-                    } else {
-                        // Same (key, val, time): accumulate diff.
-                        Columnar::copy_from(&mut diff_temp, curr.3);
-                        diff_stash.plus_equals(&diff_temp);
+                    // If keys differ, record key and seal vals and times.
+                    if key != prev.0 {
+                        output.vals.bounds.push(output.vals.values.len() as u64);
+                        output.times.bounds.push(output.times.values.len() as u64);
+                        output.keys.values.push(key);
+                        output.vals.values.push(val);
                     }
-                    prev = curr;
-                }
-
-                // Flush the final accumulated diff.
-                if !diff_stash.is_zero() {
-                    let keys_len = output.keys.values.len();
-                    let vals_len = output.vals.values.len();
-                    let times_len = output.times.values.len();
-                    let need_key = keys_len == 0 || ContainerOf::<U::Key>::reborrow_ref(prev.0) != output.keys.values.borrow().get(keys_len - 1);
-                    let need_val = need_key || vals_len == 0 || ContainerOf::<U::Val>::reborrow_ref(prev.1) != output.vals.values.borrow().get(vals_len - 1);
-
-                    if need_val {
-                        if times_len > 0 {
-                            output.times.bounds.push(times_len as u64);
-                        }
-                        if need_key {
-                            if vals_len > 0 {
-                                output.vals.bounds.push(vals_len as u64);
-                            }
-                            output.keys.values.push(prev.0);
-                        }
-                        output.vals.values.push(prev.1);
+                    // If vals differ, record val and seal times.
+                    else if val != prev.1 {
+                        output.times.bounds.push(output.times.values.len() as u64);
+                        output.vals.values.push(val);
                     }
-                    output.times.values.push(prev.2);
-                    output.diffs.values.push(&diff_stash);
+                    else {
+                        // We better not find a duplicate time.
+                        assert!(time != prev.2);
+                    }
+
+                    // Always record (time, diff).
+                    output.times.values.push(time);
+                    output.diffs.values.push(&diff);
                     output.diffs.bounds.push(output.diffs.values.len() as u64);
+
+                    prev = (key, val, time);
                 }
 
-                // Seal the final groups at each level.
-                if !output.times.values.is_empty() {
-                    output.times.bounds.push(output.times.values.len() as u64);
-                }
-                if !output.vals.values.is_empty() {
-                    output.vals.bounds.push(output.vals.values.len() as u64);
-                }
-                if !output.keys.values.is_empty() {
-                    output.keys.bounds.push(output.keys.values.len() as u64);
-                }
+                // Seal up open lists.
+                output.keys.bounds.push(output.keys.values.len() as u64);
+                output.vals.bounds.push(output.vals.values.len() as u64);
+                output.times.bounds.push(output.times.values.len() as u64);
             }
 
             output
@@ -1034,102 +903,60 @@ pub mod updates {
         /// single outer key list, all lists sorted and deduplicated,
         /// diff lists are singletons (or absent if cancelled).
         pub fn consolidate(self) -> Self {
-
-            let Self { keys, vals, times, diffs } = self;
-
-            let keys_b = keys.borrow();
-            let vals_b = vals.borrow();
-            let times_b = times.borrow();
-            let diffs_b = diffs.borrow();
-
-            // Flatten to index tuples: [key_abs, val_abs, time_abs, diff_abs].
-            let mut tuples: Vec<[usize; 4]> = Vec::new();
-            for outer in 0..Len::len(&keys_b) {
-                for k in child_range(keys_b.bounds, outer) {
-                    for v in child_range(vals_b.bounds, k) {
-                        for t in child_range(times_b.bounds, v) {
-                            for d in child_range(diffs_b.bounds, t) {
-                                tuples.push([k, v, t, d]);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Sort by (key, val, time). Diff is payload.
-            tuples.sort_by(|a, b| {
-                keys_b.values.get(a[0]).cmp(&keys_b.values.get(b[0]))
-                    .then_with(|| vals_b.values.get(a[1]).cmp(&vals_b.values.get(b[1])))
-                    .then_with(|| times_b.values.get(a[2]).cmp(&times_b.values.get(b[2])))
-            });
-
-            // Build consolidated output, bottom-up cancellation.
-            let mut output = Self::default();
-            let mut diff_stash = U::Diff::default();
-            let mut diff_temp = U::Diff::default();
-
-            let mut idx = 0;
-            while idx < tuples.len() {
-                let key_ref = keys_b.values.get(tuples[idx][0]);
-                let key_start_vals = output.vals.values.len();
-
-                // All entries with this key.
-                while idx < tuples.len() && keys_b.values.get(tuples[idx][0]) == key_ref {
-                    let val_ref = vals_b.values.get(tuples[idx][1]);
-                    let val_start_times = output.times.values.len();
-
-                    // All entries with this (key, val).
-                    while idx < tuples.len()
-                        && keys_b.values.get(tuples[idx][0]) == key_ref
-                        && vals_b.values.get(tuples[idx][1]) == val_ref
-                    {
-                        let time_ref = times_b.values.get(tuples[idx][2]);
-
-                        // Sum all diffs for this (key, val, time).
-                        Columnar::copy_from(&mut diff_stash, diffs_b.values.get(tuples[idx][3]));
-                        idx += 1;
-                        while idx < tuples.len()
-                            && keys_b.values.get(tuples[idx][0]) == key_ref
-                            && vals_b.values.get(tuples[idx][1]) == val_ref
-                            && times_b.values.get(tuples[idx][2]) == time_ref
-                        {
-                            Columnar::copy_from(&mut diff_temp, diffs_b.values.get(tuples[idx][3]));
-                            diff_stash.plus_equals(&diff_temp);
-                            idx += 1;
-                        }
-
-                        // Emit time + singleton diff if nonzero.
-                        if !diff_stash.is_zero() {
-                            output.times.values.push(time_ref);
-                            output.diffs.values.push(&diff_stash);
-                            output.diffs.bounds.push(output.diffs.values.len() as u64);
-                        }
-                    }
-
-                    // Seal time list for this val; emit val if any times survived.
-                    if output.times.values.len() > val_start_times {
-                        output.times.bounds.push(output.times.values.len() as u64);
-                        output.vals.values.push(val_ref);
-                    }
-                }
-
-                // Seal val list for this key; emit key if any vals survived.
-                if output.vals.values.len() > key_start_vals {
-                    output.vals.bounds.push(output.vals.values.len() as u64);
-                    output.keys.values.push(key_ref);
-                }
-            }
-
-            // Seal the single outer key list.
-            if !output.keys.values.is_empty() {
-                output.keys.bounds.push(output.keys.values.len() as u64);
-            }
-
-            output
+            Self::form_unsorted(self.iter())
         }
 
         /// The number of leaf-level diff entries (total updates).
         pub fn len(&self) -> usize { self.diffs.values.len() }
+
+        /// Checks trie invariants and panics with a descriptive message if any fail.
+        pub fn validate(&self, label: &str) {
+            let keys_len = Len::len(&self.keys.values);
+            let vals_bounds_len = Len::len(&self.vals.bounds);
+            let vals_len = Len::len(&self.vals.values);
+            let times_bounds_len = Len::len(&self.times.bounds);
+            let times_len = Len::len(&self.times.values);
+            let diffs_bounds_len = Len::len(&self.diffs.bounds);
+            let diffs_len = Len::len(&self.diffs.values);
+
+            // 1. One val-group bound per key.
+            assert_eq!(vals_bounds_len, keys_len,
+                "{label}: vals.bounds.len() ({vals_bounds_len}) != keys.values.len() ({keys_len})");
+
+            // 2. One time-group bound per val.
+            assert_eq!(times_bounds_len, vals_len,
+                "{label}: times.bounds.len() ({times_bounds_len}) != vals.values.len() ({vals_len})");
+
+            // 3. One diff-group bound per time (singleton diffs).
+            assert_eq!(diffs_bounds_len, times_len,
+                "{label}: diffs.bounds.len() ({diffs_bounds_len}) != times.values.len() ({times_len})");
+
+            // 4. Cumulative bounds are monotonically non-decreasing at each level.
+            // 5. Final bound at each level matches the child values count.
+            fn check_monotone_and_final<B: IndexAs<u64> + Len>(
+                bounds: &B,
+                child_len: usize,
+                level: &str,
+                label: &str,
+            ) {
+                let n = Len::len(bounds);
+                if n == 0 { return; }
+                let mut prev = bounds.index_as(0);
+                for i in 1..n {
+                    let curr = bounds.index_as(i);
+                    assert!(curr >= prev,
+                        "{label}: {level}.bounds not monotonic at index {i}: {prev} > {curr}");
+                    prev = curr;
+                }
+                let last = bounds.index_as(n - 1) as usize;
+                assert_eq!(last, child_len,
+                    "{label}: last {level}.bounds ({last}) != child values len ({child_len})");
+            }
+
+            check_monotone_and_final(&self.vals.bounds.borrow(), vals_len, "vals", label);
+            check_monotone_and_final(&self.times.bounds.borrow(), times_len, "times", label);
+            check_monotone_and_final(&self.diffs.bounds.borrow(), diffs_len, "diffs", label);
+        }
     }
 
     /// Push a single flat update as a stride-1 entry.
@@ -1201,6 +1028,54 @@ pub mod updates {
         fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
         fn length_in_bytes(&self) -> usize { unimplemented!() }
         fn into_bytes<W: std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
+    }
+
+    /// An incremental trie builder that accepts sorted, consolidated `Updates` chunks
+    /// and melds them into a single `Updates` trie.
+    ///
+    /// The internal `Updates` has open (unsealed) bounds at the keys, vals, and times
+    /// levels — the last group at each level has its values pushed but no corresponding
+    /// bounds entry. `diffs.bounds` is always 1:1 with `times.values`.
+    ///
+    /// `meld` accepts a consolidated `Updates` whose first `(key, val, time)` is
+    /// strictly greater than the builder's last `(key, val, time)`. The key and val
+    /// may equal the builder's current open key/val, as long as the time is greater.
+    ///
+    /// `done` seals all open bounds and returns the completed `Updates`.
+    pub struct UpdatesBuilder<U: Update> {
+        /// Non-empty, consolidated updates.
+        updates: Updates<U>,
+    }
+
+    impl<U: Update> UpdatesBuilder<U> {
+        /// Construct a new builder from consolidated updates.
+        ///
+        /// If the updates are not consolidated none of this works.
+        pub fn new_from(updates: Updates<U>) -> Self { Self { updates } }
+
+        /// Meld a sorted, consolidated `Updates` chunk into this builder.
+        ///
+        /// The chunk's first `(key, val, time)` must be strictly greater than
+        /// the builder's last `(key, val, time)`. Keys and vals may overlap
+        /// (continue the current group), but times must be strictly increasing
+        /// within the same `(key, val)`.
+        pub fn meld(&mut self, chunk: &Updates<U>) {
+            todo!("to be implemented")
+        }
+
+        /// Seal all open bounds and return the completed `Updates`.
+        pub fn done(mut self) -> Updates<U> {
+            use columnar::Len;
+            if Len::len(&self.updates.keys.values) > 0 {
+                // Seal the open time group.
+                self.updates.times.bounds.push(Len::len(&self.updates.times.values) as u64);
+                // Seal the open val group.
+                self.updates.vals.bounds.push(Len::len(&self.updates.vals.values) as u64);
+                // Seal the outer key group.
+                self.updates.keys.bounds.push(Len::len(&self.updates.keys.values) as u64);
+            }
+            self.updates
+        }
     }
 
     #[cfg(test)]
@@ -1348,6 +1223,9 @@ where
         .unary::<ValColBuilder<U>, _, _, _>(Pipeline, "JoinFunction", move |_, _| {
             move |input, output| {
                 input.for_each(|time, data| {
+                    if std::env::var("DDIR_VALIDATE").is_ok() {
+                        data.updates.validate("JoinFunction input");
+                    }
                     let mut session = output.session_with_builder(&time);
                     for (k1, v1, t1, d1) in data.updates.iter() {
                         let t1o: U::Time = Columnar::into_owned(t1);
