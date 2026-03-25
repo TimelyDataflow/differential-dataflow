@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.20.0...differential-dataflow-v0.21.0) - 2026-03-25
+
+### Other
+
+- Update to track timely 0.28 and columnar 0.12 ([#698](https://github.com/TimelyDataflow/differential-dataflow/pull/698))
+- Further columnar work ([#697](https://github.com/TimelyDataflow/differential-dataflow/pull/697))
+- Remove columnar::Stash-a-like ([#696](https://github.com/TimelyDataflow/differential-dataflow/pull/696))
+- Add Arranged::as_container convenience method ([#695](https://github.com/TimelyDataflow/differential-dataflow/pull/695))
+- Columnar tidy ([#694](https://github.com/TimelyDataflow/differential-dataflow/pull/694))
+- Migrate columnar example from chainless batcher to MergeBatcher ([#693](https://github.com/TimelyDataflow/differential-dataflow/pull/693))
+- Improve some graph algorithms ([#692](https://github.com/TimelyDataflow/differential-dataflow/pull/692))
+- Use more internal iteration ([#689](https://github.com/TimelyDataflow/differential-dataflow/pull/689))
+- Add columnation and columnar impls for Present ([#682](https://github.com/TimelyDataflow/differential-dataflow/pull/682))
+
 ## [0.20.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.19.1...differential-dataflow-v0.20.0) - 2026-03-05
 
 ### Other
