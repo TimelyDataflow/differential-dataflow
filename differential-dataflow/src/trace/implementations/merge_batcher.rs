@@ -311,12 +311,10 @@ pub mod container {
             }
             container
         }
-        /// Ensure `queue` is non-empty by pulling from `iter` if needed.
-        /// Returns `true` if `queue` has data, `false` if both are exhausted.
-        /// Recycles drained queues into `stash` for allocation reuse.
-        fn refill(queue: &mut std::collections::VecDeque<(D, T, R)>, iter: &mut impl Iterator<Item = Vec<(D, T, R)>>, stash: &mut Vec<Vec<(D, T, R)>>) -> bool {
-            let target = Self::target_capacity();
-            while queue.is_empty() {
+        /// Refill `queue` from `iter` if empty. Recycles drained queues into `stash`.
+        fn refill(queue: &mut std::collections::VecDeque<(D, T, R)>, iter: &mut impl Iterator<Item = Vec<(D, T, R)>>, stash: &mut Vec<Vec<(D, T, R)>>) {
+            if queue.is_empty() {
+                let target = Self::target_capacity();
                 if stash.len() < 2 {
                     let mut recycled = Vec::from(std::mem::take(queue));
                     recycled.clear();
@@ -324,12 +322,10 @@ pub mod container {
                         stash.push(recycled);
                     }
                 }
-                match iter.next() {
-                    Some(chunk) => *queue = std::collections::VecDeque::from(chunk),
-                    None => return false,
+                if let Some(chunk) = iter.next() {
+                    *queue = std::collections::VecDeque::from(chunk);
                 }
             }
-            true
         }
     }
 
@@ -359,33 +355,33 @@ pub mod container {
 
             let mut result = self.empty(stash);
 
-            // Merge while both queues can be kept non-empty.
-            while Self::refill(&mut q1, &mut iter1, stash) && Self::refill(&mut q2, &mut iter2, stash) {
-                while !q1.is_empty() && !q2.is_empty() {
-                    let (d1, t1, _) = q1.front().unwrap();
-                    let (d2, t2, _) = q2.front().unwrap();
-                    match (d1, t1).cmp(&(d2, t2)) {
-                        Ordering::Less => {
-                            result.push(q1.pop_front().unwrap());
-                        }
-                        Ordering::Greater => {
-                            result.push(q2.pop_front().unwrap());
-                        }
-                        Ordering::Equal => {
-                            let (d, t, mut r1) = q1.pop_front().unwrap();
-                            let (_, _, r2) = q2.pop_front().unwrap();
-                            r1.plus_equals(&r2);
-                            if !r1.is_zero() {
-                                result.push((d, t, r1));
-                            }
-                        }
+            // Merge while both queues are non-empty.
+            while let (Some((d1, t1, _)), Some((d2, t2, _))) = (q1.front(), q2.front()) {
+                match (d1, t1).cmp(&(d2, t2)) {
+                    Ordering::Less => {
+                        result.push(q1.pop_front().unwrap());
                     }
-
-                    if result.at_capacity() {
-                        output.push(std::mem::take(&mut result));
-                        result = self.empty(stash);
+                    Ordering::Greater => {
+                        result.push(q2.pop_front().unwrap());
+                    }
+                    Ordering::Equal => {
+                        let (d, t, mut r1) = q1.pop_front().unwrap();
+                        let (_, _, r2) = q2.pop_front().unwrap();
+                        r1.plus_equals(&r2);
+                        if !r1.is_zero() {
+                            result.push((d, t, r1));
+                        }
                     }
                 }
+
+                if result.at_capacity() {
+                    output.push(std::mem::take(&mut result));
+                    result = self.empty(stash);
+                }
+
+                // Refill emptied queues from their chains.
+                if q1.is_empty() { Self::refill(&mut q1, &mut iter1, stash); }
+                if q2.is_empty() { Self::refill(&mut q2, &mut iter2, stash); }
             }
 
             // Push partial result and remaining data from both sides.
