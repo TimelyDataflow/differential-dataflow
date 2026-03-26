@@ -432,12 +432,6 @@ pub mod container {
         }
     }
 
-    /// Implementation of `InternalMerge` for `Vec<(D, T, R)>`.
-    ///
-    /// Note: The `VecMerger` type implements `Merger` directly and avoids
-    /// cloning by draining inputs. This `InternalMerge` impl is retained
-    /// because `reduce` requires `Builder::Input: InternalMerge`.
-
     /// A merger that uses internal iteration via [`InternalMerge`].
     pub struct InternalMerger<MC> {
         _marker: PhantomData<MC>,
@@ -462,6 +456,9 @@ pub mod container {
             stash.push(chunk);
         }
         /// Drain remaining items from one side into `result`/`output`.
+        ///
+        /// Copies the partially-consumed head into `result`, then appends
+        /// remaining full chunks directly to `output` without copying.
         fn drain_side(
             &self,
             head: &mut MC,
@@ -471,21 +468,20 @@ pub mod container {
             output: &mut Vec<MC>,
             stash: &mut Vec<MC>,
         ) {
-            while *pos < head.len() {
+            // Copy the partially-consumed head into result.
+            if *pos < head.len() {
                 result.merge_from(
                     std::slice::from_mut(head),
                     std::slice::from_mut(pos),
                 );
-                if *pos >= head.len() {
-                    let old = std::mem::replace(head, list.next().unwrap_or_default());
-                    self.recycle(old, stash);
-                    *pos = 0;
-                }
-                if result.at_capacity() {
-                    output.push(std::mem::take(result));
-                    *result = self.empty(stash);
-                }
             }
+            // Flush result before appending full chunks.
+            if !result.is_empty() {
+                output.push(std::mem::take(result));
+                *result = self.empty(stash);
+            }
+            // Remaining full chunks go directly to output.
+            output.extend(list);
         }
     }
 
@@ -525,20 +521,12 @@ pub mod container {
                 }
             }
 
-            // Drain remaining from side 0.
+            // Drain remaining from each side: copy partial head, then append full chunks.
             self.drain_side(&mut heads[0], &mut positions[0], &mut list1, &mut result, output, stash);
-            if !result.is_empty() {
-                output.push(std::mem::take(&mut result));
-                result = self.empty(stash);
-            }
-            output.extend(list1);
-
-            // Drain remaining from side 1.
             self.drain_side(&mut heads[1], &mut positions[1], &mut list2, &mut result, output, stash);
             if !result.is_empty() {
-                output.push(std::mem::take(&mut result));
+                output.push(result);
             }
-            output.extend(list2);
         }
 
         fn extract(
@@ -579,6 +567,10 @@ pub mod container {
     }
 
     /// Implementation of `InternalMerge` for `Vec<(D, T, R)>`.
+    ///
+    /// Note: The `VecMerger` type implements `Merger` directly and avoids
+    /// cloning by draining inputs. This `InternalMerge` impl is retained
+    /// because `reduce` requires `Builder::Input: InternalMerge`.
     pub mod vec_internal {
         use std::cmp::Ordering;
         use timely::PartialOrder;
