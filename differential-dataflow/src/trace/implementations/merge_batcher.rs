@@ -278,10 +278,153 @@ pub mod container {
         );
     }
 
-    /// A `Merger` using internal iteration for `Vec` containers.
-    pub type VecInternalMerger<D, T, R> = InternalMerger<Vec<(D, T, R)>>;
+    /// A `Merger` for `Vec` containers, which contain owned data and need special treatment.
+    pub type VecInternalMerger<D, T, R> = VecMerger<D, T, R>;
     /// A `Merger` using internal iteration for `TimelyStack` containers.
     pub type ColInternalMerger<D, T, R> = InternalMerger<crate::containers::TimelyStack<(D, T, R)>>;
+
+    /// A `Merger` implementation for `Vec<(D, T, R)>` that drains owned inputs.
+    pub struct VecMerger<D, T, R> {
+        _marker: PhantomData<(D, T, R)>,
+    }
+
+    impl<D, T, R> Default for VecMerger<D, T, R> {
+        fn default() -> Self { Self { _marker: PhantomData } }
+    }
+
+    impl<D, T, R> VecMerger<D, T, R> {
+        fn empty(&self, stash: &mut Vec<Vec<(D, T, R)>>) -> Vec<(D, T, R)> {
+            let mut container = stash.pop().unwrap_or_default();
+            container.ensure_capacity(&mut None);
+            container
+        }
+        /// Ensure `queue` is non-empty by pulling from `iter` if needed.
+        /// Returns `true` if `queue` has data, `false` if both are exhausted.
+        /// Recycles drained queues into `stash` for allocation reuse.
+        fn refill(queue: &mut std::collections::VecDeque<(D, T, R)>, iter: &mut impl Iterator<Item = Vec<(D, T, R)>>, stash: &mut Vec<Vec<(D, T, R)>>) -> bool {
+            while queue.is_empty() {
+                if stash.len() < 2 {
+                    let mut recycled = Vec::from(std::mem::take(queue));
+                    recycled.clear();
+                    stash.push(recycled);
+                }
+                match iter.next() {
+                    Some(chunk) => *queue = std::collections::VecDeque::from(chunk),
+                    None => return false,
+                }
+            }
+            true
+        }
+    }
+
+    impl<D, T, R> Merger for VecMerger<D, T, R>
+    where
+        D: Ord + Clone + 'static,
+        T: Ord + Clone + PartialOrder + 'static,
+        R: crate::difference::Semigroup + Clone + 'static,
+    {
+        type Chunk = Vec<(D, T, R)>;
+        type Time = T;
+
+        fn merge(
+            &mut self,
+            list1: Vec<Vec<(D, T, R)>>,
+            list2: Vec<Vec<(D, T, R)>>,
+            output: &mut Vec<Vec<(D, T, R)>>,
+            stash: &mut Vec<Vec<(D, T, R)>>,
+        ) {
+            use std::cmp::Ordering;
+            use std::collections::VecDeque;
+
+            let mut iter1 = list1.into_iter();
+            let mut iter2 = list2.into_iter();
+            let mut q1 = VecDeque::<(D,T,R)>::from(iter1.next().unwrap_or_default());
+            let mut q2 = VecDeque::<(D,T,R)>::from(iter2.next().unwrap_or_default());
+
+            let mut result = self.empty(stash);
+
+            // Merge while both queues can be kept non-empty.
+            while Self::refill(&mut q1, &mut iter1, stash) && Self::refill(&mut q2, &mut iter2, stash) {
+                while !q1.is_empty() && !q2.is_empty() {
+                    let (d1, t1, _) = q1.front().unwrap();
+                    let (d2, t2, _) = q2.front().unwrap();
+                    match (d1, t1).cmp(&(d2, t2)) {
+                        Ordering::Less => {
+                            result.push(q1.pop_front().unwrap());
+                        }
+                        Ordering::Greater => {
+                            result.push(q2.pop_front().unwrap());
+                        }
+                        Ordering::Equal => {
+                            let (d, t, mut r1) = q1.pop_front().unwrap();
+                            let (_, _, r2) = q2.pop_front().unwrap();
+                            r1.plus_equals(&r2);
+                            if !r1.is_zero() {
+                                result.push((d, t, r1));
+                            }
+                        }
+                    }
+
+                    if result.at_capacity() {
+                        output.push(std::mem::take(&mut result));
+                        result = self.empty(stash);
+                    }
+                }
+            }
+
+            // Push partial result and remaining data from both sides.
+            if !result.is_empty() { output.push(result); }
+            for q in [q1, q2] {
+                if !q.is_empty() { output.push(Vec::from(q)); }
+            }
+            output.extend(iter1);
+            output.extend(iter2);
+        }
+
+        fn extract(
+            &mut self,
+            merged: Vec<Vec<(D, T, R)>>,
+            upper: AntichainRef<T>,
+            frontier: &mut Antichain<T>,
+            ship: &mut Vec<Vec<(D, T, R)>>,
+            kept: &mut Vec<Vec<(D, T, R)>>,
+            stash: &mut Vec<Vec<(D, T, R)>>,
+        ) {
+            let mut keep = self.empty(stash);
+            let mut ready = self.empty(stash);
+
+            for chunk in merged {
+                for (data, time, diff) in chunk {
+                    if upper.less_equal(&time) {
+                        frontier.insert_with(&time, |time| time.clone());
+                        keep.push((data, time, diff));
+                    } else {
+                        ready.push((data, time, diff));
+                    }
+                }
+                if keep.at_capacity() {
+                    kept.push(std::mem::take(&mut keep));
+                    keep = self.empty(stash);
+                }
+                if ready.at_capacity() {
+                    ship.push(std::mem::take(&mut ready));
+                    ready = self.empty(stash);
+                }
+            }
+            if !keep.is_empty() { kept.push(keep); }
+            if !ready.is_empty() { ship.push(ready); }
+        }
+
+        fn account(chunk: &Vec<(D, T, R)>) -> (usize, usize, usize, usize) {
+            (chunk.len(), 0, 0, 0)
+        }
+    }
+
+    /// Implementation of `InternalMerge` for `Vec<(D, T, R)>`.
+    ///
+    /// Note: The `VecMerger` type implements `Merger` directly and avoids
+    /// cloning by draining inputs. This `InternalMerge` impl is retained
+    /// because `reduce` requires `Builder::Input: InternalMerge`.
 
     /// A merger that uses internal iteration via [`InternalMerge`].
     pub struct InternalMerger<MC> {
