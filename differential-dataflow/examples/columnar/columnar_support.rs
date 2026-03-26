@@ -443,8 +443,8 @@ pub mod arrangement {
     }
 
     use crate::{Updates, RecordedUpdates};
-    use differential_dataflow::trace::implementations::merge_batcher::{MergeBatcher, InternalMerger};
-    type ValBatcher2<U> = MergeBatcher<RecordedUpdates<U>, TrieChunker<U>, InternalMerger<Updates<U>>>;
+    use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+    type ValBatcher2<U> = MergeBatcher<RecordedUpdates<U>, TrieChunker<U>, trie_merger::TrieMerger<U>>;
 
     /// A chunker that unwraps `RecordedUpdates` into bare `Updates` for the merge batcher.
     /// The `records` accounting is discarded here — it has served its purpose for exchange.
@@ -488,8 +488,7 @@ pub mod arrangement {
 
     pub mod batcher {
 
-        use std::ops::Range;
-        use columnar::{Borrow, Columnar, Container, Index, Len, Push};
+        use columnar::{Borrow, Columnar, Index, Len, Push};
         use differential_dataflow::difference::{Semigroup, IsZero};
         use timely::progress::frontier::{Antichain, AntichainRef};
         use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
@@ -499,34 +498,34 @@ pub mod arrangement {
 
         impl<U: Update> timely::container::SizableContainer for Updates<U> {
             fn at_capacity(&self) -> bool {
-                use columnar::Len;
                 self.diffs.values.len() >= 64 * 1024
             }
             fn ensure_capacity(&mut self, _stash: &mut Option<Self>) { }
         }
 
+        /// Required by `reduce_abelian`'s bound `Builder::Input: InternalMerge`.
+        /// Not called at runtime — our batcher uses `TrieMerger` instead.
+        /// TODO: Relax the bound in DD's reduce to remove this requirement.
         impl<U: Update> InternalMerge for Updates<U> {
-
             type TimeOwned = U::Time;
-
-            fn len(&self) -> usize { self.keys.values.len() }
-            fn clear(&mut self) { *self = Self::default(); }
-
-            #[inline(never)]
+            fn len(&self) -> usize { Len::len(&self.keys.values) }
+            fn clear(&mut self) {
+                use columnar::Clear;
+                self.keys.clear();
+                self.vals.clear();
+                self.times.clear();
+                self.diffs.clear();
+            }
             fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) {
-                // Slow but correct: collect self + all others (skipping already-consumed updates),
-                // rebuild via form_unsorted which sorts and consolidates.
                 let self_iter = self.iter();
                 let others_iter = others.iter().zip(positions.iter()).flat_map(|(other, pos)| {
                     other.iter().skip(*pos)
                 });
                 *self = Self::form_unsorted(self_iter.chain(others_iter));
-                // Mark all inputs as fully consumed.
                 for (other, pos) in others.iter().zip(positions.iter_mut()) {
                     *pos = other.len();
                 }
             }
-
             fn extract(
                 &mut self,
                 upper: AntichainRef<U::Time>,
@@ -534,12 +533,9 @@ pub mod arrangement {
                 keep: &mut Self,
                 ship: &mut Self,
             ) {
-                use columnar::Columnar;
-                // Slow but correct: partition, form_unsorted onto keep/ship.
+                let mut time = U::Time::default();
                 let mut keep_vec: Vec<(U::Key, U::Val, U::Time, U::Diff)> = Vec::new();
                 let mut ship_vec: Vec<(U::Key, U::Val, U::Time, U::Diff)> = Vec::new();
-
-                let mut time = U::Time::default();
                 for (k, v, t, d) in self.iter() {
                     Columnar::copy_from(&mut time, t);
                     if upper.less_equal(&time) {
@@ -549,8 +545,6 @@ pub mod arrangement {
                         ship_vec.push((Columnar::into_owned(k), Columnar::into_owned(v), time.clone(), Columnar::into_owned(d)));
                     }
                 }
-
-                // Merge new data into keep/ship: push existing + new into flat Updates, consolidate.
                 if !keep_vec.is_empty() {
                     let mut flat = Self::default();
                     for (k, v, t, d) in keep.iter() { flat.push((k, v, t, d)); }
@@ -565,28 +559,135 @@ pub mod arrangement {
                 }
             }
         }
+    }
 
-        #[inline(always)]
-        pub(crate) fn gallop<TC: columnar::Index>(input: TC, range: &mut Range<usize>, mut cmp: impl FnMut(<TC as columnar::Index>::Ref) -> bool) {
-            // if empty input, or already >= element, return
-            if !Range::<usize>::is_empty(range) && cmp(input.get(range.start)) {
-                let mut step = 1;
-                while range.start + step < range.end && cmp(input.get(range.start + step)) {
-                    range.start += step;
-                    step <<= 1;
-                }
+    pub mod trie_merger {
 
-                step >>= 1;
-                while step > 0 {
-                    if range.start + step < range.end && cmp(input.get(range.start + step)) {
-                        range.start += step;
+        use columnar::{Columnar, Len};
+        use timely::PartialOrder;
+        use timely::progress::frontier::{Antichain, AntichainRef};
+        use differential_dataflow::trace::implementations::merge_batcher::Merger;
+
+        use crate::ColumnarUpdate as Update;
+        use crate::Updates;
+
+        pub struct TrieMerger<U: Update> {
+            _marker: std::marker::PhantomData<U>,
+        }
+
+        impl<U: Update> Default for TrieMerger<U> {
+            fn default() -> Self { Self { _marker: std::marker::PhantomData } }
+        }
+
+        /// A merging iterator over two sorted iterators.
+        struct Merging<I1: Iterator, I2: Iterator> {
+            iter1: std::iter::Peekable<I1>,
+            iter2: std::iter::Peekable<I2>,
+        }
+
+        impl<K, V, T, D, I1, I2> Iterator for Merging<I1, I2>
+        where
+            K: Copy + Ord,
+            V: Copy + Ord,
+            T: Copy + Ord,
+            I1: Iterator<Item = (K, V, T, D)>,
+            I2: Iterator<Item = (K, V, T, D)>,
+        {
+            type Item = (K, V, T, D);
+            #[inline]
+            fn next(&mut self) -> Option<Self::Item> {
+                match (self.iter1.peek(), self.iter2.peek()) {
+                    (Some(a), Some(b)) => {
+                        if (a.0, a.1, a.2) <= (b.0, b.1, b.2) {
+                            self.iter1.next()
+                        } else {
+                            self.iter2.next()
+                        }
                     }
-                    step >>= 1;
+                    (Some(_), None) => self.iter1.next(),
+                    (None, Some(_)) => self.iter2.next(),
+                    (None, None) => None,
                 }
-
-                range.start += 1;
             }
         }
+
+        /// Build sorted `Updates` chunks from a sorted iterator of refs,
+        /// using `Updates::form` (which consolidates internally) on batches.
+        fn form_chunks<'a, U: Update>(
+            sorted: impl Iterator<Item = columnar::Ref<'a, crate::updates::Tuple<U>>>,
+            output: &mut Vec<Updates<U>>,
+        ) {
+            let mut sorted = sorted.peekable();
+            while sorted.peek().is_some() {
+                let chunk = Updates::<U>::form((&mut sorted).take(64 * 1024));
+                if chunk.len() > 0 {
+                    output.push(chunk);
+                }
+            }
+        }
+
+        impl<U: Update> Merger for TrieMerger<U>
+        where
+            U::Time: Ord + PartialOrder + Clone + 'static,
+        {
+            type Chunk = Updates<U>;
+            type Time = U::Time;
+
+            fn merge(
+                &mut self,
+                list1: Vec<Updates<U>>,
+                list2: Vec<Updates<U>>,
+                output: &mut Vec<Updates<U>>,
+                _stash: &mut Vec<Updates<U>>,
+            ) {
+                let iter1 = list1.iter().flat_map(|chunk| chunk.iter());
+                let iter2 = list2.iter().flat_map(|chunk| chunk.iter());
+
+                let merged = Merging {
+                    iter1: iter1.peekable(),
+                    iter2: iter2.peekable(),
+                };
+
+                form_chunks::<U>(merged, output);
+            }
+
+            fn extract(
+                &mut self,
+                merged: Vec<Self::Chunk>,
+                upper: AntichainRef<Self::Time>,
+                frontier: &mut Antichain<Self::Time>,
+                ship: &mut Vec<Self::Chunk>,
+                kept: &mut Vec<Self::Chunk>,
+                _stash: &mut Vec<Self::Chunk>,
+            ) {
+                // Flatten the sorted, consolidated chain into refs.
+                let all = merged.iter().flat_map(|chunk| chunk.iter());
+
+                // Partition into two sorted streams by time.
+                let mut time_owned = U::Time::default();
+                let mut keep_vec = Vec::new();
+                let mut ship_vec = Vec::new();
+                for (k, v, t, d) in all {
+                    Columnar::copy_from(&mut time_owned, t);
+                    if upper.less_equal(&time_owned) {
+                        frontier.insert_ref(&time_owned);
+                        keep_vec.push((k, v, t, d));
+                    } else {
+                        ship_vec.push((k, v, t, d));
+                    }
+                }
+
+                // Build chunks via form (which consolidates internally).
+                form_chunks::<U>(keep_vec.into_iter(), kept);
+                form_chunks::<U>(ship_vec.into_iter(), ship);
+            }
+
+            fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+                use timely::Accountable;
+                (chunk.record_count() as usize, 0, 0, 0)
+            }
+        }
+
     }
 
     use builder::ValMirror;
@@ -637,8 +738,19 @@ pub mod arrangement {
             fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
                 use columnar::Len;
 
-                // Slow but correct: merge all chain entries via form_unsorted.
-                let merged: Updates<U> = Updates::form_unsorted(chain.iter().flat_map(|c| c.iter()));
+                // Meld sorted, consolidated chain entries in order.
+                // Pre-allocate to avoid reallocations during meld.
+                use columnar::{Borrow, Container};
+                let mut updates = Updates::<U>::default();
+                updates.keys.reserve_for(chain.iter().map(|c| c.keys.borrow()));
+                updates.vals.reserve_for(chain.iter().map(|c| c.vals.borrow()));
+                updates.times.reserve_for(chain.iter().map(|c| c.times.borrow()));
+                updates.diffs.reserve_for(chain.iter().map(|c| c.diffs.borrow()));
+                let mut builder = crate::updates::UpdatesBuilder::new_from(updates);
+                for chunk in chain.iter() {
+                    builder.meld(chunk);
+                }
+                let merged = builder.done();
                 chain.clear();
 
                 let updates = Len::len(&merged.diffs.values);
@@ -1048,10 +1160,20 @@ pub mod updates {
     }
 
     impl<U: Update> UpdatesBuilder<U> {
-        /// Construct a new builder from consolidated updates.
+        /// Construct a new builder from consolidated, sealed updates.
         ///
+        /// Unseals the last group at keys, vals, and times levels so that
+        /// subsequent `meld` calls can extend the open groups.
         /// If the updates are not consolidated none of this works.
-        pub fn new_from(updates: Updates<U>) -> Self { Self { updates } }
+        pub fn new_from(mut updates: Updates<U>) -> Self {
+            use columnar::Len;
+            if Len::len(&updates.keys.values) > 0 {
+                updates.keys.bounds.pop();
+                updates.vals.bounds.pop();
+                updates.times.bounds.pop();
+            }
+            Self { updates }
+        }
 
         /// Meld a sorted, consolidated `Updates` chunk into this builder.
         ///
@@ -1060,7 +1182,122 @@ pub mod updates {
         /// (continue the current group), but times must be strictly increasing
         /// within the same `(key, val)`.
         pub fn meld(&mut self, chunk: &Updates<U>) {
-            todo!("to be implemented")
+            use columnar::{Borrow, Index, Len};
+
+            if chunk.len() == 0 { return; }
+
+            // Empty builder: clone the chunk and unseal it.
+            if Len::len(&self.updates.keys.values) == 0 {
+                self.updates = chunk.clone();
+                self.updates.keys.bounds.pop();
+                self.updates.vals.bounds.pop();
+                self.updates.times.bounds.pop();
+                return;
+            }
+
+            // Pre-compute boundary comparisons before mutating.
+            let keys_match = {
+                let skb = self.updates.keys.values.borrow();
+                let ckb = chunk.keys.values.borrow();
+                skb.get(Len::len(&skb) - 1) == ckb.get(0)
+            };
+            let vals_match = keys_match && {
+                let svb = self.updates.vals.values.borrow();
+                let cvb = chunk.vals.values.borrow();
+                svb.get(Len::len(&svb) - 1) == cvb.get(0)
+            };
+
+            let chunk_num_keys = Len::len(&chunk.keys.values);
+            let chunk_num_vals = Len::len(&chunk.vals.values);
+            let chunk_num_times = Len::len(&chunk.times.values);
+
+            // Child ranges for the first element at each level of the chunk.
+            let first_key_vals = child_range(chunk.vals.borrow().bounds, 0);
+            let first_val_times = child_range(chunk.times.borrow().bounds, 0);
+
+            // There is a first position where coordinates disagree.
+            // Strictly beyond that position: seal bounds, extend lists, re-open the last bound.
+            // At that position: meld the first list, extend subsequent lists, re-open.
+            let mut differ = false;
+
+            // --- Keys ---
+            if keys_match {
+                // Skip the duplicate first key; add remaining keys.
+                if chunk_num_keys > 1 {
+                    self.updates.keys.values.extend_from_self(chunk.keys.values.borrow(), 1..chunk_num_keys);
+                }
+            } else {
+                // All keys are new.
+                self.updates.keys.values.extend_from_self(chunk.keys.values.borrow(), 0..chunk_num_keys);
+                differ = true;
+            }
+
+            // --- Vals ---
+            if differ {
+                // Keys differed: seal open val group, extend all val lists, unseal last.
+                self.updates.vals.bounds.push(Len::len(&self.updates.vals.values) as u64);
+                self.updates.vals.extend_from_self(chunk.vals.borrow(), 0..chunk_num_keys);
+                self.updates.vals.bounds.pop();
+            } else {
+                // Keys matched: meld vals for the shared key.
+                if vals_match {
+                    // Skip the duplicate first val; add remaining vals from the first key's list.
+                    if first_key_vals.len() > 1 {
+                        self.updates.vals.values.extend_from_self(
+                            chunk.vals.values.borrow(),
+                            (first_key_vals.start + 1)..first_key_vals.end,
+                        );
+                    }
+                } else {
+                    // First val differs: add all vals from the first key's list.
+                    self.updates.vals.values.extend_from_self(
+                        chunk.vals.values.borrow(),
+                        first_key_vals.clone(),
+                    );
+                    differ = true;
+                }
+                // Seal the matched key's val group, extend remaining keys' val lists, unseal.
+                if chunk_num_keys > 1 {
+                    self.updates.vals.bounds.push(Len::len(&self.updates.vals.values) as u64);
+                    self.updates.vals.extend_from_self(chunk.vals.borrow(), 1..chunk_num_keys);
+                    self.updates.vals.bounds.pop();
+                }
+            }
+
+            // --- Times ---
+            if differ {
+                // Seal open time group, extend all time lists, unseal last.
+                self.updates.times.bounds.push(Len::len(&self.updates.times.values) as u64);
+                self.updates.times.extend_from_self(chunk.times.borrow(), 0..chunk_num_vals);
+                self.updates.times.bounds.pop();
+            } else {
+                // Keys and vals matched. Times must be strictly greater (precondition),
+                // so we always set differ = true here.
+                debug_assert!({
+                    let stb = self.updates.times.values.borrow();
+                    let ctb = chunk.times.values.borrow();
+                    stb.get(Len::len(&stb) - 1) != ctb.get(0)
+                }, "meld: duplicate time within same (key, val)");
+                // Add times from the first val's time list into the open group.
+                self.updates.times.values.extend_from_self(
+                    chunk.times.values.borrow(),
+                    first_val_times.clone(),
+                );
+                differ = true;
+                // Seal the matched val's time group, extend remaining vals' time lists, unseal.
+                if chunk_num_vals > 1 {
+                    self.updates.times.bounds.push(Len::len(&self.updates.times.values) as u64);
+                    self.updates.times.extend_from_self(chunk.times.borrow(), 1..chunk_num_vals);
+                    self.updates.times.bounds.pop();
+                }
+            }
+
+            // --- Diffs ---
+            // Diffs are always sealed (1:1 with times). By the precondition that
+            // times are strictly increasing for the same (key, val), differ is
+            // always true by this point — just extend all diff lists.
+            debug_assert!(differ);
+            self.updates.diffs.extend_from_self(chunk.diffs.borrow(), 0..chunk_num_times);
         }
 
         /// Seal all open bounds and return the completed `Updates`.

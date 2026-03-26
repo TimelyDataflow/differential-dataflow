@@ -23,6 +23,8 @@ use crate::trace::implementations::containers::BatchContainer;
 use crate::trace::implementations::merge_batcher::container::InternalMerge;
 use crate::trace::TraceReader;
 
+// TODO: Remove the InternalMerge constraint on Bu::Input. It only needs Clear.
+
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
