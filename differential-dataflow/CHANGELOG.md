@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.21.0...differential-dataflow-v0.21.1) - 2026-03-26
+
+### Other
+
+- InternalMerger adopts tail chunks rather than copy them
+- Tidy up structure of logic
+- Dial in buffer sizing
+- Introduce VecMerger to efficiently merge owning vectors
+
 ## [0.21.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.20.0...differential-dataflow-v0.21.0) - 2026-03-25
 
 ### Added
