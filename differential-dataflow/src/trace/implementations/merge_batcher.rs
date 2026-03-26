@@ -293,20 +293,36 @@ pub mod container {
     }
 
     impl<D, T, R> VecMerger<D, T, R> {
+        /// The target capacity for output buffers, as a power of two.
+        ///
+        /// This amount is used to size vectors, where vectors not exactly this capacity are dropped.
+        /// If this is mis-set, there is the potential for more memory churn than anticipated.
+        fn target_capacity() -> usize {
+            timely::container::buffer::default_capacity::<(D, T, R)>().next_power_of_two()
+        }
+        /// Acquire a buffer with the target capacity.
         fn empty(&self, stash: &mut Vec<Vec<(D, T, R)>>) -> Vec<(D, T, R)> {
+            let target = Self::target_capacity();
             let mut container = stash.pop().unwrap_or_default();
-            container.ensure_capacity(&mut None);
+            container.clear();
+            // Reuse if at target; otherwise allocate fresh.
+            if container.capacity() != target {
+                container = Vec::with_capacity(target);
+            }
             container
         }
         /// Ensure `queue` is non-empty by pulling from `iter` if needed.
         /// Returns `true` if `queue` has data, `false` if both are exhausted.
         /// Recycles drained queues into `stash` for allocation reuse.
         fn refill(queue: &mut std::collections::VecDeque<(D, T, R)>, iter: &mut impl Iterator<Item = Vec<(D, T, R)>>, stash: &mut Vec<Vec<(D, T, R)>>) -> bool {
+            let target = Self::target_capacity();
             while queue.is_empty() {
                 if stash.len() < 2 {
                     let mut recycled = Vec::from(std::mem::take(queue));
                     recycled.clear();
-                    stash.push(recycled);
+                    if recycled.capacity() == target {
+                        stash.push(recycled);
+                    }
                 }
                 match iter.next() {
                     Some(chunk) => *queue = std::collections::VecDeque::from(chunk),
