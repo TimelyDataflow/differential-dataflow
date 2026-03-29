@@ -1,0 +1,23 @@
+[package]
+name = "ddir"
+version = "0.1.0"
+authors = ["Frank McSherry <fmcsherry@me.com>"]
+license = "MIT"
+edition.workspace = true
+rust-version.workspace = true
+description = "DD IR: an interpreted intermediate representation for differential dataflow"
+
+[lints]
+workspace = true
+
+[dependencies]
+columnar = { workspace = true }
+differential-dataflow = { workspace = true }
+smallvec = "1.15.1"
+timely = { workspace = true }
+
+[dev-dependencies]
+rand = "0.4"
+
+[features]
+default = ["timely/getopts"]

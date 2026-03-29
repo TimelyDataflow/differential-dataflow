@@ -35,5 +35,4 @@ outer: {
     var scc_raw = CONCAT(trim_bwd, NEGATE(edges));
 }
 
-result outer::scc;
--- result INSPECT(ARRANGE(MAP(outer::scc, (;))), edges_in_sccs);
+result INSPECT(ARRANGE(MAP(outer::scc, (;))), total);

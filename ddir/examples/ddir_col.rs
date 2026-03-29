@@ -1,0 +1,347 @@
+//! DD IR columnar backend: parse, lower, render, execute.
+
+mod types {
+    /// A row type backed by Vec but using Strides for columnar bounds.
+    /// This ensures uniform-length rows (common in the IR) get compact
+    /// stride-based offset encoding rather than per-element u64 bounds.
+    #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct Row(pub Vec<i64>);
+
+    impl Row {
+        pub fn new() -> Self { Row(Vec::new()) }
+        pub fn push(&mut self, v: i64) { self.0.push(v); }
+    }
+
+    impl std::ops::Deref for Row {
+        type Target = [i64];
+        fn deref(&self) -> &[i64] { &self.0 }
+    }
+
+    impl std::iter::FromIterator<i64> for Row {
+        fn from_iter<I: IntoIterator<Item = i64>>(iter: I) -> Self {
+            Row(iter.into_iter().collect())
+        }
+    }
+
+    impl<'a> IntoIterator for &'a Row {
+        type Item = &'a i64;
+        type IntoIter = std::slice::Iter<'a, i64>;
+        fn into_iter(self) -> Self::IntoIter { self.0.iter() }
+    }
+
+    impl IntoIterator for Row {
+        type Item = i64;
+        type IntoIter = std::vec::IntoIter<i64>;
+        fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
+    }
+
+    impl columnar::Columnar for Row {
+        type Container = columnar::Vecs<Vec<i64>, columnar::primitive::offsets::Strides>;
+
+        fn into_owned<'a>(other: columnar::Ref<'a, Self>) -> Self {
+            Row(other.into_iter().copied().collect())
+        }
+
+        fn copy_from<'a>(&mut self, other: columnar::Ref<'a, Self>) {
+            self.0.clear();
+            self.0.extend(other.into_iter().copied());
+        }
+    }
+
+    impl ddir::ir::RowLike for Row {
+        fn new() -> Self { Row::new() }
+        fn push(&mut self, v: i64) { Row::push(self, v); }
+        fn as_slice(&self) -> &[i64] { &self.0 }
+        fn extend_from_slice(&mut self, other: &[i64]) { self.0.extend_from_slice(other); }
+    }
+
+    pub type Diff = i64;
+    pub type Id = usize;
+    pub type Time = timely::order::Product<u64, differential_dataflow::dynamic::pointstamp::PointStamp<u64>>;
+}
+use types::*;
+
+use ddir::parse;
+use ddir::lower;
+use ddir::ir::Program;
+
+#[path = "../../differential-dataflow/examples/columnar/columnar_support.rs"]
+mod columnar_support;
+use columnar_support::*;
+
+mod columnar {
+    use super::types::*;
+
+    pub use super::columnar_support::*;
+    pub use super::columnar_support::{ValSpine, ValBatcher, ValBuilder};
+
+    pub type DdirUpdate = (Row, Row, Time, Diff);
+    pub type DdirRecordedUpdates = RecordedUpdates<DdirUpdate>;
+
+    pub type ColValSpine<K, V, T, R> = ValSpine<K, V, T, R>;
+    pub type ColValBatcher<K, V, T, R> = ValBatcher<K, V, T, R>;
+    pub type ColValBuilder<K, V, T, R> = ValBuilder<K, V, T, R>;
+}
+
+mod render {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use timely::order::Product;
+    use timely::dataflow::Scope;
+    use differential_dataflow::Collection;
+    use differential_dataflow::operators::iterate::Variable;
+    use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
+    use differential_dataflow::dynamic::feedback_summary;
+    use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+    use columnar::Columnar;
+    use super::types::*;
+    use ddir::ir::{Node, Program};
+
+    use super::columnar::{DdirUpdate, DdirRecordedUpdates};
+    use super::columnar::{ColValSpine, ColValBuilder};
+
+    pub type Col<G> = Collection<G, DdirRecordedUpdates>;
+    type Arr<G> = Arranged<G, TraceAgent<ColValSpine<Row, Row, <G as timely::dataflow::scopes::ScopeParent>::Timestamp, Diff>>>;
+
+    type ConcreteTime = Product<u64, PointStamp<u64>>;
+
+    enum Rendered<G: Scope<Timestamp = ConcreteTime>> {
+        Collection(Col<G>),
+        Arrangement(Arr<G>),
+    }
+
+    impl<G: Scope<Timestamp = ConcreteTime>> Rendered<G> {
+        fn collection(&self) -> Col<G> {
+            match self {
+                Rendered::Collection(c) => c.clone(),
+                Rendered::Arrangement(a) => {
+                    super::columnar_support::as_recorded_updates::<_, DdirUpdate>(a.clone())
+                }
+            }
+        }
+        fn arrange(&self) -> Arr<G> {
+            match self {
+                Rendered::Arrangement(a) => a.clone(),
+                Rendered::Collection(c) => {
+                    use differential_dataflow::operators::arrange::arrangement::arrange_core;
+                    use super::columnar::ColValBatcher;
+                    arrange_core::<_, _, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
+                }
+            }
+        }
+    }
+
+    pub fn render_program<G>(program: &Program<Row>, scope: &mut G, inputs: &[Col<G>]) -> HashMap<Id, Col<G>>
+    where G: Scope<Timestamp = ConcreteTime>
+    {
+        let mut nodes: HashMap<Id, Rendered<G>> = HashMap::new();
+        let mut level: usize = 0;
+        let mut variables: HashMap<Id, (Variable<G, DdirRecordedUpdates>, usize)> = HashMap::new();
+        let mut var_levels: HashMap<Id, usize> = HashMap::new();
+
+        for (id, node) in program.nodes.iter().enumerate() {
+            match node {
+                Node::Input(i) => {
+                    nodes.insert(id, Rendered::Collection(inputs[*i].clone()));
+                },
+                Node::Map { input, logic } => {
+                    let c = nodes[input].collection();
+                    let l = Arc::clone(logic);
+                    let result = super::columnar::join_function(c, move |k, v, _t, _d| {
+                        let k: Row = Columnar::into_owned(k);
+                        let v: Row = Columnar::into_owned(v);
+                        l((k, v)).into_iter().map(|((k2,v2),t2,d2)| (k2, v2, t2, d2))
+                    });
+                    nodes.insert(id, Rendered::Collection(result));
+                },
+                Node::Concat(ids) => {
+                    let mut r = nodes[&ids[0]].collection();
+                    for i in &ids[1..] { r = r.concat(nodes[i].collection()); }
+                    nodes.insert(id, Rendered::Collection(r));
+                },
+                Node::Arrange(input) => {
+                    nodes.insert(id, Rendered::Arrangement(nodes[input].arrange()));
+                },
+                Node::Join { left, right, logic } => {
+                    let l = nodes[left].arrange();
+                    let r = nodes[right].arrange();
+                    let f = Arc::clone(logic);
+                    use differential_dataflow::operators::join::join_traces;
+                    use differential_dataflow::collection::AsCollection;
+                    use super::columnar::ValColBuilder;
+                    let stream = join_traces::<_, _, _, _, ValColBuilder<DdirUpdate>>(l, r, move |k, v1, v2, t, d1, d2, c| {
+                        use differential_dataflow::difference::Multiply;
+                        let k: Row = Columnar::into_owned(k);
+                        let v1: Row = Columnar::into_owned(v1);
+                        let v2: Row = Columnar::into_owned(v2);
+                        let d = d1.clone().multiply(d2);
+                        for (k2, v2) in f(&k, &v1, &v2) {
+                            c.give((k2, v2, t.clone(), d.clone()));
+                        }
+                    });
+                    nodes.insert(id, Rendered::Collection(stream.as_collection()));
+                },
+                Node::Reduce { input, logic } => {
+                    let a = nodes[input].arrange();
+                    let f = Arc::clone(logic);
+                    let reduced = a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>>("Reduce", move |k, vals, output| {
+                        let k: Row = Columnar::into_owned(k);
+                        let owned_vals: Vec<(Row, Diff)> = vals.iter().map(|(v, d)| {
+                            (Columnar::into_owned(*v), *d)
+                        }).collect();
+                        let refs: Vec<(&Row, Diff)> = owned_vals.iter().map(|(v, d)| (v, *d)).collect();
+                        f(&k, &refs, output);
+                    });
+                    nodes.insert(id, Rendered::Arrangement(reduced));
+                },
+                Node::Variable => {
+                    let step: Product<u64, PointStampSummary<u64>> = Product::new(0, feedback_summary::<u64>(level, 1));
+                    let (var, col) = Variable::new(scope, step);
+                    nodes.insert(id, Rendered::Collection(col));
+                    variables.insert(id, (var, level));
+                    var_levels.insert(id, level);
+                },
+                Node::Inspect { input, label } => {
+                    let col = nodes[input].collection();
+                    let label = label.clone();
+                    nodes.insert(id, Rendered::Collection(col.inspect_container(move |event| {
+                        if let Ok((_time, container)) = event {
+                            for (k, v, t, d) in container.updates.iter() {
+                                eprintln!("  [{}] ({:?}, {:?}, {:?}, {:?})", label, <Row as Columnar>::into_owned(k), <Row as Columnar>::into_owned(v), <Time as Columnar>::into_owned(t), <Diff as Columnar>::into_owned(d));
+                            }
+                        }
+                    })));
+                },
+                Node::Leave(inner_id, scope_level) => {
+                    let c = nodes[inner_id].collection();
+                    nodes.insert(id, Rendered::Collection(super::columnar::leave_dynamic(c, *scope_level)));
+                },
+                Node::Scope => { level += 1; },
+                Node::EndScope => { level -= 1; },
+                Node::Bind { variable, value } => {
+                    let c = nodes[value].collection();
+                    let (var, _) = variables.remove(variable).expect("Bind: variable not found");
+                    var.set(c);
+                },
+            }
+        }
+
+        nodes.into_iter().filter_map(|(id, r)| match r { Rendered::Collection(c) => Some((id, c)), _ => None }).collect()
+    }
+}
+
+use timely::dataflow::Scope;
+use differential_dataflow::dynamic::pointstamp::PointStamp;
+
+type DdirOuterUpdate = (Row, Row, u64, Diff);
+
+fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: u64, arity: usize, batch: u64, rounds: Option<u64>) {
+    let compiled: Program<Row> = lower::lower(stmts);
+    println!("{}: {} IR nodes, result = {}", name, compiled.nodes.len(), compiled.result);
+    let name = name.to_string();
+    let result_id = compiled.result;
+
+    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+        use timely::dataflow::InputHandle;
+        use timely::container::PushInto;
+        use columnar_support::ValColBuilder;
+
+        type OuterBuilder = ValColBuilder<DdirOuterUpdate>;
+
+        let (mut inputs, probe) = worker.dataflow::<u64, _, _>(|scope| {
+            let mut handles = Vec::new();
+            let mut collections = Vec::new();
+            for _ in 0..n_inputs {
+                let mut h = <InputHandle<_, OuterBuilder>>::new_with_builder();
+                let stream = h.to_stream(scope);
+                handles.push(h);
+                collections.push(differential_dataflow::Collection::new(stream));
+            }
+            let mut probe = timely::dataflow::ProbeHandle::new();
+            let output = scope.iterative::<PointStamp<u64>, _, _>(|inner| {
+                let entered: Vec<_> = collections.iter().map(|c| c.clone().enter(inner)).collect();
+                let rendered = render::render_program(&compiled, inner, &entered);
+                rendered[&result_id].clone().leave()
+            });
+            output.probe_with(&mut probe);
+            (handles, probe)
+        });
+
+        let index = worker.index();
+        let peers = worker.peers();
+
+        let mut builders: Vec<OuterBuilder> = (0..n_inputs).map(|_| OuterBuilder::default()).collect();
+
+        for e in 0..edges {
+            if (e as usize) % peers == index {
+                let input_idx = (e as usize) % inputs.len();
+                let (key, val) = ddir::gen_row::<Row>(e, nodes, arity);
+                let time = *inputs[input_idx].time();
+                builders[input_idx].push_into((key, val, time, 1i64));
+            }
+        }
+        for (i, h) in inputs.iter_mut().enumerate() {
+            use timely::container::ContainerBuilder;
+            while let Some(container) = builders[i].finish() { h.send_batch(container); }
+            h.advance_to(1);
+            h.flush();
+        }
+        while probe.less_than(&1u64) { worker.step(); }
+        let elapsed = std::time::Instant::now();
+        println!("worker {}: {} loaded ({} edges)", index, name, edges);
+
+        let mut cursor = 0u64;
+        let mut round = 0u64;
+        let limit = rounds.unwrap_or(u64::MAX);
+        while round < limit {
+            let time = (round + 2) as u64;
+            for _ in 0..batch {
+                let remove_idx = cursor;
+                let add_idx = edges + cursor;
+                if (remove_idx as usize) % peers == index {
+                    let input_idx = (remove_idx as usize) % inputs.len();
+                    let (key, val) = ddir::gen_row::<Row>(remove_idx, nodes, arity);
+                    builders[input_idx].push_into((key, val, time, -1i64));
+                }
+                if (add_idx as usize) % peers == index {
+                    let input_idx = (add_idx as usize) % inputs.len();
+                    let (key, val) = ddir::gen_row::<Row>(add_idx, nodes, arity);
+                    builders[input_idx].push_into((key, val, time, 1i64));
+                }
+                cursor += 1;
+            }
+            for (i, h) in inputs.iter_mut().enumerate() {
+                use timely::container::ContainerBuilder;
+                while let Some(container) = builders[i].finish() { h.send_batch(container); }
+                h.advance_to(time);
+                h.flush();
+            }
+            while probe.less_than(&time) { worker.step(); }
+
+            round += 1;
+            if round % 100 == 0 {
+                println!("worker {}: {} round {} ({:.2?})", index, name, round, elapsed.elapsed());
+            }
+        }
+        println!("worker {}: {} done ({} rounds, batch {}, {:.2?})", index, name, round, batch, elapsed.elapsed());
+    }).unwrap();
+}
+
+fn main() {
+    let program = std::env::args().nth(1).unwrap_or_else(|| { std::process::exit(0); });
+    let arity: usize = std::env::args().nth(2).unwrap_or("2".into()).parse().unwrap();
+    let nodes: u64 = std::env::args().nth(3).unwrap_or("10".into()).parse().unwrap();
+    let edges: u64 = std::env::args().nth(4).unwrap_or_else(|| (2 * nodes).to_string()).parse().unwrap();
+    let batch: u64 = std::env::args().nth(5).unwrap_or("1".into()).parse().unwrap();
+    let rounds: Option<u64> = std::env::args().nth(6).map(|s| s.parse().unwrap());
+
+    let source = ddir::load_program(&program);
+    let stmts = if program.ends_with(".ddp") {
+        parse::pipe::parse(&source)
+    } else {
+        parse::applicative::parse(&source)
+    };
+    let n_inputs = ddir::count_inputs(&stmts);
+    let name = std::path::Path::new(&program).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(program.clone());
+    run(&name, stmts, n_inputs, nodes, edges, arity, batch, rounds);
+}

@@ -19,4 +19,4 @@ matching: {
     var removals = ARRANGE(CONCAT(removals, by_a, NEGATE(props)));
 }
 
-result INSPECT(MAP(matching::props, ($0[0] ; $1[1])), matched);
+result INSPECT(ARRANGE(MAP(matching::props, (;))), total);
