@@ -22,9 +22,9 @@ use std::ops::Mul;
 
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::{Scope, Stream};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
-use timely::dataflow::operators::{Capability, Operator, generic::Session};
+use timely::dataflow::operators::Operator;
 use timely::PartialOrder;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::progress::frontier::MutableAntichain;
@@ -80,26 +80,17 @@ where
     DOut: Clone+'static,
     S: FnMut(&K, &V, Tr::Val<'_>)->DOut+'static,
 {
-    let output_func = move |session: &mut SessionFor<G, _>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &G::Timestamp, diff1: &R, output: &mut Vec<(G::Timestamp, Tr::Diff)>| {
+    let output_func = move |builder: &mut CapacityContainerBuilder<Vec<_>>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &G::Timestamp, diff1: &R, output: &mut Vec<(G::Timestamp, Tr::Diff)>| {
         for (time, diff2) in output.drain(..) {
             let diff = diff1.clone() * diff2.clone();
             let dout = (output_func(k, v1, v2), time.clone());
-            session.give((dout, initial.clone(), diff));
+            use timely::container::PushInto;
+            builder.push_into((dout, initial.clone(), diff));
         }
     };
     half_join_internal_unsafe::<_, _, _, _, _, _,_,_,_, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, comparison, |_timer, _count| false, output_func)
         .as_collection()
 }
-
-/// A session with lifetime `'a` in a scope `G` with a container builder `CB`.
-///
-/// This is a shorthand primarily for the reson of readability.
-type SessionFor<'a, 'b, G, CB> =
-    Session<'a, 'b,
-        <G as ScopeParent>::Timestamp,
-        CB,
-        Capability<<G as ScopeParent>::Timestamp>,
-    >;
 
 /// An unsafe variant of `half_join` where the `output_func` closure takes
 /// additional arguments a vector of `time` and `diff` tuples as input and
@@ -143,7 +134,7 @@ where
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
+    S: FnMut(&mut CB, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
 {
     // No need to block physical merging for this operator.
@@ -180,25 +171,6 @@ where
                 arriving.extend(data.drain(..).map(|(d, t, r)| (t, d, r)));
             });
 
-            // Form a new blob from this activation's arrivals.
-            if !arriving.is_empty() {
-                consolidate_updates(&mut arriving);
-
-                if !arriving.is_empty() {
-                    let mut lower = MutableAntichain::new();
-                    // TODO: consider implementing `update_iter_ref` to avoid clone.
-                    lower.update_iter(arriving.iter().map(|(t, _, _)| (t.clone(), 1)));
-
-                    caps.downgrade(&lower.frontier());
-
-                    stuck.push(StuckBlob {
-                        caps,
-                        lower,
-                        data: std::mem::take(&mut arriving).into(),
-                    });
-                }
-            }
-
             // Drain input batches; although we do not observe them, we want access to the input
             // to observe the frontier and to drive scheduling.
             input2.for_each(|_, _| { });
@@ -212,90 +184,92 @@ where
 
                 let frontier = frontier2.frontier();
 
-                // Stage 2 first: drain ready piles (key-sorted, yield-safe).
-                for pile in ready.iter_mut() {
-                    if yielded { break; }
+                // Determine the total-order minimum of the arrangement frontier,
+                // used to partition arrivals into immediately-eligible vs stuck.
+                let mut time_con = Tr::TimeContainer::with_capacity(1);
+                if let Some(min_time) = frontier.iter().min() {
+                    time_con.push_own(min_time);
+                }
+                let eligible = |initial: &G::Timestamp| -> bool {
+                    !(0..time_con.len()).any(|i| comparison(time_con.index(i), initial))
+                };
 
-                    let (mut cursor, storage) = trace.cursor();
-                    let mut key_con = Tr::KeyContainer::with_capacity(1);
-                    let mut removals: ChangeBatch<G::Timestamp> = ChangeBatch::new();
-                    // Cache a delayed capability. Reusable for any `initial` that is
-                    // greater or equal to the cached time in the partial order.
-                    let mut cached_cap: Option<Capability<G::Timestamp>> = None;
+                // Form new blobs from this activation's arrivals, partitioning
+                // immediately-eligible records from those that must wait.
+                if !arriving.is_empty() {
+                    consolidate_updates(&mut arriving);
 
-                    while let Some(((ref key, ref val1, ref time), ref initial, ref diff1)) = pile.data.front() {
-                        yielded = yielded || yield_function(timer, work);
-                        if yielded { break; }
+                    if !arriving.is_empty() {
+                        // Partition: eligible records go straight to a ready blob,
+                        // the rest go to a stuck blob. `arriving` is sorted by
+                        // (initial, data) after consolidation, and eligibility is
+                        // monotone in total-order initial time, so we can split
+                        // with a linear scan.
+                        let split = arriving.iter().position(|&(ref t, _, _)| !eligible(t)).unwrap_or(arriving.len());
 
-                        // Reuse cached capability if its time is <= initial.
-                        if !cached_cap.as_ref().is_some_and(|cap| cap.time().less_equal(initial)) {
-                            cached_cap = Some(pile.caps.delayed(initial));
-                        }
-                        let cap = cached_cap.as_ref().unwrap();
-
-                        key_con.clear(); key_con.push_own(&key);
-                        cursor.seek_key(&storage, key_con.index(0));
-                        if cursor.get_key(&storage) == key_con.get(0) {
-                            while let Some(val2) = cursor.get_val(&storage) {
-                                cursor.map_times(&storage, |t, d| {
-                                    if comparison(t, initial) {
-                                        let mut t = Tr::owned_time(t);
-                                        t.join_assign(time);
-                                        output_buffer.push((t, Tr::owned_diff(d)))
-                                    }
-                                });
-                                consolidate(&mut output_buffer);
-                                work += output_buffer.len();
-                                // TODO: Worry about how to avoid reconstructing sessions so often.
-                                output_func(&mut output.session_with_builder(&cap), key, val1, val2, initial, diff1, &mut output_buffer);
-                                output_buffer.clear();
-                                cursor.step_val(&storage);
+                        // Stuck portion (tail).
+                        if split < arriving.len() {
+                            let stuck_data: Vec<_> = arriving.drain(split..).collect();
+                            let mut lower = MutableAntichain::new();
+                            lower.update_iter(stuck_data.iter().map(|(t, _, _)| (t.clone(), 1)));
+                            let mut stuck_caps = CapabilitySet::new();
+                            for time in lower.frontier().iter() {
+                                stuck_caps.insert(caps.delayed(time));
                             }
-                            cursor.rewind_vals(&storage);
+                            stuck.push(StuckBlob {
+                                caps: stuck_caps,
+                                lower,
+                                data: stuck_data.into(),
+                            });
                         }
 
-                        let (_, initial, _) = pile.data.pop_front().unwrap();
-                        removals.update(initial, -1);
-                    }
+                        // Eligible portion (head) — rearrange to (data, initial, diff)
+                        // and consolidate for key-sorted cursor traversal.
+                        if !arriving.is_empty() {
+                            let mut active_data: Vec<_> = arriving.drain(..)
+                                .map(|(t, d, r)| (d, t, r))
+                                .collect();
+                            consolidate_updates(&mut active_data);
 
-                    // Apply all removals in bulk and downgrade once.
-                    if !removals.is_empty() {
-                        pile.lower.update_iter(removals.drain());
-                        pile.caps.downgrade(&pile.lower.frontier());
+                            if !active_data.is_empty() {
+                                let mut pile_lower = MutableAntichain::new();
+                                pile_lower.update_iter(active_data.iter().map(|(_, t, _)| (t.clone(), 1)));
+                                let mut ready_caps = CapabilitySet::new();
+                                for time in pile_lower.frontier().iter() {
+                                    ready_caps.insert(caps.delayed(time));
+                                }
+                                ready.push(ReadyBlob {
+                                    caps: ready_caps,
+                                    lower: pile_lower,
+                                    data: VecDeque::from(active_data),
+                                });
+                            }
+                        }
                     }
                 }
-                ready.retain(|pile| !pile.data.is_empty());
 
-                // Stage 1: nibble blobs to produce new ready piles.
-                if !yielded {
-                    // Put the total-order minimum of the frontier into a TimeContainer
-                    // so we can call `comparison`. Since `comparison` is monotone with
-                    // the total order, only the minimum matters.
-                    let mut time_con = Tr::TimeContainer::with_capacity(1);
-                    if let Some(min_time) = frontier.iter().min() {
-                        time_con.push_own(min_time);
-                    }
-
+                // Stage 1: nibble stuck blobs to produce new ready piles.
+                {
                     // Collect all eligible records across all blobs into one pile.
-                    let mut eligible = Vec::new();
+                    let mut eligible_vec = Vec::new();
                     let mut eligible_caps = CapabilitySet::new();
 
                     for blob in stuck.iter_mut() {
                         // Pop eligible records from the front. The deque is sorted by
                         // initial time in total order, and `comparison` is monotone,
                         // so we stop at the first ineligible record.
-                        let before = eligible.len();
+                        let before = eligible_vec.len();
                         while let Some((initial, _, _)) = blob.data.front() {
-                            if (0..time_con.len()).any(|i| comparison(time_con.index(i), initial)) {
+                            if !eligible(initial) {
                                 break;
                             }
-                            eligible.push(blob.data.pop_front().unwrap());
+                            eligible_vec.push(blob.data.pop_front().unwrap());
                         }
 
-                        if eligible.len() > before {
+                        if eligible_vec.len() > before {
                             // Grab caps for the eligible records before downgrading the blob.
                             let mut frontier = Antichain::new();
-                            for (initial, _, _) in eligible[before..].iter() {
+                            for (initial, _, _) in eligible_vec[before..].iter() {
                                 frontier.insert(initial.clone());
                             }
                             for time in frontier.iter() {
@@ -303,18 +277,18 @@ where
                             }
 
                             // Remove eligible times from the blob's antichain and downgrade.
-                            blob.lower.update_iter(eligible[before..].iter().map(|(t, _, _)| (t.clone(), -1)));
+                            blob.lower.update_iter(eligible_vec[before..].iter().map(|(t, _, _)| (t.clone(), -1)));
                             blob.caps.downgrade(&blob.lower.frontier());
                         }
                     }
 
                     stuck.retain(|blob| !blob.data.is_empty());
 
-                    if !eligible.is_empty() {
+                    if !eligible_vec.is_empty() {
                         // Rearrange to (data, initial, diff) and consolidate.
                         // consolidate_updates sorts by (data, initial) which is
                         // the order we want for the active blob.
-                        let mut active_data: Vec<_> = eligible.into_iter()
+                        let mut active_data: Vec<_> = eligible_vec.into_iter()
                             .map(|(t, d, r)| (d, t, r))
                             .collect();
                         consolidate_updates(&mut active_data);
@@ -332,6 +306,69 @@ where
                         }
                     }
                 }
+
+                // Stage 2: drain ready piles (key-sorted, yield-safe).
+                for pile in ready.iter_mut() {
+                    if yielded { break; }
+
+                    // For each pile, we'll set up container builders for each distinct capability in the capset.
+                    // The closure gets invoked on a container builder, and if there are containers to extract we
+                    // ship them with the associated capability. We flush at the end.
+
+                    let mut builders = (0..pile.caps.len()).map(|_| CB::default()).collect::<Vec<_>>();
+
+                    let (mut cursor, storage) = trace.cursor();
+                    let mut key_con = Tr::KeyContainer::with_capacity(1);
+                    let mut removals: ChangeBatch<G::Timestamp> = ChangeBatch::new();
+
+                    while let Some(((ref key, ref val1, ref time), ref initial, ref diff1)) = pile.data.front() {
+                        yielded = yielded || yield_function(timer, work);
+                        if yielded { break; }
+
+                        let builder_idx = pile.caps.iter().position(|c| c.time().less_equal(initial)).unwrap();
+
+                        key_con.clear(); key_con.push_own(&key);
+                        cursor.seek_key(&storage, key_con.index(0));
+                        if cursor.get_key(&storage) == key_con.get(0) {
+                            while let Some(val2) = cursor.get_val(&storage) {
+                                cursor.map_times(&storage, |t, d| {
+                                    if comparison(t, initial) {
+                                        let mut t = Tr::owned_time(t);
+                                        t.join_assign(time);
+                                        output_buffer.push((t, Tr::owned_diff(d)))
+                                    }
+                                });
+                                consolidate(&mut output_buffer);
+                                work += output_buffer.len();
+                                // TODO: Worry about how to avoid reconstructing sessions so often.
+                                output_func(&mut builders[builder_idx], key, val1, val2, initial, diff1, &mut output_buffer);
+                                output_buffer.clear();
+                                cursor.step_val(&storage);
+                            }
+                            cursor.rewind_vals(&storage);
+                        }
+
+                        while let Some(container) = builders[builder_idx].extract() {
+                            output.session(&pile.caps[builder_idx]).give_container(container);
+                        }
+
+                        let (_, initial, _) = pile.data.pop_front().unwrap();
+                        removals.update(initial, -1);
+                    }
+
+                    for builder_idx in 0 .. pile.caps.len() {
+                        while let Some(container) = builders[builder_idx].finish() {
+                            output.session(&pile.caps[builder_idx]).give_container(container);
+                        }
+                    }
+
+                    // Apply all removals in bulk and downgrade once.
+                    if !removals.is_empty() {
+                        pile.lower.update_iter(removals.drain());
+                        pile.caps.downgrade(&pile.lower.frontier());
+                    }
+                }
+                ready.retain(|pile| !pile.data.is_empty());
             }
 
             // Re-activate if we have ready piles to process.
