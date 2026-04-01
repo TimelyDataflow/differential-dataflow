@@ -147,14 +147,10 @@ where
     // Stash for (time, diff) accumulation.
     let mut output_buffer = Vec::new();
 
-    // Stage 1: Stuck blobs sorted by (initial, data). Nibbled from the front
-    // as the arrangement frontier advances to determine eligible records.
-    let mut stuck: Vec<StuckBlob<(K, V, G::Timestamp), G::Timestamp, R>> = Vec::new();
-    // Stage 2: Ready blobs sorted by (data, initial). Consumed from the front
-    // one record at a time, yield-safe.
-    let mut ready: Vec<ReadyBlob<(K, V, G::Timestamp), G::Timestamp, R>> = Vec::new();
-    // Buffer for new arrivals, stored as (initial, data, diff) for direct consolidation.
-    let mut arriving: Vec<(G::Timestamp, (K, V, G::Timestamp), R)> = Vec::new();
+    // Unified blobs: each blob holds data in (T, D, R) order, with a stuck_count
+    // tracking how many elements at the back are not yet eligible for processing.
+    // The ready prefix is sorted by (D, T, R) for cursor traversal.
+    let mut blobs: Vec<Blob<(K, V, G::Timestamp), G::Timestamp, R>> = Vec::new();
 
     let scope = stream.scope();
     stream.inner.binary_frontier(arrangement_stream, exchange, Pipeline, "HalfJoin", move |_,info| {
@@ -164,7 +160,8 @@ where
 
         move |(input1, frontier1), (input2, frontier2), output| {
 
-            // Drain all input for this activation into a single buffer.
+            // Drain all input into a single buffer.
+            let mut arriving: Vec<(G::Timestamp, (K, V, G::Timestamp), R)> = Vec::new();
             let mut caps = CapabilitySet::new();
             input1.for_each(|capability, data| {
                 caps.insert(capability.retain(0));
@@ -194,138 +191,90 @@ where
                     !(0..time_con.len()).any(|i| comparison(time_con.index(i), initial))
                 };
 
-                // Form new blobs from this activation's arrivals, partitioning
-                // immediately-eligible records from those that must wait.
+                // Form a new blob from arrivals.
+                // consolidate_updates sorts by (T, D, R) — the stuck order.
+                consolidate_updates(&mut arriving);
+
                 if !arriving.is_empty() {
-                    consolidate_updates(&mut arriving);
+                    let mut lower = MutableAntichain::new();
+                    lower.update_iter(arriving.iter().map(|(t, _, _)| (t.clone(), 1)));
+                    let mut blob_caps = CapabilitySet::new();
+                    for time in lower.frontier().iter() {
+                        blob_caps.insert(caps.delayed(time));
+                    }
 
-                    if !arriving.is_empty() {
-                        // Partition: eligible records go straight to a ready blob,
-                        // the rest go to a stuck blob. `arriving` is sorted by
-                        // (initial, data) after consolidation, and eligibility is
-                        // monotone in total-order initial time, so we can split
-                        // with a linear scan.
-                        let split = arriving.iter().position(|&(ref t, _, _)| !eligible(t)).unwrap_or(arriving.len());
+                    // Determine how many records are stuck (ineligible).
+                    // Data is sorted by (T, D, R) and eligibility is monotone in T,
+                    // so stuck records form a suffix.
+                    let stuck_count = arriving.iter().rev()
+                        .take_while(|(t, _, _)| !eligible(t))
+                        .count();
 
-                        // Stuck portion (tail).
-                        if split < arriving.len() {
-                            let stuck_data: Vec<_> = arriving.drain(split..).collect();
-                            let mut lower = MutableAntichain::new();
-                            lower.update_iter(stuck_data.iter().map(|(t, _, _)| (t.clone(), 1)));
-                            let mut stuck_caps = CapabilitySet::new();
-                            for time in lower.frontier().iter() {
-                                stuck_caps.insert(caps.delayed(time));
-                            }
-                            stuck.push(StuckBlob {
-                                caps: stuck_caps,
-                                lower,
-                                data: stuck_data.into(),
-                            });
-                        }
+                    let mut data: VecDeque<_> = arriving.into();
 
-                        // Eligible portion (head) — rearrange to (data, initial, diff)
-                        // and consolidate for key-sorted cursor traversal.
-                        if !arriving.is_empty() {
-                            let mut active_data: Vec<_> = arriving.drain(..)
-                                .map(|(t, d, r)| (d, t, r))
-                                .collect();
-                            consolidate_updates(&mut active_data);
+                    // Sort the ready prefix by (D, T, R) for cursor traversal.
+                    let ready_len = data.len() - stuck_count;
+                    if ready_len > 0 {
+                        // VecDeque slices: make_contiguous then sort the prefix.
+                        let slice = data.make_contiguous();
+                        slice[..ready_len].sort_by(|(t1, d1, r1), (t2, d2, r2)| {
+                            (d1, t1, r1).cmp(&(d2, t2, r2))
+                        });
+                    }
 
-                            if !active_data.is_empty() {
-                                let mut pile_lower = MutableAntichain::new();
-                                pile_lower.update_iter(active_data.iter().map(|(_, t, _)| (t.clone(), 1)));
-                                let mut ready_caps = CapabilitySet::new();
-                                for time in pile_lower.frontier().iter() {
-                                    ready_caps.insert(caps.delayed(time));
-                                }
-                                ready.push(ReadyBlob {
-                                    caps: ready_caps,
-                                    lower: pile_lower,
-                                    data: VecDeque::from(active_data),
-                                });
-                            }
-                        }
+                    blobs.push(Blob {
+                        caps: blob_caps,
+                        lower,
+                        data,
+                        stuck_count,
+                    });
+                }
+
+                // Nibble: only when all ready elements have been drained (stuck_count == len),
+                // check if stuck records have become eligible and promote them.
+                for blob in blobs.iter_mut().filter(|b| b.stuck_count == b.data.len()) {
+
+                    // Count how many stuck records (from the front, which has the
+                    // lowest initial times) are now eligible.
+                    let newly_ready = blob.data.iter().take_while(|(t, _, _)| eligible(t)).count();
+
+                    if newly_ready > 0 {
+                        blob.stuck_count -= newly_ready;
+
+                        // Sort the newly-ready prefix by (D, T, R) for cursor traversal.
+                        let slice = blob.data.make_contiguous();
+                        slice[..newly_ready].sort_by(|(t1, d1, r1), (t2, d2, r2)| {
+                            (d1, t1, r1).cmp(&(d2, t2, r2))
+                        });
+
+                        // Downgrade capabilities.
+                        let mut new_lower = MutableAntichain::new();
+                        new_lower.update_iter(blob.data.iter().map(|(t, _, _)| (t.clone(), 1)));
+                        blob.lower = new_lower;
+                        blob.caps.downgrade(&blob.lower.frontier());
                     }
                 }
 
-                // Stage 1: nibble stuck blobs to produce new ready piles.
-                {
-                    // Collect all eligible records across all blobs into one pile.
-                    let mut eligible_vec = Vec::new();
-                    let mut eligible_caps = CapabilitySet::new();
-
-                    for blob in stuck.iter_mut() {
-                        // Pop eligible records from the front. The deque is sorted by
-                        // initial time in total order, and `comparison` is monotone,
-                        // so we stop at the first ineligible record.
-                        let before = eligible_vec.len();
-                        while let Some((initial, _, _)) = blob.data.front() {
-                            if !eligible(initial) {
-                                break;
-                            }
-                            eligible_vec.push(blob.data.pop_front().unwrap());
-                        }
-
-                        if eligible_vec.len() > before {
-                            // Grab caps for the eligible records before downgrading the blob.
-                            let mut frontier = Antichain::new();
-                            for (initial, _, _) in eligible_vec[before..].iter() {
-                                frontier.insert(initial.clone());
-                            }
-                            for time in frontier.iter() {
-                                eligible_caps.insert(blob.caps.delayed(time));
-                            }
-
-                            // Remove eligible times from the blob's antichain and downgrade.
-                            blob.lower.update_iter(eligible_vec[before..].iter().map(|(t, _, _)| (t.clone(), -1)));
-                            blob.caps.downgrade(&blob.lower.frontier());
-                        }
-                    }
-
-                    stuck.retain(|blob| !blob.data.is_empty());
-
-                    if !eligible_vec.is_empty() {
-                        // Rearrange to (data, initial, diff) and consolidate.
-                        // consolidate_updates sorts by (data, initial) which is
-                        // the order we want for the active blob.
-                        let mut active_data: Vec<_> = eligible_vec.into_iter()
-                            .map(|(t, d, r)| (d, t, r))
-                            .collect();
-                        consolidate_updates(&mut active_data);
-
-                        if !active_data.is_empty() {
-                            let mut pile_lower = MutableAntichain::new();
-                            pile_lower.update_iter(active_data.iter().map(|(_, t, _)| (t.clone(), 1)));
-                            eligible_caps.downgrade(&pile_lower.frontier());
-
-                            ready.push(ReadyBlob {
-                                caps: eligible_caps,
-                                lower: pile_lower,
-                                data: VecDeque::from(active_data),
-                            });
-                        }
-                    }
-                }
-
-                // Stage 2: drain ready piles (key-sorted, yield-safe).
-                for pile in ready.iter_mut() {
+                // Process ready elements from blobs.
+                for blob in blobs.iter_mut().filter(|b| b.data.len() > b.stuck_count) {
                     if yielded { break; }
 
-                    // For each pile, we'll set up container builders for each distinct capability in the capset.
-                    // The closure gets invoked on a container builder, and if there are containers to extract we
-                    // ship them with the associated capability. We flush at the end.
-
-                    let mut builders = (0..pile.caps.len()).map(|_| CB::default()).collect::<Vec<_>>();
+                    let mut builders = (0..blob.caps.len()).map(|_| CB::default()).collect::<Vec<_>>();
 
                     let (mut cursor, storage) = trace.cursor();
                     let mut key_con = Tr::KeyContainer::with_capacity(1);
                     let mut removals: ChangeBatch<G::Timestamp> = ChangeBatch::new();
 
-                    while let Some(((ref key, ref val1, ref time), ref initial, ref diff1)) = pile.data.front() {
+                    // Process ready elements from the front.
+                    while blob.data.len() > blob.stuck_count {
                         yielded = yielded || yield_function(timer, work);
                         if yielded { break; }
 
-                        let builder_idx = pile.caps.iter().position(|c| c.time().less_equal(initial)).unwrap();
+                        // Peek at the front element. It's in (T, D, R) storage order,
+                        // but the ready prefix has been sorted by (D, T, R).
+                        let (ref initial, (ref key, ref val1, ref time), ref diff1) = blob.data[0];
+
+                        let builder_idx = blob.caps.iter().position(|c| c.time().less_equal(initial)).unwrap();
 
                         key_con.clear(); key_con.push_own(&key);
                         cursor.seek_key(&storage, key_con.index(0));
@@ -340,7 +289,6 @@ where
                                 });
                                 consolidate(&mut output_buffer);
                                 work += output_buffer.len();
-                                // TODO: Worry about how to avoid reconstructing sessions so often.
                                 output_func(&mut builders[builder_idx], key, val1, val2, initial, diff1, &mut output_buffer);
                                 output_buffer.clear();
                                 cursor.step_val(&storage);
@@ -349,73 +297,68 @@ where
                         }
 
                         while let Some(container) = builders[builder_idx].extract() {
-                            output.session(&pile.caps[builder_idx]).give_container(container);
+                            output.session(&blob.caps[builder_idx]).give_container(container);
                         }
 
-                        let (_, initial, _) = pile.data.pop_front().unwrap();
+                        let (initial, _, _) = blob.data.pop_front().unwrap();
                         removals.update(initial, -1);
                     }
 
-                    for builder_idx in 0 .. pile.caps.len() {
+                    for builder_idx in 0 .. blob.caps.len() {
                         while let Some(container) = builders[builder_idx].finish() {
-                            output.session(&pile.caps[builder_idx]).give_container(container);
+                            output.session(&blob.caps[builder_idx]).give_container(container);
                         }
                     }
 
                     // Apply all removals in bulk and downgrade once.
-                    if !removals.is_empty() {
-                        pile.lower.update_iter(removals.drain());
-                        pile.caps.downgrade(&pile.lower.frontier());
+                    if blob.data.is_empty() {
+                        // Eagerly release the blob's resources.
+                        blob.lower = MutableAntichain::new();
+                        blob.caps = CapabilitySet::new();
+                        blob.data = VecDeque::default();
+                    } else  {
+                        blob.lower.update_iter(removals.drain());
+                        blob.caps.downgrade(&blob.lower.frontier());
                     }
                 }
-                ready.retain(|pile| !pile.data.is_empty());
+
+                // Remove fully-consumed blobs.
+                blobs.retain(|blob| !blob.data.is_empty());
             }
 
-            // Re-activate if we have ready piles to process.
-            if !ready.is_empty() {
+            // Re-activate if we have blobs with ready elements to process.
+            if blobs.iter().any(|b| b.data.len() > b.stuck_count) {
                 activator.activate();
             }
 
-            // The logical merging frontier depends on input1, stuck, and ready blobs.
+            // The logical merging frontier depends on input1 and all blobs.
             let mut frontier = Antichain::new();
             for time in frontier1.frontier().iter() {
                 frontier_func(time, &mut frontier);
             }
-            for blob in stuck.iter() {
-                for cap in blob.caps.iter() {
-                    frontier_func(cap.time(), &mut frontier);
-                }
-            }
-            for blob in ready.iter() {
+            for blob in blobs.iter() {
                 for cap in blob.caps.iter() {
                     frontier_func(cap.time(), &mut frontier);
                 }
             }
             arrangement_trace.as_mut().map(|trace| trace.set_logical_compaction(frontier.borrow()));
 
-            if frontier1.is_empty() && stuck.is_empty() && ready.is_empty() {
+            if frontier1.is_empty() && blobs.is_empty() {
                 arrangement_trace = None;
             }
         }
     })
 }
 
-/// Stuck work sorted by `(initial, data)`. Nibbled from the front as the
-/// arrangement frontier advances to determine eligible records.
-struct StuckBlob<D, T: Timestamp, R> {
+/// A unified blob of updates. Data is stored as `(T, D, R)` tuples in a VecDeque.
+/// The last `stuck_count` elements are stuck (not yet eligible for processing),
+/// sorted by `(T, D, R)` from consolidation. The ready prefix (everything before
+/// the stuck tail) is sorted by `(D, T, R)` for efficient cursor traversal.
+/// Ready elements are consumed from the front via `pop_front`.
+struct Blob<D, T: Timestamp, R> {
     caps: CapabilitySet<T>,
     lower: MutableAntichain<T>,
     data: VecDeque<(T, D, R)>,
-}
-
-/// Ready work sorted by `(data, initial)`. Consumed from the front one record
-/// at a time during trace lookups. Yield-safe: can stop and resume at any point,
-/// because the work can be resumed without re-sorting. Strictly speaking we will
-/// do a MutableAntichain rebuild, which could be linear time, but fixing that is
-/// future work.
-// TODO: Fix the thing in the comments.
-struct ReadyBlob<D, T: Timestamp, R> {
-    caps: CapabilitySet<T>,
-    lower: MutableAntichain<T>,
-    data: VecDeque<(D, T, R)>,
+    /// Number of stuck (ineligible) elements at the back of `data`.
+    stuck_count: usize,
 }
