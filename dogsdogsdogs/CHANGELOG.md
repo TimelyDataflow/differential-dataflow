@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.2](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.21.1...differential-dogs3-v0.21.2) - 2026-04-02
+
+### Other
+
+- Consolidate storage types to avoid double allocations
+- Re-order stages and improve session batching
+- Less quadratic half_join
+
 ## [0.21.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.20.0...differential-dogs3-v0.21.0) - 2026-03-25
 
 ### Other
