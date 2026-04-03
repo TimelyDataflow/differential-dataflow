@@ -11,10 +11,11 @@ use differential_dataflow::dynamic::feedback_summary;
 use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::input::Input;
+use smallvec::smallvec as svec;
 
 use ddir::parse;
 use ddir::lower;
-use ddir::ir::{Node, Program, Diff, Id};
+use ddir::ir::{Node, LinearOp, Program, Diff, Id, Time, eval_fields, eval_field_into, eval_condition};
 
 type Row = Vec<i64>;
 type Col<G> = VecCollection<G, (Row, Row), Diff>;
@@ -31,7 +32,7 @@ impl<G: Scope<Timestamp: differential_dataflow::lattice::Lattice>> Rendered<G> {
 }
 
 
-fn render_program<G>(program: &Program<Row>, scope: &mut G, inputs: &[Col<G>]) -> HashMap<Id, Col<G>>
+fn render_program<G>(program: &Program, scope: &mut G, inputs: &[Col<G>]) -> HashMap<Id, Col<G>>
 where G: Scope<Timestamp = Product<u64, PointStamp<u64>>>
 {
     let mut nodes: HashMap<Id, Rendered<G>> = HashMap::new();
@@ -39,22 +40,71 @@ where G: Scope<Timestamp = Product<u64, PointStamp<u64>>>
     let mut variables: HashMap<Id, (VecVariable<G, (Row, Row), Diff>, usize)> = HashMap::new();
     let mut var_levels: HashMap<Id, usize> = HashMap::new();
 
-    for (id, node) in program.nodes.iter().enumerate() {
+    for (&id, node) in program.nodes.iter() {
         match node {
             Node::Input(i) => { nodes.insert(id, Rendered::Collection(inputs[*i].clone())); },
-            Node::Map { input, logic } => { let c = nodes[input].collection(); let l = Arc::clone(logic); let r = c.join_function(move |kv| l(kv)); nodes.insert(id, Rendered::Collection(r)); },
+            Node::Linear { input, ops } => {
+                let c = nodes[input].collection();
+                let ops = ops.clone();
+                let level = level;
+                let r = c.join_function(move |(key, val)| {
+                    use timely::progress::Timestamp;
+                    let mut results: smallvec::SmallVec<[((Row, Row), Time, Diff); 2]> = svec![((key, val), Time::minimum(), 1)];
+                    for op in &ops {
+                        let mut next = smallvec::SmallVec::new();
+                        for ((k, v), t, d) in results {
+                            match op {
+                                LinearOp::Project(proj) => {
+                                    let i = [k.as_slice(), v.as_slice()];
+                                    next.push(((eval_fields(&proj.key, &i), eval_fields(&proj.val, &i)), t, d));
+                                },
+                                LinearOp::Filter(cond) => {
+                                    let i = [k.as_slice(), v.as_slice()];
+                                    if eval_condition(cond, &i) { next.push(((k, v), t, d)); }
+                                },
+                                LinearOp::Negate => {
+                                    next.push(((k, v), t, -d));
+                                },
+                                LinearOp::EnterAt(field) => {
+                                    let delay = {
+                                        let mut r = Row::new();
+                                        eval_field_into(field, &[k.as_slice(), v.as_slice()], &mut r);
+                                        256 * (64 - (r.as_slice().first().copied().unwrap_or(0) as u64).leading_zeros() as u64)
+                                    };
+                                    let mut coords = smallvec::SmallVec::<[u64; 2]>::new();
+                                    for _ in 0..level.saturating_sub(1) { coords.push(0); }
+                                    coords.push(delay);
+                                    next.push(((k, v), Product::new(0u64, PointStamp::new(coords)), d));
+                                },
+                            }
+                        }
+                        results = next;
+                    }
+                    results
+                });
+                nodes.insert(id, Rendered::Collection(r));
+            },
             Node::Concat(ids) => { let mut r = nodes[&ids[0]].collection(); for i in &ids[1..] { r = r.concat(nodes[i].collection()); } nodes.insert(id, Rendered::Collection(r)); },
             Node::Arrange(input) => { nodes.insert(id, Rendered::Arrangement(nodes[input].arrange())); },
-            Node::Join { left, right, logic } => {
-                let l = nodes[left].arrange();
-                let r = nodes[right].arrange();
-                let f = Arc::clone(logic);
+            Node::Join { left, right, projection } => {
+                let Rendered::Arrangement(l) = &nodes[left] else { panic!("Join: left input must be an Arrangement") };
+                let Rendered::Arrangement(r) = &nodes[right] else { panic!("Join: right input must be an Arrangement") };
+                let l = l.clone();
+                let r = r.clone();
+                let proj = projection.clone();
+                let f: Arc<dyn Fn(&Row, &Row, &Row) -> smallvec::SmallVec<[(Row, Row); 2]> + Send + Sync> =
+                    Arc::new(move |key, left, right| { let i = [key.as_slice(), left.as_slice(), right.as_slice()]; svec![(eval_fields(&proj.key, &i), eval_fields(&proj.val, &i))] });
                 let result = l.join_core(r, move |k, v1, v2| f(k, v1, v2));
                 nodes.insert(id, Rendered::Collection(result));
             },
-            Node::Reduce { input, logic } => {
-                let a = nodes[input].arrange();
-                let f = Arc::clone(logic);
+            Node::Reduce { input, reducer } => {
+                let Rendered::Arrangement(a) = &nodes[input] else { panic!("Reduce: input must be an Arrangement") };
+                let a = a.clone();
+                let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
+                    parse::Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| *v).min() { output.push((min.clone(), 1)); } }),
+                    parse::Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
+                    parse::Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); } }),
+                };
                 let reduced = a.reduce_abelian::<_, differential_dataflow::trace::implementations::ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>("Reduce", move |k, v, o| f(k, v, o));
                 nodes.insert(id, Rendered::Arrangement(reduced));
             },
@@ -79,8 +129,11 @@ where G: Scope<Timestamp = Product<u64, PointStamp<u64>>>
 }
 
 fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: u64, arity: usize, batch: u64, rounds: Option<u64>) {
-    let compiled: Program<Row> = lower::lower(stmts);
-    println!("{}: {} IR nodes, result = {}", name, compiled.nodes.len(), compiled.result);
+    let mut compiled: Program = lower::lower(stmts);
+    println!("{}: {} IR nodes (before optimize)", name, compiled.nodes.len());
+    compiled.optimize();
+    println!("{}: {} IR nodes (after optimize), result = {}", name, compiled.nodes.len(), compiled.result);
+    compiled.dump();
     let name = name.to_string();
     let result_id = compiled.result;
 

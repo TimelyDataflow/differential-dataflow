@@ -95,7 +95,7 @@ mod render {
     use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
     use columnar::Columnar;
     use super::types::*;
-    use ddir::ir::{Node, Program};
+    use ddir::ir::{Node, LinearOp, Program, RowLike, eval_fields, eval_field_into, eval_condition};
 
     use super::columnar::{DdirUpdate, DdirRecordedUpdates};
     use super::columnar::{ColValSpine, ColValBuilder};
@@ -131,7 +131,7 @@ mod render {
         }
     }
 
-    pub fn render_program<G>(program: &Program<Row>, scope: &mut G, inputs: &[Col<G>]) -> HashMap<Id, Col<G>>
+    pub fn render_program<G>(program: &Program, scope: &mut G, inputs: &[Col<G>]) -> HashMap<Id, Col<G>>
     where G: Scope<Timestamp = ConcreteTime>
     {
         let mut nodes: HashMap<Id, Rendered<G>> = HashMap::new();
@@ -139,18 +139,51 @@ mod render {
         let mut variables: HashMap<Id, (Variable<G, DdirRecordedUpdates>, usize)> = HashMap::new();
         let mut var_levels: HashMap<Id, usize> = HashMap::new();
 
-        for (id, node) in program.nodes.iter().enumerate() {
+        for (&id, node) in program.nodes.iter() {
             match node {
                 Node::Input(i) => {
                     nodes.insert(id, Rendered::Collection(inputs[*i].clone()));
                 },
-                Node::Map { input, logic } => {
+                Node::Linear { input, ops } => {
                     let c = nodes[input].collection();
-                    let l = Arc::clone(logic);
+                    let ops = ops.clone();
+                    let level = level;
                     let result = super::columnar::join_function(c, move |k, v, _t, _d| {
+                        use timely::progress::Timestamp;
                         let k: Row = Columnar::into_owned(k);
                         let v: Row = Columnar::into_owned(v);
-                        l((k, v)).into_iter().map(|((k2,v2),t2,d2)| (k2, v2, t2, d2))
+                        let mut results: Vec<(Row, Row, Time, Diff)> = vec![(k, v, Time::minimum(), 1i64)];
+                        for op in &ops {
+                            let mut next = Vec::new();
+                            for (k, v, t, d) in results {
+                                match op {
+                                    LinearOp::Project(proj) => {
+                                        let i = [k.as_slice(), v.as_slice()];
+                                        next.push((eval_fields(&proj.key, &i), eval_fields(&proj.val, &i), t, d));
+                                    },
+                                    LinearOp::Filter(cond) => {
+                                        let i = [k.as_slice(), v.as_slice()];
+                                        if eval_condition(cond, &i) { next.push((k, v, t, d)); }
+                                    },
+                                    LinearOp::Negate => {
+                                        next.push((k, v, t, -d));
+                                    },
+                                    LinearOp::EnterAt(field) => {
+                                        let delay = {
+                                            let mut r = Row::new();
+                                            eval_field_into(field, &[k.as_slice(), v.as_slice()], &mut r);
+                                            256 * (64 - (r.as_slice().first().copied().unwrap_or(0) as u64).leading_zeros() as u64)
+                                        };
+                                        let mut coords = smallvec::SmallVec::<[u64; 2]>::new();
+                                        for _ in 0..level.saturating_sub(1) { coords.push(0); }
+                                        coords.push(delay);
+                                        next.push((k, v, Product::new(0u64, PointStamp::new(coords)), d));
+                                    },
+                                }
+                            }
+                            results = next;
+                        }
+                        results.into_iter()
                     });
                     nodes.insert(id, Rendered::Collection(result));
                 },
@@ -162,10 +195,12 @@ mod render {
                 Node::Arrange(input) => {
                     nodes.insert(id, Rendered::Arrangement(nodes[input].arrange()));
                 },
-                Node::Join { left, right, logic } => {
-                    let l = nodes[left].arrange();
-                    let r = nodes[right].arrange();
-                    let f = Arc::clone(logic);
+                Node::Join { left, right, projection } => {
+                    let Rendered::Arrangement(l) = &nodes[left] else { panic!("Join: left input must be an Arrangement") };
+                    let Rendered::Arrangement(r) = &nodes[right] else { panic!("Join: right input must be an Arrangement") };
+                    let l = l.clone();
+                    let r = r.clone();
+                    let proj = projection.clone();
                     use differential_dataflow::operators::join::join_traces;
                     use differential_dataflow::collection::AsCollection;
                     use super::columnar::ValColBuilder;
@@ -175,15 +210,21 @@ mod render {
                         let v1: Row = Columnar::into_owned(v1);
                         let v2: Row = Columnar::into_owned(v2);
                         let d = d1.clone().multiply(d2);
-                        for (k2, v2) in f(&k, &v1, &v2) {
-                            c.give((k2, v2, t.clone(), d.clone()));
-                        }
+                        let i = [k.as_slice(), v1.as_slice(), v2.as_slice()];
+                        let (k2, v2): (Row, Row) = (eval_fields(&proj.key, &i), eval_fields(&proj.val, &i));
+                        c.give((k2, v2, t.clone(), d));
                     });
                     nodes.insert(id, Rendered::Collection(stream.as_collection()));
                 },
-                Node::Reduce { input, logic } => {
-                    let a = nodes[input].arrange();
-                    let f = Arc::clone(logic);
+                Node::Reduce { input, reducer } => {
+                    let Rendered::Arrangement(a) = &nodes[input] else { panic!("Reduce: input must be an Arrangement") };
+                    let a = a.clone();
+                    let reducer = reducer.clone();
+                    let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
+                        ddir::parse::Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| *v).min() { output.push((min.clone(), 1)); } }),
+                        ddir::parse::Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
+                        ddir::parse::Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); } }),
+                    };
                     let reduced = a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>>("Reduce", move |k, vals, output| {
                         let k: Row = Columnar::into_owned(k);
                         let owned_vals: Vec<(Row, Diff)> = vals.iter().map(|(v, d)| {
@@ -236,8 +277,11 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 type DdirOuterUpdate = (Row, Row, u64, Diff);
 
 fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: u64, arity: usize, batch: u64, rounds: Option<u64>) {
-    let compiled: Program<Row> = lower::lower(stmts);
-    println!("{}: {} IR nodes, result = {}", name, compiled.nodes.len(), compiled.result);
+    let mut compiled: Program = lower::lower(stmts);
+    println!("{}: {} IR nodes (before optimize)", name, compiled.nodes.len());
+    compiled.optimize();
+    println!("{}: {} IR nodes (after optimize), result = {}", name, compiled.nodes.len(), compiled.result);
+    compiled.dump();
     let name = name.to_string();
     let result_id = compiled.result;
 

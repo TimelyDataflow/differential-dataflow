@@ -13,10 +13,9 @@ outer: {
         var proposals = labels | join(scc, ($2 ; $1));
     }
 
-    let fwd_arr = fwd::labels | arrange;
     let trim_fwd = edges
-        | join(fwd_arr, ($1 ; $0, $2))
-        | join(fwd_arr, ($0 ; $1, $2))
+        | join(fwd::labels, ($1 ; $0, $2))
+        | join(fwd::labels, ($0 ; $1, $2))
         | filter($1[1] == $1[2])
         | key($0 ; $1[0]);
 
@@ -26,10 +25,9 @@ outer: {
         var proposals = labels | join(trim_fwd, ($2 ; $1));
     }
 
-    let bwd_arr = bwd::labels | arrange;
     let trim_bwd = trans
-        | join(bwd_arr, ($1 ; $0, $2))
-        | join(bwd_arr, ($0 ; $1, $2))
+        | join(bwd::labels, ($1 ; $0, $2))
+        | join(bwd::labels, ($0 ; $1, $2))
         | filter($1[1] == $1[2])
         | key($0 ; $1[0]);
 
