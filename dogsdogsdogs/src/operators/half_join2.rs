@@ -73,7 +73,8 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<Key<'a> = &'a K, Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
+    Tr::KeyContainer: BatchContainer<Owned=K>,
     R: Mul<Tr::Diff, Output: Semigroup>,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
@@ -130,7 +131,8 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<Key<'a> = &'a K, Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
+    Tr::KeyContainer: BatchContainer<Owned=K>,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
@@ -276,7 +278,7 @@ where
 
                         let builder_idx = blob.caps.iter().position(|c| c.time().less_equal(initial)).unwrap();
 
-                        key_con.clear(); key_con.push_ref(&key);
+                        key_con.clear(); key_con.push_own(&key);
                         cursor.seek_key(&storage, key_con.index(0));
                         if cursor.get_key(&storage) == key_con.get(0) {
                             while let Some(val2) = cursor.get_val(&storage) {

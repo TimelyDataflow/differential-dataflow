@@ -85,7 +85,8 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<Key<'a> = &'a K, Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
+    Tr::KeyContainer: BatchContainer<Owned=K>,
     R: Mul<Tr::Diff, Output: Semigroup>,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
@@ -151,7 +152,8 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: for<'a> TraceReader<Key<'a> = &'a K, Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
+    Tr::KeyContainer: BatchContainer<Owned=K>,
     FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
@@ -312,7 +314,8 @@ fn process_proposals<G, Tr, CF, Y, S, CB, K, V, R>(
 ) -> bool
 where
     G: Scope<Timestamp = Tr::Time>,
-    Tr: for<'a> TraceReader<Key<'a> = &'a K>,
+    Tr: TraceReader,
+    Tr::KeyContainer: BatchContainer<Owned=K>,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(Instant, usize) -> bool + 'static,
     S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
@@ -339,7 +342,7 @@ where
         yielded = yielded || yield_function(timer, *work);
 
         if !yielded && !(0 .. time_con.len()).any(|i| comparison(time_con.index(i), initial)) {
-            key_con.clear(); key_con.push_ref(&key);
+            key_con.clear(); key_con.push_own(&key);
             cursor.seek_key(&storage, key_con.index(0));
             if cursor.get_key(&storage) == key_con.get(0) {
                 while let Some(val2) = cursor.get_val(&storage) {

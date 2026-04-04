@@ -29,10 +29,10 @@ pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        Key<'a> = &'a K,
         Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
     >+Clone+'static,
+    Tr::KeyContainer: BatchContainer<Owned=K>,
     K: Hashable + Ord + 'static,
     F: FnMut(&D, &mut K)+Clone+'static,
     D: ExchangeData,
@@ -95,7 +95,7 @@ where
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !frontier2.less_equal(time) {
                             logic2(prefix, &mut key1);
-                            key_con.clear(); key_con.push_ref(&key1);
+                            key_con.clear(); key_con.push_own(&key1);
                             cursor.seek_key(&storage, key_con.index(1));
                             if cursor.get_key(&storage) == Some(key_con.index(1)) {
                                 while let Some(value) = cursor.get_val(&storage) {
