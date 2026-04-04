@@ -300,13 +300,10 @@ where
                             new_capabilities.push(cap.delayed(time));
                         }
                         capabilities = new_capabilities;
+                    }
 
-                        // ensure that observed progress is reflected in the output.
-                        output_writer.seal(upper_limit.clone());
-                    }
-                    else {
-                        output_writer.seal(upper_limit.clone());
-                    }
+                    // ensure that observed progress is reflected in the output.
+                    output_writer.seal(upper_limit.clone());
 
                     // We only anticipate future times in advance of `upper_limit`.
                     source_trace.set_logical_compaction(upper_limit.borrow());
