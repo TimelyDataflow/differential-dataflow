@@ -529,7 +529,7 @@ mod history_replay {
 
                         // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
                         debug_assert!(self.input_buffer.is_empty());
-                        meet.as_ref().map(|meet| input_replay.advance_buffer_by(meet));
+                        if let Some(meet) = meet.as_ref() { input_replay.advance_buffer_by(meet) };
                         for &((value, ref time), ref diff) in input_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
                                 self.input_buffer.push((value, diff.clone()));
@@ -548,7 +548,7 @@ mod history_replay {
                         }
                         crate::consolidation::consolidate(&mut self.input_buffer);
 
-                        meet.as_ref().map(|meet| output_replay.advance_buffer_by(meet));
+                        if let Some(meet) = meet.as_ref() { output_replay.advance_buffer_by(meet) };
                         for &((value, ref time), ref diff) in output_replay.buffer().iter() {
                             if time.less_equal(&next_time) {
                                 self.output_buffer.push((C2::owned_val(value), diff.clone()));
