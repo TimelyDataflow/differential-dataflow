@@ -113,8 +113,6 @@ pub trait WithLayout {
 
 /// Automatically implemented trait for types with layouts.
 pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContainer, ValContainer = Self::ValContainer, TimeContainer = Self::TimeContainer, DiffContainer = Self::DiffContainer>> {
-    /// Alias for an owned key of a layout.
-    type KeyOwn;
     /// Alias for an borrowed key of a layout.
     type Key<'a>: Copy + Ord;
     /// Alias for an owned val of a layout.
@@ -131,7 +129,7 @@ pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContaine
     type DiffGat<'a>: Copy + Ord;
 
     /// Container for update keys.
-    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Key<'a>, Owned = Self::KeyOwn>;
+    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Key<'a>>;
     /// Container for update vals.
     type ValContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Val<'a>, Owned = Self::ValOwn>;
     /// Container for times.
@@ -139,8 +137,6 @@ pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContaine
     /// Container for diffs.
     type DiffContainer: for<'a> BatchContainer<ReadItem<'a> = Self::DiffGat<'a>, Owned = Self::Diff>;
 
-    /// Construct an owned key from a reference.
-    fn owned_key(key: Self::Key<'_>) -> Self::KeyOwn;
     /// Construct an owned val from a reference.
     fn owned_val(val: Self::Val<'_>) -> Self::ValOwn;
     /// Construct an owned time from a reference.
@@ -153,7 +149,6 @@ pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContaine
 }
 
 impl<L: WithLayout> LayoutExt for L {
-    type KeyOwn = <<L::Layout as Layout>::KeyContainer as BatchContainer>::Owned;
     type Key<'a> = <<L::Layout as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
     type ValOwn = <<L::Layout as Layout>::ValContainer as BatchContainer>::Owned;
     type Val<'a> = <<L::Layout as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
@@ -167,7 +162,6 @@ impl<L: WithLayout> LayoutExt for L {
     type TimeContainer = <L::Layout as Layout>::TimeContainer;
     type DiffContainer = <L::Layout as Layout>::DiffContainer;
 
-    #[inline(always)] fn owned_key(key: Self::Key<'_>) -> Self::KeyOwn { <Self::Layout as Layout>::KeyContainer::into_owned(key) }
     #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <Self::Layout as Layout>::ValContainer::into_owned(val) }
     #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Self::Layout as Layout>::TimeContainer::into_owned(time) }
     #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <Self::Layout as Layout>::DiffContainer::into_owned(diff) }

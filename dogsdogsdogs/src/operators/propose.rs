@@ -21,11 +21,11 @@ pub fn propose<G, Tr, K, F, P, V>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        KeyOwn = K,
         ValOwn = V,
         Time: std::hash::Hash,
         Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData+Semigroup<Tr::DiffGat<'a>>,
     >+Clone+'static,
+    Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     K: Hashable + Default + Ord + 'static,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
@@ -55,11 +55,11 @@ pub fn propose_distinct<G, Tr, K, F, P, V>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        KeyOwn = K,
         ValOwn = V,
         Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
+    Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     K: Hashable + Default + Ord + 'static,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,

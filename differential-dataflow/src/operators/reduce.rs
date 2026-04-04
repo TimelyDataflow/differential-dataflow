@@ -5,7 +5,6 @@
 //! to the key and the list of values.
 //! The function is expected to populate a list of output values.
 
-use timely::container::PushInto;
 use crate::Data;
 
 use timely::progress::frontier::Antichain;
@@ -18,21 +17,29 @@ use crate::operators::arrange::{Arranged, TraceAgent};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::containers::BatchContainer;
-use crate::trace::implementations::merge_batcher::container::InternalMerge;
 use crate::trace::TraceReader;
-
-// TODO: Remove the InternalMerge constraint on Bu::Input. It only needs Clear.
 
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
-pub fn reduce_trace<G, T1, Bu, T2, L>(trace: Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+///
+/// The `logic` closure is expected to take a key, accumulated input, and tentative accumulated output,
+/// and populate its final argument with whatever it feels to be appopriate updates. The behavior and
+/// correctness of the implementation rely on this making sense, and e.g. ideally the updates would if
+/// applied to the tentative output bring it in line with some function applied to the input.
+///
+/// The `push` closure is expected to clear its first argument, then populate it with the key and drain
+/// the value updates, as appropriate for the container. It is critical that it clear the container as
+/// the operator has no ability to do this otherwise, and failing to do so represents a leak from one
+/// key's computation to another, and will likely introduce non-determinism.
+pub fn reduce_trace<G, T1, Bu, T2, L, P>(trace: Arranged<G, T1>, name: &str, mut logic: L, mut push: P) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: TraceReader<KeyOwn: Ord> + Clone + 'static,
-    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, KeyOwn=T1::KeyOwn, ValOwn: Data, Time=T1::Time> + 'static,
-    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+    T1: TraceReader + Clone + 'static,
+    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, ValOwn: Data, Time=T1::Time> + 'static,
+    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: Default>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn,T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
+    P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,
 {
     let mut result_trace = None;
 
@@ -53,7 +60,6 @@ where
                 empty.set_exert_logic(exert_logic);
             }
 
-
             let mut source_trace = trace.trace.clone();
 
             let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
@@ -63,8 +69,11 @@ where
             let mut new_interesting_times = Vec::<G::Timestamp>::new();
 
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
-            // as well as capabilities for these times (or their lower envelope, at least).
-            let mut interesting = Vec::<(T1::KeyOwn, G::Timestamp)>::new();
+            // sorted by (key, time), as well as capabilities for the lower envelope of the times.
+            let mut pending_keys = T1::KeyContainer::with_capacity(0);
+            let mut pending_time = T1::TimeContainer::with_capacity(0);
+            let mut next_pending_keys = T1::KeyContainer::with_capacity(0);
+            let mut next_pending_time = T1::TimeContainer::with_capacity(0);
             let mut capabilities = timely::dataflow::operators::CapabilitySet::<G::Timestamp>::default();
 
             // buffers and logic for computing per-key interesting times "efficiently".
@@ -115,25 +124,15 @@ where
                 // We plan to retire the interval [lower_limit, upper_limit), which should be non-empty to proceed.
                 if upper_limit != lower_limit {
 
-                    // If we hold no capabilitys in the interval [lower_limit, upper_limit) then we have no compute needs,
+                    // If we hold no capabilities in the interval [lower_limit, upper_limit) then we have no compute needs,
                     // and could not transmit the outputs even if they were (incorrectly) non-zero.
                     // We do have maintenance work after this logic, and should not fuse this test with the above test.
                     if capabilities.iter().any(|c| !upper_limit.less_equal(c.time())) {
 
-                        // `interesting` contains "todos" about key and time pairs that should be re-considered.
-                        // We first extract those times from this list that lie in the interval we will process.
-                        sort_dedup(&mut interesting);
-                        // `exposed` contains interesting (key, time)s now below `upper_limit`
-                        let mut exposed_keys = T1::KeyContainer::with_capacity(0);
-                        let mut exposed_time = T1::TimeContainer::with_capacity(0);
-                        // Keep pairs greater or equal to `upper_limit`, and "expose" other pairs.
-                        interesting.retain(|(key, time)| {
-                            if upper_limit.less_equal(time) { true } else {
-                                exposed_keys.push_own(key);
-                                exposed_time.push_own(time);
-                                false
-                            }
-                        });
+                        // cursors for navigating input and output traces.
+                        let (mut source_cursor, ref source_storage): (T1::Cursor, _) = source_trace.cursor_through(lower_limit.borrow()).expect("failed to acquire source cursor");
+                        let (mut output_cursor, ref output_storage): (T2::Cursor, _) = output_reader.cursor_through(lower_limit.borrow()).expect("failed to acquire output cursor");
+                        let (mut batch_cursor, ref batch_storage) = (CursorList::new(batch_cursors, &batch_storage), batch_storage);
 
                         // Prepare an output buffer and builder for each capability.
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
@@ -144,22 +143,21 @@ where
                             buffers.push((cap.time().clone(), Vec::new()));
                             builders.push(Bu::new());
                         }
-
+                        // Temporary staging for output building.
                         let mut buffer = Bu::Input::default();
 
-                        // cursors for navigating input and output traces.
-                        let (mut source_cursor, ref source_storage): (T1::Cursor, _) = source_trace.cursor_through(lower_limit.borrow()).expect("failed to acquire source cursor");
-                        let (mut output_cursor, ref output_storage): (T2::Cursor, _) = output_reader.cursor_through(lower_limit.borrow()).expect("failed to acquire output cursor");
-                        let (mut batch_cursor, ref batch_storage) = (CursorList::new(batch_cursors, &batch_storage), batch_storage);
-
+                        // Reuseable state for performing the computation.
                         let mut thinker = history_replay::HistoryReplayer::new();
 
+                        // Merge the received batch cursor with our list of interesting (key, time) moments.
+                        // The interesting moments need to be in the interval to prompt work.
+
                         // March through the keys we must work on, merging `batch_cursors` and `exposed`.
-                        let mut exposed_position = 0;
-                        while batch_cursor.key_valid(batch_storage) || exposed_position < exposed_keys.len() {
+                        let mut pending_pos = 0;
+                        while batch_cursor.key_valid(batch_storage) || pending_pos < pending_keys.len() {
 
                             // Determine the next key we will work on; could be synthetic, could be from a batch.
-                            let key1 = exposed_keys.get(exposed_position);
+                            let key1 = pending_keys.get(pending_pos);
                             let key2 = batch_cursor.get_key(batch_storage);
                             let key = match (key1, key2) {
                                 (Some(key1), Some(key2)) => ::std::cmp::min(key1, key2),
@@ -169,49 +167,71 @@ where
                             };
 
                             // Populate `interesting_times` with interesting times not beyond `upper_limit`.
-                            // TODO: This could just be `exposed_time` and `lower .. upper` bounds.
+                            // TODO: This could just be `pending_time` and indexes within `lower .. upper`.
+                            let prior_pos = pending_pos;
                             interesting_times.clear();
-                            while exposed_keys.get(exposed_position) == Some(key) {
-                                interesting_times.push(T1::owned_time(exposed_time.index(exposed_position)));
-                                exposed_position += 1;
+                            while pending_keys.get(pending_pos) == Some(key) {
+                                let owned_time = T1::owned_time(pending_time.index(pending_pos));
+                                if !upper_limit.less_equal(&owned_time) { interesting_times.push(owned_time); }
+                                pending_pos += 1;
                             }
 
                             // tidy up times, removing redundancy.
                             sort_dedup(&mut interesting_times);
 
-                            // do the per-key computation.
-                            thinker.compute(
-                                key,
-                                (&mut source_cursor, source_storage),
-                                (&mut output_cursor, output_storage),
-                                (&mut batch_cursor, batch_storage),
-                                &interesting_times,
-                                &mut logic,
-                                &upper_limit,
-                                &mut buffers[..],
-                                &mut new_interesting_times,
-                            );
+                            // If there are new updates, or pending times, we must investigate!
+                            if batch_cursor.get_key(batch_storage) == Some(key) || !interesting_times.is_empty() {
 
-                            // Advance the cursor if this key, so that the loop's validity check registers the work as done.
-                            if batch_cursor.get_key(batch_storage) == Some(key) { batch_cursor.step_key(batch_storage); }
+                                // do the per-key computation.
+                                thinker.compute(
+                                    key,
+                                    (&mut source_cursor, source_storage),
+                                    (&mut output_cursor, output_storage),
+                                    (&mut batch_cursor, batch_storage),
+                                    &interesting_times,
+                                    &mut logic,
+                                    &upper_limit,
+                                    &mut buffers[..],
+                                    &mut new_interesting_times,
+                                );
 
-                            // Record future warnings about interesting times (and assert they should be "future").
-                            debug_assert!(new_interesting_times.iter().all(|t| upper_limit.less_equal(t)));
-                            interesting.extend(new_interesting_times.drain(..).map(|t| (T1::owned_key(key), t)));
+                                // Advance the cursor if this key, so that the loop's validity check registers the work as done.
+                                if batch_cursor.get_key(batch_storage) == Some(key) { batch_cursor.step_key(batch_storage); }
 
-                            // Sort each buffer by value and move into the corresponding builder.
-                            // TODO: This makes assumptions about at least one of (i) the stability of `sort_by`,
-                            //       (ii) that the buffers are time-ordered, and (iii) that the builders accept
-                            //       arbitrarily ordered times.
-                            for index in 0 .. buffers.len() {
-                                buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
-                                for (val, time, diff) in buffers[index].1.drain(..) {
-                                    buffer.push_into(((T1::owned_key(key), val), time, diff));
+                                // Merge novel pending times with any prior pending times we did not process.
+                                // TODO: This could be a merge, not a sort_dedup, because both lists should be sorted.
+                                for pos in prior_pos .. pending_pos {
+                                    let owned_time = T1::owned_time(pending_time.index(pos));
+                                    if upper_limit.less_equal(&owned_time) { new_interesting_times.push(owned_time); }
+                                }
+                                sort_dedup(&mut new_interesting_times);
+                                for time in new_interesting_times.drain(..) {
+                                    next_pending_keys.push_ref(key);
+                                    next_pending_time.push_own(&time);
+                                }
+
+                                // Sort each buffer by value and move into the corresponding builder.
+                                // TODO: This makes assumptions about at least one of (i) the stability of `sort_by`,
+                                //       (ii) that the buffers are time-ordered, and (iii) that the builders accept
+                                //       arbitrarily ordered times.
+                                for index in 0 .. buffers.len() {
+                                    buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
+                                    push(&mut buffer, key, &mut buffers[index].1);
+                                    buffers[index].1.clear();
                                     builders[index].push(&mut buffer);
-                                    buffer.clear();
+
+                                }
+                            }
+                            else {
+                                // copy over the pending key and times.
+                                for pos in prior_pos .. pending_pos {
+                                    next_pending_keys.push_ref(pending_keys.index(pos));
+                                    next_pending_time.push_ref(pending_time.index(pos));
                                 }
                             }
                         }
+                        // Drop to avoid lifetime issues that would lock `pending_{keys, time}`.
+                        drop(thinker);
 
                         // We start sealing output batches from the lower limit (previous upper limit).
                         // In principle, we could update `lower_limit` itself, and it should arrive at
@@ -243,14 +263,21 @@ where
                                 output_lower.extend(output_upper.borrow().iter().cloned());
                             }
                         }
-
                         // This should be true, as the final iteration introduces no capabilities, and
                         // uses exactly `upper_limit` to determine the upper bound. Good to check though.
                         assert!(output_upper.borrow() == upper_limit.borrow());
 
-                        // Update `capabilities` to reflect interesting times.
+                        // Refresh pending keys and times, then downgrade capabilities to the frontier of times.
+                        pending_keys.clear(); std::mem::swap(&mut next_pending_keys, &mut pending_keys);
+                        pending_time.clear(); std::mem::swap(&mut next_pending_time, &mut pending_time);
+
+                        // Update `capabilities` to reflect pending times.
                         let mut frontier = Antichain::<G::Timestamp>::new();
-                        for (_, time) in &interesting { frontier.insert_ref(time); }
+                        let mut owned_time = T1::Time::minimum();
+                        for pos in 0 .. pending_time.len() {
+                            T1::clone_time_onto(pending_time.index(pos), &mut owned_time);
+                            frontier.insert_ref(&owned_time);
+                        }
                         capabilities.downgrade(frontier);
                     }
 

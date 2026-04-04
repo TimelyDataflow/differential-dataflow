@@ -29,10 +29,10 @@ pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        KeyOwn = K,
         Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
     >+Clone+'static,
+    Tr::KeyContainer: BatchContainer<Owned=K>,
     K: Hashable + Ord + 'static,
     F: FnMut(&D, &mut K)+Clone+'static,
     D: ExchangeData,

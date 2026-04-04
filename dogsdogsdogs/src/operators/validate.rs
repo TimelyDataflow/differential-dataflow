@@ -20,10 +20,10 @@ pub fn validate<G, K, V, Tr, F, P>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        KeyOwn = (K, V),
         Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
+    Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=(K,V)>,
     K: Ord+Hash+Clone+Default + 'static,
     V: ExchangeData+Hash+Default,
     F: Fn(&P)->K+Clone+'static,
