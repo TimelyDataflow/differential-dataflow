@@ -479,18 +479,6 @@ mod history_replay {
             let mut meet = None;
             update_meet(&mut meet, self.meets.get(0));
             update_meet(&mut meet, batch_replay.meet());
-            // if let Some(time) = self.meets.get(0) {
-            //     meet = match meet {
-            //         None => Some(self.meets[0].clone()),
-            //         Some(x) => Some(x.meet(&self.meets[0])),
-            //     };
-            // }
-            // if let Some(time) = batch_replay.meet() {
-            //     meet = match meet {
-            //         None => Some(time.clone()),
-            //         Some(x) => Some(x.meet(&time)),
-            //     };
-            // }
 
             // Having determined the meet, we can load the input and output histories, where we
             // advance all times by joining them with `meet`. The resulting times are more compact
@@ -643,24 +631,6 @@ mod history_replay {
                             self.output_buffer.clear();
                         }
 
-                        // output_replay.advance_buffer_by(&meet);
-                        // for &((ref value, ref time), diff) in output_replay.buffer().iter() {
-                        //     if time.less_equal(&next_time) {
-                        //         self.output_buffer.push(((*value).clone(), -diff));
-                        //     }
-                        //     else {
-                        //         self.temporary.push(next_time.join(time));
-                        //     }
-                        // }
-                        // for &((ref value, ref time), diff) in self.output_produced.iter() {
-                        //     if time.less_equal(&next_time) {
-                        //         self.output_buffer.push(((*value).clone(), -diff));
-                        //     }
-                        //     else {
-                        //         self.temporary.push(next_time.join(&time));
-                        //     }
-                        // }
-
                         // Having subtracted output updates from user output, consolidate the results to determine
                         // if there is anything worth reporting. Note: this also orders the results by value, so
                         // that could make the above merging plan even easier.
@@ -754,12 +724,7 @@ mod history_replay {
                 update_meet(&mut meet, input_replay.meet());
                 update_meet(&mut meet, output_replay.meet());
                 for time in self.synth_times.iter() { update_meet(&mut meet, Some(time)); }
-                // if let Some(time) = batch_replay.meet() { meet = meet.meet(time); }
-                // if let Some(time) = input_replay.meet() { meet = meet.meet(time); }
-                // if let Some(time) = output_replay.meet() { meet = meet.meet(time); }
-                // for time in self.synth_times.iter() { meet = meet.meet(time); }
                 update_meet(&mut meet, meets_slice.first());
-                // if let Some(time) = meets_slice.first() { meet = meet.meet(time); }
 
                 // Update `times_current` by the frontier.
                 if let Some(meet) = meet.as_ref() {
