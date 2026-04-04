@@ -78,25 +78,15 @@ where
             let mut output_upper = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
             let mut output_lower = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
-            move |(input, _frontier), output| {
+            move |(input, frontier), output| {
 
-                // The `reduce` operator receives fully formed batches, which each serve as an indication
-                // that the frontier has advanced to the upper bound of their description.
+                // The operator receives input batches, which it treats as contiguous and will collect and
+                // then process as one batch. It captures the input frontier from the batches, from the upstream
+                // trace, and from the input frontier, and retires the work through that interval.
                 //
-                // Although we could act on each individually, several may have been sent, and it makes
-                // sense to accumulate them first to coordinate their re-evaluation. We will need to pay
-                // attention to which times need to be collected under which capability, so that we can
-                // assemble output batches correctly. We will maintain several builders concurrently, and
-                // place output updates into the appropriate builder.
-                //
-                // It turns out we must use notificators, as we cannot await empty batches from arrange to
-                // indicate progress, as the arrange may not hold the capability to send such. Instead, we
-                // must watch for progress here (and the upper bound of received batches) to tell us how
-                // far we can process work.
-                //
-                // We really want to retire all batches we receive, so we want a frontier which reflects
-                // both information from batches as well as progress information. I think this means that
-                // we keep times that are greater than or equal to a time in the other frontier, deduplicated.
+                // Reduce may retain capabilities and need to perform work and produce output at times that
+                // may not be seen in its input. The standard example is that updates at `(0, 1)` and `(1, 0)`
+                // may result in outputs at `(1, 1)` as well, even with no input at that time.
 
                 let mut batch_cursors = Vec::new();
                 let mut batch_storage = Vec::new();
@@ -105,23 +95,22 @@ where
                 lower_limit.clear();
                 lower_limit.extend(upper_limit.borrow().iter().cloned());
 
-                // Drain the input stream of batches, validating the contiguity of the batch descriptions and
-                // capturing a cursor for each of the batches as well as ensuring we hold a capability for the
-                // times in the batch.
+                // Drain input batches in order, capturing capabilities and the last upper.
                 input.for_each(|capability, batches| {
-
+                    capabilities.insert(capability.retain(0));
                     for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());
                         batch_cursors.push(batch.cursor());
                         batch_storage.push(batch);
                     }
-
-                    // Ensure that `capabilities` covers the capability of the batch.
-                    capabilities.insert(capability.retain(0));
                 });
 
                 // Pull in any subsequent empty batches we believe to exist.
                 source_trace.advance_upper(&mut upper_limit);
+                // Incorporate the input frontier guarantees as well.
+                let mut joined = Antichain::new();
+                crate::lattice::antichain_join_into(&upper_limit.borrow()[..], &frontier.frontier()[..], &mut joined);
+                upper_limit = joined;
 
                 // Only if our upper limit has advanced should we do work.
                 if upper_limit != lower_limit {
