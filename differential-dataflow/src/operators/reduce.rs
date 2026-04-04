@@ -5,7 +5,6 @@
 //! to the key and the list of values.
 //! The function is expected to populate a list of output values.
 
-use timely::container::PushInto;
 use crate::Data;
 
 use timely::progress::frontier::Antichain;
@@ -18,21 +17,19 @@ use crate::operators::arrange::{Arranged, TraceAgent};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::containers::BatchContainer;
-use crate::trace::implementations::merge_batcher::container::InternalMerge;
 use crate::trace::TraceReader;
-
-// TODO: Remove the InternalMerge constraint on Bu::Input. It only needs Clear.
 
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
-pub fn reduce_trace<G, T1, Bu, T2, L>(trace: Arranged<G, T1>, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+pub fn reduce_trace<G, T1, Bu, T2, L, P>(trace: Arranged<G, T1>, name: &str, mut logic: L, mut push: P) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
     T1: TraceReader<KeyOwn: Ord> + Clone + 'static,
     T2: for<'a> Trace<Key<'a>=T1::Key<'a>, KeyOwn=T1::KeyOwn, ValOwn: Data, Time=T1::Time> + 'static,
-    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+    Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: Default>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn,T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
+    P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,
 {
     let mut result_trace = None;
 
@@ -209,11 +206,8 @@ where
                                 //       arbitrarily ordered times.
                                 for index in 0 .. buffers.len() {
                                     buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
-                                    for (val, time, diff) in buffers[index].1.drain(..) {
-                                        buffer.push_into(((T1::owned_key(key), val), time, diff));
-                                        builders[index].push(&mut buffer);
-                                        buffer.clear();
-                                    }
+                                    push(&mut buffer, key, &mut buffers[index].1);
+                                    builders[index].push(&mut buffer);
                                 }
                             }
                             else {

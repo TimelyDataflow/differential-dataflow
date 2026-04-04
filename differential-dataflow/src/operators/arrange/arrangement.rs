@@ -271,7 +271,7 @@ where
     T1: TraceReader + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_abelian<L, Bu, T2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<G, TraceAgent<T2>>
     where
         T1: TraceReader<KeyOwn: Ord>,
         T2: for<'a> Trace<
@@ -283,18 +283,19 @@ where
         >+'static,
         Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,
     {
-        self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
+        self.reduce_core::<_,Bu,T2,_>(name, move |key, input, output, change| {
             if !input.is_empty() {
                 logic(key, input, change);
             }
             change.extend(output.drain(..).map(|(x,mut d)| { d.negate(); (x, d) }));
             crate::consolidation::consolidate(change);
-        })
+        }, push)
     }
 
     /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    pub fn reduce_core<L, Bu, T2, P>(self, name: &str, logic: L, push: P) -> Arranged<G, TraceAgent<T2>>
     where
         T1: TraceReader<KeyOwn: Ord>,
         T2: for<'a> Trace<
@@ -305,9 +306,10 @@ where
         >+'static,
         Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,
     {
         use crate::operators::reduce::reduce_trace;
-        reduce_trace::<_,_,Bu,_,_>(self, name, logic)
+        reduce_trace::<_,_,Bu,_,_,_>(self, name, logic, push)
     }
 }
 

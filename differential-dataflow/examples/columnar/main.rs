@@ -168,8 +168,16 @@ mod reachability {
             let result = combined_arr.reduce_abelian::<_,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
-            >("Distinct", |_node, _input, output| {
-                output.push(((), 1));
+                _,
+            >("Distinct", |_node, _input, output| { output.push(((), 1)); },
+            |col, key, upds| {
+                use columnar::{Clear, Push};
+                col.keys.clear();
+                col.vals.clear();
+                col.times.clear();
+                col.diffs.clear();
+                for (val, time, diff) in upds.drain(..) { col.push((key, &val, &time, &diff)); }
+                *col = std::mem::take(col).consolidate();
             });
 
             // Extract RecordedUpdates from the Arranged's batch stream.

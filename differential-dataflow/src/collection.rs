@@ -752,7 +752,11 @@ pub mod vec {
             use crate::trace::implementations::{ValBuilder, ValSpine};
 
             self.arrange_by_key_named(&format!("Arrange: {}", name))
-                .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<K,V2,_,_>>(name, logic)
+                .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<K,V2,_,_>,_>(
+                    name,
+                    logic,
+                    |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
+                )
                 .as_collection(|k,v| (k.clone(), v.clone()))
         }
 
@@ -806,7 +810,11 @@ pub mod vec {
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
         {
             self.arrange_by_key_named(&format!("Arrange: {}", name))
-                .reduce_core::<_,Bu,_>(name, logic)
+                .reduce_core::<_,Bu,_,_>(
+                    name,
+                    logic,
+                    |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
+                )
         }
     }
 
@@ -871,7 +879,11 @@ pub mod vec {
             use crate::trace::implementations::{KeyBuilder, KeySpine};
 
             self.arrange_by_self_named(&format!("Arrange: {}", name))
-                .reduce_abelian::<_,KeyBuilder<K,G::Timestamp,R2>,KeySpine<K,G::Timestamp,R2>>(name, move |k,s,t| t.push(((), thresh(k, &s[0].1))))
+                .reduce_abelian::<_,KeyBuilder<K,G::Timestamp,R2>,KeySpine<K,G::Timestamp,R2>,_>(
+                    name,
+                    move |k,s,t| t.push(((), thresh(k, &s[0].1))),
+                    |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
+                )
                 .as_collection(|k,_| k.clone())
         }
 
@@ -908,7 +920,11 @@ pub mod vec {
         pub fn count_core<R2: Ord + Abelian + From<i8> + 'static>(self) -> Collection<G, (K, R), R2> {
             use crate::trace::implementations::{ValBuilder, ValSpine};
             self.arrange_by_self_named("Arrange: Count")
-                .reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>>("Count", |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))))
+                .reduce_abelian::<_,ValBuilder<K,R,G::Timestamp,R2>,ValSpine<K,R,G::Timestamp,R2>,_>(
+                    "Count",
+                    |_k,s,t| t.push((s[0].1.clone(), R2::from(1i8))),
+                    |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
+                )
                 .as_collection(|k,c| (k.clone(), c.clone()))
         }
     }
