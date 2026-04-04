@@ -221,7 +221,7 @@ where
                             sort_dedup(&mut interesting_times);
 
                             // do the per-key computation.
-                            let _counters = thinker.compute(
+                            thinker.compute(
                                 key,
                                 (&mut source_cursor, source_storage),
                                 (&mut output_cursor, output_storage),
@@ -414,7 +414,7 @@ mod history_replay {
             logic: &mut L,
             upper_limit: &Antichain<C1::Time>,
             outputs: &mut [(C2::Time, Vec<(V, C2::Time, C2::Diff)>)],
-            new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
+            new_interesting: &mut Vec<C1::Time>)
         where
             L: FnMut(
                 C1::Key<'a>,
@@ -487,9 +487,6 @@ mod history_replay {
             let mut times_slice = &times[..];
             let mut meets_slice = &self.meets[..];
 
-            let mut compute_counter = 0;
-            let mut output_counter = 0;
-
             // We have candidate times from `batch` and `times`, as well as times identified by either
             // `input` or `output`. Finally, we may have synthetic times produced as the join of times
             // we consider in the course of evaluation. As long as any of these times exist, we need to
@@ -553,8 +550,6 @@ mod history_replay {
                     // output produced. This sounds like a good test to have for debug builds!
                     if interesting {
 
-                        compute_counter += 1;
-
                         // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
                         debug_assert!(self.input_buffer.is_empty());
                         meet.as_ref().map(|meet| input_replay.advance_buffer_by(meet));
@@ -612,8 +607,6 @@ mod history_replay {
                         // through times, but we cannot compact the output buffers because we need their actual
                         // times.
                         if !self.update_buffer.is_empty() {
-
-                            output_counter += 1;
 
                             // We *should* be able to find a capability for `next_time`. Any thing else would
                             // indicate a logical error somewhere along the way; either we release a capability
@@ -709,8 +702,6 @@ mod history_replay {
 
             // Normalize the representation of `new_interesting`, deduplicating and ordering.
             sort_dedup(new_interesting);
-
-            (compute_counter, output_counter)
         }
     }
 
