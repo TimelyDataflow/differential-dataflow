@@ -22,6 +22,16 @@ use crate::trace::TraceReader;
 /// A key-wise reduction of values in an input trace.
 ///
 /// This method exists to provide reduce functionality without opinions about qualifying trace types.
+///
+/// The `logic` closure is expected to take a key, accumulated input, and tentative accumulated output,
+/// and populate its final argument with whatever it feels to be appopriate updates. The behavior and
+/// correctness of the implementation rely on this making sense, and e.g. ideally the updates would if
+/// applied to the tentative output bring it in line with some function applied to the input.
+///
+/// The `push` closure is expected to clear its first argument, then populate it with the key and drain
+/// the value updates, as appropriate for the container. It is critical that it clear the container as
+/// the operator has no ability to do this otherwise, and failing to do so represents a leak from one
+/// key's computation to another, and will likely introduce non-determinism.
 pub fn reduce_trace<G, T1, Bu, T2, L, P>(trace: Arranged<G, T1>, name: &str, mut logic: L, mut push: P) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
@@ -157,7 +167,7 @@ where
                             };
 
                             // Populate `interesting_times` with interesting times not beyond `upper_limit`.
-                            // TODO: This could just be `pending_time` and `lower .. upper` bounds.
+                            // TODO: This could just be `pending_time` and indexes within `lower .. upper`.
                             let prior_pos = pending_pos;
                             interesting_times.clear();
                             while pending_keys.get(pending_pos) == Some(key) {
@@ -207,7 +217,9 @@ where
                                 for index in 0 .. buffers.len() {
                                     buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                                     push(&mut buffer, key, &mut buffers[index].1);
+                                    buffers[index].1.clear();
                                     builders[index].push(&mut buffer);
+
                                 }
                             }
                             else {
