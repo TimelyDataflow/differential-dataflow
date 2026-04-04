@@ -347,35 +347,6 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
     list.dedup();
 }
 
-trait PerKeyCompute<'a, C1, C2, C3, V>
-where
-    C1: Cursor,
-    C2: for<'b> Cursor<Key<'a> = C1::Key<'a>, ValOwn = V, Time = C1::Time>,
-    C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
-    V: Clone + Ord,
-{
-    fn new() -> Self;
-    fn compute<L>(
-        &mut self,
-        key: C1::Key<'a>,
-        source_cursor: (&mut C1, &'a C1::Storage),
-        output_cursor: (&mut C2, &'a C2::Storage),
-        batch_cursor: (&mut C3, &'a C3::Storage),
-        times: &mut Vec<C1::Time>,
-        logic: &mut L,
-        upper_limit: &Antichain<C1::Time>,
-        outputs: &mut [(C2::Time, Vec<(V, C2::Time, C2::Diff)>)],
-        new_interesting: &mut Vec<C1::Time>) -> (usize, usize)
-    where
-        L: FnMut(
-            C1::Key<'a>,
-            &[(C1::Val<'a>, C1::Diff)],
-            &mut Vec<(V, C2::Diff)>,
-            &mut Vec<(V, C2::Diff)>,
-        );
-}
-
-
 /// Implementation based on replaying historical and new updates together.
 mod history_replay {
 
@@ -386,7 +357,7 @@ mod history_replay {
     use crate::trace::Cursor;
     use crate::operators::ValueHistory;
 
-    use super::{PerKeyCompute, sort_dedup};
+    use super::sort_dedup;
 
     /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in
     /// time order, maintaining consolidated representations of updates with respect to future interesting times.
@@ -410,14 +381,14 @@ mod history_replay {
         temporary: Vec<C1::Time>,
     }
 
-    impl<'a, C1, C2, C3, V> PerKeyCompute<'a, C1, C2, C3, V> for HistoryReplayer<'a, C1, C2, C3, V>
+    impl<'a, C1, C2, C3, V> HistoryReplayer<'a, C1, C2, C3, V>
     where
         C1: Cursor,
         C2: for<'b> Cursor<Key<'a> = C1::Key<'a>, ValOwn = V, Time = C1::Time>,
         C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
         V: Clone + Ord,
     {
-        fn new() -> Self {
+        pub fn new() -> Self {
             HistoryReplayer {
                 input_history: ValueHistory::new(),
                 output_history: ValueHistory::new(),
@@ -433,7 +404,7 @@ mod history_replay {
             }
         }
         #[inline(never)]
-        fn compute<L>(
+        pub fn compute<L>(
             &mut self,
             key: C1::Key<'a>,
             (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
