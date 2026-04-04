@@ -227,7 +227,7 @@ where
                             output_upper.clear();
                             output_upper.extend(upper_limit.borrow().iter().cloned());
                             for capability in &capabilities[index + 1 ..] {
-                                output_upper.insert(capability.time().clone());
+                                output_upper.insert_ref(capability.time());
                             }
 
                             if output_upper.borrow() != output_lower.borrow() {
