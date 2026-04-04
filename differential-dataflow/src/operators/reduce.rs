@@ -60,11 +60,8 @@ where
 
             let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
 
-            // let mut output_trace = TraceRc::make_from(agent).0;
             *result_trace = Some(output_reader.clone());
 
-            // let mut thinker1 = history_replay_prior::HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
-            // let mut thinker = history_replay::HistoryReplayer::<V, V2, G::Timestamp, R, R2>::new();
             let mut new_interesting_times = Vec::<G::Timestamp>::new();
 
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
@@ -666,7 +663,7 @@ mod history_replay {
 
 
                 // Update `meet` to track the meet of each source of times.
-                meet = None;//T::maximum();
+                meet = None;
                 update_meet(&mut meet, batch_replay.meet());
                 update_meet(&mut meet, input_replay.meet());
                 update_meet(&mut meet, output_replay.meet());
