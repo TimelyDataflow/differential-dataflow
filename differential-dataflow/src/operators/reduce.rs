@@ -8,13 +8,11 @@
 use timely::container::PushInto;
 use crate::Data;
 
-use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 use timely::dataflow::*;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Capability;
 
 use crate::operators::arrange::{Arranged, TraceAgent};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
@@ -67,7 +65,7 @@ where
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
             // as well as capabilities for these times (or their lower envelope, at least).
             let mut interesting = Vec::<(T1::KeyOwn, G::Timestamp)>::new();
-            let mut capabilities = Vec::<Capability<G::Timestamp>>::new();
+            let mut capabilities = timely::dataflow::operators::CapabilitySet::<G::Timestamp>::default();
 
             // buffers and logic for computing per-key interesting times "efficiently".
             let mut interesting_times = Vec::<G::Timestamp>::new();
@@ -119,10 +117,7 @@ where
                     }
 
                     // Ensure that `capabilities` covers the capability of the batch.
-                    capabilities.retain(|cap| !capability.time().less_than(cap.time()));
-                    if !capabilities.iter().any(|cap| cap.time().less_equal(capability.time())) {
-                        capabilities.push(capability.retain(0));
-                    }
+                    capabilities.insert(capability.retain(0));
                 });
 
                 // Pull in any subsequent empty batches we believe to exist.
@@ -287,19 +282,10 @@ where
                         // uses exactly `upper_limit` to determine the upper bound. Good to check though.
                         assert!(output_upper.borrow() == upper_limit.borrow());
 
-                        // Determine the frontier of our interesting times.
+                        // Update `capabilities` to reflect interesting times.
                         let mut frontier = Antichain::<G::Timestamp>::new();
-                        for (_, time) in &interesting {
-                            frontier.insert_ref(time);
-                        }
-
-                        // Update `capabilities` to reflect interesting pairs described by `frontier`.
-                        let mut new_capabilities = Vec::new();
-                        for time in frontier.borrow().iter() {
-                            let cap = capabilities.iter().find(|c| c.time().less_equal(time)).expect("failed to find capability");
-                            new_capabilities.push(cap.delayed(time));
-                        }
-                        capabilities = new_capabilities;
+                        for (_, time) in &interesting { frontier.insert_ref(time); }
+                        capabilities.downgrade(frontier);
                     }
 
                     // ensure that observed progress is reflected in the output.
