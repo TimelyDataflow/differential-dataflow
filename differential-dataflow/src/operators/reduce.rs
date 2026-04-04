@@ -473,7 +473,7 @@ mod history_replay {
                                             input_replay.time(),
                                             output_replay.time(),
                                             self.synth_times.last(),
-                                        ].iter().cloned().flatten().min().cloned() {
+                                        ].into_iter().flatten().min().cloned() {
 
                 // Advance input and output history replayers. This marks applicable updates as active.
                 input_replay.step_while_time_is(&next_time);
@@ -511,7 +511,7 @@ mod history_replay {
                 // and become the time itself. They may not equal the current time because whatever frontier we
                 // are tracking may not have advanced far enough.
                 // TODO: `batch_history` may or may not be super compact at this point, and so this check might
-                //       yield false positives if not sufficiently compact. Maybe we should into this and see.
+                //       yield false positives if not sufficiently compact. Maybe we should look into this and see.
                 interesting = interesting || batch_replay.buffer().iter().any(|&((_, ref t),_)| t.less_equal(&next_time));
                 interesting = interesting || self.times_current.iter().any(|t| t.less_equal(&next_time));
 
@@ -658,7 +658,6 @@ mod history_replay {
                     debug_assert!(outputs.iter().any(|(t,_)| t.less_equal(&next_time)))
                 }
 
-
                 // Update `meet` to track the meet of each source of times.
                 meet = None;
                 update_meet(&mut meet, batch_replay.meet());
@@ -685,12 +684,8 @@ mod history_replay {
     /// Updates an optional meet by an optional time.
     fn update_meet<T: Lattice+Clone>(meet: &mut Option<T>, other: Option<&T>) {
         if let Some(time) = other {
-            if let Some(meet) = meet.as_mut() {
-                *meet = meet.meet(time);
-            }
-            if meet.is_none() {
-                *meet = Some(time.clone());
-            }
+            if let Some(meet) = meet.as_mut() { meet.meet_assign(time); }
+            else { *meet = Some(time.clone()); }
         }
     }
 }
