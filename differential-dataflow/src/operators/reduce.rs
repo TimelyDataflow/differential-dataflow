@@ -447,26 +447,18 @@ mod history_replay {
             // and guaranteed to accumulate identically for times greater or equal to `meet`.
 
             // Load the input and output histories.
-            let mut input_replay = if let Some(meet) = meet.as_ref() {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| {
-                    let mut time = C1::owned_time(time);
-                    time.join_assign(meet);
-                    time
-                })
-            }
-            else {
-                self.input_history.replay_key(source_cursor, source_storage, key, |time| C1::owned_time(time))
-            };
-            let mut output_replay = if let Some(meet) = meet.as_ref() {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| {
-                    let mut time = C2::owned_time(time);
-                    time.join_assign(meet);
-                    time
-                })
-            }
-            else {
-                self.output_history.replay_key(output_cursor, output_storage, key, |time| C2::owned_time(time))
-            };
+            let mut input_replay =
+            self.input_history.replay_key(source_cursor, source_storage, key, |time| {
+                let mut time = C1::owned_time(time);
+                if let Some(meet) = meet.as_ref() { time.join_assign(meet); }
+                time
+            });
+            let mut output_replay =
+            self.output_history.replay_key(output_cursor, output_storage, key, |time| {
+                let mut time = C2::owned_time(time);
+                if let Some(meet) = meet.as_ref() { time.join_assign(meet); }
+                time
+            });
 
             self.synth_times.clear();
             self.times_current.clear();
