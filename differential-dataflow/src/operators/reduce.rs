@@ -83,8 +83,6 @@ where
             let mut output_upper = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
             let mut output_lower = Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
 
-            let id = scope.index();
-
             move |(input, _frontier), output| {
 
                 // The `reduce` operator receives fully formed batches, which each serve as an indication
@@ -301,15 +299,8 @@ where
                         // Update `capabilities` to reflect interesting pairs described by `frontier`.
                         let mut new_capabilities = Vec::new();
                         for time in frontier.borrow().iter() {
-                            if let Some(cap) = capabilities.iter().find(|c| c.time().less_equal(time)) {
-                                new_capabilities.push(cap.delayed(time));
-                            }
-                            else {
-                                println!("{}:\tfailed to find capability less than new frontier time:", id);
-                                println!("{}:\t  time: {:?}", id, time);
-                                println!("{}:\t  caps: {:?}", id, capabilities);
-                                println!("{}:\t  uppr: {:?}", id, upper_limit);
-                            }
+                            let cap = capabilities.iter().find(|c| c.time().less_equal(time)).expect("failed to find capability");
+                            new_capabilities.push(cap.delayed(time));
                         }
                         capabilities = new_capabilities;
 
