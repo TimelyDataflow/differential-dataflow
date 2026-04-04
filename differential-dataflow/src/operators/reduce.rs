@@ -112,18 +112,15 @@ where
                 crate::lattice::antichain_join_into(&upper_limit.borrow()[..], &frontier.frontier()[..], &mut joined);
                 upper_limit = joined;
 
-                // Only if our upper limit has advanced should we do work.
+                // We plan to retire the interval [lower_limit, upper_limit), which should be non-empty to proceed.
                 if upper_limit != lower_limit {
 
-                    // If we have no capabilities, then we (i) should not produce any outputs and (ii) could not send
-                    // any produced outputs even if they were (incorrectly) produced. We cannot even send empty batches
-                    // to indicate forward progress, and must hope that downstream operators look at progress frontiers
-                    // as well as batch descriptions.
-                    //
-                    // We can (and should) advance source and output traces if `upper_limit` indicates this is possible.
+                    // If we hold no capabilitys in the interval [lower_limit, upper_limit) then we have no compute needs,
+                    // and could not transmit the outputs even if they were (incorrectly) non-zero.
+                    // We do have maintenance work after this logic, and should not fuse this test with the above test.
                     if capabilities.iter().any(|c| !upper_limit.less_equal(c.time())) {
 
-                        // `interesting` contains "warnings" about keys and times that may need to be re-considered.
+                        // `interesting` contains "todos" about key and time pairs that should be re-considered.
                         // We first extract those times from this list that lie in the interval we will process.
                         sort_dedup(&mut interesting);
                         // `exposed` contains interesting (key, time)s now below `upper_limit`
@@ -139,12 +136,6 @@ where
                         });
 
                         // Prepare an output buffer and builder for each capability.
-                        //
-                        // We buffer and build separately, as outputs are produced grouped by time, whereas the
-                        // builder wants to see outputs grouped by value. While the per-key computation could
-                        // do the re-sorting itself, buffering per-key outputs lets us double check the results
-                        // against other implementations for accuracy.
-                        //
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
                         let mut buffers = Vec::<(G::Timestamp, Vec<(T2::ValOwn, G::Timestamp, T2::Diff)>)>::new();
@@ -163,11 +154,7 @@ where
 
                         let mut thinker = history_replay::HistoryReplayer::new();
 
-                        // We now march through the keys we must work on, drawing from `batch_cursors` and `exposed`.
-                        //
-                        // We only keep valid cursors (those with more data) in `batch_cursors`, and so its length
-                        // indicates whether more data remain. We move through `exposed` using (index) `exposed_position`.
-                        // There could perhaps be a less provocative variable name.
+                        // March through the keys we must work on, merging `batch_cursors` and `exposed`.
                         let mut exposed_position = 0;
                         while batch_cursor.key_valid(batch_storage) || exposed_position < exposed_keys.len() {
 
@@ -181,13 +168,9 @@ where
                                 (None, None)             => unreachable!(),
                             };
 
-                            // `interesting_times` contains those times between `lower_issued` and `upper_limit`
-                            // that we need to re-consider. We now populate it, but perhaps this should be left
-                            // to the per-key computation, which may be able to avoid examining the times of some
-                            // values (for example, in the case of min/max/topk).
+                            // Populate `interesting_times` with interesting times not beyond `upper_limit`.
+                            // TODO: This could just be `exposed_time` and `lower .. upper` bounds.
                             interesting_times.clear();
-
-                            // Populate `interesting_times` with synthetic interesting times (below `upper_limit`) for this key.
                             while exposed_keys.get(exposed_position) == Some(key) {
                                 interesting_times.push(T1::owned_time(exposed_time.index(exposed_position)));
                                 exposed_position += 1;
@@ -202,22 +185,19 @@ where
                                 (&mut source_cursor, source_storage),
                                 (&mut output_cursor, output_storage),
                                 (&mut batch_cursor, batch_storage),
-                                &mut interesting_times,
+                                &interesting_times,
                                 &mut logic,
                                 &upper_limit,
                                 &mut buffers[..],
                                 &mut new_interesting_times,
                             );
 
-                            if batch_cursor.get_key(batch_storage) == Some(key) {
-                                batch_cursor.step_key(batch_storage);
-                            }
+                            // Advance the cursor if this key, so that the loop's validity check registers the work as done.
+                            if batch_cursor.get_key(batch_storage) == Some(key) { batch_cursor.step_key(batch_storage); }
 
                             // Record future warnings about interesting times (and assert they should be "future").
-                            for time in new_interesting_times.drain(..) {
-                                debug_assert!(upper_limit.less_equal(&time));
-                                interesting.push((T1::owned_key(key), time));
-                            }
+                            debug_assert!(new_interesting_times.iter().all(|t| upper_limit.less_equal(t)));
+                            interesting.extend(new_interesting_times.drain(..).map(|t| (T1::owned_key(key), t)));
 
                             // Sort each buffer by value and move into the corresponding builder.
                             // TODO: This makes assumptions about at least one of (i) the stability of `sort_by`,
@@ -367,7 +347,7 @@ mod history_replay {
             (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
             (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
             (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
-            times: &mut Vec<C1::Time>,
+            times: &Vec<C1::Time>,
             logic: &mut L,
             upper_limit: &Antichain<C1::Time>,
             outputs: &mut [(C2::Time, Vec<(V, C2::Time, C2::Diff)>)],
