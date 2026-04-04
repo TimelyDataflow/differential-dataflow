@@ -469,11 +469,7 @@ mod history_replay {
 
                 // Advance batch history, and capture whether an update exists at `next_time`.
                 let mut interesting = batch_replay.step_while_time_is(&next_time);
-                if interesting {
-                    if let Some(meet) = meet.as_ref() {
-                        batch_replay.advance_buffer_by(meet);
-                    }
-                }
+                if interesting { if let Some(meet) = meet.as_ref() { batch_replay.advance_buffer_by(meet); } }
 
                 // advance both `synth_times` and `times_slice`, marking this time interesting if in either.
                 while self.synth_times.last() == Some(&next_time) {
@@ -513,81 +509,62 @@ mod history_replay {
                         // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
                         debug_assert!(self.input_buffer.is_empty());
                         if let Some(meet) = meet.as_ref() { input_replay.advance_buffer_by(meet) };
-                        for &((value, ref time), ref diff) in input_replay.buffer().iter() {
-                            if time.less_equal(&next_time) {
-                                self.input_buffer.push((value, diff.clone()));
-                            }
-                            else {
-                                self.temporary.push(next_time.join(time));
-                            }
+                        for ((value, time), diff) in input_replay.buffer().iter() {
+                            if time.less_equal(&next_time) { self.input_buffer.push((*value, diff.clone())); }
+                            else { self.temporary.push(next_time.join(time)); }
                         }
-                        for &((value, ref time), ref diff) in batch_replay.buffer().iter() {
-                            if time.less_equal(&next_time) {
-                                self.input_buffer.push((value, diff.clone()));
-                            }
-                            else {
-                                self.temporary.push(next_time.join(time));
-                            }
+                        for ((value, time), diff) in batch_replay.buffer().iter() {
+                            if time.less_equal(&next_time) { self.input_buffer.push((*value, diff.clone())); }
+                            else { self.temporary.push(next_time.join(time)); }
                         }
                         crate::consolidation::consolidate(&mut self.input_buffer);
 
+                        // Assemble the output collection at `next_time`. (`self.output_buffer` cleared just after use).
                         if let Some(meet) = meet.as_ref() { output_replay.advance_buffer_by(meet) };
-                        for &((value, ref time), ref diff) in output_replay.buffer().iter() {
-                            if time.less_equal(&next_time) {
-                                self.output_buffer.push((C2::owned_val(value), diff.clone()));
-                            }
-                            else {
-                                self.temporary.push(next_time.join(time));
-                            }
+                        for ((value, time), diff) in output_replay.buffer().iter() {
+                            if time.less_equal(&next_time) { self.output_buffer.push((C2::owned_val(*value), diff.clone())); }
+                            else { self.temporary.push(next_time.join(time)); }
                         }
-                        for &((ref value, ref time), ref diff) in self.output_produced.iter() {
-                            if time.less_equal(&next_time) {
-                                self.output_buffer.push(((*value).to_owned(), diff.clone()));
-                            }
-                            else {
-                                self.temporary.push(next_time.join(time));
-                            }
+                        for ((value, time), diff) in self.output_produced.iter() {
+                            if time.less_equal(&next_time) { self.output_buffer.push(((*value).to_owned(), diff.clone())); }
+                            else { self.temporary.push(next_time.join(time)); }
                         }
                         crate::consolidation::consolidate(&mut self.output_buffer);
 
-                        // Apply user logic if non-empty input and see what happens!
+                        // Apply user logic if non-empty input or output and see what happens!
                         if !self.input_buffer.is_empty() || !self.output_buffer.is_empty() {
                             logic(key, &self.input_buffer[..], &mut self.output_buffer, &mut self.update_buffer);
                             self.input_buffer.clear();
                             self.output_buffer.clear();
-                        }
 
-                        // Having subtracted output updates from user output, consolidate the results to determine
-                        // if there is anything worth reporting. Note: this also orders the results by value, so
-                        // that could make the above merging plan even easier.
-                        crate::consolidation::consolidate(&mut self.update_buffer);
+                            // Having subtracted output updates from user output, consolidate the results to determine
+                            // if there is anything worth reporting. Note: this also orders the results by value, so
+                            // that could make the above merging plan even easier.
+                            //
+                            // Stash produced updates into both capability-indexed buffers and `output_produced`.
+                            // The two locations are important, in that we will compact `output_produced` as we move
+                            // through times, but we cannot compact the output buffers because we need their actual
+                            // times.
+                            crate::consolidation::consolidate(&mut self.update_buffer);
+                            if !self.update_buffer.is_empty() {
 
-                        // Stash produced updates into both capability-indexed buffers and `output_produced`.
-                        // The two locations are important, in that we will compact `output_produced` as we move
-                        // through times, but we cannot compact the output buffers because we need their actual
-                        // times.
-                        if !self.update_buffer.is_empty() {
-
-                            // We *should* be able to find a capability for `next_time`. Any thing else would
-                            // indicate a logical error somewhere along the way; either we release a capability
-                            // we should have kept, or we have computed the output incorrectly (or both!)
-                            let idx = outputs.iter().rev().position(|(time, _)| time.less_equal(&next_time));
-                            let idx = outputs.len() - idx.expect("failed to find index") - 1;
-                            for (val, diff) in self.update_buffer.drain(..) {
-                                self.output_produced.push(((val.clone(), next_time.clone()), diff.clone()));
-                                outputs[idx].1.push((val, next_time.clone(), diff));
-                            }
-
-                            // Advance times in `self.output_produced` and consolidate the representation.
-                            // NOTE: We only do this when we add records; it could be that there are situations
-                            //       where we want to consolidate even without changes (because an initially
-                            //       large collection can now be collapsed).
-                            if let Some(meet) = meet.as_ref() {
-                                for entry in &mut self.output_produced {
-                                    (entry.0).1 = (entry.0).1.join(meet);
+                                // We *should* be able to find a capability for `next_time`. Any thing else would
+                                // indicate a logical error somewhere along the way; either we release a capability
+                                // we should have kept, or we have computed the output incorrectly (or both!)
+                                let idx = outputs.iter().rev().position(|(time, _)| time.less_equal(&next_time));
+                                let idx = outputs.len() - idx.expect("failed to find index") - 1;
+                                for (val, diff) in self.update_buffer.drain(..) {
+                                    self.output_produced.push(((val.clone(), next_time.clone()), diff.clone()));
+                                    outputs[idx].1.push((val, next_time.clone(), diff));
                                 }
+
+                                // Advance times in `self.output_produced` and consolidate the representation.
+                                // NOTE: We only do this when we add records; it could be that there are situations
+                                //       where we want to consolidate even without changes (because an initially
+                                //       large collection can now be collapsed).
+                                if let Some(meet) = meet.as_ref() { for entry in &mut self.output_produced { (entry.0).1.join_assign(meet); } }
+                                crate::consolidation::consolidate(&mut self.output_produced);
                             }
-                            crate::consolidation::consolidate(&mut self.output_produced);
                         }
                     }
 
@@ -601,17 +578,8 @@ mod history_replay {
 
                     // Any time, even uninteresting times, must be joined with the current accumulation of
                     // batch times as well as the current accumulation of `times_current`.
-                    for &((_, ref time), _) in batch_replay.buffer().iter() {
-                        if !time.less_equal(&next_time) {
-                            self.temporary.push(time.join(&next_time));
-                        }
-                    }
-                    for time in self.times_current.iter() {
-                        if !time.less_equal(&next_time) {
-                            self.temporary.push(time.join(&next_time));
-                        }
-                    }
-
+                    self.temporary.extend(batch_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
+                    self.temporary.extend(self.times_current.iter().filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
                     sort_dedup(&mut self.temporary);
 
                     // Introduce synthetic times, and re-organize if we add any.
