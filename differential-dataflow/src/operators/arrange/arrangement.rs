@@ -30,7 +30,6 @@ use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, Trace, TraceReader, BatchReader, Batcher, Builder, Cursor};
-use crate::trace::implementations::merge_batcher::container::InternalMerge;
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
@@ -75,7 +74,6 @@ where
 use ::timely::dataflow::scopes::Child;
 use ::timely::progress::timestamp::Refines;
 use timely::Container;
-use timely::container::PushInto;
 
 impl<G, Tr> Arranged<G, Tr>
 where
@@ -169,12 +167,17 @@ where
     /// The underlying `Stream<G, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
-    pub fn as_vecs(self) -> VecCollection<G, (Tr::KeyOwn, Tr::ValOwn), Tr::Diff>
+    ///
+    /// The method takes `K` and `V` as generic arguments, in order to constrain the reference types to support
+    /// cloning into owned types. If this bound does not work, the `as_collection` method allows arbitrary logic
+    /// on the reference types.
+    pub fn as_vecs<K, V>(self) -> VecCollection<G, (K, V), Tr::Diff>
     where
-        Tr::KeyOwn: crate::ExchangeData,
-        Tr::ValOwn: crate::ExchangeData,
+        K: crate::ExchangeData,
+        V: crate::ExchangeData,
+        Tr: for<'a> TraceReader<Key<'a> = &'a K, Val<'a> = &'a V>,
     {
-        self.flat_map_ref(move |key, val| [(Tr::owned_key(key), Tr::owned_val(val))])
+        self.flat_map_ref(move |key, val| [(key.clone(), val.clone())])
     }
 
     /// Extracts elements from an arrangement as a `VecCollection`.
@@ -273,15 +276,14 @@ where
     /// A direct implementation of `ReduceCore::reduce_abelian`.
     pub fn reduce_abelian<L, Bu, T2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<G, TraceAgent<T2>>
     where
-        T1: TraceReader<KeyOwn: Ord>,
+        T1: TraceReader,
         T2: for<'a> Trace<
             Key<'a>= T1::Key<'a>,
-            KeyOwn=T1::KeyOwn,
             ValOwn: Data,
             Time=T1::Time,
             Diff: Abelian,
         >+'static,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: Default>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
         P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,
     {
@@ -297,14 +299,13 @@ where
     /// A direct implementation of `ReduceCore::reduce_core`.
     pub fn reduce_core<L, Bu, T2, P>(self, name: &str, logic: L, push: P) -> Arranged<G, TraceAgent<T2>>
     where
-        T1: TraceReader<KeyOwn: Ord>,
+        T1: TraceReader,
         T2: for<'a> Trace<
             Key<'a>=T1::Key<'a>,
-            KeyOwn=T1::KeyOwn,
             ValOwn: Data,
             Time=T1::Time,
         >+'static,
-        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>>,
+        Bu: Builder<Time=G::Timestamp, Output = T2::Batch, Input: Default>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
         P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,
     {

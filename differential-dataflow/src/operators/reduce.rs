@@ -25,8 +25,8 @@ use crate::trace::TraceReader;
 pub fn reduce_trace<G, T1, Bu, T2, L, P>(trace: Arranged<G, T1>, name: &str, mut logic: L, mut push: P) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope<Timestamp=T1::Time>,
-    T1: TraceReader<KeyOwn: Ord> + Clone + 'static,
-    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, KeyOwn=T1::KeyOwn, ValOwn: Data, Time=T1::Time> + 'static,
+    T1: TraceReader + Clone + 'static,
+    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, ValOwn: Data, Time=T1::Time> + 'static,
     Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: Default>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn,T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
     P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,

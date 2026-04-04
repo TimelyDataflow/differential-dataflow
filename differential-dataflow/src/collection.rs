@@ -786,7 +786,7 @@ pub mod vec {
         /// ```
         pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            T2: for<'a> Trace<Key<'a>= &'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp, Diff: Abelian>+'static,
+            T2: for<'a> Trace<Key<'a>= &'a K, ValOwn = V, Time=G::Timestamp, Diff: Abelian>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, T2::Diff)>)+'static,
         {
@@ -805,7 +805,7 @@ pub mod vec {
         pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             V: Clone+'static,
-            T2: for<'a> Trace<Key<'a>=&'a K, KeyOwn = K, ValOwn = V, Time=G::Timestamp>+'static,
+            T2: for<'a> Trace<Key<'a>=&'a K, ValOwn = V, Time=G::Timestamp>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,T2::Diff)>, &mut Vec<(V, T2::Diff)>)+'static,
         {

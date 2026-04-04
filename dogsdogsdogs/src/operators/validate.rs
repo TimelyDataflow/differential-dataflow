@@ -20,7 +20,7 @@ pub fn validate<G, K, V, Tr, F, P>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        KeyOwn = (K, V),
+        Key<'a> = &'a (K, V),
         Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,

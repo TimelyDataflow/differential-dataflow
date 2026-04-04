@@ -21,7 +21,7 @@ pub fn propose<G, Tr, K, F, P, V>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        KeyOwn = K,
+        Key<'a> = &'a K,
         ValOwn = V,
         Time: std::hash::Hash,
         Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData+Semigroup<Tr::DiffGat<'a>>,
@@ -55,7 +55,7 @@ pub fn propose_distinct<G, Tr, K, F, P, V>(
 where
     G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        KeyOwn = K,
+        Key<'a> = &'a K,
         ValOwn = V,
         Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
