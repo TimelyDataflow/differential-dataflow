@@ -108,6 +108,15 @@ pub trait TraceReader : LayoutExt {
     /// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
     fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, Self::Storage)>;
 
+    /// Acquires a cursor for a known set of keys.
+    ///
+    /// The default implementation ignores the keys and returns a full cursor via `cursor_through`.
+    /// Implementations may override this to optimize for the specified key set (e.g., serving
+    /// from a cache or performing bulk key lookups).
+    fn cursor_through_keyed(&mut self, upper: AntichainRef<Self::Time>, _keys: &Self::KeyContainer) -> Option<(Self::Cursor, Self::Storage)> {
+        self.cursor_through(upper)
+    }
+
     /// Advances the frontier that constrains logical compaction.
     ///
     /// Logical compaction is the ability of the trace to change the times of the updates it contains.
