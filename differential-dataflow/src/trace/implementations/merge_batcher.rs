@@ -269,8 +269,22 @@ pub mod container {
 
         /// Extract updates from `self` into `ship` (times not beyond `upper`)
         /// and `keep` (times beyond `upper`), updating `frontier` with kept times.
+        ///
+        /// Iteration starts at `*position` and advances `*position` as updates
+        /// are consumed. The implementation must yield (return early) when
+        /// either `keep.at_capacity()` or `ship.at_capacity()` becomes true,
+        /// so the caller can swap out a full output buffer and resume by
+        /// calling `extract` again. The caller invokes `extract` repeatedly
+        /// until `*position >= self.len()`.
+        ///
+        /// This shape exists because `at_capacity()` for `Vec` and
+        /// `TimelyStack` is `len() == capacity()`, which silently becomes
+        /// false again the moment a push past capacity grows the backing
+        /// allocation. Without per-element yielding, a single `extract` call
+        /// can quietly produce oversized output chunks.
         fn extract(
             &mut self,
+            position: &mut usize,
             upper: AntichainRef<Self::TimeOwned>,
             frontier: &mut Antichain<Self::TimeOwned>,
             keep: &mut Self,
@@ -405,22 +419,27 @@ pub mod container {
             let mut keep = self.empty(stash);
             let mut ready = self.empty(stash);
 
-            for chunk in merged {
-                for (data, time, diff) in chunk {
+            for mut chunk in merged {
+                // Go update-by-update to swap out full containers.
+                for (data, time, diff) in chunk.drain(..) {
                     if upper.less_equal(&time) {
                         frontier.insert_with(&time, |time| time.clone());
                         keep.push((data, time, diff));
                     } else {
                         ready.push((data, time, diff));
                     }
+                    if keep.at_capacity() {
+                        kept.push(std::mem::take(&mut keep));
+                        keep = self.empty(stash);
+                    }
+                    if ready.at_capacity() {
+                        ship.push(std::mem::take(&mut ready));
+                        ready = self.empty(stash);
+                    }
                 }
-                if keep.at_capacity() {
-                    kept.push(std::mem::take(&mut keep));
-                    keep = self.empty(stash);
-                }
-                if ready.at_capacity() {
-                    ship.push(std::mem::take(&mut ready));
-                    ready = self.empty(stash);
+                // Recycle the now-empty chunk if it has the right capacity.
+                if chunk.capacity() == Self::target_capacity() {
+                    stash.push(chunk);
                 }
             }
             if !keep.is_empty() { kept.push(keep); }
@@ -542,16 +561,20 @@ pub mod container {
             let mut ready = self.empty(stash);
 
             for mut buffer in merged {
-                buffer.extract(upper, frontier, &mut keep, &mut ready);
+                let mut position = 0;
+                let len = buffer.len();
+                while position < len {
+                    buffer.extract(&mut position, upper, frontier, &mut keep, &mut ready);
+                    if keep.at_capacity() {
+                        kept.push(std::mem::take(&mut keep));
+                        keep = self.empty(stash);
+                    }
+                    if ready.at_capacity() {
+                        ship.push(std::mem::take(&mut ready));
+                        ready = self.empty(stash);
+                    }
+                }
                 self.recycle(buffer, stash);
-                if keep.at_capacity() {
-                    kept.push(std::mem::take(&mut keep));
-                    keep = self.empty(stash);
-                }
-                if ready.at_capacity() {
-                    ship.push(std::mem::take(&mut ready));
-                    ready = self.empty(stash);
-                }
             }
             if !keep.is_empty() {
                 kept.push(keep);
@@ -610,6 +633,7 @@ pub mod container {
                         while positions[0] < other1.len() && positions[1] < other2.len() && !self.at_capacity() {
                             let (d1, t1, _) = &other1[positions[0]];
                             let (d2, t2, _) = &other2[positions[1]];
+                            // NOTE: The .clone() calls here are not great, but this dead code to be removed in the next release.
                             match (d1, t1).cmp(&(d2, t2)) {
                                 Ordering::Less => {
                                     self.push(other1[positions[0]].clone());
@@ -638,18 +662,22 @@ pub mod container {
 
             fn extract(
                 &mut self,
+                position: &mut usize,
                 upper: AntichainRef<T>,
                 frontier: &mut Antichain<T>,
                 keep: &mut Self,
                 ship: &mut Self,
             ) {
-                for (data, time, diff) in self.drain(..) {
+                let len = self.len();
+                while *position < len && !keep.at_capacity() && !ship.at_capacity() {
+                    let (data, time, diff) = self[*position].clone();
                     if upper.less_equal(&time) {
                         frontier.insert_with(&time, |time| time.clone());
                         keep.push((data, time, diff));
                     } else {
                         ship.push((data, time, diff));
                     }
+                    *position += 1;
                 }
             }
         }
@@ -747,18 +775,22 @@ pub mod container {
 
             fn extract(
                 &mut self,
+                position: &mut usize,
                 upper: AntichainRef<T>,
                 frontier: &mut Antichain<T>,
                 keep: &mut Self,
                 ship: &mut Self,
             ) {
-                for (data, time, diff) in self.iter() {
+                let len = self[..].len();
+                while *position < len && !keep.at_capacity() && !ship.at_capacity() {
+                    let (data, time, diff) = &self[*position];
                     if upper.less_equal(time) {
                         frontier.insert_with(time, |time| time.clone());
                         keep.copy_destructured(data, time, diff);
                     } else {
                         ship.copy_destructured(data, time, diff);
                     }
+                    *position += 1;
                 }
             }
         }

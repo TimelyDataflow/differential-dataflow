@@ -516,6 +516,7 @@ pub mod arrangement {
             }
             fn merge_from(&mut self, _others: &mut [Self], _positions: &mut [usize]) { unimplemented!() }
             fn extract(&mut self,
+                _position: &mut usize,
                 _upper: AntichainRef<U::Time>,
                 _frontier: &mut Antichain<U::Time>,
                 _keep: &mut Self,
