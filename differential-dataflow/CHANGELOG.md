@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.21.2...differential-dataflow-v0.22.0) - 2026-04-07
+
+### Other
+
+- Allow `InternalMerger::extract` to yield when full buffer ([#711](https://github.com/TimelyDataflow/differential-dataflow/pull/711))
+
 ## [0.21.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.21.0...differential-dataflow-v0.21.1) - 2026-03-26
 
 ### Other
