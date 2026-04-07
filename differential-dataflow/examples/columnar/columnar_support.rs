@@ -648,11 +648,18 @@ pub mod arrangement {
 
             fn extract(
                 &mut self,
+                position: &mut usize,
                 upper: AntichainRef<U::Time>,
                 frontier: &mut Antichain<U::Time>,
                 keep: &mut Self,
                 ship: &mut Self,
             ) {
+                // `Updates::at_capacity` is a fixed-threshold check (not the
+                // `len == capacity` quirk that Vec/TimelyStack have), so a
+                // single-shot pass is fine here. Advance `*position` to the
+                // end so the caller's `while position < len` loop exits.
+                let _ = position;
+                *position = self.diffs.values.len();
                 let mut time = U::Time::default();
                 for key_idx in 0 .. self.keys.values.len() {
                     let key = self.keys.values.borrow().get(key_idx);
