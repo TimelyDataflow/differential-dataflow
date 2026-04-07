@@ -416,19 +416,12 @@ pub mod container {
             kept: &mut Vec<Vec<(D, T, R)>>,
             stash: &mut Vec<Vec<(D, T, R)>>,
         ) {
-            use std::collections::VecDeque;
-
             let mut keep = self.empty(stash);
             let mut ready = self.empty(stash);
 
-            for chunk in merged {
-                // Convert to a VecDeque so we can pop front-by-front and
-                // yield mid-chunk when keep/ready hit capacity. Without this,
-                // pushing past `at_capacity` silently grows the buffer (Vec
-                // doubles its allocation), so the next outer at_capacity
-                // check returns false and we ship oversized chunks downstream.
-                let mut q = VecDeque::from(chunk);
-                while let Some((data, time, diff)) = q.pop_front() {
+            for mut chunk in merged {
+                // Go update-by-update to swap out full containers.
+                for (data, time, diff) in chunk.drain(..) {
                     if upper.less_equal(&time) {
                         frontier.insert_with(&time, |time| time.clone());
                         keep.push((data, time, diff));
@@ -443,6 +436,10 @@ pub mod container {
                         ship.push(std::mem::take(&mut ready));
                         ready = self.empty(stash);
                     }
+                }
+                // Recycle the now-empty chunk if it has the right capacity.
+                if chunk.capacity() == Self::target_capacity() {
+                    stash.push(chunk);
                 }
             }
             if !keep.is_empty() { kept.push(keep); }
@@ -636,6 +633,7 @@ pub mod container {
                         while positions[0] < other1.len() && positions[1] < other2.len() && !self.at_capacity() {
                             let (d1, t1, _) = &other1[positions[0]];
                             let (d2, t2, _) = &other2[positions[1]];
+                            // NOTE: The .clone() calls here are not great, but this dead code to be removed in the next release.
                             match (d1, t1).cmp(&(d2, t2)) {
                                 Ordering::Less => {
                                     self.push(other1[positions[0]].clone());
