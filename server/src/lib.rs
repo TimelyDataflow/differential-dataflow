@@ -6,7 +6,6 @@ use std::time::Instant;
 use libloading::Library;
 
 use timely::communication::Allocator;
-use timely::worker::Worker;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
@@ -21,7 +20,7 @@ pub type TraceHandle = TraceAgent<TraceSpine>;
 
 /// Arguments provided to each shared library to help build their dataflows and register their results.
 pub type Environment<'a, 'b> = (
-    &'a mut Child<'b, Worker<Allocator>,usize>,
+    &'a mut Child<'b, Allocator, usize>,
     &'a mut TraceHandler,
     &'a mut ProbeHandle<RootTime>,
     &'a Instant,

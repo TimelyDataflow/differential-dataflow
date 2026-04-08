@@ -43,9 +43,8 @@ where
     N: ExchangeData+Hash,
     Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,
 {
-    forward
-        .stream
-        .scope().iterative::<u64,_,_>(|inner| {
+    let outer = forward.stream.scope();
+    outer.iterative::<u64,_,_>(|inner| {
 
             let forward_edges = forward.enter(inner);
             let reverse_edges = reverse.enter(inner);
@@ -120,6 +119,6 @@ where
 
         reverse_bind.set(reverse_next);
 
-        reached.leave()
+        reached.leave(&outer)
     })
 }

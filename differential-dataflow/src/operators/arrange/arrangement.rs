@@ -85,8 +85,8 @@ where
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
-    pub fn enter<'a, TInner>(self, child: &Child<'a, G, TInner>)
-        -> Arranged<Child<'a, G, TInner>, TraceEnter<Tr, TInner>>
+    pub fn enter<'a, TInner>(self, child: &Child<'a, G::Allocator, TInner>)
+        -> Arranged<Child<'a, G::Allocator, TInner>, TraceEnter<Tr, TInner>>
         where
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone,
     {
@@ -100,8 +100,8 @@ where
     ///
     /// This method only applies to *regions*, which are subscopes with the same timestamp
     /// as their containing scope. In this case, the trace type does not need to change.
-    pub fn enter_region<'a>(self, child: &Child<'a, G, G::Timestamp>)
-        -> Arranged<Child<'a, G, G::Timestamp>, Tr> {
+    pub fn enter_region<'a>(self, child: &Child<'a, G::Allocator, G::Timestamp>)
+        -> Arranged<Child<'a, G::Allocator, G::Timestamp>, Tr> {
         Arranged {
             stream: self.stream.enter(child),
             trace: self.trace,
@@ -113,8 +113,8 @@ where
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
-    pub fn enter_at<'a, TInner, F, P>(self, child: &Child<'a, G, TInner>, logic: F, prior: P)
-        -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
+    pub fn enter_at<'a, TInner, F, P>(self, child: &Child<'a, G::Allocator, TInner>, logic: F, prior: P)
+        -> Arranged<Child<'a, G::Allocator, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
             TInner: Refines<G::Timestamp>+Lattice+Timestamp+Clone+'static,
             F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone+'static,
@@ -315,19 +315,22 @@ where
 }
 
 
-impl<'a, G, Tr> Arranged<Child<'a, G, G::Timestamp>, Tr>
+impl<'a, A, Tr> Arranged<Child<'a, A, Tr::Time>, Tr>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    A: timely::communication::Allocate,
     Tr: TraceReader + Clone,
 {
     /// Brings an arranged collection out of a nested region.
     ///
     /// This method only applies to *regions*, which are subscopes with the same timestamp
     /// as their containing scope. In this case, the trace type does not need to change.
-    pub fn leave_region(self) -> Arranged<G, Tr> {
+    pub fn leave_region<G>(self, outer: &G) -> Arranged<G, Tr>
+    where
+        G: Scope<Allocator = A, Timestamp = Tr::Time>,
+    {
         use timely::dataflow::operators::Leave;
         Arranged {
-            stream: self.stream.leave(),
+            stream: self.stream.leave(outer),
             trace: self.trace,
         }
     }

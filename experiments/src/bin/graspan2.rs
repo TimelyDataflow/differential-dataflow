@@ -49,6 +49,7 @@ fn unoptimized() {
 
             let dereference = dereference.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
 
+            let outer = scope.clone();
             let (value_flow, memory_alias, value_alias) =
             scope
                 .iterative::<Iter,_,_>(|scope| {
@@ -108,7 +109,7 @@ fn unoptimized() {
                     value_flow.set(value_flow_next.clone());
                     memory_alias.set(memory_alias_next.clone());
 
-                    (value_flow_next.leave(), memory_alias_next.leave(), value_alias_next.leave())
+                    (value_flow_next.leave(&outer), memory_alias_next.leave(&outer), value_alias_next.leave(&outer))
                 });
 
                 value_flow.map(|_| ()).consolidate().inspect(|x| println!("VF: {:?}", x));
@@ -174,6 +175,7 @@ fn optimized() {
 
             let dereference = dereference.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
 
+            let outer = scope.clone();
             let (value_flow, memory_alias) =
             scope
                 .iterative::<Iter,_,_>(|scope| {
@@ -233,7 +235,7 @@ fn optimized() {
                     value_flow.set(value_flow_next.clone());
                     memory_alias.set(memory_alias_next.clone());
 
-                    (value_flow_next.leave(), memory_alias_next.leave())
+                    (value_flow_next.leave(&outer), memory_alias_next.leave(&outer))
                 });
 
                 value_flow.map(|_| ()).consolidate().inspect(|x| println!("VF: {:?}", x));

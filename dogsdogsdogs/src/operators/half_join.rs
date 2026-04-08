@@ -37,7 +37,7 @@ use std::time::Instant;
 
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::{Scope, Stream};
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::{Capability, Operator, generic::Session};
 use timely::progress::Antichain;
@@ -109,9 +109,9 @@ where
 /// This is a shorthand primarily for the reson of readability.
 type SessionFor<'a, 'b, G, CB> =
     Session<'a, 'b,
-        <G as ScopeParent>::Timestamp,
+        <G as Scope>::Timestamp,
         CB,
-        Capability<<G as ScopeParent>::Timestamp>,
+        Capability<<G as Scope>::Timestamp>,
     >;
 
 /// An unsafe variant of `half_join` where the `output_func` closure takes

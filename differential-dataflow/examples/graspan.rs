@@ -5,7 +5,6 @@ use std::fs::File;
 use timely::progress::Timestamp;
 use timely::order::Product;
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::ScopeParent;
 
 use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
@@ -69,7 +68,7 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
 type TraceKeyHandle<K,T,R> = TraceAgent<KeySpine<K, T, R>>;
 type TraceValHandle<K,V,T,R> = TraceAgent<ValSpine<K, V, T, R>>;
-type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Timestamp, R>>;
+type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as Scope>::Timestamp, R>>;
 
 /// An evolving set of edges.
 ///
@@ -162,6 +161,7 @@ impl Query {
         }
 
         // We need a subscope to allow iterative development of variables.
+        let outer = scope.clone();
         scope.iterative::<Iter,_,_>(|subscope| {
 
             // create map from relation name to input handle and collection.
@@ -171,7 +171,7 @@ impl Query {
             // create variables and result handles for each named relation.
             for (name, (input, collection)) in input_map {
                 let edge_variable = EdgeVariable::from(collection.enter(subscope), Product::new(Default::default(), 1));
-                let trace = edge_variable.collection.clone().leave().arrange_by_self().trace;
+                let trace = edge_variable.collection.clone().leave(&outer).arrange_by_self().trace;
                 result_map.insert(name.clone(), RelationHandles { input, trace });
                 variable_map.insert(name.clone(), edge_variable);
             }

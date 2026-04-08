@@ -194,7 +194,7 @@ use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R>>>;
+type Arrange<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as Scope>::Timestamp, R>>>;
 
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
@@ -231,7 +231,8 @@ fn _bidijkstra<G: Scope>(
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
 where G::Timestamp: Lattice+Ord {
 
-    goals.scope().iterative::<usize,_,_>(|inner| {
+    let outer = goals.scope();
+    outer.iterative::<usize,_,_>(|inner| {
 
         // Our plan is to start evolving distances from both sources and destinations.
         // The evolution from a source or destination should continue as long as there
@@ -293,6 +294,6 @@ where G::Timestamp: Lattice+Ord {
 
         reverse.set(reverse_next);
 
-        reached.leave()
+        reached.leave(&outer)
     })
 }

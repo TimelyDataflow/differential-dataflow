@@ -92,7 +92,8 @@ where
                      .map(|(src,_dst)| src)
                      .count();
 
-    edges.scope().iterative::<Iter,_,_>(|inner| {
+    let outer = edges.scope();
+    outer.iterative::<Iter,_,_>(|inner| {
 
         // Bring various collections into the scope.
         let edges = edges.enter(inner);
@@ -130,6 +131,6 @@ where
 
         // Bind the recursive variable, return its limit.
         ranks_bind.set(pushed.clone());
-        pushed.leave()
+        pushed.leave(&outer)
     })
 }

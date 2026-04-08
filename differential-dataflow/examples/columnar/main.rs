@@ -115,9 +115,9 @@ mod reachability {
         roots: Collection<G, RecordedUpdates<(Node, (), Time, Diff)>>,
     ) -> Collection<G, RecordedUpdates<(Node, (), Time, Diff)>>
     {
-        let mut scope = edges.inner.scope();
+        let outer = edges.inner.scope();
 
-        scope.iterative::<u64, _, _>(|nested| {
+        outer.iterative::<u64, _, _>(|nested| {
             let summary = Product::new(Time::default(), 1);
 
             let roots_inner = roots.enter(nested);
@@ -186,7 +186,7 @@ mod reachability {
             variable.set(result_col.clone());
 
             // Leave the iterative scope.
-            result_col.leave()
+            result_col.leave(&outer)
         })
     }
 }

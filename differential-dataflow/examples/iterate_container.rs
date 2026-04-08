@@ -53,6 +53,7 @@ fn main() {
         let numbers = scope.new_collection_from(1 .. 10u32).1;
         let numbers: Collection<_, _>  = wrap(numbers.inner).as_collection();
 
+        let outer = scope.clone();
         scope.iterative::<u64,_,_>(|nested| {
             let summary = Product::new(Default::default(), 1);
             let (variable, collection) = Variable::new_from(numbers.enter(nested), summary);
@@ -77,7 +78,7 @@ fn main() {
             }).as_collection().consolidate();
             let result = wrap(result.inner).as_collection();
             variable.set(result);
-            collection.leave()
+            collection.leave(&outer)
         });
     })
 }

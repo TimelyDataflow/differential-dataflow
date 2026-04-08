@@ -113,7 +113,8 @@ fn reach<G: Scope<Timestamp = ()>> (
 
     let graph = graph.import(&roots.scope());
 
-    roots.scope().iterative::<Iter,_,_>(|scope| {
+    let outer = roots.scope();
+    outer.iterative::<Iter,_,_>(|scope| {
 
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
@@ -126,7 +127,7 @@ fn reach<G: Scope<Timestamp = ()>> (
              .threshold_total(|_,_| 1);
 
         inner.set(result.clone());
-        result.leave()
+        result.leave(&outer)
     })
 }
 
@@ -139,7 +140,8 @@ fn bfs<G: Scope<Timestamp = ()>> (
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));
 
-    roots.scope().iterative::<Iter,_,_>(|scope| {
+    let outer = roots.scope();
+    outer.iterative::<Iter,_,_>(|scope| {
 
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
@@ -151,7 +153,7 @@ fn bfs<G: Scope<Timestamp = ()>> (
              .reduce(|_key, input, output| output.push((*input[0].0,1)));
 
         inner.set(result.clone());
-        result.leave()
+        result.leave(&outer)
     })
 }
 
@@ -169,6 +171,7 @@ fn connected_components<G: Scope<Timestamp = ()>>(
     let nodes_r = reverse.clone().flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
     let nodes = nodes_f.concat(nodes_r).consolidate().map(|x| (x,x));
 
+    let outer = scope.clone();
     scope.iterative(|scope| {
 
         // import arrangements, nodes.
@@ -197,6 +200,6 @@ fn connected_components<G: Scope<Timestamp = ()>>(
             .reduce(|_, s, t| { t.push((*s[0].0, 1)); });
 
         inner.set(result.clone());
-        result.leave()
+        result.leave(&outer)
     })
 }

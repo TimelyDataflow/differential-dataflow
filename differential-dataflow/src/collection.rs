@@ -109,7 +109,7 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///
     /// This method is a specialization of `enter` to the case where the nested scope is a region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn enter_region<'a>(self, child: &Child<'a, G, <G as ScopeParent>::Timestamp>) -> Collection<Child<'a, G, <G as ScopeParent>::Timestamp>, C> {
+    pub fn enter_region<'a>(self, child: &Child<'a, G::Allocator, <G as Scope>::Timestamp>) -> Collection<Child<'a, G::Allocator, <G as Scope>::Timestamp>, C> {
         self.inner
             .enter(child)
             .as_collection()
@@ -206,19 +206,20 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///
     ///     let data = scope.new_collection_from(1 .. 10).1;
     ///
+    ///     let outer = scope.clone();
     ///     let result = scope.region(|child| {
     ///         data.clone()
     ///             .enter(child)
-    ///             .leave()
+    ///             .leave(&outer)
     ///     });
     ///
     ///     data.assert_eq(result);
     /// });
     /// ```
-    pub fn enter<'a, T>(self, child: &Child<'a, G, T>) -> Collection<Child<'a, G, T>, <C as containers::Enter<<G as ScopeParent>::Timestamp, T>>::InnerContainer>
+    pub fn enter<'a, T>(self, child: &Child<'a, G::Allocator, T>) -> Collection<Child<'a, G::Allocator, T>, <C as containers::Enter<<G as Scope>::Timestamp, T>>::InnerContainer>
     where
-        C: containers::Enter<<G as ScopeParent>::Timestamp, T, InnerContainer: Container>,
-        T: Refines<<G as ScopeParent>::Timestamp>,
+        C: containers::Enter<<G as Scope>::Timestamp, T, InnerContainer: Container>,
+        T: Refines<<G as Scope>::Timestamp>,
     {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
@@ -262,14 +263,10 @@ impl<G: Scope, C: Container> Collection<G, C> {
     }
 }
 
-use timely::dataflow::scopes::ScopeParent;
 use timely::progress::timestamp::Refines;
 
 /// Methods requiring a nested scope.
-impl<'a, G: Scope, T: Timestamp, C: Container> Collection<Child<'a, G, T>, C>
-where
-    C: containers::Leave<T, G::Timestamp, OuterContainer: Container>,
-    T: Refines<<G as ScopeParent>::Timestamp>,
+impl<'a, A: timely::communication::Allocate, T: Timestamp, C: Container> Collection<Child<'a, A, T>, C>
 {
     /// Returns the final value of a Collection from a nested scope to its containing scope.
     ///
@@ -286,16 +283,21 @@ where
     ///    let result = scope.region(|child| {
     ///         data.clone()
     ///             .enter(child)
-    ///             .leave()
+    ///             .leave(scope)
     ///     });
     ///
     ///     data.assert_eq(result);
     /// });
     /// ```
-    pub fn leave(self) -> Collection<G, <C as containers::Leave<T, G::Timestamp>>::OuterContainer> {
+    pub fn leave<G>(self, outer: &G) -> Collection<G, <C as containers::Leave<T, G::Timestamp>>::OuterContainer>
+    where
+        G: Scope<Allocator = A>,
+        T: Refines<G::Timestamp>,
+        C: containers::Leave<T, G::Timestamp, OuterContainer: Container>,
+    {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
-            .leave()
+            .leave(outer)
             .unary(Pipeline, "Leave", move |_,_| move |input, output| {
                 input.for_each(|time, data| output.session(&time).give_container(&mut std::mem::take(data).leave()));
             })
@@ -304,15 +306,18 @@ where
 }
 
 /// Methods requiring a region as the scope.
-impl<G: Scope, C: Container+Clone+'static> Collection<Child<'_, G, G::Timestamp>, C>
+impl<'a, A: timely::communication::Allocate, T: Timestamp, C: Container+Clone+'static> Collection<Child<'a, A, T>, C>
 {
     /// Returns the value of a Collection from a nested region to its containing scope.
     ///
     /// This method is a specialization of `leave` to the case that of a nested region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn leave_region(self) -> Collection<G, C> {
+    pub fn leave_region<G>(self, outer: &G) -> Collection<G, C>
+    where
+        G: Scope<Allocator = A, Timestamp = T>,
+    {
         self.inner
-            .leave()
+            .leave(outer)
             .as_collection()
     }
 }
@@ -326,7 +331,7 @@ pub mod vec {
     use timely::progress::Timestamp;
     use timely::order::Product;
     use timely::dataflow::scopes::child::Iterative;
-    use timely::dataflow::{Scope, ScopeParent};
+    use timely::dataflow::Scope;
     use timely::dataflow::operators::*;
     use timely::dataflow::operators::vec::*;
 
@@ -352,7 +357,7 @@ pub mod vec {
     /// defaults to) `isize`, representing changes to the occurrence count of each record.
     ///
     /// This type definition instantiates the [`Collection`] type with a `Vec<(D, G::Timestamp, R)>`.
-    pub type Collection<G, D, R = isize> = super::Collection<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
+    pub type Collection<G, D, R = isize> = super::Collection<G, Vec<(D, <G as Scope>::Timestamp, R)>>;
 
 
     impl<G: Scope, D: Clone+'static, R: Clone+'static> Collection<G, D, R> {
@@ -534,16 +539,17 @@ pub mod vec {
         ///
         ///     let data = scope.new_collection_from(1 .. 10).1;
         ///
+        ///     let outer = scope.clone();
         ///     let result = scope.iterative::<u64,_,_>(|child| {
         ///         data.clone()
         ///             .enter_at(child, |x| *x)
-        ///             .leave()
+        ///             .leave(&outer)
         ///     });
         ///
         ///     data.assert_eq(result);
         /// });
         /// ```
-        pub fn enter_at<'a, T, F>(self, child: &Iterative<'a, G, T>, mut initial: F) -> Collection<Iterative<'a, G, T>, D, R>
+        pub fn enter_at<'a, T, F>(self, child: &Iterative<'a, G::Allocator, G::Timestamp, T>, mut initial: F) -> Collection<Iterative<'a, G::Allocator, G::Timestamp, T>, D, R>
         where
             T: Timestamp+Hash,
             F: FnMut(&D) -> T + Clone + 'static,

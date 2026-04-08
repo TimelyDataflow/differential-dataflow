@@ -13,7 +13,7 @@ use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::difference::Present;
 
-type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R>>>;
+type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as Scope>::Timestamp, R>>>;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -86,7 +86,8 @@ use timely::order::Product;
 fn tc<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
 
     // repeatedly update minimal distances each node can be reached from each root
-    edges.stream.scope().iterative::<Iter,_,_>(|scope| {
+    let outer = edges.stream.scope();
+    outer.iterative::<Iter,_,_>(|scope| {
 
             let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(scope);
@@ -102,7 +103,7 @@ fn tc<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> Ve
                 ;
 
             inner.set(result.clone());
-            result.leave()
+            result.leave(&outer)
         }
     )
 }
@@ -113,7 +114,8 @@ fn sg<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> Ve
     let peers = edges.clone().join_core(edges.clone(), |_,&x,&y| Some((x,y))).filter(|&(x,y)| x != y);
 
     // repeatedly update minimal distances each node can be reached from each root
-    peers.scope().iterative::<Iter,_,_>(|scope| {
+    let outer = peers.scope();
+    outer.iterative::<Iter,_,_>(|scope| {
 
             let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(scope);
@@ -131,7 +133,7 @@ fn sg<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> Ve
                 ;
 
             inner.set(result.clone());
-            result.leave()
+            result.leave(&outer)
         }
     )
 }

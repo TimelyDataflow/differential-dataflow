@@ -90,19 +90,20 @@ As an example, the implementation of the `iterate` operator looks something like
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
-# fn logic<'a, G: Scope>(collection: VecCollection<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>
+# fn logic<'a, G: Scope>(collection: VecCollection<Child<'a, G::Allocator, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G::Allocator, G::Timestamp>, (u64, u64)>
 # where G::Timestamp: Lattice
 # {
 #     collection
 # }
-# fn example<'a, G: Scope<Timestamp=u64>>(collection: VecCollection<G, (u64, u64)>) //, logic: impl Fn(&VecVariable<Child<'a, G, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G, G::Timestamp>, (u64, u64)>)
+# fn example<'a, G: Scope<Timestamp=u64>>(collection: VecCollection<G, (u64, u64)>) //, logic: impl Fn(&VecVariable<Child<'a, G::Allocator, G::Timestamp>, (u64, u64), isize>) -> VecCollection<Child<'a, G::Allocator, G::Timestamp>, (u64, u64)>)
 #    where G::Timestamp: Lattice
 # {
-    collection.scope().scoped("inner", |subgraph| {
+    let outer = collection.scope();
+    outer.scoped::<u64,_,_>("inner", |subgraph| {
         let (variable, collection) = VecVariable::new_from(collection.enter(subgraph), 1);
-        let result = logic(collection);
+        let result = logic::<G>(collection);
         variable.set(result.clone());
-        result.leave()
+        result.leave(&outer)
     });
 # }
 ```

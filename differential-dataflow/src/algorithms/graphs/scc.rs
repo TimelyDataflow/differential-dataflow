@@ -21,7 +21,8 @@ where
     R: From<i8>
 {
     use timely::order::Product;
-    graph.scope().scoped::<Product<_, usize>,_,_>("StronglyConnected", |scope| {
+    let outer = graph.scope();
+    outer.scoped::<Product<_, usize>,_,_>("StronglyConnected", |scope| {
         // Bring in edges and transposed edges.
         let edges = graph.enter(&scope);
         let trans = edges.clone().map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
@@ -31,7 +32,7 @@ where
 
         let result = trim_edges(trim_edges(inner, edges), trans);
         variable.set(result.clone());
-        result.leave()
+        result.leave(&outer)
     })
 }
 
@@ -44,7 +45,8 @@ where
     R: Multiply<R, Output=R>,
     R: From<i8>
 {
-    edges.inner.scope().region_named("TrimEdges", |region| {
+    let outer = edges.inner.scope();
+    outer.region_named("TrimEdges", |region| {
         let cycle = cycle.enter_region(region);
         let edges = edges.enter_region(region);
 
@@ -62,6 +64,6 @@ where
              .join_core(labels, |e2,(e1,l1),l2| [((e1.clone(),e2.clone()),(l1.clone(),l2.clone()))])
              .filter(|(_,(l1,l2))| l1 == l2)
              .map(|((x1,x2),_)| (x2,x1))
-             .leave_region()
+             .leave_region(&outer)
     })
 }

@@ -127,7 +127,8 @@ where
     G: Scope<Timestamp: Lattice+Ord>,
 {
     // repeatedly update minimal distances each node can be reached from each root
-    roots.scope().iterative::<u32,_,_>(|scope| {
+    let outer = roots.scope();
+    outer.iterative::<u32,_,_>(|scope| {
 
         use differential_dataflow::operators::iterate::Variable;
         use differential_dataflow::trace::implementations::{KeySpine, KeyBuilder};
@@ -152,6 +153,6 @@ where
             .as_collection(|k,()| *k);
 
         variable.set(result.clone());
-        result.leave()
+        result.leave(&outer)
      })
 }

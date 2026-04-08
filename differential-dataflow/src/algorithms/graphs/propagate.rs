@@ -78,7 +78,8 @@ where
     //      })
 
     use timely::order::Product;
-    nodes.scope().scoped::<Product<_, usize>,_,_>("Propagate", |scope| {
+    let outer = nodes.scope();
+    outer.scoped::<Product<_, usize>,_,_>("Propagate", |scope| {
 
         use crate::operators::iterate::Variable;
         use crate::trace::implementations::{ValBuilder, ValSpine};
@@ -104,6 +105,6 @@ where
 
         labels
             .as_collection(|k,v| (k.clone(), v.clone()))
-            .leave()
+            .leave(&outer)
     })
 }

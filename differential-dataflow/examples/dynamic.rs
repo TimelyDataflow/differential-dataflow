@@ -103,7 +103,8 @@ where
     let nodes = roots.map(|x| (x, 0));
 
     // repeatedly update minimal distances each node can be reached from each root
-    nodes.scope().iterative::<PointStamp<usize>, _, _>(|inner| {
+    let outer = nodes.scope();
+    outer.iterative::<PointStamp<usize>, _, _>(|inner| {
 
         // These enter the statically bound scope, rather than any iterative scopes.
         // We do not *need* to enter them into the dynamic scope, as they are static
@@ -126,7 +127,7 @@ where
         // Leave the dynamic iteration, stripping off the last timestamp coordinate.
         next.leave_dynamic(1)
             .inspect(|x| println!("{:?}", x))
-            .leave()
+            .leave(&outer)
     })
 
 }

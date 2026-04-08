@@ -75,15 +75,16 @@ pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
     /// ```
     fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>;
+        for<'a> F: FnOnce(Iterative<'a, G::Allocator, G::Timestamp, u64>, VecCollection<Iterative<'a, G::Allocator, G::Timestamp, u64>, D, R>)->VecCollection<Iterative<'a, G::Allocator, G::Timestamp, u64>, D, R>;
 }
 
 impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for VecCollection<G, D, R> {
     fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(Iterative<'a, G::Allocator, G::Timestamp, u64>, VecCollection<Iterative<'a, G::Allocator, G::Timestamp, u64>, D, R>)->VecCollection<Iterative<'a, G::Allocator, G::Timestamp, u64>, D, R>,
     {
-        self.inner.scope().scoped("Iterate", |subgraph| {
+        let outer = self.inner.scope();
+        outer.scoped("Iterate", |subgraph| {
             // create a new variable, apply logic, bind variable, return.
             //
             // this could be much more succinct if we returned the collection
@@ -93,16 +94,17 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterat
             let (variable, collection) = Variable::new_from(self.enter(subgraph), Product::new(Default::default(), 1));
             let result = logic(subgraph.clone(), collection);
             variable.set(result.clone());
-            result.leave()
+            result.leave(&outer)
         })
     }
 }
 
 impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
-    fn iterate<F>(mut self, logic: F) -> VecCollection<G, D, R>
+    fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
     where
-        for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(Iterative<'a, G::Allocator, G::Timestamp, u64>, VecCollection<Iterative<'a, G::Allocator, G::Timestamp, u64>, D, R>)->VecCollection<Iterative<'a, G::Allocator, G::Timestamp, u64>, D, R>,
     {
+        let outer = self.clone();
         self.scoped("Iterate", |subgraph| {
                 // create a new variable, apply logic, bind variable, return.
                 //
@@ -113,7 +115,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
                 let (variable, collection) = Variable::new(subgraph, Product::new(Default::default(), 1));
                 let result = logic(subgraph.clone(), collection);
                 variable.set(result.clone());
-                result.leave()
+                result.leave(&outer)
             }
         )
     }
@@ -140,13 +142,14 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
 ///
 ///     let numbers = scope.new_collection_from(1 .. 10u32).1;
 ///
+///     let outer = scope.clone();
 ///     scope.iterative::<u64,_,_>(|nested| {
 ///         let summary = Product::new(Default::default(), 1);
 ///         let (variable, collection) = Variable::new_from(numbers.enter(nested), summary);
 ///         let result = collection.map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                                .consolidate();
 ///         variable.set(result.clone());
-///         result.leave()
+///         result.leave(&outer)
 ///     });
 /// })
 /// ```
@@ -198,7 +201,7 @@ where
 }
 
 /// A `Variable` specialized to a vector container of update triples (data, time, diff).
-pub type VecVariable<G, D, R> = Variable<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
+pub type VecVariable<G, D, R> = Variable<G, Vec<(D, <G as Scope>::Timestamp, R)>>;
 
 impl<G, C: Container> Variable<G, C>
 where
