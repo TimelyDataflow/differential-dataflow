@@ -277,11 +277,11 @@ pub mod container {
         /// calling `extract` again. The caller invokes `extract` repeatedly
         /// until `*position >= self.len()`.
         ///
-        /// This shape exists because `at_capacity()` for `Vec` and
-        /// `TimelyStack` is `len() == capacity()`, which silently becomes
-        /// false again the moment a push past capacity grows the backing
-        /// allocation. Without per-element yielding, a single `extract` call
-        /// can quietly produce oversized output chunks.
+        /// This shape exists because `at_capacity()` for `Vec` is
+        /// `len() == capacity()`, which silently becomes false again the
+        /// moment a push past capacity grows the backing allocation.
+        /// Without per-element yielding, a single `extract` call can
+        /// quietly produce oversized output chunks.
         fn extract(
             &mut self,
             position: &mut usize,
@@ -294,9 +294,6 @@ pub mod container {
 
     /// A `Merger` for `Vec` containers, which contain owned data and need special treatment.
     pub type VecInternalMerger<D, T, R> = VecMerger<D, T, R>;
-    /// A `Merger` using internal iteration for `TimelyStack` containers.
-    pub type ColInternalMerger<D, T, R> = InternalMerger<crate::containers::TimelyStack<(D, T, R)>>;
-
     /// A `Merger` implementation for `Vec<(D, T, R)>` that drains owned inputs.
     pub struct VecMerger<D, T, R> {
         _marker: PhantomData<(D, T, R)>,
@@ -683,116 +680,4 @@ pub mod container {
         }
     }
 
-    /// Implementation of `InternalMerge` for `TimelyStack<(D, T, R)>`.
-    pub mod columnation_internal {
-        use std::cmp::Ordering;
-        use columnation::Columnation;
-        use timely::PartialOrder;
-        use timely::container::SizableContainer;
-        use timely::progress::frontier::{Antichain, AntichainRef};
-        use crate::containers::TimelyStack;
-        use crate::difference::Semigroup;
-        use super::InternalMerge;
-
-        impl<D, T, R> InternalMerge for TimelyStack<(D, T, R)>
-        where
-            D: Ord + Columnation + Clone + 'static,
-            T: Ord + Columnation + Clone + PartialOrder + 'static,
-            R: Default + Semigroup + Columnation + Clone + 'static,
-        {
-            type TimeOwned = T;
-
-            fn len(&self) -> usize { self[..].len() }
-            fn clear(&mut self) { TimelyStack::clear(self) }
-
-            fn account(&self) -> (usize, usize, usize, usize) {
-                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-                let cb = |siz, cap| {
-                    size += siz;
-                    capacity += cap;
-                    allocations += 1;
-                };
-                self.heap_size(cb);
-                (self.len(), size, capacity, allocations)
-            }
-
-            fn merge_from(
-                &mut self,
-                others: &mut [Self],
-                positions: &mut [usize],
-            ) {
-                match others.len() {
-                    0 => {},
-                    1 => {
-                        let other = &mut others[0];
-                        let pos = &mut positions[0];
-                        if self[..].is_empty() && *pos == 0 {
-                            std::mem::swap(self, other);
-                            return;
-                        }
-                        for i in *pos .. other[..].len() {
-                            self.copy(&other[i]);
-                        }
-                        *pos = other[..].len();
-                    },
-                    2 => {
-                        let (left, right) = others.split_at_mut(1);
-                        let other1 = &left[0];
-                        let other2 = &right[0];
-
-                        let mut stash = R::default();
-
-                        while positions[0] < other1[..].len() && positions[1] < other2[..].len() && !self.at_capacity() {
-                            let (d1, t1, _) = &other1[positions[0]];
-                            let (d2, t2, _) = &other2[positions[1]];
-                            match (d1, t1).cmp(&(d2, t2)) {
-                                Ordering::Less => {
-                                    self.copy(&other1[positions[0]]);
-                                    positions[0] += 1;
-                                }
-                                Ordering::Greater => {
-                                    self.copy(&other2[positions[1]]);
-                                    positions[1] += 1;
-                                }
-                                Ordering::Equal => {
-                                    let (_, _, r1) = &other1[positions[0]];
-                                    let (_, _, r2) = &other2[positions[1]];
-                                    stash.clone_from(r1);
-                                    stash.plus_equals(r2);
-                                    if !stash.is_zero() {
-                                        let (d, t, _) = &other1[positions[0]];
-                                        self.copy_destructured(d, t, &stash);
-                                    }
-                                    positions[0] += 1;
-                                    positions[1] += 1;
-                                }
-                            }
-                        }
-                    },
-                    n => unimplemented!("{n}-way merge not yet supported"),
-                }
-            }
-
-            fn extract(
-                &mut self,
-                position: &mut usize,
-                upper: AntichainRef<T>,
-                frontier: &mut Antichain<T>,
-                keep: &mut Self,
-                ship: &mut Self,
-            ) {
-                let len = self[..].len();
-                while *position < len && !keep.at_capacity() && !ship.at_capacity() {
-                    let (data, time, diff) = &self[*position];
-                    if upper.less_equal(time) {
-                        frontier.insert_with(time, |time| time.clone());
-                        keep.copy_destructured(data, time, diff);
-                    } else {
-                        ship.copy_destructured(data, time, diff);
-                    }
-                    *position += 1;
-                }
-            }
-        }
-    }
 }
