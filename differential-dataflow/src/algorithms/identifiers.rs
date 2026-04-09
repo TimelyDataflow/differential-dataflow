@@ -1,6 +1,6 @@
 //! Assign unique identifiers to records.
 
-use timely::dataflow::Scope;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData, Hashable};
 use crate::lattice::Lattice;
@@ -8,7 +8,7 @@ use crate::operators::*;
 use crate::difference::Abelian;
 
 /// Assign unique identifiers to elements of a collection.
-pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
+pub trait Identifiers<G: Timestamp, D: ExchangeData, R: ExchangeData+Abelian> {
     /// Assign unique identifiers to elements of a collection.
     ///
     /// # Example
@@ -32,7 +32,7 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
 
 impl<G, D, R> Identifiers<G, D, R> for VecCollection<G, D, R>
 where
-    G: Scope<Timestamp: Lattice>,
+    G: Timestamp + Lattice,
     D: ExchangeData + ::std::hash::Hash,
     R: ExchangeData + Abelian,
 {

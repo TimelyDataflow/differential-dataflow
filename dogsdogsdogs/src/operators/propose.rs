@@ -1,4 +1,4 @@
-use timely::dataflow::Scope;
+use timely::progress::Timestamp;
 
 use differential_dataflow::{ExchangeData, VecCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
@@ -19,10 +19,10 @@ pub fn propose<G, Tr, K, F, P, V>(
     key_selector: F,
 ) -> VecCollection<G, (P, V), Tr::Diff>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
         ValOwn = V,
-        Time: std::hash::Hash,
+        Time = G,
         Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData+Semigroup<Tr::DiffGat<'a>>,
     >+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
@@ -53,10 +53,10 @@ pub fn propose_distinct<G, Tr, K, F, P, V>(
     key_selector: F,
 ) -> VecCollection<G, (P, V), Tr::Diff>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
         ValOwn = V,
-        Time: std::hash::Hash,
+        Time = G,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,

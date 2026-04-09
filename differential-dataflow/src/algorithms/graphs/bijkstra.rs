@@ -3,7 +3,7 @@
 use std::hash::Hash;
 
 use timely::order::Product;
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
@@ -21,7 +21,7 @@ use crate::operators::iterate::Variable;
 /// could be good insurance here.
 pub fn bidijkstra<G, N>(edges: VecCollection<G, (N,N)>, goals: VecCollection<G, (N,N)>) -> VecCollection<G, ((N,N), u32)>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Timestamp + Lattice + Ord,
     N: ExchangeData+Hash,
 {
     let forward = edges.clone().arrange_by_key();
@@ -39,9 +39,9 @@ pub fn bidijkstra_arranged<G, N, Tr>(
     goals: VecCollection<G, (N,N)>
 ) -> VecCollection<G, ((N,N), u32)>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Timestamp + Lattice + Ord,
     N: ExchangeData+Hash,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time=G, Diff=isize>+Clone+'static,
 {
     let outer = forward.stream.scope();
     outer.iterative::<u64,_,_>(|inner| {

@@ -39,7 +39,7 @@ fn main() {
 
 fn interpret<G>(edges: VecCollection<G, Edge>, relations: &[(usize, usize)]) -> VecCollection<G, Vec<Node>>
 where
-    G: Scope<Timestamp: Lattice+Hash+Ord>,
+    G: timely::progress::Timestamp + Lattice + Hash + Ord,
 {
 
     // arrange the edge relation three ways.

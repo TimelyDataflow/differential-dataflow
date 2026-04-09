@@ -12,4 +12,4 @@ workspace = true
 [dependencies]
 libloading = "0.8"
 differential-dataflow = { workspace = true }
-timely = { workspace = true }
+timely = { workspace = true, features = ["getopts"] }

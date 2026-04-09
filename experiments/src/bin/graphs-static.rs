@@ -106,10 +106,10 @@ use differential_dataflow::operators::arrange::TraceAgent;
 
 type TraceHandle = TraceAgent<GraphTrace>;
 
-fn reach<G: Scope<Timestamp = ()>> (
+fn reach(
     graph: &mut TraceHandle,
-    roots: VecCollection<G, Node, Diff>
-) -> VecCollection<G, Node, Diff> {
+    roots: VecCollection<(), Node, Diff>
+) -> VecCollection<(), Node, Diff> {
 
     let graph = graph.import(&roots.scope());
 
@@ -132,10 +132,10 @@ fn reach<G: Scope<Timestamp = ()>> (
 }
 
 
-fn bfs<G: Scope<Timestamp = ()>> (
+fn bfs(
     graph: &mut TraceHandle,
-    roots: VecCollection<G, Node, Diff>
-) -> VecCollection<G, (Node, u32), Diff> {
+    roots: VecCollection<(), Node, Diff>
+) -> VecCollection<(), (Node, u32), Diff> {
 
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));
@@ -157,11 +157,11 @@ fn bfs<G: Scope<Timestamp = ()>> (
     })
 }
 
-fn connected_components<G: Scope<Timestamp = ()>>(
-    scope: &mut G,
+fn connected_components(
+    scope: &mut timely::dataflow::Scope<()>,
     forward: &mut TraceHandle,
     reverse: &mut TraceHandle,
-) -> VecCollection<G, (Node, Node), Diff> {
+) -> VecCollection<(), (Node, Node), Diff> {
 
     let forward = forward.import(scope);
     let reverse = reverse.import(scope);

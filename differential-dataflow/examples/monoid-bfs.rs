@@ -124,7 +124,7 @@ fn main() {
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn bfs<G>(edges: VecCollection<G, Edge, MinSum>, roots: VecCollection<G, Node, MinSum>) -> VecCollection<G, Node, MinSum>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: timely::progress::Timestamp + Lattice + Ord,
 {
     // repeatedly update minimal distances each node can be reached from each root
     let outer = roots.scope();

@@ -38,9 +38,10 @@ use std::time::Instant;
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::{Scope, Stream};
+use timely::scheduling::Scheduler;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::{Capability, Operator, generic::Session};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::AntichainRef;
 
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
@@ -74,26 +75,27 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// once out of the "delta flow region", the updates will be `delay`d to the
 /// times specified in the payloads.
 pub fn half_join<G, K, V, R, Tr, FF, CF, DOut, S>(
-    stream: VecCollection<G, (K, V, G::Timestamp), R>,
+    stream: VecCollection<G, (K, V, G), R>,
     arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
-) -> VecCollection<G, (DOut, G::Timestamp), <R as Mul<Tr::Diff>>::Output>
+) -> VecCollection<G, (DOut, G), <R as Mul<Tr::Diff>>::Output>
 where
-    G: Scope<Timestamp = Tr::Time>,
+    G: Timestamp + Lattice,
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Time = G>+Clone+'static,
+    G: std::hash::Hash,
     Tr::KeyContainer: BatchContainer<Owned=K>,
     R: Mul<Tr::Diff, Output: Semigroup>,
-    FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
-    CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
+    FF: Fn(&G, &mut Antichain<G>) + 'static,
+    CF: Fn(Tr::TimeGat<'_>, &G) -> bool + 'static,
     DOut: Clone+'static,
     S: FnMut(&K, &V, Tr::Val<'_>)->DOut+'static,
 {
-    let output_func = move |session: &mut SessionFor<G, _>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &G::Timestamp, diff1: &R, output: &mut Vec<(G::Timestamp, Tr::Diff)>| {
+    let output_func = move |session: &mut SessionFor<G, _>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &G, diff1: &R, output: &mut Vec<(G, Tr::Diff)>| {
         for (time, diff2) in output.drain(..) {
             let diff = diff1.clone() * diff2.clone();
             let dout = (output_func(k, v1, v2), time.clone());
@@ -109,9 +111,9 @@ where
 /// This is a shorthand primarily for the reson of readability.
 type SessionFor<'a, 'b, G, CB> =
     Session<'a, 'b,
-        <G as Scope>::Timestamp,
+        G,
         CB,
-        Capability<<G as Scope>::Timestamp>,
+        Capability<G>,
     >;
 
 /// An unsafe variant of `half_join` where the `output_func` closure takes
@@ -140,7 +142,7 @@ type SessionFor<'a, 'b, G, CB> =
 /// records. Note this is not the number of *output* records, owing mainly to
 /// the number of matched records being easiest to record with low overhead.
 pub fn half_join_internal_unsafe<G, K, V, R, Tr, FF, CF, Y, S, CB>(
-    stream: VecCollection<G, (K, V, G::Timestamp), R>,
+    stream: VecCollection<G, (K, V, G), R>,
     mut arrangement: Arranged<G, Tr>,
     frontier_func: FF,
     comparison: CF,
@@ -148,16 +150,17 @@ pub fn half_join_internal_unsafe<G, K, V, R, Tr, FF, CF, Y, S, CB>(
     mut output_func: S,
 ) -> Stream<G, CB::Container>
 where
-    G: Scope<Timestamp = Tr::Time>,
+    G: Timestamp + Lattice,
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Time = G>+Clone+'static,
+    G: std::hash::Hash,
     Tr::KeyContainer: BatchContainer<Owned=K>,
-    FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
+    FF: Fn(&G, &mut Antichain<G>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
+    S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G, &R, &mut Vec<(G, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
 {
     // No need to block physical merging for this operator.
@@ -167,7 +170,7 @@ where
 
     let mut stash = HashMap::new();
 
-    let exchange = Exchange::new(move |update: &((K, V, G::Timestamp),G::Timestamp,R)| (update.0).0.hashed().into());
+    let exchange = Exchange::new(move |update: &((K, V, G),G,R)| (update.0).0.hashed().into());
 
     // Stash for (time, diff) accumulation.
     let mut output_buffer = Vec::new();
@@ -313,12 +316,12 @@ fn process_proposals<G, Tr, CF, Y, S, CB, K, V, R>(
     frontier: AntichainRef<Tr::Time>
 ) -> bool
 where
-    G: Scope<Timestamp = Tr::Time>,
-    Tr: TraceReader,
+    G: Timestamp + Lattice,
+    Tr: TraceReader<Time = G>,
     Tr::KeyContainer: BatchContainer<Owned=K>,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
+    S: FnMut(&mut SessionFor<G, CB>, &K, &V, Tr::Val<'_>, &G, &R, &mut Vec<(G, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
     K: Ord,
     V: Ord,

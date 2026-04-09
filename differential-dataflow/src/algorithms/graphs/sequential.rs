@@ -2,7 +2,7 @@
 
 use std::hash::Hash;
 
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
@@ -11,7 +11,7 @@ use crate::hashable::Hashable;
 
 fn _color<G, N>(edges: VecCollection<G, (N,N)>) -> VecCollection<G,(N,Option<u32>)>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
 {
     // need some bogus initial values.
@@ -45,7 +45,7 @@ pub fn sequence<G, N, V, F>(
     edges: VecCollection<G, (N,N)>,
     logic: F) -> VecCollection<G, (N,Option<V>)>
 where
-    G: Scope<Timestamp: Lattice+Hash+Ord>,
+    G: Timestamp + Lattice + Hash + Ord,
     N: ExchangeData+Hashable,
     V: ExchangeData,
     F: Fn(&N, &[(&V, isize)])->V+'static

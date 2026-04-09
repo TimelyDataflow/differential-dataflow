@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-use timely::dataflow::Scope;
+use timely::progress::Timestamp;
 
 use differential_dataflow::{ExchangeData, VecCollection};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
@@ -18,9 +18,9 @@ pub fn validate<G, K, V, Tr, F, P>(
     key_selector: F,
 ) -> VecCollection<G, (P, V), Tr::Diff>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
-        Time: std::hash::Hash,
+        Time = G,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=(K,V)>,

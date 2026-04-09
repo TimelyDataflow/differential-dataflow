@@ -20,7 +20,7 @@ pub mod operators;
     Implementors of `PrefixExtension` provide types and methods for extending a differential dataflow collection,
     via the three methods `count`, `propose`, and `validate`.
 **/
-pub trait PrefixExtender<G: Scope, R: Monoid+Multiply<Output = R>> {
+pub trait PrefixExtender<G: Timestamp, R: Monoid+Multiply<Output = R>> {
     /// The required type of prefix to extend.
     type Prefix;
     /// The type to be produced as extension.
@@ -33,14 +33,14 @@ pub trait PrefixExtender<G: Scope, R: Monoid+Multiply<Output = R>> {
     fn validate(&mut self, extensions: VecCollection<G, (Self::Prefix, Self::Extension), R>) -> VecCollection<G, (Self::Prefix, Self::Extension), R>;
 }
 
-pub trait ProposeExtensionMethod<G: Scope, P: ExchangeData+Ord, R: Monoid+Multiply<Output = R>> {
+pub trait ProposeExtensionMethod<G: Timestamp, P: ExchangeData+Ord, R: Monoid+Multiply<Output = R>> {
     fn propose_using<PE: PrefixExtender<G, R, Prefix=P>>(self, extender: &mut PE) -> VecCollection<G, (P, PE::Extension), R>;
     fn extend<E: ExchangeData+Ord>(self, extenders: &mut [&mut dyn PrefixExtender<G,R,Prefix=P,Extension=E>]) -> VecCollection<G, (P, E), R>;
 }
 
 impl<G, P, R> ProposeExtensionMethod<G, P, R> for VecCollection<G, P, R>
 where
-    G: Scope,
+    G: Timestamp,
     P: ExchangeData+Ord,
     R: Monoid+Multiply<Output = R>+'static,
 {
@@ -81,11 +81,11 @@ where
     }
 }
 
-pub trait ValidateExtensionMethod<G: Scope, R: Monoid+Multiply<Output = R>, P, E> {
+pub trait ValidateExtensionMethod<G: Timestamp, R: Monoid+Multiply<Output = R>, P, E> {
     fn validate_using<PE: PrefixExtender<G, R, Prefix=P, Extension=E>>(self, extender: &mut PE) -> VecCollection<G, (P, E), R>;
 }
 
-impl<G: Scope, R: Monoid+Multiply<Output = R>, P, E> ValidateExtensionMethod<G, R, P, E> for VecCollection<G, (P, E), R> {
+impl<G: Timestamp, R: Monoid+Multiply<Output = R>, P, E> ValidateExtensionMethod<G, R, P, E> for VecCollection<G, (P, E), R> {
     fn validate_using<PE: PrefixExtender<G, R, Prefix=P, Extension=E>>(self, extender: &mut PE) -> VecCollection<G, (P, E), R> {
         extender.validate(self)
     }
@@ -137,7 +137,7 @@ where
     R: Monoid+Multiply<Output = R>+ExchangeData,
 {
 
-    pub fn index<G: Scope<Timestamp = T>>(collection: VecCollection<G, (K, V), R>) -> Self {
+    pub fn index(collection: VecCollection<T, (K, V), R>) -> Self {
         // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
         // counts and validate can share the base arrangement
         let arranged = collection.clone().arrange_by_self();
@@ -180,9 +180,9 @@ where
     key_selector: F,
 }
 
-impl<G, K, V, R, P, F> PrefixExtender<G, R> for CollectionExtender<K, V, G::Timestamp, R, P, F>
+impl<G, K, V, R, P, F> PrefixExtender<G, R> for CollectionExtender<K, V, G, R, P, F>
 where
-    G: Scope<Timestamp: Lattice+ExchangeData+Hash>,
+    G: Timestamp + Lattice + ExchangeData + Hash,
     K: ExchangeData+Hash+Default,
     V: ExchangeData+Hash+Default,
     P: ExchangeData,

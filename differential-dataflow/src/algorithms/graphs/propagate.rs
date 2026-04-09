@@ -2,7 +2,7 @@
 
 use std::hash::Hash;
 
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
@@ -15,7 +15,7 @@ use crate::difference::{Abelian, Multiply};
 /// method to limit the introduction of labels.
 pub fn propagate<G, N, L, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>) -> VecCollection<G,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -32,7 +32,7 @@ where
 /// method to limit the introduction of labels.
 pub fn propagate_at<G, N, L, F, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -53,13 +53,13 @@ use crate::operators::arrange::arrangement::Arranged;
 /// of `logic should be a number in the interval \[0,64\],
 pub fn propagate_core<G, N, L, Tr, F, R>(edges: Arranged<G,Tr>, nodes: VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time:Hash, Diff=R>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time=G, Diff=R>+Clone+'static,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified

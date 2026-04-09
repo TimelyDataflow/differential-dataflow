@@ -11,9 +11,10 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::difference::Present;
 
-type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as Scope>::Timestamp, R>>>;
+type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, G, R>>>;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -83,7 +84,7 @@ fn main() {
 use timely::order::Product;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn tc<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
+fn tc<G: timely::progress::Timestamp + Lattice + Default + timely::order::Empty>(edges: EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
 
     // repeatedly update minimal distances each node can be reached from each root
     let outer = edges.stream.scope();
@@ -109,7 +110,7 @@ fn tc<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> Ve
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn sg<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
+fn sg<G: timely::progress::Timestamp + Lattice + Default + timely::order::Empty>(edges: EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
 
     let peers = edges.clone().join_core(edges.clone(), |_,&x,&y| Some((x,y))).filter(|&(x,y)| x != y);
 

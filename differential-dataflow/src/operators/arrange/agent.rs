@@ -9,6 +9,7 @@ use timely::dataflow::operators::generic::{OperatorInfo, source};
 use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
+use timely::scheduling::Scheduler;
 
 use crate::trace::{Trace, TraceReader, BatchReader};
 use crate::trace::wrappers::rc::TraceBox;
@@ -215,17 +216,13 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     ///
     /// }).unwrap();
     /// ```
-    pub fn import<G>(&mut self, scope: &G) -> Arranged<G, TraceAgent<Tr>>
-    where
-        G: Scope<Timestamp=Tr::Time>,
+    pub fn import(&mut self, scope: &Scope<Tr::Time>) -> Arranged<Tr::Time, TraceAgent<Tr>>
     {
         self.import_named(scope, "ArrangedSource")
     }
 
     /// Same as `import`, but allows to name the source.
-    pub fn import_named<G>(&mut self, scope: &G, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        G: Scope<Timestamp=Tr::Time>,
+    pub fn import_named(&mut self, scope: &Scope<Tr::Time>, name: &str) -> Arranged<Tr::Time, TraceAgent<Tr>>
     {
         // Drop ShutdownButton and return only the arrangement.
         self.import_core(scope, name).0
@@ -278,9 +275,7 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     ///
     /// }).unwrap();
     /// ```
-    pub fn import_core<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceAgent<Tr>>, ShutdownButton<CapabilitySet<Tr::Time>>)
-    where
-        G: Scope<Timestamp=Tr::Time>,
+    pub fn import_core(&mut self, scope: &Scope<Tr::Time>, name: &str) -> (Arranged<Tr::Time, TraceAgent<Tr>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     {
         let trace = self.clone();
 
@@ -393,9 +388,8 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     ///
     /// }).unwrap();
     /// ```
-    pub fn import_frontier<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
+    pub fn import_frontier(&mut self, scope: &Scope<Tr::Time>, name: &str) -> (Arranged<Tr::Time, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
-        G: Scope<Timestamp=Tr::Time>,
         Tr: TraceReader,
     {
         // This frontier describes our only guarantee on the compaction frontier.
@@ -411,9 +405,8 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     ///
     /// Invoking this method with an `until` of `Antichain::new()` will perform no filtering, as the empty
     /// frontier indicates the end of times.
-    pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, since: Antichain<Tr::Time>, until: Antichain<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
+    pub fn import_frontier_core(&mut self, scope: &Scope<Tr::Time>, name: &str, since: Antichain<Tr::Time>, until: Antichain<Tr::Time>) -> (Arranged<Tr::Time, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
-        G: Scope<Timestamp=Tr::Time>,
         Tr: TraceReader,
     {
         let trace = self.clone();

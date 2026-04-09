@@ -9,10 +9,12 @@ use timely::{Accountable, ContainerBuilder};
 use timely::container::PushInto;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Stream;
 use timely::dataflow::operators::generic::{Operator, OutputBuilderSession, Session};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
+use timely::scheduling::Scheduler;
+use timely::worker::AsWorker;
 
 use crate::lattice::Lattice;
 use crate::operators::arrange::Arranged;
@@ -68,10 +70,10 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 /// [`AsCollection`]: crate::collection::AsCollection
 pub fn join_traces<G, T1, T2, L, CB>(arranged1: Arranged<G,T1>, arranged2: Arranged<G,T2>, mut result: L) -> Stream<G, CB::Container>
 where
-    G: Scope<Timestamp=T1::Time>,
-    T1: TraceReader+Clone+'static,
-    T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time=T1::Time>+Clone+'static,
-    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G::Timestamp,&T1::Diff,&T2::Diff,&mut JoinSession<T1::Time, CB, Capability<T1::Time>>)+'static,
+    G: Timestamp + Lattice,
+    T1: TraceReader<Time = G>+Clone+'static,
+    T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time = G>+Clone+'static,
+    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G,&T1::Diff,&T2::Diff,&mut JoinSession<G, CB, Capability<G>>)+'static,
     CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.
@@ -97,8 +99,8 @@ where
         // the physical compaction frontier of their corresponding trace.
         // Should we ever *drop* a trace, these are 1. much harder to maintain correctly, but 2. no longer used.
         use timely::progress::frontier::Antichain;
-        let mut acknowledged1 = Antichain::from_elem(<G::Timestamp>::minimum());
-        let mut acknowledged2 = Antichain::from_elem(<G::Timestamp>::minimum());
+        let mut acknowledged1 = Antichain::from_elem(<G>::minimum());
+        let mut acknowledged2 = Antichain::from_elem(<G>::minimum());
 
         // deferred work of batches from each input.
         let mut todo1 = std::collections::VecDeque::new();

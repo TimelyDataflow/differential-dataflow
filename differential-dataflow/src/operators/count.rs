@@ -1,7 +1,7 @@
 //! Count the number of occurrences of each element.
 
 use timely::order::TotalOrder;
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
@@ -14,7 +14,7 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeData, R: Semigroup> : Sized {
+pub trait CountTotal<G: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: Semigroup> : Sized {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -44,7 +44,7 @@ pub trait CountTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeDat
 
 impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for VecCollection<G, K, R>
 where
-    G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
+    G: Timestamp + TotalOrder + Lattice + Ord,
 {
     fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")
@@ -54,11 +54,11 @@ where
 
 impl<G, K, T1> CountTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
-    G: Scope<Timestamp=T1::Time>,
+    G: Timestamp + TotalOrder + Lattice + Ord,
     T1: for<'a> TraceReader<
         Key<'a> = &'a K,
         Val<'a>=&'a (),
-        Time: TotalOrder,
+        Time = G,
         Diff: ExchangeData+Semigroup<T1::DiffGat<'a>>
     >+Clone+'static,
     K: ExchangeData,
@@ -70,8 +70,8 @@ where
         self.stream.unary_frontier(Pipeline, "CountTotal", move |_,_| {
 
             // tracks the lower and upper limit of received batches.
-            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
-            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
+            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
 
             move |(input, _frontier), output| {
 

@@ -19,10 +19,10 @@ impl<V: ExchangeData+Hash+Datum> Render for Concat<V> {
 
     type Value = V;
 
-    fn render<S: Scope<Timestamp = Time>>(
+    fn render(
         &self,
-        scope: &mut S,
-        arrangements: &mut TraceManager<V>) -> VecCollection<S, Vec<Self::Value>, Diff>
+        scope: &mut Scope<Time>,
+        arrangements: &mut TraceManager<V>) -> VecCollection<Time, Vec<Self::Value>, Diff>
     {
         use timely::dataflow::operators::Concatenate;
         use differential_dataflow::AsCollection;

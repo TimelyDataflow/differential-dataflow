@@ -33,7 +33,7 @@ impl<C: ResultsIn<TS>, TS> ResultsIn<TS> for ContainerWrapper<C> {
     #[inline(always)] fn results_in(self, step: &TS) -> Self { ContainerWrapper(self.0.results_in(step)) }
 }
 
-fn wrap<G: Scope, C: timely::Container>(stream: Stream<G, C>) -> Stream<G, ContainerWrapper<C>> {
+fn wrap<G: timely::progress::Timestamp, C: timely::Container>(stream: Stream<G, C>) -> Stream<G, ContainerWrapper<C>> {
     let mut builder = OperatorBuilder::new("Wrap".to_string(), stream.scope());
     let (mut output, stream_out) = builder.new_output();
     let mut input = builder.new_input(stream, Pipeline);

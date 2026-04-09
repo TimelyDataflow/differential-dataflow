@@ -110,10 +110,10 @@ mod reachability {
     /// Compute the set of nodes reachable from `roots` along directed `edges`.
     ///
     /// Returns `(node, ())` for each reachable node.
-    pub fn reach<G: Scope<Timestamp = Time>>(
-        edges: Collection<G, RecordedUpdates<(Node, Node, Time, Diff)>>,
-        roots: Collection<G, RecordedUpdates<(Node, (), Time, Diff)>>,
-    ) -> Collection<G, RecordedUpdates<(Node, (), Time, Diff)>>
+    pub fn reach(
+        edges: Collection<Time, RecordedUpdates<(Node, Node, Time, Diff)>>,
+        roots: Collection<Time, RecordedUpdates<(Node, (), Time, Diff)>>,
+    ) -> Collection<Time, RecordedUpdates<(Node, (), Time, Diff)>>
     {
         let outer = edges.inner.scope();
 
@@ -181,7 +181,7 @@ mod reachability {
             });
 
             // Extract RecordedUpdates from the Arranged's batch stream.
-            let result_col = as_recorded_updates::<_, (Node, (), IterTime, Diff)>(result);
+            let result_col = as_recorded_updates::<(Node, (), IterTime, Diff)>(result);
 
             variable.set(result_col.clone());
 

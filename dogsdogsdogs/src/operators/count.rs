@@ -1,4 +1,4 @@
-use timely::dataflow::Scope;
+use timely::progress::Timestamp;
 
 use differential_dataflow::{ExchangeData, VecCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
@@ -18,8 +18,8 @@ pub fn count<G, Tr, K, R, F, P>(
     index: usize,
 ) -> VecCollection<G, (P, usize, usize), R>
 where
-    G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader<Time: std::hash::Hash, Diff=isize>+Clone+'static,
+    G: Timestamp + std::hash::Hash,
+    Tr: TraceReader<Time = G, Diff=isize>+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
     K: Hashable + Ord + Default + 'static,

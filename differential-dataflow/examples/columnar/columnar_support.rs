@@ -1839,13 +1839,12 @@ pub mod updates {
 /// joins output times with input times, multiplies output diffs with input diffs.
 ///
 /// This subsumes map, filter, negate, and enter_at for columnar collections.
-pub fn join_function<G, U, I, L>(
-    input: differential_dataflow::Collection<G, RecordedUpdates<U>>,
+pub fn join_function<U, I, L>(
+    input: differential_dataflow::Collection<U::Time, RecordedUpdates<U>>,
     mut logic: L,
-) -> differential_dataflow::Collection<G, RecordedUpdates<U>>
+) -> differential_dataflow::Collection<U::Time, RecordedUpdates<U>>
 where
-    G: timely::dataflow::Scope,
-    G::Timestamp: differential_dataflow::lattice::Lattice,
+    U::Time: differential_dataflow::lattice::Lattice,
     U: layout::ColumnarUpdate<Diff: differential_dataflow::difference::Multiply<U::Diff, Output = U::Diff>>,
     I: IntoIterator<Item = (U::Key, U::Val, U::Time, U::Diff)>,
     L: FnMut(
@@ -1893,12 +1892,11 @@ type DynTime = timely::order::Product<u64, differential_dataflow::dynamic::point
 /// that tells timely how the PointStamp is affected (retain `level - 1` coordinates).
 ///
 /// Consolidates after truncation since distinct PointStamp coordinates can collapse.
-pub fn leave_dynamic<G, K, V, R>(
-    input: differential_dataflow::Collection<G, RecordedUpdates<(K, V, DynTime, R)>>,
+pub fn leave_dynamic<K, V, R>(
+    input: differential_dataflow::Collection<DynTime, RecordedUpdates<(K, V, DynTime, R)>>,
     level: usize,
-) -> differential_dataflow::Collection<G, RecordedUpdates<(K, V, DynTime, R)>>
+) -> differential_dataflow::Collection<DynTime, RecordedUpdates<(K, V, DynTime, R)>>
 where
-    G: timely::dataflow::Scope<Timestamp = DynTime>,
     K: columnar::Columnar,
     V: columnar::Columnar,
     R: columnar::Columnar,
@@ -1972,14 +1970,13 @@ where
 ///
 /// Cursors through each batch and pushes `(key, val, time, diff)` refs into
 /// a `ValColBuilder`, which sorts and consolidates on flush.
-pub fn as_recorded_updates<G, U>(
+pub fn as_recorded_updates<U>(
     arranged: differential_dataflow::operators::arrange::Arranged<
-        G,
+        U::Time,
         differential_dataflow::operators::arrange::TraceAgent<ValSpine<U::Key, U::Val, U::Time, U::Diff>>,
     >,
-) -> differential_dataflow::Collection<G, RecordedUpdates<U>>
+) -> differential_dataflow::Collection<U::Time, RecordedUpdates<U>>
 where
-    G: timely::dataflow::Scope<Timestamp = U::Time>,
     U: layout::ColumnarUpdate,
 {
     use timely::dataflow::operators::generic::Operator;

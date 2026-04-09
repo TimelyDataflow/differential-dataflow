@@ -120,7 +120,7 @@ fn frontier<G, T>(
     times: VecCollection<G, (Location, T)>,
 ) -> VecCollection<G, (Location, T)>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Timestamp + Lattice + Ord,
     T: Timestamp<Summary: differential_dataflow::ExchangeData>+std::hash::Hash,
 {
     // Translate node and edge transitions into a common Location to Location edge with an associated Summary.
@@ -154,7 +154,7 @@ fn summarize<G, T>(
     edges: VecCollection<G, (Source, Target)>,
 ) -> VecCollection<G, (Location, (Location, T::Summary))>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Timestamp + Lattice + Ord,
     T: Timestamp<Summary: differential_dataflow::ExchangeData+std::hash::Hash>,
 {
     // Start from trivial reachability from each input to itself.
@@ -194,12 +194,12 @@ where
 
 
 /// Identifies cycles along paths that do not increment timestamps.
-fn find_cycles<G: Scope, T: Timestamp>(
+fn find_cycles<G: Timestamp, T: Timestamp>(
     nodes: VecCollection<G, (Target, Source, T::Summary)>,
     edges: VecCollection<G, (Source, Target)>,
 ) -> VecCollection<G, (Location, Location)>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    G: Timestamp + Lattice + Ord,
     T: Timestamp<Summary: differential_dataflow::ExchangeData>,
 {
     // Retain node connections along "default" timestamp summaries.

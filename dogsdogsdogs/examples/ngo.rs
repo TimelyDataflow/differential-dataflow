@@ -38,9 +38,9 @@ fn main() {
     }).unwrap();
 }
 
-fn triangles<G: Scope>(edges: VecCollection<G, Edge>) -> VecCollection<G, (Node, Node, Node)>
+fn triangles<G>(edges: VecCollection<G, Edge>) -> VecCollection<G, (Node, Node, Node)>
 where
-    G: Scope<Timestamp: Lattice+Hash+Ord>,
+    G: timely::progress::Timestamp + Lattice + Hash + Ord,
 {
     // only use forward-pointing edges.
     let edges = edges.filter(|&(src, dst)| src < dst);

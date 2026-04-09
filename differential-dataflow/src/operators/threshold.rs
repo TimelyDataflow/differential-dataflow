@@ -4,7 +4,7 @@
 //! `distinct` and `distinct_u` operators for the case in which time is totally ordered.
 
 use timely::order::TotalOrder;
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
@@ -17,7 +17,7 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
+pub trait ThresholdTotal<G: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
     /// Reduces the collection to one occurrence of each distinct element.
     fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<G, K, R2>
     where
@@ -84,9 +84,9 @@ pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: Exchang
 
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<G, K, R> for VecCollection<G, K, R>
+impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<G, K, R> for VecCollection<G, K, R>
 where
-    G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
+    G: Timestamp + TotalOrder + Lattice + Ord,
 {
     fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<G, K, R2>
     where
@@ -100,11 +100,11 @@ where
 
 impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
 where
-    G: Scope<Timestamp=T1::Time>,
+    G: Timestamp + TotalOrder + Lattice + Ord,
     T1: for<'a> TraceReader<
         Key<'a>=&'a K,
         Val<'a>=&'a (),
-        Time: TotalOrder,
+        Time = G,
         Diff : ExchangeData + Semigroup<T1::DiffGat<'a>>,
     >+Clone+'static,
     K: ExchangeData,
@@ -120,8 +120,8 @@ where
         self.stream.unary_frontier(Pipeline, "ThresholdTotal", move |_,_| {
 
             // tracks the lower and upper limit of received batches.
-            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
-            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
+            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
 
             move |(input, _frontier), output| {
 

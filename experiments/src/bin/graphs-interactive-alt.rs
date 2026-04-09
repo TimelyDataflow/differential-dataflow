@@ -3,6 +3,7 @@
 use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::*;
+use timely::progress::Timestamp;
 use timely::dataflow::operators::probe::Handle;
 use timely::order::Product;
 
@@ -258,14 +259,14 @@ use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as Scope>::Timestamp, R>>>;
+type Arrange<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, G, R>>>;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn three_hop<G: Scope>(
+fn three_hop<G: Timestamp + Lattice + Ord>(
     forward_graph: Arrange<G, Node, Node, isize>,
     reverse_graph: Arrange<G, Node, Node, isize>,
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+{
 
     let sources = goals.clone().map(|(x,_)| x);
     let targets = goals.map(|(_,y)| y);
@@ -288,11 +289,11 @@ where G::Timestamp: Lattice+Ord {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn _bidijkstra<G: Scope>(
+fn _bidijkstra<G: Timestamp + Lattice + Ord>(
     forward_graph: Arrange<G, Node, Node, isize>,
     reverse_graph: Arrange<G, Node, Node, isize>,
     goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+{
 
     let outer = goals.scope();
     outer.iterative::<Iter,_,_>(|inner| {
@@ -362,8 +363,9 @@ where G::Timestamp: Lattice+Ord {
 }
 
 
-fn connected_components<G: Scope>(graph: Arrange<G, Node, Node, isize>) -> VecCollection<G, (Node, Node)>
-where G::Timestamp: Lattice + std::hash::Hash {
+fn connected_components<G: Timestamp + Lattice + Ord>(graph: Arrange<G, Node, Node, isize>) -> VecCollection<G, (Node, Node)>
+where G: Lattice + std::hash::Hash
+{
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes =

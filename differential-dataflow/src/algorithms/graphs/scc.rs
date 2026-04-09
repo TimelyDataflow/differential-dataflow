@@ -3,7 +3,7 @@
 use std::mem;
 use std::hash::Hash;
 
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
@@ -14,7 +14,7 @@ use super::propagate::propagate;
 /// Returns the subset of edges in the same strongly connected component.
 pub fn strongly_connected<G, N, R>(graph: VecCollection<G, (N,N), R>) -> VecCollection<G, (N,N), R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
@@ -39,7 +39,7 @@ where
 fn trim_edges<G, N, R>(cycle: VecCollection<G, (N,N), R>, edges: VecCollection<G, (N,N), R>)
     -> VecCollection<G, (N,N), R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    G: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,

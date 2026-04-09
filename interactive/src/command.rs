@@ -4,7 +4,6 @@ use std::hash::Hash;
 use std::io::Write;
 use serde::{Deserialize, Serialize};
 
-use timely::communication::Allocate;
 use timely::worker::Worker;
 
 use timely::logging::TimelyEvent;
@@ -48,7 +47,7 @@ where
 {
 
     /// Executes a command.
-    pub fn execute<A: Allocate>(self, manager: &mut Manager<V>, worker: &mut Worker<A>) {
+    pub fn execute(self, manager: &mut Manager<V>, worker: &mut Worker) {
 
         match self {
 

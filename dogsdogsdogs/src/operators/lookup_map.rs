@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
 use timely::PartialOrder;
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::Operator;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
@@ -27,9 +26,9 @@ pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
     supplied_key2: K,
 ) -> VecCollection<G, DOut, ROut>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    G: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
-        Time: std::hash::Hash,
+        Time = G,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
     >+Clone+'static,
     Tr::KeyContainer: BatchContainer<Owned=K>,
@@ -51,7 +50,7 @@ where
     let mut logic2 = key_selector.clone();
 
     let mut key: K = supplied_key0;
-    let exchange = Exchange::new(move |update: &(D,G::Timestamp,R)| {
+    let exchange = Exchange::new(move |update: &(D,G,R)| {
         logic1(&update.0, &mut key);
         key.hashed().into()
     });
