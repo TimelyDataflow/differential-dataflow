@@ -142,14 +142,13 @@ impl<T: Timestamp + Lattice, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<T,
 ///
 ///     let numbers = scope.new_collection_from(1 .. 10u32).1;
 ///
-///     let outer = scope.clone();
 ///     scope.iterative::<u64,_,_>(|nested| {
 ///         let summary = Product::new(Default::default(), 1);
 ///         let (variable, collection) = Variable::new_from(numbers.enter(nested), summary);
 ///         let result = collection.map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                                .consolidate();
 ///         variable.set(result.clone());
-///         result.leave(&outer)
+///         result.leave(&scope)
 ///     });
 /// })
 /// ```

@@ -17,11 +17,10 @@ fn main() {
         let mut input = worker.dataflow::<(), _, _>(|scope| {
             let (input, data) = scope.new_collection::<_, isize>();
 
-            let outer = scope.clone();
             scope.iterative::<u32,_,_>(|inner| {
                 data.enter_at(inner, |_| 0)
                     .consolidate()
-                    .leave(&outer)
+                    .leave(&scope)
             });
 
             input

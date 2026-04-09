@@ -231,8 +231,7 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
             use differential_dogs3::altneu::AltNeu;
 
             let scope_name = format!("DeltaRule: {}/{}", index, self.sources.len());
-            let outer = scope.clone();
-            let changes = scope.clone().scoped::<AltNeu<_>,_,_>(&scope_name, |inner| {
+            let changes = scope.scoped::<AltNeu<_>,_,_>(&scope_name, |inner| {
 
                 // This should default to an `AltNeu::Alt` timestamp.
                 let mut changes =
@@ -289,7 +288,7 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
 
                 changes
                     .map(move |tuple| extract_map.iter().map(|&i| tuple[i].clone()).collect::<Vec<_>>())
-                    .leave(&outer)
+                    .leave(scope)
             });
 
             accumulated_changes.push(changes);

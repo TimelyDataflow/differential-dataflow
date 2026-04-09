@@ -169,15 +169,14 @@ fn connected_components(
     let nodes_r = reverse.clone().flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
     let nodes = nodes_f.concat(nodes_r).consolidate().map(|x| (x,x));
 
-    let outer = scope.clone();
-    scope.iterative(|scope| {
+    scope.iterative(|inner_scope| {
 
         // import arrangements, nodes.
-        let forward = forward.enter(scope);
-        let reverse = reverse.enter(scope);
-        let nodes = nodes.enter(scope);
+        let forward = forward.enter(inner_scope);
+        let reverse = reverse.enter(inner_scope);
+        let nodes = nodes.enter(inner_scope);
 
-        let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
+        let (inner, inner_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
 
         let labels = inner_collection.clone().arrange_by_key();
         let f_prop = labels.clone().join_core(forward, |_k,l,d| Some((*d,*l)));
@@ -198,6 +197,6 @@ fn connected_components(
             .reduce(|_, s, t| { t.push((*s[0].0, 1)); });
 
         inner.set(result.clone());
-        result.leave(&outer)
+        result.leave(scope)
     })
 }

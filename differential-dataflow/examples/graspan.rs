@@ -161,7 +161,6 @@ impl Query {
         }
 
         // We need a subscope to allow iterative development of variables.
-        let outer = scope.clone();
         scope.iterative::<Iter,_,_>(|subscope| {
 
             // create map from relation name to input handle and collection.
@@ -171,7 +170,7 @@ impl Query {
             // create variables and result handles for each named relation.
             for (name, (input, collection)) in input_map {
                 let edge_variable = EdgeVariable::from(collection.enter(subscope), Product::new(Default::default(), 1));
-                let trace = edge_variable.collection.clone().leave(&outer).arrange_by_self().trace;
+                let trace = edge_variable.collection.clone().leave(&scope).arrange_by_self().trace;
                 result_map.insert(name.clone(), RelationHandles { input, trace });
                 variable_map.insert(name.clone(), edge_variable);
             }

@@ -205,11 +205,10 @@ impl<T: Timestamp, C: Container> Collection<T, C> {
     ///
     ///     let data = scope.new_collection_from(1 .. 10).1;
     ///
-    ///     let outer = scope.clone();
     ///     let result = scope.region(|child| {
     ///         data.clone()
     ///             .enter(child)
-    ///             .leave(&outer)
+    ///             .leave(&scope)
     ///     });
     ///
     ///     data.assert_eq(result);
@@ -533,11 +532,10 @@ pub mod vec {
         ///
         ///     let data = scope.new_collection_from(1 .. 10).1;
         ///
-        ///     let outer = scope.clone();
         ///     let result = scope.iterative::<u64,_,_>(|child| {
         ///         data.clone()
         ///             .enter_at(child, |x| *x)
-        ///             .leave(&outer)
+        ///             .leave(&scope)
         ///     });
         ///
         ///     data.assert_eq(result);

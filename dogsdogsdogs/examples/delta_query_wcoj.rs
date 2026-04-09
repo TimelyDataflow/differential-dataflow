@@ -30,7 +30,6 @@ fn main() {
             let reverse = edges.map(|(x,y)| (y,x));
 
             // Q(a,b,c) :=  E1(a,b),  E2(b,c),  E3(a,c)
-            let outer = scope.clone();
             let triangles = scope.scoped::<AltNeu<usize>,_,_>("DeltaQuery (Triangles)", |inner| {
 
                 // Each relation we'll need.
@@ -80,7 +79,7 @@ fn main() {
                     ])
                     .map(|((a,c),b)| (a,b,c));
 
-                changes1.concat(changes2).concat(changes3).leave(&outer)
+                changes1.concat(changes2).concat(changes3).leave(&scope)
             });
 
             triangles
