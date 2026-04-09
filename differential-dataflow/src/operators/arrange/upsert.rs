@@ -129,22 +129,22 @@ use super::TraceAgent;
 /// This method is only implemented for totally ordered times, as we do not yet
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
-pub fn arrange_from_upsert<G, Bu, Tr, K, V>(
-    stream: Stream<G, Vec<(K, Option<V>, G)>>,
+pub fn arrange_from_upsert<T, Bu, Tr, K, V>(
+    stream: Stream<T, Vec<(K, Option<V>, T)>>,
     name: &str,
 ) -> Arranged<TraceAgent<Tr>>
 where
-    G: Timestamp,
+    T: Timestamp,
     K: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
     Tr: for<'a> Trace<
         Key<'a> = &'a K,
         Val<'a> = &'a V,
-        Time = G,
+        Time = T,
         Diff=isize,
     >+'static,
-    G: TotalOrder+ExchangeData,
-    Bu: Builder<Time=G, Input = Vec<((K, V), Tr::Time, Tr::Diff)>, Output = Tr::Batch>,
+    T: TotalOrder+ExchangeData,
+    Bu: Builder<Time=T, Input = Vec<((K, V), Tr::Time, Tr::Diff)>, Output = Tr::Batch>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -153,7 +153,7 @@ where
 
         let reader = &mut reader;
 
-        let exchange = Exchange::new(move |update: &(K,Option<V>,G)| (update.0).hashed().into());
+        let exchange = Exchange::new(move |update: &(K,Option<V>,T)| (update.0).hashed().into());
 
         let scope = stream.scope();
         stream.unary_frontier(exchange, name, move |_capability, info| {
@@ -162,7 +162,7 @@ where
             let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             // Tracks the lower envelope of times in `priority_queue`.
-            let mut capabilities = Antichain::<Capability<G>>::new();
+            let mut capabilities = Antichain::<Capability<T>>::new();
             // Form the trace we will both use internally and publish.
             let activator = Some(scope.activator_for(info.address.clone()));
             let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
@@ -176,10 +176,10 @@ where
             *reader = Some(reader_local.clone());
 
             // Tracks the input frontier, used to populate the lower bound of new batches.
-            let mut prev_frontier = Antichain::from_elem(<G as Timestamp>::minimum());
+            let mut prev_frontier = Antichain::from_elem(<T as Timestamp>::minimum());
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
-            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G, K, Option<V>)>>::new();
+            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(T, K, Option<V>)>>::new();
             let mut updates = Vec::new();
 
             move |(input, frontier), output| {
@@ -282,7 +282,7 @@ where
                                     updates.sort();
                                     builder.push(&mut updates);
                                 }
-                                let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(G::minimum()));
+                                let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
                                 let batch = builder.done(description);
                                 prev_frontier.clone_from(&upper);
 

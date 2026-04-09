@@ -741,9 +741,9 @@ pub mod sink {
 //     use crate::lattice::Lattice;
 
 //     /// Creates a Kafka source from supplied configuration information.
-//     pub fn create_source<G, D, T, R>(scope: G, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any>, Stream<G, Vec<(D, T, R)>>)
+//     pub fn create_source<T, D, T, R>(scope: T, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any>, Stream<T, Vec<(D, T, R)>>)
 //     where
-//         G: Scope<Timestamp = T>,
+//         T: Scope<Timestamp = T>,
 //         D: ExchangeData + Hash + for<'a> serde::Deserialize<'a>,
 //         T: ExchangeData + Hash + for<'a> serde::Deserialize<'a> + Timestamp + Lattice,
 //         R: ExchangeData + Hash + for<'a> serde::Deserialize<'a>,
@@ -756,9 +756,9 @@ pub mod sink {
 //         })
 //     }
 
-//     pub fn create_sink<G, D, T, R>(stream: &Stream<G, Vec<(D, T, R)>>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
+//     pub fn create_sink<T, D, T, R>(stream: &Stream<T, Vec<(D, T, R)>>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
 //     where
-//         G: Scope<Timestamp = T>,
+//         T: Scope<Timestamp = T>,
 //         D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
 //         T: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a> + Timestamp + Lattice,
 //         R: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,

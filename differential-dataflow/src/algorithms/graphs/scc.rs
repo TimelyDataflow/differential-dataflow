@@ -12,9 +12,9 @@ use crate::difference::{Abelian, Multiply};
 use super::propagate::propagate;
 
 /// Returns the subset of edges in the same strongly connected component.
-pub fn strongly_connected<G, N, R>(graph: VecCollection<G, (N,N), R>) -> VecCollection<G, (N,N), R>
+pub fn strongly_connected<T, N, R>(graph: VecCollection<T, (N,N), R>) -> VecCollection<T, (N,N), R>
 where
-    G: Timestamp + Lattice + Ord + Hash,
+    T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
@@ -36,10 +36,10 @@ where
     })
 }
 
-fn trim_edges<G, N, R>(cycle: VecCollection<G, (N,N), R>, edges: VecCollection<G, (N,N), R>)
-    -> VecCollection<G, (N,N), R>
+fn trim_edges<T, N, R>(cycle: VecCollection<T, (N,N), R>, edges: VecCollection<T, (N,N), R>)
+    -> VecCollection<T, (N,N), R>
 where
-    G: Timestamp + Lattice + Ord + Hash,
+    T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,

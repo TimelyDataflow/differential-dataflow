@@ -21,23 +21,23 @@ use differential_dataflow::difference::Abelian;
 use crate::altneu::AltNeu;
 
 /// Produce a collection containing the changes at the moments they happen.
-pub trait Differentiate<G: Timestamp, D: Data, R: Abelian> {
-    fn differentiate(self, child: &Scope<AltNeu<G>>) -> VecCollection<AltNeu<G>, D, R>;
+pub trait Differentiate<T: Timestamp, D: Data, R: Abelian> {
+    fn differentiate(self, child: &Scope<AltNeu<T>>) -> VecCollection<AltNeu<T>, D, R>;
 }
 
 /// Collect instantaneous changes back in to a collection.
-pub trait Integrate<G: Timestamp, D: Data, R: Abelian> {
-    fn integrate(self, outer: &Scope<G>) -> VecCollection<G, D, R>;
+pub trait Integrate<T: Timestamp, D: Data, R: Abelian> {
+    fn integrate(self, outer: &Scope<T>) -> VecCollection<T, D, R>;
 }
 
-impl<G, D, R> Differentiate<G, D, R> for VecCollection<G, D, R>
+impl<T, D, R> Differentiate<T, D, R> for VecCollection<T, D, R>
 where
-    G: Timestamp,
+    T: Timestamp,
     D: Data,
     R: Abelian + 'static,
 {
     // For each (data, Alt(time), diff) we add a (data, Neu(time), -diff).
-    fn differentiate(self, child: &Scope<AltNeu<G>>) -> VecCollection<AltNeu<G>, D, R> {
+    fn differentiate(self, child: &Scope<AltNeu<T>>) -> VecCollection<AltNeu<T>, D, R> {
         self.enter(child)
             .inner
             .flat_map(|(data, time, diff)| {
@@ -51,14 +51,14 @@ where
     }
 }
 
-impl<G, D, R> Integrate<G, D, R> for VecCollection<AltNeu<G>, D, R>
+impl<T, D, R> Integrate<T, D, R> for VecCollection<AltNeu<T>, D, R>
 where
-    G: Timestamp,
+    T: Timestamp,
     D: Data,
     R: Abelian + 'static,
 {
     // We discard each `neu` variant and strip off the `alt` wrapper.
-    fn integrate(self, outer: &Scope<G>) -> VecCollection<G, D, R> {
+    fn integrate(self, outer: &Scope<T>) -> VecCollection<T, D, R> {
         self.inner
             .filter(|(_d,t,_r)| !t.neu)
             .as_collection()

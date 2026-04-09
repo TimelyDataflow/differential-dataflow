@@ -10,7 +10,7 @@ For example, to produce for each manager their managee with the lowest identifie
 # use timely::progress::Timestamp;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<G, (u64, u64), i64>)
+# fn example<T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<T, (u64, u64), i64>)
 # {
     manages
         .reduce(|_key, input, output| {

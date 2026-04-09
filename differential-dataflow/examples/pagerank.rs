@@ -77,9 +77,9 @@ fn main() {
 
 // Returns a weighted collection in which the weight of each node is proportional
 // to its PageRank in the input graph `edges`.
-fn pagerank<G>(iters: Iter, edges: VecCollection<G, Edge, Diff>) -> VecCollection<G, Node, Diff>
+fn pagerank<T>(iters: Iter, edges: VecCollection<T, Edge, Diff>) -> VecCollection<T, Node, Diff>
 where
-    G: timely::progress::Timestamp + Lattice,
+    T: timely::progress::Timestamp + Lattice,
 {
     // initialize many surfers at each node.
     let nodes =

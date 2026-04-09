@@ -36,9 +36,9 @@ fn main() {
     }).unwrap();
 }
 
-fn interpret<G>(edges: VecCollection<G, Edge>, relations: &[(usize, usize)]) -> VecCollection<G, Vec<Node>>
+fn interpret<T>(edges: VecCollection<T, Edge>, relations: &[(usize, usize)]) -> VecCollection<T, Vec<Node>>
 where
-    G: timely::progress::Timestamp + Lattice + Hash + Ord,
+    T: timely::progress::Timestamp + Lattice + Hash + Ord,
 {
 
     // arrange the edge relation three ways.

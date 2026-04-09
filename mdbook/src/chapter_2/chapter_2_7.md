@@ -11,7 +11,7 @@ As an example, we can take our `manages` relation and determine for all employee
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::Iterate;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<G, (u64, u64)>)
+# fn example<T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<T, (u64, u64)>)
 # {
     manages   // transitive contains (manager, person) for many hops.
         .iterate(|_scope, transitive| {
@@ -47,7 +47,7 @@ In the example above, we could rewrite
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<G, (u64, u64)>)
+# fn example<T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<T, (u64, u64)>)
 # {
     manages   // transitive contains (manager, person) for many hops.
         .clone()
@@ -88,7 +88,7 @@ As an example, the implementation of the `iterate` operator looks something like
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 # use differential_dataflow::lattice::Lattice;
-# fn logic<G: Timestamp + Lattice>(collection: VecCollection<G, (u64, u64), isize>) -> VecCollection<G, (u64, u64)>
+# fn logic<T: Timestamp + Lattice>(collection: VecCollection<T, (u64, u64), isize>) -> VecCollection<T, (u64, u64)>
 # {
 #     collection
 # }

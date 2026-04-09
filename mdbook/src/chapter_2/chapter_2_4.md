@@ -12,7 +12,7 @@ As an example, if we were to inspect
 # use timely::progress::Timestamp;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<G, (u64, u64)>)
+# fn example<T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<T, (u64, u64)>)
 # {
     manages
         .clone()
@@ -37,7 +37,7 @@ However, by introducing `consolidate`
 # use timely::progress::Timestamp;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<G, (u64, u64)>)
+# fn example<T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<T, (u64, u64)>)
 # {
     manages
         .clone()

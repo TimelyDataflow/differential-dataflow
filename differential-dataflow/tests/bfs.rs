@@ -201,9 +201,9 @@ fn bfs_differential(
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G>(edges: VecCollection<G, Edge>, roots: VecCollection<G, Node>) -> VecCollection<G, (Node, usize)>
+fn bfs<T>(edges: VecCollection<T, Edge>, roots: VecCollection<T, Node>) -> VecCollection<T, (Node, usize)>
 where
-    G: timely::progress::Timestamp + Lattice + Ord,
+    T: timely::progress::Timestamp + Lattice + Ord,
 {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));

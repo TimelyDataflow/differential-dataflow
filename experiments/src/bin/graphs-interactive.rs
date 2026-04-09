@@ -194,14 +194,14 @@ use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G, K, V, R> = Arranged<TraceAgent<ValSpine<K, V, G, R>>>;
+type Arrange<T, K, V, R> = Arranged<TraceAgent<ValSpine<K, V, T, R>>>;
 
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn three_hop<G: Timestamp + Lattice + Ord>(
-    forward_graph: Arrange<G, Node, Node, isize>,
-    reverse_graph: Arrange<G, Node, Node, isize>,
-    goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
+fn three_hop<T: Timestamp + Lattice + Ord>(
+    forward_graph: Arrange<T, Node, Node, isize>,
+    reverse_graph: Arrange<T, Node, Node, isize>,
+    goals: VecCollection<T, (Node, Node)>) -> VecCollection<T, ((Node, Node), u32)>
 {
 
     let sources = goals.clone().map(|(x,_)| x);
@@ -225,10 +225,10 @@ fn three_hop<G: Timestamp + Lattice + Ord>(
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn _bidijkstra<G: Timestamp + Lattice + Ord>(
-    forward_graph: Arrange<G, Node, Node, isize>,
-    reverse_graph: Arrange<G, Node, Node, isize>,
-    goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
+fn _bidijkstra<T: Timestamp + Lattice + Ord>(
+    forward_graph: Arrange<T, Node, Node, isize>,
+    reverse_graph: Arrange<T, Node, Node, isize>,
+    goals: VecCollection<T, (Node, Node)>) -> VecCollection<T, ((Node, Node), u32)>
 {
 
     let outer = goals.scope();

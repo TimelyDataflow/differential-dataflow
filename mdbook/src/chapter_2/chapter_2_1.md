@@ -10,7 +10,7 @@ As an example, our example program used `map` to reverse the pairs of identifier
 # use timely::progress::Timestamp;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<G, (u64, u64)>)
+# fn example<T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<T, (u64, u64)>)
 # {
     manages
         .clone()
@@ -28,7 +28,7 @@ If instead we had just written
 # use timely::progress::Timestamp;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<G, (u64, u64)>)
+# fn example<T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<T, (u64, u64)>)
 # {
     manages
         .map(|(m2, m1)| m2);

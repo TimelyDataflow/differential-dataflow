@@ -14,7 +14,7 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait CountTotal<G: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: Semigroup> : Sized {
+pub trait CountTotal<T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: Semigroup> : Sized {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -30,7 +30,7 @@ pub trait CountTotal<G: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData,
     ///          .count_total();
     /// });
     /// ```
-    fn count_total(self) -> VecCollection<G, (K, R), isize> {
+    fn count_total(self) -> VecCollection<T, (K, R), isize> {
         self.count_total_core()
     }
 
@@ -39,39 +39,39 @@ pub trait CountTotal<G: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData,
     /// This method allows `count_total` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, R), R2>;
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<T, (K, R), R2>;
 }
 
-impl<G, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<G, K, R> for VecCollection<G, K, R>
+impl<T, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<T, K, R> for VecCollection<T, K, R>
 where
-    G: Timestamp + TotalOrder + Lattice + Ord,
+    T: Timestamp + TotalOrder + Lattice + Ord,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, R), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<T, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")
             .count_total_core()
     }
 }
 
-impl<G, K, Tr> CountTotal<G, K, Tr::Diff> for Arranged<Tr>
+impl<T, K, Tr> CountTotal<T, K, Tr::Diff> for Arranged<Tr>
 where
-    G: Timestamp + TotalOrder + Lattice + Ord,
+    T: Timestamp + TotalOrder + Lattice + Ord,
     Tr: for<'a> TraceReader<
         Key<'a> = &'a K,
         Val<'a>=&'a (),
-        Time = G,
+        Time = T,
         Diff: ExchangeData+Semigroup<Tr::DiffGat<'a>>
     >+Clone+'static,
     K: ExchangeData,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, Tr::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<T, (K, Tr::Diff), R2> {
 
         let mut trace = self.trace.clone();
 
         self.stream.unary_frontier(Pipeline, "CountTotal", move |_,_| {
 
             // tracks the lower and upper limit of received batches.
-            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
-            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
+            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<T as timely::progress::Timestamp>::minimum());
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<T as timely::progress::Timestamp>::minimum());
 
             move |(input, _frontier), output| {
 
