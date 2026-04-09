@@ -249,9 +249,9 @@ impl<T: Timestamp, C: Container> Collection<T, C> {
     ///     data.results_in(summary1);
     /// });
     /// ```
-    pub fn results_in(self, step: <T as Timestamp>::Summary) -> Self
+    pub fn results_in(self, step: T::Summary) -> Self
     where
-        C: containers::ResultsIn<<T as Timestamp>::Summary>,
+        C: containers::ResultsIn<T::Summary>,
     {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner

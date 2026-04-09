@@ -407,7 +407,7 @@ where
         *reader_ref = Some(reader_local);
 
         // Initialize to the minimal input frontier.
-        let mut prev_frontier = Antichain::from_elem(<T as Timestamp>::minimum());
+        let mut prev_frontier = Antichain::from_elem(T::minimum());
 
         move |(input, frontier), output| {
 

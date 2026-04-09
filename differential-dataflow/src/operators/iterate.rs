@@ -197,7 +197,7 @@ where
 {
     feedback: Handle<T, C>,
     source: Option<Collection<T, C>>,
-    step: <T as Timestamp>::Summary,
+    step: T::Summary,
 }
 
 /// A `Variable` specialized to a vector container of update triples (data, time, diff).
@@ -206,7 +206,7 @@ pub type VecVariable<T, D, R> = Variable<T, Vec<(D, T, R)>>;
 impl<T, C: Container> Variable<T, C>
 where
     T: Timestamp + Lattice,
-    C: crate::collection::containers::ResultsIn<<T as Timestamp>::Summary>,
+    C: crate::collection::containers::ResultsIn<T::Summary>,
 {
     /// Creates a new initially empty `Variable` and its associated `Collection`.
     ///
@@ -219,7 +219,7 @@ where
     /// will produce its fixed point in the outer scope.
     ///
     /// In a non-iterative scope the mechanics are the same, but the interpretation varies.
-    pub fn new(scope: &mut Scope<T>, step: <T as Timestamp>::Summary) -> (Self, Collection<T, C>) {
+    pub fn new(scope: &mut Scope<T>, step: T::Summary) -> (Self, Collection<T, C>) {
         let (feedback, updates) = scope.feedback(step.clone());
         let collection = Collection::<T, C>::new(updates);
         (Self { feedback, source: None, step }, collection)
@@ -250,7 +250,7 @@ where
     /// adding the source, doing the logic, then subtracting the source, it is appropriate to do.
     /// For example, if the logic modifies a few records it is possible to produce this update
     /// directly without using the backstop implementation this method provides.
-    pub fn new_from(source: Collection<T, C>, step: <T as Timestamp>::Summary) -> (Self, Collection<T, C>) where C: Clone + crate::collection::containers::Negate {
+    pub fn new_from(source: Collection<T, C>, step: T::Summary) -> (Self, Collection<T, C>) where C: Clone + crate::collection::containers::Negate {
         let (feedback, updates) = source.inner.scope().feedback(step.clone());
         let collection = Collection::<T, C>::new(updates).concat(source.clone());
         (Variable { feedback, source: Some(source.negate()), step }, collection)

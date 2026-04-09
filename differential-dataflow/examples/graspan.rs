@@ -88,7 +88,7 @@ pub struct EdgeVariable<T: Timestamp + Lattice> {
 
 impl<T: Timestamp + Lattice> EdgeVariable<T> {
     /// Creates a new variable initialized with `source`.
-    pub fn from(source: VecCollection<T, Edge>, step: <T as Timestamp>::Summary) -> Self {
+    pub fn from(source: VecCollection<T, Edge>, step: T::Summary) -> Self {
         let (variable, collection) = VecVariable::new(&mut source.scope(), step);
         EdgeVariable {
             variable,

@@ -102,7 +102,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         };
 
         let writer = TraceWriter::new(
-            vec![<Tr::Time as Timestamp>::minimum()],
+            vec![Tr::Time::minimum()],
             Rc::downgrade(&trace),
             queues,
         );
@@ -126,7 +126,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
             .borrow_mut()
             .trace
             .map_batches(|batch| {
-                new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), Some(<Tr::Time as Timestamp>::minimum())));
+                new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), Some(Tr::Time::minimum())));
                 upper = Some(batch.upper().clone());
             });
 

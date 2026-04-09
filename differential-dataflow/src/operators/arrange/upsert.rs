@@ -176,7 +176,7 @@ where
             *reader = Some(reader_local.clone());
 
             // Tracks the input frontier, used to populate the lower bound of new batches.
-            let mut prev_frontier = Antichain::from_elem(<T as Timestamp>::minimum());
+            let mut prev_frontier = Antichain::from_elem(T::minimum());
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
             let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(T, K, Option<V>)>>::new();
