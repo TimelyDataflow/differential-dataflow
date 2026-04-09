@@ -109,7 +109,7 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///
     /// This method is a specialization of `enter` to the case where the nested scope is a region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn enter_region<'a>(self, child: &Child<'a, G::Allocator, <G as Scope>::Timestamp>) -> Collection<Child<'a, G::Allocator, <G as Scope>::Timestamp>, C> {
+    pub fn enter_region<'a>(self, child: &Child<'a, G::Allocator, G::Timestamp>) -> Collection<Child<'a, G::Allocator, G::Timestamp>, C> {
         self.inner
             .enter(child)
             .as_collection()
@@ -216,10 +216,10 @@ impl<G: Scope, C: Container> Collection<G, C> {
     ///     data.assert_eq(result);
     /// });
     /// ```
-    pub fn enter<'a, T>(self, child: &Child<'a, G::Allocator, T>) -> Collection<Child<'a, G::Allocator, T>, <C as containers::Enter<<G as Scope>::Timestamp, T>>::InnerContainer>
+    pub fn enter<'a, T>(self, child: &Child<'a, G::Allocator, T>) -> Collection<Child<'a, G::Allocator, T>, <C as containers::Enter<G::Timestamp, T>>::InnerContainer>
     where
-        C: containers::Enter<<G as Scope>::Timestamp, T, InnerContainer: Container>,
-        T: Refines<<G as Scope>::Timestamp>,
+        C: containers::Enter<G::Timestamp, T, InnerContainer: Container>,
+        T: Refines<G::Timestamp>,
     {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
