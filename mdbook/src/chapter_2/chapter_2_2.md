@@ -7,11 +7,10 @@ As an example, we might select out those management relation where the manager h
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
-# use timely::dataflow::Scope;
+# use timely::progress::Timestamp;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: Scope>(manages: VecCollection<G, (u64, u64)>)
-# where G::Timestamp: Lattice
+# fn example<T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<T, (u64, u64)>)
 # {
     manages
         .filter(|&(m2, m1)| m2 > m1);

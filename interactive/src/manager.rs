@@ -5,7 +5,6 @@ use std::hash::Hash;
 // use std::time::Duration;
 
 use timely::dataflow::ProbeHandle;
-use timely::communication::Allocate;
 use timely::worker::Worker;
 use timely::logging::TimelyEventBuilder;
 
@@ -79,7 +78,7 @@ impl<V: ExchangeData+Datum> Manager<V>
     // }
 
     /// Clear the managed inputs and traces.
-    pub fn shutdown<A: Allocate>(&mut self, worker: &mut Worker<A>) {
+    pub fn shutdown(&mut self, worker: &mut Worker) {
         self.inputs.sessions.clear();
         self.traces.inputs.clear();
         self.traces.arrangements.clear();

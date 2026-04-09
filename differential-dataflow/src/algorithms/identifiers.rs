@@ -1,6 +1,6 @@
 //! Assign unique identifiers to records.
 
-use timely::dataflow::Scope;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData, Hashable};
 use crate::lattice::Lattice;
@@ -8,7 +8,7 @@ use crate::operators::*;
 use crate::difference::Abelian;
 
 /// Assign unique identifiers to elements of a collection.
-pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
+pub trait Identifiers<T: Timestamp, D: ExchangeData, R: ExchangeData+Abelian> {
     /// Assign unique identifiers to elements of a collection.
     ///
     /// # Example
@@ -27,16 +27,16 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
     ///          .assert_empty();
     /// });
     /// ```
-    fn identifiers(self) -> VecCollection<G, (D, u64), R>;
+    fn identifiers(self) -> VecCollection<T, (D, u64), R>;
 }
 
-impl<G, D, R> Identifiers<G, D, R> for VecCollection<G, D, R>
+impl<T, D, R> Identifiers<T, D, R> for VecCollection<T, D, R>
 where
-    G: Scope<Timestamp: Lattice>,
+    T: Timestamp + Lattice,
     D: ExchangeData + ::std::hash::Hash,
     R: ExchangeData + Abelian,
 {
-    fn identifiers(self) -> VecCollection<G, (D, u64), R> {
+    fn identifiers(self) -> VecCollection<T, (D, u64), R> {
 
         // The design here is that we iteratively develop a collection
         // of pairs (round, record), where each pair is a proposal that

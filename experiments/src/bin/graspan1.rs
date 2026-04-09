@@ -1,7 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 
-use timely::dataflow::Scope;
 use timely::order::Product;
 
 use differential_dataflow::difference::Present;
@@ -35,8 +34,9 @@ fn main() {
 
             // a N c  <-  a N b && b E c
             // N(a,c) <-  N(a,b), E(b, c)
+            let outer = nodes.scope();
             let reached =
-            nodes.scope().iterative::<Iter,_,_>(|inner| {
+            outer.iterative::<Iter,_,_>(|inner| {
 
                 let nodes = nodes.enter(inner).map(|(a,b)| (b,a));
                 let edges = edges.enter(inner);
@@ -51,7 +51,7 @@ fn main() {
                       .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None });
 
                 labels.set(next.clone());
-                next.leave()
+                next.leave(&outer)
             });
 
             reached

@@ -66,7 +66,7 @@ impl<T: Timestamp> Refines<T> for AltNeu<T> {
     fn to_outer(self: AltNeu<T>) -> T {
         self.time
     }
-    fn summarize(_path: ()) -> <T as Timestamp>::Summary {
+    fn summarize(_path: ()) -> T::Summary {
         Default::default()
     }
 }

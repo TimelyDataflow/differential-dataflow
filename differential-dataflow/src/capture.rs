@@ -230,7 +230,7 @@ pub mod source {
     use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
     use timely::dataflow::operators::generic::OutputBuilder;
     use timely::progress::Timestamp;
-    use timely::scheduling::SyncActivator;
+    use timely::scheduling::{Scheduler, SyncActivator};
 
     // TODO(guswynn): implement this generally in timely
     struct DropActivator {
@@ -250,12 +250,11 @@ pub mod source {
     /// The stream is built in the supplied `scope` and continues to run until
     /// the returned `Box<Any>` token is dropped. The `source_builder` argument
     /// is invoked with a `SyncActivator` that will re-activate the source.
-    pub fn build<G, B, I, D, T, R>(
-        scope: G,
+    pub fn build<B, I, D, T, R>(
+        scope: Scope<T>,
         source_builder: B,
-    ) -> (Box<dyn std::any::Any + Send + Sync>, Stream<G, Vec<(D, T, R)>>)
+    ) -> (Box<dyn std::any::Any + Send + Sync>, Stream<T, Vec<(D, T, R)>>)
     where
-        G: Scope<Timestamp = T>,
         B: FnOnce(SyncActivator) -> I,
         I: Iterator<Item = Message<D, T, R>> + 'static,
         D: ExchangeData + Hash,
@@ -560,9 +559,10 @@ pub mod sink {
 
     use timely::order::PartialOrder;
     use timely::progress::{Antichain, ChangeBatch, Timestamp};
-    use timely::dataflow::{Scope, Stream};
+    use timely::dataflow::Stream;
     use timely::dataflow::channels::pact::{Exchange, Pipeline};
     use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
+    use timely::scheduling::Scheduler;
 
     use crate::{lattice::Lattice, ExchangeData};
     use super::{Writer, Message, Progress};
@@ -573,13 +573,12 @@ pub mod sink {
     /// will *not* perform the consolidation on the stream's behalf. If this is not
     /// performed before calling the method, the recorded output may not be correctly
     /// reconstructed by readers.
-    pub fn build<G, BS, D, T, R>(
-        stream: Stream<G, Vec<(D, T, R)>>,
+    pub fn build<BS, D, T, R>(
+        stream: Stream<T, Vec<(D, T, R)>>,
         sink_hash: u64,
         updates_sink: Weak<RefCell<BS>>,
         progress_sink: Weak<RefCell<BS>>,
     ) where
-        G: Scope<Timestamp = T>,
         BS: Writer<Message<D,T,R>> + 'static,
         D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
         T: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a> + Timestamp + Lattice,
@@ -742,9 +741,9 @@ pub mod sink {
 //     use crate::lattice::Lattice;
 
 //     /// Creates a Kafka source from supplied configuration information.
-//     pub fn create_source<G, D, T, R>(scope: G, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any>, Stream<G, Vec<(D, T, R)>>)
+//     pub fn create_source<T, D, T, R>(scope: T, addr: &str, topic: &str, group: &str) -> (Box<dyn std::any::Any>, Stream<T, Vec<(D, T, R)>>)
 //     where
-//         G: Scope<Timestamp = T>,
+//         T: Scope<Timestamp = T>,
 //         D: ExchangeData + Hash + for<'a> serde::Deserialize<'a>,
 //         T: ExchangeData + Hash + for<'a> serde::Deserialize<'a> + Timestamp + Lattice,
 //         R: ExchangeData + Hash + for<'a> serde::Deserialize<'a>,
@@ -757,9 +756,9 @@ pub mod sink {
 //         })
 //     }
 
-//     pub fn create_sink<G, D, T, R>(stream: &Stream<G, Vec<(D, T, R)>>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
+//     pub fn create_sink<T, D, T, R>(stream: &Stream<T, Vec<(D, T, R)>>, addr: &str, topic: &str) -> Box<dyn std::any::Any>
 //     where
-//         G: Scope<Timestamp = T>,
+//         T: Scope<Timestamp = T>,
 //         D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
 //         T: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a> + Timestamp + Lattice,
 //         R: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,

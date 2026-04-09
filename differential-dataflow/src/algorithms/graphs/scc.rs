@@ -3,7 +3,7 @@
 use std::mem;
 use std::hash::Hash;
 
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
@@ -12,16 +12,17 @@ use crate::difference::{Abelian, Multiply};
 use super::propagate::propagate;
 
 /// Returns the subset of edges in the same strongly connected component.
-pub fn strongly_connected<G, N, R>(graph: VecCollection<G, (N,N), R>) -> VecCollection<G, (N,N), R>
+pub fn strongly_connected<T, N, R>(graph: VecCollection<T, (N,N), R>) -> VecCollection<T, (N,N), R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
     R: From<i8>
 {
     use timely::order::Product;
-    graph.scope().scoped::<Product<_, usize>,_,_>("StronglyConnected", |scope| {
+    let outer = graph.scope();
+    outer.scoped::<Product<_, usize>,_,_>("StronglyConnected", |scope| {
         // Bring in edges and transposed edges.
         let edges = graph.enter(&scope);
         let trans = edges.clone().map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
@@ -31,20 +32,21 @@ where
 
         let result = trim_edges(trim_edges(inner, edges), trans);
         variable.set(result.clone());
-        result.leave()
+        result.leave(&outer)
     })
 }
 
-fn trim_edges<G, N, R>(cycle: VecCollection<G, (N,N), R>, edges: VecCollection<G, (N,N), R>)
-    -> VecCollection<G, (N,N), R>
+fn trim_edges<T, N, R>(cycle: VecCollection<T, (N,N), R>, edges: VecCollection<T, (N,N), R>)
+    -> VecCollection<T, (N,N), R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
     R: From<i8>
 {
-    edges.inner.scope().region_named("TrimEdges", |region| {
+    let outer = edges.inner.scope();
+    outer.region_named("TrimEdges", |region| {
         let cycle = cycle.enter_region(region);
         let edges = edges.enter_region(region);
 
@@ -62,6 +64,6 @@ where
              .join_core(labels, |e2,(e1,l1),l2| [((e1.clone(),e2.clone()),(l1.clone(),l2.clone()))])
              .filter(|(_,(l1,l2))| l1 == l2)
              .map(|((x1,x2),_)| (x2,x1))
-             .leave_region()
+             .leave_region(&outer)
     })
 }

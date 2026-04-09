@@ -3,7 +3,6 @@
 use std::hash::Hash;
 use std::time::Duration;
 
-use timely::communication::Allocate;
 use timely::worker::Worker;
 use timely::logging::TimelyEvent;
 use timely::dataflow::operators::capture::event::EventIterator;
@@ -20,16 +19,15 @@ pub trait LoggingValue : VectorFrom<TimelyEvent>+VectorFrom<DifferentialEvent> {
 impl<V: VectorFrom<TimelyEvent>+VectorFrom<DifferentialEvent>> LoggingValue for V { }
 
 /// Timely logging capture and arrangement.
-pub fn publish_timely_logging<V, A, I>(
+pub fn publish_timely_logging<V, I>(
     manager: &mut Manager<V>,
-    worker: &mut Worker<A>,
+    worker: &mut Worker,
     granularity_ns: u64,
     name: &str,
     events: I
 )
 where
     V: ExchangeData+Hash+LoggingValue+Datum,
-    A: Allocate,
     I : IntoIterator,
     <I as IntoIterator>::Item: EventIterator<Duration, Vec<(Duration, usize, TimelyEvent)>>+'static
 {
@@ -209,16 +207,15 @@ where
 }
 
 /// Timely logging capture and arrangement.
-pub fn publish_differential_logging<V, A, I>(
+pub fn publish_differential_logging<V, I>(
     manager: &mut Manager<V>,
-    worker: &mut Worker<A>,
+    worker: &mut Worker,
     granularity_ns: u64,
     name: &str,
     events: I
 )
 where
     V: ExchangeData+Hash+LoggingValue+Datum,
-    A: Allocate,
     I : IntoIterator,
     <I as IntoIterator>::Item: EventIterator<Duration, Vec<(Duration, usize, DifferentialEvent)>>+'static
 {

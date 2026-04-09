@@ -117,7 +117,7 @@ impl<G: Scope> Collections<G> {
 use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
-type ArrangedScope<G, K, T> = Arranged<G, ArrangedIndex<K, T>>;
+type ArrangedScope<G, K, T> = Arranged<ArrangedIndex<K, T>>;
 type ArrangedIndex<K, T> = TraceAgent<ValSpine<K, T, usize, isize>>;
 
 pub struct ArrangementsInScope<G: Scope<Timestamp=usize>> {

@@ -22,7 +22,8 @@ use std::ops::Mul;
 
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Stream;
+use timely::scheduling::Scheduler;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::Operator;
 use timely::PartialOrder;
@@ -61,27 +62,26 @@ use timely::dataflow::operators::CapabilitySet;
 /// Notice that the time is hoisted up into data. The expectation is that
 /// once out of the "delta flow region", the updates will be `delay`d to the
 /// times specified in the payloads.
-pub fn half_join<G, K, V, R, Tr, FF, CF, DOut, S>(
-    stream: VecCollection<G, (K, V, G::Timestamp), R>,
-    arrangement: Arranged<G, Tr>,
+pub fn half_join<K, V, R, Tr, FF, CF, DOut, S>(
+    stream: VecCollection<Tr::Time, (K, V, Tr::Time), R>,
+    arrangement: Arranged<Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
-) -> VecCollection<G, (DOut, G::Timestamp), <R as Mul<Tr::Diff>>::Output>
+) -> VecCollection<Tr::Time, (DOut, Tr::Time), <R as Mul<Tr::Diff>>::Output>
 where
-    G: Scope<Timestamp = Tr::Time>,
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
     Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::KeyContainer: BatchContainer<Owned=K>,
     R: Mul<Tr::Diff, Output: Semigroup>,
-    FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
-    CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
+    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
+    CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     DOut: Clone+'static,
     S: FnMut(&K, &V, Tr::Val<'_>)->DOut+'static,
 {
-    let output_func = move |builder: &mut CapacityContainerBuilder<Vec<_>>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &G::Timestamp, diff1: &R, output: &mut Vec<(G::Timestamp, Tr::Diff)>| {
+    let output_func = move |builder: &mut CapacityContainerBuilder<Vec<_>>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &Tr::Time, diff1: &R, output: &mut Vec<(Tr::Time, Tr::Diff)>| {
         for (time, diff2) in output.drain(..) {
             let diff = diff1.clone() * diff2.clone();
             let dout = (output_func(k, v1, v2), time.clone());
@@ -89,7 +89,7 @@ where
             builder.push_into((dout, initial.clone(), diff));
         }
     };
-    half_join_internal_unsafe::<_, _, _, _, _, _,_,_,_, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, comparison, |_timer, _count| false, output_func)
+    half_join_internal_unsafe::<_, _, _, _, _, _,_,_, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, comparison, |_timer, _count| false, output_func)
         .as_collection()
 }
 
@@ -118,25 +118,24 @@ where
 /// yield control, as a function of the elapsed time and the number of matched
 /// records. Note this is not the number of *output* records, owing mainly to
 /// the number of matched records being easiest to record with low overhead.
-pub fn half_join_internal_unsafe<G, K, V, R, Tr, FF, CF, Y, S, CB>(
-    stream: VecCollection<G, (K, V, G::Timestamp), R>,
-    mut arrangement: Arranged<G, Tr>,
+pub fn half_join_internal_unsafe<K, V, R, Tr, FF, CF, Y, S, CB>(
+    stream: VecCollection<Tr::Time, (K, V, Tr::Time), R>,
+    mut arrangement: Arranged<Tr>,
     frontier_func: FF,
     comparison: CF,
     yield_function: Y,
     mut output_func: S,
-) -> Stream<G, CB::Container>
+) -> Stream<Tr::Time, CB::Container>
 where
-    G: Scope<Timestamp = Tr::Time>,
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
     Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::KeyContainer: BatchContainer<Owned=K>,
-    FF: Fn(&G::Timestamp, &mut Antichain<G::Timestamp>) + 'static,
+    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    S: FnMut(&mut CB, &K, &V, Tr::Val<'_>, &G::Timestamp, &R, &mut Vec<(G::Timestamp, Tr::Diff)>) + 'static,
+    S: FnMut(&mut CB, &K, &V, Tr::Val<'_>, &Tr::Time, &R, &mut Vec<(Tr::Time, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
 {
     // No need to block physical merging for this operator.
@@ -144,7 +143,7 @@ where
     let mut arrangement_trace = Some(arrangement.trace);
     let arrangement_stream = arrangement.stream;
 
-    let exchange = Exchange::new(move |update: &((K, V, G::Timestamp),G::Timestamp,R)| (update.0).0.hashed().into());
+    let exchange = Exchange::new(move |update: &((K, V, Tr::Time),Tr::Time,R)| (update.0).0.hashed().into());
 
     // Stash for (time, diff) accumulation.
     let mut output_buffer = Vec::new();
@@ -152,7 +151,7 @@ where
     // Unified blobs: each blob holds data in (T, D, R) order, with a stuck_count
     // tracking how many elements at the back are not yet eligible for processing.
     // The ready prefix is sorted by (D, T, R) for cursor traversal.
-    let mut blobs: Vec<Blob<(K, V, G::Timestamp), G::Timestamp, R>> = Vec::new();
+    let mut blobs: Vec<Blob<(K, V, Tr::Time), Tr::Time, R>> = Vec::new();
 
     let scope = stream.scope();
     stream.inner.binary_frontier(arrangement_stream, exchange, Pipeline, "HalfJoin", move |_,info| {
@@ -163,7 +162,7 @@ where
         move |(input1, frontier1), (input2, frontier2), output| {
 
             // Drain all input into a single buffer.
-            let mut arriving: Vec<(G::Timestamp, (K, V, G::Timestamp), R)> = Vec::new();
+            let mut arriving: Vec<(Tr::Time, (K, V, Tr::Time), R)> = Vec::new();
             let mut caps = CapabilitySet::new();
             input1.for_each(|capability, data| {
                 caps.insert(capability.retain(0));
@@ -189,7 +188,7 @@ where
                 if let Some(min_time) = frontier.iter().min() {
                     time_con.push_own(min_time);
                 }
-                let eligible = |initial: &G::Timestamp| -> bool {
+                let eligible = |initial: &Tr::Time| -> bool {
                     !(0..time_con.len()).any(|i| comparison(time_con.index(i), initial))
                 };
 
@@ -265,7 +264,7 @@ where
 
                     let (mut cursor, storage) = trace.cursor();
                     let mut key_con = Tr::KeyContainer::with_capacity(1);
-                    let mut removals: ChangeBatch<G::Timestamp> = ChangeBatch::new();
+                    let mut removals: ChangeBatch<Tr::Time> = ChangeBatch::new();
 
                     // Process ready elements from the front.
                     while blob.data.len() > blob.stuck_count {

@@ -77,9 +77,9 @@ fn main() {
 
 // Returns a weighted collection in which the weight of each node is proportional
 // to its PageRank in the input graph `edges`.
-fn pagerank<G>(iters: Iter, edges: VecCollection<G, Edge, Diff>) -> VecCollection<G, Node, Diff>
+fn pagerank<T>(iters: Iter, edges: VecCollection<T, Edge, Diff>) -> VecCollection<T, Node, Diff>
 where
-    G: Scope<Timestamp: Lattice>,
+    T: timely::progress::Timestamp + Lattice,
 {
     // initialize many surfers at each node.
     let nodes =
@@ -92,7 +92,8 @@ where
                      .map(|(src,_dst)| src)
                      .count();
 
-    edges.scope().iterative::<Iter,_,_>(|inner| {
+    let outer = edges.scope();
+    outer.iterative::<Iter,_,_>(|inner| {
 
         // Bring various collections into the scope.
         let edges = edges.enter(inner);
@@ -130,6 +131,6 @@ where
 
         // Bind the recursive variable, return its limit.
         ranks_bind.set(pushed.clone());
-        pushed.leave()
+        pushed.leave(&outer)
     })
 }

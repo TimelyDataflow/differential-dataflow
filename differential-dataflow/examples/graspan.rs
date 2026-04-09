@@ -5,7 +5,6 @@ use std::fs::File;
 use timely::progress::Timestamp;
 use timely::order::Product;
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::ScopeParent;
 
 use differential_dataflow::VecCollection;
 use differential_dataflow::lattice::Lattice;
@@ -69,7 +68,7 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
 type TraceKeyHandle<K,T,R> = TraceAgent<KeySpine<K, T, R>>;
 type TraceValHandle<K,V,T,R> = TraceAgent<ValSpine<K, V, T, R>>;
-type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Timestamp, R>>;
+type Arrange<T,K,V,R> = Arranged<TraceValHandle<K, V, T, R>>;
 
 /// An evolving set of edges.
 ///
@@ -79,17 +78,17 @@ type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, <G as ScopeParent>::Tim
 ///
 /// An edge variable provides arranged representations of its contents, even before they are
 /// completely defined, in support of recursively defined productions.
-pub struct EdgeVariable<G: Scope<Timestamp: Lattice>> {
-    variable: VecVariable<G, Edge, Diff>,
-    collection: VecCollection<G, Edge, Diff>,
-    current: VecCollection<G, Edge, Diff>,
-    forward: Option<Arrange<G, Node, Node, Diff>>,
-    reverse: Option<Arrange<G, Node, Node, Diff>>,
+pub struct EdgeVariable<T: Timestamp + Lattice> {
+    variable: VecVariable<T, Edge, Diff>,
+    collection: VecCollection<T, Edge, Diff>,
+    current: VecCollection<T, Edge, Diff>,
+    forward: Option<Arrange<T, Node, Node, Diff>>,
+    reverse: Option<Arrange<T, Node, Node, Diff>>,
 }
 
-impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
+impl<T: Timestamp + Lattice> EdgeVariable<T> {
     /// Creates a new variable initialized with `source`.
-    pub fn from(source: VecCollection<G, Edge>, step: <G::Timestamp as Timestamp>::Summary) -> Self {
+    pub fn from(source: VecCollection<T, Edge>, step: T::Summary) -> Self {
         let (variable, collection) = VecVariable::new(&mut source.scope(), step);
         EdgeVariable {
             variable,
@@ -100,7 +99,7 @@ impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
         }
     }
     /// Concatenates `production` into the definition of the variable.
-    pub fn add_production(&mut self, production: VecCollection<G, Edge, Diff>) {
+    pub fn add_production(&mut self, production: VecCollection<T, Edge, Diff>) {
         self.current = self.current.clone().concat(production);
     }
     /// Finalizes the variable, connecting its recursive definition.
@@ -113,14 +112,14 @@ impl<G: Scope<Timestamp: Lattice>> EdgeVariable<G> {
         self.variable.set(distinct);
     }
     /// The collection arranged in the forward direction.
-    pub fn forward(&mut self) -> &Arrange<G, Node, Node, Diff> {
+    pub fn forward(&mut self) -> &Arrange<T, Node, Node, Diff> {
         if self.forward.is_none() {
             self.forward = Some(self.collection.clone().arrange_by_key());
         }
         self.forward.as_ref().unwrap()
     }
     /// The collection arranged in the reverse direction.
-    pub fn reverse(&mut self) -> &Arrange<G, Node, Node, Diff> {
+    pub fn reverse(&mut self) -> &Arrange<T, Node, Node, Diff> {
         if self.reverse.is_none() {
             self.reverse = Some(self.collection.clone().map(|(x,y)| (y,x)).arrange_by_key());
         }
@@ -151,9 +150,9 @@ impl Query {
     }
 
     /// Creates a dataflow implementing the query, and returns input and trace handles.
-    pub fn render_in<G>(&self, scope: &mut G) -> BTreeMap<String, RelationHandles<G::Timestamp>>
+    pub fn render_in<T>(&self, scope: &mut Scope<T>) -> BTreeMap<String, RelationHandles<T>>
     where
-        G: Scope<Timestamp: Lattice+::timely::order::TotalOrder>,
+        T: Timestamp + Lattice + ::timely::order::TotalOrder,
     {
         // Create new input (handle, stream) pairs
         let mut input_map = BTreeMap::new();
@@ -171,7 +170,7 @@ impl Query {
             // create variables and result handles for each named relation.
             for (name, (input, collection)) in input_map {
                 let edge_variable = EdgeVariable::from(collection.enter(subscope), Product::new(Default::default(), 1));
-                let trace = edge_variable.collection.clone().leave().arrange_by_self().trace;
+                let trace = edge_variable.collection.clone().leave(&scope).arrange_by_self().trace;
                 result_map.insert(name.clone(), RelationHandles { input, trace });
                 variable_map.insert(name.clone(), edge_variable);
             }

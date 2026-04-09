@@ -37,7 +37,7 @@ use timely::progress::Timestamp;
 use timely::order::Product;
 
 use timely::dataflow::*;
-use timely::dataflow::scopes::child::Iterative;
+use timely::dataflow::scope::Iterative;
 use timely::dataflow::operators::{Feedback, ConnectLoop};
 use timely::dataflow::operators::feedback::Handle;
 
@@ -46,7 +46,7 @@ use crate::difference::{Semigroup, Abelian};
 use crate::lattice::Lattice;
 
 /// An extension trait for the `iterate` method.
-pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
+pub trait Iterate<T: Timestamp + Lattice, D: Data, R: Semigroup> {
     /// Iteratively apply `logic` to the source collection until convergence.
     ///
     /// Importantly, this method does not automatically consolidate results.
@@ -73,17 +73,18 @@ pub trait Iterate<G: Scope<Timestamp: Lattice>, D: Data, R: Semigroup> {
     ///          });
     /// });
     /// ```
-    fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
+    fn iterate<F>(self, logic: F) -> VecCollection<T, D, R>
     where
-        for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>;
+        for<'a> F: FnOnce(Iterative<T, u64>, VecCollection<Product<T, u64>, D, R>)->VecCollection<Product<T, u64>, D, R>;
 }
 
-impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterate<G, D, R> for VecCollection<G, D, R> {
-    fn iterate<F>(self, logic: F) -> VecCollection<G, D, R>
+impl<T: Timestamp + Lattice, D: Ord+Data+Debug, R: Abelian+'static> Iterate<T, D, R> for VecCollection<T, D, R> {
+    fn iterate<F>(self, logic: F) -> VecCollection<T, D, R>
     where
-        for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(Iterative<T, u64>, VecCollection<Product<T, u64>, D, R>)->VecCollection<Product<T, u64>, D, R>,
     {
-        self.inner.scope().scoped("Iterate", |subgraph| {
+        let outer = self.inner.scope();
+        outer.scoped("Iterate", |subgraph| {
             // create a new variable, apply logic, bind variable, return.
             //
             // this could be much more succinct if we returned the collection
@@ -93,16 +94,17 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Abelian+'static> Iterat
             let (variable, collection) = Variable::new_from(self.enter(subgraph), Product::new(Default::default(), 1));
             let result = logic(subgraph.clone(), collection);
             variable.set(result.clone());
-            result.leave()
+            result.leave(&outer)
         })
     }
 }
 
-impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<G, D, R> for G {
-    fn iterate<F>(mut self, logic: F) -> VecCollection<G, D, R>
+impl<T: Timestamp + Lattice, D: Ord+Data+Debug, R: Semigroup+'static> Iterate<T, D, R> for Scope<T> {
+    fn iterate<F>(self, logic: F) -> VecCollection<T, D, R>
     where
-        for<'a> F: FnOnce(Iterative<'a, G, u64>, VecCollection<Iterative<'a, G, u64>, D, R>)->VecCollection<Iterative<'a, G, u64>, D, R>,
+        for<'a> F: FnOnce(Iterative<T, u64>, VecCollection<Product<T, u64>, D, R>)->VecCollection<Product<T, u64>, D, R>,
     {
+        let outer = self.clone();
         self.scoped("Iterate", |subgraph| {
                 // create a new variable, apply logic, bind variable, return.
                 //
@@ -113,7 +115,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
                 let (variable, collection) = Variable::new(subgraph, Product::new(Default::default(), 1));
                 let result = logic(subgraph.clone(), collection);
                 variable.set(result.clone());
-                result.leave()
+                result.leave(&outer)
             }
         )
     }
@@ -146,7 +148,7 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
 ///         let result = collection.map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                                .consolidate();
 ///         variable.set(result.clone());
-///         result.leave()
+///         result.leave(&scope)
 ///     });
 /// })
 /// ```
@@ -187,23 +189,23 @@ impl<G: Scope<Timestamp: Lattice>, D: Ord+Data+Debug, R: Semigroup+'static> Iter
 /// By iteratively developing a variable of the *edits* to the input, we can produce and circulate
 /// a smaller volume of updates. This can be especially impactful when the initial collection is
 /// large, and the edits to perform are relatively smaller.
-pub struct Variable<G, C>
+pub struct Variable<T, C>
 where
-    G: Scope<Timestamp: Lattice>,
+    T: Timestamp + Lattice,
     C: Container,
 {
-    feedback: Handle<G, C>,
-    source: Option<Collection<G, C>>,
-    step: <G::Timestamp as Timestamp>::Summary,
+    feedback: Handle<T, C>,
+    source: Option<Collection<T, C>>,
+    step: T::Summary,
 }
 
 /// A `Variable` specialized to a vector container of update triples (data, time, diff).
-pub type VecVariable<G, D, R> = Variable<G, Vec<(D, <G as ScopeParent>::Timestamp, R)>>;
+pub type VecVariable<T, D, R> = Variable<T, Vec<(D, T, R)>>;
 
-impl<G, C: Container> Variable<G, C>
+impl<T, C: Container> Variable<T, C>
 where
-    G: Scope<Timestamp: Lattice>,
-    C: crate::collection::containers::ResultsIn<<G::Timestamp as Timestamp>::Summary>,
+    T: Timestamp + Lattice,
+    C: crate::collection::containers::ResultsIn<T::Summary>,
 {
     /// Creates a new initially empty `Variable` and its associated `Collection`.
     ///
@@ -216,9 +218,9 @@ where
     /// will produce its fixed point in the outer scope.
     ///
     /// In a non-iterative scope the mechanics are the same, but the interpretation varies.
-    pub fn new(scope: &mut G, step: <G::Timestamp as Timestamp>::Summary) -> (Self, Collection<G, C>) {
+    pub fn new(scope: &mut Scope<T>, step: T::Summary) -> (Self, Collection<T, C>) {
         let (feedback, updates) = scope.feedback(step.clone());
-        let collection = Collection::<G, C>::new(updates);
+        let collection = Collection::<T, C>::new(updates);
         (Self { feedback, source: None, step }, collection)
     }
 
@@ -247,9 +249,9 @@ where
     /// adding the source, doing the logic, then subtracting the source, it is appropriate to do.
     /// For example, if the logic modifies a few records it is possible to produce this update
     /// directly without using the backstop implementation this method provides.
-    pub fn new_from(source: Collection<G, C>, step: <G::Timestamp as Timestamp>::Summary) -> (Self, Collection<G, C>) where C: Clone + crate::collection::containers::Negate {
+    pub fn new_from(source: Collection<T, C>, step: T::Summary) -> (Self, Collection<T, C>) where C: Clone + crate::collection::containers::Negate {
         let (feedback, updates) = source.inner.scope().feedback(step.clone());
-        let collection = Collection::<G, C>::new(updates).concat(source.clone());
+        let collection = Collection::<T, C>::new(updates).concat(source.clone());
         (Variable { feedback, source: Some(source.negate()), step }, collection)
     }
 
@@ -257,7 +259,7 @@ where
     ///
     /// This method binds the `Variable` to be equal to the supplied collection,
     /// which may be recursively defined in terms of the variable itself.
-    pub fn set(mut self, mut result: Collection<G, C>) {
+    pub fn set(mut self, mut result: Collection<T, C>) {
         if let Some(source) = self.source.take() {
             result = result.concat(source);
         }

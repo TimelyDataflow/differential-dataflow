@@ -1,7 +1,6 @@
 use rand::{Rng, SeedableRng, StdRng};
 use serde::{Deserialize, Serialize};
 
-use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::Input;
@@ -122,12 +121,13 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G>(edges: VecCollection<G, Edge, MinSum>, roots: VecCollection<G, Node, MinSum>) -> VecCollection<G, Node, MinSum>
+fn bfs<T>(edges: VecCollection<T, Edge, MinSum>, roots: VecCollection<T, Node, MinSum>) -> VecCollection<T, Node, MinSum>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    T: timely::progress::Timestamp + Lattice + Ord,
 {
     // repeatedly update minimal distances each node can be reached from each root
-    roots.scope().iterative::<u32,_,_>(|scope| {
+    let outer = roots.scope();
+    outer.iterative::<u32,_,_>(|scope| {
 
         use differential_dataflow::operators::iterate::Variable;
         use differential_dataflow::trace::implementations::{KeySpine, KeyBuilder};
@@ -152,6 +152,6 @@ where
             .as_collection(|k,()| *k);
 
         variable.set(result.clone());
-        result.leave()
+        result.leave(&outer)
      })
 }

@@ -3,7 +3,7 @@
 use std::hash::Hash;
 
 use timely::order::Product;
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
@@ -19,9 +19,9 @@ use crate::operators::iterate::Variable;
 /// Goals that cannot reach from the source to the target are relatively expensive, as
 /// the entire graph must be explored to confirm this. A graph connectivity pre-filter
 /// could be good insurance here.
-pub fn bidijkstra<G, N>(edges: VecCollection<G, (N,N)>, goals: VecCollection<G, (N,N)>) -> VecCollection<G, ((N,N), u32)>
+pub fn bidijkstra<T, N>(edges: VecCollection<T, (N,N)>, goals: VecCollection<T, (N,N)>) -> VecCollection<T, ((N,N), u32)>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    T: Timestamp + Lattice + Ord,
     N: ExchangeData+Hash,
 {
     let forward = edges.clone().arrange_by_key();
@@ -33,19 +33,17 @@ use crate::trace::TraceReader;
 use crate::operators::arrange::Arranged;
 
 /// Bi-directional Dijkstra search using arranged forward and reverse edge collections.
-pub fn bidijkstra_arranged<G, N, Tr>(
-    forward: Arranged<G, Tr>,
-    reverse: Arranged<G, Tr>,
-    goals: VecCollection<G, (N,N)>
-) -> VecCollection<G, ((N,N), u32)>
+pub fn bidijkstra_arranged<N, Tr>(
+    forward: Arranged<Tr>,
+    reverse: Arranged<Tr>,
+    goals: VecCollection<Tr::Time, (N,N)>
+) -> VecCollection<Tr::Time, ((N,N), u32)>
 where
-    G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
     Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,
 {
-    forward
-        .stream
-        .scope().iterative::<u64,_,_>(|inner| {
+    let outer = forward.stream.scope();
+    outer.iterative::<u64,_,_>(|inner| {
 
             let forward_edges = forward.enter(inner);
             let reverse_edges = reverse.enter(inner);
@@ -120,6 +118,6 @@ where
 
         reverse_bind.set(reverse_next);
 
-        reached.leave()
+        reached.leave(&outer)
     })
 }

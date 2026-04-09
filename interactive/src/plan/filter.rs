@@ -84,12 +84,12 @@ impl<V: ExchangeData+Hash+Datum> Render for Filter<V> {
 
     type Value = V;
 
-    fn render<S: Scope<Timestamp = Time>>(
+    fn render(
         &self,
-        scope: &mut S,
-        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<S, Vec<Self::Value>, Diff>>,
+        scope: &mut Scope<Time>,
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<Time, Vec<Self::Value>, Diff>>,
         arrangements: &mut TraceManager<Self::Value>,
-    ) -> VecCollection<S, Vec<Self::Value>, Diff>
+    ) -> VecCollection<Time, Vec<Self::Value>, Diff>
     {
         let predicate = self.predicate.clone();
         self.plan

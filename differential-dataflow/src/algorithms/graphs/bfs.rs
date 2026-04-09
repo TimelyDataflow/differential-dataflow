@@ -2,16 +2,16 @@
 
 use std::hash::Hash;
 
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData};
 use crate::operators::*;
 use crate::lattice::Lattice;
 
 /// Returns pairs (node, dist) indicating distance of each node from a root.
-pub fn bfs<G, N>(edges: VecCollection<G, (N,N)>, roots: VecCollection<G, N>) -> VecCollection<G, (N,u32)>
+pub fn bfs<T, N>(edges: VecCollection<T, (N,N)>, roots: VecCollection<T, N>) -> VecCollection<T, (N,u32)>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    T: Timestamp + Lattice + Ord,
     N: ExchangeData+Hash,
 {
     let edges = edges.arrange_by_key();
@@ -22,9 +22,8 @@ use crate::trace::TraceReader;
 use crate::operators::arrange::Arranged;
 
 /// Returns pairs (node, dist) indicating distance of each node from a root.
-pub fn bfs_arranged<G, N, Tr>(edges: Arranged<G, Tr>, roots: VecCollection<G, N>) -> VecCollection<G, (N, u32)>
+pub fn bfs_arranged<N, Tr>(edges: Arranged<Tr>, roots: VecCollection<Tr::Time, N>) -> VecCollection<Tr::Time, (N, u32)>
 where
-    G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
     Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,
 {

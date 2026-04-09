@@ -1,4 +1,3 @@
-use timely::dataflow::Scope;
 use timely::order::Product;
 use timely::dataflow::operators::probe::Handle;
 use timely::dataflow::operators::vec::UnorderedInput;

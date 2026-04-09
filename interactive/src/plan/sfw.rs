@@ -65,12 +65,12 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
 
     type Value = V;
 
-    fn render<S: Scope<Timestamp = Time>>(
+    fn render(
         &self,
-        scope: &mut S,
-        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<S, Vec<Self::Value>, Diff>>,
+        scope: &mut Scope<Time>,
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<Time, Vec<Self::Value>, Diff>>,
         arrangements: &mut TraceManager<Self::Value>,
-    ) -> VecCollection<S, Vec<Self::Value>, Diff>
+    ) -> VecCollection<Time, Vec<Self::Value>, Diff>
     {
         // The idea here is the following:
         //
@@ -231,7 +231,7 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
             use differential_dogs3::altneu::AltNeu;
 
             let scope_name = format!("DeltaRule: {}/{}", index, self.sources.len());
-            let changes = scope.clone().scoped::<AltNeu<_>,_,_>(&scope_name, |inner| {
+            let changes = scope.scoped::<AltNeu<_>,_,_>(&scope_name, |inner| {
 
                 // This should default to an `AltNeu::Alt` timestamp.
                 let mut changes =
@@ -288,7 +288,7 @@ impl<V: ExchangeData+Hash+Datum> Render for MultiwayJoin<V> {
 
                 changes
                     .map(move |tuple| extract_map.iter().map(|&i| tuple[i].clone()).collect::<Vec<_>>())
-                    .leave()
+                    .leave(scope)
             });
 
             accumulated_changes.push(changes);
