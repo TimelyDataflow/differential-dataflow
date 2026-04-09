@@ -67,12 +67,12 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
 ///
 /// [`AsCollection`]: crate::collection::AsCollection
-pub fn join_traces<G, T1, T2, L, CB>(arranged1: Arranged<T1>, arranged2: Arranged<T2>, mut result: L) -> Stream<G, CB::Container>
+pub fn join_traces<T, Tr1, Tr2, L, CB>(arranged1: Arranged<Tr1>, arranged2: Arranged<Tr2>, mut result: L) -> Stream<T, CB::Container>
 where
-    G: Timestamp + Lattice,
-    T1: TraceReader<Time = G>+Clone+'static,
-    T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>, Time = G>+Clone+'static,
-    L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>,&G,&T1::Diff,&T2::Diff,&mut JoinSession<G, CB, Capability<G>>)+'static,
+    T: Timestamp + Lattice,
+    Tr1: TraceReader<Time = T>+Clone+'static,
+    Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>, Time = T>+Clone+'static,
+    L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>,&T,&Tr1::Diff,&Tr2::Diff,&mut JoinSession<T, CB, Capability<T>>)+'static,
     CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.
@@ -98,8 +98,8 @@ where
         // the physical compaction frontier of their corresponding trace.
         // Should we ever *drop* a trace, these are 1. much harder to maintain correctly, but 2. no longer used.
         use timely::progress::frontier::Antichain;
-        let mut acknowledged1 = Antichain::from_elem(<G>::minimum());
-        let mut acknowledged2 = Antichain::from_elem(<G>::minimum());
+        let mut acknowledged1 = Antichain::from_elem(<T>::minimum());
+        let mut acknowledged2 = Antichain::from_elem(<T>::minimum());
 
         // deferred work of batches from each input.
         let mut todo1 = std::collections::VecDeque::new();

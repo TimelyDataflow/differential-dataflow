@@ -13,16 +13,16 @@ use differential_dataflow::trace::TraceReader;
 /// create a join if the `prefixes` collection is also arranged and responds to changes that
 /// `arrangement` undergoes. More complicated patterns are also appropriate, as in the case
 /// of delta queries.
-pub fn propose<G, Tr, K, F, P, V>(
-    prefixes: VecCollection<G, P, Tr::Diff>,
+pub fn propose<T, Tr, K, F, P, V>(
+    prefixes: VecCollection<T, P, Tr::Diff>,
     arrangement: Arranged<Tr>,
     key_selector: F,
-) -> VecCollection<G, (P, V), Tr::Diff>
+) -> VecCollection<T, (P, V), Tr::Diff>
 where
-    G: Timestamp + std::hash::Hash,
+    T: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
         ValOwn = V,
-        Time = G,
+        Time = T,
         Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData+Semigroup<Tr::DiffGat<'a>>,
     >+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
@@ -47,16 +47,16 @@ where
 /// Unlike `propose`, this method does not scale the multiplicity of matched
 /// prefixes by the number of matches in `arrangement`. This can be useful to
 /// avoid the need to prepare an arrangement of distinct extensions.
-pub fn propose_distinct<G, Tr, K, F, P, V>(
-    prefixes: VecCollection<G, P, Tr::Diff>,
+pub fn propose_distinct<T, Tr, K, F, P, V>(
+    prefixes: VecCollection<T, P, Tr::Diff>,
     arrangement: Arranged<Tr>,
     key_selector: F,
-) -> VecCollection<G, (P, V), Tr::Diff>
+) -> VecCollection<T, (P, V), Tr::Diff>
 where
-    G: Timestamp + std::hash::Hash,
+    T: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
         ValOwn = V,
-        Time = G,
+        Time = T,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,

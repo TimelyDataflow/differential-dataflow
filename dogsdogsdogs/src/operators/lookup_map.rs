@@ -15,19 +15,19 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// This method takes a stream of prefixes and for each determines a
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
-pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
-    prefixes: VecCollection<G, D, R>,
+pub fn lookup_map<T, D, K, R, Tr, F, DOut, ROut, S>(
+    prefixes: VecCollection<T, D, R>,
     mut arrangement: Arranged<Tr>,
     key_selector: F,
     mut output_func: S,
     supplied_key0: K,
     supplied_key1: K,
     supplied_key2: K,
-) -> VecCollection<G, DOut, ROut>
+) -> VecCollection<T, DOut, ROut>
 where
-    G: Timestamp + std::hash::Hash,
+    T: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
-        Time = G,
+        Time = T,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
     >+Clone+'static,
     Tr::KeyContainer: BatchContainer<Owned=K>,
@@ -49,7 +49,7 @@ where
     let mut logic2 = key_selector.clone();
 
     let mut key: K = supplied_key0;
-    let exchange = Exchange::new(move |update: &(D,G,R)| {
+    let exchange = Exchange::new(move |update: &(D,T,R)| {
         logic1(&update.0, &mut key);
         key.hashed().into()
     });

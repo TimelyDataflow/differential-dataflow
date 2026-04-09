@@ -228,21 +228,21 @@ where
 
 use crate::difference::Multiply;
 // Direct join implementations.
-impl<T1> Arranged<T1>
+impl<Tr1> Arranged<Tr1>
 where
-    T1: TraceReader<Time: Lattice> + Clone + 'static,
+    Tr1: TraceReader<Time: Lattice> + Clone + 'static,
 {
     /// A convenience method to join and produce `VecCollection` output.
     ///
     /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
-    pub fn join_core<T2,I,L>(self, other: Arranged<T2>, mut result: L) -> VecCollection<T1::Time,I::Item,<T1::Diff as Multiply<T2::Diff>>::Output>
+    pub fn join_core<Tr2,I,L>(self, other: Arranged<Tr2>, mut result: L) -> VecCollection<Tr1::Time,I::Item,<Tr1::Diff as Multiply<Tr2::Diff>>::Output>
     where
-        T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>,Time=T1::Time>+Clone+'static,
-        T1::Diff: Multiply<T2::Diff, Output: Semigroup+'static>,
+        Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>,Time=Tr1::Time>+Clone+'static,
+        Tr1::Diff: Multiply<Tr2::Diff, Output: Semigroup+'static>,
         I: IntoIterator<Item: Data>,
-        L: FnMut(T1::Key<'_>,T1::Val<'_>,T2::Val<'_>)->I+'static
+        L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>)->I+'static
     {
-        let mut result = move |k: T1::Key<'_>, v1: T1::Val<'_>, v2: T2::Val<'_>, t: &T1::Time, r1: &T1::Diff, r2: &T2::Diff| {
+        let mut result = move |k: Tr1::Key<'_>, v1: Tr1::Val<'_>, v2: Tr2::Val<'_>, t: &Tr1::Time, r1: &Tr1::Diff, r2: &Tr2::Diff| {
             let t = t.clone();
             let r = (r1.clone()).multiply(r2);
             result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
@@ -264,24 +264,24 @@ where
 
 // Direct reduce implementations.
 use crate::difference::Abelian;
-impl<T1> Arranged<T1>
+impl<Tr1> Arranged<Tr1>
 where
-    T1: TraceReader<Time: Lattice> + Clone + 'static,
+    Tr1: TraceReader<Time: Lattice> + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, Bu, T2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<TraceAgent<T2>>
+    pub fn reduce_abelian<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<TraceAgent<Tr2>>
     where
-        T2: for<'a> Trace<
-            Key<'a>= T1::Key<'a>,
+        Tr2: for<'a> Trace<
+            Key<'a>= Tr1::Key<'a>,
             ValOwn: Data,
-            Time=T1::Time,
+            Time=Tr1::Time,
             Diff: Abelian,
         >+'static,
-        Bu: Builder<Time=T1::Time, Output = T2::Batch, Input: Default>,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
-        P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,
+        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
+        L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
     {
-        self.reduce_core::<_,Bu,T2,_>(name, move |key, input, output, change| {
+        self.reduce_core::<_,Bu,Tr2,_>(name, move |key, input, output, change| {
             if !input.is_empty() {
                 logic(key, input, change);
             }
@@ -291,16 +291,16 @@ where
     }
 
     /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, Bu, T2, P>(self, name: &str, logic: L, push: P) -> Arranged<TraceAgent<T2>>
+    pub fn reduce_core<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<TraceAgent<Tr2>>
     where
-        T2: for<'a> Trace<
-            Key<'a>=T1::Key<'a>,
+        Tr2: for<'a> Trace<
+            Key<'a>=Tr1::Key<'a>,
             ValOwn: Data,
-            Time=T1::Time,
+            Time=Tr1::Time,
         >+'static,
-        Bu: Builder<Time=T1::Time, Output = T2::Batch, Input: Default>,
-        L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
-        P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,
+        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
+        L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
     {
         use crate::operators::reduce::reduce_trace;
         reduce_trace::<_,Bu,_,_,_>(self, name, logic, push)
@@ -327,16 +327,16 @@ where
 }
 
 /// A type that can be arranged as if a collection of updates.
-pub trait Arrange<G, C> : Sized
+pub trait Arrange<T, C> : Sized
 where
-    G: Timestamp + Lattice,
+    T: Timestamp + Lattice,
 {
     /// Arranges updates into a shared trace.
     fn arrange<Ba, Bu, Tr>(self) -> Arranged<TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=C, Time=G> + 'static,
-        Bu: Builder<Time=G, Input=Ba::Output, Output = Tr::Batch>,
-        Tr: Trace<Time=G> + 'static,
+        Ba: Batcher<Input=C, Time=T> + 'static,
+        Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
+        Tr: Trace<Time=T> + 'static,
     {
         self.arrange_named::<Ba, Bu, Tr>("Arrange")
     }
@@ -344,9 +344,9 @@ where
     /// Arranges updates into a shared trace, with a supplied name.
     fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=C, Time=G> + 'static,
-        Bu: Builder<Time=G, Input=Ba::Output, Output = Tr::Batch>,
-        Tr: Trace<Time=G> + 'static,
+        Ba: Batcher<Input=C, Time=T> + 'static,
+        Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
+        Tr: Trace<Time=T> + 'static,
     ;
 }
 
@@ -355,13 +355,13 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<TraceAgent<Tr>>
+pub fn arrange_core<T, P, Ba, Bu, Tr>(stream: Stream<T, Ba::Input>, pact: P, name: &str) -> Arranged<TraceAgent<Tr>>
 where
-    G: Timestamp + Lattice,
-    P: ParallelizationContract<G, Ba::Input>,
-    Ba: Batcher<Time=G,Input: Container> + 'static,
-    Bu: Builder<Time=G, Input=Ba::Output, Output = Tr::Batch>,
-    Tr: Trace<Time=G>+'static,
+    T: Timestamp + Lattice,
+    P: ParallelizationContract<T, Ba::Input>,
+    Ba: Batcher<Time=T,Input: Container> + 'static,
+    Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
+    Tr: Trace<Time=T>+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
@@ -393,7 +393,7 @@ where
         let mut batcher = Ba::new(logger.clone(), info.global_id);
 
         // Capabilities for the lower envelope of updates in `batcher`.
-        let mut capabilities = Antichain::<Capability<G>>::new();
+        let mut capabilities = Antichain::<Capability<T>>::new();
 
         let activator = Some(scope.activator_for(info.address.clone()));
         let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
@@ -407,7 +407,7 @@ where
         *reader_ref = Some(reader_local);
 
         // Initialize to the minimal input frontier.
-        let mut prev_frontier = Antichain::from_elem(<G as Timestamp>::minimum());
+        let mut prev_frontier = Antichain::from_elem(<T as Timestamp>::minimum());
 
         move |(input, frontier), output| {
 

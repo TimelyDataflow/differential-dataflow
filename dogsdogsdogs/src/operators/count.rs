@@ -11,15 +11,15 @@ use differential_dataflow::trace::TraceReader;
 /// For each triple, it extracts a key using `key_selector`, and finds the
 /// associated count in `arrangement`. If the found count is less than `count`,
 /// the `count` and `index` fields are overwritten with their new values.
-pub fn count<G, Tr, K, R, F, P>(
-    prefixes: VecCollection<G, (P, usize, usize), R>,
+pub fn count<T, Tr, K, R, F, P>(
+    prefixes: VecCollection<T, (P, usize, usize), R>,
     arrangement: Arranged<Tr>,
     key_selector: F,
     index: usize,
-) -> VecCollection<G, (P, usize, usize), R>
+) -> VecCollection<T, (P, usize, usize), R>
 where
-    G: Timestamp + std::hash::Hash,
-    Tr: TraceReader<Time = G, Diff=isize>+Clone+'static,
+    T: Timestamp + std::hash::Hash,
+    Tr: TraceReader<Time = T, Diff=isize>+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
     K: Hashable + Ord + Default + 'static,

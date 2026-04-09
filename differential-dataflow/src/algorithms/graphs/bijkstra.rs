@@ -19,9 +19,9 @@ use crate::operators::iterate::Variable;
 /// Goals that cannot reach from the source to the target are relatively expensive, as
 /// the entire graph must be explored to confirm this. A graph connectivity pre-filter
 /// could be good insurance here.
-pub fn bidijkstra<G, N>(edges: VecCollection<G, (N,N)>, goals: VecCollection<G, (N,N)>) -> VecCollection<G, ((N,N), u32)>
+pub fn bidijkstra<T, N>(edges: VecCollection<T, (N,N)>, goals: VecCollection<T, (N,N)>) -> VecCollection<T, ((N,N), u32)>
 where
-    G: Timestamp + Lattice + Ord,
+    T: Timestamp + Lattice + Ord,
     N: ExchangeData+Hash,
 {
     let forward = edges.clone().arrange_by_key();
@@ -33,15 +33,15 @@ use crate::trace::TraceReader;
 use crate::operators::arrange::Arranged;
 
 /// Bi-directional Dijkstra search using arranged forward and reverse edge collections.
-pub fn bidijkstra_arranged<G, N, Tr>(
+pub fn bidijkstra_arranged<T, N, Tr>(
     forward: Arranged<Tr>,
     reverse: Arranged<Tr>,
-    goals: VecCollection<G, (N,N)>
-) -> VecCollection<G, ((N,N), u32)>
+    goals: VecCollection<T, (N,N)>
+) -> VecCollection<T, ((N,N), u32)>
 where
-    G: Timestamp + Lattice + Ord,
+    T: Timestamp + Lattice + Ord,
     N: ExchangeData+Hash,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time=G, Diff=isize>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time=T, Diff=isize>+Clone+'static,
 {
     let outer = forward.stream.scope();
     outer.iterative::<u64,_,_>(|inner| {

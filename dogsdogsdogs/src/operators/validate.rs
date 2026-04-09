@@ -12,15 +12,15 @@ use differential_dataflow::trace::TraceReader;
 /// This method takes a stream of prefixes and for each determines a
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
-pub fn validate<G, K, V, Tr, F, P>(
-    extensions: VecCollection<G, (P, V), Tr::Diff>,
+pub fn validate<T, K, V, Tr, F, P>(
+    extensions: VecCollection<T, (P, V), Tr::Diff>,
     arrangement: Arranged<Tr>,
     key_selector: F,
-) -> VecCollection<G, (P, V), Tr::Diff>
+) -> VecCollection<T, (P, V), Tr::Diff>
 where
-    G: Timestamp + std::hash::Hash,
+    T: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
-        Time = G,
+        Time = T,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=(K,V)>,

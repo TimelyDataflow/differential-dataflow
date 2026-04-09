@@ -52,18 +52,18 @@ where
     }
 }
 
-impl<G, K, T1> CountTotal<G, K, T1::Diff> for Arranged<T1>
+impl<G, K, Tr> CountTotal<G, K, Tr::Diff> for Arranged<Tr>
 where
     G: Timestamp + TotalOrder + Lattice + Ord,
-    T1: for<'a> TraceReader<
+    Tr: for<'a> TraceReader<
         Key<'a> = &'a K,
         Val<'a>=&'a (),
         Time = G,
-        Diff: ExchangeData+Semigroup<T1::DiffGat<'a>>
+        Diff: ExchangeData+Semigroup<Tr::DiffGat<'a>>
     >+Clone+'static,
     K: ExchangeData,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, T1::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<G, (K, Tr::Diff), R2> {
 
         let mut trace = self.trace.clone();
 
@@ -103,13 +103,13 @@ where
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
-                        let mut count: Option<T1::Diff> = None;
+                        let mut count: Option<Tr::Diff> = None;
 
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(T1::owned_diff(diff)); }
+                                if count.is_none() { count = Some(Tr::owned_diff(diff)); }
                             });
                         }
 
@@ -117,14 +117,14 @@ where
 
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.clone(), count.clone()), T1::owned_time(time), R2::from(-1i8)));
+                                    session.give(((key.clone(), count.clone()), Tr::owned_time(time), R2::from(-1i8)));
                                 }
                             }
                             count.as_mut().map(|c| c.plus_equals(&diff));
-                            if count.is_none() { count = Some(T1::owned_diff(diff)); }
+                            if count.is_none() { count = Some(Tr::owned_diff(diff)); }
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.clone(), count.clone()), T1::owned_time(time), R2::from(1i8)));
+                                    session.give(((key.clone(), count.clone()), Tr::owned_time(time), R2::from(1i8)));
                                 }
                             }
                         });
