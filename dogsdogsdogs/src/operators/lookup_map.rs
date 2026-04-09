@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::Operator;
-use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
+use timely::progress::Antichain;
 
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
@@ -15,19 +16,18 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// This method takes a stream of prefixes and for each determines a
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
-pub fn lookup_map<T, D, K, R, Tr, F, DOut, ROut, S>(
-    prefixes: VecCollection<T, D, R>,
+pub fn lookup_map<D, K, R, Tr, F, DOut, ROut, S>(
+    prefixes: VecCollection<Tr::Time, D, R>,
     mut arrangement: Arranged<Tr>,
     key_selector: F,
     mut output_func: S,
     supplied_key0: K,
     supplied_key1: K,
     supplied_key2: K,
-) -> VecCollection<T, DOut, ROut>
+) -> VecCollection<Tr::Time, DOut, ROut>
 where
-    T: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
-        Time = T,
+        Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
     >+Clone+'static,
     Tr::KeyContainer: BatchContainer<Owned=K>,
@@ -49,7 +49,7 @@ where
     let mut logic2 = key_selector.clone();
 
     let mut key: K = supplied_key0;
-    let exchange = Exchange::new(move |update: &(D,T,R)| {
+    let exchange = Exchange::new(move |update: &(D,Tr::Time,R)| {
         logic1(&update.0, &mut key);
         key.hashed().into()
     });

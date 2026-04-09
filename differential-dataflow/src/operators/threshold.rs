@@ -98,18 +98,17 @@ where
     }
 }
 
-impl<T, K, Tr> ThresholdTotal<T, K, Tr::Diff> for Arranged<Tr>
+impl<K, Tr> ThresholdTotal<Tr::Time, K, Tr::Diff> for Arranged<Tr>
 where
-    T: Timestamp + TotalOrder + Lattice + Ord,
     Tr: for<'a> TraceReader<
         Key<'a>=&'a K,
         Val<'a>=&'a (),
-        Time = T,
+        Time: TotalOrder + Lattice + Ord,
         Diff : ExchangeData + Semigroup<Tr::DiffGat<'a>>,
     >+Clone+'static,
     K: ExchangeData,
 {
-    fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<T, K, R2>
+    fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<Tr::Time, K, R2>
     where
         R2: Semigroup+'static,
         F: for<'a> FnMut(Tr::Key<'a>,&Tr::Diff,Option<&Tr::Diff>)->Option<R2>+'static,
@@ -120,8 +119,8 @@ where
         self.stream.unary_frontier(Pipeline, "ThresholdTotal", move |_,_| {
 
             // tracks the lower and upper limit of received batches.
-            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<T as timely::progress::Timestamp>::minimum());
-            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<T as timely::progress::Timestamp>::minimum());
+            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(Tr::Time::minimum());
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(Tr::Time::minimum());
 
             move |(input, _frontier), output| {
 

@@ -249,7 +249,7 @@ where
         };
 
         use crate::operators::join::join_traces;
-        join_traces::<_, _, _, _, crate::consolidation::ConsolidatingContainerBuilder<_>>(
+        join_traces::<_, _, _, crate::consolidation::ConsolidatingContainerBuilder<_>>(
             self,
             other,
             move |k, v1, v2, t, d1, d2, c| {

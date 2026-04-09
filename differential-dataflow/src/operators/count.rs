@@ -52,26 +52,25 @@ where
     }
 }
 
-impl<T, K, Tr> CountTotal<T, K, Tr::Diff> for Arranged<Tr>
+impl<K, Tr> CountTotal<Tr::Time, K, Tr::Diff> for Arranged<Tr>
 where
-    T: Timestamp + TotalOrder + Lattice + Ord,
     Tr: for<'a> TraceReader<
         Key<'a> = &'a K,
         Val<'a>=&'a (),
-        Time = T,
+        Time: TotalOrder + Lattice + Ord,
         Diff: ExchangeData+Semigroup<Tr::DiffGat<'a>>
     >+Clone+'static,
     K: ExchangeData,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<T, (K, Tr::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<Tr::Time, (K, Tr::Diff), R2> {
 
         let mut trace = self.trace.clone();
 
         self.stream.unary_frontier(Pipeline, "CountTotal", move |_,_| {
 
             // tracks the lower and upper limit of received batches.
-            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<T as timely::progress::Timestamp>::minimum());
-            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<T as timely::progress::Timestamp>::minimum());
+            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(Tr::Time::minimum());
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(Tr::Time::minimum());
 
             move |(input, _frontier), output| {
 

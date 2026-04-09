@@ -41,7 +41,8 @@ use timely::dataflow::Stream;
 use timely::scheduling::Scheduler;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::{Capability, Operator, generic::Session};
-use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
+use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
@@ -74,35 +75,33 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// Notice that the time is hoisted up into data. The expectation is that
 /// once out of the "delta flow region", the updates will be `delay`d to the
 /// times specified in the payloads.
-pub fn half_join<T, K, V, R, Tr, FF, CF, DOut, S>(
-    stream: VecCollection<T, (K, V, T), R>,
+pub fn half_join<K, V, R, Tr, FF, CF, DOut, S>(
+    stream: VecCollection<Tr::Time, (K, V, Tr::Time), R>,
     arrangement: Arranged<Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
-) -> VecCollection<T, (DOut, T), <R as Mul<Tr::Diff>>::Output>
+) -> VecCollection<Tr::Time, (DOut, Tr::Time), <R as Mul<Tr::Diff>>::Output>
 where
-    T: Timestamp + Lattice,
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time = T>+Clone+'static,
-    T: std::hash::Hash,
+    Tr: TraceReader<Time: Lattice + std::hash::Hash>+Clone+'static,
     Tr::KeyContainer: BatchContainer<Owned=K>,
     R: Mul<Tr::Diff, Output: Semigroup>,
-    FF: Fn(&T, &mut Antichain<T>) + 'static,
-    CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
+    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
+    CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     DOut: Clone+'static,
     S: FnMut(&K, &V, Tr::Val<'_>)->DOut+'static,
 {
-    let output_func = move |session: &mut SessionFor<T, _>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &T, diff1: &R, output: &mut Vec<(T, Tr::Diff)>| {
+    let output_func = move |session: &mut SessionFor<Tr::Time, _>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &Tr::Time, diff1: &R, output: &mut Vec<(Tr::Time, Tr::Diff)>| {
         for (time, diff2) in output.drain(..) {
             let diff = diff1.clone() * diff2.clone();
             let dout = (output_func(k, v1, v2), time.clone());
             session.give((dout, initial.clone(), diff));
         }
     };
-    half_join_internal_unsafe::<_, _, _, _, _, _,_,_,_, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, comparison, |_timer, _count| false, output_func)
+    half_join_internal_unsafe::<_, _, _, _, _, _,_,_, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, comparison, |_timer, _count| false, output_func)
         .as_collection()
 }
 
@@ -141,26 +140,24 @@ type SessionFor<'a, 'b, T, CB> =
 /// yield control, as a function of the elapsed time and the number of matched
 /// records. Note this is not the number of *output* records, owing mainly to
 /// the number of matched records being easiest to record with low overhead.
-pub fn half_join_internal_unsafe<T, K, V, R, Tr, FF, CF, Y, S, CB>(
-    stream: VecCollection<T, (K, V, T), R>,
+pub fn half_join_internal_unsafe<K, V, R, Tr, FF, CF, Y, S, CB>(
+    stream: VecCollection<Tr::Time, (K, V, Tr::Time), R>,
     mut arrangement: Arranged<Tr>,
     frontier_func: FF,
     comparison: CF,
     yield_function: Y,
     mut output_func: S,
-) -> Stream<T, CB::Container>
+) -> Stream<Tr::Time, CB::Container>
 where
-    T: Timestamp + Lattice,
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time = T>+Clone+'static,
-    T: std::hash::Hash,
+    Tr: TraceReader<Time: Lattice + std::hash::Hash>+Clone+'static,
     Tr::KeyContainer: BatchContainer<Owned=K>,
-    FF: Fn(&T, &mut Antichain<T>) + 'static,
+    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<T, CB>, &K, &V, Tr::Val<'_>, &T, &R, &mut Vec<(T, Tr::Diff)>) + 'static,
+    S: FnMut(&mut SessionFor<Tr::Time, CB>, &K, &V, Tr::Val<'_>, &Tr::Time, &R, &mut Vec<(Tr::Time, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
 {
     // No need to block physical merging for this operator.
@@ -170,7 +167,7 @@ where
 
     let mut stash = HashMap::new();
 
-    let exchange = Exchange::new(move |update: &((K, V, T),T,R)| (update.0).0.hashed().into());
+    let exchange = Exchange::new(move |update: &((K, V, Tr::Time),Tr::Time,R)| (update.0).0.hashed().into());
 
     // Stash for (time, diff) accumulation.
     let mut output_buffer = Vec::new();
@@ -218,7 +215,7 @@ where
 
                         // Update yielded: We can only go from false to {false, true} as
                         // we're checking that `!yielded` holds before entering this block.
-                        yielded = process_proposals::<T, _, _, _, _, _, _, _, _>(
+                        yielded = process_proposals::<_, _, _, _, _, _, _, _>(
                             &comparison,
                             &yield_function,
                             &mut output_func,
@@ -302,7 +299,7 @@ where
 /// Leaves a zero diff in place for all proposals that were processed.
 ///
 /// Returns `true` if the operator should yield.
-fn process_proposals<T, Tr, CF, Y, S, CB, K, V, R>(
+fn process_proposals<Tr, CF, Y, S, CB, K, V, R>(
     comparison: &CF,
     yield_function: &Y,
     output_func: &mut S,
@@ -311,16 +308,15 @@ fn process_proposals<T, Tr, CF, Y, S, CB, K, V, R>(
     work: &mut usize,
     trace: &mut Tr,
     proposals: &mut Vec<((K, V, Tr::Time), Tr::Time, R)>,
-    mut session: SessionFor<T, CB>,
+    mut session: SessionFor<Tr::Time, CB>,
     frontier: AntichainRef<Tr::Time>
 ) -> bool
 where
-    T: Timestamp + Lattice,
-    Tr: TraceReader<Time = T>,
+    Tr: TraceReader<Time: Lattice>,
     Tr::KeyContainer: BatchContainer<Owned=K>,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<T, CB>, &K, &V, Tr::Val<'_>, &T, &R, &mut Vec<(T, Tr::Diff)>) + 'static,
+    S: FnMut(&mut SessionFor<Tr::Time, CB>, &K, &V, Tr::Val<'_>, &Tr::Time, &R, &mut Vec<(Tr::Time, Tr::Diff)>) + 'static,
     CB: ContainerBuilder,
     K: Ord,
     V: Ord,

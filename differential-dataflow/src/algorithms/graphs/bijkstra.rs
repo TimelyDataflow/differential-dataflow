@@ -33,15 +33,14 @@ use crate::trace::TraceReader;
 use crate::operators::arrange::Arranged;
 
 /// Bi-directional Dijkstra search using arranged forward and reverse edge collections.
-pub fn bidijkstra_arranged<T, N, Tr>(
+pub fn bidijkstra_arranged<N, Tr>(
     forward: Arranged<Tr>,
     reverse: Arranged<Tr>,
-    goals: VecCollection<T, (N,N)>
-) -> VecCollection<T, ((N,N), u32)>
+    goals: VecCollection<Tr::Time, (N,N)>
+) -> VecCollection<Tr::Time, ((N,N), u32)>
 where
-    T: Timestamp + Lattice + Ord,
     N: ExchangeData+Hash,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time=T, Diff=isize>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize, Time: Lattice + Ord>+Clone+'static,
 {
     let outer = forward.stream.scope();
     outer.iterative::<u64,_,_>(|inner| {

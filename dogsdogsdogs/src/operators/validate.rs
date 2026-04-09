@@ -1,7 +1,5 @@
 use std::hash::Hash;
 
-use timely::progress::Timestamp;
-
 use differential_dataflow::{ExchangeData, VecCollection};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
@@ -12,15 +10,14 @@ use differential_dataflow::trace::TraceReader;
 /// This method takes a stream of prefixes and for each determines a
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
-pub fn validate<T, K, V, Tr, F, P>(
-    extensions: VecCollection<T, (P, V), Tr::Diff>,
+pub fn validate<K, V, Tr, F, P>(
+    extensions: VecCollection<Tr::Time, (P, V), Tr::Diff>,
     arrangement: Arranged<Tr>,
     key_selector: F,
-) -> VecCollection<T, (P, V), Tr::Diff>
+) -> VecCollection<Tr::Time, (P, V), Tr::Diff>
 where
-    T: Timestamp + std::hash::Hash,
     Tr: for<'a> TraceReader<
-        Time = T,
+        Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=(K,V)>,

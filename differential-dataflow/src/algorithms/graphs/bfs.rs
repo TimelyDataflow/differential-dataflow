@@ -22,11 +22,10 @@ use crate::trace::TraceReader;
 use crate::operators::arrange::Arranged;
 
 /// Returns pairs (node, dist) indicating distance of each node from a root.
-pub fn bfs_arranged<T, N, Tr>(edges: Arranged<Tr>, roots: VecCollection<T, N>) -> VecCollection<T, (N, u32)>
+pub fn bfs_arranged<N, Tr>(edges: Arranged<Tr>, roots: VecCollection<Tr::Time, N>) -> VecCollection<Tr::Time, (N, u32)>
 where
-    T: Timestamp + Lattice + Ord,
     N: ExchangeData+Hash,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time=T, Diff=isize>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize, Time: Lattice + Ord>+Clone+'static,
 {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));

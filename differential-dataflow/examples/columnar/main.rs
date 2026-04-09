@@ -141,7 +141,7 @@ mod reachability {
 
             // join_traces with ValColBuilder: produces Stream<_, RecordedUpdates<...>>.
             let proposed =
-                join_traces::<_, _, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
+                join_traces::<_, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
                     edges_arr,
                     reach_arr,
                     |_src, dst, (), time, d1, d2, session| {

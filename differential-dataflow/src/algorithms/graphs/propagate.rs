@@ -51,15 +51,14 @@ use crate::operators::arrange::arrangement::Arranged;
 /// This variant takes a pre-arranged edge collection, to facilitate re-use, and allows
 /// a method `logic` to specify the rounds in which we introduce various labels. The output
 /// of `logic should be a number in the interval \[0,64\],
-pub fn propagate_core<T, N, L, Tr, F, R>(edges: Arranged<Tr>, nodes: VecCollection<T,(N,L),R>, logic: F) -> VecCollection<T,(N,L),R>
+pub fn propagate_core<N, L, Tr, F, R>(edges: Arranged<Tr>, nodes: VecCollection<Tr::Time,(N,L),R>, logic: F) -> VecCollection<Tr::Time,(N,L),R>
 where
-    T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time=T, Diff=R>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=R, Time: Lattice + Ord + Hash>+Clone+'static,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified
