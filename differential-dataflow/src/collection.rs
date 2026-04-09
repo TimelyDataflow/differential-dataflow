@@ -342,10 +342,11 @@ pub mod vec {
     /// propagate changes through your functional computation and report the corresponding changes to the
     /// output collections.
     ///
-    /// Each vec collection has three generic parameters. The parameter `T` is for the scope in which the
-    /// collection exists; as you write more complicated programs you may wish to introduce nested scopes
-    /// (e.g. for iteration) and this parameter tracks the scope (for timely dataflow's benefit). The `D`
-    /// parameter is the type of data in your collection, for example `String`, or `(u32, Vec<Option<()>>)`.
+    /// Each vec collection has three generic parameters. The parameter `T` is the timestamp type of the
+    /// scope in which the collection exists; as you write more complicated programs you may wish to
+    /// introduce nested scopes (e.g. for iteration), and this parameter tracks the scope's timestamp
+    /// (for timely dataflow's benefit). The `D` parameter is the type of data in your collection, for
+    /// example `String`, or `(u32, Vec<Option<()>>)`.
     /// The `R` parameter represents the types of changes that the data undergo, and is most commonly (and
     /// defaults to) `isize`, representing changes to the occurrence count of each record.
     ///
@@ -1219,7 +1220,7 @@ pub mod vec {
         /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
         /// every value returned by the iterator.
         ///
-        /// This trait is implemented for arrangements (`Arranged<T, T>`) rather than collections. The `Join` trait
+        /// This trait is implemented for arrangements (`Arranged<Tr>`) rather than collections. The `Join` trait
         /// contains the implementations for collections.
         ///
         /// # Examples

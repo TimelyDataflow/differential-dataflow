@@ -105,7 +105,7 @@ where
         .as_collection()
 }
 
-/// A session with lifetime `'a` in a scope `T` with a container builder `CB`.
+/// A session with lifetime `'a` over timestamp `T` with a container builder `CB`.
 ///
 /// This is a shorthand primarily for the reson of readability.
 type SessionFor<'a, 'b, T, CB> =
