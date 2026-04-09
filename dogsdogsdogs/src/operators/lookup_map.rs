@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use timely::PartialOrder;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::Operator;
 use timely::progress::{Antichain, Timestamp};

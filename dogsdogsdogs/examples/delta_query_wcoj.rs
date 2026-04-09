@@ -1,4 +1,3 @@
-use timely::dataflow::Scope;
 use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;

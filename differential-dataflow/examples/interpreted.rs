@@ -1,5 +1,4 @@
 use std::hash::Hash;
-use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use differential_dataflow::VecCollection;

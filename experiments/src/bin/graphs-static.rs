@@ -1,5 +1,3 @@
-use timely::dataflow::*;
-
 use timely::order::Product;
 use timely::dataflow::operators::ToStream;
 

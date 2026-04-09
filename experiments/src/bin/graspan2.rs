@@ -1,7 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 
-use timely::dataflow::Scope;
 use timely::order::Product;
 
 use differential_dataflow::operators::iterate::Variable;

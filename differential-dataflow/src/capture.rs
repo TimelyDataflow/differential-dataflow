@@ -230,7 +230,6 @@ pub mod source {
     use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
     use timely::dataflow::operators::generic::OutputBuilder;
     use timely::progress::Timestamp;
-    use timely::worker::AsWorker;
     use timely::scheduling::{Scheduler, SyncActivator};
 
     // TODO(guswynn): implement this generally in timely
@@ -560,7 +559,7 @@ pub mod sink {
 
     use timely::order::PartialOrder;
     use timely::progress::{Antichain, ChangeBatch, Timestamp};
-    use timely::dataflow::{Scope, Stream};
+    use timely::dataflow::Stream;
     use timely::dataflow::channels::pact::{Exchange, Pipeline};
     use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
     use timely::scheduling::Scheduler;

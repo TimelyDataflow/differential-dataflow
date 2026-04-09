@@ -1,7 +1,6 @@
 //! A demonstration of timely dataflow progress tracking, using differential dataflow operators.
 
 use timely::PartialOrder;
-use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::Input;

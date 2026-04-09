@@ -14,7 +14,6 @@ use timely::dataflow::operators::generic::{Operator, OutputBuilderSession, Sessi
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::scheduling::Scheduler;
-use timely::worker::AsWorker;
 
 use crate::lattice::Lattice;
 use crate::operators::arrange::Arranged;

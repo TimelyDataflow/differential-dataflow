@@ -1,6 +1,5 @@
 use std::hash::Hash;
 
-use timely::dataflow::Scope;
 use timely::progress::Timestamp;
 use timely::dataflow::operators::vec::Partition;
 use timely::dataflow::operators::Concatenate;

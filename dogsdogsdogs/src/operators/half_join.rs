@@ -37,7 +37,7 @@ use std::time::Instant;
 
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Stream;
 use timely::scheduling::Scheduler;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::{Capability, Operator, generic::Session};
@@ -250,7 +250,6 @@ where
                             // Any remaining times should peel off elements from `proposals`.
                             let mut additions = vec![Vec::new(); antichain.len()];
                             for (data, initial, diff) in proposals.drain(..) {
-                                use timely::PartialOrder;
                                 let position = antichain.iter().position(|t| t.less_equal(&initial)).unwrap();
                                 additions[position].push((data, initial, diff));
                             }

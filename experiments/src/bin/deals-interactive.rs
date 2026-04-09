@@ -1,7 +1,6 @@
 use std::time::Instant;
 
 use rand::{Rng, SeedableRng, StdRng};
-use timely::dataflow::*;
 use timely::WorkerConfig;
 
 use differential_dataflow::input::Input;

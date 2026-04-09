@@ -1,7 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 
-use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::InputSession;

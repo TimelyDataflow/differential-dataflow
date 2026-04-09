@@ -1,7 +1,5 @@
 use std::time::Instant;
 
-use timely::dataflow::*;
-
 use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;

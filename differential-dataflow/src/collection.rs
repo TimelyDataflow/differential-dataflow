@@ -326,7 +326,6 @@ pub mod vec {
     use timely::progress::Timestamp;
     use timely::order::Product;
     use timely::dataflow::scope::Iterative;
-    use timely::dataflow::Scope;
     use timely::dataflow::operators::*;
     use timely::dataflow::operators::vec::*;
 

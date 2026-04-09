@@ -101,7 +101,7 @@
 use std::collections::{BinaryHeap, BTreeMap};
 
 use timely::order::{PartialOrder, TotalOrder};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Stream;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::Exchange;
 use timely::progress::Timestamp;

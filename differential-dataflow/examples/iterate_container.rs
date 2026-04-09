@@ -3,7 +3,7 @@
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::order::Product;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Stream;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use differential_dataflow::{AsCollection, Collection};
 use differential_dataflow::input::Input;

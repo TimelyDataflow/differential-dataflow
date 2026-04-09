@@ -33,11 +33,10 @@ use crate::trace::TraceReader;
 /// the value updates, as appropriate for the container. It is critical that it clear the container as
 /// the operator has no ability to do this otherwise, and failing to do so represents a leak from one
 /// key's computation to another, and will likely introduce non-determinism.
-pub fn reduce_trace<G, T1, Bu, T2, L, P>(trace: Arranged<G, T1>, name: &str, mut logic: L, mut push: P) -> Arranged<G, TraceAgent<T2>>
+pub fn reduce_trace<T1, Bu, T2, L, P>(trace: Arranged<T1::Time, T1>, name: &str, mut logic: L, mut push: P) -> Arranged<T1::Time, TraceAgent<T2>>
 where
-    G: Timestamp + crate::lattice::Lattice,
-    T1: TraceReader<Time = G> + Clone + 'static,
-    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, ValOwn: Data, Time = G> + 'static,
+    T1: TraceReader<Time: crate::lattice::Lattice> + Clone + 'static,
+    T2: for<'a> Trace<Key<'a>=T1::Key<'a>, ValOwn: Data, Time = T1::Time> + 'static,
     Bu: Builder<Time=T2::Time, Output = T2::Batch, Input: Default>,
     L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn,T2::Diff)>, &mut Vec<(T2::ValOwn, T2::Diff)>)+'static,
     P: FnMut(&mut Bu::Input, T1::Key<'_>, &mut Vec<(T2::ValOwn, T2::Time, T2::Diff)>) + 'static,
@@ -67,7 +66,7 @@ where
 
             *result_trace = Some(output_reader.clone());
 
-            let mut new_interesting_times = Vec::<G>::new();
+            let mut new_interesting_times = Vec::<T1::Time>::new();
 
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
             // sorted by (key, time), as well as capabilities for the lower envelope of the times.
@@ -75,18 +74,18 @@ where
             let mut pending_time = T1::TimeContainer::with_capacity(0);
             let mut next_pending_keys = T1::KeyContainer::with_capacity(0);
             let mut next_pending_time = T1::TimeContainer::with_capacity(0);
-            let mut capabilities = timely::dataflow::operators::CapabilitySet::<G>::default();
+            let mut capabilities = timely::dataflow::operators::CapabilitySet::<T1::Time>::default();
 
             // buffers and logic for computing per-key interesting times "efficiently".
-            let mut interesting_times = Vec::<G>::new();
+            let mut interesting_times = Vec::<T1::Time>::new();
 
             // Upper and lower frontiers for the pending input and output batches to process.
-            let mut upper_limit = Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
-            let mut lower_limit = Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
+            let mut upper_limit = Antichain::from_elem(<T1::Time as timely::progress::Timestamp>::minimum());
+            let mut lower_limit = Antichain::from_elem(<T1::Time as timely::progress::Timestamp>::minimum());
 
             // Output batches may need to be built piecemeal, and these temp storage help there.
-            let mut output_upper = Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
-            let mut output_lower = Antichain::from_elem(<G as timely::progress::Timestamp>::minimum());
+            let mut output_upper = Antichain::from_elem(<T1::Time as timely::progress::Timestamp>::minimum());
+            let mut output_lower = Antichain::from_elem(<T1::Time as timely::progress::Timestamp>::minimum());
 
             move |(input, frontier), output| {
 
@@ -138,7 +137,7 @@ where
                         // Prepare an output buffer and builder for each capability.
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
-                        let mut buffers = Vec::<(G, Vec<(T2::ValOwn, G, T2::Diff)>)>::new();
+                        let mut buffers = Vec::<(T1::Time, Vec<(T2::ValOwn, T1::Time, T2::Diff)>)>::new();
                         let mut builders = Vec::new();
                         for cap in capabilities.iter() {
                             buffers.push((cap.time().clone(), Vec::new()));
@@ -253,7 +252,7 @@ where
 
                             if output_upper.borrow() != output_lower.borrow() {
 
-                                let description = Description::new(output_lower.clone(), output_upper.clone(), Antichain::from_elem(G::minimum()));
+                                let description = Description::new(output_lower.clone(), output_upper.clone(), Antichain::from_elem(T1::Time::minimum()));
                                 let batch = builder.done(description);
 
                                 // ship batch to the output, and commit to the output trace.
@@ -273,7 +272,7 @@ where
                         pending_time.clear(); std::mem::swap(&mut next_pending_time, &mut pending_time);
 
                         // Update `capabilities` to reflect pending times.
-                        let mut frontier = Antichain::<G>::new();
+                        let mut frontier = Antichain::<T1::Time>::new();
                         let mut owned_time = T1::Time::minimum();
                         for pos in 0 .. pending_time.len() {
                             T1::clone_time_onto(pending_time.index(pos), &mut owned_time);

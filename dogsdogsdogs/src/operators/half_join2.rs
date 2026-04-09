@@ -22,11 +22,10 @@ use std::ops::Mul;
 
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Stream;
 use timely::scheduling::Scheduler;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::Operator;
-use timely::PartialOrder;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::progress::frontier::MutableAntichain;
 

@@ -93,7 +93,6 @@ fn main() {
 mod reachability {
 
     use timely::order::Product;
-    use timely::dataflow::Scope;
     use differential_dataflow::Collection;
     use differential_dataflow::AsCollection;
     use differential_dataflow::operators::iterate::Variable;

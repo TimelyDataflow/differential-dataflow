@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 
 use timely::Config;
 
-use timely::dataflow::*;
 use timely::dataflow::operators::Capture;
 use timely::dataflow::operators::capture::Extract;
 
