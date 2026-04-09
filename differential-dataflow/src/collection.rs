@@ -784,7 +784,7 @@ pub mod vec {
         ///          .trace;
         /// });
         /// ```
-        pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+        pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<TraceAgent<T2>>
         where
             T2: for<'a> Trace<Key<'a>= &'a K, ValOwn = V, Time=G, Diff: Abelian>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
@@ -802,7 +802,7 @@ pub mod vec {
         /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
         /// and it may not be safe to index into the first element.
         /// At least one of the two collections will be non-empty.
-        pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+        pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<TraceAgent<T2>>
         where
             V: Clone+'static,
             T2: for<'a> Trace<Key<'a>=&'a K, ValOwn = V, Time=G>+'static,
@@ -1032,7 +1032,7 @@ pub mod vec {
         V: crate::ExchangeData,
         R: crate::ExchangeData + Semigroup,
     {
-        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<TraceAgent<Tr>>
         where
             Ba: crate::trace::Batcher<Input=Vec<((K, V), G, R)>, Time=G> + 'static,
             Bu: crate::trace::Builder<Time=G, Input=Ba::Output, Output = Tr::Batch>,
@@ -1047,7 +1047,7 @@ pub mod vec {
     where
         G: Timestamp + Lattice + Ord,
     {
-        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+        fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<TraceAgent<Tr>>
         where
             Ba: crate::trace::Batcher<Input=Vec<((K,()),G,R)>, Time=G> + 'static,
             Bu: crate::trace::Builder<Time=G, Input=Ba::Output, Output = Tr::Batch>,
@@ -1068,12 +1068,12 @@ pub mod vec {
         /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
         /// This trace is current for all times completed by the output stream, which can be used to
         /// safely identify the stable times and values in the trace.
-        pub fn arrange_by_key(self) -> Arranged<G, TraceAgent<ValSpine<K, V, G, R>>> {
+        pub fn arrange_by_key(self) -> Arranged<TraceAgent<ValSpine<K, V, G, R>>> {
             self.arrange_by_key_named("ArrangeByKey")
         }
 
         /// As `arrange_by_key` but with the ability to name the arrangement.
-        pub fn arrange_by_key_named(self, name: &str) -> Arranged<G, TraceAgent<ValSpine<K, V, G, R>>> {
+        pub fn arrange_by_key_named(self, name: &str) -> Arranged<TraceAgent<ValSpine<K, V, G, R>>> {
             self.arrange_named::<ValBatcher<_,_,_,_>,ValBuilder<_,_,_,_>,_>(name)
         }
     }
@@ -1087,12 +1087,12 @@ pub mod vec {
         /// This operator arranges a collection of records into a shared trace, whose contents it maintains.
         /// This trace is current for all times complete in the output stream, which can be used to safely
         /// identify the stable times and values in the trace.
-        pub fn arrange_by_self(self) -> Arranged<G, TraceAgent<KeySpine<K, G, R>>> {
+        pub fn arrange_by_self(self) -> Arranged<TraceAgent<KeySpine<K, G, R>>> {
             self.arrange_by_self_named("ArrangeBySelf")
         }
 
         /// As `arrange_by_self` but with the ability to name the arrangement.
-        pub fn arrange_by_self_named(self, name: &str) -> Arranged<G, TraceAgent<KeySpine<K, G, R>>> {
+        pub fn arrange_by_self_named(self, name: &str) -> Arranged<TraceAgent<KeySpine<K, G, R>>> {
             self.map(|k| (k, ()))
                 .arrange_named::<KeyBatcher<_,_,_>,KeyBuilder<_,_,_>,_>(name)
         }
@@ -1244,7 +1244,7 @@ pub mod vec {
         ///      .assert_eq(z);
         /// });
         /// ```
-        pub fn join_core<Tr2,I,L> (self, stream2: Arranged<G,Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
+        pub fn join_core<Tr2,I,L> (self, stream2: Arranged<Tr2>, result: L) -> Collection<G,I::Item,<R as Multiply<Tr2::Diff>>::Output>
         where
             Tr2: for<'a> crate::trace::TraceReader<Key<'a>=&'a K, Time=G>+Clone+'static,
             R: Multiply<Tr2::Diff, Output: Semigroup+'static>,

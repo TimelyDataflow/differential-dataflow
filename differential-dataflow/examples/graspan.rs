@@ -68,7 +68,7 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
 type TraceKeyHandle<K,T,R> = TraceAgent<KeySpine<K, T, R>>;
 type TraceValHandle<K,V,T,R> = TraceAgent<ValSpine<K, V, T, R>>;
-type Arrange<G,K,V,R> = Arranged<G, TraceValHandle<K, V, G, R>>;
+type Arrange<G,K,V,R> = Arranged<TraceValHandle<K, V, G, R>>;
 
 /// An evolving set of edges.
 ///

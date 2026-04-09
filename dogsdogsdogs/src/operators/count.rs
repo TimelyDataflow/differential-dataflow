@@ -13,7 +13,7 @@ use differential_dataflow::trace::TraceReader;
 /// the `count` and `index` fields are overwritten with their new values.
 pub fn count<G, Tr, K, R, F, P>(
     prefixes: VecCollection<G, (P, usize, usize), R>,
-    arrangement: Arranged<G, Tr>,
+    arrangement: Arranged<Tr>,
     key_selector: F,
     index: usize,
 ) -> VecCollection<G, (P, usize, usize), R>

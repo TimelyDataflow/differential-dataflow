@@ -15,7 +15,7 @@ use differential_dataflow::trace::TraceReader;
 /// of delta queries.
 pub fn propose<G, Tr, K, F, P, V>(
     prefixes: VecCollection<G, P, Tr::Diff>,
-    arrangement: Arranged<G, Tr>,
+    arrangement: Arranged<Tr>,
     key_selector: F,
 ) -> VecCollection<G, (P, V), Tr::Diff>
 where
@@ -49,7 +49,7 @@ where
 /// avoid the need to prepare an arrangement of distinct extensions.
 pub fn propose_distinct<G, Tr, K, F, P, V>(
     prefixes: VecCollection<G, P, Tr::Diff>,
-    arrangement: Arranged<G, Tr>,
+    arrangement: Arranged<Tr>,
     key_selector: F,
 ) -> VecCollection<G, (P, V), Tr::Diff>
 where

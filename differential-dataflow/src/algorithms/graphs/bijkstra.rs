@@ -34,8 +34,8 @@ use crate::operators::arrange::Arranged;
 
 /// Bi-directional Dijkstra search using arranged forward and reverse edge collections.
 pub fn bidijkstra_arranged<G, N, Tr>(
-    forward: Arranged<G, Tr>,
-    reverse: Arranged<G, Tr>,
+    forward: Arranged<Tr>,
+    reverse: Arranged<Tr>,
     goals: VecCollection<G, (N,N)>
 ) -> VecCollection<G, ((N,N), u32)>
 where

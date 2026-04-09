@@ -98,7 +98,7 @@ where
     }
 }
 
-impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
+impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<T1>
 where
     G: Timestamp + TotalOrder + Lattice + Ord,
     T1: for<'a> TraceReader<

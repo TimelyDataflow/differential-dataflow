@@ -67,7 +67,7 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
 ///
 /// [`AsCollection`]: crate::collection::AsCollection
-pub fn join_traces<G, T1, T2, L, CB>(arranged1: Arranged<G,T1>, arranged2: Arranged<G,T2>, mut result: L) -> Stream<G, CB::Container>
+pub fn join_traces<G, T1, T2, L, CB>(arranged1: Arranged<T1>, arranged2: Arranged<T2>, mut result: L) -> Stream<G, CB::Container>
 where
     G: Timestamp + Lattice,
     T1: TraceReader<Time = G>+Clone+'static,

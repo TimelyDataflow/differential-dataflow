@@ -76,7 +76,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// times specified in the payloads.
 pub fn half_join<G, K, V, R, Tr, FF, CF, DOut, S>(
     stream: VecCollection<G, (K, V, G), R>,
-    arrangement: Arranged<G, Tr>,
+    arrangement: Arranged<Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
@@ -143,7 +143,7 @@ type SessionFor<'a, 'b, G, CB> =
 /// the number of matched records being easiest to record with low overhead.
 pub fn half_join_internal_unsafe<G, K, V, R, Tr, FF, CF, Y, S, CB>(
     stream: VecCollection<G, (K, V, G), R>,
-    mut arrangement: Arranged<G, Tr>,
+    mut arrangement: Arranged<Tr>,
     frontier_func: FF,
     comparison: CF,
     yield_function: Y,

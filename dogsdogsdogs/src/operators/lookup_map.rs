@@ -17,7 +17,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// and values associated with the key in `arrangement`.
 pub fn lookup_map<G, D, K, R, Tr, F, DOut, ROut, S>(
     prefixes: VecCollection<G, D, R>,
-    mut arrangement: Arranged<G, Tr>,
+    mut arrangement: Arranged<Tr>,
     key_selector: F,
     mut output_func: S,
     supplied_key0: K,

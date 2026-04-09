@@ -1972,7 +1972,6 @@ where
 /// a `ValColBuilder`, which sorts and consolidates on flush.
 pub fn as_recorded_updates<U>(
     arranged: differential_dataflow::operators::arrange::Arranged<
-        U::Time,
         differential_dataflow::operators::arrange::TraceAgent<ValSpine<U::Key, U::Val, U::Time, U::Diff>>,
     >,
 ) -> differential_dataflow::Collection<U::Time, RecordedUpdates<U>>

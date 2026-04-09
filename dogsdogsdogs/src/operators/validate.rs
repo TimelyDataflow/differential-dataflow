@@ -14,7 +14,7 @@ use differential_dataflow::trace::TraceReader;
 /// and values associated with the key in `arrangement`.
 pub fn validate<G, K, V, Tr, F, P>(
     extensions: VecCollection<G, (P, V), Tr::Diff>,
-    arrangement: Arranged<G, Tr>,
+    arrangement: Arranged<Tr>,
     key_selector: F,
 ) -> VecCollection<G, (P, V), Tr::Diff>
 where

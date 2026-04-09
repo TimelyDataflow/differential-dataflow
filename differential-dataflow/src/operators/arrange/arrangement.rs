@@ -43,9 +43,8 @@ use super::TraceAgent;
 ///
 /// An `Arranged` allows multiple differential operators to share the resources (communication,
 /// computation, memory) required to produce and maintain an indexed representation of a collection.
-pub struct Arranged<G, Tr>
+pub struct Arranged<Tr>
 where
-    G: Timestamp,
     Tr: TraceReader+Clone,
 {
     /// A stream containing arranged updates.
@@ -53,14 +52,14 @@ where
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
-    pub stream: Stream<G, Vec<Tr::Batch>>,
+    pub stream: Stream<Tr::Time, Vec<Tr::Batch>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Tr,
     // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
     // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
-impl<Tr> Clone for Arranged<Tr::Time, Tr>
+impl<Tr> Clone for Arranged<Tr>
 where
     Tr: TraceReader + Clone,
 {
@@ -75,7 +74,7 @@ where
 use ::timely::progress::timestamp::Refines;
 use timely::Container;
 
-impl<Tr> Arranged<Tr::Time, Tr>
+impl<Tr> Arranged<Tr>
 where
     Tr: TraceReader + Clone,
 {
@@ -85,7 +84,7 @@ where
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
     pub fn enter<TInner>(self, child: &Scope<TInner>)
-        -> Arranged<TInner, TraceEnter<Tr, TInner>>
+        -> Arranged<TraceEnter<Tr, TInner>>
         where
             TInner: Refines<Tr::Time>+Lattice+Timestamp+Clone,
     {
@@ -112,7 +111,7 @@ where
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
     pub fn enter_at<TInner, F, P>(self, child: &Scope<TInner>, logic: F, prior: P)
-        -> Arranged<TInner, TraceEnterAt<Tr, TInner, F, P>>
+        -> Arranged<TraceEnterAt<Tr, TInner, F, P>>
         where
             TInner: Refines<Tr::Time>+Lattice+Timestamp+Clone+'static,
             F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone+'static,
@@ -229,14 +228,14 @@ where
 
 use crate::difference::Multiply;
 // Direct join implementations.
-impl<T1> Arranged<T1::Time, T1>
+impl<T1> Arranged<T1>
 where
     T1: TraceReader<Time: Lattice> + Clone + 'static,
 {
     /// A convenience method to join and produce `VecCollection` output.
     ///
     /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
-    pub fn join_core<T2,I,L>(self, other: Arranged<T1::Time,T2>, mut result: L) -> VecCollection<T1::Time,I::Item,<T1::Diff as Multiply<T2::Diff>>::Output>
+    pub fn join_core<T2,I,L>(self, other: Arranged<T2>, mut result: L) -> VecCollection<T1::Time,I::Item,<T1::Diff as Multiply<T2::Diff>>::Output>
     where
         T2: for<'a> TraceReader<Key<'a>=T1::Key<'a>,Time=T1::Time>+Clone+'static,
         T1::Diff: Multiply<T2::Diff, Output: Semigroup+'static>,
@@ -265,12 +264,12 @@ where
 
 // Direct reduce implementations.
 use crate::difference::Abelian;
-impl<T1> Arranged<T1::Time, T1>
+impl<T1> Arranged<T1>
 where
     T1: TraceReader<Time: Lattice> + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, Bu, T2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<T1::Time, TraceAgent<T2>>
+    pub fn reduce_abelian<L, Bu, T2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<TraceAgent<T2>>
     where
         T2: for<'a> Trace<
             Key<'a>= T1::Key<'a>,
@@ -292,7 +291,7 @@ where
     }
 
     /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, Bu, T2, P>(self, name: &str, logic: L, push: P) -> Arranged<T1::Time, TraceAgent<T2>>
+    pub fn reduce_core<L, Bu, T2, P>(self, name: &str, logic: L, push: P) -> Arranged<TraceAgent<T2>>
     where
         T2: for<'a> Trace<
             Key<'a>=T1::Key<'a>,
@@ -309,7 +308,7 @@ where
 }
 
 
-impl<Tr> Arranged<Tr::Time, Tr>
+impl<Tr> Arranged<Tr>
 where
     Tr: TraceReader + Clone,
 {
@@ -333,7 +332,7 @@ where
     G: Timestamp + Lattice,
 {
     /// Arranges updates into a shared trace.
-    fn arrange<Ba, Bu, Tr>(self) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange<Ba, Bu, Tr>(self) -> Arranged<TraceAgent<Tr>>
     where
         Ba: Batcher<Input=C, Time=G> + 'static,
         Bu: Builder<Time=G, Input=Ba::Output, Output = Tr::Batch>,
@@ -343,7 +342,7 @@ where
     }
 
     /// Arranges updates into a shared trace, with a supplied name.
-    fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<TraceAgent<Tr>>
     where
         Ba: Batcher<Input=C, Time=G> + 'static,
         Bu: Builder<Time=G, Input=Ba::Output, Output = Tr::Batch>,
@@ -356,7 +355,7 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+pub fn arrange_core<G, P, Ba, Bu, Tr>(stream: Stream<G, Ba::Input>, pact: P, name: &str) -> Arranged<TraceAgent<Tr>>
 where
     G: Timestamp + Lattice,
     P: ParallelizationContract<G, Ba::Input>,

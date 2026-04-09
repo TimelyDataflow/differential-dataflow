@@ -12,7 +12,7 @@ use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::difference::Present;
 
-type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, G, R>>>;
+type EdgeArranged<G, K, V, R> = Arranged<TraceAgent<ValSpine<K, V, G, R>>>;
 
 type Node = u32;
 type Edge = (Node, Node);

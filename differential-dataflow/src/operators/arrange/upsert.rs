@@ -132,7 +132,7 @@ use super::TraceAgent;
 pub fn arrange_from_upsert<G, Bu, Tr, K, V>(
     stream: Stream<G, Vec<(K, Option<V>, G)>>,
     name: &str,
-) -> Arranged<G, TraceAgent<Tr>>
+) -> Arranged<TraceAgent<Tr>>
 where
     G: Timestamp,
     K: ExchangeData+Hashable+std::hash::Hash,

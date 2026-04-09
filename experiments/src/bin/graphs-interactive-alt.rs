@@ -258,7 +258,7 @@ use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, G, R>>>;
+type Arrange<G, K, V, R> = Arranged<TraceAgent<ValSpine<K, V, G, R>>>;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn three_hop<G: Timestamp + Lattice + Ord>(
