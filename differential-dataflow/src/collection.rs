@@ -217,7 +217,7 @@ impl<T: Timestamp, C: Container> Collection<T, C> {
     pub fn enter<TInner>(self, child: &Scope<TInner>) -> Collection<TInner, <C as containers::Enter<T, TInner>>::InnerContainer>
     where
         C: containers::Enter<T, TInner, InnerContainer: Container>,
-        TInner: Refines<T> + Timestamp,
+        TInner: Refines<T>,
     {
         use timely::dataflow::channels::pact::Pipeline;
         self.inner
@@ -1036,7 +1036,7 @@ pub mod vec {
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),T,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, Bu, _>(self.inner, exchange, name)
+            crate::operators::arrange::arrangement::arrange_core::<_, Ba, Bu, _>(self.inner, exchange, name)
         }
     }
 
@@ -1051,7 +1051,7 @@ pub mod vec {
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,()),T,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_,_,Ba,Bu,_>(self.map(|k| (k, ())).inner, exchange, name)
+            crate::operators::arrange::arrangement::arrange_core::<_,Ba,Bu,_>(self.map(|k| (k, ())).inner, exchange, name)
         }
     }
 

@@ -40,7 +40,7 @@ pub fn bidijkstra_arranged<N, Tr>(
 ) -> VecCollection<Tr::Time, ((N,N), u32)>
 where
     N: ExchangeData+Hash,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize, Time: Lattice + Ord>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,
 {
     let outer = forward.stream.scope();
     outer.iterative::<u64,_,_>(|inner| {

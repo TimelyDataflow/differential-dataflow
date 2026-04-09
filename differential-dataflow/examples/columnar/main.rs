@@ -127,13 +127,13 @@ mod reachability {
             let edges_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
             let reach_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
 
-            let edges_arr = arrange_core::<_, _,
+            let edges_arr = arrange_core::<_,
                 ValBatcher<Node, Node, IterTime, Diff>,
                 ValBuilder<Node, Node, IterTime, Diff>,
                 ValSpine<Node, Node, IterTime, Diff>,
             >(edges_inner.inner, edges_pact, "Edges");
 
-            let reach_arr = arrange_core::<_, _,
+            let reach_arr = arrange_core::<_,
                 ValBatcher<Node, (), IterTime, Diff>,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
@@ -157,7 +157,7 @@ mod reachability {
 
             // Arrange for reduce.
             let combined_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
-            let combined_arr = arrange_core::<_, _,
+            let combined_arr = arrange_core::<_,
                 ValBatcher<Node, (), IterTime, Diff>,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,

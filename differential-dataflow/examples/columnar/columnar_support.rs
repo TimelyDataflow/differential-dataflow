@@ -592,7 +592,7 @@ pub mod arrangement {
 
         impl<U: Update> Merger for TrieMerger<U>
         where
-            U::Time: Ord + PartialOrder + Clone + 'static,
+            U::Time: 'static,
         {
             type Chunk = Updates<U>;
             type Time = U::Time;
@@ -646,7 +646,7 @@ pub mod arrangement {
 
         impl<U: Update> TrieMerger<U>
         where
-            U::Time: Ord + PartialOrder + Clone + 'static,
+            U::Time: 'static,
         {
             /// Iterator-based merge: flatten, merge, consolidate, form.
             /// Correct but slow — used as fallback.

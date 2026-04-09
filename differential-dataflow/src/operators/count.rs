@@ -57,7 +57,7 @@ where
     Tr: for<'a> TraceReader<
         Key<'a> = &'a K,
         Val<'a>=&'a (),
-        Time: TotalOrder + Lattice + Ord,
+        Time: TotalOrder,
         Diff: ExchangeData+Semigroup<Tr::DiffGat<'a>>
     >+Clone+'static,
     K: ExchangeData,

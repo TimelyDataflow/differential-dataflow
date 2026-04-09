@@ -86,7 +86,7 @@ where
     pub fn enter<TInner>(self, child: &Scope<TInner>)
         -> Arranged<TraceEnter<Tr, TInner>>
         where
-            TInner: Refines<Tr::Time>+Lattice+Timestamp+Clone,
+            TInner: Refines<Tr::Time>+Lattice,
     {
         Arranged {
             stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
@@ -113,7 +113,7 @@ where
     pub fn enter_at<TInner, F, P>(self, child: &Scope<TInner>, logic: F, prior: P)
         -> Arranged<TraceEnterAt<Tr, TInner, F, P>>
         where
-            TInner: Refines<Tr::Time>+Lattice+Timestamp+Clone+'static,
+            TInner: Refines<Tr::Time>+Lattice+'static,
             F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone+'static,
             P: FnMut(&TInner)->Tr::Time+Clone+'static,
         {
@@ -230,7 +230,7 @@ use crate::difference::Multiply;
 // Direct join implementations.
 impl<Tr1> Arranged<Tr1>
 where
-    Tr1: TraceReader<Time: Lattice> + Clone + 'static,
+    Tr1: TraceReader + Clone + 'static,
 {
     /// A convenience method to join and produce `VecCollection` output.
     ///
@@ -266,7 +266,7 @@ where
 use crate::difference::Abelian;
 impl<Tr1> Arranged<Tr1>
 where
-    Tr1: TraceReader<Time: Lattice> + Clone + 'static,
+    Tr1: TraceReader + Clone + 'static,
 {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
     pub fn reduce_abelian<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<TraceAgent<Tr2>>
@@ -355,13 +355,12 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<T, P, Ba, Bu, Tr>(stream: Stream<T, Ba::Input>, pact: P, name: &str) -> Arranged<TraceAgent<Tr>>
+pub fn arrange_core<P, Ba, Bu, Tr>(stream: Stream<Tr::Time, Ba::Input>, pact: P, name: &str) -> Arranged<TraceAgent<Tr>>
 where
-    T: Timestamp + Lattice,
-    P: ParallelizationContract<T, Ba::Input>,
-    Ba: Batcher<Time=T,Input: Container> + 'static,
-    Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
-    Tr: Trace<Time=T>+'static,
+    P: ParallelizationContract<Tr::Time, Ba::Input>,
+    Ba: Batcher<Time=Tr::Time,Input: Container> + 'static,
+    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
+    Tr: Trace+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
@@ -393,7 +392,7 @@ where
         let mut batcher = Ba::new(logger.clone(), info.global_id);
 
         // Capabilities for the lower envelope of updates in `batcher`.
-        let mut capabilities = Antichain::<Capability<T>>::new();
+        let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
 
         let activator = Some(scope.activator_for(info.address.clone()));
         let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
@@ -407,7 +406,7 @@ where
         *reader_ref = Some(reader_local);
 
         // Initialize to the minimal input frontier.
-        let mut prev_frontier = Antichain::from_elem(T::minimum());
+        let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
 
         move |(input, frontier), output| {
 

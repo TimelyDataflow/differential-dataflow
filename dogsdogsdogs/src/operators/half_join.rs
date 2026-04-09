@@ -86,7 +86,7 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time: Lattice + std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::KeyContainer: BatchContainer<Owned=K>,
     R: Mul<Tr::Diff, Output: Semigroup>,
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
@@ -152,7 +152,7 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time: Lattice + std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::KeyContainer: BatchContainer<Owned=K>,
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
@@ -312,7 +312,7 @@ fn process_proposals<Tr, CF, Y, S, CB, K, V, R>(
     frontier: AntichainRef<Tr::Time>
 ) -> bool
 where
-    Tr: TraceReader<Time: Lattice>,
+    Tr: TraceReader,
     Tr::KeyContainer: BatchContainer<Owned=K>,
     CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(Instant, usize) -> bool + 'static,

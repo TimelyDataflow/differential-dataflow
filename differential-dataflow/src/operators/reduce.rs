@@ -35,7 +35,7 @@ use crate::trace::TraceReader;
 /// key's computation to another, and will likely introduce non-determinism.
 pub fn reduce_trace<Tr1, Bu, Tr2, L, P>(trace: Arranged<Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<TraceAgent<Tr2>>
 where
-    Tr1: TraceReader<Time: crate::lattice::Lattice> + Clone + 'static,
+    Tr1: TraceReader + Clone + 'static,
     Tr2: for<'a> Trace<Key<'a>=Tr1::Key<'a>, ValOwn: Data, Time = Tr1::Time> + 'static,
     Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default>,
     L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn,Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,

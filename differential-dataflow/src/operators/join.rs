@@ -69,7 +69,7 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 /// [`AsCollection`]: crate::collection::AsCollection
 pub fn join_traces<Tr1, Tr2, L, CB>(arranged1: Arranged<Tr1>, arranged2: Arranged<Tr2>, mut result: L) -> Stream<Tr1::Time, CB::Container>
 where
-    Tr1: TraceReader<Time: Lattice>+Clone+'static,
+    Tr1: TraceReader+Clone+'static,
     Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>, Time = Tr1::Time>+Clone+'static,
     L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>,&Tr1::Time,&Tr1::Diff,&Tr2::Diff,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
     CB: ContainerBuilder,
