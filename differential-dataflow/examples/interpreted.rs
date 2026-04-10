@@ -36,7 +36,7 @@ fn main() {
     }).unwrap();
 }
 
-fn interpret<T>(edges: VecCollection<T, Edge>, relations: &[(usize, usize)]) -> VecCollection<T, Vec<Node>>
+fn interpret<'scope, T>(edges: VecCollection<'scope, T, Edge>, relations: &[(usize, usize)]) -> VecCollection<'scope, T, Vec<Node>>
 where
     T: timely::progress::Timestamp + Lattice + Hash + Ord,
 {

@@ -12,7 +12,7 @@ use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G, K, V, R> = Arranged<TraceAgent<ValSpine<K, V, G, R>>>;
+type Arrange<'s, G, K, V, R> = Arranged<'s, TraceAgent<ValSpine<K, V, G, R>>>;
 
 type Node = u32;
 
@@ -203,12 +203,12 @@ fn main() {
     }).unwrap();
 }
 
-fn interactive<G: timely::progress::Timestamp + Lattice>(
-    edges: Arrange<G, Node, Node, isize>,
-    tc_1: VecCollection<G, Node>,
-    tc_2: VecCollection<G, Node>,
-    sg_x: VecCollection<G, Node>
-) -> VecCollection<G, Node> {
+fn interactive<'s, G: timely::progress::Timestamp + Lattice>(
+    edges: Arrange<'s, G, Node, Node, isize>,
+    tc_1: VecCollection<'s, G, Node>,
+    tc_2: VecCollection<'s, G, Node>,
+    sg_x: VecCollection<'s, G, Node>
+) -> VecCollection<'s, G, Node> {
 
     // descendants of tc_1:
     let tc_1_enter = tc_1.clone();

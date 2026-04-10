@@ -121,7 +121,7 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<T>(edges: VecCollection<T, Edge, MinSum>, roots: VecCollection<T, Node, MinSum>) -> VecCollection<T, Node, MinSum>
+fn bfs<'scope, T>(edges: VecCollection<'scope, T, Edge, MinSum>, roots: VecCollection<'scope, T, Node, MinSum>) -> VecCollection<'scope, T, Node, MinSum>
 where
     T: timely::progress::Timestamp + Lattice + Ord,
 {

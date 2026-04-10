@@ -9,12 +9,12 @@ use differential_dataflow::trace::TraceReader;
 /// For each triple, it extracts a key using `key_selector`, and finds the
 /// associated count in `arrangement`. If the found count is less than `count`,
 /// the `count` and `index` fields are overwritten with their new values.
-pub fn count<Tr, K, R, F, P>(
-    prefixes: VecCollection<Tr::Time, (P, usize, usize), R>,
-    arrangement: Arranged<Tr>,
+pub fn count<'scope, Tr, K, R, F, P>(
+    prefixes: VecCollection<'scope, Tr::Time, (P, usize, usize), R>,
+    arrangement: Arranged<'scope, Tr>,
     key_selector: F,
     index: usize,
-) -> VecCollection<Tr::Time, (P, usize, usize), R>
+) -> VecCollection<'scope, Tr::Time, (P, usize, usize), R>
 where
     Tr: TraceReader<Time: std::hash::Hash, Diff=isize>+Clone+'static,
     Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,

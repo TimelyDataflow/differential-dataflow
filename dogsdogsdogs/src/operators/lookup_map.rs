@@ -16,15 +16,15 @@ use differential_dataflow::trace::implementations::BatchContainer;
 /// This method takes a stream of prefixes and for each determines a
 /// key with `key_selector` and then proposes all pair af the prefix
 /// and values associated with the key in `arrangement`.
-pub fn lookup_map<D, K, R, Tr, F, DOut, ROut, S>(
-    prefixes: VecCollection<Tr::Time, D, R>,
-    mut arrangement: Arranged<Tr>,
+pub fn lookup_map<'scope, D, K, R, Tr, F, DOut, ROut, S>(
+    prefixes: VecCollection<'scope, Tr::Time, D, R>,
+    mut arrangement: Arranged<'scope, Tr>,
     key_selector: F,
     mut output_func: S,
     supplied_key0: K,
     supplied_key1: K,
     supplied_key2: K,
-) -> VecCollection<Tr::Time, DOut, ROut>
+) -> VecCollection<'scope, Tr::Time, DOut, ROut>
 where
     Tr: for<'a> TraceReader<
         Time: std::hash::Hash,

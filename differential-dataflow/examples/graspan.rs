@@ -68,7 +68,7 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 
 type TraceKeyHandle<K,T,R> = TraceAgent<KeySpine<K, T, R>>;
 type TraceValHandle<K,V,T,R> = TraceAgent<ValSpine<K, V, T, R>>;
-type Arrange<T,K,V,R> = Arranged<TraceValHandle<K, V, T, R>>;
+type Arrange<'scope, T,K,V,R> = Arranged<'scope, TraceValHandle<K, V, T, R>>;
 
 /// An evolving set of edges.
 ///
@@ -78,17 +78,17 @@ type Arrange<T,K,V,R> = Arranged<TraceValHandle<K, V, T, R>>;
 ///
 /// An edge variable provides arranged representations of its contents, even before they are
 /// completely defined, in support of recursively defined productions.
-pub struct EdgeVariable<T: Timestamp + Lattice> {
-    variable: VecVariable<T, Edge, Diff>,
-    collection: VecCollection<T, Edge, Diff>,
-    current: VecCollection<T, Edge, Diff>,
-    forward: Option<Arrange<T, Node, Node, Diff>>,
-    reverse: Option<Arrange<T, Node, Node, Diff>>,
+pub struct EdgeVariable<'scope, T: Timestamp + Lattice> {
+    variable: VecVariable<'scope, T, Edge, Diff>,
+    collection: VecCollection<'scope, T, Edge, Diff>,
+    current: VecCollection<'scope, T, Edge, Diff>,
+    forward: Option<Arrange<'scope, T, Node, Node, Diff>>,
+    reverse: Option<Arrange<'scope, T, Node, Node, Diff>>,
 }
 
-impl<T: Timestamp + Lattice> EdgeVariable<T> {
+impl<'scope, T: Timestamp + Lattice> EdgeVariable<'scope, T> {
     /// Creates a new variable initialized with `source`.
-    pub fn from(source: VecCollection<T, Edge>, step: T::Summary) -> Self {
+    pub fn from(source: VecCollection<'scope, T, Edge>, step: T::Summary) -> Self {
         let (variable, collection) = VecVariable::new(&mut source.scope(), step);
         EdgeVariable {
             variable,
@@ -99,7 +99,7 @@ impl<T: Timestamp + Lattice> EdgeVariable<T> {
         }
     }
     /// Concatenates `production` into the definition of the variable.
-    pub fn add_production(&mut self, production: VecCollection<T, Edge, Diff>) {
+    pub fn add_production(&mut self, production: VecCollection<'scope, T, Edge, Diff>) {
         self.current = self.current.clone().concat(production);
     }
     /// Finalizes the variable, connecting its recursive definition.
@@ -112,14 +112,14 @@ impl<T: Timestamp + Lattice> EdgeVariable<T> {
         self.variable.set(distinct);
     }
     /// The collection arranged in the forward direction.
-    pub fn forward(&mut self) -> &Arrange<T, Node, Node, Diff> {
+    pub fn forward(&mut self) -> &Arrange<'scope, T, Node, Node, Diff> {
         if self.forward.is_none() {
             self.forward = Some(self.collection.clone().arrange_by_key());
         }
         self.forward.as_ref().unwrap()
     }
     /// The collection arranged in the reverse direction.
-    pub fn reverse(&mut self) -> &Arrange<T, Node, Node, Diff> {
+    pub fn reverse(&mut self) -> &Arrange<'scope, T, Node, Node, Diff> {
         if self.reverse.is_none() {
             self.reverse = Some(self.collection.clone().map(|(x,y)| (y,x)).arrange_by_key());
         }

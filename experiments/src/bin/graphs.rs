@@ -86,10 +86,10 @@ use differential_dataflow::operators::arrange::TraceAgent;
 
 type TraceHandle = TraceAgent<GraphTrace>;
 
-fn reach(
+fn reach<'s>(
     graph: &mut TraceHandle,
-    roots: VecCollection<(), Node>
-) -> VecCollection<(), Node> {
+    roots: VecCollection<'s, (), Node>
+) -> VecCollection<'s, (), Node> {
 
     let graph = graph.import(&roots.scope());
 
@@ -108,10 +108,10 @@ fn reach(
 }
 
 
-fn bfs(
+fn bfs<'s>(
     graph: &mut TraceHandle,
-    roots: VecCollection<(), Node>
-) -> VecCollection<(), (Node, u32)> {
+    roots: VecCollection<'s, (), Node>
+) -> VecCollection<'s, (), (Node, u32)> {
 
     let graph = graph.import(&roots.scope());
     let roots = roots.map(|r| (r,0));

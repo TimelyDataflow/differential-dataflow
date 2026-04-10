@@ -32,12 +32,12 @@ pub trait Render : Sized {
     ///
     /// This method has access to arranged data, and may rely on and update the set
     /// of arrangements based on the needs and offerings of the rendering process.
-    fn render(
+    fn render<'scope>(
         &self,
-        scope: &mut Scope<Time>,
-        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<Time, Vec<Self::Value>, Diff>>,
+        scope: &mut Scope<'scope, Time>,
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<'scope, Time, Vec<Self::Value>, Diff>>,
         arrangements: &mut TraceManager<Self::Value>,
-    ) -> VecCollection<Time, Vec<Self::Value>, Diff>;}
+    ) -> VecCollection<'scope, Time, Vec<Self::Value>, Diff>;}
 
 /// Possible query plan types.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -141,12 +141,12 @@ impl<V: ExchangeData+Hash+Datum> Render for Plan<V> {
 
     type Value = V;
 
-    fn render(
+    fn render<'scope>(
         &self,
-        scope: &mut Scope<Time>,
-        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<Time, Vec<Self::Value>, Diff>>,
+        scope: &mut Scope<'scope, Time>,
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<'scope, Time, Vec<Self::Value>, Diff>>,
         arrangements: &mut TraceManager<Self::Value>,
-    ) -> VecCollection<Time, Vec<Self::Value>, Diff>
+    ) -> VecCollection<'scope, Time, Vec<Self::Value>, Diff>
     {
         if collections.get(self).is_none() {
 

@@ -1217,9 +1217,6 @@ pub mod vec {
         /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
         /// every value returned by the iterator.
         ///
-        /// This trait is implemented for arrangements (`Arranged<Tr>`) rather than collections. The `Join` trait
-        /// contains the implementations for collections.
-        ///
         /// # Examples
         ///
         /// ```
