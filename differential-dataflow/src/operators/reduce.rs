@@ -33,7 +33,7 @@ use crate::trace::TraceReader;
 /// the value updates, as appropriate for the container. It is critical that it clear the container as
 /// the operator has no ability to do this otherwise, and failing to do so represents a leak from one
 /// key's computation to another, and will likely introduce non-determinism.
-pub fn reduce_trace<Tr1, Bu, Tr2, L, P>(trace: Arranged<Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<TraceAgent<Tr2>>
+pub fn reduce_trace<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader + Clone + 'static,
     Tr2: for<'a> Trace<Key<'a>=Tr1::Key<'a>, ValOwn: Data, Time = Tr1::Time> + 'static,

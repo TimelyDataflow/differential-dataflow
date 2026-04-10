@@ -9,7 +9,7 @@ use crate::operators::*;
 use crate::lattice::Lattice;
 
 /// Returns pairs (node, dist) indicating distance of each node from a root.
-pub fn bfs<T, N>(edges: VecCollection<T, (N,N)>, roots: VecCollection<T, N>) -> VecCollection<T, (N,u32)>
+pub fn bfs<'scope, T, N>(edges: VecCollection<'scope, T, (N,N)>, roots: VecCollection<'scope, T, N>) -> VecCollection<'scope, T, (N,u32)>
 where
     T: Timestamp + Lattice + Ord,
     N: ExchangeData+Hash,
@@ -22,7 +22,7 @@ use crate::trace::TraceReader;
 use crate::operators::arrange::Arranged;
 
 /// Returns pairs (node, dist) indicating distance of each node from a root.
-pub fn bfs_arranged<N, Tr>(edges: Arranged<Tr>, roots: VecCollection<Tr::Time, N>) -> VecCollection<Tr::Time, (N, u32)>
+pub fn bfs_arranged<'scope, N, Tr>(edges: Arranged<'scope, Tr>, roots: VecCollection<'scope, Tr::Time, N>) -> VecCollection<'scope, Tr::Time, (N, u32)>
 where
     N: ExchangeData+Hash,
     Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>+Clone+'static,

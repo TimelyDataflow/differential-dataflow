@@ -7,7 +7,7 @@ use crate::lattice::Lattice;
 use crate::operators::*;
 
 /// Extension trait for the prefix_sum method.
-pub trait PrefixSum<T: Timestamp, K, D> {
+pub trait PrefixSum<'scope, T: Timestamp, K, D> {
     /// Computes the prefix sum for each element in the collection.
     ///
     /// The prefix sum is data-parallel, in the sense that the sums are computed independently for
@@ -16,10 +16,10 @@ pub trait PrefixSum<T: Timestamp, K, D> {
     fn prefix_sum<F>(self, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static;
 
     /// Determine the prefix sum at each element of `location`.
-    fn prefix_sum_at<F>(self, locations: VecCollection<T, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static;
+    fn prefix_sum_at<F>(self, locations: VecCollection<'scope, T, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static;
 }
 
-impl<T, K, D> PrefixSum<T, K, D> for VecCollection<T, ((usize, K), D)>
+impl<'scope, T, K, D> PrefixSum<'scope, T, K, D> for VecCollection<'scope, T, ((usize, K), D)>
 where
     T: Timestamp + Lattice,
     K: ExchangeData + ::std::hash::Hash,
@@ -29,7 +29,7 @@ where
         self.clone().prefix_sum_at(self.map(|(x,_)| x), zero, combine)
     }
 
-    fn prefix_sum_at<F>(self, locations: VecCollection<T, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
+    fn prefix_sum_at<F>(self, locations: VecCollection<'scope, T, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
 
         let combine1 = ::std::rc::Rc::new(combine);
         let combine2 = combine1.clone();
@@ -40,7 +40,7 @@ where
 }
 
 /// Accumulate data in `collection` into all powers-of-two intervals containing them.
-pub fn aggregate<T, K, D, F>(collection: VecCollection<T, ((usize, K), D)>, combine: F) -> VecCollection<T, ((usize, usize, K), D)>
+pub fn aggregate<'scope, T, K, D, F>(collection: VecCollection<'scope, T, ((usize, K), D)>, combine: F) -> VecCollection<'scope, T, ((usize, usize, K), D)>
 where
     T: Timestamp + Lattice,
     K: ExchangeData + ::std::hash::Hash,
@@ -73,18 +73,17 @@ where
 }
 
 /// Produces the accumulated values at each of the `usize` locations in `queries`.
-pub fn broadcast<T, K, D, F>(
-    ranges: VecCollection<T, ((usize, usize, K), D)>,
-    queries: VecCollection<T, (usize, K)>,
+pub fn broadcast<'scope, T, K, D, F>(
+    ranges: VecCollection<'scope, T, ((usize, usize, K), D)>,
+    queries: VecCollection<'scope, T, (usize, K)>,
     zero: D,
-    combine: F) -> VecCollection<T, ((usize, K), D)>
+    combine: F) -> VecCollection<'scope, T, ((usize, K), D)>
 where
     T: Timestamp + Lattice + Ord + ::std::fmt::Debug,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,
 {
-
     let zero0 = zero.clone();
     let zero1 = zero.clone();
     let zero2 = zero.clone();
