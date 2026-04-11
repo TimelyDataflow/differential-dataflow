@@ -1,0 +1,13 @@
+-- Reachability — pipe syntax
+-- input 0: edges (src, dst ;)
+-- input 1: roots (node ;)
+
+let edges = input 0 | key($0[0] ; $0[1]);
+let roots = input 1 | key($0[0] ;);
+
+reach: {
+    let proposals = reach | join(edges, ($2 ;));
+    var reach = roots + proposals | distinct;
+}
+
+result reach::reach | key(;) | arrange | inspect(total);
