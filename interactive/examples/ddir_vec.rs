@@ -13,31 +13,31 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::input::Input;
 use smallvec::smallvec as svec;
 
-use ddir::parse;
-use ddir::lower;
-use ddir::ir::{Node, LinearOp, Program, Diff, Id, Time, eval_fields, eval_field_into, eval_condition};
+use interactive::parse;
+use interactive::lower;
+use interactive::ir::{Node, LinearOp, Program, Diff, Id, Time, eval_fields, eval_field_into, eval_condition};
 
 type Row = Vec<i64>;
-type Col<G> = VecCollection<G, (Row, Row), Diff>;
-type Arr<G> = Arranged<G, TraceAgent<ValSpine<Row, Row, <G as timely::dataflow::scopes::ScopeParent>::Timestamp, Diff>>>;
+type DdirTime = Product<u64, PointStamp<u64>>;
+type Col<'scope, T> = VecCollection<'scope, T, (Row, Row), Diff>;
+type Arr<'scope, T> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, T, Diff>>>;
 
-enum Rendered<G: Scope<Timestamp: differential_dataflow::lattice::Lattice>> {
-    Collection(Col<G>),
-    Arrangement(Arr<G>),
+enum Rendered<'scope, T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice> {
+    Collection(Col<'scope, T>),
+    Arrangement(Arr<'scope, T>),
 }
 
-impl<G: Scope<Timestamp: differential_dataflow::lattice::Lattice>> Rendered<G> {
-    fn collection(&self) -> Col<G> { match self { Rendered::Collection(c) => c.clone(), Rendered::Arrangement(a) => a.clone().as_collection(|k, v| (k.clone(), v.clone())) } }
-    fn arrange(&self) -> Arr<G> { match self { Rendered::Arrangement(a) => a.clone(), Rendered::Collection(c) => c.clone().arrange_by_key() } }
+impl<'scope, T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice> Rendered<'scope, T> {
+    fn collection(&self) -> Col<'scope, T> { match self { Rendered::Collection(c) => c.clone(), Rendered::Arrangement(a) => a.clone().as_collection(|k, v| (k.clone(), v.clone())) } }
+    fn arrange(&self) -> Arr<'scope, T> { match self { Rendered::Arrangement(a) => a.clone(), Rendered::Collection(c) => c.clone().arrange_by_key() } }
 }
 
 
-fn render_program<G>(program: &Program, scope: &mut G, inputs: &[Col<G>]) -> HashMap<Id, Col<G>>
-where G: Scope<Timestamp = Product<u64, PointStamp<u64>>>
+fn render_program<'scope>(program: &Program, scope: &mut Scope<'scope, DdirTime>, inputs: &[Col<'scope, DdirTime>]) -> HashMap<Id, Col<'scope, DdirTime>>
 {
-    let mut nodes: HashMap<Id, Rendered<G>> = HashMap::new();
+    let mut nodes: HashMap<Id, Rendered<'scope, DdirTime>> = HashMap::new();
     let mut level: usize = 0;
-    let mut variables: HashMap<Id, (VecVariable<G, (Row, Row), Diff>, usize)> = HashMap::new();
+    let mut variables: HashMap<Id, (VecVariable<'scope, DdirTime, (Row, Row), Diff>, usize)> = HashMap::new();
     let mut var_levels: HashMap<Id, usize> = HashMap::new();
 
     for (&id, node) in program.nodes.iter() {
@@ -105,7 +105,11 @@ where G: Scope<Timestamp = Product<u64, PointStamp<u64>>>
                     parse::Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
                     parse::Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); } }),
                 };
-                let reduced = a.reduce_abelian::<_, differential_dataflow::trace::implementations::ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>("Reduce", move |k, v, o| f(k, v, o));
+                let reduced = a.reduce_abelian::<_, differential_dataflow::trace::implementations::ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>, _>(
+                    "Reduce",
+                    move |k, v, o| f(k, v, o),
+                    |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
+                );
                 nodes.insert(id, Rendered::Arrangement(reduced));
             },
             Node::Variable => {
@@ -150,7 +154,7 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
             let output = scope.iterative::<PointStamp<u64>, _, _>(|inner| {
                 let entered: Vec<_> = collections.iter().map(|c| c.clone().enter(inner)).collect();
                 let rendered = render_program(&compiled, inner, &entered);
-                rendered[&result_id].clone().leave()
+                rendered[&result_id].clone().leave(scope)
             });
             output.probe_with(&mut probe);
             (handles, probe)
@@ -162,7 +166,7 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
         for e in 0..edges {
             if (e as usize) % peers == index {
                 let input_idx = (e as usize) % inputs.len();
-                inputs[input_idx].update(ddir::gen_row::<Row>(e, nodes, arity), 1);
+                inputs[input_idx].update(interactive::gen_row::<Row>(e, nodes, arity), 1);
             }
         }
         for i in inputs.iter_mut() { i.advance_to(1); i.flush(); }
@@ -180,11 +184,11 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
                 let add_idx = edges + cursor;
                 if (remove_idx as usize) % peers == index {
                     let input_idx = (remove_idx as usize) % inputs.len();
-                    inputs[input_idx].update(ddir::gen_row::<Row>(remove_idx, nodes, arity), -1);
+                    inputs[input_idx].update(interactive::gen_row::<Row>(remove_idx, nodes, arity), -1);
                 }
                 if (add_idx as usize) % peers == index {
                     let input_idx = (add_idx as usize) % inputs.len();
-                    inputs[input_idx].update(ddir::gen_row::<Row>(add_idx, nodes, arity), 1);
+                    inputs[input_idx].update(interactive::gen_row::<Row>(add_idx, nodes, arity), 1);
                 }
                 cursor += 1;
             }
@@ -208,13 +212,13 @@ fn main() {
     let batch: u64 = std::env::args().nth(5).unwrap_or("1".into()).parse().unwrap();
     let rounds: Option<u64> = std::env::args().nth(6).map(|s| s.parse().unwrap());
 
-    let source = ddir::load_program(&program);
+    let source = interactive::load_program(&program);
     let stmts = if program.ends_with(".ddp") {
         parse::pipe::parse(&source)
     } else {
         parse::applicative::parse(&source)
     };
-    let n_inputs = ddir::count_inputs(&stmts);
+    let n_inputs = interactive::count_inputs(&stmts);
     let name = std::path::Path::new(&program).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(program.clone());
     run(&name, stmts, n_inputs, nodes, edges, arity, batch, rounds);
 }

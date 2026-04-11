@@ -14,7 +14,6 @@ members = [
     #"doop",
     "mdbook",
     "diagnostics",
-    "ddir",
 ]
 resolver = "2"
 
