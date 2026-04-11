@@ -1,0 +1,28 @@
+-- K-Core (k=2): maximal subgraph where every node has degree >= 2.
+-- Input 0: edges (src, dst ;)
+
+let edges = MAP(INPUT 0, ($0[0] ; $0[1]));
+let back = MAP(edges, ($1 ; $0));
+let symm = CONCAT(edges, back);
+
+peel: {
+    let active = CONCAT(symm, removals);
+
+    -- Count degree of each node among active edges.
+    let deg = REDUCE(MAP(active, ($0[0] ;)), COUNT);
+    -- deg: (node ; count)
+
+    -- Nodes with degree >= 2 survive.
+    let alive = FILTER(deg, $1[0] >= 2);
+    let alive_set = MAP(alive, ($0[0] ;));
+
+    -- Edges whose source is not alive get removed.
+    -- semijoin active with alive_set, negate to get removals.
+    let kept = JOIN(active, alive_set, ($0 ; $1));
+    let newly_removed = CONCAT(active, NEGATE(kept));
+
+    var removals = ARRANGE(CONCAT(removals, NEGATE(newly_removed)));
+}
+
+let core_edges = CONCAT(symm, peel::removals);
+result INSPECT(REDUCE(MAP(core_edges, ($0[0] ;)), COUNT), kcore_degrees);
