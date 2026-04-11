@@ -62,13 +62,13 @@ use timely::dataflow::operators::CapabilitySet;
 /// Notice that the time is hoisted up into data. The expectation is that
 /// once out of the "delta flow region", the updates will be `delay`d to the
 /// times specified in the payloads.
-pub fn half_join<K, V, R, Tr, FF, CF, DOut, S>(
-    stream: VecCollection<Tr::Time, (K, V, Tr::Time), R>,
-    arrangement: Arranged<Tr>,
+pub fn half_join<'scope, K, V, R, Tr, FF, CF, DOut, S>(
+    stream: VecCollection<'scope, Tr::Time, (K, V, Tr::Time), R>,
+    arrangement: Arranged<'scope, Tr>,
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
-) -> VecCollection<Tr::Time, (DOut, Tr::Time), <R as Mul<Tr::Diff>>::Output>
+) -> VecCollection<'scope, Tr::Time, (DOut, Tr::Time), <R as Mul<Tr::Diff>>::Output>
 where
     K: Hashable + ExchangeData,
     V: ExchangeData,
@@ -118,14 +118,14 @@ where
 /// yield control, as a function of the elapsed time and the number of matched
 /// records. Note this is not the number of *output* records, owing mainly to
 /// the number of matched records being easiest to record with low overhead.
-pub fn half_join_internal_unsafe<K, V, R, Tr, FF, CF, Y, S, CB>(
-    stream: VecCollection<Tr::Time, (K, V, Tr::Time), R>,
-    mut arrangement: Arranged<Tr>,
+pub fn half_join_internal_unsafe<'scope, K, V, R, Tr, FF, CF, Y, S, CB>(
+    stream: VecCollection<'scope, Tr::Time, (K, V, Tr::Time), R>,
+    mut arrangement: Arranged<'scope, Tr>,
     frontier_func: FF,
     comparison: CF,
     yield_function: Y,
     mut output_func: S,
-) -> Stream<Tr::Time, CB::Container>
+) -> Stream<'scope, Tr::Time, CB::Container>
 where
     K: Hashable + ExchangeData,
     V: ExchangeData,

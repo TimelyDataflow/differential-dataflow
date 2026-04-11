@@ -16,7 +16,7 @@ use crate::difference::Semigroup;
 use crate::collection::{VecCollection, AsCollection};
 
 /// Create a new collection and input handle to control the collection.
-pub trait Input : TimelyInput {
+pub trait Input<'scope> : TimelyInput<'scope> {
     /// Create a new collection and input handle to subsequently control the collection.
     ///
     /// # Examples
@@ -41,7 +41,7 @@ pub trait Input : TimelyInput {
     ///
     /// }).unwrap();
     /// ```
-    fn new_collection<D, R>(&mut self) -> (InputSession<Self::Timestamp, D, R>, VecCollection<Self::Timestamp, D, R>)
+    fn new_collection<D, R>(&mut self) -> (InputSession<Self::Timestamp, D, R>, VecCollection<'scope, Self::Timestamp, D, R>)
     where D: Data, R: Semigroup+'static;
     /// Create a new collection and input handle from initial data.
     ///
@@ -67,7 +67,7 @@ pub trait Input : TimelyInput {
     ///
     /// }).unwrap();
     /// ```
-    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<Self::Timestamp, I::Item, isize>, VecCollection<Self::Timestamp, I::Item, isize>)
+    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<Self::Timestamp, I::Item, isize>, VecCollection<'scope, Self::Timestamp, I::Item, isize>)
     where I: IntoIterator<Item: Data> + 'static;
     /// Create a new collection and input handle from initial data.
     ///
@@ -93,24 +93,24 @@ pub trait Input : TimelyInput {
     ///
     /// }).unwrap();
     /// ```
-    fn new_collection_from_raw<D, R, I>(&mut self, data: I) -> (InputSession<Self::Timestamp, D, R>, VecCollection<Self::Timestamp, D, R>)
+    fn new_collection_from_raw<D, R, I>(&mut self, data: I) -> (InputSession<Self::Timestamp, D, R>, VecCollection<'scope, Self::Timestamp, D, R>)
     where I: IntoIterator<Item=(D,Self::Timestamp,R)>+'static, D: Data, R: Semigroup+'static;
 }
 
 use crate::lattice::Lattice;
-impl<T: Timestamp + Lattice + timely::order::TotalOrder> Input for Scope<T> {
-    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, VecCollection<T, D, R>)
+impl<'scope, T: Timestamp + Lattice + timely::order::TotalOrder> Input<'scope> for Scope<'scope, T> {
+    fn new_collection<D, R>(&mut self) -> (InputSession<T, D, R>, VecCollection<'scope, T, D, R>)
     where
         D: Data, R: Semigroup+'static,
     {
         let (handle, stream) = self.new_input();
         (InputSession::from(handle), stream.as_collection())
     }
-    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, VecCollection<T, I::Item, isize>)
+    fn new_collection_from<I>(&mut self, data: I) -> (InputSession<T, I::Item, isize>, VecCollection<'scope, T, I::Item, isize>)
     where I: IntoIterator+'static, I::Item: Data {
         self.new_collection_from_raw(data.into_iter().map(|d| (d, <T as timely::progress::Timestamp>::minimum(), 1)))
     }
-    fn new_collection_from_raw<D,R,I>(&mut self, data: I) -> (InputSession<T, D, R>, VecCollection<T, D, R>)
+    fn new_collection_from_raw<D,R,I>(&mut self, data: I) -> (InputSession<T, D, R>, VecCollection<'scope, T, D, R>)
     where
         D: Data,
         R: Semigroup+'static,
@@ -199,7 +199,7 @@ impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
 impl<T: Timestamp+Clone, D: Data, R: Semigroup+'static> InputSession<T, D, R> {
 
     /// Introduces a handle as collection.
-    pub fn to_collection(&mut self, scope: &mut Scope<T>) -> VecCollection<T, D, R>
+    pub fn to_collection<'scope>(&mut self, scope: &mut Scope<'scope, T>) -> VecCollection<'scope, T, D, R>
     where
         T: timely::order::TotalOrder,
     {

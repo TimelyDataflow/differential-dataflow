@@ -109,10 +109,10 @@ mod reachability {
     /// Compute the set of nodes reachable from `roots` along directed `edges`.
     ///
     /// Returns `(node, ())` for each reachable node.
-    pub fn reach(
-        edges: Collection<Time, RecordedUpdates<(Node, Node, Time, Diff)>>,
-        roots: Collection<Time, RecordedUpdates<(Node, (), Time, Diff)>>,
-    ) -> Collection<Time, RecordedUpdates<(Node, (), Time, Diff)>>
+    pub fn reach<'scope>(
+        edges: Collection<'scope, Time, RecordedUpdates<(Node, Node, Time, Diff)>>,
+        roots: Collection<'scope, Time, RecordedUpdates<(Node, (), Time, Diff)>>,
+    ) -> Collection<'scope, Time, RecordedUpdates<(Node, (), Time, Diff)>>
     {
         let outer = edges.inner.scope();
 

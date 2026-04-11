@@ -19,37 +19,37 @@ pub mod operators;
     Implementors of `PrefixExtension` provide types and methods for extending a differential dataflow collection,
     via the three methods `count`, `propose`, and `validate`.
 **/
-pub trait PrefixExtender<T: Timestamp, R: Monoid+Multiply<Output = R>> {
+pub trait PrefixExtender<'scope, T: Timestamp, R: Monoid+Multiply<Output = R>> {
     /// The required type of prefix to extend.
     type Prefix;
     /// The type to be produced as extension.
     type Extension;
     /// Annotates prefixes with the number of extensions the relation would propose.
-    fn count(&mut self, prefixes: VecCollection<T, (Self::Prefix, usize, usize), R>, index: usize) -> VecCollection<T, (Self::Prefix, usize, usize), R>;
+    fn count(&mut self, prefixes: VecCollection<'scope, T, (Self::Prefix, usize, usize), R>, index: usize) -> VecCollection<'scope, T, (Self::Prefix, usize, usize), R>;
     /// Extends each prefix with corresponding extensions.
-    fn propose(&mut self, prefixes: VecCollection<T, Self::Prefix, R>) -> VecCollection<T, (Self::Prefix, Self::Extension), R>;
+    fn propose(&mut self, prefixes: VecCollection<'scope, T, Self::Prefix, R>) -> VecCollection<'scope, T, (Self::Prefix, Self::Extension), R>;
     /// Restricts proposed extensions by those the extender would have proposed.
-    fn validate(&mut self, extensions: VecCollection<T, (Self::Prefix, Self::Extension), R>) -> VecCollection<T, (Self::Prefix, Self::Extension), R>;
+    fn validate(&mut self, extensions: VecCollection<'scope, T, (Self::Prefix, Self::Extension), R>) -> VecCollection<'scope, T, (Self::Prefix, Self::Extension), R>;
 }
 
-pub trait ProposeExtensionMethod<T: Timestamp, P: ExchangeData+Ord, R: Monoid+Multiply<Output = R>> {
-    fn propose_using<PE: PrefixExtender<T, R, Prefix=P>>(self, extender: &mut PE) -> VecCollection<T, (P, PE::Extension), R>;
-    fn extend<E: ExchangeData+Ord>(self, extenders: &mut [&mut dyn PrefixExtender<T,R,Prefix=P,Extension=E>]) -> VecCollection<T, (P, E), R>;
+pub trait ProposeExtensionMethod<'scope, T: Timestamp, P: ExchangeData+Ord, R: Monoid+Multiply<Output = R>> {
+    fn propose_using<PE: PrefixExtender<'scope, T, R, Prefix=P>>(self, extender: &mut PE) -> VecCollection<'scope, T, (P, PE::Extension), R>;
+    fn extend<E: ExchangeData+Ord>(self, extenders: &mut [&mut dyn PrefixExtender<'scope, T,R,Prefix=P,Extension=E>]) -> VecCollection<'scope, T, (P, E), R>;
 }
 
-impl<T, P, R> ProposeExtensionMethod<T, P, R> for VecCollection<T, P, R>
+impl<'scope, T, P, R> ProposeExtensionMethod<'scope, T, P, R> for VecCollection<'scope, T, P, R>
 where
     T: Timestamp,
     P: ExchangeData+Ord,
     R: Monoid+Multiply<Output = R>+'static,
 {
-    fn propose_using<PE>(self, extender: &mut PE) -> VecCollection<T, (P, PE::Extension), R>
+    fn propose_using<PE>(self, extender: &mut PE) -> VecCollection<'scope, T, (P, PE::Extension), R>
     where
-        PE: PrefixExtender<T, R, Prefix=P>
+        PE: PrefixExtender<'scope, T, R, Prefix=P>
     {
         extender.propose(self)
     }
-    fn extend<E>(self, extenders: &mut [&mut dyn PrefixExtender<T,R,Prefix=P,Extension=E>]) -> VecCollection<T, (P, E), R>
+    fn extend<E>(self, extenders: &mut [&mut dyn PrefixExtender<'scope, T,R,Prefix=P,Extension=E>]) -> VecCollection<'scope, T, (P, E), R>
     where
         E: ExchangeData+Ord
     {
@@ -80,12 +80,12 @@ where
     }
 }
 
-pub trait ValidateExtensionMethod<T: Timestamp, R: Monoid+Multiply<Output = R>, P, E> {
-    fn validate_using<PE: PrefixExtender<T, R, Prefix=P, Extension=E>>(self, extender: &mut PE) -> VecCollection<T, (P, E), R>;
+pub trait ValidateExtensionMethod<'scope, T: Timestamp, R: Monoid+Multiply<Output = R>, P, E> {
+    fn validate_using<PE: PrefixExtender<'scope, T, R, Prefix=P, Extension=E>>(self, extender: &mut PE) -> VecCollection<'scope, T, (P, E), R>;
 }
 
-impl<T: Timestamp, R: Monoid+Multiply<Output = R>, P, E> ValidateExtensionMethod<T, R, P, E> for VecCollection<T, (P, E), R> {
-    fn validate_using<PE: PrefixExtender<T, R, Prefix=P, Extension=E>>(self, extender: &mut PE) -> VecCollection<T, (P, E), R> {
+impl<'scope, T: Timestamp, R: Monoid+Multiply<Output = R>, P, E> ValidateExtensionMethod<'scope, T, R, P, E> for VecCollection<'scope, T, (P, E), R> {
+    fn validate_using<PE: PrefixExtender<'scope, T, R, Prefix=P, Extension=E>>(self, extender: &mut PE) -> VecCollection<'scope, T, (P, E), R> {
         extender.validate(self)
     }
 }
@@ -136,7 +136,7 @@ where
     R: Monoid+Multiply<Output = R>+ExchangeData,
 {
 
-    pub fn index(collection: VecCollection<T, (K, V), R>) -> Self {
+    pub fn index<'scope>(collection: VecCollection<'scope, T, (K, V), R>) -> Self {
         // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
         // counts and validate can share the base arrangement
         let arranged = collection.clone().arrange_by_self();
@@ -179,7 +179,7 @@ where
     key_selector: F,
 }
 
-impl<T, K, V, R, P, F> PrefixExtender<T, R> for CollectionExtender<K, V, T, R, P, F>
+impl<'scope, T, K, V, R, P, F> PrefixExtender<'scope, T, R> for CollectionExtender<K, V, T, R, P, F>
 where
     T: Timestamp + Lattice + ExchangeData + Hash,
     K: ExchangeData+Hash+Default,
@@ -191,17 +191,17 @@ where
     type Prefix = P;
     type Extension = V;
 
-    fn count(&mut self, prefixes: VecCollection<T, (P, usize, usize), R>, index: usize) -> VecCollection<T, (P, usize, usize), R> {
+    fn count(&mut self, prefixes: VecCollection<'scope, T, (P, usize, usize), R>, index: usize) -> VecCollection<'scope, T, (P, usize, usize), R> {
         let counts = self.indices.count_trace.import(&prefixes.scope());
         operators::count::count(prefixes, counts, self.key_selector.clone(), index)
     }
 
-    fn propose(&mut self, prefixes: VecCollection<T, P, R>) -> VecCollection<T, (P, V), R> {
+    fn propose(&mut self, prefixes: VecCollection<'scope, T, P, R>) -> VecCollection<'scope, T, (P, V), R> {
         let propose = self.indices.propose_trace.import(&prefixes.scope());
         operators::propose::propose(prefixes, propose, self.key_selector.clone())
     }
 
-    fn validate(&mut self, extensions: VecCollection<T, (P, V), R>) -> VecCollection<T, (P, V), R> {
+    fn validate(&mut self, extensions: VecCollection<'scope, T, (P, V), R>) -> VecCollection<'scope, T, (P, V), R> {
         let validate = self.indices.validate_trace.import(&extensions.scope());
         operators::validate::validate(extensions, validate, self.key_selector.clone())
     }

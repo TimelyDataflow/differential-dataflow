@@ -8,7 +8,7 @@ use crate::operators::*;
 use crate::difference::Abelian;
 
 /// Assign unique identifiers to elements of a collection.
-pub trait Identifiers<T: Timestamp, D: ExchangeData, R: ExchangeData+Abelian> {
+pub trait Identifiers<'scope, T: Timestamp, D: ExchangeData, R: ExchangeData+Abelian> {
     /// Assign unique identifiers to elements of a collection.
     ///
     /// # Example
@@ -27,16 +27,16 @@ pub trait Identifiers<T: Timestamp, D: ExchangeData, R: ExchangeData+Abelian> {
     ///          .assert_empty();
     /// });
     /// ```
-    fn identifiers(self) -> VecCollection<T, (D, u64), R>;
+    fn identifiers(self) -> VecCollection<'scope, T, (D, u64), R>;
 }
 
-impl<T, D, R> Identifiers<T, D, R> for VecCollection<T, D, R>
+impl<'scope, T, D, R> Identifiers<'scope, T, D, R> for VecCollection<'scope, T, D, R>
 where
     T: Timestamp + Lattice,
     D: ExchangeData + ::std::hash::Hash,
     R: ExchangeData + Abelian,
 {
-    fn identifiers(self) -> VecCollection<T, (D, u64), R> {
+    fn identifiers(self) -> VecCollection<'scope, T, (D, u64), R> {
 
         // The design here is that we iteratively develop a collection
         // of pairs (round, record), where each pair is a proposal that

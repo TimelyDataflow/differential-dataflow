@@ -14,7 +14,7 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait CountTotal<T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: Semigroup> : Sized {
+pub trait CountTotal<'scope, T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: Semigroup> : Sized {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -30,7 +30,7 @@ pub trait CountTotal<T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData,
     ///          .count_total();
     /// });
     /// ```
-    fn count_total(self) -> VecCollection<T, (K, R), isize> {
+    fn count_total(self) -> VecCollection<'scope, T, (K, R), isize> {
         self.count_total_core()
     }
 
@@ -39,20 +39,20 @@ pub trait CountTotal<T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData,
     /// This method allows `count_total` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<T, (K, R), R2>;
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<'scope, T, (K, R), R2>;
 }
 
-impl<T, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<T, K, R> for VecCollection<T, K, R>
+impl<'scope, T, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<'scope, T, K, R> for VecCollection<'scope, T, K, R>
 where
     T: Timestamp + TotalOrder + Lattice + Ord,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<T, (K, R), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<'scope, T, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")
             .count_total_core()
     }
 }
 
-impl<K, Tr> CountTotal<Tr::Time, K, Tr::Diff> for Arranged<Tr>
+impl<'scope, K, Tr> CountTotal<'scope, Tr::Time, K, Tr::Diff> for Arranged<'scope, Tr>
 where
     Tr: for<'a> TraceReader<
         Key<'a> = &'a K,
@@ -62,7 +62,7 @@ where
     >+Clone+'static,
     K: ExchangeData,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<Tr::Time, (K, Tr::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<'scope, Tr::Time, (K, Tr::Diff), R2> {
 
         let mut trace = self.trace.clone();
 

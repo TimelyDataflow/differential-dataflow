@@ -11,11 +11,11 @@ use differential_dataflow::trace::TraceReader;
 /// create a join if the `prefixes` collection is also arranged and responds to changes that
 /// `arrangement` undergoes. More complicated patterns are also appropriate, as in the case
 /// of delta queries.
-pub fn propose<Tr, K, F, P, V>(
-    prefixes: VecCollection<Tr::Time, P, Tr::Diff>,
-    arrangement: Arranged<Tr>,
+pub fn propose<'scope, Tr, K, F, P, V>(
+    prefixes: VecCollection<'scope, Tr::Time, P, Tr::Diff>,
+    arrangement: Arranged<'scope, Tr>,
     key_selector: F,
-) -> VecCollection<Tr::Time, (P, V), Tr::Diff>
+) -> VecCollection<'scope, Tr::Time, (P, V), Tr::Diff>
 where
     Tr: for<'a> TraceReader<
         ValOwn = V,
@@ -44,11 +44,11 @@ where
 /// Unlike `propose`, this method does not scale the multiplicity of matched
 /// prefixes by the number of matches in `arrangement`. This can be useful to
 /// avoid the need to prepare an arrangement of distinct extensions.
-pub fn propose_distinct<Tr, K, F, P, V>(
-    prefixes: VecCollection<Tr::Time, P, Tr::Diff>,
-    arrangement: Arranged<Tr>,
+pub fn propose_distinct<'scope, Tr, K, F, P, V>(
+    prefixes: VecCollection<'scope, Tr::Time, P, Tr::Diff>,
+    arrangement: Arranged<'scope, Tr>,
     key_selector: F,
-) -> VecCollection<Tr::Time, (P, V), Tr::Diff>
+) -> VecCollection<'scope, Tr::Time, (P, V), Tr::Diff>
 where
     Tr: for<'a> TraceReader<
         ValOwn = V,

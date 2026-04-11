@@ -25,12 +25,12 @@ pub struct Map<V: Datum> {
 impl<V: ExchangeData+Hash+Datum> Render for Map<V> {
     type Value = V;
 
-    fn render(
+    fn render<'scope>(
         &self,
-        scope: &mut Scope<Time>,
-        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<Time, Vec<Self::Value>, Diff>>,
+        scope: &mut Scope<'scope, Time>,
+        collections: &mut std::collections::HashMap<Plan<Self::Value>, VecCollection<'scope, Time, Vec<Self::Value>, Diff>>,
         arrangements: &mut TraceManager<Self::Value>,
-    ) -> VecCollection<Time, Vec<Self::Value>, Diff>
+    ) -> VecCollection<'scope, Time, Vec<Self::Value>, Diff>
     {
         let expressions = self.expressions.clone();
 

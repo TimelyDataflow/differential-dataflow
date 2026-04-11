@@ -13,7 +13,7 @@ use crate::difference::{Abelian, Multiply};
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate<T, N, L, R>(edges: VecCollection<T, (N,N), R>, nodes: VecCollection<T,(N,L),R>) -> VecCollection<T,(N,L),R>
+pub fn propagate<'scope, T, N, L, R>(edges: VecCollection<'scope, T, (N,N), R>, nodes: VecCollection<'scope, T,(N,L),R>) -> VecCollection<'scope, T,(N,L),R>
 where
     T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
@@ -30,7 +30,7 @@ where
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate_at<T, N, L, F, R>(edges: VecCollection<T, (N,N), R>, nodes: VecCollection<T,(N,L),R>, logic: F) -> VecCollection<T,(N,L),R>
+pub fn propagate_at<'scope, T, N, L, F, R>(edges: VecCollection<'scope, T, (N,N), R>, nodes: VecCollection<'scope, T,(N,L),R>, logic: F) -> VecCollection<'scope, T,(N,L),R>
 where
     T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
@@ -51,7 +51,7 @@ use crate::operators::arrange::arrangement::Arranged;
 /// This variant takes a pre-arranged edge collection, to facilitate re-use, and allows
 /// a method `logic` to specify the rounds in which we introduce various labels. The output
 /// of `logic should be a number in the interval \[0,64\],
-pub fn propagate_core<N, L, Tr, F, R>(edges: Arranged<Tr>, nodes: VecCollection<Tr::Time,(N,L),R>, logic: F) -> VecCollection<Tr::Time,(N,L),R>
+pub fn propagate_core<'scope, N, L, Tr, F, R>(edges: Arranged<'scope, Tr>, nodes: VecCollection<'scope, Tr::Time,(N,L),R>, logic: F) -> VecCollection<'scope, Tr::Time,(N,L),R>
 where
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,

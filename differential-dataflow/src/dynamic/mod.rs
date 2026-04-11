@@ -25,7 +25,7 @@ use crate::collection::AsCollection;
 use crate::dynamic::pointstamp::PointStamp;
 use crate::dynamic::pointstamp::PointStampSummary;
 
-impl<D, R, T, TOuter> VecCollection<Product<TOuter, PointStamp<T>>, D, R>
+impl<'scope, D, R, T, TOuter> VecCollection<'scope, Product<TOuter, PointStamp<T>>, D, R>
 where
     D: Data,
     R: Semigroup+'static,

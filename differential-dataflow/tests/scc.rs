@@ -214,7 +214,7 @@ fn scc_differential(
         .collect()
 }
 
-fn _strongly_connected<T>(graph: VecCollection<T, Edge>) -> VecCollection<T, Edge>
+fn _strongly_connected<'scope, T>(graph: VecCollection<'scope, T, Edge>) -> VecCollection<'scope, T, Edge>
 where
     T: timely::progress::Timestamp + Lattice + Ord + Hash,
 {
@@ -225,7 +225,7 @@ where
     })
 }
 
-fn _trim_edges<T>(cycle: VecCollection<T, Edge>, edges: VecCollection<T, Edge>) -> VecCollection<T, Edge>
+fn _trim_edges<'scope, T>(cycle: VecCollection<'scope, T, Edge>, edges: VecCollection<'scope, T, Edge>) -> VecCollection<'scope, T, Edge>
 where
     T: timely::progress::Timestamp + Lattice + Ord + Hash,
 {
@@ -243,7 +243,7 @@ where
          .map(|((x1,x2),_)| (x2,x1))
 }
 
-fn _reachability<T>(edges: VecCollection<T, Edge>, nodes: VecCollection<T, (Node, Node)>) -> VecCollection<T, Edge>
+fn _reachability<'scope, T>(edges: VecCollection<'scope, T, Edge>, nodes: VecCollection<'scope, T, (Node, Node)>) -> VecCollection<'scope, T, Edge>
 where
     T: timely::progress::Timestamp + Lattice + Ord + Hash,
 {

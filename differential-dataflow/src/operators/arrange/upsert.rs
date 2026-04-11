@@ -128,10 +128,10 @@ use super::TraceAgent;
 /// This method is only implemented for totally ordered times, as we do not yet
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
-pub fn arrange_from_upsert<Bu, Tr, K, V>(
-    stream: Stream<Tr::Time, Vec<(K, Option<V>, Tr::Time)>>,
+pub fn arrange_from_upsert<'scope, Bu, Tr, K, V>(
+    stream: Stream<'scope, Tr::Time, Vec<(K, Option<V>, Tr::Time)>>,
     name: &str,
-) -> Arranged<TraceAgent<Tr>>
+) -> Arranged<'scope, TraceAgent<Tr>>
 where
     K: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,

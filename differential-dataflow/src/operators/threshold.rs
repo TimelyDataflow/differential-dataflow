@@ -17,9 +17,9 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait ThresholdTotal<T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
+pub trait ThresholdTotal<'scope, T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
     /// Reduces the collection to one occurrence of each distinct element.
-    fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<T, K, R2>
+    fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<'scope, T, K, R2>
     where
         R2: Semigroup+'static,
         F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
@@ -39,7 +39,7 @@ pub trait ThresholdTotal<T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeD
     ///          .threshold_total(|_,c| c % 2);
     /// });
     /// ```
-    fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(self, mut thresh: F) -> VecCollection<T, K, R2> {
+    fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(self, mut thresh: F) -> VecCollection<'scope, T, K, R2> {
         self.threshold_semigroup(move |key, new, old| {
             let mut new = thresh(key, new);
             if let Some(old) = old {
@@ -69,7 +69,7 @@ pub trait ThresholdTotal<T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeD
     ///          .distinct_total();
     /// });
     /// ```
-    fn distinct_total(self) -> VecCollection<T, K, isize> {
+    fn distinct_total(self) -> VecCollection<'scope, T, K, isize> {
         self.distinct_total_core()
     }
 
@@ -78,17 +78,17 @@ pub trait ThresholdTotal<T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeD
     /// This method allows `distinct` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn distinct_total_core<R2: Abelian+From<i8>+'static>(self) -> VecCollection<T, K, R2> {
+    fn distinct_total_core<R2: Abelian+From<i8>+'static>(self) -> VecCollection<'scope, T, K, R2> {
         self.threshold_total(|_,_| R2::from(1i8))
     }
 
 }
 
-impl<T, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<T, K, R> for VecCollection<T, K, R>
+impl<'scope, T, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<'scope, T, K, R> for VecCollection<'scope, T, K, R>
 where
     T: Timestamp + TotalOrder + Lattice + Ord,
 {
-    fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<T, K, R2>
+    fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<'scope, T, K, R2>
     where
         R2: Semigroup+'static,
         F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
@@ -98,7 +98,7 @@ where
     }
 }
 
-impl<K, Tr> ThresholdTotal<Tr::Time, K, Tr::Diff> for Arranged<Tr>
+impl<'scope, K, Tr> ThresholdTotal<'scope, Tr::Time, K, Tr::Diff> for Arranged<'scope, Tr>
 where
     Tr: for<'a> TraceReader<
         Key<'a>=&'a K,
@@ -108,7 +108,7 @@ where
     >+Clone+'static,
     K: ExchangeData,
 {
-    fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<Tr::Time, K, R2>
+    fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<'scope, Tr::Time, K, R2>
     where
         R2: Semigroup+'static,
         F: for<'a> FnMut(Tr::Key<'a>,&Tr::Diff,Option<&Tr::Diff>)->Option<R2>+'static,

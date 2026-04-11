@@ -9,7 +9,7 @@ use crate::lattice::Lattice;
 use crate::operators::*;
 use crate::hashable::Hashable;
 
-fn _color<T, N>(edges: VecCollection<T, (N,N)>) -> VecCollection<T,(N,Option<u32>)>
+fn _color<'scope, T, N>(edges: VecCollection<'scope, T, (N,N)>) -> VecCollection<'scope, T,(N,Option<u32>)>
 where
     T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
@@ -40,10 +40,10 @@ where
 /// a node "fires" once all of its neighbors with lower identifier have
 /// fired, and we apply `logic` to the new state of lower neighbors and
 /// the old state (input) of higher neighbors.
-pub fn sequence<T, N, V, F>(
-    state: VecCollection<T, (N,V)>,
-    edges: VecCollection<T, (N,N)>,
-    logic: F) -> VecCollection<T, (N,Option<V>)>
+pub fn sequence<'scope, T, N, V, F>(
+    state: VecCollection<'scope, T, (N,V)>,
+    edges: VecCollection<'scope, T, (N,N)>,
+    logic: F) -> VecCollection<'scope, T, (N,Option<V>)>
 where
     T: Timestamp + Lattice + Hash + Ord,
     N: ExchangeData+Hashable,

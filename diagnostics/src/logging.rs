@@ -243,10 +243,10 @@ fn quantize(time: Duration, interval: Duration) -> Duration {
 }
 
 /// Quantize timestamps in a collection's inner stream.
-fn quantize_collection<D>(
-    collection: VecCollection<Duration, D, i64>,
+fn quantize_collection<'scope, D>(
+    collection: VecCollection<'scope, Duration, D, i64>,
     interval: Duration,
-) -> VecCollection<Duration, D, i64>
+) -> VecCollection<'scope, Duration, D, i64>
 where
     D: differential_dataflow::Data,
 {
@@ -400,11 +400,11 @@ fn install_loggers(
 // ============================================================================
 
 /// Internal: collections before arrangement, used for the cross-join.
-struct TimelyCollections {
-    operators: VecCollection<Duration, (usize, String, Vec<usize>), i64>,
-    channels: VecCollection<Duration, (usize, Vec<usize>, (usize, usize), (usize, usize)), i64>,
-    elapsed: VecCollection<Duration, usize, i64>,
-    messages: VecCollection<Duration, usize, i64>,
+struct TimelyCollections<'scope> {
+    operators: VecCollection<'scope, Duration, (usize, String, Vec<usize>), i64>,
+    channels: VecCollection<'scope, Duration, (usize, Vec<usize>, (usize, usize), (usize, usize)), i64>,
+    elapsed: VecCollection<'scope, Duration, usize, i64>,
+    messages: VecCollection<'scope, Duration, usize, i64>,
 }
 
 #[derive(Default)]
@@ -414,10 +414,10 @@ struct TimelyDemuxState {
 }
 
 /// Build timely logging collections and arrangements.
-fn construct_timely(
-    scope: &mut Scope<Duration>,
-    stream: Stream<Duration, Vec<(Duration, TimelyEvent)>>,
-) -> (TimelyTraces, TimelyCollections) {
+fn construct_timely<'scope>(
+    scope: &mut Scope<'scope, Duration>,
+    stream: Stream<'scope, Duration, Vec<(Duration, TimelyEvent)>>,
+) -> (TimelyTraces, TimelyCollections<'scope>) {
     type OpUpdate = ((usize, String, Vec<usize>), Duration, i64);
     type ChUpdate = ((usize, Vec<usize>, (usize, usize), (usize, usize)), Duration, i64);
     type ElUpdate = (usize, Duration, i64);
@@ -534,21 +534,21 @@ fn construct_timely(
 // ============================================================================
 
 /// Internal: collections before arrangement, used for the cross-join.
-struct DifferentialCollections {
-    arrangement_batches: VecCollection<Duration, usize, i64>,
-    arrangement_records: VecCollection<Duration, usize, i64>,
-    sharing: VecCollection<Duration, usize, i64>,
-    batcher_records: VecCollection<Duration, usize, i64>,
-    batcher_size: VecCollection<Duration, usize, i64>,
-    batcher_capacity: VecCollection<Duration, usize, i64>,
-    batcher_allocations: VecCollection<Duration, usize, i64>,
+struct DifferentialCollections<'scope> {
+    arrangement_batches: VecCollection<'scope, Duration, usize, i64>,
+    arrangement_records: VecCollection<'scope, Duration, usize, i64>,
+    sharing: VecCollection<'scope, Duration, usize, i64>,
+    batcher_records: VecCollection<'scope, Duration, usize, i64>,
+    batcher_size: VecCollection<'scope, Duration, usize, i64>,
+    batcher_capacity: VecCollection<'scope, Duration, usize, i64>,
+    batcher_allocations: VecCollection<'scope, Duration, usize, i64>,
 }
 
 /// Build differential logging collections and arrangements.
-fn construct_differential(
-    scope: &mut Scope<Duration>,
-    stream: Stream<Duration, Vec<(Duration, DifferentialEvent)>>,
-) -> (DifferentialTraces, DifferentialCollections) {
+fn construct_differential<'scope>(
+    scope: &mut Scope<'scope, Duration>,
+    stream: Stream<'scope, Duration, Vec<(Duration, DifferentialEvent)>>,
+) -> (DifferentialTraces, DifferentialCollections<'scope>) {
     type Update = (usize, Duration, i64);
 
     let mut demux = OperatorBuilder::new("Differential Demux".to_string(), scope.clone());
