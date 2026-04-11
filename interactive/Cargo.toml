@@ -6,6 +6,7 @@ license = "MIT"
 edition.workspace = true
 rust-version.workspace = true
 description = "DD IR: an interpreted intermediate representation for differential dataflow"
+publish = false
 
 [lints]
 workspace = true
@@ -15,9 +16,6 @@ columnar = { workspace = true }
 differential-dataflow = { workspace = true }
 smallvec = "1.15.1"
 timely = { workspace = true }
-
-[dev-dependencies]
-rand = "0.4"
 
 [features]
 default = ["timely/getopts"]

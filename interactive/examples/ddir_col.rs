@@ -173,7 +173,7 @@ mod render {
                                             eval_field_into(field, &[k.as_slice(), v.as_slice()], &mut r);
                                             256 * (64 - (r.as_slice().first().copied().unwrap_or(0) as u64).leading_zeros() as u64)
                                         };
-                                        let mut coords = smallvec::SmallVec::<[u64; 2]>::new();
+                                        let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
                                         for _ in 0..level.saturating_sub(1) { coords.push(0); }
                                         coords.push(delay);
                                         next.push((k, v, Product::new(0u64, PointStamp::new(coords)), d));
