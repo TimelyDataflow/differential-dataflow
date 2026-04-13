@@ -192,17 +192,17 @@ where
     type Extension = V;
 
     fn count(&mut self, prefixes: VecCollection<'scope, T, (P, usize, usize), R>, index: usize) -> VecCollection<'scope, T, (P, usize, usize), R> {
-        let counts = self.indices.count_trace.import(&prefixes.scope());
+        let counts = self.indices.count_trace.import(prefixes.scope());
         operators::count::count(prefixes, counts, self.key_selector.clone(), index)
     }
 
     fn propose(&mut self, prefixes: VecCollection<'scope, T, P, R>) -> VecCollection<'scope, T, (P, V), R> {
-        let propose = self.indices.propose_trace.import(&prefixes.scope());
+        let propose = self.indices.propose_trace.import(prefixes.scope());
         operators::propose::propose(prefixes, propose, self.key_selector.clone())
     }
 
     fn validate(&mut self, extensions: VecCollection<'scope, T, (P, V), R>) -> VecCollection<'scope, T, (P, V), R> {
-        let validate = self.indices.validate_trace.import(&extensions.scope());
+        let validate = self.indices.validate_trace.import(extensions.scope());
         operators::validate::validate(extensions, validate, self.key_selector.clone())
     }
 }

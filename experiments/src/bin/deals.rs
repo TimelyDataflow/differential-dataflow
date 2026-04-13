@@ -102,7 +102,7 @@ fn tc<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Em
                 ;
 
             inner.set(result.clone());
-            result.leave(&outer)
+            result.leave(outer)
         }
     )
 }
@@ -132,7 +132,7 @@ fn sg<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Em
                 ;
 
             inner.set(result.clone());
-            result.leave(&outer)
+            result.leave(outer)
         }
     )
 }

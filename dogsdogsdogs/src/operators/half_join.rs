@@ -38,7 +38,6 @@ use std::time::Instant;
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Stream;
-use timely::scheduling::Scheduler;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
 use timely::dataflow::operators::{Capability, Operator, generic::Session};
 use timely::PartialOrder;

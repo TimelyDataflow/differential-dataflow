@@ -106,8 +106,6 @@ use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::Exchange;
 use timely::progress::{Antichain, Timestamp};
 use timely::dataflow::operators::Capability;
-use timely::scheduling::Scheduler;
-use timely::worker::AsWorker;
 
 use crate::operators::arrange::arrangement::Arranged;
 use crate::trace::{Builder, Description};
@@ -156,7 +154,7 @@ where
         stream.unary_frontier(exchange, name, move |_capability, info| {
 
             // Acquire a logger for arrange events.
-            let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+            let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             // Tracks the lower envelope of times in `priority_queue`.
             let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
@@ -164,7 +162,7 @@ where
             let activator = Some(scope.activator_for(info.address.clone()));
             let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
 
-            if let Some(exert_logic) = scope.config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+            if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty_trace.set_exert_logic(exert_logic);
             }
 

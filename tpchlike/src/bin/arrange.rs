@@ -59,7 +59,7 @@ fn main() {
 
             // use timely::dataflow::ProbeHandle;
 
-            let mut context = Context::new(scope.clone(), collections);
+            let mut context = Context::new(scope, collections);
 
             context.index = arrange;
 

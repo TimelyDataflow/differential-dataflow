@@ -13,7 +13,6 @@ use timely::dataflow::Stream;
 use timely::dataflow::operators::generic::{Operator, OutputBuilderSession, Session};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
-use timely::scheduling::Scheduler;
 
 use crate::lattice::Lattice;
 use crate::operators::arrange::Arranged;

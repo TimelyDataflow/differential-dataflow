@@ -11,8 +11,6 @@ use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::scheduling::Scheduler;
-use timely::worker::AsWorker;
 
 use crate::operators::arrange::{Arranged, TraceAgent};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
@@ -51,12 +49,12 @@ where
         trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
 
             // Acquire a logger for arrange events.
-            let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+            let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             let activator = Some(scope.activator_for(operator_info.address.clone()));
             let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
             // If there is default exert logic set, install it.
-            if let Some(exert_logic) = scope.config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
+            if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty.set_exert_logic(exert_logic);
             }
 

@@ -91,12 +91,12 @@ fn reach<'s>(
     roots: VecCollection<'s, (), Node>
 ) -> VecCollection<'s, (), Node> {
 
-    let graph = graph.import(&roots.scope());
+    let graph = graph.import(roots.scope());
 
     roots.clone().iterate(|scope, inner| {
 
-        let graph = graph.enter(&scope);
-        let roots = roots.enter(&scope);
+        let graph = graph.enter(scope);
+        let roots = roots.enter(scope);
 
         // let reach = inner.concat(roots).distinct_total().arrange_by_self();
         // graph.join_core(reach, |_src,&dst,&()| Some(dst))
@@ -113,13 +113,13 @@ fn bfs<'s>(
     roots: VecCollection<'s, (), Node>
 ) -> VecCollection<'s, (), (Node, u32)> {
 
-    let graph = graph.import(&roots.scope());
+    let graph = graph.import(roots.scope());
     let roots = roots.map(|r| (r,0));
 
     roots.clone().iterate(|scope, inner| {
 
-        let graph = graph.enter(&scope);
-        let roots = roots.enter(&scope);
+        let graph = graph.enter(scope);
+        let roots = roots.enter(scope);
 
         graph.join_core(inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
              .concat(roots)
@@ -147,8 +147,8 @@ fn bfs<'s>(
 //     // don't actually use these labels, just grab the type
 //     nodes.filter(|_| false)
 //          .iterate(|scope, inner| {
-//              let edges = edges.enter(&scope);
-//              let nodes = nodes.enter_at(&scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
+//              let edges = edges.enter(scope);
+//              let nodes = nodes.enter_at(scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
 
 //             inner.join_map(edges, |_k,l,d| (*d,*l))
 //                  .concat(nodes)

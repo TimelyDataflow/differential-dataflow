@@ -53,7 +53,7 @@ In the example above, we could rewrite
         .clone()
         .iterate(|scope, transitive| {
 
-            let manages = manages.enter(&scope);
+            let manages = manages.enter(scope);
 
             transitive
                 .map(|(mk, m1)| (m1, mk))
@@ -99,7 +99,7 @@ As an example, the implementation of the `iterate` operator looks something like
         let (variable, collection) = VecVariable::new_from(collection.enter(subgraph), 1);
         let result = logic(collection);
         variable.set(result.clone());
-        result.leave(&outer)
+        result.leave(outer)
     });
 # }
 ```

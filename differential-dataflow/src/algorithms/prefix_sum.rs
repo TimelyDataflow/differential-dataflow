@@ -59,7 +59,7 @@ where
             // most two elements, then summarizes itself using the `combine` function. Finally, we re-add
             // the initial `unit_ranges` intervals, so that the set of ranges grows monotonically.
 
-            let unit_ranges = unit_ranges.enter(&scope);
+            let unit_ranges = unit_ranges.enter(scope);
             ranges
                 .filter(|&((_pos, log, _), _)| log < 64)
                 .map(|((pos, log, key), data)| ((pos >> 1, log + 1, key), (pos, data)))
@@ -141,9 +141,9 @@ where
     init_states
         .clone()
         .iterate(|scope, states| {
-            let init_states = init_states.enter(&scope);
+            let init_states = init_states.enter(scope);
             used_ranges
-                .enter(&scope)
+                .enter(scope)
                 .map(|((pos, log, key), data)| ((pos << log, key), (log, data)))
                 .join_map(states, move |&(pos, ref key), &(log, ref data), state|
                     ((pos + (1 << log), key.clone()), combine(key, state, data)))

@@ -415,7 +415,7 @@ struct TimelyDemuxState {
 
 /// Build timely logging collections and arrangements.
 fn construct_timely<'scope>(
-    scope: &mut Scope<'scope, Duration>,
+    scope: Scope<'scope, Duration>,
     stream: Stream<'scope, Duration, Vec<(Duration, TimelyEvent)>>,
 ) -> (TimelyTraces, TimelyCollections<'scope>) {
     type OpUpdate = ((usize, String, Vec<usize>), Duration, i64);
@@ -423,7 +423,7 @@ fn construct_timely<'scope>(
     type ElUpdate = (usize, Duration, i64);
     type MsgUpdate = (usize, Duration, i64);
 
-    let mut demux = OperatorBuilder::new("Timely Demux".to_string(), scope.clone());
+    let mut demux = OperatorBuilder::new("Timely Demux".to_string(), scope);
     let mut input = demux.new_input(stream, Pipeline);
 
     let (op_out, operates) = demux.new_output::<Vec<OpUpdate>>();
@@ -546,12 +546,12 @@ struct DifferentialCollections<'scope> {
 
 /// Build differential logging collections and arrangements.
 fn construct_differential<'scope>(
-    scope: &mut Scope<'scope, Duration>,
+    scope: Scope<'scope, Duration>,
     stream: Stream<'scope, Duration, Vec<(Duration, DifferentialEvent)>>,
 ) -> (DifferentialTraces, DifferentialCollections<'scope>) {
     type Update = (usize, Duration, i64);
 
-    let mut demux = OperatorBuilder::new("Differential Demux".to_string(), scope.clone());
+    let mut demux = OperatorBuilder::new("Differential Demux".to_string(), scope);
     let mut input = demux.new_input(stream, Pipeline);
 
     let (bat_out, batches) = demux.new_output::<Vec<Update>>();

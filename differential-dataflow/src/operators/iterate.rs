@@ -92,9 +92,9 @@ impl<'scope, T: Timestamp + Lattice, D: Ord+Data+Debug, R: Abelian+'static> Iter
             // diffs produced; `result` is post-consolidation, and means fewer
             // records are yielded out of the loop.
             let (variable, collection) = Variable::new_from(self.enter(subgraph), Product::new(Default::default(), 1));
-            let result = logic(subgraph.clone(), collection);
+            let result = logic(subgraph, collection);
             variable.set(result.clone());
-            result.leave(&outer)
+            result.leave(outer)
         })
     }
 }
@@ -104,7 +104,7 @@ impl<'scope, T: Timestamp + Lattice, D: Ord+Data+Debug, R: Semigroup+'static> It
     where
         for<'inner> F: FnOnce(Iterative<'inner, T, u64>, VecCollection<'inner, Product<T, u64>, D, R>)->VecCollection<'inner, Product<T, u64>, D, R>,
     {
-        let outer = self.clone();
+        let outer = self;
         self.scoped("Iterate", |subgraph| {
                 // create a new variable, apply logic, bind variable, return.
                 //
@@ -113,9 +113,9 @@ impl<'scope, T: Timestamp + Lattice, D: Ord+Data+Debug, R: Semigroup+'static> It
                 // diffs produced; `result` is post-consolidation, and means fewer
                 // records are yielded out of the loop.
                 let (variable, collection) = Variable::new(subgraph, Product::new(Default::default(), 1));
-                let result = logic(subgraph.clone(), collection);
+                let result = logic(subgraph, collection);
                 variable.set(result.clone());
-                result.leave(&outer)
+                result.leave(outer)
             }
         )
     }
@@ -148,7 +148,7 @@ impl<'scope, T: Timestamp + Lattice, D: Ord+Data+Debug, R: Semigroup+'static> It
 ///         let result = collection.map(|x| if x % 2 == 0 { x/2 } else { x })
 ///                                .consolidate();
 ///         variable.set(result.clone());
-///         result.leave(&scope)
+///         result.leave(scope)
 ///     });
 /// })
 /// ```
@@ -218,7 +218,7 @@ where
     /// will produce its fixed point in the outer scope.
     ///
     /// In a non-iterative scope the mechanics are the same, but the interpretation varies.
-    pub fn new(scope: &mut Scope<'scope, T>, step: T::Summary) -> (Self, Collection<'scope, T, C>) {
+    pub fn new(scope: Scope<'scope, T>, step: T::Summary) -> (Self, Collection<'scope, T, C>) {
         let (feedback, updates) = scope.feedback(step.clone());
         let collection = Collection::<T, C>::new(updates);
         (Self { feedback, source: None, step }, collection)

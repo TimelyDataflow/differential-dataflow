@@ -22,12 +22,12 @@ use crate::altneu::AltNeu;
 
 /// Produce a collection containing the changes at the moments they happen.
 pub trait Differentiate<'scope, T: Timestamp, D: Data, R: Abelian> {
-    fn differentiate<'inner>(self, child: &Scope<'inner, AltNeu<T>>) -> VecCollection<'inner, AltNeu<T>, D, R>;
+    fn differentiate<'inner>(self, child: Scope<'inner, AltNeu<T>>) -> VecCollection<'inner, AltNeu<T>, D, R>;
 }
 
 /// Collect instantaneous changes back in to a collection.
 pub trait Integrate<'scope, T: Timestamp, D: Data, R: Abelian> {
-    fn integrate<'outer>(self, outer: &Scope<'outer, T>) -> VecCollection<'outer, T, D, R>;
+    fn integrate<'outer>(self, outer: Scope<'outer, T>) -> VecCollection<'outer, T, D, R>;
 }
 
 impl<'scope, T, D, R> Differentiate<'scope, T, D, R> for VecCollection<'scope, T, D, R>
@@ -37,7 +37,7 @@ where
     R: Abelian + 'static,
 {
     // For each (data, Alt(time), diff) we add a (data, Neu(time), -diff).
-    fn differentiate<'inner>(self, child: &Scope<'inner, AltNeu<T>>) -> VecCollection<'inner, AltNeu<T>, D, R> {
+    fn differentiate<'inner>(self, child: Scope<'inner, AltNeu<T>>) -> VecCollection<'inner, AltNeu<T>, D, R> {
         self.enter(child)
             .inner
             .flat_map(|(data, time, diff)| {
@@ -58,7 +58,7 @@ where
     R: Abelian + 'static,
 {
     // We discard each `neu` variant and strip off the `alt` wrapper.
-    fn integrate<'outer>(self, outer: &Scope<'outer, T>) -> VecCollection<'outer, T, D, R> {
+    fn integrate<'outer>(self, outer: Scope<'outer, T>) -> VecCollection<'outer, T, D, R> {
         self.inner
             .filter(|(_d,t,_r)| !t.neu)
             .as_collection()

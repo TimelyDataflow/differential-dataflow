@@ -107,7 +107,7 @@ fn unoptimized() {
                     value_flow.set(value_flow_next.clone());
                     memory_alias.set(memory_alias_next.clone());
 
-                    (value_flow_next.leave(&scope), memory_alias_next.leave(&scope), value_alias_next.leave(&scope))
+                    (value_flow_next.leave(scope), memory_alias_next.leave(scope), value_alias_next.leave(scope))
                 });
 
                 value_flow.map(|_| ()).consolidate().inspect(|x| println!("VF: {:?}", x));
@@ -232,7 +232,7 @@ fn optimized() {
                     value_flow.set(value_flow_next.clone());
                     memory_alias.set(memory_alias_next.clone());
 
-                    (value_flow_next.leave(&scope), memory_alias_next.leave(&scope))
+                    (value_flow_next.leave(scope), memory_alias_next.leave(scope))
                 });
 
                 value_flow.map(|_| ()).consolidate().inspect(|x| println!("VF: {:?}", x));

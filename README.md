@@ -22,7 +22,7 @@ Alternately, here is a fragment that computes the set of nodes reachable from a 
 ```rust
 let reachable =
 roots.iterate(|scope, reach|
-    edges.enter(&scope)
+    edges.enter(scope)
          .semijoin(reach)
          .map(|(src, dst)| dst)
          .concat(reach)
@@ -337,7 +337,7 @@ edges.iterate(|scope, inner| {
                       .map(|(node,_)| node);
 
     // keep edges between active vertices
-    edges.enter(&scope)
+    edges.enter(scope)
          .semijoin(active)
          .map(|(src,dst)| (dst,src))
          .semijoin(active)

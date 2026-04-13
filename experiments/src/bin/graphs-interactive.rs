@@ -294,6 +294,6 @@ fn _bidijkstra<'s, T: Timestamp + Lattice + Ord>(
 
         reverse.set(reverse_next);
 
-        reached.leave(&outer)
+        reached.leave(outer)
     })
 }

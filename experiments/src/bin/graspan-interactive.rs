@@ -30,8 +30,8 @@ fn main() {
                 .filter(|_| false)
                 .iterate(|scope, inner| {
 
-                    let nodes = nodes2.enter(&scope);
-                    let edges = edges.enter(&scope);
+                    let nodes = nodes2.enter(scope);
+                    let edges = edges.enter(scope);
 
                     inner
                         .map(|(a,b)| (b,a))

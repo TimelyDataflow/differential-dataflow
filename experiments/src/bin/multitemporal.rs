@@ -35,8 +35,8 @@ fn main() {
 
             roots.clone().iterate(|scope, inner| {
 
-                let edges = edges.enter(&scope);
-                let roots = roots.enter(&scope);
+                let edges = edges.enter(scope);
+                let roots = roots.enter(scope);
 
                 edges
                     .semijoin(inner)

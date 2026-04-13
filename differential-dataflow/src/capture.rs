@@ -230,7 +230,7 @@ pub mod source {
     use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
     use timely::dataflow::operators::generic::OutputBuilder;
     use timely::progress::Timestamp;
-    use timely::scheduling::{Scheduler, SyncActivator};
+    use timely::scheduling::SyncActivator;
 
     // TODO(guswynn): implement this generally in timely
     struct DropActivator {
@@ -307,11 +307,11 @@ pub mod source {
         let shared_frontier2 = shared_frontier.clone();
 
         // Step 1: The MESSAGES operator.
-        let mut messages_op = OperatorBuilder::new("CDCV2_Messages".to_string(), scope.clone());
+        let mut messages_op = OperatorBuilder::new("CDCV2_Messages".to_string(), scope);
         let address = messages_op.operator_info().address;
-        let activator = scope.sync_activator_for(address.to_vec());
+        let activator = scope.worker().sync_activator_for(address.to_vec());
         let activator2 = scope.activator_for(Rc::clone(&address));
-        let drop_activator = DropActivator { activator: Arc::new(scope.sync_activator_for(address.to_vec())) };
+        let drop_activator = DropActivator { activator: Arc::new(scope.worker().sync_activator_for(address.to_vec())) };
         let mut source = source_builder(activator);
         let (updates_out, updates) = messages_op.new_output();
         let mut updates_out = OutputBuilder::from(updates_out);
@@ -388,7 +388,7 @@ pub mod source {
         });
 
         // Step 2: The UPDATES operator.
-        let mut updates_op = OperatorBuilder::new("CDCV2_Updates".to_string(), scope.clone());
+        let mut updates_op = OperatorBuilder::new("CDCV2_Updates".to_string(), scope);
         let mut input = updates_op.new_input(updates, Exchange::new(|x: &(D, T, R)| x.hashed()));
         let (changes_out, changes) = updates_op.new_output();
         let mut changes_out = OutputBuilder::from(changes_out);
@@ -437,7 +437,7 @@ pub mod source {
         });
 
         // Step 3: The PROGRESS operator.
-        let mut progress_op = OperatorBuilder::new("CDCV2_Progress".to_string(), scope.clone());
+        let mut progress_op = OperatorBuilder::new("CDCV2_Progress".to_string(), scope);
         let mut input = progress_op.new_input(
             progress,
             Exchange::new(|x: &(usize, Progress<T>)| x.0 as u64),
@@ -521,7 +521,7 @@ pub mod source {
         });
 
         // Step 4: The FEEDBACK operator.
-        let mut feedback_op = OperatorBuilder::new("CDCV2_Feedback".to_string(), scope.clone());
+        let mut feedback_op = OperatorBuilder::new("CDCV2_Feedback".to_string(), scope);
         let mut input = feedback_op.new_input(
             frontier,
             Exchange::new(|x: &(usize, ChangeBatch<T>)| x.0 as u64),
@@ -562,7 +562,6 @@ pub mod sink {
     use timely::dataflow::Stream;
     use timely::dataflow::channels::pact::{Exchange, Pipeline};
     use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
-    use timely::scheduling::Scheduler;
 
     use crate::{lattice::Lattice, ExchangeData};
     use super::{Writer, Message, Progress};
