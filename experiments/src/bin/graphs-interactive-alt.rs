@@ -2,7 +2,7 @@
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 use timely::dataflow::operators::probe::Handle;
 use timely::order::Product;
 
@@ -258,14 +258,14 @@ use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R>>>;
+type Arrange<'s, T, K, V, R> = Arranged<'s, TraceAgent<ValSpine<K, V, T, R>>>;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn three_hop<G: Scope>(
-    forward_graph: Arrange<G, Node, Node, isize>,
-    reverse_graph: Arrange<G, Node, Node, isize>,
-    goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+fn three_hop<'s, T: Timestamp + Lattice + Ord>(
+    forward_graph: Arrange<'s, T, Node, Node, isize>,
+    reverse_graph: Arrange<'s, T, Node, Node, isize>,
+    goals: VecCollection<'s, T, (Node, Node)>) -> VecCollection<'s, T, ((Node, Node), u32)>
+{
 
     let sources = goals.clone().map(|(x,_)| x);
     let targets = goals.map(|(_,y)| y);
@@ -288,13 +288,14 @@ where G::Timestamp: Lattice+Ord {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn _bidijkstra<G: Scope>(
-    forward_graph: Arrange<G, Node, Node, isize>,
-    reverse_graph: Arrange<G, Node, Node, isize>,
-    goals: VecCollection<G, (Node, Node)>) -> VecCollection<G, ((Node, Node), u32)>
-where G::Timestamp: Lattice+Ord {
+fn _bidijkstra<'s, T: Timestamp + Lattice + Ord>(
+    forward_graph: Arrange<'s, T, Node, Node, isize>,
+    reverse_graph: Arrange<'s, T, Node, Node, isize>,
+    goals: VecCollection<'s, T, (Node, Node)>) -> VecCollection<'s, T, ((Node, Node), u32)>
+{
 
-    goals.scope().iterative::<Iter,_,_>(|inner| {
+    let outer = goals.scope();
+    outer.iterative::<Iter,_,_>(|inner| {
 
         // Our plan is to start evolving distances from both sources and destinations.
         // The evolution from a source or destination should continue as long as there
@@ -356,13 +357,14 @@ where G::Timestamp: Lattice+Ord {
 
         reverse.set(reverse_next);
 
-        reached.leave()
+        reached.leave(outer)
     })
 }
 
 
-fn connected_components<G: Scope>(graph: Arrange<G, Node, Node, isize>) -> VecCollection<G, (Node, Node)>
-where G::Timestamp: Lattice + std::hash::Hash {
+fn connected_components<'s, T: Timestamp + Lattice + Ord>(graph: Arrange<'s, T, Node, Node, isize>) -> VecCollection<'s, T, (Node, Node)>
+where T: Lattice + std::hash::Hash
+{
 
     // each edge (x,y) means that we need at least a label for the min of x and y.
     let nodes =
@@ -378,8 +380,8 @@ where G::Timestamp: Lattice + std::hash::Hash {
         .filter(|_| false)
         .iterate(|scope, inner| {
 
-            let graph = graph.enter(&scope);
-            let nodes = nodes.enter_at(&scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
+            let graph = graph.enter(scope);
+            let nodes = nodes.enter_at(scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
 
             let inner = inner.arrange_by_key();
 

@@ -93,7 +93,6 @@ fn main() {
 mod reachability {
 
     use timely::order::Product;
-    use timely::dataflow::Scope;
     use differential_dataflow::Collection;
     use differential_dataflow::AsCollection;
     use differential_dataflow::operators::iterate::Variable;
@@ -110,14 +109,14 @@ mod reachability {
     /// Compute the set of nodes reachable from `roots` along directed `edges`.
     ///
     /// Returns `(node, ())` for each reachable node.
-    pub fn reach<G: Scope<Timestamp = Time>>(
-        edges: Collection<G, RecordedUpdates<(Node, Node, Time, Diff)>>,
-        roots: Collection<G, RecordedUpdates<(Node, (), Time, Diff)>>,
-    ) -> Collection<G, RecordedUpdates<(Node, (), Time, Diff)>>
+    pub fn reach<'scope>(
+        edges: Collection<'scope, Time, RecordedUpdates<(Node, Node, Time, Diff)>>,
+        roots: Collection<'scope, Time, RecordedUpdates<(Node, (), Time, Diff)>>,
+    ) -> Collection<'scope, Time, RecordedUpdates<(Node, (), Time, Diff)>>
     {
-        let mut scope = edges.inner.scope();
+        let outer = edges.inner.scope();
 
-        scope.iterative::<u64, _, _>(|nested| {
+        outer.iterative::<u64, _, _>(|nested| {
             let summary = Product::new(Time::default(), 1);
 
             let roots_inner = roots.enter(nested);
@@ -128,13 +127,13 @@ mod reachability {
             let edges_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
             let reach_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
 
-            let edges_arr = arrange_core::<_, _,
+            let edges_arr = arrange_core::<_,
                 ValBatcher<Node, Node, IterTime, Diff>,
                 ValBuilder<Node, Node, IterTime, Diff>,
                 ValSpine<Node, Node, IterTime, Diff>,
             >(edges_inner.inner, edges_pact, "Edges");
 
-            let reach_arr = arrange_core::<_, _,
+            let reach_arr = arrange_core::<_,
                 ValBatcher<Node, (), IterTime, Diff>,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
@@ -142,7 +141,7 @@ mod reachability {
 
             // join_traces with ValColBuilder: produces Stream<_, RecordedUpdates<...>>.
             let proposed =
-                join_traces::<_, _, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
+                join_traces::<_, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
                     edges_arr,
                     reach_arr,
                     |_src, dst, (), time, d1, d2, session| {
@@ -158,7 +157,7 @@ mod reachability {
 
             // Arrange for reduce.
             let combined_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
-            let combined_arr = arrange_core::<_, _,
+            let combined_arr = arrange_core::<_,
                 ValBatcher<Node, (), IterTime, Diff>,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
@@ -168,17 +167,25 @@ mod reachability {
             let result = combined_arr.reduce_abelian::<_,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
-            >("Distinct", |_node, _input, output| {
-                output.push(((), 1));
+                _,
+            >("Distinct", |_node, _input, output| { output.push(((), 1)); },
+            |col, key, upds| {
+                use columnar::{Clear, Push};
+                col.keys.clear();
+                col.vals.clear();
+                col.times.clear();
+                col.diffs.clear();
+                for (val, time, diff) in upds.drain(..) { col.push((key, &val, &time, &diff)); }
+                *col = std::mem::take(col).consolidate();
             });
 
             // Extract RecordedUpdates from the Arranged's batch stream.
-            let result_col = as_recorded_updates::<_, (Node, (), IterTime, Diff)>(result);
+            let result_col = as_recorded_updates::<(Node, (), IterTime, Diff)>(result);
 
             variable.set(result_col.clone());
 
             // Leave the iterative scope.
-            result_col.leave()
+            result_col.leave(outer)
         })
     }
 }

@@ -7,7 +7,7 @@ fn main() {
     let keys: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let batch: usize = 10_000;
 
-    // This computation demonstrates in-place accumulation of arbitrarily large 
+    // This computation demonstrates in-place accumulation of arbitrarily large
     // volumes of input data, consuming space bounded by the number of distinct keys.
     timely::execute_from_args(std::env::args().skip(2), move |worker| {
 
@@ -17,11 +17,10 @@ fn main() {
         let mut input = worker.dataflow::<(), _, _>(|scope| {
             let (input, data) = scope.new_collection::<_, isize>();
 
-            use timely::dataflow::Scope;
             scope.iterative::<u32,_,_>(|inner| {
                 data.enter_at(inner, |_| 0)
                     .consolidate()
-                    .leave()
+                    .leave(scope)
             });
 
             input
@@ -41,7 +40,7 @@ fn main() {
             }
             counter += batch;
 
-            worker.step(); 
+            worker.step();
             let elapsed = timer.elapsed();
 
             if elapsed.as_secs() as usize > last_sec {

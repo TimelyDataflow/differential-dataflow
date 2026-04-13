@@ -1,5 +1,3 @@
-use timely::dataflow::Scope;
-
 use differential_dataflow::{ExchangeData, VecCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
@@ -13,19 +11,18 @@ use differential_dataflow::trace::TraceReader;
 /// create a join if the `prefixes` collection is also arranged and responds to changes that
 /// `arrangement` undergoes. More complicated patterns are also appropriate, as in the case
 /// of delta queries.
-pub fn propose<G, Tr, K, F, P, V>(
-    prefixes: VecCollection<G, P, Tr::Diff>,
-    arrangement: Arranged<G, Tr>,
+pub fn propose<'scope, Tr, K, F, P, V>(
+    prefixes: VecCollection<'scope, Tr::Time, P, Tr::Diff>,
+    arrangement: Arranged<'scope, Tr>,
     key_selector: F,
-) -> VecCollection<G, (P, V), Tr::Diff>
+) -> VecCollection<'scope, Tr::Time, (P, V), Tr::Diff>
 where
-    G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        KeyOwn = K,
         ValOwn = V,
         Time: std::hash::Hash,
         Diff: Monoid+Multiply<Output = Tr::Diff>+ExchangeData+Semigroup<Tr::DiffGat<'a>>,
     >+Clone+'static,
+    Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     K: Hashable + Default + Ord + 'static,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,
@@ -47,19 +44,18 @@ where
 /// Unlike `propose`, this method does not scale the multiplicity of matched
 /// prefixes by the number of matches in `arrangement`. This can be useful to
 /// avoid the need to prepare an arrangement of distinct extensions.
-pub fn propose_distinct<G, Tr, K, F, P, V>(
-    prefixes: VecCollection<G, P, Tr::Diff>,
-    arrangement: Arranged<G, Tr>,
+pub fn propose_distinct<'scope, Tr, K, F, P, V>(
+    prefixes: VecCollection<'scope, Tr::Time, P, Tr::Diff>,
+    arrangement: Arranged<'scope, Tr>,
     key_selector: F,
-) -> VecCollection<G, (P, V), Tr::Diff>
+) -> VecCollection<'scope, Tr::Time, (P, V), Tr::Diff>
 where
-    G: Scope<Timestamp=Tr::Time>,
     Tr: for<'a> TraceReader<
-        KeyOwn = K,
         ValOwn = V,
         Time: std::hash::Hash,
         Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+Multiply<Output = Tr::Diff>+ExchangeData,
     >+Clone+'static,
+    Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     K: Hashable + Default + Ord + 'static,
     F: Fn(&P)->K+Clone+'static,
     P: ExchangeData,

@@ -13,7 +13,6 @@
 
 pub mod pointstamp;
 
-use timely::dataflow::Scope;
 use timely::order::Product;
 use timely::progress::Timestamp;
 use timely::dataflow::operators::generic::{OutputBuilder, builder_rc::OperatorBuilder};
@@ -26,9 +25,8 @@ use crate::collection::AsCollection;
 use crate::dynamic::pointstamp::PointStamp;
 use crate::dynamic::pointstamp::PointStampSummary;
 
-impl<G, D, R, T, TOuter> VecCollection<G, D, R>
+impl<'scope, D, R, T, TOuter> VecCollection<'scope, Product<TOuter, PointStamp<T>>, D, R>
 where
-    G: Scope<Timestamp = Product<TOuter, PointStamp<T>>>,
     D: Data,
     R: Semigroup+'static,
     T: Timestamp+Default,

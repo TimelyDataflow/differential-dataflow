@@ -1,7 +1,5 @@
 use std::time::Instant;
 
-use timely::dataflow::*;
-
 use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
@@ -11,9 +9,10 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::difference::Present;
 
-type EdgeArranged<G, K, V, R> = Arranged<G, TraceAgent<ValSpine<K, V, <G as ScopeParent>::Timestamp, R>>>;
+type EdgeArranged<'s, G, K, V, R> = Arranged<'s, TraceAgent<ValSpine<K, V, G, R>>>;
 
 type Node = u32;
 type Edge = (Node, Node);
@@ -83,10 +82,11 @@ fn main() {
 use timely::order::Product;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn tc<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
+fn tc<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Empty>(edges: EdgeArranged<'s, T, Node, Node, Present>) -> VecCollection<'s, T, Edge, Present> {
 
     // repeatedly update minimal distances each node can be reached from each root
-    edges.stream.scope().iterative::<Iter,_,_>(|scope| {
+    let outer = edges.stream.scope();
+    outer.iterative::<Iter,_,_>(|scope| {
 
             let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(scope);
@@ -102,18 +102,19 @@ fn tc<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> Ve
                 ;
 
             inner.set(result.clone());
-            result.leave()
+            result.leave(outer)
         }
     )
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn sg<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> VecCollection<G, Edge, Present> {
+fn sg<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Empty>(edges: EdgeArranged<'s, T, Node, Node, Present>) -> VecCollection<'s, T, Edge, Present> {
 
     let peers = edges.clone().join_core(edges.clone(), |_,&x,&y| Some((x,y))).filter(|&(x,y)| x != y);
 
     // repeatedly update minimal distances each node can be reached from each root
-    peers.scope().iterative::<Iter,_,_>(|scope| {
+    let outer = peers.scope();
+    outer.iterative::<Iter,_,_>(|scope| {
 
             let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
             let edges = edges.enter(scope);
@@ -131,7 +132,7 @@ fn sg<G: Scope<Timestamp=()>>(edges: EdgeArranged<G, Node, Node, Present>) -> Ve
                 ;
 
             inner.set(result.clone());
-            result.leave()
+            result.leave(outer)
         }
     )
 }

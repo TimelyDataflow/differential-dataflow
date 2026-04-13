@@ -2,16 +2,16 @@
 
 use std::hash::Hash;
 
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
 use crate::operators::*;
 use crate::hashable::Hashable;
 
-fn _color<G, N>(edges: VecCollection<G, (N,N)>) -> VecCollection<G,(N,Option<u32>)>
+fn _color<'scope, T, N>(edges: VecCollection<'scope, T, (N,N)>) -> VecCollection<'scope, T,(N,Option<u32>)>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
 {
     // need some bogus initial values.
@@ -40,12 +40,12 @@ where
 /// a node "fires" once all of its neighbors with lower identifier have
 /// fired, and we apply `logic` to the new state of lower neighbors and
 /// the old state (input) of higher neighbors.
-pub fn sequence<G, N, V, F>(
-    state: VecCollection<G, (N,V)>,
-    edges: VecCollection<G, (N,N)>,
-    logic: F) -> VecCollection<G, (N,Option<V>)>
+pub fn sequence<'scope, T, N, V, F>(
+    state: VecCollection<'scope, T, (N,V)>,
+    edges: VecCollection<'scope, T, (N,N)>,
+    logic: F) -> VecCollection<'scope, T, (N,Option<V>)>
 where
-    G: Scope<Timestamp: Lattice+Hash+Ord>,
+    T: Timestamp + Lattice + Hash + Ord,
     N: ExchangeData+Hashable,
     V: ExchangeData,
     F: Fn(&N, &[(&V, isize)])->V+'static
@@ -57,8 +57,8 @@ where
         .map(|(node, _state)| (node, None))
         .iterate(|scope, new_state| {
             // immutable content: edges and initial state.
-            let edges = edges.enter(&scope);
-            let old_state = state.enter(&scope);
+            let edges = edges.enter(scope);
+            let old_state = state.enter(scope);
                                  // .map(|x| (x.0, Some(x.1)));
 
             // break edges into forward and reverse directions.

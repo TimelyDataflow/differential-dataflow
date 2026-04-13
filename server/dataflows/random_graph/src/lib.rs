@@ -3,7 +3,7 @@ use std::cell::RefCell;
 
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::scheduling::Scheduler;
+
 use timely::dataflow::operators::Probe;
 use timely::dataflow::operators::generic::operator::source;
 use timely::progress::Antichain;

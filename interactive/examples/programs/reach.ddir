@@ -1,0 +1,13 @@
+-- Reachability
+-- Input 0: edges (src, dst ;)
+-- Input 1: roots (node ;)
+
+let edges = MAP(INPUT 0, ($0[0] ; $0[1]));
+let roots = MAP(INPUT 1, ($0[0] ;));
+
+reach: {
+    let proposals = JOIN(reach, edges, ($2));
+    var reach = REDUCE(CONCAT(roots, proposals), DISTINCT);
+}
+
+result INSPECT(ARRANGE(MAP(reach::reach, (;))), total);

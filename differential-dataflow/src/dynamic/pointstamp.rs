@@ -225,6 +225,7 @@ impl<T: Timestamp> Timestamp for PointStamp<T> {
 // This extends the `PartialOrder` implementation with additional structure.
 use crate::lattice::Lattice;
 impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
+    #[inline(always)]
     fn join(&self, other: &Self) -> Self {
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
         let max_len = ::std::cmp::max(self.vector.len(), other.vector.len());
@@ -242,6 +243,7 @@ impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
         }
         Self::new(vector)
     }
+    #[inline(always)]
     fn meet(&self, other: &Self) -> Self {
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
         let mut vector = SmallVec::with_capacity(min_len);

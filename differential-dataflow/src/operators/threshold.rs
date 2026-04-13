@@ -4,7 +4,7 @@
 //! `distinct` and `distinct_u` operators for the case in which time is totally ordered.
 
 use timely::order::TotalOrder;
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
@@ -17,9 +17,9 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
-pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
+pub trait ThresholdTotal<'scope, T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
     /// Reduces the collection to one occurrence of each distinct element.
-    fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<G, K, R2>
+    fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<'scope, T, K, R2>
     where
         R2: Semigroup+'static,
         F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
@@ -39,7 +39,7 @@ pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: Exchang
     ///          .threshold_total(|_,c| c % 2);
     /// });
     /// ```
-    fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(self, mut thresh: F) -> VecCollection<G, K, R2> {
+    fn threshold_total<R2: Abelian+'static, F: FnMut(&K,&R)->R2+'static>(self, mut thresh: F) -> VecCollection<'scope, T, K, R2> {
         self.threshold_semigroup(move |key, new, old| {
             let mut new = thresh(key, new);
             if let Some(old) = old {
@@ -69,7 +69,7 @@ pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: Exchang
     ///          .distinct_total();
     /// });
     /// ```
-    fn distinct_total(self) -> VecCollection<G, K, isize> {
+    fn distinct_total(self) -> VecCollection<'scope, T, K, isize> {
         self.distinct_total_core()
     }
 
@@ -78,17 +78,17 @@ pub trait ThresholdTotal<G: Scope<Timestamp: TotalOrder+Lattice+Ord>, K: Exchang
     /// This method allows `distinct` to produce collections whose difference
     /// type is something other than an `isize` integer, for example perhaps an
     /// `i32`.
-    fn distinct_total_core<R2: Abelian+From<i8>+'static>(self) -> VecCollection<G, K, R2> {
+    fn distinct_total_core<R2: Abelian+From<i8>+'static>(self) -> VecCollection<'scope, T, K, R2> {
         self.threshold_total(|_,_| R2::from(1i8))
     }
 
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<G, K, R> for VecCollection<G, K, R>
+impl<'scope, T, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> ThresholdTotal<'scope, T, K, R> for VecCollection<'scope, T, K, R>
 where
-    G: Scope<Timestamp: TotalOrder+Lattice+Ord>,
+    T: Timestamp + TotalOrder + Lattice + Ord,
 {
-    fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<G, K, R2>
+    fn threshold_semigroup<R2, F>(self, thresh: F) -> VecCollection<'scope, T, K, R2>
     where
         R2: Semigroup+'static,
         F: FnMut(&K,&R,Option<&R>)->Option<R2>+'static,
@@ -98,21 +98,20 @@ where
     }
 }
 
-impl<G, K, T1> ThresholdTotal<G, K, T1::Diff> for Arranged<G, T1>
+impl<'scope, K, Tr> ThresholdTotal<'scope, Tr::Time, K, Tr::Diff> for Arranged<'scope, Tr>
 where
-    G: Scope<Timestamp=T1::Time>,
-    T1: for<'a> TraceReader<
+    Tr: for<'a> TraceReader<
         Key<'a>=&'a K,
         Val<'a>=&'a (),
         Time: TotalOrder,
-        Diff : ExchangeData + Semigroup<T1::DiffGat<'a>>,
+        Diff : ExchangeData + Semigroup<Tr::DiffGat<'a>>,
     >+Clone+'static,
     K: ExchangeData,
 {
-    fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<G, K, R2>
+    fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<'scope, Tr::Time, K, R2>
     where
         R2: Semigroup+'static,
-        F: for<'a> FnMut(T1::Key<'a>,&T1::Diff,Option<&T1::Diff>)->Option<R2>+'static,
+        F: for<'a> FnMut(Tr::Key<'a>,&Tr::Diff,Option<&Tr::Diff>)->Option<R2>+'static,
     {
 
         let mut trace = self.trace.clone();
@@ -120,8 +119,8 @@ where
         self.stream.unary_frontier(Pipeline, "ThresholdTotal", move |_,_| {
 
             // tracks the lower and upper limit of received batches.
-            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
-            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
+            let mut lower_limit = timely::progress::frontier::Antichain::from_elem(Tr::Time::minimum());
+            let mut upper_limit = timely::progress::frontier::Antichain::from_elem(Tr::Time::minimum());
 
             move |(input, _frontier), output| {
 
@@ -153,14 +152,14 @@ where
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
-                        let mut count: Option<T1::Diff> = None;
+                        let mut count: Option<Tr::Diff> = None;
 
                         // Compute the multiplicity of this key before the current batch.
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(T1::owned_diff(diff)); }
+                                if count.is_none() { count = Some(Tr::owned_diff(diff)); }
                             });
                         }
 
@@ -175,7 +174,7 @@ where
                                     temp.plus_equals(&diff);
                                     thresh(key, &temp, Some(old))
                                 },
-                                None => { thresh(key, &T1::owned_diff(diff), None) },
+                                None => { thresh(key, &Tr::owned_diff(diff), None) },
                             };
 
                             // Either add or assign `diff` to `count`.
@@ -183,12 +182,12 @@ where
                                 count.plus_equals(&diff);
                             }
                             else {
-                                count = Some(T1::owned_diff(diff));
+                                count = Some(Tr::owned_diff(diff));
                             }
 
                             if let Some(difference) = difference {
                                 if !difference.is_zero() {
-                                    session.give((key.clone(), T1::owned_time(time), difference));
+                                    session.give((key.clone(), Tr::owned_time(time), difference));
                                 }
                             }
                         });

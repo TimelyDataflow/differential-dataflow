@@ -1,6 +1,5 @@
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::dataflow::*;
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::Input;
@@ -91,9 +90,9 @@ fn main() {
 }
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
-fn bfs<G>(edges: VecCollection<G, Edge>, roots: VecCollection<G, Node>) -> VecCollection<G, (Node, u32)>
+fn bfs<'scope, T>(edges: VecCollection<'scope, T, Edge>, roots: VecCollection<'scope, T, Node>) -> VecCollection<'scope, T, (Node, u32)>
 where
-    G: Scope<Timestamp: Lattice+Ord>,
+    T: timely::progress::Timestamp + Lattice + Ord,
 {
     use timely::order::Product;
     use iterate::Variable;
@@ -103,7 +102,8 @@ where
     let nodes = roots.map(|x| (x, 0));
 
     // repeatedly update minimal distances each node can be reached from each root
-    nodes.scope().iterative::<PointStamp<usize>, _, _>(|inner| {
+    let outer = nodes.scope();
+    outer.iterative::<PointStamp<usize>, _, _>(|inner| {
 
         // These enter the statically bound scope, rather than any iterative scopes.
         // We do not *need* to enter them into the dynamic scope, as they are static
@@ -126,7 +126,7 @@ where
         // Leave the dynamic iteration, stripping off the last timestamp coordinate.
         next.leave_dynamic(1)
             .inspect(|x| println!("{:?}", x))
-            .leave()
+            .leave(outer)
     })
 
 }

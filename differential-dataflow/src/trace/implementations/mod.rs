@@ -57,12 +57,10 @@ pub use self::ord_neu::RcOrdKeyBuilder as KeyBuilder;
 
 use std::convert::TryInto;
 
-use columnation::Columnation;
 use serde::{Deserialize, Serialize};
 use timely::container::{DrainContainer, PushInto};
 use timely::progress::Timestamp;
 
-use crate::containers::TimelyStack;
 use crate::lattice::Lattice;
 use crate::difference::Semigroup;
 
@@ -113,8 +111,6 @@ pub trait WithLayout {
 
 /// Automatically implemented trait for types with layouts.
 pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContainer, ValContainer = Self::ValContainer, TimeContainer = Self::TimeContainer, DiffContainer = Self::DiffContainer>> {
-    /// Alias for an owned key of a layout.
-    type KeyOwn;
     /// Alias for an borrowed key of a layout.
     type Key<'a>: Copy + Ord;
     /// Alias for an owned val of a layout.
@@ -131,7 +127,7 @@ pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContaine
     type DiffGat<'a>: Copy + Ord;
 
     /// Container for update keys.
-    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Key<'a>, Owned = Self::KeyOwn>;
+    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Key<'a>>;
     /// Container for update vals.
     type ValContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Val<'a>, Owned = Self::ValOwn>;
     /// Container for times.
@@ -139,8 +135,6 @@ pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContaine
     /// Container for diffs.
     type DiffContainer: for<'a> BatchContainer<ReadItem<'a> = Self::DiffGat<'a>, Owned = Self::Diff>;
 
-    /// Construct an owned key from a reference.
-    fn owned_key(key: Self::Key<'_>) -> Self::KeyOwn;
     /// Construct an owned val from a reference.
     fn owned_val(val: Self::Val<'_>) -> Self::ValOwn;
     /// Construct an owned time from a reference.
@@ -153,7 +147,6 @@ pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContaine
 }
 
 impl<L: WithLayout> LayoutExt for L {
-    type KeyOwn = <<L::Layout as Layout>::KeyContainer as BatchContainer>::Owned;
     type Key<'a> = <<L::Layout as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
     type ValOwn = <<L::Layout as Layout>::ValContainer as BatchContainer>::Owned;
     type Val<'a> = <<L::Layout as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
@@ -167,7 +160,6 @@ impl<L: WithLayout> LayoutExt for L {
     type TimeContainer = <L::Layout as Layout>::TimeContainer;
     type DiffContainer = <L::Layout as Layout>::DiffContainer;
 
-    #[inline(always)] fn owned_key(key: Self::Key<'_>) -> Self::KeyOwn { <Self::Layout as Layout>::KeyContainer::into_owned(key) }
     #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <Self::Layout as Layout>::ValContainer::into_owned(val) }
     #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Self::Layout as Layout>::TimeContainer::into_owned(time) }
     #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <Self::Layout as Layout>::DiffContainer::into_owned(diff) }
@@ -226,27 +218,6 @@ impl<U: Update<Diff: Ord>> Layout for Vector<U> {
     type ValContainer = Vec<U::Val>;
     type TimeContainer = Vec<U::Time>;
     type DiffContainer = Vec<U::Diff>;
-    type OffsetContainer = OffsetList;
-}
-
-/// A layout based on timely stacks
-pub struct TStack<U: Update> {
-    phantom: std::marker::PhantomData<U>,
-}
-
-impl<U> Layout for TStack<U>
-where
-    U: Update<
-        Key: Columnation,
-        Val: Columnation,
-        Time: Columnation,
-        Diff: Columnation + Ord,
-    >,
-{
-    type KeyContainer = TimelyStack<U::Key>;
-    type ValContainer = TimelyStack<U::Val>;
-    type TimeContainer = TimelyStack<U::Time>;
-    type DiffContainer = TimelyStack<U::Diff>;
     type OffsetContainer = OffsetList;
 }
 
@@ -453,71 +424,12 @@ where
     }
 }
 
-impl<K,V,T,R> BuilderInput<K, V> for TimelyStack<((K::Owned, V::Owned), T, R)>
-where
-    K: for<'a> BatchContainer<
-        ReadItem<'a>: PartialEq<&'a K::Owned>,
-        Owned: Ord + Columnation + Clone + 'static,
-    >,
-    V: for<'a> BatchContainer<
-        ReadItem<'a>: PartialEq<&'a V::Owned>,
-        Owned: Ord + Columnation + Clone + 'static,
-    >,
-    T: Timestamp + Lattice + Columnation + Clone + 'static,
-    R: Ord + Clone + Semigroup + Columnation + 'static,
-{
-    type Key<'a> = &'a K::Owned;
-    type Val<'a> = &'a V::Owned;
-    type Time = T;
-    type Diff = R;
-
-    fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-        (key, val, time.clone(), diff.clone())
-    }
-
-    fn key_eq(this: &&K::Owned, other: K::ReadItem<'_>) -> bool {
-        K::reborrow(other) == *this
-    }
-
-    fn val_eq(this: &&V::Owned, other: V::ReadItem<'_>) -> bool {
-        V::reborrow(other) == *this
-    }
-
-    fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
-        let mut keys = 0;
-        let mut vals = 0;
-        let mut upds = 0;
-        let mut prev_keyval = None;
-        for link in chain.iter() {
-            for ((key, val), _, _) in link.iter() {
-                if let Some((p_key, p_val)) = prev_keyval {
-                    if p_key != key {
-                        keys += 1;
-                        vals += 1;
-                    } else if p_val != val {
-                        vals += 1;
-                    }
-                } else {
-                    keys += 1;
-                    vals += 1;
-                }
-                upds += 1;
-                prev_keyval = Some((key, val));
-            }
-        }
-        (keys, vals, upds)
-    }
-}
-
 pub use self::containers::{BatchContainer, SliceContainer};
 
 /// Containers for data that resemble `Vec<T>`, with leaner implementations.
 pub mod containers {
 
-    use columnation::Columnation;
     use timely::container::PushInto;
-
-    use crate::containers::TimelyStack;
 
     /// A general-purpose container resembling `Vec<T>`.
     pub trait BatchContainer: 'static {
@@ -650,38 +562,6 @@ pub mod containers {
         }
         fn get(&self, index: usize) -> Option<Self::ReadItem<'_>> {
             <[T]>::get(&self, index)
-        }
-        fn len(&self) -> usize {
-            self[..].len()
-        }
-    }
-
-    // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
-    // be presented with the actual contained type, rather than a type that borrows into it.
-    impl<T: Clone + Ord + Columnation + 'static> BatchContainer for TimelyStack<T> {
-        type Owned = T;
-        type ReadItem<'a> = &'a T;
-
-        #[inline(always)] fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned { item.clone() }
-        #[inline(always)] fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) { other.clone_from(item); }
-
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> { item }
-
-        fn push_ref(&mut self, item: Self::ReadItem<'_>) { self.push_into(item) }
-        fn push_own(&mut self, item: &Self::Owned) { self.push_into(item) }
-
-        fn clear(&mut self) { self.clear() }
-
-        fn with_capacity(size: usize) -> Self {
-            Self::with_capacity(size)
-        }
-        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
-            let mut new = Self::default();
-            new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
-            new
-        }
-        fn index(&self, index: usize) -> Self::ReadItem<'_> {
-            &self[index]
         }
         fn len(&self) -> usize {
             self[..].len()

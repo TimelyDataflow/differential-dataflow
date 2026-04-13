@@ -59,7 +59,7 @@
 //!         use differential_dataflow::operators::arrange::upsert;
 //!
 //!         let stream = scope.input_from(&mut input);
-//!         let arranged = upsert::arrange_from_upsert::<_, ValBuilder<Key, Val, _, _>, ValSpine<Key, Val, _, _>>(stream, &"test");
+//!         let arranged = upsert::arrange_from_upsert::<ValBuilder<Key, Val, _, _>, ValSpine<Key, Val, _, _>,String,String>(stream, &"test");
 //!
 //!         arranged
 //!             .as_collection(|k,v| (k.clone(), v.clone()))
@@ -101,11 +101,10 @@
 use std::collections::{BinaryHeap, BTreeMap};
 
 use timely::order::{PartialOrder, TotalOrder};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Stream;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::Exchange;
-use timely::progress::Timestamp;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use timely::dataflow::operators::Capability;
 
 use crate::operators::arrange::arrangement::Arranged;
@@ -127,19 +126,20 @@ use super::TraceAgent;
 /// This method is only implemented for totally ordered times, as we do not yet
 /// understand what a "sequence" of upserts would mean for partially ordered
 /// timestamps.
-pub fn arrange_from_upsert<G, Bu, Tr>(
-    stream: Stream<G, Vec<(Tr::KeyOwn, Option<Tr::ValOwn>, G::Timestamp)>>,
+pub fn arrange_from_upsert<'scope, Bu, Tr, K, V>(
+    stream: Stream<'scope, Tr::Time, Vec<(K, Option<V>, Tr::Time)>>,
     name: &str,
-) -> Arranged<G, TraceAgent<Tr>>
+) -> Arranged<'scope, TraceAgent<Tr>>
 where
-    G: Scope<Timestamp=Tr::Time>,
+    K: ExchangeData+Hashable+std::hash::Hash,
+    V: ExchangeData,
     Tr: for<'a> Trace<
-        KeyOwn: ExchangeData+Hashable+std::hash::Hash,
-        ValOwn: ExchangeData,
+        Key<'a> = &'a K,
+        Val<'a> = &'a V,
         Time: TotalOrder+ExchangeData,
         Diff=isize,
     >+'static,
-    Bu: Builder<Time=G::Timestamp, Input = Vec<((Tr::KeyOwn, Tr::ValOwn), Tr::Time, Tr::Diff)>, Output = Tr::Batch>,
+    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, Tr::Diff)>, Output = Tr::Batch>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -148,21 +148,21 @@ where
 
         let reader = &mut reader;
 
-        let exchange = Exchange::new(move |update: &(Tr::KeyOwn,Option<Tr::ValOwn>,G::Timestamp)| (update.0).hashed().into());
+        let exchange = Exchange::new(move |update: &(K,Option<V>,Tr::Time)| (update.0).hashed().into());
 
         let scope = stream.scope();
         stream.unary_frontier(exchange, name, move |_capability, info| {
 
             // Acquire a logger for arrange events.
-            let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+            let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             // Tracks the lower envelope of times in `priority_queue`.
-            let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
+            let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
             // Form the trace we will both use internally and publish.
             let activator = Some(scope.activator_for(info.address.clone()));
             let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
 
-            if let Some(exert_logic) = scope.config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+            if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty_trace.set_exert_logic(exert_logic);
             }
 
@@ -171,10 +171,10 @@ where
             *reader = Some(reader_local.clone());
 
             // Tracks the input frontier, used to populate the lower bound of new batches.
-            let mut prev_frontier = Antichain::from_elem(<G::Timestamp as Timestamp>::minimum());
+            let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
-            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(G::Timestamp, Tr::KeyOwn, Option<Tr::ValOwn>)>>::new();
+            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(Tr::Time, K, Option<V>)>>::new();
             let mut updates = Vec::new();
 
             move |(input, frontier), output| {
@@ -237,10 +237,10 @@ where
                                 let mut key_con = Tr::KeyContainer::with_capacity(1);
                                 for (key, mut list) in to_process {
 
-                                    key_con.clear(); key_con.push_own(&key);
+                                    key_con.clear(); key_con.push_ref(&key);
 
                                     // The prior value associated with the key.
-                                    let mut prev_value: Option<Tr::ValOwn> = None;
+                                    let mut prev_value: Option<V> = None;
 
                                     // Attempt to find the key in the trace.
                                     trace_cursor.seek_key(&trace_storage, key_con.index(0));
@@ -252,7 +252,7 @@ where
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());
-                                                prev_value = Some(Tr::owned_val(val));
+                                                prev_value = Some(val.clone());
                                             }
                                             trace_cursor.step_val(&trace_storage);
                                         }
@@ -277,7 +277,7 @@ where
                                     updates.sort();
                                     builder.push(&mut updates);
                                 }
-                                let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(G::Timestamp::minimum()));
+                                let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(Tr::Time::minimum()));
                                 let batch = builder.done(description);
                                 prev_frontier.clone_from(&upper);
 

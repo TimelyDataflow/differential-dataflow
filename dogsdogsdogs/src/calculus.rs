@@ -13,7 +13,7 @@
 //! almost everywhere empty (and so has a low memory footprint, if the system works as planned).
 
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::Child;
+use timely::progress::Timestamp;
 use timely::dataflow::operators::vec::{Filter, Map};
 use differential_dataflow::{AsCollection, VecCollection, Data};
 use differential_dataflow::difference::Abelian;
@@ -21,23 +21,23 @@ use differential_dataflow::difference::Abelian;
 use crate::altneu::AltNeu;
 
 /// Produce a collection containing the changes at the moments they happen.
-pub trait Differentiate<G: Scope, D: Data, R: Abelian> {
-    fn differentiate<'a>(self, child: &Child<'a, G, AltNeu<G::Timestamp>>) -> VecCollection<Child<'a, G, AltNeu<G::Timestamp>>, D, R>;
+pub trait Differentiate<'scope, T: Timestamp, D: Data, R: Abelian> {
+    fn differentiate<'inner>(self, child: Scope<'inner, AltNeu<T>>) -> VecCollection<'inner, AltNeu<T>, D, R>;
 }
 
 /// Collect instantaneous changes back in to a collection.
-pub trait Integrate<G: Scope, D: Data, R: Abelian> {
-    fn integrate(self) -> VecCollection<G, D, R>;
+pub trait Integrate<'scope, T: Timestamp, D: Data, R: Abelian> {
+    fn integrate<'outer>(self, outer: Scope<'outer, T>) -> VecCollection<'outer, T, D, R>;
 }
 
-impl<G, D, R> Differentiate<G, D, R> for VecCollection<G, D, R>
+impl<'scope, T, D, R> Differentiate<'scope, T, D, R> for VecCollection<'scope, T, D, R>
 where
-    G: Scope,
+    T: Timestamp,
     D: Data,
     R: Abelian + 'static,
 {
     // For each (data, Alt(time), diff) we add a (data, Neu(time), -diff).
-    fn differentiate<'a>(self, child: &Child<'a, G, AltNeu<G::Timestamp>>) -> VecCollection<Child<'a, G, AltNeu<G::Timestamp>>, D, R> {
+    fn differentiate<'inner>(self, child: Scope<'inner, AltNeu<T>>) -> VecCollection<'inner, AltNeu<T>, D, R> {
         self.enter(child)
             .inner
             .flat_map(|(data, time, diff)| {
@@ -51,17 +51,17 @@ where
     }
 }
 
-impl<'a, G, D, R> Integrate<G, D, R> for VecCollection<Child<'a, G, AltNeu<G::Timestamp>>, D, R>
+impl<'scope, T, D, R> Integrate<'scope, T, D, R> for VecCollection<'scope, AltNeu<T>, D, R>
 where
-    G: Scope,
+    T: Timestamp,
     D: Data,
     R: Abelian + 'static,
 {
     // We discard each `neu` variant and strip off the `alt` wrapper.
-    fn integrate(self) -> VecCollection<G, D, R> {
+    fn integrate<'outer>(self, outer: Scope<'outer, T>) -> VecCollection<'outer, T, D, R> {
         self.inner
             .filter(|(_d,t,_r)| !t.neu)
             .as_collection()
-            .leave()
+            .leave(outer)
     }
 }

@@ -104,7 +104,6 @@ pub mod collection;
 pub mod logging;
 pub mod consolidation;
 pub mod capture;
-pub mod containers;
 
 /// Configuration options for differential dataflow.
 #[derive(Default)]

@@ -1,5 +1,3 @@
-use timely::dataflow::*;
-
 use timely::order::Product;
 use timely::dataflow::operators::ToStream;
 
@@ -106,14 +104,15 @@ use differential_dataflow::operators::arrange::TraceAgent;
 
 type TraceHandle = TraceAgent<GraphTrace>;
 
-fn reach<G: Scope<Timestamp = ()>> (
+fn reach<'s>(
     graph: &mut TraceHandle,
-    roots: VecCollection<G, Node, Diff>
-) -> VecCollection<G, Node, Diff> {
+    roots: VecCollection<'s, (), Node, Diff>
+) -> VecCollection<'s, (), Node, Diff> {
 
-    let graph = graph.import(&roots.scope());
+    let graph = graph.import(roots.scope());
 
-    roots.scope().iterative::<Iter,_,_>(|scope| {
+    let outer = roots.scope();
+    outer.iterative::<Iter,_,_>(|scope| {
 
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
@@ -126,20 +125,21 @@ fn reach<G: Scope<Timestamp = ()>> (
              .threshold_total(|_,_| 1);
 
         inner.set(result.clone());
-        result.leave()
+        result.leave(outer)
     })
 }
 
 
-fn bfs<G: Scope<Timestamp = ()>> (
+fn bfs<'s>(
     graph: &mut TraceHandle,
-    roots: VecCollection<G, Node, Diff>
-) -> VecCollection<G, (Node, u32), Diff> {
+    roots: VecCollection<'s, (), Node, Diff>
+) -> VecCollection<'s, (), (Node, u32), Diff> {
 
-    let graph = graph.import(&roots.scope());
+    let graph = graph.import(roots.scope());
     let roots = roots.map(|r| (r,0));
 
-    roots.scope().iterative::<Iter,_,_>(|scope| {
+    let outer = roots.scope();
+    outer.iterative::<Iter,_,_>(|scope| {
 
         let graph = graph.enter(scope);
         let roots = roots.enter(scope);
@@ -151,15 +151,15 @@ fn bfs<G: Scope<Timestamp = ()>> (
              .reduce(|_key, input, output| output.push((*input[0].0,1)));
 
         inner.set(result.clone());
-        result.leave()
+        result.leave(outer)
     })
 }
 
-fn connected_components<G: Scope<Timestamp = ()>>(
-    scope: &mut G,
+fn connected_components<'s>(
+    scope: timely::dataflow::Scope<'s, ()>,
     forward: &mut TraceHandle,
     reverse: &mut TraceHandle,
-) -> VecCollection<G, (Node, Node), Diff> {
+) -> VecCollection<'s, (), (Node, Node), Diff> {
 
     let forward = forward.import(scope);
     let reverse = reverse.import(scope);
@@ -169,14 +169,14 @@ fn connected_components<G: Scope<Timestamp = ()>>(
     let nodes_r = reverse.clone().flat_map_ref(|k,v| if k < v { Some(*k) } else { None });
     let nodes = nodes_f.concat(nodes_r).consolidate().map(|x| (x,x));
 
-    scope.iterative(|scope| {
+    scope.iterative(|inner_scope| {
 
         // import arrangements, nodes.
-        let forward = forward.enter(scope);
-        let reverse = reverse.enter(scope);
-        let nodes = nodes.enter(scope);
+        let forward = forward.enter(inner_scope);
+        let reverse = reverse.enter(inner_scope);
+        let nodes = nodes.enter(inner_scope);
 
-        let (inner, inner_collection) = Variable::new(scope, Product::new(Default::default(), 1));
+        let (inner, inner_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
 
         let labels = inner_collection.clone().arrange_by_key();
         let f_prop = labels.clone().join_core(forward, |_k,l,d| Some((*d,*l)));
@@ -197,6 +197,6 @@ fn connected_components<G: Scope<Timestamp = ()>>(
             .reduce(|_, s, t| { t.push((*s[0].0, 1)); });
 
         inner.set(result.clone());
-        result.leave()
+        result.leave(scope)
     })
 }

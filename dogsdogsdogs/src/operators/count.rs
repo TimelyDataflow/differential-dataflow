@@ -1,5 +1,3 @@
-use timely::dataflow::Scope;
-
 use differential_dataflow::{ExchangeData, VecCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
@@ -11,15 +9,15 @@ use differential_dataflow::trace::TraceReader;
 /// For each triple, it extracts a key using `key_selector`, and finds the
 /// associated count in `arrangement`. If the found count is less than `count`,
 /// the `count` and `index` fields are overwritten with their new values.
-pub fn count<G, Tr, K, R, F, P>(
-    prefixes: VecCollection<G, (P, usize, usize), R>,
-    arrangement: Arranged<G, Tr>,
+pub fn count<'scope, Tr, K, R, F, P>(
+    prefixes: VecCollection<'scope, Tr::Time, (P, usize, usize), R>,
+    arrangement: Arranged<'scope, Tr>,
     key_selector: F,
     index: usize,
-) -> VecCollection<G, (P, usize, usize), R>
+) -> VecCollection<'scope, Tr::Time, (P, usize, usize), R>
 where
-    G: Scope<Timestamp=Tr::Time>,
-    Tr: TraceReader<KeyOwn = K, Time: std::hash::Hash, Diff=isize>+Clone+'static,
+    Tr: TraceReader<Time: std::hash::Hash, Diff=isize>+Clone+'static,
+    Tr::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     for<'a> Tr::Diff : Semigroup<Tr::DiffGat<'a>>,
     K: Hashable + Ord + Default + 'static,
     R: Monoid+Multiply<Output = R>+ExchangeData,

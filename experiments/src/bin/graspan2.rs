@@ -1,7 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 
-use timely::dataflow::Scope;
 use timely::order::Product;
 
 use differential_dataflow::operators::iterate::Variable;
@@ -51,14 +50,14 @@ fn unoptimized() {
 
             let (value_flow, memory_alias, value_alias) =
             scope
-                .iterative::<Iter,_,_>(|scope| {
+                .iterative::<Iter,_,_>(|inner_scope| {
 
-                    let nodes = nodes.enter(scope);
-                    let assignment = assignment.enter(scope);
-                    let dereference = dereference.enter(scope);
+                    let nodes = nodes.enter(inner_scope);
+                    let assignment = assignment.enter(inner_scope);
+                    let dereference = dereference.enter(inner_scope);
 
-                    let (value_flow, value_flow_collection) = Variable::new(scope, Product::new(Default::default(), 1));
-                    let (memory_alias, memory_alias_collection) = Variable::new(scope, Product::new(Default::default(), 1));
+                    let (value_flow, value_flow_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
+                    let (memory_alias, memory_alias_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
 
                     let value_flow_arranged = value_flow_collection.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
                     let memory_alias_arranged = memory_alias_collection.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
@@ -108,7 +107,7 @@ fn unoptimized() {
                     value_flow.set(value_flow_next.clone());
                     memory_alias.set(memory_alias_next.clone());
 
-                    (value_flow_next.leave(), memory_alias_next.leave(), value_alias_next.leave())
+                    (value_flow_next.leave(scope), memory_alias_next.leave(scope), value_alias_next.leave(scope))
                 });
 
                 value_flow.map(|_| ()).consolidate().inspect(|x| println!("VF: {:?}", x));
@@ -176,14 +175,14 @@ fn optimized() {
 
             let (value_flow, memory_alias) =
             scope
-                .iterative::<Iter,_,_>(|scope| {
+                .iterative::<Iter,_,_>(|inner_scope| {
 
-                    let nodes = nodes.enter(scope);
-                    let assignment = assignment.enter(scope);
-                    let dereference = dereference.enter(scope);
+                    let nodes = nodes.enter(inner_scope);
+                    let assignment = assignment.enter(inner_scope);
+                    let dereference = dereference.enter(inner_scope);
 
-                    let (value_flow, value_flow_collection) = Variable::new(scope, Product::new(Default::default(), 1));
-                    let (memory_alias, memory_alias_collection) = Variable::new(scope, Product::new(Default::default(), 1));
+                    let (value_flow, value_flow_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
+                    let (memory_alias, memory_alias_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
 
                     let value_flow_arranged = value_flow_collection.clone().arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
                     let memory_alias_arranged = memory_alias_collection.arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>();
@@ -233,7 +232,7 @@ fn optimized() {
                     value_flow.set(value_flow_next.clone());
                     memory_alias.set(memory_alias_next.clone());
 
-                    (value_flow_next.leave(), memory_alias_next.leave())
+                    (value_flow_next.leave(scope), memory_alias_next.leave(scope))
                 });
 
                 value_flow.map(|_| ()).consolidate().inspect(|x| println!("VF: {:?}", x));

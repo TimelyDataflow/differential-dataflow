@@ -43,8 +43,8 @@ fn main() {
             // Reachability queries.
             query.clone().iterate(|scope, reach| {
 
-                let knows = knows.enter(&scope);
-                let query = query.enter(&scope);
+                let knows = knows.enter(scope);
+                let query = query.enter(scope);
 
                 knows.join_core(reach.arrange_by_key(), |x,y,q| [(*y,*q)])
                      .concat(query)

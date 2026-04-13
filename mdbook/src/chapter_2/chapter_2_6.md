@@ -7,11 +7,10 @@ For example, to produce for each manager their managee with the lowest identifie
 ```rust
 # extern crate timely;
 # extern crate differential_dataflow;
-# use timely::dataflow::Scope;
+# use timely::progress::Timestamp;
 # use differential_dataflow::VecCollection;
 # use differential_dataflow::lattice::Lattice;
-# fn example<G: Scope>(manages: VecCollection<G, (u64, u64), i64>)
-# where G::Timestamp: Lattice
+# fn example<T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice>(manages: VecCollection<T, (u64, u64), i64>)
 # {
     manages
         .reduce(|_key, input, output| {

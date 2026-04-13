@@ -1,87 +1,56 @@
-//! Interactive differential dataflow
-//!
-//! This crate provides a demonstration of an interactive differential
-//! dataflow system, which accepts query plans as data and then directly
-//! implements them without compilation.
+pub mod parse;
+pub mod ir;
+pub mod lower;
 
-#![forbid(missing_docs)]
+use parse::{Stmt, Expr};
 
-pub mod plan;
-pub use plan::Plan;
-
-pub mod manager;
-pub use manager::{Manager, TraceManager, InputManager};
-
-pub mod command;
-pub use command::Command;
-
-pub mod logging;
-
-pub mod concrete;
-
-/// System-wide notion of time.
-pub type Time = ::std::time::Duration;
-/// System-wide update type.
-pub type Diff = isize;
-
-use std::hash::Hash;
-use std::fmt::Debug;
-use serde::{Serialize, Deserialize};
-
-/// Types capable of use as data in interactive.
-pub trait Datum : Hash+Sized+Debug {
-    /// A type that can act on slices of data.
-    type Expression : Clone+Debug+Eq+Ord+Hash+Serialize+for<'a>Deserialize<'a>;
-    /// Applies an expression to a slice of data.
-    fn subject_to(data: &[Self], expr: &Self::Expression) -> Self;
-    /// Creates a expression that implements projection.
-    fn projection(index: usize) -> Self::Expression;
-}
-
-/// A type that can be converted to a vector of another type.
-pub trait VectorFrom<T> : Sized {
-    /// Converts `T` to a vector of `Self`.
-    fn vector_from(item: T) -> Vec<Self>;
-}
-
-/// Multiple related collection definitions.
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Query<V: Datum> {
-    /// A list of bindings of names to plans.
-    pub rules: Vec<Rule<V>>,
-}
-
-impl<V: Datum> Query<V> {
-    /// Creates a new, empty query.
-    pub fn new() -> Self {
-        Query { rules: Vec::new() }
+/// Count the number of distinct inputs referenced in a program.
+pub fn count_inputs(stmts: &[Stmt]) -> usize {
+    let mut max_input = 0usize;
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let(_, expr) | Stmt::Var(_, expr) | Stmt::Result(expr) => {
+                max_input = max_input.max(count_inputs_expr(expr));
+            },
+            Stmt::Scope(_, body) => {
+                max_input = max_input.max(count_inputs(body));
+            },
+        }
     }
-    /// Adds a rule to an existing query.
-    pub fn add_rule(mut self, rule: Rule<V>) -> Self {
-        self.rules.push(rule);
-        self
+    max_input
+}
+
+fn count_inputs_expr(expr: &Expr) -> usize {
+    match expr {
+        Expr::Input(n) => n + 1,
+        Expr::Map(e, _) | Expr::Negate(e) | Expr::Arrange(e)
+            | Expr::EnterAt(e, _) | Expr::Filter(e, _) | Expr::Reduce(e, _)
+            | Expr::Inspect(e, _) => count_inputs_expr(e),
+        Expr::Join(l, r, _) => count_inputs_expr(l).max(count_inputs_expr(r)),
+        Expr::Concat(es) => es.iter().map(|e| count_inputs_expr(e)).max().unwrap_or(0),
+        Expr::Name(_) | Expr::Qualified(_, _) => 0,
     }
 }
 
-impl<V: Datum> Query<V> {
-    /// Converts the query into a command.
-    pub fn into_command(self) -> Command<V> {
-        Command::Query(self)
-    }
+/// Load a program source file.
+pub fn load_program(path: &str) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Cannot read {}: {}", path, e))
 }
 
-/// Definition of a single collection.
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Rule<V: Datum> {
-    /// Name of the rule.
-    pub name: String,
-    /// Plan describing contents of the rule.
-    pub plan: Plan<V>,
+/// Deterministic hash: maps an index to a pseudorandom u64 (splitmix64).
+pub fn hash_u64(index: u64) -> u64 {
+    let mut x = index.wrapping_mul(0x9e3779b97f4a7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
 }
 
-impl<V: Datum> Rule<V> {
-    /// Converts the rule into a singleton query.
-    pub fn into_query(self) -> Query<V> {
-        Query::new().add_rule(self)
+/// Generate one row: arity fields, each hash-derived, magnitude < nodes.
+pub fn gen_row<R: ir::RowLike>(edge_index: u64, nodes: u64, arity: usize) -> (R, R) {
+    let mut key = R::new();
+    for col in 0..arity {
+        let h = hash_u64(edge_index.wrapping_mul(31).wrapping_add(col as u64));
+        key.push((h % nodes) as i64);
     }
+    (key, R::new())
 }

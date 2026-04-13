@@ -7,7 +7,6 @@ use std::mem;
 
 use timely::Config;
 
-use timely::dataflow::*;
 use timely::dataflow::operators::Capture;
 use timely::dataflow::operators::capture::Extract;
 
@@ -215,20 +214,20 @@ fn scc_differential(
         .collect()
 }
 
-fn _strongly_connected<G>(graph: VecCollection<G, Edge>) -> VecCollection<G, Edge>
+fn _strongly_connected<'scope, T>(graph: VecCollection<'scope, T, Edge>) -> VecCollection<'scope, T, Edge>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    T: timely::progress::Timestamp + Lattice + Ord + Hash,
 {
     graph.clone().iterate(|scope, inner| {
-        let edges = graph.enter(&scope);
+        let edges = graph.enter(scope);
         let trans = edges.clone().map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
         _trim_edges(_trim_edges(inner, edges), trans)
     })
 }
 
-fn _trim_edges<G>(cycle: VecCollection<G, Edge>, edges: VecCollection<G, Edge>) -> VecCollection<G, Edge>
+fn _trim_edges<'scope, T>(cycle: VecCollection<'scope, T, Edge>, edges: VecCollection<'scope, T, Edge>) -> VecCollection<'scope, T, Edge>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    T: timely::progress::Timestamp + Lattice + Ord + Hash,
 {
     let nodes = edges.clone()
                      .map_in_place(|x| x.0 = x.1)
@@ -244,15 +243,15 @@ where
          .map(|((x1,x2),_)| (x2,x1))
 }
 
-fn _reachability<G>(edges: VecCollection<G, Edge>, nodes: VecCollection<G, (Node, Node)>) -> VecCollection<G, Edge>
+fn _reachability<'scope, T>(edges: VecCollection<'scope, T, Edge>, nodes: VecCollection<'scope, T, (Node, Node)>) -> VecCollection<'scope, T, Edge>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    T: timely::progress::Timestamp + Lattice + Ord + Hash,
 {
     edges.clone()   // <-- wth is this.
          .filter(|_| false)
          .iterate(|scope, inner| {
-             let edges = edges.enter(&scope);
-             let nodes = nodes.enter_at(&scope, |r| 256 * (64 - (r.0 as u64).leading_zeros() as u64));
+             let edges = edges.enter(scope);
+             let nodes = nodes.enter_at(scope, |r| 256 * (64 - (r.0 as u64).leading_zeros() as u64));
 
              inner.join_map(edges, |_k,l,d| (*d,*l))
                   .concat(nodes)

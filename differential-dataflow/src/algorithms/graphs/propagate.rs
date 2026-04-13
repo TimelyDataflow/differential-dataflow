@@ -2,7 +2,7 @@
 
 use std::hash::Hash;
 
-use timely::dataflow::*;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
@@ -13,9 +13,9 @@ use crate::difference::{Abelian, Multiply};
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate<G, N, L, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>) -> VecCollection<G,(N,L),R>
+pub fn propagate<'scope, T, N, L, R>(edges: VecCollection<'scope, T, (N,N), R>, nodes: VecCollection<'scope, T,(N,L),R>) -> VecCollection<'scope, T,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -30,9 +30,9 @@ where
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
 /// To more carefully control the label propagation, consider `propagate_core` which supports a
 /// method to limit the introduction of labels.
-pub fn propagate_at<G, N, L, F, R>(edges: VecCollection<G, (N,N), R>, nodes: VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
+pub fn propagate_at<'scope, T, N, L, F, R>(edges: VecCollection<'scope, T, (N,N), R>, nodes: VecCollection<'scope, T,(N,L),R>, logic: F) -> VecCollection<'scope, T,(N,L),R>
 where
-    G: Scope<Timestamp: Lattice+Ord+Hash>,
+    T: Timestamp + Lattice + Ord + Hash,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -51,15 +51,14 @@ use crate::operators::arrange::arrangement::Arranged;
 /// This variant takes a pre-arranged edge collection, to facilitate re-use, and allows
 /// a method `logic` to specify the rounds in which we introduce various labels. The output
 /// of `logic should be a number in the interval \[0,64\],
-pub fn propagate_core<G, N, L, Tr, F, R>(edges: Arranged<G,Tr>, nodes: VecCollection<G,(N,L),R>, logic: F) -> VecCollection<G,(N,L),R>
+pub fn propagate_core<'scope, N, L, Tr, F, R>(edges: Arranged<'scope, Tr>, nodes: VecCollection<'scope, Tr::Time,(N,L),R>, logic: F) -> VecCollection<'scope, Tr::Time,(N,L),R>
 where
-    G: Scope<Timestamp=Tr::Time>,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Time:Hash, Diff=R>+Clone+'static,
+    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=R, Time: Hash>+Clone+'static,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified
@@ -70,15 +69,16 @@ where
 
     // nodes.filter(|_| false)
     //      .iterate(|scope, inner| {
-    //          let edges = edges.enter(&scope);
-    //          let nodes = nodes.enter_at(&scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as u64));
+    //          let edges = edges.enter(scope);
+    //          let nodes = nodes.enter_at(scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as u64));
     //          inner.join_map(edges, |_k,l,d| (d.clone(),l.clone()))
     //               .concat(nodes)
     //               .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))
     //      })
 
     use timely::order::Product;
-    nodes.scope().scoped::<Product<_, usize>,_,_>("Propagate", |scope| {
+    let outer = nodes.scope();
+    outer.scoped::<Product<_, usize>,_,_>("Propagate", |scope| {
 
         use crate::operators::iterate::Variable;
         use crate::trace::implementations::{ValBuilder, ValSpine};
@@ -104,6 +104,6 @@ where
 
         labels
             .as_collection(|k,v| (k.clone(), v.clone()))
-            .leave()
+            .leave(outer)
     })
 }

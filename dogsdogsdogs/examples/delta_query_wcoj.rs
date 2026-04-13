@@ -1,4 +1,3 @@
-use timely::dataflow::Scope;
 use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
@@ -80,7 +79,7 @@ fn main() {
                     ])
                     .map(|((a,c),b)| (a,b,c));
 
-                changes1.concat(changes2).concat(changes3).leave()
+                changes1.concat(changes2).concat(changes3).leave(scope)
             });
 
             triangles

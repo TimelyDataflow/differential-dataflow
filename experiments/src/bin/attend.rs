@@ -24,11 +24,11 @@ fn main() {
             organizers
                 .clone()
                 .iterate(|scope, attend| {
-                    graph2.enter(&scope)
+                    graph2.enter(scope)
                          .semijoin(attend)
                          .map(|(_,y)| y)
                          .threshold_total(|_,w| if w >= &3 { 1 } else { 0 })
-                         .concat(organizers.enter(&scope))
+                         .concat(organizers.enter(scope))
                          .consolidate()
                 })
                 .map(|_| ())

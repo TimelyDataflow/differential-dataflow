@@ -24,7 +24,7 @@ fn main() {
 
             let stable = banks.iterate(|scope, iter|
                 iter.map_in_place(|banks| recycle(banks))
-                    .concat(banks.enter(&scope))
+                    .concat(banks.enter(scope))
                     .distinct()
             );
 
@@ -43,7 +43,7 @@ fn main() {
             loop_point
                 .iterate(|scope, iter|
                     iter.map_in_place(|banks| recycle(banks))
-                        .concat(loop_point.enter(&scope))
+                        .concat(loop_point.enter(scope))
                         .distinct()
                 )
                 .map(|_| ((),()))

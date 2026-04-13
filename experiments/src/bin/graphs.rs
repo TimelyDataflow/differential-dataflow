@@ -1,7 +1,5 @@
 use rand::{Rng, SeedableRng, StdRng};
 
-use timely::dataflow::*;
-
 use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
@@ -88,17 +86,17 @@ use differential_dataflow::operators::arrange::TraceAgent;
 
 type TraceHandle = TraceAgent<GraphTrace>;
 
-fn reach<G: Scope<Timestamp = ()>> (
+fn reach<'s>(
     graph: &mut TraceHandle,
-    roots: VecCollection<G, Node>
-) -> VecCollection<G, Node> {
+    roots: VecCollection<'s, (), Node>
+) -> VecCollection<'s, (), Node> {
 
-    let graph = graph.import(&roots.scope());
+    let graph = graph.import(roots.scope());
 
     roots.clone().iterate(|scope, inner| {
 
-        let graph = graph.enter(&scope);
-        let roots = roots.enter(&scope);
+        let graph = graph.enter(scope);
+        let roots = roots.enter(scope);
 
         // let reach = inner.concat(roots).distinct_total().arrange_by_self();
         // graph.join_core(reach, |_src,&dst,&()| Some(dst))
@@ -110,18 +108,18 @@ fn reach<G: Scope<Timestamp = ()>> (
 }
 
 
-fn bfs<G: Scope<Timestamp = ()>> (
+fn bfs<'s>(
     graph: &mut TraceHandle,
-    roots: VecCollection<G, Node>
-) -> VecCollection<G, (Node, u32)> {
+    roots: VecCollection<'s, (), Node>
+) -> VecCollection<'s, (), (Node, u32)> {
 
-    let graph = graph.import(&roots.scope());
+    let graph = graph.import(roots.scope());
     let roots = roots.map(|r| (r,0));
 
     roots.clone().iterate(|scope, inner| {
 
-        let graph = graph.enter(&scope);
-        let roots = roots.enter(&scope);
+        let graph = graph.enter(scope);
+        let roots = roots.enter(scope);
 
         graph.join_core(inner.arrange_by_key(), |_src,&dest,&dist| [(dest, dist+1)])
              .concat(roots)
@@ -129,9 +127,9 @@ fn bfs<G: Scope<Timestamp = ()>> (
     })
 }
 
-// fn connected_components<G: Scope<Timestamp = ()>>(
+// fn connected_components(
 //     graph: &mut TraceHandle<Node>
-// ) -> VecCollection<G, (Node, Node)> {
+// ) -> VecCollection<(), (Node, Node)> {
 
 //     // each edge (x,y) means that we need at least a label for the min of x and y.
 //     let nodes =
@@ -149,8 +147,8 @@ fn bfs<G: Scope<Timestamp = ()>> (
 //     // don't actually use these labels, just grab the type
 //     nodes.filter(|_| false)
 //          .iterate(|scope, inner| {
-//              let edges = edges.enter(&scope);
-//              let nodes = nodes.enter_at(&scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
+//              let edges = edges.enter(scope);
+//              let nodes = nodes.enter_at(scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
 
 //             inner.join_map(edges, |_k,l,d| (*d,*l))
 //                  .concat(nodes)

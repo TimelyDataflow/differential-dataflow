@@ -34,7 +34,6 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::{KeySpine, ValSpine};
 use differential_dataflow::{AsCollection, VecCollection};
 
-use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::{Event, EventLink, Replay, Capture};
@@ -244,12 +243,11 @@ fn quantize(time: Duration, interval: Duration) -> Duration {
 }
 
 /// Quantize timestamps in a collection's inner stream.
-fn quantize_collection<S, D>(
-    collection: VecCollection<S, D, i64>,
+fn quantize_collection<'scope, D>(
+    collection: VecCollection<'scope, Duration, D, i64>,
     interval: Duration,
-) -> VecCollection<S, D, i64>
+) -> VecCollection<'scope, Duration, D, i64>
 where
-    S: Scope<Timestamp = Duration>,
     D: differential_dataflow::Data,
 {
     collection
@@ -276,7 +274,7 @@ where
 ///
 /// Returns a [`LoggingState`] with trace handles and a [`SinkHandle`] for
 /// the WebSocket thread.
-pub fn register<A: Allocate>(worker: &mut Worker<A>, log_logging: bool) -> LoggingState {
+pub fn register(worker: &mut Worker, log_logging: bool) -> LoggingState {
     let start = Instant::now();
 
     // Event links for logging capture (worker-internal, Rc-based).
@@ -377,8 +375,8 @@ pub fn register<A: Allocate>(worker: &mut Worker<A>, log_logging: bool) -> Loggi
     }
 }
 
-fn install_loggers<A: Allocate>(
-    worker: &mut Worker<A>,
+fn install_loggers(
+    worker: &mut Worker,
     t_link: Rc<EventLink<Duration, Vec<(Duration, TimelyEvent)>>>,
     d_link: Rc<EventLink<Duration, Vec<(Duration, DifferentialEvent)>>>,
 ) {
@@ -402,11 +400,11 @@ fn install_loggers<A: Allocate>(
 // ============================================================================
 
 /// Internal: collections before arrangement, used for the cross-join.
-struct TimelyCollections<S: Scope> {
-    operators: VecCollection<S, (usize, String, Vec<usize>), i64>,
-    channels: VecCollection<S, (usize, Vec<usize>, (usize, usize), (usize, usize)), i64>,
-    elapsed: VecCollection<S, usize, i64>,
-    messages: VecCollection<S, usize, i64>,
+struct TimelyCollections<'scope> {
+    operators: VecCollection<'scope, Duration, (usize, String, Vec<usize>), i64>,
+    channels: VecCollection<'scope, Duration, (usize, Vec<usize>, (usize, usize), (usize, usize)), i64>,
+    elapsed: VecCollection<'scope, Duration, usize, i64>,
+    messages: VecCollection<'scope, Duration, usize, i64>,
 }
 
 #[derive(Default)]
@@ -416,16 +414,16 @@ struct TimelyDemuxState {
 }
 
 /// Build timely logging collections and arrangements.
-fn construct_timely<S: Scope<Timestamp = Duration>>(
-    scope: &mut S,
-    stream: Stream<S, Vec<(Duration, TimelyEvent)>>,
-) -> (TimelyTraces, TimelyCollections<S>) {
+fn construct_timely<'scope>(
+    scope: Scope<'scope, Duration>,
+    stream: Stream<'scope, Duration, Vec<(Duration, TimelyEvent)>>,
+) -> (TimelyTraces, TimelyCollections<'scope>) {
     type OpUpdate = ((usize, String, Vec<usize>), Duration, i64);
     type ChUpdate = ((usize, Vec<usize>, (usize, usize), (usize, usize)), Duration, i64);
     type ElUpdate = (usize, Duration, i64);
     type MsgUpdate = (usize, Duration, i64);
 
-    let mut demux = OperatorBuilder::new("Timely Demux".to_string(), scope.clone());
+    let mut demux = OperatorBuilder::new("Timely Demux".to_string(), scope);
     let mut input = demux.new_input(stream, Pipeline);
 
     let (op_out, operates) = demux.new_output::<Vec<OpUpdate>>();
@@ -536,24 +534,24 @@ fn construct_timely<S: Scope<Timestamp = Duration>>(
 // ============================================================================
 
 /// Internal: collections before arrangement, used for the cross-join.
-struct DifferentialCollections<S: Scope> {
-    arrangement_batches: VecCollection<S, usize, i64>,
-    arrangement_records: VecCollection<S, usize, i64>,
-    sharing: VecCollection<S, usize, i64>,
-    batcher_records: VecCollection<S, usize, i64>,
-    batcher_size: VecCollection<S, usize, i64>,
-    batcher_capacity: VecCollection<S, usize, i64>,
-    batcher_allocations: VecCollection<S, usize, i64>,
+struct DifferentialCollections<'scope> {
+    arrangement_batches: VecCollection<'scope, Duration, usize, i64>,
+    arrangement_records: VecCollection<'scope, Duration, usize, i64>,
+    sharing: VecCollection<'scope, Duration, usize, i64>,
+    batcher_records: VecCollection<'scope, Duration, usize, i64>,
+    batcher_size: VecCollection<'scope, Duration, usize, i64>,
+    batcher_capacity: VecCollection<'scope, Duration, usize, i64>,
+    batcher_allocations: VecCollection<'scope, Duration, usize, i64>,
 }
 
 /// Build differential logging collections and arrangements.
-fn construct_differential<S: Scope<Timestamp = Duration>>(
-    scope: &mut S,
-    stream: Stream<S, Vec<(Duration, DifferentialEvent)>>,
-) -> (DifferentialTraces, DifferentialCollections<S>) {
+fn construct_differential<'scope>(
+    scope: Scope<'scope, Duration>,
+    stream: Stream<'scope, Duration, Vec<(Duration, DifferentialEvent)>>,
+) -> (DifferentialTraces, DifferentialCollections<'scope>) {
     type Update = (usize, Duration, i64);
 
-    let mut demux = OperatorBuilder::new("Differential Demux".to_string(), scope.clone());
+    let mut demux = OperatorBuilder::new("Differential Demux".to_string(), scope);
     let mut input = demux.new_input(stream, Pipeline);
 
     let (bat_out, batches) = demux.new_output::<Vec<Update>>();

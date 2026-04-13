@@ -11,7 +11,6 @@
 //! specific behavior you require.
 
 use std::collections::VecDeque;
-use columnation::Columnation;
 use timely::container::{ContainerBuilder, PushInto};
 use crate::Data;
 use crate::difference::Semigroup;
@@ -257,38 +256,6 @@ impl<D: Ord, T: Ord, R: Semigroup> Consolidate for Vec<(D, T, R)> {
     fn consolidate_into(&mut self, target: &mut Self) {
         consolidate_updates(self);
         std::mem::swap(self, target);
-    }
-}
-
-impl<D: Ord + Columnation, T: Ord + Columnation, R: Semigroup + Columnation> Consolidate for crate::containers::TimelyStack<(D, T, R)> {
-    fn len(&self) -> usize { self[..].len() }
-    fn clear(&mut self) { crate::containers::TimelyStack::clear(self) }
-    fn consolidate_into(&mut self, target: &mut Self) {
-        let len = self[..].len();
-        let mut indices: Vec<usize> = (0..len).collect();
-        indices.sort_unstable_by(|&i, &j| {
-            let (d1, t1, _) = &self[i];
-            let (d2, t2, _) = &self[j];
-            (d1, t1).cmp(&(d2, t2))
-        });
-        target.clear();
-        let mut idx = 0;
-        while idx < indices.len() {
-            let (d, t, r) = &self[indices[idx]];
-            let mut r_owned = r.clone();
-            idx += 1;
-            while idx < indices.len() {
-                let (d2, t2, r2) = &self[indices[idx]];
-                if d == d2 && t == t2 {
-                    r_owned.plus_equals(r2);
-                    idx += 1;
-                } else { break; }
-            }
-            if !r_owned.is_zero() {
-                target.copy_destructured(d, t, &r_owned);
-            }
-        }
-        self.clear();
     }
 }
 

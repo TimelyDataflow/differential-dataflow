@@ -2035,8 +2035,8 @@ fn main() {
             let labels =
             nodes
                 .iterate(|scope, label| {
-                    let edges = edges.enter(&scope);
-                    let nodes = nodes.enter(&scope);
+                    let edges = edges.enter(scope);
+                    let nodes = nodes.enter(scope);
                     label
                         .join_map(edges, |_src, &lbl, &tgt| (tgt, lbl))
                         .concat(nodes)

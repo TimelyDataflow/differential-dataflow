@@ -1104,10 +1104,10 @@ tvhftq (35)";
 
             let total_weights: VecCollection<_,String> = weights
                 .iterate(|scope, inner| {
-                    parents.enter(&scope)
+                    parents.enter(scope)
                            .semijoin(inner)
                            .map(|(_, parent)| parent)
-                           .concat(weights.enter(&scope))
+                           .concat(weights.enter(scope))
                 });
 
             parents

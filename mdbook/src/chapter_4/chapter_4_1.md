@@ -15,8 +15,8 @@ Let's write this computation starting from a collection `edges`, using different
 
     labels
         .iterate(|scope, inner| {
-            let labels = labels.enter(&scope);
-            let edges = edges.enter(&scope);
+            let labels = labels.enter(scope);
+            let edges = edges.enter(scope);
             inner.join(edges)
                  .map(|(_src,(lbl,dst))| (dst,lbl))
                  .concat(labels)

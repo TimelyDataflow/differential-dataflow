@@ -11,14 +11,13 @@ use std::cmp::Ordering;
 use serde::{Deserialize, Serialize};
 
 use crate::Hashable;
-use crate::containers::TimelyStack;
-use crate::trace::implementations::chunker::{ColumnationChunker, ContainerChunker};
+use crate::trace::implementations::chunker::ContainerChunker;
 use crate::trace::implementations::merge_batcher::MergeBatcher;
-use crate::trace::implementations::merge_batcher::container::{VecInternalMerger, ColInternalMerger};
+use crate::trace::implementations::merge_batcher::container::VecInternalMerger;
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::rc_blanket_impls::RcBuilder;
 
-use super::{Layout, Vector, TStack};
+use super::{Layout, Vector};
 
 use self::val_batch::{RhhValBatch, RhhValBuilder};
 
@@ -31,16 +30,6 @@ pub type VecBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<
 
 // /// A trace implementation for empty values using a spine of ordered lists.
 // pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
-
-/// A trace implementation backed by columnar storage.
-pub type ColSpine<K, V, T, R> = Spine<Rc<RhhValBatch<TStack<((K,V),T,R)>>>>;
-/// A batcher for columnar storage.
-pub type ColBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, ColumnationChunker<((K,V),T,R)>, ColInternalMerger<(K,V),T,R>>;
-/// A builder for columnar storage.
-pub type ColBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<TStack<((K,V),T,R)>, TimelyStack<((K,V),T,R)>>>;
-
-// /// A trace implementation backed by columnar storage.
-// pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<TStack<((K,()),T,R)>>>>;
 
 /// A carrier trait indicating that the type's `Ord` and `PartialOrd` implementations are by `Hashable::hashed()`.
 pub trait HashOrdered: Hashable { }

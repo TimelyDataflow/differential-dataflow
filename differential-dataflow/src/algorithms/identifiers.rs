@@ -1,6 +1,6 @@
 //! Assign unique identifiers to records.
 
-use timely::dataflow::Scope;
+use timely::progress::Timestamp;
 
 use crate::{VecCollection, ExchangeData, Hashable};
 use crate::lattice::Lattice;
@@ -8,7 +8,7 @@ use crate::operators::*;
 use crate::difference::Abelian;
 
 /// Assign unique identifiers to elements of a collection.
-pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
+pub trait Identifiers<'scope, T: Timestamp, D: ExchangeData, R: ExchangeData+Abelian> {
     /// Assign unique identifiers to elements of a collection.
     ///
     /// # Example
@@ -27,16 +27,16 @@ pub trait Identifiers<G: Scope, D: ExchangeData, R: ExchangeData+Abelian> {
     ///          .assert_empty();
     /// });
     /// ```
-    fn identifiers(self) -> VecCollection<G, (D, u64), R>;
+    fn identifiers(self) -> VecCollection<'scope, T, (D, u64), R>;
 }
 
-impl<G, D, R> Identifiers<G, D, R> for VecCollection<G, D, R>
+impl<'scope, T, D, R> Identifiers<'scope, T, D, R> for VecCollection<'scope, T, D, R>
 where
-    G: Scope<Timestamp: Lattice>,
+    T: Timestamp + Lattice,
     D: ExchangeData + ::std::hash::Hash,
     R: ExchangeData + Abelian,
 {
-    fn identifiers(self) -> VecCollection<G, (D, u64), R> {
+    fn identifiers(self) -> VecCollection<'scope, T, (D, u64), R> {
 
         // The design here is that we iteratively develop a collection
         // of pairs (round, record), where each pair is a proposal that
@@ -55,11 +55,11 @@ where
         use crate::collection::AsCollection;
 
         let init = self.map(|record| (0, record));
-        timely::dataflow::operators::generic::operator::empty(&init.scope())
+        timely::dataflow::operators::generic::operator::empty(init.scope())
             .as_collection()
             .iterate(|scope, diff|
                 init.clone()
-                    .enter(&scope)
+                    .enter(scope)
                     .concat(diff)
                     .map(|pair| (pair.hashed(), pair))
                     .reduce(|_hash, input, output| {
@@ -107,11 +107,11 @@ mod tests {
             use crate::collection::AsCollection;
 
             let init = input.map(|record| (0, record));
-            timely::dataflow::operators::generic::operator::empty(&init.scope())
+            timely::dataflow::operators::generic::operator::empty(init.scope())
                 .as_collection()
                 .iterate(|scope, diff|
                     init.clone()
-                        .enter(&scope)
+                        .enter(scope)
                         .concat(diff)
                         .map(|(round, num)| ((round + num) / 10, (round, num)))
                         .reduce(|_hash, input, output| {
