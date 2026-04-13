@@ -9,9 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.23.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.22.0...differential-dataflow-v0.23.0) - 2026-04-13
 
+### Changed
+
+- Update to timely 0.29 ([#714](https://github.com/TimelyDataflow/differential-dataflow/pull/714), [#718](https://github.com/TimelyDataflow/differential-dataflow/pull/718), [#720](https://github.com/TimelyDataflow/differential-dataflow/pull/720))
+- Remove scope generic from `Arranged` (now `Arranged<'scope, Tr>` instead of `Arranged<G, Tr>` where `G: Scope`), simplifying trait bounds throughout ([#714](https://github.com/TimelyDataflow/differential-dataflow/pull/714))
+- Add explicit `'scope` lifetime parameter to `VecCollection`, `Arranged`, and related types ([#718](https://github.com/TimelyDataflow/differential-dataflow/pull/718))
+- Scopes are now passed by value rather than by reference (`enter(scope)` instead of `enter(&scope)`) ([#720](https://github.com/TimelyDataflow/differential-dataflow/pull/720))
+- `reduce_abelian` and `reduce_core` accept a container/builder parameter for output, removing the `KeyOwn` requirement from trace bounds ([#710](https://github.com/TimelyDataflow/differential-dataflow/pull/710))
+
+### Removed
+
+- `TimelyStack` container and all dependent types: `TStack` layout, `ColumnationChunker`, `ColInternalMerger`, and `Col*` type aliases (`ColValSpine`, `ColKeySpine`, etc.) ([#715](https://github.com/TimelyDataflow/differential-dataflow/pull/715))
+
 ### Other
 
-- Release preparation ([#722](https://github.com/TimelyDataflow/differential-dataflow/pull/722))
+- Substantial cleanup of `reduce.rs`: remove ~300 lines of dead code, simplify conditional logic, replace silent error swallowing with panics ([#709](https://github.com/TimelyDataflow/differential-dataflow/pull/709))
+- Columnar support refinements ([#704](https://github.com/TimelyDataflow/differential-dataflow/pull/704))
+
+This is a heavily breaking release driven by tracking timely 0.29.
+The `Arranged` type loses its scope generic and gains an explicit scope lifetime.
+Scope parameters throughout the API shift from generic `S: Scope` to concrete types, and scopes are passed owned rather than borrowed.
+Users of `Col*` type aliases should migrate to columnar-backed equivalents.
+The `reduce` family of functions now takes an explicit output container parameter, which removes the need for `KeyOwn` bounds on traces.
 
 ## [0.22.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.21.2...differential-dataflow-v0.22.0) - 2026-04-07
 
