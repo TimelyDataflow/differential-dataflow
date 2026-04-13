@@ -11,4 +11,4 @@ workspace = true
 
 [dependencies]
 differential-dataflow = { workspace = true }
-timely = { git = "https://github.com/frankmcsherry/timely-dataflow" }
+timely = { workspace = true }
