@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7efa1ce8.js";
+            window.path_to_searchindex_js = "searchindex-a246d49f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-03e09f86.js"></script>
@@ -208,7 +208,7 @@ version = "0.1.0"
 authors = ["Your Name &lt;your_name@you.ch&gt;"]
 
 [dependencies]
-timely = "=0.28.1"
+timely = "=0.29.0"
 differential-dataflow = "=0.22.0"
 </code></pre>
 <p>You should only need to add those last two lines there, which bring in dependencies on both <a href="https://github.com/TimelyDataflow/timely-dataflow">timely dataflow</a> and <a href="https://github.com/TimelyDataflow/differential-dataflow">differential dataflow</a>. We will be using both of those.</p>
@@ -513,11 +513,10 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages
         .clone()
@@ -531,11 +530,10 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages
         .map(|(m2, m1)| m2);
@@ -551,11 +549,10 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages
         .filter(|&amp;(m2, m1)| m2 &gt; m1);
@@ -571,11 +568,10 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages
         .clone()
@@ -599,11 +595,10 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages
         .clone()
@@ -621,11 +616,10 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages
         .clone()
@@ -648,11 +642,10 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages
         .clone()
@@ -671,11 +664,10 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64), i64&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64), i64&gt;)
 </span><span class="boring">{
 </span>    manages
         .reduce(|_key, input, output| {
@@ -719,12 +711,11 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::operators::Iterate;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages   // transitive contains (manager, person) for many hops.
         .iterate(|_scope, transitive| {
@@ -757,18 +748,17 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages   // transitive contains (manager, person) for many hops.
         .clone()
         .iterate(|scope, transitive| {
 
-            let manages = manages.enter(&amp;scope);
+            let manages = manages.enter(scope);
 
             transitive
                 .map(|(mk, m1)| (m1, mk))
@@ -790,25 +780,24 @@ Echidnatron%
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use timely::dataflow::Scope;
-</span><span class="boring">use timely::dataflow::scopes::Child;
 </span><span class="boring">use timely::progress::Antichain;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn logic&lt;'a, G: Scope&gt;(collection: VecCollection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64), isize&gt;) -&gt; VecCollection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64)&gt;
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn logic&lt;T: Timestamp + Lattice&gt;(collection: VecCollection&lt;T, (u64, u64), isize&gt;) -&gt; VecCollection&lt;T, (u64, u64)&gt;
 </span><span class="boring">{
 </span><span class="boring">    collection
 </span><span class="boring">}
-</span><span class="boring">fn example&lt;'a, G: Scope&lt;Timestamp=u64&gt;&gt;(collection: VecCollection&lt;G, (u64, u64)&gt;) //, logic: impl Fn(&amp;VecVariable&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64), isize&gt;) -&gt; VecCollection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64)&gt;)
-</span><span class="boring">   where G::Timestamp: Lattice
+</span><span class="boring">fn example(collection: VecCollection&lt;u64, (u64, u64)&gt;)
 </span><span class="boring">{
-</span>    collection.scope().scoped("inner", |subgraph| {
+</span>    let outer = collection.scope();
+    outer.scoped::&lt;u64,_,_&gt;("inner", |subgraph| {
         let (variable, collection) = VecVariable::new_from(collection.enter(subgraph), 1);
         let result = logic(collection);
         variable.set(result.clone());
-        result.leave()
+        result.leave(outer)
     });
 <span class="boring">}
 </span><span class="boring">}</span></code></pre>
@@ -937,8 +926,8 @@ Echidnatron%
 
     labels
         .iterate(|scope, inner| {
-            let labels = labels.enter(&amp;scope);
-            let edges = edges.enter(&amp;scope);
+            let labels = labels.enter(scope);
+            let edges = edges.enter(scope);
             inner.join(edges)
                  .map(|(_src,(lbl,dst))| (dst,lbl))
                  .concat(labels)
@@ -1290,8 +1279,8 @@ fn main() {
             // Reachability queries.
             query.clone().iterate(|scope, reach| {
 
-                let knows = knows.enter(&amp;scope);
-                let query = query.enter(&amp;scope);
+                let knows = knows.enter(scope);
+                let query = query.enter(scope);
 
                 knows.join_core(reach.arrange_by_key(), |x,y,q| [(*y,*q)])
                      .concat(query)

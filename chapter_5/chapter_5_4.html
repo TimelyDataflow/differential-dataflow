@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7efa1ce8.js";
+            window.path_to_searchindex_js = "../searchindex-a246d49f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-03e09f86.js"></script>
@@ -209,8 +209,8 @@ fn main() {
             // Reachability queries.
             query.clone().iterate(|scope, reach| {
 
-                let knows = knows.enter(&amp;scope);
-                let query = query.enter(&amp;scope);
+                let knows = knows.enter(scope);
+                let query = query.enter(scope);
 
                 knows.join_core(reach.arrange_by_key(), |x,y,q| [(*y,*q)])
                      .concat(query)

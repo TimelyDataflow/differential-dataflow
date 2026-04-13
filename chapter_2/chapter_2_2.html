@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7efa1ce8.js";
+            window.path_to_searchindex_js = "../searchindex-a246d49f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-03e09f86.js"></script>
@@ -181,11 +181,10 @@
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages
         .filter(|&amp;(m2, m1)| m2 &gt; m1);

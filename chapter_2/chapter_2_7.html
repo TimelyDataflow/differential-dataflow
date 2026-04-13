@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7efa1ce8.js";
+            window.path_to_searchindex_js = "../searchindex-a246d49f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-03e09f86.js"></script>
@@ -181,12 +181,11 @@
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::operators::Iterate;
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages   // transitive contains (manager, person) for many hops.
         .iterate(|_scope, transitive| {
@@ -219,18 +218,17 @@
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
-</span><span class="boring">use timely::dataflow::Scope;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn example&lt;G: Scope&gt;(manages: VecCollection&lt;G, (u64, u64)&gt;)
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn example&lt;T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice&gt;(manages: VecCollection&lt;T, (u64, u64)&gt;)
 </span><span class="boring">{
 </span>    manages   // transitive contains (manager, person) for many hops.
         .clone()
         .iterate(|scope, transitive| {
 
-            let manages = manages.enter(&amp;scope);
+            let manages = manages.enter(scope);
 
             transitive
                 .map(|(mk, m1)| (m1, mk))
@@ -252,25 +250,24 @@
 </span><span class="boring">fn main() {
 </span><span class="boring">extern crate timely;
 </span><span class="boring">extern crate differential_dataflow;
+</span><span class="boring">use timely::progress::Timestamp;
 </span><span class="boring">use timely::dataflow::Scope;
-</span><span class="boring">use timely::dataflow::scopes::Child;
 </span><span class="boring">use timely::progress::Antichain;
 </span><span class="boring">use differential_dataflow::VecCollection;
 </span><span class="boring">use differential_dataflow::operators::{Iterate, iterate::VecVariable};
 </span><span class="boring">use differential_dataflow::lattice::Lattice;
-</span><span class="boring">fn logic&lt;'a, G: Scope&gt;(collection: VecCollection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64), isize&gt;) -&gt; VecCollection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64)&gt;
-</span><span class="boring">where G::Timestamp: Lattice
+</span><span class="boring">fn logic&lt;T: Timestamp + Lattice&gt;(collection: VecCollection&lt;T, (u64, u64), isize&gt;) -&gt; VecCollection&lt;T, (u64, u64)&gt;
 </span><span class="boring">{
 </span><span class="boring">    collection
 </span><span class="boring">}
-</span><span class="boring">fn example&lt;'a, G: Scope&lt;Timestamp=u64&gt;&gt;(collection: VecCollection&lt;G, (u64, u64)&gt;) //, logic: impl Fn(&amp;VecVariable&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64), isize&gt;) -&gt; VecCollection&lt;Child&lt;'a, G, G::Timestamp&gt;, (u64, u64)&gt;)
-</span><span class="boring">   where G::Timestamp: Lattice
+</span><span class="boring">fn example(collection: VecCollection&lt;u64, (u64, u64)&gt;)
 </span><span class="boring">{
-</span>    collection.scope().scoped("inner", |subgraph| {
+</span>    let outer = collection.scope();
+    outer.scoped::&lt;u64,_,_&gt;("inner", |subgraph| {
         let (variable, collection) = VecVariable::new_from(collection.enter(subgraph), 1);
         let result = logic(collection);
         variable.set(result.clone());
-        result.leave()
+        result.leave(outer)
     });
 <span class="boring">}
 </span><span class="boring">}</span></code></pre>

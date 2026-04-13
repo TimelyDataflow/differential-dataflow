@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7efa1ce8.js";
+            window.path_to_searchindex_js = "../searchindex-a246d49f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-03e09f86.js"></script>
@@ -185,8 +185,8 @@
 
     labels
         .iterate(|scope, inner| {
-            let labels = labels.enter(&amp;scope);
-            let edges = edges.enter(&amp;scope);
+            let labels = labels.enter(scope);
+            let edges = edges.enter(scope);
             inner.join(edges)
                  .map(|(_src,(lbl,dst))| (dst,lbl))
                  .concat(labels)
