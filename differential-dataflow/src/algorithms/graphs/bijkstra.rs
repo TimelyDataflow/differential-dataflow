@@ -118,6 +118,6 @@ where
 
         reverse_bind.set(reverse_next);
 
-        reached.leave(&outer)
+        reached.leave(outer)
     })
 }

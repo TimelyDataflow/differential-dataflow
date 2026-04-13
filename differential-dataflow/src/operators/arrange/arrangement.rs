@@ -25,8 +25,6 @@ use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::progress::Timestamp;
 use timely::progress::Antichain;
 use timely::dataflow::operators::Capability;
-use timely::scheduling::Scheduler;
-use timely::worker::AsWorker;
 
 use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
@@ -83,7 +81,7 @@ where
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
-    pub fn enter<'inner, TInner>(self, child: &Scope<'inner, TInner>) -> Arranged<'inner, TraceEnter<Tr, TInner>>
+    pub fn enter<'inner, TInner>(self, child: Scope<'inner, TInner>) -> Arranged<'inner, TraceEnter<Tr, TInner>>
     where
         TInner: Refines<Tr::Time>+Lattice,
     {
@@ -97,7 +95,7 @@ where
     ///
     /// This method only applies to *regions*, which are subscopes with the same timestamp
     /// as their containing scope. In this case, the trace type does not need to change.
-    pub fn enter_region<'inner>(self, child: &Scope<'inner, Tr::Time>) -> Arranged<'inner, Tr> {
+    pub fn enter_region<'inner>(self, child: Scope<'inner, Tr::Time>) -> Arranged<'inner, Tr> {
         Arranged {
             stream: self.stream.enter(child),
             trace: self.trace,
@@ -109,7 +107,7 @@ where
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
-    pub fn enter_at<'inner, TInner, F, P>(self, child: &Scope<'inner, TInner>, logic: F, prior: P) -> Arranged<'inner, TraceEnterAt<Tr, TInner, F, P>>
+    pub fn enter_at<'inner, TInner, F, P>(self, child: Scope<'inner, TInner>, logic: F, prior: P) -> Arranged<'inner, TraceEnterAt<Tr, TInner, F, P>>
     where
         TInner: Refines<Tr::Time>+Lattice+'static,
         F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone+'static,
@@ -314,7 +312,7 @@ where
     ///
     /// This method only applies to *regions*, which are subscopes with the same timestamp
     /// as their containing scope. In this case, the trace type does not need to change.
-    pub fn leave_region<'outer>(self, outer: &Scope<'outer, Tr::Time>) -> Arranged<'outer, Tr> {
+    pub fn leave_region<'outer>(self, outer: Scope<'outer, Tr::Time>) -> Arranged<'outer, Tr> {
         use timely::dataflow::operators::Leave;
         Arranged {
             stream: self.stream.leave(outer),
@@ -383,7 +381,7 @@ where
     let stream = stream.unary_frontier(pact, name, move |_capability, info| {
 
         // Acquire a logger for arrange events.
-        let logger = scope.logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+        let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
         // Where we will deposit received updates, and from which we extract batches.
         let mut batcher = Ba::new(logger.clone(), info.global_id);
@@ -394,7 +392,7 @@ where
         let activator = Some(scope.activator_for(info.address.clone()));
         let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
         // If there is default exertion logic set, install it.
-        if let Some(exert_logic) = scope.config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+        if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
             empty_trace.set_exert_logic(exert_logic);
         }
 

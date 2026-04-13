@@ -24,7 +24,7 @@ where
     let outer = graph.scope();
     outer.scoped::<Product<_, usize>,_,_>("StronglyConnected", |scope| {
         // Bring in edges and transposed edges.
-        let edges = graph.enter(&scope);
+        let edges = graph.enter(scope);
         let trans = edges.clone().map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
         // Create a new variable that will be intra-scc edges.
         use crate::operators::iterate::Variable;
@@ -32,7 +32,7 @@ where
 
         let result = trim_edges(trim_edges(inner, edges), trans);
         variable.set(result.clone());
-        result.leave(&outer)
+        result.leave(outer)
     })
 }
 
@@ -64,6 +64,6 @@ where
              .join_core(labels, |e2,(e1,l1),l2| [((e1.clone(),e2.clone()),(l1.clone(),l2.clone()))])
              .filter(|(_,(l1,l2))| l1 == l2)
              .map(|((x1,x2),_)| (x2,x1))
-             .leave_region(&outer)
+             .leave_region(outer)
     })
 }

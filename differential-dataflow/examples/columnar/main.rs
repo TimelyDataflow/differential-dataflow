@@ -185,7 +185,7 @@ mod reachability {
             variable.set(result_col.clone());
 
             // Leave the iterative scope.
-            result_col.leave(&outer)
+            result_col.leave(outer)
         })
     }
 }

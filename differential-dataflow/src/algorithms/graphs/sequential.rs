@@ -57,8 +57,8 @@ where
         .map(|(node, _state)| (node, None))
         .iterate(|scope, new_state| {
             // immutable content: edges and initial state.
-            let edges = edges.enter(&scope);
-            let old_state = state.enter(&scope);
+            let edges = edges.enter(scope);
+            let old_state = state.enter(scope);
                                  // .map(|x| (x.0, Some(x.1)));
 
             // break edges into forward and reverse directions.

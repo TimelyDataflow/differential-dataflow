@@ -89,7 +89,7 @@ pub struct EdgeVariable<'scope, T: Timestamp + Lattice> {
 impl<'scope, T: Timestamp + Lattice> EdgeVariable<'scope, T> {
     /// Creates a new variable initialized with `source`.
     pub fn from(source: VecCollection<'scope, T, Edge>, step: T::Summary) -> Self {
-        let (variable, collection) = VecVariable::new(&mut source.scope(), step);
+        let (variable, collection) = VecVariable::new(source.scope(), step);
         EdgeVariable {
             variable,
             collection,
@@ -150,7 +150,7 @@ impl Query {
     }
 
     /// Creates a dataflow implementing the query, and returns input and trace handles.
-    pub fn render_in<T>(&self, scope: &mut Scope<T>) -> BTreeMap<String, RelationHandles<T>>
+    pub fn render_in<T>(&self, scope: Scope<T>) -> BTreeMap<String, RelationHandles<T>>
     where
         T: Timestamp + Lattice + ::timely::order::TotalOrder,
     {
@@ -170,7 +170,7 @@ impl Query {
             // create variables and result handles for each named relation.
             for (name, (input, collection)) in input_map {
                 let edge_variable = EdgeVariable::from(collection.enter(subscope), Product::new(Default::default(), 1));
-                let trace = edge_variable.collection.clone().leave(&scope).arrange_by_self().trace;
+                let trace = edge_variable.collection.clone().leave(scope).arrange_by_self().trace;
                 result_map.insert(name.clone(), RelationHandles { input, trace });
                 variable_map.insert(name.clone(), edge_variable);
             }

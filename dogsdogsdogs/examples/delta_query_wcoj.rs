@@ -79,7 +79,7 @@ fn main() {
                     ])
                     .map(|((a,c),b)| (a,b,c));
 
-                changes1.concat(changes2).concat(changes3).leave(&scope)
+                changes1.concat(changes2).concat(changes3).leave(scope)
             });
 
             triangles

@@ -1107,7 +1107,7 @@ wui inc -120 if i > -2038";
                 .map(|_| ((0, String::new()), 0))
                 .iterate(|scope, valid| {
 
-                    let edits = edits.enter(&scope);
+                    let edits = edits.enter(scope);
 
                     valid
                         .prefix_sum_at(edits.map(|(key,_)| key), 0, |_k,x,y| *x + *y)

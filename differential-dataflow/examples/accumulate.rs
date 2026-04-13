@@ -20,7 +20,7 @@ fn main() {
             scope.iterative::<u32,_,_>(|inner| {
                 data.enter_at(inner, |_| 0)
                     .consolidate()
-                    .leave(&scope)
+                    .leave(scope)
             });
 
             input

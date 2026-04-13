@@ -77,7 +77,7 @@ fn main() {
             }).as_collection().consolidate();
             let result = wrap(result.inner).as_collection();
             variable.set(result);
-            collection.leave(&scope)
+            collection.leave(scope)
         });
     })
 }

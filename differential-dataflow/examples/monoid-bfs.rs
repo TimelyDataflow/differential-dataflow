@@ -152,6 +152,6 @@ where
             .as_collection(|k,()| *k);
 
         variable.set(result.clone());
-        result.leave(&outer)
+        result.leave(outer)
      })
 }

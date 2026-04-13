@@ -131,6 +131,6 @@ where
 
         // Bind the recursive variable, return its limit.
         ranks_bind.set(pushed.clone());
-        pushed.leave(&outer)
+        pushed.leave(outer)
     })
 }

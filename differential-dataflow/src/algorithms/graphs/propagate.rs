@@ -69,8 +69,8 @@ where
 
     // nodes.filter(|_| false)
     //      .iterate(|scope, inner| {
-    //          let edges = edges.enter(&scope);
-    //          let nodes = nodes.enter_at(&scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as u64));
+    //          let edges = edges.enter(scope);
+    //          let nodes = nodes.enter_at(scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as u64));
     //          inner.join_map(edges, |_k,l,d| (d.clone(),l.clone()))
     //               .concat(nodes)
     //               .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))
@@ -104,6 +104,6 @@ where
 
         labels
             .as_collection(|k,v| (k.clone(), v.clone()))
-            .leave(&outer)
+            .leave(outer)
     })
 }

@@ -19,7 +19,7 @@ pub type TraceHandle = TraceAgent<TraceSpine>;
 
 /// Arguments provided to each shared library to help build their dataflows and register their results.
 pub type Environment<'a, 'b> = (
-    &'a mut Scope<'b, usize>,
+    Scope<'b, usize>,
     &'a mut TraceHandler,
     &'a mut ProbeHandle<RootTime>,
     &'a Instant,

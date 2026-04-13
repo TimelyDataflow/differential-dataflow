@@ -51,7 +51,7 @@ fn main() {
                       .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None });
 
                 labels.set(next.clone());
-                next.leave(&outer)
+                next.leave(outer)
             });
 
             reached

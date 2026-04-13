@@ -89,7 +89,7 @@ fn main() {
                 let changes3 = validate(changes3, reverse_self_alt.clone(), key2.clone());
                 let changes3 = changes3.map(|((a,c),b)| (a,b,c));
 
-                let prev_changes = changes1.concat(changes2).concat(changes3).leave(&scope);
+                let prev_changes = changes1.concat(changes2).concat(changes3).leave(scope);
 
                 // New ideas
                 let d_edges = edges.differentiate(inner);
@@ -115,7 +115,7 @@ fn main() {
                     .join_core(forward_key_alt, |a,c,b| Some(((*c, *b), *a)))
                     .join_core(reverse_self_alt, |(c,b), a, &()| Some((*a,*b,*c)));
 
-                let next_changes = changes1.concat(changes2).concat(changes3).integrate(&scope);
+                let next_changes = changes1.concat(changes2).concat(changes3).integrate(scope);
 
                 (prev_changes, next_changes)
             });

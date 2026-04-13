@@ -33,7 +33,7 @@ impl<'scope, T: timely::progress::Timestamp + differential_dataflow::lattice::La
 }
 
 
-fn render_program<'scope>(program: &Program, scope: &mut Scope<'scope, DdirTime>, inputs: &[Col<'scope, DdirTime>]) -> HashMap<Id, Col<'scope, DdirTime>>
+fn render_program<'scope>(program: &Program, scope: Scope<'scope, DdirTime>, inputs: &[Col<'scope, DdirTime>]) -> HashMap<Id, Col<'scope, DdirTime>>
 {
     let mut nodes: HashMap<Id, Rendered<'scope, DdirTime>> = HashMap::new();
     let mut level: usize = 0;

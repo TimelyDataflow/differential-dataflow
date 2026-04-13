@@ -291,7 +291,7 @@ mod distributor {
     use timely::dataflow::channels::Message;
     use timely::dataflow::channels::pact::{LogPuller, LogPusher, ParallelizationContract};
     use timely::progress::Timestamp;
-    use timely::worker::AsWorker;
+    use timely::worker::Worker;
 
     use crate::layout::ColumnarUpdate as Update;
     use crate::{Updates, RecordedUpdates};
@@ -361,15 +361,15 @@ mod distributor {
         >;
         type Puller = LogPuller<Box<dyn timely::communication::Pull<Message<T, RecordedUpdates<U>>>>>;
 
-        fn connect<A: AsWorker>(self, allocator: &mut A, identifier: usize, address: Rc<[usize]>, logging: Option<TimelyLogger>) -> (Self::Pusher, Self::Puller) {
-            let (senders, receiver) = allocator.allocate::<Message<T, RecordedUpdates<U>>>(identifier, address);
-            let senders = senders.into_iter().enumerate().map(|(i,x)| LogPusher::new(x, allocator.index(), i, identifier, logging.clone())).collect::<Vec<_>>();
+        fn connect(self, worker: &Worker, identifier: usize, address: Rc<[usize]>, logging: Option<TimelyLogger>) -> (Self::Pusher, Self::Puller) {
+            let (senders, receiver) = worker.allocate::<Message<T, RecordedUpdates<U>>>(identifier, address);
+            let senders = senders.into_iter().enumerate().map(|(i,x)| LogPusher::new(x, worker.index(), i, identifier, logging.clone())).collect::<Vec<_>>();
             let distributor = ValDistributor {
                 marker: std::marker::PhantomData,
                 hashfunc: self.hashfunc,
                 pre_lens: Vec::new(),
             };
-            (Exchange::new(senders, distributor), LogPuller::new(receiver, allocator.index(), identifier, logging.clone()))
+            (Exchange::new(senders, distributor), LogPuller::new(receiver, worker.index(), identifier, logging.clone()))
         }
     }
 }

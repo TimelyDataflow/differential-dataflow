@@ -109,7 +109,7 @@ fn reach<'s>(
     roots: VecCollection<'s, (), Node, Diff>
 ) -> VecCollection<'s, (), Node, Diff> {
 
-    let graph = graph.import(&roots.scope());
+    let graph = graph.import(roots.scope());
 
     let outer = roots.scope();
     outer.iterative::<Iter,_,_>(|scope| {
@@ -125,7 +125,7 @@ fn reach<'s>(
              .threshold_total(|_,_| 1);
 
         inner.set(result.clone());
-        result.leave(&outer)
+        result.leave(outer)
     })
 }
 
@@ -135,7 +135,7 @@ fn bfs<'s>(
     roots: VecCollection<'s, (), Node, Diff>
 ) -> VecCollection<'s, (), (Node, u32), Diff> {
 
-    let graph = graph.import(&roots.scope());
+    let graph = graph.import(roots.scope());
     let roots = roots.map(|r| (r,0));
 
     let outer = roots.scope();
@@ -151,12 +151,12 @@ fn bfs<'s>(
              .reduce(|_key, input, output| output.push((*input[0].0,1)));
 
         inner.set(result.clone());
-        result.leave(&outer)
+        result.leave(outer)
     })
 }
 
 fn connected_components<'s>(
-    scope: &mut timely::dataflow::Scope<'s, ()>,
+    scope: timely::dataflow::Scope<'s, ()>,
     forward: &mut TraceHandle,
     reverse: &mut TraceHandle,
 ) -> VecCollection<'s, (), (Node, Node), Diff> {

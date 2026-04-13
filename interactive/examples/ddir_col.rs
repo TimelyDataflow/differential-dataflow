@@ -131,7 +131,7 @@ mod render {
         }
     }
 
-    pub fn render_program<'scope>(program: &Program, scope: &mut Scope<'scope, ConcreteTime>, inputs: &[Col<'scope>]) -> HashMap<Id, Col<'scope>>
+    pub fn render_program<'scope>(program: &Program, scope: Scope<'scope, ConcreteTime>, inputs: &[Col<'scope>]) -> HashMap<Id, Col<'scope>>
     {
         let mut nodes: HashMap<Id, Rendered<'scope>> = HashMap::new();
         let mut level: usize = 0;

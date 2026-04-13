@@ -2,7 +2,6 @@ use rand::{Rng, SeedableRng, StdRng};
 
 use timely::dataflow::operators::*;
 use timely::order::Product;
-use timely::scheduling::Scheduler;
 
 use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
@@ -109,8 +108,8 @@ fn main() {
             // repeatedly update minimal distances each node can be reached from each root
             roots.clone().iterate(|scope, dists| {
 
-                let edges = edges.enter(&scope);
-                let roots = roots.enter(&scope);
+                let edges = edges.enter(scope);
+                let roots = roots.enter(scope);
 
                 dists.arrange_by_key()
                      .join_core(edges, |_k,l,d| Some((*d, l+1)))

@@ -126,7 +126,7 @@ where
         // Leave the dynamic iteration, stripping off the last timestamp coordinate.
         next.leave_dynamic(1)
             .inspect(|x| println!("{:?}", x))
-            .leave(&outer)
+            .leave(outer)
     })
 
 }

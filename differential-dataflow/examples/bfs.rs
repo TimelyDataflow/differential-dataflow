@@ -100,8 +100,8 @@ where
     // repeatedly update minimal distances each node can be reached from each root
     nodes.clone().iterate(|scope, inner| {
 
-        let nodes = nodes.enter(&scope);
-        let edges = edges.enter(&scope);
+        let nodes = nodes.enter(scope);
+        let edges = edges.enter(scope);
 
         inner.join_map(edges, |_k,l,d| (*d, l+1))
              .concat(nodes)

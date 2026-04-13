@@ -357,7 +357,7 @@ fn _bidijkstra<'s, T: Timestamp + Lattice + Ord>(
 
         reverse.set(reverse_next);
 
-        reached.leave(&outer)
+        reached.leave(outer)
     })
 }
 
@@ -380,8 +380,8 @@ where T: Lattice + std::hash::Hash
         .filter(|_| false)
         .iterate(|scope, inner| {
 
-            let graph = graph.enter(&scope);
-            let nodes = nodes.enter_at(&scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
+            let graph = graph.enter(scope);
+            let nodes = nodes.enter_at(scope, |r| 256 * (64 - r.1.leading_zeros() as u64));
 
             let inner = inner.arrange_by_key();
 

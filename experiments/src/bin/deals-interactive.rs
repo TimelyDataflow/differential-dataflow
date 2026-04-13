@@ -217,9 +217,9 @@ fn interactive<'s, G: timely::progress::Timestamp + Lattice>(
     tc_1.map(|x| (x,x))
         .iterate(|scope, inner|
             edges_q1
-                .enter(&scope)
+                .enter(scope)
                 .join_core(inner.arrange_by_key(), |_,&y,&q| [(y,q)])
-                .concat(tc_1_enter.enter(&scope).map(|x| (x,x)))
+                .concat(tc_1_enter.enter(scope).map(|x| (x,x)))
                 .distinct()
         )
         .map(|(x,q)| (q,x));
@@ -232,9 +232,9 @@ fn interactive<'s, G: timely::progress::Timestamp + Lattice>(
         .iterate(|scope, inner|
             edges_q2
                 .as_collection(|&k,&v| (v,k))
-                .enter(&scope)
+                .enter(scope)
                 .join_core(inner.arrange_by_key(), |_,&y,&q| [(y,q)])
-                .concat(tc_2_enter.enter(&scope).map(|x| (x,x)))
+                .concat(tc_2_enter.enter(scope).map(|x| (x,x)))
                 .distinct()
         )
         .map(|(x,q)| (q,x));
@@ -251,10 +251,10 @@ fn interactive<'s, G: timely::progress::Timestamp + Lattice>(
     sg_x.iterate(|scope, inner|
             edges_magic
                 .as_collection(|&k,&v| (v,k))
-                .enter(&scope)
+                .enter(scope)
                 .semijoin(inner)
                 .map(|(_x,y)| y)
-                .concat(sg_x_enter.enter(&scope))
+                .concat(sg_x_enter.enter(scope))
                 .distinct()
         );
 
@@ -271,9 +271,9 @@ fn interactive<'s, G: timely::progress::Timestamp + Lattice>(
         .map(|x| (x,x))   // for query q, sg(x,x)
         .iterate(|scope, inner| {
 
-            let edges = edges.enter(&scope);
-            let magic = magic_enter.enter(&scope);
-            let magic_edges = magic_edges.enter(&scope);
+            let edges = edges.enter(scope);
+            let magic = magic_enter.enter(scope);
+            let magic_edges = magic_edges.enter(scope);
 
             let result =
             inner

@@ -108,7 +108,7 @@ impl<'scope, T: Timestamp, C: Container> Collection<'scope, T, C> {
     ///
     /// This method is a specialization of `enter` to the case where the nested scope is a region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn enter_region<'inner>(self, child: &Scope<'inner, T>) -> Collection<'inner, T, C> {
+    pub fn enter_region<'inner>(self, child: Scope<'inner, T>) -> Collection<'inner, T, C> {
         self.inner
             .enter(child)
             .as_collection()
@@ -208,13 +208,13 @@ impl<'scope, T: Timestamp, C: Container> Collection<'scope, T, C> {
     ///     let result = scope.region(|child| {
     ///         data.clone()
     ///             .enter(child)
-    ///             .leave(&scope)
+    ///             .leave(scope)
     ///     });
     ///
     ///     data.assert_eq(result);
     /// });
     /// ```
-    pub fn enter<'inner, TInner>(self, child: &Scope<'inner, TInner>) -> Collection<'inner, TInner, <C as containers::Enter<T, TInner>>::InnerContainer>
+    pub fn enter<'inner, TInner>(self, child: Scope<'inner, TInner>) -> Collection<'inner, TInner, <C as containers::Enter<T, TInner>>::InnerContainer>
     where
         C: containers::Enter<T, TInner, InnerContainer: Container>,
         TInner: Refines<T>,
@@ -287,7 +287,7 @@ impl<'scope, T: Timestamp, C: Container> Collection<'scope, T, C>
     ///     data.assert_eq(result);
     /// });
     /// ```
-    pub fn leave<'outer, TOuter>(self, outer: &Scope<'outer, TOuter>) -> Collection<'outer, TOuter, <C as containers::Leave<T, TOuter>>::OuterContainer>
+    pub fn leave<'outer, TOuter>(self, outer: Scope<'outer, TOuter>) -> Collection<'outer, TOuter, <C as containers::Leave<T, TOuter>>::OuterContainer>
     where
         TOuter: Timestamp,
         T: Refines<TOuter>,
@@ -306,7 +306,7 @@ impl<'scope, T: Timestamp, C: Container> Collection<'scope, T, C>
     ///
     /// This method is a specialization of `leave` to the case that of a nested region.
     /// It removes the need for an operator that adjusts the timestamp.
-    pub fn leave_region<'outer>(self, outer: &Scope<'outer, T>) -> Collection<'outer, T, C> {
+    pub fn leave_region<'outer>(self, outer: Scope<'outer, T>) -> Collection<'outer, T, C> {
         self.inner
             .leave(outer)
             .as_collection()
@@ -533,13 +533,13 @@ pub mod vec {
         ///     let result = scope.iterative::<u64,_,_>(|child| {
         ///         data.clone()
         ///             .enter_at(child, |x| *x)
-        ///             .leave(&scope)
+        ///             .leave(scope)
         ///     });
         ///
         ///     data.assert_eq(result);
         /// });
         /// ```
-        pub fn enter_at<'inner, TInner, F>(self, child: &Iterative<'inner, T, TInner>, mut initial: F) -> Collection<'inner, Product<T, TInner>, D, R>
+        pub fn enter_at<'inner, TInner, F>(self, child: Iterative<'inner, T, TInner>, mut initial: F) -> Collection<'inner, Product<T, TInner>, D, R>
         where
             TInner: Timestamp+Hash,
             F: FnMut(&D) -> TInner + Clone + 'static,
@@ -1286,7 +1286,7 @@ impl<'scope, T: Timestamp, C> AsCollection<'scope, T, C> for Stream<'scope, T, C
 ///         .assert_eq(data);
 /// });
 /// ```
-pub fn concatenate<'scope, T, C, I>(scope: &mut Scope<'scope, T>, iterator: I) -> Collection<'scope, T, C>
+pub fn concatenate<'scope, T, C, I>(scope: Scope<'scope, T>, iterator: I) -> Collection<'scope, T, C>
 where
     T: Timestamp,
     C: Container,
