@@ -10,7 +10,6 @@
 
 use std::rc::Rc;
 
-use crate::trace::implementations::chunker::ContainerChunker;
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::MergeBatcher;
 use crate::trace::implementations::merge_batcher::container::VecInternalMerger;
@@ -24,7 +23,7 @@ pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher using ordered lists.
-pub type OrdValBatcher<K, V, T, R> = MergeBatcher<Vec<((K,V),T,R)>, ContainerChunker<Vec<((K,V),T,R)>>, VecInternalMerger<(K, V), T, R>>;
+pub type OrdValBatcher<K, V, T, R> = MergeBatcher<VecInternalMerger<(K, V), T, R>>;
 /// A builder using ordered lists.
 pub type RcOrdValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
 
@@ -34,7 +33,7 @@ pub type RcOrdValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Vector<((K,V),T,R
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 /// A batcher for ordered lists.
-pub type OrdKeyBatcher<K, T, R> = MergeBatcher<Vec<((K,()),T,R)>, ContainerChunker<Vec<((K,()),T,R)>>, VecInternalMerger<(K, ()), T, R>>;
+pub type OrdKeyBatcher<K, T, R> = MergeBatcher<VecInternalMerger<(K, ()), T, R>>;
 /// A builder for ordered lists.
 pub type RcOrdKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>;
 

@@ -24,6 +24,7 @@ use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::progress::Timestamp;
 use timely::progress::Antichain;
+use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::operators::Capability;
 
 use crate::{Data, VecCollection, AsCollection};
@@ -327,9 +328,13 @@ where
     T: Timestamp + Lattice,
 {
     /// Arranges updates into a shared trace.
+    ///
+    /// The batcher's output container must equal the stream container `C`; the default
+    /// chunker only consolidates same-type containers. For chunker setups that convert
+    /// between container types (e.g. columnar layouts), call [`arrange_core`] directly.
     fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=C, Time=T> + 'static,
+        Ba: Batcher<Output=C, Time=T> + 'static,
         Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=T> + 'static,
     {
@@ -337,9 +342,11 @@ where
     }
 
     /// Arranges updates into a shared trace, with a supplied name.
+    ///
+    /// See [`Arrange::arrange`] for constraints on the batcher's output container.
     fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        Ba: Batcher<Input=C, Time=T> + 'static,
+        Ba: Batcher<Output=C, Time=T> + 'static,
         Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
         Tr: Trace<Time=T> + 'static,
     ;
@@ -350,10 +357,12 @@ where
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<'scope, P, Ba, Bu, Tr>(stream: Stream<'scope, Tr::Time, Ba::Input>, pact: P, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+pub fn arrange_core<'scope, P, C, Chu, Ba, Bu, Tr>(stream: Stream<'scope, Tr::Time, C>, pact: P, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
 where
-    P: ParallelizationContract<Tr::Time, Ba::Input>,
-    Ba: Batcher<Time=Tr::Time,Input: Container> + 'static,
+    C: Container + Clone + 'static,
+    P: ParallelizationContract<Tr::Time, C>,
+    Chu: ContainerBuilder<Container=Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
+    Ba: Batcher<Time=Tr::Time> + 'static,
     Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace+'static,
 {
@@ -403,6 +412,8 @@ where
         // Initialize to the minimal input frontier.
         let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
 
+        let mut chunker = Chu::default();
+
         move |(input, frontier), output| {
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
@@ -411,7 +422,10 @@ where
 
             input.for_each(|cap, data| {
                 capabilities.insert(cap.retain(0));
-                batcher.push_container(data);
+                chunker.push_into(data);
+                while let Some(chunk) = chunker.extract() {
+                    batcher.push_into(std::mem::take(chunk));
+                }
             });
 
             // The frontier may have advanced by multiple elements, which is an issue because
