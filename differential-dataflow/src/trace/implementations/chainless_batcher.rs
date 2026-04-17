@@ -1,5 +1,6 @@
 //! A `Batcher` implementation based on merge sort.
 
+use timely::container::PushInto;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 
@@ -55,9 +56,20 @@ impl<T: Timestamp, S: BatcherStorage<T>> Batcher<T, S> {
     }
 }
 
+impl<T: Timestamp, S: BatcherStorage<T>> PushInto<S> for Batcher<T, S> {
+    fn push_into(&mut self, batch: S) {
+        if batch.len() > 0 {
+            // TODO: This appears to be optional based on `frontier` only being called after `seal`.
+            //       For the moment, the trait doesn't promise this, but keep eyes on the cost.
+            batch.lower(&mut self.lower);
+            self.storages.push(batch);
+            self.tidy();
+        }
+    }
+}
+
 impl<T: Timestamp, S: BatcherStorage<T>> trace::Batcher for Batcher<T, S> {
     type Time = T;
-    type Input = S;
     type Output = S;
 
     fn new(logger: Option<Logger>, operator_id: usize) -> Self {
@@ -67,16 +79,6 @@ impl<T: Timestamp, S: BatcherStorage<T>> trace::Batcher for Batcher<T, S> {
             prior: Antichain::from_elem(T::minimum()),
             _logger: logger,
             _operator_id: operator_id,
-        }
-    }
-
-    fn push_container(&mut self, batch: &mut Self::Input) {
-        if batch.len() > 0 {
-            // TODO: This appears to be optional based on `frontier` only being called after `seal`.
-            //       For the moment, the trait doesn't promise this, but keep eyes on the cost.
-            batch.lower(&mut self.lower);
-            self.storages.push(std::mem::take(batch));
-            self.tidy();
         }
     }
 

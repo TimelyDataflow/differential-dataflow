@@ -374,7 +374,7 @@ mod distributor {
     }
 }
 
-pub use arrangement::{ValBatcher, ValBuilder, ValSpine};
+pub use arrangement::{ValBatcher, ValBuilder, ValSpine, ValChunker};
 pub mod arrangement {
 
     use std::rc::Rc;
@@ -442,7 +442,9 @@ pub mod arrangement {
 
     use crate::{Updates, RecordedUpdates};
     use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-    type ValBatcher2<U> = MergeBatcher<RecordedUpdates<U>, TrieChunker<U>, trie_merger::TrieMerger<U>>;
+    type ValBatcher2<U> = MergeBatcher<trie_merger::TrieMerger<U>>;
+    /// Chunker type for `ValBatcher`: turns `RecordedUpdates` into `Updates` chunks.
+    pub type ValChunker<U> = TrieChunker<U>;
 
     /// A chunker that unwraps `RecordedUpdates` into bare `Updates` for the merge batcher.
     /// The `records` accounting is discarded here — it has served its purpose for exchange.

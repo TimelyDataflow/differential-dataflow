@@ -81,6 +81,7 @@ mod columnar {
     pub type ColValSpine<K, V, T, R> = ValSpine<K, V, T, R>;
     pub type ColValBatcher<K, V, T, R> = ValBatcher<K, V, T, R>;
     pub type ColValBuilder<K, V, T, R> = ValBuilder<K, V, T, R>;
+    pub type ColValChunker<U> = ValChunker<U>;
 }
 
 mod render {
@@ -124,8 +125,8 @@ mod render {
                 Rendered::Arrangement(a) => a.clone(),
                 Rendered::Collection(c) => {
                     use differential_dataflow::operators::arrange::arrangement::arrange_core;
-                    use super::columnar::ColValBatcher;
-                    arrange_core::<_, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
+                    use super::columnar::{ColValBatcher, ColValChunker};
+                    arrange_core::<_, _, ColValChunker<(Row,Row,Time,Diff)>, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
                 }
             }
         }
