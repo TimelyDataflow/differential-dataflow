@@ -1966,15 +1966,13 @@ where
     stream.as_collection()
 }
 
-/// Extract a `Collection<_, RecordedUpdates<U>>` from a columnar `Arranged`.
+/// Extract a `Collection<_, RecordedUpdates<U>>` from a columnar batch stream.
 ///
 /// Cursors through each batch and pushes `(key, val, time, diff)` refs into
 /// a `ValColBuilder`, which sorts and consolidates on flush.
-pub fn as_recorded_updates<U>(
-    arranged: differential_dataflow::operators::arrange::Arranged<
-        differential_dataflow::operators::arrange::TraceAgent<ValSpine<U::Key, U::Val, U::Time, U::Diff>>,
-    >,
-) -> differential_dataflow::Collection<U::Time, RecordedUpdates<U>>
+pub fn as_recorded_updates<'scope, U>(
+    stream: timely::dataflow::Stream<'scope, U::Time, Vec<std::rc::Rc<differential_dataflow::trace::implementations::ord_neu::OrdValBatch<layout::ColumnarLayout<U>>>>>,
+) -> differential_dataflow::Collection<'scope, U::Time, RecordedUpdates<U>>
 where
     U: layout::ColumnarUpdate,
 {
@@ -1983,7 +1981,7 @@ where
     use differential_dataflow::trace::{BatchReader, Cursor};
     use differential_dataflow::AsCollection;
 
-    arranged.stream
+    stream
         .unary::<ValColBuilder<U>, _, _, _>(Pipeline, "AsRecordedUpdates", |_, _| {
             move |input, output| {
                 input.for_each(|time, batches| {

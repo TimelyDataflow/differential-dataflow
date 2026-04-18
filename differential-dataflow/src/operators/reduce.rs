@@ -12,7 +12,7 @@ use timely::progress::Timestamp;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
-use crate::operators::arrange::{Arranged, TraceAgent};
+use crate::operators::arrange::{Arranged, TraceInter};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::containers::BatchContainer;
@@ -31,7 +31,7 @@ use crate::trace::TraceReader;
 /// the value updates, as appropriate for the container. It is critical that it clear the container as
 /// the operator has no ability to do this otherwise, and failing to do so represents a leak from one
 /// key's computation to another, and will likely introduce non-determinism.
-pub fn reduce_trace<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<'scope, TraceAgent<Tr2>>
+pub fn reduce_trace<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<'scope, TraceInter<Tr2>>
 where
     Tr1: TraceReader + Clone + 'static,
     Tr2: for<'a> Trace<Key<'a>=Tr1::Key<'a>, ValOwn: Data, Time = Tr1::Time> + 'static,
@@ -60,7 +60,7 @@ where
 
             let mut source_trace = trace.trace.clone();
 
-            let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
+            let (mut output_reader, mut output_writer) = TraceInter::new(empty, operator_info, logger);
 
             *result_trace = Some(output_reader.clone());
 

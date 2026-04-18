@@ -46,7 +46,7 @@ fn main() {
                                   .to_stream(scope)
                                   .as_collection();
 
-            edges.arrange_by_key().trace
+            edges.arrange_by_key_inter().trace
         });
 
         while worker.step() { }
@@ -84,7 +84,7 @@ fn main() {
             forward
                 .import(scope)
                 .as_collection(|&k,&v| (v,k))
-                .arrange_by_key()
+                .arrange_by_key_inter()
                 .trace
         });
         while worker.step() { }
@@ -100,9 +100,9 @@ fn main() {
     }).unwrap();
 }
 
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceInter;
 
-type TraceHandle = TraceAgent<GraphTrace>;
+type TraceHandle = TraceInter<GraphTrace>;
 
 fn reach<'s>(
     graph: &mut TraceHandle,

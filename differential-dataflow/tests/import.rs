@@ -52,7 +52,7 @@ fn test_import_vanilla() {
             let (mut input, mut trace) = worker.dataflow(|scope| {
                 let (input, edges) = scope.new_input();
                 let arranged = edges.as_collection()
-                                    .arrange_by_key();
+                                    .arrange_by_key_inter();
                 (input, arranged.trace.clone())
             });
             let (captured,) = worker.dataflow(move |scope| {
@@ -116,7 +116,7 @@ fn test_import_completed_dataflow() {
             let (mut input, mut trace, probe) = worker.dataflow(|scope| {
                 let (input, edges) = scope.new_input();
                 let arranged = edges.as_collection()
-                                    .arrange_by_key();
+                                    .arrange_by_key_inter();
                 let (probe, _) = arranged.stream.probe();
                 (input, arranged.trace.clone(), probe)
             });
@@ -182,7 +182,7 @@ fn test_import_stalled_dataflow() {
             let arranged =
             input
                 .to_collection(scope)
-                .arrange_by_self();
+                .arrange_by_self_inter();
 
             let (probe, _) = arranged.stream.probe();
             (arranged.trace, probe)
@@ -229,7 +229,7 @@ fn import_skewed() {
             let (mut input, mut trace) = worker.dataflow(|scope| {
                 let (input, edges) = scope.new_input();
                 let arranged = edges.as_collection()
-                                    .arrange_by_key();
+                                    .arrange_by_key_inter();
                 (input, arranged.trace.clone())
             });
 

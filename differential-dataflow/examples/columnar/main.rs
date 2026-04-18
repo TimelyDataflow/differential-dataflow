@@ -96,7 +96,7 @@ mod reachability {
     use differential_dataflow::Collection;
     use differential_dataflow::AsCollection;
     use differential_dataflow::operators::iterate::Variable;
-    use differential_dataflow::operators::arrange::arrangement::arrange_core;
+    use differential_dataflow::operators::arrange::arrangement::arrange_intra;
     use differential_dataflow::operators::join::join_traces;
 
     use crate::columnar_support::*;
@@ -127,13 +127,13 @@ mod reachability {
             let edges_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
             let reach_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
 
-            let edges_arr = arrange_core::<_,
+            let edges_arr = arrange_intra::<_,
                 ValBatcher<Node, Node, IterTime, Diff>,
                 ValBuilder<Node, Node, IterTime, Diff>,
                 ValSpine<Node, Node, IterTime, Diff>,
             >(edges_inner.inner, edges_pact, "Edges");
 
-            let reach_arr = arrange_core::<_,
+            let reach_arr = arrange_intra::<_,
                 ValBatcher<Node, (), IterTime, Diff>,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
@@ -157,7 +157,7 @@ mod reachability {
 
             // Arrange for reduce.
             let combined_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
-            let combined_arr = arrange_core::<_,
+            let combined_arr = arrange_intra::<_,
                 ValBatcher<Node, (), IterTime, Diff>,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
@@ -180,7 +180,7 @@ mod reachability {
             });
 
             // Extract RecordedUpdates from the Arranged's batch stream.
-            let result_col = as_recorded_updates::<(Node, (), IterTime, Diff)>(result);
+            let result_col = as_recorded_updates::<(Node, (), IterTime, Diff)>(result.stream);
 
             variable.set(result_col.clone());
 
