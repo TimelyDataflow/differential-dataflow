@@ -15,7 +15,7 @@ use crate::difference::{Abelian, Multiply};
 /// method to limit the introduction of labels.
 pub fn propagate<'scope, T, N, L, R>(edges: VecCollection<'scope, T, (N,N), R>, nodes: VecCollection<'scope, T,(N,L),R>) -> VecCollection<'scope, T,(N,L),R>
 where
-    T: Timestamp + Lattice + Ord + Hash,
+    T: Timestamp + Lattice + Hash,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,
@@ -32,7 +32,7 @@ where
 /// method to limit the introduction of labels.
 pub fn propagate_at<'scope, T, N, L, F, R>(edges: VecCollection<'scope, T, (N,N), R>, nodes: VecCollection<'scope, T,(N,L),R>, logic: F) -> VecCollection<'scope, T,(N,L),R>
 where
-    T: Timestamp + Lattice + Ord + Hash,
+    T: Timestamp + Lattice + Hash,
     N: ExchangeData+Hash,
     R: ExchangeData+Abelian,
     R: Multiply<R, Output=R>,

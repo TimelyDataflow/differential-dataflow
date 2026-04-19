@@ -41,10 +41,7 @@
 pub mod spine_fueled;
 
 pub mod merge_batcher;
-pub mod chainless_batcher;
 pub mod ord_neu;
-pub mod rhh;
-pub mod huffman_container;
 pub mod chunker;
 
 // Opinionated takes on default spines.
@@ -71,7 +68,7 @@ pub trait Update {
     /// Values associated with the key.
     type Val: Ord + Clone + 'static;
     /// Time at which updates occur.
-    type Time: Ord + Clone + Lattice + timely::progress::Timestamp;
+    type Time: Lattice + timely::progress::Timestamp;
     /// Way in which updates occur.
     type Diff: Ord + Semigroup + 'static;
 }
@@ -80,7 +77,7 @@ impl<K,V,T,R> Update for ((K, V), T, R)
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
-    T: Ord+Clone+Lattice+timely::progress::Timestamp,
+    T: Lattice+timely::progress::Timestamp,
     R: Ord+Semigroup+'static,
 {
     type Key = K;
@@ -378,7 +375,7 @@ where
     KBC: for<'a> BatchContainer<ReadItem<'a>: PartialEq<&'a K>>,
     V: Ord + Clone + 'static,
     VBC: for<'a> BatchContainer<ReadItem<'a>: PartialEq<&'a V>>,
-    T: Timestamp + Lattice + Clone + 'static,
+    T: Timestamp + Lattice + 'static,
     R: Ord + Semigroup + 'static,
 {
     type Key<'a> = K;
@@ -561,7 +558,7 @@ pub mod containers {
             &self[index]
         }
         fn get(&self, index: usize) -> Option<Self::ReadItem<'_>> {
-            <[T]>::get(&self, index)
+            <[T]>::get(self, index)
         }
         fn len(&self) -> usize {
             self[..].len()

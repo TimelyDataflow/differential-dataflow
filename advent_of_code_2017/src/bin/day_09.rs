@@ -107,7 +107,7 @@ where
     unit_ranges
         .iterate(|scope, ranges|
 
-            // Each available range, of size less than usize::max_value(), advertises itself as the range
+            // Each available range, of size less than usize::MAX, advertises itself as the range
             // twice as large, aligned to integer multiples of its size. Each range, which may contain at
             // most two elements, then summarizes itself using the `combine` function. Finally, we re-add
             // the initial `unit_ranges` intervals, so that the set of ranges grows monotonically.

@@ -68,21 +68,21 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 /// [`AsCollection`]: crate::collection::AsCollection
 pub fn join_traces<'scope, Tr1, Tr2, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut result: L) -> Stream<'scope, Tr1::Time, CB::Container>
 where
-    Tr1: TraceReader+Clone+'static,
-    Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>, Time = Tr1::Time>+Clone+'static,
+    Tr1: TraceReader+'static,
+    Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>, Time = Tr1::Time>+'static,
     L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>,&Tr1::Time,&Tr1::Diff,&Tr2::Diff,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
     CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.
-    let mut trace1 = arranged1.trace.clone();
-    let mut trace2 = arranged2.trace.clone();
+    let mut trace1 = arranged1.trace;
+    let mut trace2 = arranged2.trace;
 
     let scope = arranged1.stream.scope();
     arranged1.stream.binary_frontier(arranged2.stream, Pipeline, Pipeline, "Join", move |capability, info| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         use timely::scheduling::Activator;
-        let activations = scope.activations().clone();
+        let activations = scope.activations();
         let activator = Activator::new(info.address, activations);
 
         // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
@@ -310,7 +310,7 @@ where
 /// dataflow system a chance to run operators that can consume and aggregate the data.
 struct Deferred<T, C1, C2>
 where
-    T: Timestamp+Lattice+Ord,
+    T: Timestamp+Lattice,
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
 {
@@ -326,7 +326,7 @@ impl<T, C1, C2> Deferred<T, C1, C2>
 where
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
-    T: Timestamp+Lattice+Ord,
+    T: Timestamp+Lattice,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
         Deferred {

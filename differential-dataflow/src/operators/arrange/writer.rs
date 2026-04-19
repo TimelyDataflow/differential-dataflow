@@ -9,11 +9,10 @@ use std::cell::RefCell;
 use timely::progress::Antichain;
 
 use crate::trace::{Trace, Batch, BatchReader};
-use crate::trace::wrappers::rc::TraceBox;
-
 
 use super::TraceAgentQueueWriter;
 use super::TraceReplayInstruction;
+use super::agent::trace_box::TraceBox;
 
 /// Write endpoint for a sequence of batches.
 ///

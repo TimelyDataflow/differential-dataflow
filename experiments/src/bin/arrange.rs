@@ -28,7 +28,7 @@ fn main() {
     let keys: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let recs: usize = std::env::args().nth(2).unwrap().parse().unwrap();
     let rate: usize = std::env::args().nth(3).unwrap().parse().unwrap();
-    let work: usize = std::env::args().nth(4).unwrap().parse().unwrap_or(usize::max_value());
+    let work: usize = std::env::args().nth(4).unwrap().parse().unwrap_or(usize::MAX);
     let comp: Comp = match std::env::args().nth(5).unwrap().as_str() {
         "exchange" => Comp::Exchange,
         "arrange" => Comp::Arrange,

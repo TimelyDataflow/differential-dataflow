@@ -157,7 +157,7 @@ fn main() {
         q2.advance_to(1);    q2.flush();     // q2 queries start here.
         q3.advance_to(1);    q3.flush();     // q3 queries start here.
         q4.advance_to(1);    q4.flush();     // q4 queries start here.
-        state.advance_to(usize::max_value()); state.flush();
+        state.advance_to(usize::MAX); state.flush();
         graph.advance_to(1);                  graph.flush();
 
         // finish graph loading work.

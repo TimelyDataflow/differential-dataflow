@@ -41,10 +41,7 @@ use super::TraceAgent;
 ///
 /// An `Arranged` allows multiple differential operators to share the resources (communication,
 /// computation, memory) required to produce and maintain an indexed representation of a collection.
-pub struct Arranged<'scope, Tr>
-where
-    Tr: TraceReader+Clone,
-{
+pub struct Arranged<'scope, Tr: TraceReader> {
     /// A stream containing arranged updates.
     ///
     /// This stream contains the same batches of updates the trace itself accepts, so there should
@@ -53,14 +50,9 @@ where
     pub stream: Stream<'scope, Tr::Time, Vec<Tr::Batch>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Tr,
-    // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
-    // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
-impl<'scope, Tr> Clone for Arranged<'scope, Tr>
-where
-    Tr: TraceReader + Clone,
-{
+impl<'scope, Tr: TraceReader+Clone> Clone for Arranged<'scope, Tr> {
     fn clone(&self) -> Self {
         Arranged {
             stream: self.stream.clone(),
@@ -72,10 +64,7 @@ where
 use ::timely::progress::timestamp::Refines;
 use timely::Container;
 
-impl<'scope, Tr> Arranged<'scope, Tr>
-where
-    Tr: TraceReader + Clone,
-{
+impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// Brings an arranged collection into a nested scope.
     ///
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
@@ -224,10 +213,7 @@ where
 
 use crate::difference::Multiply;
 // Direct join implementations.
-impl<'scope, Tr1> Arranged<'scope, Tr1>
-where
-    Tr1: TraceReader + Clone + 'static,
-{
+impl<'scope, Tr1: TraceReader+'static> Arranged<'scope, Tr1> {
     /// A convenience method to join and produce `VecCollection` output.
     ///
     /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
@@ -260,10 +246,7 @@ where
 
 // Direct reduce implementations.
 use crate::difference::Abelian;
-impl<'scope, Tr1> Arranged<'scope, Tr1>
-where
-    Tr1: TraceReader + Clone + 'static,
-{
+impl<'scope, Tr1: TraceReader+'static> Arranged<'scope, Tr1> {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
     pub fn reduce_abelian<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
@@ -304,10 +287,7 @@ where
 }
 
 
-impl<'scope, Tr> Arranged<'scope, Tr>
-where
-    Tr: TraceReader + Clone,
-{
+impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// Brings an arranged collection out of a nested region.
     ///
     /// This method only applies to *regions*, which are subscopes with the same timestamp
@@ -322,10 +302,7 @@ where
 }
 
 /// A type that can be arranged as if a collection of updates.
-pub trait Arrange<'scope, T, C> : Sized
-where
-    T: Timestamp + Lattice,
-{
+pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
     /// Arranges updates into a shared trace.
     fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceAgent<Tr>>
     where
@@ -389,7 +366,7 @@ where
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
 
-        let activator = Some(scope.activator_for(info.address.clone()));
+        let activator = Some(scope.activator_for(std::rc::Rc::clone(&info.address)));
         let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
         // If there is default exertion logic set, install it.
         if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {

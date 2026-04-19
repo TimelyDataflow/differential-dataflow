@@ -11,12 +11,12 @@ use crate::hashable::Hashable;
 
 fn _color<'scope, T, N>(edges: VecCollection<'scope, T, (N,N)>) -> VecCollection<'scope, T,(N,Option<u32>)>
 where
-    T: Timestamp + Lattice + Ord + Hash,
+    T: Timestamp + Lattice + Hash,
     N: ExchangeData+Hash,
 {
     // need some bogus initial values.
     let start = edges.clone()
-                     .map(|(x,_y)| (x,u32::max_value()))
+                     .map(|(x,_y)| (x,u32::MAX))
                      .distinct();
 
     // repeatedly apply color-picking logic.
@@ -45,7 +45,7 @@ pub fn sequence<'scope, T, N, V, F>(
     edges: VecCollection<'scope, T, (N,N)>,
     logic: F) -> VecCollection<'scope, T, (N,Option<V>)>
 where
-    T: Timestamp + Lattice + Hash + Ord,
+    T: Timestamp + Lattice + Hash,
     N: ExchangeData+Hashable,
     V: ExchangeData,
     F: Fn(&N, &[(&V, isize)])->V+'static

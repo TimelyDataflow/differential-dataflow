@@ -344,7 +344,7 @@ pub mod container {
     where
         D: Ord + Clone + 'static,
         T: Ord + Clone + PartialOrder + 'static,
-        R: crate::difference::Semigroup + Clone + 'static,
+        R: crate::difference::Semigroup + 'static,
     {
         type Chunk = Vec<(D, T, R)>;
         type Time = T;
@@ -599,7 +599,7 @@ pub mod container {
         use crate::difference::Semigroup;
         use super::InternalMerge;
 
-        impl<D: Ord + Clone + 'static, T: Ord + Clone + PartialOrder + 'static, R: Semigroup + Clone + 'static> InternalMerge for Vec<(D, T, R)> {
+        impl<D: Ord + Clone + 'static, T: Ord + Clone + PartialOrder + 'static, R: Semigroup + 'static> InternalMerge for Vec<(D, T, R)> {
             type TimeOwned = T;
 
             fn len(&self) -> usize { Vec::len(self) }
