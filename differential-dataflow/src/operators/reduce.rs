@@ -33,7 +33,7 @@ use crate::trace::TraceReader;
 /// key's computation to another, and will likely introduce non-determinism.
 pub fn reduce_trace<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<'scope, TraceAgent<Tr2>>
 where
-    Tr1: TraceReader + Clone + 'static,
+    Tr1: TraceReader + 'static,
     Tr2: for<'a> Trace<Key<'a>=Tr1::Key<'a>, ValOwn: Data, Time = Tr1::Time> + 'static,
     Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default>,
     L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn,Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
@@ -44,6 +44,7 @@ where
     // fabricate a data-parallel operator using the `unary_notify` pattern.
     let stream = {
 
+        let mut source_trace = trace.trace;
         let result_trace = &mut result_trace;
         let scope = trace.stream.scope();
         trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
@@ -57,8 +58,6 @@ where
             if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty.set_exert_logic(exert_logic);
             }
-
-            let mut source_trace = trace.trace.clone();
 
             let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
 
