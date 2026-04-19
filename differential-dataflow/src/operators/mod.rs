@@ -19,7 +19,7 @@ use crate::lattice::Lattice;
 use crate::trace::Cursor;
 
 /// An accumulation of (value, time, diff) updates.
-struct EditList<V, T, D> {
+pub struct EditList<V, T, D> {
     values: Vec<(V, usize)>,
     edits: Vec<(T, D)>,
 }
@@ -33,35 +33,29 @@ impl<V: Copy, T: Ord, D: crate::difference::Semigroup> EditList<V, T, D> {
             edits: Vec::new(),
         }
     }
-    /// Loads the contents of a cursor.
-    fn load<'a, C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
+    /// Loads the contents of a cursor at `key`, advancing times by `meet` if supplied.
+    fn load<'a, C>(&mut self, cursor: &mut C, storage: &'a C::Storage, key: C::Key<'a>, meet: Option<&T>)
     where
         C: Cursor<Val<'a> = V, Time = T, Diff = D>,
-        L: Fn(C::TimeGat<'_>) -> T,
     {
-        self.clear();
-        while let Some(val) = cursor.get_val(storage) {
-            cursor.map_times(storage, |time1, diff1| self.push(logic(time1), C::owned_diff(diff1)));
-            self.seal(val);
-            cursor.step_val(storage);
-        }
+        cursor.populate_key(storage, key, meet, self);
     }
     /// Clears the list of edits.
     #[inline]
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.values.clear();
         self.edits.clear();
     }
     fn len(&self) -> usize { self.edits.len() }
     /// Inserts a new edit for an as-yet undetermined value.
     #[inline]
-    fn push(&mut self, time: T, diff: D) {
+    pub fn push(&mut self, time: T, diff: D) {
         // TODO: Could attempt "insertion-sort" like behavior here, where we collapse if possible.
         self.edits.push((time, diff));
     }
     /// Associates all edits pushed since the previous `seal_value` call with `value`.
     #[inline]
-    fn seal(&mut self, value: V) {
+    pub fn seal(&mut self, value: V) {
         let prev = self.values.last().map(|x| x.1).unwrap_or(0);
         crate::consolidation::consolidate_from(&mut self.edits, prev);
         if self.edits.len() > prev {
@@ -98,33 +92,22 @@ impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> V
         self.history.clear();
         self.buffer.clear();
     }
-    fn load<'a, C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
-    where
-        C: Cursor<Val<'a> = V, Time = T, Diff = D>,
-        L: Fn(C::TimeGat<'_>) -> T,
-    {
-        self.edits.load(cursor, storage, logic);
-    }
 
     /// Loads and replays a specified key.
     ///
     /// If the key is absent, the replayed history will be empty.
-    fn replay_key<'a, 'history, C, L>(
+    fn replay_key<'a, 'history, C>(
         &'history mut self,
         cursor: &mut C,
         storage: &'a C::Storage,
         key: C::Key<'a>,
-        logic: L,
+        meet: Option<&T>,
     ) -> HistoryReplay<'history, V, T, D>
     where
         C: Cursor<Val<'a> = V, Time = T, Diff = D>,
-        L: Fn(C::TimeGat<'_>) -> T,
     {
         self.clear();
-        cursor.seek_key(storage, key);
-        if cursor.get_key(storage) == Some(key) {
-            self.load(cursor, storage, logic);
-        }
+        cursor.populate_key(storage, key, meet, &mut self.edits);
         self.replay()
     }
 

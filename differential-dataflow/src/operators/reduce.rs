@@ -388,7 +388,7 @@ mod history_replay {
             // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| C3::owned_time(time));
+            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, None);
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -412,17 +412,9 @@ mod history_replay {
 
             // Load the input and output histories.
             let mut input_replay =
-            self.input_history.replay_key(source_cursor, source_storage, key, |time| {
-                let mut time = C1::owned_time(time);
-                if let Some(meet) = meet.as_ref() { time.join_assign(meet); }
-                time
-            });
+            self.input_history.replay_key(source_cursor, source_storage, key, meet.as_ref());
             let mut output_replay =
-            self.output_history.replay_key(output_cursor, output_storage, key, |time| {
-                let mut time = C2::owned_time(time);
-                if let Some(meet) = meet.as_ref() { time.join_assign(meet); }
-                time
-            });
+            self.output_history.replay_key(output_cursor, output_storage, key, meet.as_ref());
 
             self.synth_times.clear();
             self.times_current.clear();

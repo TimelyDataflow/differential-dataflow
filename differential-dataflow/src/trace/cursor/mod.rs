@@ -56,7 +56,7 @@ pub trait Cursor : LayoutExt {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Loads `target` with all updates associated with the supplied `key`.
-    fn populate_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>, meet: Option<&Self::Time>, target: &mut crate::operators::EditList<'a, Self>) where Self : Sized {
+    fn populate_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>, meet: Option<&Self::Time>, target: &mut crate::operators::EditList<Self::Val<'a>, Self::Time, Self::Diff>) {
         target.clear();
         self.seek_key(storage, key);
         if self.get_key(storage) == Some(key) {
