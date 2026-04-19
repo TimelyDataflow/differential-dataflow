@@ -779,7 +779,7 @@ pub mod vec {
         ///          .trace;
         /// });
         /// ```
-        pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<'scope, TraceInter<T2>>
+        pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<'scope, TraceIntra<T2>>
         where
             T2: for<'a> Trace<Key<'a>= &'a K, ValOwn = V, Time=T, Diff: Abelian>+'static,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, T2::Diff)>, Output = T2::Batch>,
@@ -797,7 +797,7 @@ pub mod vec {
         /// Unlike `reduce_arranged`, this method may be called with an empty `input`,
         /// and it may not be safe to index into the first element.
         /// At least one of the two collections will be non-empty.
-        pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<'scope, TraceInter<T2>>
+        pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<'scope, TraceIntra<T2>>
         where
             V: Clone+'static,
             T2: for<'a> Trace<Key<'a>=&'a K, ValOwn = V, Time=T>+'static,

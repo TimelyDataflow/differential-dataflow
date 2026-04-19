@@ -264,8 +264,8 @@ impl<'scope, Tr1> Arranged<'scope, Tr1>
 where
     Tr1: TraceReader + Clone + 'static,
 {
-    /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    /// A direct implementation of `ReduceCore::reduce_abelian`, producing a `TraceIntra`.
+    pub fn reduce_abelian<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceIntra<Tr2>>
     where
         Tr2: for<'a> Trace<
             Key<'a>= Tr1::Key<'a>,
@@ -286,8 +286,30 @@ where
         }, push)
     }
 
-    /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    /// As `reduce_abelian` but producing a `TraceInter` that can be imported into other dataflows.
+    pub fn reduce_abelian_inter<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    where
+        Tr2: for<'a> Trace<
+            Key<'a>= Tr1::Key<'a>,
+            ValOwn: Data,
+            Time=Tr1::Time,
+            Diff: Abelian,
+        >+'static,
+        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
+        L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
+    {
+        self.reduce_core_inter::<_,Bu,Tr2,_>(name, move |key, input, output, change| {
+            if !input.is_empty() {
+                logic(key, input, change);
+            }
+            change.extend(output.drain(..).map(|(x,mut d)| { d.negate(); (x, d) }));
+            crate::consolidation::consolidate(change);
+        }, push)
+    }
+
+    /// A direct implementation of `ReduceCore::reduce_core`, producing a `TraceIntra`.
+    pub fn reduce_core<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceIntra<Tr2>>
     where
         Tr2: for<'a> Trace<
             Key<'a>=Tr1::Key<'a>,
@@ -298,8 +320,24 @@ where
         L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
         P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
     {
-        use crate::operators::reduce::reduce_trace;
-        reduce_trace::<_,Bu,_,_,_>(self, name, logic, push)
+        use crate::operators::reduce::reduce_trace_intra;
+        reduce_trace_intra::<_,Bu,_,_,_>(self, name, logic, push)
+    }
+
+    /// As `reduce_core` but producing a `TraceInter` that can be imported into other dataflows.
+    pub fn reduce_core_inter<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    where
+        Tr2: for<'a> Trace<
+            Key<'a>=Tr1::Key<'a>,
+            ValOwn: Data,
+            Time=Tr1::Time,
+        >+'static,
+        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
+        L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
+    {
+        use crate::operators::reduce::reduce_trace_inter;
+        reduce_trace_inter::<_,Bu,_,_,_>(self, name, logic, push)
     }
 }
 

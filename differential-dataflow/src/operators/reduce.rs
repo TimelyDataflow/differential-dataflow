@@ -9,14 +9,44 @@ use crate::Data;
 
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
-use timely::dataflow::operators::Operator;
+use timely::progress::operate::FrontierInterest;
 use timely::dataflow::channels::pact::Pipeline;
 
-use crate::operators::arrange::{Arranged, TraceInter};
+use crate::operators::arrange::{Arranged, TraceInter, TraceIntra};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
 use crate::trace::cursor::CursorList;
 use crate::trace::implementations::containers::BatchContainer;
 use crate::trace::TraceReader;
+
+/// A key-wise reduction of values in an input trace, producing a `TraceInter`.
+///
+/// The returned trace can be imported into other dataflows. Use `reduce_trace_intra` if
+/// cross-dataflow import is not needed, to reduce scheduling overhead.
+pub fn reduce_trace_inter<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+where
+    Tr1: TraceReader + Clone + 'static,
+    Tr2: for<'a> Trace<Key<'a>=Tr1::Key<'a>, ValOwn: Data, Time = Tr1::Time> + 'static,
+    Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default>,
+    L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn,Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
+    P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
+{
+    reduce_trace::<Tr1, Bu, Tr2, L, P>(trace, name, logic, push, FrontierInterest::Always)
+}
+
+/// A key-wise reduction of values in an input trace, producing a `TraceIntra`.
+///
+/// The returned trace cannot be imported into other dataflows (it has no `import` method).
+/// In exchange, the operator is only scheduled when it holds capabilities.
+pub fn reduce_trace_intra<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceIntra<Tr2>>
+where
+    Tr1: TraceReader + Clone + 'static,
+    Tr2: for<'a> Trace<Key<'a>=Tr1::Key<'a>, ValOwn: Data, Time = Tr1::Time> + 'static,
+    Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default>,
+    L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn,Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
+    P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
+{
+    reduce_trace::<Tr1, Bu, Tr2, L, P>(trace, name, logic, push, FrontierInterest::IfCapability).into_intra()
+}
 
 /// A key-wise reduction of values in an input trace.
 ///
@@ -31,7 +61,10 @@ use crate::trace::TraceReader;
 /// the value updates, as appropriate for the container. It is critical that it clear the container as
 /// the operator has no ability to do this otherwise, and failing to do so represents a leak from one
 /// key's computation to another, and will likely introduce non-determinism.
-pub fn reduce_trace<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<'scope, TraceInter<Tr2>>
+///
+/// The `interest` parameter controls when the operator is notified of frontier changes;
+/// `reduce_trace_inter` and `reduce_trace_intra` are the common wrappers.
+pub fn reduce_trace<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, mut logic: L, mut push: P, interest: FrontierInterest) -> Arranged<'scope, TraceInter<Tr2>>
 where
     Tr1: TraceReader + Clone + 'static,
     Tr2: for<'a> Trace<Key<'a>=Tr1::Key<'a>, ValOwn: Data, Time = Tr1::Time> + 'static,
@@ -39,32 +72,36 @@ where
     L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn,Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
     P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
 {
-    let mut result_trace = None;
+    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-    // fabricate a data-parallel operator using the `unary_notify` pattern.
-    let stream = {
+    let scope = trace.stream.scope();
 
-        let result_trace = &mut result_trace;
-        let scope = trace.stream.scope();
-        trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
+    let mut builder = OperatorBuilder::new(name.to_owned(), scope);
+    let operator_info = builder.operator_info();
 
-            // Acquire a logger for arrange events.
-            let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+    let mut input = builder.new_input(trace.stream, Pipeline);
+    builder.set_notify_for(0, interest);
+    let (mut output, stream) = builder.new_output();
 
-            let activator = Some(scope.activator_for(operator_info.address.clone()));
-            let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
-            // If there is default exert logic set, install it.
-            if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
-                empty.set_exert_logic(exert_logic);
-            }
+    // Acquire a logger for reduce events.
+    let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
-            let mut source_trace = trace.trace.clone();
+    let activator = Some(scope.activator_for(operator_info.address.clone()));
+    let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
+    // If there is default exert logic set, install it.
+    if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
+        empty.set_exert_logic(exert_logic);
+    }
 
-            let (mut output_reader, mut output_writer) = TraceInter::new(empty, operator_info, logger);
+    let mut source_trace = trace.trace.clone();
 
-            *result_trace = Some(output_reader.clone());
+    let (mut output_reader, mut output_writer) = TraceInter::new(empty, operator_info, logger);
 
-            let mut new_interesting_times = Vec::<Tr1::Time>::new();
+    let result_trace = output_reader.clone();
+
+    builder.build(move |_capabilities| {
+
+        let mut new_interesting_times = Vec::<Tr1::Time>::new();
 
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
             // sorted by (key, time), as well as capabilities for the lower envelope of the times.
@@ -85,15 +122,18 @@ where
             let mut output_upper = Antichain::from_elem(<Tr1::Time as timely::progress::Timestamp>::minimum());
             let mut output_lower = Antichain::from_elem(<Tr1::Time as timely::progress::Timestamp>::minimum());
 
-            move |(input, frontier), output| {
+        move |frontiers| {
 
-                // The operator receives input batches, which it treats as contiguous and will collect and
-                // then process as one batch. It captures the input frontier from the batches, from the upstream
-                // trace, and from the input frontier, and retires the work through that interval.
-                //
-                // Reduce may retain capabilities and need to perform work and produce output at times that
-                // may not be seen in its input. The standard example is that updates at `(0, 1)` and `(1, 0)`
-                // may result in outputs at `(1, 1)` as well, even with no input at that time.
+            let frontier = &frontiers[0];
+            let mut output = output.activate();
+
+            // The operator receives input batches, which it treats as contiguous and will collect and
+            // then process as one batch. It captures the input frontier from the batches, from the upstream
+            // trace, and from the input frontier, and retires the work through that interval.
+            //
+            // Reduce may retain capabilities and need to perform work and produce output at times that
+            // may not be seen in its input. The standard example is that updates at `(0, 1)` and `(1, 0)`
+            // may result in outputs at `(1, 1)` as well, even with no input at that time.
 
                 let mut batch_cursors = Vec::new();
                 let mut batch_storage = Vec::new();
@@ -254,7 +294,7 @@ where
                                 let batch = builder.done(description);
 
                                 // ship batch to the output, and commit to the output trace.
-                                output.session(&capabilities[index]).give(batch.clone());
+                                output.give(&capabilities[index], &mut vec![batch.clone()]);
                                 output_writer.insert(batch, Some(capabilities[index].time().clone()));
 
                                 output_lower.clear();
@@ -291,14 +331,12 @@ where
                     output_reader.set_physical_compaction(upper_limit.borrow());
                 }
 
-                // Exert trace maintenance if we have been so requested.
-                output_writer.exert();
-            }
+            // Exert trace maintenance if we have been so requested.
+            output_writer.exert();
         }
-    )
-    };
+    });
 
-    Arranged { stream, trace: result_trace.unwrap() }
+    Arranged { stream, trace: result_trace }
 }
 
 
