@@ -55,6 +55,34 @@ pub trait Cursor : LayoutExt {
     /// Rewinds the cursor to the first value for current key.
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
+    /// Loads `target` with all updates associated with the supplied `key`.
+    fn populate_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>, meet: Option<&Self::Time>, target: &mut crate::operators::EditList<'a, Self>) where Self : Sized {
+        target.clear();
+        self.seek_key(storage, key);
+        if self.get_key(storage) == Some(key) {
+            self.rewind_vals(storage);
+            if let Some(meet) = meet {
+                while let Some(val) = self.get_val(storage) {
+                    self.map_times(storage, |time, diff| {
+                        use crate::lattice::Lattice;
+                        let mut time = Self::owned_time(time);
+                        time.join_assign(meet);
+                        target.push(time, Self::owned_diff(diff))
+                    });
+                    target.seal(val);
+                    self.step_val(storage);
+                }
+            }
+            else {
+                while let Some(val) = self.get_val(storage) {
+                    self.map_times(storage, |time, diff| target.push(Self::owned_time(time), Self::owned_diff(diff)));
+                    target.seal(val);
+                    self.step_val(storage);
+                }
+            }
+        }
+    }
+
     /// Rewinds the cursor and outputs its contents to a Vec
     fn to_vec<K, IK, V, IV>(&mut self, storage: &Self::Storage, into_key: IK, into_val: IV) -> Vec<((K, V), Vec<(Self::Time, Self::Diff)>)>
     where
