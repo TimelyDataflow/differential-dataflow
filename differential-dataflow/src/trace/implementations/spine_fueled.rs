@@ -855,7 +855,7 @@ impl<B: Batch> MergeVariant<B> {
     /// The result is either `None`, for structurally empty batches,
     /// or a batch and optionally input batches from which it derived.
     fn complete(mut self) -> Option<(B, Option<(B, B)>)> {
-        let mut fuel = isize::max_value();
+        let mut fuel = isize::MAX;
         self.work(&mut fuel);
         if let MergeVariant::Complete(batch) = self { batch }
         else { panic!("Failed to complete a merge!"); }

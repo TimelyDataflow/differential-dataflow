@@ -89,7 +89,7 @@ where G::Timestamp: Lattice+TotalOrder+Ord {
             let key: u64 = key;
             let avail2: isize = avail2;
             if avail1 > avail2 as i32 / 2 {
-                Some((key & (u32::max_value() as u64)) as usize)
+                Some((key & (u32::MAX as u64)) as usize)
             }
             else { None }
         });

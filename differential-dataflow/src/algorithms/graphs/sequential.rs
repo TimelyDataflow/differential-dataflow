@@ -16,7 +16,7 @@ where
 {
     // need some bogus initial values.
     let start = edges.clone()
-                     .map(|(x,_y)| (x,u32::max_value()))
+                     .map(|(x,_y)| (x,u32::MAX))
                      .distinct();
 
     // repeatedly apply color-picking logic.
