@@ -310,7 +310,7 @@ where
 /// dataflow system a chance to run operators that can consume and aggregate the data.
 struct Deferred<T, C1, C2>
 where
-    T: Timestamp+Lattice+Ord,
+    T: Timestamp+Lattice,
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
 {
@@ -326,7 +326,7 @@ impl<T, C1, C2> Deferred<T, C1, C2>
 where
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
-    T: Timestamp+Lattice+Ord,
+    T: Timestamp+Lattice,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
         Deferred {

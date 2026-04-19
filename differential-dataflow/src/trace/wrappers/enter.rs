@@ -27,7 +27,7 @@ impl<Tr: TraceReader + Clone, TInner> Clone for TraceEnter<Tr, TInner> {
 
 impl<Tr, TInner> WithLayout for TraceEnter<Tr, TInner>
 where
-    Tr: TraceReader<Batch: Clone>,
+    Tr: TraceReader,
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Layout = (
@@ -41,7 +41,7 @@ where
 
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
-    Tr: TraceReader<Batch: Clone>,
+    Tr: TraceReader,
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Batch = BatchEnter<Tr::Batch, TInner>;

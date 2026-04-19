@@ -79,7 +79,7 @@ pub fn broadcast<'scope, T, K, D, F>(
     zero: D,
     combine: F) -> VecCollection<'scope, T, ((usize, K), D)>
 where
-    T: Timestamp + Lattice + Ord + ::std::fmt::Debug,
+    T: Timestamp + Lattice,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,

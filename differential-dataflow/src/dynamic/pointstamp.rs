@@ -87,7 +87,7 @@ impl<T> std::ops::Deref for PointStamp<T> {
 
 // Implement timely dataflow's `PartialOrder` trait.
 use timely::order::PartialOrder;
-impl<T: PartialOrder + Timestamp> PartialOrder for PointStamp<T> {
+impl<T: Timestamp> PartialOrder for PointStamp<T> {
     fn less_equal(&self, other: &Self) -> bool {
         // Every present coordinate must be less-equal the corresponding coordinate,
         // where absent corresponding coordinates are `T::minimum()`. Coordinates
@@ -224,7 +224,7 @@ impl<T: Timestamp> Timestamp for PointStamp<T> {
 // Implement differential dataflow's `Lattice` trait.
 // This extends the `PartialOrder` implementation with additional structure.
 use crate::lattice::Lattice;
-impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
+impl<T: Lattice + Timestamp> Lattice for PointStamp<T> {
     #[inline(always)]
     fn join(&self, other: &Self) -> Self {
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
