@@ -92,7 +92,7 @@ mod render {
     use differential_dataflow::operators::iterate::Variable;
     use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
     use differential_dataflow::dynamic::feedback_summary;
-    use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+    use differential_dataflow::operators::arrange::{Arranged, TraceIntra};
     use columnar::Columnar;
     use super::types::*;
     use interactive::ir::{Node, LinearOp, Program, RowLike, eval_fields, eval_field_into, eval_condition};
@@ -103,7 +103,7 @@ mod render {
     type ConcreteTime = Product<u64, PointStamp<u64>>;
 
     pub type Col<'scope> = Collection<'scope, ConcreteTime, DdirRecordedUpdates>;
-    type Arr<'scope> = Arranged<'scope, TraceAgent<ColValSpine<Row, Row, ConcreteTime, Diff>>>;
+    type Arr<'scope> = Arranged<'scope, TraceIntra<ColValSpine<Row, Row, ConcreteTime, Diff>>>;
 
     enum Rendered<'scope> {
         Collection(Col<'scope>),
@@ -115,7 +115,7 @@ mod render {
             match self {
                 Rendered::Collection(c) => c.clone(),
                 Rendered::Arrangement(a) => {
-                    super::columnar_support::as_recorded_updates::<DdirUpdate>(a.clone())
+                    super::columnar_support::as_recorded_updates::<DdirUpdate>(a.stream.clone())
                 }
             }
         }
@@ -123,9 +123,9 @@ mod render {
             match self {
                 Rendered::Arrangement(a) => a.clone(),
                 Rendered::Collection(c) => {
-                    use differential_dataflow::operators::arrange::arrangement::arrange_core;
+                    use differential_dataflow::operators::arrange::arrangement::arrange_intra;
                     use super::columnar::ColValBatcher;
-                    arrange_core::<_, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
+                    arrange_intra::<_, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
                 }
             }
         }

@@ -255,10 +255,10 @@ fn main() {
 }
 
 use differential_dataflow::trace::implementations::ValSpine;
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceIntra;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<'s, T, K, V, R> = Arranged<'s, TraceAgent<ValSpine<K, V, T, R>>>;
+type Arrange<'s, T, K, V, R> = Arranged<'s, TraceIntra<ValSpine<K, V, T, R>>>;
 
 // returns pairs (n, s) indicating node n can be reached from a root in s steps.
 fn three_hop<'s, T: Timestamp + Lattice + Ord>(

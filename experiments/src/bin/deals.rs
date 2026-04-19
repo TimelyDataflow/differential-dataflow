@@ -5,14 +5,14 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 
 use differential_dataflow::trace::implementations::{ValSpine, KeySpine, KeyBatcher, KeyBuilder, ValBatcher, ValBuilder};
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceIntra;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::difference::Present;
 
-type EdgeArranged<'s, G, K, V, R> = Arranged<'s, TraceAgent<ValSpine<K, V, G, R>>>;
+type EdgeArranged<'s, G, K, V, R> = Arranged<'s, TraceIntra<ValSpine<K, V, G, R>>>;
 
 type Node = u32;
 type Edge = (Node, Node);

@@ -34,7 +34,7 @@ fn main() {
 
         let (mut graph, mut trace) = worker.dataflow(|scope| {
             let (graph_input, graph) = scope.new_collection();
-            let graph_indexed = graph.arrange_by_key();
+            let graph_indexed = graph.arrange_by_key_inter();
             // let graph_indexed = graph.arrange_by_key();
             (graph_input, graph_indexed.trace)
         });
@@ -81,10 +81,9 @@ fn main() {
     }).unwrap();
 }
 
-// use differential_dataflow::trace::implementations::ord::OrdValSpine;
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceInter;
 
-type TraceHandle = TraceAgent<GraphTrace>;
+type TraceHandle = TraceInter<GraphTrace>;
 
 fn reach<'s>(
     graph: &mut TraceHandle,

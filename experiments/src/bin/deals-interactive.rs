@@ -9,10 +9,10 @@ use differential_dataflow::operators::*;
 use differential_dataflow::lattice::Lattice;
 
 use differential_dataflow::trace::implementations::ValSpine;
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceIntra;
 use differential_dataflow::operators::arrange::Arranged;
 
-type Arrange<'s, G, K, V, R> = Arranged<'s, TraceAgent<ValSpine<K, V, G, R>>>;
+type Arrange<'s, G, K, V, R> = Arranged<'s, TraceIntra<ValSpine<K, V, G, R>>>;
 
 type Node = u32;
 

@@ -9,7 +9,7 @@ use differential_dataflow::operators::iterate::VecVariable;
 use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::dynamic::feedback_summary;
 use differential_dataflow::trace::implementations::ValSpine;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::{Arranged, TraceIntra};
 use differential_dataflow::input::Input;
 use smallvec::smallvec as svec;
 
@@ -20,7 +20,7 @@ use interactive::ir::{Node, LinearOp, Program, Diff, Id, Time, eval_fields, eval
 type Row = Vec<i64>;
 type DdirTime = Product<u64, PointStamp<u64>>;
 type Col<'scope, T> = VecCollection<'scope, T, (Row, Row), Diff>;
-type Arr<'scope, T> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, T, Diff>>>;
+type Arr<'scope, T> = Arranged<'scope, TraceIntra<ValSpine<Row, Row, T, Diff>>>;
 
 enum Rendered<'scope, T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice> {
     Collection(Col<'scope, T>),

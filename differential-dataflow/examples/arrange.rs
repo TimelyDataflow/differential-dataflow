@@ -86,8 +86,7 @@ fn main() {
             })
             .probe_with(&mut probe)
             .as_collection()
-            .arrange_by_key()
-            // .arrange::<OrdValSpineAbom>()
+            .arrange_by_key_inter()
             .trace
         });
 

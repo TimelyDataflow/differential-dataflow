@@ -35,7 +35,7 @@ use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 
-use super::TraceAgent;
+use super::{TraceIntra, TraceInter};
 
 /// An arranged collection of `(K,V)` values.
 ///
@@ -264,8 +264,8 @@ impl<'scope, Tr1> Arranged<'scope, Tr1>
 where
     Tr1: TraceReader + Clone + 'static,
 {
-    /// A direct implementation of `ReduceCore::reduce_abelian`.
-    pub fn reduce_abelian<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
+    /// A direct implementation of `ReduceCore::reduce_abelian`, producing a `TraceIntra`.
+    pub fn reduce_abelian<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceIntra<Tr2>>
     where
         Tr2: for<'a> Trace<
             Key<'a>= Tr1::Key<'a>,
@@ -286,8 +286,30 @@ where
         }, push)
     }
 
-    /// A direct implementation of `ReduceCore::reduce_core`.
-    pub fn reduce_core<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
+    /// As `reduce_abelian` but producing a `TraceInter` that can be imported into other dataflows.
+    pub fn reduce_abelian_inter<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    where
+        Tr2: for<'a> Trace<
+            Key<'a>= Tr1::Key<'a>,
+            ValOwn: Data,
+            Time=Tr1::Time,
+            Diff: Abelian,
+        >+'static,
+        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
+        L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
+    {
+        self.reduce_core_inter::<_,Bu,Tr2,_>(name, move |key, input, output, change| {
+            if !input.is_empty() {
+                logic(key, input, change);
+            }
+            change.extend(output.drain(..).map(|(x,mut d)| { d.negate(); (x, d) }));
+            crate::consolidation::consolidate(change);
+        }, push)
+    }
+
+    /// A direct implementation of `ReduceCore::reduce_core`, producing a `TraceIntra`.
+    pub fn reduce_core<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceIntra<Tr2>>
     where
         Tr2: for<'a> Trace<
             Key<'a>=Tr1::Key<'a>,
@@ -298,8 +320,24 @@ where
         L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
         P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
     {
-        use crate::operators::reduce::reduce_trace;
-        reduce_trace::<_,Bu,_,_,_>(self, name, logic, push)
+        use crate::operators::reduce::reduce_trace_intra;
+        reduce_trace_intra::<_,Bu,_,_,_>(self, name, logic, push)
+    }
+
+    /// As `reduce_core` but producing a `TraceInter` that can be imported into other dataflows.
+    pub fn reduce_core_inter<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceInter<Tr2>>
+    where
+        Tr2: for<'a> Trace<
+            Key<'a>=Tr1::Key<'a>,
+            ValOwn: Data,
+            Time=Tr1::Time,
+        >+'static,
+        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
+        L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
+    {
+        use crate::operators::reduce::reduce_trace_inter;
+        reduce_trace_inter::<_,Bu,_,_,_>(self, name, logic, push)
     }
 }
 
@@ -321,13 +359,30 @@ where
     }
 }
 
+impl<'scope, Tr> Arranged<'scope, TraceInter<Tr>>
+where
+    Tr: TraceReader,
+{
+    /// Converts an inter-dataflow trace to an intra-dataflow trace.
+    ///
+    /// This method is used primarily to harmonize types. It only unwraps the trace and discards
+    /// its ability to be imported into dataflows. It does not improve or alter the scheduling of
+    /// the backing dataflow operator. To get the improved scheduling, use `arrange_intra` instead.
+    pub fn into_intra<'outer>(self) -> Arranged<'scope, TraceIntra<Tr>> {
+        Arranged {
+            stream: self.stream,
+            trace: self.trace.into_intra(),
+        }
+    }
+}
+
 /// A type that can be arranged as if a collection of updates.
 pub trait Arrange<'scope, T, C> : Sized
 where
     T: Timestamp + Lattice,
 {
     /// Arranges updates into a shared trace.
-    fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceAgent<Tr>>
+    fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceIntra<Tr>>
     where
         Ba: Batcher<Input=C, Time=T> + 'static,
         Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
@@ -337,7 +392,7 @@ where
     }
 
     /// Arranges updates into a shared trace, with a supplied name.
-    fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+    fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceIntra<Tr>>
     where
         Ba: Batcher<Input=C, Time=T> + 'static,
         Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
@@ -345,12 +400,43 @@ where
     ;
 }
 
-/// Arranges a stream of updates by a key, configured with a name and a parallelization contract.
+/// Arranges a stream of updates into a trace that can be imported into other dataflows.
 ///
-/// This operator arranges a stream of values into a shared trace, whose contents it maintains.
-/// It uses the supplied parallelization contract to distribute the data, which does not need to
-/// be consistently by key (though this is the most common).
-pub fn arrange_core<'scope, P, Ba, Bu, Tr>(stream: Stream<'scope, Tr::Time, Ba::Input>, pact: P, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+/// The returned `TraceInter` can be shared across dataflows via `import`. Because this
+/// requires propagating frontier advances outward even without data, the operator must be
+/// continually scheduled, which adds scheduling overhead. Use `arrange_intra` if the trace
+/// will only be consumed within the producing dataflow.
+pub fn arrange_inter<'scope, P, Ba, Bu, Tr>(stream: Stream<'scope, Tr::Time, Ba::Input>, pact: P, name: &str) -> Arranged<'scope, TraceInter<Tr>>
+where
+    P: ParallelizationContract<Tr::Time, Ba::Input>,
+    Ba: Batcher<Time=Tr::Time,Input: Container> + 'static,
+    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
+    Tr: Trace+'static,
+{
+    arrange_core::<P, Ba, Bu, Tr>(stream, pact, name, timely::progress::operate::FrontierInterest::Always)
+}
+
+/// Arranges a stream of updates into a trace scoped to the producing dataflow.
+///
+/// The returned `TraceIntra` can be shared by operators within the same dataflow, but it
+/// cannot be imported into other dataflows (it has no `import` method). In exchange, the
+/// operator is only scheduled when it holds capabilities, reducing scheduling overhead.
+pub fn arrange_intra<'scope, P, Ba, Bu, Tr>(stream: Stream<'scope, Tr::Time, Ba::Input>, pact: P, name: &str) -> Arranged<'scope, TraceIntra<Tr>>
+where
+    P: ParallelizationContract<Tr::Time, Ba::Input>,
+    Ba: Batcher<Time=Tr::Time,Input: Container> + 'static,
+    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
+    Tr: Trace+'static,
+{
+    arrange_core::<P, Ba, Bu, Tr>(stream, pact, name, timely::progress::operate::FrontierInterest::IfCapability).into_intra()
+}
+
+/// Arranges a stream of updates by a key, configured with a name, a parallelization contract,
+/// and a frontier interest policy.
+///
+/// This is the general form that both `arrange_inter` and `arrange_intra` delegate to.
+/// The `FrontierInterest` parameter controls when the operator is notified of frontier changes.
+pub fn arrange_core<'scope, P, Ba, Bu, Tr>(stream: Stream<'scope, Tr::Time, Ba::Input>, pact: P, name: &str, interest: timely::progress::operate::FrontierInterest) -> Arranged<'scope, TraceInter<Tr>>
 where
     P: ParallelizationContract<Tr::Time, Ba::Input>,
     Ba: Batcher<Time=Tr::Time,Input: Container> + 'static,
@@ -372,38 +458,44 @@ where
     // held by the batcher, which may prevents the operator from sending an
     // empty batch.
 
-    let mut reader: Option<TraceAgent<Tr>> = None;
+    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-    // fabricate a data-parallel operator using the `unary_notify` pattern.
-    let reader_ref = &mut reader;
     let scope = stream.scope();
 
-    let stream = stream.unary_frontier(pact, name, move |_capability, info| {
+    let mut builder = OperatorBuilder::new(name.to_owned(), scope);
+    let operator_info = builder.operator_info();
 
-        // Acquire a logger for arrange events.
-        let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+    let mut input = builder.new_input(stream, pact);
+    builder.set_notify_for(0, interest);
+    let (mut output, stream) = builder.new_output();
 
-        // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = Ba::new(logger.clone(), info.global_id);
+    // Acquire a logger for arrange events.
+    let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+
+    // Where we will deposit received updates, and from which we extract batches.
+    let mut batcher = Ba::new(logger.clone(), operator_info.global_id);
+
+    let activator = Some(scope.activator_for(operator_info.address.clone()));
+    let mut empty_trace = Tr::new(operator_info.clone(), logger.clone(), activator);
+    // If there is default exertion logic set, install it.
+    if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
+        empty_trace.set_exert_logic(exert_logic);
+    }
+
+    let (trace, mut writer) = TraceInter::new(empty_trace, operator_info, logger);
+
+    builder.build(move |_capabilities| {
 
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
 
-        let activator = Some(scope.activator_for(info.address.clone()));
-        let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
-        // If there is default exertion logic set, install it.
-        if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
-            empty_trace.set_exert_logic(exert_logic);
-        }
-
-        let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
-
-        *reader_ref = Some(reader_local);
-
         // Initialize to the minimal input frontier.
         let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
 
-        move |(input, frontier), output| {
+        move |frontiers| {
+
+            let frontier = &frontiers[0];
+            let mut output = output.activate();
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
             // We don't have to keep all capabilities, but we need to be able to form output messages
@@ -465,7 +557,7 @@ where
                             writer.insert(batch.clone(), Some(capability.time().clone()));
 
                             // send the batch to downstream consumers, empty or not.
-                            output.session(&capabilities.elements()[index]).give(batch);
+                            output.give(&capabilities.elements()[index], &mut vec![batch]);
                         }
                     }
 
@@ -500,5 +592,5 @@ where
         }
     });
 
-    Arranged { stream, trace: reader.unwrap() }
+    Arranged { stream, trace }
 }

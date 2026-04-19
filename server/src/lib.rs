@@ -9,13 +9,13 @@ use timely::dataflow::Scope;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 
 // stuff for talking about shared trace types ...
-use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::operators::arrange::TraceInter;
 use differential_dataflow::trace::implementations::ValSpine;
 
 // These are all defined here so that users can be assured a common layout.
 pub type RootTime = usize;
 type TraceSpine = ValSpine<usize, usize, RootTime, isize>;
-pub type TraceHandle = TraceAgent<TraceSpine>;
+pub type TraceHandle = TraceInter<TraceSpine>;
 
 /// Arguments provided to each shared library to help build their dataflows and register their results.
 pub type Environment<'a, 'b> = (
