@@ -304,7 +304,7 @@ pub mod source {
         let mut antichain = MutableAntichain::new();
         antichain.update_iter(Some((T::minimum(), workers as i64)));
         let shared_frontier = Rc::new(RefCell::new(antichain));
-        let shared_frontier2 = shared_frontier.clone();
+        let shared_frontier2 = Rc::clone(&shared_frontier);
 
         // Step 1: The MESSAGES operator.
         let mut messages_op = OperatorBuilder::new("CDCV2_Messages".to_string(), scope);
@@ -329,7 +329,7 @@ pub mod source {
             let mut updates_caps = CapabilitySet::from_elem(capabilities[0].clone());
             let mut progress_caps = CapabilitySet::from_elem(capabilities[1].clone());
             // Capture the shared frontier to read out frontier updates to apply.
-            let local_frontier = shared_frontier.clone();
+            let local_frontier = Rc::clone(&shared_frontier);
             //
             move |_frontiers| {
                 // First check to ensure that we haven't been terminated by someone dropping our tokens.

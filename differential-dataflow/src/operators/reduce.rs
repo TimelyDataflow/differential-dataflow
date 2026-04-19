@@ -52,7 +52,7 @@ where
             // Acquire a logger for arrange events.
             let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
-            let activator = Some(scope.activator_for(operator_info.address.clone()));
+            let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
             let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
             // If there is default exert logic set, install it.
             if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {

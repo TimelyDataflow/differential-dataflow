@@ -194,7 +194,7 @@ mod val_batch {
         /// Inserts a reference to an owned key, inefficiently. Should be removed.
         fn insert_key_own(&mut self, key: &layout::Key<L>, offset: Option<usize>) {
             let mut key_con = L::KeyContainer::with_capacity(1);
-            key_con.push_own(&key);
+            key_con.push_own(key);
             self.insert_key(key_con.index(0), offset)
         }
 

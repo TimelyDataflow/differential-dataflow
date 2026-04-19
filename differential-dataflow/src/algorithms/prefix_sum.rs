@@ -32,7 +32,7 @@ where
     fn prefix_sum_at<F>(self, locations: VecCollection<'scope, T, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
 
         let combine1 = ::std::rc::Rc::new(combine);
-        let combine2 = combine1.clone();
+        let combine2 = ::std::rc::Rc::clone(&combine1);
 
         let ranges = aggregate(self.clone(), move |k,x,y| (*combine1)(k,x,y));
         broadcast(ranges, locations, zero, move |k,x,y| (*combine2)(k,x,y))

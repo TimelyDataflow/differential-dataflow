@@ -366,7 +366,7 @@ where
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
 
-        let activator = Some(scope.activator_for(info.address.clone()));
+        let activator = Some(scope.activator_for(std::rc::Rc::clone(&info.address)));
         let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
         // If there is default exertion logic set, install it.
         if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {

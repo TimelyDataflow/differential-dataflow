@@ -82,7 +82,7 @@ where
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         use timely::scheduling::Activator;
-        let activations = scope.activations().clone();
+        let activations = scope.activations();
         let activator = Activator::new(info.address, activations);
 
         // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.

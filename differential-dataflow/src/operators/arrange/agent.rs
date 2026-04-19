@@ -90,7 +90,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         }
 
         let reader = TraceAgent {
-            trace: trace.clone(),
+            trace: Rc::clone(&trace),
             queues: Rc::downgrade(&queues),
             logical_compaction: trace.borrow().logical_compaction.frontier().to_owned(),
             physical_compaction: trace.borrow().physical_compaction.frontier().to_owned(),
@@ -290,7 +290,7 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
                 let queue = self.new_listener(activator);
 
                 let activator = scope.activator_for(info.address);
-                *shutdown_button_ref = Some(ShutdownButton::new(capabilities.clone(), activator));
+                *shutdown_button_ref = Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
 
                 capabilities.borrow_mut().as_mut().unwrap().insert(capability);
 
@@ -423,7 +423,7 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
                 let queue = self.new_listener(activator);
 
                 let activator = scope.activator_for(info.address);
-                *shutdown_button_ref = Some(ShutdownButton::new(capabilities.clone(), activator));
+                *shutdown_button_ref = Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
 
                 capabilities.borrow_mut().as_mut().unwrap().insert(capability);
 
@@ -501,8 +501,8 @@ impl<Tr: TraceReader> Clone for TraceAgent<Tr> {
         self.trace.borrow_mut().adjust_physical_compaction(empty_frontier.borrow(), self.physical_compaction.borrow());
 
         TraceAgent {
-            trace: self.trace.clone(),
-            queues: self.queues.clone(),
+            trace: Rc::clone(&self.trace),
+            queues: Weak::clone(&self.queues),
             logical_compaction: self.logical_compaction.clone(),
             physical_compaction: self.physical_compaction.clone(),
             operator: self.operator.clone(),
