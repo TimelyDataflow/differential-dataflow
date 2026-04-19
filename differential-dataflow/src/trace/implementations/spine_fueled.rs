@@ -378,21 +378,6 @@ impl<B: Batch> Spine<B> {
         })
     }
 
-    /// Describes the merge progress of layers in the trace.
-    ///
-    /// Intended for diagnostics rather than public consumption.
-    #[allow(dead_code)]
-    fn describe(&self) -> Vec<(usize, usize)> {
-        self.merging
-            .iter()
-            .map(|b| match b {
-                MergeState::Vacant => (0, 0),
-                x @ MergeState::Single(_) => (1, x.len()),
-                x @ MergeState::Double(_) => (2, x.len()),
-            })
-            .collect()
-    }
-
     /// Allocates a fueled `Spine` with a specified effort multiplier.
     ///
     /// This trace will merge batches progressively, with each inserted batch applying a multiple

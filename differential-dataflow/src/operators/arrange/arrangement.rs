@@ -53,8 +53,6 @@ where
     pub stream: Stream<'scope, Tr::Time, Vec<Tr::Batch>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Tr,
-    // TODO : We might have an `Option<Collection<G, (K, V)>>` here, which `as_collection` sets and
-    // returns when invoked, so as to not duplicate work with multiple calls to `as_collection`.
 }
 
 impl<'scope, Tr> Clone for Arranged<'scope, Tr>

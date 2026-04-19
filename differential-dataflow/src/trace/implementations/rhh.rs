@@ -28,9 +28,6 @@ pub type VecBatcher<K,V,T,R> = MergeBatcher<Vec<((K,V),T,R)>, ContainerChunker<V
 /// A builder for ordered lists.
 pub type VecBuilder<K,V,T,R> = RcBuilder<RhhValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
 
-// /// A trace implementation for empty values using a spine of ordered lists.
-// pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
-
 /// A carrier trait indicating that the type's `Ord` and `PartialOrd` implementations are by `Hashable::hashed()`.
 pub trait HashOrdered: Hashable { }
 
