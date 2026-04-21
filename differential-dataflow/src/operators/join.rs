@@ -400,19 +400,18 @@ where
     }
 }
 
-struct JoinThinker<'a, C1, C2>
-where
-    C1: Cursor,
-    C2: Cursor<Time = C1::Time>,
-{
-    pub history1: ValueHistory<'a, C1>,
-    pub history2: ValueHistory<'a, C2>,
+struct JoinThinker<V1, V2, T, D1, D2> {
+    pub history1: ValueHistory<V1, T, D1>,
+    pub history2: ValueHistory<V2, T, D2>,
 }
 
-impl<'a, C1, C2> JoinThinker<'a, C1, C2>
+impl<V1, V2, T, D1, D2> JoinThinker<V1, V2, T, D1, D2>
 where
-    C1: Cursor,
-    C2: Cursor<Time = C1::Time>,
+    V1: Copy + Ord,
+    V2: Copy + Ord,
+    T: Ord + Clone + Lattice,
+    D1: Clone + crate::difference::Semigroup,
+    D2: Clone + crate::difference::Semigroup,
 {
     fn new() -> Self {
         JoinThinker {
@@ -421,7 +420,7 @@ where
         }
     }
 
-    fn think<F: FnMut(C1::Val<'a>,C2::Val<'a>,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
+    fn think<F: FnMut(V1, V2, T, &D1, &D2)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
