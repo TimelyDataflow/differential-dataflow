@@ -70,7 +70,7 @@ pub fn join_traces<'scope, Tr1, Tr2, L, CB>(arranged1: Arranged<'scope, Tr1>, ar
 where
     Tr1: TraceReader+'static,
     Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>, Time = Tr1::Time>+'static,
-    L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>,&Tr1::Time,&Tr1::Diff,&Tr2::Diff,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
+    L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>,Tr1::Time,&Tr1::Diff,&Tr2::Diff,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
     CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.
@@ -347,7 +347,7 @@ where
     #[inline(never)]
     fn work<L, CB: ContainerBuilder>(&mut self, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>, mut logic: L, fuel: &mut usize)
     where
-        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
+        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
     {
 
         let meet = self.capability.time();
@@ -379,7 +379,7 @@ where
 
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
-                        logic(batch_key, v1, v2, &t, r1, r2, &mut session);
+                        logic(batch_key, v1, v2, t, r1, r2, &mut session);
                     });
 
                     // TODO: Effort isn't perfectly tracked as we might still have some data in the
