@@ -182,7 +182,7 @@ impl<'history, V: Copy + Ord, T: Ord + Clone + Lattice, D: Clone + crate::differ
     }
     fn advance_buffer_by(&mut self, meet: &T) {
         for element in self.replay.buffer.iter_mut() {
-            (element.0).1 = (element.0).1.join(meet);
+            (element.0).1.join_assign(meet);
         }
         crate::consolidation::consolidate(&mut self.replay.buffer);
     }

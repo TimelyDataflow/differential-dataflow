@@ -133,13 +133,14 @@ pub trait Lattice : PartialOrder {
     /// ```
     #[inline]
     fn advance_by(&mut self, frontier: AntichainRef<Self>) where Self: Sized {
-        let mut iter = frontier.iter();
-        if let Some(first) = iter.next() {
-            let mut result = self.join(first);
-            for f in iter {
-                result.meet_assign(&self.join(f));
+        match &*frontier {
+            [] => {}
+            [first] => self.join_assign(first),
+            [first, rest @ ..] => {
+                let mut result = self.join(first);
+                for f in rest { result.meet_assign(&self.join(f)); }
+                *self = result;
             }
-            *self = result;
         }
     }
 }
@@ -155,11 +156,21 @@ impl<T1: Lattice, T2: Lattice> Lattice for Product<T1, T2> {
         }
     }
     #[inline]
+    fn join_assign(&mut self, other: &Self) {
+        self.outer.join_assign(&other.outer);
+        self.inner.join_assign(&other.inner);
+    }
+    #[inline]
     fn meet(&self, other: &Product<T1, T2>) -> Product<T1, T2> {
         Product {
             outer: self.outer.meet(&other.outer),
             inner: self.inner.meet(&other.inner),
         }
+    }
+    #[inline]
+    fn meet_assign(&mut self, other: &Self) {
+        self.outer.meet_assign(&other.outer);
+        self.inner.meet_assign(&other.inner);
     }
 }
 
