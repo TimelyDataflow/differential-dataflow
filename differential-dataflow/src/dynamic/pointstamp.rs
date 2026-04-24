@@ -266,6 +266,15 @@ impl<T: Lattice + Timestamp> Lattice for PointStamp<T> {
         // Remaining coordinates are `T::minimum()` in one input, and so in the output.
         Self::new(vector)
     }
+    #[inline]
+    fn meet_assign(&mut self, other: &Self) {
+        let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
+        self.vector.truncate(min_len);
+        for (this, that) in self.vector.iter_mut().zip(other.vector.iter()) {
+            this.meet_assign(that);
+        }
+        while self.vector.last() == Some(&T::minimum()) { self.vector.pop(); }
+    }
 }
 
 mod columnation {
