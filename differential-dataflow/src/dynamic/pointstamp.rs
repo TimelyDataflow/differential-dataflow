@@ -243,6 +243,18 @@ impl<T: Lattice + Timestamp> Lattice for PointStamp<T> {
         }
         Self::new(vector)
     }
+    #[inline]
+    fn join_assign(&mut self, other: &Self) {
+        let my_len = self.vector.len();
+        let other_len = other.vector.len();
+        let min_len = my_len.min(other_len);
+        for i in 0..min_len {
+            self.vector[i].join_assign(&other.vector[i]);
+        }
+        if other_len > my_len {
+            self.vector.extend(other.vector[my_len..].iter().cloned());
+        }
+    }
     #[inline(always)]
     fn meet(&self, other: &Self) -> Self {
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
