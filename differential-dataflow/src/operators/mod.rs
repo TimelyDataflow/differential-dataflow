@@ -143,13 +143,9 @@ impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> V
         }
 
         self.history.sort_by(|x,y| y.cmp(x));
-        for index in 1 .. self.history.len() {
-            self.history[index].1 = self.history[index].1.meet(&self.history[index-1].1);
-        }
+        self.history.iter_mut().reduce(|prev, cur| { cur.1.meet_assign(&prev.1); cur });
 
-        HistoryReplay {
-            replay: self
-        }
+        HistoryReplay { replay: self }
     }
 }
 
