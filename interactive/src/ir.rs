@@ -26,6 +26,16 @@ impl RowLike for Vec<i64> {
     fn extend_from_slice(&mut self, other: &[i64]) { Vec::extend_from_slice(self, other); }
 }
 
+impl<A> RowLike for smallvec::SmallVec<A>
+where
+    A: smallvec::Array<Item = i64> + Send + Sync + 'static,
+{
+    fn new() -> Self { smallvec::SmallVec::new() }
+    fn push(&mut self, v: i64) { smallvec::SmallVec::push(self, v); }
+    fn as_slice(&self) -> &[i64] { self }
+    fn extend_from_slice(&mut self, other: &[i64]) { smallvec::SmallVec::extend_from_slice(self, other); }
+}
+
 /// An individual step within a Linear node.
 #[derive(Debug, Clone)]
 pub enum LinearOp {

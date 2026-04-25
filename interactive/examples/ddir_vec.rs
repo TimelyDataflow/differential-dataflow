@@ -1,5 +1,10 @@
 //! DD IR vec-backed backend: parse, lower, render, execute.
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use timely::order::Product;
@@ -11,13 +16,14 @@ use differential_dataflow::dynamic::feedback_summary;
 use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::input::Input;
+use smallvec::SmallVec;
 use smallvec::smallvec as svec;
 
 use interactive::parse;
 use interactive::lower;
 use interactive::ir::{Node, LinearOp, Program, Diff, Id, Time, eval_fields, eval_field_into, eval_condition};
 
-type Row = Vec<i64>;
+type Row = SmallVec<[i64; 2]>;
 type DdirTime = Product<u64, PointStamp<u64>>;
 type Col<'scope, T> = VecCollection<'scope, T, (Row, Row), Diff>;
 type Arr<'scope, T> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, T, Diff>>>;
@@ -163,6 +169,8 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
         let index = worker.index();
         let peers = worker.peers();
 
+        let timer = std::time::Instant::now();
+        let timer_load = std::time::Instant::now();
         for e in 0..edges {
             if (e as usize) % peers == index {
                 let input_idx = (e as usize) % inputs.len();
@@ -171,13 +179,13 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
         }
         for i in inputs.iter_mut() { i.advance_to(1); i.flush(); }
         while probe.less_than(&1u64) { worker.step(); }
-        let elapsed = std::time::Instant::now();
-        println!("worker {}: {} loaded ({} edges)", index, name, edges);
+        println!("worker {}: {} loaded ({} edges, total {:.2?}, load {:.2?})", index, name, edges, timer.elapsed(), timer_load.elapsed());
 
         let mut cursor = 0u64;
         let mut round = 0u64;
         let limit = rounds.unwrap_or(u64::MAX);
         while round < limit {
+            let timer_round = std::time::Instant::now();
             let time = (round + 2) as u64;
             for _ in 0..batch {
                 let remove_idx = cursor;
@@ -197,10 +205,10 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
 
             round += 1;
             if round % 100 == 0 {
-                println!("worker {}: {} round {} ({:.2?})", index, name, round, elapsed.elapsed());
+                println!("worker {}: {} round {} (total {:.2?}, round {:.2?})", index, name, round, timer.elapsed(), timer_round.elapsed());
             }
         }
-        println!("worker {}: {} done ({} rounds, batch {}, {:.2?})", index, name, round, batch, elapsed.elapsed());
+        println!("worker {}: {} done ({} rounds, batch {}, total {:.2?})", index, name, round, batch, timer.elapsed());
     }).unwrap();
 }
 
