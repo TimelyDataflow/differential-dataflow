@@ -56,29 +56,23 @@ pub trait Cursor : LayoutExt {
     fn rewind_vals(&mut self, storage: &Self::Storage);
 
     /// Loads `target` with all updates associated with the supplied `key`.
+    ///
+    /// First `target` is cleared, and then if we find `key` we populated it with each of its `(val, time, diff)` updates.
+    /// If `meet` is supplied, the time is joined with each `time` in the updates, to advance the times before consolidation.
     fn populate_key<'a>(&mut self, storage: &'a Self::Storage, key: Self::Key<'a>, meet: Option<&Self::Time>, target: &mut crate::operators::EditList<Self::Val<'a>, Self::Time, Self::Diff>) {
         target.clear();
         self.seek_key(storage, key);
         if self.get_key(storage) == Some(key) {
             self.rewind_vals(storage);
-            if let Some(meet) = meet {
-                while let Some(val) = self.get_val(storage) {
-                    self.map_times(storage, |time, diff| {
-                        use crate::lattice::Lattice;
-                        let mut time = Self::owned_time(time);
-                        time.join_assign(meet);
-                        target.push(time, Self::owned_diff(diff))
-                    });
-                    target.seal(val);
-                    self.step_val(storage);
-                }
-            }
-            else {
-                while let Some(val) = self.get_val(storage) {
-                    self.map_times(storage, |time, diff| target.push(Self::owned_time(time), Self::owned_diff(diff)));
-                    target.seal(val);
-                    self.step_val(storage);
-                }
+            while let Some(val) = self.get_val(storage) {
+                self.map_times(storage, |time, diff| {
+                    use crate::lattice::Lattice;
+                    let mut time = Self::owned_time(time);
+                    if let Some(meet) = meet { time.join_assign(meet); }
+                    target.push(time, Self::owned_diff(diff))
+                });
+                target.seal(val);
+                self.step_val(storage);
             }
         }
     }
