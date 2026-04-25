@@ -4,13 +4,11 @@
 //! exercising Enter, Leave, Negate, ResultsIn on RecordedUpdates,
 //! and Push on Updates for the reduce builder path.
 
-mod columnar_support;
-
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::InputHandle;
 use timely::dataflow::ProbeHandle;
 
-use columnar_support::*;
+use differential_dataflow::columnar::*;
 
 use mimalloc::MiMalloc;
 
@@ -99,7 +97,7 @@ mod reachability {
     use differential_dataflow::operators::arrange::arrangement::arrange_core;
     use differential_dataflow::operators::join::join_traces;
 
-    use crate::columnar_support::*;
+    use differential_dataflow::columnar::*;
 
     type Node = u32;
     type Time = u64;
