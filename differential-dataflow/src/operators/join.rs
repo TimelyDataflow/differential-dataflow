@@ -370,8 +370,8 @@ where
                 Ordering::Greater => batch.seek_key(batch_storage, trace_key),
                 Ordering::Equal => {
 
-                    thinker.history1.edits.load(trace, trace_storage, trace_key, Some(meet));
-                    thinker.history2.edits.load(batch, batch_storage, batch_key, None);
+                    thinker.history1.edits.load(trace, trace_storage, Some(meet));
+                    thinker.history2.edits.load(batch, batch_storage, None);
 
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
