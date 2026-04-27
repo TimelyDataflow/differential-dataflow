@@ -68,10 +68,12 @@ fn main() {
                     ) -> timely::dataflow::Stream<'scope, u64, differential_dataflow::columnar::RecordedUpdates<DataU>> {
                         stream.unary::<ValColBuilder<DataU>, _, _, _>(Pipeline, "ToRecorded", |_, _| {
                             move |input, output| {
-                                input.for_each(|cap, batch| {
+                                input.for_each_time(|cap, batches| {
                                     let mut session = output.session_with_builder(&cap);
-                                    for ((k, _), t, d) in batch.drain(..) {
-                                        session.give((k.as_str(), (), t, d as i64));
+                                    for batch in batches {
+                                        for ((k, _), t, d) in batch.drain(..) {
+                                            session.give((k.as_str(), (), t, d as i64));
+                                        }
                                     }
                                 });
                             }
@@ -91,7 +93,7 @@ fn main() {
                         .probe_with(&mut probe);
                 },
                 _ => {
-                    println!("unrecognized mode: {:?}", mode)
+                    panic!("unrecognized mode: {:?}", mode);
                 }
             }
 
