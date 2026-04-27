@@ -180,7 +180,7 @@ pub mod batcher {
     use super::super::updates::Updates;
 
     impl<U: Update> timely::container::SizableContainer for Updates<U> {
-        fn at_capacity(&self) -> bool { self.diffs.values.len() >= 64 * 1024 }
+        fn at_capacity(&self) -> bool { self.diffs.values.len() >= crate::columnar::LINK_TARGET }
         fn ensure_capacity(&mut self, _stash: &mut Option<Self>) { }
     }
 

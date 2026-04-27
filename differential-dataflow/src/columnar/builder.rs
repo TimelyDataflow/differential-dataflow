@@ -28,7 +28,7 @@ impl<T, U: Update> PushInto<T> for ValBuilder<U> where TupleContainer<U> : Push<
     #[inline]
     fn push_into(&mut self, item: T) {
         self.current.push(item);
-        if self.current.len() > 1024 * 1024 {
+        if self.current.len() > crate::columnar::LINK_TARGET {
             use columnar::{Borrow, Index};
             let records = self.current.len();
             let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
