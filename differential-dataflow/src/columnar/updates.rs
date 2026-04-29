@@ -94,6 +94,35 @@ impl<U: Update> Clone for Updates<U> {
     }
 }
 
+/// Borrowed view of an [`Updates<U>`] with the same four-field shape.
+///
+/// Reader code should consume an `Updates` through this view rather than reading
+/// fields directly. This decouples readers from the storage representation: the
+/// view's shape stays the same whether the underlying `Updates` holds owned
+/// `Lists` or (later) `Stash`-backed columns that may be borrowed from wire bytes.
+pub struct UpdatesView<'a, U: Update> {
+    /// Outer key list (one entry per group of keys at the trie root).
+    pub keys:  <Lists<ContainerOf<U::Key>>  as Borrow>::Borrowed<'a>,
+    /// Per-key list of vals.
+    pub vals:  <Lists<ContainerOf<U::Val>>  as Borrow>::Borrowed<'a>,
+    /// Per-val list of times.
+    pub times: <Lists<ContainerOf<U::Time>> as Borrow>::Borrowed<'a>,
+    /// Per-time list of diffs.
+    pub diffs: <Lists<ContainerOf<U::Diff>> as Borrow>::Borrowed<'a>,
+}
+
+impl<U: Update> Updates<U> {
+    /// Borrow the four columns as a single `UpdatesView`.
+    pub fn view(&self) -> UpdatesView<'_, U> {
+        UpdatesView {
+            keys:  self.keys.borrow(),
+            vals:  self.vals.borrow(),
+            times: self.times.borrow(),
+            diffs: self.diffs.borrow(),
+        }
+    }
+}
+
 /// The flat `(key, val, time, diff)` tuple for an [`Update`].
 pub type Tuple<U> = (<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff);
 
