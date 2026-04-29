@@ -39,10 +39,23 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
         for outer in 0..Len::len(&keys_b) {
             self.pre_lens.clear();
             self.pre_lens.extend(outputs.iter().map(|o| o.keys.values.len()));
-            for k in child_range(keys_b.bounds, outer) {
-                let key = keys_b.values.get(k);
-                let idx = ((self.hashfunc)(key) as usize) % pushers.len();
-                outputs[idx].extend_from_keys(&container.updates, k..k+1);
+            if pushers.len().is_power_of_two() {
+                let mask = (pushers.len() - 1) as u64;
+                for k in child_range(keys_b.bounds, outer) {
+                    let key = keys_b.values.get(k);
+                    let h = (self.hashfunc)(key);
+                    let idx = (h & mask) as usize;
+                    outputs[idx].extend_from_keys(&container.updates, k..k+1);
+                }
+            }
+            else {
+                let pushers_len = pushers.len() as u64;
+                for k in child_range(keys_b.bounds, outer) {
+                    let key = keys_b.values.get(k);
+                    let h = (self.hashfunc)(key);
+                    let idx = (h % pushers_len) as usize;
+                    outputs[idx].extend_from_keys(&container.updates, k..k+1);
+                }
             }
             for (output, &pre) in outputs.iter_mut().zip(self.pre_lens.iter()) {
                 if output.keys.values.len() > pre {
