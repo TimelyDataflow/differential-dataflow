@@ -123,6 +123,59 @@ impl<U: Update> UpdatesOwned<U> {
     }
 }
 
+/// `Stash`-backed update storage: each column may be typed (writable) or
+/// borrowed from wire bytes (read-only, zero-copy).
+///
+/// Construction sites work in [`UpdatesOwned`]; convert via `From` at the
+/// boundary. Reader code uses [`UpdatesView`] via [`Updates::view`], which
+/// produces the same shape regardless of whether the columns are typed or
+/// borrowed.
+pub struct Updates<U: Update, B = timely::bytes::arc::Bytes> {
+    /// Outer key list (one entry per group of keys at the trie root).
+    pub keys:  columnar::bytes::stash::Stash<Lists<ContainerOf<U::Key>>,  B>,
+    /// Per-key list of vals.
+    pub vals:  columnar::bytes::stash::Stash<Lists<ContainerOf<U::Val>>,  B>,
+    /// Per-val list of times.
+    pub times: columnar::bytes::stash::Stash<Lists<ContainerOf<U::Time>>, B>,
+    /// Per-time list of diffs.
+    pub diffs: columnar::bytes::stash::Stash<Lists<ContainerOf<U::Diff>>, B>,
+}
+
+impl<U: Update, B> Default for Updates<U, B> {
+    fn default() -> Self {
+        Self {
+            keys:  Default::default(),
+            vals:  Default::default(),
+            times: Default::default(),
+            diffs: Default::default(),
+        }
+    }
+}
+
+impl<U: Update, B> From<UpdatesOwned<U>> for Updates<U, B> {
+    fn from(owned: UpdatesOwned<U>) -> Self {
+        use columnar::bytes::stash::Stash;
+        Self {
+            keys:  Stash::Typed(owned.keys),
+            vals:  Stash::Typed(owned.vals),
+            times: Stash::Typed(owned.times),
+            diffs: Stash::Typed(owned.diffs),
+        }
+    }
+}
+
+impl<U: Update, B: std::ops::Deref<Target = [u8]> + Clone + 'static> Updates<U, B> {
+    /// Borrow the four columns as a single `UpdatesView`.
+    pub fn view(&self) -> UpdatesView<'_, U> {
+        UpdatesView {
+            keys:  self.keys.borrow(),
+            vals:  self.vals.borrow(),
+            times: self.times.borrow(),
+            diffs: self.diffs.borrow(),
+        }
+    }
+}
+
 /// The flat `(key, val, time, diff)` tuple for an [`Update`].
 pub type Tuple<U> = (<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff);
 
