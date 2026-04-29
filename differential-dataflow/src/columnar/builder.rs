@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use columnar::{Columnar, Clear, Len, Push};
 
 use super::layout::ColumnarUpdate as Update;
-use super::updates::Updates;
+use super::updates::UpdatesOwned;
 use super::RecordedUpdates;
 
 type TupleContainer<U> = <(<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff) as Columnar>::Container;
@@ -33,7 +33,7 @@ impl<T, U: Update> PushInto<T> for ValBuilder<U> where TupleContainer<U> : Push<
             let records = self.current.len();
             let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
             refs.sort();
-            let updates = Updates::form(refs.into_iter());
+            let updates = UpdatesOwned::form(refs.into_iter());
             self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
             self.current.clear();
         }
@@ -71,7 +71,7 @@ impl<U: Update> ContainerBuilder for ValBuilder<U> {
             let records = self.current.len();
             let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
             refs.sort();
-            let updates = Updates::form(refs.into_iter());
+            let updates = UpdatesOwned::form(refs.into_iter());
             self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
             self.current.clear();
         }

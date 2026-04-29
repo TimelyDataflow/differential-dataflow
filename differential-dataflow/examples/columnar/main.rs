@@ -2,7 +2,7 @@
 //!
 //! Demonstrates columnar-backed arrangements in an iterative scope,
 //! exercising Enter, Leave, Negate, ResultsIn on RecordedUpdates,
-//! and Push on Updates for the reduce builder path.
+//! and Push on UpdatesOwned for the reduce builder path.
 
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::InputHandle;
@@ -87,7 +87,7 @@ fn main() {
 ///
 /// This module exercises the container traits needed for iterative columnar
 /// computation: Enter, Leave, Negate, ResultsIn on RecordedUpdates, and
-/// Push on Updates for the reduce builder path.
+/// Push on UpdatesOwned for the reduce builder path.
 mod reachability {
 
     use timely::order::Product;

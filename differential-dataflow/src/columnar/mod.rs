@@ -4,7 +4,7 @@
 //! changes; do not rely on stability across releases.
 //!
 //! Known rough edges:
-//! - `ContainerBytes` for `RecordedUpdates` and `Updates` is `unimplemented!()`;
+//! - `ContainerBytes` for `RecordedUpdates` and `UpdatesOwned` is `unimplemented!()`;
 //!   multi-process dataflows that exchange these containers will panic.
 //! - `leave_dynamic` consolidates eagerly on each batch; the
 //!   [`crate::dynamic`] counterpart defers consolidation. Same observable
@@ -20,7 +20,7 @@
 //!
 //! Module layout (bottom-up):
 //! - [`layout`] — `ColumnarUpdate` / `ColumnarLayout` / `OrdContainer`.
-//! - [`updates`] — `Updates<U>` trie, `Consolidating`, `UpdatesBuilder`.
+//! - [`updates`] — `UpdatesOwned<U>` trie, `Consolidating`, `UpdatesBuilder`.
 //! - [`builder`] — `ValColBuilder`: the input-side `ContainerBuilder`.
 //! - [`exchange`] — `ValPact` / `ValDistributor`: PACT for shuffling.
 //! - [`arrangement`] — type aliases + `Coltainer` + `TrieChunker` +
@@ -36,7 +36,7 @@ pub mod builder;
 pub mod exchange;
 pub mod arrangement;
 
-pub use updates::Updates;
+pub use updates::UpdatesOwned;
 pub use builder::ValBuilder as ValColBuilder;
 pub use exchange::ValPact;
 pub use arrangement::{ValBatcher, ValBuilder, ValSpine};
@@ -44,12 +44,12 @@ pub use arrangement::{ValBatcher, ValBuilder, ValSpine};
 /// Target size for update batches, in number of updates.
 pub const LINK_TARGET: usize = 64 * 1024;
 
-/// A thin wrapper around `Updates` that tracks the pre-consolidation record count
+/// A thin wrapper around `UpdatesOwned` that tracks the pre-consolidation record count
 /// for timely's exchange accounting. This wrapper is the stream container type;
-/// the `TrieChunker` strips it, passing bare `Updates` into the merge batcher.
+/// the `TrieChunker` strips it, passing bare `UpdatesOwned` into the merge batcher.
 pub struct RecordedUpdates<U: layout::ColumnarUpdate> {
     /// The trie of `(key, val, time, diff)` updates.
-    pub updates: Updates<U>,
+    pub updates: UpdatesOwned<U>,
     /// Number of records in `updates` before consolidation.
     pub records: usize,
     /// Whether `updates` is known to be sorted and consolidated
@@ -83,7 +83,7 @@ mod container_impls {
     use crate::collection::containers::{Negate, Enter, Leave, ResultsIn};
 
     use super::layout::ColumnarUpdate as Update;
-    use super::updates::Updates;
+    use super::updates::UpdatesOwned;
     use super::RecordedUpdates;
 
     impl<U: Update<Diff: Abelian>> Negate for RecordedUpdates<U> {
@@ -122,7 +122,7 @@ mod container_impls {
             // TODO: Assumes Enter (to_inner) is order-preserving on times.
             RecordedUpdates {
                 consolidated: self.consolidated,
-                updates: Updates {
+                updates: UpdatesOwned {
                     keys: self.updates.keys,
                     vals: self.updates.vals,
                     times: super::updates::Lists { values: new_times, bounds: self.updates.times.bounds },
@@ -146,7 +146,7 @@ mod container_impls {
             // Flatten, convert times, and reconsolidate via consolidate.
             // Leave can collapse distinct T1 times to the same T2 time,
             // so the trie must be rebuilt with consolidation.
-            let mut flat = Updates::<(K, V, T2, R)>::default();
+            let mut flat = UpdatesOwned::<(K, V, T2, R)>::default();
             let mut t1_owned = T1::default();
             for (k, v, t, d) in self.updates.iter() {
                 Columnar::copy_from(&mut t1_owned, t);
@@ -166,7 +166,7 @@ mod container_impls {
             use timely::progress::PathSummary;
             // Apply results_in to each time; drop updates whose time maps to None.
             // This must rebuild the trie since some entries may be removed.
-            let mut output = Updates::<U>::default();
+            let mut output = UpdatesOwned::<U>::default();
             let mut time_owned = U::Time::default();
             for (k, v, t, d) in self.updates.iter() {
                 Columnar::copy_from(&mut time_owned, t);
