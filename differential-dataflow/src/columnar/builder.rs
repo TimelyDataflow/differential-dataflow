@@ -33,7 +33,7 @@ impl<T, U: Update> PushInto<T> for ValBuilder<U> where TupleContainer<U> : Push<
             let records = self.current.len();
             let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
             refs.sort();
-            let updates = UpdatesOwned::form(refs.into_iter());
+            let updates = UpdatesOwned::form(refs.into_iter()).into();
             self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
             self.current.clear();
         }
@@ -71,7 +71,7 @@ impl<U: Update> ContainerBuilder for ValBuilder<U> {
             let records = self.current.len();
             let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
             refs.sort();
-            let updates = UpdatesOwned::form(refs.into_iter());
+            let updates = UpdatesOwned::form(refs.into_iter()).into();
             self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
             self.current.clear();
         }

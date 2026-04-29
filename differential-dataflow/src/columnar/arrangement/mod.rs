@@ -194,7 +194,7 @@ impl<'a, U: super::layout::ColumnarUpdate> timely::container::PushInto<&'a mut R
         // Into if small enough, as we can further consolidate, but if not we need to
         // consolidate and then either ship (if large) or hold (if small) the results.
 
-        let updates = std::mem::take(&mut container.updates);
+        let updates = std::mem::take(&mut container.updates).into_owned();
         let consolidated = container.consolidated;
         let len = updates.len();
 

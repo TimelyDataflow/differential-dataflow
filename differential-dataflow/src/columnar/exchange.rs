@@ -32,7 +32,8 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
     fn partition<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, container: &mut RecordedUpdates<U>, time: &T, pushers: &mut [P]) {
         use super::updates::child_range;
 
-        let view = container.updates.view();
+        let owned = std::mem::take(&mut container.updates).into_owned();
+        let view = owned.view();
         let keys_b = view.keys;
         let mut outputs: Vec<UpdatesOwned<U>> = (0..pushers.len()).map(|_| UpdatesOwned::default()).collect();
 
@@ -46,7 +47,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
                     let key = keys_b.values.get(k);
                     let h = (self.hashfunc)(key);
                     let idx = (h & mask) as usize;
-                    outputs[idx].extend_from_keys(&container.updates, k..k+1);
+                    outputs[idx].extend_from_keys(&owned, k..k+1);
                 }
             }
             else {
@@ -55,7 +56,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
                     let key = keys_b.values.get(k);
                     let h = (self.hashfunc)(key);
                     let idx = (h % pushers_len) as usize;
-                    outputs[idx].extend_from_keys(&container.updates, k..k+1);
+                    outputs[idx].extend_from_keys(&owned, k..k+1);
                 }
             }
             for (output, &pre) in outputs.iter_mut().zip(self.pre_lens.iter()) {
@@ -71,7 +72,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
         let mut first_records = total_records.saturating_sub(non_empty.saturating_sub(1));
         for (pusher, output) in pushers.iter_mut().zip(outputs) {
             if !output.keys.values.is_empty() {
-                let recorded = RecordedUpdates { updates: output, records: first_records, consolidated: container.consolidated };
+                let recorded = RecordedUpdates { updates: output.into(), records: first_records, consolidated: container.consolidated };
                 first_records = 1;
                 let mut recorded = recorded;
                 Message::push_at(&mut recorded, time.clone(), pusher);

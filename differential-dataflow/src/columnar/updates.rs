@@ -152,6 +152,17 @@ impl<U: Update, B> Default for Updates<U, B> {
     }
 }
 
+impl<U: Update, B: Clone> Clone for Updates<U, B> {
+    fn clone(&self) -> Self {
+        Self {
+            keys:  self.keys.clone(),
+            vals:  self.vals.clone(),
+            times: self.times.clone(),
+            diffs: self.diffs.clone(),
+        }
+    }
+}
+
 impl<U: Update, B> From<UpdatesOwned<U>> for Updates<U, B> {
     fn from(owned: UpdatesOwned<U>) -> Self {
         use columnar::bytes::stash::Stash;
@@ -173,6 +184,31 @@ impl<U: Update, B: std::ops::Deref<Target = [u8]> + Clone + 'static> Updates<U, 
             times: self.times.borrow(),
             diffs: self.diffs.borrow(),
         }
+    }
+
+    /// Total number of updates (records) in the trie.
+    pub fn len(&self) -> usize {
+        self.view().diffs.values.len()
+    }
+
+    /// Whether the trie is empty.
+    pub fn is_empty(&self) -> bool { self.len() == 0 }
+
+    /// Convert to fully owned form, copying any `Stash::Bytes` columns into
+    /// typed `Lists`. Already-typed columns pass through with no copy.
+    ///
+    /// This method should be avoided unless typed containers are truly needed.
+    pub fn into_owned(mut self) -> UpdatesOwned<U> {
+        use columnar::bytes::stash::Stash;
+        self.keys.make_typed();
+        self.vals.make_typed();
+        self.times.make_typed();
+        self.diffs.make_typed();
+        let Stash::Typed(keys)  = self.keys  else { unreachable!() };
+        let Stash::Typed(vals)  = self.vals  else { unreachable!() };
+        let Stash::Typed(times) = self.times else { unreachable!() };
+        let Stash::Typed(diffs) = self.diffs else { unreachable!() };
+        UpdatesOwned { keys, vals, times, diffs }
     }
 }
 
