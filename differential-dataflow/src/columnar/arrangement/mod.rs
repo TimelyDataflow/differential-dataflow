@@ -263,7 +263,7 @@ pub mod batcher {
     use super::super::updates::Updates;
 
     impl<U: Update> timely::container::SizableContainer for Updates<U> {
-        fn at_capacity(&self) -> bool { self.diffs.values.len() >= crate::columnar::LINK_TARGET }
+        fn at_capacity(&self) -> bool { self.view().diffs.values.len() >= crate::columnar::LINK_TARGET }
         fn ensure_capacity(&mut self, _stash: &mut Option<Self>) { }
     }
 
@@ -343,12 +343,12 @@ pub mod builder {
 
             // Meld sorted, consolidated chain entries in order.
             // Pre-allocate to avoid reallocations during meld.
-            use columnar::{Borrow, Container};
+            use columnar::Container;
             let mut updates = Updates::<U>::default();
-            updates.keys.reserve_for(chain.iter().map(|c| c.keys.borrow()));
-            updates.vals.reserve_for(chain.iter().map(|c| c.vals.borrow()));
-            updates.times.reserve_for(chain.iter().map(|c| c.times.borrow()));
-            updates.diffs.reserve_for(chain.iter().map(|c| c.diffs.borrow()));
+            updates.keys.reserve_for(chain.iter().map(|c| c.view().keys));
+            updates.vals.reserve_for(chain.iter().map(|c| c.view().vals));
+            updates.times.reserve_for(chain.iter().map(|c| c.view().times));
+            updates.diffs.reserve_for(chain.iter().map(|c| c.view().diffs));
             let mut builder = super::super::updates::UpdatesBuilder::new_from(updates);
             for chunk in chain.iter() {
                 builder.meld(chunk);

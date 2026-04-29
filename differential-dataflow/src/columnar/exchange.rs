@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use columnar::{Borrow, Index, Len};
+use columnar::{Index, Len};
 use timely::logging::TimelyLogger;
 use timely::dataflow::channels::pushers::{Exchange, exchange::Distributor};
 use timely::dataflow::channels::Message;
@@ -32,7 +32,8 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
     fn partition<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, container: &mut RecordedUpdates<U>, time: &T, pushers: &mut [P]) {
         use super::updates::child_range;
 
-        let keys_b = container.updates.keys.borrow();
+        let view = container.updates.view();
+        let keys_b = view.keys;
         let mut outputs: Vec<Updates<U>> = (0..pushers.len()).map(|_| Updates::default()).collect();
 
         // Each outer key group becomes a separate run in the destination.
