@@ -41,6 +41,9 @@ pub use builder::ValBuilder as ValColBuilder;
 pub use exchange::ValPact;
 pub use arrangement::{ValBatcher, ValBuilder, ValSpine};
 
+/// Target size for update batches, in number of updates.
+pub const LINK_TARGET: usize = 64 * 1024;
+
 /// A thin wrapper around `Updates` that tracks the pre-consolidation record count
 /// for timely's exchange accounting. This wrapper is the stream container type;
 /// the `TrieChunker` strips it, passing bare `Updates` into the merge batcher.

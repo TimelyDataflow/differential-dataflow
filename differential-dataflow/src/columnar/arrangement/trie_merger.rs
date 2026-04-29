@@ -62,7 +62,7 @@ fn form_chunks<'a, U: Update>(
 ) {
     let mut sorted = sorted.peekable();
     while sorted.peek().is_some() {
-        let chunk = Updates::<U>::form((&mut sorted).take(64 * 1024));
+        let chunk = Updates::<U>::form((&mut sorted).take(crate::columnar::LINK_TARGET));
         if chunk.len() > 0 {
             output.push(chunk);
         }
@@ -152,28 +152,6 @@ where
                 });
             }
         }
-
-
-        // // Flatten the sorted, consolidated chain into refs.
-        // let all = merged.iter().flat_map(|chunk| chunk.iter());
-
-        // // Partition into two sorted streams by time.
-        // let mut time_owned = U::Time::default();
-        // let mut keep_vec = Vec::new();
-        // let mut ship_vec = Vec::new();
-        // for (k, v, t, d) in all {
-        //     Columnar::copy_from(&mut time_owned, t);
-        //     if upper.less_equal(&time_owned) {
-        //         frontier.insert_ref(&time_owned);
-        //         keep_vec.push((k, v, t, d));
-        //     } else {
-        //         ship_vec.push((k, v, t, d));
-        //     }
-        // }
-
-        // // Build chunks via form (which consolidates internally).
-        // form_chunks::<U>(keep_vec.into_iter(), kept);
-        // form_chunks::<U>(ship_vec.into_iter(), ship);
     }
 
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
@@ -306,6 +284,8 @@ where
         builder: &mut ChainBuilder<U>,
         stash: &mut Vec<Updates<U>>,
     ) {
+        // TODO: Optimization for one batch exceeding the other.
+
         let ((k0_idx, v0_idx, t0_idx), updates0) = batch1.take().unwrap();
         let ((k1_idx, v1_idx, t1_idx), updates1) = batch2.take().unwrap();
 
@@ -669,7 +649,7 @@ impl<U: super::super::layout::ColumnarUpdate> ChainBuilder<U> {
         link = link.filter_zero();
         if link.len() > 0 {
             if let Some(last) = self.updates.last_mut() {
-                if last.len() + link.len() < 2 * 64 * 1024 {
+                if last.len() + link.len() < 2 * crate::columnar::LINK_TARGET {
                     let mut build = super::super::updates::UpdatesBuilder::new_from(std::mem::take(last));
                     build.meld(&link);
                     *last = build.done();

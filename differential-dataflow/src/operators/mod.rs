@@ -24,7 +24,7 @@ pub struct EditList<V, T, D> {
     edits: Vec<(T, D)>,
 }
 
-impl<V: Copy, T: Ord, D: crate::difference::Semigroup> EditList<V, T, D> {
+impl<V: Copy, T: Ord + Lattice, D: crate::difference::Semigroup> EditList<V, T, D> {
     /// Creates an empty list of edits.
     #[inline]
     fn new() -> Self {
@@ -33,12 +33,26 @@ impl<V: Copy, T: Ord, D: crate::difference::Semigroup> EditList<V, T, D> {
             edits: Vec::new(),
         }
     }
-    /// Loads the contents of a cursor at `key`, advancing times by `meet` if supplied.
-    fn load<'a, C>(&mut self, cursor: &mut C, storage: &'a C::Storage, key: C::Key<'a>, meet: Option<&T>)
+    /// Walks the cursor's vals at the current key into `self`, advancing times by `meet` if supplied.
+    ///
+    /// The cursor is assumed to be positioned at a key already; callers that need
+    /// to seek should use [`Cursor::populate_key`] (or [`ValueHistory::replay_key`])
+    /// instead. This split avoids a redundant seek in the merge-join inner loop,
+    /// where the cursor is positioned by the upstream merge step.
+    fn load<'a, C>(&mut self, cursor: &mut C, storage: &'a C::Storage, meet: Option<&T>)
     where
         C: Cursor<Val<'a> = V, Time = T, Diff = D>,
     {
-        cursor.populate_key(storage, key, meet, self);
+        self.clear();
+        while let Some(val) = cursor.get_val(storage) {
+            cursor.map_times(storage, |time, diff| {
+                let mut t = C::owned_time(time);
+                if let Some(m) = meet { t.join_assign(m); }
+                self.push(t, C::owned_diff(diff));
+            });
+            self.seal(val);
+            cursor.step_val(storage);
+        }
     }
     /// Clears the list of edits.
     #[inline]
