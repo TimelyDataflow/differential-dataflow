@@ -32,8 +32,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
     fn partition<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, container: &mut RecordedUpdates<U>, time: &T, pushers: &mut [P]) {
         use super::updates::child_range;
 
-        let owned = std::mem::take(&mut container.updates).into_owned();
-        let view = owned.view();
+        let view = container.updates.view();
         let keys_b = view.keys;
         let mut outputs: Vec<UpdatesOwned<U>> = (0..pushers.len()).map(|_| UpdatesOwned::default()).collect();
 
@@ -47,7 +46,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
                     let key = keys_b.values.get(k);
                     let h = (self.hashfunc)(key);
                     let idx = (h & mask) as usize;
-                    outputs[idx].extend_from_keys(&owned, k..k+1);
+                    outputs[idx].extend_from_keys(view, k..k+1);
                 }
             }
             else {
@@ -56,7 +55,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
                     let key = keys_b.values.get(k);
                     let h = (self.hashfunc)(key);
                     let idx = (h % pushers_len) as usize;
-                    outputs[idx].extend_from_keys(&owned, k..k+1);
+                    outputs[idx].extend_from_keys(view, k..k+1);
                 }
             }
             for (output, &pre) in outputs.iter_mut().zip(self.pre_lens.iter()) {

@@ -111,6 +111,30 @@ pub struct UpdatesView<'a, U: Update> {
     pub diffs: <Lists<ContainerOf<U::Diff>> as Borrow>::Borrowed<'a>,
 }
 
+impl<'a, U: Update> Copy for UpdatesView<'a, U> {}
+impl<'a, U: Update> Clone for UpdatesView<'a, U> { fn clone(&self) -> Self { *self } }
+
+impl<'a, U: Update> UpdatesView<'a, U> {
+    /// Translate a key-range into the corresponding val-range via `vals.bounds`.
+    pub fn vals_bounds(self, key_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        if !key_range.is_empty() {
+            let bounds = self.vals.bounds;
+            let lower = if key_range.start == 0 { 0 } else { bounds.index_as(key_range.start - 1) as usize };
+            let upper = bounds.index_as(key_range.end - 1) as usize;
+            lower..upper
+        } else { key_range }
+    }
+    /// Translate a val-range into the corresponding time-range via `times.bounds`.
+    pub fn times_bounds(self, val_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        if !val_range.is_empty() {
+            let bounds = self.times.bounds;
+            let lower = if val_range.start == 0 { 0 } else { bounds.index_as(val_range.start - 1) as usize };
+            let upper = bounds.index_as(val_range.end - 1) as usize;
+            lower..upper
+        } else { val_range }
+    }
+}
+
 impl<U: Update> UpdatesOwned<U> {
     /// Borrow the four columns as a single `UpdatesView`.
     pub fn view(&self) -> UpdatesView<'_, U> {
@@ -278,33 +302,14 @@ where
 
 impl<U: Update> UpdatesOwned<U> {
 
-    /// Translate a key-range into the corresponding val-range via `vals.bounds`.
-    pub fn vals_bounds(&self, key_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
-        if !key_range.is_empty() {
-            let bounds = self.vals.bounds.borrow();
-            let lower = if key_range.start == 0 { 0 } else { bounds.index_as(key_range.start - 1) as usize };
-            let upper = bounds.index_as(key_range.end - 1) as usize;
-            lower..upper
-        } else { key_range }
-    }
-    /// Translate a val-range into the corresponding time-range via `times.bounds`.
-    pub fn times_bounds(&self, val_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
-        if !val_range.is_empty() {
-            let bounds = self.times.bounds.borrow();
-            let lower = if val_range.start == 0 { 0 } else { bounds.index_as(val_range.start - 1) as usize };
-            let upper = bounds.index_as(val_range.end - 1) as usize;
-            lower..upper
-        } else { val_range }
-    }
-
     /// Copies `other[key_range]` into self, keys and all.
-    pub fn extend_from_keys(&mut self, other: &Self, key_range: std::ops::Range<usize>) {
-        self.keys.values.extend_from_self(other.keys.values.borrow(), key_range.clone());
-        self.vals.extend_from_self(other.vals.borrow(), key_range.clone());
+    pub fn extend_from_keys(&mut self, other: UpdatesView<'_, U>, key_range: std::ops::Range<usize>) {
+        self.keys.values.extend_from_self(other.keys.values, key_range.clone());
+        self.vals.extend_from_self(other.vals, key_range.clone());
         let val_range = other.vals_bounds(key_range);
-        self.times.extend_from_self(other.times.borrow(), val_range.clone());
+        self.times.extend_from_self(other.times, val_range.clone());
         let time_range = other.times_bounds(val_range);
-        self.diffs.extend_from_self(other.diffs.borrow(), time_range);
+        self.diffs.extend_from_self(other.diffs, time_range);
     }
 
     /// Forms a consolidated `UpdatesOwned` trie from unsorted `(key, val, time, diff)` refs.
