@@ -1,4 +1,4 @@
-//! Batch-at-a-time merging of sorted, consolidated `UpdatesOwned` chains.
+//! Batch-at-a-time merging of sorted, consolidated `UpdatesTyped` chains.
 //!
 //! The core is `TrieMerger::merge_batches`, which walks pairs of chunks via
 //! `merge_batch`, building a chain of merged outputs with `ChainBuilder`.
@@ -11,9 +11,9 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 use crate::trace::implementations::merge_batcher::Merger;
 
 use super::super::layout::ColumnarUpdate as Update;
-use super::super::updates::UpdatesOwned;
+use super::super::updates::UpdatesTyped;
 
-/// Merge-batcher merger that melds sorted, consolidated `UpdatesOwned` tries.
+/// Merge-batcher merger that melds sorted, consolidated `UpdatesTyped` tries.
 pub struct TrieMerger<U: Update> {
     _marker: std::marker::PhantomData<U>,
 }
@@ -54,15 +54,15 @@ where
     }
 }
 
-/// Build sorted `UpdatesOwned` chunks from a sorted iterator of refs,
-/// using `UpdatesOwned::form` (which consolidates internally) on batches.
+/// Build sorted `UpdatesTyped` chunks from a sorted iterator of refs,
+/// using `UpdatesTyped::form` (which consolidates internally) on batches.
 fn form_chunks<'a, U: Update>(
     sorted: impl Iterator<Item = columnar::Ref<'a, super::super::updates::Tuple<U>>>,
-    output: &mut Vec<UpdatesOwned<U>>,
+    output: &mut Vec<UpdatesTyped<U>>,
 ) {
     let mut sorted = sorted.peekable();
     while sorted.peek().is_some() {
-        let chunk = UpdatesOwned::<U>::form((&mut sorted).take(crate::columnar::LINK_TARGET));
+        let chunk = UpdatesTyped::<U>::form((&mut sorted).take(crate::columnar::LINK_TARGET));
         if chunk.len() > 0 {
             output.push(chunk);
         }
@@ -73,15 +73,15 @@ impl<U: Update> Merger for TrieMerger<U>
 where
     U::Time: 'static,
 {
-    type Chunk = UpdatesOwned<U>;
+    type Chunk = UpdatesTyped<U>;
     type Time = U::Time;
 
     fn merge(
         &mut self,
-        list1: Vec<UpdatesOwned<U>>,
-        list2: Vec<UpdatesOwned<U>>,
-        output: &mut Vec<UpdatesOwned<U>>,
-        _stash: &mut Vec<UpdatesOwned<U>>,
+        list1: Vec<UpdatesTyped<U>>,
+        list2: Vec<UpdatesTyped<U>>,
+        output: &mut Vec<UpdatesTyped<U>>,
+        _stash: &mut Vec<UpdatesTyped<U>>,
     ) {
         Self::merge_batches(list1, list2, output, _stash);
     }
@@ -127,7 +127,7 @@ where
                     if *bit { diffs.values.push(d_borrow.values.get(index)); }
                 }
                 diffs.bounds = Strides::new(1, times.values.len() as u64);
-                kept.push(UpdatesOwned {
+                kept.push(UpdatesTyped {
                     keys,
                     vals,
                     times,
@@ -145,7 +145,7 @@ where
                     if *bit { diffs.values.push(d_borrow.values.get(index)); }
                 }
                 diffs.bounds = Strides::new(1, times.values.len() as u64);
-                ship.push(UpdatesOwned {
+                ship.push(UpdatesTyped {
                     keys,
                     vals,
                     times,
@@ -169,9 +169,9 @@ where
     /// Correct but slow — used as fallback.
     #[allow(dead_code)]
     fn merge_iterator(
-        list1: &[UpdatesOwned<U>],
-        list2: &[UpdatesOwned<U>],
-        output: &mut Vec<UpdatesOwned<U>>,
+        list1: &[UpdatesTyped<U>],
+        list2: &[UpdatesTyped<U>],
+        output: &mut Vec<UpdatesTyped<U>>,
     ) {
         let iter1 = list1.iter().flat_map(|chunk| chunk.iter());
         let iter2 = list2.iter().flat_map(|chunk| chunk.iter());
@@ -187,10 +187,10 @@ where
     /// A merge implementation that operates batch-at-a-time.
     #[inline(never)]
     fn merge_batches(
-        list1: Vec<UpdatesOwned<U>>,
-        list2: Vec<UpdatesOwned<U>>,
-        output: &mut Vec<UpdatesOwned<U>>,
-        stash: &mut Vec<UpdatesOwned<U>>,
+        list1: Vec<UpdatesTyped<U>>,
+        list2: Vec<UpdatesTyped<U>>,
+        output: &mut Vec<UpdatesTyped<U>>,
+        stash: &mut Vec<UpdatesTyped<U>>,
     ) {
 
         // The design for efficient "batch" merginging of chains of links is:
@@ -228,7 +228,7 @@ where
         // TODO: create batch for the non-empty cursor.
         if let Some(((k,v,t),batch)) = cursor1 {
             let mut out_batch = stash.pop().unwrap_or_default();
-            let empty: UpdatesOwned<U> = Default::default();
+            let empty: UpdatesTyped<U> = Default::default();
             let view = batch.view();
             write_from_surveys(
                 &batch,
@@ -243,7 +243,7 @@ where
         }
         if let Some(((k,v,t),batch)) = cursor2 {
             let mut out_batch = stash.pop().unwrap_or_default();
-            let empty: UpdatesOwned<U> = Default::default();
+            let empty: UpdatesTyped<U> = Default::default();
             let view = batch.view();
             write_from_surveys(
                 &empty,
@@ -282,10 +282,10 @@ where
     /// cursors as part of the mapping.
     #[inline(never)]
     fn merge_batch(
-        batch1: &mut Option<((usize, usize, usize), UpdatesOwned<U>)>,
-        batch2: &mut Option<((usize, usize, usize), UpdatesOwned<U>)>,
+        batch1: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
+        batch2: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
         builder: &mut ChainBuilder<U>,
-        stash: &mut Vec<UpdatesOwned<U>>,
+        stash: &mut Vec<UpdatesTyped<U>>,
     ) {
         // TODO: Optimization for one batch exceeding the other.
 
@@ -389,13 +389,13 @@ where
 /// and times; `write_diffs` handles diff consolidation.
 #[inline(never)]
 fn write_from_surveys<U: Update>(
-    updates0: &UpdatesOwned<U>,
-    updates1: &UpdatesOwned<U>,
+    updates0: &UpdatesTyped<U>,
+    updates1: &UpdatesTyped<U>,
     root_survey: &[Report],
     key_survey: &[Report],
     val_survey: &[Report],
     time_survey: &[Report],
-    output: &mut UpdatesOwned<U>,
+    output: &mut UpdatesTyped<U>,
 ) {
     let view0 = updates0.view();
     let view1 = updates1.view();
@@ -642,14 +642,14 @@ pub enum Report {
     Both(usize, usize),
 }
 
-/// Accumulates a sequence of `UpdatesOwned` chunks, merging the tail when a new
+/// Accumulates a sequence of `UpdatesTyped` chunks, merging the tail when a new
 /// chunk would extend the current run rather than start a new one.
-pub struct ChainBuilder<U: super::super::layout::ColumnarUpdate> { updates: Vec<UpdatesOwned<U>> }
+pub struct ChainBuilder<U: super::super::layout::ColumnarUpdate> { updates: Vec<UpdatesTyped<U>> }
 
 impl<U: super::super::layout::ColumnarUpdate> Default for ChainBuilder<U> { fn default() -> Self { Self { updates: Default::default() } } }
 
 impl<U: super::super::layout::ColumnarUpdate> ChainBuilder<U> {
-    fn push(&mut self, mut link: UpdatesOwned<U>) {
+    fn push(&mut self, mut link: UpdatesTyped<U>) {
         link = link.filter_zero();
         if link.len() > 0 {
             if let Some(last) = self.updates.last_mut() {
@@ -664,6 +664,6 @@ impl<U: super::super::layout::ColumnarUpdate> ChainBuilder<U> {
             else { self.updates.push(link); }
         }
     }
-    fn extend(&mut self, iter: impl IntoIterator<Item=UpdatesOwned<U>>) { for link in iter { self.push(link); }}
-    fn done(self) -> Vec<UpdatesOwned<U>> { self.updates }
+    fn extend(&mut self, iter: impl IntoIterator<Item=UpdatesTyped<U>>) { for link in iter { self.push(link); }}
+    fn done(self) -> Vec<UpdatesTyped<U>> { self.updates }
 }

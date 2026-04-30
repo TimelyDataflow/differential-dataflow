@@ -4,7 +4,7 @@
 //! changes; do not rely on stability across releases.
 //!
 //! Known rough edges:
-//! - `ContainerBytes` for `RecordedUpdates` and `UpdatesOwned` is `unimplemented!()`;
+//! - `ContainerBytes` for `RecordedUpdates` and `UpdatesTyped` is `unimplemented!()`;
 //!   multi-process dataflows that exchange these containers will panic.
 //! - `leave_dynamic` consolidates eagerly on each batch; the
 //!   [`crate::dynamic`] counterpart defers consolidation. Same observable
@@ -20,7 +20,7 @@
 //!
 //! Module layout (bottom-up):
 //! - [`layout`] — `ColumnarUpdate` / `ColumnarLayout` / `OrdContainer`.
-//! - [`updates`] — `UpdatesOwned<U>` trie, `Consolidating`, `UpdatesBuilder`.
+//! - [`updates`] — `UpdatesTyped<U>` trie, `Consolidating`, `UpdatesBuilder`.
 //! - [`builder`] — `ValColBuilder`: the input-side `ContainerBuilder`.
 //! - [`exchange`] — `ValPact` / `ValDistributor`: PACT for shuffling.
 //! - [`arrangement`] — type aliases + `Coltainer` + `TrieChunker` +
@@ -36,7 +36,7 @@ pub mod builder;
 pub mod exchange;
 pub mod arrangement;
 
-pub use updates::UpdatesOwned;
+pub use updates::UpdatesTyped;
 pub use builder::ValBuilder as ValColBuilder;
 pub use exchange::ValPact;
 pub use arrangement::{ValBatcher, ValBuilder, ValSpine};
@@ -46,7 +46,7 @@ pub const LINK_TARGET: usize = 64 * 1024;
 
 /// A thin wrapper around `Updates` that tracks the pre-consolidation record count
 /// for timely's exchange accounting. This wrapper is the stream container type;
-/// the `TrieChunker` strips it, passing bare `UpdatesOwned` into the merge batcher.
+/// the `TrieChunker` strips it, passing bare `UpdatesTyped` into the merge batcher.
 pub struct RecordedUpdates<U: layout::ColumnarUpdate> {
     /// The trie of `(key, val, time, diff)` updates.
     pub updates: updates::Updates<U>,
@@ -83,7 +83,7 @@ mod container_impls {
     use crate::collection::containers::{Negate, Enter, Leave, ResultsIn};
 
     use super::layout::ColumnarUpdate as Update;
-    use super::updates::UpdatesOwned;
+    use super::updates::UpdatesTyped;
     use super::RecordedUpdates;
 
     impl<U: Update<Diff: Abelian>> Negate for RecordedUpdates<U> {
@@ -181,7 +181,7 @@ mod container_impls {
             let mid = super::updates::Updates { keys, vals, times, diffs };
             // Collapse adjacent (k,v,t2) duplicates created by `to_outer`.
             RecordedUpdates {
-                updates: mid.into_owned().consolidate().into(),
+                updates: mid.into_typed().consolidate().into(),
                 records,
                 consolidated: true,
             }
@@ -193,7 +193,7 @@ mod container_impls {
             use timely::progress::PathSummary;
             // Apply results_in to each time; drop updates whose time maps to None.
             // This must rebuild the trie since some entries may be removed.
-            let mut output = UpdatesOwned::<U>::default();
+            let mut output = UpdatesTyped::<U>::default();
             let mut time_owned = U::Time::default();
             // TODO: Build all times first, and if no `None` outputs, can re-use k, v, d.
             for (k, v, t, d) in self.updates.view().iter() {

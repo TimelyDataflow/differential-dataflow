@@ -14,7 +14,7 @@ use timely::progress::Timestamp;
 use timely::worker::Worker;
 
 use super::layout::ColumnarUpdate as Update;
-use super::updates::UpdatesOwned;
+use super::updates::UpdatesTyped;
 use super::RecordedUpdates;
 
 /// Distributor that routes `RecordedUpdates` records to workers by hashing keys.
@@ -25,7 +25,7 @@ pub struct ValDistributor<U: Update, H> {
 }
 
 impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<RecordedUpdates<U>> for ValDistributor<U, H> {
-    // TODO: For unsorted UpdatesOwned (stride-1 outer keys), each key is its own outer group,
+    // TODO: For unsorted UpdatesTyped (stride-1 outer keys), each key is its own outer group,
     // so the per-group pre_lens snapshot and seal check costs O(keys × workers). Should
     // either batch keys by destination first, or detect stride-1 outer bounds and use a
     // simpler single-pass partitioning that seals once at the end.
@@ -34,7 +34,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
 
         let view = container.updates.view();
         let keys_b = view.keys;
-        let mut outputs: Vec<UpdatesOwned<U>> = (0..pushers.len()).map(|_| UpdatesOwned::default()).collect();
+        let mut outputs: Vec<UpdatesTyped<U>> = (0..pushers.len()).map(|_| UpdatesTyped::default()).collect();
 
         // Each outer key group becomes a separate run in the destination.
         for outer in 0..Len::len(&keys_b) {

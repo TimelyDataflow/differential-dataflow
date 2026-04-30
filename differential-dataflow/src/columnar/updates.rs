@@ -1,10 +1,10 @@
 //! Trie-structured update storage.
 //!
-//! `UpdatesOwned<U>` is the core trie: four nested `Lists` (keys, vals, times, diffs).
+//! `UpdatesTyped<U>` is the core trie: four nested `Lists` (keys, vals, times, diffs).
 //! `Consolidating` is a streaming consolidator over sorted `(k,v,t,d)` data.
 //! `UpdatesBuilder` melds sorted, consolidated chunks into a single trie.
 //!
-//! NOTE: `UpdatesOwned::iter` / `form` / `form_unsorted` / `consolidate` / `filter_zero`
+//! NOTE: `UpdatesTyped::iter` / `form` / `form_unsorted` / `consolidate` / `filter_zero`
 //! are escape hatches that flatten the trie. Prefer trie-native operations where
 //! possible — flattening + rebuilding is a significant cost on hot paths.
 
@@ -55,7 +55,7 @@ pub fn retain_items<'a, C: Container>(lists: <Lists<C> as Borrow>::Borrowed<'a>,
 /// one val per key, one time per val, one diff per time).
 /// A fully consolidated trie has a single outer key list, all lists sorted
 /// and deduplicated, and singleton diff lists.
-pub struct UpdatesOwned<U: Update> {
+pub struct UpdatesTyped<U: Update> {
     /// Outer key list (one entry per group of keys at the trie root).
     pub keys:  Lists<ContainerOf<U::Key>>,
     /// Per-key list of vals.
@@ -66,7 +66,7 @@ pub struct UpdatesOwned<U: Update> {
     pub diffs: Lists<ContainerOf<U::Diff>>,
 }
 
-impl<U: Update> Default for UpdatesOwned<U> {
+impl<U: Update> Default for UpdatesTyped<U> {
     fn default() -> Self {
         Self {
             keys: Default::default(),
@@ -77,13 +77,13 @@ impl<U: Update> Default for UpdatesOwned<U> {
     }
 }
 
-impl<U: Update> std::fmt::Debug for UpdatesOwned<U> {
+impl<U: Update> std::fmt::Debug for UpdatesTyped<U> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UpdatesOwned").finish()
+        f.debug_struct("UpdatesTyped").finish()
     }
 }
 
-impl<U: Update> Clone for UpdatesOwned<U> {
+impl<U: Update> Clone for UpdatesTyped<U> {
     fn clone(&self) -> Self {
         Self {
             keys: self.keys.clone(),
@@ -94,11 +94,11 @@ impl<U: Update> Clone for UpdatesOwned<U> {
     }
 }
 
-/// Borrowed view of an [`UpdatesOwned<U>`] with the same four-field shape.
+/// Borrowed view of an [`UpdatesTyped<U>`] with the same four-field shape.
 ///
-/// Reader code should consume an `UpdatesOwned` through this view rather than reading
+/// Reader code should consume an `UpdatesTyped` through this view rather than reading
 /// fields directly. This decouples readers from the storage representation: the
-/// view's shape stays the same whether the underlying `UpdatesOwned` holds owned
+/// view's shape stays the same whether the underlying `UpdatesTyped` holds owned
 /// `Lists` or (later) `Stash`-backed columns that may be borrowed from wire bytes.
 pub struct UpdatesView<'a, U: Update> {
     /// Outer key list (one entry per group of keys at the trie root).
@@ -159,7 +159,7 @@ impl<'a, U: Update> UpdatesView<'a, U> {
     }
 }
 
-impl<U: Update> UpdatesOwned<U> {
+impl<U: Update> UpdatesTyped<U> {
     /// Borrow the four columns as a single `UpdatesView`.
     pub fn view(&self) -> UpdatesView<'_, U> {
         UpdatesView {
@@ -174,7 +174,7 @@ impl<U: Update> UpdatesOwned<U> {
 /// `Stash`-backed update storage: each column may be typed (writable) or
 /// borrowed from wire bytes (read-only, zero-copy).
 ///
-/// Construction sites work in [`UpdatesOwned`]; convert via `From` at the
+/// Construction sites work in [`UpdatesTyped`]; convert via `From` at the
 /// boundary. Reader code uses [`UpdatesView`] via [`Updates::view`], which
 /// produces the same shape regardless of whether the columns are typed or
 /// borrowed.
@@ -211,8 +211,8 @@ impl<U: Update, B: Clone> Clone for Updates<U, B> {
     }
 }
 
-impl<U: Update, B> From<UpdatesOwned<U>> for Updates<U, B> {
-    fn from(owned: UpdatesOwned<U>) -> Self {
+impl<U: Update, B> From<UpdatesTyped<U>> for Updates<U, B> {
+    fn from(owned: UpdatesTyped<U>) -> Self {
         use columnar::bytes::stash::Stash;
         Self {
             keys:  Stash::Typed(owned.keys),
@@ -246,7 +246,7 @@ impl<U: Update, B: std::ops::Deref<Target = [u8]> + Clone + 'static> Updates<U, 
     /// typed `Lists`. Already-typed columns pass through with no copy.
     ///
     /// This method should be avoided unless typed containers are truly needed.
-    pub fn into_owned(mut self) -> UpdatesOwned<U> {
+    pub fn into_typed(mut self) -> UpdatesTyped<U> {
         use columnar::bytes::stash::Stash;
         self.keys.make_typed();
         self.vals.make_typed();
@@ -256,7 +256,7 @@ impl<U: Update, B: std::ops::Deref<Target = [u8]> + Clone + 'static> Updates<U, 
         let Stash::Typed(vals)  = self.vals  else { unreachable!() };
         let Stash::Typed(times) = self.times else { unreachable!() };
         let Stash::Typed(diffs) = self.diffs else { unreachable!() };
-        UpdatesOwned { keys, vals, times, diffs }
+        UpdatesTyped { keys, vals, times, diffs }
     }
 }
 
@@ -324,7 +324,7 @@ where
     }
 }
 
-impl<U: Update> UpdatesOwned<U> {
+impl<U: Update> UpdatesTyped<U> {
 
     /// Copies `other[key_range]` into self, keys and all.
     pub fn extend_from_keys(&mut self, other: UpdatesView<'_, U>, key_range: std::ops::Range<usize>) {
@@ -336,14 +336,14 @@ impl<U: Update> UpdatesOwned<U> {
         self.diffs.extend_from_self(other.diffs, time_range);
     }
 
-    /// Forms a consolidated `UpdatesOwned` trie from unsorted `(key, val, time, diff)` refs.
+    /// Forms a consolidated `UpdatesTyped` trie from unsorted `(key, val, time, diff)` refs.
     pub fn form_unsorted<'a>(unsorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
         let mut data = unsorted.collect::<Vec<_>>();
         data.sort();
         Self::form(data.into_iter())
     }
 
-    /// Forms a consolidated `UpdatesOwned` trie from sorted `(key, val, time, diff)` refs.
+    /// Forms a consolidated `UpdatesTyped` trie from sorted `(key, val, time, diff)` refs.
     pub fn form<'a>(sorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
 
         // Step 1: Streaming consolidation — accumulate diffs, drop zeros.
@@ -418,7 +418,7 @@ impl<U: Update> UpdatesOwned<U> {
             let (times, keep) = retain_items(self.times.borrow(), &keep[..]);
             let (vals, keep) = retain_items(self.vals.borrow(), &keep[..]);
             let (keys, _keep) = retain_items(self.keys.borrow(), &keep[..]);
-            UpdatesOwned {
+            UpdatesTyped {
                 keys,
                 vals,
                 times,
@@ -439,7 +439,7 @@ impl<U: Update> UpdatesOwned<U> {
 ///
 /// Each field is independently typed — columnar refs, `&Owned`, owned values,
 /// or any other type the column container accepts via its `Push` impl.
-impl<KP, VP, TP, DP, U: Update> Push<(KP, VP, TP, DP)> for UpdatesOwned<U>
+impl<KP, VP, TP, DP, U: Update> Push<(KP, VP, TP, DP)> for UpdatesTyped<U>
 where
     ContainerOf<U::Key>: Push<KP>,
     ContainerOf<U::Val>: Push<VP>,
@@ -459,13 +459,13 @@ where
 }
 
 /// PushInto for the `((K, V), T, R)` shape that reduce_trace uses.
-impl<U: Update> timely::container::PushInto<((U::Key, U::Val), U::Time, U::Diff)> for UpdatesOwned<U> {
+impl<U: Update> timely::container::PushInto<((U::Key, U::Val), U::Time, U::Diff)> for UpdatesTyped<U> {
     fn push_into(&mut self, ((key, val), time, diff): ((U::Key, U::Val), U::Time, U::Diff)) {
         self.push((&key, &val, &time, &diff));
     }
 }
 
-impl<U: Update> UpdatesOwned<U> {
+impl<U: Update> UpdatesTyped<U> {
 
     /// Iterate all `(key, val, time, diff)` entries as refs.
     pub fn iter(&self) -> impl Iterator<Item = (
@@ -478,31 +478,31 @@ impl<U: Update> UpdatesOwned<U> {
     }
 }
 
-impl<U: Update> timely::Accountable for UpdatesOwned<U> {
+impl<U: Update> timely::Accountable for UpdatesTyped<U> {
     #[inline] fn record_count(&self) -> i64 { Len::len(&self.diffs.values) as i64 }
 }
 
-impl<U: Update> timely::dataflow::channels::ContainerBytes for UpdatesOwned<U> {
+impl<U: Update> timely::dataflow::channels::ContainerBytes for UpdatesTyped<U> {
     fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
     fn length_in_bytes(&self) -> usize { unimplemented!() }
     fn into_bytes<W: std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
 }
 
-/// An incremental trie builder that accepts sorted, consolidated `UpdatesOwned` chunks
-/// and melds them into a single `UpdatesOwned` trie.
+/// An incremental trie builder that accepts sorted, consolidated `UpdatesTyped` chunks
+/// and melds them into a single `UpdatesTyped` trie.
 ///
-/// The internal `UpdatesOwned` has open (unsealed) bounds at the keys, vals, and times
+/// The internal `UpdatesTyped` has open (unsealed) bounds at the keys, vals, and times
 /// levels — the last group at each level has its values pushed but no corresponding
 /// bounds entry. `diffs.bounds` is always 1:1 with `times.values`.
 ///
-/// `meld` accepts a consolidated `UpdatesOwned` whose first `(key, val, time)` is
+/// `meld` accepts a consolidated `UpdatesTyped` whose first `(key, val, time)` is
 /// strictly greater than the builder's last `(key, val, time)`. The key and val
 /// may equal the builder's current open key/val, as long as the time is greater.
 ///
-/// `done` seals all open bounds and returns the completed `UpdatesOwned`.
+/// `done` seals all open bounds and returns the completed `UpdatesTyped`.
 pub struct UpdatesBuilder<U: Update> {
     /// Non-empty, consolidated updates.
-    updates: UpdatesOwned<U>,
+    updates: UpdatesTyped<U>,
 }
 
 impl<U: Update> UpdatesBuilder<U> {
@@ -511,7 +511,7 @@ impl<U: Update> UpdatesBuilder<U> {
     /// Unseals the last group at keys, vals, and times levels so that
     /// subsequent `meld` calls can extend the open groups.
     /// If the updates are not consolidated none of this works.
-    pub fn new_from(mut updates: UpdatesOwned<U>) -> Self {
+    pub fn new_from(mut updates: UpdatesTyped<U>) -> Self {
         use columnar::Len;
         if Len::len(&updates.keys.values) > 0 {
             updates.keys.bounds.pop();
@@ -521,13 +521,13 @@ impl<U: Update> UpdatesBuilder<U> {
         Self { updates }
     }
 
-    /// Meld a sorted, consolidated `UpdatesOwned` chunk into this builder.
+    /// Meld a sorted, consolidated `UpdatesTyped` chunk into this builder.
     ///
     /// The chunk's first `(key, val, time)` must be strictly greater than
     /// the builder's last `(key, val, time)`. Keys and vals may overlap
     /// (continue the current group), but times must be strictly increasing
     /// within the same `(key, val)`.
-    pub fn meld(&mut self, chunk: &UpdatesOwned<U>) {
+    pub fn meld(&mut self, chunk: &UpdatesTyped<U>) {
         use columnar::{Borrow, Index, Len};
 
         if chunk.len() == 0 { return; }
@@ -646,8 +646,8 @@ impl<U: Update> UpdatesBuilder<U> {
         self.updates.diffs.extend_from_self(chunk.diffs.borrow(), 0..chunk_num_times);
     }
 
-    /// Seal all open bounds and return the completed `UpdatesOwned`.
-    pub fn done(mut self) -> UpdatesOwned<U> {
+    /// Seal all open bounds and return the completed `UpdatesTyped`.
+    pub fn done(mut self) -> UpdatesTyped<U> {
         use columnar::Len;
         if Len::len(&self.updates.keys.values) > 0 {
             // Seal the open time group.
@@ -668,13 +668,13 @@ mod tests {
 
     type TestUpdate = (u64, u64, u64, i64);
 
-    fn collect(updates: &UpdatesOwned<TestUpdate>) -> Vec<(u64, u64, u64, i64)> {
+    fn collect(updates: &UpdatesTyped<TestUpdate>) -> Vec<(u64, u64, u64, i64)> {
         updates.iter().map(|(k, v, t, d)| (*k, *v, *t, *d)).collect()
     }
 
     #[test]
     fn test_push_and_consolidate_basic() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &100, &2));
         updates.push((&2, &20, &200, &5));
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn test_cancellation() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &3));
         updates.push((&1, &10, &100, &-3));
         updates.push((&2, &20, &200, &1));
@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_multiple_vals_and_times() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &200, &2));
         updates.push((&1, &20, &100, &3));
@@ -703,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_val_cancellation_propagates() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &5));
         updates.push((&1, &10, &100, &-5));
         updates.push((&1, &20, &100, &1));
@@ -712,13 +712,13 @@ mod tests {
 
     #[test]
     fn test_empty() {
-        let updates = UpdatesOwned::<TestUpdate>::default();
+        let updates = UpdatesTyped::<TestUpdate>::default();
         assert_eq!(collect(&updates.consolidate()), vec![]);
     }
 
     #[test]
     fn test_total_cancellation() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &100, &-1));
         assert_eq!(collect(&updates.consolidate()), vec![]);
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn test_unsorted_input() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&3, &30, &300, &1));
         updates.push((&1, &10, &100, &2));
         updates.push((&2, &20, &200, &3));
@@ -735,7 +735,7 @@ mod tests {
 
     #[test]
     fn test_first_key_cancels() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &5));
         updates.push((&1, &10, &100, &-5));
         updates.push((&2, &20, &200, &3));
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn test_middle_time_cancels() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &200, &2));
         updates.push((&1, &10, &200, &-2));
@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn test_first_val_cancels() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &100, &-1));
         updates.push((&1, &20, &100, &5));
@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn test_interleaved_cancellations() {
-        let mut updates = UpdatesOwned::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &100, &-1));
         updates.push((&2, &20, &200, &7));
