@@ -4,8 +4,9 @@
 //! changes; do not rely on stability across releases.
 //!
 //! Known rough edges:
-//! - `ContainerBytes` for `RecordedUpdates` and `UpdatesTyped` is `unimplemented!()`;
-//!   multi-process dataflows that exchange these containers will panic.
+//! - `ContainerBytes` for `UpdatesTyped` is `unimplemented!()`. The wire-side
+//!   container is `RecordedUpdates`, whose `ContainerBytes` is implemented;
+//!   `UpdatesTyped` is the input-builder type and isn't shipped over channels.
 //! - `leave_dynamic` consolidates eagerly on each batch; the
 //!   [`crate::dynamic`] counterpart defers consolidation. Same observable
 //!   semantics, different work distribution.
@@ -70,9 +71,57 @@ impl<U: layout::ColumnarUpdate> timely::Accountable for RecordedUpdates<U> {
 }
 
 impl<U: layout::ColumnarUpdate> timely::dataflow::channels::ContainerBytes for RecordedUpdates<U> {
-    fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
-    fn length_in_bytes(&self) -> usize { unimplemented!() }
-    fn into_bytes<W: std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
+    fn from_bytes(mut bytes: timely::bytes::arc::Bytes) -> Self {
+        // Header: records, consolidated, and four column lengths (all u64).
+        let header = bytes.extract_to(48);
+        let records       = u64::from_le_bytes(header[0..8].try_into().unwrap()) as usize;
+        let consolidated  = u64::from_le_bytes(header[8..16].try_into().unwrap()) != 0;
+        let keys_len      = u64::from_le_bytes(header[16..24].try_into().unwrap()) as usize;
+        let vals_len      = u64::from_le_bytes(header[24..32].try_into().unwrap()) as usize;
+        let times_len     = u64::from_le_bytes(header[32..40].try_into().unwrap()) as usize;
+        let diffs_len     = u64::from_le_bytes(header[40..48].try_into().unwrap()) as usize;
+        // Slice the per-column byte ranges and wrap each as `Stash::Bytes`.
+        let keys_bytes  = bytes.extract_to(keys_len);
+        let vals_bytes  = bytes.extract_to(vals_len);
+        let times_bytes = bytes.extract_to(times_len);
+        let diffs_bytes = bytes.extract_to(diffs_len);
+        use columnar::bytes::stash::Stash;
+        let keys  = Stash::try_from_bytes(keys_bytes).expect("keys decode failed");
+        let vals  = Stash::try_from_bytes(vals_bytes).expect("vals decode failed");
+        let times = Stash::try_from_bytes(times_bytes).expect("times decode failed");
+        let diffs = Stash::try_from_bytes(diffs_bytes).expect("diffs decode failed");
+        RecordedUpdates {
+            updates: updates::Updates { keys, vals, times, diffs },
+            records,
+            consolidated,
+        }
+    }
+
+    fn length_in_bytes(&self) -> usize {
+        48 + self.updates.keys.length_in_bytes()
+           + self.updates.vals.length_in_bytes()
+           + self.updates.times.length_in_bytes()
+           + self.updates.diffs.length_in_bytes()
+    }
+
+    fn into_bytes<W: std::io::Write>(&self, writer: &mut W) {
+        let keys_len  = self.updates.keys.length_in_bytes()  as u64;
+        let vals_len  = self.updates.vals.length_in_bytes()  as u64;
+        let times_len = self.updates.times.length_in_bytes() as u64;
+        let diffs_len = self.updates.diffs.length_in_bytes() as u64;
+        // Header.
+        writer.write_all(&(self.records as u64).to_le_bytes()).unwrap();
+        writer.write_all(&(self.consolidated as u64).to_le_bytes()).unwrap();
+        writer.write_all(&keys_len.to_le_bytes()).unwrap();
+        writer.write_all(&vals_len.to_le_bytes()).unwrap();
+        writer.write_all(&times_len.to_le_bytes()).unwrap();
+        writer.write_all(&diffs_len.to_le_bytes()).unwrap();
+        // Body: each Stash writes its own indexed encoding.
+        self.updates.keys.write_bytes(writer).unwrap();
+        self.updates.vals.write_bytes(writer).unwrap();
+        self.updates.times.write_bytes(writer).unwrap();
+        self.updates.diffs.write_bytes(writer).unwrap();
+    }
 }
 
 // Container trait impls for RecordedUpdates, enabling iterative scopes.
