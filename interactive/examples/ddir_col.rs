@@ -260,7 +260,7 @@ mod render {
                     let label = label.clone();
                     nodes.insert(id, Rendered::Collection(col.inspect_container(move |event| {
                         if let Ok((_time, container)) = event {
-                            for (k, v, t, d) in container.updates.iter() {
+                            for (k, v, t, d) in container.updates.view().iter() {
                                 eprintln!("  [{}] ({:?}, {:?}, {:?}, {:?})", label, <Row as Columnar>::into_owned(k), <Row as Columnar>::into_owned(v), <Time as Columnar>::into_owned(t), <Diff as Columnar>::into_owned(d));
                             }
                         }

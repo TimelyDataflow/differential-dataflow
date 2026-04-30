@@ -1,4 +1,4 @@
-//! Batch-at-a-time merging of sorted, consolidated `Updates` chains.
+//! Batch-at-a-time merging of sorted, consolidated `UpdatesTyped` chains.
 //!
 //! The core is `TrieMerger::merge_batches`, which walks pairs of chunks via
 //! `merge_batch`, building a chain of merged outputs with `ChainBuilder`.
@@ -11,9 +11,9 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 use crate::trace::implementations::merge_batcher::Merger;
 
 use super::super::layout::ColumnarUpdate as Update;
-use super::super::updates::Updates;
+use super::super::updates::UpdatesTyped;
 
-/// Merge-batcher merger that melds sorted, consolidated `Updates` tries.
+/// Merge-batcher merger that melds sorted, consolidated `UpdatesTyped` tries.
 pub struct TrieMerger<U: Update> {
     _marker: std::marker::PhantomData<U>,
 }
@@ -54,15 +54,15 @@ where
     }
 }
 
-/// Build sorted `Updates` chunks from a sorted iterator of refs,
-/// using `Updates::form` (which consolidates internally) on batches.
+/// Build sorted `UpdatesTyped` chunks from a sorted iterator of refs,
+/// using `UpdatesTyped::form` (which consolidates internally) on batches.
 fn form_chunks<'a, U: Update>(
     sorted: impl Iterator<Item = columnar::Ref<'a, super::super::updates::Tuple<U>>>,
-    output: &mut Vec<Updates<U>>,
+    output: &mut Vec<UpdatesTyped<U>>,
 ) {
     let mut sorted = sorted.peekable();
     while sorted.peek().is_some() {
-        let chunk = Updates::<U>::form((&mut sorted).take(crate::columnar::LINK_TARGET));
+        let chunk = UpdatesTyped::<U>::form((&mut sorted).take(crate::columnar::LINK_TARGET));
         if chunk.len() > 0 {
             output.push(chunk);
         }
@@ -73,15 +73,15 @@ impl<U: Update> Merger for TrieMerger<U>
 where
     U::Time: 'static,
 {
-    type Chunk = Updates<U>;
+    type Chunk = UpdatesTyped<U>;
     type Time = U::Time;
 
     fn merge(
         &mut self,
-        list1: Vec<Updates<U>>,
-        list2: Vec<Updates<U>>,
-        output: &mut Vec<Updates<U>>,
-        _stash: &mut Vec<Updates<U>>,
+        list1: Vec<UpdatesTyped<U>>,
+        list2: Vec<UpdatesTyped<U>>,
+        output: &mut Vec<UpdatesTyped<U>>,
+        _stash: &mut Vec<UpdatesTyped<U>>,
     ) {
         Self::merge_batches(list1, list2, output, _stash);
     }
@@ -95,7 +95,7 @@ where
         kept: &mut Vec<Self::Chunk>,
         _stash: &mut Vec<Self::Chunk>,
     ) {
-        use columnar::{Borrow, Container, ContainerOf, Index, Push};
+        use columnar::{Container, ContainerOf, Index, Push};
         use columnar::primitive::offsets::Strides;
         use crate::columnar::updates::{Lists, retain_items};
 
@@ -104,7 +104,8 @@ where
         let mut bitmap = Vec::new();    // update should be kept.
         for chunk in merged.drain(..) {
             bitmap.clear();
-            let times = chunk.times.values.borrow();
+            let view = chunk.view();
+            let times = view.times.values;
             for idx in 0 .. times.len() {
                 Columnar::copy_from(&mut time_owned, times.get(idx));
                 if upper.less_equal(&time_owned) {
@@ -117,16 +118,16 @@ where
             else if bitmap.iter().all(|x| !*x) { ship.push(chunk); }
             else {
 
-                let (times, temp) = retain_items::<ContainerOf<U::Time>>(chunk.times.borrow(), &bitmap[..]);
-                let (vals, temp) = retain_items::<ContainerOf<U::Val>>(chunk.vals.borrow(), &temp[..]);
-                let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(chunk.keys.borrow(), &temp[..]);
-                let d_borrow = chunk.diffs.borrow();
+                let (times, temp) = retain_items::<ContainerOf<U::Time>>(view.times, &bitmap[..]);
+                let (vals, temp) = retain_items::<ContainerOf<U::Val>>(view.vals, &temp[..]);
+                let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(view.keys, &temp[..]);
+                let d_borrow = view.diffs;
                 let mut diffs = <Lists::<ContainerOf<U::Diff>> as Container>::with_capacity_for([d_borrow].into_iter());
                 for (index, bit) in bitmap.iter().enumerate() {
                     if *bit { diffs.values.push(d_borrow.values.get(index)); }
                 }
                 diffs.bounds = Strides::new(1, times.values.len() as u64);
-                kept.push(Updates {
+                kept.push(UpdatesTyped {
                     keys,
                     vals,
                     times,
@@ -135,16 +136,16 @@ where
 
                 for bit in bitmap.iter_mut() { *bit = !*bit; }
 
-                let (times, temp) = retain_items::<ContainerOf<U::Time>>(chunk.times.borrow(), &bitmap[..]);
-                let (vals, temp) = retain_items::<ContainerOf<U::Val>>(chunk.vals.borrow(), &temp[..]);
-                let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(chunk.keys.borrow(), &temp[..]);
-                let d_borrow = chunk.diffs.borrow();
+                let (times, temp) = retain_items::<ContainerOf<U::Time>>(view.times, &bitmap[..]);
+                let (vals, temp) = retain_items::<ContainerOf<U::Val>>(view.vals, &temp[..]);
+                let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(view.keys, &temp[..]);
+                let d_borrow = view.diffs;
                 let mut diffs = <Lists::<ContainerOf<U::Diff>> as Container>::with_capacity_for([d_borrow].into_iter());
                 for (index, bit) in bitmap.iter().enumerate() {
                     if *bit { diffs.values.push(d_borrow.values.get(index)); }
                 }
                 diffs.bounds = Strides::new(1, times.values.len() as u64);
-                ship.push(Updates {
+                ship.push(UpdatesTyped {
                     keys,
                     vals,
                     times,
@@ -168,9 +169,9 @@ where
     /// Correct but slow — used as fallback.
     #[allow(dead_code)]
     fn merge_iterator(
-        list1: &[Updates<U>],
-        list2: &[Updates<U>],
-        output: &mut Vec<Updates<U>>,
+        list1: &[UpdatesTyped<U>],
+        list2: &[UpdatesTyped<U>],
+        output: &mut Vec<UpdatesTyped<U>>,
     ) {
         let iter1 = list1.iter().flat_map(|chunk| chunk.iter());
         let iter2 = list2.iter().flat_map(|chunk| chunk.iter());
@@ -186,10 +187,10 @@ where
     /// A merge implementation that operates batch-at-a-time.
     #[inline(never)]
     fn merge_batches(
-        list1: Vec<Updates<U>>,
-        list2: Vec<Updates<U>>,
-        output: &mut Vec<Updates<U>>,
-        stash: &mut Vec<Updates<U>>,
+        list1: Vec<UpdatesTyped<U>>,
+        list2: Vec<UpdatesTyped<U>>,
+        output: &mut Vec<UpdatesTyped<U>>,
+        stash: &mut Vec<UpdatesTyped<U>>,
     ) {
 
         // The design for efficient "batch" merginging of chains of links is:
@@ -227,28 +228,30 @@ where
         // TODO: create batch for the non-empty cursor.
         if let Some(((k,v,t),batch)) = cursor1 {
             let mut out_batch = stash.pop().unwrap_or_default();
-            let empty: Updates<U> = Default::default();
+            let empty: UpdatesTyped<U> = Default::default();
+            let view = batch.view();
             write_from_surveys(
                 &batch,
                 &empty,
                 &[Report::This(0, 1)],
-                &[Report::This(k, batch.keys.values.len())],
-                &[Report::This(v, batch.vals.values.len())],
-                &[Report::This(t, batch.times.values.len())],
+                &[Report::This(k, view.keys.values.len())],
+                &[Report::This(v, view.vals.values.len())],
+                &[Report::This(t, view.times.values.len())],
                 &mut out_batch,
             );
             builder.push(out_batch);
         }
         if let Some(((k,v,t),batch)) = cursor2 {
             let mut out_batch = stash.pop().unwrap_or_default();
-            let empty: Updates<U> = Default::default();
+            let empty: UpdatesTyped<U> = Default::default();
+            let view = batch.view();
             write_from_surveys(
                 &empty,
                 &batch,
                 &[Report::That(0, 1)],
-                &[Report::That(k, batch.keys.values.len())],
-                &[Report::That(v, batch.vals.values.len())],
-                &[Report::That(t, batch.times.values.len())],
+                &[Report::That(k, view.keys.values.len())],
+                &[Report::That(v, view.vals.values.len())],
+                &[Report::That(t, view.times.values.len())],
                 &mut out_batch,
             );
             builder.push(out_batch);
@@ -279,23 +282,24 @@ where
     /// cursors as part of the mapping.
     #[inline(never)]
     fn merge_batch(
-        batch1: &mut Option<((usize, usize, usize), Updates<U>)>,
-        batch2: &mut Option<((usize, usize, usize), Updates<U>)>,
+        batch1: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
+        batch2: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
         builder: &mut ChainBuilder<U>,
-        stash: &mut Vec<Updates<U>>,
+        stash: &mut Vec<UpdatesTyped<U>>,
     ) {
         // TODO: Optimization for one batch exceeding the other.
 
         let ((k0_idx, v0_idx, t0_idx), updates0) = batch1.take().unwrap();
         let ((k1_idx, v1_idx, t1_idx), updates1) = batch2.take().unwrap();
 
-        use columnar::Borrow;
-        let keys0 = updates0.keys.borrow();
-        let keys1 = updates1.keys.borrow();
-        let vals0 = updates0.vals.borrow();
-        let vals1 = updates1.vals.borrow();
-        let times0 = updates0.times.borrow();
-        let times1 = updates1.times.borrow();
+        let view0 = updates0.view();
+        let view1 = updates1.view();
+        let keys0 = view0.keys;
+        let keys1 = view1.keys;
+        let vals0 = view0.vals;
+        let vals1 = view1.vals;
+        let times0 = view0.times;
+        let times1 = view1.times;
 
         // Survey the interleaving of the two inputs.
         let mut key_survey = survey::<columnar::ContainerOf<U::Key>>(keys0, keys1, &[Report::Both(0,0)]);
@@ -385,20 +389,20 @@ where
 /// and times; `write_diffs` handles diff consolidation.
 #[inline(never)]
 fn write_from_surveys<U: Update>(
-    updates0: &Updates<U>,
-    updates1: &Updates<U>,
+    updates0: &UpdatesTyped<U>,
+    updates1: &UpdatesTyped<U>,
     root_survey: &[Report],
     key_survey: &[Report],
     val_survey: &[Report],
     time_survey: &[Report],
-    output: &mut Updates<U>,
+    output: &mut UpdatesTyped<U>,
 ) {
-    use columnar::Borrow;
-
-    write_layer(updates0.keys.borrow(), updates1.keys.borrow(), root_survey, key_survey, &mut output.keys);
-    write_layer(updates0.vals.borrow(), updates1.vals.borrow(), key_survey, val_survey, &mut output.vals);
-    write_layer(updates0.times.borrow(), updates1.times.borrow(), val_survey, time_survey, &mut output.times);
-    write_diffs::<U>(updates0.diffs.borrow(), updates1.diffs.borrow(), time_survey, &mut output.diffs);
+    let view0 = updates0.view();
+    let view1 = updates1.view();
+    write_layer(view0.keys, view1.keys, root_survey, key_survey, &mut output.keys);
+    write_layer(view0.vals, view1.vals, key_survey, val_survey, &mut output.vals);
+    write_layer(view0.times, view1.times, val_survey, time_survey, &mut output.times);
+    write_diffs::<U>(view0.diffs, view1.diffs, time_survey, &mut output.diffs);
 }
 
 /// From two sequences of interleaved lists, map out the interleaving of their values.
@@ -638,14 +642,14 @@ pub enum Report {
     Both(usize, usize),
 }
 
-/// Accumulates a sequence of `Updates` chunks, merging the tail when a new
+/// Accumulates a sequence of `UpdatesTyped` chunks, merging the tail when a new
 /// chunk would extend the current run rather than start a new one.
-pub struct ChainBuilder<U: super::super::layout::ColumnarUpdate> { updates: Vec<Updates<U>> }
+pub struct ChainBuilder<U: super::super::layout::ColumnarUpdate> { updates: Vec<UpdatesTyped<U>> }
 
 impl<U: super::super::layout::ColumnarUpdate> Default for ChainBuilder<U> { fn default() -> Self { Self { updates: Default::default() } } }
 
 impl<U: super::super::layout::ColumnarUpdate> ChainBuilder<U> {
-    fn push(&mut self, mut link: Updates<U>) {
+    fn push(&mut self, mut link: UpdatesTyped<U>) {
         link = link.filter_zero();
         if link.len() > 0 {
             if let Some(last) = self.updates.last_mut() {
@@ -660,6 +664,6 @@ impl<U: super::super::layout::ColumnarUpdate> ChainBuilder<U> {
             else { self.updates.push(link); }
         }
     }
-    fn extend(&mut self, iter: impl IntoIterator<Item=Updates<U>>) { for link in iter { self.push(link); }}
-    fn done(self) -> Vec<Updates<U>> { self.updates }
+    fn extend(&mut self, iter: impl IntoIterator<Item=UpdatesTyped<U>>) { for link in iter { self.push(link); }}
+    fn done(self) -> Vec<UpdatesTyped<U>> { self.updates }
 }

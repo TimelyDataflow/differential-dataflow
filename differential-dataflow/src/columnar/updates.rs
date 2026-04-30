@@ -1,10 +1,10 @@
 //! Trie-structured update storage.
 //!
-//! `Updates<U>` is the core trie: four nested `Lists` (keys, vals, times, diffs).
+//! `UpdatesTyped<U>` is the core trie: four nested `Lists` (keys, vals, times, diffs).
 //! `Consolidating` is a streaming consolidator over sorted `(k,v,t,d)` data.
 //! `UpdatesBuilder` melds sorted, consolidated chunks into a single trie.
 //!
-//! NOTE: `Updates::iter` / `form` / `form_unsorted` / `consolidate` / `filter_zero`
+//! NOTE: `UpdatesTyped::iter` / `form` / `form_unsorted` / `consolidate` / `filter_zero`
 //! are escape hatches that flatten the trie. Prefer trie-native operations where
 //! possible — flattening + rebuilding is a significant cost on hot paths.
 
@@ -55,7 +55,7 @@ pub fn retain_items<'a, C: Container>(lists: <Lists<C> as Borrow>::Borrowed<'a>,
 /// one val per key, one time per val, one diff per time).
 /// A fully consolidated trie has a single outer key list, all lists sorted
 /// and deduplicated, and singleton diff lists.
-pub struct Updates<U: Update> {
+pub struct UpdatesTyped<U: Update> {
     /// Outer key list (one entry per group of keys at the trie root).
     pub keys:  Lists<ContainerOf<U::Key>>,
     /// Per-key list of vals.
@@ -66,7 +66,7 @@ pub struct Updates<U: Update> {
     pub diffs: Lists<ContainerOf<U::Diff>>,
 }
 
-impl<U: Update> Default for Updates<U> {
+impl<U: Update> Default for UpdatesTyped<U> {
     fn default() -> Self {
         Self {
             keys: Default::default(),
@@ -77,13 +77,13 @@ impl<U: Update> Default for Updates<U> {
     }
 }
 
-impl<U: Update> std::fmt::Debug for Updates<U> {
+impl<U: Update> std::fmt::Debug for UpdatesTyped<U> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Updates").finish()
+        f.debug_struct("UpdatesTyped").finish()
     }
 }
 
-impl<U: Update> Clone for Updates<U> {
+impl<U: Update> Clone for UpdatesTyped<U> {
     fn clone(&self) -> Self {
         Self {
             keys: self.keys.clone(),
@@ -91,6 +91,172 @@ impl<U: Update> Clone for Updates<U> {
             times: self.times.clone(),
             diffs: self.diffs.clone(),
         }
+    }
+}
+
+/// Borrowed view of an [`UpdatesTyped<U>`] with the same four-field shape.
+///
+/// Reader code should consume an `UpdatesTyped` through this view rather than reading
+/// fields directly. This decouples readers from the storage representation: the
+/// view's shape stays the same whether the underlying `UpdatesTyped` holds owned
+/// `Lists` or (later) `Stash`-backed columns that may be borrowed from wire bytes.
+pub struct UpdatesView<'a, U: Update> {
+    /// Outer key list (one entry per group of keys at the trie root).
+    pub keys:  <Lists<ContainerOf<U::Key>>  as Borrow>::Borrowed<'a>,
+    /// Per-key list of vals.
+    pub vals:  <Lists<ContainerOf<U::Val>>  as Borrow>::Borrowed<'a>,
+    /// Per-val list of times.
+    pub times: <Lists<ContainerOf<U::Time>> as Borrow>::Borrowed<'a>,
+    /// Per-time list of diffs.
+    pub diffs: <Lists<ContainerOf<U::Diff>> as Borrow>::Borrowed<'a>,
+}
+
+impl<'a, U: Update> Copy for UpdatesView<'a, U> {}
+impl<'a, U: Update> Clone for UpdatesView<'a, U> { fn clone(&self) -> Self { *self } }
+
+impl<'a, U: Update> UpdatesView<'a, U> {
+    /// Iterate all `(key, val, time, diff)` entries as refs.
+    pub fn iter(self) -> impl Iterator<Item = (
+        columnar::Ref<'a, U::Key>,
+        columnar::Ref<'a, U::Val>,
+        columnar::Ref<'a, U::Time>,
+        columnar::Ref<'a, U::Diff>,
+    )> {
+        let UpdatesView { keys, vals, times, diffs } = self;
+        (0..Len::len(&keys))
+            .flat_map(move |outer| child_range(keys.bounds, outer))
+            .flat_map(move |k| {
+                let key = keys.values.get(k);
+                child_range(vals.bounds, k).map(move |v| (key, v))
+            })
+            .flat_map(move |(key, v)| {
+                let val = vals.values.get(v);
+                child_range(times.bounds, v).map(move |t| (key, val, t))
+            })
+            .flat_map(move |(key, val, t)| {
+                let time = times.values.get(t);
+                child_range(diffs.bounds, t).map(move |d| (key, val, time, diffs.values.get(d)))
+            })
+    }
+
+    /// Translate a key-range into the corresponding val-range via `vals.bounds`.
+    pub fn vals_bounds(self, key_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        if !key_range.is_empty() {
+            let bounds = self.vals.bounds;
+            let lower = if key_range.start == 0 { 0 } else { bounds.index_as(key_range.start - 1) as usize };
+            let upper = bounds.index_as(key_range.end - 1) as usize;
+            lower..upper
+        } else { key_range }
+    }
+    /// Translate a val-range into the corresponding time-range via `times.bounds`.
+    pub fn times_bounds(self, val_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        if !val_range.is_empty() {
+            let bounds = self.times.bounds;
+            let lower = if val_range.start == 0 { 0 } else { bounds.index_as(val_range.start - 1) as usize };
+            let upper = bounds.index_as(val_range.end - 1) as usize;
+            lower..upper
+        } else { val_range }
+    }
+}
+
+impl<U: Update> UpdatesTyped<U> {
+    /// Borrow the four columns as a single `UpdatesView`.
+    pub fn view(&self) -> UpdatesView<'_, U> {
+        UpdatesView {
+            keys:  self.keys.borrow(),
+            vals:  self.vals.borrow(),
+            times: self.times.borrow(),
+            diffs: self.diffs.borrow(),
+        }
+    }
+}
+
+/// `Stash`-backed update storage: each column may be typed (writable) or
+/// borrowed from wire bytes (read-only, zero-copy).
+///
+/// Construction sites work in [`UpdatesTyped`]; convert via `From` at the
+/// boundary. Reader code uses [`UpdatesView`] via [`Updates::view`], which
+/// produces the same shape regardless of whether the columns are typed or
+/// borrowed.
+pub struct Updates<U: Update, B = timely::bytes::arc::Bytes> {
+    /// Outer key list (one entry per group of keys at the trie root).
+    pub keys:  columnar::bytes::stash::Stash<Lists<ContainerOf<U::Key>>,  B>,
+    /// Per-key list of vals.
+    pub vals:  columnar::bytes::stash::Stash<Lists<ContainerOf<U::Val>>,  B>,
+    /// Per-val list of times.
+    pub times: columnar::bytes::stash::Stash<Lists<ContainerOf<U::Time>>, B>,
+    /// Per-time list of diffs.
+    pub diffs: columnar::bytes::stash::Stash<Lists<ContainerOf<U::Diff>>, B>,
+}
+
+impl<U: Update, B> Default for Updates<U, B> {
+    fn default() -> Self {
+        Self {
+            keys:  Default::default(),
+            vals:  Default::default(),
+            times: Default::default(),
+            diffs: Default::default(),
+        }
+    }
+}
+
+impl<U: Update, B: Clone> Clone for Updates<U, B> {
+    fn clone(&self) -> Self {
+        Self {
+            keys:  self.keys.clone(),
+            vals:  self.vals.clone(),
+            times: self.times.clone(),
+            diffs: self.diffs.clone(),
+        }
+    }
+}
+
+impl<U: Update, B> From<UpdatesTyped<U>> for Updates<U, B> {
+    fn from(owned: UpdatesTyped<U>) -> Self {
+        use columnar::bytes::stash::Stash;
+        Self {
+            keys:  Stash::Typed(owned.keys),
+            vals:  Stash::Typed(owned.vals),
+            times: Stash::Typed(owned.times),
+            diffs: Stash::Typed(owned.diffs),
+        }
+    }
+}
+
+impl<U: Update, B: std::ops::Deref<Target = [u8]> + Clone + 'static> Updates<U, B> {
+    /// Borrow the four columns as a single `UpdatesView`.
+    pub fn view(&self) -> UpdatesView<'_, U> {
+        UpdatesView {
+            keys:  self.keys.borrow(),
+            vals:  self.vals.borrow(),
+            times: self.times.borrow(),
+            diffs: self.diffs.borrow(),
+        }
+    }
+
+    /// Total number of updates (records) in the trie.
+    pub fn len(&self) -> usize {
+        self.view().diffs.values.len()
+    }
+
+    /// Whether the trie is empty.
+    pub fn is_empty(&self) -> bool { self.len() == 0 }
+
+    /// Convert to fully owned form, copying any `Stash::Bytes` columns into
+    /// typed `Lists`. Already-typed columns pass through with no copy.
+    ///
+    /// This method should be avoided unless typed containers are truly needed.
+    pub fn into_typed(mut self) -> UpdatesTyped<U> {
+        use columnar::bytes::stash::Stash;
+        self.keys.make_typed();
+        self.vals.make_typed();
+        self.times.make_typed();
+        self.diffs.make_typed();
+        let Stash::Typed(keys)  = self.keys  else { unreachable!() };
+        let Stash::Typed(vals)  = self.vals  else { unreachable!() };
+        let Stash::Typed(times) = self.times else { unreachable!() };
+        let Stash::Typed(diffs) = self.diffs else { unreachable!() };
+        UpdatesTyped { keys, vals, times, diffs }
     }
 }
 
@@ -158,45 +324,26 @@ where
     }
 }
 
-impl<U: Update> Updates<U> {
-
-    /// Translate a key-range into the corresponding val-range via `vals.bounds`.
-    pub fn vals_bounds(&self, key_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
-        if !key_range.is_empty() {
-            let bounds = self.vals.bounds.borrow();
-            let lower = if key_range.start == 0 { 0 } else { bounds.index_as(key_range.start - 1) as usize };
-            let upper = bounds.index_as(key_range.end - 1) as usize;
-            lower..upper
-        } else { key_range }
-    }
-    /// Translate a val-range into the corresponding time-range via `times.bounds`.
-    pub fn times_bounds(&self, val_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
-        if !val_range.is_empty() {
-            let bounds = self.times.bounds.borrow();
-            let lower = if val_range.start == 0 { 0 } else { bounds.index_as(val_range.start - 1) as usize };
-            let upper = bounds.index_as(val_range.end - 1) as usize;
-            lower..upper
-        } else { val_range }
-    }
+impl<U: Update> UpdatesTyped<U> {
 
     /// Copies `other[key_range]` into self, keys and all.
-    pub fn extend_from_keys(&mut self, other: &Self, key_range: std::ops::Range<usize>) {
-        self.keys.values.extend_from_self(other.keys.values.borrow(), key_range.clone());
-        self.vals.extend_from_self(other.vals.borrow(), key_range.clone());
+    pub fn extend_from_keys(&mut self, other: UpdatesView<'_, U>, key_range: std::ops::Range<usize>) {
+        self.keys.values.extend_from_self(other.keys.values, key_range.clone());
+        self.vals.extend_from_self(other.vals, key_range.clone());
         let val_range = other.vals_bounds(key_range);
-        self.times.extend_from_self(other.times.borrow(), val_range.clone());
+        self.times.extend_from_self(other.times, val_range.clone());
         let time_range = other.times_bounds(val_range);
-        self.diffs.extend_from_self(other.diffs.borrow(), time_range);
+        self.diffs.extend_from_self(other.diffs, time_range);
     }
 
-    /// Forms a consolidated `Updates` trie from unsorted `(key, val, time, diff)` refs.
+    /// Forms a consolidated `UpdatesTyped` trie from unsorted `(key, val, time, diff)` refs.
     pub fn form_unsorted<'a>(unsorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
         let mut data = unsorted.collect::<Vec<_>>();
         data.sort();
         Self::form(data.into_iter())
     }
 
-    /// Forms a consolidated `Updates` trie from sorted `(key, val, time, diff)` refs.
+    /// Forms a consolidated `UpdatesTyped` trie from sorted `(key, val, time, diff)` refs.
     pub fn form<'a>(sorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
 
         // Step 1: Streaming consolidation — accumulate diffs, drop zeros.
@@ -271,7 +418,7 @@ impl<U: Update> Updates<U> {
             let (times, keep) = retain_items(self.times.borrow(), &keep[..]);
             let (vals, keep) = retain_items(self.vals.borrow(), &keep[..]);
             let (keys, _keep) = retain_items(self.keys.borrow(), &keep[..]);
-            Updates {
+            UpdatesTyped {
                 keys,
                 vals,
                 times,
@@ -292,7 +439,7 @@ impl<U: Update> Updates<U> {
 ///
 /// Each field is independently typed — columnar refs, `&Owned`, owned values,
 /// or any other type the column container accepts via its `Push` impl.
-impl<KP, VP, TP, DP, U: Update> Push<(KP, VP, TP, DP)> for Updates<U>
+impl<KP, VP, TP, DP, U: Update> Push<(KP, VP, TP, DP)> for UpdatesTyped<U>
 where
     ContainerOf<U::Key>: Push<KP>,
     ContainerOf<U::Val>: Push<VP>,
@@ -312,13 +459,13 @@ where
 }
 
 /// PushInto for the `((K, V), T, R)` shape that reduce_trace uses.
-impl<U: Update> timely::container::PushInto<((U::Key, U::Val), U::Time, U::Diff)> for Updates<U> {
+impl<U: Update> timely::container::PushInto<((U::Key, U::Val), U::Time, U::Diff)> for UpdatesTyped<U> {
     fn push_into(&mut self, ((key, val), time, diff): ((U::Key, U::Val), U::Time, U::Diff)) {
         self.push((&key, &val, &time, &diff));
     }
 }
 
-impl<U: Update> Updates<U> {
+impl<U: Update> UpdatesTyped<U> {
 
     /// Iterate all `(key, val, time, diff)` entries as refs.
     pub fn iter(&self) -> impl Iterator<Item = (
@@ -327,53 +474,35 @@ impl<U: Update> Updates<U> {
         columnar::Ref<'_, U::Time>,
         columnar::Ref<'_, U::Diff>,
     )> {
-        let keys_b = self.keys.borrow();
-        let vals_b = self.vals.borrow();
-        let times_b = self.times.borrow();
-        let diffs_b = self.diffs.borrow();
-
-        (0..Len::len(&keys_b))
-            .flat_map(move |outer| child_range(keys_b.bounds, outer))
-            .flat_map(move |k| {
-                let key = keys_b.values.get(k);
-                child_range(vals_b.bounds, k).map(move |v| (key, v))
-            })
-            .flat_map(move |(key, v)| {
-                let val = vals_b.values.get(v);
-                child_range(times_b.bounds, v).map(move |t| (key, val, t))
-            })
-            .flat_map(move |(key, val, t)| {
-                let time = times_b.values.get(t);
-                child_range(diffs_b.bounds, t).map(move |d| (key, val, time, diffs_b.values.get(d)))
-            })
+        self.view().iter()
     }
 }
 
-impl<U: Update> timely::Accountable for Updates<U> {
+impl<U: Update> timely::Accountable for UpdatesTyped<U> {
     #[inline] fn record_count(&self) -> i64 { Len::len(&self.diffs.values) as i64 }
 }
 
-impl<U: Update> timely::dataflow::channels::ContainerBytes for Updates<U> {
+impl<U: Update> timely::dataflow::channels::ContainerBytes for UpdatesTyped<U> {
     fn from_bytes(_bytes: timely::bytes::arc::Bytes) -> Self { unimplemented!() }
     fn length_in_bytes(&self) -> usize { unimplemented!() }
     fn into_bytes<W: std::io::Write>(&self, _writer: &mut W) { unimplemented!() }
 }
 
-/// An incremental trie builder that accepts sorted, consolidated `Updates` chunks
-/// and melds them into a single `Updates` trie.
+/// An incremental trie builder that accepts sorted, consolidated `UpdatesTyped` chunks
+/// and melds them into a single `UpdatesTyped` trie.
 ///
-/// The internal `Updates` has open (unsealed) bounds at the keys, vals, and times
+/// The internal `UpdatesTyped` has open (unsealed) bounds at the keys, vals, and times
 /// levels — the last group at each level has its values pushed but no corresponding
 /// bounds entry. `diffs.bounds` is always 1:1 with `times.values`.
 ///
-/// `meld` accepts a consolidated `Updates` whose first `(key, val, time)` is
+/// `meld` accepts a consolidated `UpdatesTyped` whose first `(key, val, time)` is
 /// strictly greater than the builder's last `(key, val, time)`. The key and val
 /// may equal the builder's current open key/val, as long as the time is greater.
 ///
-/// `done` seals all open bounds and returns the completed `Updates`.
+/// `done` seals all open bounds and returns the completed `UpdatesTyped`.
 pub struct UpdatesBuilder<U: Update> {
     /// Non-empty, consolidated updates.
-    updates: Updates<U>,
+    updates: UpdatesTyped<U>,
 }
 
 impl<U: Update> UpdatesBuilder<U> {
@@ -382,7 +511,7 @@ impl<U: Update> UpdatesBuilder<U> {
     /// Unseals the last group at keys, vals, and times levels so that
     /// subsequent `meld` calls can extend the open groups.
     /// If the updates are not consolidated none of this works.
-    pub fn new_from(mut updates: Updates<U>) -> Self {
+    pub fn new_from(mut updates: UpdatesTyped<U>) -> Self {
         use columnar::Len;
         if Len::len(&updates.keys.values) > 0 {
             updates.keys.bounds.pop();
@@ -392,13 +521,13 @@ impl<U: Update> UpdatesBuilder<U> {
         Self { updates }
     }
 
-    /// Meld a sorted, consolidated `Updates` chunk into this builder.
+    /// Meld a sorted, consolidated `UpdatesTyped` chunk into this builder.
     ///
     /// The chunk's first `(key, val, time)` must be strictly greater than
     /// the builder's last `(key, val, time)`. Keys and vals may overlap
     /// (continue the current group), but times must be strictly increasing
     /// within the same `(key, val)`.
-    pub fn meld(&mut self, chunk: &Updates<U>) {
+    pub fn meld(&mut self, chunk: &UpdatesTyped<U>) {
         use columnar::{Borrow, Index, Len};
 
         if chunk.len() == 0 { return; }
@@ -517,8 +646,8 @@ impl<U: Update> UpdatesBuilder<U> {
         self.updates.diffs.extend_from_self(chunk.diffs.borrow(), 0..chunk_num_times);
     }
 
-    /// Seal all open bounds and return the completed `Updates`.
-    pub fn done(mut self) -> Updates<U> {
+    /// Seal all open bounds and return the completed `UpdatesTyped`.
+    pub fn done(mut self) -> UpdatesTyped<U> {
         use columnar::Len;
         if Len::len(&self.updates.keys.values) > 0 {
             // Seal the open time group.
@@ -539,13 +668,13 @@ mod tests {
 
     type TestUpdate = (u64, u64, u64, i64);
 
-    fn collect(updates: &Updates<TestUpdate>) -> Vec<(u64, u64, u64, i64)> {
+    fn collect(updates: &UpdatesTyped<TestUpdate>) -> Vec<(u64, u64, u64, i64)> {
         updates.iter().map(|(k, v, t, d)| (*k, *v, *t, *d)).collect()
     }
 
     #[test]
     fn test_push_and_consolidate_basic() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &100, &2));
         updates.push((&2, &20, &200, &5));
@@ -555,7 +684,7 @@ mod tests {
 
     #[test]
     fn test_cancellation() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &3));
         updates.push((&1, &10, &100, &-3));
         updates.push((&2, &20, &200, &1));
@@ -564,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_multiple_vals_and_times() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &200, &2));
         updates.push((&1, &20, &100, &3));
@@ -574,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_val_cancellation_propagates() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &5));
         updates.push((&1, &10, &100, &-5));
         updates.push((&1, &20, &100, &1));
@@ -583,13 +712,13 @@ mod tests {
 
     #[test]
     fn test_empty() {
-        let updates = Updates::<TestUpdate>::default();
+        let updates = UpdatesTyped::<TestUpdate>::default();
         assert_eq!(collect(&updates.consolidate()), vec![]);
     }
 
     #[test]
     fn test_total_cancellation() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &100, &-1));
         assert_eq!(collect(&updates.consolidate()), vec![]);
@@ -597,7 +726,7 @@ mod tests {
 
     #[test]
     fn test_unsorted_input() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&3, &30, &300, &1));
         updates.push((&1, &10, &100, &2));
         updates.push((&2, &20, &200, &3));
@@ -606,7 +735,7 @@ mod tests {
 
     #[test]
     fn test_first_key_cancels() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &5));
         updates.push((&1, &10, &100, &-5));
         updates.push((&2, &20, &200, &3));
@@ -615,7 +744,7 @@ mod tests {
 
     #[test]
     fn test_middle_time_cancels() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &200, &2));
         updates.push((&1, &10, &200, &-2));
@@ -625,7 +754,7 @@ mod tests {
 
     #[test]
     fn test_first_val_cancels() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &100, &-1));
         updates.push((&1, &20, &100, &5));
@@ -634,7 +763,7 @@ mod tests {
 
     #[test]
     fn test_interleaved_cancellations() {
-        let mut updates = Updates::<TestUpdate>::default();
+        let mut updates = UpdatesTyped::<TestUpdate>::default();
         updates.push((&1, &10, &100, &1));
         updates.push((&1, &10, &100, &-1));
         updates.push((&2, &20, &200, &7));

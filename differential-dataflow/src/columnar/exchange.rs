@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use columnar::{Borrow, Index, Len};
+use columnar::{Index, Len};
 use timely::logging::TimelyLogger;
 use timely::dataflow::channels::pushers::{Exchange, exchange::Distributor};
 use timely::dataflow::channels::Message;
@@ -14,7 +14,7 @@ use timely::progress::Timestamp;
 use timely::worker::Worker;
 
 use super::layout::ColumnarUpdate as Update;
-use super::updates::Updates;
+use super::updates::UpdatesTyped;
 use super::RecordedUpdates;
 
 /// Distributor that routes `RecordedUpdates` records to workers by hashing keys.
@@ -25,15 +25,16 @@ pub struct ValDistributor<U: Update, H> {
 }
 
 impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<RecordedUpdates<U>> for ValDistributor<U, H> {
-    // TODO: For unsorted Updates (stride-1 outer keys), each key is its own outer group,
+    // TODO: For unsorted UpdatesTyped (stride-1 outer keys), each key is its own outer group,
     // so the per-group pre_lens snapshot and seal check costs O(keys × workers). Should
     // either batch keys by destination first, or detect stride-1 outer bounds and use a
     // simpler single-pass partitioning that seals once at the end.
     fn partition<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, container: &mut RecordedUpdates<U>, time: &T, pushers: &mut [P]) {
         use super::updates::child_range;
 
-        let keys_b = container.updates.keys.borrow();
-        let mut outputs: Vec<Updates<U>> = (0..pushers.len()).map(|_| Updates::default()).collect();
+        let view = container.updates.view();
+        let keys_b = view.keys;
+        let mut outputs: Vec<UpdatesTyped<U>> = (0..pushers.len()).map(|_| UpdatesTyped::default()).collect();
 
         // Each outer key group becomes a separate run in the destination.
         for outer in 0..Len::len(&keys_b) {
@@ -45,7 +46,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
                     let key = keys_b.values.get(k);
                     let h = (self.hashfunc)(key);
                     let idx = (h & mask) as usize;
-                    outputs[idx].extend_from_keys(&container.updates, k..k+1);
+                    outputs[idx].extend_from_keys(view, k..k+1);
                 }
             }
             else {
@@ -54,7 +55,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
                     let key = keys_b.values.get(k);
                     let h = (self.hashfunc)(key);
                     let idx = (h % pushers_len) as usize;
-                    outputs[idx].extend_from_keys(&container.updates, k..k+1);
+                    outputs[idx].extend_from_keys(view, k..k+1);
                 }
             }
             for (output, &pre) in outputs.iter_mut().zip(self.pre_lens.iter()) {
@@ -70,7 +71,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
         let mut first_records = total_records.saturating_sub(non_empty.saturating_sub(1));
         for (pusher, output) in pushers.iter_mut().zip(outputs) {
             if !output.keys.values.is_empty() {
-                let recorded = RecordedUpdates { updates: output, records: first_records, consolidated: container.consolidated };
+                let recorded = RecordedUpdates { updates: output.into(), records: first_records, consolidated: container.consolidated };
                 first_records = 1;
                 let mut recorded = recorded;
                 Message::push_at(&mut recorded, time.clone(), pusher);
