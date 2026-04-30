@@ -193,12 +193,10 @@ mod container_impls {
             use timely::progress::PathSummary;
             // Apply results_in to each time; drop updates whose time maps to None.
             // This must rebuild the trie since some entries may be removed.
-            let RecordedUpdates { updates, records, consolidated: _ } = self;
-            let owned = updates.into_owned();
             let mut output = UpdatesOwned::<U>::default();
             let mut time_owned = U::Time::default();
             // TODO: Build all times first, and if no `None` outputs, can re-use k, v, d.
-            for (k, v, t, d) in owned.iter() {
+            for (k, v, t, d) in self.updates.view().iter() {
                 Columnar::copy_from(&mut time_owned, t);
                 if let Some(new_time) = step.results_in(&time_owned) {
                     output.push((k, v, &new_time, d));
@@ -206,7 +204,7 @@ mod container_impls {
             }
             // TODO: Time advancement may not be order preserving, but .. it could be.
             // TODO: Before this is consolidated the above would need to be `form`ed.
-            RecordedUpdates { updates: output.into(), records, consolidated: false }
+            RecordedUpdates { updates: output.into(), records: self.records, consolidated: false }
         }
     }
 }
@@ -245,8 +243,7 @@ where
                 let mut d1o = U::Diff::default();
                 input.for_each(|time, data| {
                     let mut session = output.session_with_builder(&time);
-                    let owned = std::mem::take(&mut data.updates).into_owned();
-                    for (k1, v1, t1, d1) in owned.iter() {
+                    for (k1, v1, t1, d1) in data.updates.view().iter() {
                         Columnar::copy_from(&mut t1o, t1);
                         Columnar::copy_from(&mut d1o, d1);
                         for (k2, v2, t2, d2) in logic(k1, v1, t1, d1) {
@@ -330,8 +327,7 @@ where
                 // TODO: The input trie is already sorted; a streaming form
                 // that accepts pre-sorted, potentially-collapsing timestamps
                 // could avoid the re-sort inside the builder.
-                let owned = std::mem::take(&mut data.updates).into_owned();
-                for (k, v, t, d) in owned.iter() {
+                for (k, v, t, d) in data.updates.view().iter() {
                     Columnar::copy_from(&mut time, t);
                     let mut inner_vec = std::mem::take(&mut time.inner).into_inner();
                     inner_vec.truncate(level - 1);

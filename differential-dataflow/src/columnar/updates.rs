@@ -115,6 +115,30 @@ impl<'a, U: Update> Copy for UpdatesView<'a, U> {}
 impl<'a, U: Update> Clone for UpdatesView<'a, U> { fn clone(&self) -> Self { *self } }
 
 impl<'a, U: Update> UpdatesView<'a, U> {
+    /// Iterate all `(key, val, time, diff)` entries as refs.
+    pub fn iter(self) -> impl Iterator<Item = (
+        columnar::Ref<'a, U::Key>,
+        columnar::Ref<'a, U::Val>,
+        columnar::Ref<'a, U::Time>,
+        columnar::Ref<'a, U::Diff>,
+    )> {
+        let UpdatesView { keys, vals, times, diffs } = self;
+        (0..Len::len(&keys))
+            .flat_map(move |outer| child_range(keys.bounds, outer))
+            .flat_map(move |k| {
+                let key = keys.values.get(k);
+                child_range(vals.bounds, k).map(move |v| (key, v))
+            })
+            .flat_map(move |(key, v)| {
+                let val = vals.values.get(v);
+                child_range(times.bounds, v).map(move |t| (key, val, t))
+            })
+            .flat_map(move |(key, val, t)| {
+                let time = times.values.get(t);
+                child_range(diffs.bounds, t).map(move |d| (key, val, time, diffs.values.get(d)))
+            })
+    }
+
     /// Translate a key-range into the corresponding val-range via `vals.bounds`.
     pub fn vals_bounds(self, key_range: std::ops::Range<usize>) -> std::ops::Range<usize> {
         if !key_range.is_empty() {
@@ -450,25 +474,7 @@ impl<U: Update> UpdatesOwned<U> {
         columnar::Ref<'_, U::Time>,
         columnar::Ref<'_, U::Diff>,
     )> {
-        let keys_b = self.keys.borrow();
-        let vals_b = self.vals.borrow();
-        let times_b = self.times.borrow();
-        let diffs_b = self.diffs.borrow();
-
-        (0..Len::len(&keys_b))
-            .flat_map(move |outer| child_range(keys_b.bounds, outer))
-            .flat_map(move |k| {
-                let key = keys_b.values.get(k);
-                child_range(vals_b.bounds, k).map(move |v| (key, v))
-            })
-            .flat_map(move |(key, v)| {
-                let val = vals_b.values.get(v);
-                child_range(times_b.bounds, v).map(move |t| (key, val, t))
-            })
-            .flat_map(move |(key, val, t)| {
-                let time = times_b.values.get(t);
-                child_range(diffs_b.bounds, t).map(move |d| (key, val, time, diffs_b.values.get(d)))
-            })
+        self.view().iter()
     }
 }
 
