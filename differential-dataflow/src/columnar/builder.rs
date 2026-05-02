@@ -5,7 +5,7 @@
 //! queues it. `finish` produces one final trie from any remaining tuples.
 
 use std::collections::VecDeque;
-use columnar::{Columnar, Clear, Len, Push};
+use columnar::{Clear, Columnar, Len, Push};
 
 use super::layout::ColumnarUpdate as Update;
 use super::updates::UpdatesTyped;
@@ -23,19 +23,31 @@ pub struct ValBuilder<U: Update> {
     pending: VecDeque<RecordedUpdates<U>>,
 }
 
+impl<U: Update> ValBuilder<U> {
+    /// Wrap `self.current` as a stride-1 `UpdatesTyped`, consolidate it, and queue.
+    ///
+    /// Reclaims the column allocations: takes `self.current` by value, consolidates
+    /// (which builds a fresh trie via Push), then clears the now-stale columns and
+    /// returns them to `self.current` so capacity is retained across flushes.
+    fn flush(&mut self) {
+        if self.current.len() == 0 { return; }
+        let records = self.current.len();
+        let raw: UpdatesTyped<U> = std::mem::take(&mut self.current).into();
+        let updates = raw.consolidate().into();
+        // Reclaim raw's column allocations.
+        self.current = (raw.keys.values, raw.vals.values, raw.times.values, raw.diffs.values);
+        self.current.clear();
+        self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
+    }
+}
+
 use timely::container::PushInto;
 impl<T, U: Update> PushInto<T> for ValBuilder<U> where TupleContainer<U> : Push<T> {
     #[inline]
     fn push_into(&mut self, item: T) {
         self.current.push(item);
         if self.current.len() > crate::columnar::LINK_TARGET {
-            use columnar::{Borrow, Index};
-            let records = self.current.len();
-            let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
-            refs.sort();
-            let updates = UpdatesTyped::form(refs.into_iter()).into();
-            self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
-            self.current.clear();
+            self.flush();
         }
     }
 }
@@ -56,27 +68,14 @@ impl<U: Update> ContainerBuilder for ValBuilder<U> {
 
     #[inline]
     fn extract(&mut self) -> Option<&mut Self::Container> {
-        if let Some(container) = self.pending.pop_front() {
-            self.empty = Some(container);
-            self.empty.as_mut()
-        } else {
-            None
-        }
+        self.empty = self.pending.pop_front();
+        self.empty.as_mut()
     }
 
     #[inline]
     fn finish(&mut self) -> Option<&mut Self::Container> {
-        if !self.current.is_empty() {
-            use columnar::{Borrow, Index};
-            let records = self.current.len();
-            let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
-            refs.sort();
-            let updates = UpdatesTyped::form(refs.into_iter()).into();
-            self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
-            self.current.clear();
-        }
-        self.empty = self.pending.pop_front();
-        self.empty.as_mut()
+        self.flush();
+        self.extract()
     }
 }
 
