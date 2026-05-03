@@ -37,7 +37,7 @@ where
 }
 
 /// An individual step within a Linear node.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LinearOp {
     /// Rekey/reval: project to new (key, val).
     Project(Projection),

@@ -7,7 +7,7 @@
 pub mod applicative;
 pub mod pipe;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FieldExpr {
     Pos(usize),
     Index(usize, usize),
@@ -15,13 +15,13 @@ pub enum FieldExpr {
     Neg(Box<FieldExpr>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Condition { Eq(FieldExpr, FieldExpr), Ne(FieldExpr, FieldExpr), Lt(FieldExpr, FieldExpr), Le(FieldExpr, FieldExpr), Gt(FieldExpr, FieldExpr), Ge(FieldExpr, FieldExpr) }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Projection { pub key: Vec<FieldExpr>, pub val: Vec<FieldExpr> }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Reducer { Min, Distinct, Count }
 
 #[derive(Debug, Clone)]

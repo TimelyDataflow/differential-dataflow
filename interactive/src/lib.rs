@@ -1,6 +1,18 @@
 pub mod parse;
 pub mod ir;
 pub mod lower;
+pub mod opt;
+
+/// Run the optimizer on a flat IR program. Honors the `OPTIMIZE` environment
+/// variable: set `OPTIMIZE=0` to bypass and return the input unchanged.
+/// Any other value (or unset) engages the optimizer.
+pub fn optimize(program: ir::Program) -> ir::Program {
+    let on = std::env::var("OPTIMIZE").map(|v| v != "0").unwrap_or(true);
+    if !on { return program; }
+    let mut o = opt::lift(&program);
+    o.optimize();
+    opt::lower(&o)
+}
 
 use parse::{Stmt, Expr};
 

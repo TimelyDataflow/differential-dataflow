@@ -141,7 +141,7 @@ fn render_program<'scope>(program: &Program, scope: Scope<'scope, DdirTime>, inp
 fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: u64, arity: usize, batch: u64, rounds: Option<u64>) {
     let mut compiled: Program = lower::lower(stmts);
     println!("{}: {} IR nodes (before optimize)", name, compiled.nodes.len());
-    compiled.optimize();
+    compiled = interactive::optimize(compiled);
     println!("{}: {} IR nodes (after optimize), result = {}", name, compiled.nodes.len(), compiled.result);
     compiled.dump();
     let name = name.to_string();
