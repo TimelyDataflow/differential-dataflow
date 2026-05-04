@@ -485,8 +485,13 @@
       ws.addEventListener('message', event => {
         try {
           const data = JSON.parse(event.data);
-          if (Array.isArray(data)) {
-            applyBatch(data);
+          // Wire format is one Frame envelope per WebSocket message:
+          //   { type: "Frame", ts_us: <u64>, updates: [...] }
+          // The server only emits a Frame once the capture frontier has
+          // advanced past `ts_us`, so each Frame is a complete view at that
+          // closed logical timestamp.
+          if (data && data.type === 'Frame' && Array.isArray(data.updates)) {
+            applyBatch(data.updates);
           }
         } catch (e) {
           // ignore parse errors
