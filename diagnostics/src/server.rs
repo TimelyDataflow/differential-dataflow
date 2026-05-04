@@ -62,6 +62,15 @@ impl Server {
     pub fn start(port: u16, sink: SinkHandle) -> Self {
         let handle = thread::spawn(move || run_server(port, sink));
         eprintln!("Diagnostics server on ws://localhost:{port}");
+        eprintln!("  view with one of:");
+        eprintln!(
+            "    diagnostics/index.html       — single-file UI \
+             (cd diagnostics && python3 -m http.server 8000, then open localhost:8000/index.html)"
+        );
+        eprintln!(
+            "    diagnostics/console/         — React UI \
+             (cd diagnostics/console && npm install && npm run dev)"
+        );
         Server { _handle: handle }
     }
 }
