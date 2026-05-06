@@ -219,81 +219,15 @@ pub trait Merger: Default {
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize);
 }
 
-pub use container::InternalMerger;
-
-pub mod container {
-
-    //! Merger implementations for the merge batcher.
-    //!
-    //! The `InternalMerge` trait allows containers to merge sorted, consolidated
-    //! data using internal iteration. The `InternalMerger` type implements the
-    //! `Merger` trait using `InternalMerge`, and is the standard merger for all
-    //! container types.
+/// A `Merger` implementation for vector update containers.
+pub mod vec {
 
     use std::marker::PhantomData;
     use timely::container::SizableContainer;
     use timely::progress::frontier::{Antichain, AntichainRef};
-    use timely::{Accountable, PartialOrder};
+    use timely::PartialOrder;
     use crate::trace::implementations::merge_batcher::Merger;
 
-    /// A container that supports the operations needed by the merge batcher:
-    /// merging sorted chains and extracting updates by time.
-    pub trait InternalMerge: Accountable + SizableContainer + Default {
-        /// The owned time type, for maintaining antichains.
-        type TimeOwned;
-
-        /// The number of items in this container.
-        fn len(&self) -> usize;
-
-        /// Clear the container for reuse.
-        fn clear(&mut self);
-
-        /// Account the allocations behind the chunk.
-        fn account(&self) -> (usize, usize, usize, usize) {
-            let (size, capacity, allocations) = (0, 0, 0);
-            (usize::try_from(self.record_count()).unwrap(), size, capacity, allocations)
-        }
-
-        /// Merge items from sorted inputs into `self`, advancing positions.
-        /// Merges until `self` is at capacity or all inputs are exhausted.
-        ///
-        /// Dispatches based on the number of inputs:
-        /// - **0**: no-op
-        /// - **1**: bulk copy (may swap the input into `self`)
-        /// - **2**: merge two sorted streams
-        fn merge_from(
-            &mut self,
-            others: &mut [Self],
-            positions: &mut [usize],
-        );
-
-        /// Extract updates from `self` into `ship` (times not beyond `upper`)
-        /// and `keep` (times beyond `upper`), updating `frontier` with kept times.
-        ///
-        /// Iteration starts at `*position` and advances `*position` as updates
-        /// are consumed. The implementation must yield (return early) when
-        /// either `keep.at_capacity()` or `ship.at_capacity()` becomes true,
-        /// so the caller can swap out a full output buffer and resume by
-        /// calling `extract` again. The caller invokes `extract` repeatedly
-        /// until `*position >= self.len()`.
-        ///
-        /// This shape exists because `at_capacity()` for `Vec` is
-        /// `len() == capacity()`, which silently becomes false again the
-        /// moment a push past capacity grows the backing allocation.
-        /// Without per-element yielding, a single `extract` call can
-        /// quietly produce oversized output chunks.
-        fn extract(
-            &mut self,
-            position: &mut usize,
-            upper: AntichainRef<Self::TimeOwned>,
-            frontier: &mut Antichain<Self::TimeOwned>,
-            keep: &mut Self,
-            ship: &mut Self,
-        );
-    }
-
-    /// A `Merger` for `Vec` containers, which contain owned data and need special treatment.
-    pub type VecInternalMerger<D, T, R> = VecMerger<D, T, R>;
     /// A `Merger` implementation for `Vec<(D, T, R)>` that drains owned inputs.
     pub struct VecMerger<D, T, R> {
         _marker: PhantomData<(D, T, R)>,
@@ -446,6 +380,80 @@ pub mod container {
         fn account(chunk: &Vec<(D, T, R)>) -> (usize, usize, usize, usize) {
             (chunk.len(), 0, 0, 0)
         }
+    }
+}
+
+pub use container::InternalMerger;
+
+pub mod container {
+
+    //! Merger implementations for the merge batcher.
+    //!
+    //! The `InternalMerge` trait allows containers to merge sorted, consolidated
+    //! data using internal iteration. The `InternalMerger` type implements the
+    //! `Merger` trait using `InternalMerge`, and is the standard merger for all
+    //! container types.
+
+    use std::marker::PhantomData;
+    use timely::container::SizableContainer;
+    use timely::progress::frontier::{Antichain, AntichainRef};
+    use timely::{Accountable, PartialOrder};
+    use crate::trace::implementations::merge_batcher::Merger;
+
+    /// A container that supports the operations needed by the merge batcher:
+    /// merging sorted chains and extracting updates by time.
+    pub trait InternalMerge: Accountable + SizableContainer + Default {
+        /// The owned time type, for maintaining antichains.
+        type TimeOwned;
+
+        /// The number of items in this container.
+        fn len(&self) -> usize;
+
+        /// Clear the container for reuse.
+        fn clear(&mut self);
+
+        /// Account the allocations behind the chunk.
+        fn account(&self) -> (usize, usize, usize, usize) {
+            let (size, capacity, allocations) = (0, 0, 0);
+            (usize::try_from(self.record_count()).unwrap(), size, capacity, allocations)
+        }
+
+        /// Merge items from sorted inputs into `self`, advancing positions.
+        /// Merges until `self` is at capacity or all inputs are exhausted.
+        ///
+        /// Dispatches based on the number of inputs:
+        /// - **0**: no-op
+        /// - **1**: bulk copy (may swap the input into `self`)
+        /// - **2**: merge two sorted streams
+        fn merge_from(
+            &mut self,
+            others: &mut [Self],
+            positions: &mut [usize],
+        );
+
+        /// Extract updates from `self` into `ship` (times not beyond `upper`)
+        /// and `keep` (times beyond `upper`), updating `frontier` with kept times.
+        ///
+        /// Iteration starts at `*position` and advances `*position` as updates
+        /// are consumed. The implementation must yield (return early) when
+        /// either `keep.at_capacity()` or `ship.at_capacity()` becomes true,
+        /// so the caller can swap out a full output buffer and resume by
+        /// calling `extract` again. The caller invokes `extract` repeatedly
+        /// until `*position >= self.len()`.
+        ///
+        /// This shape exists because `at_capacity()` for `Vec` is
+        /// `len() == capacity()`, which silently becomes false again the
+        /// moment a push past capacity grows the backing allocation.
+        /// Without per-element yielding, a single `extract` call can
+        /// quietly produce oversized output chunks.
+        fn extract(
+            &mut self,
+            position: &mut usize,
+            upper: AntichainRef<Self::TimeOwned>,
+            frontier: &mut Antichain<Self::TimeOwned>,
+            keep: &mut Self,
+            ship: &mut Self,
+        );
     }
 
     /// A merger that uses internal iteration via [`InternalMerge`].
