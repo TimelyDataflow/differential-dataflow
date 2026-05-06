@@ -255,17 +255,11 @@ impl<U: super::layout::ColumnarUpdate> timely::container::ContainerBuilder for T
 pub mod batcher {
     //! Batcher trait stubs required to plug `UpdatesTyped` into DD's merge batcher.
 
-    use columnar::Len;
     use timely::progress::frontier::{Antichain, AntichainRef};
     use crate::trace::implementations::merge_batcher::container::InternalMerge;
 
     use super::super::layout::ColumnarUpdate as Update;
     use super::super::updates::UpdatesTyped;
-
-    impl<U: Update> timely::container::SizableContainer for UpdatesTyped<U> {
-        fn at_capacity(&self) -> bool { self.view().diffs.values.len() >= crate::columnar::LINK_TARGET }
-        fn ensure_capacity(&mut self, _stash: &mut Option<Self>) { }
-    }
 
     /// Required by `reduce_abelian`'s bound `Builder::Input: InternalMerge`.
     /// Not called at runtime — our batcher uses `TrieMerger` instead.

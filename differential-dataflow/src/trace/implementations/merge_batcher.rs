@@ -238,7 +238,7 @@ pub mod container {
 
     /// A container that supports the operations needed by the merge batcher:
     /// merging sorted chains and extracting updates by time.
-    pub trait InternalMerge: Accountable + SizableContainer + Default {
+    pub trait InternalMerge: Accountable + Default {
         /// The owned time type, for maintaining antichains.
         type TimeOwned;
 
@@ -457,7 +457,7 @@ pub mod container {
         fn default() -> Self { Self { _marker: PhantomData } }
     }
 
-    impl<MC> InternalMerger<MC> where MC: InternalMerge {
+    impl<MC> InternalMerger<MC> where MC: InternalMerge + SizableContainer {
         #[inline]
         fn empty(&self, stash: &mut Vec<MC>) -> MC {
             stash.pop().unwrap_or_else(|| {
@@ -503,7 +503,7 @@ pub mod container {
 
     impl<MC> Merger for InternalMerger<MC>
     where
-        MC: InternalMerge<TimeOwned: Ord + PartialOrder + Clone + 'static> + 'static,
+        MC: InternalMerge<TimeOwned: Ord + PartialOrder + Clone + 'static> + SizableContainer + 'static,
     {
         type Time = MC::TimeOwned;
         type Chunk = MC;
