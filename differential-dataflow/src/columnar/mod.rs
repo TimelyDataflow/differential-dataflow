@@ -36,6 +36,7 @@ pub mod updates;
 pub mod builder;
 pub mod exchange;
 pub mod arrangement;
+pub mod batcher;
 
 pub use updates::UpdatesTyped;
 pub use builder::ValBuilder as ValColBuilder;

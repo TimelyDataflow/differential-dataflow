@@ -1,6 +1,6 @@
 //! Batch-at-a-time merging of sorted, consolidated `UpdatesTyped` chains.
 //!
-//! The core is `TrieMerger::merge_batches`, which walks pairs of chunks via
+//! The core is `merge_batches`, which walks pairs of chunks via
 //! `merge_batch`, building a chain of merged outputs with `ChainBuilder`.
 //! `survey` maps the interleaving of the two inputs at each trie layer,
 //! `write_from_surveys` (via `write_layer` and `write_diffs`) copies the
@@ -8,19 +8,9 @@
 
 use columnar::{Columnar, Len};
 use timely::progress::frontier::{Antichain, AntichainRef};
-use crate::trace::implementations::merge_batcher::Merger;
 
 use super::super::layout::ColumnarUpdate as Update;
 use super::super::updates::UpdatesTyped;
-
-/// Merge-batcher merger that melds sorted, consolidated `UpdatesTyped` tries.
-pub struct TrieMerger<U: Update> {
-    _marker: std::marker::PhantomData<U>,
-}
-
-impl<U: Update> Default for TrieMerger<U> {
-    fn default() -> Self { Self { _marker: std::marker::PhantomData } }
-}
 
 /// A merging iterator over two sorted iterators.
 struct Merging<I1: Iterator, I2: Iterator> {
@@ -69,318 +59,300 @@ fn form_chunks<'a, U: Update>(
     }
 }
 
-impl<U: Update> Merger for TrieMerger<U>
+/// Partition `merged` into chunks ready to ship (times strictly less than `upper`)
+/// and chunks kept for future seals (times at-or-after `upper`). Updates `frontier`
+/// to the antichain of kept times.
+pub fn extract<U: Update>(
+    mut merged: Vec<UpdatesTyped<U>>,
+    upper: AntichainRef<U::Time>,
+    frontier: &mut Antichain<U::Time>,
+    ship: &mut Vec<UpdatesTyped<U>>,
+    kept: &mut Vec<UpdatesTyped<U>>,
+)
 where
     U::Time: 'static,
 {
-    type Chunk = UpdatesTyped<U>;
-    type Time = U::Time;
+    use columnar::{Container, ContainerOf, Index, Push};
+    use columnar::primitive::offsets::Strides;
+    use crate::columnar::updates::{Lists, retain_items};
 
-    fn merge(
-        &mut self,
-        list1: Vec<UpdatesTyped<U>>,
-        list2: Vec<UpdatesTyped<U>>,
-        output: &mut Vec<UpdatesTyped<U>>,
-        _stash: &mut Vec<UpdatesTyped<U>>,
-    ) {
-        Self::merge_batches(list1, list2, output, _stash);
-    }
-
-    fn extract(
-        &mut self,
-        mut merged: Vec<Self::Chunk>,
-        upper: AntichainRef<Self::Time>,
-        frontier: &mut Antichain<Self::Time>,
-        ship: &mut Vec<Self::Chunk>,
-        kept: &mut Vec<Self::Chunk>,
-        _stash: &mut Vec<Self::Chunk>,
-    ) {
-        use columnar::{Container, ContainerOf, Index, Push};
-        use columnar::primitive::offsets::Strides;
-        use crate::columnar::updates::{Lists, retain_items};
-
-        // TODO: rework to move from trie structure to trie structure.
-        let mut time_owned = U::Time::default();
-        let mut bitmap = Vec::new();    // update should be kept.
-        for chunk in merged.drain(..) {
-            bitmap.clear();
-            let view = chunk.view();
-            let times = view.times.values;
-            for idx in 0 .. times.len() {
-                Columnar::copy_from(&mut time_owned, times.get(idx));
-                if upper.less_equal(&time_owned) {
-                    frontier.insert_ref(&time_owned);
-                    bitmap.push(true);
-                }
-                else { bitmap.push(false); }
+    // TODO: rework to move from trie structure to trie structure.
+    let mut time_owned = U::Time::default();
+    let mut bitmap = Vec::new();    // update should be kept.
+    for chunk in merged.drain(..) {
+        bitmap.clear();
+        let view = chunk.view();
+        let times = view.times.values;
+        for idx in 0 .. times.len() {
+            Columnar::copy_from(&mut time_owned, times.get(idx));
+            if upper.less_equal(&time_owned) {
+                frontier.insert_ref(&time_owned);
+                bitmap.push(true);
             }
-            if bitmap.iter().all(|x| *x) { kept.push(chunk); }
-            else if bitmap.iter().all(|x| !*x) { ship.push(chunk); }
-            else {
-
-                let (times, temp) = retain_items::<ContainerOf<U::Time>>(view.times, &bitmap[..]);
-                let (vals, temp) = retain_items::<ContainerOf<U::Val>>(view.vals, &temp[..]);
-                let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(view.keys, &temp[..]);
-                let d_borrow = view.diffs;
-                let mut diffs = <Lists::<ContainerOf<U::Diff>> as Container>::with_capacity_for([d_borrow].into_iter());
-                for (index, bit) in bitmap.iter().enumerate() {
-                    if *bit { diffs.values.push(d_borrow.values.get(index)); }
-                }
-                diffs.bounds = Strides::new(1, times.values.len() as u64);
-                kept.push(UpdatesTyped {
-                    keys,
-                    vals,
-                    times,
-                    diffs,
-                });
-
-                for bit in bitmap.iter_mut() { *bit = !*bit; }
-
-                let (times, temp) = retain_items::<ContainerOf<U::Time>>(view.times, &bitmap[..]);
-                let (vals, temp) = retain_items::<ContainerOf<U::Val>>(view.vals, &temp[..]);
-                let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(view.keys, &temp[..]);
-                let d_borrow = view.diffs;
-                let mut diffs = <Lists::<ContainerOf<U::Diff>> as Container>::with_capacity_for([d_borrow].into_iter());
-                for (index, bit) in bitmap.iter().enumerate() {
-                    if *bit { diffs.values.push(d_borrow.values.get(index)); }
-                }
-                diffs.bounds = Strides::new(1, times.values.len() as u64);
-                ship.push(UpdatesTyped {
-                    keys,
-                    vals,
-                    times,
-                    diffs,
-                });
-            }
+            else { bitmap.push(false); }
         }
-    }
+        if bitmap.iter().all(|x| *x) { kept.push(chunk); }
+        else if bitmap.iter().all(|x| !*x) { ship.push(chunk); }
+        else {
 
-    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
-        use timely::Accountable;
-        (chunk.record_count() as usize, 0, 0, 0)
+            let (times, temp) = retain_items::<ContainerOf<U::Time>>(view.times, &bitmap[..]);
+            let (vals, temp) = retain_items::<ContainerOf<U::Val>>(view.vals, &temp[..]);
+            let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(view.keys, &temp[..]);
+            let d_borrow = view.diffs;
+            let mut diffs = <Lists::<ContainerOf<U::Diff>> as Container>::with_capacity_for([d_borrow].into_iter());
+            for (index, bit) in bitmap.iter().enumerate() {
+                if *bit { diffs.values.push(d_borrow.values.get(index)); }
+            }
+            diffs.bounds = Strides::new(1, times.values.len() as u64);
+            kept.push(UpdatesTyped {
+                keys,
+                vals,
+                times,
+                diffs,
+            });
+
+            for bit in bitmap.iter_mut() { *bit = !*bit; }
+
+            let (times, temp) = retain_items::<ContainerOf<U::Time>>(view.times, &bitmap[..]);
+            let (vals, temp) = retain_items::<ContainerOf<U::Val>>(view.vals, &temp[..]);
+            let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(view.keys, &temp[..]);
+            let d_borrow = view.diffs;
+            let mut diffs = <Lists::<ContainerOf<U::Diff>> as Container>::with_capacity_for([d_borrow].into_iter());
+            for (index, bit) in bitmap.iter().enumerate() {
+                if *bit { diffs.values.push(d_borrow.values.get(index)); }
+            }
+            diffs.bounds = Strides::new(1, times.values.len() as u64);
+            ship.push(UpdatesTyped {
+                keys,
+                vals,
+                times,
+                diffs,
+            });
+        }
     }
 }
 
-impl<U: Update> TrieMerger<U>
+/// Iterator-based merge: flatten, merge, consolidate, form.
+/// Correct but slow — used as fallback.
+#[allow(dead_code)]
+fn merge_iterator<U: Update>(
+    list1: &[UpdatesTyped<U>],
+    list2: &[UpdatesTyped<U>],
+    output: &mut Vec<UpdatesTyped<U>>,
+)
 where
     U::Time: 'static,
 {
-    /// Iterator-based merge: flatten, merge, consolidate, form.
-    /// Correct but slow — used as fallback.
-    #[allow(dead_code)]
-    fn merge_iterator(
-        list1: &[UpdatesTyped<U>],
-        list2: &[UpdatesTyped<U>],
-        output: &mut Vec<UpdatesTyped<U>>,
-    ) {
-        let iter1 = list1.iter().flat_map(|chunk| chunk.iter());
-        let iter2 = list2.iter().flat_map(|chunk| chunk.iter());
+    let iter1 = list1.iter().flat_map(|chunk| chunk.iter());
+    let iter2 = list2.iter().flat_map(|chunk| chunk.iter());
 
-        let merged = Merging {
-            iter1: iter1.peekable(),
-            iter2: iter2.peekable(),
-        };
+    let merged = Merging {
+        iter1: iter1.peekable(),
+        iter2: iter2.peekable(),
+    };
 
-        form_chunks::<U>(merged, output);
+    form_chunks::<U>(merged, output);
+}
+
+/// A merge implementation that operates batch-at-a-time.
+#[inline(never)]
+pub fn merge_batches<U: Update>(
+    list1: Vec<UpdatesTyped<U>>,
+    list2: Vec<UpdatesTyped<U>>,
+    output: &mut Vec<UpdatesTyped<U>>,
+)
+where
+    U::Time: 'static,
+{
+
+    // The design for efficient "batch" merginging of chains of links is:
+    // 0.   We choose a target link size, K, and will keep the average link size at least K and the max size at 2k.
+    //      K should be large enough to amortize some set-up, but not so large that one or two extra break the bank.
+    // 1.   We will repeatedly consider pairs of links, and fully merge one with a prefix of the other.
+    //      The last elements of each link will tell us which of the two suffixes must be held back.
+    // 2.   We then have a chain of as many links as we started with, with potential defects to correct:
+    //      a.  A link may contain some number of zeros: we can remove them if we are eager, based on size.
+    //      b.  A link may contain more than 2K updates; we can split it.
+    //      c.  Two adjacent links may contain fewer than 2K updates; we can meld (careful append) them.
+    // 3.   After a pass of the above, we should have restored the invariant.
+    //      We can try and me smarter and fuse some of the above work rather than explicitly stage results.
+    //
+    // The challenging moment is the merge that can start with a suffix of one link, involving a prefix of one link.
+    // These could be the same link, different links, and generally there is the potential for complexity here.
+
+    let mut builder = ChainBuilder::default();
+
+    let mut queue1: std::collections::VecDeque<_> = list1.into();
+    let mut queue2: std::collections::VecDeque<_> = list2.into();
+
+    // The first unconsumed update in each block, via (k_idx, v_idx, t_idx), or None if exhausted.
+    // These are (0,0,0) for a new block, and should become None once there are no remaining updates.
+    let mut cursor1 = queue1.pop_front().map(|b| ((0,0,0), b));
+    let mut cursor2 = queue2.pop_front().map(|b| ((0,0,0), b));
+
+    // For each pair of batches
+    while cursor1.is_some() && cursor2.is_some() {
+        merge_batch(&mut cursor1, &mut cursor2, &mut builder);
+        if cursor1.is_none() { cursor1 = queue1.pop_front().map(|b| ((0,0,0), b)); }
+        if cursor2.is_none() { cursor2 = queue2.pop_front().map(|b| ((0,0,0), b)); }
     }
 
-    /// A merge implementation that operates batch-at-a-time.
-    #[inline(never)]
-    fn merge_batches(
-        list1: Vec<UpdatesTyped<U>>,
-        list2: Vec<UpdatesTyped<U>>,
-        output: &mut Vec<UpdatesTyped<U>>,
-        stash: &mut Vec<UpdatesTyped<U>>,
-    ) {
-
-        // The design for efficient "batch" merginging of chains of links is:
-        // 0.   We choose a target link size, K, and will keep the average link size at least K and the max size at 2k.
-        //      K should be large enough to amortize some set-up, but not so large that one or two extra break the bank.
-        // 1.   We will repeatedly consider pairs of links, and fully merge one with a prefix of the other.
-        //      The last elements of each link will tell us which of the two suffixes must be held back.
-        // 2.   We then have a chain of as many links as we started with, with potential defects to correct:
-        //      a.  A link may contain some number of zeros: we can remove them if we are eager, based on size.
-        //      b.  A link may contain more than 2K updates; we can split it.
-        //      c.  Two adjacent links may contain fewer than 2K updates; we can meld (careful append) them.
-        // 3.   After a pass of the above, we should have restored the invariant.
-        //      We can try and me smarter and fuse some of the above work rather than explicitly stage results.
-        //
-        // The challenging moment is the merge that can start with a suffix of one link, involving a prefix of one link.
-        // These could be the same link, different links, and generally there is the potential for complexity here.
-
-        let mut builder = ChainBuilder::default();
-
-        let mut queue1: std::collections::VecDeque<_> = list1.into();
-        let mut queue2: std::collections::VecDeque<_> = list2.into();
-
-        // The first unconsumed update in each block, via (k_idx, v_idx, t_idx), or None if exhausted.
-        // These are (0,0,0) for a new block, and should become None once there are no remaining updates.
-        let mut cursor1 = queue1.pop_front().map(|b| ((0,0,0), b));
-        let mut cursor2 = queue2.pop_front().map(|b| ((0,0,0), b));
-
-        // For each pair of batches
-        while cursor1.is_some() && cursor2.is_some() {
-            Self::merge_batch(&mut cursor1, &mut cursor2, &mut builder, stash);
-            if cursor1.is_none() { cursor1 = queue1.pop_front().map(|b| ((0,0,0), b)); }
-            if cursor2.is_none() { cursor2 = queue2.pop_front().map(|b| ((0,0,0), b)); }
-        }
-
-        // TODO: create batch for the non-empty cursor.
-        if let Some(((k,v,t),batch)) = cursor1 {
-            let mut out_batch = stash.pop().unwrap_or_default();
-            let empty: UpdatesTyped<U> = Default::default();
-            let view = batch.view();
-            write_from_surveys(
-                &batch,
-                &empty,
-                &[Report::This(0, 1)],
-                &[Report::This(k, view.keys.values.len())],
-                &[Report::This(v, view.vals.values.len())],
-                &[Report::This(t, view.times.values.len())],
-                &mut out_batch,
-            );
-            builder.push(out_batch);
-        }
-        if let Some(((k,v,t),batch)) = cursor2 {
-            let mut out_batch = stash.pop().unwrap_or_default();
-            let empty: UpdatesTyped<U> = Default::default();
-            let view = batch.view();
-            write_from_surveys(
-                &empty,
-                &batch,
-                &[Report::That(0, 1)],
-                &[Report::That(k, view.keys.values.len())],
-                &[Report::That(v, view.vals.values.len())],
-                &[Report::That(t, view.times.values.len())],
-                &mut out_batch,
-            );
-            builder.push(out_batch);
-        }
-
-        builder.extend(queue1);
-        builder.extend(queue2);
-        *output = builder.done();
-        // TODO: Tidy output to satisfy structural invariants.
-    }
-
-    /// Merge two batches, one completely and another through the corresponding prefix.
-    ///
-    /// Each invocation determines the maximum amount of both batches we can merge, determined
-    /// by comparing the elements at the tails of each batch, and locating the lesser in other.
-    /// We will merge the whole of the batch containing the lesser, and the prefix up through
-    /// the lesser element in the other batch, setting the cursor to the first element strictly
-    /// greater than that lesser element.
-    ///
-    /// The algorithm uses a list of `Report` findings to map the interleavings of the layers.
-    /// Each indicates either a range exclusive to one of the inputs, or a one element common
-    /// to the layers from both inputs, which must be further explored. This map would normally
-    /// allow the full merge to happen, but we need to carefully start at each cursor, and end
-    /// just before the first element greater than the lesser bound.
-    ///
-    /// The consumed prefix and disjoint suffix should be single report entries, and it seems
-    /// fine to first produce all reports and then reflect on the cursors, rather than use the
-    /// cursors as part of the mapping.
-    #[inline(never)]
-    fn merge_batch(
-        batch1: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
-        batch2: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
-        builder: &mut ChainBuilder<U>,
-        stash: &mut Vec<UpdatesTyped<U>>,
-    ) {
-        // TODO: Optimization for one batch exceeding the other.
-
-        let ((k0_idx, v0_idx, t0_idx), updates0) = batch1.take().unwrap();
-        let ((k1_idx, v1_idx, t1_idx), updates1) = batch2.take().unwrap();
-
-        let view0 = updates0.view();
-        let view1 = updates1.view();
-        let keys0 = view0.keys;
-        let keys1 = view1.keys;
-        let vals0 = view0.vals;
-        let vals1 = view1.vals;
-        let times0 = view0.times;
-        let times1 = view1.times;
-
-        // Survey the interleaving of the two inputs.
-        let mut key_survey = survey::<columnar::ContainerOf<U::Key>>(keys0, keys1, &[Report::Both(0,0)]);
-        let mut val_survey = survey::<columnar::ContainerOf<U::Val>>(vals0, vals1, &key_survey);
-        let mut time_survey = survey::<columnar::ContainerOf<U::Time>>(times0, times1, &val_survey);
-
-        // We now know enough to start writing into an output batch.
-        // We should update the input surveys to reflect the subset
-        // of data that we want.
-        //
-        // At most one cursor should be non-zero (assert!).
-        // A non-zero cursor must correspond to the first entry of the surveys,
-        // as there is at least one consumed update that precedes the other batch.
-        // We need to nudge that report forward to align with the cursor, potentially
-        // squeezing the report to nothing (to the upper bound).
-
-        // We start by updating the surveys to reflect the cursors.
-        // If either cursor is set, then its batch has an element strictly less than the other batch.
-        // We therefore expect to find a prefix of This/That at the start of the survey.
-        if (k0_idx, v0_idx, t0_idx) != (0,0,0) {
-            let mut done = false; while !done { if let Report::This(l,u) = &mut key_survey[0] { if *u <= k0_idx { key_survey.remove(0); } else { *l = k0_idx; done = true; } } else { done = true; } }
-            let mut done = false; while !done { if let Report::This(l,u) = &mut val_survey[0] { if *u <= v0_idx { val_survey.remove(0); } else { *l = v0_idx; done = true; } } else { done = true; } }
-            let mut done = false; while !done { if let Report::This(l,u) = &mut time_survey[0] { if *u <= t0_idx { time_survey.remove(0); } else { *l = t0_idx; done = true; } } else { done = true; } }
-        }
-
-        if (k1_idx, v1_idx, t1_idx) != (0,0,0) {
-            let mut done = false; while !done { if let Report::That(l,u) = &mut key_survey[0] { if *u <= k1_idx { key_survey.remove(0); } else { *l = k1_idx; done = true; } } else { done = true; } }
-            let mut done = false; while !done { if let Report::That(l,u) = &mut val_survey[0] { if *u <= v1_idx { val_survey.remove(0); } else { *l = v1_idx; done = true; } } else { done = true; } }
-            let mut done = false; while !done { if let Report::That(l,u) = &mut time_survey[0] { if *u <= t1_idx { time_survey.remove(0); } else { *l = t1_idx; done = true; } } else { done = true; } }
-        }
-
-        // We want to trim the tails of the surveys to only cover ranges present in both inputs.
-        // We can determine which was "longer" by looking at the last entry of the bottom layer,
-        // which tells us which input (or both) contained the last element.
-        //
-        // From the bottom layer up, we'll identify the index of the last item, and then determine
-        // the index of the list it belongs to. We use that index in the next layer, to locate the
-        // index of the list it belongs to, on upward.
-        let next_cursor = match time_survey.last().unwrap() {
-            Report::This(_,_) => {
-                // Collect the last value indexes known to strictly exceed an entry in the other batch.
-                let mut t = times0.values.len();
-                while let Some(Report::This(l,_)) = time_survey.last() { t = *l; time_survey.pop(); }
-                let mut v = vals0.values.len();
-                while let Some(Report::This(l,_)) = val_survey.last() { v = *l; val_survey.pop(); }
-                let mut k = keys0.values.len();
-                while let Some(Report::This(l,_)) = key_survey.last() { k = *l; key_survey.pop(); }
-                // Now we may need to correct by nudging down.
-                if v == times0.len() || times0.bounds.bounds(v).0 > t { v -= 1; }
-                if k == vals0.len() || vals0.bounds.bounds(k).0 > v { k -= 1; }
-                Some(Ok((k,v,t)))
-            }
-            Report::Both(_,_) => { None }
-            Report::That(_,_) => {
-                // Collect the last value indexes known to strictly exceed an entry in the other batch.
-                let mut t = times1.values.len();
-                while let Some(Report::That(l,_)) = time_survey.last() { t = *l; time_survey.pop(); }
-                let mut v = vals1.values.len();
-                while let Some(Report::That(l,_)) = val_survey.last() { v = *l; val_survey.pop(); }
-                let mut k = keys1.values.len();
-                while let Some(Report::That(l,_)) = key_survey.last() { k = *l; key_survey.pop(); }
-                // Now we may need to correct by nudging down.
-                if v == times1.len() || times1.bounds.bounds(v).0 > t { v -= 1; }
-                if k == vals1.len() || vals1.bounds.bounds(k).0 > v { k -= 1; }
-                Some(Err((k,v,t)))
-            }
-        };
-
-        // Having updated the surveys, we now copy over the ranges they identify.
-        let mut out_batch = stash.pop().unwrap_or_default();
-        // TODO: We should be able to size `out_batch` pretty accurately from the survey.
-        write_from_surveys(&updates0, &updates1, &[Report::Both(0,0)], &key_survey, &val_survey, &time_survey, &mut out_batch);
+    // TODO: create batch for the non-empty cursor.
+    if let Some(((k,v,t),batch)) = cursor1 {
+        let mut out_batch = UpdatesTyped::<U>::default();
+        let empty: UpdatesTyped<U> = Default::default();
+        let view = batch.view();
+        write_from_surveys(
+            &batch,
+            &empty,
+            &[Report::This(0, 1)],
+            &[Report::This(k, view.keys.values.len())],
+            &[Report::This(v, view.vals.values.len())],
+            &[Report::This(t, view.times.values.len())],
+            &mut out_batch,
+        );
         builder.push(out_batch);
-
-        match next_cursor {
-            Some(Ok(kvt)) => { *batch1 = Some((kvt, updates0)); }
-            Some(Err(kvt)) => {*batch2 = Some((kvt, updates1)); }
-            None => { }
-        }
+    }
+    if let Some(((k,v,t),batch)) = cursor2 {
+        let mut out_batch = UpdatesTyped::<U>::default();
+        let empty: UpdatesTyped<U> = Default::default();
+        let view = batch.view();
+        write_from_surveys(
+            &empty,
+            &batch,
+            &[Report::That(0, 1)],
+            &[Report::That(k, view.keys.values.len())],
+            &[Report::That(v, view.vals.values.len())],
+            &[Report::That(t, view.times.values.len())],
+            &mut out_batch,
+        );
+        builder.push(out_batch);
     }
 
+    builder.extend(queue1);
+    builder.extend(queue2);
+    *output = builder.done();
+    // TODO: Tidy output to satisfy structural invariants.
+}
+
+/// Merge two batches, one completely and another through the corresponding prefix.
+///
+/// Each invocation determines the maximum amount of both batches we can merge, determined
+/// by comparing the elements at the tails of each batch, and locating the lesser in other.
+/// We will merge the whole of the batch containing the lesser, and the prefix up through
+/// the lesser element in the other batch, setting the cursor to the first element strictly
+/// greater than that lesser element.
+///
+/// The algorithm uses a list of `Report` findings to map the interleavings of the layers.
+/// Each indicates either a range exclusive to one of the inputs, or a one element common
+/// to the layers from both inputs, which must be further explored. This map would normally
+/// allow the full merge to happen, but we need to carefully start at each cursor, and end
+/// just before the first element greater than the lesser bound.
+///
+/// The consumed prefix and disjoint suffix should be single report entries, and it seems
+/// fine to first produce all reports and then reflect on the cursors, rather than use the
+/// cursors as part of the mapping.
+#[inline(never)]
+fn merge_batch<U: Update>(
+    batch1: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
+    batch2: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
+    builder: &mut ChainBuilder<U>,
+)
+where
+    U::Time: 'static,
+{
+    // TODO: Optimization for one batch exceeding the other.
+
+    let ((k0_idx, v0_idx, t0_idx), updates0) = batch1.take().unwrap();
+    let ((k1_idx, v1_idx, t1_idx), updates1) = batch2.take().unwrap();
+
+    let view0 = updates0.view();
+    let view1 = updates1.view();
+    let keys0 = view0.keys;
+    let keys1 = view1.keys;
+    let vals0 = view0.vals;
+    let vals1 = view1.vals;
+    let times0 = view0.times;
+    let times1 = view1.times;
+
+    // Survey the interleaving of the two inputs.
+    let mut key_survey = survey::<columnar::ContainerOf<U::Key>>(keys0, keys1, &[Report::Both(0,0)]);
+    let mut val_survey = survey::<columnar::ContainerOf<U::Val>>(vals0, vals1, &key_survey);
+    let mut time_survey = survey::<columnar::ContainerOf<U::Time>>(times0, times1, &val_survey);
+
+    // We now know enough to start writing into an output batch.
+    // We should update the input surveys to reflect the subset
+    // of data that we want.
+    //
+    // At most one cursor should be non-zero (assert!).
+    // A non-zero cursor must correspond to the first entry of the surveys,
+    // as there is at least one consumed update that precedes the other batch.
+    // We need to nudge that report forward to align with the cursor, potentially
+    // squeezing the report to nothing (to the upper bound).
+
+    // We start by updating the surveys to reflect the cursors.
+    // If either cursor is set, then its batch has an element strictly less than the other batch.
+    // We therefore expect to find a prefix of This/That at the start of the survey.
+    if (k0_idx, v0_idx, t0_idx) != (0,0,0) {
+        let mut done = false; while !done { if let Report::This(l,u) = &mut key_survey[0] { if *u <= k0_idx { key_survey.remove(0); } else { *l = k0_idx; done = true; } } else { done = true; } }
+        let mut done = false; while !done { if let Report::This(l,u) = &mut val_survey[0] { if *u <= v0_idx { val_survey.remove(0); } else { *l = v0_idx; done = true; } } else { done = true; } }
+        let mut done = false; while !done { if let Report::This(l,u) = &mut time_survey[0] { if *u <= t0_idx { time_survey.remove(0); } else { *l = t0_idx; done = true; } } else { done = true; } }
+    }
+
+    if (k1_idx, v1_idx, t1_idx) != (0,0,0) {
+        let mut done = false; while !done { if let Report::That(l,u) = &mut key_survey[0] { if *u <= k1_idx { key_survey.remove(0); } else { *l = k1_idx; done = true; } } else { done = true; } }
+        let mut done = false; while !done { if let Report::That(l,u) = &mut val_survey[0] { if *u <= v1_idx { val_survey.remove(0); } else { *l = v1_idx; done = true; } } else { done = true; } }
+        let mut done = false; while !done { if let Report::That(l,u) = &mut time_survey[0] { if *u <= t1_idx { time_survey.remove(0); } else { *l = t1_idx; done = true; } } else { done = true; } }
+    }
+
+    // We want to trim the tails of the surveys to only cover ranges present in both inputs.
+    // We can determine which was "longer" by looking at the last entry of the bottom layer,
+    // which tells us which input (or both) contained the last element.
+    //
+    // From the bottom layer up, we'll identify the index of the last item, and then determine
+    // the index of the list it belongs to. We use that index in the next layer, to locate the
+    // index of the list it belongs to, on upward.
+    let next_cursor = match time_survey.last().unwrap() {
+        Report::This(_,_) => {
+            // Collect the last value indexes known to strictly exceed an entry in the other batch.
+            let mut t = times0.values.len();
+            while let Some(Report::This(l,_)) = time_survey.last() { t = *l; time_survey.pop(); }
+            let mut v = vals0.values.len();
+            while let Some(Report::This(l,_)) = val_survey.last() { v = *l; val_survey.pop(); }
+            let mut k = keys0.values.len();
+            while let Some(Report::This(l,_)) = key_survey.last() { k = *l; key_survey.pop(); }
+            // Now we may need to correct by nudging down.
+            if v == times0.len() || times0.bounds.bounds(v).0 > t { v -= 1; }
+            if k == vals0.len() || vals0.bounds.bounds(k).0 > v { k -= 1; }
+            Some(Ok((k,v,t)))
+        }
+        Report::Both(_,_) => { None }
+        Report::That(_,_) => {
+            // Collect the last value indexes known to strictly exceed an entry in the other batch.
+            let mut t = times1.values.len();
+            while let Some(Report::That(l,_)) = time_survey.last() { t = *l; time_survey.pop(); }
+            let mut v = vals1.values.len();
+            while let Some(Report::That(l,_)) = val_survey.last() { v = *l; val_survey.pop(); }
+            let mut k = keys1.values.len();
+            while let Some(Report::That(l,_)) = key_survey.last() { k = *l; key_survey.pop(); }
+            // Now we may need to correct by nudging down.
+            if v == times1.len() || times1.bounds.bounds(v).0 > t { v -= 1; }
+            if k == vals1.len() || vals1.bounds.bounds(k).0 > v { k -= 1; }
+            Some(Err((k,v,t)))
+        }
+    };
+
+    // Having updated the surveys, we now copy over the ranges they identify.
+    let mut out_batch = UpdatesTyped::<U>::default();
+    // TODO: We should be able to size `out_batch` pretty accurately from the survey.
+    write_from_surveys(&updates0, &updates1, &[Report::Both(0,0)], &key_survey, &val_survey, &time_survey, &mut out_batch);
+    builder.push(out_batch);
+
+    match next_cursor {
+        Some(Ok(kvt)) => { *batch1 = Some((kvt, updates0)); }
+        Some(Err(kvt)) => {*batch2 = Some((kvt, updates1)); }
+        None => { }
+    }
 }
 
 /// Write merged output from four levels of survey reports.

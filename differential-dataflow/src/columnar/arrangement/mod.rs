@@ -4,7 +4,6 @@
 //!   into DD's trace machinery.
 //! - `Coltainer<C>` wraps a columnar `C::Container` as a DD `BatchContainer`.
 //! - `TrieChunker` strips `RecordedUpdates` down to `UpdatesTyped` for the merge batcher.
-//! - `batcher` contains required trait stubs for `UpdatesTyped`.
 //! - `trie_merger` is the batch-at-a-time merging logic.
 //! - `builder::ValMirror` is the `trace::Builder` that seals melded chunks into
 //!   an `OrdValBatch`.
@@ -21,7 +20,7 @@ pub mod trie_merger;
 /// A trace implementation backed by columnar storage.
 pub type ValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<ColumnarLayout<(K,V,T,R)>>>>;
 /// A batcher for columnar storage.
-pub type ValBatcher<K, V, T, R> = ValBatcher2<(K,V,T,R)>;
+pub type ValBatcher<K, V, T, R> = super::batcher::MergeBatcher<(K,V,T,R)>;
 /// A builder for columnar storage.
 pub type ValBuilder<K, V, T, R> = RcBuilder<builder::ValMirror<(K,V,T,R)>>;
 
@@ -124,8 +123,6 @@ pub mod batch_container {
 
 use super::updates::UpdatesTyped;
 use super::RecordedUpdates;
-use crate::trace::implementations::merge_batcher::MergeBatcher;
-type ValBatcher2<U> = MergeBatcher<RecordedUpdates<U>, TrieChunker<U>, trie_merger::TrieMerger<U>>;
 
 /// A chunker that unwraps `RecordedUpdates` into bare `UpdatesTyped` for the merge batcher.
 ///
