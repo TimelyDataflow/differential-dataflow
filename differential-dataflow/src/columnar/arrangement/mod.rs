@@ -252,45 +252,6 @@ impl<U: super::layout::ColumnarUpdate> timely::container::ContainerBuilder for T
     }
 }
 
-pub mod batcher {
-    //! Batcher trait stubs required to plug `UpdatesTyped` into DD's merge batcher.
-
-    use columnar::Len;
-    use timely::progress::frontier::{Antichain, AntichainRef};
-    use crate::trace::implementations::merge_batcher::container::InternalMerge;
-
-    use super::super::layout::ColumnarUpdate as Update;
-    use super::super::updates::UpdatesTyped;
-
-    impl<U: Update> timely::container::SizableContainer for UpdatesTyped<U> {
-        fn at_capacity(&self) -> bool { self.view().diffs.values.len() >= crate::columnar::LINK_TARGET }
-        fn ensure_capacity(&mut self, _stash: &mut Option<Self>) { }
-    }
-
-    /// Required by `reduce_abelian`'s bound `Builder::Input: InternalMerge`.
-    /// Not called at runtime — our batcher uses `TrieMerger` instead.
-    /// TODO: Relax the bound in DD's reduce to remove this requirement.
-    impl<U: Update> InternalMerge for UpdatesTyped<U> {
-        type TimeOwned = U::Time;
-        fn len(&self) -> usize { unimplemented!() }
-        fn clear(&mut self) {
-            use columnar::Clear;
-            self.keys.clear();
-            self.vals.clear();
-            self.times.clear();
-            self.diffs.clear();
-        }
-        fn merge_from(&mut self, _others: &mut [Self], _positions: &mut [usize]) { unimplemented!() }
-        fn extract(&mut self,
-            _position: &mut usize,
-            _upper: AntichainRef<U::Time>,
-            _frontier: &mut Antichain<U::Time>,
-            _keep: &mut Self,
-            _ship: &mut Self,
-        ) { unimplemented!() }
-    }
-}
-
 pub mod builder {
     //! [`ValMirror`] trace builder that seals melded chunks into [`OrdValBatch`].
 
