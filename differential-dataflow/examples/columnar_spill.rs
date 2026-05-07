@@ -24,6 +24,12 @@ static ENABLE_SPILL: AtomicBool = AtomicBool::new(true);
 static HEAD: AtomicUsize = AtomicUsize::new(10_000_000);
 static THRESH: AtomicUsize = AtomicUsize::new(50_000_000);
 
+/// Cumulative bytes serialized (pre-compression) and bytes written
+/// (post-compression) across all `FileSpill` instances. Lets us report a
+/// compression ratio at the end of a run.
+static BYTES_DECOMPRESSED: AtomicUsize = AtomicUsize::new(0);
+static BYTES_COMPRESSED: AtomicUsize = AtomicUsize::new(0);
+
 /// Cross-worker registry of `Threshold` stats so we can sum them after a run.
 static SHARED_STATS: OnceLock<Mutex<Vec<Arc<ThresholdStats>>>> = OnceLock::new();
 
@@ -50,6 +56,8 @@ fn reset_stats() {
     if let Some(m) = SHARED_STATS.get() {
         m.lock().unwrap().clear();
     }
+    BYTES_DECOMPRESSED.store(0, Ordering::Relaxed);
+    BYTES_COMPRESSED.store(0, Ordering::Relaxed);
 }
 
 use columnar::Push;
@@ -130,7 +138,7 @@ impl<U: Update + 'static> Spill<UpdatesTyped<U>> for FileSpill<U> {
             let total = 32 + keys_len + vals_len + times_len + diffs_len;
 
             // Serialize the whole chunk (header + four columns) into the
-            // reusable buffer, then issue a single write_all to the file.
+            // reusable buffer.
             self.buf.clear();
             self.buf.extend_from_slice(&keys_len.to_le_bytes());
             self.buf.extend_from_slice(&vals_len.to_le_bytes());
@@ -142,51 +150,72 @@ impl<U: Update + 'static> Spill<UpdatesTyped<U>> for FileSpill<U> {
             updates.diffs.write_bytes(&mut self.buf).unwrap();
             debug_assert_eq!(self.buf.len() as u64, total);
 
+            // Compress before writing. lz4 block format: caller is responsible
+            // for tracking the decompressed size, which we stash in the handle.
+            let compressed = lz4_flex::block::compress(&self.buf);
+            let comp_len = compressed.len() as u64;
+            BYTES_DECOMPRESSED.fetch_add(total as usize, Ordering::Relaxed);
+            BYTES_COMPRESSED.fetch_add(comp_len as usize, Ordering::Relaxed);
+
             let file = self.current_file().expect("tempfile");
             let start = self.current_offset;
             let mut f = file.lock().unwrap();
             f.seek(SeekFrom::Start(start)).unwrap();
-            f.write_all(&self.buf).unwrap();
+            f.write_all(&compressed).unwrap();
             drop(f);
-            self.current_offset += total;
+            self.current_offset += comp_len;
 
             handles.push(Box::new(FileFetch::<U> {
                 file: file.clone(),
                 offset: start,
+                compressed_len: comp_len,
+                decompressed_len: total,
                 _marker: PhantomData,
             }));
         }
     }
 }
 
-/// Per-chunk fetch handle. Reads a 32-byte header (four column lengths) at the
-/// recorded offset, then four `Stash::try_from_bytes` payloads.
+/// Per-chunk fetch handle. On `fetch`, reads `compressed_len` bytes at
+/// `offset`, decompresses to `decompressed_len`, then parses the 32-byte
+/// header + four column payloads.
 pub struct FileFetch<U: Update> {
     file: Arc<Mutex<std::fs::File>>,
     offset: u64,
+    compressed_len: u64,
+    decompressed_len: u64,
     _marker: PhantomData<U>,
 }
 
 impl<U: Update + 'static> Fetch<UpdatesTyped<U>> for FileFetch<U> {
     fn fetch(self: Box<Self>) -> Result<Vec<UpdatesTyped<U>>, Box<dyn Fetch<UpdatesTyped<U>>>> {
+        // Read the compressed bytes in one shot.
+        let mut compressed = vec![0u8; self.compressed_len as usize];
         let mut file = self.file.lock().unwrap();
         file.seek(SeekFrom::Start(self.offset)).unwrap();
-        let mut header = [0u8; 32];
-        file.read_exact(&mut header).unwrap();
+        file.read_exact(&mut compressed).unwrap();
+        drop(file);
+
+        let decompressed = lz4_flex::block::decompress(&compressed, self.decompressed_len as usize)
+            .expect("lz4 decompress");
+
+        // Parse the 32-byte header from the decompressed buffer.
+        let header = &decompressed[0..32];
         let keys_len = u64::from_le_bytes(header[0..8].try_into().unwrap()) as usize;
         let vals_len = u64::from_le_bytes(header[8..16].try_into().unwrap()) as usize;
         let times_len = u64::from_le_bytes(header[16..24].try_into().unwrap()) as usize;
         let diffs_len = u64::from_le_bytes(header[24..32].try_into().unwrap()) as usize;
 
-        let mut keys_bytes = vec![0u8; keys_len];
-        file.read_exact(&mut keys_bytes).unwrap();
-        let mut vals_bytes = vec![0u8; vals_len];
-        file.read_exact(&mut vals_bytes).unwrap();
-        let mut times_bytes = vec![0u8; times_len];
-        file.read_exact(&mut times_bytes).unwrap();
-        let mut diffs_bytes = vec![0u8; diffs_len];
-        file.read_exact(&mut diffs_bytes).unwrap();
-        drop(file);
+        // Slice the four columns out of the decompressed buffer, each into
+        // its own owned `Vec<u8>` (`Stash::try_from_bytes` requires owned).
+        let mut o = 32;
+        let keys_bytes = decompressed[o..o + keys_len].to_vec();
+        o += keys_len;
+        let vals_bytes = decompressed[o..o + vals_len].to_vec();
+        o += vals_len;
+        let times_bytes = decompressed[o..o + times_len].to_vec();
+        o += times_len;
+        let diffs_bytes = decompressed[o..o + diffs_len].to_vec();
 
         let keys = Stash::try_from_bytes(keys_bytes).unwrap();
         let vals = Stash::try_from_bytes(vals_bytes).unwrap();
@@ -478,6 +507,8 @@ fn main() {
             reset_stats();
             let elapsed = run_timely_dataflow(cfg.times, cfg.keys_per_time, cfg.workers, cfg.sample_secs, "spill");
             let (fires, chunks) = collect_stats();
+            let dec = BYTES_DECOMPRESSED.load(Ordering::Relaxed);
+            let comp = BYTES_COMPRESSED.load(Ordering::Relaxed);
             println!(
                 "spill: {:.2}s | {:.2} M records/s | {:.2} GB/s | threshold fired {} times, spilled {} chunks",
                 elapsed.as_secs_f64(),
@@ -485,6 +516,14 @@ fn main() {
                 raw_gb / elapsed.as_secs_f64(),
                 fires, chunks,
             );
+            if dec > 0 {
+                let dec_gb = dec as f64 / (1u64 << 30) as f64;
+                let comp_gb = comp as f64 / (1u64 << 30) as f64;
+                println!(
+                    "compression: {:.2} GB → {:.2} GB ({:.2}× ratio, lz4)",
+                    dec_gb, comp_gb, dec as f64 / comp.max(1) as f64,
+                );
+            }
         }
 
         if cfg.mode != Mode::Spill {
