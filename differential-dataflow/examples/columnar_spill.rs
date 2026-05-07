@@ -71,12 +71,16 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 
 /// File-backed `Spill`. Serializes each chunk into a reusable `Vec<u8>` and
-/// writes it with one `write_all` per chunk — one syscall per spill, vs. one
-/// per column.
+/// writes it with one `write_all` per chunk. Rotates to a new tempfile every
+/// `ROTATE_AFTER_BYTES` so disk space is reclaimed as `FileFetch` handles are
+/// consumed: once a file's last handle is dropped, the `Arc` hits zero, the
+/// (already-unlinked) tempfile closes, and the OS gives the space back.
 pub struct FileSpill<U: Update> {
-    file: Arc<Mutex<std::fs::File>>,
-    /// Cumulative byte offset for the next write.
-    offset: u64,
+    /// Current write file. `None` until first spill, or after rotation if no
+    /// chunks have been written to a fresh file yet.
+    current: Option<Arc<Mutex<std::fs::File>>>,
+    /// Bytes written to `current` so far.
+    current_offset: u64,
     /// Reusable serialization buffer; grows to fit the largest chunk seen,
     /// then sticks at that capacity (no per-chunk allocation).
     buf: Vec<u8>,
@@ -84,14 +88,30 @@ pub struct FileSpill<U: Update> {
 }
 
 impl<U: Update> FileSpill<U> {
+    /// Rotate to a new tempfile after this many bytes. Sized so each file
+    /// holds many chunks (amortizing the file-open cost) but small enough
+    /// that we don't accumulate hundreds of GB on disk before any can be
+    /// reclaimed.
+    const ROTATE_AFTER_BYTES: u64 = 1 << 30; // 1 GiB
+
     pub fn new() -> std::io::Result<Self> {
-        let file = tempfile::tempfile()?;
         Ok(Self {
-            file: Arc::new(Mutex::new(file)),
-            offset: 0,
+            current: None,
+            current_offset: 0,
             buf: Vec::new(),
             _marker: PhantomData,
         })
+    }
+
+    fn current_file(&mut self) -> std::io::Result<Arc<Mutex<std::fs::File>>> {
+        if self.current.is_none() || self.current_offset >= Self::ROTATE_AFTER_BYTES {
+            // Drop the previous Arc — outstanding `FileFetch` handles still
+            // hold it; once they're all consumed, the file is unlinked-closed
+            // and the OS reclaims its space.
+            self.current = Some(Arc::new(Mutex::new(tempfile::tempfile()?)));
+            self.current_offset = 0;
+        }
+        Ok(self.current.as_ref().unwrap().clone())
     }
 }
 
@@ -122,15 +142,16 @@ impl<U: Update + 'static> Spill<UpdatesTyped<U>> for FileSpill<U> {
             updates.diffs.write_bytes(&mut self.buf).unwrap();
             debug_assert_eq!(self.buf.len() as u64, total);
 
-            let start = self.offset;
-            let mut file = self.file.lock().unwrap();
-            file.seek(SeekFrom::Start(start)).unwrap();
-            file.write_all(&self.buf).unwrap();
-            drop(file);
-            self.offset += total;
+            let file = self.current_file().expect("tempfile");
+            let start = self.current_offset;
+            let mut f = file.lock().unwrap();
+            f.seek(SeekFrom::Start(start)).unwrap();
+            f.write_all(&self.buf).unwrap();
+            drop(f);
+            self.current_offset += total;
 
             handles.push(Box::new(FileFetch::<U> {
-                file: self.file.clone(),
+                file: file.clone(),
                 offset: start,
                 _marker: PhantomData,
             }));
