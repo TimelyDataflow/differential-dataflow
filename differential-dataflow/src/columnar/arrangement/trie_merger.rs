@@ -640,12 +640,24 @@ pub struct ChainBuilder<U: super::super::layout::ColumnarUpdate, F: FnMut(Update
     sink: F,
 }
 
-impl<U: super::super::layout::ColumnarUpdate, F: FnMut(UpdatesTyped<U>)> ChainBuilder<U, F> {
+impl<U: super::super::layout::ColumnarUpdate, F: FnMut(UpdatesTyped<U>)> ChainBuilder<U, F>
+where
+    U::Time: 'static,
+{
     fn new(sink: F) -> Self { Self { last: None, sink } }
 
     fn push(&mut self, mut link: UpdatesTyped<U>) {
         link = link.filter_zero();
         if link.len() == 0 { return; }
+        // Split links larger than twice the link target so downstream chains
+        // have multiple entries — required for per-chain spill policies (e.g.
+        // `Threshold` in the columnar_spill example) to actually spill anything.
+        if link.len() > 2 * crate::columnar::LINK_TARGET {
+            let (first, rest) = split_at::<U>(link, crate::columnar::LINK_TARGET);
+            self.push(first);
+            self.push(rest);
+            return;
+        }
         match self.last.as_mut() {
             Some(last) if last.len() + link.len() < 2 * crate::columnar::LINK_TARGET => {
                 let mut build = super::super::updates::UpdatesBuilder::new_from(std::mem::take(last));
@@ -668,4 +680,49 @@ impl<U: super::super::layout::ColumnarUpdate, F: FnMut(UpdatesTyped<U>)> ChainBu
             (self.sink)(last);
         }
     }
+}
+
+/// Split `chunk` into two `UpdatesTyped` parts at record index `n`: the first
+/// `n` records and the remaining `chunk.len() - n`. Bitmap pattern mirrors
+/// `extract`'s split between ship/kept halves.
+fn split_at<U: Update>(chunk: UpdatesTyped<U>, n: usize) -> (UpdatesTyped<U>, UpdatesTyped<U>)
+where
+    U::Time: 'static,
+{
+    use columnar::{Container, ContainerOf, Index, Push};
+    use columnar::primitive::offsets::Strides;
+    use crate::columnar::updates::{Lists, retain_items};
+
+    let total = chunk.len();
+    if n == 0 { return (UpdatesTyped::default(), chunk); }
+    if n >= total { return (chunk, UpdatesTyped::default()); }
+
+    let view = chunk.view();
+    let mut bitmap: Vec<bool> = (0..total).map(|i| i < n).collect();
+
+    // First half: records [0, n).
+    let (times, temp) = retain_items::<ContainerOf<U::Time>>(view.times, &bitmap[..]);
+    let (vals, temp) = retain_items::<ContainerOf<U::Val>>(view.vals, &temp[..]);
+    let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(view.keys, &temp[..]);
+    let d_borrow = view.diffs;
+    let mut diffs = <Lists::<ContainerOf<U::Diff>> as Container>::with_capacity_for([d_borrow].into_iter());
+    for (i, &bit) in bitmap.iter().enumerate() {
+        if bit { diffs.values.push(d_borrow.values.get(i)); }
+    }
+    diffs.bounds = Strides::new(1, times.values.len() as u64);
+    let first = UpdatesTyped { keys, vals, times, diffs };
+
+    // Invert and build second half: records [n, total).
+    for bit in bitmap.iter_mut() { *bit = !*bit; }
+    let (times, temp) = retain_items::<ContainerOf<U::Time>>(view.times, &bitmap[..]);
+    let (vals, temp) = retain_items::<ContainerOf<U::Val>>(view.vals, &temp[..]);
+    let (keys, _temp) = retain_items::<ContainerOf<U::Key>>(view.keys, &temp[..]);
+    let mut diffs = <Lists::<ContainerOf<U::Diff>> as Container>::with_capacity_for([d_borrow].into_iter());
+    for (i, &bit) in bitmap.iter().enumerate() {
+        if bit { diffs.values.push(d_borrow.values.get(i)); }
+    }
+    diffs.bounds = Strides::new(1, times.values.len() as u64);
+    let second = UpdatesTyped { keys, vals, times, diffs };
+
+    (first, second)
 }
