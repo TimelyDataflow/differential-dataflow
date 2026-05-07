@@ -226,32 +226,6 @@ impl<U: Update + 'static> Fetch<UpdatesTyped<U>> for FileFetch<U> {
     }
 }
 
-/// Trivial `SpillPolicy`: page out every `Typed` entry on each apply.
-/// Useful for direct queue exercise; not intended as a real policy.
-pub struct SpillEverything<U: Update> {
-    spill: FileSpill<U>,
-}
-
-impl<U: Update + 'static> SpillPolicy<UpdatesTyped<U>> for SpillEverything<U> {
-    fn apply(&mut self, queue: &mut std::collections::VecDeque<Entry<UpdatesTyped<U>>>) {
-        let mut new_queue = std::collections::VecDeque::with_capacity(queue.len());
-        let mut buf = Vec::new();
-        let mut handles: Vec<Box<dyn Fetch<UpdatesTyped<U>>>> = Vec::new();
-        for entry in queue.drain(..) {
-            match entry {
-                Entry::Typed(c) => {
-                    buf.push(c);
-                    self.spill.spill(&mut buf, &mut handles);
-                    let handle = handles.pop().expect("FileSpill produces a handle per chunk");
-                    new_queue.push_back(Entry::Paged(handle));
-                }
-                Entry::Paged(h) => new_queue.push_back(Entry::Paged(h)),
-            }
-        }
-        *queue = new_queue;
-    }
-}
-
 /// Threshold-based spill policy adapted from timely's
 /// `communication::allocator::zero_copy::spill::threshold::Threshold`.
 ///
@@ -438,31 +412,6 @@ fn main() {
             assert_eq!(got, expected[i], "chunk {} mismatch after roundtrip", i);
         }
         println!("ok: direct Spill+Fetch roundtripped {} chunks", expected.len());
-    }
-
-    // SpillPolicy roundtrip via a queue: every Typed becomes Paged, then we
-    // fetch each one back and compare.
-    {
-        let mut policy = SpillEverything {
-            spill: FileSpill::<TestUpdate>::new().unwrap(),
-        };
-        let mut queue: std::collections::VecDeque<Entry<UpdatesTyped<TestUpdate>>> =
-            originals.iter().cloned().map(Entry::Typed).collect();
-        policy.apply(&mut queue);
-
-        // Every entry should now be Paged, in original order.
-        assert_eq!(queue.len(), expected.len());
-        for (i, entry) in queue.into_iter().enumerate() {
-            match entry {
-                Entry::Paged(handle) => {
-                    let fetched = handle.fetch().unwrap_or_else(|_| panic!("fetch should succeed"));
-                    assert_eq!(fetched.len(), 1);
-                    assert_eq!(collect(&fetched[0]), expected[i], "queue position {}", i);
-                }
-                Entry::Typed(_) => panic!("SpillEverything should leave nothing typed"),
-            }
-        }
-        println!("ok: SpillEverything paged & retrieved {} chunks in order", expected.len());
     }
 
     // End-to-end demo: a real timely dataflow.
