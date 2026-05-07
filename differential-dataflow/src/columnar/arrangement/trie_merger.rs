@@ -60,17 +60,23 @@ fn form_chunks<'a, U: Update>(
 }
 
 /// Partition `merged` into chunks ready to ship (times strictly less than `upper`)
-/// and chunks kept for future seals (times at-or-after `upper`). Updates `frontier`
-/// to the antichain of kept times.
-pub fn extract<U: Update>(
-    mut merged: Vec<UpdatesTyped<U>>,
+/// and chunks kept for future seals (times at-or-after `upper`), updating
+/// `frontier` to the antichain of kept times. `merged` is consumed lazily,
+/// and outputs flow through `ship` / `kept` sinks so the caller can spill or
+/// forward as chunks are produced rather than buffering them.
+pub fn extract<U, I, FShip, FKept>(
+    merged: I,
     upper: AntichainRef<U::Time>,
     frontier: &mut Antichain<U::Time>,
-    ship: &mut Vec<UpdatesTyped<U>>,
-    kept: &mut Vec<UpdatesTyped<U>>,
+    mut ship: FShip,
+    mut kept: FKept,
 )
 where
+    U: Update,
     U::Time: 'static,
+    I: IntoIterator<Item = UpdatesTyped<U>>,
+    FShip: FnMut(UpdatesTyped<U>),
+    FKept: FnMut(UpdatesTyped<U>),
 {
     use columnar::{Container, ContainerOf, Index, Push};
     use columnar::primitive::offsets::Strides;
@@ -79,7 +85,7 @@ where
     // TODO: rework to move from trie structure to trie structure.
     let mut time_owned = U::Time::default();
     let mut bitmap = Vec::new();    // update should be kept.
-    for chunk in merged.drain(..) {
+    for chunk in merged {
         bitmap.clear();
         let view = chunk.view();
         let times = view.times.values;
@@ -91,8 +97,8 @@ where
             }
             else { bitmap.push(false); }
         }
-        if bitmap.iter().all(|x| *x) { kept.push(chunk); }
-        else if bitmap.iter().all(|x| !*x) { ship.push(chunk); }
+        if bitmap.iter().all(|x| *x) { kept(chunk); }
+        else if bitmap.iter().all(|x| !*x) { ship(chunk); }
         else {
 
             let (times, temp) = retain_items::<ContainerOf<U::Time>>(view.times, &bitmap[..]);
@@ -104,7 +110,7 @@ where
                 if *bit { diffs.values.push(d_borrow.values.get(index)); }
             }
             diffs.bounds = Strides::new(1, times.values.len() as u64);
-            kept.push(UpdatesTyped {
+            kept(UpdatesTyped {
                 keys,
                 vals,
                 times,
@@ -122,7 +128,7 @@ where
                 if *bit { diffs.values.push(d_borrow.values.get(index)); }
             }
             diffs.bounds = Strides::new(1, times.values.len() as u64);
-            ship.push(UpdatesTyped {
+            ship(UpdatesTyped {
                 keys,
                 vals,
                 times,
@@ -155,14 +161,24 @@ where
 }
 
 /// A merge implementation that operates batch-at-a-time.
+///
+/// Inputs are taken as `IntoIterator` so the caller can stream chunks in
+/// lazily — e.g. fetching paged-out chunks one group at a time — rather than
+/// materializing entire chains up front. Output chunks are emitted via the
+/// caller-supplied `sink` as they become stable, so the caller can apply a
+/// spill policy mid-merge rather than buffering the full result.
 #[inline(never)]
-pub fn merge_batches<U: Update>(
-    list1: Vec<UpdatesTyped<U>>,
-    list2: Vec<UpdatesTyped<U>>,
-    output: &mut Vec<UpdatesTyped<U>>,
+pub fn merge_batches<U, I1, I2, S>(
+    list1: I1,
+    list2: I2,
+    sink: S,
 )
 where
+    U: Update,
     U::Time: 'static,
+    I1: IntoIterator<Item = UpdatesTyped<U>>,
+    I2: IntoIterator<Item = UpdatesTyped<U>>,
+    S: FnMut(UpdatesTyped<U>),
 {
 
     // The design for efficient "batch" merginging of chains of links is:
@@ -180,21 +196,21 @@ where
     // The challenging moment is the merge that can start with a suffix of one link, involving a prefix of one link.
     // These could be the same link, different links, and generally there is the potential for complexity here.
 
-    let mut builder = ChainBuilder::default();
+    let mut builder = ChainBuilder::new(sink);
 
-    let mut queue1: std::collections::VecDeque<_> = list1.into();
-    let mut queue2: std::collections::VecDeque<_> = list2.into();
+    let mut iter1 = list1.into_iter();
+    let mut iter2 = list2.into_iter();
 
     // The first unconsumed update in each block, via (k_idx, v_idx, t_idx), or None if exhausted.
     // These are (0,0,0) for a new block, and should become None once there are no remaining updates.
-    let mut cursor1 = queue1.pop_front().map(|b| ((0,0,0), b));
-    let mut cursor2 = queue2.pop_front().map(|b| ((0,0,0), b));
+    let mut cursor1 = iter1.next().map(|b| ((0,0,0), b));
+    let mut cursor2 = iter2.next().map(|b| ((0,0,0), b));
 
     // For each pair of batches
     while cursor1.is_some() && cursor2.is_some() {
         merge_batch(&mut cursor1, &mut cursor2, &mut builder);
-        if cursor1.is_none() { cursor1 = queue1.pop_front().map(|b| ((0,0,0), b)); }
-        if cursor2.is_none() { cursor2 = queue2.pop_front().map(|b| ((0,0,0), b)); }
+        if cursor1.is_none() { cursor1 = iter1.next().map(|b| ((0,0,0), b)); }
+        if cursor2.is_none() { cursor2 = iter2.next().map(|b| ((0,0,0), b)); }
     }
 
     // TODO: create batch for the non-empty cursor.
@@ -229,9 +245,9 @@ where
         builder.push(out_batch);
     }
 
-    builder.extend(queue1);
-    builder.extend(queue2);
-    *output = builder.done();
+    builder.extend(iter1);
+    builder.extend(iter2);
+    builder.done();
     // TODO: Tidy output to satisfy structural invariants.
 }
 
@@ -253,10 +269,10 @@ where
 /// fine to first produce all reports and then reflect on the cursors, rather than use the
 /// cursors as part of the mapping.
 #[inline(never)]
-fn merge_batch<U: Update>(
+fn merge_batch<U: Update, F: FnMut(UpdatesTyped<U>)>(
     batch1: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
     batch2: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
-    builder: &mut ChainBuilder<U>,
+    builder: &mut ChainBuilder<U, F>,
 )
 where
     U::Time: 'static,
@@ -614,28 +630,42 @@ pub enum Report {
     Both(usize, usize),
 }
 
-/// Accumulates a sequence of `UpdatesTyped` chunks, merging the tail when a new
-/// chunk would extend the current run rather than start a new one.
-pub struct ChainBuilder<U: super::super::layout::ColumnarUpdate> { updates: Vec<UpdatesTyped<U>> }
+/// Accumulates `UpdatesTyped` chunks one at a time, melding small adjacent
+/// chunks. Holds at most one chunk in memory (the meld target); whenever a
+/// push doesn't meld, the prior target becomes "stable" and is emitted via
+/// the caller-provided sink. The sink can spill, count, or forward the chunk
+/// however it likes.
+pub struct ChainBuilder<U: super::super::layout::ColumnarUpdate, F: FnMut(UpdatesTyped<U>)> {
+    last: Option<UpdatesTyped<U>>,
+    sink: F,
+}
 
-impl<U: super::super::layout::ColumnarUpdate> Default for ChainBuilder<U> { fn default() -> Self { Self { updates: Default::default() } } }
+impl<U: super::super::layout::ColumnarUpdate, F: FnMut(UpdatesTyped<U>)> ChainBuilder<U, F> {
+    fn new(sink: F) -> Self { Self { last: None, sink } }
 
-impl<U: super::super::layout::ColumnarUpdate> ChainBuilder<U> {
     fn push(&mut self, mut link: UpdatesTyped<U>) {
         link = link.filter_zero();
-        if link.len() > 0 {
-            if let Some(last) = self.updates.last_mut() {
-                if last.len() + link.len() < 2 * crate::columnar::LINK_TARGET {
-                    let mut build = super::super::updates::UpdatesBuilder::new_from(std::mem::take(last));
-                    build.meld(&link);
-                    *last = build.done();
-                }
-                else { self.updates.push(link); }
-
+        if link.len() == 0 { return; }
+        match self.last.as_mut() {
+            Some(last) if last.len() + link.len() < 2 * crate::columnar::LINK_TARGET => {
+                let mut build = super::super::updates::UpdatesBuilder::new_from(std::mem::take(last));
+                build.meld(&link);
+                *last = build.done();
             }
-            else { self.updates.push(link); }
+            _ => {
+                if let Some(prev) = self.last.take() {
+                    (self.sink)(prev);
+                }
+                self.last = Some(link);
+            }
         }
     }
-    fn extend(&mut self, iter: impl IntoIterator<Item=UpdatesTyped<U>>) { for link in iter { self.push(link); }}
-    fn done(self) -> Vec<UpdatesTyped<U>> { self.updates }
+    fn extend(&mut self, iter: impl IntoIterator<Item=UpdatesTyped<U>>) {
+        for link in iter { self.push(link); }
+    }
+    fn done(mut self) {
+        if let Some(last) = self.last.take() {
+            (self.sink)(last);
+        }
+    }
 }
