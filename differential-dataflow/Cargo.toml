@@ -25,6 +25,8 @@ itertools="^0.13"
 graph_map = "0.1"
 bytemuck = "1.18.0"
 mimalloc = "0.1.48"
+tempfile = "3"
+lz4_flex = "0.11"
 
 [dependencies]
 columnar = { workspace = true }
