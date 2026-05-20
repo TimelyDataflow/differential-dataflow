@@ -89,10 +89,9 @@
 //!
 //! ### Out of scope for this pass
 //!
-//! - The §3.2.2 value-based narrowing for Min — currently pass-through-on-key
-//!   (sound but loose; tightens `stable.ddp` / `scc.ddp` outputs once added).
-//! - `Reduce::Count` — handled by the same keyed lookup as Min/Distinct;
-//!   value-level narrowing would also apply here once it lands.
+//! - `Reduce::Count` — handled by the same keyed lookup as Min/Distinct,
+//!   but without value-narrowing. A real Count-flavored rule would need to
+//!   reason about which input rows summed to the demanded count.
 //! - Multi-op `Linear` chains. `emit_reverse` currently panics on these;
 //!   the rewrite assumes the optimizer leaves Linear nodes single-op.
 //! - Pre-optimization. The optimizer can clean up dead lifts and unused
@@ -535,7 +534,7 @@ mod reverse {
     use std::collections::BTreeMap;
 
     use crate::ir::{Id, LinearOp, Node};
-    use crate::parse::{Condition, FieldExpr, Projection};
+    use crate::parse::{Condition, FieldExpr, Projection, Reducer};
 
     use super::Builder;
     use super::CloneResult;
@@ -643,9 +642,9 @@ mod reverse {
                     contribs.entry(*input).or_default().push(contrib);
                 }
 
-                Node::Reduce { input, reducer: _ } => {
+                Node::Reduce { input, reducer } => {
                     let input_side = side(*input);
-                    let contrib = self.emit_lookup_keyed(dep_this, &input_side, out_shape, out_user_len);
+                    let contrib = self.emit_lookup_keyed(dep_this, &input_side, out_shape, out_user_len, reducer);
                     contribs.entry(*input).or_default().push(contrib);
                 }
 
@@ -763,30 +762,75 @@ mod reverse {
     /// Keyed lookup (Reduce-style): demand on `(K; V_out ++ user_out ++ q)`
     /// maps to every input row at the same K, time-filtered against user_out.
     /// Output: `(K; V_in ++ user_in ++ [q])`.
+    ///
+    /// For `Reducer::Min`, also applies the §3.2.2 value-narrowing: only
+    /// keep input rows whose `V_in` equals the queried `V_out` (the min).
+    /// Other inputs at the same key did not contribute to that min and are
+    /// not needed in the explanation.
     fn emit_lookup_keyed(
         &mut self,
         dep_y: Id,
         side: &Side,
         output_shape: (usize, usize),
         out_user_len: usize,
+        reducer: &Reducer,
     ) -> Id {
         let (k_in, v_in) = side.shape;
         let in_user_len = side.user_len;
         let (_, v_out) = output_shape;
         let pair = self.concat(vec![side.witness, side.forward]);
+        // Min narrowing: include V_out in the val layout so we can filter
+        // V_in == V_out element-wise below. Only applies when arities match
+        // (true for Min: forward preserves arity) and there's a value to compare.
+        let include_v_out = matches!(reducer, Reducer::Min) && v_in == v_out && v_in > 0;
         // After arrange-join on K: $0 = K, $1 = dep val (V_out + user_out + q),
         // $2 = pair val (V_in + user_in).
-        // Keep user_out in val for the time filter, then strip.
+        // val layout: V_in [+ V_out for Min] + user_in + user_out + q.
         let mut val: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_in + in_user_len { val.push(FieldExpr::Index(2, i)); }
-        for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
-        val.push(FieldExpr::Index(1, v_out + out_user_len));
+        for i in 0..v_in { val.push(FieldExpr::Index(2, i)); }                      // V_in
+        if include_v_out {
+            for i in 0..v_out { val.push(FieldExpr::Index(1, i)); }                 // V_out
+        }
+        for i in 0..in_user_len { val.push(FieldExpr::Index(2, v_in + i)); }        // user_in
+        for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }      // user_out
+        val.push(FieldExpr::Index(1, v_out + out_user_len));                         // q
         let proj = Projection {
             key: (0..k_in).map(|i| FieldExpr::Index(0, i)).collect(),
             val,
         };
         let joined = self.join(dep_y, pair, proj);
-        self.filter_time_and_strip(joined, k_in, v_in, in_user_len, out_user_len)
+
+        // For Min: filter V_in[i] == V_out[i] element-wise, then strip V_out
+        // back out of val so the downstream time-filter sees its expected
+        // (K; V_in + user_in + user_out + q) layout.
+        let after_min = if include_v_out {
+            let mut acc: Option<Condition> = None;
+            for i in 0..v_in {
+                let cond = Condition::Eq(
+                    FieldExpr::Index(1, i),         // V_in[i]
+                    FieldExpr::Index(1, v_in + i),  // V_out[i]
+                );
+                acc = Some(match acc {
+                    None => cond,
+                    Some(prev) => Condition::And(Box::new(prev), Box::new(cond)),
+                });
+            }
+            let filtered = self.filter(joined, acc.unwrap());
+            // Re-project to drop V_out, restoring (K; V_in + user_in + user_out + q).
+            let key: Vec<FieldExpr> = (0..k_in).map(|i| FieldExpr::Index(0, i)).collect();
+            let mut new_val: Vec<FieldExpr> = Vec::new();
+            for i in 0..v_in { new_val.push(FieldExpr::Index(1, i)); }                       // V_in
+            // skip V_out at [v_in..v_in+v_out]
+            let after_vout = v_in + v_out;
+            for i in 0..in_user_len { new_val.push(FieldExpr::Index(1, after_vout + i)); }   // user_in
+            for i in 0..out_user_len { new_val.push(FieldExpr::Index(1, after_vout + in_user_len + i)); }  // user_out
+            new_val.push(FieldExpr::Index(1, after_vout + in_user_len + out_user_len));      // q
+            self.project(filtered, Projection { key, val: new_val })
+        } else {
+            joined
+        };
+
+        self.filter_time_and_strip(after_min, k_in, v_in, in_user_len, out_user_len)
     }
 
     /// Lossy lookup (Linear[Project]).
