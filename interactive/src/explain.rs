@@ -606,12 +606,51 @@ mod reverse {
             contribs: &mut BTreeMap<Id, Vec<Id>>,
         ) {
             // Bind has no demand entry of its own; it routes the *variable's*
-            // demand into the *value's* contribs. Other no-demand nodes (Scope,
-            // EndScope) have nothing to do.
+            // demand into the *value's* contribs as a pure map.
+            //
+            // The user `var`'s forward feedback advances `user_chain[0]` (the
+            // innermost user-iter coord, which is the var's own scope iter)
+            // by 1. Inverting that: dep at `var` with `user_chain[0] = K`
+            // maps to dep at body with `user_chain[0] = K - 1`. Rows with
+            // `user_chain[0] = 0` are filtered out — they represent a demand
+            // at iter 0, which has no body-side source (the body hadn't
+            // emitted anything by then).
+            //
+            // Replacing the prior `emit_lookup_shape_preserving` (which
+            // joined against host[body] and picked up *any* body emission of
+            // the same data, regardless of iter) tightens demand to the
+            // single iter that actually sourced the var's view. Sound only
+            // because the demand variables are non-monotone — see the
+            // earlier note on the bind loop.
             if let Node::Bind { variable, value } = node {
                 if let Some(&dv) = demand.get(variable) {
-                    let value_side = Side::for_input(*value, witness, forward, arities, user_lens);
-                    let contrib = self.emit_lookup_shape_preserving(dv, &value_side, user_lens[variable]);
+                    let (kx, vx) = arities[variable];
+                    let var_user_len = user_lens[variable];
+                    // Position of user_chain[0] in the dep row's val.
+                    let chain_pos = vx;
+                    // Filter: user_chain[0] > 0.
+                    let filtered = self.filter(
+                        dv,
+                        Condition::Gt(
+                            FieldExpr::Index(1, chain_pos),
+                            FieldExpr::Const(0),
+                        ),
+                    );
+                    // Project: subtract 1 from user_chain[0]; leave all
+                    // other fields (key, V_data, user_chain[1..], q) intact.
+                    let key: Vec<FieldExpr> =
+                        (0..kx).map(|i| FieldExpr::Index(0, i)).collect();
+                    let mut val: Vec<FieldExpr> = Vec::new();
+                    for i in 0..vx { val.push(FieldExpr::Index(1, i)); }
+                    val.push(FieldExpr::Sub(
+                        Box::new(FieldExpr::Index(1, chain_pos)),
+                        Box::new(FieldExpr::Const(1)),
+                    ));
+                    for i in 1..var_user_len {
+                        val.push(FieldExpr::Index(1, chain_pos + i));
+                    }
+                    val.push(FieldExpr::Index(1, chain_pos + var_user_len));
+                    let contrib = self.project(filtered, Projection { key, val });
                     contribs.entry(*value).or_default().push(contrib);
                 }
                 return;
