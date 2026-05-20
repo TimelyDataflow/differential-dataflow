@@ -835,11 +835,24 @@ mod reverse {
 
     /// Lossy lookup (Linear[Project]).
     ///
-    /// pair = (witness_input + forward_input) projected to
+    /// Two emission paths depending on `proj`'s invertibility:
+    ///
+    /// **Pure-map shortcut.** If every input field is recoverable from the
+    /// output (every `(r, c)` appears as `Index(r, c)` or via `Pos(r)` in
+    /// `proj.key` or `proj.val`) AND the input lives at outer scope (no
+    /// `user_chain` to source), bypass the pair table entirely: emit a
+    /// single Linear that maps each `dep_y` row directly to its synthetic
+    /// `(K_in, V_in, q)` form. Cost is `O(|dep|)`, independent of `|input|`
+    /// — the algorithmic win that lets explanations stay bounded as inputs
+    /// grow. Any synthetic input row that doesn't actually exist gets
+    /// filtered out later by the `semijoin(actual_input_<i>)` at must-set
+    /// seeding.
+    ///
+    /// **Fallback (pair-table).** Otherwise, the original construction:
+    /// `pair = (witness_input + forward_input)` projected to
     /// `(chained_K_out; K_in ++ V_in ++ user_in)`. dep_y has shape
-    /// `(K_out; V_out ++ user_out ++ q)`. After join on K_out:
-    /// `$0=K_out, $1=dep_val, $2=pair_val`.
-    /// Output: `(K_in; V_in ++ user_in ++ [q])`.
+    /// `(K_out; V_out ++ user_out ++ q)`. After join on K_out, output
+    /// `(K_in; V_in ++ user_in ++ [q])`, time-filtered.
     fn emit_lookup_lossy(
         &mut self,
         dep_y: Id,
@@ -850,7 +863,29 @@ mod reverse {
     ) -> Id {
         let (k_in, v_in) = side.shape;
         let in_user_len = side.user_len;
-        let (_, v_out) = output_shape;
+        let (k_out, v_out) = output_shape;
+
+        let known = analyze_lossy_invertibility(proj, k_in, v_in);
+        let total = (0..k_in).all(|c| known.contains_key(&(0, c)))
+            && (0..v_in).all(|c| known.contains_key(&(1, c)));
+
+        if total && in_user_len == 0 {
+            // Map flat output position p (into [K_out ++ V_out]) to an access
+            // expression against dep_y's (key, val) layout:
+            //   p < k_out → $0[p]                 (key)
+            //   p >= k_out → $1[p - k_out]        (val, since dep_y.val starts with V_out)
+            let access = |p: usize| -> FieldExpr {
+                if p < k_out { FieldExpr::Index(0, p) }
+                else { FieldExpr::Index(1, p - k_out) }
+            };
+            let key: Vec<FieldExpr> = (0..k_in).map(|c| access(known[&(0, c)])).collect();
+            let mut val: Vec<FieldExpr> = Vec::with_capacity(v_in + 1);
+            for c in 0..v_in { val.push(access(known[&(1, c)])); }
+            // user_in is empty (in_user_len == 0); q is at $1[v_out + out_user_len].
+            val.push(FieldExpr::Index(1, v_out + out_user_len));
+            return self.project(dep_y, Projection { key, val });
+        }
+
         let pair_src = self.concat(vec![side.witness, side.forward]);
         // pair_src shape: (K_in; V_in ++ user_in[0..in_user_len]).
         // Build pair: key = proj.key (computes chained K_out), val = K_in ++ V_in ++ user_in.
@@ -985,6 +1020,44 @@ mod reverse {
         for i in 0..k { out.push(FieldExpr::Index(0, i)); }
         for i in 0..v { out.push(FieldExpr::Index(1, i)); }
         out
+    }
+
+    /// Identify which input fields a `Linear[Project]` projection makes
+    /// recoverable from its output. Returns a map `(r, c) → output_position`
+    /// where `output_position` indexes into the flattened `[K_out, V_out]`
+    /// row and `(r, c)` is the input field — `r=0` for `K_in[c]`, `r=1` for
+    /// `V_in[c]`.
+    ///
+    /// Direct cases (`Index(r, c)` and `Pos(r)`) are recognized. Computed
+    /// fields (`Const`, `Neg`, `Sub`) are not analyzed — the input field
+    /// they reference, if any, is left "unknown" and falls back to the
+    /// pair-table path in `emit_lookup_lossy`.
+    fn analyze_lossy_invertibility(
+        proj: &Projection,
+        k_in: usize,
+        v_in: usize,
+    ) -> BTreeMap<(usize, usize), usize> {
+        let mut known: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+        let mut p: usize = 0;
+        for fe in proj.key.iter().chain(proj.val.iter()) {
+            match fe {
+                FieldExpr::Index(r, c) => {
+                    known.entry((*r, *c)).or_insert(p);
+                    p += 1;
+                }
+                FieldExpr::Pos(r) => {
+                    let arity = if *r == 0 { k_in } else { v_in };
+                    for c in 0..arity {
+                        known.entry((*r, c)).or_insert(p + c);
+                    }
+                    p += arity;
+                }
+                FieldExpr::Const(_) | FieldExpr::Neg(_) | FieldExpr::Sub(_, _) => {
+                    p += 1;
+                }
+            }
+        }
+        known
     }
 }
 
