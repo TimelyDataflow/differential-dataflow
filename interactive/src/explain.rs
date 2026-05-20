@@ -174,59 +174,72 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
     // PointStamp depth at any point is one more than its local user_level.
     let forward = b.clone_with_lifts(p, &forward_inputs, 1);
 
-    // Demand Variables (one per witness data node).
+    // Demand Variables are pre-allocated *only* for user-program `var` IR
+    // nodes (`Node::Variable`). These are the only places where the demand
+    // chain has a structurally-required feedback (forward cycles around
+    // user `var`s induce backward cycles that need a Variable to close).
+    //
+    // For every other node, demand is a closed-form expression computed
+    // in the reverse walk below.
     let mut demand_var: BTreeMap<Id, Id> = BTreeMap::new();
     for (&id, node) in &p.nodes {
-        if !matches!(node, Node::Scope | Node::EndScope | Node::Bind { .. }) {
+        if matches!(node, Node::Variable) {
             demand_var.insert(id, b.variable());
         }
     }
 
-    // reverse rules. Per-op, push contributions onto `contribs[input_id]`.
+    // reverse rules. Walk nodes in *reverse* id order so each node's
+    // `contribs[id]` is already populated by its higher-id consumers by
+    // the time we reach it. For each node we compute its demand expression
+    // from `contribs[id]`, store it in `demand_var`, then dispatch the
+    // node's bward rule (which pushes onto its inputs' contribs).
+    //
     // Query input directly seeds `contribs[result]` — the result demand
     // starts with the query rows.
     let mut contribs: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
     contribs.entry(p.result).or_default().push(query_input);
 
-    for (&id, node) in &p.nodes {
-        b.emit_reverse(
-            id,
-            node,
-            &witness,
-            &forward,
-            &demand_var,
-            &arities,
-            &user_lens,
-            &mut contribs,
-        );
-    }
-
-    // Bind demand variables: demand_<N> := distinct(contribs).
-    //
-    // Note the absence of `demand_<N>` itself on the right-hand side — this
-    // makes the per-IR-node demand variable a *one-step delay* rather than a
-    // monotone accumulator. The variable still acts as a feedback edge (so
-    // the IR-level cycles around user `var`s can close), but it does not
-    // retain demand entries from prior iterations. This is the structural
-    // change we predicted would tighten programs whose looseness comes from
-    // intermediate-state leakage (stable, scc).
-    for (&id, &var) in &demand_var {
+    for (&id, node) in p.nodes.iter().rev() {
+        // Scope / EndScope carry no demand and have no bward action.
+        if matches!(node, Node::Scope | Node::EndScope) { continue; }
+        // Bind has no demand of its own; its handler in `emit_reverse`
+        // routes the variable's pre-allocated demand into the value's
+        // contribs.
+        if matches!(node, Node::Bind { .. }) {
+            b.emit_reverse(id, node, &witness, &forward, &demand_var, &arities, &user_lens, &mut contribs);
+            continue;
+        }
         let cs = contribs.remove(&id).unwrap_or_default();
-        let combined = if cs.is_empty() {
-            // No upstream demand. Bind the variable to itself so the feedback
-            // edge remains structurally valid; it stays empty in practice.
-            var
-        } else if cs.len() == 1 {
-            cs[0]
-        } else {
-            b.concat(cs)
-        };
+        if cs.is_empty() {
+            // No upstream demand. For a user `var`, still bind the
+            // pre-allocated Variable to itself so the feedback edge is
+            // structurally valid (it stays empty in practice).
+            if matches!(node, Node::Variable) {
+                let var = demand_var[&id];
+                b.bind(var, var);
+            }
+            continue;
+        }
+        let combined = if cs.len() == 1 { cs[0] } else { b.concat(cs) };
         let (k, v) = arities[&id];
         let user_len = user_lens[&id];
         let val_arity = v + user_len + 1; // V + user_chain + [q]
         let dist = b.distinct_full(combined, k, val_arity);
         b.debug_inspect(dist, format!("demand_{}", id));
-        b.bind(var, dist);
+        if matches!(node, Node::Variable) {
+            // User `var`: bind the pre-allocated Variable to its demand
+            // expression. `demand_var[id]` already holds the Variable id
+            // (set above); leave it as-is so consumers reference the
+            // Variable, not the body expression directly.
+            let var = demand_var[&id];
+            b.bind(var, dist);
+        } else {
+            // Non-user-var: demand is the expression itself, no Variable
+            // wrapping. Inputs that consume this node read the expression
+            // id directly.
+            demand_var.insert(id, dist);
+        }
+        b.emit_reverse(id, node, &witness, &forward, &demand_var, &arities, &user_lens, &mut contribs);
     }
 
     // Bind demand-set variables: demand_set_<i> := distinct(demand_set_<i> + (demand_<Input(i)> | strip | semijoin actual)).
