@@ -201,12 +201,26 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
         );
     }
 
-    // Bind demand variables: demand_<N> := distinct(demand_<N> + contribs).
+    // Bind demand variables: demand_<N> := distinct(contribs).
+    //
+    // Note the absence of `demand_<N>` itself on the right-hand side — this
+    // makes the per-IR-node demand variable a *one-step delay* rather than a
+    // monotone accumulator. The variable still acts as a feedback edge (so
+    // the IR-level cycles around user `var`s can close), but it does not
+    // retain demand entries from prior iterations. This is the structural
+    // change we predicted would tighten programs whose looseness comes from
+    // intermediate-state leakage (stable, scc).
     for (&id, &var) in &demand_var {
         let cs = contribs.remove(&id).unwrap_or_default();
-        let mut all = vec![var];
-        all.extend(cs);
-        let combined = if all.len() == 1 { all[0] } else { b.concat(all) };
+        let combined = if cs.is_empty() {
+            // No upstream demand. Bind the variable to itself so the feedback
+            // edge remains structurally valid; it stays empty in practice.
+            var
+        } else if cs.len() == 1 {
+            cs[0]
+        } else {
+            b.concat(cs)
+        };
         let (k, v) = arities[&id];
         let user_len = user_lens[&id];
         let val_arity = v + user_len + 1; // V + user_chain + [q]
