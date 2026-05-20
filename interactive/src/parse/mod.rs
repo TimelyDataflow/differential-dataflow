@@ -13,10 +13,20 @@ pub enum FieldExpr {
     Index(usize, usize),
     Const(i64),
     Neg(Box<FieldExpr>),
+    /// Element-wise subtraction. IR-level only (no surface syntax).
+    /// Used by the explanation rewrite for the user-iter decrement.
+    Sub(Box<FieldExpr>, Box<FieldExpr>),
 }
 
 #[derive(Debug, Clone)]
-pub enum Condition { Eq(FieldExpr, FieldExpr), Ne(FieldExpr, FieldExpr), Lt(FieldExpr, FieldExpr), Le(FieldExpr, FieldExpr), Gt(FieldExpr, FieldExpr), Ge(FieldExpr, FieldExpr) }
+pub enum Condition {
+    Eq(FieldExpr, FieldExpr), Ne(FieldExpr, FieldExpr),
+    Lt(FieldExpr, FieldExpr), Le(FieldExpr, FieldExpr),
+    Gt(FieldExpr, FieldExpr), Ge(FieldExpr, FieldExpr),
+    /// Conjunction. Used to express partial-order time comparisons across
+    /// multiple coords (`t0 <= s0 && t1 <= s1 && ...`).
+    And(Box<Condition>, Box<Condition>),
+}
 
 #[derive(Debug, Clone)]
 pub struct Projection { pub key: Vec<FieldExpr>, pub val: Vec<FieldExpr> }
@@ -35,6 +45,16 @@ pub enum Expr {
     Filter(Box<Expr>, Condition),
     Negate(Box<Expr>),
     EnterAt(Box<Expr>, FieldExpr),
+    /// Append the current user-iter coord (at the operator's scope depth)
+    /// to each row's value as one additional i64 field. Time itself is
+    /// unchanged.
+    ///
+    /// Discipline (post-lowering check, see `lower::validate_lift_iter`):
+    /// the result of `LiftIter` must not be referenced inside the same
+    /// scope it appears in — only from an enclosing scope, after the
+    /// implicit leave. This preserves the "loop body is a time-invariant
+    /// function" property; in-scope use risks defeating the fixpoint.
+    LiftIter(Box<Expr>),
     Inspect(Box<Expr>, String),
     Concat(Vec<Expr>),
     Arrange(Box<Expr>),

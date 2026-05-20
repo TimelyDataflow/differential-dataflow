@@ -7,10 +7,10 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Let, Var, Result,
-    Input, Key, Map, Join, Min, Distinct, Count, Arrange, Negate, Filter, EnterAt, Inspect,
+    Input, Key, Map, Join, Min, Distinct, Count, Arrange, Negate, Filter, EnterAt, LiftIter, Inspect,
     Ident(String), Int(i64),
     Dollar, LParen, RParen, LBrace, RBrace, LBracket, RBracket,
-    Comma, Semi, Colon, ColonColon, Eq, EqEq, NotEq, Lt, LtEq, Gt, GtEq,
+    Comma, Semi, Colon, ColonColon, Eq, EqEq, NotEq, Lt, LtEq, Gt, GtEq, AndAnd,
     Pipe, Plus, Minus, Eof,
 }
 
@@ -32,6 +32,7 @@ fn tokenize(input: &str) -> Vec<Token> {
             ',' => { chars.next(); tokens.push(Token::Comma); },
             ';' => { chars.next(); tokens.push(Token::Semi); },
             '|' => { chars.next(); tokens.push(Token::Pipe); },
+            '&' => { chars.next(); if chars.peek() == Some(&'&') { chars.next(); tokens.push(Token::AndAnd); } else { panic!("Expected && after &"); } },
             '+' => { chars.next(); tokens.push(Token::Plus); },
             '=' => { chars.next(); if chars.peek() == Some(&'=') { chars.next(); tokens.push(Token::EqEq); } else { tokens.push(Token::Eq); } },
             '!' => { chars.next(); if chars.peek() == Some(&'=') { chars.next(); tokens.push(Token::NotEq); } else { panic!("Expected != after !"); } },
@@ -54,6 +55,7 @@ fn tokenize(input: &str) -> Vec<Token> {
                     "join" => Token::Join, "min" => Token::Min, "distinct" => Token::Distinct,
                     "count" => Token::Count, "arrange" => Token::Arrange, "negate" => Token::Negate,
                     "filter" => Token::Filter, "enter_at" => Token::EnterAt, "inspect" => Token::Inspect,
+                    "lift_iter" => Token::LiftIter,
                     _ => Token::Ident(ident),
                 });
             },
@@ -142,6 +144,7 @@ impl Parser {
             Token::Negate => { self.next(); Expr::Negate(Box::new(lhs)) },
             Token::Filter => { self.next(); self.expect(&Token::LParen); let c = self.parse_condition(); self.expect(&Token::RParen); Expr::Filter(Box::new(lhs), c) },
             Token::EnterAt => { self.next(); self.expect(&Token::LParen); let f = self.parse_field(); self.expect(&Token::RParen); Expr::EnterAt(Box::new(lhs), f) },
+            Token::LiftIter => { self.next(); Expr::LiftIter(Box::new(lhs)) },
             Token::Inspect => { self.next(); self.expect(&Token::LParen); let l = self.parse_ident(); self.expect(&Token::RParen); Expr::Inspect(Box::new(lhs), l) },
             other => panic!("Expected pipe operator, got {:?}", other),
         }
@@ -181,6 +184,16 @@ impl Parser {
     }
 
     fn parse_condition(&mut self) -> Condition {
+        let mut left = self.parse_primary_condition();
+        while *self.peek() == Token::AndAnd {
+            self.next();
+            let right = self.parse_primary_condition();
+            left = Condition::And(Box::new(left), Box::new(right));
+        }
+        left
+    }
+
+    fn parse_primary_condition(&mut self) -> Condition {
         let l = self.parse_field();
         let op = self.next();
         let r = self.parse_field();

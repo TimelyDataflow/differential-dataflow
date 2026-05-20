@@ -184,6 +184,7 @@ impl Lowering {
             Expr::Filter(input, cond)  => { let id = self.lower_expr(*input); self.push(Node::Linear { input: id, ops: vec![LinearOp::Filter(cond)] }) },
             Expr::Negate(input)        => { let id = self.lower_expr(*input); self.push(Node::Linear { input: id, ops: vec![LinearOp::Negate] }) },
             Expr::EnterAt(input, fld)  => { let id = self.lower_expr(*input); self.push(Node::Linear { input: id, ops: vec![LinearOp::EnterAt(fld)] }) },
+            Expr::LiftIter(input)      => { let id = self.lower_expr(*input); self.push(Node::Linear { input: id, ops: vec![LinearOp::LiftIter] }) },
             Expr::Inspect(input, lab)  => { let id = self.lower_expr(*input); self.push(Node::Inspect { input: id, label: lab }) },
             Expr::Concat(exprs) => { let ids: Vec<Id> = exprs.into_iter().map(|e| self.lower_expr(e)).collect(); self.push(Node::Concat(ids)) },
             Expr::Arrange(input) => { let id = self.lower_expr(*input); self.push(Node::Arrange(id)) },
@@ -226,8 +227,8 @@ fn expr_free_names<'a>(expr: &'a Expr, out: &mut BTreeSet<&'a str>) {
         Expr::Name(n) => { out.insert(n.as_str()); },
         Expr::Qualified(scope, _) => { out.insert(scope.as_str()); },
         Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
-            | Expr::Negate(e) | Expr::EnterAt(e, _) | Expr::Inspect(e, _)
-            | Expr::Arrange(e) => expr_free_names(e, out),
+            | Expr::Negate(e) | Expr::EnterAt(e, _) | Expr::LiftIter(e)
+            | Expr::Inspect(e, _) | Expr::Arrange(e) => expr_free_names(e, out),
         Expr::Join(l, r, _) => { expr_free_names(l, out); expr_free_names(r, out); },
         Expr::Concat(es) => { for e in es { expr_free_names(e, out); } },
     }
@@ -254,4 +255,8 @@ fn collect_body_free_names<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>) {
     for n in inner { if !local.contains(n) { out.insert(n); } }
 }
 
-pub fn lower(stmts: Vec<Stmt>) -> Program { Lowering::new().lower_program(stmts) }
+pub fn lower(stmts: Vec<Stmt>) -> Program {
+    let program = Lowering::new().lower_program(stmts);
+    program.validate_lift_iter().unwrap_or_else(|e| panic!("{}", e));
+    program
+}

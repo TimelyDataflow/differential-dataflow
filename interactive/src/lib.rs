@@ -1,6 +1,7 @@
 pub mod parse;
 pub mod ir;
 pub mod lower;
+pub mod explain;
 
 use parse::{Stmt, Expr};
 
@@ -24,8 +25,8 @@ fn count_inputs_expr(expr: &Expr) -> usize {
     match expr {
         Expr::Input(n) => n + 1,
         Expr::Map(e, _) | Expr::Negate(e) | Expr::Arrange(e)
-            | Expr::EnterAt(e, _) | Expr::Filter(e, _) | Expr::Reduce(e, _)
-            | Expr::Inspect(e, _) => count_inputs_expr(e),
+            | Expr::EnterAt(e, _) | Expr::LiftIter(e) | Expr::Filter(e, _)
+            | Expr::Reduce(e, _) | Expr::Inspect(e, _) => count_inputs_expr(e),
         Expr::Join(l, r, _) => count_inputs_expr(l).max(count_inputs_expr(r)),
         Expr::Concat(es) => es.iter().map(|e| count_inputs_expr(e)).max().unwrap_or(0),
         Expr::Name(_) | Expr::Qualified(_, _) => 0,
