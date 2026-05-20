@@ -99,15 +99,28 @@
 //!
 //! ### Future investigation
 //!
-//! Per-IR-node demand variables (`demand_<N>`) may be redundant. They are
-//! inherited from the timely reference implementation, which needed a
-//! feedback Variable per operator to express backward edges. The rewrite
-//! likely doesn't: each non-user-`var` node's demand is a pure function of
-//! downstream demand + its pair table, and could be composed as plain DD
-//! operators. The only structurally required feedbacks are (a) one
-//! demand-set per Input and (b) one demand feedback per user-program `var`.
-//! Worth measuring intermediate-stream sizes before committing — the
-//! per-node `distinct`s today act as natural fan-out limiters.
+//! **Self-protection at non-pass-through ops.** Today, Concat is the one
+//! pass-through-eligible op that *isn't* pass-through, because its per-input
+//! SP lookup against `host[input]` is what filters spurious demand routed
+//! to consumers downstream of the Concat — specifically, demand at user_chain
+//! values that the consumer never actually emitted. The Join's right contrib
+//! is one example: it filters on `u_R ≤ u_out` (its own pair's right side),
+//! but with static edges where `u_R = 0`, that filter admits demand at any
+//! `u_out ≥ 0` — including u_out values the Join never produced output at.
+//! The Concat's per-input SP catches this externally.
+//!
+//! A cleaner model would shift the responsibility inward: every
+//! non-pass-through op (Reduce, Join, Linear[Project]) self-filters its
+//! incoming `dep_y` against `host[<own-output>]` at the start of its bward,
+//! asking "is this dep row consistent with what I actually emitted?"
+//! Concat would then become pass-through. Each op becomes responsible for
+//! receiving only valid demand, no externality on its consumers.
+//!
+//! Trade-off: a self-filter adds ~5 IR nodes per non-pass-through op vs.
+//! the current ~5 nodes per Concat input. Programs with many ops behind one
+//! Concat win; programs with few Concats and many ops lose. The diagnostic
+//! value is the bigger gain — fewer "action at a distance" relationships
+//! to reason about.
 
 use std::collections::BTreeMap;
 
