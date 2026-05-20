@@ -142,11 +142,25 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
     let mut b = Builder::new();
     let arities = compute_arities(p, input_arities);
     let depths = p.depths();
-    // Per node, how many user-iter coords the lifted (host-visible) collection
-    // carries in val. For non-Leave nodes this equals `depths[N]`; for
-    // `Leave(inner, _)`, host[Leave] aliases host[inner] so the user-chain
-    // length is the inner's depth.
-    let user_lens: BTreeMap<Id, usize> = p.nodes.iter().map(|(&id, node)| {
+    // The two user-chain lengths we track at each node:
+    //
+    // * `host_user_lens[N]` — how many user-iter coords the lifted, host-
+    //   visible collection at `N` carries in val. For most nodes this is
+    //   `depths[N]`; for `Leave(inner, _)`, host[Leave] aliases host[inner],
+    //   so the host length equals `depths[inner]` (one greater than
+    //   `Leave`'s own depth). Used only for *lookups* against `host[N]` —
+    //   i.e. via `Side`'s pair construction.
+    //
+    // * `dep_user_lens[N]` — how many user-iter coords the *demand* at `N`
+    //   carries in val. This is always `depths[N]` — no override.
+    //
+    // The split matters at `Leave`: dep[Leave] lives in the outer scope,
+    // so it carries the outer scope's user_chain length, even though
+    // host[Leave] carries the (longer) inner one. `Leave`'s bward is the
+    // place that *injects* the extra inner user_chain coord (via an SP
+    // lookup against host[inner]) — no other node has to know about the
+    // depth boundary.
+    let host_user_lens: BTreeMap<Id, usize> = p.nodes.iter().map(|(&id, node)| {
         let len = if let Node::Leave(inner, _) = node {
             *depths.get(inner).unwrap_or(&0)
         } else {
@@ -154,6 +168,7 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
         };
         (id, len)
     }).collect();
+    let dep_user_lens: &BTreeMap<Id, usize> = &depths;
     let n_inputs = input_arities.len();
 
     // ---- outer scope ----
@@ -219,7 +234,7 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
         // routes the variable's pre-allocated demand into the value's
         // contribs.
         if matches!(node, Node::Bind { .. }) {
-            b.emit_reverse(id, node, &witness, &forward, &demand_var, &arities, &user_lens, &mut contribs);
+            b.emit_reverse(id, node, &witness, &forward, &demand_var, &arities, &host_user_lens, dep_user_lens, &mut contribs);
             continue;
         }
         let cs = contribs.remove(&id).unwrap_or_default();
@@ -235,7 +250,7 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
         }
         let combined = if cs.len() == 1 { cs[0] } else { b.concat(cs) };
         let (k, v) = arities[&id];
-        let user_len = user_lens[&id];
+        let user_len = dep_user_lens[&id];
         let val_arity = v + user_len + 1; // V + user_chain + [q]
         let dist = b.distinct_full(combined, k, val_arity);
         b.debug_inspect(dist, format!("demand_{}", id));
@@ -252,7 +267,7 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
             // id directly.
             demand_var.insert(id, dist);
         }
-        b.emit_reverse(id, node, &witness, &forward, &demand_var, &arities, &user_lens, &mut contribs);
+        b.emit_reverse(id, node, &witness, &forward, &demand_var, &arities, &host_user_lens, dep_user_lens, &mut contribs);
     }
 
     // Bind demand-set variables: demand_set_<i> := distinct(demand_set_<i> + (demand_<Input(i)> | strip | semijoin actual)).
@@ -580,28 +595,34 @@ mod reverse {
     use super::CloneResult;
 
     /// One upstream edge into a backward rule: its host-side `(data, user)`
-    /// collections from both clones, its data shape, and the user-chain
-    /// length its host form carries.
-    struct Side {
-        witness: Id,                 // witness.host[input]
-        forward: Id,                 // forward.host[input]
-        shape: (usize, usize),     // (k_arity, v_arity)
-        user_len: usize,
+    /// collections from both clones, its data shape, and the two user-chain
+    /// lengths described in the top-of-module split (host vs dep). For
+    /// non-Leave nodes the two are equal; they only diverge at a `Leave`,
+    /// where the host length is the inner depth and the dep length is the
+    /// outer depth.
+    pub(super) struct Side {
+        pub(super) witness: Id,            // witness.host[input]
+        pub(super) forward: Id,            // forward.host[input]
+        pub(super) shape: (usize, usize),  // (k_arity, v_arity)
+        pub(super) host_user_len: usize,
+        pub(super) dep_user_len: usize,
     }
 
     impl Side {
-        fn for_input(
+        pub(super) fn for_input(
             id: Id,
             witness: &CloneResult,
             forward: &CloneResult,
             arities: &BTreeMap<Id, (usize, usize)>,
-            user_lens: &BTreeMap<Id, usize>,
+            host_user_lens: &BTreeMap<Id, usize>,
+            dep_user_lens: &BTreeMap<Id, usize>,
         ) -> Self {
             Self {
                 witness: witness.host[&id],
                 forward: forward.host[&id],
                 shape: arities[&id],
-                user_len: user_lens[&id],
+                host_user_len: host_user_lens[&id],
+                dep_user_len: dep_user_lens[&id],
             }
         }
     }
@@ -615,7 +636,8 @@ mod reverse {
             forward: &CloneResult,
             demand: &BTreeMap<Id, Id>,
             arities: &BTreeMap<Id, (usize, usize)>,
-            user_lens: &BTreeMap<Id, usize>,
+            host_user_lens: &BTreeMap<Id, usize>,
+            dep_user_lens: &BTreeMap<Id, usize>,
             contribs: &mut BTreeMap<Id, Vec<Id>>,
         ) {
             // Bind has no demand entry of its own; it routes the *variable's*
@@ -638,7 +660,7 @@ mod reverse {
             if let Node::Bind { variable, value } = node {
                 if let Some(&dv) = demand.get(variable) {
                     let (kx, vx) = arities[variable];
-                    let var_user_len = user_lens[variable];
+                    let var_user_len = dep_user_lens[variable];
                     // Position of user_chain[0] in the dep row's val.
                     let chain_pos = vx;
                     // Filter: user_chain[0] > 0.
@@ -673,9 +695,9 @@ mod reverse {
                 None => return,
             };
             // `out_user_len` = number of user-iter coords in dep_<id>'s val (after V).
-            let out_user_len = user_lens[&id];
+            let out_user_len = dep_user_lens[&id];
             let out_shape = arities[&id];
-            let side = |inp: Id| Side::for_input(inp, witness, forward, arities, user_lens);
+            let side = |inp: Id| Side::for_input(inp, witness, forward, arities, host_user_lens, dep_user_lens);
 
             match node {
                 Node::Input(_) => { /* terminal; feeds demand-set seeding. */ }
@@ -697,15 +719,15 @@ mod reverse {
                             // (e.g., when this Filter feeds a Concat whose
                             // other input could have supplied those rows);
                             // keeping only rows the filter would admit blocks
-                            // that leak.
+                            // that leak. Pass-through is sound here because
+                            // input and output share a scope (Filter doesn't
+                            // cross a depth boundary; only `Leave` does).
                             let contrib = self.filter(dep_this, cond.clone());
                             contribs.entry(*input).or_default().push(contrib);
                         }
                         LinearOp::Negate | LinearOp::EnterAt(_) => {
                             // Pure pass-through: data unchanged, scope
-                            // unchanged. No host lookup, no time filter
-                            // (input and output user_chains are identical
-                            // row-by-row).
+                            // unchanged.
                             contribs.entry(*input).or_default().push(dep_this);
                         }
                         LinearOp::LiftIter => {
@@ -731,14 +753,25 @@ mod reverse {
                     }
                 }
 
-                // Pure pass-through ops: data unchanged, scope unchanged,
-                // host[output] aligned with host[input] so the SP filter
-                // would be a no-op.
+                // Pure pass-through: data unchanged, scope unchanged.
+                // (Both input and output live at the same depth, so they
+                // carry the same `dep_user_len` — no depth boundary to
+                // worry about. That's `Leave`'s job, below.)
                 Node::Arrange(input) | Node::Inspect { input, .. } => {
                     contribs.entry(*input).or_default().push(dep_this);
                 }
+
+                // Leave is the sole depth-boundary op. dep[Leave] lives
+                // in the outer scope and carries `depths[Leave]` user_chain
+                // coords, but contribs[inner] needs `depths[inner]` (one
+                // more). The SP lookup against host[inner] (which carries
+                // user_chain via `lift_iter`) injects the extra coord —
+                // and only Leave needs to know about this; no other op
+                // has to special-case "input is a Leave."
                 Node::Leave(inner, _) => {
-                    contribs.entry(*inner).or_default().push(dep_this);
+                    let inner_side = side(*inner);
+                    let contrib = self.emit_lookup_shape_preserving(dep_this, &inner_side, out_user_len);
+                    contribs.entry(*inner).or_default().push(contrib);
                 }
 
                 Node::Reduce { input, reducer } => {
@@ -780,11 +813,17 @@ mod reverse {
         output_depth: usize,
     ) -> Id {
         let (k, v) = side.shape;
-        let input_depth = side.user_len;
+        // `host_user_len` is the user_chain length in host[input] — what the
+        // pair table actually carries. `dep_user_len` is what contribs[input]
+        // should carry (= depths[input]). They differ only when `input` is a
+        // `Leave`; the lookup truncates user_in down to `dep_user_len` on the
+        // way out.
+        let host_user_len = side.host_user_len;
+        let dep_user_len = side.dep_user_len;
         let pair = self.concat(vec![side.witness, side.forward]);
         let pair_keyed = self.project(pair, Projection {
             key: pack_kv(k, v),
-            val: (0..input_depth).map(|i| FieldExpr::Index(1, v + i)).collect(),
+            val: (0..host_user_len).map(|i| FieldExpr::Index(1, v + i)).collect(),
         });
         let dep_keyed = self.project(dep_y, Projection {
             key: pack_kv(k, v),
@@ -795,22 +834,27 @@ mod reverse {
         let key: Vec<FieldExpr> = (0..k).map(|i| FieldExpr::Index(0, i)).collect();
         let mut val: Vec<FieldExpr> = Vec::new();
         for i in 0..v { val.push(FieldExpr::Index(0, k + i)); }
-        for i in 0..input_depth { val.push(FieldExpr::Index(2, i)); }
+        for i in 0..host_user_len { val.push(FieldExpr::Index(2, i)); }
         for i in 0..output_depth { val.push(FieldExpr::Index(1, i)); }
         val.push(FieldExpr::Index(1, output_depth)); // q
         let joined = self.join(dep_keyed, pair_keyed, Projection { key, val });
-        self.filter_time_and_strip(joined, k, v, input_depth, output_depth)
+        self.filter_time_and_strip(joined, k, v, host_user_len, output_depth, dep_user_len)
     }
 
     /// Apply the soundness filter (`user_in[i] ≤ user_out[i]` element-wise) and
     /// strip `user_out` from a collection whose row shape is
     /// `(K[k_out]; V_pre[v_pre] ++ user_in[in_len] ++ user_out[out_len] ++ [q])`.
-    /// Result shape: `(K[k_out]; V_pre[v_pre] ++ user_in[in_len] ++ [q])`.
+    /// Result shape: `(K[k_out]; V_pre[v_pre] ++ user_in[0..keep_in_len] ++ [q])`.
     ///
     /// The filter excludes contributions whose witness input row was produced at
     /// a strictly-later user-iter than the demanded output — an output cannot be
     /// "explained by" an input that came after it. When `in_len` and `out_len`
     /// differ, we compare only the common prefix (innermost-first ordering).
+    ///
+    /// `keep_in_len` lets callers ask for fewer user_in coords in the output
+    /// than the pair table carries. This is how a `Leave`-as-input collapses
+    /// host[Leave]'s inner user_chain (length `depths[inner]`) down to
+    /// contribs[Leave]'s outer user_chain (length `depths[Leave]`).
     fn filter_time_and_strip(
         &mut self,
         coll: Id,
@@ -818,7 +862,9 @@ mod reverse {
         v_pre: usize,
         in_len: usize,
         out_len: usize,
+        keep_in_len: usize,
     ) -> Id {
+        assert!(keep_in_len <= in_len);
         let mut cur = coll;
         let cmp_len = in_len.min(out_len);
         if cmp_len > 0 {
@@ -835,11 +881,16 @@ mod reverse {
             }
             cur = self.filter(cur, acc.unwrap());
         }
-        // Strip user_out, preserving (K; V_pre ++ user_in ++ [q]).
+        // Strip user_out and the innermost coords of user_in past `keep_in_len`,
+        // preserving (K; V_pre ++ user_in[in_len - keep_in_len .. in_len] ++ [q]).
+        // user_chain is innermost-first, so the *last* `keep_in_len` coords
+        // correspond to the outer scopes that contribs at the input side care
+        // about; the dropped innermost coords belong to scope(s) we've left.
         let key: Vec<FieldExpr> = (0..k_out).map(|i| FieldExpr::Index(0, i)).collect();
         let mut val: Vec<FieldExpr> = Vec::new();
         for i in 0..v_pre { val.push(FieldExpr::Index(1, i)); }
-        for i in 0..in_len { val.push(FieldExpr::Index(1, v_pre + i)); }
+        let drop_in = in_len - keep_in_len;
+        for i in 0..keep_in_len { val.push(FieldExpr::Index(1, v_pre + drop_in + i)); }
         val.push(FieldExpr::Index(1, v_pre + in_len + out_len)); // q
         self.project(cur, Projection { key, val })
     }
@@ -861,7 +912,8 @@ mod reverse {
         reducer: &Reducer,
     ) -> Id {
         let (k_in, v_in) = side.shape;
-        let in_user_len = side.user_len;
+        let in_user_len = side.host_user_len;
+        let keep_in_len = side.dep_user_len;
         let (_, v_out) = output_shape;
         let pair = self.concat(vec![side.witness, side.forward]);
         // Min narrowing: include V_out in the val layout so we can filter
@@ -915,7 +967,7 @@ mod reverse {
             joined
         };
 
-        self.filter_time_and_strip(after_min, k_in, v_in, in_user_len, out_user_len)
+        self.filter_time_and_strip(after_min, k_in, v_in, in_user_len, out_user_len, keep_in_len)
     }
 
     /// Lossy lookup (Linear[Project]).
@@ -947,7 +999,8 @@ mod reverse {
         proj: &Projection,
     ) -> Id {
         let (k_in, v_in) = side.shape;
-        let in_user_len = side.user_len;
+        let in_user_len = side.host_user_len;
+        let keep_in_len = side.dep_user_len;
         let (k_out, v_out) = output_shape;
 
         let known = analyze_lossy_invertibility(proj, k_in, v_in);
@@ -988,7 +1041,7 @@ mod reverse {
         for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
         val.push(FieldExpr::Index(1, v_out + out_user_len));
         let joined = self.join(dep_y, pair, Projection { key, val });
-        self.filter_time_and_strip(joined, k_in, v_in, in_user_len, out_user_len)
+        self.filter_time_and_strip(joined, k_in, v_in, in_user_len, out_user_len, keep_in_len)
     }
 
     /// Join's backward rule: produces two contribs (left and right).
@@ -1004,8 +1057,10 @@ mod reverse {
         let (k_arity, v_l) = left.shape;
         let (_, v_r) = right.shape;
         let (_, v_out) = output_shape;
-        let left_user_len = left.user_len;
-        let right_user_len = right.user_len;
+        let left_user_len = left.host_user_len;
+        let right_user_len = right.host_user_len;
+        let left_keep_in_len = left.dep_user_len;
+        let right_keep_in_len = right.dep_user_len;
         // Left and right inputs have shape (K; V_L/R ++ user_L/R[user_len]).
         let left_pair_src = self.concat(vec![left.witness, left.forward]);
         let right_pair_src = self.concat(vec![right.witness, right.forward]);
@@ -1050,7 +1105,7 @@ mod reverse {
         for i in 0..out_user_len { val_left.push(FieldExpr::Index(1, v_out + i)); }
         val_left.push(FieldExpr::Index(1, q_pair_pos));
         let left_joined = self.join(dep_y, pair, Projection { key: key_left, val: val_left });
-        let left_contrib = self.filter_time_and_strip(left_joined, k_arity, v_l, left_user_len, out_user_len);
+        let left_contrib = self.filter_time_and_strip(left_joined, k_arity, v_l, left_user_len, out_user_len, left_keep_in_len);
         // Right contrib: (K; V_R + user_R + user_out + [q]), then filter+strip.
         let key_right: Vec<FieldExpr> =
             (0..k_arity).map(|i| FieldExpr::Index(2, k_pair_start + i)).collect();
@@ -1060,7 +1115,7 @@ mod reverse {
         for i in 0..out_user_len { val_right.push(FieldExpr::Index(1, v_out + i)); }
         val_right.push(FieldExpr::Index(1, q_pair_pos));
         let right_joined = self.join(dep_y, pair, Projection { key: key_right, val: val_right });
-        let right_contrib = self.filter_time_and_strip(right_joined, k_arity, v_r, right_user_len, out_user_len);
+        let right_contrib = self.filter_time_and_strip(right_joined, k_arity, v_r, right_user_len, out_user_len, right_keep_in_len);
         (left_contrib, right_contrib)
     }
     }
