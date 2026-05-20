@@ -672,18 +672,28 @@ mod reverse {
                         [single] => single,
                         _ => panic!("explain: multi-op Linear chain at node {}", id),
                     };
-                    let input_side = side(*input);
                     match op {
                         LinearOp::Project(proj) => {
+                            let input_side = side(*input);
                             let contrib = self.emit_lookup_lossy(dep_this, &input_side, out_shape, out_user_len, proj);
                             contribs.entry(*input).or_default().push(contrib);
                         }
-                        LinearOp::Filter(_) | LinearOp::Negate | LinearOp::EnterAt(_) => {
-                            // Filter/Negate don't change shape; EnterAt only shifts
-                            // the timestamp. Demand routes straight through to the
-                            // input via the standard shape-preserving lookup.
-                            let contrib = self.emit_lookup_shape_preserving(dep_this, &input_side, out_user_len);
+                        LinearOp::Filter(cond) => {
+                            // Re-apply the filter to dep_y. dep_y can carry
+                            // demand for rows the filter would have rejected
+                            // (e.g., when this Filter feeds a Concat whose
+                            // other input could have supplied those rows);
+                            // keeping only rows the filter would admit blocks
+                            // that leak.
+                            let contrib = self.filter(dep_this, cond.clone());
                             contribs.entry(*input).or_default().push(contrib);
+                        }
+                        LinearOp::Negate | LinearOp::EnterAt(_) => {
+                            // Pure pass-through: data unchanged, scope
+                            // unchanged. No host lookup, no time filter
+                            // (input and output user_chains are identical
+                            // row-by-row).
+                            contribs.entry(*input).or_default().push(dep_this);
                         }
                         LinearOp::LiftIter => {
                             // LiftIter is rewrite-emitted only; it should never
@@ -693,6 +703,13 @@ mod reverse {
                     }
                 }
 
+                // Concat: per-input SP lookup. Each input has its own host
+                // table; the filter against `host[input]` discriminates which
+                // input "sourced" a given dep row at a given iter. Demand for
+                // (K=4, u=0) might originate from input A (host[A] has it at
+                // u=0) but not from input B (host[B] has it at u=1). Pass-
+                // through would feed demand to both, admitting B's path
+                // spuriously.
                 Node::Concat(ids) => {
                     for inp in ids {
                         let input_side = side(*inp);
@@ -701,11 +718,14 @@ mod reverse {
                     }
                 }
 
+                // Pure pass-through ops: data unchanged, scope unchanged,
+                // host[output] aligned with host[input] so the SP filter
+                // would be a no-op.
                 Node::Arrange(input) | Node::Inspect { input, .. } => {
-                    let input_side = side(*input);
-                    let contrib = self.emit_lookup_shape_preserving(dep_this, &input_side, out_user_len);
-                    self.debug_inspect(contrib, format!("contrib_{}_to_{}", id, input));
-                    contribs.entry(*input).or_default().push(contrib);
+                    contribs.entry(*input).or_default().push(dep_this);
+                }
+                Node::Leave(inner, _) => {
+                    contribs.entry(*inner).or_default().push(dep_this);
                 }
 
                 Node::Reduce { input, reducer } => {
@@ -727,23 +747,13 @@ mod reverse {
 
                 Node::Variable => { /* handled by Bind. */ }
 
-                Node::Leave(inner, _) => {
-                    let inner_side = side(*inner);
-                    let contrib = self.emit_lookup_shape_preserving(dep_this, &inner_side, out_user_len);
-                    contribs.entry(*inner).or_default().push(contrib);
-                }
-
                 Node::Bind { .. } | Node::Scope | Node::EndScope => {}
             }
         }
 
     /// Shape-preserving lookup: input and output have the same (k, v) shape.
-    /// Used for Concat, Arrange, Inspect, Filter, Negate, Variable->body
-    /// routing, and the inner/Leave aliasing.
-    ///
-    /// `input_depth` is the input's user-chain length, which may be less than
-    /// `output_depth` (the dep's chain length) when the input lives at a shallower
-    /// scope than the operator.
+    /// Used by Concat — each input gets its own host lookup so the per-input
+    /// time filter can discriminate which input sourced a given dep row.
     ///
     /// pair = witness + forward of input. Shape (K; V ++ user_chain_in).
     /// Repack to (K+V; user_chain_in). dep repacks to (K+V; user_chain_out ++ [q]).
@@ -759,8 +769,6 @@ mod reverse {
         let (k, v) = side.shape;
         let input_depth = side.user_len;
         let pair = self.concat(vec![side.witness, side.forward]);
-        self.debug_inspect(pair, format!("pair_sp_dep={}_witness={}_forward={}", dep_y, side.witness, side.forward));
-        // pair shape: (K; V ++ user_chain_in[0..input_depth])
         let pair_keyed = self.project(pair, Projection {
             key: pack_kv(k, v),
             val: (0..input_depth).map(|i| FieldExpr::Index(1, v + i)).collect(),
@@ -769,8 +777,6 @@ mod reverse {
             key: pack_kv(k, v),
             val: (0..output_depth + 1).map(|i| FieldExpr::Index(1, v + i)).collect(),
         });
-        self.debug_inspect(dep_keyed, format!("dep_keyed_dep={}", dep_y));
-        self.debug_inspect(pair_keyed, format!("pair_keyed_dep={}", dep_y));
         // After arrange-join on (K+V): $0 = K+V, $1 = dep val, $2 = pair val.
         // Keep user_out in val for the time filter, then strip.
         let key: Vec<FieldExpr> = (0..k).map(|i| FieldExpr::Index(0, i)).collect();
