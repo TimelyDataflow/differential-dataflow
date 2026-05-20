@@ -121,6 +121,55 @@
 //! Concat win; programs with few Concats and many ops lose. The diagnostic
 //! value is the bigger gain — fewer "action at a distance" relationships
 //! to reason about.
+//!
+//! ## Extending the IR — touchpoints
+//!
+//! When adding a new variant to one of the three IR enums, the type system
+//! will catch most omissions because the semantic dispatch sites (those
+//! enumerated below as "compile-error sites") are exhaustive matches. The
+//! list still helps a contributor know *why* each site needs an update.
+//!
+//! ### New `Node` variant
+//!
+//! - `ir.rs`: define the variant; update `Program::depths()` if the node
+//!   enters/leaves a scope; update the IR printer (`Display`/`dump`).
+//! - `lower.rs`, `parse/`: lowering + parser support, if user-facing.
+//! - `explain.rs::arities::compute_arities`: produce the new node's
+//!   `(k, v)` shape. *Compile-error site.*
+//! - `explain.rs::clone::clone_with_lifts`: emit the variant in the
+//!   witness/forward clones; decide if `host[N]` aliases an input (like
+//!   `Arrange`/`Leave`) or stands alone. *Two compile-error sites: the
+//!   control-flow vs data-node dispatch above, and the emission match.*
+//! - `explain.rs::reverse::emit_reverse`: *the backward rule.* Decide:
+//!   - pass-through (data and scope unchanged — `Arrange`, `Inspect`)?
+//!   - host-lookup against the input's pair table (`Reduce`-style,
+//!     `Linear[Project]`-style, `Concat`-per-input)?
+//!   - special-purpose (`Leave` injects user_chain; `Bind` advances iter)?
+//!   - Does it cross a depth boundary? Only `Leave` does today; if your
+//!     node does too, mirror its structure (and look at the host vs dep
+//!     user-chain split on `Side`).
+//!   *Compile-error site.*
+//!
+//! ### New `LinearOp` variant
+//!
+//! - `ir.rs`: define; printer.
+//! - `parse/`, `lower.rs`: parser + lowering if user-facing.
+//! - `explain.rs::arities::apply_ops_arity`: how the op changes `(k, v)`.
+//!   *Compile-error site.*
+//! - `explain.rs::reverse::emit_reverse`'s `Linear` arm: backward rule.
+//!   *Compile-error site.*
+//!
+//! ### New `FieldExpr` variant
+//!
+//! - `ir.rs`: define; `eval_field_into`, `eval_field_raw` (forward eval).
+//!   *Compile-error sites.*
+//! - `parse/`: syntax, optional. (`Sub` is rewrite-emitted only today — no
+//!   parser entry; users can't write `$1[0] - 1`.)
+//! - `explain.rs::analyze_lossy_invertibility`: classify as recoverable
+//!   (drives the pure-map shortcut) or opaque (falls back to the
+//!   pair-table path — sound but lossier). *Compile-error site.*
+//! - `explain.rs::expand_pos_one` (used inside `emit_lookup_join`):
+//!   propagate the variant through `Pos` expansion. *Compile-error site.*
 
 use std::collections::BTreeMap;
 
@@ -476,12 +525,16 @@ mod clone {
             let mut pending: Vec<Vec<(Id, Id)>> = Vec::new();
 
             for (&id, node) in &p.nodes {
-                match node {
+                // Exhaustive emission per node. Control-flow nodes handle
+                // their own bookkeeping in-arm and yield `None`; data nodes
+                // yield `Some(cloned_id)`, which then shares the standard
+                // in_scope/host/pending registration below.
+                let cloned: Option<Id> = match node {
                     Node::Scope => {
                         self.scope_open();
                         user_level += 1;
                         pending.push(Vec::new());
-                        continue;
+                        None
                     }
                     Node::EndScope => {
                         let pile = pending.pop().expect("EndScope without Scope");
@@ -505,54 +558,59 @@ mod clone {
                                 pending.last_mut().unwrap().push((orig, leaved));
                             }
                         }
-                        continue;
+                        None
                     }
                     Node::Bind { variable, value } => {
                         self.bind(in_scope[variable], in_scope[value]);
-                        continue;
+                        None
                     }
                     Node::Input(i) => {
                         // Inputs are at depth 0, host-visible directly.
                         in_scope.insert(id, input_subst[*i]);
                         host.insert(id, input_subst[*i]);
-                        continue;
+                        None
                     }
-                    _ => {}
-                }
-                // Emit the clone for this data node.
-                let cloned = match node {
-                    Node::Linear { input, ops } => self.linear(in_scope[input], ops.clone()),
+                    Node::Linear { input, ops } => {
+                        Some(self.linear(in_scope[input], ops.clone()))
+                    }
                     Node::Concat(ids) => {
                         let mapped: Vec<Id> = ids.iter().map(|i| in_scope[i]).collect();
-                        self.concat(mapped)
+                        Some(self.concat(mapped))
                     }
-                    Node::Arrange(input) => self.arrange(in_scope[input]),
-                    Node::Join { left, right, projection } => self.push(Node::Join {
+                    Node::Arrange(input) => Some(self.arrange(in_scope[input])),
+                    Node::Join { left, right, projection } => Some(self.push(Node::Join {
                         left: in_scope[left],
                         right: in_scope[right],
                         projection: projection.clone(),
-                    }),
-                    Node::Reduce { input, reducer } => self.push(Node::Reduce {
+                    })),
+                    Node::Reduce { input, reducer } => Some(self.push(Node::Reduce {
                         input: in_scope[input],
                         reducer: reducer.clone(),
-                    }),
-                    Node::Variable => self.variable(),
-                    Node::Inspect { input, label } => self.inspect(in_scope[input], label.clone()),
-                    Node::Leave(inner, scope_level) => self.leave(in_scope[inner], *scope_level + enclosing_scope_depth),
-                    _ => unreachable!(),
+                    })),
+                    Node::Variable => Some(self.variable()),
+                    Node::Inspect { input, label } => {
+                        Some(self.inspect(in_scope[input], label.clone()))
+                    }
+                    Node::Leave(inner, scope_level) => {
+                        Some(self.leave(in_scope[inner], *scope_level + enclosing_scope_depth))
+                    }
                 };
-                in_scope.insert(id, cloned);
-                if user_level == 0 {
-                    // For Arrange nodes at outer scope: alias host[N] to the
-                    // underlying Collection (= host[input]) so backward rules
-                    // never refer to an Arrangement across scope boundaries.
-                    let recorded = match node {
-                        Node::Arrange(input) => host.get(input).copied().unwrap_or(cloned),
-                        _ => cloned,
-                    };
-                    host.insert(id, recorded);
-                } else {
-                    pending.last_mut().unwrap().push((id, cloned));
+
+                if let Some(cloned) = cloned {
+                    in_scope.insert(id, cloned);
+                    if user_level == 0 {
+                        // For Arrange nodes at outer scope: alias host[N] to
+                        // the underlying Collection (= host[input]) so backward
+                        // rules never refer to an Arrangement across scope
+                        // boundaries.
+                        let recorded = match node {
+                            Node::Arrange(input) => host.get(input).copied().unwrap_or(cloned),
+                            _ => cloned,
+                        };
+                        host.insert(id, recorded);
+                    } else {
+                        pending.last_mut().unwrap().push((id, cloned));
+                    }
                 }
             }
             assert!(pending.is_empty(), "Scope/EndScope imbalance in clone");
@@ -1171,7 +1229,16 @@ mod reverse {
     /// Direct cases (`Index(r, c)` and `Pos(r)`) are recognized. Computed
     /// fields (`Const`, `Neg`, `Sub`) are not analyzed — the input field
     /// they reference, if any, is left "unknown" and falls back to the
-    /// pair-table path in `emit_lookup_lossy`.
+    /// pair-table path in `emit_lookup_lossy`. This is sound but loose.
+    ///
+    /// Tightening opportunities for whoever adds a parser entry for these:
+    /// - `Neg(Index(r, c))` recovers input via `-output_at_p`.
+    /// - `Sub(Index(r, c), Const(k))` recovers via `output_at_p + k`.
+    /// - `Sub(Const(k), Index(r, c))` recovers via `k - output_at_p`.
+    /// Recording these as recoverable would let the pure-map shortcut fire
+    /// for projections that shift fields by a constant. Today none of the
+    /// rewrite's own emissions or user programs reach this site with such
+    /// expressions, so it's purely latent looseness.
     fn analyze_lossy_invertibility(
         proj: &Projection,
         k_in: usize,
