@@ -150,10 +150,17 @@ mod render {
                     let c = nodes[input].collection();
                     let ops = ops.clone();
                     let level = level;
-                    let result = super::columnar::join_function(c, move |k, v, _t, _d| {
+                    let result = super::columnar::join_function(c, move |k, v, t_in, _d| {
                         use timely::progress::Timestamp;
                         let k: Row = Columnar::into_owned(k);
                         let v: Row = Columnar::into_owned(v);
+                        // Materialize input time once so LiftIter can read
+                        // the iter coord at the operator's scope depth.
+                        let t_owned: Time = Columnar::into_owned(t_in);
+                        let iter_at_level: i64 = level
+                            .checked_sub(1)
+                            .and_then(|idx| t_owned.inner.get(idx).copied())
+                            .unwrap_or(0) as i64;
                         let mut results: Vec<(Row, Row, Time, Diff)> = vec![(k, v, Time::minimum(), 1i64)];
                         for op in &ops {
                             let mut next = Vec::new();
@@ -180,6 +187,11 @@ mod render {
                                         for _ in 0..level.saturating_sub(1) { coords.push(0); }
                                         coords.push(delay);
                                         next.push((k, v, Product::new(0u64, PointStamp::new(coords)), d));
+                                    },
+                                    LinearOp::LiftIter => {
+                                        let mut new_v = v.clone();
+                                        new_v.push(iter_at_level);
+                                        next.push((k, new_v, t, d));
                                     },
                                 }
                             }

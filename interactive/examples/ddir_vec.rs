@@ -1,4 +1,8 @@
 //! DD IR vec-backed backend: parse, lower, render, execute.
+//!
+//! With `--explain`, applies `interactive::explain::explain` after lowering
+//! and treats the last input handle as the query input (seeded from the
+//! `QUERY` env var, format `"key_fields:val_fields"`).
 
 use mimalloc::MiMalloc;
 
@@ -50,11 +54,18 @@ fn render_program<'scope>(program: &Program, scope: Scope<'scope, DdirTime>, inp
         match node {
             Node::Input(i) => { nodes.insert(id, Rendered::Collection(inputs[*i].clone())); },
             Node::Linear { input, ops } => {
+                use differential_dataflow::AsCollection;
+                use differential_dataflow::lattice::Lattice;
+                use timely::dataflow::operators::core::Map;
                 let c = nodes[input].collection();
                 let ops = ops.clone();
                 let level = level;
-                let r = c.join_function(move |(key, val)| {
+                let r = c.inner.flat_map(move |((key, val), t_in, d_in)| {
                     use timely::progress::Timestamp;
+                    let iter_at_level: i64 = level
+                        .checked_sub(1)
+                        .and_then(|idx| t_in.inner.get(idx).copied())
+                        .unwrap_or(0) as i64;
                     let mut results: smallvec::SmallVec<[((Row, Row), Time, Diff); 2]> = svec![((key, val), Time::minimum(), 1)];
                     for op in &ops {
                         let mut next = smallvec::SmallVec::new();
@@ -82,12 +93,17 @@ fn render_program<'scope>(program: &Program, scope: Scope<'scope, DdirTime>, inp
                                     coords.push(delay);
                                     next.push(((k, v), Product::new(0u64, PointStamp::new(coords)), d));
                                 },
+                                LinearOp::LiftIter => {
+                                    let mut new_v = v.clone();
+                                    new_v.push(iter_at_level);
+                                    next.push(((k, new_v), t, d));
+                                },
                             }
                         }
                         results = next;
                     }
-                    results
-                });
+                    results.into_iter().map(move |((k, v), t_delta, d)| ((k, v), t_in.join(&t_delta), d_in * d))
+                }).as_collection();
                 nodes.insert(id, Rendered::Collection(r));
             },
             Node::Concat(ids) => { let mut r = nodes[&ids[0]].collection(); for i in &ids[1..] { r = r.concat(nodes[i].collection()); } nodes.insert(id, Rendered::Collection(r)); },
@@ -138,21 +154,41 @@ fn render_program<'scope>(program: &Program, scope: Scope<'scope, DdirTime>, inp
     nodes.into_iter().filter_map(|(id, r)| match r { Rendered::Collection(c) => Some((id, c)), _ => None }).collect()
 }
 
-fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: u64, arity: usize, batch: u64, rounds: Option<u64>) {
+fn run(
+    name: &str,
+    stmts: Vec<parse::Stmt>,
+    n_inputs: usize,
+    nodes: u64,
+    edges: u64,
+    arity: usize,
+    batch: u64,
+    rounds: Option<u64>,
+    explain: bool,
+) {
     let mut compiled: Program = lower::lower(stmts);
+    // When --explain is set, rewrite the program for self-explanation
+    // before optimization. The transformed program declares one extra
+    // input (the query); the last handle below is reserved for it and
+    // seeded from `QUERY=`.
+    if explain {
+        let input_arities = vec![(arity, 0usize); n_inputs];
+        compiled = interactive::explain::explain(&compiled, &input_arities);
+    }
     println!("{}: {} IR nodes (before optimize)", name, compiled.nodes.len());
     compiled.optimize();
     println!("{}: {} IR nodes (after optimize), result = {}", name, compiled.nodes.len(), compiled.result);
     compiled.dump();
     let name = name.to_string();
     let result_id = compiled.result;
+    let total_inputs = if explain { n_inputs + 1 } else { n_inputs };
+    let query_input_idx = if explain { Some(n_inputs) } else { None };
 
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
 
         let (mut inputs, probe) = worker.dataflow::<u64, _, _>(|scope| {
             let mut handles = Vec::new();
             let mut collections = Vec::new();
-            for _ in 0..n_inputs {
+            for _ in 0..total_inputs {
                 let (h, c) = scope.new_collection::<(Row, Row), Diff>();
                 handles.push(h); collections.push(c);
             }
@@ -171,10 +207,32 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
 
         let timer = std::time::Instant::now();
         let timer_load = std::time::Instant::now();
+        // Real inputs are 0..n_inputs. The query input (if any) is at
+        // n_inputs and is seeded separately below.
         for e in 0..edges {
             if (e as usize) % peers == index {
-                let input_idx = (e as usize) % inputs.len();
+                let input_idx = (e as usize) % n_inputs;
                 inputs[input_idx].update(interactive::gen_row::<Row>(e, nodes, arity), 1);
+            }
+        }
+        // Seed the query input (worker 0 only) from $QUERY = "k:v[,q]".
+        if let Some(q_idx) = query_input_idx {
+            if index == 0 {
+                if let Ok(qstr) = std::env::var("QUERY") {
+                    let parse_row = |s: &str| -> Row {
+                        if s.is_empty() {
+                            SmallVec::new()
+                        } else {
+                            s.split(',').map(|t| t.trim().parse::<i64>().unwrap()).collect()
+                        }
+                    };
+                    let (k_str, vq_str) = qstr.split_once(':').unwrap_or((qstr.as_str(), ""));
+                    let q_key: Row = parse_row(k_str);
+                    let mut q_val: Row = parse_row(vq_str);
+                    if q_val.is_empty() { q_val.push(0); }
+                    eprintln!("seeding query: key={:?} val_with_q={:?}", q_key, q_val);
+                    inputs[q_idx].update((q_key, q_val), 1);
+                }
             }
         }
         for i in inputs.iter_mut() { i.advance_to(1); i.flush(); }
@@ -191,11 +249,11 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
                 let remove_idx = cursor;
                 let add_idx = edges + cursor;
                 if (remove_idx as usize) % peers == index {
-                    let input_idx = (remove_idx as usize) % inputs.len();
+                    let input_idx = (remove_idx as usize) % n_inputs;
                     inputs[input_idx].update(interactive::gen_row::<Row>(remove_idx, nodes, arity), -1);
                 }
                 if (add_idx as usize) % peers == index {
-                    let input_idx = (add_idx as usize) % inputs.len();
+                    let input_idx = (add_idx as usize) % n_inputs;
                     inputs[input_idx].update(interactive::gen_row::<Row>(add_idx, nodes, arity), 1);
                 }
                 cursor += 1;
@@ -213,12 +271,25 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
 }
 
 fn main() {
-    let program = std::env::args().nth(1).unwrap_or_else(|| { std::process::exit(0); });
-    let arity: usize = std::env::args().nth(2).unwrap_or("2".into()).parse().unwrap();
-    let nodes: u64 = std::env::args().nth(3).unwrap_or("10".into()).parse().unwrap();
-    let edges: u64 = std::env::args().nth(4).unwrap_or_else(|| (2 * nodes).to_string()).parse().unwrap();
-    let batch: u64 = std::env::args().nth(5).unwrap_or("1".into()).parse().unwrap();
-    let rounds: Option<u64> = std::env::args().nth(6).map(|s| s.parse().unwrap());
+    // Strip an optional leading --explain flag.
+    let raw_args: Vec<String> = std::env::args().collect();
+    let (explain, args): (bool, Vec<String>) = {
+        let mut it = raw_args.into_iter();
+        let prog = it.next().unwrap();
+        let mut explain = false;
+        let mut rest: Vec<String> = Vec::new();
+        for a in it {
+            if a == "--explain" { explain = true; } else { rest.push(a); }
+        }
+        let mut out = vec![prog]; out.extend(rest);
+        (explain, out)
+    };
+    let program = args.get(1).cloned().unwrap_or_else(|| { std::process::exit(0); });
+    let arity: usize = args.get(2).cloned().unwrap_or("2".into()).parse().unwrap();
+    let nodes: u64 = args.get(3).cloned().unwrap_or("10".into()).parse().unwrap();
+    let edges: u64 = args.get(4).cloned().unwrap_or_else(|| (2 * nodes).to_string()).parse().unwrap();
+    let batch: u64 = args.get(5).cloned().unwrap_or("1".into()).parse().unwrap();
+    let rounds: Option<u64> = args.get(6).map(|s| s.parse().unwrap());
 
     let source = interactive::load_program(&program);
     let stmts = if program.ends_with(".ddp") {
@@ -228,5 +299,5 @@ fn main() {
     };
     let n_inputs = interactive::count_inputs(&stmts);
     let name = std::path::Path::new(&program).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(program.clone());
-    run(&name, stmts, n_inputs, nodes, edges, arity, batch, rounds);
+    run(&name, stmts, n_inputs, nodes, edges, arity, batch, rounds, explain);
 }

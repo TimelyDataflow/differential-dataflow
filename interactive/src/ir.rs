@@ -47,6 +47,10 @@ pub enum LinearOp {
     Negate,
     /// Shift the timestamp based on a field value.
     EnterAt(FieldExpr),
+    /// Append the current user-iter coord (at the row's scope depth) to
+    /// the value as one i64 field. Time itself is unchanged. See
+    /// `Expr::LiftIter` for the discipline restriction.
+    LiftIter,
 }
 
 /// Symbolic IR node.
@@ -83,6 +87,7 @@ impl Program {
                         LinearOp::Filter(_) => "Filter".into(),
                         LinearOp::Negate => "Negate".into(),
                         LinearOp::EnterAt(_) => "EnterAt".into(),
+                        LinearOp::LiftIter => "LiftIter".into(),
                     }).collect();
                     format!("Linear({}, [{}])", input, ops_str.join(", "))
                 },
@@ -100,6 +105,72 @@ impl Program {
             println!("  {:3}: {}", id, desc);
         }
         println!("  result: {}", self.result);
+    }
+
+    /// Per-node user-scope depth. Computed by walking `nodes` in id order
+    /// and tracking `Scope` / `EndScope` markers. A node sits at the depth
+    /// active at the moment it was lowered; `Scope` itself sits at its
+    /// outer depth (the increment applies to subsequent nodes), and
+    /// `EndScope` sits at its inner depth (the decrement applies after).
+    pub fn depths(&self) -> BTreeMap<Id, usize> {
+        let mut out = BTreeMap::new();
+        let mut depth = 0usize;
+        for (&id, node) in &self.nodes {
+            match node {
+                Node::Scope => { out.insert(id, depth); depth += 1; },
+                Node::EndScope => { out.insert(id, depth); depth = depth.saturating_sub(1); },
+                _ => { out.insert(id, depth); },
+            }
+        }
+        out
+    }
+
+    /// Reject programs where a `LinearOp::LiftIter` result is referenced
+    /// inside its own scope. See `Expr::LiftIter` for the rationale: in-
+    /// scope use would let loop bodies branch on iter, defeating the
+    /// time-invariant-body property fixpoints rely on.
+    pub fn validate_lift_iter(&self) -> Result<(), String> {
+        let depths = self.depths();
+        // Build a map: producer id -> list of (user id, user node).
+        let mut users: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
+        for (&user_id, node) in &self.nodes {
+            let inputs: Vec<Id> = match node {
+                Node::Linear { input, .. } | Node::Arrange(input)
+                | Node::Reduce { input, .. } | Node::Inspect { input, .. } => vec![*input],
+                Node::Join { left, right, .. } => vec![*left, *right],
+                Node::Concat(ids) => ids.clone(),
+                Node::Leave(id, _) => vec![*id],
+                Node::Bind { value, .. } => vec![*value],
+                Node::Input(_) | Node::Variable | Node::Scope | Node::EndScope => vec![],
+            };
+            for input in inputs {
+                users.entry(input).or_default().push(user_id);
+            }
+        }
+        for (&id, node) in &self.nodes {
+            if let Node::Linear { ops, .. } = node {
+                if !ops.iter().any(|o| matches!(o, LinearOp::LiftIter)) { continue; }
+                let my_depth = depths[&id];
+                if my_depth == 0 {
+                    return Err(format!(
+                        "lift_iter at node {} is at scope depth 0; lift_iter is only meaningful inside a user scope",
+                        id
+                    ));
+                }
+                if let Some(uses) = users.get(&id) {
+                    for &user in uses {
+                        let user_depth = depths[&user];
+                        if user_depth >= my_depth {
+                            return Err(format!(
+                                "lift_iter at node {} (depth {}) referenced by node {} (depth {}); lift_iter result must be referenced only from an enclosing scope",
+                                id, my_depth, user, user_depth
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Replace all references to `from` with `to` across the IR.
@@ -260,20 +331,31 @@ pub fn eval_field_into<R: RowLike>(field: &FieldExpr, inputs: &[&[i64]], result:
         FieldExpr::Index(row, idx) => result.push(inputs[*row][*idx]),
         FieldExpr::Const(v) => result.push(*v),
         FieldExpr::Neg(inner) => { let mut tmp = R::new(); eval_field_into(inner, inputs, &mut tmp); for v in tmp.as_slice().iter() { result.push(-v); } },
+        FieldExpr::Sub(a, b) => {
+            let mut la = R::new(); eval_field_into(a, inputs, &mut la);
+            let mut lb = R::new(); eval_field_into(b, inputs, &mut lb);
+            // Element-wise subtract; rows must have matching length.
+            assert_eq!(la.as_slice().len(), lb.as_slice().len(),
+                "FieldExpr::Sub: operands must produce same-length rows");
+            for (x, y) in la.as_slice().iter().zip(lb.as_slice().iter()) { result.push(x - y); }
+        }
     }
 }
 
 pub fn eval_condition(cond: &Condition, inputs: &[&[i64]]) -> bool {
-    let (l, r) = match cond {
-        Condition::Eq(l, r) | Condition::Ne(l, r) | Condition::Lt(l, r)
-        | Condition::Le(l, r) | Condition::Gt(l, r) | Condition::Ge(l, r) => (l, r),
+    let cmp = |l, r, op: fn(&Vec<i64>, &Vec<i64>) -> bool| {
+        let mut a = Vec::<i64>::new(); let mut b = Vec::<i64>::new();
+        eval_field_raw(l, inputs, &mut a); eval_field_raw(r, inputs, &mut b);
+        op(&a, &b)
     };
-    let mut a = Vec::<i64>::new(); let mut b = Vec::<i64>::new();
-    eval_field_raw(l, inputs, &mut a); eval_field_raw(r, inputs, &mut b);
     match cond {
-        Condition::Eq(..) => a == b, Condition::Ne(..) => a != b,
-        Condition::Lt(..) => a < b,  Condition::Le(..) => a <= b,
-        Condition::Gt(..) => a > b,  Condition::Ge(..) => a >= b,
+        Condition::And(l, r) => eval_condition(l, inputs) && eval_condition(r, inputs),
+        Condition::Eq(l, r) => cmp(l, r, |a, b| a == b),
+        Condition::Ne(l, r) => cmp(l, r, |a, b| a != b),
+        Condition::Lt(l, r) => cmp(l, r, |a, b| a < b),
+        Condition::Le(l, r) => cmp(l, r, |a, b| a <= b),
+        Condition::Gt(l, r) => cmp(l, r, |a, b| a > b),
+        Condition::Ge(l, r) => cmp(l, r, |a, b| a >= b),
     }
 }
 
@@ -283,5 +365,11 @@ fn eval_field_raw(field: &FieldExpr, inputs: &[&[i64]], result: &mut Vec<i64>) {
         FieldExpr::Index(row, idx) => result.push(inputs[*row][*idx]),
         FieldExpr::Const(v) => result.push(*v),
         FieldExpr::Neg(inner) => { let mut tmp = Vec::new(); eval_field_raw(inner, inputs, &mut tmp); for v in tmp.iter() { result.push(-v); } },
+        FieldExpr::Sub(a, b) => {
+            let mut la = Vec::new(); eval_field_raw(a, inputs, &mut la);
+            let mut lb = Vec::new(); eval_field_raw(b, inputs, &mut lb);
+            assert_eq!(la.len(), lb.len(), "FieldExpr::Sub: operands must produce same-length rows");
+            for (x, y) in la.iter().zip(lb.iter()) { result.push(x - y); }
+        }
     }
 }
