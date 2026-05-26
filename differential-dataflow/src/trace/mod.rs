@@ -7,6 +7,7 @@
 //! collection trace. This trait allows operator implementations to be generic with respect to the type of trace,
 //! and allows various data structures to be interpretable as multiple different types of trace.
 
+pub mod chunk;
 pub mod cursor;
 pub mod description;
 pub mod implementations;
