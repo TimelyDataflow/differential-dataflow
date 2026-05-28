@@ -42,7 +42,7 @@ pub mod spill;
 pub use updates::UpdatesTyped;
 pub use builder::ValBuilder as ValColBuilder;
 pub use exchange::ValPact;
-pub use arrangement::{ValBatcher, ValBuilder, ValSpine};
+pub use arrangement::{ValBatcher, ValBuilder, ValChunker, ValSpine};
 
 /// Target size for update batches, in number of updates.
 pub const LINK_TARGET: usize = 64 * 1024;

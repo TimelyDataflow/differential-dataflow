@@ -63,7 +63,7 @@ fn reset_stats() {
 use columnar::Push;
 use columnar::bytes::stash::Stash;
 
-use differential_dataflow::columnar::{RecordedUpdates, ValBuilder, ValColBuilder, ValSpine};
+use differential_dataflow::columnar::{ValBuilder, ValChunker, ValColBuilder, ValSpine};
 use differential_dataflow::columnar::batcher::MergeBatcher;
 use differential_dataflow::columnar::layout::ColumnarUpdate as Update;
 use differential_dataflow::columnar::spill::{Entry, Fetch, Spill, SpillPolicy};
@@ -75,6 +75,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::probe::{Handle as ProbeHandle, Probe};
 use timely::dataflow::operators::Input;
 use timely::dataflow::InputHandle;
+use timely::container::PushInto;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 
@@ -323,7 +324,6 @@ where
     R: columnar::Columnar + 'static,
     (K, V, T, R): Update<Time = T> + 'static,
 {
-    type Input = RecordedUpdates<(K, V, T, R)>;
     type Time = T;
     type Output = UpdatesTyped<(K, V, T, R)>;
 
@@ -343,10 +343,6 @@ where
         Self(inner)
     }
 
-    fn push_container(&mut self, container: &mut Self::Input) {
-        self.0.push_container(container);
-    }
-
     fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(
         &mut self,
         upper: Antichain<T>,
@@ -356,6 +352,15 @@ where
 
     fn frontier(&mut self) -> AntichainRef<'_, T> {
         self.0.frontier()
+    }
+}
+
+impl<K, V, T, R> PushInto<UpdatesTyped<(K, V, T, R)>> for SpillBatcher<K, V, T, R>
+where
+    (K, V, T, R): Update,
+{
+    fn push_into(&mut self, chunk: UpdatesTyped<(K, V, T, R)>) {
+        self.0.push_into(chunk);
     }
 }
 
@@ -537,6 +542,8 @@ fn run_timely_dataflow(
             let stream = scope.input_from(&mut input);
             let arranged = arrange_core::<
                 _,
+                _,
+                ValChunker<(u64, u64, u64, i64)>,
                 SpillBatcher<u64, u64, u64, i64>,
                 ValBuilder<u64, u64, u64, i64>,
                 ValSpine<u64, u64, u64, i64>,

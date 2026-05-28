@@ -1,26 +1,27 @@
-//! A `Batcher` for `RecordedUpdates<U>` streams that consolidates input via
-//! `TrieChunker` and merges sorted chains via the free functions in `trie_merger`.
+//! A `Batcher` for columnar streams that merges sorted chains via the free
+//! functions in `trie_merger`.
+//!
+//! Callers feed already-chunked, sorted-and-consolidated `UpdatesTyped<U>` into
+//! the batcher via [`PushInto`]; forming such chunks from `RecordedUpdates<U>`
+//! is the responsibility of the surrounding dataflow operator's chunker
+//! (`TrieChunker`).
 
 use std::collections::VecDeque;
 
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::PushInto;
 
 use crate::logging::Logger;
 use crate::trace::{Batcher, Builder, Description};
 
 use super::layout::ColumnarUpdate as Update;
 use super::updates::UpdatesTyped;
-use super::RecordedUpdates;
-use super::arrangement::TrieChunker;
 use super::arrangement::trie_merger;
 use super::spill::{Entry, SpillPolicy};
 
-/// Creates batches from `RecordedUpdates<U>` streams.
+/// Creates batches from chunks of sorted, consolidated columnar updates.
 pub struct MergeBatcher<U: Update> {
-    /// Transforms input streams to chunks of sorted, consolidated data.
-    chunker: TrieChunker<U>,
     /// A sequence of power-of-two length chains of sorted, consolidated entries.
     /// Each entry is either an in-memory chunk or a handle to a paged-out chunk.
     chains: Vec<VecDeque<Entry<UpdatesTyped<U>>>>,
@@ -34,27 +35,15 @@ pub struct MergeBatcher<U: Update> {
 }
 
 impl<U: Update<Time: Timestamp>> Batcher for MergeBatcher<U> {
-    type Input = RecordedUpdates<U>;
     type Time = U::Time;
     type Output = UpdatesTyped<U>;
 
     fn new(_logger: Option<Logger>, _operator_id: usize) -> Self {
         Self {
-            chunker: TrieChunker::default(),
             chains: Vec::new(),
             frontier: Antichain::new(),
             lower: Antichain::from_elem(U::Time::minimum()),
             policy: None,
-        }
-    }
-
-    /// Push a container of data into this merge batcher. Updates the internal chain structure if
-    /// needed.
-    fn push_container(&mut self, container: &mut RecordedUpdates<U>) {
-        self.chunker.push_into(container);
-        while let Some(chunk) = self.chunker.extract() {
-            let chunk = std::mem::take(chunk);
-            self.insert_chain(VecDeque::from([Entry::Typed(chunk)]));
         }
     }
 
@@ -63,12 +52,6 @@ impl<U: Update<Time: Timestamp>> Batcher for MergeBatcher<U> {
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(&mut self, upper: Antichain<U::Time>) -> B::Output {
-        // Finish
-        while let Some(chunk) = self.chunker.finish() {
-            let chunk = std::mem::take(chunk);
-            self.insert_chain(VecDeque::from([Entry::Typed(chunk)]));
-        }
-
         // Merge all remaining chains into a single chain.
         while self.chains.len() > 1 {
             let list1 = self.chains.pop().unwrap();
@@ -119,6 +102,12 @@ impl<U: Update<Time: Timestamp>> Batcher for MergeBatcher<U> {
     #[inline]
     fn frontier(&mut self) -> AntichainRef<'_, U::Time> {
         self.frontier.borrow()
+    }
+}
+
+impl<U: Update> PushInto<UpdatesTyped<U>> for MergeBatcher<U> {
+    fn push_into(&mut self, chunk: UpdatesTyped<U>) {
+        self.insert_chain(VecDeque::from([Entry::Typed(chunk)]));
     }
 }
 
