@@ -45,6 +45,7 @@ pub mod ord_neu;
 pub mod chunker;
 
 // Opinionated takes on default spines.
+pub use self::chunker::ContainerChunker;
 pub use self::ord_neu::OrdValSpine as ValSpine;
 pub use self::ord_neu::OrdValBatcher as ValBatcher;
 pub use self::ord_neu::RcOrdValBuilder as ValBuilder;

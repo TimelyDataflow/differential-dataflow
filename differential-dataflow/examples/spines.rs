@@ -108,7 +108,7 @@ fn main() {
                 },
                 "col" => {
                     use timely::dataflow::operators::Input as _;
-                    use differential_dataflow::columnar::{ValBatcher, ValBuilder, ValPact, ValSpine};
+                    use differential_dataflow::columnar::{ValBatcher, ValBuilder, ValChunker, ValPact, ValSpine};
                     use differential_dataflow::operators::arrange::arrangement::arrange_core;
 
                     fn string_hash(s: columnar::Ref<'_, String>) -> u64 {
@@ -124,10 +124,10 @@ fn main() {
                     let data_stream = scope.input_from(&mut data_input);
                     let keys_stream = scope.input_from(&mut keys_input);
 
-                    let data = arrange_core::<_, ValBatcher<String,(),u64,i64>, ValBuilder<String,(),u64,i64>, ValSpine<String,(),u64,i64>>(
+                    let data = arrange_core::<_, _, ValChunker<(String,(),u64,i64)>, ValBatcher<String,(),u64,i64>, ValBuilder<String,(),u64,i64>, ValSpine<String,(),u64,i64>>(
                         data_stream, ValPact { hashfunc: |k: columnar::Ref<'_, String>| string_hash(k) }, "DataArrange",
                     );
-                    let keys = arrange_core::<_, ValBatcher<String,(),u64,i64>, ValBuilder<String,(),u64,i64>, ValSpine<String,(),u64,i64>>(
+                    let keys = arrange_core::<_, _, ValChunker<(String,(),u64,i64)>, ValBatcher<String,(),u64,i64>, ValBuilder<String,(),u64,i64>, ValSpine<String,(),u64,i64>>(
                         keys_stream, ValPact { hashfunc: |k: columnar::Ref<'_, String>| string_hash(k) }, "KeysArrange",
                     );
                     keys.join_core(data, |_k, (), ()| Option::<()>::None)

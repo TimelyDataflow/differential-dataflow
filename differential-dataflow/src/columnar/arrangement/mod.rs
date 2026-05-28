@@ -21,6 +21,8 @@ pub mod trie_merger;
 pub type ValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<ColumnarLayout<(K,V,T,R)>>>>;
 /// A batcher for columnar storage.
 pub type ValBatcher<K, V, T, R> = super::batcher::MergeBatcher<(K,V,T,R)>;
+/// A chunker that maps `RecordedUpdates<U>` streams into the batcher's `UpdatesTyped<U>` chunks.
+pub type ValChunker<U> = TrieChunker<U>;
 /// A builder for columnar storage.
 pub type ValBuilder<K, V, T, R> = RcBuilder<builder::ValMirror<(K,V,T,R)>>;
 
