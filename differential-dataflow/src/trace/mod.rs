@@ -309,8 +309,11 @@ pub trait Batcher: PushInto<Self::Output> {
     type Time: Timestamp;
     /// Allocates a new empty batcher.
     fn new(logger: Option<Logger>, operator_id: usize) -> Self;
-    /// Returns all updates not greater or equal to an element of `upper`.
-    fn seal<B: Builder<Input=Self::Output, Time=Self::Time>>(&mut self, upper: Antichain<Self::Time>) -> B::Output;
+    /// Returns all updates not greater or equal to an element of `upper`, as a sorted and
+    /// consolidated chain together with the description that bounds them.
+    ///
+    /// The returned chain is suitable to hand directly to [`Builder::seal`].
+    fn seal(&mut self, upper: Antichain<Self::Time>) -> (Vec<Self::Output>, Description<Self::Time>);
     /// Returns the lower envelope of contained update times.
     fn frontier(&mut self) -> AntichainRef<'_, Self::Time>;
 }

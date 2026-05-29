@@ -13,7 +13,7 @@ use timely::progress::{frontier::Antichain, Timestamp};
 use timely::container::PushInto;
 
 use crate::logging::Logger;
-use crate::trace::{Batcher, Builder, Description};
+use crate::trace::{Batcher, Description};
 
 use super::layout::ColumnarUpdate as Update;
 use super::updates::UpdatesTyped;
@@ -51,7 +51,7 @@ impl<U: Update<Time: Timestamp>> Batcher for MergeBatcher<U> {
     // in `upper`. All updates must have time greater or equal to the previously used `upper`,
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(&mut self, upper: Antichain<U::Time>) -> B::Output {
+    fn seal(&mut self, upper: Antichain<U::Time>) -> (Vec<Self::Output>, Description<U::Time>) {
         // Merge all remaining chains into a single chain.
         while self.chains.len() > 1 {
             let list1 = self.chains.pop().unwrap();
@@ -93,9 +93,8 @@ impl<U: Update<Time: Timestamp>> Batcher for MergeBatcher<U> {
         }
 
         let description = Description::new(self.lower.clone(), upper.clone(), Antichain::from_elem(U::Time::minimum()));
-        let seal = B::seal(&mut readied, description);
         self.lower = upper;
-        seal
+        (readied, description)
     }
 
     /// The frontier of elements remaining after the most recent call to `self.seal`.

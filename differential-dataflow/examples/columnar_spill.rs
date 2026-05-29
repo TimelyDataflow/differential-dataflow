@@ -70,7 +70,7 @@ use differential_dataflow::columnar::spill::{Entry, Fetch, Spill, SpillPolicy};
 use differential_dataflow::columnar::updates::{Updates, UpdatesTyped};
 use differential_dataflow::logging::Logger;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
-use differential_dataflow::trace::{Batcher, Builder};
+use differential_dataflow::trace::{Batcher, Description};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::probe::{Handle as ProbeHandle, Probe};
 use timely::dataflow::operators::Input;
@@ -343,11 +343,8 @@ where
         Self(inner)
     }
 
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(
-        &mut self,
-        upper: Antichain<T>,
-    ) -> B::Output {
-        self.0.seal::<B>(upper)
+    fn seal(&mut self, upper: Antichain<T>) -> (Vec<Self::Output>, Description<T>) {
+        self.0.seal(upper)
     }
 
     fn frontier(&mut self) -> AntichainRef<'_, T> {

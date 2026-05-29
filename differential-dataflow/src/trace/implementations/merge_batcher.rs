@@ -13,7 +13,7 @@ use timely::progress::{frontier::Antichain, Timestamp};
 use timely::container::PushInto;
 
 use crate::logging::{BatcherEvent, Logger};
-use crate::trace::{Batcher, Builder, Description};
+use crate::trace::{Batcher, Description};
 
 /// Creates batches from chunks of sorted, consolidated tuples.
 pub struct MergeBatcher<M: Merger> {
@@ -58,7 +58,7 @@ where
     // in `upper`. All updates must have time greater or equal to the previously used `upper`,
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(&mut self, upper: Antichain<M::Time>) -> B::Output {
+    fn seal(&mut self, upper: Antichain<M::Time>) -> (Vec<Self::Output>, Description<M::Time>) {
         // Merge all remaining chains into a single chain.
         while self.chains.len() > 1 {
             let list1 = self.chain_pop().unwrap();
@@ -82,9 +82,8 @@ where
         self.stash.clear();
 
         let description = Description::new(self.lower.clone(), upper.clone(), Antichain::from_elem(M::Time::minimum()));
-        let seal = B::seal(&mut readied, description);
         self.lower = upper;
-        seal
+        (readied, description)
     }
 
     /// The frontier of elements remaining after the most recent call to `self.seal`.
