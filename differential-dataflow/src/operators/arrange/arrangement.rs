@@ -457,7 +457,8 @@ where
                             }
 
                             // Extract updates not in advance of `upper`.
-                            let batch = batcher.seal::<Bu>(upper.clone());
+                            let (mut chain, description) = batcher.seal(upper.clone());
+                            let batch = Bu::seal(&mut chain, description);
 
                             writer.insert(batch.clone(), Some(capability.time().clone()));
 
@@ -484,8 +485,10 @@ where
                     capabilities = new_capabilities;
                 }
                 else {
-                    // Announce progress updates, even without data.
-                    let _batch = batcher.seal::<Bu>(frontier.frontier().to_owned());
+                    // Announce progress updates, even without data. We seal the batcher to
+                    // advance its lower bound and frontier, but discard the readied updates
+                    // rather than building a batch we would immediately drop.
+                    let _ = batcher.seal(frontier.frontier().to_owned());
                     writer.seal(frontier.frontier().to_owned());
                 }
 
