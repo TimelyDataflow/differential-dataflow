@@ -9,20 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.24.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.23.0...differential-dataflow-v0.24.0) - 2026-05-29
 
+### Added
+
+- New experimental `columnar` module exposing public (but explicitly unstable) columnar arrangement and container infrastructure: `UpdatesTyped`, `RecordedUpdates`, `ValPact`, `ValBatcher`, `ValBuilder`, `ValChunker`, `ValSpine`, plus dynamic-scope helpers (`DynTime`, `leave_dynamic`). See the module docs for the current rough edges. ([#730](https://github.com/TimelyDataflow/differential-dataflow/pull/730))
+- Columnar serialization for trace transport: `UpdatesView` reader, `UpdatesTyped` writer, and a `Stash`-backed `RecordedUpdates` with a `ContainerBytes` impl. ([#733](https://github.com/TimelyDataflow/differential-dataflow/pull/733))
+- Columnar spilling merge batcher with pluggable `Spill` / `Fetch` / `SpillPolicy` traits parameterized over a chunk type. The `columnar_spill` example demonstrates a disk-backed, lz4-compressed spill path. ([#741](https://github.com/TimelyDataflow/differential-dataflow/pull/741))
+- `Cursor::populate_key` for key-positioned bulk load into an `EditList`, with an optional time `meet` to advance times before consolidation. Used by `reduce` and `ValueHistory`. ([#725](https://github.com/TimelyDataflow/differential-dataflow/pull/725))
+
+### Changed
+
+- Update to timely 0.30 and columnar 0.13. (bf9b36f)
+- Separate the chunker from the batcher. The `Batcher` trait drops its `Input` associated type and `push_container` method and now accepts pre-chunked input via `PushInto<Self::Output>`. `arrange_core` gains `C` (input container) and `Chu: ContainerBuilder` (chunker) type parameters so chunking lives in the operator. The high-level `.arrange::<Ba, Bu, Tr>()` callsite is unchanged; cross-container callers (columnar, interactive, spill) drop to `arrange_core` directly. ([#625](https://github.com/TimelyDataflow/differential-dataflow/pull/625))
+- `Batcher::seal` no longer takes a `B: Builder` type parameter; the builder is supplied at the call site. ([#745](https://github.com/TimelyDataflow/differential-dataflow/pull/745))
+- Replace the `Cursor` generic argument with associated types (`Key`, `Val`, `Time`, `Diff`), simplifying trait bounds throughout. ([#726](https://github.com/TimelyDataflow/differential-dataflow/pull/726))
+- Reduce moments of owned `Time` in `join`; improve use of `join_assign`; add the missing `PointStamp::meet_assign`. ([#727](https://github.com/TimelyDataflow/differential-dataflow/pull/727))
+- Restore the pre-#725 division of labor in `EditList::load`: the join inner loop again walks vals inline from the cursor's current position rather than re-seeking on every key, recovering a ~3s regression in the spines benchmark. `Cursor::populate_key` retains the seek for callers (`reduce`, `ValueHistory`) that need it. ([#732](https://github.com/TimelyDataflow/differential-dataflow/pull/732))
+
+### Removed
+
+- `InternalMerge*` types and traits; `VecMerger` moves to its own independent module. ([#740](https://github.com/TimelyDataflow/differential-dataflow/pull/740))
+- Spring cleaning: remove `ShutdownDeadmans`, `TraceRc` and `trace/wrappers/rc.rs`, `chainless_batcher.rs`, `RHH`, the Huffman container, the `Clone` constraint on traces, redundant trait bounds, dead and commented code, and needless borrows; convert `::max_value()` to `::MAX`. ([#724](https://github.com/TimelyDataflow/differential-dataflow/pull/724))
+
 ### Other
 
-- Remove B: Builder from Batcher::seal ([#745](https://github.com/TimelyDataflow/differential-dataflow/pull/745))
-- Separate chunker from batcher ([#625](https://github.com/TimelyDataflow/differential-dataflow/pull/625))
-- Columnar spilling merge batcher ([#741](https://github.com/TimelyDataflow/differential-dataflow/pull/741))
-- Remove `InternalMerge*` types and traits. ([#740](https://github.com/TimelyDataflow/differential-dataflow/pull/740))
-- Columnar serialization ([#733](https://github.com/TimelyDataflow/differential-dataflow/pull/733))
-- Spine benchmark columnar performance improvements ([#732](https://github.com/TimelyDataflow/differential-dataflow/pull/732))
-- :populate_key` ([#725](https://github.com/TimelyDataflow/differential-dataflow/pull/725))
-- SCC benchmarking improvements ([#731](https://github.com/TimelyDataflow/differential-dataflow/pull/731))
-- Add experimental `columnar` module to differential-dataflow ([#730](https://github.com/TimelyDataflow/differential-dataflow/pull/730))
-- Reduce moments of owned `Time` ([#727](https://github.com/TimelyDataflow/differential-dataflow/pull/727))
-- Replace Cursor generic argument with associated types ([#726](https://github.com/TimelyDataflow/differential-dataflow/pull/726))
-- Spring cleaning ([#724](https://github.com/TimelyDataflow/differential-dataflow/pull/724))
+- Spine benchmark example improvements. `examples/spines.rs` is restored as a `key` / `val` / `col` arrangement bake-off using the new `columnar` module via an in-dataflow `ToRecorded` repacker. ([#732](https://github.com/TimelyDataflow/differential-dataflow/pull/732))
+- New `examples/scc.rs` for comparative benchmarking; use `meet_assign` in `ValueHistory::replay`. ([#731](https://github.com/TimelyDataflow/differential-dataflow/pull/731))
+
+This is a heavily breaking release driven by tracking timely 0.30 and introducing the experimental `columnar` module.
+The `Batcher` trait no longer knows about input containers; chunking moves into `arrange_core`, which gains two new type parameters. Direct callers of `arrange_core` need to supply a chunker; users of `.arrange::<Ba, Bu, Tr>()` are unaffected.
+The `Cursor` trait swaps its generic argument for associated types — downstream cursor implementations need to migrate from `impl<K, V, T, D> Cursor for ...` to associated-type form.
+`TraceRc`, `RHH`, `HuffmanContainer`, and the `InternalMerge*` family are gone; consumers should move to the columnar-backed equivalents (when applicable) or hold their own `Rc<TraceBox<_>>`.
 
 ## [0.23.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.22.0...differential-dataflow-v0.23.0) - 2026-04-13
 

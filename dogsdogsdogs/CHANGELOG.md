@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.24.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.23.0...differential-dogs3-v0.24.0) - 2026-05-29
 
-### Other
+### Changed
 
-- Spring cleaning ([#724](https://github.com/TimelyDataflow/differential-dataflow/pull/724))
+- Track differential-dataflow 0.24 and timely 0.30 / columnar 0.13.
+- Examples updated to use `usize::MAX` rather than the deprecated `usize::max_value()` ([#724](https://github.com/TimelyDataflow/differential-dataflow/pull/724)).
 
 ## [0.23.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.22.0...differential-dogs3-v0.23.0) - 2026-04-13
 
