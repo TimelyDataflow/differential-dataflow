@@ -2,15 +2,13 @@
 //!
 //! Demonstrates columnar-backed arrangements in an iterative scope,
 //! exercising Enter, Leave, Negate, ResultsIn on RecordedUpdates,
-//! and Push on Updates for the reduce builder path.
-
-mod columnar_support;
+//! and Push on UpdatesTyped for the reduce builder path.
 
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::InputHandle;
 use timely::dataflow::ProbeHandle;
 
-use columnar_support::*;
+use differential_dataflow::columnar::*;
 
 use mimalloc::MiMalloc;
 
@@ -89,7 +87,7 @@ fn main() {
 ///
 /// This module exercises the container traits needed for iterative columnar
 /// computation: Enter, Leave, Negate, ResultsIn on RecordedUpdates, and
-/// Push on Updates for the reduce builder path.
+/// Push on UpdatesTyped for the reduce builder path.
 mod reachability {
 
     use timely::order::Product;
@@ -99,7 +97,7 @@ mod reachability {
     use differential_dataflow::operators::arrange::arrangement::arrange_core;
     use differential_dataflow::operators::join::join_traces;
 
-    use crate::columnar_support::*;
+    use differential_dataflow::columnar::*;
 
     type Node = u32;
     type Time = u64;
@@ -127,13 +125,15 @@ mod reachability {
             let edges_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
             let reach_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
 
-            let edges_arr = arrange_core::<_,
+            let edges_arr = arrange_core::<_, _,
+                ValChunker<(Node, Node, IterTime, Diff)>,
                 ValBatcher<Node, Node, IterTime, Diff>,
                 ValBuilder<Node, Node, IterTime, Diff>,
                 ValSpine<Node, Node, IterTime, Diff>,
             >(edges_inner.inner, edges_pact, "Edges");
 
-            let reach_arr = arrange_core::<_,
+            let reach_arr = arrange_core::<_, _,
+                ValChunker<(Node, (), IterTime, Diff)>,
                 ValBatcher<Node, (), IterTime, Diff>,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
@@ -157,7 +157,8 @@ mod reachability {
 
             // Arrange for reduce.
             let combined_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
-            let combined_arr = arrange_core::<_,
+            let combined_arr = arrange_core::<_, _,
+                ValChunker<(Node, (), IterTime, Diff)>,
                 ValBatcher<Node, (), IterTime, Diff>,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,

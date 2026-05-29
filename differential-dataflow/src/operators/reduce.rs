@@ -33,7 +33,7 @@ use crate::trace::TraceReader;
 /// key's computation to another, and will likely introduce non-determinism.
 pub fn reduce_trace<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<'scope, TraceAgent<Tr2>>
 where
-    Tr1: TraceReader + Clone + 'static,
+    Tr1: TraceReader + 'static,
     Tr2: for<'a> Trace<Key<'a>=Tr1::Key<'a>, ValOwn: Data, Time = Tr1::Time> + 'static,
     Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default>,
     L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn,Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
@@ -44,6 +44,7 @@ where
     // fabricate a data-parallel operator using the `unary_notify` pattern.
     let stream = {
 
+        let mut source_trace = trace.trace;
         let result_trace = &mut result_trace;
         let scope = trace.stream.scope();
         trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
@@ -51,14 +52,12 @@ where
             // Acquire a logger for arrange events.
             let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
-            let activator = Some(scope.activator_for(operator_info.address.clone()));
+            let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
             let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
             // If there is default exert logic set, install it.
             if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty.set_exert_logic(exert_logic);
             }
-
-            let mut source_trace = trace.trace.clone();
 
             let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
 
@@ -313,7 +312,6 @@ fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
 mod history_replay {
 
     use timely::progress::Antichain;
-    use timely::PartialOrder;
 
     use crate::lattice::Lattice;
     use crate::trace::Cursor;
@@ -323,32 +321,28 @@ mod history_replay {
 
     /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in
     /// time order, maintaining consolidated representations of updates with respect to future interesting times.
-    pub struct HistoryReplayer<'a, C1, C2, C3, V>
-    where
-        C1: Cursor,
-        C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time>,
-        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
-        V: Clone + Ord,
-    {
-        input_history: ValueHistory<'a, C1>,
-        output_history: ValueHistory<'a, C2>,
-        batch_history: ValueHistory<'a, C3>,
-        input_buffer: Vec<(C1::Val<'a>, C1::Diff)>,
-        output_buffer: Vec<(V, C2::Diff)>,
-        update_buffer: Vec<(V, C2::Diff)>,
-        output_produced: Vec<((V, C2::Time), C2::Diff)>,
-        synth_times: Vec<C1::Time>,
-        meets: Vec<C1::Time>,
-        times_current: Vec<C1::Time>,
-        temporary: Vec<C1::Time>,
+    pub struct HistoryReplayer<V1, V2, V, T, D1, D2> {
+        input_history: ValueHistory<V1, T, D1>,
+        output_history: ValueHistory<V2, T, D2>,
+        batch_history: ValueHistory<V1, T, D1>,
+        input_buffer: Vec<(V1, D1)>,
+        output_buffer: Vec<(V, D2)>,
+        update_buffer: Vec<(V, D2)>,
+        output_produced: Vec<((V, T), D2)>,
+        synth_times: Vec<T>,
+        meets: Vec<T>,
+        times_current: Vec<T>,
+        temporary: Vec<T>,
     }
 
-    impl<'a, C1, C2, C3, V> HistoryReplayer<'a, C1, C2, C3, V>
+    impl<V1, V2, V, T, D1, D2> HistoryReplayer<V1, V2, V, T, D1, D2>
     where
-        C1: Cursor,
-        C2: for<'b> Cursor<Key<'a> = C1::Key<'a>, ValOwn = V, Time = C1::Time>,
-        C3: Cursor<Key<'a> = C1::Key<'a>, Val<'a> = C1::Val<'a>, Time = C1::Time, Diff = C1::Diff>,
+        V1: Copy + Ord,
+        V2: Copy + Ord,
         V: Clone + Ord,
+        T: Ord + Clone + Lattice,
+        D1: Clone + crate::difference::Semigroup,
+        D2: Clone + crate::difference::Semigroup,
     {
         pub fn new() -> Self {
             HistoryReplayer {
@@ -366,24 +360,23 @@ mod history_replay {
             }
         }
         #[inline(never)]
-        pub fn compute<L>(
+        pub fn compute<'a, K, C1, C2, C3, L>(
             &mut self,
-            key: C1::Key<'a>,
+            key: K,
             (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
             (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
             (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
-            times: &Vec<C1::Time>,
+            times: &Vec<T>,
             logic: &mut L,
-            upper_limit: &Antichain<C1::Time>,
-            outputs: &mut [(C2::Time, Vec<(V, C2::Time, C2::Diff)>)],
-            new_interesting: &mut Vec<C1::Time>)
+            upper_limit: &Antichain<T>,
+            outputs: &mut [(T, Vec<(V, T, D2)>)],
+            new_interesting: &mut Vec<T>)
         where
-            L: FnMut(
-                C1::Key<'a>,
-                &[(C1::Val<'a>, C1::Diff)],
-                &mut Vec<(V, C2::Diff)>,
-                &mut Vec<(V, C2::Diff)>,
-            )
+            C1: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
+            C2: Cursor<Key<'a> = K, Val<'a> = V2, ValOwn = V, Time = T, Diff = D2>,
+            C3: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
+            K: Copy + Ord,
+            L: FnMut(K, &[(V1, D1)], &mut Vec<(V, D2)>, &mut Vec<(V, D2)>),
         {
 
             // The work we need to perform is at times defined principally by the contents of `batch_cursor`
@@ -395,7 +388,7 @@ mod history_replay {
             // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, |time| C3::owned_time(time));
+            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, None);
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -419,17 +412,9 @@ mod history_replay {
 
             // Load the input and output histories.
             let mut input_replay =
-            self.input_history.replay_key(source_cursor, source_storage, key, |time| {
-                let mut time = C1::owned_time(time);
-                if let Some(meet) = meet.as_ref() { time.join_assign(meet); }
-                time
-            });
+            self.input_history.replay_key(source_cursor, source_storage, key, meet.as_ref());
             let mut output_replay =
-            self.output_history.replay_key(output_cursor, output_storage, key, |time| {
-                let mut time = C2::owned_time(time);
-                if let Some(meet) = meet.as_ref() { time.join_assign(meet); }
-                time
-            });
+            self.output_history.replay_key(output_cursor, output_storage, key, meet.as_ref());
 
             self.synth_times.clear();
             self.times_current.clear();

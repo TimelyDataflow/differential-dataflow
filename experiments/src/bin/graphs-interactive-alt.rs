@@ -152,11 +152,11 @@ fn main() {
             q4.insert((rng3.gen_range(0, nodes), rng3.gen_range(0, nodes)));
         }
 
-        q1.advance_to(usize::max_value());    q1.flush();     // q1 queries start now.
-        q2.advance_to(usize::max_value());    q2.flush();     // q2 queries start here.
-        q3.advance_to(usize::max_value());    q3.flush();     // q3 queries start here.
-        q4.advance_to(usize::max_value());    q4.flush();     // q4 queries start here.
-        state.advance_to(usize::max_value()); state.flush();
+        q1.advance_to(usize::MAX);    q1.flush();     // q1 queries start now.
+        q2.advance_to(usize::MAX);    q2.flush();     // q2 queries start here.
+        q3.advance_to(usize::MAX);    q3.flush();     // q3 queries start here.
+        q4.advance_to(usize::MAX);    q4.flush();     // q4 queries start here.
+        state.advance_to(usize::MAX); state.flush();
         graph.advance_to(1);                  graph.flush();
 
         // finish graph loading work.

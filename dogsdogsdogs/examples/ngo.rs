@@ -62,8 +62,8 @@ where
     let winners = cand_count1.concat(cand_count2)
                              .reduce(|_srcdst, counts, output| {
                                  if counts.len() == 2 {
-                                     let mut min_cnt = isize::max_value();
-                                     let mut min_idx = usize::max_value();
+                                     let mut min_cnt = isize::MAX;
+                                     let mut min_idx = usize::MAX;
                                      for &(&idx, cnt) in counts.iter() {
                                          if min_cnt > cnt {
                                              min_idx = idx;

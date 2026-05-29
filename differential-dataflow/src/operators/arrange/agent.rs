@@ -11,7 +11,6 @@ use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
 
 use crate::trace::{Trace, TraceReader, BatchReader};
-use crate::trace::wrappers::rc::TraceBox;
 
 use timely::scheduling::Activator;
 
@@ -26,7 +25,7 @@ use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};
 /// The `TraceAgent` is the default trace type produced by `arranged`, and it can be extracted
 /// from the dataflow in which it was defined, and imported into other dataflows.
 pub struct TraceAgent<Tr: TraceReader> {
-    trace: Rc<RefCell<TraceBox<Tr>>>,
+    trace: Rc<RefCell<trace_box::TraceBox<Tr>>>,
     queues: Weak<RefCell<Vec<TraceAgentQueueWriter<Tr>>>>,
     logical_compaction: Antichain<Tr::Time>,
     physical_compaction: Antichain<Tr::Time>,
@@ -81,7 +80,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
     where
         Tr: Trace,
     {
-        let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
+        let trace = Rc::new(RefCell::new(trace_box::TraceBox::new(trace)));
         let queues = Rc::new(RefCell::new(Vec::new()));
 
         if let Some(logging) = &logging {
@@ -91,7 +90,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         }
 
         let reader = TraceAgent {
-            trace: trace.clone(),
+            trace: Rc::clone(&trace),
             queues: Rc::downgrade(&queues),
             logical_compaction: trace.borrow().logical_compaction.frontier().to_owned(),
             physical_compaction: trace.borrow().physical_compaction.frontier().to_owned(),
@@ -148,13 +147,13 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         &self.operator
     }
 
-    /// Obtain a reference to the inner [`TraceBox`]. It is the caller's obligation to maintain
+    /// Obtain a reference to the inner [`trace_box::TraceBox`]. It is the caller's obligation to maintain
     /// the trace box and this trace agent's invariants. Specifically, it is undefined behavior
     /// to mutate the trace box. Keeping strong references can prevent resource reclamation.
     ///
     /// This method is subject to changes and removal and should not be considered part of a stable
     /// interface.
-    pub fn trace_box_unstable(&self) -> Rc<RefCell<TraceBox<Tr>>> {
+    pub fn trace_box_unstable(&self) -> Rc<RefCell<trace_box::TraceBox<Tr>>> {
         Rc::clone(&self.trace)
     }
 }
@@ -291,7 +290,7 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
                 let queue = self.new_listener(activator);
 
                 let activator = scope.activator_for(info.address);
-                *shutdown_button_ref = Some(ShutdownButton::new(capabilities.clone(), activator));
+                *shutdown_button_ref = Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
 
                 capabilities.borrow_mut().as_mut().unwrap().insert(capability);
 
@@ -424,7 +423,7 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
                 let queue = self.new_listener(activator);
 
                 let activator = scope.activator_for(info.address);
-                *shutdown_button_ref = Some(ShutdownButton::new(capabilities.clone(), activator));
+                *shutdown_button_ref = Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
 
                 capabilities.borrow_mut().as_mut().unwrap().insert(capability);
 
@@ -485,25 +484,6 @@ impl<T> ShutdownButton<T> {
         *self.reference.borrow_mut() = None;
         self.activator.activate();
     }
-    /// Hotwires the button to one that is pressed if dropped.
-    pub fn press_on_drop(self) -> ShutdownDeadmans<T> {
-        ShutdownDeadmans {
-            button: self
-        }
-    }
-}
-
-/// A deadman's switch version of a shutdown button.
-///
-/// This type hosts a shutdown button and will press it when dropped.
-pub struct ShutdownDeadmans<T> {
-    button: ShutdownButton<T>,
-}
-
-impl<T> Drop for ShutdownDeadmans<T> {
-    fn drop(&mut self) {
-        self.button.press();
-    }
 }
 
 impl<Tr: TraceReader> Clone for TraceAgent<Tr> {
@@ -521,8 +501,8 @@ impl<Tr: TraceReader> Clone for TraceAgent<Tr> {
         self.trace.borrow_mut().adjust_physical_compaction(empty_frontier.borrow(), self.physical_compaction.borrow());
 
         TraceAgent {
-            trace: self.trace.clone(),
-            queues: self.queues.clone(),
+            trace: Rc::clone(&self.trace),
+            queues: Weak::clone(&self.queues),
             logical_compaction: self.logical_compaction.clone(),
             physical_compaction: self.physical_compaction.clone(),
             operator: self.operator.clone(),
@@ -546,4 +526,68 @@ impl<Tr: TraceReader> Drop for TraceAgent<Tr> {
         self.trace.borrow_mut().adjust_logical_compaction(self.logical_compaction.borrow(), empty_frontier.borrow());
         self.trace.borrow_mut().adjust_physical_compaction(self.physical_compaction.borrow(), empty_frontier.borrow());
     }
+}
+
+/// A trace wrapper suitable for use through shared reference counted ownership.
+///
+/// The wrapper mainly accumulates the expressed compaction constraints from many,
+/// and presents their implications to the wrapped trace.
+pub mod trace_box {
+
+    use timely::progress::{frontier::{AntichainRef, MutableAntichain}};
+
+    use crate::trace::TraceReader;
+
+    /// A wrapper around a trace which tracks the frontiers of all referees.
+    ///
+    /// This is an internal type, unlikely to be useful to higher-level programs, but exposed just in case.
+    /// This type is equivalent to a `RefCell`, in that it wraps the mutable state that multiple referrers
+    /// may influence.
+    pub struct TraceBox<Tr: TraceReader> {
+        /// accumulated holds on times for advancement.
+        pub (crate) logical_compaction: MutableAntichain<Tr::Time>,
+        /// accumulated holds on times for distinction.
+        pub (crate) physical_compaction: MutableAntichain<Tr::Time>,
+        /// The wrapped trace.
+        pub (crate) trace: Tr,
+    }
+
+    impl<Tr: TraceReader> TraceBox<Tr> {
+        /// Moves an existing trace into a shareable trace wrapper.
+        ///
+        /// The trace may already exist and have non-initial advance and distinguish frontiers. The boxing
+        /// process will fish these out and make sure that they are used for the initial read capabilities.
+        pub fn new(mut trace: Tr) -> Self {
+
+            let mut logical_compaction = MutableAntichain::new();
+            logical_compaction.update_iter(trace.get_logical_compaction().iter().cloned().map(|t| (t,1)));
+            let mut physical_compaction = MutableAntichain::new();
+            physical_compaction.update_iter(trace.get_physical_compaction().iter().cloned().map(|t| (t,1)));
+
+            TraceBox {
+                logical_compaction,
+                physical_compaction,
+                trace,
+            }
+        }
+        /// Borrowed access to the underlying trace.
+        ///
+        /// This is used to inspect batches for purposes of resource accounting in external systems.
+        pub fn trace(&self) -> &Tr { &self.trace }
+        /// Replaces elements of `lower` with those of `upper`.
+        #[inline]
+        pub fn adjust_logical_compaction(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
+            self.logical_compaction.update_iter(upper.iter().cloned().map(|t| (t,1)));
+            self.logical_compaction.update_iter(lower.iter().cloned().map(|t| (t,-1)));
+            self.trace.set_logical_compaction(self.logical_compaction.frontier());
+        }
+        /// Replaces elements of `lower` with those of `upper`.
+        #[inline]
+        pub fn adjust_physical_compaction(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
+            self.physical_compaction.update_iter(upper.iter().cloned().map(|t| (t,1)));
+            self.physical_compaction.update_iter(lower.iter().cloned().map(|t| (t,-1)));
+            self.trace.set_physical_compaction(self.physical_compaction.frontier());
+        }
+    }
+
 }

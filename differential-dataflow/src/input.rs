@@ -182,20 +182,6 @@ impl<T: Timestamp+Clone, D: Data> InputSession<T, D, isize> {
     pub fn remove(&mut self, element: D) { self.update(element,-1); }
 }
 
-// impl<T: Timestamp+Clone, D: Data> InputSession<T, D, i64> {
-//     /// Adds an element to the collection.
-//     pub fn insert(&mut self, element: D) { self.update(element, 1); }
-//     /// Removes an element from the collection.
-//     pub fn remove(&mut self, element: D) { self.update(element,-1); }
-// }
-
-// impl<T: Timestamp+Clone, D: Data> InputSession<T, D, i32> {
-//     /// Adds an element to the collection.
-//     pub fn insert(&mut self, element: D) { self.update(element, 1); }
-//     /// Removes an element from the collection.
-//     pub fn remove(&mut self, element: D) { self.update(element,-1); }
-// }
-
 impl<T: Timestamp+Clone, D: Data, R: Semigroup+'static> InputSession<T, D, R> {
 
     /// Introduces a handle as collection.

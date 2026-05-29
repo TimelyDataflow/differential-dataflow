@@ -101,7 +101,7 @@ fn bfs_sequential(
             if time <= round { *edges.entry((src, dst)).or_insert(0) += diff; }
         }
 
-        let mut dists = vec![usize::max_value(); nodes];
+        let mut dists = vec![usize::MAX; nodes];
         for (&key, &val) in roots.iter() {
             if val > 0 { dists[key] = 0; }
         }
@@ -111,7 +111,7 @@ fn bfs_sequential(
             changes = false;
             for (&(src, dst), &cnt) in edges.iter() {
                 if cnt > 0 {
-                    if dists[src] != usize::max_value() && dists[dst] > dists[src] + 1 {
+                    if dists[src] != usize::MAX && dists[dst] > dists[src] + 1 {
                         dists[dst] = dists[src] + 1;
                         changes = true;
                     }
@@ -121,7 +121,7 @@ fn bfs_sequential(
 
         let mut new_counts = vec![0; nodes];
         for &value in dists.iter() {
-            if value != usize::max_value() {
+            if value != usize::MAX {
                 new_counts[value] += 1;
             }
         }

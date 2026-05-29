@@ -32,7 +32,7 @@ where
     fn prefix_sum_at<F>(self, locations: VecCollection<'scope, T, (usize, K)>, zero: D, combine: F) -> Self where F: Fn(&K,&D,&D)->D + 'static {
 
         let combine1 = ::std::rc::Rc::new(combine);
-        let combine2 = combine1.clone();
+        let combine2 = ::std::rc::Rc::clone(&combine1);
 
         let ranges = aggregate(self.clone(), move |k,x,y| (*combine1)(k,x,y));
         broadcast(ranges, locations, zero, move |k,x,y| (*combine2)(k,x,y))
@@ -54,7 +54,7 @@ where
         .clone()
         .iterate(|scope, ranges| {
 
-            // Each available range, of size less than usize::max_value(), advertises itself as the range
+            // Each available range, of size less than usize::MAX, advertises itself as the range
             // twice as large, aligned to integer multiples of its size. Each range, which may contain at
             // most two elements, then summarizes itself using the `combine` function. Finally, we re-add
             // the initial `unit_ranges` intervals, so that the set of ranges grows monotonically.
@@ -79,7 +79,7 @@ pub fn broadcast<'scope, T, K, D, F>(
     zero: D,
     combine: F) -> VecCollection<'scope, T, ((usize, K), D)>
 where
-    T: Timestamp + Lattice + Ord + ::std::fmt::Debug,
+    T: Timestamp + Lattice,
     K: ExchangeData + ::std::hash::Hash,
     D: ExchangeData + ::std::hash::Hash,
     F: Fn(&K,&D,&D)->D + 'static,

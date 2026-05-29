@@ -115,7 +115,7 @@ fn main() {
         }
 
         query.advance_to(1);                  query.flush();
-        state.advance_to(usize::max_value()); state.flush();
+        state.advance_to(usize::MAX); state.flush();
         graph.advance_to(1);                  graph.flush();
 
         // finish graph loading work.

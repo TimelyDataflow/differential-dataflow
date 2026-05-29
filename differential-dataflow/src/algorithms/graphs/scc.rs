@@ -14,7 +14,7 @@ use super::propagate::propagate;
 /// Returns the subset of edges in the same strongly connected component.
 pub fn strongly_connected<'scope, T, N, R>(graph: VecCollection<'scope, T, (N,N), R>) -> VecCollection<'scope, T, (N,N), R>
 where
-    T: Timestamp + Lattice + Ord + Hash,
+    T: Timestamp + Lattice + Hash,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,
@@ -39,7 +39,7 @@ where
 fn trim_edges<'scope, T, N, R>(cycle: VecCollection<'scope, T, (N,N), R>, edges: VecCollection<'scope, T, (N,N), R>)
     -> VecCollection<'scope, T, (N,N), R>
 where
-    T: Timestamp + Lattice + Ord + Hash,
+    T: Timestamp + Lattice + Hash,
     N: ExchangeData + Hash,
     R: ExchangeData + Abelian,
     R: Multiply<R, Output=R>,

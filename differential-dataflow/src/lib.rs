@@ -104,6 +104,7 @@ pub mod collection;
 pub mod logging;
 pub mod consolidation;
 pub mod capture;
+pub mod columnar;
 
 /// Configuration options for differential dataflow.
 #[derive(Default)]

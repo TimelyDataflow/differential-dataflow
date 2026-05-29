@@ -1,5 +1,10 @@
 //! DD IR columnar backend: parse, lower, render, execute.
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 mod types {
     /// A row type backed by Vec but using Strides for columnar bounds.
     /// This ensures uniform-length rows (common in the IR) get compact
@@ -65,9 +70,7 @@ use interactive::parse;
 use interactive::lower;
 use interactive::ir::Program;
 
-#[path = "../../differential-dataflow/examples/columnar/columnar_support.rs"]
-mod columnar_support;
-use columnar_support::*;
+use differential_dataflow::columnar as columnar_support;
 
 mod columnar {
     use super::types::*;
@@ -81,6 +84,7 @@ mod columnar {
     pub type ColValSpine<K, V, T, R> = ValSpine<K, V, T, R>;
     pub type ColValBatcher<K, V, T, R> = ValBatcher<K, V, T, R>;
     pub type ColValBuilder<K, V, T, R> = ValBuilder<K, V, T, R>;
+    pub type ColValChunker<U> = ValChunker<U>;
 }
 
 mod render {
@@ -124,8 +128,8 @@ mod render {
                 Rendered::Arrangement(a) => a.clone(),
                 Rendered::Collection(c) => {
                     use differential_dataflow::operators::arrange::arrangement::arrange_core;
-                    use super::columnar::ColValBatcher;
-                    arrange_core::<_, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
+                    use super::columnar::{ColValBatcher, ColValChunker};
+                    arrange_core::<_, _, ColValChunker<(Row,Row,Time,Diff)>, ColValBatcher<Row,Row,Time,Diff>, ColValBuilder<Row,Row,Time,Diff>, ColValSpine<Row,Row,Time,Diff>>(c.inner.clone(), timely::dataflow::channels::pact::Pipeline, "Arrange")
                 }
             }
         }
@@ -147,10 +151,17 @@ mod render {
                     let c = nodes[input].collection();
                     let ops = ops.clone();
                     let level = level;
-                    let result = super::columnar::join_function(c, move |k, v, _t, _d| {
+                    let result = super::columnar::join_function(c, move |k, v, t_in, _d| {
                         use timely::progress::Timestamp;
                         let k: Row = Columnar::into_owned(k);
                         let v: Row = Columnar::into_owned(v);
+                        // Materialize input time once so LiftIter can read
+                        // the iter coord at the operator's scope depth.
+                        let t_owned: Time = Columnar::into_owned(t_in);
+                        let iter_at_level: i64 = level
+                            .checked_sub(1)
+                            .and_then(|idx| t_owned.inner.get(idx).copied())
+                            .unwrap_or(0) as i64;
                         let mut results: Vec<(Row, Row, Time, Diff)> = vec![(k, v, Time::minimum(), 1i64)];
                         for op in &ops {
                             let mut next = Vec::new();
@@ -177,6 +188,11 @@ mod render {
                                         for _ in 0..level.saturating_sub(1) { coords.push(0); }
                                         coords.push(delay);
                                         next.push((k, v, Product::new(0u64, PointStamp::new(coords)), d));
+                                    },
+                                    LinearOp::LiftIter => {
+                                        let mut new_v = v.clone();
+                                        new_v.push(iter_at_level);
+                                        next.push((k, new_v, t, d));
                                     },
                                 }
                             }
@@ -205,13 +221,10 @@ mod render {
                     use super::columnar::ValColBuilder;
                     let stream = join_traces::<_, _, _, ValColBuilder<DdirUpdate>>(l, r, move |k, v1, v2, t, d1, d2, c| {
                         use differential_dataflow::difference::Multiply;
-                        let k: Row = Columnar::into_owned(k);
-                        let v1: Row = Columnar::into_owned(v1);
-                        let v2: Row = Columnar::into_owned(v2);
                         let d = d1.clone().multiply(d2);
                         let i = [k.as_slice(), v1.as_slice(), v2.as_slice()];
                         let (k2, v2): (Row, Row) = (eval_fields(&proj.key, &i), eval_fields(&proj.val, &i));
-                        c.give((k2, v2, t.clone(), d));
+                        c.give((k2, v2, t, d));
                     });
                     nodes.insert(id, Rendered::Collection(stream.as_collection()));
                 },
@@ -219,21 +232,22 @@ mod render {
                     let Rendered::Arrangement(a) = &nodes[input] else { panic!("Reduce: input must be an Arrangement") };
                     let a = a.clone();
                     let reducer = reducer.clone();
-                    let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
-                        interactive::parse::Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| *v).min() { output.push((min.clone(), 1)); } }),
+                    type ReduceFn = dyn for<'a> Fn(columnar::Ref<'a, Row>, &[(columnar::Ref<'a, Row>, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync;
+                    let f: Arc<ReduceFn> = match reducer {
+                        interactive::parse::Reducer::Min => Arc::new(|_key, vals, output| {
+                            if let Some(min) = vals.iter().map(|(v, _)| v.as_slice()).min() {
+                                output.push((Row(min.to_vec()), 1));
+                            }
+                        }),
                         interactive::parse::Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
-                        interactive::parse::Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); } }),
+                        interactive::parse::Reducer::Count => Arc::new(|_key, vals, output| {
+                            let count: Diff = vals.iter().map(|(_, d)| *d).sum();
+                            if count != 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); }
+                        }),
                     };
                     let reduced = a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>, _>(
                         "Reduce",
-                        move |k, vals, output| {
-                            let k: Row = Columnar::into_owned(k);
-                            let owned_vals: Vec<(Row, Diff)> = vals.iter().map(|(v, d)| {
-                                (Columnar::into_owned(*v), *d)
-                            }).collect();
-                            let refs: Vec<(&Row, Diff)> = owned_vals.iter().map(|(v, d)| (v, *d)).collect();
-                            f(&k, &refs, output);
-                        },
+                        move |k, vals, output| { f(k, vals, output); },
                         |col, key, upds| {
                             use columnar::{Clear, Push};
                             col.keys.clear();
@@ -259,7 +273,7 @@ mod render {
                     let label = label.clone();
                     nodes.insert(id, Rendered::Collection(col.inspect_container(move |event| {
                         if let Ok((_time, container)) = event {
-                            for (k, v, t, d) in container.updates.iter() {
+                            for (k, v, t, d) in container.updates.view().iter() {
                                 eprintln!("  [{}] ({:?}, {:?}, {:?}, {:?})", label, <Row as Columnar>::into_owned(k), <Row as Columnar>::into_owned(v), <Time as Columnar>::into_owned(t), <Diff as Columnar>::into_owned(d));
                             }
                         }
@@ -327,6 +341,8 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
 
         let mut builders: Vec<OuterBuilder> = (0..n_inputs).map(|_| OuterBuilder::default()).collect();
 
+        let timer = std::time::Instant::now();
+        let timer_load = std::time::Instant::now();
         for e in 0..edges {
             if (e as usize) % peers == index {
                 let input_idx = (e as usize) % inputs.len();
@@ -342,13 +358,13 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
             h.flush();
         }
         while probe.less_than(&1u64) { worker.step(); }
-        let elapsed = std::time::Instant::now();
-        println!("worker {}: {} loaded ({} edges)", index, name, edges);
+        println!("worker {}: {} loaded ({} edges, total {:.2?}, load {:.2?})", index, name, edges, timer.elapsed(), timer_load.elapsed());
 
         let mut cursor = 0u64;
         let mut round = 0u64;
         let limit = rounds.unwrap_or(u64::MAX);
         while round < limit {
+            let timer_round = std::time::Instant::now();
             let time = (round + 2) as u64;
             for _ in 0..batch {
                 let remove_idx = cursor;
@@ -375,10 +391,10 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
 
             round += 1;
             if round % 100 == 0 {
-                println!("worker {}: {} round {} ({:.2?})", index, name, round, elapsed.elapsed());
+                println!("worker {}: {} round {} (total {:.2?}, round {:.2?})", index, name, round, timer.elapsed(), timer_round.elapsed());
             }
         }
-        println!("worker {}: {} done ({} rounds, batch {}, {:.2?})", index, name, round, batch, elapsed.elapsed());
+        println!("worker {}: {} done ({} rounds, batch {}, total {:.2?})", index, name, round, batch, timer.elapsed());
     }).unwrap();
 }
 

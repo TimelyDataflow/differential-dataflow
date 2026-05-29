@@ -45,7 +45,7 @@ fn main() {
             let (edges_input, edges) = scope.new_collection();
 
             // determine stream of (prefix, count, index) indicating relation with fewest extensions.
-            let counts  = edges.map(|p| (p, usize::max_value(), usize::max_value()));
+            let counts  = edges.map(|p| (p, usize::MAX, usize::MAX));
             let counts0 = index_xz.count(counts,  0);
             let counts1 = index_yz.count(counts0, 1);
 

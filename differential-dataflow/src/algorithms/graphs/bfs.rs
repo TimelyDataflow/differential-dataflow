@@ -11,7 +11,7 @@ use crate::lattice::Lattice;
 /// Returns pairs (node, dist) indicating distance of each node from a root.
 pub fn bfs<'scope, T, N>(edges: VecCollection<'scope, T, (N,N)>, roots: VecCollection<'scope, T, N>) -> VecCollection<'scope, T, (N,u32)>
 where
-    T: Timestamp + Lattice + Ord,
+    T: Timestamp + Lattice,
     N: ExchangeData+Hash,
 {
     let edges = edges.arrange_by_key();

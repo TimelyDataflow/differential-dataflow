@@ -146,7 +146,7 @@ fn main() {
         }
 
         // Finish outstanding work before stopping the timer.
-        let next_round = usize::max_value();
+        let next_round = usize::MAX;
         inputs.0.as_mut().map(|x| x.advance_to(next_round));
         inputs.1.as_mut().map(|x| x.advance_to(next_round));
         inputs.2.as_mut().map(|x| x.advance_to(next_round));

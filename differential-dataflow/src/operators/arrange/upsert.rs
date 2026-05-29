@@ -159,7 +159,7 @@ where
             // Tracks the lower envelope of times in `priority_queue`.
             let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
             // Form the trace we will both use internally and publish.
-            let activator = Some(scope.activator_for(info.address.clone()));
+            let activator = Some(scope.activator_for(std::rc::Rc::clone(&info.address)));
             let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
 
             if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
@@ -244,7 +244,7 @@ where
 
                                     // Attempt to find the key in the trace.
                                     trace_cursor.seek_key(&trace_storage, key_con.index(0));
-                                    if trace_cursor.get_key(&trace_storage).map(|k| k.eq(&key_con.index(0))).unwrap_or(false) {
+                                    if trace_cursor.get_key(&trace_storage).map(|k| k.eq(key_con.index(0))).unwrap_or(false) {
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;

@@ -87,7 +87,7 @@ impl<T> std::ops::Deref for PointStamp<T> {
 
 // Implement timely dataflow's `PartialOrder` trait.
 use timely::order::PartialOrder;
-impl<T: PartialOrder + Timestamp> PartialOrder for PointStamp<T> {
+impl<T: Timestamp> PartialOrder for PointStamp<T> {
     fn less_equal(&self, other: &Self) -> bool {
         // Every present coordinate must be less-equal the corresponding coordinate,
         // where absent corresponding coordinates are `T::minimum()`. Coordinates
@@ -224,7 +224,7 @@ impl<T: Timestamp> Timestamp for PointStamp<T> {
 // Implement differential dataflow's `Lattice` trait.
 // This extends the `PartialOrder` implementation with additional structure.
 use crate::lattice::Lattice;
-impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
+impl<T: Lattice + Timestamp> Lattice for PointStamp<T> {
     #[inline(always)]
     fn join(&self, other: &Self) -> Self {
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
@@ -243,6 +243,18 @@ impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
         }
         Self::new(vector)
     }
+    #[inline]
+    fn join_assign(&mut self, other: &Self) {
+        let my_len = self.vector.len();
+        let other_len = other.vector.len();
+        let min_len = my_len.min(other_len);
+        for i in 0..min_len {
+            self.vector[i].join_assign(&other.vector[i]);
+        }
+        if other_len > my_len {
+            self.vector.extend(other.vector[my_len..].iter().cloned());
+        }
+    }
     #[inline(always)]
     fn meet(&self, other: &Self) -> Self {
         let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
@@ -253,6 +265,15 @@ impl<T: Lattice + Timestamp + Clone> Lattice for PointStamp<T> {
         }
         // Remaining coordinates are `T::minimum()` in one input, and so in the output.
         Self::new(vector)
+    }
+    #[inline]
+    fn meet_assign(&mut self, other: &Self) {
+        let min_len = ::std::cmp::min(self.vector.len(), other.vector.len());
+        self.vector.truncate(min_len);
+        for (this, that) in self.vector.iter_mut().zip(other.vector.iter()) {
+            this.meet_assign(that);
+        }
+        while self.vector.last() == Some(&T::minimum()) { self.vector.pop(); }
     }
 }
 

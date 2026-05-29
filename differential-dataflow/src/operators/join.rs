@@ -68,21 +68,21 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 /// [`AsCollection`]: crate::collection::AsCollection
 pub fn join_traces<'scope, Tr1, Tr2, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut result: L) -> Stream<'scope, Tr1::Time, CB::Container>
 where
-    Tr1: TraceReader+Clone+'static,
-    Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>, Time = Tr1::Time>+Clone+'static,
-    L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>,&Tr1::Time,&Tr1::Diff,&Tr2::Diff,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
+    Tr1: TraceReader+'static,
+    Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>, Time = Tr1::Time>+'static,
+    L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>,Tr1::Time,&Tr1::Diff,&Tr2::Diff,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
     CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.
-    let mut trace1 = arranged1.trace.clone();
-    let mut trace2 = arranged2.trace.clone();
+    let mut trace1 = arranged1.trace;
+    let mut trace2 = arranged2.trace;
 
     let scope = arranged1.stream.scope();
     arranged1.stream.binary_frontier(arranged2.stream, Pipeline, Pipeline, "Join", move |capability, info| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         use timely::scheduling::Activator;
-        let activations = scope.activations().clone();
+        let activations = scope.activations();
         let activator = Activator::new(info.address, activations);
 
         // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
@@ -310,7 +310,7 @@ where
 /// dataflow system a chance to run operators that can consume and aggregate the data.
 struct Deferred<T, C1, C2>
 where
-    T: Timestamp+Lattice+Ord,
+    T: Timestamp+Lattice,
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
 {
@@ -326,7 +326,7 @@ impl<T, C1, C2> Deferred<T, C1, C2>
 where
     C1: Cursor<Time=T>,
     C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
-    T: Timestamp+Lattice+Ord,
+    T: Timestamp+Lattice,
 {
     fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
         Deferred {
@@ -347,7 +347,7 @@ where
     #[inline(never)]
     fn work<L, CB: ContainerBuilder>(&mut self, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>, mut logic: L, fuel: &mut usize)
     where
-        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, &T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
+        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
     {
 
         let meet = self.capability.time();
@@ -370,16 +370,12 @@ where
                 Ordering::Greater => batch.seek_key(batch_storage, trace_key),
                 Ordering::Equal => {
 
-                    thinker.history1.edits.load(trace, trace_storage, |time| {
-                        let mut time = C1::owned_time(time);
-                        time.join_assign(meet);
-                        time
-                    });
-                    thinker.history2.edits.load(batch, batch_storage, |time| C2::owned_time(time));
+                    thinker.history1.edits.load(trace, trace_storage, Some(meet));
+                    thinker.history2.edits.load(batch, batch_storage, None);
 
                     // populate `temp` with the results in the best way we know how.
                     thinker.think(|v1,v2,t,r1,r2| {
-                        logic(batch_key, v1, v2, &t, r1, r2, &mut session);
+                        logic(batch_key, v1, v2, t, r1, r2, &mut session);
                     });
 
                     // TODO: Effort isn't perfectly tracked as we might still have some data in the
@@ -400,19 +396,18 @@ where
     }
 }
 
-struct JoinThinker<'a, C1, C2>
-where
-    C1: Cursor,
-    C2: Cursor<Time = C1::Time>,
-{
-    pub history1: ValueHistory<'a, C1>,
-    pub history2: ValueHistory<'a, C2>,
+struct JoinThinker<V1, V2, T, D1, D2> {
+    pub history1: ValueHistory<V1, T, D1>,
+    pub history2: ValueHistory<V2, T, D2>,
 }
 
-impl<'a, C1, C2> JoinThinker<'a, C1, C2>
+impl<V1, V2, T, D1, D2> JoinThinker<V1, V2, T, D1, D2>
 where
-    C1: Cursor,
-    C2: Cursor<Time = C1::Time>,
+    V1: Copy + Ord,
+    V2: Copy + Ord,
+    T: Ord + Clone + Lattice,
+    D1: Clone + crate::difference::Semigroup,
+    D2: Clone + crate::difference::Semigroup,
 {
     fn new() -> Self {
         JoinThinker {
@@ -421,7 +416,7 @@ where
         }
     }
 
-    fn think<F: FnMut(C1::Val<'a>,C2::Val<'a>,C1::Time,&C1::Diff,&C2::Diff)>(&mut self, mut results: F) {
+    fn think<F: FnMut(V1, V2, T, &D1, &D2)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
         if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {

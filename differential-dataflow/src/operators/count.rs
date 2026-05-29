@@ -14,7 +14,7 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchReader, Cursor, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
-pub trait CountTotal<'scope, T: Timestamp + TotalOrder + Lattice + Ord, K: ExchangeData, R: Semigroup> : Sized {
+pub trait CountTotal<'scope, T: Timestamp + TotalOrder + Lattice, K: ExchangeData, R: Semigroup> : Sized {
     /// Counts the number of occurrences of each element.
     ///
     /// # Examples
@@ -44,7 +44,7 @@ pub trait CountTotal<'scope, T: Timestamp + TotalOrder + Lattice + Ord, K: Excha
 
 impl<'scope, T, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> CountTotal<'scope, T, K, R> for VecCollection<'scope, T, K, R>
 where
-    T: Timestamp + TotalOrder + Lattice + Ord,
+    T: Timestamp + TotalOrder + Lattice,
 {
     fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<'scope, T, (K, R), R2> {
         self.arrange_by_self_named("Arrange: CountTotal")

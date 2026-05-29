@@ -7,11 +7,11 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Let, Var, Scope, Result,
-    Input, Map, Join, Reduce, Concat, Arrange, Filter, Negate, EnterAt, Inspect,
+    Input, Map, Join, Reduce, Concat, Arrange, Filter, Negate, EnterAt, LiftIter, Inspect,
     Min, Distinct, Count,
     Ident(String), Int(i64),
     Dollar, LParen, RParen, LBrace, RBrace, LBracket, RBracket,
-    Comma, Semi, Colon, ColonColon, Eq, EqEq, NotEq, Lt, LtEq, Gt, GtEq,
+    Comma, Semi, Colon, ColonColon, Eq, EqEq, NotEq, Lt, LtEq, Gt, GtEq, AndAnd,
     Plus, Minus, Star, Eof,
 }
 
@@ -36,6 +36,7 @@ fn tokenize(input: &str) -> Vec<Token> {
             '!' => { chars.next(); if chars.peek() == Some(&'=') { chars.next(); tokens.push(Token::NotEq); } else { panic!("Expected != after !"); } },
             '<' => { chars.next(); if chars.peek() == Some(&'=') { chars.next(); tokens.push(Token::LtEq); } else { tokens.push(Token::Lt); } },
             '>' => { chars.next(); if chars.peek() == Some(&'=') { chars.next(); tokens.push(Token::GtEq); } else { tokens.push(Token::Gt); } },
+            '&' => { chars.next(); if chars.peek() == Some(&'&') { chars.next(); tokens.push(Token::AndAnd); } else { panic!("Expected && after &"); } },
             '+' => { chars.next(); tokens.push(Token::Plus); },
             '*' => { chars.next(); tokens.push(Token::Star); },
             '$' => { chars.next(); tokens.push(Token::Dollar); },
@@ -55,6 +56,7 @@ fn tokenize(input: &str) -> Vec<Token> {
                     "REDUCE" => Token::Reduce, "CONCAT" => Token::Concat, "ARRANGE" => Token::Arrange,
                     "FILTER" => Token::Filter, "NEGATE" => Token::Negate, "ENTER_AT" => Token::EnterAt, "INSPECT" => Token::Inspect,
                     "MIN" => Token::Min, "DISTINCT" => Token::Distinct, "COUNT" => Token::Count,
+                    "LIFT_ITER" => Token::LiftIter,
                     _ => Token::Ident(ident),
                 });
             },
@@ -104,6 +106,7 @@ impl Parser {
             Token::Filter => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let c = self.parse_condition(); self.expect(&Token::RParen); Expr::Filter(Box::new(i), c) },
             Token::Negate => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::RParen); Expr::Negate(Box::new(i)) },
             Token::EnterAt => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let f = self.parse_field(); self.expect(&Token::RParen); Expr::EnterAt(Box::new(i), f) },
+            Token::LiftIter => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::RParen); Expr::LiftIter(Box::new(i)) },
             Token::Inspect => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let label = self.parse_ident(); self.expect(&Token::RParen); Expr::Inspect(Box::new(i), label) },
             Token::Concat => { self.next(); self.expect(&Token::LParen); let mut v = vec![self.parse_expr()]; while *self.peek() == Token::Comma { self.next(); v.push(self.parse_expr()); } self.expect(&Token::RParen); Expr::Concat(v) },
             Token::Arrange => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::RParen); Expr::Arrange(Box::new(i)) },
@@ -142,6 +145,16 @@ impl Parser {
     }
 
     fn parse_condition(&mut self) -> Condition {
+        let mut left = self.parse_primary_condition();
+        while *self.peek() == Token::AndAnd {
+            self.next();
+            let right = self.parse_primary_condition();
+            left = Condition::And(Box::new(left), Box::new(right));
+        }
+        left
+    }
+
+    fn parse_primary_condition(&mut self) -> Condition {
         let l = self.parse_field();
         let op = self.next();
         let r = self.parse_field();

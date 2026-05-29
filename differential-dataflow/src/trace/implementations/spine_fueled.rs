@@ -378,21 +378,6 @@ impl<B: Batch> Spine<B> {
         })
     }
 
-    /// Describes the merge progress of layers in the trace.
-    ///
-    /// Intended for diagnostics rather than public consumption.
-    #[allow(dead_code)]
-    fn describe(&self) -> Vec<(usize, usize)> {
-        self.merging
-            .iter()
-            .map(|b| match b {
-                MergeState::Vacant => (0, 0),
-                x @ MergeState::Single(_) => (1, x.len()),
-                x @ MergeState::Double(_) => (2, x.len()),
-            })
-            .collect()
-    }
-
     /// Allocates a fueled `Spine` with a specified effort multiplier.
     ///
     /// This trace will merge batches progressively, with each inserted batch applying a multiple
@@ -870,7 +855,7 @@ impl<B: Batch> MergeVariant<B> {
     /// The result is either `None`, for structurally empty batches,
     /// or a batch and optionally input batches from which it derived.
     fn complete(mut self) -> Option<(B, Option<(B, B)>)> {
-        let mut fuel = isize::max_value();
+        let mut fuel = isize::MAX;
         self.work(&mut fuel);
         if let MergeVariant::Complete(batch) = self { batch }
         else { panic!("Failed to complete a merge!"); }
