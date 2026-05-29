@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.23.0...differential-dataflow-v0.24.0) - 2026-05-29
+
+### Other
+
+- Remove B: Builder from Batcher::seal ([#745](https://github.com/TimelyDataflow/differential-dataflow/pull/745))
+- Separate chunker from batcher ([#625](https://github.com/TimelyDataflow/differential-dataflow/pull/625))
+- Columnar spilling merge batcher ([#741](https://github.com/TimelyDataflow/differential-dataflow/pull/741))
+- Remove `InternalMerge*` types and traits. ([#740](https://github.com/TimelyDataflow/differential-dataflow/pull/740))
+- Columnar serialization ([#733](https://github.com/TimelyDataflow/differential-dataflow/pull/733))
+- Spine benchmark columnar performance improvements ([#732](https://github.com/TimelyDataflow/differential-dataflow/pull/732))
+- :populate_key` ([#725](https://github.com/TimelyDataflow/differential-dataflow/pull/725))
+- SCC benchmarking improvements ([#731](https://github.com/TimelyDataflow/differential-dataflow/pull/731))
+- Add experimental `columnar` module to differential-dataflow ([#730](https://github.com/TimelyDataflow/differential-dataflow/pull/730))
+- Reduce moments of owned `Time` ([#727](https://github.com/TimelyDataflow/differential-dataflow/pull/727))
+- Replace Cursor generic argument with associated types ([#726](https://github.com/TimelyDataflow/differential-dataflow/pull/726))
+- Spring cleaning ([#724](https://github.com/TimelyDataflow/differential-dataflow/pull/724))
+
 ## [0.23.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.22.0...differential-dataflow-v0.23.0) - 2026-04-13
 
 ### Changed
