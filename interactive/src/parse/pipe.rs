@@ -6,9 +6,9 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Let, Var, Result,
-    Input, Key, Map, Join, Min, Distinct, Count, Arrange, Negate, Filter, EnterAt, LiftIter, Inspect,
-    Ident(String), Int(i64),
+    Let, Var, Export,
+    Input, Import, Key, Map, Join, Min, Distinct, Count, Arrange, Negate, Filter, EnterAt, LiftIter, Inspect,
+    Ident(String), Int(i64), Str(String),
     Dollar, LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Semi, Colon, ColonColon, Eq, EqEq, NotEq, Lt, LtEq, Gt, GtEq, AndAnd,
     Pipe, Plus, Minus, Eof,
@@ -39,6 +39,19 @@ fn tokenize(input: &str) -> Vec<Token> {
             '<' => { chars.next(); if chars.peek() == Some(&'=') { chars.next(); tokens.push(Token::LtEq); } else { tokens.push(Token::Lt); } },
             '>' => { chars.next(); if chars.peek() == Some(&'=') { chars.next(); tokens.push(Token::GtEq); } else { tokens.push(Token::Gt); } },
             '$' => { chars.next(); tokens.push(Token::Dollar); },
+            '"' => {
+                // String literal: the quoted name in `import "..."` / `export "..." = ...`.
+                // Names carry no escapes, so read verbatim up to the closing quote.
+                chars.next();
+                let mut s = String::new();
+                let mut closed = false;
+                while let Some(c) = chars.next() {
+                    if c == '"' { closed = true; break; }
+                    s.push(c);
+                }
+                if !closed { panic!("Unterminated string literal"); }
+                tokens.push(Token::Str(s));
+            },
             '-' => { chars.next(); tokens.push(Token::Minus); },
             ':' => { chars.next(); if chars.peek() == Some(&':') { chars.next(); tokens.push(Token::ColonColon); } else { tokens.push(Token::Colon); } },
             c if c.is_ascii_digit() => {
@@ -50,8 +63,10 @@ fn tokenize(input: &str) -> Vec<Token> {
                 let mut ident = String::new();
                 while let Some(&c) = chars.peek() { if c.is_ascii_alphanumeric() || c == '_' { ident.push(c); chars.next(); } else { break; } }
                 tokens.push(match ident.as_str() {
-                    "let" => Token::Let, "var" => Token::Var, "result" => Token::Result,
-                    "input" => Token::Input, "key" => Token::Key, "map" => Token::Map,
+                    "let" => Token::Let, "var" => Token::Var,
+                    "export" => Token::Export,
+                    "input" => Token::Input, "import" => Token::Import,
+                    "key" => Token::Key, "map" => Token::Map,
                     "join" => Token::Join, "min" => Token::Min, "distinct" => Token::Distinct,
                     "count" => Token::Count, "arrange" => Token::Arrange, "negate" => Token::Negate,
                     "filter" => Token::Filter, "enter_at" => Token::EnterAt, "inspect" => Token::Inspect,
@@ -84,7 +99,17 @@ impl Parser {
         match self.peek().clone() {
             Token::Let => { self.next(); let n = self.parse_ident(); self.expect(&Token::Eq); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Let(n, e) },
             Token::Var => { self.next(); let n = self.parse_ident(); self.expect(&Token::Eq); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Var(n, e) },
-            Token::Result => { self.next(); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Result(e) },
+            Token::Export => {
+                self.next();
+                let name = match self.next() {
+                    Token::Str(s) => s,
+                    o => panic!("Expected string literal after `export`, got {:?}", o),
+                };
+                self.expect(&Token::Eq);
+                let e = self.parse_pipe_expr();
+                self.expect(&Token::Semi);
+                Stmt::Export(name, e)
+            },
             Token::Ident(_) => {
                 let n = self.parse_ident(); self.expect(&Token::Colon);
                 self.expect(&Token::LBrace); let b = self.parse_program(); self.expect(&Token::RBrace); Stmt::Scope(n, b)
@@ -120,6 +145,7 @@ impl Parser {
     fn parse_atom(&mut self) -> Expr {
         match self.peek().clone() {
             Token::Input => { self.next(); match self.next() { Token::Int(n) => Expr::Input(n as usize), o => panic!("Expected int, got {:?}", o) } },
+            Token::Import => { self.next(); match self.next() { Token::Str(s) => Expr::Import(s), o => panic!("Expected string literal after `import`, got {:?}", o) } },
             Token::Ident(_) => { let n = self.parse_ident(); if *self.peek() == Token::ColonColon { self.next(); let f = self.parse_ident(); Expr::Qualified(n, f) } else { Expr::Name(n) } },
             Token::LParen => { self.next(); let e = self.parse_pipe_expr(); self.expect(&Token::RParen); e },
             other => panic!("Unexpected token in atom: {:?}", other),

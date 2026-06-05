@@ -56,6 +56,15 @@ pub enum LinearOp {
 /// Symbolic IR node.
 pub enum Node {
     Input(usize),
+    /// A named external trace, resolved against a registry at install time;
+    /// shape is inferred from the registry, not the IR.
+    ///
+    /// STUB: only the server resolves this; the example renderers don't, and no
+    /// example program uses it yet. The intended end-state is a single
+    /// named-source substrate that also subsumes `Input(usize)` — there should
+    /// not be two ways to bring in a source. Until that cutover, `Input` is the
+    /// working input and `Import` is forward-looking.
+    Import { name: String },
     /// A chain of linear operations on a stream of (data, time, diff) triples.
     Linear { input: Id, ops: Vec<LinearOp> },
     Concat(Vec<Id>),
@@ -72,7 +81,8 @@ pub enum Node {
 
 pub struct Program {
     pub nodes: BTreeMap<Id, Node>,
-    pub result: Id,
+    /// Named outputs of the program.
+    pub export: Vec<(String, Id)>,
 }
 
 impl Program {
@@ -81,6 +91,7 @@ impl Program {
         for (&id, node) in &self.nodes {
             let desc = match node {
                 Node::Input(i) => format!("Input({})", i),
+                Node::Import { name } => format!("Import({:?})", name),
                 Node::Linear { input, ops } => {
                     let ops_str: Vec<String> = ops.iter().map(|op| match op {
                         LinearOp::Project(_) => "Project".into(),
@@ -104,7 +115,9 @@ impl Program {
             };
             println!("  {:3}: {}", id, desc);
         }
-        println!("  result: {}", self.result);
+        for (name, id) in &self.export {
+            println!("  export {:?} = {}", name, id);
+        }
     }
 
     /// Per-node user-scope depth. Computed by walking `nodes` in id order
@@ -141,7 +154,7 @@ impl Program {
                 Node::Concat(ids) => ids.clone(),
                 Node::Leave(id, _) => vec![*id],
                 Node::Bind { value, .. } => vec![*value],
-                Node::Input(_) | Node::Variable | Node::Scope | Node::EndScope => vec![],
+                Node::Input(_) | Node::Import { .. } | Node::Variable | Node::Scope | Node::EndScope => vec![],
             };
             for input in inputs {
                 users.entry(input).or_default().push(user_id);
@@ -173,7 +186,9 @@ impl Program {
         Ok(())
     }
 
-    /// Replace all references to `from` with `to` across the IR.
+    /// Redirect every reference to node `from` so it points at `to`, across all
+    /// nodes' inputs and the export list. Used by `optimize` when it collapses
+    /// or fuses one node into another and the old id must be retargeted.
     fn rewrite(&mut self, from: Id, to: Id) {
         for node in self.nodes.values_mut() {
             match node {
@@ -195,10 +210,12 @@ impl Program {
                     if *variable == from { *variable = to; }
                     if *value == from { *value = to; }
                 },
-                Node::Input(_) | Node::Variable | Node::Scope | Node::EndScope => {},
+                Node::Input(_) | Node::Import { .. } | Node::Variable | Node::Scope | Node::EndScope => {},
             }
         }
-        if self.result == from { self.result = to; }
+        for (_, id) in self.export.iter_mut() {
+            if *id == from { *id = to; }
+        }
     }
 
     /// Optimize the IR in place, iterating to a fixed point.
@@ -247,7 +264,7 @@ impl Program {
                 _ => {},
             }
         }
-        if self.result != usize::MAX { *ref_counts.entry(self.result).or_default() += 1; }
+        for (_, id) in &self.export { *ref_counts.entry(*id).or_default() += 1; }
 
         let fusions: Vec<(Id, Id)> = self.nodes.iter()
             .filter_map(|(&id, node)| {
@@ -285,6 +302,7 @@ impl Program {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self.0 {
                     Node::Input(i) => write!(f, "Input({})", i),
+                    Node::Import { name } => write!(f, "Import({:?})", name),
                     Node::Linear { input, ops } => write!(f, "Linear({},{:?})", input, ops),
                     Node::Concat(ids) => write!(f, "Concat({:?})", ids),
                     Node::Arrange(input) => write!(f, "Arrange({})", input),

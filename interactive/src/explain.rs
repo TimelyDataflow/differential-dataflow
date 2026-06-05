@@ -184,12 +184,18 @@ use clone::CloneResult;
 /// demand-set explanations for queries against the original's result.
 /// See the module doc for the architecture.
 ///
-/// `input_arities` gives `(key_arity, val_arity)` per input, in input
-/// order. Necessary because input row shapes aren't recoverable from the
-/// IR alone (Projections only invert with known input arity).
-pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
+/// `input_arities` gives `(key_arity, val_arity)` per positional input;
+/// `import_arities` gives the same per named import (entries needed for
+/// every distinct `Import { name }` referenced in `p`). Both are
+/// necessary because data-source shapes aren't recoverable from the IR
+/// alone (Projections only invert with known input arity).
+pub fn explain(
+    p: &Program,
+    input_arities: &[(usize, usize)],
+    import_arities: &BTreeMap<String, (usize, usize)>,
+) -> Program {
     let mut b = Builder::new();
-    let arities = compute_arities(p, input_arities);
+    let arities = compute_arities(p, input_arities, import_arities);
     let depths = p.depths();
     // The two user-chain lengths we track at each node:
     //
@@ -220,21 +226,37 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
     let dep_user_lens: &BTreeMap<Id, usize> = &depths;
     let n_inputs = input_arities.len();
 
+    // Distinct import names referenced by `p`, in deterministic order.
+    let import_names: Vec<String> = {
+        let mut s = std::collections::BTreeSet::new();
+        for node in p.nodes.values() {
+            if let Node::Import { name } = node { s.insert(name.clone()); }
+        }
+        s.into_iter().collect()
+    };
+
     // ---- outer scope ----
-    // Original inputs of `p`, plus one extra "query" input at index n.
+    // Original inputs of `p`, one outer-scope Import per referenced name,
+    // plus one extra "query" input.
     let original_inputs: Vec<Id> = (0..n_inputs).map(|i| b.input(i)).collect();
+    let original_imports: BTreeMap<String, Id> = import_names.iter()
+        .map(|n| (n.clone(), b.push(Node::Import { name: n.clone() })))
+        .collect();
     let query_input = b.input(n_inputs);
 
     // witness: a clone of `p`, with lift_iter chains so every witness
     // collection has a host-visible `(data, user)` form via auto-leave at
     // each enclosing user scope's exit.
-    let witness = b.clone_with_lifts(p, &original_inputs, 0);
+    let witness = b.clone_with_lifts(p, &original_inputs, &original_imports, 0);
 
     // ---- explain scope ----
     b.scope_open();
 
-    // Demand-set Variables (one per input).
+    // Demand-set Variables (one per input, one per import).
     let demand_sets: Vec<Id> = (0..n_inputs).map(|_| b.variable()).collect();
+    let import_demand_sets: BTreeMap<String, Id> = import_names.iter()
+        .map(|n| (n.clone(), b.variable()))
+        .collect();
 
     // forward inputs: demand_set_<i> | semijoin(actual_input_<i>).
     // Enter actual inputs into explain scope implicitly; semijoin restricts to
@@ -245,11 +267,18 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
             b.semijoin_data(demand_sets[i], original_inputs[i], k, v)
         })
         .collect();
+    let forward_imports: BTreeMap<String, Id> = import_names.iter()
+        .map(|n| {
+            let (k, v) = import_arities[n];
+            let semi = b.semijoin_data(import_demand_sets[n], original_imports[n], k, v);
+            (n.clone(), semi)
+        })
+        .collect();
 
     // forward: same clone procedure as witness, with substituted inputs.
     // Offset = 1 because this clone lives INSIDE the explain scope: its real
     // PointStamp depth at any point is one more than its local user_level.
-    let forward = b.clone_with_lifts(p, &forward_inputs, 1);
+    let forward = b.clone_with_lifts(p, &forward_inputs, &forward_imports, 1);
 
     // Demand Variables are pre-allocated *only* for user-program `var` IR
     // nodes (`Node::Variable`). These are the only places where the demand
@@ -271,10 +300,14 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
     // from `contribs[id]`, store it in `demand_var`, then dispatch the
     // node's bward rule (which pushes onto its inputs' contribs).
     //
-    // Query input directly seeds `contribs[result]` — the result demand
-    // starts with the query rows.
+    // Query input directly seeds `contribs[first_export]` — the demand
+    // starts with the query rows against the first export. v0 only
+    // explains a single output; multi-export programs would need one
+    // query input per export and per-output dispatch in the seeding.
+    let primary_export = p.export.first()
+        .expect("explain: program has no export to seed query input against").1;
     let mut contribs: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
-    contribs.entry(p.result).or_default().push(query_input);
+    contribs.entry(primary_export).or_default().push(query_input);
 
     for (&id, node) in p.nodes.iter().rev() {
         // Scope / EndScope carry no demand and have no bward action.
@@ -319,13 +352,19 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
         b.emit_reverse(id, node, &witness, &forward, &demand_var, &arities, &host_user_lens, dep_user_lens, &mut contribs);
     }
 
-    // Bind demand-set variables: demand_set_<i> := distinct(demand_set_<i> + (demand_<Input(i)> | strip | semijoin actual)).
+    // Bind demand-set variables for inputs and imports symmetrically:
+    //   demand_set_X := distinct(demand_set_X + (demand_<X> | strip | semijoin actual)).
     // Build a Vec mapping input index `i` to its IR id in `p`, so the
-    // per-input loop below is O(n) total instead of O(n^2).
+    // per-input loop below is O(n) total instead of O(n^2). Imports are
+    // looked up by name; multiple `Import { name }` nodes in `p` share
+    // demand via the dedup pass — we route from any one of them.
     let mut input_ids: Vec<Option<Id>> = vec![None; n_inputs];
+    let mut import_ids: BTreeMap<String, Id> = BTreeMap::new();
     for (&id, node) in &p.nodes {
-        if let Node::Input(i) = node {
-            input_ids[*i] = Some(id);
+        match node {
+            Node::Input(i) => { input_ids[*i] = Some(id); }
+            Node::Import { name } => { import_ids.entry(name.clone()).or_insert(id); }
+            _ => {}
         }
     }
     for i in 0..n_inputs {
@@ -338,17 +377,30 @@ pub fn explain(p: &Program, input_arities: &[(usize, usize)]) -> Program {
         let dist = b.distinct_full(combined, kx, vx);
         b.bind(demand_sets[i], dist);
     }
-
-    // Inspects on demand-sets.
-    let mut last_inspect: Option<Id> = None;
-    for (i, &mv) in demand_sets.iter().enumerate() {
-        last_inspect = Some(b.inspect(mv, format!("demand_set_{}", i)));
+    for name in &import_names {
+        let imp_id = import_ids[name];
+        let (kx, vx) = arities[&imp_id];
+        let stripped = b.project(demand_var[&imp_id], strip_user_and_q(kx, vx));
+        let semi = b.semijoin_data(stripped, original_imports[name], kx, vx);
+        let combined = b.concat(vec![import_demand_sets[name], semi]);
+        let dist = b.distinct_full(combined, kx, vx);
+        b.bind(import_demand_sets[name], dist);
     }
-    let result_inner = last_inspect.unwrap_or_else(|| demand_sets.first().copied().unwrap_or(0));
+
+    // Per-source demand-set ids inside the explain scope; we leave each
+    // out and register as a named export after closing the scope.
+    let inputs_leaves: Vec<(String, Id)> = demand_sets.iter().enumerate()
+        .map(|(i, &mv)| (format!("demand:input{}", i), mv))
+        .collect();
+    let imports_leaves: Vec<(String, Id)> = import_names.iter()
+        .map(|n| (format!("demand:{}", n), import_demand_sets[n]))
+        .collect();
 
     b.scope_close();
-    let result_outer = b.leave(result_inner, 1);
-    b.set_result(result_outer);
+    for (name, inner) in inputs_leaves.into_iter().chain(imports_leaves) {
+        let outer = b.leave(inner, 1);
+        b.add_export(name, outer);
+    }
     b.into_program()
 }
 
@@ -371,7 +423,7 @@ mod builder {
     impl Builder {
         pub(super) fn new() -> Self {
             Builder {
-                program: Program { nodes: BTreeMap::new(), result: 0 },
+                program: Program { nodes: BTreeMap::new(), export: Vec::new() },
                 next_id: 0,
             }
         }
@@ -414,7 +466,7 @@ mod builder {
         }
         pub(super) fn scope_open(&mut self) { self.push(Node::Scope); }
         pub(super) fn scope_close(&mut self) { self.push(Node::EndScope); }
-        pub(super) fn set_result(&mut self, id: Id) { self.program.result = id; }
+        pub(super) fn add_export(&mut self, name: String, id: Id) { self.program.export.push((name, id)); }
         pub(super) fn into_program(self) -> Program { self.program }
     }
 }
@@ -426,13 +478,17 @@ mod builder {
 /// recoverable from the IR alone — `Projection`s only invert with known
 /// input arity, and lift_iter sites need to know how many user-iter coords
 /// already sit in the val.
-mod arities {
+pub mod arities {
     use std::collections::BTreeMap;
 
     use crate::ir::{Id, LinearOp, Node, Program};
     use crate::parse::Reducer;
 
-    pub(super) fn compute_arities(p: &Program, input_arities: &[(usize, usize)]) -> BTreeMap<Id, (usize, usize)> {
+    pub fn compute_arities(
+        p: &Program,
+        input_arities: &[(usize, usize)],
+        import_arities: &BTreeMap<String, (usize, usize)>,
+    ) -> BTreeMap<Id, (usize, usize)> {
         // Variables are referenced before their Binds appear in id order;
         // resolve a Variable's shape via its body.
         let var_body: BTreeMap<Id, Id> = p.nodes.iter().filter_map(|(_, n)| {
@@ -448,6 +504,10 @@ mod arities {
                 if out.contains_key(&id) { continue; }
                 let shape = match node {
                     Node::Input(i) => Some(input_arities[*i]),
+                    Node::Import { name } => Some(
+                        *import_arities.get(name)
+                            .unwrap_or_else(|| panic!("explain: no arity registered for import {:?}", name))
+                    ),
                     Node::Linear { input, ops } => out.get(input).map(|s| apply_ops_arity(*s, ops)),
                     // Try each input — for self-recursive Variables that appear
                     // as `Concat([var, ...])`, the first input's shape isn't
@@ -512,6 +572,7 @@ mod clone {
             &mut self,
             p: &Program,
             input_subst: &[Id],
+            import_subst: &BTreeMap<String, Id>,
             enclosing_scope_depth: usize,
         ) -> CloneResult {
             let mut in_scope: BTreeMap<Id, Id> = BTreeMap::new();
@@ -568,6 +629,14 @@ mod clone {
                         // Inputs are at depth 0, host-visible directly.
                         in_scope.insert(id, input_subst[*i]);
                         host.insert(id, input_subst[*i]);
+                        None
+                    }
+                    Node::Import { name } => {
+                        // Imports are at depth 0, host-visible directly.
+                        let sub = *import_subst.get(name)
+                            .unwrap_or_else(|| panic!("clone: no substitution for import {:?}", name));
+                        in_scope.insert(id, sub);
+                        host.insert(id, sub);
                         None
                     }
                     Node::Linear { input, ops } => {
@@ -758,7 +827,7 @@ mod reverse {
             let side = |inp: Id| Side::for_input(inp, witness, forward, arities, host_user_lens, dep_user_lens);
 
             match node {
-                Node::Input(_) => { /* terminal; feeds demand-set seeding. */ }
+                Node::Input(_) | Node::Import { .. } => { /* terminal; feeds demand-set seeding. */ }
 
                 Node::Linear { input, ops } => {
                     let op = match ops.as_slice() {

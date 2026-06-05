@@ -25,4 +25,4 @@ peel: {
 }
 
 let core_edges = CONCAT(symm, peel::removals);
-result INSPECT(REDUCE(MAP(core_edges, ($0[0] ;)), COUNT), kcore_degrees);
+export "result" = INSPECT(REDUCE(MAP(core_edges, ($0[0] ;)), COUNT), kcore_degrees);

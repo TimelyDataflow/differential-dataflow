@@ -34,4 +34,4 @@ outer: {
     var trim = trim_bwd - edges;
 }
 
-result outer::scc | map(;) | arrange | inspect(total);
+export "result" = outer::scc | map(;) | arrange | inspect(total);

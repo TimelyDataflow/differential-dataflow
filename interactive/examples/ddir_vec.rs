@@ -53,6 +53,7 @@ fn render_program<'scope>(program: &Program, scope: Scope<'scope, DdirTime>, inp
     for (&id, node) in program.nodes.iter() {
         match node {
             Node::Input(i) => { nodes.insert(id, Rendered::Collection(inputs[*i].clone())); },
+            Node::Import { name } => panic!("ddir_vec: Import {:?} not supported in this harness (no trace registry).", name),
             Node::Linear { input, ops } => {
                 use differential_dataflow::AsCollection;
                 use differential_dataflow::lattice::Lattice;
@@ -172,14 +173,24 @@ fn run(
     // seeded from `QUERY=`.
     if explain {
         let input_arities = vec![(arity, 0usize); n_inputs];
-        compiled = interactive::explain::explain(&compiled, &input_arities);
+        let import_arities = std::collections::BTreeMap::new();
+        compiled = interactive::explain::explain(&compiled, &input_arities, &import_arities);
     }
     println!("{}: {} IR nodes (before optimize)", name, compiled.nodes.len());
     compiled.optimize();
-    println!("{}: {} IR nodes (after optimize), result = {}", name, compiled.nodes.len(), compiled.result);
+    println!("{}: {} IR nodes (after optimize), exports = {:?}",
+        name, compiled.nodes.len(),
+        compiled.export.iter().map(|(n, id)| (n.as_str(), *id)).collect::<Vec<_>>());
     compiled.dump();
     let name = name.to_string();
-    let result_id = compiled.result;
+    // Drive one export: prefer `$result`, else the first declared.
+    let (driven_name, result_id) = {
+        let pick = compiled.export.iter().find(|(n, _)| n == "result")
+            .or_else(|| compiled.export.first())
+            .expect("ddir_vec: program declares no exports");
+        (pick.0.clone(), pick.1)
+    };
+    println!("{}: driving export {:?} (id {})", name, driven_name, result_id);
     let total_inputs = if explain { n_inputs + 1 } else { n_inputs };
     let query_input_idx = if explain { Some(n_inputs) } else { None };
 
@@ -297,7 +308,10 @@ fn main() {
     } else {
         parse::applicative::parse(&source)
     };
-    let n_inputs = interactive::count_inputs(&stmts);
+    let (n_inputs, imports) = interactive::survey_sources(&stmts);
+    if !imports.is_empty() {
+        panic!("ddir_vec: program references imports {:?} but this harness has no trace registry.", imports);
+    }
     let name = std::path::Path::new(&program).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(program.clone());
     run(&name, stmts, n_inputs, nodes, edges, arity, batch, rounds, explain);
 }

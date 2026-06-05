@@ -23,7 +23,7 @@ fn main() {
     } else {
         parse::applicative::parse(&source)
     };
-    let n_inputs = interactive::count_inputs(&stmts);
+    let (n_inputs, imports) = interactive::survey_sources(&stmts);
     let original = lower::lower(stmts);
 
     println!("-- ====================================================");
@@ -32,7 +32,11 @@ fn main() {
     print_ddp(&original);
 
     let input_arities = vec![(arity, 0usize); n_inputs];
-    let rewritten = explain::explain(&original, &input_arities);
+    let import_arities: BTreeMap<String, (usize, usize)> = imports
+        .iter()
+        .map(|n| (n.clone(), (arity, 0usize)))
+        .collect();
+    let rewritten = explain::explain(&original, &input_arities, &import_arities);
 
     println!();
     println!("-- ====================================================");
@@ -84,6 +88,9 @@ fn print_ddp(p: &Program) {
             }
             Node::Input(i) => {
                 println!("{}let n{} = input {};", pad, id, i);
+            }
+            Node::Import { name } => {
+                println!("{}let n{} = import {:?};", pad, id, name);
             }
             Node::Linear { input, ops } => {
                 println!("{}let n{} = n{} | {};", pad, id, input, fmt_linear_ops(ops));
@@ -138,7 +145,14 @@ fn print_ddp(p: &Program) {
             }
         }
     }
-    println!("{}result n{};", "    ".repeat(indent), p.result);
+    let pad = "    ".repeat(indent);
+    for (name, id) in &p.export {
+        if name == "result" {
+            println!("{}result n{};", pad, id);
+        } else {
+            println!("{}export {:?} = n{};", pad, name, id);
+        }
+    }
 }
 
 fn fmt_linear_ops(ops: &[LinearOp]) -> String {

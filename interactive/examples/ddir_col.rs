@@ -147,6 +147,7 @@ mod render {
                 Node::Input(i) => {
                     nodes.insert(id, Rendered::Collection(inputs[*i].clone()));
                 },
+                Node::Import { name } => panic!("ddir_col: Import {:?} not supported in this harness (no trace registry).", name),
                 Node::Linear { input, ops } => {
                     let c = nodes[input].collection();
                     let ops = ops.clone();
@@ -305,10 +306,18 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
     let mut compiled: Program = lower::lower(stmts);
     println!("{}: {} IR nodes (before optimize)", name, compiled.nodes.len());
     compiled.optimize();
-    println!("{}: {} IR nodes (after optimize), result = {}", name, compiled.nodes.len(), compiled.result);
+    println!("{}: {} IR nodes (after optimize), exports = {:?}",
+        name, compiled.nodes.len(),
+        compiled.export.iter().map(|(n, id)| (n.as_str(), *id)).collect::<Vec<_>>());
     compiled.dump();
     let name = name.to_string();
-    let result_id = compiled.result;
+    let (driven_name, result_id) = {
+        let pick = compiled.export.iter().find(|(n, _)| n == "result")
+            .or_else(|| compiled.export.first())
+            .expect("ddir_col: program declares no exports");
+        (pick.0.clone(), pick.1)
+    };
+    println!("{}: driving export {:?} (id {})", name, driven_name, result_id);
 
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
         use timely::dataflow::InputHandle;
@@ -412,7 +421,10 @@ fn main() {
     } else {
         parse::applicative::parse(&source)
     };
-    let n_inputs = interactive::count_inputs(&stmts);
+    let (n_inputs, imports) = interactive::survey_sources(&stmts);
+    if !imports.is_empty() {
+        panic!("ddir_col: program references imports {:?} but this harness has no trace registry.", imports);
+    }
     let name = std::path::Path::new(&program).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(program.clone());
     run(&name, stmts, n_inputs, nodes, edges, arity, batch, rounds);
 }
