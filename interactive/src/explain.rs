@@ -1148,7 +1148,18 @@ mod reverse {
         let total = (0..k_in).all(|c| known.contains_key(&(0, c)))
             && (0..v_in).all(|c| known.contains_key(&(1, c)));
 
-        if total && in_user_len == 0 {
+        // Pure-map shortcut, extended to same-scope projects of any depth.
+        // A Linear[Project] doesn't cross a scope boundary, so the input's
+        // user_chain equals the output's (in_user_len == out_user_len ==
+        // keep_in_len when the input isn't a Leave). When every input field is
+        // also recoverable from the output, the whole reverse is a direct map
+        // from dep_y, narrowing by *all* demanded fields — including value
+        // fields the pair-table join (keyed on K_out only) ignores. That
+        // key-only match is what let sibling rows leak through a re-key that
+        // drops a field from the key (e.g. by_b = tc | key($0[1]; …), keyed by
+        // tc's destination only → fallback recovered every same-destination
+        // pair regardless of source).
+        if total && in_user_len == out_user_len && keep_in_len == in_user_len {
             // Map flat output position p (into [K_out ++ V_out]) to an access
             // expression against dep_y's (key, val) layout:
             //   p < k_out → $0[p]                 (key)
@@ -1158,9 +1169,11 @@ mod reverse {
                 else { FieldExpr::Index(1, p - k_out) }
             };
             let key: Vec<FieldExpr> = (0..k_in).map(|c| access(known[&(0, c)])).collect();
-            let mut val: Vec<FieldExpr> = Vec::with_capacity(v_in + 1);
+            let mut val: Vec<FieldExpr> = Vec::with_capacity(v_in + in_user_len + 1);
             for c in 0..v_in { val.push(access(known[&(1, c)])); }
-            // user_in is empty (in_user_len == 0); q is at $1[v_out + out_user_len].
+            // user_in == user_out (same scope), so copy it through. The filter
+            // user_in ≤ user_out then holds with equality. q at $1[v_out+out_user_len].
+            for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
             val.push(FieldExpr::Index(1, v_out + out_user_len));
             return self.project(dep_y, Projection { key, val });
         }
