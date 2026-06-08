@@ -886,9 +886,23 @@ mod reverse {
                             let contrib = self.filter(dep_this, cond.clone());
                             contribs.entry(*input).or_default().push(contrib);
                         }
-                        LinearOp::Negate | LinearOp::EnterAt(_) => {
-                            // Pure pass-through: data unchanged, scope
-                            // unchanged.
+                        LinearOp::Negate => {
+                            // Pure pass-through: data unchanged, scope unchanged.
+                            contribs.entry(*input).or_default().push(dep_this);
+                        }
+                        LinearOp::EnterAt(_) => {
+                            // Sound but over-broad. EnterAt is a data→time lift: it sets a new
+                            // innermost user_chain coord `t_in = delay($field)` from the value,
+                            // so its output is one scope deeper than its input. The 1:1 reverse
+                            // would DROP that coord (recoverable as `delay($field)` from the
+                            // preserved value): out ((k,v),[t_in,t_out..]) -> in ((k,v),[t_out..]).
+                            // We instead pass demand through unchanged — tenable only because
+                            // `depths()` is positional and treats EnterAt as depth-neutral, so
+                            // the coord is stripped *unconstrained* by the neighboring Project
+                            // that crosses the scope boundary. The result is a superset (kept
+                            // sound by the `semijoin(actual_input)` at seeding); it never drops a
+                            // needed edge. Tight fix: let `depths()` give EnterAt its own level
+                            // and make this arm drop the innermost coord — see `depths()` (ir.rs).
                             contribs.entry(*input).or_default().push(dep_this);
                         }
                         LinearOp::LiftIter => {

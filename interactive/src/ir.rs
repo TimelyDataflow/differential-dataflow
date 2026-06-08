@@ -125,6 +125,14 @@ impl Program {
     /// active at the moment it was lowered; `Scope` itself sits at its
     /// outer depth (the increment applies to subsequent nodes), and
     /// `EndScope` sits at its inner depth (the decrement applies after).
+    ///
+    /// Note: this is purely positional, so `enter_at` — a data→time lift that
+    /// semantically adds one scope coordinate (its output is one level deeper
+    /// than its input) — is counted depth-NEUTRAL here. The coordinate it
+    /// introduces is instead absorbed by a neighboring Project's depth jump and
+    /// stripped *unconstrained* in the reverse rewrite: sound but over-broad.
+    /// The fix is to let `enter_at` own its level (output = input depth + 1);
+    /// see the `LinearOp::EnterAt` arm in `explain.rs::emit_reverse`.
     pub fn depths(&self) -> BTreeMap<Id, usize> {
         let mut out = BTreeMap::new();
         let mut depth = 0usize;
