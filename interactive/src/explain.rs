@@ -1025,43 +1025,15 @@ mod reverse {
         out_len: usize,
         keep_in_len: usize,
     ) -> Id {
-        assert!(keep_in_len <= in_len);
+        // The user_chain index arithmetic (the outer-end alignment whose
+        // off-by-one made SCC explain unsound) lives in `folded::Joined`, the
+        // single home shared with the scope-builder ports.
+        let layout = crate::folded::Joined { v_pre, in_len, out_len };
         let mut cur = coll;
-        let cmp_len = in_len.min(out_len);
-        if cmp_len > 0 {
-            // user_chain is innermost-first. When `in_len != out_len` (a
-            // `Leave` crossing drops the innermost coord), the *shared*
-            // scopes are the outer ones — the last `cmp_len` coords of each
-            // chain. Align both to their outer ends so we compare the same
-            // scope's iter coord on each side; comparing from index 0 would
-            // pair the just-left inner scope against an enclosing scope.
-            let in_off = in_len - cmp_len;
-            let out_off = out_len - cmp_len;
-            let mut acc: Option<Condition> = None;
-            for i in 0..cmp_len {
-                let cond = Condition::Le(
-                    FieldExpr::Index(1, v_pre + in_off + i),                // user_in[in_off + i]
-                    FieldExpr::Index(1, v_pre + in_len + out_off + i),      // user_out[out_off + i]
-                );
-                acc = Some(match acc {
-                    None => cond,
-                    Some(prev) => Condition::And(Box::new(prev), Box::new(cond)),
-                });
-            }
-            cur = self.filter(cur, acc.unwrap());
+        if let Some(cond) = layout.time_le() {
+            cur = self.filter(cur, cond);
         }
-        // Strip user_out and the innermost coords of user_in past `keep_in_len`,
-        // preserving (K; V_pre ++ user_in[in_len - keep_in_len .. in_len] ++ [q]).
-        // user_chain is innermost-first, so the *last* `keep_in_len` coords
-        // correspond to the outer scopes that contribs at the input side care
-        // about; the dropped innermost coords belong to scope(s) we've left.
-        let key: Vec<FieldExpr> = (0..k_out).map(|i| FieldExpr::Index(0, i)).collect();
-        let mut val: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_pre { val.push(FieldExpr::Index(1, i)); }
-        let drop_in = in_len - keep_in_len;
-        for i in 0..keep_in_len { val.push(FieldExpr::Index(1, v_pre + drop_in + i)); }
-        val.push(FieldExpr::Index(1, v_pre + in_len + out_len)); // q
-        self.project(cur, Projection { key, val })
+        self.project(cur, layout.strip(k_out, keep_in_len))
     }
 
     /// Keyed lookup (Reduce-style): demand on `(K; V_out ++ user_out ++ q)`

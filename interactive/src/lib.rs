@@ -2,6 +2,7 @@ pub mod parse;
 pub mod ir;
 pub mod lower;
 pub mod explain;
+pub mod folded;
 
 use std::collections::BTreeSet;
 
