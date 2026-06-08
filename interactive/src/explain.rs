@@ -482,7 +482,7 @@ pub mod arities {
     use std::collections::BTreeMap;
 
     use crate::ir::{Id, LinearOp, Node, Program};
-    use crate::parse::Reducer;
+    use crate::parse::{FieldExpr, Reducer};
 
     pub fn compute_arities(
         p: &Program,
@@ -515,7 +515,17 @@ pub mod arities {
                     // shape and let fixed-point iteration propagate.
                     Node::Concat(ids) => ids.iter().find_map(|i| out.get(i).copied()),
                     Node::Arrange(input) => out.get(input).copied(),
-                    Node::Join { projection, .. } => Some((projection.key.len(), projection.val.len())),
+                    // A projection's arity is the sum of each field's *width*,
+                    // not the count of field-exprs: `Pos(r)` is a whole-row
+                    // reference that expands to input row `r`'s arity. The
+                    // join's input rows are [key, left_val, right_val].
+                    Node::Join { left, right, projection } => match (out.get(left), out.get(right)) {
+                        (Some(&(kl, vl)), Some(&(_kr, vr))) => {
+                            let rows = [kl, vl, vr];
+                            Some((proj_arity(&projection.key, &rows), proj_arity(&projection.val, &rows)))
+                        }
+                        _ => None,
+                    },
                     Node::Reduce { input, reducer } => out.get(input).map(|s| match reducer {
                         Reducer::Distinct => (s.0, 0),
                         Reducer::Min => (s.0, s.1),
@@ -536,12 +546,36 @@ pub mod arities {
     fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, usize) {
         for op in ops {
             match op {
-                LinearOp::Project(p) => { k = p.key.len(); v = p.val.len(); }
+                // Project's input rows are [key, val]; expand `Pos` refs to
+                // their row arities rather than counting field-exprs.
+                LinearOp::Project(p) => {
+                    let rows = [k, v];
+                    k = proj_arity(&p.key, &rows);
+                    v = proj_arity(&p.val, &rows);
+                }
                 LinearOp::Filter(_) | LinearOp::Negate | LinearOp::EnterAt(_) => {}
                 LinearOp::LiftIter => { v += 1; }
             }
         }
         (k, v)
+    }
+
+    /// Width (output columns) a single `FieldExpr` expands to, given the
+    /// arities of the input rows it may reference. `Pos(r)` is a whole-row
+    /// reference of width `rows[r]`; index/const are single columns.
+    fn field_width(f: &FieldExpr, rows: &[usize]) -> usize {
+        match f {
+            FieldExpr::Pos(r) => rows.get(*r).copied().unwrap_or(0),
+            FieldExpr::Index(_, _) | FieldExpr::Const(_) => 1,
+            FieldExpr::Neg(inner) => field_width(inner, rows),
+            FieldExpr::Sub(a, _) => field_width(a, rows),
+        }
+    }
+
+    /// Total arity of one projection side (`key`/`val`): the sum of its
+    /// fields' widths.
+    fn proj_arity(fields: &[FieldExpr], rows: &[usize]) -> usize {
+        fields.iter().map(|f| field_width(f, rows)).sum()
     }
 }
 
@@ -995,11 +1029,19 @@ mod reverse {
         let mut cur = coll;
         let cmp_len = in_len.min(out_len);
         if cmp_len > 0 {
+            // user_chain is innermost-first. When `in_len != out_len` (a
+            // `Leave` crossing drops the innermost coord), the *shared*
+            // scopes are the outer ones — the last `cmp_len` coords of each
+            // chain. Align both to their outer ends so we compare the same
+            // scope's iter coord on each side; comparing from index 0 would
+            // pair the just-left inner scope against an enclosing scope.
+            let in_off = in_len - cmp_len;
+            let out_off = out_len - cmp_len;
             let mut acc: Option<Condition> = None;
             for i in 0..cmp_len {
                 let cond = Condition::Le(
-                    FieldExpr::Index(1, v_pre + i),               // user_in[i]
-                    FieldExpr::Index(1, v_pre + in_len + i),      // user_out[i]
+                    FieldExpr::Index(1, v_pre + in_off + i),                // user_in[in_off + i]
+                    FieldExpr::Index(1, v_pre + in_len + out_off + i),      // user_out[out_off + i]
                 );
                 acc = Some(match acc {
                     None => cond,
