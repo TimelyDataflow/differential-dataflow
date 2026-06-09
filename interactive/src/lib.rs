@@ -3,6 +3,7 @@ pub mod ir;
 pub mod lower;
 pub mod explain;
 pub mod folded;
+pub mod scope_builder;
 
 use std::collections::BTreeSet;
 
