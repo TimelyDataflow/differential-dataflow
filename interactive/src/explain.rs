@@ -543,7 +543,7 @@ pub mod arities {
         out
     }
 
-    fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, usize) {
+    pub(crate) fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, usize) {
         for op in ops {
             match op {
                 // Project's input rows are [key, val]; expand `Pos` refs to
@@ -574,7 +574,7 @@ pub mod arities {
 
     /// Total arity of one projection side (`key`/`val`): the sum of its
     /// fields' widths.
-    fn proj_arity(fields: &[FieldExpr], rows: &[usize]) -> usize {
+    pub(crate) fn proj_arity(fields: &[FieldExpr], rows: &[usize]) -> usize {
         fields.iter().map(|f| field_width(f, rows)).sum()
     }
 }
