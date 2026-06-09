@@ -85,6 +85,31 @@ pub struct Program {
     pub export: Vec<(String, Id)>,
 }
 
+/// Identifier for a scope (a scope nesting). Scope 0 is the root.
+pub type ScopeId = usize;
+
+/// Structural view of the program's scope nesting, derived from the
+/// `Scope`/`EndScope` markers — the explicit form of what `depths()` only
+/// counts. Scope 0 is the top level; each `Scope` opens a child scope.
+///
+/// `iterative[r]` is true when scope `r` carries an iteration feedback (a
+/// `Variable`); a scope with none is purely *structural* — a nesting
+/// boundary that does not advance the timestamp. The scope-typed builder
+/// (see `scope_builder`) leverages the latter for cheap, lifetime-
+/// based scoping discipline, and a viz can draw scopes as nested boxes.
+#[derive(Debug, Clone)]
+pub struct ScopeTree {
+    /// Parent of each scope; `None` for the root.
+    pub parent: Vec<Option<ScopeId>>,
+    /// Direct children of each scope, in the order they were opened.
+    pub children: Vec<Vec<ScopeId>>,
+    /// The scope each node sits in (same scope convention as `depths()`:
+    /// a `Scope` marker sits in the outer scope, an `EndScope` in the inner).
+    pub of_node: BTreeMap<Id, ScopeId>,
+    /// Whether each scope carries an iteration feedback (a `Variable`).
+    pub iterative: Vec<bool>,
+}
+
 impl Program {
     /// Print a human-readable summary of the IR.
     pub fn dump(&self) {
@@ -144,6 +169,44 @@ impl Program {
             }
         }
         out
+    }
+
+    /// Derive the scope tree and per-node scope assignment from the
+    /// `Scope`/`EndScope` markers. Companion to `depths()`: that gives the
+    /// numeric nesting level, this gives the structure itself plus an
+    /// iterative-vs-structural tag per scope.
+    pub fn scopes(&self) -> ScopeTree {
+        let mut parent: Vec<Option<ScopeId>> = vec![None];
+        let mut children: Vec<Vec<ScopeId>> = vec![Vec::new()];
+        let mut iterative: Vec<bool> = vec![false];
+        let mut of_node: BTreeMap<Id, ScopeId> = BTreeMap::new();
+        let mut stack: Vec<ScopeId> = vec![0]; // current scope path; top = current
+        for (&id, node) in &self.nodes {
+            let cur = *stack.last().unwrap();
+            match node {
+                Node::Scope => {
+                    // The marker sits in the outer scope; open a child scope.
+                    of_node.insert(id, cur);
+                    let new = parent.len();
+                    parent.push(Some(cur));
+                    children.push(Vec::new());
+                    iterative.push(false);
+                    children[cur].push(new);
+                    stack.push(new);
+                }
+                Node::EndScope => {
+                    // Sits in the inner scope (matches `depths()`), then closes.
+                    of_node.insert(id, cur);
+                    if stack.len() > 1 { stack.pop(); }
+                }
+                Node::Variable => {
+                    of_node.insert(id, cur);
+                    iterative[cur] = true; // this scope has a feedback
+                }
+                _ => { of_node.insert(id, cur); }
+            }
+        }
+        ScopeTree { parent, children, of_node, iterative }
     }
 
     /// Reject programs where a `LinearOp::LiftIter` result is referenced
@@ -397,5 +460,37 @@ fn eval_field_raw(field: &FieldExpr, inputs: &[&[i64]], result: &mut Vec<i64>) {
             assert_eq!(la.len(), lb.len(), "FieldExpr::Sub: operands must produce same-length rows");
             for (x, y) in la.iter().zip(lb.iter()) { result.push(x - y); }
         }
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn scopes_one_iterative_scope() {
+        // n0 input;  scope { n2 var; n3 linear; n4 bind }  n6 leave
+        let mut nodes = BTreeMap::new();
+        nodes.insert(0usize, Node::Input(0));
+        nodes.insert(1, Node::Scope);
+        nodes.insert(2, Node::Variable);
+        nodes.insert(3, Node::Linear { input: 0, ops: vec![] });
+        nodes.insert(4, Node::Bind { variable: 2, value: 3 });
+        nodes.insert(5, Node::EndScope);
+        nodes.insert(6, Node::Leave(2, 1));
+        let p = Program { nodes, export: vec![("$result".into(), 6)] };
+        let r = p.scopes();
+        // outer nodes (incl. the Scope marker) sit in scope 0; inner nodes
+        // (incl. the EndScope marker) in scope 1 — matching `depths()`.
+        assert_eq!(r.of_node[&0], 0);
+        assert_eq!(r.of_node[&1], 0);
+        assert_eq!(r.of_node[&2], 1);
+        assert_eq!(r.of_node[&5], 1);
+        assert_eq!(r.of_node[&6], 0);
+        // tree shape + iterative tag (scope 1 holds the Variable feedback).
+        assert_eq!(r.parent, vec![None, Some(0)]);
+        assert_eq!(r.children[0], vec![1]);
+        assert_eq!(r.iterative, vec![false, true]);
     }
 }
