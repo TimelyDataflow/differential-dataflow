@@ -482,7 +482,7 @@ pub mod arities {
     use std::collections::BTreeMap;
 
     use crate::ir::{Id, LinearOp, Node, Program};
-    use crate::parse::Reducer;
+    use crate::parse::{FieldExpr, Reducer};
 
     pub fn compute_arities(
         p: &Program,
@@ -515,7 +515,17 @@ pub mod arities {
                     // shape and let fixed-point iteration propagate.
                     Node::Concat(ids) => ids.iter().find_map(|i| out.get(i).copied()),
                     Node::Arrange(input) => out.get(input).copied(),
-                    Node::Join { projection, .. } => Some((projection.key.len(), projection.val.len())),
+                    // A projection's arity is the sum of each field's *width*,
+                    // not the count of field-exprs: `Pos(r)` is a whole-row
+                    // reference that expands to input row `r`'s arity. The
+                    // join's input rows are [key, left_val, right_val].
+                    Node::Join { left, right, projection } => match (out.get(left), out.get(right)) {
+                        (Some(&(kl, vl)), Some(&(_kr, vr))) => {
+                            let rows = [kl, vl, vr];
+                            Some((proj_arity(&projection.key, &rows), proj_arity(&projection.val, &rows)))
+                        }
+                        _ => None,
+                    },
                     Node::Reduce { input, reducer } => out.get(input).map(|s| match reducer {
                         Reducer::Distinct => (s.0, 0),
                         Reducer::Min => (s.0, s.1),
@@ -536,12 +546,36 @@ pub mod arities {
     fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, usize) {
         for op in ops {
             match op {
-                LinearOp::Project(p) => { k = p.key.len(); v = p.val.len(); }
+                // Project's input rows are [key, val]; expand `Pos` refs to
+                // their row arities rather than counting field-exprs.
+                LinearOp::Project(p) => {
+                    let rows = [k, v];
+                    k = proj_arity(&p.key, &rows);
+                    v = proj_arity(&p.val, &rows);
+                }
                 LinearOp::Filter(_) | LinearOp::Negate | LinearOp::EnterAt(_) => {}
                 LinearOp::LiftIter => { v += 1; }
             }
         }
         (k, v)
+    }
+
+    /// Width (output columns) a single `FieldExpr` expands to, given the
+    /// arities of the input rows it may reference. `Pos(r)` is a whole-row
+    /// reference of width `rows[r]`; index/const are single columns.
+    fn field_width(f: &FieldExpr, rows: &[usize]) -> usize {
+        match f {
+            FieldExpr::Pos(r) => rows.get(*r).copied().unwrap_or(0),
+            FieldExpr::Index(_, _) | FieldExpr::Const(_) => 1,
+            FieldExpr::Neg(inner) => field_width(inner, rows),
+            FieldExpr::Sub(a, _) => field_width(a, rows),
+        }
+    }
+
+    /// Total arity of one projection side (`key`/`val`): the sum of its
+    /// fields' widths.
+    fn proj_arity(fields: &[FieldExpr], rows: &[usize]) -> usize {
+        fields.iter().map(|f| field_width(f, rows)).sum()
     }
 }
 
@@ -852,9 +886,23 @@ mod reverse {
                             let contrib = self.filter(dep_this, cond.clone());
                             contribs.entry(*input).or_default().push(contrib);
                         }
-                        LinearOp::Negate | LinearOp::EnterAt(_) => {
-                            // Pure pass-through: data unchanged, scope
-                            // unchanged.
+                        LinearOp::Negate => {
+                            // Pure pass-through: data unchanged, scope unchanged.
+                            contribs.entry(*input).or_default().push(dep_this);
+                        }
+                        LinearOp::EnterAt(_) => {
+                            // Sound but over-broad. EnterAt is a data→time lift: it sets a new
+                            // innermost user_chain coord `t_in = delay($field)` from the value,
+                            // so its output is one scope deeper than its input. The 1:1 reverse
+                            // would DROP that coord (recoverable as `delay($field)` from the
+                            // preserved value): out ((k,v),[t_in,t_out..]) -> in ((k,v),[t_out..]).
+                            // We instead pass demand through unchanged — tenable only because
+                            // `depths()` is positional and treats EnterAt as depth-neutral, so
+                            // the coord is stripped *unconstrained* by the neighboring Project
+                            // that crosses the scope boundary. The result is a superset (kept
+                            // sound by the `semijoin(actual_input)` at seeding); it never drops a
+                            // needed edge. Tight fix: let `depths()` give EnterAt its own level
+                            // and make this arm drop the innermost coord — see `depths()` (ir.rs).
                             contribs.entry(*input).or_default().push(dep_this);
                         }
                         LinearOp::LiftIter => {
@@ -991,35 +1039,15 @@ mod reverse {
         out_len: usize,
         keep_in_len: usize,
     ) -> Id {
-        assert!(keep_in_len <= in_len);
+        // The user_chain index arithmetic (the outer-end alignment whose
+        // off-by-one made SCC explain unsound) lives in `folded::Joined`, the
+        // single home shared with the scope-builder ports.
+        let layout = crate::folded::Joined { v_pre, in_len, out_len };
         let mut cur = coll;
-        let cmp_len = in_len.min(out_len);
-        if cmp_len > 0 {
-            let mut acc: Option<Condition> = None;
-            for i in 0..cmp_len {
-                let cond = Condition::Le(
-                    FieldExpr::Index(1, v_pre + i),               // user_in[i]
-                    FieldExpr::Index(1, v_pre + in_len + i),      // user_out[i]
-                );
-                acc = Some(match acc {
-                    None => cond,
-                    Some(prev) => Condition::And(Box::new(prev), Box::new(cond)),
-                });
-            }
-            cur = self.filter(cur, acc.unwrap());
+        if let Some(cond) = layout.time_le() {
+            cur = self.filter(cur, cond);
         }
-        // Strip user_out and the innermost coords of user_in past `keep_in_len`,
-        // preserving (K; V_pre ++ user_in[in_len - keep_in_len .. in_len] ++ [q]).
-        // user_chain is innermost-first, so the *last* `keep_in_len` coords
-        // correspond to the outer scopes that contribs at the input side care
-        // about; the dropped innermost coords belong to scope(s) we've left.
-        let key: Vec<FieldExpr> = (0..k_out).map(|i| FieldExpr::Index(0, i)).collect();
-        let mut val: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_pre { val.push(FieldExpr::Index(1, i)); }
-        let drop_in = in_len - keep_in_len;
-        for i in 0..keep_in_len { val.push(FieldExpr::Index(1, v_pre + drop_in + i)); }
-        val.push(FieldExpr::Index(1, v_pre + in_len + out_len)); // q
-        self.project(cur, Projection { key, val })
+        self.project(cur, layout.strip(k_out, keep_in_len))
     }
 
     /// Keyed lookup (Reduce-style): demand on `(K; V_out ++ user_out ++ q)`
@@ -1134,7 +1162,18 @@ mod reverse {
         let total = (0..k_in).all(|c| known.contains_key(&(0, c)))
             && (0..v_in).all(|c| known.contains_key(&(1, c)));
 
-        if total && in_user_len == 0 {
+        // Pure-map shortcut, extended to same-scope projects of any depth.
+        // A Linear[Project] doesn't cross a scope boundary, so the input's
+        // user_chain equals the output's (in_user_len == out_user_len ==
+        // keep_in_len when the input isn't a Leave). When every input field is
+        // also recoverable from the output, the whole reverse is a direct map
+        // from dep_y, narrowing by *all* demanded fields — including value
+        // fields the pair-table join (keyed on K_out only) ignores. That
+        // key-only match is what let sibling rows leak through a re-key that
+        // drops a field from the key (e.g. by_b = tc | key($0[1]; …), keyed by
+        // tc's destination only → fallback recovered every same-destination
+        // pair regardless of source).
+        if total && in_user_len == out_user_len && keep_in_len == in_user_len {
             // Map flat output position p (into [K_out ++ V_out]) to an access
             // expression against dep_y's (key, val) layout:
             //   p < k_out → $0[p]                 (key)
@@ -1144,9 +1183,11 @@ mod reverse {
                 else { FieldExpr::Index(1, p - k_out) }
             };
             let key: Vec<FieldExpr> = (0..k_in).map(|c| access(known[&(0, c)])).collect();
-            let mut val: Vec<FieldExpr> = Vec::with_capacity(v_in + 1);
+            let mut val: Vec<FieldExpr> = Vec::with_capacity(v_in + in_user_len + 1);
             for c in 0..v_in { val.push(access(known[&(1, c)])); }
-            // user_in is empty (in_user_len == 0); q is at $1[v_out + out_user_len].
+            // user_in == user_out (same scope), so copy it through. The filter
+            // user_in ≤ user_out then holds with equality. q at $1[v_out+out_user_len].
+            for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
             val.push(FieldExpr::Index(1, v_out + out_user_len));
             return self.project(dep_y, Projection { key, val });
         }
