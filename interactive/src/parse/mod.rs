@@ -37,6 +37,9 @@ pub enum Reducer { Min, Distinct, Count }
 #[derive(Debug, Clone)]
 pub enum Expr {
     Input(usize),
+    /// Named external trace resolved at install time. Carries only the name;
+    /// shape comes from the registry the program is installed against.
+    Import(String),
     Name(String),
     Qualified(String, String),
     Map(Box<Expr>, Projection),
@@ -65,5 +68,7 @@ pub enum Stmt {
     Let(String, Expr),
     Var(String, Expr),
     Scope(String, Vec<Stmt>),
-    Result(Expr),
+    /// `export "name" = expr;` — registers a named output in the program.
+    /// Only valid at the root scope.
+    Export(String, Expr),
 }

@@ -10,4 +10,4 @@ reach: {
     var reach = roots + proposals | distinct;
 }
 
-result reach::reach | key(;) | arrange | inspect(total);
+export "result" = reach::reach | key(;) | arrange | inspect(total);

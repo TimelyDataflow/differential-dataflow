@@ -6,10 +6,10 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Let, Var, Scope, Result,
-    Input, Map, Join, Reduce, Concat, Arrange, Filter, Negate, EnterAt, LiftIter, Inspect,
+    Let, Var, Scope, Export,
+    Input, Import, Map, Join, Reduce, Concat, Arrange, Filter, Negate, EnterAt, LiftIter, Inspect,
     Min, Distinct, Count,
-    Ident(String), Int(i64),
+    Ident(String), Int(i64), Str(String),
     Dollar, LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Semi, Colon, ColonColon, Eq, EqEq, NotEq, Lt, LtEq, Gt, GtEq, AndAnd,
     Plus, Minus, Star, Eof,
@@ -40,6 +40,19 @@ fn tokenize(input: &str) -> Vec<Token> {
             '+' => { chars.next(); tokens.push(Token::Plus); },
             '*' => { chars.next(); tokens.push(Token::Star); },
             '$' => { chars.next(); tokens.push(Token::Dollar); },
+            '"' => {
+                // String literal: the quoted name in `IMPORT "..."` / `EXPORT "..." = ...`.
+                // Names carry no escapes, so read verbatim up to the closing quote.
+                chars.next();
+                let mut s = String::new();
+                let mut closed = false;
+                while let Some(c) = chars.next() {
+                    if c == '"' { closed = true; break; }
+                    s.push(c);
+                }
+                if !closed { panic!("Unterminated string literal"); }
+                tokens.push(Token::Str(s));
+            },
             '-' => { chars.next(); tokens.push(Token::Minus); },
             ':' => { chars.next(); if chars.peek() == Some(&':') { chars.next(); tokens.push(Token::ColonColon); } else { tokens.push(Token::Colon); } },
             c if c.is_ascii_digit() => {
@@ -51,8 +64,10 @@ fn tokenize(input: &str) -> Vec<Token> {
                 let mut ident = String::new();
                 while let Some(&c) = chars.peek() { if c.is_ascii_alphanumeric() || c == '_' { ident.push(c); chars.next(); } else { break; } }
                 tokens.push(match ident.as_str() {
-                    "let" => Token::Let, "var" => Token::Var, "scope" => Token::Scope, "result" => Token::Result,
-                    "INPUT" => Token::Input, "MAP" => Token::Map, "JOIN" => Token::Join,
+                    "let" => Token::Let, "var" => Token::Var, "scope" => Token::Scope,
+                    "export" => Token::Export,
+                    "INPUT" => Token::Input, "IMPORT" => Token::Import,
+                    "MAP" => Token::Map, "JOIN" => Token::Join,
                     "REDUCE" => Token::Reduce, "CONCAT" => Token::Concat, "ARRANGE" => Token::Arrange,
                     "FILTER" => Token::Filter, "NEGATE" => Token::Negate, "ENTER_AT" => Token::EnterAt, "INSPECT" => Token::Inspect,
                     "MIN" => Token::Min, "DISTINCT" => Token::Distinct, "COUNT" => Token::Count,
@@ -85,7 +100,17 @@ impl Parser {
         match self.peek().clone() {
             Token::Let => { self.next(); let n = self.parse_ident(); self.expect(&Token::Eq); let e = self.parse_expr(); self.expect(&Token::Semi); Stmt::Let(n, e) },
             Token::Var => { self.next(); let n = self.parse_ident(); self.expect(&Token::Eq); let e = self.parse_expr(); self.expect(&Token::Semi); Stmt::Var(n, e) },
-            Token::Result => { self.next(); let e = self.parse_expr(); self.expect(&Token::Semi); Stmt::Result(e) },
+            Token::Export => {
+                self.next();
+                let name = match self.next() {
+                    Token::Str(s) => s,
+                    o => panic!("Expected string literal after `export`, got {:?}", o),
+                };
+                self.expect(&Token::Eq);
+                let e = self.parse_expr();
+                self.expect(&Token::Semi);
+                Stmt::Export(name, e)
+            },
             Token::Ident(_) => {
                 let n = self.parse_ident(); self.expect(&Token::Colon);
                 if *self.peek() == Token::Scope { self.next(); }
@@ -100,6 +125,7 @@ impl Parser {
     fn parse_expr(&mut self) -> Expr {
         match self.peek().clone() {
             Token::Input => { self.next(); match self.next() { Token::Int(n) => Expr::Input(n as usize), o => panic!("Expected int, got {:?}", o) } },
+            Token::Import => { self.next(); match self.next() { Token::Str(s) => Expr::Import(s), o => panic!("Expected string literal after IMPORT, got {:?}", o) } },
             Token::Map => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let p = self.parse_projection(); self.expect(&Token::RParen); Expr::Map(Box::new(i), p) },
             Token::Join => { self.next(); self.expect(&Token::LParen); let l = self.parse_expr(); self.expect(&Token::Comma); let r = self.parse_expr(); self.expect(&Token::Comma); let p = self.parse_projection(); self.expect(&Token::RParen); Expr::Join(Box::new(l), Box::new(r), p) },
             Token::Reduce => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let r = self.parse_reducer(); self.expect(&Token::RParen); Expr::Reduce(Box::new(i), r) },

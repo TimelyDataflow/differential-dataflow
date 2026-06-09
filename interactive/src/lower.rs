@@ -10,7 +10,7 @@
 //!      each item is lowered once all the names it transitively needs at this
 //!      level are bound. A cycle among `let`s is an error (use a `var` to
 //!      introduce recursion).
-//!   4. Lower the (single) `result` expression, if any.
+//!   4. Lower the `export` expressions (root scope only).
 //!   5. Lower each `var`'s body and emit a `Bind` from the placeholder to the
 //!      resulting value.
 
@@ -51,12 +51,15 @@ impl Lowering {
     }
 
     fn lower_program(mut self, stmts: Vec<Stmt>) -> Program {
-        let mut result_id = None;
-        self.lower_stmts(stmts, &mut result_id);
-        Program { result: result_id.expect("No result statement"), nodes: self.nodes }
+        let mut exports = Vec::new();
+        self.lower_stmts(stmts, &mut exports);
+        if exports.is_empty() {
+            panic!("Program has no `export` statement");
+        }
+        Program { nodes: self.nodes, export: exports }
     }
 
-    fn lower_stmts(&mut self, stmts: Vec<Stmt>, result_id: &mut Option<Id>) {
+    fn lower_stmts(&mut self, stmts: Vec<Stmt>, exports: &mut Vec<(String, Id)>) {
         // ---- 1. Bucket statements; reject duplicate names. ----
         // `order` records the original textual order so the topological pass
         // is deterministic when several items are simultaneously ready.
@@ -64,7 +67,8 @@ impl Lowering {
         let mut lets: HashMap<String, Expr> = HashMap::new();
         let mut scopes: HashMap<String, Vec<Stmt>> = HashMap::new();
         let mut order: Vec<(ItemKind, String)> = Vec::new();
-        let mut results: Vec<Expr> = Vec::new();
+        // Exports in declaration order (root scope only — rejected below if nested).
+        let mut local_exports: Vec<(String, Expr)> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for stmt in stmts {
             match stmt {
@@ -82,10 +86,27 @@ impl Lowering {
                     order.push((ItemKind::Scope, name.clone()));
                     scopes.insert(name, body);
                 },
-                Stmt::Result(expr) => results.push(expr),
+                Stmt::Export(name, expr) => {
+                    // Exports are the program's output interface and only make
+                    // sense at the root; reject nested ones rather than silently
+                    // dropping them.
+                    if self.level > 0 {
+                        panic!("`export {:?}` is nested; exports are only allowed at the root scope", name);
+                    }
+                    local_exports.push((name, expr));
+                },
             }
         }
-        if results.len() > 1 { panic!("Multiple `result` statements at the same scope level"); }
+        // Reject duplicate export names (root-only, so this is the whole
+        // program's output interface).
+        {
+            let mut names: BTreeSet<&str> = BTreeSet::new();
+            for (n, _) in &local_exports {
+                if !names.insert(n) {
+                    panic!("Duplicate export name: {:?}", n);
+                }
+            }
+        }
 
         // ---- 2. Pre-bind `Variable` placeholders. ----
         for (name, _) in &vars {
@@ -132,8 +153,10 @@ impl Lowering {
                     self.push(Node::Scope);
                     self.level += 1;
                     self.scopes.push(HashMap::new());
-                    let mut inner_result = None;
-                    self.lower_stmts(body, &mut inner_result);
+                    // Exports are root-only (lower_stmts rejects nested ones),
+                    // so this stays empty.
+                    let mut inner_exports = Vec::new();
+                    self.lower_stmts(body, &mut inner_exports);
                     let inner_scope = self.scopes.pop().unwrap();
                     let scope_level = self.level;
                     self.named_scopes.insert(name, (scope_level, inner_scope));
@@ -143,10 +166,10 @@ impl Lowering {
             }
         }
 
-        // ---- 4. Lower the result expression (if any). ----
-        if let Some(expr) = results.into_iter().next() {
+        // ---- 4. Lower export expressions (if any) and record them. ----
+        for (name, expr) in local_exports {
             let id = self.lower_expr(expr);
-            *result_id = Some(id);
+            exports.push((name, id));
         }
 
         // ---- 5. Lower var bodies and emit Bind nodes. ----
@@ -160,6 +183,7 @@ impl Lowering {
     fn lower_expr(&mut self, expr: Expr) -> Id {
         match expr {
             Expr::Input(n) => self.push(Node::Input(n)),
+            Expr::Import(name) => self.push(Node::Import { name }),
             Expr::Name(name) => self.resolve_name(&name),
             Expr::Qualified(scope_name, name) => {
                 let (scope_level, inner_id) = {
@@ -223,7 +247,7 @@ fn scope_body_deps(body: &[Stmt], defined: &BTreeSet<&str>, self_name: &str) -> 
 /// field is resolved within that scope's environment, not the enclosing one).
 fn expr_free_names<'a>(expr: &'a Expr, out: &mut BTreeSet<&'a str>) {
     match expr {
-        Expr::Input(_) => {},
+        Expr::Input(_) | Expr::Import(_) => {},
         Expr::Name(n) => { out.insert(n.as_str()); },
         Expr::Qualified(scope, _) => { out.insert(scope.as_str()); },
         Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
@@ -242,13 +266,13 @@ fn collect_body_free_names<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>) {
     for stmt in body {
         match stmt {
             Stmt::Let(n, _) | Stmt::Var(n, _) | Stmt::Scope(n, _) => { local.insert(n.as_str()); },
-            Stmt::Result(_) => {},
+            Stmt::Export(_, _) => {},
         }
     }
     let mut inner: BTreeSet<&'a str> = BTreeSet::new();
     for stmt in body {
         match stmt {
-            Stmt::Let(_, e) | Stmt::Var(_, e) | Stmt::Result(e) => expr_free_names(e, &mut inner),
+            Stmt::Let(_, e) | Stmt::Var(_, e) | Stmt::Export(_, e) => expr_free_names(e, &mut inner),
             Stmt::Scope(_, b) => collect_body_free_names(b, &mut inner),
         }
     }
