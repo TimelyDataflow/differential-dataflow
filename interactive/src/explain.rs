@@ -1,6 +1,6 @@
 //! The explanation rewrite on the scope-tree IR.
 //!
-//! `explain_tree(p)` transforms a program into one whose execution produces
+//! `explain(p)` transforms a program into one whose execution produces
 //! per-source demand-set explanations for queries against `p`'s first
 //! export: root { sources, query input, witness clone } plus an iterative
 //! `explain` scope { demand-set vars, forward clone on demanded rows,
@@ -178,7 +178,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
 
 // ===== The explanation transform =====
 //
-// `explain_tree(p)` produces a Program whose execution yields per-source
+// `explain(p)` produces a Program whose execution yields per-source
 // demand-set explanations for queries against `p`'s first export. Output
 // shape: root { sources, query input, witness clone } and an iterative
 // `explain` scope { demand-set vars, forward clone on demanded rows,
@@ -625,7 +625,7 @@ pub fn export_shape(p: &Program, source_shapes: &[(usize, usize)]) -> (usize, us
 /// The transform. `source_shapes[k]` is the `(k, v)` of the original root's
 /// import `k` (positional inputs and named traces alike). The query arrives
 /// as one extra positional input appended after the original inputs.
-pub fn explain_tree(p: &Program, source_shapes: &[(usize, usize)]) -> Program {
+pub fn explain(p: &Program, source_shapes: &[(usize, usize)]) -> Program {
     let n_sources = p.root.imports.len();
     assert_eq!(source_shapes.len(), n_sources, "one shape per root import");
     let shapes = site_shapes(p, source_shapes);
@@ -688,7 +688,7 @@ pub fn explain_tree(p: &Program, source_shapes: &[(usize, usize)]) -> Program {
         contribs: BTreeMap::new(),
     };
     // Seed: the query rows are demand against the first export's target.
-    let first = p.root.exports.first().expect("explain_tree: program has no export").value.clone();
+    let first = p.root.exports.first().expect("explain: program has no export").value.clone();
     let target = resolve(&p.root, &[], &first);
     let seeded = rev.route(&mut ex, ex_query, 0, &target);
     rev.contribs.entry(target).or_default().push(seeded);
@@ -859,7 +859,7 @@ impl<'a> Reverse<'a> {
             Node::Linear { input, ops } => {
                 let op = match ops.as_slice() {
                     [single] => single,
-                    _ => panic!("explain_tree: multi-op Linear (run before optimize)"),
+                    _ => panic!("explain: multi-op Linear (run before optimize)"),
                 };
                 match op {
                     LinearOp::Project(proj) => {
@@ -878,7 +878,7 @@ impl<'a> Reverse<'a> {
                         // the routing adapter handles any depth difference.
                         self.push(ex, path, input, dep_this, out_user_len);
                     }
-                    LinearOp::LiftIter => panic!("explain_tree: LiftIter in user program"),
+                    LinearOp::LiftIter => panic!("explain: LiftIter in user program"),
                 }
             }
             Node::Concat(refs) => {

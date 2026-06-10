@@ -3,7 +3,7 @@ pub mod ir;
 pub mod lower;
 pub mod folded;
 pub mod scope_ir;
-pub mod explain_tree;
+pub mod explain;
 
 use std::collections::BTreeSet;
 
