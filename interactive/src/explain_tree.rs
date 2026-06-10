@@ -1,7 +1,13 @@
-//! Explanation rewrite on the scope-tree IR (in progress).
+//! The explanation rewrite on the scope-tree IR.
 //!
-//! Current contents: the clone-with-lifts, the foundation the rewrite's
-//! witness and forward copies are built from. `clone_into` clones an original
+//! `explain_tree(p)` transforms a program into one whose execution produces
+//! per-source demand-set explanations for queries against `p`'s first
+//! export: root { sources, query input, witness clone } plus an iterative
+//! `explain` scope { demand-set vars, forward clone on demanded rows,
+//! reverse-tracing ops, demand exports }. See the section comments below.
+//!
+//! The clone-with-lifts is the foundation the rewrite's witness and
+//! forward copies are built from. `clone_into` clones an original
 //! program's scopes into an output scope under construction; every nested
 //! scope additionally `lift_iter`s and exports each internal collection, so
 //! every value-producing site in the subtree has a "host-visible" form — its
