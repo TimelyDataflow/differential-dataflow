@@ -603,6 +603,19 @@ fn analyze_lossy_invertibility(proj: &Projection, k_in: usize, v_in: usize) -> B
     known
 }
 
+/// The `(k, v)` shape of the program's first export — what a query against it
+/// must match. A query row is `(key[k]; val[v] ++ [q])`; a shape-mismatched
+/// query addresses nothing and yields junk demand, so harnesses should check
+/// loudly at seeding time.
+pub fn export_shape(p: &Program, source_shapes: &[(usize, usize)]) -> (usize, usize) {
+    let shapes = site_shapes(p, source_shapes);
+    let first = p.root.exports.first().expect("export_shape: program has no export").value.clone();
+    match resolve(&p.root, &[], &first) {
+        Target::Site(a) => shapes[&a],
+        Target::Source(k) => source_shapes[k],
+    }
+}
+
 /// The transform. `source_shapes[k]` is the `(k, v)` of the original root's
 /// import `k` (positional inputs and named traces alike). The query arrives
 /// as one extra positional input appended after the original inputs.

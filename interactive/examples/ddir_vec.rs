@@ -302,6 +302,7 @@ fn run(
     // forces the flat path for A/B comparison; outputs must match either way.
     let tree_mode = std::env::var("FLAT").is_err();
     let (tree, compiled, result_id, tree_export_idx);
+    let mut query_shape: Option<(usize, usize)> = None;
     if tree_mode {
         let mut t = lower::lower_tree(stmts);
         // CLONE_RT=1 routes the program through the explain rewrite's
@@ -316,6 +317,7 @@ fn run(
                 interactive::scope_ir::Source::Input(_) => (arity, 0usize),
                 other => panic!("ddir_vec --explain: unsupported source {:?}", other),
             }).collect();
+            query_shape = Some(interactive::explain_tree::export_shape(&t, &source_shapes));
             t = interactive::explain_tree::explain_tree(&t, &source_shapes);
         }
         let ops_before = t.op_count();
@@ -429,6 +431,11 @@ fn run(
                     let q_key: Row = parse_row(k_str);
                     let mut q_val: Row = parse_row(vq_str);
                     if q_val.is_empty() { q_val.push(0); }
+                    if let Some((qk, qv)) = query_shape {
+                        assert!(q_key.len() == qk && q_val.len() == qv + 1,
+                            "QUERY shape mismatch: export is (k={}, v={}), so QUERY needs {} key field(s) and {} val field(s) + q; got key={:?} val_with_q={:?}",
+                            qk, qv, qk, qv, q_key, q_val);
+                    }
                     eprintln!("seeding query: key={:?} val_with_q={:?}", q_key, q_val);
                     inputs[q_idx].update((q_key, q_val), 1);
                 }
