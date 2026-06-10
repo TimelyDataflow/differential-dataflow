@@ -61,14 +61,12 @@ mod types {
     }
 
     pub type Diff = i64;
-    pub type Id = usize;
     pub type Time = timely::order::Product<u64, differential_dataflow::dynamic::pointstamp::PointStamp<u64>>;
 }
 use types::*;
 
 use interactive::parse;
 use interactive::lower;
-use interactive::ir::Program;
 
 use differential_dataflow::columnar as columnar_support;
 
@@ -88,7 +86,6 @@ mod columnar {
 }
 
 mod render {
-    use std::collections::HashMap;
     use std::sync::Arc;
     use timely::order::Product;
     use timely::dataflow::Scope;
@@ -99,7 +96,7 @@ mod render {
     use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
     use columnar::Columnar;
     use super::types::*;
-    use interactive::ir::{Node, LinearOp, Program, RowLike, eval_fields, eval_field_into, eval_condition};
+    use interactive::ir::{LinearOp, RowLike, eval_fields, eval_field_into, eval_condition};
 
     use super::columnar::{DdirUpdate, DdirRecordedUpdates};
     use super::columnar::{ColValSpine, ColValBuilder};
@@ -353,67 +350,6 @@ mod render {
         s.exports.iter().map(|e| resolve(&items, &imports, &var_cols, &e.value).collection()).collect()
     }
 
-    pub fn render_program<'scope>(program: &Program, scope: Scope<'scope, ConcreteTime>, inputs: &[Col<'scope>]) -> HashMap<Id, Col<'scope>>
-    {
-        let mut nodes: HashMap<Id, Rendered<'scope>> = HashMap::new();
-        let mut level: usize = 0;
-        let mut variables: HashMap<Id, (Variable<'scope, ConcreteTime, DdirRecordedUpdates>, usize)> = HashMap::new();
-        let mut var_levels: HashMap<Id, usize> = HashMap::new();
-
-        for (&id, node) in program.nodes.iter() {
-            match node {
-                Node::Input(i) => {
-                    nodes.insert(id, Rendered::Collection(inputs[*i].clone()));
-                },
-                Node::Import { name } => panic!("ddir_col: Import {:?} not supported in this harness (no trace registry).", name),
-                Node::Linear { input, ops } => {
-                    let c = nodes[input].collection();
-                    nodes.insert(id, Rendered::Collection(render_linear(c, ops.clone(), level)));
-                },
-                Node::Concat(ids) => {
-                    let mut r = nodes[&ids[0]].collection();
-                    for i in &ids[1..] { r = r.concat(nodes[i].collection()); }
-                    nodes.insert(id, Rendered::Collection(r));
-                },
-                Node::Arrange(input) => {
-                    nodes.insert(id, Rendered::Arrangement(nodes[input].arrange()));
-                },
-                Node::Join { left, right, projection } => {
-                    let Rendered::Arrangement(l) = &nodes[left] else { panic!("Join: left input must be an Arrangement") };
-                    let Rendered::Arrangement(r) = &nodes[right] else { panic!("Join: right input must be an Arrangement") };
-                    nodes.insert(id, Rendered::Collection(render_join(l.clone(), r.clone(), projection)));
-                },
-                Node::Reduce { input, reducer } => {
-                    let Rendered::Arrangement(a) = &nodes[input] else { panic!("Reduce: input must be an Arrangement") };
-                    nodes.insert(id, Rendered::Arrangement(render_reduce(a.clone(), reducer)));
-                },
-                Node::Variable => {
-                    let step: Product<u64, PointStampSummary<u64>> = Product::new(0, feedback_summary::<u64>(level, 1));
-                    let (var, col) = Variable::new(scope, step);
-                    nodes.insert(id, Rendered::Collection(col));
-                    variables.insert(id, (var, level));
-                    var_levels.insert(id, level);
-                },
-                Node::Inspect { input, label } => {
-                    let col = nodes[input].collection();
-                    nodes.insert(id, Rendered::Collection(render_inspect(col, label.clone())));
-                },
-                Node::Leave(inner_id, scope_level) => {
-                    let c = nodes[inner_id].collection();
-                    nodes.insert(id, Rendered::Collection(super::columnar::leave_dynamic(c, *scope_level)));
-                },
-                Node::Scope => { level += 1; },
-                Node::EndScope => { level -= 1; },
-                Node::Bind { variable, value } => {
-                    let c = nodes[value].collection();
-                    let (var, _) = variables.remove(variable).expect("Bind: variable not found");
-                    var.set(c);
-                },
-            }
-        }
-
-        nodes.into_iter().filter_map(|(id, r)| match r { Rendered::Collection(c) => Some((id, c)), _ => None }).collect()
-    }
 }
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -421,40 +357,12 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 type DdirOuterUpdate = (Row, Row, u64, Diff);
 
 fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: u64, arity: usize, batch: u64, rounds: Option<u64>) {
-    // The scope-tree IR (lower_tree + render_tree, one timely region per scope)
-    // is the default path; FLAT=1 forces the flat path for A/B comparison.
-    let tree_mode = std::env::var("FLAT").is_err();
-    let (tree, compiled, result_id, tree_export_idx);
-    if tree_mode {
-        let mut t = lower::lower_tree(stmts);
-        let ops_before = t.op_count();
-        t.optimize();
-        tree_export_idx = t.root.exports.iter().position(|e| e.name == "result").unwrap_or(0);
-        println!("{}: tree mode; {} ops before optimize, {} after; driving export {:?}",
-            name, ops_before, t.op_count(), t.root.exports[tree_export_idx].name);
-        tree = Some(t);
-        compiled = Program { nodes: std::collections::BTreeMap::new(), export: vec![] };
-        result_id = 0;
-    } else {
-        let mut c: Program = lower::lower(stmts);
-        println!("{}: {} IR nodes (before optimize)", name, c.nodes.len());
-        c.optimize();
-        println!("{}: {} IR nodes (after optimize), exports = {:?}",
-            name, c.nodes.len(),
-            c.export.iter().map(|(n, id)| (n.as_str(), *id)).collect::<Vec<_>>());
-        c.dump();
-        let (driven_name, id) = {
-            let pick = c.export.iter().find(|(n, _)| n == "result")
-                .or_else(|| c.export.first())
-                .expect("ddir_col: program declares no exports");
-            (pick.0.clone(), pick.1)
-        };
-        println!("{}: driving export {:?} (id {})", name, driven_name, id);
-        tree = None;
-        compiled = c;
-        result_id = id;
-        tree_export_idx = 0;
-    }
+    let mut tree = lower::lower_tree(stmts);
+    let ops_before = tree.op_count();
+    tree.optimize();
+    let tree_export_idx = tree.root.exports.iter().position(|e| e.name == "result").unwrap_or(0);
+    println!("{}: {} ops before optimize, {} after; driving export {:?}",
+        name, ops_before, tree.op_count(), tree.root.exports[tree_export_idx].name);
     let name = name.to_string();
 
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
@@ -476,18 +384,13 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
             let mut probe = timely::dataflow::ProbeHandle::new();
             let output = scope.iterative::<PointStamp<u64>, _, _>(|inner| {
                 let entered: Vec<_> = collections.iter().map(|c| c.clone().enter(inner)).collect();
-                if let Some(tree) = &tree {
-                    let root_imports: Vec<_> = tree.root.imports.iter().map(|imp| match &imp.from {
-                        interactive::scope_ir::Source::Input(n) => entered[*n].clone(),
-                        interactive::scope_ir::Source::Trace(name) => panic!("ddir_col: Import {:?} not supported in this harness (no trace registry).", name),
-                        interactive::scope_ir::Source::Parent(_) => unreachable!("root scope cannot import from a parent"),
-                    }).collect();
-                    let exports = render::render_tree(&tree.root, inner, 0, root_imports);
-                    exports[tree_export_idx].clone().leave(scope)
-                } else {
-                    let rendered = render::render_program(&compiled, inner, &entered);
-                    rendered[&result_id].clone().leave(scope)
-                }
+                let root_imports: Vec<_> = tree.root.imports.iter().map(|imp| match &imp.from {
+                    interactive::scope_ir::Source::Input(n) => entered[*n].clone(),
+                    interactive::scope_ir::Source::Trace(name) => panic!("ddir_col: Import {:?} not supported in this harness (no trace registry).", name),
+                    interactive::scope_ir::Source::Parent(_) => unreachable!("root scope cannot import from a parent"),
+                }).collect();
+                let exports = render::render_tree(&tree.root, inner, 0, root_imports);
+                exports[tree_export_idx].clone().leave(scope)
             });
             output.probe_with(&mut probe);
             (handles, probe)
