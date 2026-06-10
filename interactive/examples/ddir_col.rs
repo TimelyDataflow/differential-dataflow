@@ -135,6 +135,224 @@ mod render {
         }
     }
 
+    /// Render a Linear chain: one pass applying the ops in sequence. `level` is
+    /// the op's scope depth — it locates the iteration coord for LiftIter and
+    /// the coordinate position EnterAt's delay lands in.
+    fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Col<'scope> {
+        super::columnar::join_function(c, move |k, v, t_in, _d| {
+            use timely::progress::Timestamp;
+            let k: Row = Columnar::into_owned(k);
+            let v: Row = Columnar::into_owned(v);
+            // Materialize input time once so LiftIter can read
+            // the iter coord at the operator's scope depth.
+            let t_owned: Time = Columnar::into_owned(t_in);
+            let iter_at_level: i64 = level
+                .checked_sub(1)
+                .and_then(|idx| t_owned.inner.get(idx).copied())
+                .unwrap_or(0) as i64;
+            let mut results: Vec<(Row, Row, Time, Diff)> = vec![(k, v, Time::minimum(), 1i64)];
+            for op in &ops {
+                let mut next = Vec::new();
+                for (k, v, t, d) in results {
+                    match op {
+                        LinearOp::Project(proj) => {
+                            let i = [k.as_slice(), v.as_slice()];
+                            next.push((eval_fields(&proj.key, &i), eval_fields(&proj.val, &i), t, d));
+                        },
+                        LinearOp::Filter(cond) => {
+                            let i = [k.as_slice(), v.as_slice()];
+                            if eval_condition(cond, &i) { next.push((k, v, t, d)); }
+                        },
+                        LinearOp::Negate => {
+                            next.push((k, v, t, -d));
+                        },
+                        LinearOp::EnterAt(field) => {
+                            let delay = {
+                                let mut r = Row::new();
+                                eval_field_into(field, &[k.as_slice(), v.as_slice()], &mut r);
+                                256 * (64 - (r.as_slice().first().copied().unwrap_or(0) as u64).leading_zeros() as u64)
+                            };
+                            let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
+                            for _ in 0..level.saturating_sub(1) { coords.push(0); }
+                            coords.push(delay);
+                            next.push((k, v, Product::new(0u64, PointStamp::new(coords)), d));
+                        },
+                        LinearOp::LiftIter => {
+                            let mut new_v = v.clone();
+                            new_v.push(iter_at_level);
+                            next.push((k, new_v, t, d));
+                        },
+                    }
+                }
+                results = next;
+            }
+            results.into_iter()
+        })
+    }
+
+    fn render_join<'scope>(l: Arr<'scope>, r: Arr<'scope>, projection: &interactive::parse::Projection) -> Col<'scope> {
+        let proj = projection.clone();
+        use differential_dataflow::operators::join::join_traces;
+        use differential_dataflow::collection::AsCollection;
+        use super::columnar::ValColBuilder;
+        let stream = join_traces::<_, _, _, ValColBuilder<DdirUpdate>>(l, r, move |k, v1, v2, t, d1, d2, c| {
+            use differential_dataflow::difference::Multiply;
+            let d = d1.clone().multiply(d2);
+            let i = [k.as_slice(), v1.as_slice(), v2.as_slice()];
+            let (k2, v2): (Row, Row) = (eval_fields(&proj.key, &i), eval_fields(&proj.val, &i));
+            c.give((k2, v2, t, d));
+        });
+        stream.as_collection()
+    }
+
+    fn render_reduce<'scope>(a: Arr<'scope>, reducer: &interactive::parse::Reducer) -> Arr<'scope> {
+        let reducer = reducer.clone();
+        type ReduceFn = dyn for<'a> Fn(columnar::Ref<'a, Row>, &[(columnar::Ref<'a, Row>, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync;
+        let f: Arc<ReduceFn> = match reducer {
+            interactive::parse::Reducer::Min => Arc::new(|_key, vals, output| {
+                if let Some(min) = vals.iter().map(|(v, _)| v.as_slice()).min() {
+                    output.push((Row(min.to_vec()), 1));
+                }
+            }),
+            interactive::parse::Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
+            interactive::parse::Reducer::Count => Arc::new(|_key, vals, output| {
+                let count: Diff = vals.iter().map(|(_, d)| *d).sum();
+                if count != 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); }
+            }),
+        };
+        a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>, _>(
+            "Reduce",
+            move |k, vals, output| { f(k, vals, output); },
+            |col, key, upds| {
+                use columnar::{Clear, Push};
+                col.keys.clear();
+                col.vals.clear();
+                col.times.clear();
+                col.diffs.clear();
+                for (val, time, diff) in upds.drain(..) { col.push((key, &val, &time, &diff)); }
+                // NOTE: required because push above doesn't group by key, val.
+                *col = std::mem::take(col).consolidate();
+            },
+        )
+    }
+
+    fn render_inspect<'scope>(col: Col<'scope>, label: String) -> Col<'scope> {
+        col.inspect_container(move |event| {
+            if let Ok((_time, container)) = event {
+                for (k, v, t, d) in container.updates.view().iter() {
+                    eprintln!("  [{}] ({:?}, {:?}, {:?}, {:?})", label, <Row as Columnar>::into_owned(k), <Row as Columnar>::into_owned(v), <Time as Columnar>::into_owned(t), <Diff as Columnar>::into_owned(d));
+                }
+            }
+        })
+    }
+
+    // ===== Scope-tree renderer =====
+    //
+    // Walks the scope-tree IR in item order; each `{}` scope is a real timely
+    // region (imports enter it, exports leave it, then the dynamic coordinate
+    // pops). Mirrors ddir_vec's render_tree with columnar types.
+
+    use interactive::scope_ir as st;
+
+    enum RItem<'scope> {
+        Op(Rendered<'scope>),
+        Sub(Vec<Col<'scope>>),
+    }
+
+    fn resolve<'scope>(
+        items: &[RItem<'scope>],
+        imports: &[Col<'scope>],
+        var_cols: &[Col<'scope>],
+        r: &st::Ref,
+    ) -> Rendered<'scope> {
+        match r {
+            st::Ref::Local(i) => match &items[*i] {
+                RItem::Op(Rendered::Collection(c)) => Rendered::Collection(c.clone()),
+                RItem::Op(Rendered::Arrangement(a)) => Rendered::Arrangement(a.clone()),
+                RItem::Sub(_) => panic!("Ref::Local points at a child scope"),
+            },
+            st::Ref::Import(i) => Rendered::Collection(imports[*i].clone()),
+            st::Ref::Var(i) => Rendered::Collection(var_cols[*i].clone()),
+            st::Ref::ChildExport(i, j) => match &items[*i] {
+                RItem::Sub(exports) => Rendered::Collection(exports[*j].clone()),
+                RItem::Op(_) => panic!("Ref::ChildExport points at an operator"),
+            },
+        }
+    }
+
+    pub fn render_tree<'scope>(
+        s: &st::Scope,
+        scope: Scope<'scope, ConcreteTime>,
+        depth: usize,
+        imports: Vec<Col<'scope>>,
+    ) -> Vec<Col<'scope>> {
+        let mut var_handles: Vec<Option<Variable<'scope, ConcreteTime, DdirRecordedUpdates>>> = Vec::new();
+        let mut var_cols: Vec<Col<'scope>> = Vec::new();
+        for _ in &s.vars {
+            let step: Product<u64, PointStampSummary<u64>> = Product::new(0, feedback_summary::<u64>(depth, 1));
+            let (var, col) = Variable::new(scope, step);
+            var_handles.push(Some(var));
+            var_cols.push(col);
+        }
+
+        let mut items: Vec<RItem<'scope>> = Vec::new();
+        for item in &s.items {
+            match item {
+                st::Item::Op(node) => {
+                    let rendered = match node {
+                        st::Node::Linear { input, ops } => {
+                            let c = resolve(&items, &imports, &var_cols, input).collection();
+                            Rendered::Collection(render_linear(c, ops.clone(), depth))
+                        },
+                        st::Node::Concat(refs) => {
+                            let mut c = resolve(&items, &imports, &var_cols, &refs[0]).collection();
+                            for r in &refs[1..] { c = c.concat(resolve(&items, &imports, &var_cols, r).collection()); }
+                            Rendered::Collection(c)
+                        },
+                        st::Node::Arrange(r) => Rendered::Arrangement(resolve(&items, &imports, &var_cols, r).arrange()),
+                        st::Node::Join { left, right, projection } => {
+                            let l = resolve(&items, &imports, &var_cols, left).arrange();
+                            let r = resolve(&items, &imports, &var_cols, right).arrange();
+                            Rendered::Collection(render_join(l, r, projection))
+                        },
+                        st::Node::Reduce { input, reducer } => {
+                            let a = resolve(&items, &imports, &var_cols, input).arrange();
+                            Rendered::Arrangement(render_reduce(a, reducer))
+                        },
+                        st::Node::Inspect { input, label } => {
+                            let c = resolve(&items, &imports, &var_cols, input).collection();
+                            Rendered::Collection(render_inspect(c, label.clone()))
+                        },
+                    };
+                    items.push(RItem::Op(rendered));
+                },
+                st::Item::Sub(child) => {
+                    let child_imports: Vec<Col<'scope>> = child.imports.iter().map(|imp| match &imp.from {
+                        st::Source::Parent(r) => resolve(&items, &imports, &var_cols, r).collection(),
+                        other => panic!("non-root scope with external source {:?}", other),
+                    }).collect();
+                    // Each `{}` scope is a real timely region: imports enter it,
+                    // the child renders inside, exports leave it structurally —
+                    // and then pop the child's dynamic coordinate.
+                    let exported = scope.region_named(&child.name, |region| {
+                        let entered: Vec<_> = child_imports.iter().map(|c| c.clone().enter(region)).collect();
+                        let exports = render_tree(child, region, depth + 1, entered);
+                        exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()
+                    });
+                    let left: Vec<Col<'scope>> = exported.into_iter().map(|c| super::columnar::leave_dynamic(c, depth + 1)).collect();
+                    items.push(RItem::Sub(left));
+                },
+            }
+        }
+
+        for bind in &s.binds {
+            let c = resolve(&items, &imports, &var_cols, &bind.value).collection();
+            var_handles[bind.var].take().expect("bind: variable already bound").set(c);
+        }
+
+        s.exports.iter().map(|e| resolve(&items, &imports, &var_cols, &e.value).collection()).collect()
+    }
+
     pub fn render_program<'scope>(program: &Program, scope: Scope<'scope, ConcreteTime>, inputs: &[Col<'scope>]) -> HashMap<Id, Col<'scope>>
     {
         let mut nodes: HashMap<Id, Rendered<'scope>> = HashMap::new();
@@ -150,58 +368,7 @@ mod render {
                 Node::Import { name } => panic!("ddir_col: Import {:?} not supported in this harness (no trace registry).", name),
                 Node::Linear { input, ops } => {
                     let c = nodes[input].collection();
-                    let ops = ops.clone();
-                    let level = level;
-                    let result = super::columnar::join_function(c, move |k, v, t_in, _d| {
-                        use timely::progress::Timestamp;
-                        let k: Row = Columnar::into_owned(k);
-                        let v: Row = Columnar::into_owned(v);
-                        // Materialize input time once so LiftIter can read
-                        // the iter coord at the operator's scope depth.
-                        let t_owned: Time = Columnar::into_owned(t_in);
-                        let iter_at_level: i64 = level
-                            .checked_sub(1)
-                            .and_then(|idx| t_owned.inner.get(idx).copied())
-                            .unwrap_or(0) as i64;
-                        let mut results: Vec<(Row, Row, Time, Diff)> = vec![(k, v, Time::minimum(), 1i64)];
-                        for op in &ops {
-                            let mut next = Vec::new();
-                            for (k, v, t, d) in results {
-                                match op {
-                                    LinearOp::Project(proj) => {
-                                        let i = [k.as_slice(), v.as_slice()];
-                                        next.push((eval_fields(&proj.key, &i), eval_fields(&proj.val, &i), t, d));
-                                    },
-                                    LinearOp::Filter(cond) => {
-                                        let i = [k.as_slice(), v.as_slice()];
-                                        if eval_condition(cond, &i) { next.push((k, v, t, d)); }
-                                    },
-                                    LinearOp::Negate => {
-                                        next.push((k, v, t, -d));
-                                    },
-                                    LinearOp::EnterAt(field) => {
-                                        let delay = {
-                                            let mut r = Row::new();
-                                            eval_field_into(field, &[k.as_slice(), v.as_slice()], &mut r);
-                                            256 * (64 - (r.as_slice().first().copied().unwrap_or(0) as u64).leading_zeros() as u64)
-                                        };
-                                        let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
-                                        for _ in 0..level.saturating_sub(1) { coords.push(0); }
-                                        coords.push(delay);
-                                        next.push((k, v, Product::new(0u64, PointStamp::new(coords)), d));
-                                    },
-                                    LinearOp::LiftIter => {
-                                        let mut new_v = v.clone();
-                                        new_v.push(iter_at_level);
-                                        next.push((k, new_v, t, d));
-                                    },
-                                }
-                            }
-                            results = next;
-                        }
-                        results.into_iter()
-                    });
-                    nodes.insert(id, Rendered::Collection(result));
+                    nodes.insert(id, Rendered::Collection(render_linear(c, ops.clone(), level)));
                 },
                 Node::Concat(ids) => {
                     let mut r = nodes[&ids[0]].collection();
@@ -214,53 +381,11 @@ mod render {
                 Node::Join { left, right, projection } => {
                     let Rendered::Arrangement(l) = &nodes[left] else { panic!("Join: left input must be an Arrangement") };
                     let Rendered::Arrangement(r) = &nodes[right] else { panic!("Join: right input must be an Arrangement") };
-                    let l = l.clone();
-                    let r = r.clone();
-                    let proj = projection.clone();
-                    use differential_dataflow::operators::join::join_traces;
-                    use differential_dataflow::collection::AsCollection;
-                    use super::columnar::ValColBuilder;
-                    let stream = join_traces::<_, _, _, ValColBuilder<DdirUpdate>>(l, r, move |k, v1, v2, t, d1, d2, c| {
-                        use differential_dataflow::difference::Multiply;
-                        let d = d1.clone().multiply(d2);
-                        let i = [k.as_slice(), v1.as_slice(), v2.as_slice()];
-                        let (k2, v2): (Row, Row) = (eval_fields(&proj.key, &i), eval_fields(&proj.val, &i));
-                        c.give((k2, v2, t, d));
-                    });
-                    nodes.insert(id, Rendered::Collection(stream.as_collection()));
+                    nodes.insert(id, Rendered::Collection(render_join(l.clone(), r.clone(), projection)));
                 },
                 Node::Reduce { input, reducer } => {
                     let Rendered::Arrangement(a) = &nodes[input] else { panic!("Reduce: input must be an Arrangement") };
-                    let a = a.clone();
-                    let reducer = reducer.clone();
-                    type ReduceFn = dyn for<'a> Fn(columnar::Ref<'a, Row>, &[(columnar::Ref<'a, Row>, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync;
-                    let f: Arc<ReduceFn> = match reducer {
-                        interactive::parse::Reducer::Min => Arc::new(|_key, vals, output| {
-                            if let Some(min) = vals.iter().map(|(v, _)| v.as_slice()).min() {
-                                output.push((Row(min.to_vec()), 1));
-                            }
-                        }),
-                        interactive::parse::Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
-                        interactive::parse::Reducer::Count => Arc::new(|_key, vals, output| {
-                            let count: Diff = vals.iter().map(|(_, d)| *d).sum();
-                            if count != 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); }
-                        }),
-                    };
-                    let reduced = a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>, _>(
-                        "Reduce",
-                        move |k, vals, output| { f(k, vals, output); },
-                        |col, key, upds| {
-                            use columnar::{Clear, Push};
-                            col.keys.clear();
-                            col.vals.clear();
-                            col.times.clear();
-                            col.diffs.clear();
-                            for (val, time, diff) in upds.drain(..) { col.push((key, &val, &time, &diff)); }
-                            // NOTE: required because push above doesn't group by key, val.
-                            *col = std::mem::take(col).consolidate();
-                        },
-                    );
-                    nodes.insert(id, Rendered::Arrangement(reduced));
+                    nodes.insert(id, Rendered::Arrangement(render_reduce(a.clone(), reducer)));
                 },
                 Node::Variable => {
                     let step: Product<u64, PointStampSummary<u64>> = Product::new(0, feedback_summary::<u64>(level, 1));
@@ -271,14 +396,7 @@ mod render {
                 },
                 Node::Inspect { input, label } => {
                     let col = nodes[input].collection();
-                    let label = label.clone();
-                    nodes.insert(id, Rendered::Collection(col.inspect_container(move |event| {
-                        if let Ok((_time, container)) = event {
-                            for (k, v, t, d) in container.updates.view().iter() {
-                                eprintln!("  [{}] ({:?}, {:?}, {:?}, {:?})", label, <Row as Columnar>::into_owned(k), <Row as Columnar>::into_owned(v), <Time as Columnar>::into_owned(t), <Diff as Columnar>::into_owned(d));
-                            }
-                        }
-                    })));
+                    nodes.insert(id, Rendered::Collection(render_inspect(col, label.clone())));
                 },
                 Node::Leave(inner_id, scope_level) => {
                     let c = nodes[inner_id].collection();
@@ -303,21 +421,39 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 type DdirOuterUpdate = (Row, Row, u64, Diff);
 
 fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: u64, arity: usize, batch: u64, rounds: Option<u64>) {
-    let mut compiled: Program = lower::lower(stmts);
-    println!("{}: {} IR nodes (before optimize)", name, compiled.nodes.len());
-    compiled.optimize();
-    println!("{}: {} IR nodes (after optimize), exports = {:?}",
-        name, compiled.nodes.len(),
-        compiled.export.iter().map(|(n, id)| (n.as_str(), *id)).collect::<Vec<_>>());
-    compiled.dump();
+    // The scope-tree IR (lower_tree + render_tree, one timely region per scope)
+    // is the default path; FLAT=1 forces the flat path for A/B comparison.
+    let tree_mode = std::env::var("FLAT").is_err();
+    let (tree, compiled, result_id, tree_export_idx);
+    if tree_mode {
+        let t = lower::lower_tree(stmts);
+        tree_export_idx = t.root.exports.iter().position(|e| e.name == "result").unwrap_or(0);
+        println!("{}: tree mode; root has {} items, driving export {:?}",
+            name, t.root.items.len(), t.root.exports[tree_export_idx].name);
+        tree = Some(t);
+        compiled = Program { nodes: std::collections::BTreeMap::new(), export: vec![] };
+        result_id = 0;
+    } else {
+        let mut c: Program = lower::lower(stmts);
+        println!("{}: {} IR nodes (before optimize)", name, c.nodes.len());
+        c.optimize();
+        println!("{}: {} IR nodes (after optimize), exports = {:?}",
+            name, c.nodes.len(),
+            c.export.iter().map(|(n, id)| (n.as_str(), *id)).collect::<Vec<_>>());
+        c.dump();
+        let (driven_name, id) = {
+            let pick = c.export.iter().find(|(n, _)| n == "result")
+                .or_else(|| c.export.first())
+                .expect("ddir_col: program declares no exports");
+            (pick.0.clone(), pick.1)
+        };
+        println!("{}: driving export {:?} (id {})", name, driven_name, id);
+        tree = None;
+        compiled = c;
+        result_id = id;
+        tree_export_idx = 0;
+    }
     let name = name.to_string();
-    let (driven_name, result_id) = {
-        let pick = compiled.export.iter().find(|(n, _)| n == "result")
-            .or_else(|| compiled.export.first())
-            .expect("ddir_col: program declares no exports");
-        (pick.0.clone(), pick.1)
-    };
-    println!("{}: driving export {:?} (id {})", name, driven_name, result_id);
 
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
         use timely::dataflow::InputHandle;
@@ -338,8 +474,18 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
             let mut probe = timely::dataflow::ProbeHandle::new();
             let output = scope.iterative::<PointStamp<u64>, _, _>(|inner| {
                 let entered: Vec<_> = collections.iter().map(|c| c.clone().enter(inner)).collect();
-                let rendered = render::render_program(&compiled, inner, &entered);
-                rendered[&result_id].clone().leave(scope)
+                if let Some(tree) = &tree {
+                    let root_imports: Vec<_> = tree.root.imports.iter().map(|imp| match &imp.from {
+                        interactive::scope_ir::Source::Input(n) => entered[*n].clone(),
+                        interactive::scope_ir::Source::Trace(name) => panic!("ddir_col: Import {:?} not supported in this harness (no trace registry).", name),
+                        interactive::scope_ir::Source::Parent(_) => unreachable!("root scope cannot import from a parent"),
+                    }).collect();
+                    let exports = render::render_tree(&tree.root, inner, 0, root_imports);
+                    exports[tree_export_idx].clone().leave(scope)
+                } else {
+                    let rendered = render::render_program(&compiled, inner, &entered);
+                    rendered[&result_id].clone().leave(scope)
+                }
             });
             output.probe_with(&mut probe);
             (handles, probe)
