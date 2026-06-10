@@ -149,6 +149,13 @@ impl Program {
         self.root.optimize();
     }
 
+    /// Print the tree as indented structural text (readability, not
+    /// parseability): imports and vars first, items in order (`Sub`s nest),
+    /// then binds and exports.
+    pub fn dump(&self) {
+        dump_scope(&self.root, 0);
+    }
+
     /// Total operator (`Op`) count across all scopes.
     pub fn op_count(&self) -> usize {
         fn count(s: &Scope) -> usize {
@@ -298,6 +305,76 @@ impl Scope {
             },
             Ref::Import(_) | Ref::Var(_) => {},
         });
+    }
+}
+
+fn fmt_ref(r: &Ref) -> String {
+    match r {
+        Ref::Local(i) => format!("n{}", i),
+        Ref::Import(k) => format!("in{}", k),
+        Ref::Var(v) => format!("v{}", v),
+        Ref::ChildExport(c, j) => format!("n{}::{}", c, j),
+    }
+}
+
+fn dump_scope(s: &Scope, indent: usize) {
+    let pad = "  ".repeat(indent);
+    println!("{}{}: {{", pad, if s.name.is_empty() { "scope" } else { &s.name });
+    dump_scope_body(s, indent);
+    println!("{}}}", pad);
+}
+
+fn dump_scope_inner(s: &Scope, indent: usize) {
+    // As `dump_scope`, but the caller began the opening line.
+    println!("{}: {{", if s.name.is_empty() { "scope" } else { &s.name });
+    dump_scope_body(s, indent);
+    println!("{}}}", "  ".repeat(indent));
+}
+
+fn dump_scope_body(s: &Scope, indent: usize) {
+    let pad2 = "  ".repeat(indent + 1);
+    for (k, imp) in s.imports.iter().enumerate() {
+        let from = match &imp.from {
+            Source::Parent(r) => fmt_ref(r),
+            Source::Input(i) => format!("input {}", i),
+            Source::Trace(n) => format!("import {:?}", n),
+        };
+        println!("{}in{} = {} ({:?});", pad2, k, from, imp.name);
+    }
+    for (v, var) in s.vars.iter().enumerate() {
+        println!("{}var v{} ({:?});", pad2, v, var.name);
+    }
+    for (i, item) in s.items.iter().enumerate() {
+        match item {
+            Item::Op(node) => {
+                let desc = match node {
+                    Node::Linear { input, ops } => {
+                        let ops: Vec<&str> = ops.iter().map(|op| match op {
+                            LinearOp::Project(_) => "project", LinearOp::Filter(_) => "filter",
+                            LinearOp::Negate => "negate", LinearOp::EnterAt(_) => "enter_at",
+                            LinearOp::LiftIter => "lift_iter",
+                        }).collect();
+                        format!("{} | {}", fmt_ref(input), ops.join(" | "))
+                    }
+                    Node::Concat(refs) => refs.iter().map(fmt_ref).collect::<Vec<_>>().join(" + "),
+                    Node::Arrange(r) => format!("{} | arrange", fmt_ref(r)),
+                    Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
+                    Node::Reduce { input, reducer } => format!("{} | {:?}", fmt_ref(input), reducer),
+                    Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
+                };
+                println!("{}n{} = {};", pad2, i, desc);
+            }
+            Item::Sub(child) => {
+                print!("{}n{} = ", pad2, i);
+                dump_scope_inner(child, indent + 1);
+            }
+        }
+    }
+    for b in &s.binds {
+        println!("{}bind v{} = {};", pad2, b.var, fmt_ref(&b.value));
+    }
+    for e in &s.exports {
+        println!("{}export {:?} = {};", pad2, e.name, fmt_ref(&e.value));
     }
 }
 
