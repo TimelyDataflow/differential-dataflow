@@ -375,6 +375,7 @@ pub fn explain(
         let semi = b.semijoin_data(stripped, original_inputs[i], kx, vx);
         let combined = b.concat(vec![demand_sets[i], semi]);
         let dist = b.distinct_full(combined, kx, vx);
+        b.debug_inspect(dist, format!("demand_set:{}", i));
         b.bind(demand_sets[i], dist);
     }
     for name in &import_names {
@@ -543,7 +544,7 @@ pub mod arities {
         out
     }
 
-    fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, usize) {
+    pub(crate) fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, usize) {
         for op in ops {
             match op {
                 // Project's input rows are [key, val]; expand `Pos` refs to
@@ -574,7 +575,7 @@ pub mod arities {
 
     /// Total arity of one projection side (`key`/`val`): the sum of its
     /// fields' widths.
-    fn proj_arity(fields: &[FieldExpr], rows: &[usize]) -> usize {
+    pub(crate) fn proj_arity(fields: &[FieldExpr], rows: &[usize]) -> usize {
         fields.iter().map(|f| field_width(f, rows)).sum()
     }
 }

@@ -298,10 +298,9 @@ fn run(
     explain: bool,
 ) {
     // The scope-tree IR (lower_tree + render_tree, one timely region per scope)
-    // is the default path. `--explain` still goes through the flat IR (the
-    // explanation rewrite operates on it), and FLAT=1 forces the flat path
-    // for A/B comparison; outputs must match either way.
-    let tree_mode = !explain && std::env::var("FLAT").is_err();
+    // is the default path, including for `--explain` (explain_tree). FLAT=1
+    // forces the flat path for A/B comparison; outputs must match either way.
+    let tree_mode = std::env::var("FLAT").is_err();
     let (tree, compiled, result_id, tree_export_idx);
     if tree_mode {
         let mut t = lower::lower_tree(stmts);
@@ -309,6 +308,15 @@ fn run(
         // clone-with-lifts as an identity check: outputs must be unchanged.
         if std::env::var("CLONE_RT").is_ok() {
             t = interactive::explain_tree::clone_identity(&t);
+        }
+        // --explain: rewrite for self-explanation before optimization (the
+        // rules assume single-op Linears). Sources are the root's imports.
+        if explain {
+            let source_shapes: Vec<(usize, usize)> = t.root.imports.iter().map(|imp| match &imp.from {
+                interactive::scope_ir::Source::Input(_) => (arity, 0usize),
+                other => panic!("ddir_vec --explain: unsupported source {:?}", other),
+            }).collect();
+            t = interactive::explain_tree::explain_tree(&t, &source_shapes);
         }
         let ops_before = t.op_count();
         t.optimize();
