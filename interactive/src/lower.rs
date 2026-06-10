@@ -354,8 +354,18 @@ impl ScopeLower {
             Expr::EnterAt(e, f) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::EnterAt(f.clone())] }) },
             Expr::LiftIter(e)   => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::LiftIter] }) },
             Expr::Arrange(e)    => { let r = self.lower_expr(e); self.push(st::Node::Arrange(r)) },
-            Expr::Join(l, r, p) => { let lr = self.lower_expr(l); let rr = self.lower_expr(r); self.push(st::Node::Join { left: lr, right: rr, projection: p.clone() }) },
-            Expr::Reduce(e, red)=> { let r = self.lower_expr(e); self.push(st::Node::Reduce { input: r, reducer: red.clone() }) },
+            // Join/Reduce consume arrangements; arrange their inputs explicitly
+            // (as the flat lowering does) so identical arrangements are visible
+            // to `optimize`'s within-scope dedup and shared at render.
+            Expr::Join(l, r, p) => {
+                let lr = self.lower_expr(l); let la = self.push(st::Node::Arrange(lr));
+                let rr = self.lower_expr(r); let ra = self.push(st::Node::Arrange(rr));
+                self.push(st::Node::Join { left: la, right: ra, projection: p.clone() })
+            },
+            Expr::Reduce(e, red)=> {
+                let r = self.lower_expr(e); let a = self.push(st::Node::Arrange(r));
+                self.push(st::Node::Reduce { input: a, reducer: red.clone() })
+            },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
             Expr::Concat(es)    => { let rs: Vec<st::Ref> = es.iter().map(|e| self.lower_expr(e)).collect(); self.push(st::Node::Concat(rs)) },
         }
@@ -616,5 +626,78 @@ mod tree_tests {
             assert!(child.exports.iter().any(|e| e.name == "labels"));
         }
         assert!(reads_a_child_export(&prog.root)); // root reads outer::scc
+    }
+}
+
+#[cfg(test)]
+mod optimize_tests {
+    use super::*;
+    use crate::scope_ir::{Item, Node, Ref};
+
+    fn parse(src: &str) -> Vec<Stmt> { crate::parse::pipe::parse(src) }
+    fn ops(s: &st::Scope) -> Vec<&Node> {
+        s.items.iter().filter_map(|i| match i { Item::Op(n) => Some(n), _ => None }).collect()
+    }
+
+    #[test]
+    fn fuses_linear_chains() {
+        let src = "let a = input 0 | key($0[0] ; $0[1]) | filter($0[0] != $1[0]) | negate;\nexport \"result\" = a;";
+        let mut p = lower_tree(parse(src));
+        assert_eq!(p.op_count(), 3); // three single-op Linears
+        p.optimize();
+        assert_eq!(p.op_count(), 1, "chain should fuse to one Linear");
+        let Node::Linear { ops, .. } = ops(&p.root)[0] else { panic!("expected a Linear") };
+        assert_eq!(ops.len(), 3, "fused Linear carries all three ops in order");
+        assert!(matches!(ops[0], LinearOp::Project(_)));
+        assert!(matches!(ops[2], LinearOp::Negate));
+    }
+
+    #[test]
+    fn shares_arrangements_across_joins() {
+        // `a` feeds two joins; its two implicit Arranges must dedup to one.
+        let src = "\
+            let a = input 0 | key($0[0] ; $0[1]);\n\
+            let b = input 0 | key($0[1] ; $0[0]);\n\
+            let j1 = a | join(b, ($1 ; $2));\n\
+            let j2 = a | join(b, ($2 ; $1));\n\
+            export \"result\" = j1 + j2;";
+        let mut p = lower_tree(parse(src));
+        p.optimize();
+        let arranges = ops(&p.root).iter().filter(|n| matches!(n, Node::Arrange(_))).count();
+        assert_eq!(arranges, 2, "one shared arrangement per distinct input (a, b)");
+    }
+
+    #[test]
+    fn collapses_arrange_of_reduce() {
+        // distinct produces an arrangement; joining on it must not re-arrange.
+        let src = "\
+            let a = input 0 | key($0[0] ; $0[1]) | distinct;\n\
+            let b = input 0 | key($0[0] ; $0[1]);\n\
+            export \"result\" = a | join(b, ($1 ;));";
+        let mut p = lower_tree(parse(src));
+        p.optimize();
+        // No Arrange may target a Reduce item.
+        for n in ops(&p.root) {
+            if let Node::Arrange(Ref::Local(j)) = n {
+                assert!(!matches!(&p.root.items[*j], Item::Op(Node::Reduce { .. })),
+                    "Arrange of a Reduce should have collapsed");
+            }
+        }
+    }
+
+    #[test]
+    fn optimizes_within_nested_scopes() {
+        // The fusible chain sits inside a scope; optimize must recurse.
+        let src = "\
+            let e = input 0 | key($0[0] ; $0[1]);\n\
+            s: {\n\
+                var x = e | key($0 ; $1) | filter($0[0] != $1[0]) | distinct;\n\
+            }\n\
+            export \"result\" = s::x;";
+        let mut p = lower_tree(parse(src));
+        p.optimize();
+        let Item::Sub(child) = p.root.items.iter().find(|i| matches!(i, Item::Sub(_))).unwrap() else { unreachable!() };
+        let linears: Vec<usize> = ops(child).iter().filter_map(|n| match n { Node::Linear { ops, .. } => Some(ops.len()), _ => None }).collect();
+        assert_eq!(linears, vec![2], "the key|filter chain fuses inside the child scope");
     }
 }

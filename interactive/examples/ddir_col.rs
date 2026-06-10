@@ -426,10 +426,12 @@ fn run(name: &str, stmts: Vec<parse::Stmt>, n_inputs: usize, nodes: u64, edges: 
     let tree_mode = std::env::var("FLAT").is_err();
     let (tree, compiled, result_id, tree_export_idx);
     if tree_mode {
-        let t = lower::lower_tree(stmts);
+        let mut t = lower::lower_tree(stmts);
+        let ops_before = t.op_count();
+        t.optimize();
         tree_export_idx = t.root.exports.iter().position(|e| e.name == "result").unwrap_or(0);
-        println!("{}: tree mode; root has {} items, driving export {:?}",
-            name, t.root.items.len(), t.root.exports[tree_export_idx].name);
+        println!("{}: tree mode; {} ops before optimize, {} after; driving export {:?}",
+            name, ops_before, t.op_count(), t.root.exports[tree_export_idx].name);
         tree = Some(t);
         compiled = Program { nodes: std::collections::BTreeMap::new(), export: vec![] };
         result_id = 0;

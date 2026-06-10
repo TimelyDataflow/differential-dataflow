@@ -143,6 +143,164 @@ pub struct Program {
     pub root: Scope,
 }
 
+impl Program {
+    /// Optimize every scope in place. See `Scope::optimize`.
+    pub fn optimize(&mut self) {
+        self.root.optimize();
+    }
+
+    /// Total operator (`Op`) count across all scopes.
+    pub fn op_count(&self) -> usize {
+        fn count(s: &Scope) -> usize {
+            s.items.iter().map(|i| match i { Item::Op(_) => 1, Item::Sub(c) => count(c) }).sum()
+        }
+        count(&self.root)
+    }
+}
+
+impl Scope {
+    /// Optimize this scope (and, recursively, its children) in place, iterating
+    /// three rewrites to a fixed point:
+    ///
+    /// - collapse an `Arrange` whose input is already an arrangement
+    ///   (an `Arrange` or a `Reduce`);
+    /// - fuse a `Linear` into its `Linear` input when it is that input's only
+    ///   consumer;
+    /// - deduplicate structurally identical operators.
+    ///
+    /// All three are *within-scope*: a scope boundary is a semantic barrier,
+    /// so nothing merges or moves across one. (The flat IR's dedup was
+    /// position-blind and could merge across boundaries — sound only because
+    /// the dynamic model has no structural nesting; here the structure makes
+    /// the restriction automatic.)
+    pub fn optimize(&mut self) {
+        for item in self.items.iter_mut() {
+            if let Item::Sub(child) = item { child.optimize(); }
+        }
+        let mut dead: Vec<bool> = vec![false; self.items.len()];
+        loop {
+            let changed = self.collapse_arranges(&mut dead)
+                | self.fuse_linear(&mut dead)
+                | self.dedup(&mut dead);
+            if !changed { break; }
+        }
+        self.compact(&dead);
+    }
+
+    /// Apply `f` to every `Ref` in this scope: operator inputs, child-scope
+    /// import edges, binds, and exports.
+    fn for_each_ref(&mut self, mut f: impl FnMut(&mut Ref)) {
+        for item in self.items.iter_mut() {
+            match item {
+                Item::Op(node) => match node {
+                    Node::Linear { input, .. } | Node::Arrange(input)
+                    | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
+                    Node::Join { left, right, .. } => { f(left); f(right); },
+                    Node::Concat(refs) => for r in refs { f(r); },
+                },
+                Item::Sub(child) => for imp in child.imports.iter_mut() {
+                    if let Source::Parent(r) = &mut imp.from { f(r); }
+                },
+            }
+        }
+        for b in self.binds.iter_mut() { f(&mut b.value); }
+        for e in self.exports.iter_mut() { f(&mut e.value); }
+    }
+
+    /// Count, for each item, the references to it (`Local` or `ChildExport`).
+    fn use_counts(&mut self) -> Vec<usize> {
+        let mut counts = vec![0usize; self.items.len()];
+        self.for_each_ref(|r| match r {
+            Ref::Local(i) | Ref::ChildExport(i, _) => counts[*i] += 1,
+            Ref::Import(_) | Ref::Var(_) => {},
+        });
+        counts
+    }
+
+    /// Redirect every `Ref::Local(from)` to `to`, and mark `from` dead.
+    fn redirect(&mut self, from: usize, to: Ref, dead: &mut [bool]) {
+        self.for_each_ref(|r| if matches!(r, Ref::Local(i) if *i == from) { *r = to.clone(); });
+        dead[from] = true;
+    }
+
+    /// `Arrange` of an arrangement (an `Arrange` or `Reduce` item) is redundant.
+    fn collapse_arranges(&mut self, dead: &mut [bool]) -> bool {
+        let mut changed = false;
+        for i in 0..self.items.len() {
+            if dead[i] { continue; }
+            let Item::Op(Node::Arrange(Ref::Local(j))) = &self.items[i] else { continue };
+            let j = *j;
+            if !dead[j] && matches!(&self.items[j], Item::Op(Node::Arrange(_) | Node::Reduce { .. })) {
+                self.redirect(i, Ref::Local(j), dead);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Fuse a `Linear` into its `Linear` input when it is the only consumer.
+    fn fuse_linear(&mut self, dead: &mut [bool]) -> bool {
+        let counts = self.use_counts();
+        let mut changed = false;
+        for i in 0..self.items.len() {
+            if dead[i] { continue; }
+            let Item::Op(Node::Linear { input: Ref::Local(j), .. }) = &self.items[i] else { continue };
+            let j = *j;
+            if dead[j] || counts[j] != 1 { continue; }
+            let Item::Op(Node::Linear { input: inner_input, ops: inner_ops }) = self.items[j].clone() else { continue };
+            let Item::Op(Node::Linear { ops, .. }) = &mut self.items[i] else { unreachable!() };
+            let mut fused = inner_ops;
+            fused.append(ops);
+            self.items[i] = Item::Op(Node::Linear { input: inner_input, ops: fused });
+            dead[j] = true;
+            changed = true;
+        }
+        changed
+    }
+
+    /// Deduplicate structurally identical operators (the later one redirects to
+    /// the earlier, so references keep pointing backward).
+    fn dedup(&mut self, dead: &mut [bool]) -> bool {
+        use std::collections::HashMap;
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        let mut redirects: Vec<(usize, usize)> = Vec::new();
+        for i in 0..self.items.len() {
+            if dead[i] { continue; }
+            let Item::Op(node) = &self.items[i] else { continue };
+            let key = format!("{:?}", node);
+            match seen.get(&key) {
+                Some(&first) => redirects.push((i, first)),
+                None => { seen.insert(key, i); },
+            }
+        }
+        let changed = !redirects.is_empty();
+        for (i, first) in redirects {
+            self.redirect(i, Ref::Local(first), dead);
+        }
+        changed
+    }
+
+    /// Drop dead items and remap every item-indexed `Ref` to the compacted
+    /// positions. Dead items have no remaining references (their uses were
+    /// redirected when they were marked).
+    fn compact(&mut self, dead: &[bool]) {
+        let mut remap = vec![usize::MAX; self.items.len()];
+        let mut next = 0;
+        for (i, &d) in dead.iter().enumerate() {
+            if !d { remap[i] = next; next += 1; }
+        }
+        let mut keep = dead.iter().map(|d| !d);
+        self.items.retain(|_| keep.next().unwrap());
+        self.for_each_ref(|r| match r {
+            Ref::Local(i) | Ref::ChildExport(i, _) => {
+                assert!(remap[*i] != usize::MAX, "compact: a reference points at a dead item");
+                *i = remap[*i];
+            },
+            Ref::Import(_) | Ref::Var(_) => {},
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
