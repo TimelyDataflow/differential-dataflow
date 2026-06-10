@@ -1,6 +1,6 @@
 //! DD IR vec-backed backend: parse, lower, render, execute.
 //!
-//! With `--explain`, applies the explanation rewrite (explain_tree) after lowering
+//! With `--explain`, applies the explanation rewrite after lowering
 //! and treats the last input handle as the query input (seeded from the
 //! `QUERY` env var, format `"key_fields:val_fields"`).
 
@@ -232,15 +232,12 @@ fn run(
     rounds: Option<u64>,
     explain: bool,
 ) {
-    // The scope-tree IR (lower_tree + render_tree, one timely region per scope)
-    // is the default path, including for `--explain` (explain_tree). FLAT=1
-    // forces the flat path for A/B comparison; outputs must match either way.
     let mut query_shape: Option<(usize, usize)> = None;
     let mut tree = lower::lower_tree(stmts);
     // CLONE_RT=1 routes the program through the explain rewrite's
     // clone-with-lifts as an identity check: outputs must be unchanged.
     if std::env::var("CLONE_RT").is_ok() {
-        tree = interactive::explain_tree::clone_identity(&tree);
+        tree = interactive::explain::clone_identity(&tree);
     }
     // --explain: rewrite for self-explanation before optimization (the
     // rules assume single-op Linears). Sources are the root's imports.
@@ -249,8 +246,8 @@ fn run(
             interactive::scope_ir::Source::Input(_) => (arity, 0usize),
             other => panic!("ddir_vec --explain: unsupported source {:?}", other),
         }).collect();
-        query_shape = Some(interactive::explain_tree::export_shape(&tree, &source_shapes));
-        tree = interactive::explain_tree::explain_tree(&tree, &source_shapes);
+        query_shape = Some(interactive::explain::export_shape(&tree, &source_shapes));
+        tree = interactive::explain::explain(&tree, &source_shapes);
     }
     let ops_before = tree.op_count();
     tree.optimize();

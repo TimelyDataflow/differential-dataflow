@@ -29,7 +29,7 @@ fn main() {
         scope_ir::Source::Input(_) | scope_ir::Source::Trace(_) => (arity, 0usize),
         scope_ir::Source::Parent(_) => unreachable!("root scope cannot import from a parent"),
     }).collect();
-    let rewritten = interactive::explain_tree::explain_tree(&original, &source_shapes);
+    let rewritten = interactive::explain::explain(&original, &source_shapes);
 
     println!();
     println!("-- ====================================================");
