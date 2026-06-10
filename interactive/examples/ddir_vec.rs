@@ -1,6 +1,6 @@
 //! DD IR vec-backed backend: parse, lower, render, execute.
 //!
-//! With `--explain`, applies `interactive::explain::explain` after lowering
+//! With `--explain`, applies the explanation rewrite (explain_tree) after lowering
 //! and treats the last input handle as the query input (seeded from the
 //! `QUERY` env var, format `"key_fields:val_fields"`).
 
@@ -9,7 +9,6 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use timely::order::Product;
 use timely::dataflow::Scope;
@@ -26,7 +25,7 @@ use smallvec::smallvec as svec;
 use interactive::parse;
 use interactive::lower;
 use interactive::scope_ir as st;
-use interactive::ir::{Node, LinearOp, Program, Diff, Id, Time, eval_fields, eval_field_into, eval_condition};
+use interactive::ir::{LinearOp, Diff, Time, eval_fields, eval_field_into, eval_condition};
 
 type Row = SmallVec<[i64; 2]>;
 type DdirTime = Product<u64, PointStamp<u64>>;
@@ -222,70 +221,6 @@ fn render_tree<'scope>(
     s.exports.iter().map(|e| resolve(&items, &imports, &var_cols, &e.value).collection()).collect()
 }
 
-fn render_program<'scope>(program: &Program, scope: Scope<'scope, DdirTime>, inputs: &[Col<'scope, DdirTime>]) -> HashMap<Id, Col<'scope, DdirTime>>
-{
-    let mut nodes: HashMap<Id, Rendered<'scope, DdirTime>> = HashMap::new();
-    let mut level: usize = 0;
-    let mut variables: HashMap<Id, (VecVariable<'scope, DdirTime, (Row, Row), Diff>, usize)> = HashMap::new();
-    let mut var_levels: HashMap<Id, usize> = HashMap::new();
-
-    for (&id, node) in program.nodes.iter() {
-        match node {
-            Node::Input(i) => { nodes.insert(id, Rendered::Collection(inputs[*i].clone())); },
-            Node::Import { name } => panic!("ddir_vec: Import {:?} not supported in this harness (no trace registry).", name),
-            Node::Linear { input, ops } => {
-                let c = nodes[input].collection();
-                let r = render_linear(c, ops.clone(), level);
-                nodes.insert(id, Rendered::Collection(r));
-            },
-            Node::Concat(ids) => { let mut r = nodes[&ids[0]].collection(); for i in &ids[1..] { r = r.concat(nodes[i].collection()); } nodes.insert(id, Rendered::Collection(r)); },
-            Node::Arrange(input) => { nodes.insert(id, Rendered::Arrangement(nodes[input].arrange())); },
-            Node::Join { left, right, projection } => {
-                let Rendered::Arrangement(l) = &nodes[left] else { panic!("Join: left input must be an Arrangement") };
-                let Rendered::Arrangement(r) = &nodes[right] else { panic!("Join: right input must be an Arrangement") };
-                let l = l.clone();
-                let r = r.clone();
-                let proj = projection.clone();
-                let f: Arc<dyn Fn(&Row, &Row, &Row) -> smallvec::SmallVec<[(Row, Row); 2]> + Send + Sync> =
-                    Arc::new(move |key, left, right| { let i = [key.as_slice(), left.as_slice(), right.as_slice()]; svec![(eval_fields(&proj.key, &i), eval_fields(&proj.val, &i))] });
-                let result = l.join_core(r, move |k, v1, v2| f(k, v1, v2));
-                nodes.insert(id, Rendered::Collection(result));
-            },
-            Node::Reduce { input, reducer } => {
-                let Rendered::Arrangement(a) = &nodes[input] else { panic!("Reduce: input must be an Arrangement") };
-                let a = a.clone();
-                let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
-                    parse::Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| *v).min() { output.push((min.clone(), 1)); } }),
-                    parse::Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
-                    parse::Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); } }),
-                };
-                let reduced = a.reduce_abelian::<_, differential_dataflow::trace::implementations::ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>, _>(
-                    "Reduce",
-                    move |k, v, o| f(k, v, o),
-                    |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
-                );
-                nodes.insert(id, Rendered::Arrangement(reduced));
-            },
-            Node::Variable => {
-                let step: Product<u64, PointStampSummary<u64>> = Product::new(0, feedback_summary::<u64>(level, 1));
-                let (var, col) = VecVariable::new(scope, step);
-                nodes.insert(id, Rendered::Collection(col)); variables.insert(id, (var, level)); var_levels.insert(id, level);
-            },
-            Node::Inspect { input, label } => {
-                let col = nodes[input].collection();
-                let label = label.clone();
-                nodes.insert(id, Rendered::Collection(col.inspect(move |x| eprintln!("  [{}] {:?}", label, x.clone()))));
-            },
-            Node::Leave(inner_id, scope_level) => { nodes.insert(id, Rendered::Collection(nodes[inner_id].collection().leave_dynamic(*scope_level))); },
-            Node::Scope => { level += 1; },
-            Node::EndScope => { level -= 1; },
-            Node::Bind { variable, value } => { let c = nodes[value].collection(); let (var, _) = variables.remove(variable).expect("Bind: variable not found"); var.set(c); },
-        }
-    }
-
-    nodes.into_iter().filter_map(|(id, r)| match r { Rendered::Collection(c) => Some((id, c)), _ => None }).collect()
-}
-
 fn run(
     name: &str,
     stmts: Vec<parse::Stmt>,
@@ -300,64 +235,28 @@ fn run(
     // The scope-tree IR (lower_tree + render_tree, one timely region per scope)
     // is the default path, including for `--explain` (explain_tree). FLAT=1
     // forces the flat path for A/B comparison; outputs must match either way.
-    let tree_mode = std::env::var("FLAT").is_err();
-    let (tree, compiled, result_id, tree_export_idx);
     let mut query_shape: Option<(usize, usize)> = None;
-    if tree_mode {
-        let mut t = lower::lower_tree(stmts);
-        // CLONE_RT=1 routes the program through the explain rewrite's
-        // clone-with-lifts as an identity check: outputs must be unchanged.
-        if std::env::var("CLONE_RT").is_ok() {
-            t = interactive::explain_tree::clone_identity(&t);
-        }
-        // --explain: rewrite for self-explanation before optimization (the
-        // rules assume single-op Linears). Sources are the root's imports.
-        if explain {
-            let source_shapes: Vec<(usize, usize)> = t.root.imports.iter().map(|imp| match &imp.from {
-                interactive::scope_ir::Source::Input(_) => (arity, 0usize),
-                other => panic!("ddir_vec --explain: unsupported source {:?}", other),
-            }).collect();
-            query_shape = Some(interactive::explain_tree::export_shape(&t, &source_shapes));
-            t = interactive::explain_tree::explain_tree(&t, &source_shapes);
-        }
-        let ops_before = t.op_count();
-        t.optimize();
-        tree_export_idx = t.root.exports.iter().position(|e| e.name == "result").unwrap_or(0);
-        println!("{}: tree mode; {} ops before optimize, {} after; driving export {:?}",
-            name, ops_before, t.op_count(), t.root.exports[tree_export_idx].name);
-        tree = Some(t);
-        compiled = Program { nodes: std::collections::BTreeMap::new(), export: vec![] };
-        result_id = 0;
-    } else {
-        let mut c: Program = lower::lower(stmts);
-        // When --explain is set, rewrite the program for self-explanation
-        // before optimization. The transformed program declares one extra
-        // input (the query); the last handle below is reserved for it and
-        // seeded from `QUERY=`.
-        if explain {
-            let input_arities = vec![(arity, 0usize); n_inputs];
-            let import_arities = std::collections::BTreeMap::new();
-            c = interactive::explain::explain(&c, &input_arities, &import_arities);
-        }
-        println!("{}: {} IR nodes (before optimize)", name, c.nodes.len());
-        c.optimize();
-        println!("{}: {} IR nodes (after optimize), exports = {:?}",
-            name, c.nodes.len(),
-            c.export.iter().map(|(n, id)| (n.as_str(), *id)).collect::<Vec<_>>());
-        c.dump();
-        // Drive one export: prefer `$result`, else the first declared.
-        let (driven_name, id) = {
-            let pick = c.export.iter().find(|(n, _)| n == "result")
-                .or_else(|| c.export.first())
-                .expect("ddir_vec: program declares no exports");
-            (pick.0.clone(), pick.1)
-        };
-        println!("{}: driving export {:?} (id {})", name, driven_name, id);
-        tree = None;
-        compiled = c;
-        result_id = id;
-        tree_export_idx = 0;
+    let mut tree = lower::lower_tree(stmts);
+    // CLONE_RT=1 routes the program through the explain rewrite's
+    // clone-with-lifts as an identity check: outputs must be unchanged.
+    if std::env::var("CLONE_RT").is_ok() {
+        tree = interactive::explain_tree::clone_identity(&tree);
     }
+    // --explain: rewrite for self-explanation before optimization (the
+    // rules assume single-op Linears). Sources are the root's imports.
+    if explain {
+        let source_shapes: Vec<(usize, usize)> = tree.root.imports.iter().map(|imp| match &imp.from {
+            interactive::scope_ir::Source::Input(_) => (arity, 0usize),
+            other => panic!("ddir_vec --explain: unsupported source {:?}", other),
+        }).collect();
+        query_shape = Some(interactive::explain_tree::export_shape(&tree, &source_shapes));
+        tree = interactive::explain_tree::explain_tree(&tree, &source_shapes);
+    }
+    let ops_before = tree.op_count();
+    tree.optimize();
+    let tree_export_idx = tree.root.exports.iter().position(|e| e.name == "result").unwrap_or(0);
+    println!("{}: {} ops before optimize, {} after; driving export {:?}",
+        name, ops_before, tree.op_count(), tree.root.exports[tree_export_idx].name);
     let name = name.to_string();
     let total_inputs = if explain { n_inputs + 1 } else { n_inputs };
     let query_input_idx = if explain { Some(n_inputs) } else { None };
@@ -386,18 +285,13 @@ fn run(
             let mut probe = timely::dataflow::ProbeHandle::new();
             let output = scope.iterative::<PointStamp<u64>, _, _>(|inner| {
                 let entered: Vec<_> = collections.iter().map(|c| c.clone().enter(inner)).collect();
-                if let Some(tree) = &tree {
-                    let root_imports: Vec<_> = tree.root.imports.iter().map(|imp| match &imp.from {
-                        st::Source::Input(n) => entered[*n].clone(),
-                        st::Source::Trace(name) => panic!("ddir_vec: Import {:?} not supported in this harness (no trace registry).", name),
-                        st::Source::Parent(_) => unreachable!("root scope cannot import from a parent"),
-                    }).collect();
-                    let exports = render_tree(&tree.root, inner, 0, root_imports);
-                    exports[tree_export_idx].clone().leave(scope)
-                } else {
-                    let rendered = render_program(&compiled, inner, &entered);
-                    rendered[&result_id].clone().leave(scope)
-                }
+                let root_imports: Vec<_> = tree.root.imports.iter().map(|imp| match &imp.from {
+                    st::Source::Input(n) => entered[*n].clone(),
+                    st::Source::Trace(name) => panic!("ddir_vec: Import {:?} not supported in this harness (no trace registry).", name),
+                    st::Source::Parent(_) => unreachable!("root scope cannot import from a parent"),
+                }).collect();
+                let exports = render_tree(&tree.root, inner, 0, root_imports);
+                exports[tree_export_idx].clone().leave(scope)
             });
             output.probe_with(&mut probe);
             (handles, probe)

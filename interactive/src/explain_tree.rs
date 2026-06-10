@@ -190,7 +190,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
 
 use std::collections::BTreeMap;
 use crate::parse::{Condition, FieldExpr, Projection, Reducer};
-use crate::explain::arities::{apply_ops_arity, proj_arity};
+use crate::ir::{apply_ops_arity, proj_arity};
 
 /// What a reference ultimately names: a value-producing site, or one of the
 /// root's external sources.
@@ -623,12 +623,6 @@ pub fn explain_tree(p: &Program, source_shapes: &[(usize, usize)]) -> Program {
     let n_sources = p.root.imports.len();
     assert_eq!(source_shapes.len(), n_sources, "one shape per root import");
     let shapes = site_shapes(p, source_shapes);
-    let depth_of = |t: &Target| -> usize {
-        match t { Target::Site(a) => a.path.len(), Target::Source(_) => 0 }
-    };
-    let shape_of = |t: &Target| -> (usize, usize) {
-        match t { Target::Site(a) => shapes[a], Target::Source(k) => source_shapes[*k] }
-    };
     // The largest positional-input index, for placing the query input after.
     let max_input = p.root.imports.iter().filter_map(|imp| match &imp.from {
         Source::Input(i) => Some(*i + 1),
