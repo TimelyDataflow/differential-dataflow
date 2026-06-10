@@ -305,6 +305,11 @@ fn run(
     let (tree, compiled, result_id, tree_export_idx);
     if tree_mode {
         let mut t = lower::lower_tree(stmts);
+        // CLONE_RT=1 routes the program through the explain rewrite's
+        // clone-with-lifts as an identity check: outputs must be unchanged.
+        if std::env::var("CLONE_RT").is_ok() {
+            t = interactive::explain_tree::clone_identity(&t);
+        }
         let ops_before = t.op_count();
         t.optimize();
         tree_export_idx = t.root.exports.iter().position(|e| e.name == "result").unwrap_or(0);
