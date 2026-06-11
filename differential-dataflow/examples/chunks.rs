@@ -13,8 +13,6 @@ use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::chunk::vec_chunk::{ChunkBatcher, ChunkRcBuilder, ChunkSpine, VecChunk};
-use differential_dataflow::trace::chunk::col_chunk::{ColChunkBatcher, ColChunkRcBuilder, ColChunkSpine, ColChunker};
-use differential_dataflow::trace::implementations::Vector;
 use differential_dataflow::trace::implementations::chunker::ContainerChunker;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValBatcher, RcOrdValBuilder, OrdValSpine};
 
@@ -55,18 +53,6 @@ fn main() {
                         keys.inner, Exchange::new(|u: &((u64, ()), u64, isize)| (u.0).0.hashed().into()), "Keys");
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None).probe_with(&mut probe);
                 }
-                "colchunk" => {
-                    type L = Vector<((u64, ()), u64, isize)>;
-                    type Ba = ColChunkBatcher<L>;
-                    type Bu = ColChunkRcBuilder<L>;
-                    type Sp = ColChunkSpine<L>;
-                    type Chu = ColChunker<L>;
-                    let data = arrange_core::<_, _, Chu, Ba, Bu, Sp>(
-                        data.inner, Exchange::new(|u: &((u64, ()), u64, isize)| (u.0).0.hashed().into()), "Data");
-                    let keys = arrange_core::<_, _, Chu, Ba, Bu, Sp>(
-                        keys.inner, Exchange::new(|u: &((u64, ()), u64, isize)| (u.0).0.hashed().into()), "Keys");
-                    keys.join_core(data, |_k, &(), &()| Option::<()>::None).probe_with(&mut probe);
-                }
                 "ord" => {
                     type Ba = OrdValBatcher<u64, (), u64, isize>;
                     type Bu = RcOrdValBuilder<u64, (), u64, isize>;
@@ -75,7 +61,7 @@ fn main() {
                     let keys = keys.arrange::<Ba, Bu, Sp>();
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None).probe_with(&mut probe);
                 }
-                other => panic!("unrecognized mode: {other:?} (expected `chunk`, `colchunk`, or `ord`)"),
+                other => panic!("unrecognized mode: {other:?} (expected `chunk` or `ord`)"),
             }
 
             (data_input, keys_input)
