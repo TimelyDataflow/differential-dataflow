@@ -392,7 +392,7 @@ where
         ship.extend(shipped.done());
     }
 
-    fn account(chunk: &C) -> (usize, usize, usize, usize) { (chunk.len(), 0, 0, 0) }
+    fn len(chunk: &C) -> usize { chunk.len() }
 }
 
 /// The merge batcher for chunks of type `C`, merging pre-chunked `C` runs.
@@ -871,9 +871,13 @@ pub mod vec_chunk {
 
     impl<K, V, T, R> SizableContainer for VecChunk<K, V, T, R>
     where K: Clone+'static, V: Clone+'static, T: Clone+'static, R: Clone+'static {
-        fn at_capacity(&self) -> bool { self.0.at_capacity() }
+        // The absorb point is the grading target: the chunker fills a scratch chunk
+        // to `TARGET` updates before emitting, so chunks arrive pre-graded rather than
+        // at timely's byte-derived buffer size (which downstream regrading re-melds).
+        fn at_capacity(&self) -> bool { self.0.len() >= TARGET }
         fn ensure_capacity(&mut self, _stash: &mut Option<Self>) {
-            Rc::make_mut(&mut self.0).ensure_capacity(&mut None);
+            let inner = Rc::make_mut(&mut self.0);
+            inner.reserve(TARGET.saturating_sub(inner.len()));
         }
     }
 
