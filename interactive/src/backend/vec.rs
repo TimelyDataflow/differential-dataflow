@@ -1,0 +1,131 @@
+//! Vec-backed rendering substrate.
+//!
+//! Rows are `SmallVec<[i64; 2]>`; the differential container is a flat
+//! `Vec<((Row, Row), Time, Diff)>`. Supplies the substrate leaf operators; the
+//! scope-tree walk lives in [`crate::backend::render_tree`].
+
+use std::sync::Arc;
+use timely::order::Product;
+use timely::dataflow::Scope;
+use differential_dataflow::{Collection, VecCollection};
+use differential_dataflow::dynamic::pointstamp::PointStamp;
+use differential_dataflow::trace::implementations::{ValSpine, ValBuilder};
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use smallvec::SmallVec;
+use smallvec::smallvec as svec;
+
+use crate::backend::Backend;
+use crate::parse::{Projection, Reducer};
+use crate::scope_ir as st;
+use crate::ir::{LinearOp, Diff, Time, eval_fields, eval_field_into, eval_condition};
+
+/// The row type: a short inline vector of field values.
+pub type Row = SmallVec<[i64; 2]>;
+/// A rendered collection at the renderer's (inner, dynamic) time.
+pub type Col<'scope> = VecCollection<'scope, Time, (Row, Row), Diff>;
+type Arr<'scope> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, Time, Diff>>>;
+
+/// Render a Linear chain: one flat_map applying the ops in sequence. `level` is
+/// the op's scope depth — it locates the iteration coord for LiftIter and the
+/// coordinate position EnterAt's delay lands in.
+fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Col<'scope> {
+    use differential_dataflow::AsCollection;
+    use differential_dataflow::lattice::Lattice;
+    use timely::dataflow::operators::core::Map;
+    c.inner.flat_map(move |((key, val), t_in, d_in)| {
+        use timely::progress::Timestamp;
+        let iter_at_level: i64 = level
+            .checked_sub(1)
+            .and_then(|idx| t_in.inner.get(idx).copied())
+            .unwrap_or(0) as i64;
+        let mut results: smallvec::SmallVec<[((Row, Row), Time, Diff); 2]> = svec![((key, val), Time::minimum(), 1)];
+        for op in &ops {
+            let mut next = smallvec::SmallVec::new();
+            for ((k, v), t, d) in results {
+                match op {
+                    LinearOp::Project(proj) => {
+                        let i = [k.as_slice(), v.as_slice()];
+                        next.push(((eval_fields(&proj.key, &i), eval_fields(&proj.val, &i)), t, d));
+                    },
+                    LinearOp::Filter(cond) => {
+                        let i = [k.as_slice(), v.as_slice()];
+                        if eval_condition(cond, &i) { next.push(((k, v), t, d)); }
+                    },
+                    LinearOp::Negate => {
+                        next.push(((k, v), t, -d));
+                    },
+                    LinearOp::EnterAt(field) => {
+                        let delay = {
+                            let mut r = Row::new();
+                            eval_field_into(field, &[k.as_slice(), v.as_slice()], &mut r);
+                            256 * (64 - (r.as_slice().first().copied().unwrap_or(0) as u64).leading_zeros() as u64)
+                        };
+                        let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
+                        for _ in 0..level.saturating_sub(1) { coords.push(0); }
+                        coords.push(delay);
+                        next.push(((k, v), Product::new(0u64, PointStamp::new(coords)), d));
+                    },
+                    LinearOp::LiftIter => {
+                        let mut new_v = v.clone();
+                        new_v.push(iter_at_level);
+                        next.push(((k, new_v), t, d));
+                    },
+                }
+            }
+            results = next;
+        }
+        results.into_iter().map(move |((k, v), t_delta, d)| ((k, v), t_in.join(&t_delta), d_in * d))
+    }).as_collection()
+}
+
+/// The vec rendering substrate.
+pub enum VecBackend {}
+
+impl Backend for VecBackend {
+    type Container = Vec<((Row, Row), Time, Diff)>;
+    type Arr<'scope> = Arr<'scope>;
+
+    fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize) -> Collection<'s, Time, Self::Container> {
+        render_linear(c, ops, level)
+    }
+    fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s> {
+        c.arrange_by_key()
+    }
+    fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container> {
+        a.as_collection(|k, v| (k.clone(), v.clone()))
+    }
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, Self::Container> {
+        let proj = projection.clone();
+        let f: Arc<dyn Fn(&Row, &Row, &Row) -> SmallVec<[(Row, Row); 2]> + Send + Sync> =
+            Arc::new(move |key, left, right| { let i = [key.as_slice(), left.as_slice(), right.as_slice()]; svec![(eval_fields(&proj.key, &i), eval_fields(&proj.val, &i))] });
+        l.join_core(r, move |k, v1, v2| f(k, v1, v2))
+    }
+    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
+        let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
+            Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| *v).min() { output.push((min.clone(), 1)); } }),
+            Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
+            Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); } }),
+        };
+        a.reduce_abelian::<_, ValBuilder<_, _, _, _>, ValSpine<_, _, _, _>, _>(
+            "Reduce",
+            move |k, v, o| f(k, v, o),
+            |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v, t, r)| ((key.clone(), v), t, r))); },
+        )
+    }
+    fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container> {
+        c.inspect(move |x| eprintln!("  [{}] {:?}", label, x.clone()))
+    }
+    fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container> {
+        c.leave_dynamic(depth)
+    }
+}
+
+/// Render `s` with the vec substrate. See [`crate::backend::render_tree`].
+pub fn render_tree<'s>(
+    s: &st::Scope,
+    scope: Scope<'s, Time>,
+    depth: usize,
+    imports: Vec<Col<'s>>,
+) -> Vec<Col<'s>> {
+    crate::backend::render_tree::<VecBackend>(s, scope, depth, imports)
+}

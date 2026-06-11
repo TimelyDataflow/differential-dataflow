@@ -1,225 +1,22 @@
-//! DD IR vec-backed backend: parse, lower, render, execute.
+//! DD IR vec-backed driver: parse, lower, render (via `interactive::backend::vec`), execute.
 //!
-//! With `--explain`, applies the explanation rewrite after lowering
-//! and treats the last input handle as the query input (seeded from the
-//! `QUERY` env var, format `"key_fields:val_fields"`).
+//! With `--explain`, applies the explanation rewrite after lowering and treats
+//! the last input handle as the query input (seeded from the `QUERY` env var,
+//! format `"key_fields:val_fields"`).
 
 use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use std::sync::Arc;
-use timely::order::Product;
-use timely::dataflow::Scope;
-use differential_dataflow::VecCollection;
-use differential_dataflow::operators::iterate::VecVariable;
-use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
-use differential_dataflow::dynamic::feedback_summary;
-use differential_dataflow::trace::implementations::ValSpine;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::input::Input;
-use smallvec::SmallVec;
-use smallvec::smallvec as svec;
 
 use interactive::parse;
 use interactive::lower;
 use interactive::scope_ir as st;
-use interactive::ir::{LinearOp, Diff, Time, eval_fields, eval_field_into, eval_condition};
-
-type Row = SmallVec<[i64; 2]>;
-type DdirTime = Product<u64, PointStamp<u64>>;
-type Col<'scope, T> = VecCollection<'scope, T, (Row, Row), Diff>;
-type Arr<'scope, T> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, T, Diff>>>;
-
-enum Rendered<'scope, T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice> {
-    Collection(Col<'scope, T>),
-    Arrangement(Arr<'scope, T>),
-}
-
-impl<'scope, T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice> Rendered<'scope, T> {
-    fn collection(&self) -> Col<'scope, T> { match self { Rendered::Collection(c) => c.clone(), Rendered::Arrangement(a) => a.clone().as_collection(|k, v| (k.clone(), v.clone())) } }
-    fn arrange(&self) -> Arr<'scope, T> { match self { Rendered::Arrangement(a) => a.clone(), Rendered::Collection(c) => c.clone().arrange_by_key() } }
-}
-
-
-/// Render a Linear chain: one flat_map applying the ops in sequence. `level` is
-/// the op's scope depth — it locates the iteration coord for LiftIter and the
-/// coordinate position EnterAt's delay lands in.
-fn render_linear<'scope>(c: Col<'scope, DdirTime>, ops: Vec<LinearOp>, level: usize) -> Col<'scope, DdirTime> {
-    use differential_dataflow::AsCollection;
-    use differential_dataflow::lattice::Lattice;
-    use timely::dataflow::operators::core::Map;
-    c.inner.flat_map(move |((key, val), t_in, d_in)| {
-        use timely::progress::Timestamp;
-        let iter_at_level: i64 = level
-            .checked_sub(1)
-            .and_then(|idx| t_in.inner.get(idx).copied())
-            .unwrap_or(0) as i64;
-        let mut results: smallvec::SmallVec<[((Row, Row), Time, Diff); 2]> = svec![((key, val), Time::minimum(), 1)];
-        for op in &ops {
-            let mut next = smallvec::SmallVec::new();
-            for ((k, v), t, d) in results {
-                match op {
-                    LinearOp::Project(proj) => {
-                        let i = [k.as_slice(), v.as_slice()];
-                        next.push(((eval_fields(&proj.key, &i), eval_fields(&proj.val, &i)), t, d));
-                    },
-                    LinearOp::Filter(cond) => {
-                        let i = [k.as_slice(), v.as_slice()];
-                        if eval_condition(cond, &i) { next.push(((k, v), t, d)); }
-                    },
-                    LinearOp::Negate => {
-                        next.push(((k, v), t, -d));
-                    },
-                    LinearOp::EnterAt(field) => {
-                        let delay = {
-                            let mut r = Row::new();
-                            eval_field_into(field, &[k.as_slice(), v.as_slice()], &mut r);
-                            256 * (64 - (r.as_slice().first().copied().unwrap_or(0) as u64).leading_zeros() as u64)
-                        };
-                        let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
-                        for _ in 0..level.saturating_sub(1) { coords.push(0); }
-                        coords.push(delay);
-                        next.push(((k, v), Product::new(0u64, PointStamp::new(coords)), d));
-                    },
-                    LinearOp::LiftIter => {
-                        let mut new_v = v.clone();
-                        new_v.push(iter_at_level);
-                        next.push(((k, new_v), t, d));
-                    },
-                }
-            }
-            results = next;
-        }
-        results.into_iter().map(move |((k, v), t_delta, d)| ((k, v), t_in.join(&t_delta), d_in * d))
-    }).as_collection()
-}
-
-// ===== Scope-tree renderer =====
-//
-// Walks the scope tree (scope_ir) in item order — no scans, no topological
-// re-analysis. Each `{}` scope renders as a timely region (imports enter it,
-// exports leave it), with the dynamic PointStamp coordinate riding inside.
-
-/// A rendered item: an operator's value, or a child scope's surrendered exports
-/// (already returned to this scope's depth via `leave_dynamic`).
-enum RItem<'scope> {
-    Op(Rendered<'scope, DdirTime>),
-    Sub(Vec<Col<'scope, DdirTime>>),
-}
-
-fn resolve<'scope>(
-    items: &[RItem<'scope>],
-    imports: &[Col<'scope, DdirTime>],
-    var_cols: &[Col<'scope, DdirTime>],
-    r: &st::Ref,
-) -> Rendered<'scope, DdirTime> {
-    match r {
-        st::Ref::Local(i) => match &items[*i] {
-            RItem::Op(Rendered::Collection(c)) => Rendered::Collection(c.clone()),
-            RItem::Op(Rendered::Arrangement(a)) => Rendered::Arrangement(a.clone()),
-            RItem::Sub(_) => panic!("Ref::Local points at a child scope"),
-        },
-        st::Ref::Import(i) => Rendered::Collection(imports[*i].clone()),
-        st::Ref::Var(i) => Rendered::Collection(var_cols[*i].clone()),
-        st::Ref::ChildExport(i, j) => match &items[*i] {
-            RItem::Sub(exports) => Rendered::Collection(exports[*j].clone()),
-            RItem::Op(_) => panic!("Ref::ChildExport points at an operator"),
-        },
-    }
-}
-
-/// Render one scope at `depth` (root = 0): feedback vars first (they're listed,
-/// not scanned for), then items in order, then binds close the loops, then the
-/// exports are surrendered. The returned collections are at this scope's depth;
-/// popping the coordinate (`leave_dynamic`) is the caller's job.
-fn render_tree<'scope>(
-    s: &st::Scope,
-    scope: Scope<'scope, DdirTime>,
-    depth: usize,
-    imports: Vec<Col<'scope, DdirTime>>,
-) -> Vec<Col<'scope, DdirTime>> {
-    let mut var_handles: Vec<Option<VecVariable<'scope, DdirTime, (Row, Row), Diff>>> = Vec::new();
-    let mut var_cols: Vec<Col<'scope, DdirTime>> = Vec::new();
-    for _ in &s.vars {
-        let step: Product<u64, PointStampSummary<u64>> = Product::new(0, feedback_summary::<u64>(depth, 1));
-        let (var, col) = VecVariable::new(scope, step);
-        var_handles.push(Some(var));
-        var_cols.push(col);
-    }
-
-    let mut items: Vec<RItem<'scope>> = Vec::new();
-    for item in &s.items {
-        match item {
-            st::Item::Op(node) => {
-                let rendered = match node {
-                    st::Node::Linear { input, ops } => {
-                        let c = resolve(&items, &imports, &var_cols, input).collection();
-                        Rendered::Collection(render_linear(c, ops.clone(), depth))
-                    },
-                    st::Node::Concat(refs) => {
-                        let mut c = resolve(&items, &imports, &var_cols, &refs[0]).collection();
-                        for r in &refs[1..] { c = c.concat(resolve(&items, &imports, &var_cols, r).collection()); }
-                        Rendered::Collection(c)
-                    },
-                    st::Node::Arrange(r) => Rendered::Arrangement(resolve(&items, &imports, &var_cols, r).arrange()),
-                    st::Node::Join { left, right, projection } => {
-                        let l = resolve(&items, &imports, &var_cols, left).arrange();
-                        let r = resolve(&items, &imports, &var_cols, right).arrange();
-                        let proj = projection.clone();
-                        let f: Arc<dyn Fn(&Row, &Row, &Row) -> smallvec::SmallVec<[(Row, Row); 2]> + Send + Sync> =
-                            Arc::new(move |key, left, right| { let i = [key.as_slice(), left.as_slice(), right.as_slice()]; svec![(eval_fields(&proj.key, &i), eval_fields(&proj.val, &i))] });
-                        Rendered::Collection(l.join_core(r, move |k, v1, v2| f(k, v1, v2)))
-                    },
-                    st::Node::Reduce { input, reducer } => {
-                        let a = resolve(&items, &imports, &var_cols, input).arrange();
-                        let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
-                            parse::Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| *v).min() { output.push((min.clone(), 1)); } }),
-                            parse::Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
-                            parse::Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); } }),
-                        };
-                        let reduced = a.reduce_abelian::<_, differential_dataflow::trace::implementations::ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>, _>(
-                            "Reduce",
-                            move |k, v, o| f(k, v, o),
-                            |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
-                        );
-                        Rendered::Arrangement(reduced)
-                    },
-                    st::Node::Inspect { input, label } => {
-                        let col = resolve(&items, &imports, &var_cols, input).collection();
-                        let label = label.clone();
-                        Rendered::Collection(col.inspect(move |x| eprintln!("  [{}] {:?}", label, x.clone())))
-                    },
-                };
-                items.push(RItem::Op(rendered));
-            },
-            st::Item::Sub(child) => {
-                let child_imports: Vec<Col<'scope, DdirTime>> = child.imports.iter().map(|imp| match &imp.from {
-                    st::Source::Parent(r) => resolve(&items, &imports, &var_cols, r).collection(),
-                    other => panic!("non-root scope with external source {:?}", other),
-                }).collect();
-                // Each `{}` scope is a real timely region: imports enter it,
-                // the child renders inside, exports leave it structurally —
-                // and then pop the child's dynamic coordinate.
-                let exported = scope.region_named(&child.name, |region| {
-                    let entered: Vec<_> = child_imports.iter().map(|c| c.clone().enter(region)).collect();
-                    let exports = render_tree(child, region, depth + 1, entered);
-                    exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()
-                });
-                let left: Vec<Col<'scope, DdirTime>> = exported.into_iter().map(|c| c.leave_dynamic(depth + 1)).collect();
-                items.push(RItem::Sub(left));
-            },
-        }
-    }
-
-    for bind in &s.binds {
-        let c = resolve(&items, &imports, &var_cols, &bind.value).collection();
-        var_handles[bind.var].take().expect("bind: variable already bound").set(c);
-    }
-
-    s.exports.iter().map(|e| resolve(&items, &imports, &var_cols, &e.value).collection()).collect()
-}
+use interactive::ir::Diff;
+use interactive::backend::vec::{render_tree, Row};
 
 fn run(
     name: &str,
@@ -313,7 +110,7 @@ fn run(
                 if let Ok(qstr) = std::env::var("QUERY") {
                     let parse_row = |s: &str| -> Row {
                         if s.is_empty() {
-                            SmallVec::new()
+                            Row::new()
                         } else {
                             s.split(',').map(|t| t.trim().parse::<i64>().unwrap()).collect()
                         }
