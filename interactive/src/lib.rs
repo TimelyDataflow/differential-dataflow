@@ -4,6 +4,7 @@ pub mod lower;
 pub mod folded;
 pub mod scope_ir;
 pub mod explain;
+pub mod backend;
 
 use std::collections::BTreeSet;
 
