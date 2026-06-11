@@ -546,22 +546,69 @@ impl Sb {
         let vr_pair_start = vl_pair_start + v_l;
         let ul_pair_start = vr_pair_start + v_r;
         let ur_pair_start = ul_pair_start + left_user_len;
-        let key_left: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(2, i)).collect();
+        // One dep ⋈ pair join carrying BOTH sides' user chains, so that both
+        // time filters apply before either side's coords are projected away.
+        // Projecting away the partner's user chain first is unsound: pair rows
+        // that differ only in the partner's time — e.g. a `+1` while the
+        // partner held the row and a `-1` from the partner's later retraction
+        // — merge into the same contribution row and cancel, annihilating
+        // demand that the surviving (time-valid) configuration justifies.
+        // A (left, right) pair can only explain output demanded at `u_out` if
+        // BOTH inputs were present at times ≤ `u_out`.
+        let key: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(2, i)).collect();
+        let mut val: Vec<FieldExpr> = Vec::new();
+        for i in 0..v_l { val.push(FieldExpr::Index(2, vl_pair_start + i)); }
+        for i in 0..v_r { val.push(FieldExpr::Index(2, vr_pair_start + i)); }
+        for i in 0..left_user_len { val.push(FieldExpr::Index(2, ul_pair_start + i)); }
+        for i in 0..right_user_len { val.push(FieldExpr::Index(2, ur_pair_start + i)); }
+        for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
+        val.push(FieldExpr::Index(1, q_pair_pos));
+        let joined = self.join(dep_y, pair, Projection { key, val });
+        // Joined val layout: V_L ++ V_R ++ U_L ++ U_R ++ user_out ++ [q].
+        let ul_j = v_l + v_r;
+        let ur_j = ul_j + left_user_len;
+        let uo_j = ur_j + right_user_len;
+        let q_j = uo_j + out_user_len;
+        // Outer-aligned `u_in ≤ u_out` for one side's chain at offset `off`.
+        let time_cond = |off: usize, in_len: usize| -> Option<Condition> {
+            let n = in_len.min(out_user_len);
+            let in_skip = in_len - n;
+            let out_skip = out_user_len - n;
+            let mut acc: Option<Condition> = None;
+            for i in 0..n {
+                let cond = Condition::Le(
+                    FieldExpr::Index(1, off + in_skip + i),
+                    FieldExpr::Index(1, uo_j + out_skip + i),
+                );
+                acc = Some(match acc {
+                    None => cond,
+                    Some(prev) => Condition::And(Box::new(prev), Box::new(cond)),
+                });
+            }
+            acc
+        };
+        let both = match (time_cond(ul_j, left_user_len), time_cond(ur_j, right_user_len)) {
+            (Some(a), Some(b)) => Some(Condition::And(Box::new(a), Box::new(b))),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+        let timed = match both {
+            Some(cond) => self.filter(joined, cond),
+            None => joined,
+        };
+        // Per-side contributions: (K; V_side ++ U_side ++ [q]).
+        let key_left: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
         let mut val_left: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_l { val_left.push(FieldExpr::Index(2, vl_pair_start + i)); }
-        for i in 0..left_user_len { val_left.push(FieldExpr::Index(2, ul_pair_start + i)); }
-        for i in 0..out_user_len { val_left.push(FieldExpr::Index(1, v_out + i)); }
-        val_left.push(FieldExpr::Index(1, q_pair_pos));
-        let left_joined = self.join(dep_y.clone(), pair.clone(), Projection { key: key_left, val: val_left });
-        let left_contrib = self.filter_time_and_strip(left_joined, k_arity, v_l, left_user_len, out_user_len, left_user_len);
-        let key_right: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(2, i)).collect();
+        for i in 0..v_l { val_left.push(FieldExpr::Index(1, i)); }
+        for i in 0..left_user_len { val_left.push(FieldExpr::Index(1, ul_j + i)); }
+        val_left.push(FieldExpr::Index(1, q_j));
+        let left_contrib = self.project(timed.clone(), Projection { key: key_left, val: val_left });
+        let key_right: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
         let mut val_right: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_r { val_right.push(FieldExpr::Index(2, vr_pair_start + i)); }
-        for i in 0..right_user_len { val_right.push(FieldExpr::Index(2, ur_pair_start + i)); }
-        for i in 0..out_user_len { val_right.push(FieldExpr::Index(1, v_out + i)); }
-        val_right.push(FieldExpr::Index(1, q_pair_pos));
-        let right_joined = self.join(dep_y, pair, Projection { key: key_right, val: val_right });
-        let right_contrib = self.filter_time_and_strip(right_joined, k_arity, v_r, right_user_len, out_user_len, right_user_len);
+        for i in 0..v_r { val_right.push(FieldExpr::Index(1, v_l + i)); }
+        for i in 0..right_user_len { val_right.push(FieldExpr::Index(1, ur_j + i)); }
+        val_right.push(FieldExpr::Index(1, q_j));
+        let right_contrib = self.project(timed, Projection { key: key_right, val: val_right });
         (left_contrib, right_contrib)
     }
 }
