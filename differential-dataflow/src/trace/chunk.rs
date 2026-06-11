@@ -199,26 +199,39 @@ pub trait Chunk: Sized + Clone + LayoutExt {
 
     /// Remove some first few updates, returning the remainder.
     ///
-    /// Implemented via a singleton `merge`: with one input there is no horizon to
-    /// hold back, so the whole suffix `[prefix..]` is emitted. The remainder of a
-    /// graded chunk is at most one graded chunk.
-    fn prune(self, prefix: usize) -> Self {
-        let mut buffer = ChunkList::default();
-        Self::merge(&mut [(prefix, self)], &mut buffer);
-        let mut data = buffer.done();
-        assert_eq!(data.len(), 1);
-        data.pop().unwrap()
-    }
+    /// The whole suffix `[prefix..]` is emitted as a single chunk; the remainder of
+    /// a graded chunk is at most one graded chunk. Used to flush a partially-consumed
+    /// merge head (its `prefix` is the consumed position).
+    fn prune(self, prefix: usize) -> Self;
+
+    /// Merges as much as possible from each of two input chunks.
+    ///
+    /// Each input is a chunk with its consumed-prefix position, which is not
+    /// intended for merging. The chunks are only able to merge through updates that
+    /// would be present in both inputs, generally up to the least last
+    /// `(key, val, time)` triple across the two. On return, the consumed prefix of
+    /// at least one input has advanced to that input's length, marking it drained
+    /// and signalling the caller to refill that slot.
+    ///
+    /// This is the required merge primitive; the harnesses in this module drive it
+    /// pairwise ([`merge_chains`], the batch merger). The k-way [`merge`](Chunk::merge)
+    /// is a provided convenience over it.
+    fn merge_pair(slot1: &mut (usize, Self), slot2: &mut (usize, Self), out: &mut ChunkList<Self>);
 
     /// Merges as much as possible from each of the input chunks.
     ///
-    /// Input chunks come with a number of consumed prefix updates, which are not
-    /// intended for merging. The chunks are only able to merge through updates
-    /// that would be present in all inputs, generally up to the least last
-    /// `(key, val, time)` triple across the inputs. On return, the consumed
-    /// prefix of at least one input has advanced to that input's length, marking
-    /// it drained and signalling the caller to refill that slot.
-    fn merge(chunks: &mut [(usize, Self)], out: &mut ChunkList<Self>);
+    /// The same contract as [`merge_pair`](Chunk::merge_pair), generalized to a
+    /// slice of inputs. The provided implementation handles exactly the arities the
+    /// harnesses produce: zero (nothing) and two (via `merge_pair`). A backend whose
+    /// merge is genuinely k-way (e.g. `vec_chunk`'s `merge_buf`) can override this;
+    /// callers wanting other arities require such an override.
+    fn merge(chunks: &mut [(usize, Self)], out: &mut ChunkList<Self>) {
+        match chunks {
+            [] => {}
+            [slot1, slot2] => Self::merge_pair(slot1, slot2, out),
+            _ => unimplemented!("merge of arity {} requires a backend override (binary `merge_pair` is the required primitive; `prune` handles suffixes)", chunks.len()),
+        }
+    }
 
     /// Partition chunks into updates greater or equal `frontier` (`keep`) or not (`ship`).
     ///
@@ -284,7 +297,8 @@ pub fn merge_chains<C: Chunk>(
 
     while head1.is_some() && head2.is_some() {
         let mut window = [head1.take().unwrap(), head2.take().unwrap()];
-        C::merge(&mut window, out);
+        let [slot1, slot2] = &mut window;
+        C::merge_pair(slot1, slot2, out);
         let [(p1, c1), (p2, c2)] = window;
         // Refill whichever side(s) drained to length; keep partially-consumed ones.
         head1 = if p1 >= c1.len() { iter1.next().map(|c| (0, c)) } else { Some((p1, c1)) };
@@ -715,7 +729,8 @@ where
                 // One merge step: present both heads, refill whichever drains.
                 let mut window = [state.head1.take().unwrap(), state.head2.take().unwrap()];
                 let mut merged = ChunkList::default();
-                C::merge(&mut window, &mut merged);
+                let [slot1, slot2] = &mut window;
+                C::merge_pair(slot1, slot2, &mut merged);
                 let [(p1, c1), (p2, c2)] = window;
                 state.head1 = if p1 >= c1.len() { clone_chunk(&source1.chunks, &mut state.idx1) } else { Some((p1, c1)) };
                 state.head2 = if p2 >= c2.len() { clone_chunk(&source2.chunks, &mut state.idx2) } else { Some((p2, c2)) };
@@ -1016,6 +1031,92 @@ pub mod vec_chunk {
             let mut v = take(self);
             v.drain(..prefix);
             VecChunk(Rc::new(v))
+        }
+
+        /// A dedicated two-pointer binary merge: one gallop pins how far each side
+        /// may merge (through the lesser of the two last `(key, val)`s), then a
+        /// single pass consolidates equal `(key, val, time)` triples and bulk-copies
+        /// the disjoint runs as slices. The k-way [`merge`](Chunk::merge) override
+        /// below serves slice callers and is the correctness reference (property
+        /// test `merge_pair_matches_merge_buf`).
+        fn merge_pair(slot1: &mut (usize, Self), slot2: &mut (usize, Self), out: &mut ChunkList<Self>) {
+            let (p1, c1) = slot1;
+            let (p2, c2) = slot2;
+            let s1 = &c1.0[..];
+            let s2 = &c2.0[..];
+
+            // The merge horizon: the lesser of the two last `(key, val, time)`s. The
+            // side owning it drains fully; the other merges through it. The time must
+            // be part of the horizon: a `(key, val)` group can straddle a chunk
+            // boundary on the owning side, and a coarser `(key, val)` horizon would
+            // let the other side's whole group merge before that continuation arrives,
+            // emitting it unconsolidated (caught by `merge_pair_matches_reference`).
+            fn kv<K, V, T, R>(u: &((K, V), T, R)) -> (&K, &V) { (&u.0.0, &u.0.1) }
+            fn kvt<K, V, T, R>(u: &((K, V), T, R)) -> ((&K, &V), &T) { (kv(u), &u.1) }
+            let (end1, end2);
+            if kvt(&s1[s1.len() - 1]) <= kvt(&s2[s2.len() - 1]) {
+                let horizon = kvt(&s1[s1.len() - 1]);
+                end1 = s1.len();
+                end2 = gallop(s2, *p2, |u| kvt(u) <= horizon);
+            } else {
+                let horizon = kvt(&s2[s2.len() - 1]);
+                end2 = s2.len();
+                end1 = gallop(s1, *p1, |u| kvt(u) <= horizon);
+            }
+
+            let mut result: Vec<((K, V), T, R)> = Vec::with_capacity(TARGET);
+            let mut flush = |result: &mut Vec<((K, V), T, R)>, force: bool| {
+                if result.len() >= TARGET || (force && !result.is_empty()) {
+                    out.push(VecChunk(Rc::new(std::mem::replace(result, Vec::with_capacity(TARGET)))));
+                }
+            };
+
+            let (mut i, mut j) = (*p1, *p2);
+            while i < end1 && j < end2 {
+                let a = &s1[i];
+                let b = &s2[j];
+                match (kv(a), &a.1).cmp(&(kv(b), &b.1)) {
+                    // Copy the whole run of one side strictly below the other's head:
+                    // collisions are impossible within it, so it moves as slices (cut
+                    // at the grading target) rather than element by element.
+                    std::cmp::Ordering::Less => {
+                        let run = gallop(s1, i + 1, |u| (kv(u), &u.1) < (kv(b), &b.1)).min(end1);
+                        for piece in s1[i..run].chunks(TARGET) {
+                            result.extend_from_slice(piece);
+                            flush(&mut result, false);
+                        }
+                        i = run;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        let run = gallop(s2, j + 1, |u| (kv(u), &u.1) < (kv(a), &a.1)).min(end2);
+                        for piece in s2[j..run].chunks(TARGET) {
+                            result.extend_from_slice(piece);
+                            flush(&mut result, false);
+                        }
+                        j = run;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        let mut diff = a.2.clone();
+                        diff.plus_equals(&b.2);
+                        if !diff.is_zero() {
+                            result.push((a.0.clone(), a.1.clone(), diff));
+                        }
+                        i += 1;
+                        j += 1;
+                        flush(&mut result, false);
+                    }
+                }
+            }
+            // Bulk-copy the in-horizon tails, cutting at the grading target.
+            for tail in [&s1[i..end1], &s2[j..end2]] {
+                for piece in tail.chunks(TARGET) {
+                    result.extend_from_slice(piece);
+                    flush(&mut result, false);
+                }
+            }
+            flush(&mut result, true);
+            *p1 = end1;
+            *p2 = end2;
         }
 
         fn merge(chunks: &mut [(usize, Self)], out: &mut ChunkList<Self>) {
@@ -1427,6 +1528,57 @@ pub mod vec_chunk {
             let merged: Vec<_> = chunks.into_iter().flat_map(|c| (*c.0).clone()).collect();
             let want: Vec<_> = (0..n).map(|k| ((k, 0u64), 0u64, 1i64)).collect();
             assert_eq!(merged, want);
+        }
+
+        // Property test: merging two *multi-chunk* chains (driven through `merge_pair`
+        // by `merge_chains`) reproduces the union of all updates, consolidated. Tiny
+        // chunks force `(key, val)` groups — which can span several times — to
+        // straddle chunk boundaries on both sides, exercising the refill path the
+        // single-chunk merge tests never reach. The independent oracle is
+        // `consolidate_updates` over the concatenation.
+        #[test]
+        fn merge_pair_matches_reference() {
+            use crate::trace::chunk::{ChunkList, merge_chains};
+            use crate::consolidation::consolidate_updates;
+
+            // Deterministic xorshift PRNG — no dev-dependency on `rand`.
+            let mut seed = 0x2545F4914F6CDD1Du64;
+            let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+
+            // A sorted, consolidated update set over a small (key, val, time) space,
+            // so the two chains collide and a `(key, val)` carries several times.
+            fn gen(rng: &mut impl FnMut() -> u64, n: usize) -> Vec<((u64, u64), u64, i64)> {
+                let mut v: Vec<((u64, u64), u64, i64)> = (0..n).map(|_| {
+                    let k = rng() % 20; let val = rng() % 3; let t = rng() % 8;
+                    let d = if rng() % 4 == 0 { -1 } else { 1 };
+                    ((k, val), t, d)
+                }).collect();
+                consolidate_updates(&mut v);
+                v
+            }
+            // Split a consolidated set into a chain of small chunks (each sorted and
+            // consolidated; together globally sorted), so groups straddle boundaries.
+            fn chain(updates: &[((u64, u64), u64, i64)], sz: usize) -> Vec<VecChunk<u64, u64, u64, i64>> {
+                updates.chunks(sz).map(|c| VecChunk(Rc::new(c.to_vec()))).collect()
+            }
+
+            for _ in 0..300 {
+                let n1 = (rng() as usize % 60) + 1;
+                let u1 = gen(&mut rng, n1);
+                let n2 = (rng() as usize % 60) + 1;
+                let u2 = gen(&mut rng, n2);
+                if u1.is_empty() || u2.is_empty() { continue; }
+                let sz = (rng() as usize % 5) + 1; // tiny chunks → heavy straddling
+
+                let mut out = ChunkList::default();
+                merge_chains(chain(&u1, sz), chain(&u2, sz), &mut out);
+                let merged: Vec<_> = out.done().into_iter().flat_map(|c| (*c.0).clone()).collect();
+
+                let mut reference: Vec<_> = u1.iter().chain(u2.iter()).cloned().collect();
+                consolidate_updates(&mut reference);
+
+                assert_eq!(merged, reference, "chunk size {sz}\n  u1={u1:?}\n  u2={u2:?}");
+            }
         }
 
         // `regrade` must produce a *maximal packing*: adjacent sub-`TARGET` chunks
