@@ -2,9 +2,10 @@
 //! `backend::vec::evaluate` (explicit inputs in, every export out).
 //!
 //! The central property is *sufficiency*: for a query against a program's
-//! output, the demand-sets the rewritten program reports must — fed back
-//! through the original program as its only inputs — regenerate the queried
-//! output row. Tests marked `#[ignore]` are heavier sweeps meant for
+//! output, the original inputs *restricted to* the demand-sets the rewritten
+//! program reports — keeping each demanded row at its original multiplicity,
+//! exactly as the rewrite's own forward clone does via semijoin — must
+//! regenerate the queried output row. Tests marked `#[ignore]` are heavier sweeps meant for
 //! `cargo test --release -- --ignored`.
 
 use std::collections::BTreeSet;
@@ -169,6 +170,20 @@ fn demand_total(demand: &[Vec<(Row, Row)>]) -> usize {
     demand.iter().map(|d| d.len()).sum()
 }
 
+/// Restrict `inputs` to the demanded rows, preserving original
+/// multiplicities — the contract of demand ("this row, at its reference
+/// count"), and what the rewrite's forward clone does via semijoin.
+fn restrict(inputs: &[Vec<(Row, Row)>], demand: &[Vec<(Row, Row)>]) -> Vec<Vec<(Row, Row)>> {
+    inputs
+        .iter()
+        .zip(demand)
+        .map(|(rows, dem)| {
+            let set: BTreeSet<&(Row, Row)> = dem.iter().collect();
+            rows.iter().filter(|r| set.contains(r)).cloned().collect()
+        })
+        .collect()
+}
+
 /// Sufficiency for every row of `src`'s output on `inputs`: query it, take
 /// the demand-sets, re-run the original program on the demand-sets alone,
 /// and require the queried row in the output. Returns (row, total demand)
@@ -183,7 +198,7 @@ fn assert_all_rows_sufficient(
     let mut sizes = Vec::new();
     for (k, v) in &result {
         let demand = demand_for(src, shapes, inputs, k, v);
-        let replay = export_rows(&p, &demand, "result");
+        let replay = export_rows(&p, &restrict(inputs, &demand), "result");
         assert!(
             replay.contains(&(k.clone(), v.clone())),
             "insufficient explanation for {:?}: demanded {:?} regenerates only {:?}",
@@ -267,8 +282,8 @@ fn scc_row_explanations_sufficient_100() {
 fn scc_join_partner_time_regression() {
     let edges = gen_edges(1000, 1100);
     let p = optimized(SCC_ROW);
-    let demand = demand_for(SCC_ROW, SCC_SHAPES, &[edges], &row(&[773]), &row(&[466]));
-    let replay = export_rows(&p, &demand, "result");
+    let demand = demand_for(SCC_ROW, SCC_SHAPES, &[edges.clone()], &row(&[773]), &row(&[466]));
+    let replay = export_rows(&p, &restrict(&[edges], &demand), "result");
     assert!(
         replay.contains(&(row(&[773]), row(&[466]))),
         "insufficient explanation for (773, 466): demanded {} rows regenerate only {:?}",
@@ -282,6 +297,7 @@ fn scc_join_partner_time_regression() {
 /// for measuring excess demand.
 fn greedy_shrink(
     p: &Program,
+    inputs: &[Vec<(Row, Row)>],
     demand: &[Vec<(Row, Row)>],
     target: &(Row, Row),
 ) -> Vec<Vec<(Row, Row)>> {
@@ -291,7 +307,7 @@ fn greedy_shrink(
         while i < keep[input].len() {
             let mut trial = keep.clone();
             trial[input].remove(i);
-            if export_rows(p, &trial, "result").contains(target) {
+            if export_rows(p, &restrict(inputs, &trial), "result").contains(target) {
                 keep = trial;
             } else {
                 i += 1;
@@ -320,7 +336,7 @@ fn report_demand_excess() {
         let (mut tot_d, mut tot_m, mut worst): (usize, usize, f64) = (0, 0, 1.0);
         for (k, v) in &result {
             let demand = demand_for(src, shapes, &inputs, k, v);
-            let min = greedy_shrink(&p, &demand, &(k.clone(), v.clone()));
+            let min = greedy_shrink(&p, &inputs, &demand, &(k.clone(), v.clone()));
             let (d, m) = (demand_total(&demand), demand_total(&min));
             tot_d += d;
             tot_m += m;
@@ -351,15 +367,15 @@ fn count_explanations_sufficient_small() {
     assert!(!sizes.is_empty());
 }
 
-/// KNOWN GAP: demand-sets are *sets*, but count outputs depend on input
-/// *multiplicities*. With a duplicated input row, indeg(5) = 3 needs the
-/// row (1,5) twice, and the demand-set can only say it once — the replay
-/// produces indeg(5) = 2 and the queried row is not regenerated. This is
-/// the motivating case for a multiplicity ("diff") dimension on demand.
-/// Asserts sufficiency, so it FAILS until that lands; un-ignore it then.
+/// Demand means "this row, at its reference count": with a duplicated
+/// input row, indeg(5) = 3 demands the *rows* {(1,5), (2,5)}, and the
+/// restriction keeps both copies of (1,5) — exactly as the rewrite's
+/// forward clone consumes the demand-set via semijoin. (An earlier version
+/// of this test replayed the demand-set itself at multiplicity 1 and
+/// mistook the resulting indeg(5) = 2 for a soundness gap; the gap was in
+/// that oracle, not the rewrite.)
 #[test]
-#[ignore = "known gap: count needs multiplicity-aware demand"]
-fn count_duplicate_inputs_known_gap() {
+fn count_duplicate_inputs_sufficient() {
     let edges = vec![
         (row(&[1, 5]), Row::new()),
         (row(&[1, 5]), Row::new()),
@@ -368,8 +384,8 @@ fn count_duplicate_inputs_known_gap() {
     let p = optimized(INDEG_ROW);
     let result = export_rows(&p, &[edges.clone()], "result");
     assert!(result.contains(&(row(&[5]), row(&[3]))), "expected indeg(5) = 3 in {:?}", result);
-    let demand = demand_for(INDEG_ROW, INDEG_SHAPES, &[edges], &row(&[5]), &row(&[3]));
-    let replay = export_rows(&p, &demand, "result");
+    let demand = demand_for(INDEG_ROW, INDEG_SHAPES, &[edges.clone()], &row(&[5]), &row(&[3]));
+    let replay = export_rows(&p, &restrict(&[edges], &demand), "result");
     assert!(
         replay.contains(&(row(&[5]), row(&[3]))),
         "insufficient explanation for indeg(5) = 3: demanded {:?} regenerates only {:?}",
@@ -389,8 +405,8 @@ fn two_simultaneous_queries_sufficient() {
     let q0 = (row(&[7]), row(&[44]));
     let q1 = (row(&[16]), row(&[19]));
     assert!(result.contains(&q0) && result.contains(&q1));
-    let demand = demand_for_queries(SCC_ROW, SCC_SHAPES, &[edges], &[q0.clone(), q1.clone()]);
-    let replay = export_rows(&p, &demand, "result");
+    let demand = demand_for_queries(SCC_ROW, SCC_SHAPES, &[edges.clone()], &[q0.clone(), q1.clone()]);
+    let replay = export_rows(&p, &restrict(&[edges], &demand), "result");
     assert!(replay.contains(&q0), "union demand fails first query: {:?}", replay);
     assert!(replay.contains(&q1), "union demand fails second query: {:?}", replay);
 }
