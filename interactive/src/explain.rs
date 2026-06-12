@@ -52,7 +52,7 @@ pub fn clone_into(orig: &Scope, out: &mut Scope, import_map: &[Ref]) -> Vec<(Add
 
 /// The identity check: a program cloned into a fresh root computes the same
 /// named exports as the original (the extra `$host:` exports ride along,
-/// unconsumed). Backends hook this behind `CLONE_RT=1` for A/B verification.
+/// unconsumed). Pinned by the `clone_identity_preserves_*` tests.
 pub fn clone_identity(p: &Program) -> Program {
     let mut out = Scope {
         name: p.root.name.clone(),
@@ -322,13 +322,22 @@ fn walk_shapes(
     }
 }
 
+/// Options for the explanation rewrite.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Options {
+    /// Insert an `Inspect` tap on every demand collection (`demand_*` /
+    /// `demand_set:*` labels), for tracing the reverse dataflow's contents.
+    pub debug_inspects: bool,
+}
+
 /// Minimal builder over a `Scope` under construction: push an op, get a Ref.
 struct Sb {
     s: Scope,
+    debug: bool,
 }
 
 impl Sb {
-    fn new(name: &str) -> Self { Sb { s: Scope { name: name.into(), ..Scope::default() } } }
+    fn new(name: &str) -> Self { Sb { s: Scope { name: name.into(), ..Scope::default() }, debug: false } }
     fn op(&mut self, n: Node) -> Ref {
         let i = self.s.items.len();
         self.s.items.push(Item::Op(n));
@@ -370,7 +379,7 @@ impl Sb {
         j
     }
     fn debug_inspect(&mut self, input: Ref, label: String) {
-        if std::env::var("EXPLAIN_DEBUG_DEP").is_ok() {
+        if self.debug {
             self.op(Node::Inspect { input, label });
         }
     }
@@ -540,28 +549,101 @@ impl Sb {
         for i in 0..right_user_len { pair_val.push(FieldExpr::Index(2, v_r + i)); }
         let pos_arities = [k_arity, v_l, v_r];
         let key_expanded = expand_pos_bounded(&projection.key, &pos_arities);
+        // Also record the chained V_out each pair produces, so demand can be
+        // narrowed to the pairs that produced the demanded output VALUE.
+        // Matching on K_out alone charges every same-key sibling pair (e.g.
+        // every in-edge of a node, not just the one carrying the demanded
+        // label).
+        pair_val.extend(expand_pos_bounded(&projection.val, &pos_arities));
         let pair = self.join(left_pair_src, right_pair_src, Projection { key: key_expanded, val: pair_val });
         let q_pair_pos = v_out + out_user_len;
         let vl_pair_start = k_arity;
         let vr_pair_start = vl_pair_start + v_l;
         let ul_pair_start = vr_pair_start + v_r;
         let ur_pair_start = ul_pair_start + left_user_len;
-        let key_left: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(2, i)).collect();
+        // One dep ⋈ pair join carrying BOTH sides' user chains, so that both
+        // time filters apply before either side's coords are projected away.
+        // Projecting away the partner's user chain first is unsound: pair rows
+        // that differ only in the partner's time — e.g. a `+1` while the
+        // partner held the row and a `-1` from the partner's later retraction
+        // — merge into the same contribution row and cancel, annihilating
+        // demand that the surviving (time-valid) configuration justifies.
+        // A (left, right) pair can only explain output demanded at `u_out` if
+        // BOTH inputs were present at times ≤ `u_out`.
+        let key: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(2, i)).collect();
+        let mut val: Vec<FieldExpr> = Vec::new();
+        for i in 0..v_l { val.push(FieldExpr::Index(2, vl_pair_start + i)); }
+        for i in 0..v_r { val.push(FieldExpr::Index(2, vr_pair_start + i)); }
+        for i in 0..left_user_len { val.push(FieldExpr::Index(2, ul_pair_start + i)); }
+        for i in 0..right_user_len { val.push(FieldExpr::Index(2, ur_pair_start + i)); }
+        for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
+        val.push(FieldExpr::Index(1, q_pair_pos));
+        let vout_pair_start = ur_pair_start + right_user_len;
+        for i in 0..v_out { val.push(FieldExpr::Index(1, i)); }                    // demanded V_out
+        for i in 0..v_out { val.push(FieldExpr::Index(2, vout_pair_start + i)); }  // pair-produced V_out
+        let joined = self.join(dep_y, pair, Projection { key, val });
+        // Joined val layout:
+        //   V_L ++ V_R ++ U_L ++ U_R ++ user_out ++ [q] ++ V_out_dep ++ V_out_pair.
+        let ul_j = v_l + v_r;
+        let ur_j = ul_j + left_user_len;
+        let uo_j = ur_j + right_user_len;
+        let q_j = uo_j + out_user_len;
+        let vdep_j = q_j + 1;
+        let vpair_j = vdep_j + v_out;
+        // Outer-aligned `u_in ≤ u_out` for one side's chain at offset `off`.
+        let time_cond = |off: usize, in_len: usize| -> Option<Condition> {
+            let n = in_len.min(out_user_len);
+            let in_skip = in_len - n;
+            let out_skip = out_user_len - n;
+            let mut acc: Option<Condition> = None;
+            for i in 0..n {
+                let cond = Condition::Le(
+                    FieldExpr::Index(1, off + in_skip + i),
+                    FieldExpr::Index(1, uo_j + out_skip + i),
+                );
+                acc = Some(match acc {
+                    None => cond,
+                    Some(prev) => Condition::And(Box::new(prev), Box::new(cond)),
+                });
+            }
+            acc
+        };
+        // Value narrowing: keep only pairs whose produced V_out equals the
+        // demanded V_out, element-wise. Unlike time, every joined row carries
+        // both columns explicitly, so this is a plain equality filter.
+        let value_cond = {
+            let mut acc: Option<Condition> = None;
+            for i in 0..v_out {
+                let cond = Condition::Eq(
+                    FieldExpr::Index(1, vdep_j + i),
+                    FieldExpr::Index(1, vpair_j + i),
+                );
+                acc = Some(match acc {
+                    None => cond,
+                    Some(prev) => Condition::And(Box::new(prev), Box::new(cond)),
+                });
+            }
+            acc
+        };
+        let conds = [time_cond(ul_j, left_user_len), time_cond(ur_j, right_user_len), value_cond];
+        let both = conds.into_iter().flatten().reduce(|a, b| Condition::And(Box::new(a), Box::new(b)));
+        let timed = match both {
+            Some(cond) => self.filter(joined, cond),
+            None => joined,
+        };
+        // Per-side contributions: (K; V_side ++ U_side ++ [q]).
+        let key_left: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
         let mut val_left: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_l { val_left.push(FieldExpr::Index(2, vl_pair_start + i)); }
-        for i in 0..left_user_len { val_left.push(FieldExpr::Index(2, ul_pair_start + i)); }
-        for i in 0..out_user_len { val_left.push(FieldExpr::Index(1, v_out + i)); }
-        val_left.push(FieldExpr::Index(1, q_pair_pos));
-        let left_joined = self.join(dep_y.clone(), pair.clone(), Projection { key: key_left, val: val_left });
-        let left_contrib = self.filter_time_and_strip(left_joined, k_arity, v_l, left_user_len, out_user_len, left_user_len);
-        let key_right: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(2, i)).collect();
+        for i in 0..v_l { val_left.push(FieldExpr::Index(1, i)); }
+        for i in 0..left_user_len { val_left.push(FieldExpr::Index(1, ul_j + i)); }
+        val_left.push(FieldExpr::Index(1, q_j));
+        let left_contrib = self.project(timed.clone(), Projection { key: key_left, val: val_left });
+        let key_right: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
         let mut val_right: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_r { val_right.push(FieldExpr::Index(2, vr_pair_start + i)); }
-        for i in 0..right_user_len { val_right.push(FieldExpr::Index(2, ur_pair_start + i)); }
-        for i in 0..out_user_len { val_right.push(FieldExpr::Index(1, v_out + i)); }
-        val_right.push(FieldExpr::Index(1, q_pair_pos));
-        let right_joined = self.join(dep_y, pair, Projection { key: key_right, val: val_right });
-        let right_contrib = self.filter_time_and_strip(right_joined, k_arity, v_r, right_user_len, out_user_len, right_user_len);
+        for i in 0..v_r { val_right.push(FieldExpr::Index(1, v_l + i)); }
+        for i in 0..right_user_len { val_right.push(FieldExpr::Index(1, ur_j + i)); }
+        val_right.push(FieldExpr::Index(1, q_j));
+        let right_contrib = self.project(timed, Projection { key: key_right, val: val_right });
         (left_contrib, right_contrib)
     }
 }
@@ -626,6 +708,11 @@ pub fn export_shape(p: &Program, source_shapes: &[(usize, usize)]) -> (usize, us
 /// import `k` (positional inputs and named traces alike). The query arrives
 /// as one extra positional input appended after the original inputs.
 pub fn explain(p: &Program, source_shapes: &[(usize, usize)]) -> Program {
+    explain_with(p, source_shapes, Options::default())
+}
+
+/// [`explain`], with [`Options`].
+pub fn explain_with(p: &Program, source_shapes: &[(usize, usize)], options: Options) -> Program {
     let n_sources = p.root.imports.len();
     assert_eq!(source_shapes.len(), n_sources, "one shape per root import");
     let shapes = site_shapes(p, source_shapes);
@@ -647,6 +734,7 @@ pub fn explain(p: &Program, source_shapes: &[(usize, usize)]) -> Program {
 
     // ---- explain scope ----
     let mut ex = Sb::new("explain");
+    ex.debug = options.debug_inspects;
     let ex_src: Vec<Ref> = (0..n_sources)
         .map(|k| ex.import(format!("$src:{}", k), Source::Parent(src_refs[k].clone())))
         .collect();
