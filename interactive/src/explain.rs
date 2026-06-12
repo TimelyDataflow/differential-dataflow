@@ -52,7 +52,7 @@ pub fn clone_into(orig: &Scope, out: &mut Scope, import_map: &[Ref]) -> Vec<(Add
 
 /// The identity check: a program cloned into a fresh root computes the same
 /// named exports as the original (the extra `$host:` exports ride along,
-/// unconsumed). Backends hook this behind `CLONE_RT=1` for A/B verification.
+/// unconsumed). Pinned by the `clone_identity_preserves_*` tests.
 pub fn clone_identity(p: &Program) -> Program {
     let mut out = Scope {
         name: p.root.name.clone(),
@@ -322,13 +322,22 @@ fn walk_shapes(
     }
 }
 
+/// Options for the explanation rewrite.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Options {
+    /// Insert an `Inspect` tap on every demand collection (`demand_*` /
+    /// `demand_set:*` labels), for tracing the reverse dataflow's contents.
+    pub debug_inspects: bool,
+}
+
 /// Minimal builder over a `Scope` under construction: push an op, get a Ref.
 struct Sb {
     s: Scope,
+    debug: bool,
 }
 
 impl Sb {
-    fn new(name: &str) -> Self { Sb { s: Scope { name: name.into(), ..Scope::default() } } }
+    fn new(name: &str) -> Self { Sb { s: Scope { name: name.into(), ..Scope::default() }, debug: false } }
     fn op(&mut self, n: Node) -> Ref {
         let i = self.s.items.len();
         self.s.items.push(Item::Op(n));
@@ -370,7 +379,7 @@ impl Sb {
         j
     }
     fn debug_inspect(&mut self, input: Ref, label: String) {
-        if std::env::var("EXPLAIN_DEBUG_DEP").is_ok() {
+        if self.debug {
             self.op(Node::Inspect { input, label });
         }
     }
@@ -699,6 +708,11 @@ pub fn export_shape(p: &Program, source_shapes: &[(usize, usize)]) -> (usize, us
 /// import `k` (positional inputs and named traces alike). The query arrives
 /// as one extra positional input appended after the original inputs.
 pub fn explain(p: &Program, source_shapes: &[(usize, usize)]) -> Program {
+    explain_with(p, source_shapes, Options::default())
+}
+
+/// [`explain`], with [`Options`].
+pub fn explain_with(p: &Program, source_shapes: &[(usize, usize)], options: Options) -> Program {
     let n_sources = p.root.imports.len();
     assert_eq!(source_shapes.len(), n_sources, "one shape per root import");
     let shapes = site_shapes(p, source_shapes);
@@ -720,6 +734,7 @@ pub fn explain(p: &Program, source_shapes: &[(usize, usize)]) -> Program {
 
     // ---- explain scope ----
     let mut ex = Sb::new("explain");
+    ex.debug = options.debug_inspects;
     let ex_src: Vec<Ref> = (0..n_sources)
         .map(|k| ex.import(format!("$src:{}", k), Source::Parent(src_refs[k].clone())))
         .collect();

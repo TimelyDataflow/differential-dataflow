@@ -1,8 +1,13 @@
 //! DD IR vec-backed driver: parse, lower, render (via `interactive::backend::vec`), execute.
 //!
-//! With `--explain`, applies the explanation rewrite after lowering and treats
-//! the last input handle as the query input (seeded from the `QUERY` env var,
-//! format `"key_fields:val_fields"`).
+//! Usage: `ddir_vec [flags] <program> <arity> <nodes> <edges> [batch] [rounds] [timely args]`
+//!
+//! Flags:
+//! - `--explain`: apply the explanation rewrite after lowering; the last
+//!   input handle becomes the query input.
+//! - `--query=K:V,Q`: seed the query input with one row (requires --explain).
+//! - `--debug-demand`: tap every demand collection with an Inspect.
+//! - `--diag`: serve timely/DD diagnostics on port 51371.
 
 use mimalloc::MiMalloc;
 
@@ -18,6 +23,14 @@ use interactive::scope_ir as st;
 use interactive::ir::Diff;
 use interactive::backend::vec::{render_tree, Row};
 
+#[derive(Clone, Default)]
+struct Flags {
+    explain: bool,
+    query: Option<String>,
+    debug_demand: bool,
+    diag: bool,
+}
+
 fn run(
     name: &str,
     stmts: Vec<parse::Stmt>,
@@ -27,15 +40,12 @@ fn run(
     arity: usize,
     batch: u64,
     rounds: Option<u64>,
-    explain: bool,
+    flags: Flags,
+    timely_args: Vec<String>,
 ) {
+    let explain = flags.explain;
     let mut query_shape: Option<(usize, usize)> = None;
     let mut tree = lower::lower_tree(stmts);
-    // CLONE_RT=1 routes the program through the explain rewrite's
-    // clone-with-lifts as an identity check: outputs must be unchanged.
-    if std::env::var("CLONE_RT").is_ok() {
-        tree = interactive::explain::clone_identity(&tree);
-    }
     // --explain: rewrite for self-explanation before optimization (the
     // rules assume single-op Linears). Sources are the root's imports.
     if explain {
@@ -44,7 +54,8 @@ fn run(
             other => panic!("ddir_vec --explain: unsupported source {:?}", other),
         }).collect();
         query_shape = Some(interactive::explain::export_shape(&tree, &source_shapes));
-        tree = interactive::explain::explain(&tree, &source_shapes);
+        let options = interactive::explain::Options { debug_inspects: flags.debug_demand };
+        tree = interactive::explain::explain_with(&tree, &source_shapes, options);
     }
     let ops_before = tree.op_count();
     tree.optimize();
@@ -55,11 +66,11 @@ fn run(
     let total_inputs = if explain { n_inputs + 1 } else { n_inputs };
     let query_input_idx = if explain { Some(n_inputs) } else { None };
 
-    timely::execute_from_args(std::env::args().skip(4), move |worker| {
+    timely::execute_from_args(timely_args.into_iter(), move |worker| {
 
-        // DIAG=1 registers timely/DD logging and serves the diagnostics
+        // --diag registers timely/DD logging and serves the diagnostics
         // WebSocket on worker 0 (port 51371) — see diagnostics/README.md.
-        let _diag = if std::env::var("DIAG").is_ok() {
+        let _diag = if flags.diag {
             let state = diagnostics::logging::register(worker, false);
             if worker.index() == 0 {
                 Some(diagnostics::server::Server::start(51371, state.sink))
@@ -104,10 +115,10 @@ fn run(
                 inputs[input_idx].update(interactive::gen_row::<Row>(e, nodes, arity), 1);
             }
         }
-        // Seed the query input (worker 0 only) from $QUERY = "k:v[,q]".
+        // Seed the query input (worker 0 only) from --query="k:v[,q]".
         if let Some(q_idx) = query_input_idx {
             if index == 0 {
-                if let Ok(qstr) = std::env::var("QUERY") {
+                if let Some(qstr) = flags.query.clone() {
                     let parse_row = |s: &str| -> Row {
                         if s.is_empty() {
                             Row::new()
@@ -165,18 +176,23 @@ fn run(
 }
 
 fn main() {
-    // Strip an optional leading --explain flag.
+    // Strip our flags; everything else stays positional (and the tail is
+    // forwarded to timely).
     let raw_args: Vec<String> = std::env::args().collect();
-    let (explain, args): (bool, Vec<String>) = {
+    let (flags, args): (Flags, Vec<String>) = {
         let mut it = raw_args.into_iter();
         let prog = it.next().unwrap();
-        let mut explain = false;
+        let mut flags = Flags::default();
         let mut rest: Vec<String> = Vec::new();
         for a in it {
-            if a == "--explain" { explain = true; } else { rest.push(a); }
+            if a == "--explain" { flags.explain = true; }
+            else if let Some(q) = a.strip_prefix("--query=") { flags.query = Some(q.to_string()); }
+            else if a == "--debug-demand" { flags.debug_demand = true; }
+            else if a == "--diag" { flags.diag = true; }
+            else { rest.push(a); }
         }
         let mut out = vec![prog]; out.extend(rest);
-        (explain, out)
+        (flags, out)
     };
     let program = args.get(1).cloned().unwrap_or_else(|| { std::process::exit(0); });
     let arity: usize = args.get(2).cloned().unwrap_or("2".into()).parse().unwrap();
@@ -196,5 +212,6 @@ fn main() {
         panic!("ddir_vec: program references imports {:?} but this harness has no trace registry.", imports);
     }
     let name = std::path::Path::new(&program).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(program.clone());
-    run(&name, stmts, n_inputs, nodes, edges, arity, batch, rounds, explain);
+    let timely_args: Vec<String> = args.iter().skip(4).cloned().collect();
+    run(&name, stmts, n_inputs, nodes, edges, arity, batch, rounds, flags, timely_args);
 }
