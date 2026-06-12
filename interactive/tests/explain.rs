@@ -175,3 +175,44 @@ fn scc_join_partner_time_regression() {
         demand.len(), replay,
     );
 }
+
+/// Greedy 1-minimal shrink: drop demanded rows while the replay still
+/// regenerates `target`. The result is locally minimal (no single row can be
+/// removed), a practical lower-bound estimate for measuring excess demand.
+fn greedy_shrink(p: &Program, demand: &[(Row, Row)], target: &(Row, Row)) -> Vec<(Row, Row)> {
+    let mut keep: Vec<(Row, Row)> = demand.to_vec();
+    let mut i = 0;
+    while i < keep.len() {
+        let mut trial = keep.clone();
+        trial.remove(i);
+        if export_rows(p, &[trial.clone()], "result").contains(target) {
+            keep = trial;
+        } else {
+            i += 1;
+        }
+    }
+    keep
+}
+
+/// Not an assertion — a report. Prints per-query demand size vs a greedy
+/// 1-minimal size, the working metric for the over-approximation work.
+/// Run with: cargo test --release -- --ignored report_demand_excess --nocapture
+#[test]
+#[ignore = "metric report; run with --release -- --ignored --nocapture"]
+fn report_demand_excess() {
+    for (nodes, edges_n) in [(50u64, 55u64), (100, 110)] {
+        let edges = gen_edges(nodes, edges_n);
+        let p = optimized(SCC_ROW);
+        let result = export_rows(&p, &[edges.clone()], "result");
+        let (mut tot_d, mut tot_m) = (0usize, 0usize);
+        println!("== {} nodes / {} edges: {} scc edges", nodes, edges_n, result.len());
+        for (k, v) in &result {
+            let demand = demand_for(SCC_ROW, &edges, k, v);
+            let min = greedy_shrink(&p, &demand, &(k.clone(), v.clone()));
+            tot_d += demand.len();
+            tot_m += min.len();
+            println!("  query {:?}: demand {} vs 1-minimal {}", (k, v), demand.len(), min.len());
+        }
+        println!("  TOTAL demand {} vs 1-minimal {} ({:.2}x)", tot_d, tot_m, tot_d as f64 / tot_m as f64);
+    }
+}
