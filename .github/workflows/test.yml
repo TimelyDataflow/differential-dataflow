@@ -39,6 +39,12 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: Cargo doc test
         run: cargo test --doc
+      # The explanation suite's heavier sweeps (soundness regression, fuzz)
+      # are #[ignore]d for local debug runs but must gate merges. Skips:
+      # the metric report (not an assertion) and known-gap tests (fail by
+      # design until their gap is closed).
+      - name: Explanation suite (release, incl. ignored)
+        run: cargo test --release -p interactive --test explain -- --include-ignored --skip report_demand_excess --skip known_gap
 
   # Check for clippy warnings
   clippy:

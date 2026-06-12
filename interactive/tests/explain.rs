@@ -83,6 +83,13 @@ fn gen_edges(nodes: u64, edges: u64) -> Vec<(Row, Row)> {
     (0..edges).map(|e| interactive::gen_row::<Row>(e, nodes, 2)).collect()
 }
 
+/// A different deterministic graph per seed (offset into the same hash space).
+fn gen_edges_seeded(seed: u64, nodes: u64, edges: u64) -> Vec<(Row, Row)> {
+    (0..edges)
+        .map(|e| interactive::gen_row::<Row>(seed.wrapping_mul(1_000_003).wrapping_add(e), nodes, 2))
+        .collect()
+}
+
 fn row(fields: &[i64]) -> Row {
     fields.iter().copied().collect()
 }
@@ -108,22 +115,28 @@ fn optimized(src: &str) -> Program {
     p
 }
 
-/// The per-input demand-sets for query row `(q_key, q_val)` (q id 0) against
-/// `src`'s first export, with `src` run on `inputs`.
-fn demand_for(
+/// The per-input demand-sets for a batch of query rows (q ids assigned in
+/// order) against `src`'s first export, with `src` run on `inputs`.
+fn demand_for_queries(
     src: &str,
     shapes: &[(usize, usize)],
     inputs: &[Vec<(Row, Row)>],
-    q_key: &Row,
-    q_val: &Row,
+    queries: &[(Row, Row)],
 ) -> Vec<Vec<(Row, Row)>> {
     let tree = lowered(src);
     let mut ex = explain::explain(&tree, shapes);
     ex.optimize();
-    let mut query: Row = q_val.clone();
-    query.push(0); // query id
+    let query_rows: Vec<(Row, Row)> = queries
+        .iter()
+        .enumerate()
+        .map(|(q, (k, v))| {
+            let mut val = v.clone();
+            val.push(q as i64); // query id
+            (k.clone(), val)
+        })
+        .collect();
     let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
-    ex_inputs.push(vec![(q_key.clone(), query)]);
+    ex_inputs.push(query_rows);
     let exports = evaluate(&ex, &ex_inputs);
     (0..inputs.len())
         .map(|i| {
@@ -141,6 +154,17 @@ fn demand_for(
         .collect()
 }
 
+/// Single-query convenience over [`demand_for_queries`].
+fn demand_for(
+    src: &str,
+    shapes: &[(usize, usize)],
+    inputs: &[Vec<(Row, Row)>],
+    q_key: &Row,
+    q_val: &Row,
+) -> Vec<Vec<(Row, Row)>> {
+    demand_for_queries(src, shapes, inputs, &[(q_key.clone(), q_val.clone())])
+}
+
 fn demand_total(demand: &[Vec<(Row, Row)>]) -> usize {
     demand.iter().map(|d| d.len()).sum()
 }
@@ -156,7 +180,6 @@ fn assert_all_rows_sufficient(
 ) -> Vec<((Row, Row), usize)> {
     let p = optimized(src);
     let result = export_rows(&p, inputs, "result");
-    assert!(!result.is_empty(), "test instance has empty output; pick another");
     let mut sizes = Vec::new();
     for (k, v) in &result {
         let demand = demand_for(src, shapes, inputs, k, v);
@@ -308,4 +331,83 @@ fn report_demand_excess() {
             name, result.len(), tot_d, tot_m, tot_d as f64 / tot_m as f64, worst,
         );
     }
+}
+
+/// In-degree counts: the one `count` reducer case. With duplicate-free
+/// inputs the keyed all-rows demand happens to be exactly what the count
+/// needs.
+const INDEG_ROW: &str = r#"
+    let edges = input 0 | key($0[0] ; $0[1]);
+    export "result" = edges | key($1 ;) | count;
+"#;
+const INDEG_SHAPES: &[(usize, usize)] = &[(2, 0)];
+
+/// Count outputs over duplicate-free inputs: sufficient today, because the
+/// keyed lookup demands every input row at the key, which is precisely the
+/// count's multiset.
+#[test]
+fn count_explanations_sufficient_small() {
+    let sizes = assert_all_rows_sufficient(INDEG_ROW, INDEG_SHAPES, &[gen_edges(20, 22)]);
+    assert!(!sizes.is_empty());
+}
+
+/// KNOWN GAP: demand-sets are *sets*, but count outputs depend on input
+/// *multiplicities*. With a duplicated input row, indeg(5) = 3 needs the
+/// row (1,5) twice, and the demand-set can only say it once — the replay
+/// produces indeg(5) = 2 and the queried row is not regenerated. This is
+/// the motivating case for a multiplicity ("diff") dimension on demand.
+/// Asserts sufficiency, so it FAILS until that lands; un-ignore it then.
+#[test]
+#[ignore = "known gap: count needs multiplicity-aware demand"]
+fn count_duplicate_inputs_known_gap() {
+    let edges = vec![
+        (row(&[1, 5]), Row::new()),
+        (row(&[1, 5]), Row::new()),
+        (row(&[2, 5]), Row::new()),
+    ];
+    let p = optimized(INDEG_ROW);
+    let result = export_rows(&p, &[edges.clone()], "result");
+    assert!(result.contains(&(row(&[5]), row(&[3]))), "expected indeg(5) = 3 in {:?}", result);
+    let demand = demand_for(INDEG_ROW, INDEG_SHAPES, &[edges], &row(&[5]), &row(&[3]));
+    let replay = export_rows(&p, &demand, "result");
+    assert!(
+        replay.contains(&(row(&[5]), row(&[3]))),
+        "insufficient explanation for indeg(5) = 3: demanded {:?} regenerates only {:?}",
+        demand, replay,
+    );
+}
+
+/// Two queries seeded together (distinct q ids): the union demand-set must
+/// regenerate both queried rows. Exercises the q-id plumbing through every
+/// reverse rule — a mismatched q in a lookup would silently drop demand.
+#[test]
+fn two_simultaneous_queries_sufficient() {
+    let edges = gen_edges(50, 55);
+    let p = optimized(SCC_ROW);
+    let result: Vec<(Row, Row)> = export_rows(&p, &[edges.clone()], "result").into_iter().collect();
+    // Two edges from different components.
+    let q0 = (row(&[7]), row(&[44]));
+    let q1 = (row(&[16]), row(&[19]));
+    assert!(result.contains(&q0) && result.contains(&q1));
+    let demand = demand_for_queries(SCC_ROW, SCC_SHAPES, &[edges], &[q0.clone(), q1.clone()]);
+    let replay = export_rows(&p, &demand, "result");
+    assert!(replay.contains(&q0), "union demand fails first query: {:?}", replay);
+    assert!(replay.contains(&q1), "union demand fails second query: {:?}", replay);
+}
+
+/// Seeded sufficiency sweep: many graphs, every output row queried. The
+/// soundness bugs found so far surfaced only at particular scales/instances;
+/// this is the standing net for the next one.
+#[test]
+#[ignore = "fuzz sweep; run with --release -- --ignored"]
+fn fuzz_explanations_sufficient() {
+    let mut queries = 0;
+    for seed in 0..10u64 {
+        queries += assert_all_rows_sufficient(SCC_ROW, SCC_SHAPES, &[gen_edges_seeded(seed, 80, 88)]).len();
+        queries += assert_all_rows_sufficient(TC_ROW, TC_SHAPES, &[gen_edges_seeded(seed, 25, 27)]).len();
+        let root = (seed % 60) as i64;
+        let inputs = vec![gen_edges_seeded(seed, 60, 66), vec![(row(&[root]), Row::new())]];
+        queries += assert_all_rows_sufficient(REACH_ROW, REACH_SHAPES, &inputs).len();
+    }
+    assert!(queries >= 100, "fuzz swept only {} queries — instances too sparse to mean much", queries);
 }
