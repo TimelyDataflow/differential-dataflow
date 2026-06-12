@@ -2,8 +2,8 @@
 //! `backend::vec::evaluate` (explicit inputs in, every export out).
 //!
 //! The central property is *sufficiency*: for a query against a program's
-//! output, the demand-set the rewritten program reports must — fed back
-//! through the original program as its only input — regenerate the queried
+//! output, the demand-sets the rewritten program reports must — fed back
+//! through the original program as its only inputs — regenerate the queried
 //! output row. Tests marked `#[ignore]` are heavier sweeps meant for
 //! `cargo test --release -- --ignored`.
 
@@ -45,6 +45,35 @@ const SCC_ROW: &str = r#"
     }
     export "result" = outer::scc;
 "#;
+const SCC_SHAPES: &[(usize, usize)] = &[(2, 0)];
+
+/// Transitive closure, with the closure's pairs as the result.
+const TC_ROW: &str = r#"
+    let edges = input 0 | key($0[0] ; $0[1]);
+    outer: {
+        let tc = edges + more
+            | key($0[0], $1[0] ;)
+            | distinct
+            | key($0[0] ; $0[1]);
+        var more = tc
+            | key($1 ; $0)
+            | join(edges, ($1 ; $2));
+    }
+    export "result" = outer::tc;
+"#;
+const TC_SHAPES: &[(usize, usize)] = &[(2, 0)];
+
+/// Reachability from roots (two inputs), the reached set as the result.
+const REACH_ROW: &str = r#"
+    let edges = input 0 | key($0[0] ; $0[1]);
+    let roots = input 1 | key($0[0] ;);
+    reach: {
+        let proposals = reach | join(edges, ($2 ;));
+        var reach = roots + proposals | distinct;
+    }
+    export "result" = reach::reach;
+"#;
+const REACH_SHAPES: &[(usize, usize)] = &[(2, 0), (1, 0)];
 
 fn lowered(src: &str) -> Program {
     lower::lower_tree(parse::pipe::parse(src))
@@ -54,7 +83,11 @@ fn gen_edges(nodes: u64, edges: u64) -> Vec<(Row, Row)> {
     (0..edges).map(|e| interactive::gen_row::<Row>(e, nodes, 2)).collect()
 }
 
-/// Run `src` on `inputs` and return one export's rows (asserting positive
+fn row(fields: &[i64]) -> Row {
+    fields.iter().copied().collect()
+}
+
+/// Run `p` on `inputs` and return one export's rows (asserting positive
 /// multiplicities — a set-like result).
 fn export_rows(p: &Program, inputs: &[Vec<(Row, Row)>], export: &str) -> BTreeSet<(Row, Row)> {
     let exports = evaluate(p, inputs);
@@ -75,40 +108,65 @@ fn optimized(src: &str) -> Program {
     p
 }
 
-/// The demand-set for query row `(q_key, q_val)` (q id 0) against `src`'s
-/// first export, with `src` run on `edges`.
-fn demand_for(src: &str, edges: &[(Row, Row)], q_key: &[i64], q_val: &[i64]) -> Vec<(Row, Row)> {
+/// The per-input demand-sets for query row `(q_key, q_val)` (q id 0) against
+/// `src`'s first export, with `src` run on `inputs`.
+fn demand_for(
+    src: &str,
+    shapes: &[(usize, usize)],
+    inputs: &[Vec<(Row, Row)>],
+    q_key: &Row,
+    q_val: &Row,
+) -> Vec<Vec<(Row, Row)>> {
     let tree = lowered(src);
-    let shapes: Vec<(usize, usize)> = vec![(2, 0); tree.root.imports.len()];
-    let mut ex = explain::explain(&tree, &shapes);
+    let mut ex = explain::explain(&tree, shapes);
     ex.optimize();
-    let mut query: Row = q_val.iter().copied().collect();
+    let mut query: Row = q_val.clone();
     query.push(0); // query id
-    let demand = export_rows(
-        &ex,
-        &[edges.to_vec(), vec![(q_key.iter().copied().collect(), query)]],
-        "demand:input0",
-    );
-    demand.into_iter().collect()
+    let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
+    ex_inputs.push(vec![(q_key.clone(), query)]);
+    let exports = evaluate(&ex, &ex_inputs);
+    (0..inputs.len())
+        .map(|i| {
+            let name = format!("demand:input{}", i);
+            exports
+                .get(&name)
+                .unwrap_or_else(|| panic!("no export {:?}; have {:?}", name, exports.keys().collect::<Vec<_>>()))
+                .iter()
+                .map(|((k, v), d)| {
+                    assert!(*d > 0, "negative multiplicity {} for {:?}", d, (k, v));
+                    (k.clone(), v.clone())
+                })
+                .collect()
+        })
+        .collect()
 }
 
-/// Sufficiency for every row of `src`'s output on `edges`: query it, take the
-/// demand-set, re-run the original program on the demand-set alone, and
-/// require the queried row in the output. Returns (row, |demand|) per query.
-fn assert_all_rows_sufficient(src: &str, edges: &[(Row, Row)]) -> Vec<((Row, Row), usize)> {
+fn demand_total(demand: &[Vec<(Row, Row)>]) -> usize {
+    demand.iter().map(|d| d.len()).sum()
+}
+
+/// Sufficiency for every row of `src`'s output on `inputs`: query it, take
+/// the demand-sets, re-run the original program on the demand-sets alone,
+/// and require the queried row in the output. Returns (row, total demand)
+/// per query.
+fn assert_all_rows_sufficient(
+    src: &str,
+    shapes: &[(usize, usize)],
+    inputs: &[Vec<(Row, Row)>],
+) -> Vec<((Row, Row), usize)> {
     let p = optimized(src);
-    let result = export_rows(&p, &[edges.to_vec()], "result");
+    let result = export_rows(&p, inputs, "result");
     assert!(!result.is_empty(), "test instance has empty output; pick another");
     let mut sizes = Vec::new();
     for (k, v) in &result {
-        let demand = demand_for(src, edges, k, v);
-        let replay = export_rows(&p, &[demand.clone()], "result");
+        let demand = demand_for(src, shapes, inputs, k, v);
+        let replay = export_rows(&p, &demand, "result");
         assert!(
             replay.contains(&(k.clone(), v.clone())),
-            "insufficient explanation for {:?}: {} demanded rows {:?} regenerate only {:?}",
-            (k, v), demand.len(), demand, replay,
+            "insufficient explanation for {:?}: demanded {:?} regenerates only {:?}",
+            (k, v), demand, replay,
         );
-        sizes.push(((k.clone(), v.clone()), demand.len()));
+        sizes.push(((k.clone(), v.clone()), demand_total(&demand)));
     }
     sizes
 }
@@ -130,8 +188,25 @@ fn clone_identity_preserves_scc_output() {
 /// plus one self-loop) is explained by a demand-set that regenerates it.
 #[test]
 fn scc_row_explanations_sufficient_small() {
-    let sizes = assert_all_rows_sufficient(SCC_ROW, &gen_edges(50, 55));
+    let sizes = assert_all_rows_sufficient(SCC_ROW, SCC_SHAPES, &[gen_edges(50, 55)]);
     assert_eq!(sizes.len(), 12, "expected 12 scc edges at 50/55");
+}
+
+/// Every pair of the 20-node / 22-edge transitive closure is explained by a
+/// demand-set that regenerates it.
+#[test]
+fn tc_row_explanations_sufficient_small() {
+    let sizes = assert_all_rows_sufficient(TC_ROW, TC_SHAPES, &[gen_edges(20, 22)]);
+    assert_eq!(sizes.len(), 34, "expected 34 tc pairs at 20/22");
+}
+
+/// Every node reached from root 0 in the 50-node / 55-edge instance is
+/// explained by demand-sets (edges and roots) that regenerate it.
+#[test]
+fn reach_row_explanations_sufficient_small() {
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Row::new())]];
+    let sizes = assert_all_rows_sufficient(REACH_ROW, REACH_SHAPES, &inputs);
+    assert_eq!(sizes.len(), 5, "expected 5 reached nodes at 50/55 from root 0");
 }
 
 /// A demand-set is grounded in actual input rows.
@@ -142,8 +217,10 @@ fn demand_is_a_subset_of_the_input() {
     let result = export_rows(&p, &[edges.clone()], "result");
     let edge_set: BTreeSet<(Row, Row)> = edges.iter().cloned().collect();
     let (k, v) = result.iter().next().unwrap();
-    for row in demand_for(SCC_ROW, &edges, k, v) {
-        assert!(edge_set.contains(&row), "demanded row {:?} is not an input row", row);
+    for set in demand_for(SCC_ROW, SCC_SHAPES, &[edges.clone()], k, v) {
+        for row in set {
+            assert!(edge_set.contains(&row), "demanded row {:?} is not an input row", row);
+        }
     }
 }
 
@@ -151,7 +228,7 @@ fn demand_is_a_subset_of_the_input() {
 #[test]
 #[ignore = "heavier sweep; run with --release -- --ignored"]
 fn scc_row_explanations_sufficient_100() {
-    let sizes = assert_all_rows_sufficient(SCC_ROW, &gen_edges(100, 110));
+    let sizes = assert_all_rows_sufficient(SCC_ROW, SCC_SHAPES, &[gen_edges(100, 110)]);
     assert_eq!(sizes.len(), 22, "expected 22 scc edges at 100/110");
 }
 
@@ -167,52 +244,68 @@ fn scc_row_explanations_sufficient_100() {
 fn scc_join_partner_time_regression() {
     let edges = gen_edges(1000, 1100);
     let p = optimized(SCC_ROW);
-    let demand = demand_for(SCC_ROW, &edges, &[773], &[466]);
-    let replay = export_rows(&p, &[demand.clone()], "result");
+    let demand = demand_for(SCC_ROW, SCC_SHAPES, &[edges], &row(&[773]), &row(&[466]));
+    let replay = export_rows(&p, &demand, "result");
     assert!(
-        replay.contains(&(Row::from_slice(&[773]), Row::from_slice(&[466]))),
-        "insufficient explanation for (773, 466): {} demanded rows regenerate only {:?}",
-        demand.len(), replay,
+        replay.contains(&(row(&[773]), row(&[466]))),
+        "insufficient explanation for (773, 466): demanded {} rows regenerate only {:?}",
+        demand_total(&demand), replay,
     );
 }
 
-/// Greedy 1-minimal shrink: drop demanded rows while the replay still
-/// regenerates `target`. The result is locally minimal (no single row can be
-/// removed), a practical lower-bound estimate for measuring excess demand.
-fn greedy_shrink(p: &Program, demand: &[(Row, Row)], target: &(Row, Row)) -> Vec<(Row, Row)> {
-    let mut keep: Vec<(Row, Row)> = demand.to_vec();
-    let mut i = 0;
-    while i < keep.len() {
-        let mut trial = keep.clone();
-        trial.remove(i);
-        if export_rows(p, &[trial.clone()], "result").contains(target) {
-            keep = trial;
-        } else {
-            i += 1;
+/// Greedy 1-minimal shrink across all inputs' demand-sets: drop demanded
+/// rows while the replay still regenerates `target`. The result is locally
+/// minimal (no single row can be removed), a practical lower-bound estimate
+/// for measuring excess demand.
+fn greedy_shrink(
+    p: &Program,
+    demand: &[Vec<(Row, Row)>],
+    target: &(Row, Row),
+) -> Vec<Vec<(Row, Row)>> {
+    let mut keep: Vec<Vec<(Row, Row)>> = demand.to_vec();
+    for input in 0..keep.len() {
+        let mut i = 0;
+        while i < keep[input].len() {
+            let mut trial = keep.clone();
+            trial[input].remove(i);
+            if export_rows(p, &trial, "result").contains(target) {
+                keep = trial;
+            } else {
+                i += 1;
+            }
         }
     }
     keep
 }
 
-/// Not an assertion — a report. Prints per-query demand size vs a greedy
-/// 1-minimal size, the working metric for the over-approximation work.
+/// Not an assertion — a report. Prints per-program total demand vs greedy
+/// 1-minimal totals, the working metric for the over-approximation work.
 /// Run with: cargo test --release -- --ignored report_demand_excess --nocapture
 #[test]
 #[ignore = "metric report; run with --release -- --ignored --nocapture"]
 fn report_demand_excess() {
-    for (nodes, edges_n) in [(50u64, 55u64), (100, 110)] {
-        let edges = gen_edges(nodes, edges_n);
-        let p = optimized(SCC_ROW);
-        let result = export_rows(&p, &[edges.clone()], "result");
-        let (mut tot_d, mut tot_m) = (0usize, 0usize);
-        println!("== {} nodes / {} edges: {} scc edges", nodes, edges_n, result.len());
+    let cases: Vec<(&str, &str, &[(usize, usize)], Vec<Vec<(Row, Row)>>)> = vec![
+        ("scc 50/55", SCC_ROW, SCC_SHAPES, vec![gen_edges(50, 55)]),
+        ("scc 100/110", SCC_ROW, SCC_SHAPES, vec![gen_edges(100, 110)]),
+        ("tc 20/22", TC_ROW, TC_SHAPES, vec![gen_edges(20, 22)]),
+        ("tc 50/55", TC_ROW, TC_SHAPES, vec![gen_edges(50, 55)]),
+        ("reach 50/55", REACH_ROW, REACH_SHAPES, vec![gen_edges(50, 55), vec![(row(&[0]), Row::new())]]),
+    ];
+    for (name, src, shapes, inputs) in cases {
+        let p = optimized(src);
+        let result = export_rows(&p, &inputs, "result");
+        let (mut tot_d, mut tot_m, mut worst): (usize, usize, f64) = (0, 0, 1.0);
         for (k, v) in &result {
-            let demand = demand_for(SCC_ROW, &edges, k, v);
+            let demand = demand_for(src, shapes, &inputs, k, v);
             let min = greedy_shrink(&p, &demand, &(k.clone(), v.clone()));
-            tot_d += demand.len();
-            tot_m += min.len();
-            println!("  query {:?}: demand {} vs 1-minimal {}", (k, v), demand.len(), min.len());
+            let (d, m) = (demand_total(&demand), demand_total(&min));
+            tot_d += d;
+            tot_m += m;
+            worst = worst.max(d as f64 / m as f64);
         }
-        println!("  TOTAL demand {} vs 1-minimal {} ({:.2}x)", tot_d, tot_m, tot_d as f64 / tot_m as f64);
+        println!(
+            "{:>12}: {:>4} queries, demand {:>5} vs 1-minimal {:>5} ({:.2}x avg, {:.2}x worst)",
+            name, result.len(), tot_d, tot_m, tot_d as f64 / tot_m as f64, worst,
+        );
     }
 }
