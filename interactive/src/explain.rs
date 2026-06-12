@@ -540,6 +540,12 @@ impl Sb {
         for i in 0..right_user_len { pair_val.push(FieldExpr::Index(2, v_r + i)); }
         let pos_arities = [k_arity, v_l, v_r];
         let key_expanded = expand_pos_bounded(&projection.key, &pos_arities);
+        // Also record the chained V_out each pair produces, so demand can be
+        // narrowed to the pairs that produced the demanded output VALUE.
+        // Matching on K_out alone charges every same-key sibling pair (e.g.
+        // every in-edge of a node, not just the one carrying the demanded
+        // label).
+        pair_val.extend(expand_pos_bounded(&projection.val, &pos_arities));
         let pair = self.join(left_pair_src, right_pair_src, Projection { key: key_expanded, val: pair_val });
         let q_pair_pos = v_out + out_user_len;
         let vl_pair_start = k_arity;
@@ -563,12 +569,18 @@ impl Sb {
         for i in 0..right_user_len { val.push(FieldExpr::Index(2, ur_pair_start + i)); }
         for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
         val.push(FieldExpr::Index(1, q_pair_pos));
+        let vout_pair_start = ur_pair_start + right_user_len;
+        for i in 0..v_out { val.push(FieldExpr::Index(1, i)); }                    // demanded V_out
+        for i in 0..v_out { val.push(FieldExpr::Index(2, vout_pair_start + i)); }  // pair-produced V_out
         let joined = self.join(dep_y, pair, Projection { key, val });
-        // Joined val layout: V_L ++ V_R ++ U_L ++ U_R ++ user_out ++ [q].
+        // Joined val layout:
+        //   V_L ++ V_R ++ U_L ++ U_R ++ user_out ++ [q] ++ V_out_dep ++ V_out_pair.
         let ul_j = v_l + v_r;
         let ur_j = ul_j + left_user_len;
         let uo_j = ur_j + right_user_len;
         let q_j = uo_j + out_user_len;
+        let vdep_j = q_j + 1;
+        let vpair_j = vdep_j + v_out;
         // Outer-aligned `u_in ≤ u_out` for one side's chain at offset `off`.
         let time_cond = |off: usize, in_len: usize| -> Option<Condition> {
             let n = in_len.min(out_user_len);
@@ -587,11 +599,25 @@ impl Sb {
             }
             acc
         };
-        let both = match (time_cond(ul_j, left_user_len), time_cond(ur_j, right_user_len)) {
-            (Some(a), Some(b)) => Some(Condition::And(Box::new(a), Box::new(b))),
-            (Some(a), None) | (None, Some(a)) => Some(a),
-            (None, None) => None,
+        // Value narrowing: keep only pairs whose produced V_out equals the
+        // demanded V_out, element-wise. Unlike time, every joined row carries
+        // both columns explicitly, so this is a plain equality filter.
+        let value_cond = {
+            let mut acc: Option<Condition> = None;
+            for i in 0..v_out {
+                let cond = Condition::Eq(
+                    FieldExpr::Index(1, vdep_j + i),
+                    FieldExpr::Index(1, vpair_j + i),
+                );
+                acc = Some(match acc {
+                    None => cond,
+                    Some(prev) => Condition::And(Box::new(prev), Box::new(cond)),
+                });
+            }
+            acc
         };
+        let conds = [time_cond(ul_j, left_user_len), time_cond(ur_j, right_user_len), value_cond];
+        let both = conds.into_iter().flatten().reduce(|a, b| Condition::And(Box::new(a), Box::new(b)));
         let timed = match both {
             Some(cond) => self.filter(joined, cond),
             None => joined,
