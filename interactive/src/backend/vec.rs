@@ -129,3 +129,80 @@ pub fn render_tree<'s>(
 ) -> Vec<Col<'s>> {
     crate::backend::render_tree::<VecBackend>(s, scope, depth, imports)
 }
+
+/// Evaluate `program` on explicit inputs: single worker, in-process, every
+/// export returned as its consolidated final contents (rows with non-zero
+/// net multiplicity).
+///
+/// `inputs[i]` provides the rows of positional input `i`, each with
+/// multiplicity +1; all rows are introduced at time 0 and the computation
+/// runs to quiescence. This is the data-in/data-out entry point that tests
+/// and tools build on — e.g. feeding an explanation's demand-set back
+/// through the original program to check the queried output reproduces.
+pub fn evaluate(
+    program: &st::Program,
+    inputs: &[Vec<(Row, Row)>],
+) -> std::collections::BTreeMap<String, Vec<((Row, Row), Diff)>> {
+    use std::sync::mpsc::channel;
+    use timely::dataflow::operators::core::capture::{Capture, Event};
+    use differential_dataflow::input::Input;
+
+    let names: Vec<String> = program.root.exports.iter().map(|e| e.name.clone()).collect();
+    let mut txs = Vec::with_capacity(names.len());
+    let mut rxs = Vec::with_capacity(names.len());
+    for _ in &names {
+        let (tx, rx) = channel::<Event<u64, Vec<((Row, Row), u64, Diff)>>>();
+        txs.push(tx);
+        rxs.push(rx);
+    }
+
+    let program = program.clone();
+    let inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
+    timely::execute_directly(move |worker| {
+        let mut handles = worker.dataflow::<u64, _, _>(|scope| {
+            let mut handles = Vec::new();
+            let mut collections = Vec::new();
+            for _ in 0..inputs.len() {
+                let (h, c) = scope.new_collection::<(Row, Row), Diff>();
+                handles.push(h);
+                collections.push(c);
+            }
+            let exports = scope.iterative::<PointStamp<u64>, _, _>(|inner| {
+                let entered: Vec<_> = collections.iter().map(|c| c.clone().enter(inner)).collect();
+                let root_imports: Vec<_> = program.root.imports.iter().map(|imp| match &imp.from {
+                    st::Source::Input(n) => entered[*n].clone(),
+                    other => panic!("evaluate: unsupported source {:?}", other),
+                }).collect();
+                let exports = render_tree(&program.root, inner.clone(), 0, root_imports);
+                exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()
+            });
+            for (col, tx) in exports.into_iter().zip(txs) {
+                col.inner.capture_into(tx);
+            }
+            handles
+        });
+        for (i, rows) in inputs.iter().enumerate() {
+            for r in rows {
+                handles[i].update(r.clone(), 1);
+            }
+        }
+        // Dropping the handles closes the inputs; `execute_directly` then
+        // steps the worker until the dataflow completes.
+    });
+
+    names
+        .into_iter()
+        .zip(rxs)
+        .map(|(name, rx)| {
+            let mut acc: std::collections::BTreeMap<(Row, Row), Diff> = std::collections::BTreeMap::new();
+            for event in rx {
+                if let Event::Messages(_, data) = event {
+                    for ((k, v), _, d) in data {
+                        *acc.entry((k, v)).or_insert(0) += d;
+                    }
+                }
+            }
+            (name, acc.into_iter().filter(|(_, d)| *d != 0).collect())
+        })
+        .collect()
+}
