@@ -197,6 +197,8 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
 use std::collections::BTreeMap;
 use crate::parse::{Condition, FieldExpr, Projection, Reducer};
 use crate::ir::{apply_ops_arity, proj_arity};
+mod decouple;
+use decouple::{Dataflow, RowModel};
 
 /// What a reference ultimately names: a value-producing site, or one of the
 /// root's external sources.
@@ -385,26 +387,13 @@ impl Sb {
     }
     /// Semijoin `left (K; V)` with `right (K; V)` by `(K)`, keep left's rows.
     fn semijoin_data(&mut self, left: Ref, right: Ref, k_arity: usize, v_arity: usize) -> Ref {
-        let key: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
-        let val: Vec<FieldExpr> = (0..v_arity).map(|i| FieldExpr::Index(1, i)).collect();
-        self.join(left, right, Projection { key, val })
+        self.join(left, right, <Flat as RowModel>::project_kv(k_arity, v_arity))
     }
     /// Set-level distinct on `(K; V)` rows (pack-distinct-unpack).
     fn distinct_full(&mut self, input: Ref, k_arity: usize, v_arity: usize) -> Ref {
-        let mut pack_key: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
-        for i in 0..v_arity { pack_key.push(FieldExpr::Index(1, i)); }
-        let packed = self.project(input, Projection { key: pack_key, val: vec![] });
+        let packed = self.project(input, <Flat as RowModel>::pack(k_arity, v_arity, 0, false));
         let dist = self.reduce(packed, Reducer::Distinct);
-        let unpack_key: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
-        let unpack_val: Vec<FieldExpr> = (0..v_arity).map(|i| FieldExpr::Index(0, k_arity + i)).collect();
-        self.project(dist, Projection { key: unpack_key, val: unpack_val })
-    }
-    /// Soundness filter + strip, via the shared `folded` layout algebra.
-    fn filter_time_and_strip(&mut self, coll: Ref, k_out: usize, v_pre: usize, in_len: usize, out_len: usize, keep_in_len: usize) -> Ref {
-        let layout = crate::folded::Joined { v_pre, in_len, out_len };
-        let mut cur = coll;
-        if let Some(cond) = layout.time_le() { cur = self.filter(cur, cond); }
-        self.project(cur, layout.strip(k_out, keep_in_len))
+        self.project(dist, <Flat as RowModel>::distinct_unpack(k_arity, v_arity))
     }
 }
 
@@ -419,11 +408,20 @@ struct Side {
     user_len: usize,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn strip_user_and_q(k_arity: usize, v_arity: usize) -> Projection {
-    let key: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
-    let val: Vec<FieldExpr> = (0..v_arity).map(|i| FieldExpr::Index(1, i)).collect();
-    Projection { key, val }
+    <Flat as RowModel>::project_kv(k_arity, v_arity)
+}
+
+impl Side {
+    /// View this edge as the data-model-agnostic `SideInfo` the reverse rules take.
+    fn info(&self) -> decouple::SideInfo<Sb> {
+        decouple::SideInfo {
+            witness: self.witness.clone(),
+            forward: self.forward.clone(),
+            shape: self.shape,
+            user_len: self.user_len,
+        }
+    }
 }
 
 impl Sb {
@@ -432,219 +430,209 @@ impl Sb {
     /// the target's host form injects (deeper target) or strips (shallower)
     /// the difference, outer-aligned by `folded`.
     fn emit_lookup_shape_preserving(&mut self, dep_y: Ref, side: &Side, output_depth: usize) -> Ref {
-        let (k, v) = side.shape;
-        let user_len = side.user_len;
-        let pack_kv = |k: usize, v: usize| -> Vec<FieldExpr> {
-            let mut out: Vec<FieldExpr> = Vec::with_capacity(k + v);
-            for i in 0..k { out.push(FieldExpr::Index(0, i)); }
-            for i in 0..v { out.push(FieldExpr::Index(1, i)); }
-            out
-        };
-        let pair = self.concat(vec![side.witness.clone(), side.forward.clone()]);
-        let pair_keyed = self.project(pair, Projection {
-            key: pack_kv(k, v),
-            val: (0..user_len).map(|i| FieldExpr::Index(1, v + i)).collect(),
-        });
-        let dep_keyed = self.project(dep_y, Projection {
-            key: pack_kv(k, v),
-            val: (0..output_depth + 1).map(|i| FieldExpr::Index(1, v + i)).collect(),
-        });
-        let key: Vec<FieldExpr> = (0..k).map(|i| FieldExpr::Index(0, i)).collect();
-        let mut val: Vec<FieldExpr> = Vec::new();
-        for i in 0..v { val.push(FieldExpr::Index(0, k + i)); }
-        for i in 0..user_len { val.push(FieldExpr::Index(2, i)); }
-        for i in 0..output_depth { val.push(FieldExpr::Index(1, i)); }
-        val.push(FieldExpr::Index(1, output_depth)); // q
-        let joined = self.join(dep_keyed, pair_keyed, Projection { key, val });
-        self.filter_time_and_strip(joined, k, v, user_len, output_depth, user_len)
+        decouple::shape_preserving_lookup::<Flat, Sb>(self, &dep_y, &side.info(), output_depth)
     }
 
     /// Keyed lookup (Reduce-style), with Min's value-narrowing.
     fn emit_lookup_keyed(&mut self, dep_y: Ref, side: &Side, output_shape: (usize, usize), out_user_len: usize, reducer: &Reducer) -> Ref {
-        let (k_in, v_in) = side.shape;
-        let in_user_len = side.user_len;
-        let (_, v_out) = output_shape;
-        let pair = self.concat(vec![side.witness.clone(), side.forward.clone()]);
-        let include_v_out = matches!(reducer, Reducer::Min) && v_in == v_out && v_in > 0;
-        let mut val: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_in { val.push(FieldExpr::Index(2, i)); }
-        if include_v_out {
-            for i in 0..v_out { val.push(FieldExpr::Index(1, i)); }
-        }
-        for i in 0..in_user_len { val.push(FieldExpr::Index(2, v_in + i)); }
-        for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
-        val.push(FieldExpr::Index(1, v_out + out_user_len));
-        let proj = Projection { key: (0..k_in).map(|i| FieldExpr::Index(0, i)).collect(), val };
-        let joined = self.join(dep_y, pair, proj);
-        let after_min = if include_v_out {
-            let mut acc: Option<Condition> = None;
-            for i in 0..v_in {
-                let cond = Condition::Eq(FieldExpr::Index(1, i), FieldExpr::Index(1, v_in + i));
-                acc = Some(match acc { None => cond, Some(prev) => Condition::And(Box::new(prev), Box::new(cond)) });
-            }
-            let filtered = self.filter(joined, acc.unwrap());
-            let key: Vec<FieldExpr> = (0..k_in).map(|i| FieldExpr::Index(0, i)).collect();
-            let mut new_val: Vec<FieldExpr> = Vec::new();
-            for i in 0..v_in { new_val.push(FieldExpr::Index(1, i)); }
-            let after_vout = v_in + v_out;
-            for i in 0..in_user_len { new_val.push(FieldExpr::Index(1, after_vout + i)); }
-            for i in 0..out_user_len { new_val.push(FieldExpr::Index(1, after_vout + in_user_len + i)); }
-            new_val.push(FieldExpr::Index(1, after_vout + in_user_len + out_user_len));
-            self.project(filtered, Projection { key, val: new_val })
-        } else {
-            joined
-        };
-        self.filter_time_and_strip(after_min, k_in, v_in, in_user_len, out_user_len, in_user_len)
+        let min = matches!(reducer, Reducer::Min);
+        decouple::keyed_lookup::<Flat, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, min)
     }
 
     /// Lossy lookup (Linear[Project]): pure-map shortcut when invertible and
     /// same-scope, pair-table fallback otherwise.
     fn emit_lookup_lossy(&mut self, dep_y: Ref, side: &Side, output_shape: (usize, usize), out_user_len: usize, proj: &Projection) -> Ref {
-        let (k_in, v_in) = side.shape;
-        let in_user_len = side.user_len;
-        let (k_out, v_out) = output_shape;
-        let known = analyze_lossy_invertibility(proj, k_in, v_in);
-        let total = (0..k_in).all(|c| known.contains_key(&(0, c)))
-            && (0..v_in).all(|c| known.contains_key(&(1, c)));
-        if total && in_user_len == out_user_len {
-            let access = |p: usize| -> FieldExpr {
-                if p < k_out { FieldExpr::Index(0, p) } else { FieldExpr::Index(1, p - k_out) }
-            };
-            let key: Vec<FieldExpr> = (0..k_in).map(|c| access(known[&(0, c)])).collect();
-            let mut val: Vec<FieldExpr> = Vec::with_capacity(v_in + in_user_len + 1);
-            for c in 0..v_in { val.push(access(known[&(1, c)])); }
-            for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
-            val.push(FieldExpr::Index(1, v_out + out_user_len));
-            return self.project(dep_y, Projection { key, val });
-        }
-        let pair_src = self.concat(vec![side.witness.clone(), side.forward.clone()]);
-        let mut pair_val: Vec<FieldExpr> = Vec::with_capacity(k_in + v_in + in_user_len);
-        for i in 0..k_in { pair_val.push(FieldExpr::Index(0, i)); }
-        for i in 0..v_in + in_user_len { pair_val.push(FieldExpr::Index(1, i)); }
-        let pair = self.project(pair_src, Projection { key: proj.key.clone(), val: pair_val });
-        let key: Vec<FieldExpr> = (0..k_in).map(|i| FieldExpr::Index(2, i)).collect();
-        let mut val: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_in { val.push(FieldExpr::Index(2, k_in + i)); }
-        for i in 0..in_user_len { val.push(FieldExpr::Index(2, k_in + v_in + i)); }
-        for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
-        val.push(FieldExpr::Index(1, v_out + out_user_len));
-        let joined = self.join(dep_y, pair, Projection { key, val });
-        self.filter_time_and_strip(joined, k_in, v_in, in_user_len, out_user_len, in_user_len)
+        decouple::lossy_lookup::<Flat, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, proj)
     }
 
     /// Join's backward rule: two contribs (left, right).
     fn emit_lookup_join(&mut self, dep_y: Ref, left: &Side, right: &Side, output_shape: (usize, usize), out_user_len: usize, projection: &Projection) -> (Ref, Ref) {
-        let (k_arity, v_l) = left.shape;
-        let (_, v_r) = right.shape;
-        let (_, v_out) = output_shape;
-        let left_user_len = left.user_len;
-        let right_user_len = right.user_len;
-        let left_pair_src = self.concat(vec![left.witness.clone(), left.forward.clone()]);
-        let right_pair_src = self.concat(vec![right.witness.clone(), right.forward.clone()]);
-        let mut pair_val: Vec<FieldExpr> = Vec::new();
-        for i in 0..k_arity { pair_val.push(FieldExpr::Index(0, i)); }
-        for i in 0..v_l { pair_val.push(FieldExpr::Index(1, i)); }
-        for i in 0..v_r { pair_val.push(FieldExpr::Index(2, i)); }
-        for i in 0..left_user_len { pair_val.push(FieldExpr::Index(1, v_l + i)); }
-        for i in 0..right_user_len { pair_val.push(FieldExpr::Index(2, v_r + i)); }
-        let pos_arities = [k_arity, v_l, v_r];
-        let key_expanded = expand_pos_bounded(&projection.key, &pos_arities);
-        // Also record the chained V_out each pair produces, so demand can be
-        // narrowed to the pairs that produced the demanded output VALUE.
-        // Matching on K_out alone charges every same-key sibling pair (e.g.
-        // every in-edge of a node, not just the one carrying the demanded
-        // label).
-        pair_val.extend(expand_pos_bounded(&projection.val, &pos_arities));
-        let pair = self.join(left_pair_src, right_pair_src, Projection { key: key_expanded, val: pair_val });
-        let q_pair_pos = v_out + out_user_len;
-        let vl_pair_start = k_arity;
-        let vr_pair_start = vl_pair_start + v_l;
-        let ul_pair_start = vr_pair_start + v_r;
-        let ur_pair_start = ul_pair_start + left_user_len;
-        // One dep ⋈ pair join carrying BOTH sides' user chains, so that both
-        // time filters apply before either side's coords are projected away.
-        // Projecting away the partner's user chain first is unsound: pair rows
-        // that differ only in the partner's time — e.g. a `+1` while the
-        // partner held the row and a `-1` from the partner's later retraction
-        // — merge into the same contribution row and cancel, annihilating
-        // demand that the surviving (time-valid) configuration justifies.
-        // A (left, right) pair can only explain output demanded at `u_out` if
-        // BOTH inputs were present at times ≤ `u_out`.
-        let key: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(2, i)).collect();
-        let mut val: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_l { val.push(FieldExpr::Index(2, vl_pair_start + i)); }
-        for i in 0..v_r { val.push(FieldExpr::Index(2, vr_pair_start + i)); }
-        for i in 0..left_user_len { val.push(FieldExpr::Index(2, ul_pair_start + i)); }
-        for i in 0..right_user_len { val.push(FieldExpr::Index(2, ur_pair_start + i)); }
-        for i in 0..out_user_len { val.push(FieldExpr::Index(1, v_out + i)); }
-        val.push(FieldExpr::Index(1, q_pair_pos));
-        let vout_pair_start = ur_pair_start + right_user_len;
-        for i in 0..v_out { val.push(FieldExpr::Index(1, i)); }                    // demanded V_out
-        for i in 0..v_out { val.push(FieldExpr::Index(2, vout_pair_start + i)); }  // pair-produced V_out
-        let joined = self.join(dep_y, pair, Projection { key, val });
-        // Joined val layout:
-        //   V_L ++ V_R ++ U_L ++ U_R ++ user_out ++ [q] ++ V_out_dep ++ V_out_pair.
+        decouple::join_lookup::<Flat, Sb>(
+            self, &dep_y, &left.info(), &right.info(), output_shape, out_user_len, projection,
+        )
+    }
+}
+
+/// `Index(row, lo..hi)`.
+fn fidx(row: usize, lo: usize, hi: usize) -> Vec<FieldExpr> {
+    (lo..hi).map(|c| FieldExpr::Index(row, c)).collect()
+}
+/// Conjoin comparisons; `None` for the empty conjunction.
+fn and_all(conds: Vec<Condition>) -> Option<Condition> {
+    conds.into_iter().reduce(|a, b| Condition::And(Box::new(a), Box::new(b)))
+}
+
+/// The flat `[i64]` data model: an envelope is one positional sequence
+/// `V ++ chain ++ [q]`. Every builder works in index ranges; the time-filter
+/// and strip reuse the `folded` algebra. This is the instantiation explain
+/// runs on — a nested ADT model would implement the same trait differently.
+pub(crate) struct Flat;
+
+impl Dataflow for Sb {
+    type Handle = Ref;
+    type Proj = Projection;
+    type Pred = Condition;
+    fn project(&mut self, c: &Ref, p: Projection) -> Ref { Sb::project(self, c.clone(), p) }
+    fn filter(&mut self, c: &Ref, p: Condition) -> Ref { Sb::filter(self, c.clone(), p) }
+    fn join(&mut self, l: &Ref, r: &Ref, p: Projection) -> Ref { Sb::join(self, l.clone(), r.clone(), p) }
+    fn concat(&mut self, cs: Vec<Ref>) -> Ref { Sb::concat(self, cs) }
+}
+
+impl RowModel for Flat {
+    type Proj = Projection;
+    type Pred = Condition;
+
+    fn pack(k: usize, v: usize, chain_len: usize, has_q: bool) -> Projection {
+        let mut key = fidx(0, 0, k); key.extend(fidx(1, 0, v));
+        let tail = chain_len + has_q as usize;
+        Projection { key, val: fidx(1, v, v + tail) }
+    }
+    fn project_kv(k: usize, v: usize) -> Projection {
+        Projection { key: fidx(0, 0, k), val: fidx(1, 0, v) }
+    }
+    fn sp_reassemble(k: usize, v: usize, user_len: usize, out_depth: usize) -> Projection {
+        let key = fidx(0, 0, k);
+        let mut val = fidx(0, k, k + v);              // V (from packed key)
+        val.extend(fidx(2, 0, user_len));             // chain_in (pair)
+        val.extend(fidx(1, 0, out_depth));            // chain_out (dep)
+        val.push(FieldExpr::Index(1, out_depth));     // q
+        Projection { key, val }
+    }
+
+    fn ky_join(k: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize, min: bool) -> Projection {
+        let mut val = fidx(2, 0, v_in);               // V_in
+        if min { val.extend(fidx(1, 0, v_out)); }     // V_out (for narrowing)
+        val.extend(fidx(2, v_in, v_in + in_len));     // chain_in
+        val.extend(fidx(1, v_out, v_out + out_len));  // chain_out
+        val.push(FieldExpr::Index(1, v_out + out_len)); // q
+        Projection { key: fidx(0, 0, k), val }
+    }
+    fn ky_data_eq(v_in: usize) -> Option<Condition> {
+        and_all((0..v_in).map(|i| Condition::Eq(FieldExpr::Index(1, i), FieldExpr::Index(1, v_in + i))).collect())
+    }
+    fn ky_drop_vout(k: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize) -> Projection {
+        let after_vout = v_in + v_out;
+        let mut val = fidx(1, 0, v_in);
+        val.extend(fidx(1, after_vout, after_vout + in_len));
+        val.extend(fidx(1, after_vout + in_len, after_vout + in_len + out_len));
+        val.push(FieldExpr::Index(1, after_vout + in_len + out_len));
+        Projection { key: fidx(0, 0, k), val }
+    }
+
+    fn lossy_try_invert(proj: &Projection, k_in: usize, v_in: usize, k_out: usize, v_out: usize, out_len: usize) -> Option<Projection> {
+        let known = analyze_lossy_invertibility(proj, k_in, v_in);
+        let total = (0..k_in).all(|c| known.contains_key(&(0, c)))
+            && (0..v_in).all(|c| known.contains_key(&(1, c)));
+        if !total { return None; }
+        let access = |p: usize| if p < k_out { FieldExpr::Index(0, p) } else { FieldExpr::Index(1, p - k_out) };
+        let key: Vec<FieldExpr> = (0..k_in).map(|c| access(known[&(0, c)])).collect();
+        let mut val: Vec<FieldExpr> = (0..v_in).map(|c| access(known[&(1, c)])).collect();
+        val.extend(fidx(1, v_out, v_out + out_len));  // chain_out passthrough
+        val.push(FieldExpr::Index(1, v_out + out_len)); // q
+        Some(Projection { key, val })
+    }
+    fn lossy_pair(proj: &Projection, k_in: usize, v_in: usize, in_len: usize) -> Projection {
+        let mut val = fidx(0, 0, k_in);
+        val.extend(fidx(1, 0, v_in + in_len));
+        Projection { key: proj.key.clone(), val }
+    }
+    fn lossy_reassemble(k_in: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize) -> Projection {
+        let key = fidx(2, 0, k_in);
+        let mut val = fidx(2, k_in, k_in + v_in);
+        val.extend(fidx(2, k_in + v_in, k_in + v_in + in_len));
+        val.extend(fidx(1, v_out, v_out + out_len));
+        val.push(FieldExpr::Index(1, v_out + out_len));
+        Projection { key, val }
+    }
+
+    fn join_forward(proj: &Projection, k: usize, v_l: usize, v_r: usize, l_len: usize, r_len: usize) -> Projection {
+        let key = expand_pos_bounded(&proj.key, &[k, v_l, v_r]);
+        let mut val = fidx(0, 0, k);             // K
+        val.extend(fidx(1, 0, v_l));             // V_L
+        val.extend(fidx(2, 0, v_r));             // V_R
+        val.extend(fidx(1, v_l, v_l + l_len));   // chain_L
+        val.extend(fidx(2, v_r, v_r + r_len));   // chain_R
+        val.extend(expand_pos_bounded(&proj.val, &[k, v_l, v_r])); // V_out (pair-produced)
+        Projection { key, val }
+    }
+    fn join_combined(k: usize, v_l: usize, v_r: usize, v_out: usize, l_len: usize, r_len: usize, out_len: usize) -> Projection {
+        let vl_s = k;
+        let vr_s = vl_s + v_l;
+        let ul_s = vr_s + v_r;
+        let ur_s = ul_s + l_len;
+        let vout_s = ur_s + r_len;
+        let key = fidx(2, 0, k);
+        let mut val = fidx(2, vl_s, vl_s + v_l);          // V_L
+        val.extend(fidx(2, vr_s, vr_s + v_r));            // V_R
+        val.extend(fidx(2, ul_s, ul_s + l_len));          // chain_L
+        val.extend(fidx(2, ur_s, ur_s + r_len));          // chain_R
+        val.extend(fidx(1, v_out, v_out + out_len));      // chain_out
+        val.push(FieldExpr::Index(1, v_out + out_len));   // q
+        val.extend(fidx(1, 0, v_out));                    // V_out_dep
+        val.extend(fidx(2, vout_s, vout_s + v_out));      // V_out_pair
+        Projection { key, val }
+    }
+    fn join_filter(v_l: usize, v_r: usize, v_out: usize, l_len: usize, r_len: usize, out_len: usize) -> Option<Condition> {
         let ul_j = v_l + v_r;
-        let ur_j = ul_j + left_user_len;
-        let uo_j = ur_j + right_user_len;
-        let q_j = uo_j + out_user_len;
+        let ur_j = ul_j + l_len;
+        let uo_j = ur_j + r_len;
+        let q_j = uo_j + out_len;
         let vdep_j = q_j + 1;
         let vpair_j = vdep_j + v_out;
-        // Outer-aligned `u_in ≤ u_out` for one side's chain at offset `off`.
         let time_cond = |off: usize, in_len: usize| -> Option<Condition> {
-            let n = in_len.min(out_user_len);
+            let n = in_len.min(out_len);
             let in_skip = in_len - n;
-            let out_skip = out_user_len - n;
-            let mut acc: Option<Condition> = None;
-            for i in 0..n {
-                let cond = Condition::Le(
-                    FieldExpr::Index(1, off + in_skip + i),
-                    FieldExpr::Index(1, uo_j + out_skip + i),
-                );
-                acc = Some(match acc {
-                    None => cond,
-                    Some(prev) => Condition::And(Box::new(prev), Box::new(cond)),
-                });
-            }
-            acc
+            let out_skip = out_len - n;
+            and_all((0..n).map(|i| Condition::Le(
+                FieldExpr::Index(1, off + in_skip + i),
+                FieldExpr::Index(1, uo_j + out_skip + i),
+            )).collect())
         };
-        // Value narrowing: keep only pairs whose produced V_out equals the
-        // demanded V_out, element-wise. Unlike time, every joined row carries
-        // both columns explicitly, so this is a plain equality filter.
-        let value_cond = {
-            let mut acc: Option<Condition> = None;
-            for i in 0..v_out {
-                let cond = Condition::Eq(
-                    FieldExpr::Index(1, vdep_j + i),
-                    FieldExpr::Index(1, vpair_j + i),
-                );
-                acc = Some(match acc {
-                    None => cond,
-                    Some(prev) => Condition::And(Box::new(prev), Box::new(cond)),
-                });
-            }
-            acc
+        let value_cond = and_all((0..v_out).map(|i| Condition::Eq(
+            FieldExpr::Index(1, vdep_j + i), FieldExpr::Index(1, vpair_j + i),
+        )).collect());
+        [time_cond(ul_j, l_len), time_cond(ur_j, r_len), value_cond]
+            .into_iter().flatten().reduce(|a, b| Condition::And(Box::new(a), Box::new(b)))
+    }
+    fn join_split(left: bool, k: usize, v_l: usize, v_r: usize, l_len: usize, r_len: usize, out_len: usize) -> Projection {
+        let ul_j = v_l + v_r;
+        let ur_j = ul_j + l_len;
+        let uo_j = ur_j + r_len;
+        let q_j = uo_j + out_len;
+        let key = fidx(0, 0, k);
+        let val = if left {
+            let mut v = fidx(1, 0, v_l);                 // V_L
+            v.extend(fidx(1, ul_j, ul_j + l_len));       // chain_L
+            v.push(FieldExpr::Index(1, q_j));            // q
+            v
+        } else {
+            let mut v = fidx(1, v_l, v_l + v_r);         // V_R
+            v.extend(fidx(1, ur_j, ur_j + r_len));       // chain_R
+            v.push(FieldExpr::Index(1, q_j));            // q
+            v
         };
-        let conds = [time_cond(ul_j, left_user_len), time_cond(ur_j, right_user_len), value_cond];
-        let both = conds.into_iter().flatten().reduce(|a, b| Condition::And(Box::new(a), Box::new(b)));
-        let timed = match both {
-            Some(cond) => self.filter(joined, cond),
-            None => joined,
-        };
-        // Per-side contributions: (K; V_side ++ U_side ++ [q]).
-        let key_left: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
-        let mut val_left: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_l { val_left.push(FieldExpr::Index(1, i)); }
-        for i in 0..left_user_len { val_left.push(FieldExpr::Index(1, ul_j + i)); }
-        val_left.push(FieldExpr::Index(1, q_j));
-        let left_contrib = self.project(timed.clone(), Projection { key: key_left, val: val_left });
-        let key_right: Vec<FieldExpr> = (0..k_arity).map(|i| FieldExpr::Index(0, i)).collect();
-        let mut val_right: Vec<FieldExpr> = Vec::new();
-        for i in 0..v_r { val_right.push(FieldExpr::Index(1, v_l + i)); }
-        for i in 0..right_user_len { val_right.push(FieldExpr::Index(1, ur_j + i)); }
-        val_right.push(FieldExpr::Index(1, q_j));
-        let right_contrib = self.project(timed, Projection { key: key_right, val: val_right });
-        (left_contrib, right_contrib)
+        Projection { key, val }
+    }
+
+    fn time_le(v: usize, in_len: usize, out_len: usize) -> Option<Condition> {
+        crate::folded::Joined { v_pre: v, in_len, out_len }.time_le()
+    }
+    fn strip(k: usize, v: usize, in_len: usize, out_len: usize, keep: usize) -> Projection {
+        crate::folded::Joined { v_pre: v, in_len, out_len }.strip(k, keep)
+    }
+
+    fn bind_filter(v: usize) -> Option<Condition> {
+        Some(Condition::Gt(FieldExpr::Index(1, v), FieldExpr::Const(0)))
+    }
+    fn bind_decrement(k: usize, v: usize, user_len: usize) -> Projection {
+        let mut val = fidx(1, 0, v);
+        val.push(FieldExpr::Sub(Box::new(FieldExpr::Index(1, v)), Box::new(FieldExpr::Const(1))));
+        val.extend(fidx(1, v + 1, v + user_len));
+        val.push(FieldExpr::Index(1, v + user_len));
+        Projection { key: fidx(0, 0, k), val }
+    }
+    fn distinct_unpack(k: usize, v: usize) -> Projection {
+        Projection { key: fidx(0, 0, k), val: fidx(0, k, k + v) }
     }
 }
 
@@ -890,15 +878,11 @@ impl<'a> Reverse<'a> {
             let dv = self.demand[&var_addr].clone();
             let (kx, vx) = self.shapes[&var_addr];
             let var_user_len = path.len();
-            let chain_pos = vx;
-            let filtered = ex.filter(dv, Condition::Gt(FieldExpr::Index(1, chain_pos), FieldExpr::Const(0)));
-            let key: Vec<FieldExpr> = (0..kx).map(|i| FieldExpr::Index(0, i)).collect();
-            let mut val: Vec<FieldExpr> = Vec::new();
-            for i in 0..vx { val.push(FieldExpr::Index(1, i)); }
-            val.push(FieldExpr::Sub(Box::new(FieldExpr::Index(1, chain_pos)), Box::new(FieldExpr::Const(1))));
-            for i in 1..var_user_len { val.push(FieldExpr::Index(1, chain_pos + i)); }
-            val.push(FieldExpr::Index(1, chain_pos + var_user_len));
-            let contrib = ex.project(filtered, Projection { key, val });
+            let filtered = match <Flat as RowModel>::bind_filter(vx) {
+                Some(c) => ex.filter(dv, c),
+                None => dv,
+            };
+            let contrib = ex.project(filtered, <Flat as RowModel>::bind_decrement(kx, vx, var_user_len));
             self.push(ex, path, &b.value, contrib, var_user_len);
         }
         // Items in reverse: consumers have contributed by the time we arrive.
