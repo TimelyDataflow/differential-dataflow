@@ -1,0 +1,53 @@
+-- Equality saturation / congruence closure as a single differential fixpoint.
+--
+-- input 0: binary e-nodes (name, op, c0, c1 ;)
+-- input 1: leaf e-nodes   (name, sym ;)
+-- input 2: exogenous eqs  (a, b ;)        given equalities (rewrites)
+--
+-- One outer iteration refines `eq : element ; leader` (the e-class map).
+-- Each step (a) canonicalizes every binary node's children through the
+-- current `eq`, (b) groups nodes by structural signature (op ++ classes)
+-- and by leaf symbol, emitting congruence edges to each group's min name,
+-- (c) unions those with the exogenous equalities (both symmetrized), and
+-- (d) does one min-label propagation hop. Monotone: leaders only shrink,
+-- so it converges. Congruence is arity-independent (flatmap/join/collect).
+
+let bin   = input 0 | key($0[0] ; $0[1], list($0[2], $0[3]));   -- name ; op, [c0,c1]
+let leaf  = input 1 | key($0[0] ; $0[1]);                       -- name ; sym
+let equiv = input 2 | key($0[0] ; $0[1]);                       -- a ; b
+
+-- every e-class id, seeded to itself
+let elems = (bin | map($0 ; $0)) + (leaf | map($0 ; $0));       -- name ; name
+
+-- static skeleton: explode each binary node's children, rekey by child
+let pc = bin
+    | map($0, $1[0] ; $1[1])             -- (name,op) ; [children]
+    | flatmap($1[0])                     -- (name,op) ; (pos, child)
+    | map($1[1] ; $0[0], $0[1], $1[0]);  -- child ; (name, op, pos)
+
+-- leaf signatures don't depend on `eq`; compute once
+let lsig = leaf | map($1 ; $0);          -- sym ; name
+
+eqsat: {
+    -- canonicalize children through the current class map, rebuild signature
+    let canon = pc | join(eq, ($1[0], $1[1] ; $1[2], $2[0]));   -- (name,op) ; (pos, class)
+    let bsig  = canon
+        | collect                        -- (name,op) ; [(pos,class)...]   (pos-ordered)
+        | map($0[1], $1 ; $0[0]);        -- (op ++ classes) ; name
+
+    let sigs = bsig + lsig;                              -- signature ; name
+    let reps = sigs | min;                               -- signature ; min name
+    let cong = sigs | join(reps, ($1[0] ; $2[0]));       -- name ; representative
+
+    -- candidate equality edges, symmetrized
+    let edges = cong
+        + (cong | key($1 ; $0))
+        + equiv
+        + (equiv | key($1 ; $0));                        -- a ; b
+
+    -- one hop of min-label propagation
+    let prop = eq | join(edges, ($2 ; $1));              -- b ; leader(a)
+    var eq = elems + prop | min;                         -- element ; leader
+}
+
+export "result" = eqsat::eq | arrange | inspect(classes);

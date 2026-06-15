@@ -1,0 +1,31 @@
+-- The novel core of eqsat: variable-arity child canonicalization + structural
+-- congruence, via flatmap (UNNEST) and collect (NEST). Symbols interned to i64.
+--
+-- input 0: nodes (name, op, c0, c1 ;)   binary e-nodes
+-- input 1: eq    (child, class ;)       a given class map
+--
+-- Canonicalize each node's children through `eq`, build the signature
+-- (op, [(pos,class)...]), and group congruent nodes to a representative.
+-- Arity-independent: one flatmap/join/collect, no per-position unrolling.
+
+let nodes = input 0 | key($0[0] ; $0[1], list($0[2], $0[3]));   -- name ; op, [c0,c1]
+let eq    = input 1 | key($0[0] ; $0[1]);                       -- child ; class
+
+let parts = nodes
+    | map($0[0], $1[0] ; $1[1])          -- (name,op) ; [children]
+    | flatmap($1[0]);                    -- (name,op) ; (pos, child)
+
+let canon = parts
+    | map($1[1] ; $0[0], $0[1], $1[0])               -- child ; name, op, pos
+    | join(eq, ($1[0], $1[1] ; $1[2], $2[0]));       -- (name,op) ; (pos, class)
+
+let sigs = canon
+    | collect                            -- (name,op) ; [(pos,class)...]   (NEST, pos-ordered)
+    | map($0[1], $1 ; $0[0]);            -- (op ++ children) ; name         <- signature key
+    -- bare `$1` splices the whole child list into the key (after `collect` the
+    -- value IS the list); `$1[0]` would key on only the first child.
+
+let reps = sigs | min;                                -- signature ; min name
+let cong = sigs | join(reps, ($1[0] ; $2[0]));        -- name ; representative
+
+export "result" = cong | arrange | inspect(cong);

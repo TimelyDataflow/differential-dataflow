@@ -1,0 +1,36 @@
+-- Structural CSE over an expression DAG (stress test for deep ADT values).
+--
+-- Input 0: one node per row, (id ; tag, a, b):
+--   tag 0 = const (a = value),  tag 1 = var (a = name),
+--   tag 2..5 = add/sub/mul/div  (a, b = child node ids).
+--
+-- We expand every node to its *full* expression tree as a nested Variant
+-- value (sharing in the DAG is ignored on expansion, so trees grow with
+-- depth). Then we group structurally-identical trees and assign each the
+-- minimum node id — the canonical representative. The `min` reduce keys on
+-- whole-tree values, so its arrangement sorts/compares deep ADTs: exactly
+-- the cost the flat reach/scc benchmarks never touch.
+
+let nodes = input 0 | key($0[0] ; $0[1], $0[2], $0[3]);
+
+let leaves   = nodes | filter($1[0] <= 1) | map($0 ; variant($1[0], $1[1]));
+let internal = nodes | filter($1[0] >= 2);
+
+build: {
+    -- tree: (id ; <expression tree as a Variant>)
+    var tree = leaves + built;
+
+    -- Attach the left child's tree, then the right child's, then build the
+    -- parent Variant. Two keyed joins, carrying deep tree values as payloads.
+    let with_a = internal
+        | key($1[1] ; $0, $1[0], $1[2])          -- rekey by child a: (a ; id, tag, b)
+        | join(tree, ($1[2] ; $1[0], $1[1], $2[0]));   -- (b ; id, tag, tree_a)
+
+    let built = with_a
+        | join(tree, ($1[0] ; variant($1[1], tuple($1[2], $2[0]))));  -- (id ; tree)
+}
+
+-- Canonicalize: min id per distinct tree.
+let canon = build::tree | map($1[0] ; $0) | min;
+
+export "result" = canon | key(;) | arrange | inspect(cse);
