@@ -11,7 +11,9 @@
 pub mod applicative;
 pub mod pipe;
 
-/// Scalar expression over [`crate::ir::Value`].
+/// Scalar expression over [`crate::ir::Value`]. For the concrete surface
+/// syntax (how each of these is written in a `.ddp` program), see the
+/// module-level reference on [`crate::parse::pipe`].
 ///
 /// A `Term` is evaluated against an *environment* — a stack of `Value`s.
 /// The bottom of the stack is the operator's input rows:

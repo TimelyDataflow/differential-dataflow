@@ -1,6 +1,56 @@
-//! Pipe syntax parser for .ddp files.
+//! Pipe syntax parser for .ddp files — and the surface-language reference.
 //!
-//! Syntax: `expr | key(proj)`, `expr | join(e2, proj)`, `a + b`, `a - b`, etc.
+//! A program is a sequence of statements; an expression is a source piped
+//! through operators (`expr | op | op`). Two layers: the *collection* language
+//! (the dataflow graph) and the *scalar* language ([`Term`], per-row value
+//! computation over [`crate::ir::Value`]).
+//!
+//! # Collection language
+//!
+//! Sources: `input N` (positional input), `import "name"` (named trace),
+//! `name` (a `let`/`var` in scope), `scope::field` (a child scope's export).
+//! Operators chain with `|`:
+//!
+//! - `| key(k… ; v…)` — reshape to `(key ; val)`; `map` is an alias.
+//! - `| join(other, (k… ; v…))` — equijoin on the key.
+//! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `collect` is
+//!   NEST (gather a key's values into a `List`).
+//! - `| filter(term)` — keep rows where `term` is truthy (a nonzero `Int`).
+//! - `| flatmap(term)` — UNNEST: explode a `List`-valued `term` into one row
+//!   per element, value `tuple(pos, element)`.
+//! - `| negate` · `| arrange` · `| inspect(label)` · `| enter_at(term)` ·
+//!   `| lift_iter`.
+//! - `a + b` (concat), `a - b` (concat with `b` negated).
+//!
+//! Statements: `let x = …;`, `var x = …;` (a feedback variable, for
+//! recursion), `name: { … }` (a nested scope), `export "name" = …;` (a
+//! program output, root scope only). `con Name(arity) = tag;` declares a
+//! constructor (see below); it is parse-time only and emits no IR.
+//!
+//! # Scalar language (`Term`)
+//!
+//! Evaluated against an environment of input rows: linear ops bind `$0` = key,
+//! `$1` = value; a join binds `$0` = key, `$1` = left value, `$2` = right value.
+//!
+//! - Access: `$n` is a whole row — in a projection it *splices* the row's
+//!   fields; `$n[i]` selects field `i`; chains as `$n[i][j]`.
+//! - Arithmetic / compare / logic: `+ - *`, `== != < <= > >=`, `&&`,
+//!   `or(a, b)`, `not(x)`, unary `-x`.
+//! - Products: `tuple(a, …)`; index with `v[i]` or `proj(v, i)`; `len(v)`.
+//! - Lists: `list(a, …)`; eliminated by `flatmap` / `collect` / `fold`.
+//! - Sums: `inject(tag, payload)` (alias `variant`); test with `istag(tag, v)`.
+//! - Constructors (sugar): after `con Name(arity) = tag;`, a call `Name(a, b)`
+//!   desugars to `inject(tag, tuple(a, b))`.
+//! - Pattern match: `case scrut { Ctor(a, b) => arm, …, _ => default }` — each
+//!   arm binds the matched variant's payload fields by name.
+//! - Fold: `fold(list, init, step)` — in `step`, `^0` is the element and `^1`
+//!   the accumulator.
+//! - Binders: `^k` refers to the k-th enclosing `case`/`fold` binder (de
+//!   Bruijn, innermost = 0); `case` patterns also bind payload fields by name.
+//! - Conditional: `if(cond, then, els)`.
+//!
+//! The applicative front-end ([`super::applicative`], `.ddir` files) parses the
+//! same scalar grammar with an S-expression operator syntax (`MAP`, `JOIN`, …).
 
 use super::*;
 
