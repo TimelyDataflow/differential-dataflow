@@ -352,7 +352,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                         let ops: Vec<&str> = ops.iter().map(|op| match op {
                             LinearOp::Project(_) => "project", LinearOp::Filter(_) => "filter",
                             LinearOp::Negate => "negate", LinearOp::EnterAt(_) => "enter_at",
-                            LinearOp::LiftIter => "lift_iter",
+                            LinearOp::LiftIter => "lift_iter", LinearOp::FlatMap(_) => "flatmap",
                         }).collect();
                         format!("{} | {}", fmt_ref(input), ops.join(" | "))
                     }
@@ -381,13 +381,14 @@ fn dump_scope_body(s: &Scope, indent: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parse::Term;
 
     // Express a reach-shaped program by hand: it exercises items (Op + Sub),
     // every `Ref` variant, and both relevant `Source` variants — proving the
     // shape can represent a real scoped, iterative program.
     #[test]
     fn expresses_a_scoped_iterative_program() {
-        let noproj = Projection { key: vec![], val: vec![] };
+        let noproj = Projection { key: Term::Tuple(vec![]), val: Term::Tuple(vec![]) };
         let inner = Scope {
             name: "reach".into(),
             imports: vec![

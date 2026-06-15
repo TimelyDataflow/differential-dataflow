@@ -1,38 +1,35 @@
-//! Row and operator vocabulary shared by the IR and the renderers:
-//! `LinearOp`, `RowLike`, field/condition evaluation, and the arity
-//! transfer functions.
+//! Row vocabulary shared by the IR and the renderers: the `Value` data model,
+//! the `LinearOp` operator steps, and the scalar `Term` interpreter (`eval`).
 //! The program structure itself lives in `scope_ir`.
 
-
-use crate::parse::{Projection, Condition, FieldExpr};
+use crate::parse::{Projection, Term, UnOp, BinOp};
 
 pub type Diff = i64;
 pub type Id = usize;
 pub type Time = timely::order::Product<u64, differential_dataflow::dynamic::pointstamp::PointStamp<u64>>;
 
-/// Minimal interface for a row type used by renderers.
-pub trait RowLike: Clone + Ord + std::fmt::Debug + Send + Sync + 'static {
-    fn new() -> Self;
-    fn push(&mut self, v: i64);
-    fn as_slice(&self) -> &[i64];
-    fn extend_from_slice(&mut self, other: &[i64]);
+/// A runtime value: the data model of the interpreter.
+///
+/// An algebraic data type over a single scalar (`Int`). `Tuple`/`Variant`/
+/// `List` are the product/sum/sequence constructors; together they cover
+/// JSON-shaped data and program ASTs. A collection element is a `(key, val)`
+/// pair of `Value`s (typically `Tuple`s). The derived `Ord` gives `min`,
+/// join-key matching, and `distinct` for free.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize)]
+pub enum Value {
+    Int(i64),
+    Tuple(Vec<Value>),
+    Variant(u32, Box<Value>),
+    List(Vec<Value>),
 }
 
-impl RowLike for Vec<i64> {
-    fn new() -> Self { Vec::new() }
-    fn push(&mut self, v: i64) { Vec::push(self, v); }
-    fn as_slice(&self) -> &[i64] { self }
-    fn extend_from_slice(&mut self, other: &[i64]) { Vec::extend_from_slice(self, other); }
-}
-
-impl<A> RowLike for smallvec::SmallVec<A>
-where
-    A: smallvec::Array<Item = i64> + Send + Sync + 'static,
-{
-    fn new() -> Self { smallvec::SmallVec::new() }
-    fn push(&mut self, v: i64) { smallvec::SmallVec::push(self, v); }
-    fn as_slice(&self) -> &[i64] { self }
-    fn extend_from_slice(&mut self, other: &[i64]) { smallvec::SmallVec::extend_from_slice(self, other); }
+impl Value {
+    /// The empty tuple — the conventional "unit"/empty value.
+    pub fn unit() -> Value { Value::Tuple(Vec::new()) }
+    /// Truthiness: a nonzero `Int` is true; everything else is false.
+    pub fn truthy(&self) -> bool { matches!(self, Value::Int(n) if *n != 0) }
+    /// Unwrap an `Int`, panicking otherwise (interpreter is dynamically typed).
+    pub fn as_int(&self) -> i64 { match self { Value::Int(n) => *n, other => panic!("expected Int, got {:?}", other) } }
 }
 
 /// An individual step within a Linear node.
@@ -40,108 +37,160 @@ where
 pub enum LinearOp {
     /// Rekey/reval: project to new (key, val).
     Project(Projection),
-    /// Keep or discard the record.
-    Filter(Condition),
+    /// Keep the record when the `Term` evaluates to a truthy `Value`.
+    Filter(Term),
     /// Negate the diff.
     Negate,
-    /// Shift the timestamp based on a field value.
-    EnterAt(FieldExpr),
+    /// Shift the timestamp based on an `Int`-valued `Term`.
+    EnterAt(Term),
     /// Append the current user-iter coord (at the row's scope depth) to
-    /// the value as one i64 field. Time itself is unchanged. See
-    /// `Expr::LiftIter` for the discipline restriction.
+    /// the value. Time itself is unchanged. See `Expr::LiftIter` for the
+    /// discipline restriction.
     LiftIter,
-}
-/// Evaluate fields into a row.
-pub fn eval_fields<R: RowLike>(fields: &[FieldExpr], inputs: &[&[i64]]) -> R {
-    let mut r = R::new();
-    for f in fields { eval_field_into(f, inputs, &mut r); }
-    r
+    /// UNNEST: explode a `List`-valued `Term` into one row per element, value
+    /// `tuple(pos, element)`. See `parse::Expr::FlatMap`.
+    FlatMap(Term),
 }
 
-pub fn eval_field_into<R: RowLike>(field: &FieldExpr, inputs: &[&[i64]], result: &mut R) {
-    match field {
-        FieldExpr::Pos(i) => result.extend_from_slice(inputs[*i]),
-        FieldExpr::Index(row, idx) => result.push(inputs[*row][*idx]),
-        FieldExpr::Const(v) => result.push(*v),
-        FieldExpr::Neg(inner) => { let mut tmp = R::new(); eval_field_into(inner, inputs, &mut tmp); for v in tmp.as_slice().iter() { result.push(-v); } },
-        FieldExpr::Sub(a, b) => {
-            let mut la = R::new(); eval_field_into(a, inputs, &mut la);
-            let mut lb = R::new(); eval_field_into(b, inputs, &mut lb);
-            // Element-wise subtract; rows must have matching length.
-            assert_eq!(la.as_slice().len(), lb.as_slice().len(),
-                "FieldExpr::Sub: operands must produce same-length rows");
-            for (x, y) in la.as_slice().iter().zip(lb.as_slice().iter()) { result.push(x - y); }
-        }
-    }
-}
-
-pub fn eval_condition(cond: &Condition, inputs: &[&[i64]]) -> bool {
-    let cmp = |l, r, op: fn(&Vec<i64>, &Vec<i64>) -> bool| {
-        let mut a = Vec::<i64>::new(); let mut b = Vec::<i64>::new();
-        eval_field_raw(l, inputs, &mut a); eval_field_raw(r, inputs, &mut b);
-        op(&a, &b)
-    };
-    match cond {
-        Condition::And(l, r) => eval_condition(l, inputs) && eval_condition(r, inputs),
-        Condition::Eq(l, r) => cmp(l, r, |a, b| a == b),
-        Condition::Ne(l, r) => cmp(l, r, |a, b| a != b),
-        Condition::Lt(l, r) => cmp(l, r, |a, b| a < b),
-        Condition::Le(l, r) => cmp(l, r, |a, b| a <= b),
-        Condition::Gt(l, r) => cmp(l, r, |a, b| a > b),
-        Condition::Ge(l, r) => cmp(l, r, |a, b| a >= b),
-    }
-}
-
-fn eval_field_raw(field: &FieldExpr, inputs: &[&[i64]], result: &mut Vec<i64>) {
-    match field {
-        FieldExpr::Pos(i) => result.extend_from_slice(inputs[*i]),
-        FieldExpr::Index(row, idx) => result.push(inputs[*row][*idx]),
-        FieldExpr::Const(v) => result.push(*v),
-        FieldExpr::Neg(inner) => { let mut tmp = Vec::new(); eval_field_raw(inner, inputs, &mut tmp); for v in tmp.iter() { result.push(-v); } },
-        FieldExpr::Sub(a, b) => {
-            let mut la = Vec::new(); eval_field_raw(a, inputs, &mut la);
-            let mut lb = Vec::new(); eval_field_raw(b, inputs, &mut lb);
-            assert_eq!(la.len(), lb.len(), "FieldExpr::Sub: operands must produce same-length rows");
-            for (x, y) in la.iter().zip(lb.iter()) { result.push(x - y); }
-        }
-    }
-}
-
-// Arity transfer functions: how ops and projections change a row's (k, v)
-// shape. A projection field's width is the sum of its parts — `Pos(r)` is a
-// whole-row reference of width = row r's arity, not one column (the miscount
-// that once made SCC's explanation unsound).
-pub(crate) fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, usize) {
-    for op in ops {
-        match op {
-            // Project's input rows are [key, val]; expand `Pos` refs to
-            // their row arities rather than counting field-exprs.
-            LinearOp::Project(p) => {
-                let rows = [k, v];
-                k = proj_arity(&p.key, &rows);
-                v = proj_arity(&p.val, &rows);
+/// Evaluate a scalar `Term` against an environment of `Value`s.
+///
+/// `env` holds the operator's input rows at the bottom (`Var(i)` indexes it
+/// absolutely); `Case`/`Fold` push their binders on top, read back with
+/// `Bound(k)` counting from the innermost. Binders are pushed and popped
+/// around sub-evaluation, so `env` is restored on return.
+pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
+    match term {
+        Term::Var(i) => env[*i].clone(),
+        Term::Bound(k) => env[env.len() - 1 - *k].clone(),
+        Term::Int(n) => Value::Int(*n),
+        Term::Tuple(fields) => Value::Tuple(build_seq(fields, env)),
+        Term::List(fields) => Value::List(build_seq(fields, env)),
+        Term::Spread(_) => panic!("Spread is only valid as a direct child of Tuple/List"),
+        Term::Proj(t, i) => {
+            // If the operand is a "place" (a Var/Bound/Proj chain), index into
+            // it by reference and clone only the selected field — avoids deep-
+            // cloning the whole environment slot just to discard most of it.
+            if let Some(place) = eval_ref(t, env) {
+                match place {
+                    Value::Tuple(xs) | Value::List(xs) => {
+                        assert!(*i < xs.len(), "Proj index {} out of bounds (len {})", i, xs.len());
+                        xs[*i].clone()
+                    }
+                    other => panic!("Proj on non-aggregate value: {:?}", other),
+                }
+            } else {
+                match eval(t, env) {
+                    Value::Tuple(mut xs) | Value::List(mut xs) => {
+                        assert!(*i < xs.len(), "Proj index {} out of bounds (len {})", i, xs.len());
+                        xs.swap_remove(*i)
+                    }
+                    other => panic!("Proj on non-aggregate value: {:?}", other),
+                }
             }
-            LinearOp::Filter(_) | LinearOp::Negate | LinearOp::EnterAt(_) => {}
-            LinearOp::LiftIter => { v += 1; }
+        }
+        Term::Inject(tag, t) => Value::Variant(eval(tag, env).as_int() as u32, Box::new(eval(t, env))),
+        Term::Case { scrutinee, arms, default } => {
+            let Value::Variant(tag, payload) = eval(scrutinee, env) else {
+                panic!("Case scrutinee is not a Variant")
+            };
+            match arms.get(tag as usize) {
+                Some(arm) => {
+                    env.push(*payload);
+                    let r = eval(arm, env);
+                    env.pop();
+                    r
+                }
+                None => match default {
+                    Some(d) => eval(d, env),
+                    None => panic!("Case: no arm for tag {} and no default", tag),
+                },
+            }
+        }
+        Term::Fold { list, init, step } => {
+            let Value::List(items) = eval(list, env) else { panic!("Fold on non-list value") };
+            let mut acc = eval(init, env);
+            for item in items {
+                // step sees elem = Bound(0), acc = Bound(1).
+                env.push(acc);
+                env.push(item);
+                acc = eval(step, env);
+                env.pop();
+                env.pop();
+            }
+            acc
+        }
+        Term::If { cond, then, els } => {
+            if eval(cond, env).truthy() { eval(then, env) } else { eval(els, env) }
+        }
+        Term::Unary(op, t) => eval_unary(*op, eval(t, env)),
+        Term::Binary(op, l, r) => {
+            // Short-circuit the logical operators.
+            match op {
+                BinOp::And => return Value::Int((eval(l, env).truthy() && eval(r, env).truthy()) as i64),
+                BinOp::Or => return Value::Int((eval(l, env).truthy() || eval(r, env).truthy()) as i64),
+                _ => {}
+            }
+            eval_binary(*op, eval(l, env), eval(r, env))
         }
     }
-    (k, v)
 }
 
-/// Width (output columns) a single `FieldExpr` expands to, given the
-/// arities of the input rows it may reference. `Pos(r)` is a whole-row
-/// reference of width `rows[r]`; index/const are single columns.
-fn field_width(f: &FieldExpr, rows: &[usize]) -> usize {
-    match f {
-        FieldExpr::Pos(r) => rows.get(*r).copied().unwrap_or(0),
-        FieldExpr::Index(_, _) | FieldExpr::Const(_) => 1,
-        FieldExpr::Neg(inner) => field_width(inner, rows),
-        FieldExpr::Sub(a, _) => field_width(a, rows),
+/// Resolve a "place" term (a `Var`/`Bound`/`Proj` chain) to a borrowed
+/// reference into `env`, without cloning. Returns `None` for terms that build
+/// a fresh value (constructors, primitives) — those must be evaluated owned.
+fn eval_ref<'a>(term: &Term, env: &'a [Value]) -> Option<&'a Value> {
+    match term {
+        Term::Var(i) => env.get(*i),
+        Term::Bound(k) => env.get(env.len().checked_sub(1 + *k)?),
+        Term::Proj(t, i) => match eval_ref(t, env)? {
+            Value::Tuple(xs) | Value::List(xs) => xs.get(*i),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
-/// Total arity of one projection side (`key`/`val`): the sum of its
-/// fields' widths.
-pub(crate) fn proj_arity(fields: &[FieldExpr], rows: &[usize]) -> usize {
-    fields.iter().map(|f| field_width(f, rows)).sum()
+/// Build a tuple/list element sequence, splicing any `Spread` children.
+fn build_seq(fields: &[Term], env: &mut Vec<Value>) -> Vec<Value> {
+    let mut out = Vec::with_capacity(fields.len());
+    for f in fields {
+        if let Term::Spread(inner) = f {
+            match eval(inner, env) {
+                Value::Tuple(xs) | Value::List(xs) => out.extend(xs),
+                other => panic!("Spread of non-aggregate value: {:?}", other),
+            }
+        } else {
+            out.push(eval(f, env));
+        }
+    }
+    out
+}
+
+fn eval_unary(op: UnOp, v: Value) -> Value {
+    match op {
+        UnOp::Neg => Value::Int(-v.as_int()),
+        UnOp::Not => Value::Int((!v.truthy()) as i64),
+        UnOp::IsTag(t) => Value::Int(matches!(&v, Value::Variant(tag, _) if *tag == t) as i64),
+        UnOp::Len => match v {
+            Value::Tuple(xs) | Value::List(xs) => Value::Int(xs.len() as i64),
+            other => panic!("Len on non-aggregate value: {:?}", other),
+        },
+    }
+}
+
+fn eval_binary(op: BinOp, l: Value, r: Value) -> Value {
+    let b = |x: bool| Value::Int(x as i64);
+    match op {
+        BinOp::Add => Value::Int(l.as_int() + r.as_int()),
+        BinOp::Sub => Value::Int(l.as_int() - r.as_int()),
+        BinOp::Mul => Value::Int(l.as_int() * r.as_int()),
+        // Comparisons are structural, using the derived `Ord`/`Eq` on `Value`.
+        BinOp::Eq => b(l == r),
+        BinOp::Ne => b(l != r),
+        BinOp::Lt => b(l < r),
+        BinOp::Le => b(l <= r),
+        BinOp::Gt => b(l > r),
+        BinOp::Ge => b(l >= r),
+        BinOp::And | BinOp::Or => unreachable!("logical ops short-circuit in eval"),
+    }
 }

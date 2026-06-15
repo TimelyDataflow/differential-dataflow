@@ -1,10 +1,13 @@
 pub mod parse;
 pub mod ir;
 pub mod lower;
-pub mod folded;
 pub mod scope_ir;
-pub mod explain;
 pub mod backend;
+// `explain` and its `folded` time-filter helper are disabled on the Value-model
+// port: they build the old `[i64]`/`FieldExpr` reverse projections. They return
+// once `RowModel` is implemented for `Value`/`Term` (the explain stage).
+// pub mod folded;
+// pub mod explain;
 
 use std::collections::BTreeSet;
 
@@ -37,6 +40,7 @@ fn walk_expr(expr: &Expr, positional: &mut usize, imports: &mut BTreeSet<String>
         Expr::Import(name) => { imports.insert(name.clone()); },
         Expr::Map(e, _) | Expr::Negate(e) | Expr::Arrange(e)
             | Expr::EnterAt(e, _) | Expr::LiftIter(e) | Expr::Filter(e, _)
+            | Expr::FlatMap(e, _)
             | Expr::Reduce(e, _) | Expr::Inspect(e, _) => walk_expr(e, positional, imports),
         Expr::Join(l, r, _) => { walk_expr(l, positional, imports); walk_expr(r, positional, imports); },
         Expr::Concat(es) => { for e in es { walk_expr(e, positional, imports); } },
@@ -57,12 +61,13 @@ pub fn hash_u64(index: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// Generate one row: arity fields, each hash-derived, magnitude < nodes.
-pub fn gen_row<R: ir::RowLike>(edge_index: u64, nodes: u64, arity: usize) -> (R, R) {
-    let mut key = R::new();
+/// Generate one row: a key `Tuple` of `arity` hash-derived `Int`s (each of
+/// magnitude < nodes) and an empty-tuple value.
+pub fn gen_row(edge_index: u64, nodes: u64, arity: usize) -> (ir::Value, ir::Value) {
+    let mut fields = Vec::with_capacity(arity);
     for col in 0..arity {
         let h = hash_u64(edge_index.wrapping_mul(31).wrapping_add(col as u64));
-        key.push((h % nodes) as i64);
+        fields.push(ir::Value::Int((h % nodes) as i64));
     }
-    (key, R::new())
+    (ir::Value::Tuple(fields), ir::Value::unit())
 }
