@@ -3,11 +3,10 @@ pub mod ir;
 pub mod lower;
 pub mod scope_ir;
 pub mod backend;
-// `explain` and its `folded` time-filter helper are disabled on the Value-model
-// port: they build the old `[i64]`/`FieldExpr` reverse projections. They return
-// once `RowModel` is implemented for `Value`/`Term` (the explain stage).
-// pub mod folded;
-// pub mod explain;
+pub mod explain;
+// `folded` (the flat `[i64]` per-coordinate time-filter algebra) is retired:
+// the Value reverse model implements `time_le`/`strip` directly over the nested
+// chain tuple, so explain no longer needs it.
 
 use std::collections::BTreeSet;
 

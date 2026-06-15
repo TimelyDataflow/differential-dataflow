@@ -135,7 +135,9 @@ impl Backend for VecBackend {
         let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
             Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| (*v).clone()).min() { output.push((min, 1)); } }),
             Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Value::unit(), 1)); }),
-            Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { output.push((Value::Int(count), 1)); } }),
+            // Count yields a one-field tuple `(count)`, keeping the convention
+            // that a value is a tuple (so `$1[0]` and the explain envelope work).
+            Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { output.push((Value::Tuple(vec![Value::Int(count)]), 1)); } }),
             // NEST: collect the key's values into a List, in value order (DD
             // hands them sorted), each repeated per its multiplicity.
             Reducer::Collect => Arc::new(|_key, vals, output| {
