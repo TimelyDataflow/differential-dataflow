@@ -615,3 +615,71 @@ mod value_contract {
         assert_eq!(rc, vec![(key(5), val(&[9, 1]))]);
     }
 }
+
+#[cfg(test)]
+mod backstop {
+    //! The *universal backstop* reverses `flatmap` — the op the live rewrite
+    //! still `panic!`s on — using only the existing `Dataflow` primitives. The
+    //! forward clone runs the op and keys each output by itself, carrying the
+    //! input (the `(output -> input)` pair table); the reverse is one join on
+    //! the output plus a `REFORM` projection. No op-supplied inverse: the `None`
+    //! endpoint, so `RESIDUAL` is the whole input (here, the list). This pins
+    //! "the gap is closable" before the real rule + wiring are built.
+
+    use super::*;
+    use crate::ir::{eval, Value};
+    use crate::parse::{Projection, Term};
+
+    type Coll = Vec<(Value, Value)>;
+    struct Mem;
+    impl Dataflow for Mem {
+        type Handle = Coll;
+        type Proj = Projection;
+        type Pred = Term;
+        fn project(&mut self, c: &Coll, p: Projection) -> Coll {
+            c.iter().map(|(k, v)| { let mut e = vec![k.clone(), v.clone()]; (eval(&p.key, &mut e), eval(&p.val, &mut e)) }).collect()
+        }
+        fn filter(&mut self, c: &Coll, p: Term) -> Coll {
+            c.iter().filter(|(k, v)| { let mut e = vec![k.clone(), v.clone()]; eval(&p, &mut e).truthy() }).cloned().collect()
+        }
+        fn join(&mut self, l: &Coll, r: &Coll, p: Projection) -> Coll {
+            let mut out = Vec::new();
+            for (lk, lv) in l { for (rk, rv) in r {
+                if lk == rk { let mut e = vec![lk.clone(), lv.clone(), rv.clone()]; out.push((eval(&p.key, &mut e), eval(&p.val, &mut e))); }
+            }}
+            out
+        }
+        fn concat(&mut self, cs: Vec<Coll>) -> Coll { cs.into_iter().flatten().collect() }
+    }
+
+    fn int(n: i64) -> Value { Value::Int(n) }
+    fn list(xs: &[i64]) -> Value { Value::List(xs.iter().map(|&n| int(n)).collect()) }
+    fn tup(xs: Vec<Value>) -> Value { Value::Tuple(xs) }
+    fn f(s: usize, i: usize) -> Term { Term::Proj(Box::new(Term::Var(s)), i) }
+    fn tterm(xs: Vec<Term>) -> Term { Term::Tuple(xs) }
+
+    fn flatmap_forward(k: &Value, lst: &Value) -> Coll {
+        let Value::List(xs) = lst else { panic!("flatmap on non-list") };
+        xs.iter().enumerate().map(|(p, e)| (k.clone(), tup(vec![int(p as i64), e.clone()]))).collect()
+    }
+
+    #[test]
+    fn backstop_reverses_flatmap() {
+        let witness: Coll = vec![
+            (int(1), list(&[10, 20, 30])),
+            (int(1), list(&[40, 50])),
+            (int(2), list(&[30])),
+        ];
+        let pairs: Coll = witness.iter().flat_map(|(k, lst)| {
+            flatmap_forward(k, lst).into_iter().map(move |(ok, ov)| {
+                let Value::Tuple(o) = &ov else { unreachable!() };
+                (tup(vec![ok.clone(), o[0].clone(), o[1].clone()]), tup(vec![k.clone(), lst.clone()]))
+            })
+        }).collect();
+        let demand: Coll = vec![(tup(vec![int(1), int(2), int(30)]), tup(vec![int(9)]))];
+        let reform = Projection { key: f(2, 0), val: tterm(vec![f(2, 1), f(1, 0)]) };
+        let mut df = Mem;
+        let got = df.join(&demand, &pairs, reform);
+        assert_eq!(got, vec![(int(1), tup(vec![list(&[10, 20, 30]), int(9)]))]);
+    }
+}
