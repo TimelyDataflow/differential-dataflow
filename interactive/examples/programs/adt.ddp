@@ -1,0 +1,22 @@
+-- Named constructors + pattern `case`. Each edge is tagged by orientation,
+-- carrying the field-sum as payload, then matched back out to a (bucket; sum)
+-- and counted per bucket. (Contrived — exercises sum intro/outro + fold.)
+
+con Fwd(1) = 0;   -- src < dst
+con Bwd(1) = 1;   -- otherwise
+
+let edges = input 0 | key($0[0] ; $0[1]);
+
+let tagged = edges
+    | map( if($0[0] < $1[0], 0, 1)
+         ; case if($0[0] < $1[0],
+                   Fwd(fold(list($0[0], $1[0]), 0, ^0 + ^1)),
+                   Bwd(fold(list($0[0], $1[0]), 0, ^0 + ^1)))
+           {
+             Fwd(s) => s,
+             Bwd(s) => s,
+           } );
+
+let buckets = tagged | count;
+
+export "result" = buckets | arrange | inspect(adt);

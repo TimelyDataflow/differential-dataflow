@@ -195,8 +195,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
 // coordinates as the depths dictate. No op needs to know about boundaries.
 
 use std::collections::BTreeMap;
-use crate::parse::{Condition, FieldExpr, Projection, Reducer};
-use crate::ir::{apply_ops_arity, proj_arity};
+use crate::parse::{Projection, Reducer, Term, BinOp};
 mod decouple;
 use decouple::{Dataflow, RowModel};
 
@@ -245,10 +244,38 @@ fn resolve(root: &Scope, path: &[usize], r: &Ref) -> Target {
     }
 }
 
-/// `(k, v)` per site, forward-propagated from source arities to a fixed
-/// point (feedback variables converge through their binds; a program with an
-/// unconstrained var would simply leave it absent, and the rewrite panics on
-/// lookup — the standalone shape pass is the place for a polite error).
+// ===== Term-arity: how a projection reshapes a flat `(k, v)` row =====
+//
+// The demand envelope is a flat value tuple `[V (v) | chain | q]`, so explain
+// needs each site's `v` to know where the chain starts. A projection side is a
+// `Term::Tuple` of fields; a bare-row `Spread($r)` field splices row r's `v`
+// fields, every other field is one value. (Explain targets flat relational
+// programs — tuples of scalar fields.)
+fn field_width(t: &Term, rows: &[usize]) -> usize {
+    match t {
+        Term::Spread(inner) => match &**inner {
+            Term::Var(r) => rows.get(*r).copied().unwrap_or(0),
+            _ => 1,
+        },
+        _ => 1,
+    }
+}
+fn proj_arity(t: &Term, rows: &[usize]) -> usize {
+    match t { Term::Tuple(fields) => fields.iter().map(|f| field_width(f, rows)).sum(), _ => 1 }
+}
+fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, usize) {
+    for op in ops {
+        match op {
+            LinearOp::Project(p) => { let rows = [k, v]; k = proj_arity(&p.key, &rows); v = proj_arity(&p.val, &rows); }
+            LinearOp::Filter(_) | LinearOp::Negate | LinearOp::EnterAt(_) => {}
+            LinearOp::LiftIter => v += 1,
+            LinearOp::FlatMap(_) => v = 2, // value becomes tuple(pos, element)
+        }
+    }
+    (k, v)
+}
+
+/// `(k, v)` per site, forward-propagated from source arities to a fixed point.
 fn site_shapes(
     p: &Program,
     source_shapes: &[(usize, usize)],
@@ -283,7 +310,6 @@ fn walk_shapes(
     shapes: &mut BTreeMap<Addr, (usize, usize)>,
 ) {
     let addr = |site: Site| Addr { path: path.to_vec(), site };
-    // Var shapes from their binds.
     for b in &s.binds {
         if !shapes.contains_key(&addr(Site::Var(b.var))) {
             if let Some(sh) = shape_of_ref(root, path, &b.value, source_shapes, shapes) {
@@ -311,6 +337,7 @@ fn walk_shapes(
                         Reducer::Distinct => (k, 0),
                         Reducer::Min => (k, v),
                         Reducer::Count => (k, 1),
+                        Reducer::Collect => (k, 1),
                     }),
                 };
                 if let Some(sh) = sh { shapes.insert(addr(Site::Op(i)), sh); }
@@ -347,7 +374,7 @@ impl Sb {
     }
     fn linear(&mut self, input: Ref, ops: Vec<LinearOp>) -> Ref { self.op(Node::Linear { input, ops }) }
     fn project(&mut self, input: Ref, p: Projection) -> Ref { self.linear(input, vec![LinearOp::Project(p)]) }
-    fn filter(&mut self, input: Ref, c: Condition) -> Ref { self.linear(input, vec![LinearOp::Filter(c)]) }
+    fn filter(&mut self, input: Ref, c: Term) -> Ref { self.linear(input, vec![LinearOp::Filter(c)]) }
     fn concat(&mut self, refs: Vec<Ref>) -> Ref {
         if refs.len() == 1 { return refs.into_iter().next().unwrap(); }
         self.op(Node::Concat(refs))
@@ -387,13 +414,16 @@ impl Sb {
     }
     /// Semijoin `left (K; V)` with `right (K; V)` by `(K)`, keep left's rows.
     fn semijoin_data(&mut self, left: Ref, right: Ref, k_arity: usize, v_arity: usize) -> Ref {
-        self.join(left, right, <Flat as RowModel>::project_kv(k_arity, v_arity))
+        self.join(left, right, <Val as RowModel>::project_kv(k_arity, v_arity))
     }
-    /// Set-level distinct on `(K; V)` rows (pack-distinct-unpack).
+    /// Set-level distinct on whole `(K ; V ++ chain ++ q)` rows. `v_arity` is
+    /// the *full* value width (V + chain + q), so `pack` moves the entire row
+    /// into the join key and `distinct_unpack` restores it — dedup on identical
+    /// demand rows, not on `(K, V)`.
     fn distinct_full(&mut self, input: Ref, k_arity: usize, v_arity: usize) -> Ref {
-        let packed = self.project(input, <Flat as RowModel>::pack(k_arity, v_arity, 0, false));
+        let packed = self.project(input, <Val as RowModel>::pack(k_arity, v_arity, 0, false));
         let dist = self.reduce(packed, Reducer::Distinct);
-        self.project(dist, <Flat as RowModel>::distinct_unpack(k_arity, v_arity))
+        self.project(dist, <Val as RowModel>::distinct_unpack(k_arity, v_arity))
     }
 }
 
@@ -409,7 +439,7 @@ struct Side {
 }
 
 fn strip_user_and_q(k_arity: usize, v_arity: usize) -> Projection {
-    <Flat as RowModel>::project_kv(k_arity, v_arity)
+    <Val as RowModel>::project_kv(k_arity, v_arity)
 }
 
 impl Side {
@@ -430,73 +460,102 @@ impl Sb {
     /// the target's host form injects (deeper target) or strips (shallower)
     /// the difference, outer-aligned by `folded`.
     fn emit_lookup_shape_preserving(&mut self, dep_y: Ref, side: &Side, output_depth: usize) -> Ref {
-        decouple::shape_preserving_lookup::<Flat, Sb>(self, &dep_y, &side.info(), output_depth)
+        decouple::shape_preserving_lookup::<Val, Sb>(self, &dep_y, &side.info(), output_depth)
     }
 
     /// Keyed lookup (Reduce-style), with Min's value-narrowing.
     fn emit_lookup_keyed(&mut self, dep_y: Ref, side: &Side, output_shape: (usize, usize), out_user_len: usize, reducer: &Reducer) -> Ref {
         let min = matches!(reducer, Reducer::Min);
-        decouple::keyed_lookup::<Flat, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, min)
+        decouple::keyed_lookup::<Val, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, min)
     }
 
     /// Lossy lookup (Linear[Project]): pure-map shortcut when invertible and
     /// same-scope, pair-table fallback otherwise.
     fn emit_lookup_lossy(&mut self, dep_y: Ref, side: &Side, output_shape: (usize, usize), out_user_len: usize, proj: &Projection) -> Ref {
-        decouple::lossy_lookup::<Flat, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, proj)
+        decouple::lossy_lookup::<Val, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, proj)
     }
 
     /// Join's backward rule: two contribs (left, right).
     fn emit_lookup_join(&mut self, dep_y: Ref, left: &Side, right: &Side, output_shape: (usize, usize), out_user_len: usize, projection: &Projection) -> (Ref, Ref) {
-        decouple::join_lookup::<Flat, Sb>(
+        decouple::join_lookup::<Val, Sb>(
             self, &dep_y, &left.info(), &right.info(), output_shape, out_user_len, projection,
         )
     }
 }
 
-/// `Index(row, lo..hi)`.
-fn fidx(row: usize, lo: usize, hi: usize) -> Vec<FieldExpr> {
-    (lo..hi).map(|c| FieldExpr::Index(row, c)).collect()
-}
-/// Conjoin comparisons; `None` for the empty conjunction.
-fn and_all(conds: Vec<Condition>) -> Option<Condition> {
-    conds.into_iter().reduce(|a, b| Condition::And(Box::new(a), Box::new(b)))
-}
-
-/// The flat `[i64]` data model: an envelope is one positional sequence
-/// `V ++ chain ++ [q]`. Every builder works in index ranges; the time-filter
-/// and strip reuse the `folded` algebra. This is the instantiation explain
-/// runs on — a nested ADT model would implement the same trait differently.
-pub(crate) struct Flat;
+/// The `Value` data model for explain: a demand row is `(K ; Tuple([V…, chain…,
+/// q]))` — a flat value tuple of `V`'s fields, then the loop-iteration chain
+/// (innermost-first), then the trailing query id, matching the host lift's
+/// `append_iter`. Every builder works in field-index ranges; the flat `[i64]`
+/// model implemented the same trait over `[i64]` column ranges.
+pub(crate) struct Val;
 
 impl Dataflow for Sb {
     type Handle = Ref;
     type Proj = Projection;
-    type Pred = Condition;
+    type Pred = Term;
     fn project(&mut self, c: &Ref, p: Projection) -> Ref { Sb::project(self, c.clone(), p) }
-    fn filter(&mut self, c: &Ref, p: Condition) -> Ref { Sb::filter(self, c.clone(), p) }
+    fn filter(&mut self, c: &Ref, p: Term) -> Ref { Sb::filter(self, c.clone(), p) }
     fn join(&mut self, l: &Ref, r: &Ref, p: Projection) -> Ref { Sb::join(self, l.clone(), r.clone(), p) }
     fn concat(&mut self, cs: Vec<Ref>) -> Ref { Sb::concat(self, cs) }
 }
 
-impl RowModel for Flat {
+// Term-building helpers for the Value reverse rules. The demand envelope is a
+// flat value tuple `[V (v fields) | chain (innermost-first) | q]`, matching the
+// host lift's `append_iter`. Each projection side is built as a `Term::Tuple`
+// of fields; `f(s, c)` selects field c of slot s, `fidx(s, lo, hi)` a range.
+fn var(s: usize) -> Term { Term::Var(s) }
+fn fld(t: Term, i: usize) -> Term { Term::Proj(Box::new(t), i) }
+fn f(s: usize, i: usize) -> Term { fld(var(s), i) }
+fn tup(xs: Vec<Term>) -> Term { Term::Tuple(xs) }
+fn fidx(s: usize, lo: usize, hi: usize) -> Vec<Term> { (lo..hi).map(|c| f(s, c)).collect() }
+fn le(a: Term, b: Term) -> Term { Term::Binary(BinOp::Le, Box::new(a), Box::new(b)) }
+fn eq(a: Term, b: Term) -> Term { Term::Binary(BinOp::Eq, Box::new(a), Box::new(b)) }
+fn gt(a: Term, b: Term) -> Term { Term::Binary(BinOp::Gt, Box::new(a), Box::new(b)) }
+fn sub(a: Term, b: Term) -> Term { Term::Binary(BinOp::Sub, Box::new(a), Box::new(b)) }
+fn and_all(conds: Vec<Term>) -> Option<Term> {
+    conds.into_iter().reduce(|a, b| Term::Binary(BinOp::And, Box::new(a), Box::new(b)))
+}
+
+/// Expand a user projection side over slots whose value-columns have the given
+/// `arities`. A bare-row `Spread($r)` field splices only row r's value columns
+/// (`arities[r]`), excluding any trailing chain; every other field passes
+/// through unchanged (an indexed `$r[c]` reads a value column directly, as the
+/// chain sits after the value).
+fn expand_value_fields(side: &Term, arities: &[usize]) -> Vec<Term> {
+    let fields = match side { Term::Tuple(fs) => fs.as_slice(), other => std::slice::from_ref(other) };
+    let mut out = Vec::new();
+    for field in fields {
+        match field {
+            Term::Spread(inner) => match &**inner {
+                Term::Var(r) => out.extend(fidx(*r, 0, arities.get(*r).copied().unwrap_or(0))),
+                _ => out.push(field.clone()),
+            },
+            other => out.push(other.clone()),
+        }
+    }
+    out
+}
+
+impl RowModel for Val {
     type Proj = Projection;
-    type Pred = Condition;
+    type Pred = Term;
 
     fn pack(k: usize, v: usize, chain_len: usize, has_q: bool) -> Projection {
         let mut key = fidx(0, 0, k); key.extend(fidx(1, 0, v));
         let tail = chain_len + has_q as usize;
-        Projection { key, val: fidx(1, v, v + tail) }
+        Projection { key: tup(key), val: tup(fidx(1, v, v + tail)) }
     }
     fn project_kv(k: usize, v: usize) -> Projection {
-        Projection { key: fidx(0, 0, k), val: fidx(1, 0, v) }
+        Projection { key: tup(fidx(0, 0, k)), val: tup(fidx(1, 0, v)) }
     }
     fn sp_reassemble(k: usize, v: usize, user_len: usize, out_depth: usize) -> Projection {
         let key = fidx(0, 0, k);
         let mut val = fidx(0, k, k + v);              // V (from packed key)
         val.extend(fidx(2, 0, user_len));             // chain_in (pair)
         val.extend(fidx(1, 0, out_depth));            // chain_out (dep)
-        val.push(FieldExpr::Index(1, out_depth));     // q
-        Projection { key, val }
+        val.push(f(1, out_depth));                    // q
+        Projection { key: tup(key), val: tup(val) }
     }
 
     fn ky_join(k: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize, min: bool) -> Projection {
@@ -504,56 +563,47 @@ impl RowModel for Flat {
         if min { val.extend(fidx(1, 0, v_out)); }     // V_out (for narrowing)
         val.extend(fidx(2, v_in, v_in + in_len));     // chain_in
         val.extend(fidx(1, v_out, v_out + out_len));  // chain_out
-        val.push(FieldExpr::Index(1, v_out + out_len)); // q
-        Projection { key: fidx(0, 0, k), val }
+        val.push(f(1, v_out + out_len));              // q
+        Projection { key: tup(fidx(0, 0, k)), val: tup(val) }
     }
-    fn ky_data_eq(v_in: usize) -> Option<Condition> {
-        and_all((0..v_in).map(|i| Condition::Eq(FieldExpr::Index(1, i), FieldExpr::Index(1, v_in + i))).collect())
+    fn ky_data_eq(v_in: usize) -> Option<Term> {
+        and_all((0..v_in).map(|i| eq(f(1, i), f(1, v_in + i))).collect())
     }
     fn ky_drop_vout(k: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize) -> Projection {
         let after_vout = v_in + v_out;
         let mut val = fidx(1, 0, v_in);
         val.extend(fidx(1, after_vout, after_vout + in_len));
         val.extend(fidx(1, after_vout + in_len, after_vout + in_len + out_len));
-        val.push(FieldExpr::Index(1, after_vout + in_len + out_len));
-        Projection { key: fidx(0, 0, k), val }
+        val.push(f(1, after_vout + in_len + out_len));
+        Projection { key: tup(fidx(0, 0, k)), val: tup(val) }
     }
 
-    fn lossy_try_invert(proj: &Projection, k_in: usize, v_in: usize, k_out: usize, v_out: usize, out_len: usize) -> Option<Projection> {
-        let known = analyze_lossy_invertibility(proj, k_in, v_in);
-        let total = (0..k_in).all(|c| known.contains_key(&(0, c)))
-            && (0..v_in).all(|c| known.contains_key(&(1, c)));
-        if !total { return None; }
-        let access = |p: usize| if p < k_out { FieldExpr::Index(0, p) } else { FieldExpr::Index(1, p - k_out) };
-        let key: Vec<FieldExpr> = (0..k_in).map(|c| access(known[&(0, c)])).collect();
-        let mut val: Vec<FieldExpr> = (0..v_in).map(|c| access(known[&(1, c)])).collect();
-        val.extend(fidx(1, v_out, v_out + out_len));  // chain_out passthrough
-        val.push(FieldExpr::Index(1, v_out + out_len)); // q
-        Some(Projection { key, val })
+    fn lossy_try_invert(_p: &Projection, _ki: usize, _vi: usize, _ko: usize, _vo: usize, _ol: usize) -> Option<Projection> {
+        None // always take the pair-table fallback; `lossy_pair` bounds Spread so it is sound.
     }
     fn lossy_pair(proj: &Projection, k_in: usize, v_in: usize, in_len: usize) -> Projection {
         let mut val = fidx(0, 0, k_in);
         val.extend(fidx(1, 0, v_in + in_len));
-        Projection { key: proj.key.clone(), val }
+        Projection { key: tup(expand_value_fields(&proj.key, &[k_in, v_in])), val: tup(val) }
     }
     fn lossy_reassemble(k_in: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize) -> Projection {
         let key = fidx(2, 0, k_in);
         let mut val = fidx(2, k_in, k_in + v_in);
         val.extend(fidx(2, k_in + v_in, k_in + v_in + in_len));
         val.extend(fidx(1, v_out, v_out + out_len));
-        val.push(FieldExpr::Index(1, v_out + out_len));
-        Projection { key, val }
+        val.push(f(1, v_out + out_len));
+        Projection { key: tup(key), val: tup(val) }
     }
 
     fn join_forward(proj: &Projection, k: usize, v_l: usize, v_r: usize, l_len: usize, r_len: usize) -> Projection {
-        let key = expand_pos_bounded(&proj.key, &[k, v_l, v_r]);
+        let key = expand_value_fields(&proj.key, &[k, v_l, v_r]);
         let mut val = fidx(0, 0, k);             // K
         val.extend(fidx(1, 0, v_l));             // V_L
         val.extend(fidx(2, 0, v_r));             // V_R
         val.extend(fidx(1, v_l, v_l + l_len));   // chain_L
         val.extend(fidx(2, v_r, v_r + r_len));   // chain_R
-        val.extend(expand_pos_bounded(&proj.val, &[k, v_l, v_r])); // V_out (pair-produced)
-        Projection { key, val }
+        val.extend(expand_value_fields(&proj.val, &[k, v_l, v_r])); // V_out (pair-produced)
+        Projection { key: tup(key), val: tup(val) }
     }
     fn join_combined(k: usize, v_l: usize, v_r: usize, v_out: usize, l_len: usize, r_len: usize, out_len: usize) -> Projection {
         let vl_s = k;
@@ -567,32 +617,27 @@ impl RowModel for Flat {
         val.extend(fidx(2, ul_s, ul_s + l_len));          // chain_L
         val.extend(fidx(2, ur_s, ur_s + r_len));          // chain_R
         val.extend(fidx(1, v_out, v_out + out_len));      // chain_out
-        val.push(FieldExpr::Index(1, v_out + out_len));   // q
+        val.push(f(1, v_out + out_len));                  // q
         val.extend(fidx(1, 0, v_out));                    // V_out_dep
         val.extend(fidx(2, vout_s, vout_s + v_out));      // V_out_pair
-        Projection { key, val }
+        Projection { key: tup(key), val: tup(val) }
     }
-    fn join_filter(v_l: usize, v_r: usize, v_out: usize, l_len: usize, r_len: usize, out_len: usize) -> Option<Condition> {
+    fn join_filter(v_l: usize, v_r: usize, v_out: usize, l_len: usize, r_len: usize, out_len: usize) -> Option<Term> {
         let ul_j = v_l + v_r;
         let ur_j = ul_j + l_len;
         let uo_j = ur_j + r_len;
         let q_j = uo_j + out_len;
         let vdep_j = q_j + 1;
         let vpair_j = vdep_j + v_out;
-        let time_cond = |off: usize, in_len: usize| -> Option<Condition> {
+        let time_cond = |off: usize, in_len: usize| -> Option<Term> {
             let n = in_len.min(out_len);
             let in_skip = in_len - n;
             let out_skip = out_len - n;
-            and_all((0..n).map(|i| Condition::Le(
-                FieldExpr::Index(1, off + in_skip + i),
-                FieldExpr::Index(1, uo_j + out_skip + i),
-            )).collect())
+            and_all((0..n).map(|i| le(f(1, off + in_skip + i), f(1, uo_j + out_skip + i))).collect())
         };
-        let value_cond = and_all((0..v_out).map(|i| Condition::Eq(
-            FieldExpr::Index(1, vdep_j + i), FieldExpr::Index(1, vpair_j + i),
-        )).collect());
+        let value_cond = and_all((0..v_out).map(|i| eq(f(1, vdep_j + i), f(1, vpair_j + i))).collect());
         [time_cond(ul_j, l_len), time_cond(ur_j, r_len), value_cond]
-            .into_iter().flatten().reduce(|a, b| Condition::And(Box::new(a), Box::new(b)))
+            .into_iter().flatten().reduce(|a, b| Term::Binary(BinOp::And, Box::new(a), Box::new(b)))
     }
     fn join_split(left: bool, k: usize, v_l: usize, v_r: usize, l_len: usize, r_len: usize, out_len: usize) -> Projection {
         let ul_j = v_l + v_r;
@@ -603,80 +648,47 @@ impl RowModel for Flat {
         let val = if left {
             let mut v = fidx(1, 0, v_l);                 // V_L
             v.extend(fidx(1, ul_j, ul_j + l_len));       // chain_L
-            v.push(FieldExpr::Index(1, q_j));            // q
+            v.push(f(1, q_j));                           // q
             v
         } else {
             let mut v = fidx(1, v_l, v_l + v_r);         // V_R
             v.extend(fidx(1, ur_j, ur_j + r_len));       // chain_R
-            v.push(FieldExpr::Index(1, q_j));            // q
+            v.push(f(1, q_j));                           // q
             v
         };
-        Projection { key, val }
+        Projection { key: tup(key), val: tup(val) }
     }
 
-    fn time_le(v: usize, in_len: usize, out_len: usize) -> Option<Condition> {
-        crate::folded::Joined { v_pre: v, in_len, out_len }.time_le()
+    fn time_le(v: usize, in_len: usize, out_len: usize) -> Option<Term> {
+        // Joined row value: [V_pre(v) | user_in(in_len) | user_out(out_len) | q],
+        // each chain innermost-first; compare outer-aligned (last min(in,out)).
+        let n = in_len.min(out_len);
+        let in_off = in_len - n;
+        let out_off = out_len - n;
+        and_all((0..n).map(|i| le(f(1, v + in_off + i), f(1, v + in_len + out_off + i))).collect())
     }
     fn strip(k: usize, v: usize, in_len: usize, out_len: usize, keep: usize) -> Projection {
-        crate::folded::Joined { v_pre: v, in_len, out_len }.strip(k, keep)
+        let key = fidx(0, 0, k);
+        let mut val = fidx(1, 0, v);                  // V_pre
+        let drop_in = in_len - keep;
+        for i in 0..keep { val.push(f(1, v + drop_in + i)); }   // outer kept user_in coords
+        val.push(f(1, v + in_len + out_len));         // q
+        Projection { key: tup(key), val: tup(val) }
     }
 
-    fn bind_filter(v: usize) -> Option<Condition> {
-        Some(Condition::Gt(FieldExpr::Index(1, v), FieldExpr::Const(0)))
+    fn bind_filter(v: usize) -> Option<Term> {
+        Some(gt(f(1, v), Term::Int(0)))
     }
     fn bind_decrement(k: usize, v: usize, user_len: usize) -> Projection {
         let mut val = fidx(1, 0, v);
-        val.push(FieldExpr::Sub(Box::new(FieldExpr::Index(1, v)), Box::new(FieldExpr::Const(1))));
+        val.push(sub(f(1, v), Term::Int(1)));         // innermost chain coord - 1
         val.extend(fidx(1, v + 1, v + user_len));
-        val.push(FieldExpr::Index(1, v + user_len));
-        Projection { key: fidx(0, 0, k), val }
+        val.push(f(1, v + user_len));                 // q
+        Projection { key: tup(fidx(0, 0, k)), val: tup(val) }
     }
     fn distinct_unpack(k: usize, v: usize) -> Projection {
-        Projection { key: fidx(0, 0, k), val: fidx(0, k, k + v) }
+        Projection { key: tup(fidx(0, 0, k)), val: tup(fidx(0, k, k + v)) }
     }
-}
-
-fn expand_pos_bounded(fields: &[FieldExpr], arities: &[usize]) -> Vec<FieldExpr> {
-    let mut out = Vec::with_capacity(fields.len());
-    for f in fields { expand_pos_one(f, arities, &mut out); }
-    out
-}
-
-fn expand_pos_one(f: &FieldExpr, arities: &[usize], out: &mut Vec<FieldExpr>) {
-    match f {
-        FieldExpr::Pos(i) => {
-            for c in 0..arities[*i] { out.push(FieldExpr::Index(*i, c)); }
-        }
-        FieldExpr::Index(_, _) | FieldExpr::Const(_) => out.push(f.clone()),
-        FieldExpr::Neg(inner) => {
-            let mut tmp = Vec::new();
-            expand_pos_one(inner, arities, &mut tmp);
-            for t in tmp { out.push(FieldExpr::Neg(Box::new(t))); }
-        }
-        FieldExpr::Sub(a, b) => {
-            let (mut ta, mut tb) = (Vec::new(), Vec::new());
-            expand_pos_one(a, arities, &mut ta);
-            expand_pos_one(b, arities, &mut tb);
-            for (x, y) in ta.into_iter().zip(tb) { out.push(FieldExpr::Sub(Box::new(x), Box::new(y))); }
-        }
-    }
-}
-
-fn analyze_lossy_invertibility(proj: &Projection, k_in: usize, v_in: usize) -> BTreeMap<(usize, usize), usize> {
-    let mut known: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-    let mut p: usize = 0;
-    for fe in proj.key.iter().chain(proj.val.iter()) {
-        match fe {
-            FieldExpr::Index(r, c) => { known.entry((*r, *c)).or_insert(p); p += 1; }
-            FieldExpr::Pos(r) => {
-                let arity = if *r == 0 { k_in } else { v_in };
-                for c in 0..arity { known.entry((*r, c)).or_insert(p + c); }
-                p += arity;
-            }
-            FieldExpr::Const(_) | FieldExpr::Neg(_) | FieldExpr::Sub(_, _) => { p += 1; }
-        }
-    }
-    known
 }
 
 /// The `(k, v)` shape of the program's first export — what a query against it
@@ -878,11 +890,11 @@ impl<'a> Reverse<'a> {
             let dv = self.demand[&var_addr].clone();
             let (kx, vx) = self.shapes[&var_addr];
             let var_user_len = path.len();
-            let filtered = match <Flat as RowModel>::bind_filter(vx) {
+            let filtered = match <Val as RowModel>::bind_filter(vx) {
                 Some(c) => ex.filter(dv, c),
                 None => dv,
             };
-            let contrib = ex.project(filtered, <Flat as RowModel>::bind_decrement(kx, vx, var_user_len));
+            let contrib = ex.project(filtered, <Val as RowModel>::bind_decrement(kx, vx, var_user_len));
             self.push(ex, path, &b.value, contrib, var_user_len);
         }
         // Items in reverse: consumers have contributed by the time we arrive.
@@ -951,6 +963,7 @@ impl<'a> Reverse<'a> {
                         self.push(ex, path, input, dep_this, out_user_len);
                     }
                     LinearOp::LiftIter => panic!("explain: LiftIter in user program"),
+                    LinearOp::FlatMap(_) => panic!("explain: FlatMap (UNNEST) reverse rule not implemented; explain targets flat relational programs"),
                 }
             }
             Node::Concat(refs) => {

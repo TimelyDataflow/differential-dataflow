@@ -11,7 +11,9 @@
 //! that pick a backend and call [`render_tree`].
 
 pub mod vec;
-pub mod col;
+// The columnar substrate is deferred on the Value-model port (it needs a
+// `Columnar`/columnar-storage story for `Value`); see `backend::vec`.
+// pub mod col;
 
 use timely::Container;
 use timely::order::Product;

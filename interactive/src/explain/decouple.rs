@@ -242,135 +242,10 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     (lc, rc)
 }
 
-#[cfg(test)]
-mod contract {
-    //! Executable contract for the reverse rules.
-    //!
-    //! Each test is a by-example spec: concrete `dep`/pair rows in the demand
-    //! envelope go in, and the asserted demand rows come out. They run the
-    //! generic rules on an in-memory `Dataflow` against the flat `RowModel`, so
-    //! the requirements are runnable and machine-checked rather than only prose.
-    //! A new `RowModel` (e.g. a nested-value model) is correct when it
-    //! reproduces these same semantics.
-
-    use super::*;
-    use crate::explain::Flat;
-    use crate::ir::{eval_condition, eval_fields};
-    use crate::parse::{Condition, FieldExpr, Projection};
-
-    type Row = Vec<i64>;
-    type Coll = Vec<(Row, Row)>;
-
-    /// In-memory dataflow: applies projections/predicates with the flat row
-    /// evaluator (`ir::eval_*`). `join` is a nested-loop equi-join on the key.
-    struct Mem;
-    impl Dataflow for Mem {
-        type Handle = Coll;
-        type Proj = Projection;
-        type Pred = Condition;
-        fn project(&mut self, c: &Coll, p: Projection) -> Coll {
-            c.iter().map(|(k, v)| {
-                let i = [k.as_slice(), v.as_slice()];
-                (eval_fields(&p.key, &i), eval_fields(&p.val, &i))
-            }).collect()
-        }
-        fn filter(&mut self, c: &Coll, p: Condition) -> Coll {
-            c.iter().filter(|(k, v)| eval_condition(&p, &[k.as_slice(), v.as_slice()])).cloned().collect()
-        }
-        fn join(&mut self, l: &Coll, r: &Coll, p: Projection) -> Coll {
-            let mut out = Vec::new();
-            for (lk, lv) in l {
-                for (rk, rv) in r {
-                    if lk == rk {
-                        let i = [lk.as_slice(), lv.as_slice(), rv.as_slice()];
-                        out.push((eval_fields(&p.key, &i), eval_fields(&p.val, &i)));
-                    }
-                }
-            }
-            out
-        }
-        fn concat(&mut self, cs: Vec<Coll>) -> Coll { cs.into_iter().flatten().collect() }
-    }
-
-    fn side(witness: Coll, shape: (usize, usize), user_len: usize) -> SideInfo<Mem> {
-        SideInfo { witness, forward: vec![], shape, user_len }
-    }
-    fn sorted(mut c: Coll) -> Coll { c.sort(); c }
-
-    // --- shape-preserving lookup (Concat/Leave) ---
-
-    #[test]
-    fn sp_depth0_keeps_only_value_matching_pair() {
-        // pair table has two same-key rows; dep demands V=7 (with q=9). Packing
-        // (K,V) into the join key means only the V=7 pair can match.
-        let pair = vec![(vec![5], vec![7]), (vec![5], vec![8])];
-        let dep = vec![(vec![5], vec![7, 9])]; // (K=5 ; V_out=7, q=9)
-        let out = shape_preserving_lookup::<Flat, _>(&mut Mem, &dep, &side(pair, (1, 1), 0), 0);
-        assert_eq!(out, vec![(vec![5], vec![7, 9])]); // (K=5 ; V=7, q=9)
-    }
-
-    #[test]
-    fn sp_depth1_time_filters_late_inputs() {
-        // chain length 1. An input at iter 2 explains an output demanded at
-        // iter 3 (2 ≤ 3, kept); one at iter 4 does not (4 ≤ 3 false, dropped).
-        let keep = vec![(vec![5], vec![7, 2])];   // (K=5 ; V=7, chain_in=2)
-        let drop = vec![(vec![5], vec![7, 4])];   // chain_in=4
-        let dep = vec![(vec![5], vec![7, 3, 9])]; // (K=5 ; V=7, chain_out=3, q=9)
-        let kept = shape_preserving_lookup::<Flat, _>(&mut Mem, &dep, &side(keep, (1, 1), 1), 1);
-        assert_eq!(kept, vec![(vec![5], vec![7, 2, 9])]); // chain_in=2 kept
-        let dropped = shape_preserving_lookup::<Flat, _>(&mut Mem, &dep, &side(drop, (1, 1), 1), 1);
-        assert!(dropped.is_empty());
-    }
-
-    // --- keyed lookup (Reduce) ---
-
-    #[test]
-    fn keyed_min_narrows_to_the_demanded_value() {
-        // Min: only the input row whose V equals the demanded (min) value is
-        // demanded; the sibling at the same key is not.
-        let pair = vec![(vec![5], vec![7]), (vec![5], vec![6])];
-        let dep = vec![(vec![5], vec![7, 9])]; // (K=5 ; V_out=7, q=9)
-        let out = keyed_lookup::<Flat, _>(&mut Mem, &dep, &side(pair, (1, 1), 0), (1, 1), 0, true);
-        assert_eq!(out, vec![(vec![5], vec![7, 9])]);
-    }
-
-    #[test]
-    fn keyed_nonmin_demands_all_same_key_inputs() {
-        // Count/Distinct: every input row at the key contributes.
-        let pair = vec![(vec![5], vec![7]), (vec![5], vec![6])];
-        let dep = vec![(vec![5], vec![1, 9])]; // V_out unrelated (a count)
-        let out = keyed_lookup::<Flat, _>(&mut Mem, &dep, &side(pair, (1, 1), 0), (1, 1), 0, false);
-        assert_eq!(sorted(out), vec![(vec![5], vec![6, 9]), (vec![5], vec![7, 9])]);
-    }
-
-    // --- lossy lookup (Linear[Project]) ---
-
-    #[test]
-    fn lossy_invertible_recovers_input_directly() {
-        // proj: K_out = V_in, V_out = K_in (a rekey). Invertible, depth 0 -> the
-        // fast path reconstructs (K_in, V_in) from the demanded output.
-        let proj = Projection { key: vec![FieldExpr::Index(1, 0)], val: vec![FieldExpr::Index(0, 0)] };
-        let pair = vec![(vec![3], vec![8])];      // (K_in=3 ; V_in=8)
-        let dep = vec![(vec![8], vec![3, 9])];    // (K_out=8 ; V_out=3, q=9)
-        let out = lossy_lookup::<Flat, _>(&mut Mem, &dep, &side(pair, (1, 1), 0), (1, 1), 0, &proj);
-        assert_eq!(out, vec![(vec![3], vec![8, 9])]); // (K_in=3 ; V_in=8, q=9)
-    }
-
-    // --- join lookup (two inputs; #758) ---
-
-    #[test]
-    fn join_demands_both_inputs_that_produced_the_output() {
-        // proj: K_out = K, V_out = V_L. A (left,right) pair at key 5 produces
-        // V_out=7; demanding that output demands both inputs.
-        let proj = Projection { key: vec![FieldExpr::Index(0, 0)], val: vec![FieldExpr::Index(1, 0)] };
-        let left = side(vec![(vec![5], vec![7])], (1, 1), 0);  // (K=5 ; V_L=7)
-        let right = side(vec![(vec![5], vec![9])], (1, 1), 0); // (K=5 ; V_R=9)
-        let dep = vec![(vec![5], vec![7, 1])]; // (K_out=5 ; V_out=7, q=1)
-        let (lc, rc) = join_lookup::<Flat, _>(&mut Mem, &dep, &left, &right, (1, 1), 0, &proj);
-        assert_eq!(lc, vec![(vec![5], vec![7, 1])]); // (K=5 ; V_L=7, q=1)
-        assert_eq!(rc, vec![(vec![5], vec![9, 1])]); // (K=5 ; V_R=9, q=1)
-    }
-}
+// The flat-row executable contract was removed with the `[i64]` model. The
+// model-agnostic proof below (`nested_contract`) runs the same generic rules
+// against a nested `Value`-shaped `RowModel` — the shape the real `explain::Val`
+// model uses — so it remains the runnable spec for the reverse rules.
 
 #[cfg(test)]
 mod nested_contract {
@@ -611,5 +486,132 @@ mod nested_contract {
         let (lc, rc) = join_lookup::<Nested, _>(&mut Mem, &dep, &left, &right, (1, 1), 0, &proj);
         assert_eq!(lc, vec![(int(5), tup(vec![int(7), chain(&[]), int(1)]))]);
         assert_eq!(rc, vec![(int(5), tup(vec![int(9), chain(&[]), int(1)]))]);
+    }
+}
+
+#[cfg(test)]
+mod value_contract {
+    //! Executable contract for the reverse rules over the real `Value` model.
+    //!
+    //! The same by-example specs as the (removed) flat `[i64]` contract, but on
+    //! `Value` rows in `Val`'s flat envelope `[V | chain | q]`, run through an
+    //! in-memory `Value` dataflow against `crate::explain::Val` — the unit-level
+    //! spec for the model the crate actually evaluates. (`nested_contract` above
+    //! proves the *rules* are model-agnostic with a different, nested layout;
+    //! this pins the model the backend runs.)
+
+    use super::*;
+    use crate::explain::Val;
+    use crate::ir::{eval, Value};
+    use crate::parse::{Projection, Term};
+
+    type Row = Value;
+    type Coll = Vec<(Row, Row)>;
+
+    /// In-memory dataflow: applies projections/predicates with the `Term`
+    /// interpreter (`ir::eval`); `join` is a nested-loop equi-join on the key.
+    struct Mem;
+    impl Dataflow for Mem {
+        type Handle = Coll;
+        type Proj = Projection;
+        type Pred = Term;
+        fn project(&mut self, c: &Coll, p: Projection) -> Coll {
+            c.iter().map(|(k, v)| {
+                let mut e = vec![k.clone(), v.clone()];
+                (eval(&p.key, &mut e), eval(&p.val, &mut e))
+            }).collect()
+        }
+        fn filter(&mut self, c: &Coll, p: Term) -> Coll {
+            c.iter().filter(|(k, v)| {
+                let mut e = vec![k.clone(), v.clone()];
+                eval(&p, &mut e).truthy()
+            }).cloned().collect()
+        }
+        fn join(&mut self, l: &Coll, r: &Coll, p: Projection) -> Coll {
+            let mut out = Vec::new();
+            for (lk, lv) in l {
+                for (rk, rv) in r {
+                    if lk == rk {
+                        let mut e = vec![lk.clone(), lv.clone(), rv.clone()];
+                        out.push((eval(&p.key, &mut e), eval(&p.val, &mut e)));
+                    }
+                }
+            }
+            out
+        }
+        fn concat(&mut self, cs: Vec<Coll>) -> Coll { cs.into_iter().flatten().collect() }
+    }
+
+    /// A 1-field key `(n)`.
+    fn key(n: i64) -> Row { Value::Tuple(vec![Value::Int(n)]) }
+    /// A value tuple from a flat field list (`[V… | chain… | q]`).
+    fn val(xs: &[i64]) -> Row { Value::Tuple(xs.iter().map(|&n| Value::Int(n)).collect()) }
+    fn side(witness: Coll, shape: (usize, usize), user_len: usize) -> SideInfo<Mem> {
+        SideInfo { witness, forward: vec![], shape, user_len }
+    }
+    fn sorted(mut c: Coll) -> Coll { c.sort(); c }
+    fn proj(k: Term, v: Term) -> Projection { Projection { key: k, val: v } }
+    /// `Spread($n)` — a bare-`$n` projection field (splices row n's value).
+    fn spread(n: usize) -> Term { Term::Tuple(vec![Term::Spread(Box::new(Term::Var(n)))]) }
+
+    #[test]
+    fn sp_depth0_keeps_only_value_matching_pair() {
+        // Packing (K,V) into the join key means only the V=7 pair can match.
+        let pair = vec![(key(5), val(&[7])), (key(5), val(&[8]))];
+        let dep = vec![(key(5), val(&[7, 9]))];           // (K=5 ; V=7, q=9)
+        let out = shape_preserving_lookup::<Val, _>(&mut Mem, &dep, &side(pair, (1, 1), 0), 0);
+        assert_eq!(out, vec![(key(5), val(&[7, 9]))]);
+    }
+
+    #[test]
+    fn sp_depth1_time_filters_late_inputs() {
+        // chain length 1: an input at iter 2 explains an output demanded at
+        // iter 3 (kept); one at iter 4 does not (dropped).
+        let keep = vec![(key(5), val(&[7, 2]))];          // chain_in = 2
+        let drop = vec![(key(5), val(&[7, 4]))];          // chain_in = 4
+        let dep = vec![(key(5), val(&[7, 3, 9]))];        // chain_out = 3, q = 9
+        let kept = shape_preserving_lookup::<Val, _>(&mut Mem, &dep, &side(keep, (1, 1), 1), 1);
+        assert_eq!(kept, vec![(key(5), val(&[7, 2, 9]))]);
+        let dropped = shape_preserving_lookup::<Val, _>(&mut Mem, &dep, &side(drop, (1, 1), 1), 1);
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn keyed_min_narrows_to_the_demanded_value() {
+        let pair = vec![(key(5), val(&[7])), (key(5), val(&[6]))];
+        let dep = vec![(key(5), val(&[7, 9]))];
+        let out = keyed_lookup::<Val, _>(&mut Mem, &dep, &side(pair, (1, 1), 0), (1, 1), 0, true);
+        assert_eq!(out, vec![(key(5), val(&[7, 9]))]);
+    }
+
+    #[test]
+    fn keyed_nonmin_demands_all_same_key_inputs() {
+        let pair = vec![(key(5), val(&[7])), (key(5), val(&[6]))];
+        let dep = vec![(key(5), val(&[1, 9]))];           // V_out unrelated (a count)
+        let out = keyed_lookup::<Val, _>(&mut Mem, &dep, &side(pair, (1, 1), 0), (1, 1), 0, false);
+        assert_eq!(sorted(out), vec![(key(5), val(&[6, 9])), (key(5), val(&[7, 9]))]);
+    }
+
+    #[test]
+    fn lossy_via_fallback_recovers_input() {
+        // proj: K_out = $1 (V_in), V_out = $0 (K_in). Val always takes the
+        // pair-table fallback (lossy_try_invert returns None).
+        let p = proj(spread(1), spread(0));
+        let pair = vec![(key(3), val(&[8]))];             // (K_in=3 ; V_in=8)
+        let dep = vec![(key(8), val(&[3, 9]))];           // (K_out=8 ; V_out=3, q=9)
+        let out = lossy_lookup::<Val, _>(&mut Mem, &dep, &side(pair, (1, 1), 0), (1, 1), 0, &p);
+        assert_eq!(out, vec![(key(3), val(&[8, 9]))]);
+    }
+
+    #[test]
+    fn join_demands_both_inputs() {
+        // proj: K_out = $0 (K), V_out = $1 (V_L).
+        let p = proj(spread(0), spread(1));
+        let left = side(vec![(key(5), val(&[7]))], (1, 1), 0);
+        let right = side(vec![(key(5), val(&[9]))], (1, 1), 0);
+        let dep = vec![(key(5), val(&[7, 1]))];           // (K_out=5 ; V_out=7, q=1)
+        let (lc, rc) = join_lookup::<Val, _>(&mut Mem, &dep, &left, &right, (1, 1), 0, &p);
+        assert_eq!(lc, vec![(key(5), val(&[7, 1]))]);
+        assert_eq!(rc, vec![(key(5), val(&[9, 1]))]);
     }
 }

@@ -11,6 +11,7 @@
 use std::collections::BTreeSet;
 
 use interactive::backend::vec::{evaluate, Row};
+use interactive::ir::Value;
 use interactive::scope_ir::Program;
 use interactive::{explain, lower, parse};
 
@@ -81,18 +82,19 @@ fn lowered(src: &str) -> Program {
 }
 
 fn gen_edges(nodes: u64, edges: u64) -> Vec<(Row, Row)> {
-    (0..edges).map(|e| interactive::gen_row::<Row>(e, nodes, 2)).collect()
+    (0..edges).map(|e| interactive::gen_row(e, nodes, 2)).collect()
 }
 
 /// A different deterministic graph per seed (offset into the same hash space).
 fn gen_edges_seeded(seed: u64, nodes: u64, edges: u64) -> Vec<(Row, Row)> {
     (0..edges)
-        .map(|e| interactive::gen_row::<Row>(seed.wrapping_mul(1_000_003).wrapping_add(e), nodes, 2))
+        .map(|e| interactive::gen_row(seed.wrapping_mul(1_000_003).wrapping_add(e), nodes, 2))
         .collect()
 }
 
+/// A row value: a `Tuple` of `Int`s.
 fn row(fields: &[i64]) -> Row {
-    fields.iter().copied().collect()
+    Value::Tuple(fields.iter().map(|&n| Value::Int(n)).collect())
 }
 
 /// Run `p` on `inputs` and return one export's rows (asserting positive
@@ -127,13 +129,16 @@ fn demand_for_queries(
     let tree = lowered(src);
     let mut ex = explain::explain(&tree, shapes);
     ex.optimize();
+    // A query row is the flat demand envelope `(K ; Tuple([V…, chain…, q]))`:
+    // V's fields, then the chain (empty — the first export is at depth 0), then
+    // the query id.
     let query_rows: Vec<(Row, Row)> = queries
         .iter()
         .enumerate()
         .map(|(q, (k, v))| {
-            let mut val = v.clone();
-            val.push(q as i64); // query id
-            (k.clone(), val)
+            let mut fields = match v { Value::Tuple(xs) => xs.clone(), other => vec![other.clone()] };
+            fields.push(Value::Int(q as i64));
+            (k.clone(), Value::Tuple(fields))
         })
         .collect();
     let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
@@ -242,7 +247,7 @@ fn tc_row_explanations_sufficient_small() {
 /// explained by demand-sets (edges and roots) that regenerate it.
 #[test]
 fn reach_row_explanations_sufficient_small() {
-    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Row::new())]];
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
     let sizes = assert_all_rows_sufficient(REACH_ROW, REACH_SHAPES, &inputs);
     assert_eq!(sizes.len(), 5, "expected 5 reached nodes at 50/55 from root 0");
 }
@@ -328,7 +333,7 @@ fn report_demand_excess() {
         ("scc 100/110", SCC_ROW, SCC_SHAPES, vec![gen_edges(100, 110)]),
         ("tc 20/22", TC_ROW, TC_SHAPES, vec![gen_edges(20, 22)]),
         ("tc 50/55", TC_ROW, TC_SHAPES, vec![gen_edges(50, 55)]),
-        ("reach 50/55", REACH_ROW, REACH_SHAPES, vec![gen_edges(50, 55), vec![(row(&[0]), Row::new())]]),
+        ("reach 50/55", REACH_ROW, REACH_SHAPES, vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]]),
     ];
     for (name, src, shapes, inputs) in cases {
         let p = optimized(src);
@@ -377,9 +382,9 @@ fn count_explanations_sufficient_small() {
 #[test]
 fn count_duplicate_inputs_sufficient() {
     let edges = vec![
-        (row(&[1, 5]), Row::new()),
-        (row(&[1, 5]), Row::new()),
-        (row(&[2, 5]), Row::new()),
+        (row(&[1, 5]), Value::unit()),
+        (row(&[1, 5]), Value::unit()),
+        (row(&[2, 5]), Value::unit()),
     ];
     let p = optimized(INDEG_ROW);
     let result = export_rows(&p, &[edges.clone()], "result");
@@ -422,7 +427,7 @@ fn fuzz_explanations_sufficient() {
         queries += assert_all_rows_sufficient(SCC_ROW, SCC_SHAPES, &[gen_edges_seeded(seed, 80, 88)]).len();
         queries += assert_all_rows_sufficient(TC_ROW, TC_SHAPES, &[gen_edges_seeded(seed, 25, 27)]).len();
         let root = (seed % 60) as i64;
-        let inputs = vec![gen_edges_seeded(seed, 60, 66), vec![(row(&[root]), Row::new())]];
+        let inputs = vec![gen_edges_seeded(seed, 60, 66), vec![(row(&[root]), Value::unit())]];
         queries += assert_all_rows_sufficient(REACH_ROW, REACH_SHAPES, &inputs).len();
     }
     assert!(queries >= 100, "fuzz swept only {} queries — instances too sparse to mean much", queries);

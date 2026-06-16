@@ -2,10 +2,14 @@
 //!
 //! Usage: `ddir_vec [flags] <program> <arity> <nodes> <edges> [batch] [rounds] [timely args]`
 //!
+//! Inputs: with `EDGES_FILE` set, rows come from that file — one row per line,
+//! whitespace-separated `i64` fields, assigned round-robin to the program's
+//! inputs (`line % n_inputs`). Otherwise rows are synthesized by `gen_row`.
+//!
 //! Flags:
-//! - `--explain`: apply the explanation rewrite after lowering; the last
-//!   input handle becomes the query input.
-//! - `--query=K:V,Q`: seed the query input with one row (requires --explain).
+//! - `--explain`: apply the explanation rewrite after lowering; the last input
+//!   becomes the query input (the demand envelope `(key ; val ++ q)`).
+//! - `--query=K:V[,q]`: seed the query input with one row (requires --explain).
 //! - `--debug-demand`: tap every demand collection with an Inspect.
 //! - `--diag`: serve timely/DD diagnostics on port 51371.
 
@@ -20,7 +24,7 @@ use differential_dataflow::input::Input;
 use interactive::parse;
 use interactive::lower;
 use interactive::scope_ir as st;
-use interactive::ir::Diff;
+use interactive::ir::{Diff, Value};
 use interactive::backend::vec::{render_tree, Row};
 
 #[derive(Clone, Default)]
@@ -44,16 +48,17 @@ fn run(
     timely_args: Vec<String>,
 ) {
     let explain = flags.explain;
-    let mut query_shape: Option<(usize, usize)> = None;
     let mut tree = lower::lower_tree(stmts);
-    // --explain: rewrite for self-explanation before optimization (the
-    // rules assume single-op Linears). Sources are the root's imports.
+    // --explain: rewrite for self-explanation before optimization (the rules
+    // assume single-op Linears). Sources are the root's positional inputs; the
+    // query arrives as one extra input appended after them.
     if explain {
         let source_shapes: Vec<(usize, usize)> = tree.root.imports.iter().map(|imp| match &imp.from {
-            interactive::scope_ir::Source::Input(_) => (arity, 0usize),
+            st::Source::Input(_) => (arity, 0usize),
             other => panic!("ddir_vec --explain: unsupported source {:?}", other),
         }).collect();
-        query_shape = Some(interactive::explain::export_shape(&tree, &source_shapes));
+        let shape = interactive::explain::export_shape(&tree, &source_shapes);
+        eprintln!("explain: first export shape (k={}, v={}); query is (key[{}] ; val[{}] ++ q)", shape.0, shape.1, shape.0, shape.1);
         let options = interactive::explain::Options { debug_inspects: flags.debug_demand };
         tree = interactive::explain::explain_with(&tree, &source_shapes, options);
     }
@@ -63,6 +68,7 @@ fn run(
     println!("{}: {} ops before optimize, {} after; driving export {:?}",
         name, ops_before, tree.op_count(), tree.root.exports[tree_export_idx].name);
     let name = name.to_string();
+    let edges_file = std::env::var("EDGES_FILE").ok();
     let total_inputs = if explain { n_inputs + 1 } else { n_inputs };
     let query_input_idx = if explain { Some(n_inputs) } else { None };
 
@@ -107,34 +113,40 @@ fn run(
 
         let timer = std::time::Instant::now();
         let timer_load = std::time::Instant::now();
-        // Real inputs are 0..n_inputs. The query input (if any) is at
-        // n_inputs and is seeded separately below.
-        for e in 0..edges {
-            if (e as usize) % peers == index {
-                let input_idx = (e as usize) % n_inputs;
-                inputs[input_idx].update(interactive::gen_row::<Row>(e, nodes, arity), 1);
+        // With `EDGES_FILE` set, rows come from the file (one row per line,
+        // whitespace-separated i64 fields), assigned round-robin to inputs.
+        // Otherwise `gen_row` synthesizes `edges` rows.
+        if let Some(path) = &edges_file {
+            let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Cannot read {}: {}", path, e));
+            for (e, line) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+                if e % peers == index {
+                    let input_idx = e % n_inputs;
+                    let fields: Vec<Value> = line.split_whitespace().map(|t| Value::Int(t.parse::<i64>().unwrap())).collect();
+                    inputs[input_idx].update((Value::Tuple(fields), Value::unit()), 1);
+                }
+            }
+        } else {
+            for e in 0..edges {
+                if (e as usize) % peers == index {
+                    let input_idx = (e as usize) % n_inputs;
+                    inputs[input_idx].update(interactive::gen_row(e, nodes, arity), 1);
+                }
             }
         }
-        // Seed the query input (worker 0 only) from --query="k:v[,q]".
+        // Seed the query input (worker 0 only) from --query="k:v[,q]". The row
+        // is the flat demand envelope `(key[k] ; val[v] ++ [q])` — at depth 0
+        // there is no chain, so the value is just V's fields then the query id.
         if let Some(q_idx) = query_input_idx {
             if index == 0 {
                 if let Some(qstr) = flags.query.clone() {
-                    let parse_row = |s: &str| -> Row {
-                        if s.is_empty() {
-                            Row::new()
-                        } else {
-                            s.split(',').map(|t| t.trim().parse::<i64>().unwrap()).collect()
-                        }
+                    let parse_fields = |s: &str| -> Vec<Value> {
+                        if s.is_empty() { vec![] } else { s.split(',').map(|t| Value::Int(t.trim().parse::<i64>().unwrap())).collect() }
                     };
                     let (k_str, vq_str) = qstr.split_once(':').unwrap_or((qstr.as_str(), ""));
-                    let q_key: Row = parse_row(k_str);
-                    let mut q_val: Row = parse_row(vq_str);
-                    if q_val.is_empty() { q_val.push(0); }
-                    if let Some((qk, qv)) = query_shape {
-                        assert!(q_key.len() == qk && q_val.len() == qv + 1,
-                            "QUERY shape mismatch: export is (k={}, v={}), so QUERY needs {} key field(s) and {} val field(s) + q; got key={:?} val_with_q={:?}",
-                            qk, qv, qk, qv, q_key, q_val);
-                    }
+                    let q_key = Value::Tuple(parse_fields(k_str));
+                    let mut vq = parse_fields(vq_str);
+                    if vq.is_empty() { vq.push(Value::Int(0)); } // a bare query id
+                    let q_val = Value::Tuple(vq);
                     eprintln!("seeding query: key={:?} val_with_q={:?}", q_key, q_val);
                     inputs[q_idx].update((q_key, q_val), 1);
                 }
@@ -155,11 +167,11 @@ fn run(
                 let add_idx = edges + cursor;
                 if (remove_idx as usize) % peers == index {
                     let input_idx = (remove_idx as usize) % n_inputs;
-                    inputs[input_idx].update(interactive::gen_row::<Row>(remove_idx, nodes, arity), -1);
+                    inputs[input_idx].update(interactive::gen_row(remove_idx, nodes, arity), -1);
                 }
                 if (add_idx as usize) % peers == index {
                     let input_idx = (add_idx as usize) % n_inputs;
-                    inputs[input_idx].update(interactive::gen_row::<Row>(add_idx, nodes, arity), 1);
+                    inputs[input_idx].update(interactive::gen_row(add_idx, nodes, arity), 1);
                 }
                 cursor += 1;
             }

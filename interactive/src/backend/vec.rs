@@ -1,8 +1,11 @@
 //! Vec-backed rendering substrate.
 //!
-//! Rows are `SmallVec<[i64; 2]>`; the differential container is a flat
-//! `Vec<((Row, Row), Time, Diff)>`. Supplies the substrate leaf operators; the
-//! scope-tree walk lives in [`crate::backend::render_tree`].
+//! Rows are `interactive::ir::Value` — an ADT (Int / Tuple / Variant / List);
+//! a collection element is a `(key, val)` pair of `Value`s. The differential
+//! container is a flat `Vec<((Row, Row), Time, Diff)>`. Scalar work in
+//! `map`/`join`/`reduce`/`filter` is the tree-walking `Term` interpreter
+//! (`ir::eval`). Supplies the substrate leaf operators; the scope-tree walk
+//! lives in [`crate::backend::render_tree`].
 
 use std::sync::Arc;
 use timely::order::Product;
@@ -17,13 +20,22 @@ use smallvec::smallvec as svec;
 use crate::backend::Backend;
 use crate::parse::{Projection, Reducer};
 use crate::scope_ir as st;
-use crate::ir::{LinearOp, Diff, Time, eval_fields, eval_field_into, eval_condition};
+use crate::ir::{LinearOp, Diff, Time, Value, eval};
 
-/// The row type: a short inline vector of field values.
-pub type Row = SmallVec<[i64; 2]>;
+/// The row type: a single `Value` (an `Int`, or a `Tuple`/`List`/`Variant`).
+pub type Row = Value;
 /// A rendered collection at the renderer's (inner, dynamic) time.
 pub type Col<'scope> = VecCollection<'scope, Time, (Row, Row), Diff>;
 type Arr<'scope> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, Time, Diff>>>;
+
+/// Append the user-iter coordinate to a value: extend a `Tuple` in place, or
+/// wrap any other value as `(value, iter)`.
+fn append_iter(val: Row, iter: i64) -> Row {
+    match val {
+        Value::Tuple(mut xs) => { xs.push(Value::Int(iter)); Value::Tuple(xs) }
+        other => Value::Tuple(vec![other, Value::Int(iter)]),
+    }
+}
 
 /// Render a Linear chain: one flat_map applying the ops in sequence. `level` is
 /// the op's scope depth — it locates the iteration coord for LiftIter and the
@@ -44,21 +56,23 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
             for ((k, v), t, d) in results {
                 match op {
                     LinearOp::Project(proj) => {
-                        let i = [k.as_slice(), v.as_slice()];
-                        next.push(((eval_fields(&proj.key, &i), eval_fields(&proj.val, &i)), t, d));
+                        let mut env = vec![k, v];
+                        let nk = eval(&proj.key, &mut env);
+                        let nv = eval(&proj.val, &mut env);
+                        next.push(((nk, nv), t, d));
                     },
                     LinearOp::Filter(cond) => {
-                        let i = [k.as_slice(), v.as_slice()];
-                        if eval_condition(cond, &i) { next.push(((k, v), t, d)); }
+                        let keep = { let mut env = vec![k.clone(), v.clone()]; eval(cond, &mut env).truthy() };
+                        if keep { next.push(((k, v), t, d)); }
                     },
                     LinearOp::Negate => {
                         next.push(((k, v), t, -d));
                     },
                     LinearOp::EnterAt(field) => {
                         let delay = {
-                            let mut r = Row::new();
-                            eval_field_into(field, &[k.as_slice(), v.as_slice()], &mut r);
-                            256 * (64 - (r.as_slice().first().copied().unwrap_or(0) as u64).leading_zeros() as u64)
+                            let mut env = vec![k.clone(), v.clone()];
+                            let raw = eval(field, &mut env).as_int() as u64;
+                            256 * (64 - raw.leading_zeros() as u64)
                         };
                         let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
                         for _ in 0..level.saturating_sub(1) { coords.push(0); }
@@ -66,9 +80,21 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
                         next.push(((k, v), Product::new(0u64, PointStamp::new(coords)), d));
                     },
                     LinearOp::LiftIter => {
-                        let mut new_v = v.clone();
-                        new_v.push(iter_at_level);
-                        next.push(((k, new_v), t, d));
+                        next.push(((k, append_iter(v, iter_at_level)), t, d));
+                    },
+                    LinearOp::FlatMap(list_term) => {
+                        let elems = {
+                            let mut env = vec![k.clone(), v.clone()];
+                            match eval(list_term, &mut env) {
+                                Value::List(xs) => xs,
+                                other => panic!("flatmap: expected a List, got {:?}", other),
+                            }
+                        };
+                        // One row per element: (key, tuple(pos, element)),
+                        // position first so `collect` restores order.
+                        for (pos, elem) in elems.into_iter().enumerate() {
+                            next.push(((k.clone(), Value::Tuple(vec![Value::Int(pos as i64), elem])), t.clone(), d));
+                        }
                     },
                 }
             }
@@ -97,14 +123,28 @@ impl Backend for VecBackend {
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, Self::Container> {
         let proj = projection.clone();
         let f: Arc<dyn Fn(&Row, &Row, &Row) -> SmallVec<[(Row, Row); 2]> + Send + Sync> =
-            Arc::new(move |key, left, right| { let i = [key.as_slice(), left.as_slice(), right.as_slice()]; svec![(eval_fields(&proj.key, &i), eval_fields(&proj.val, &i))] });
+            Arc::new(move |key, left, right| {
+                let mut env = vec![key.clone(), left.clone(), right.clone()];
+                let k = eval(&proj.key, &mut env);
+                let v = eval(&proj.val, &mut env);
+                svec![(k, v)]
+            });
         l.join_core(r, move |k, v1, v2| f(k, v1, v2))
     }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
         let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
-            Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| *v).min() { output.push((min.clone(), 1)); } }),
-            Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Row::new(), 1)); }),
-            Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); } }),
+            Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| (*v).clone()).min() { output.push((min, 1)); } }),
+            Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Value::unit(), 1)); }),
+            // Count yields a one-field tuple `(count)`, keeping the convention
+            // that a value is a tuple (so `$1[0]` and the explain envelope work).
+            Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { output.push((Value::Tuple(vec![Value::Int(count)]), 1)); } }),
+            // NEST: collect the key's values into a List, in value order (DD
+            // hands them sorted), each repeated per its multiplicity.
+            Reducer::Collect => Arc::new(|_key, vals, output| {
+                let mut items: Vec<Value> = Vec::new();
+                for (v, d) in vals { for _ in 0..(*d).max(0) { items.push((*v).clone()); } }
+                output.push((Value::List(items), 1));
+            }),
         };
         a.reduce_abelian::<_, ValBuilder<_, _, _, _>, ValSpine<_, _, _, _>, _>(
             "Reduce",
