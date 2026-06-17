@@ -481,6 +481,47 @@ impl Sb {
             self, &dep_y, &left.info(), &right.info(), output_shape, out_user_len, projection,
         )
     }
+
+    /// FlatMap's (UNNEST's) backward rule — the universal backstop instantiated
+    /// for a cardinality-changing op. FlatMap is *same-depth* (it doesn't touch
+    /// iteration time) and its list rides as one opaque value, so this needs no
+    /// envelope change: build the `(output -> input)` pair table by running the
+    /// op forward on the input side, join the demand on the output, recover the
+    /// whole input (the `None` endpoint — `RESIDUAL` is the input value).
+    ///
+    /// The one wrinkle is that a plain flatmap drops the source row and the key
+    /// isn't unique, so we **re-key the input by itself** before exploding (the
+    /// source then rides through in the join key) and re-project to the packed
+    /// output afterwards. `output_shape.1 == 2` (the `tuple(pos, elem)` value).
+    fn emit_lookup_flatmap(&mut self, dep_y: Ref, side: &Side, output_shape: (usize, usize), out_user_len: usize, list_term: &Term) -> Ref {
+        let (_, v_in) = side.shape;
+        let v_out = output_shape.1;          // 2: pos, elem
+        let d = out_user_len;                // same depth for input and output
+        // Pair table: re-key the input by the whole input row, explode (the
+        // source survives in the key), then re-key to (k, pos, elem) carrying
+        // the source as the value.
+        let src = self.concat(vec![side.witness.clone(), side.forward.clone()]);
+        let rekeyed = self.project(src, Projection { key: tup(vec![var(0), var(1)]), val: var(1) });
+        let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list_term.clone())]);
+        let pair = self.project(exploded, Projection { key: tup(vec![f(0, 0), f(1, 0), f(1, 1)]), val: var(0) });
+        // Re-key the demand by the same packed output; keep its chain ++ q.
+        let dep_keyed = self.project(dep_y, Projection { key: tup(vec![var(0), f(1, 0), f(1, 1)]), val: tup(fidx(1, v_out, v_out + d + 1)) });
+        // Join into a wide row [V_in | chain_in | chain_out | q]. Source is `$2`
+        // = (k, host_val); host_val = [V_in | chain_in]. Dep' is `$1` = [chain_out | q].
+        let mut wide = (0..v_in).map(|c| fld(f(2, 1), c)).collect::<Vec<_>>();   // V_in
+        wide.extend((0..d).map(|c| fld(f(2, 1), v_in + c)));                     // chain_in
+        wide.extend(fidx(1, 0, d));                                             // chain_out
+        wide.push(f(1, d));                                                     // q
+        let joined = self.join(dep_keyed, pair, Projection { key: f(2, 0), val: tup(wide) });
+        // Soundness: chain_in ≤ chain_out (same depth, so coordinate-aligned).
+        let cond = and_all((0..d).map(|c| le(f(1, v_in + c), f(1, v_in + d + c))).collect());
+        let filtered = match cond { Some(c) => self.filter(joined, c), None => joined };
+        // Reform the demanded input (k ; V_in ++ chain_out ++ q).
+        let mut val = fidx(1, 0, v_in);
+        val.extend(fidx(1, v_in + d, v_in + 2 * d));
+        val.push(f(1, v_in + 2 * d));
+        self.project(filtered, Projection { key: var(0), val: tup(val) })
+    }
 }
 
 /// The `Value` data model for explain: a demand row is `(K ; Tuple([V…, chain…,
@@ -963,7 +1004,12 @@ impl<'a> Reverse<'a> {
                         self.push(ex, path, input, dep_this, out_user_len);
                     }
                     LinearOp::LiftIter => panic!("explain: LiftIter in user program"),
-                    LinearOp::FlatMap(_) => panic!("explain: FlatMap (UNNEST) reverse rule not implemented; explain targets flat relational programs"),
+                    LinearOp::FlatMap(list_term) => {
+                        let target = resolve(self.orig, path, input);
+                        let side = self.side(&target);
+                        let contrib = ex.emit_lookup_flatmap(dep_this, &side, out_shape, out_user_len, list_term);
+                        self.contribs.entry(target).or_default().push(contrib);
+                    }
                 }
             }
             Node::Concat(refs) => {
