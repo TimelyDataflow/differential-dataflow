@@ -432,3 +432,19 @@ fn fuzz_explanations_sufficient() {
     }
     assert!(queries >= 100, "fuzz swept only {} queries — instances too sparse to mean much", queries);
 }
+
+/// FlatMap (UNNEST): each input edge `(a, b)` rekeys to `(a ; [a, b])` and
+/// explodes to `(a ; (0, a))` and `(a ; (1, b))`. The reverse rule must trace a
+/// demanded exploded output back to the input edge that carried it. This is the
+/// op that used to `panic!` in explain.
+const FLATMAP_ROW: &str = r#"
+    let rows = input 0 | key($0[0] ; list($0[0], $0[1]));
+    export "result" = rows | flatmap($1[0]);
+"#;
+const FLATMAP_SHAPES: &[(usize, usize)] = &[(2, 0)];
+
+#[test]
+fn flatmap_explanations_sufficient_small() {
+    let sizes = assert_all_rows_sufficient(FLATMAP_ROW, FLATMAP_SHAPES, &[gen_edges(20, 22)]);
+    assert!(!sizes.is_empty(), "expected some exploded outputs to explain");
+}
