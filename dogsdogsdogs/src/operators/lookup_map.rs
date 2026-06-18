@@ -94,8 +94,8 @@ where
                         if !frontier2.less_equal(time) {
                             logic2(prefix, &mut key1);
                             key_con.clear(); key_con.push_own(&key1);
-                            cursor.seek_key(&storage, key_con.index(1));
-                            if cursor.get_key(&storage) == Some(key_con.index(1)) {
+                            cursor.seek_key(&storage, key_con.index(0));
+                            if cursor.get_key(&storage) == Some(key_con.index(0)) {
                                 while let Some(value) = cursor.get_val(&storage) {
                                     let mut count = Tr::Diff::zero();
                                     cursor.map_times(&storage, |t, d| {
