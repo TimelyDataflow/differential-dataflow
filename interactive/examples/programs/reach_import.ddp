@@ -1,0 +1,13 @@
+-- Reachability over an edge set imported from another installed program.
+-- trace "edges": (src ; dst), published by `producer.ddp`.
+-- input 0: roots (node ;)
+
+let edges = import "edges";
+let roots = input 0 | key($0[0] ;);
+
+reach: {
+    let proposals = reach | join(edges, ($2 ;));
+    var reach = roots + proposals | distinct;
+}
+
+export "result" = reach::reach | inspect(reach);
