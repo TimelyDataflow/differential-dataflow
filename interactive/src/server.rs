@@ -549,12 +549,20 @@ impl Server {
             worker.step();
         }
 
-        // Allow every published trace to compact up to the new epoch. This is
-        // safe even while another program is importing the trace: each importer
-        // is a separate `TraceAgent` whose contribution holds the shared
+        // Allow every published trace to compact up to the previous epoch. This
+        // is safe even while another program is importing the trace: each
+        // importer is a separate `TraceAgent` whose contribution holds the shared
         // `TraceBox` compaction back to what it still needs (the meet across all
         // handles), so the trace only sheds history no live reader requires.
-        let frontier = Antichain::from_elem(self.epoch);
+        //
+        // We hold one epoch back (`epoch - 1`, not `epoch`): `peek` reconstructs
+        // its snapshot from the closed past (`t < epoch`), so the trace must
+        // still distinguish times up to `epoch - 1`. Compacting to `[epoch]`
+        // would let a batch merge advance that closed-past history forward onto
+        // `epoch`, sliding it out of peek's window and leaving peek with only the
+        // latest epoch's delta. (`saturating_sub` guards `epoch == 0`, though
+        // tick only runs at epoch >= 1.)
+        let frontier = Antichain::from_elem(self.epoch.saturating_sub(1));
         for trace in self.traces.values_mut() {
             trace.set_logical_compaction(frontier.borrow());
             trace.set_physical_compaction(frontier.borrow());
