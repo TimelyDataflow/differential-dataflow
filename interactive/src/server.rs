@@ -7,48 +7,48 @@
 //! parse → lower → render an [`crate::scope_ir::Program`] against a live
 //! registry — no machine code, no `dlopen`.
 //!
+//! # Typed commands
+//!
+//! The server executes a [`Command`] — already parsed, lowered, and validated.
+//! Programs are parsed *off the worker threads* (on the intake side) and shipped
+//! here as `scope_ir::Program`s; a malformed program is rejected before it ever
+//! reaches a worker, so bad input can't panic the computation. `Command` is
+//! serializable precisely so it can ride a timely `Sequencer` to every worker.
+//!
 //! # The two binding points
 //!
-//! The named-trace IR (`import "x"` / `export "y"`) already flows through parse
-//! → lower → `scope_ir`; every batch backend simply `panic!`s on a non-`Input`
-//! source because it has no registry. The server supplies that registry and
-//! resolves the two ends:
+//! The named-trace IR (`import "x"` / `export "y"`) flows through parse → lower
+//! → `scope_ir`; every batch backend simply `panic!`s on a non-`Input` source
+//! because it has no registry. The server resolves both ends:
 //!
-//! - **`Source::Trace(name)`** — instead of panicking, `import_core` the
-//!   registered [`ServerTrace`] into the new dataflow and feed it as a root
-//!   collection (keeping the [`ShutdownButton`] so the import can be torn down).
+//! - **`Source::Trace(name)`** — `import` the registered [`ServerTrace`] into the
+//!   new dataflow and feed it as a root collection.
 //! - **`Export(name, _)`** — arrange the exported collection and register its
 //!   trace under `name`, so a later install can import it.
 //!
 //! # Lifecycle
 //!
-//! - **install** builds a dataflow that may import published traces and
-//!   publishes its own exports.
+//! - **install** builds a dataflow over imported traces + positional inputs,
+//!   publishing its exports. The dataflow's id (`next_dataflow_index`) is kept
+//!   for teardown.
+//! - **feed** stages an input update at a chosen time (default: the current
+//!   epoch) via `update_at`, so inputs can be scheduled into the future.
 //! - **tick** advances all inputs to the next epoch, runs to quiescence, then
 //!   lets every trace compact (an importer's own handle holds the shared
-//!   `TraceBox` back to what it still needs, so compaction sheds only history
-//!   no live reader requires).
-//! - **drop** evicts a program — but only one whose published traces have *no
-//!   live importers* (a refcount gate). That keeps teardown local and avoids
-//!   the "is the frontier emptying because the source finished, or because it's
-//!   being torn down?" ambiguity: we never pull a trace out from under a live
-//!   consumer. Pressing the import [`ShutdownButton`]s and dropping the input
-//!   handles lets timely reclaim the dataflow and release its upstream holds.
-//!
-//! # Scope (still deferred)
-//!
-//! Vec substrate only; direct arrangement import (vs. the `as_collection`
-//! round-trip); and on-demand trace peeking.
+//!   `TraceBox` back to what it still needs).
+//! - **drop** evicts a program — gated on its published traces having no live
+//!   importer — and calls `worker.drop_dataflow`, which removes the operators
+//!   outright and frees their state immediately. The gate is what makes that
+//!   unilateral removal safe: nothing live still reads the dropped traces.
 
 use std::collections::HashMap;
 
 use timely::worker::Worker;
 use timely::dataflow::ProbeHandle;
-use timely::dataflow::operators::CapabilitySet;
 use timely::progress::Antichain;
 use differential_dataflow::VecCollection;
 use differential_dataflow::input::{Input, InputSession};
-use differential_dataflow::operators::arrange::{TraceAgent, ShutdownButton};
+use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -67,9 +67,28 @@ pub type ServerTrace = TraceAgent<ValSpine<Value, Value, OuterTime, Diff>>;
 /// An input handle into an installed program's positional `input N`.
 type ServerInput = InputSession<OuterTime, (Value, Value), Diff>;
 
-/// The shutdown handle for one imported trace; pressing it releases the import
-/// operator's capability so the dataflow can be reclaimed.
-type ImportToken = ShutdownButton<CapabilitySet<OuterTime>>;
+/// A unit of server work, already parsed/lowered/validated on the intake side.
+///
+/// Serializable so it can be circulated to every worker through a timely
+/// `Sequencer`; the workers execute it without any further parsing.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub enum Command {
+    /// Install `program` under `name`.
+    Install { name: String, program: st::Program },
+    /// Update positional `input` of `prog`: add `(key, val)` with `diff` at
+    /// `time` (default the current epoch when `None`).
+    Feed { prog: String, input: usize, key: Value, val: Value, time: Option<OuterTime>, diff: Diff },
+    /// Close the current epoch and run to quiescence.
+    Tick,
+    /// Drop the named program.
+    Drop { name: String },
+    /// Print the registry (worker 0).
+    List,
+    /// Print the command help (worker 0).
+    Help,
+    /// Stop the server.
+    Exit,
+}
 
 /// Everything the server holds for one installed program.
 struct Installed {
@@ -79,20 +98,22 @@ struct Installed {
     imports: Vec<String>,
     /// Names of traces this program publishes (registry entries it owns).
     exports: Vec<String>,
-    /// One shutdown button per import, pressed on drop.
-    tokens: Vec<ImportToken>,
+    /// The timely dataflow id, used to `drop_dataflow` on teardown.
+    dataflow_id: usize,
+    /// This program's own probe (every export is probed with it), so `tick`
+    /// waits per-program. A shared probe would strand a dropped program's
+    /// handle at its last frontier and wedge `tick` forever.
+    probe: ProbeHandle<OuterTime>,
 }
 
 /// A live registry of installed programs and the traces they publish.
 pub struct Server {
     /// Published export name -> shareable trace.
     traces: HashMap<String, ServerTrace>,
-    /// Installed program name -> its handles and lifecycle tokens.
+    /// Installed program name -> its handles and lifecycle bookkeeping.
     programs: HashMap<String, Installed>,
     /// Trace name -> number of installed programs importing it (the drop gate).
     importers: HashMap<String, usize>,
-    /// One probe shared by every export, so `tick` can wait for quiescence.
-    probe: ProbeHandle<OuterTime>,
     /// The current open epoch; inputs sit here until `tick` closes it.
     epoch: OuterTime,
 }
@@ -104,7 +125,6 @@ impl Server {
             traces: HashMap::new(),
             programs: HashMap::new(),
             importers: HashMap::new(),
-            probe: ProbeHandle::new(),
             epoch: 0,
         }
     }
@@ -146,16 +166,16 @@ impl Server {
             .collect();
         let export_names: Vec<String> = prog.root.exports.iter().map(|e| e.name.clone()).collect();
 
-        let probe = self.probe.clone();
+        let probe = ProbeHandle::new();
         let root = &prog.root;
         let traces = &mut self.traces;
 
-        // Build the dataflow; return the exports' traces, the new inputs, and
-        // the import shutdown tokens.
-        let (published, inputs, tokens): (Vec<(String, ServerTrace)>, Vec<(usize, ServerInput)>, Vec<ImportToken>) =
+        // The id this dataflow will get; captured so `drop` can remove it.
+        let dataflow_id = worker.next_dataflow_index();
+
+        let (published, inputs): (Vec<(String, ServerTrace)>, Vec<(usize, ServerInput)>) =
             worker.dataflow::<OuterTime, _, _>(|outer| {
                 let mut inputs: Vec<(usize, ServerInput)> = Vec::new();
-                let mut tokens: Vec<ImportToken> = Vec::new();
 
                 // One outer (host-time) collection per root import.
                 let outer_cols: Vec<VecCollection<OuterTime, (Value, Value), Diff>> =
@@ -166,11 +186,8 @@ impl Server {
                             col
                         }
                         st::Source::Trace(t) => {
-                            // The first binding point: resolve a named trace by
-                            // importing it; keep its shutdown button for teardown.
-                            let (arranged, button) = traces.get_mut(t).expect("validated above")
-                                .import_core(outer.clone(), &imp.name);
-                            tokens.push(button);
+                            // The first binding point: resolve a named trace by importing it.
+                            let arranged = traces.get_mut(t).expect("validated above").import(outer.clone());
                             arranged.as_collection(|k, v| (k.clone(), v.clone()))
                         }
                         st::Source::Parent(_) => unreachable!("root import from a parent scope"),
@@ -190,7 +207,7 @@ impl Server {
                     .map(|(e, col)| (e.name.clone(), col.probe_with(&probe).arrange_by_key().trace))
                     .collect();
 
-                (published, inputs, tokens)
+                (published, inputs)
             });
 
         for (export_name, trace) in published {
@@ -209,27 +226,35 @@ impl Server {
             inputs: by_pos,
             imports: import_names,
             exports: export_names,
-            tokens,
+            dataflow_id,
+            probe,
         });
         Ok(())
     }
 
-    /// Stage an update to positional input `input` of installed program `prog`.
-    /// Takes effect at the next [`tick`](Self::tick).
-    pub fn feed(&mut self, prog: &str, input: usize, key: Value, val: Value, diff: Diff) -> Result<(), String> {
+    /// Stage an update to positional input `input` of installed program `prog`:
+    /// add `(key, val)` with multiplicity `diff` at `time` (default: the current
+    /// epoch). The time must be at or after the current epoch — you cannot
+    /// insert into the closed past. Takes effect once `tick` advances the input
+    /// frontier past `time`.
+    pub fn feed(&mut self, prog: &str, input: usize, key: Value, val: Value, time: Option<OuterTime>, diff: Diff) -> Result<(), String> {
+        let t = time.unwrap_or(self.epoch);
+        if t < self.epoch {
+            return Err(format!("cannot feed at time {} < current epoch {}", t, self.epoch));
+        }
         let installed = self.programs.get_mut(prog).ok_or_else(|| format!("no program {:?}", prog))?;
         let handle = installed.inputs.get_mut(&input).ok_or_else(|| format!("program {:?} has no input {}", prog, input))?;
-        handle.update((key, val), diff);
+        handle.update_at((key, val), t, diff);
         Ok(())
     }
 
-    /// Drop installed program `name`, releasing its dataflow.
+    /// Drop installed program `name`, releasing its dataflow immediately.
     ///
     /// Refuses (changing nothing) if any trace the program publishes still has a
-    /// live importer — drop the consumers first. Otherwise it presses the
-    /// program's import shutdown buttons, closes its inputs, unregisters its
-    /// published traces, and steps the worker so timely can reclaim the
-    /// now-orphaned dataflow.
+    /// live importer — drop the consumers first. Otherwise it unregisters the
+    /// program's published traces, closes its inputs, and calls
+    /// `worker.drop_dataflow`, which removes the operators and frees their state
+    /// at once. Safe because the gate guarantees no live dataflow still reads it.
     pub fn drop_program(&mut self, worker: &mut Worker, name: &str) -> Result<(), String> {
         let installed = self.programs.get(name).ok_or_else(|| format!("no program {:?}", name))?;
         for ex in &installed.exports {
@@ -239,25 +264,20 @@ impl Server {
             }
         }
 
-        let mut installed = self.programs.remove(name).unwrap();
-        // Release this program's holds on the traces it imports.
-        for token in installed.tokens.iter_mut() {
-            token.press();
-        }
+        let installed = self.programs.remove(name).unwrap();
         for t in &installed.imports {
             if let Some(c) = self.importers.get_mut(t) {
                 *c = c.saturating_sub(1);
             }
         }
-        // Unregister the traces this program published.
         for ex in &installed.exports {
             self.traces.remove(ex);
         }
-        // Close the inputs; dropping `installed` releases the pressed tokens.
-        installed.inputs.clear();
+        let id = installed.dataflow_id;
+        // Drop the input handles first (closes the inputs while the operators
+        // still exist), then remove the dataflow outright.
         drop(installed);
-        // Nudge timely to reclaim the orphaned operators.
-        for _ in 0..3 { worker.step(); }
+        worker.drop_dataflow(id);
         Ok(())
     }
 
@@ -273,9 +293,10 @@ impl Server {
         }
         self.epoch = next;
 
-        let probe = self.probe.clone();
+        // Wait for every *live* program to catch up. Per-program probes mean a
+        // dropped program leaves nothing behind to wait on.
         let epoch = self.epoch;
-        while probe.less_than(&epoch) {
+        while self.programs.values().any(|p| p.probe.less_than(&epoch)) {
             worker.step();
         }
 
