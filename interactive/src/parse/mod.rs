@@ -24,7 +24,7 @@ pub mod pipe;
 /// `Case` and `Fold` push their binders on top of the stack; those are read
 /// back with `Bound(k)` (de Bruijn, `0` = innermost) so a sub-term is
 /// independent of how deep it sits.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Term {
     /// Input row at absolute environment index.
     Var(usize),
@@ -58,7 +58,7 @@ pub enum Term {
     Binary(BinOp, Box<Term>, Box<Term>),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum UnOp {
     /// Integer negation.
     Neg,
@@ -70,7 +70,7 @@ pub enum UnOp {
     Len,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum BinOp {
     Add, Sub, Mul,
     Eq, Ne, Lt, Le, Gt, Ge,
@@ -78,10 +78,10 @@ pub enum BinOp {
 }
 
 /// A `(key, val)` reshaping: each component evaluates to one `Value`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Projection { pub key: Term, pub val: Term }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Reducer {
     Min,
     Distinct,
@@ -92,7 +92,7 @@ pub enum Reducer {
     Collect,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Input(usize),
     /// Named external trace resolved at install time. Carries only the name;

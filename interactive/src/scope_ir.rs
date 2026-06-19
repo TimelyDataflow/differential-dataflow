@@ -47,7 +47,7 @@ pub type VarId = usize; // index into `Scope::vars`
 
 /// A reference, resolved *within its own scope*. Nothing here can name an item
 /// in another scope's interior — cross-scope flow goes through imports/exports.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Ref {
     /// An earlier `Op` item in this scope.
     Local(ItemId),
@@ -61,7 +61,7 @@ pub enum Ref {
 
 /// Where an import's value comes from. Inner scopes import from the parent; the
 /// root imports the program's external sources — unifying `Input`/`Import`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     /// A reference in the parent scope.
     Parent(Ref),
@@ -72,14 +72,14 @@ pub enum Source {
 }
 
 /// A value brought into a scope — `enter_region` (+ `enter_dynamic` if iterating).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Import {
     pub name: String,
     pub from: Source,
 }
 
 /// A value surrendered up — `leave_region` (+ `leave_dynamic` if iterating).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Export {
     pub name: String,
     pub value: Ref,
@@ -89,13 +89,13 @@ pub struct Export {
 /// source name (readability, cross-scope name visibility). Its shape is *not*
 /// stored — the shape pass derives every node/var shape when a consumer needs
 /// it, so storing it here would cache a derivable (and currently unknown) value.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Var {
     pub name: String,
 }
 
 /// Closes a feedback loop: `var <- value`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bind {
     pub var: VarId,
     pub value: Ref,
@@ -103,7 +103,7 @@ pub struct Bind {
 
 /// A pure operator. Sources (`Input`/`Import`) are imports; structure
 /// (`Scope`/`Variable`/`Leave`/`Bind`) is the scope itself — neither is a node.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Node {
     Linear { input: Ref, ops: Vec<LinearOp> },
     Concat(Vec<Ref>),
@@ -116,7 +116,7 @@ pub enum Node {
 /// An item in a scope's body: a pure operator or a nested child scope. The
 /// `items` vec is in dependency order, so rendering is a straight walk — no
 /// topological re-analysis. `Ref::Local`/`ChildExport` index into it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Item {
     Op(Node),
     Sub(Scope),
@@ -124,7 +124,7 @@ pub enum Item {
 
 /// A scope owns its IR. It iterates iff it has `vars` (no `kind` field yet; see
 /// the design doc). Children are owned, inline in `items`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Scope {
     /// The source name of the `{ .. }` block ("root" for the program root).
     /// Names the timely region at render time and labels the scope in viz.
@@ -138,7 +138,7 @@ pub struct Scope {
 
 /// A program is its root scope: root imports are the external sources, root
 /// exports are the program's outputs.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Program {
     pub root: Scope,
 }

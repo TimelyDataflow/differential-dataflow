@@ -496,3 +496,9 @@ impl Parser {
 }
 
 pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.parse_program() }
+
+/// Parse a single scalar [`Term`] from a string — the same expression language
+/// used in `filter`/`map`/`flatmap` arguments. A *closed* term (no `$n` input
+/// references) evaluates to a constant [`crate::ir::Value`], which is how the
+/// server accepts structured (ADT) values on input.
+pub fn parse_term(input: &str) -> Term { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.parse_term() }
