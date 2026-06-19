@@ -33,7 +33,7 @@ impl Value {
 }
 
 /// An individual step within a Linear node.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum LinearOp {
     /// Rekey/reval: project to new (key, val).
     Project(Projection),
