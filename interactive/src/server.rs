@@ -41,7 +41,9 @@
 //!   outright and frees their state immediately. The gate is what makes that
 //!   unilateral removal safe: nothing live still reads the dropped traces.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use timely::worker::Worker;
 use timely::dataflow::ProbeHandle;
@@ -82,6 +84,8 @@ pub enum Command {
     Tick,
     /// Drop the named program.
     Drop { name: String },
+    /// Snapshot a registered trace (optionally one key) and print it (worker 0).
+    Peek { trace: String, key: Option<Value> },
     /// Print the registry (worker 0).
     List,
     /// Print the command help (worker 0).
@@ -245,6 +249,66 @@ impl Server {
         let installed = self.programs.get_mut(prog).ok_or_else(|| format!("no program {:?}", prog))?;
         let handle = installed.inputs.get_mut(&input).ok_or_else(|| format!("program {:?} has no input {}", prog, input))?;
         handle.update_at((key, val), t, diff);
+        Ok(())
+    }
+
+    /// Read a snapshot of a registered trace and print it (worker 0).
+    ///
+    /// Builds a transient dataflow that imports the trace, optionally filters to
+    /// a single `key`, **exchanges every row to worker 0**, and accumulates net
+    /// multiplicities as of the current epoch — so the result is the complete,
+    /// consolidated contents even when the trace is sharded across workers, not
+    /// each worker's slice. The dataflow is dropped as soon as it has drained.
+    pub fn peek(&mut self, worker: &mut Worker, name: &str, key: Option<Value>) -> Result<(), String> {
+        use timely::dataflow::operators::{Exchange, Inspect, Probe};
+
+        if !self.traces.contains_key(name) {
+            return Err(format!("no trace {:?}", name));
+        }
+        let epoch = self.epoch;
+        // Net multiplicity per (key, val); filled on worker 0 after the exchange.
+        let acc: Rc<RefCell<HashMap<(Value, Value), Diff>>> = Rc::new(RefCell::new(HashMap::new()));
+        let acc_in = acc.clone();
+        let key_filter = key.clone();
+        let mut peek_probe = ProbeHandle::new();
+
+        let trace = self.traces.get_mut(name).unwrap();
+        let peek_id = worker.next_dataflow_index();
+        worker.dataflow::<OuterTime, _, _>(|scope| {
+            let imported = trace.import(scope.clone());
+            let coll = imported.as_collection(|k, v| (k.clone(), v.clone()));
+            let coll = match key_filter {
+                Some(k) => coll.filter(move |(kk, _)| kk == &k),
+                None => coll,
+            };
+            coll.inner
+                .exchange(|_| 0u64) // gather every shard onto worker 0
+                .inspect(move |((k, v), t, d)| {
+                    // The snapshot as of `epoch`: the closed past (t < epoch).
+                    if *t < epoch {
+                        *acc_in.borrow_mut().entry((k.clone(), v.clone())).or_insert(0) += *d;
+                    }
+                })
+                .probe_with(&mut peek_probe);
+        });
+        // Drain the transient dataflow up to the current epoch, then drop it.
+        while peek_probe.less_than(&epoch) {
+            worker.step();
+        }
+        worker.drop_dataflow(peek_id);
+
+        if worker.index() == 0 {
+            let acc = acc.borrow();
+            let mut rows: Vec<(&(Value, Value), &Diff)> = acc.iter().filter(|(_, d)| **d != 0).collect();
+            rows.sort_by(|a, b| a.0.cmp(b.0));
+            match &key {
+                Some(k) => println!("peek {:?} key={:?} ({} rows):", name, k, rows.len()),
+                None => println!("peek {:?} ({} rows):", name, rows.len()),
+            }
+            for ((k, v), d) in rows {
+                println!("  ({:?}, {:?})  x{}", k, v, d);
+            }
+        }
         Ok(())
     }
 

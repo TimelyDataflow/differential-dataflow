@@ -22,6 +22,7 @@
 //!   feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]
 //!   tick
 //!   drop <name>
+//!   peek <trace> [key]
 //!   list
 //!   help
 //!   exit | quit
@@ -124,6 +125,14 @@ fn parse_command(line: &str) -> Result<Command, String> {
         }
         "tick" => Ok(Command::Tick),
         "drop" if toks.len() == 2 => Ok(Command::Drop { name: toks[1].to_string() }),
+        "peek" if toks.len() == 2 || toks.len() == 3 => {
+            let trace = toks[1].to_string();
+            let key = match toks.get(2) {
+                Some(k) => Some(catch_unwind(AssertUnwindSafe(|| parse_value(k))).map_err(panic_msg)?),
+                None => None,
+            };
+            Ok(Command::Peek { trace, key })
+        }
         "list" => Ok(Command::List),
         "help" => Ok(Command::Help),
         "exit" | "quit" => Ok(Command::Exit),
@@ -137,6 +146,7 @@ fn print_help() {
     println!("  feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]");
     println!("  tick");
     println!("  drop <name>");
+    println!("  peek <trace> [key]");
     println!("  list");
     println!("  exit");
 }
@@ -166,6 +176,13 @@ fn dispatch(cmd: &Command, server: &mut Server, worker: &mut Worker) -> bool {
             Ok(()) => if w0 { println!("dropped {:?}", name); },
             Err(e) => if w0 { println!("error: {}", e); },
         },
+        // Collective: every worker imports its shard; `peek` gathers to worker 0
+        // (which prints) and reports an error there if the trace is unknown.
+        Command::Peek { trace, key } => {
+            if let Err(e) = server.peek(worker, trace, key.clone()) {
+                if w0 { println!("error: {}", e); }
+            }
+        }
         Command::List => if w0 { server.list(); },
         Command::Help => if w0 { print_help(); },
         Command::Exit => return false,
