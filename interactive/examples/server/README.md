@@ -68,6 +68,25 @@ share one generated source, generated once. It shows up in `list` tagged
 program once nothing imports it. This is a first step toward unifying `input`
 and `import`: a generated source is just an `import` whose data is computed.
 
+Two more primitives let you derive sources *in the language* rather than baking
+them in:
+
+- **`iota:N`** — the rows `(0) .. (N-1)`. The minimal index source.
+- **`clock`** — a single row holding the current epoch, advanced by one each
+  `tick` (an O(1) change, tagged `[clock]` in `list`).
+- **`hash(bound, keys…)`** — a scalar builtin: a deterministic draw in
+  `[0, bound)` from the key `Int`s (raw non-negative hash if `bound <= 0`).
+
+So `random:…` is really sugar — the composable form is `iota` + `hash`:
+
+```
+let edges = import "iota:12" | map( hash(8,$0[0],0) ; hash(8,$0[0],1) );
+```
+
+(A `clock`-driven *changing* generator is possible too, but a naive
+`iota × clock` spends its time reconciling the input diff; the efficient,
+log-work form is left for later.)
+
 ## The programs
 
 - **`producer.ddp`** — republishes input 0 as the named trace `edges`
@@ -80,6 +99,9 @@ and `import`: a generated source is just an `import` whose data is computed.
 - **`reach_gen.ddp`** / **`count_gen.ddp`** — two consumers of the *generated*
   source `random:nodes=8,edges=12` (reachability and an edge count); they share
   the one on-demand source.
+- **`rand_reach.ddp`** — reachability over a graph derived from `iota` via
+  `hash` (the composable form of `random:`).
+- **`clock_watch.ddp`** — `inspect`s the `clock` source ticking.
 
 ## The sessions — what to look for
 
@@ -97,3 +119,5 @@ and `import`: a generated source is just an `import` whose data is computed.
   key, and the clean error for an unknown trace.
 - **`generated.txt`** — a random graph imported by recipe, installed on demand
   and shared by two programs (`importers: 2`, one source), then GC'd on drop.
+- **`derived.txt`** — a random graph derived in-language from `iota` via `hash`.
+- **`clock.txt`** — the `clock` source advancing one step per tick (O(1) deltas).

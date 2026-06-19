@@ -122,6 +122,18 @@ pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
         Term::If { cond, then, els } => {
             if eval(cond, env).truthy() { eval(then, env) } else { eval(els, env) }
         }
+        Term::Hash(args) => {
+            // args[0] is the (exclusive) bound; the rest are mixed into a
+            // deterministic non-negative draw via splitmix64.
+            let bound = eval(&args[0], env).as_int();
+            let mut acc: u64 = 0xcbf29ce484222325;
+            for a in &args[1..] {
+                acc ^= eval(a, env).as_int() as u64;
+                acc = crate::hash_u64(acc);
+            }
+            let h = (acc >> 1) as i64; // non-negative
+            Value::Int(if bound > 0 { h % bound } else { h })
+        }
         Term::Unary(op, t) => eval_unary(*op, eval(t, env)),
         Term::Binary(op, l, r) => {
             // Short-circuit the logical operators.

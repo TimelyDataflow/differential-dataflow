@@ -1,0 +1,4 @@
+-- Watches the `clock` ticking source: a single row holding the current epoch,
+-- which advances by one each tick. `inspect` shows the O(1) change per tick
+-- (retract the old epoch, add the new one) rather than any regeneration.
+export "now" = import "clock" | inspect(clock);
