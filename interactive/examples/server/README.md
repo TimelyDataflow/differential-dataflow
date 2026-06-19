@@ -51,6 +51,23 @@ or any **closed scalar term, written without spaces** (`inject(2,tuple(3,4))`,
 `list(1,2,3)`) for ADT-shaped data such as ASTs. `feed` defaults to value=unit,
 `time`=the current epoch (use a future `time=` to schedule ahead), `diff`=+1.
 
+## Generated (named) sources
+
+A program can `import` a *recipe* name instead of another program's export:
+
+```
+let edges = import "random:nodes=8,edges=12";
+```
+
+`random:nodes=N,edges=E[,arity=A][,seed=S]` is a deterministic random graph
+(rows `(Tuple[a,b] ; ())`, like a raw input). The first import **installs the
+generator on demand** — no producer to set up first — and the source is
+*content-addressed*: two programs importing the same recipe (in any key order)
+share one generated source, generated once. It shows up in `list` tagged
+`[generated]`, is not writable (`feed` is refused), and is dropped like any
+program once nothing imports it. This is a first step toward unifying `input`
+and `import`: a generated source is just an `import` whose data is computed.
+
 ## The programs
 
 - **`producer.ddp`** — republishes input 0 as the named trace `edges`
@@ -60,6 +77,9 @@ or any **closed scalar term, written without spaces** (`inject(2,tuple(3,4))`,
   trace.
 - **`echo.ddp`** — passes input straight to output via `inspect`; used to show
   values flowing in.
+- **`reach_gen.ddp`** / **`count_gen.ddp`** — two consumers of the *generated*
+  source `random:nodes=8,edges=12` (reachability and an edge count); they share
+  the one on-demand source.
 
 ## The sessions — what to look for
 
@@ -75,3 +95,5 @@ or any **closed scalar term, written without spaces** (`inject(2,tuple(3,4))`,
   frontier passes it), and a malformed value reported without crashing the server.
 - **`peek.txt`** — reading results back out: `peek` a whole trace and a single
   key, and the clean error for an unknown trace.
+- **`generated.txt`** — a random graph imported by recipe, installed on demand
+  and shared by two programs (`importers: 2`, one source), then GC'd on drop.

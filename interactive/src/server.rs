@@ -69,6 +69,51 @@ pub type ServerTrace = TraceAgent<ValSpine<Value, Value, OuterTime, Diff>>;
 /// An input handle into an installed program's positional `input N`.
 type ServerInput = InputSession<OuterTime, (Value, Value), Diff>;
 
+/// A generated, content-addressed source: a deterministic random graph named
+/// `random:nodes=N,edges=E[,arity=A][,seed=S]`. Importing such a name installs
+/// the generator on demand, and two imports of the same recipe share one source.
+#[derive(Clone, Copy)]
+struct Recipe { nodes: u64, edges: u64, arity: usize, seed: u64 }
+
+impl Recipe {
+    /// Parse a recipe name, or `None` if it isn't one. An unknown key, a missing
+    /// `nodes`/`edges`, or a non-numeric value all reject (so the name falls back
+    /// to being an ordinary trace lookup).
+    fn parse(name: &str) -> Option<Recipe> {
+        let params = name.strip_prefix("random:")?;
+        let (mut nodes, mut edges, mut arity, mut seed) = (None, None, 2usize, 0u64);
+        for kv in params.split(',') {
+            let (k, v) = kv.split_once('=')?;
+            match k.trim() {
+                "nodes" => nodes = Some(v.trim().parse().ok()?),
+                "edges" => edges = Some(v.trim().parse().ok()?),
+                "arity" => arity = v.trim().parse().ok()?,
+                "seed" => seed = v.trim().parse().ok()?,
+                _ => return None,
+            }
+        }
+        Some(Recipe { nodes: nodes?, edges: edges?, arity, seed })
+    }
+
+    /// The canonical name: fixed key order, defaults filled — so reorderings and
+    /// omitted defaults address the same source.
+    fn canonical(&self) -> String {
+        format!("random:nodes={},edges={},arity={},seed={}", self.nodes, self.edges, self.arity, self.seed)
+    }
+
+    /// The generated row at index `e`.
+    fn row(&self, e: u64) -> (Value, Value) {
+        crate::gen_row_seeded(self.seed, e, self.nodes, self.arity)
+    }
+}
+
+/// Map a source name to its canonical form: a recipe canonicalizes, any other
+/// name is returned unchanged. Used everywhere a source is looked up, so
+/// generated sources are shared by content regardless of how they're spelled.
+fn canonical_source_name(name: &str) -> String {
+    Recipe::parse(name).map(|r| r.canonical()).unwrap_or_else(|| name.to_string())
+}
+
 /// A unit of server work, already parsed/lowered/validated on the intake side.
 ///
 /// Serializable so it can be circulated to every worker through a timely
@@ -108,6 +153,9 @@ struct Installed {
     /// waits per-program. A shared probe would strand a dropped program's
     /// handle at its last frontier and wedge `tick` forever.
     probe: ProbeHandle<OuterTime>,
+    /// True for server-synthesized generated sources (see `install_generated`):
+    /// they advance and drop like any program, but are not writable by `feed`.
+    generated: bool,
 }
 
 /// A live registry of installed programs and the traces they publish.
@@ -144,18 +192,26 @@ impl Server {
     /// trace for later imports. New inputs are advanced to the current epoch so
     /// they are consistent with the traces they may already see.
     ///
-    /// Errors (without building anything) if the name is taken, if it imports a
-    /// trace that is not yet registered, or if it would publish an export name
-    /// that already exists — install producers before consumers, and keep
-    /// published names unique so the registry's name→producer map is unambiguous.
+    /// A `Source::Trace` that names a *recipe* (e.g. `random:nodes=8,edges=12`)
+    /// is installed on demand if absent — generated sources are content-addressed,
+    /// so two importers of the same recipe share one source. Any other
+    /// unregistered import errors (install its producer first). Also errors if
+    /// the name is taken or it would republish an existing export name.
     pub fn install(&mut self, worker: &mut Worker, name: &str, prog: &st::Program) -> Result<(), String> {
         if self.programs.contains_key(name) {
             return Err(format!("a program named {:?} is already installed", name));
         }
+        // Resolve trace imports against canonical names, installing generated
+        // sources (e.g. `random:...`) on demand. A name that is neither
+        // registered nor a recipe is an error.
         for imp in &prog.root.imports {
             if let st::Source::Trace(t) = &imp.from {
-                if !self.traces.contains_key(t) {
-                    return Err(format!("program {:?} imports unknown trace {:?}; install its producer first", name, t));
+                let key = canonical_source_name(t);
+                if !self.traces.contains_key(&key) {
+                    match Recipe::parse(&key) {
+                        Some(recipe) => self.install_generated(worker, &key, recipe),
+                        None => return Err(format!("program {:?} imports unknown trace {:?}; install its producer first", name, t)),
+                    }
                 }
             }
         }
@@ -166,7 +222,7 @@ impl Server {
         }
 
         let import_names: Vec<String> = prog.root.imports.iter()
-            .filter_map(|imp| match &imp.from { st::Source::Trace(t) => Some(t.clone()), _ => None })
+            .filter_map(|imp| match &imp.from { st::Source::Trace(t) => Some(canonical_source_name(t)), _ => None })
             .collect();
         let export_names: Vec<String> = prog.root.exports.iter().map(|e| e.name.clone()).collect();
 
@@ -191,7 +247,8 @@ impl Server {
                         }
                         st::Source::Trace(t) => {
                             // The first binding point: resolve a named trace by importing it.
-                            let arranged = traces.get_mut(t).expect("validated above").import(outer.clone());
+                            let key = canonical_source_name(t);
+                            let arranged = traces.get_mut(&key).expect("validated above").import(outer.clone());
                             arranged.as_collection(|k, v| (k.clone(), v.clone()))
                         }
                         st::Source::Parent(_) => unreachable!("root import from a parent scope"),
@@ -232,8 +289,48 @@ impl Server {
             exports: export_names,
             dataflow_id,
             probe,
+            generated: false,
         });
         Ok(())
+    }
+
+    /// Install a generated source under its canonical `name`: a one-input
+    /// dataflow pre-filled with the recipe's rows at time 0 and published as a
+    /// trace. Content-addressed, so a later importer of the same recipe shares
+    /// it; not writable (see `feed`); dropped like any program once unused.
+    fn install_generated(&mut self, worker: &mut Worker, name: &str, recipe: Recipe) {
+        let probe = ProbeHandle::new();
+        let dataflow_id = worker.next_dataflow_index();
+        let (index, peers) = (worker.index(), worker.peers());
+
+        let (trace, mut input): (ServerTrace, ServerInput) =
+            worker.dataflow::<OuterTime, _, _>(|outer| {
+                let (handle, col) = outer.new_collection::<(Value, Value), Diff>();
+                let trace = col.probe_with(&probe).arrange_by_key().trace;
+                (trace, handle)
+            });
+
+        // Each worker emits its shard (e % peers == index) at time 0, so the
+        // union is the full graph exactly once.
+        for e in 0..recipe.edges {
+            if (e as usize) % peers == index {
+                input.update_at(recipe.row(e), 0, 1);
+            }
+        }
+        input.advance_to(self.epoch);
+        input.flush();
+
+        self.traces.insert(name.to_string(), trace);
+        let mut inputs = HashMap::new();
+        inputs.insert(0usize, input);
+        self.programs.insert(name.to_string(), Installed {
+            inputs,
+            imports: Vec::new(),
+            exports: vec![name.to_string()],
+            dataflow_id,
+            probe,
+            generated: true,
+        });
     }
 
     /// Stage an update to positional input `input` of installed program `prog`:
@@ -246,7 +343,11 @@ impl Server {
         if t < self.epoch {
             return Err(format!("cannot feed at time {} < current epoch {}", t, self.epoch));
         }
-        let installed = self.programs.get_mut(prog).ok_or_else(|| format!("no program {:?}", prog))?;
+        let prog = canonical_source_name(prog);
+        let installed = self.programs.get_mut(&prog).ok_or_else(|| format!("no program {:?}", prog))?;
+        if installed.generated {
+            return Err(format!("{:?} is a generated source and is not writable", prog));
+        }
         let handle = installed.inputs.get_mut(&input).ok_or_else(|| format!("program {:?} has no input {}", prog, input))?;
         handle.update_at((key, val), t, diff);
         Ok(())
@@ -262,6 +363,8 @@ impl Server {
     pub fn peek(&mut self, worker: &mut Worker, name: &str, key: Option<Value>) -> Result<(), String> {
         use timely::dataflow::operators::{Exchange, Inspect, Probe};
 
+        let canon = canonical_source_name(name);
+        let name = canon.as_str();
         if !self.traces.contains_key(name) {
             return Err(format!("no trace {:?}", name));
         }
@@ -320,6 +423,8 @@ impl Server {
     /// `worker.drop_dataflow`, which removes the operators and frees their state
     /// at once. Safe because the gate guarantees no live dataflow still reads it.
     pub fn drop_program(&mut self, worker: &mut Worker, name: &str) -> Result<(), String> {
+        let canon = canonical_source_name(name);
+        let name = canon.as_str();
         let installed = self.programs.get(name).ok_or_else(|| format!("no program {:?}", name))?;
         for ex in &installed.exports {
             let live = self.importers.get(ex).copied().unwrap_or(0);
@@ -393,7 +498,8 @@ impl Server {
             let installed = &self.programs[p];
             let mut ins: Vec<usize> = installed.inputs.keys().copied().collect();
             ins.sort();
-            println!("  {} (inputs: {:?}, imports: {:?}, exports: {:?})", p, ins, installed.imports, installed.exports);
+            let tag = if installed.generated { " [generated]" } else { "" };
+            println!("  {}{} (inputs: {:?}, imports: {:?}, exports: {:?})", p, tag, ins, installed.imports, installed.exports);
         }
     }
 }
