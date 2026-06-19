@@ -1,6 +1,6 @@
 # Reading results back out with `peek`.
-install prod examples/programs/producer.ddp
-install reach examples/programs/reach_import.ddp
+install prod examples/server/programs/producer.ddp
+install reach examples/server/programs/reach_import.ddp
 
 # graph 1 -> 2 -> 3, root 1
 feed prod 0 1,2

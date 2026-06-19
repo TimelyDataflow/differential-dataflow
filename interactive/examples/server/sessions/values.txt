@@ -1,5 +1,5 @@
 # Structured (ADT) values + time-scheduled input.
-install echo examples/programs/echo.ddp
+install echo examples/server/programs/echo.ddp
 
 # A Variant payload at the current epoch (0): a tagged tuple, the shape an AST node takes.
 # (values are one token — write terms without spaces)

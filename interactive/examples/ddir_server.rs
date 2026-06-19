@@ -1,11 +1,12 @@
 //! A live DDIR server: install interpreted dataflows into one running timely
 //! computation and let them share results by name. Multi-worker capable.
 //!
-//! Usage:
+//! Usage (see `examples/server/` for session scripts and a README):
 //!   cargo run --release --example ddir_server                      # stdin, 1 worker
 //!   cargo run --release --example ddir_server -- <script>          # script, 1 worker
 //!   cargo run --release --example ddir_server -- <script> -w4      # script, 4 workers
 //!   cargo run --release --example ddir_server -- -w4               # stdin, 4 workers
+//! e.g. cargo run --example ddir_server -- interactive/examples/server/sessions/shared_trace.txt
 //!
 //! # Where parsing happens
 //!
