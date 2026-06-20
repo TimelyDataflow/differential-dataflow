@@ -56,6 +56,10 @@ pub enum Term {
     If { cond: Box<Term>, then: Box<Term>, els: Box<Term> },
     Unary(UnOp, Box<Term>),
     Binary(BinOp, Box<Term>, Box<Term>),
+    /// `hash(bound, keys…)`: a deterministic pseudo-random `Int` in `[0, bound)`
+    /// (the raw non-negative hash if `bound <= 0`), mixed from the key `Int`s.
+    /// The building block for generators derived from `iota`/`clock`.
+    Hash(Vec<Term>),
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -153,6 +157,7 @@ pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
         "not" => { assert_eq!(args.len(), 1, "not(value)"); Term::Unary(UnOp::Not, Box::new(args.remove(0))) }
         "or" => { assert_eq!(args.len(), 2, "or(a, b)"); let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0)); Term::Binary(BinOp::Or, a, b) }
         "if" => { assert_eq!(args.len(), 3, "if(cond, then, els)"); let els = Box::new(args.remove(2)); let then = Box::new(args.remove(1)); let cond = Box::new(args.remove(0)); Term::If { cond, then, els } }
+        "hash" => { assert!(args.len() >= 2, "hash(bound, key, ...)"); Term::Hash(std::mem::take(args)) }
         other => panic!("Unknown scalar builtin: {}", other),
     }
 }

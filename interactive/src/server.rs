@@ -69,6 +69,82 @@ pub type ServerTrace = TraceAgent<ValSpine<Value, Value, OuterTime, Diff>>;
 /// An input handle into an installed program's positional `input N`.
 type ServerInput = InputSession<OuterTime, (Value, Value), Diff>;
 
+/// A generated, content-addressed source. Importing such a name installs the
+/// generator on demand, and two imports of the same recipe share one source.
+#[derive(Clone, Copy)]
+enum Recipe {
+    /// `random:nodes=N,edges=E[,arity=A][,seed=S]` — a deterministic random
+    /// graph: `E` rows of `A` fields each, every field in `0..N`.
+    Random { nodes: u64, edges: u64, arity: usize, seed: u64 },
+    /// `iota:N` — the rows `(0) .. (N-1)`, each a one-field `Tuple`. The minimal
+    /// index source from which richer generators are derived in-language (with
+    /// `hash`).
+    Iota { n: u64 },
+}
+
+impl Recipe {
+    /// Parse a recipe name, or `None` if it isn't one (then it's an ordinary
+    /// trace lookup). Unknown keys, missing required keys, or non-numbers reject.
+    fn parse(name: &str) -> Option<Recipe> {
+        if let Some(params) = name.strip_prefix("random:") {
+            let (mut nodes, mut edges, mut arity, mut seed) = (None, None, 2usize, 0u64);
+            for kv in params.split(',') {
+                let (k, v) = kv.split_once('=')?;
+                match k.trim() {
+                    "nodes" => nodes = Some(v.trim().parse().ok()?),
+                    "edges" => edges = Some(v.trim().parse().ok()?),
+                    "arity" => arity = v.trim().parse().ok()?,
+                    "seed" => seed = v.trim().parse().ok()?,
+                    _ => return None,
+                }
+            }
+            Some(Recipe::Random { nodes: nodes?, edges: edges?, arity, seed })
+        } else if let Some(n) = name.strip_prefix("iota:") {
+            Some(Recipe::Iota { n: n.trim().parse().ok()? })
+        } else {
+            None
+        }
+    }
+
+    /// The canonical name: fixed key order, defaults filled — so reorderings and
+    /// omitted defaults address the same source.
+    fn canonical(&self) -> String {
+        match self {
+            Recipe::Random { nodes, edges, arity, seed } =>
+                format!("random:nodes={},edges={},arity={},seed={}", nodes, edges, arity, seed),
+            Recipe::Iota { n } => format!("iota:{}", n),
+        }
+    }
+
+    /// The number of rows the source contains.
+    fn rows_len(&self) -> u64 {
+        match self { Recipe::Random { edges, .. } => *edges, Recipe::Iota { n } => *n }
+    }
+
+    /// The generated row at index `e`.
+    fn row(&self, e: u64) -> (Value, Value) {
+        match self {
+            Recipe::Random { nodes, arity, seed, .. } => crate::gen_row_seeded(*seed, e, *nodes, *arity),
+            Recipe::Iota { .. } => (Value::Tuple(vec![Value::Int(e as i64)]), Value::unit()),
+        }
+    }
+}
+
+/// Where an installed entry came from. Only `Program` is writable by `feed`;
+/// `Clock` additionally has its single row advanced each `tick`.
+#[derive(Clone, Copy, PartialEq)]
+enum Origin { Program, Generated, Clock }
+
+/// The single `clock` row for epoch `t`: `(Tuple[t] ; ())`.
+fn clock_row(t: OuterTime) -> Value { Value::Tuple(vec![Value::Int(t as i64)]) }
+
+/// Map a source name to its canonical form: a recipe canonicalizes, any other
+/// name is returned unchanged. Used everywhere a source is looked up, so
+/// generated sources are shared by content regardless of how they're spelled.
+fn canonical_source_name(name: &str) -> String {
+    Recipe::parse(name).map(|r| r.canonical()).unwrap_or_else(|| name.to_string())
+}
+
 /// A unit of server work, already parsed/lowered/validated on the intake side.
 ///
 /// Serializable so it can be circulated to every worker through a timely
@@ -108,6 +184,10 @@ struct Installed {
     /// waits per-program. A shared probe would strand a dropped program's
     /// handle at its last frontier and wedge `tick` forever.
     probe: ProbeHandle<OuterTime>,
+    /// Whether this is a user program, a generated source, or the clock — see
+    /// [`Origin`]. Generated/clock entries advance and drop like any program but
+    /// are not writable by `feed`.
+    origin: Origin,
 }
 
 /// A live registry of installed programs and the traces they publish.
@@ -144,18 +224,29 @@ impl Server {
     /// trace for later imports. New inputs are advanced to the current epoch so
     /// they are consistent with the traces they may already see.
     ///
-    /// Errors (without building anything) if the name is taken, if it imports a
-    /// trace that is not yet registered, or if it would publish an export name
-    /// that already exists — install producers before consumers, and keep
-    /// published names unique so the registry's name→producer map is unambiguous.
+    /// A `Source::Trace` that names a *recipe* (e.g. `random:nodes=8,edges=12`)
+    /// is installed on demand if absent — generated sources are content-addressed,
+    /// so two importers of the same recipe share one source. Any other
+    /// unregistered import errors (install its producer first). Also errors if
+    /// the name is taken or it would republish an existing export name.
     pub fn install(&mut self, worker: &mut Worker, name: &str, prog: &st::Program) -> Result<(), String> {
         if self.programs.contains_key(name) {
             return Err(format!("a program named {:?} is already installed", name));
         }
+        // Resolve trace imports against canonical names, installing generated
+        // sources (e.g. `random:...`) on demand. A name that is neither
+        // registered nor a recipe is an error.
         for imp in &prog.root.imports {
             if let st::Source::Trace(t) = &imp.from {
-                if !self.traces.contains_key(t) {
-                    return Err(format!("program {:?} imports unknown trace {:?}; install its producer first", name, t));
+                let key = canonical_source_name(t);
+                if !self.traces.contains_key(&key) {
+                    if key == "clock" {
+                        self.install_clock(worker);
+                    } else if let Some(recipe) = Recipe::parse(&key) {
+                        self.install_generated(worker, &key, recipe);
+                    } else {
+                        return Err(format!("program {:?} imports unknown trace {:?}; install its producer first", name, t));
+                    }
                 }
             }
         }
@@ -166,7 +257,7 @@ impl Server {
         }
 
         let import_names: Vec<String> = prog.root.imports.iter()
-            .filter_map(|imp| match &imp.from { st::Source::Trace(t) => Some(t.clone()), _ => None })
+            .filter_map(|imp| match &imp.from { st::Source::Trace(t) => Some(canonical_source_name(t)), _ => None })
             .collect();
         let export_names: Vec<String> = prog.root.exports.iter().map(|e| e.name.clone()).collect();
 
@@ -191,7 +282,8 @@ impl Server {
                         }
                         st::Source::Trace(t) => {
                             // The first binding point: resolve a named trace by importing it.
-                            let arranged = traces.get_mut(t).expect("validated above").import(outer.clone());
+                            let key = canonical_source_name(t);
+                            let arranged = traces.get_mut(&key).expect("validated above").import(outer.clone());
                             arranged.as_collection(|k, v| (k.clone(), v.clone()))
                         }
                         st::Source::Parent(_) => unreachable!("root import from a parent scope"),
@@ -232,8 +324,82 @@ impl Server {
             exports: export_names,
             dataflow_id,
             probe,
+            origin: Origin::Program,
         });
         Ok(())
+    }
+
+    /// Install a generated source under its canonical `name`: a one-input
+    /// dataflow pre-filled with the recipe's rows at time 0 and published as a
+    /// trace. Content-addressed, so a later importer of the same recipe shares
+    /// it; not writable (see `feed`); dropped like any program once unused.
+    fn install_generated(&mut self, worker: &mut Worker, name: &str, recipe: Recipe) {
+        let probe = ProbeHandle::new();
+        let dataflow_id = worker.next_dataflow_index();
+        let (index, peers) = (worker.index(), worker.peers());
+
+        let (trace, mut input): (ServerTrace, ServerInput) =
+            worker.dataflow::<OuterTime, _, _>(|outer| {
+                let (handle, col) = outer.new_collection::<(Value, Value), Diff>();
+                let trace = col.probe_with(&probe).arrange_by_key().trace;
+                (trace, handle)
+            });
+
+        // Each worker emits its shard (e % peers == index) at time 0, so the
+        // union is the full source exactly once.
+        for e in 0..recipe.rows_len() {
+            if (e as usize) % peers == index {
+                input.update_at(recipe.row(e), 0, 1);
+            }
+        }
+        input.advance_to(self.epoch);
+        input.flush();
+
+        self.traces.insert(name.to_string(), trace);
+        let mut inputs = HashMap::new();
+        inputs.insert(0usize, input);
+        self.programs.insert(name.to_string(), Installed {
+            inputs,
+            imports: Vec::new(),
+            exports: vec![name.to_string()],
+            dataflow_id,
+            probe,
+            origin: Origin::Generated,
+        });
+    }
+
+    /// Install the `clock` source: a single row holding the current epoch, which
+    /// advances by one each `tick` (an O(1) change, not an O(n) regeneration).
+    /// Produced on worker 0 only; `tick` advances it (see [`Server::tick`]).
+    fn install_clock(&mut self, worker: &mut Worker) {
+        let probe = ProbeHandle::new();
+        let dataflow_id = worker.next_dataflow_index();
+        let w0 = worker.index() == 0;
+
+        let (trace, mut input): (ServerTrace, ServerInput) =
+            worker.dataflow::<OuterTime, _, _>(|outer| {
+                let (handle, col) = outer.new_collection::<(Value, Value), Diff>();
+                let trace = col.probe_with(&probe).arrange_by_key().trace;
+                (trace, handle)
+            });
+
+        if w0 {
+            input.update_at((clock_row(self.epoch), Value::unit()), self.epoch, 1);
+        }
+        input.advance_to(self.epoch);
+        input.flush();
+
+        self.traces.insert("clock".to_string(), trace);
+        let mut inputs = HashMap::new();
+        inputs.insert(0usize, input);
+        self.programs.insert("clock".to_string(), Installed {
+            inputs,
+            imports: Vec::new(),
+            exports: vec!["clock".to_string()],
+            dataflow_id,
+            probe,
+            origin: Origin::Clock,
+        });
     }
 
     /// Stage an update to positional input `input` of installed program `prog`:
@@ -246,7 +412,12 @@ impl Server {
         if t < self.epoch {
             return Err(format!("cannot feed at time {} < current epoch {}", t, self.epoch));
         }
-        let installed = self.programs.get_mut(prog).ok_or_else(|| format!("no program {:?}", prog))?;
+        let prog = canonical_source_name(prog);
+        let installed = self.programs.get_mut(&prog).ok_or_else(|| format!("no program {:?}", prog))?;
+        if installed.origin != Origin::Program {
+            let kind = if installed.origin == Origin::Clock { "clock" } else { "generated" };
+            return Err(format!("{:?} is a {} source and is not writable", prog, kind));
+        }
         let handle = installed.inputs.get_mut(&input).ok_or_else(|| format!("program {:?} has no input {}", prog, input))?;
         handle.update_at((key, val), t, diff);
         Ok(())
@@ -262,6 +433,8 @@ impl Server {
     pub fn peek(&mut self, worker: &mut Worker, name: &str, key: Option<Value>) -> Result<(), String> {
         use timely::dataflow::operators::{Exchange, Inspect, Probe};
 
+        let canon = canonical_source_name(name);
+        let name = canon.as_str();
         if !self.traces.contains_key(name) {
             return Err(format!("no trace {:?}", name));
         }
@@ -320,6 +493,8 @@ impl Server {
     /// `worker.drop_dataflow`, which removes the operators and frees their state
     /// at once. Safe because the gate guarantees no live dataflow still reads it.
     pub fn drop_program(&mut self, worker: &mut Worker, name: &str) -> Result<(), String> {
+        let canon = canonical_source_name(name);
+        let name = canon.as_str();
         let installed = self.programs.get(name).ok_or_else(|| format!("no program {:?}", name))?;
         for ex in &installed.exports {
             let live = self.importers.get(ex).copied().unwrap_or(0);
@@ -348,8 +523,18 @@ impl Server {
     /// Close the current epoch: advance every input to the next epoch, step the
     /// worker until all exports have caught up, then let every trace compact.
     pub fn tick(&mut self, worker: &mut Worker) {
-        let next = self.epoch + 1;
+        let cur = self.epoch;
+        let next = cur + 1;
+        let w0 = worker.index() == 0;
         for installed in self.programs.values_mut() {
+            // The clock's single row advances by one each tick (worker 0 owns
+            // it): retract the current epoch, add the next — an O(1) change.
+            if w0 && installed.origin == Origin::Clock {
+                if let Some(h) = installed.inputs.get_mut(&0) {
+                    h.update_at((clock_row(cur), Value::unit()), next, -1);
+                    h.update_at((clock_row(next), Value::unit()), next, 1);
+                }
+            }
             for handle in installed.inputs.values_mut() {
                 handle.advance_to(next);
                 handle.flush();
@@ -364,12 +549,20 @@ impl Server {
             worker.step();
         }
 
-        // Allow every published trace to compact up to the new epoch. This is
-        // safe even while another program is importing the trace: each importer
-        // is a separate `TraceAgent` whose contribution holds the shared
+        // Allow every published trace to compact up to the previous epoch. This
+        // is safe even while another program is importing the trace: each
+        // importer is a separate `TraceAgent` whose contribution holds the shared
         // `TraceBox` compaction back to what it still needs (the meet across all
         // handles), so the trace only sheds history no live reader requires.
-        let frontier = Antichain::from_elem(self.epoch);
+        //
+        // We hold one epoch back (`epoch - 1`, not `epoch`): `peek` reconstructs
+        // its snapshot from the closed past (`t < epoch`), so the trace must
+        // still distinguish times up to `epoch - 1`. Compacting to `[epoch]`
+        // would let a batch merge advance that closed-past history forward onto
+        // `epoch`, sliding it out of peek's window and leaving peek with only the
+        // latest epoch's delta. (`saturating_sub` guards `epoch == 0`, though
+        // tick only runs at epoch >= 1.)
+        let frontier = Antichain::from_elem(self.epoch.saturating_sub(1));
         for trace in self.traces.values_mut() {
             trace.set_logical_compaction(frontier.borrow());
             trace.set_physical_compaction(frontier.borrow());
@@ -393,7 +586,12 @@ impl Server {
             let installed = &self.programs[p];
             let mut ins: Vec<usize> = installed.inputs.keys().copied().collect();
             ins.sort();
-            println!("  {} (inputs: {:?}, imports: {:?}, exports: {:?})", p, ins, installed.imports, installed.exports);
+            let tag = match installed.origin {
+                Origin::Program => "",
+                Origin::Generated => " [generated]",
+                Origin::Clock => " [clock]",
+            };
+            println!("  {}{} (inputs: {:?}, imports: {:?}, exports: {:?})", p, tag, ins, installed.imports, installed.exports);
         }
     }
 }

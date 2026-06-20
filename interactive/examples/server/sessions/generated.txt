@@ -1,0 +1,25 @@
+# Generated / named sources: a random graph imported by recipe, installed on
+# demand and shared by content address.
+
+# Importing "random:nodes=8,edges=12" auto-installs the generator — no producer
+# to set up first.
+install reach examples/server/programs/reach_gen.ddp
+# A second program imports the SAME recipe; it shares the one source.
+install counter examples/server/programs/count_gen.ddp
+feed reach 0 0
+tick
+
+# One generated source, two importers — note the [generated] tag and importers: 2.
+list
+# Its contents, and the two results computed over it.
+peek random:nodes=8,edges=12
+peek result
+peek edge_count
+
+# Dropping both consumers releases the source (importers -> 0); then it drops.
+drop reach
+drop counter
+list
+drop random:nodes=8,edges=12
+list
+exit
