@@ -102,6 +102,11 @@ log-work form is left for later.)
 - **`rand_reach.ddp`** — reachability over a graph derived from `iota` via
   `hash` (the composable form of `random:`).
 - **`clock_watch.ddp`** — `inspect`s the `clock` source ticking.
+- **`arrange_idem.ddp`** — a minimal e-graph *in DDIR*: congruence closure plus
+  one rewrite rule, arrange-idempotence (`arrange(x) ≡ x` when `x` is already
+  arranged). Reads a node graph `(id ; op, [children])` and maintains trace
+  `classes` `(id ; class-leader)`. Optimizing DDIR by feeding it DDIR's own
+  e-nodes — eat-your-own-dogfood.
 
 ## The sessions — what to look for
 
@@ -121,3 +126,8 @@ log-work form is left for later.)
   and shared by two programs (`importers: 2`, one source), then GC'd on drop.
 - **`derived.txt`** — a random graph derived in-language from `iota` via `hash`.
 - **`clock.txt`** — the `clock` source advancing one step per tick (O(1) deltas).
+- **`arrange_idem.txt`** — the e-graph rewrite rule firing **incrementally**:
+  build a base graph, then add `arrange(reduce(…))` and watch the rule fold it
+  (`+1`), add another arrange and watch saturation carry the fold one hop
+  further, then retract and watch the fold undo (`-1`). Equality saturation as a
+  differential dataflow.

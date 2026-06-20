@@ -1,0 +1,39 @@
+# Arrange-idempotence as an e-graph REWRITE RULE, saturating incrementally.
+#
+# `arrange_idem.ddp` is congruence closure plus one rule: arrange(x) ≡ x when x
+# is already arranged. Unlike pure CSE, the rule equates *structurally
+# different* nodes, and congruence propagates it to a fixpoint. Op convention:
+# 1 = Arrange, 2 = Reduce (both produce an arrangement). Run from interactive/:
+#   cargo run --release --example ddir_server -- examples/server/sessions/arrange_idem.txt
+
+install eg examples/server/programs/arrange_idem.ddp
+
+# Base: node 0 (a source), 1 = Arrange(0), 2 = Reduce(1).
+feed eg 0 0 val=tuple(5,list())
+feed eg 0 1 val=tuple(1,list(0))
+feed eg 0 2 val=tuple(2,list(1))
+tick
+peek classes
+# -> all singletons. Note 1 = Arrange(0) does NOT fold: 0 is not arranged.
+
+# Add node 3 = Arrange(2). Node 2 is a Reduce (already arranged), so the rule
+# fires: Arrange(2) ≡ 2.
+feed eg 0 3 val=tuple(1,list(2))
+tick
+peek classes
+# -> 3->2 appears: the rule fired incrementally.
+
+# Add node 4 = Arrange(3). Node 3 now lives in class 2 (arranged), so 4 folds
+# too — saturation across the equality we just derived.
+feed eg 0 4 val=tuple(1,list(3))
+tick
+peek classes
+# -> 4->2.
+
+# Retract node 4; the fold undoes incrementally (4 is a sink, nothing else
+# depends on it).
+feed eg 0 4 val=tuple(1,list(3)) diff=-1
+tick
+peek classes
+# -> back to {0, 1, 2, 3->2}.
+exit
