@@ -40,6 +40,8 @@
 //! It does this by exposing a small set of chunk-oriented primitives, which are
 //! sufficient for harnesses for each of these tasks.
 
+use std::collections::VecDeque;
+
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 use crate::lattice::Lattice;
@@ -53,9 +55,6 @@ type KeyCon<C> = <<C as WithLayout>::Layout as Layout>::KeyContainer;
 /// The val container of chunk `C`'s layout.
 type ValCon<C> = <<C as WithLayout>::Layout as Layout>::ValContainer;
 
-/// A partially consumed head and optional tail of chunks.
-pub type ChunkFeed<C> = ((usize, C), Vec<C>);
-
 /// Whether `chunks` satisfy the [`Chunk::TARGET`] grading invariant: every chunk
 /// at most `TARGET`, and every adjacent pair summing to more than `TARGET` (so no
 /// two neighbours could be combined into one legal chunk — a *maximal packing*).
@@ -66,36 +65,17 @@ pub fn is_graded<C: Chunk>(chunks: &[C]) -> bool {
         && chunks.windows(2).all(|w| w[0].len() + w[1].len() > C::TARGET)
 }
 
-/// A list of chunks that maintains the `C::regrade` structural invariant.
+/// Regrade `input` to completion into a fresh graded `Vec` (see [`Chunk::regrade`]).
 ///
-/// Producers `push` chunks in; each push runs `C::regrade`, which moves graded
-/// runs into `data` and leaves anything not yet safe to emit in `todo`. `done`
-/// flushes the remainder and yields the graded sequence.
-pub struct ChunkList<C> {
-    todo: Vec<C>,
-    data: Vec<C>,
-}
-
-impl<C> Default for ChunkList<C> {
-    fn default() -> Self { Self { todo: Vec::new(), data: Vec::new() } }
-}
-
-impl<C: Chunk> ChunkList<C> {
-    /// Add a new chunk to the list, regrading as far as is safe.
-    pub fn push(&mut self, chunk: C) {
-        self.todo.push(chunk);
-        C::regrade(&mut self.todo, false, &mut self.data);
-    }
-    /// Add several chunks.
-    pub fn extend<I: IntoIterator<Item = C>>(&mut self, chunks: I) {
-        for chunk in chunks { self.push(chunk); }
-    }
-    /// Finalize the list, flushing the remainder, and extract the graded sequence.
-    pub fn done(mut self) -> Vec<C> {
-        C::regrade(&mut self.todo, true, &mut self.data);
-        assert!(self.todo.is_empty());
-        self.data
-    }
+/// A convenience for the one-shot callers (batch sealing, the batcher's merge and
+/// extract) that have a whole sequence in hand and want it graded; the streaming
+/// callers drive [`Chunk::regrade`] directly across ticks.
+pub fn regrade_all<C: Chunk>(input: impl IntoIterator<Item = C>) -> Vec<C> {
+    let mut input: VecDeque<C> = input.into_iter().collect();
+    let mut out = VecDeque::new();
+    C::regrade(&mut input, true, &mut out);
+    debug_assert!(input.is_empty());
+    out.into()
 }
 
 /// A consolidated, sorted sequence of `(data, time, diff)`.
@@ -106,34 +86,53 @@ impl<C: Chunk> ChunkList<C> {
 ///
 /// `Clone` is expected to be cheap — a refcount bump on shared backing storage,
 /// not a deep copy. The trace merger relies on this to read its (shared,
-/// immutable) source batches by cloning chunks rather than consuming them, and
-/// `prune` is likewise expected to be a range adjustment over shared storage.
+/// immutable) source batches by cloning chunks rather than consuming them.
 ///
 /// A chunk *has* a [`Cursor`] over its own `(key, val, time, diff)` contents —
 /// the chunk is its own cursor `Storage`, mirroring [`BatchReader`]. This is what
 /// lets a batch cursor delegate downward: the batch indexes which chunk holds a
 /// key (reusing the chunk's `KeyContainer` / `ValContainer` for boundaries) and
-/// then reads through that chunk's cursor. As with `merge`, we do not
-/// provide this; the opaque chunk implementor does.
+/// then reads through that chunk's cursor. We do not provide this; the opaque
+/// chunk implementor does.
 ///
-/// # Implementor contract
+/// # The transducer protocol
 ///
-/// The chunk-producing operations (`merge`, `extract`, `advance`, `regrade`) emit
-/// into a [`ChunkList`], and implementors are expected to:
+/// The four chunk-producing operations ([`merge`](Chunk::merge),
+/// [`extract`](Chunk::extract), [`advance`](Chunk::advance),
+/// [`regrade`](Chunk::regrade)) are all *stream transducers* over `VecDeque<Self>`,
+/// sharing one calling convention so an implementor learns it once:
 ///
-/// * **Respect the chain structure.** Emit *graded* chunks — sized to the
-///   `regrade` invariant — rather than collapsing a run into one monolithic chunk
-///   and leaning on `regrade` to re-split it. Building the right shape directly
-///   avoids a redundant copy.
-/// * **Bound output by input consumed.** Produce output chunks in proportion to
-///   the input chunks consumed, never buffering an unbounded amount before
-///   emitting. The fueled merger debits progress by the work it feeds across
-///   suspensions; output that lags input arbitrarily breaks that accounting.
-/// * **Recycle where possible.** Reuse the storage of chunks drained from the
-///   input as the buffers for output, so allocations balance input against output
-///   rather than allocating afresh per emitted chunk. `vec_chunk::extract` is the
-///   worked example: it fills `TARGET`-sized buffers reclaimed from a stash of
-///   emptied input `Vec`s.
+/// * **Consume from the front.** Read chunks off the front of the input deque(s).
+/// * **Withhold by pushing back.** Anything consumed but not yet safe to commit
+///   (advance's still-growing last group; regrade's sub-`TARGET` carry; merge's
+///   partially-consumed front) is reformed into a single owned chunk and
+///   `push_front`ed back onto its input. The only cross-call state is therefore the
+///   deques themselves — clean owned runs, no indices escape a call.
+/// * **Commit by appending.** Append committed chunks to the output deque; once
+///   appended they are written and a downstream stage may take them immediately.
+/// * **`done` forces the flush.** The unary stages take `done: bool`; while it is
+///   false they may withhold, and a call that appends nothing has yielded — the
+///   harness will not call again until more input arrives or `done` flips true. On
+///   `done` the stage must drain its withheld state (the harness keeps calling
+///   until the output stops growing).
+///
+/// Two operations vary only where their job demands it: [`merge`](Chunk::merge) is
+/// binary (and the harness, not `merge`, handles a drained input by flushing the
+/// other side's verbatim tail, so `merge` needs no `done`); [`extract`](Chunk::extract)
+/// is the one-shot splitter (it drains its whole input, so it needs no `done` and
+/// has two outputs plus a residual frontier).
+///
+/// Implementors are further expected to:
+///
+/// * **Emit near-graded output.** Fill `TARGET`-sized output chunks directly rather
+///   than emitting one monolithic chunk; the terminal [`regrade`](Chunk::regrade)
+///   only has to coalesce the trailing partials at the seams. Grading is a
+///   *seal-time* property, not an invariant maintained between stages.
+/// * **Recycle where possible.** Reuse the storage of chunks drained from the input
+///   as the buffers for output, so allocations balance input against output rather
+///   than allocating afresh per emitted chunk. `vec_chunk` is the worked example: it
+///   fills buffers reclaimed from a stash of emptied input `Vec`s, and advance reuses
+///   its withheld carry's storage in place so a giant key stays linear, not quadratic.
 ///
 /// [`BatchReader`]: crate::trace::BatchReader
 pub trait Chunk: Sized + Clone + LayoutExt {
@@ -197,168 +196,94 @@ pub trait Chunk: Sized + Clone + LayoutExt {
     /// they reach a chunk sequence, and [`ChunkBatch::new`] asserts the invariant.
     fn len(&self) -> usize;
 
-    /// Remove some first few updates, returning the remainder.
+    /// Merge the fronts of two input deques through their shared horizon.
     ///
-    /// The whole suffix `[prefix..]` is emitted as a single chunk; the remainder of
-    /// a graded chunk is at most one graded chunk. Used to flush a partially-consumed
-    /// merge head (its `prefix` is the consumed position).
-    fn prune(self, prefix: usize) -> Self;
+    /// Both deques are non-empty (the caller guarantees it). The two front chunks
+    /// merge through updates present in both — up to the least last `(key, val, time)`
+    /// triple across them — consolidating collisions and emitting committed chunks to
+    /// `out`. The side owning the horizon is fully consumed and `pop_front`ed; the
+    /// other's partially-consumed front is reformed (its consumed prefix dropped) and
+    /// `push_front`ed back. So on return at least one deque has had its front retired.
+    ///
+    /// `merge` makes one front-pair's worth of progress and returns; the harness
+    /// re-ticks it, refilling a drained deque from its source, and itself handles an
+    /// exhausted source by flushing the other deque's verbatim tail — so `merge` needs
+    /// no `done` and never has to reason about end-of-input.
+    fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>);
 
-    /// Merges as much as possible from each of two input chunks.
+    /// Partition the input by `frontier` into updates greater-or-equal it (`keep`) or
+    /// not (`ship`). One-shot: the whole of `input` is consumed.
     ///
-    /// Each input is a chunk with its consumed-prefix position, which is not
-    /// intended for merging. The chunks are only able to merge through updates that
-    /// would be present in both inputs, generally up to the least last
-    /// `(key, val, time)` triple across the two. On return, the consumed prefix of
-    /// at least one input has advanced to that input's length, marking it drained
-    /// and signalling the caller to refill that slot.
-    ///
-    /// This is the required merge primitive; the harnesses in this module drive it
-    /// pairwise ([`merge_chains`], the batch merger). The k-way [`merge`](Chunk::merge)
-    /// is a provided convenience over it.
-    fn merge_pair(slot1: &mut (usize, Self), slot2: &mut (usize, Self), out: &mut ChunkList<Self>);
-
-    /// Merges as much as possible from each of the input chunks.
-    ///
-    /// The same contract as [`merge_pair`](Chunk::merge_pair), generalized to a
-    /// slice of inputs. The provided implementation handles exactly the arities the
-    /// harnesses produce: zero (nothing) and two (via `merge_pair`). A backend whose
-    /// merge is genuinely k-way (e.g. `vec_chunk`'s `merge_buf`) can override this;
-    /// callers wanting other arities require such an override.
-    fn merge(chunks: &mut [(usize, Self)], out: &mut ChunkList<Self>) {
-        match chunks {
-            [] => {}
-            [slot1, slot2] => Self::merge_pair(slot1, slot2, out),
-            _ => unimplemented!("merge of arity {} requires a backend override (binary `merge_pair` is the required primitive; `prune` handles suffixes)", chunks.len()),
-        }
-    }
-
-    /// Partition chunks into updates greater or equal `frontier` (`keep`) or not (`ship`).
-    ///
-    /// The lower envelope of the times routed to `keep` is folded into
-    /// `residual`, so the caller learns the frontier of data it still holds
-    /// without a second pass over the chunks.
+    /// The lower envelope of the times routed to `keep` is folded into `residual`, so
+    /// the caller learns the frontier of data it still holds without a second pass.
+    /// Outputs are near-graded but not regraded; a terminal [`regrade`](Chunk::regrade)
+    /// zips up the seams.
     fn extract(
-        chunks: &mut Vec<Self>,
+        input: &mut VecDeque<Self>,
         frontier: &Antichain<Self::Time>,
         residual: &mut Antichain<Self::Time>,
-        keep: &mut ChunkList<Self>,
-        ship: &mut ChunkList<Self>,
+        keep: &mut VecDeque<Self>,
+        ship: &mut VecDeque<Self>,
     );
 
-    /// Advance times in input chunks by `frontier` and push consolidated result out.
+    /// Advance times by `frontier`, consolidating each complete `(key, val)` group from
+    /// the front of `input` into `out`.
     ///
-    /// To be certainly consolidated, all `(key, val)` updates must be present in
-    /// the input, or `done` must be set. A run of chunks may fail to be emitted if
-    /// they all share the same `(key, val)` and the implementor cannot be sure no
-    /// future times for the pair are yet to arrive.
+    /// A group is complete once a later `(key, val)` is seen, so every group but the
+    /// last is emitted; the last (which a future call might extend) is reformed and
+    /// `push_front`ed back as the withheld carry — unless `done`, which flushes it too.
+    /// The degenerate case is a single `(key, val)` spanning all available input: no
+    /// group is provably complete, so nothing is committed (the whole buffer is
+    /// withheld) until `done`.
     fn advance(
-        feed: &mut ChunkFeed<Self>,
+        input: &mut VecDeque<Self>,
         frontier: &Antichain<Self::Time>,
         done: bool,
-        out: &mut ChunkList<Self>,
+        out: &mut VecDeque<Self>,
     );
 
-    /// Reshapes a sequence of consolidated chunks into a maximal packing: each at
-    /// most [`TARGET`](Chunk::TARGET), and any two adjacent chunks summing past
-    /// `TARGET` (so no neighbours could be combined). See [`is_graded`].
+    /// Reshape the front of `input` into a maximal packing in `out`: each chunk at most
+    /// [`TARGET`](Chunk::TARGET), and any two adjacent summing past `TARGET` (so no
+    /// neighbours could be combined). See [`is_graded`].
     ///
-    /// The implementor should guard against emitting sequences of chunks that violate
-    /// the invariant, until the set `done` indicates that the queues is complete.
-    /// The implementor is allowed to push back at `queue` if it needs, but should
-    /// not corrupt the order of chunks and updates.
+    /// The terminal stage of every pipeline. A sub-`TARGET` carry that might still grow
+    /// is `push_front`ed back as the withheld remainder until `done`, which flushes it.
     fn regrade(
-        queue: &mut Vec<Self>,
+        input: &mut VecDeque<Self>,
         done: bool,
-        out: &mut Vec<Self>,
+        out: &mut VecDeque<Self>,
     );
 
 }
 
-/// Merge two sorted chains of chunks into one sorted chain.
+/// Merge two full chains of chunks into one, to completion, appending to `out`.
 ///
-/// Presents the heads of `chain1` and `chain2` to [`Chunk::merge`], each
-/// tagged with the prefix already consumed. After each call at least one head has
-/// been drained to its length; that slot is refilled from its chain. When either
-/// chain is exhausted, the partially-consumed remainder of the other is pruned of
-/// its consumed prefix and the rest of that chain is appended verbatim.
+/// The whole-chain (non-fueled) driver used by the batcher's
+/// [`Merger`](crate::trace::implementations::merge_batcher::Merger): both chains are in
+/// hand, so it ticks [`Chunk::merge`] until one deque empties, then appends the other's
+/// remainder (the verbatim tail). Output is near-graded; callers regrade as needed.
 pub fn merge_chains<C: Chunk>(
     chain1: Vec<C>,
     chain2: Vec<C>,
-    out: &mut ChunkList<C>,
+    out: &mut VecDeque<C>,
 ) {
-    let mut iter1 = chain1.into_iter();
-    let mut iter2 = chain2.into_iter();
-
-    // Current head of each chain, tagged with its consumed prefix; `None` once
-    // that chain's iterator is exhausted.
-    let mut head1 = iter1.next().map(|c| (0, c));
-    let mut head2 = iter2.next().map(|c| (0, c));
-
-    while head1.is_some() && head2.is_some() {
-        let mut window = [head1.take().unwrap(), head2.take().unwrap()];
-        let [slot1, slot2] = &mut window;
-        C::merge_pair(slot1, slot2, out);
-        let [(p1, c1), (p2, c2)] = window;
-        // Refill whichever side(s) drained to length; keep partially-consumed ones.
-        head1 = if p1 >= c1.len() { iter1.next().map(|c| (0, c)) } else { Some((p1, c1)) };
-        head2 = if p2 >= c2.len() { iter2.next().map(|c| (0, c)) } else { Some((p2, c2)) };
+    let mut in1: VecDeque<C> = chain1.into();
+    let mut in2: VecDeque<C> = chain2.into();
+    while !in1.is_empty() && !in2.is_empty() {
+        C::merge(&mut in1, &mut in2, out);
     }
-
-    // One chain is exhausted; flush the partially-consumed remainder of the other,
-    // then its untouched tail.
-    for head in [head1, head2] {
-        if let Some((consumed, chunk)) = head {
-            // A retained head always has `consumed < len` (a fully-consumed one
-            // would have been refilled), so the pruned remainder is non-empty.
-            let chunk = if consumed > 0 { chunk.prune(consumed) } else { chunk };
-            out.push(chunk);
-        }
-    }
-    out.extend(iter1);
-    out.extend(iter2);
-}
-
-/// Drives [`Chunk::advance`] over a growing queue of chunks.
-///
-/// Compaction may need to see several chunks before it can emit a consolidated
-/// output chunk, because a `(key, val)` run can span chunk boundaries. The
-/// implementor owns the `(next, tail)` representation and rotates it itself: it
-/// can consume across chunks by amounts the driver cannot see, so the driver
-/// never promotes from `tail` into `next`. The driver only appends incoming
-/// chunks to `tail` and calls `advance`; a final [`Self::finish`] sets `done` to
-/// flush whatever was being withheld.
-pub struct AdvanceQueue<C: Chunk> {
-    /// The chunks awaiting advancement, as a head (with consumed prefix) and tail;
-    /// the implementor owns rotation between them.
-    feed: ChunkFeed<C>,
-    /// Frontier to advance times by during compaction.
-    frontier: Antichain<C::Time>,
-}
-
-impl<C: Chunk + Default> AdvanceQueue<C> {
-    /// A compactor that advances times by `frontier`.
-    pub fn new(frontier: Antichain<C::Time>) -> Self {
-        Self { feed: ((0, C::default()), Vec::new()), frontier }
-    }
-    /// Append a completed merge's chunks and advance as far as is certain.
-    pub fn push<I: IntoIterator<Item = C>>(&mut self, chunks: I, out: &mut ChunkList<C>) {
-        self.feed.1.extend(chunks);
-        C::advance(&mut self.feed, &self.frontier, false, out);
-    }
-    /// Flush all remaining updates; no further chunks will be pushed.
-    pub fn finish(mut self, out: &mut ChunkList<C>) {
-        C::advance(&mut self.feed, &self.frontier, true, out);
-    }
+    // One deque is empty; the other's remainder is all greater than everything merged.
+    out.extend(in1.drain(..));
+    out.extend(in2.drain(..));
 }
 
 /// A merge-batcher [`Merger`](crate::trace::implementations::merge_batcher::Merger)
 /// over chains of [`Chunk`]s.
 ///
-/// `merge` runs the binary merger; `extract` splits by the seal frontier using
-/// [`Chunk::extract`]. The batcher consolidates equal `(data, time)` updates
-/// but does *not* advance times — time advancement is advance's job, handled
-/// later in the trace.
+/// `merge` runs the whole-chain binary merger; `extract` splits by the seal frontier
+/// using [`Chunk::extract`]. The batcher consolidates equal `(data, time)` updates
+/// but does *not* advance times — time advancement is advance's job, handled later in
+/// the trace. Both regrade their output, since the batcher's chains want to be graded.
 pub struct ChunkMerger<C> {
     _marker: std::marker::PhantomData<C>,
 }
@@ -382,15 +307,14 @@ where
         output: &mut Vec<C>,
         _stash: &mut Vec<C>,
     ) {
-        // The merge-batcher's chains are plain `Vec`s; grade through a `ChunkList`.
-        let mut graded = ChunkList::default();
-        merge_chains(list1, list2, &mut graded);
-        output.extend(graded.done());
+        let mut merged = VecDeque::new();
+        merge_chains(list1, list2, &mut merged);
+        output.extend(regrade_all(merged));
     }
 
     fn extract(
         &mut self,
-        mut merged: Vec<C>,
+        merged: Vec<C>,
         upper: AntichainRef<C::Time>,
         frontier: &mut Antichain<C::Time>,
         ship: &mut Vec<C>,
@@ -400,10 +324,11 @@ where
         // `extract` keeps updates greater-or-equal `upper` and ships the rest,
         // folding the lower envelope of kept times into `frontier`.
         let upper = upper.to_owned();
-        let (mut keep, mut shipped) = (ChunkList::default(), ChunkList::default());
-        C::extract(&mut merged, &upper, frontier, &mut keep, &mut shipped);
-        kept.extend(keep.done());
-        ship.extend(shipped.done());
+        let mut input: VecDeque<C> = merged.into();
+        let (mut keep, mut shipped) = (VecDeque::new(), VecDeque::new());
+        C::extract(&mut input, &upper, frontier, &mut keep, &mut shipped);
+        kept.extend(regrade_all(keep));
+        ship.extend(regrade_all(shipped));
     }
 
     fn len(chunk: &C) -> usize { chunk.len() }
@@ -635,54 +560,41 @@ where
     }
 }
 
-/// Live state of the binary merge: an index into each (shared, immutable) source
-/// chain marking the next chunk to clone, and the current head of each (a cloned
-/// chunk tagged with its consumed prefix). A head is `None` once its chain is
-/// exhausted; the merge proper runs while both are `Some`. The indices are the
-/// "cursor positions": the same sources arrive on each `work` call, so they are
-/// stable across suspensions.
-struct MergeState<C> {
-    idx1: usize,
-    idx2: usize,
-    head1: Option<(usize, C)>,
-    head2: Option<(usize, C)>,
-}
-
-/// Clone the chunk at `*idx` (if any), advancing `*idx`, tagged with prefix `0`.
-fn clone_chunk<C: Clone>(chunks: &[C], idx: &mut usize) -> Option<(usize, C)> {
-    let chunk = chunks.get(*idx)?.clone();
-    *idx += 1;
-    Some((0, chunk))
-}
-
 /// A merge of two [`ChunkBatch`]es in progress.
 ///
 /// This is the [`ChunkBatch`] merger, wired in as its
 /// [`Batch::Merger`](crate::trace::Batch::Merger), and has that trait's
 /// `new` / `work` / `done` shape.
 ///
-/// The merge is *resumable*: `work` drains one [`Chunk::merge`]'s-worth of
-/// updates per step, feeding the output into a live [`AdvanceQueue`], and stops once
-/// `fuel` is exhausted, retaining the iterators, heads, and advancer for the
-/// next call. Fuel is debited by the (consolidated) updates fed into the advancer;
-/// summed over all steps this is the total *output*, not the input scanned —
-/// matching how the trace's other mergers account (cf. `ord_neu`, which debits the
-/// consolidated updates it stages). Compaction's final flush (`done = true`) rides
-/// along uncounted, bounded by the data withheld during streaming.
+/// The merge is *resumable* and runs a two-stage deque pipeline:
+/// [`merge`](Chunk::merge) feeds `merged`, [`advance`](Chunk::advance) consumes it
+/// into `advanced`; the terminal [`regrade`](Chunk::regrade) runs once at `done`. Each
+/// `work` step clones a head from each source (the burst is head-of-each-list), ticks
+/// `merge` once, then advances the fresh output, debiting `fuel` by the *merged*
+/// records that entered the pipe — the total output across the merge, matching how the
+/// trace's other mergers account (cf. `ord_neu`). The sources are read by *cloning*
+/// chunks (a cheap refcount bump per the [`Chunk`] contract), never consumed or
+/// mutated; the same `source1`/`source2` must be supplied on every call. When a source
+/// exhausts, the harness flushes the other's verbatim tail one chunk per step. Once
+/// both are drained, a final `advance(done)` flushes advance's withheld carry.
 pub struct ChunkBatchMerger<C: Chunk> {
     /// Compaction frontier supplied at construction.
     frontier: Antichain<C::Time>,
     /// Result frontiers, retained for the output description.
     lower: Antichain<C::Time>,
     upper: Antichain<C::Time>,
-    /// Merged-and-advanced chunks, grown by `work`.
-    result: ChunkList<C>,
-    /// Live merge state; `None` before the first `work` and after merging completes.
-    state: Option<MergeState<C>>,
-    /// Live advancer; `Some` until its final flush, then `None`.
-    advancer: Option<AdvanceQueue<C>>,
-    /// Whether the inputs have been moved into `state` yet.
-    initialized: bool,
+    /// Input deques, refilled from the sources (clones) head-of-list at a time.
+    in1: VecDeque<C>,
+    in2: VecDeque<C>,
+    /// Next source chunk to clone into `in1` / `in2`.
+    idx1: usize,
+    idx2: usize,
+    /// `advance`'s input: the merge output plus advance's withheld carry at the front.
+    merged: VecDeque<C>,
+    /// `advance`'s output: the merged-and-advanced chunks, grown by `work`.
+    advanced: VecDeque<C>,
+    /// Set once both sources are drained and advance's final flush has run.
+    complete: bool,
 }
 
 impl<C> crate::trace::Merger<ChunkBatch<C>> for ChunkBatchMerger<C>
@@ -698,67 +610,52 @@ where
             frontier: frontier.to_owned(),
             lower,
             upper,
-            result: ChunkList::default(),
-            state: None,
-            advancer: None,
-            initialized: false,
+            in1: VecDeque::new(),
+            in2: VecDeque::new(),
+            idx1: 0,
+            idx2: 0,
+            merged: VecDeque::new(),
+            advanced: VecDeque::new(),
+            complete: false,
         }
     }
 
     /// Advance the merge by up to `fuel` updates, suspending when it runs out.
-    ///
-    /// The sources are read by *cloning* chunks (a cheap refcount bump, per the
-    /// [`Chunk`] contract), never consumed or mutated, so they remain shared and
-    /// immutable. The same `source1`/`source2` must be supplied on every call.
     fn work(&mut self, source1: &ChunkBatch<C>, source2: &ChunkBatch<C>, fuel: &mut isize) {
-        if !self.initialized {
-            let mut idx1 = 0;
-            let mut idx2 = 0;
-            let head1 = clone_chunk(&source1.chunks, &mut idx1);
-            let head2 = clone_chunk(&source2.chunks, &mut idx2);
-            self.state = Some(MergeState { idx1, idx2, head1, head2 });
-            self.advancer = Some(AdvanceQueue::new(self.frontier.clone()));
-            self.initialized = true;
-        }
+        if self.complete { return; }
 
         while *fuel > 0 {
-            let state = match &mut self.state { Some(s) => s, None => break };
-            let advancer = self.advancer.as_mut().unwrap();
+            // Refill each empty input deque with the next source chunk (head-of-list
+            // burst). After this, a deque is non-empty iff its source still has data.
+            if self.in1.is_empty() && self.idx1 < source1.chunks.len() {
+                self.in1.push_back(source1.chunks[self.idx1].clone());
+                self.idx1 += 1;
+            }
+            if self.in2.is_empty() && self.idx2 < source2.chunks.len() {
+                self.in2.push_back(source2.chunks[self.idx2].clone());
+                self.idx2 += 1;
+            }
 
-            if state.head1.is_some() && state.head2.is_some() {
-                // One merge step: present both heads, refill whichever drains.
-                let mut window = [state.head1.take().unwrap(), state.head2.take().unwrap()];
-                let mut merged = ChunkList::default();
-                let [slot1, slot2] = &mut window;
-                C::merge_pair(slot1, slot2, &mut merged);
-                let [(p1, c1), (p2, c2)] = window;
-                state.head1 = if p1 >= c1.len() { clone_chunk(&source1.chunks, &mut state.idx1) } else { Some((p1, c1)) };
-                state.head2 = if p2 >= c2.len() { clone_chunk(&source2.chunks, &mut state.idx2) } else { Some((p2, c2)) };
-                let chunks = merged.done();
-                let work: usize = chunks.iter().map(C::len).sum();
-                advancer.push(chunks, &mut self.result);
-                *fuel -= work as isize;
-            } else if let Some((consumed, chunk)) = state.head1.take().or_else(|| state.head2.take()) {
-                // One chain exhausted; flush the partially-consumed head of the
-                // other. It was retained with `consumed < len`, so the pruned
-                // remainder is non-empty.
-                let chunk = if consumed > 0 { chunk.prune(consumed) } else { chunk };
-                let work = chunk.len();
-                advancer.push(std::iter::once(chunk), &mut self.result);
-                *fuel -= work as isize;
-            } else if let Some((_, chunk)) = clone_chunk(&source1.chunks, &mut state.idx1).or_else(|| clone_chunk(&source2.chunks, &mut state.idx2)) {
-                // Flush the untouched tail of the surviving chain, one chunk per step.
-                let work = chunk.len();
-                advancer.push(std::iter::once(chunk), &mut self.result);
-                *fuel -= work as isize;
+            // Merge's per-tick output (small: one front-pair, or one tail chunk),
+            // measured for fuel before it joins the carry already in `merged`.
+            let mut produced = VecDeque::new();
+            if !self.in1.is_empty() && !self.in2.is_empty() {
+                // Both sides have data: one front-pair merge.
+                C::merge(&mut self.in1, &mut self.in2, &mut produced);
+            } else if let Some(chunk) = self.in1.pop_front().or_else(|| self.in2.pop_front()) {
+                // Exactly one side has data: flush its verbatim tail, one chunk a step.
+                produced.push_back(chunk);
             } else {
-                // Both chains fully fed; flush withheld advancement and retire.
-                self.state = None;
-                if let Some(advancer) = self.advancer.take() {
-                    advancer.finish(&mut self.result);
-                }
+                // Both sources drained: final flush of advance's withheld carry.
+                C::advance(&mut self.merged, &self.frontier, true, &mut self.advanced);
+                self.complete = true;
                 break;
             }
+
+            let work: usize = produced.iter().map(C::len).sum();
+            self.merged.extend(produced);
+            C::advance(&mut self.merged, &self.frontier, false, &mut self.advanced);
+            *fuel -= work as isize;
         }
     }
 
@@ -768,7 +665,7 @@ where
     /// positive), as the [`trace::Merger`](crate::trace::Merger) contract requires.
     fn done(self) -> ChunkBatch<C> {
         let description = Description::new(self.lower, self.upper, self.frontier);
-        ChunkBatch::new(self.result.done(), description)
+        ChunkBatch::new(regrade_all(self.advanced), description)
     }
 }
 
@@ -777,12 +674,14 @@ where
 ///
 /// The builder assumes its inputs arrive already sorted and consolidated (as the
 /// `Builder` contract requires), so it does no merging: each pushed chunk is an
-/// ordered run, appended in order. They accumulate in a [`ChunkList`], which
-/// regrades them to the size invariant as they arrive — so a batch built here is
-/// graded like one produced by the merger, rather than inheriting whatever chunk
-/// sizes the caller happened to push.
+/// ordered run, fed straight to [`regrade`](Chunk::regrade) as it arrives — so a batch
+/// built here is graded like one produced by the merger, rather than inheriting
+/// whatever chunk sizes the caller happened to push.
 pub struct ChunkBuilder<C: Chunk> {
-    chunks: ChunkList<C>,
+    /// Pushed chunks awaiting regrading; holds regrade's sub-`TARGET` carry at the front.
+    input: VecDeque<C>,
+    /// The graded chunks emitted so far.
+    output: VecDeque<C>,
 }
 
 impl<C> crate::trace::Builder for ChunkBuilder<C>
@@ -795,25 +694,28 @@ where
     type Output = ChunkBatch<C>;
 
     fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        Self { chunks: ChunkList::default() }
+        Self { input: VecDeque::new(), output: VecDeque::new() }
     }
 
     fn push(&mut self, chunk: &mut C) {
         let chunk = std::mem::take(chunk);
-        if chunk.len() > 0 { self.chunks.push(chunk); }
+        if chunk.len() > 0 {
+            self.input.push_back(chunk);
+            C::regrade(&mut self.input, false, &mut self.output);
+        }
     }
 
     fn done(self, description: Description<C::Time>) -> ChunkBatch<C> {
-        ChunkBatch::new(self.chunks.done(), description)
+        let ChunkBuilder { mut input, mut output } = self;
+        C::regrade(&mut input, true, &mut output);
+        ChunkBatch::new(output.into(), description)
     }
 
     fn seal(chain: &mut Vec<C>, description: Description<C::Time>) -> ChunkBatch<C> {
-        // The chain is sorted and consolidated but not necessarily graded; regrade
-        // it. Already-sized chunks pass through as cheap `Rc` moves, so a chain that
+        // The chain is sorted and consolidated but not necessarily graded; regrade it.
+        // Already-`TARGET` chunks pass through as cheap `Rc` moves, so a chain that
         // arrives graded (as the batcher's does) pays only an O(#chunks) walk.
-        let mut chunks = ChunkList::default();
-        chunks.extend(std::mem::take(chain));
-        ChunkBatch::new(chunks.done(), description)
+        ChunkBatch::new(regrade_all(std::mem::take(chain)), description)
     }
 }
 
@@ -831,13 +733,14 @@ pub mod vec_chunk {
     //!   inner `Vec` via `Rc::make_mut` — free while a chunk is being built
     //!   (refcount 1), and it never copies a *shared* chunk because batches are
     //!   immutable once built.
-    //! * **Trace side.** [`Chunk`] (merge / extract / advance / prune / bounds)
+    //! * **Trace side.** [`Chunk`] (merge / extract / advance / regrade / bounds)
     //!   plus a cursor. Key lookups are logarithmic by galloping search (`seek_*`),
     //!   independent of chunk size; stepping stays linear (short hops).
     //!
     //! `Clone` is a refcount bump, so the trace merger shares source chunks instead
     //! of copying them.
 
+    use std::collections::VecDeque;
     use std::marker::PhantomData;
     use std::rc::Rc;
 
@@ -851,7 +754,7 @@ pub mod vec_chunk {
     use crate::trace::cursor::Cursor;
     use crate::trace::implementations::{Vector, WithLayout};
 
-    use super::{Chunk, ChunkFeed, ChunkList};
+    use super::Chunk;
 
     /// The chunk size: both the maximum updates per chunk and the coalescing
     /// threshold (see [`Chunk::TARGET`]). Chosen for the reference impl; exposed as
@@ -1027,113 +930,107 @@ pub mod vec_chunk {
 
         fn len(&self) -> usize { self.0.len() }
 
-        fn prune(self, prefix: usize) -> Self {
-            let mut v = take(self);
-            v.drain(..prefix);
-            VecChunk(Rc::new(v))
-        }
-
-        /// A dedicated two-pointer binary merge: one gallop pins how far each side
-        /// may merge (through the lesser of the two last `(key, val)`s), then a
-        /// single pass consolidates equal `(key, val, time)` triples and bulk-copies
-        /// the disjoint runs as slices. The k-way [`merge`](Chunk::merge) override
-        /// below serves slice callers and is the correctness reference (property
-        /// test `merge_pair_matches_merge_buf`).
-        fn merge_pair(slot1: &mut (usize, Self), slot2: &mut (usize, Self), out: &mut ChunkList<Self>) {
-            let (p1, c1) = slot1;
-            let (p2, c2) = slot2;
-            let s1 = &c1.0[..];
-            let s2 = &c2.0[..];
-
-            // The merge horizon: the lesser of the two last `(key, val, time)`s. The
-            // side owning it drains fully; the other merges through it. The time must
-            // be part of the horizon: a `(key, val)` group can straddle a chunk
-            // boundary on the owning side, and a coarser `(key, val)` horizon would
-            // let the other side's whole group merge before that continuation arrives,
-            // emitting it unconsolidated (caught by `merge_pair_matches_reference`).
+        /// A dedicated two-pointer binary merge of the two front chunks: one gallop
+        /// pins how far each side may merge (through the lesser of the two last
+        /// `(key, val, time)`s), then a single pass consolidates equal triples and
+        /// bulk-copies disjoint runs as slices. The drained side's front is popped; the
+        /// other's partially-consumed front is pruned (its prefix dropped) and
+        /// `push_front`ed back — so the only persisted state is the deques themselves.
+        fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
             fn kv<K, V, T, R>(u: &((K, V), T, R)) -> (&K, &V) { (&u.0.0, &u.0.1) }
             fn kvt<K, V, T, R>(u: &((K, V), T, R)) -> ((&K, &V), &T) { (kv(u), &u.1) }
-            let (end1, end2);
-            if kvt(&s1[s1.len() - 1]) <= kvt(&s2[s2.len() - 1]) {
-                let horizon = kvt(&s1[s1.len() - 1]);
-                end1 = s1.len();
-                end2 = gallop(s2, *p2, |u| kvt(u) <= horizon);
-            } else {
-                let horizon = kvt(&s2[s2.len() - 1]);
-                end2 = s2.len();
-                end1 = gallop(s1, *p1, |u| kvt(u) <= horizon);
-            }
 
-            let mut result: Vec<((K, V), T, R)> = Vec::with_capacity(TARGET);
-            let mut flush = |result: &mut Vec<((K, V), T, R)>, force: bool| {
-                if result.len() >= TARGET || (force && !result.is_empty()) {
-                    out.push(VecChunk(Rc::new(std::mem::replace(result, Vec::with_capacity(TARGET)))));
+            // How far each front may merge, computed while the fronts are borrowed; the
+            // deques are mutated only after these borrows end.
+            let (end1, end2, len1, len2);
+            {
+                let s1 = &in1.front().unwrap().0[..];
+                let s2 = &in2.front().unwrap().0[..];
+                len1 = s1.len();
+                len2 = s2.len();
+
+                // The merge horizon: the lesser of the two last `(key, val, time)`s. The
+                // side owning it drains fully; the other merges through it. The time must
+                // be part of the horizon: a `(key, val)` group can straddle a chunk
+                // boundary on the owning side, and a coarser `(key, val)` horizon would
+                // let the other side's whole group merge before that continuation arrives,
+                // emitting it unconsolidated (caught by `merge_matches_reference`).
+                if kvt(&s1[len1 - 1]) <= kvt(&s2[len2 - 1]) {
+                    let horizon = kvt(&s1[len1 - 1]);
+                    end1 = len1;
+                    end2 = gallop(s2, 0, |u| kvt(u) <= horizon);
+                } else {
+                    let horizon = kvt(&s2[len2 - 1]);
+                    end2 = len2;
+                    end1 = gallop(s1, 0, |u| kvt(u) <= horizon);
                 }
-            };
 
-            let (mut i, mut j) = (*p1, *p2);
-            while i < end1 && j < end2 {
-                let a = &s1[i];
-                let b = &s2[j];
-                match (kv(a), &a.1).cmp(&(kv(b), &b.1)) {
-                    // Copy the whole run of one side strictly below the other's head:
-                    // collisions are impossible within it, so it moves as slices (cut
-                    // at the grading target) rather than element by element.
-                    std::cmp::Ordering::Less => {
-                        let run = gallop(s1, i + 1, |u| (kv(u), &u.1) < (kv(b), &b.1)).min(end1);
-                        for piece in s1[i..run].chunks(TARGET) {
-                            result.extend_from_slice(piece);
+                let mut result: Vec<((K, V), T, R)> = Vec::with_capacity(TARGET);
+                let mut flush = |result: &mut Vec<((K, V), T, R)>, force: bool| {
+                    if result.len() >= TARGET || (force && !result.is_empty()) {
+                        out.push_back(VecChunk(Rc::new(std::mem::replace(result, Vec::with_capacity(TARGET)))));
+                    }
+                };
+
+                let (mut i, mut j) = (0, 0);
+                while i < end1 && j < end2 {
+                    let a = &s1[i];
+                    let b = &s2[j];
+                    match (kv(a), &a.1).cmp(&(kv(b), &b.1)) {
+                        // Copy the whole run of one side strictly below the other's head:
+                        // collisions are impossible within it, so it moves as slices (cut
+                        // at the grading target) rather than element by element.
+                        std::cmp::Ordering::Less => {
+                            let run = gallop(s1, i + 1, |u| (kv(u), &u.1) < (kv(b), &b.1)).min(end1);
+                            for piece in s1[i..run].chunks(TARGET) {
+                                result.extend_from_slice(piece);
+                                flush(&mut result, false);
+                            }
+                            i = run;
+                        }
+                        std::cmp::Ordering::Greater => {
+                            let run = gallop(s2, j + 1, |u| (kv(u), &u.1) < (kv(a), &a.1)).min(end2);
+                            for piece in s2[j..run].chunks(TARGET) {
+                                result.extend_from_slice(piece);
+                                flush(&mut result, false);
+                            }
+                            j = run;
+                        }
+                        std::cmp::Ordering::Equal => {
+                            let mut diff = a.2.clone();
+                            diff.plus_equals(&b.2);
+                            if !diff.is_zero() {
+                                result.push((a.0.clone(), a.1.clone(), diff));
+                            }
+                            i += 1;
+                            j += 1;
                             flush(&mut result, false);
                         }
-                        i = run;
                     }
-                    std::cmp::Ordering::Greater => {
-                        let run = gallop(s2, j + 1, |u| (kv(u), &u.1) < (kv(a), &a.1)).min(end2);
-                        for piece in s2[j..run].chunks(TARGET) {
-                            result.extend_from_slice(piece);
-                            flush(&mut result, false);
-                        }
-                        j = run;
-                    }
-                    std::cmp::Ordering::Equal => {
-                        let mut diff = a.2.clone();
-                        diff.plus_equals(&b.2);
-                        if !diff.is_zero() {
-                            result.push((a.0.clone(), a.1.clone(), diff));
-                        }
-                        i += 1;
-                        j += 1;
+                }
+                // Bulk-copy the in-horizon tails, cutting at the grading target.
+                for tail in [&s1[i..end1], &s2[j..end2]] {
+                    for piece in tail.chunks(TARGET) {
+                        result.extend_from_slice(piece);
                         flush(&mut result, false);
                     }
                 }
+                flush(&mut result, true);
             }
-            // Bulk-copy the in-horizon tails, cutting at the grading target.
-            for tail in [&s1[i..end1], &s2[j..end2]] {
-                for piece in tail.chunks(TARGET) {
-                    result.extend_from_slice(piece);
-                    flush(&mut result, false);
-                }
-            }
-            flush(&mut result, true);
-            *p1 = end1;
-            *p2 = end2;
-        }
 
-        fn merge(chunks: &mut [(usize, Self)], out: &mut ChunkList<Self>) {
-            let mut consumed: Vec<usize> = chunks.iter().map(|(c, _)| *c).collect();
-            {
-                let inputs: Vec<&[_]> = chunks.iter().map(|(_, ch)| &ch.0[..]).collect();
-                merge_buf(&inputs, &mut consumed, out);
-            }
-            for (i, (c, _)) in chunks.iter_mut().enumerate() { *c = consumed[i]; }
+            // Retire the fronts: pop the drained side, prune+push_front the partial one.
+            if end1 >= len1 { in1.pop_front(); }
+            else { let mut v = take(in1.pop_front().unwrap()); v.drain(..end1); in1.push_front(VecChunk(Rc::new(v))); }
+            if end2 >= len2 { in2.pop_front(); }
+            else { let mut v = take(in2.pop_front().unwrap()); v.drain(..end2); in2.push_front(VecChunk(Rc::new(v))); }
         }
 
         fn extract(
-            chunks: &mut Vec<Self>,
+            input: &mut VecDeque<Self>,
             frontier: &Antichain<T>,
             residual: &mut Antichain<T>,
-            keep: &mut ChunkList<Self>,
-            ship: &mut ChunkList<Self>,
+            keep: &mut VecDeque<Self>,
+            ship: &mut VecDeque<Self>,
         ) {
             // Fill `TARGET`-sized buffers directly, so the chunks pushed are already
             // graded and `regrade` passes them through as `Rc` moves rather than
@@ -1143,46 +1040,44 @@ pub mod vec_chunk {
             let mut stash: Vec<Vec<((K, V), T, R)>> = Vec::new();
             let take_buf = |stash: &mut Vec<_>| stash.pop().unwrap_or_default();
             let (mut k, mut s) = (take_buf(&mut stash), take_buf(&mut stash));
-            for chunk in chunks.drain(..) {
+            for chunk in input.drain(..) {
                 let mut v = take(chunk);
                 for u in v.drain(..) {
                     if frontier.borrow().less_equal(&u.1) {
                         residual.insert_ref(&u.1);
                         k.push(u);
-                        if k.len() >= TARGET { keep.push(VecChunk(Rc::new(std::mem::replace(&mut k, take_buf(&mut stash))))); }
+                        if k.len() >= TARGET { keep.push_back(VecChunk(Rc::new(std::mem::replace(&mut k, take_buf(&mut stash))))); }
                     } else {
                         s.push(u);
-                        if s.len() >= TARGET { ship.push(VecChunk(Rc::new(std::mem::replace(&mut s, take_buf(&mut stash))))); }
+                        if s.len() >= TARGET { ship.push_back(VecChunk(Rc::new(std::mem::replace(&mut s, take_buf(&mut stash))))); }
                     }
                 }
                 stash.push(v);
             }
-            if !k.is_empty() { keep.push(VecChunk(Rc::new(k))); }
-            if !s.is_empty() { ship.push(VecChunk(Rc::new(s))); }
+            if !k.is_empty() { keep.push_back(VecChunk(Rc::new(k))); }
+            if !s.is_empty() { ship.push_back(VecChunk(Rc::new(s))); }
         }
 
         fn advance(
-            feed: &mut ChunkFeed<Self>,
+            input: &mut VecDeque<Self>,
             frontier: &Antichain<T>,
             done: bool,
-            out: &mut ChunkList<Self>,
+            out: &mut VecDeque<Self>,
         ) {
             // Advance and consolidate every *complete* `(key, val)` group eagerly,
             // so its updates can be released as soon as the input proves no later
             // time for the pair can arrive. A group is contiguous in the sorted
-            // chain, so the only one that might continue in a future push is the
-            // last; unless `done`, we process up to its start and withhold the rest
-            // as the head for the next call.
+            // chain, so the only one that might continue in a future call is the last;
+            // unless `done`, we process up to its start and `push_front` the rest as
+            // the withheld carry for the next call.
             let mut stash: Vec<Vec<((K, V), T, R)>> = Vec::new();
-            let (consumed, ch) = &mut feed.0;
-            // Build the working buffer by *reusing the head's storage* and appending
-            // the tail (recycling each emptied tail `Vec`). Reusing the head is what
-            // keeps a withheld group from being recopied across calls: it just
-            // accumulates in place, so a `(key, val)` larger than the working set
-            // costs O(total) over the run rather than O(total²).
-            let mut buf = take(std::mem::take(ch));
-            if *consumed > 0 { buf.drain(..*consumed); *consumed = 0; }
-            for chunk in feed.1.drain(..) {
+            // Build the working buffer by *reusing the front chunk's storage* (the
+            // carry from last time) and appending the rest (recycling each emptied
+            // `Vec`). Reusing the front is what keeps a withheld group from being
+            // recopied across calls: it just accumulates in place, so a `(key, val)`
+            // larger than the working set costs O(total) over the run, not O(total²).
+            let mut buf = match input.pop_front() { Some(chunk) => take(chunk), None => return };
+            while let Some(chunk) = input.pop_front() {
                 let mut v = take(chunk);
                 buf.append(&mut v);
                 stash.push(v);
@@ -1190,17 +1085,17 @@ pub mod vec_chunk {
             if buf.is_empty() { return; }
 
             // If every available update shares one `(key, val)`, no group is provably
-            // complete — the next push may extend it — so make no progress unless
-            // `done`: retain the accumulated buffer as the head and return. This is
+            // complete — a later call may extend it — so make no progress unless
+            // `done`: push the accumulated buffer back as the carry and return. This is
             // the giant-key case; comparing only the first and last pair detects it
-            // without scanning, and reusing the head above makes the retention free.
+            // without scanning, and reusing the front above makes the retention free.
             if !done && buf[0].0 == buf[buf.len() - 1].0 {
-                *ch = VecChunk(Rc::new(buf));
+                input.push_front(VecChunk(Rc::new(buf)));
                 return;
             }
 
             // Otherwise at least the first group is complete. Withhold the last group
-            // (a single `(key, val)`) as the next head unless the input is complete.
+            // (a single `(key, val)`) as the next carry unless the input is complete.
             let end = if done { buf.len() } else {
                 let last_kv = buf[buf.len() - 1].0.clone();
                 let mut start = buf.len();
@@ -1208,11 +1103,10 @@ pub mod vec_chunk {
                 start
             };
             if end < buf.len() {
-                let tail = buf.split_off(end);
-                *ch = VecChunk(Rc::new(tail));
+                input.push_front(VecChunk(Rc::new(buf.split_off(end))));
             }
             // Advance + consolidate each group into `TARGET`-sized output chunks,
-            // filling buffers reclaimed from the recycled tail `Vec`s.
+            // filling buffers reclaimed from the recycled `Vec`s.
             let mut result = stash.pop().unwrap_or_default();
             let mut i = 0;
             while i < buf.len() {
@@ -1231,15 +1125,15 @@ pub mod vec_chunk {
                     while k < j && buf[k].1 == t { diff.plus_equals(&buf[k].2); k += 1; }
                     if !diff.is_zero() {
                         result.push((kv, t, diff));
-                        if result.len() >= TARGET { out.push(VecChunk(Rc::new(std::mem::replace(&mut result, stash.pop().unwrap_or_default())))); }
+                        if result.len() >= TARGET { out.push_back(VecChunk(Rc::new(std::mem::replace(&mut result, stash.pop().unwrap_or_default())))); }
                     }
                 }
                 i = j;
             }
-            if !result.is_empty() { out.push(VecChunk(Rc::new(result))); }
+            if !result.is_empty() { out.push_back(VecChunk(Rc::new(result))); }
         }
 
-        fn regrade(queue: &mut Vec<Self>, done: bool, out: &mut Vec<Self>) {
+        fn regrade(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
             // Maximal packing: emit chunks as large as possible up to `TARGET`,
             // never splitting a pair that could combine into one legal (`<= TARGET`)
             // chunk. A chunk of exactly `TARGET` is maximal — it cannot grow — so it
@@ -1249,31 +1143,31 @@ pub mod vec_chunk {
             // occasional trailing partial is coalesced.
             //
             // `carry` is the (sub-`TARGET`) chunk under construction. It is flushed
-            // once it reaches `TARGET`, carried back onto `queue` between calls, or
-            // emitted on `done`. Whenever `carry` is non-empty its left neighbour in
+            // once it reaches `TARGET`, `push_front`ed back onto `input` between calls,
+            // or emitted on `done`. Whenever `carry` is non-empty its left neighbour in
             // `out` is a `TARGET` chunk (or `carry` is `out`'s first chunk), so
             // emitting `carry` against a neighbour it cannot merge with — their sum
             // exceeds `TARGET` — keeps the packing maximal on both sides.
             let mut carry: Vec<((K, V), T, R)> = Vec::new();
-            for chunk in queue.drain(..) {
+            while let Some(chunk) = input.pop_front() {
                 if carry.is_empty() {
                     absorb(chunk, &mut carry, out);
                 } else if carry.len() + chunk.0.len() <= TARGET {
                     // Combines into one legal chunk; coalesce in place.
                     carry.extend(take(chunk));
                     if carry.len() == TARGET {
-                        out.push(VecChunk(Rc::new(std::mem::take(&mut carry))));
+                        out.push_back(VecChunk(Rc::new(std::mem::take(&mut carry))));
                     }
                 } else {
                     // Cannot combine without exceeding `TARGET`; `carry` is maximal
                     // against this neighbour, so emit it and absorb the chunk afresh.
-                    out.push(VecChunk(Rc::new(std::mem::take(&mut carry))));
+                    out.push_back(VecChunk(Rc::new(std::mem::take(&mut carry))));
                     absorb(chunk, &mut carry, out);
                 }
             }
             if !carry.is_empty() {
                 let chunk = VecChunk(Rc::new(carry));
-                if done { out.push(chunk); } else { queue.push(chunk); }
+                if done { out.push_back(chunk); } else { input.push_front(chunk); }
             }
         }
     }
@@ -1282,11 +1176,11 @@ pub mod vec_chunk {
     /// sub-`TARGET` tail behind.
     fn peel<K: Clone, V: Clone, T: Clone, R: Clone>(
         carry: &mut Vec<((K, V), T, R)>,
-        out: &mut Vec<VecChunk<K, V, T, R>>,
+        out: &mut VecDeque<VecChunk<K, V, T, R>>,
     ) {
         let mut start = 0;
         while carry.len() - start >= TARGET {
-            out.push(VecChunk(Rc::new(carry[start..start + TARGET].to_vec())));
+            out.push_back(VecChunk(Rc::new(carry[start..start + TARGET].to_vec())));
             start += TARGET;
         }
         carry.drain(..start);
@@ -1298,82 +1192,20 @@ pub mod vec_chunk {
     fn absorb<K: Clone, V: Clone, T: Clone, R: Clone>(
         chunk: VecChunk<K, V, T, R>,
         carry: &mut Vec<((K, V), T, R)>,
-        out: &mut Vec<VecChunk<K, V, T, R>>,
+        out: &mut VecDeque<VecChunk<K, V, T, R>>,
     ) {
         use std::cmp::Ordering::{Equal, Greater, Less};
         match chunk.0.len().cmp(&TARGET) {
-            Equal => out.push(chunk),
+            Equal => out.push_back(chunk),
             Less => *carry = take(chunk),
             Greater => { *carry = take(chunk); peel(carry, out); }
         }
     }
 
-    /// K-way merge of in-range prefixes of sorted, consolidated inputs, emitting
-    /// graded chunks directly into `out`.
-    ///
-    /// `inputs[i][consumed[i]..]` is the unconsumed, sorted suffix of input `i`.
-    /// Merges through the least last `((key, val), time)` across inputs (nothing
-    /// interleaves below it), consolidating triples shared across inputs, and
-    /// advances each `consumed[i]` past what it merged. Output is filled into
-    /// `TARGET`-sized buffers and pushed as it fills, so the run arrives *graded*
-    /// rather than as one monolithic chunk that `regrade` would re-split (and
-    /// re-copy) — mirroring `extract`. Sizing buffers to `TARGET` also avoids the
-    /// over-reservation a single up-front `with_capacity(total)` would incur.
-    fn merge_buf<K, V, T, R>(
-        inputs: &[&[((K, V), T, R)]],
-        consumed: &mut [usize],
-        out: &mut ChunkList<VecChunk<K, V, T, R>>,
-    )
-    where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-        let Some(horizon) = inputs.iter().enumerate()
-            .filter(|(i, s)| consumed[*i] < s.len())
-            .map(|(_, s)| { let u = &s[s.len() - 1]; (u.0.clone(), u.1.clone()) })
-            .min()
-        else { return; };
-
-        let in_range = |i: usize, p: usize| {
-            p < inputs[i].len() && (&inputs[i][p].0, &inputs[i][p].1) <= (&horizon.0, &horizon.1)
-        };
-
-        let mut result: Vec<((K, V), T, R)> = Vec::with_capacity(TARGET);
-        loop {
-            let mut best: Option<usize> = None;
-            for i in 0..inputs.len() {
-                if in_range(i, consumed[i]) && best.is_none_or(|b| {
-                    let (bi, bb) = (&inputs[i][consumed[i]], &inputs[b][consumed[b]]);
-                    (&bi.0, &bi.1) < (&bb.0, &bb.1)
-                }) {
-                    best = Some(i);
-                }
-            }
-            let Some(b) = best else { break; };
-            let kv = inputs[b][consumed[b]].0.clone();
-            let t = inputs[b][consumed[b]].1.clone();
-            let mut diff: Option<R> = None;
-            for i in 0..inputs.len() {
-                if in_range(i, consumed[i]) && inputs[i][consumed[i]].0 == kv && inputs[i][consumed[i]].1 == t {
-                    match &mut diff {
-                        None => diff = Some(inputs[i][consumed[i]].2.clone()),
-                        Some(d) => d.plus_equals(&inputs[i][consumed[i]].2),
-                    }
-                    consumed[i] += 1;
-                }
-            }
-            if let Some(diff) = diff {
-                if !diff.is_zero() {
-                    result.push((kv, t, diff));
-                    if result.len() >= TARGET {
-                        out.push(VecChunk(Rc::new(std::mem::replace(&mut result, Vec::with_capacity(TARGET)))));
-                    }
-                }
-            }
-        }
-        if !result.is_empty() { out.push(VecChunk(Rc::new(result))); }
-    }
-
     #[cfg(test)]
     mod test {
-        use super::VecChunk;
+        use std::collections::VecDeque;
+        use super::{Chunk, VecChunk};
         use crate::trace::chunk::merge_chains;
         use std::rc::Rc;
 
@@ -1381,31 +1213,32 @@ pub mod vec_chunk {
             VecChunk(Rc::new(updates))
         }
 
-        // `extract` must partition by frontier, fold the kept frontier into
-        // `residual`, and emit graded chunks directly — without leaning on a regrade
-        // re-split.
+        // Flatten a chunk sequence back to its update stream.
+        fn flat<I: IntoIterator<Item = VecChunk<u64, u64, u64, i64>>>(chunks: I) -> Vec<((u64, u64), u64, i64)> {
+            chunks.into_iter().flat_map(|c| (*c.0).clone()).collect()
+        }
+
+        // `extract` partitions by frontier and folds the kept frontier into `residual`;
+        // a terminal `regrade` then grades each side (the seams of near-graded output).
         #[test]
         fn extract_partitions_and_grades() {
-            use super::{Chunk, TARGET};
-            use crate::trace::chunk::{is_graded, ChunkList};
+            use super::TARGET;
+            use crate::trace::chunk::{is_graded, regrade_all};
             use timely::progress::Antichain;
 
             // 4·TARGET updates spread over many input chunks; even times ship
             // (< frontier), odd times keep (>= frontier), so both sides straddle.
             let n = 4 * TARGET as u64;
-            let input: Vec<_> = (0..n)
-                .map(|i| chunk(vec![((i, 0), i % 2, 1)]))
-                .collect();
-            let mut chunks = input;
+            let mut input: VecDeque<_> = (0..n).map(|i| chunk(vec![((i, 0), i % 2, 1)])).collect();
             let frontier = Antichain::from_elem(1u64);
             let mut residual = Antichain::new();
-            let (mut keep, mut ship) = (ChunkList::default(), ChunkList::default());
-            VecChunk::extract(&mut chunks, &frontier, &mut residual, &mut keep, &mut ship);
-            let (keep, ship) = (keep.done(), ship.done());
+            let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
+            VecChunk::extract(&mut input, &frontier, &mut residual, &mut keep, &mut ship);
+            let (keep, ship) = (regrade_all(keep), regrade_all(ship));
 
             // Kept times are exactly {1}; that is the residual frontier.
             assert_eq!(residual, Antichain::from_elem(1u64));
-            // Both sides emerge graded directly from `extract`.
+            // Both sides are graded after the regrade.
             assert!(is_graded(&keep), "ungraded keep: {:?}", keep.iter().map(Chunk::len).collect::<Vec<_>>());
             assert!(is_graded(&ship), "ungraded ship: {:?}", ship.iter().map(Chunk::len).collect::<Vec<_>>());
             // Nothing lost: half the updates each way.
@@ -1414,26 +1247,23 @@ pub mod vec_chunk {
         }
 
         // `advance` advances and consolidates complete `(key, val)` groups eagerly,
-        // withholding only the (possibly-growing) last group when not `done`.
+        // pushing the (possibly-growing) last group back as the carry when not `done`.
         #[test]
         fn advance_emits_complete_groups_eagerly() {
-            use super::Chunk;
-            use crate::trace::chunk::ChunkList;
             use timely::progress::Antichain;
 
             let frontier = Antichain::from_elem(5u64);
             // Group (0,0) is complete within this chunk; group (1,0) might still grow.
             let c0 = chunk(vec![((0, 0), 0, 1), ((0, 0), 1, 1), ((1, 0), 0, 1)]);
-            let mut feed = ((0usize, VecChunk::default()), vec![c0]);
-            let mut out = ChunkList::default();
-            VecChunk::advance(&mut feed, &frontier, false, &mut out);
+            let mut input: VecDeque<_> = VecDeque::from([c0]);
+            let mut out = VecDeque::new();
+            VecChunk::advance(&mut input, &frontier, false, &mut out);
 
-            // The trailing group (1,0) is withheld as the head for the next call.
-            assert_eq!(Chunk::len(&feed.0.1), 1);
-            assert!(feed.1.is_empty());
+            // The trailing group (1,0) is withheld as the carry at the front of `input`.
+            assert_eq!(input.len(), 1);
+            assert_eq!(Chunk::len(&input[0]), 1);
             // Group (0,0)'s times {0,1} advanced to 5 and consolidated, emitted now.
-            let emitted: Vec<_> = out.done().into_iter().flat_map(|c| (*c.0).clone()).collect();
-            assert_eq!(emitted, vec![((0, 0), 5, 2)]);
+            assert_eq!(flat(out), vec![((0, 0), 5, 2)]);
         }
 
         // Streaming the input one chunk at a time must yield exactly what a single
@@ -1441,7 +1271,6 @@ pub mod vec_chunk {
         // at group boundaries.
         #[test]
         fn advance_resumable_matches_oneshot() {
-            use crate::trace::chunk::{AdvanceQueue, ChunkList};
             use timely::progress::Antichain;
 
             let frontier = Antichain::from_elem(3u64);
@@ -1451,22 +1280,20 @@ pub mod vec_chunk {
                 chunk(vec![((1, 0), 5, 1), ((1, 1), 0, 1), ((2, 0), 0, 1)]),
                 chunk(vec![((2, 0), 2, 1), ((2, 0), 9, 1)]),
             ];
-            let flat = |v: Vec<VecChunk<u64, u64, u64, i64>>|
-                v.into_iter().flat_map(|c| (*c.0).clone()).collect::<Vec<_>>();
 
             let oneshot = {
-                let mut q = AdvanceQueue::new(frontier.clone());
-                let mut out = ChunkList::default();
-                q.push(input(), &mut out);
-                q.finish(&mut out);
-                flat(out.done())
+                let mut q: VecDeque<_> = input().into();
+                let mut out = VecDeque::new();
+                VecChunk::advance(&mut q, &frontier, false, &mut out);
+                VecChunk::advance(&mut q, &frontier, true, &mut out);
+                flat(out)
             };
             let incremental = {
-                let mut q = AdvanceQueue::new(frontier.clone());
-                let mut out = ChunkList::default();
-                for c in input() { q.push(std::iter::once(c), &mut out); }
-                q.finish(&mut out);
-                flat(out.done())
+                let mut q = VecDeque::new();
+                let mut out = VecDeque::new();
+                for c in input() { q.push_back(c); VecChunk::advance(&mut q, &frontier, false, &mut out); }
+                VecChunk::advance(&mut q, &frontier, true, &mut out);
+                flat(out)
             };
             assert_eq!(oneshot, incremental);
             // Times are advanced: nothing below the frontier survives.
@@ -1474,71 +1301,66 @@ pub mod vec_chunk {
         }
 
         // A single `(key, val)` whose updates span every pushed chunk: `advance`
-        // can make no progress until `done`, accumulating in the head in place.
+        // can make no progress until `done`, accumulating in the carry in place.
         // It must still produce the right advanced+consolidated result at the end.
         #[test]
         fn advance_single_key_spanning_pushes() {
-            use crate::trace::chunk::{AdvanceQueue, ChunkList};
             use timely::progress::Antichain;
 
             let frontier = Antichain::from_elem(100u64);
             let n = 50u64;
             let make = || (0..n).map(|t| chunk(vec![((7u64, 0u64), t, 1i64)])).collect::<Vec<_>>();
-            let flat = |v: Vec<VecChunk<u64, u64, u64, i64>>|
-                v.into_iter().flat_map(|c| (*c.0).clone()).collect::<Vec<_>>();
 
-            let mut q = AdvanceQueue::new(frontier);
-            let mut out = ChunkList::default();
-            for c in make() { q.push(std::iter::once(c), &mut out); }
-            q.finish(&mut out);
+            let mut q = VecDeque::new();
+            let mut out = VecDeque::new();
+            for c in make() { q.push_back(c); VecChunk::advance(&mut q, &frontier, false, &mut out); }
+            VecChunk::advance(&mut q, &frontier, true, &mut out);
             // All times advance to 100 and consolidate to one update of diff `n`.
-            assert_eq!(flat(out.done()), vec![((7u64, 0u64), 100u64, n as i64)]);
+            assert_eq!(flat(out), vec![((7u64, 0u64), 100u64, n as i64)]);
         }
 
         #[test]
         fn merge_chains_consolidates() {
             let a = chunk(vec![((0, 0), 0, 1), ((1, 0), 0, 1)]);
             let b = chunk(vec![((0, 0), 0, 1), ((2, 0), 0, 1)]);
-            let mut out = crate::trace::chunk::ChunkList::default();
+            let mut out = VecDeque::new();
             merge_chains(vec![a], vec![b], &mut out);
-            let merged: Vec<_> = out.done().into_iter().flat_map(|c| (*c.0).clone()).collect();
-            assert_eq!(merged, vec![((0, 0), 0, 2), ((1, 0), 0, 1), ((2, 0), 0, 1)]);
+            assert_eq!(flat(out), vec![((0, 0), 0, 2), ((1, 0), 0, 1), ((2, 0), 0, 1)]);
         }
 
-        // Merging runs larger than `TARGET` must emit a *graded* sequence directly
-        // (each chunk `<= TARGET`, adjacent pairs summing past `TARGET`), not one
-        // monolithic chunk, while reproducing the consolidated sorted contents.
+        // Merging runs larger than `TARGET`, then regrading, yields a *graded* sequence
+        // (each chunk `<= TARGET`, adjacent pairs summing past `TARGET`) reproducing the
+        // consolidated sorted contents.
         #[test]
         fn merge_emits_graded_chunks() {
-            use super::{Chunk, TARGET};
-            use crate::trace::chunk::{ChunkList, is_graded, merge_chains};
+            use super::TARGET;
+            use crate::trace::chunk::{is_graded, merge_chains, regrade_all};
 
             // Two interleaving single-chunk chains: evens and odds over `0..4·TARGET`.
             let n = 4 * TARGET as u64;
             let evens = chunk((0..n).step_by(2).map(|k| ((k, 0), 0, 1)).collect());
             let odds = chunk((0..n).step_by(2).map(|k| ((k + 1, 0), 0, 1)).collect());
 
-            let mut out = ChunkList::default();
+            let mut out = VecDeque::new();
             merge_chains(vec![evens], vec![odds], &mut out);
-            let chunks = out.done();
+            let chunks = regrade_all(out);
 
             assert!(is_graded(&chunks), "merge output not graded: {:?}",
                 chunks.iter().map(Chunk::len).collect::<Vec<_>>());
             // Contents are exactly the sorted keys `0..4·TARGET`, each once.
-            let merged: Vec<_> = chunks.into_iter().flat_map(|c| (*c.0).clone()).collect();
             let want: Vec<_> = (0..n).map(|k| ((k, 0u64), 0u64, 1i64)).collect();
-            assert_eq!(merged, want);
+            assert_eq!(flat(chunks), want);
         }
 
-        // Property test: merging two *multi-chunk* chains (driven through `merge_pair`
-        // by `merge_chains`) reproduces the union of all updates, consolidated. Tiny
+        // Property test: merging two *multi-chunk* chains (driven through `merge` by
+        // `merge_chains`) reproduces the union of all updates, consolidated. Tiny
         // chunks force `(key, val)` groups — which can span several times — to
         // straddle chunk boundaries on both sides, exercising the refill path the
         // single-chunk merge tests never reach. The independent oracle is
         // `consolidate_updates` over the concatenation.
         #[test]
-        fn merge_pair_matches_reference() {
-            use crate::trace::chunk::{ChunkList, merge_chains};
+        fn merge_matches_reference() {
+            use crate::trace::chunk::merge_chains;
             use crate::consolidation::consolidate_updates;
 
             // Deterministic xorshift PRNG — no dev-dependency on `rand`.
@@ -1570,9 +1392,9 @@ pub mod vec_chunk {
                 if u1.is_empty() || u2.is_empty() { continue; }
                 let sz = (rng() as usize % 5) + 1; // tiny chunks → heavy straddling
 
-                let mut out = ChunkList::default();
+                let mut out = VecDeque::new();
                 merge_chains(chain(&u1, sz), chain(&u2, sz), &mut out);
-                let merged: Vec<_> = out.done().into_iter().flat_map(|c| (*c.0).clone()).collect();
+                let merged = flat(out);
 
                 let mut reference: Vec<_> = u1.iter().chain(u2.iter()).cloned().collect();
                 consolidate_updates(&mut reference);
@@ -1582,13 +1404,12 @@ pub mod vec_chunk {
         }
 
         // `regrade` must produce a *maximal packing*: adjacent sub-`TARGET` chunks
-        // that could combine into one legal chunk are coalesced (the prior rule left
-        // any pair summing past `TARGET/2` alone), full chunks pass through, and
-        // contents are preserved exactly.
+        // that could combine into one legal chunk are coalesced, full chunks pass
+        // through as `Rc` moves, and contents are preserved exactly.
         #[test]
         fn regrade_maximal_packing() {
-            use super::{Chunk, TARGET};
-            use crate::trace::chunk::{is_graded, ChunkList};
+            use super::TARGET;
+            use crate::trace::chunk::is_graded;
 
             // A mix of small and full chunks with distinct, increasing keys (so the
             // concatenation is sorted and nothing consolidates away).
@@ -1596,12 +1417,15 @@ pub mod vec_chunk {
             let sizes = [t / 3, t / 3, t / 3, t, t / 2, t / 2, t, 1, t - 1];
             let total: usize = sizes.iter().sum();
             let mut key = 0u64;
-            let mut list = ChunkList::default();
+            let mut input = VecDeque::new();
+            let mut output = VecDeque::new();
             for &s in &sizes {
                 let updates: Vec<_> = (0..s).map(|_| { let k = key; key += 1; ((k, 0u64), 0u64, 1i64) }).collect();
-                list.push(chunk(updates));
+                input.push_back(chunk(updates));
+                VecChunk::regrade(&mut input, false, &mut output);
             }
-            let chunks = list.done();
+            VecChunk::regrade(&mut input, true, &mut output);
+            let chunks: Vec<_> = output.into();
 
             assert!(is_graded(&chunks), "not graded: {:?}",
                 chunks.iter().map(Chunk::len).collect::<Vec<_>>());
