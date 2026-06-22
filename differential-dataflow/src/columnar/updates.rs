@@ -211,6 +211,22 @@ impl<U: Update, B: Clone> Clone for Updates<U, B> {
     }
 }
 
+impl<U: Update> Updates<U> {
+    /// Reconstruct from bytes produced by [`write_to`](Updates::write_to). Columns
+    /// are wrapped as `Stash::Bytes` (zero-copy, read-only) over the input `bytes`.
+    pub fn read_from(mut bytes: timely::bytes::arc::Bytes) -> Self {
+        use columnar::bytes::stash::Stash;
+        let header = bytes.extract_to(32);
+        let len = |i: usize| u64::from_le_bytes(header[i*8..i*8+8].try_into().unwrap()) as usize;
+        let (kl, vl, tl, dl) = (len(0), len(1), len(2), len(3));
+        let keys  = Stash::try_from_bytes(bytes.extract_to(kl)).expect("keys decode");
+        let vals  = Stash::try_from_bytes(bytes.extract_to(vl)).expect("vals decode");
+        let times = Stash::try_from_bytes(bytes.extract_to(tl)).expect("times decode");
+        let diffs = Stash::try_from_bytes(bytes.extract_to(dl)).expect("diffs decode");
+        Updates { keys, vals, times, diffs }
+    }
+}
+
 impl<U: Update, B> From<UpdatesTyped<U>> for Updates<U, B> {
     fn from(owned: UpdatesTyped<U>) -> Self {
         use columnar::bytes::stash::Stash;
@@ -241,6 +257,29 @@ impl<U: Update, B: std::ops::Deref<Target = [u8]> + Clone + 'static> Updates<U, 
 
     /// Whether the trie is empty.
     pub fn is_empty(&self) -> bool { self.len() == 0 }
+
+    /// Serialize the four columns to `writer`: a 32-byte header of per-column
+    /// byte lengths, then each column's `Stash` encoding. Round-trips with
+    /// [`read_from`](Updates::read_from). Used to spill a chunk to backing storage.
+    pub fn write_to<W: std::io::Write>(&self, writer: &mut W) {
+        let lens = [
+            self.keys.length_in_bytes()  as u64,
+            self.vals.length_in_bytes()  as u64,
+            self.times.length_in_bytes() as u64,
+            self.diffs.length_in_bytes() as u64,
+        ];
+        for l in lens { writer.write_all(&l.to_le_bytes()).unwrap(); }
+        self.keys.write_bytes(writer).unwrap();
+        self.vals.write_bytes(writer).unwrap();
+        self.times.write_bytes(writer).unwrap();
+        self.diffs.write_bytes(writer).unwrap();
+    }
+
+    /// Total serialized size in bytes (matches what [`write_to`](Updates::write_to) emits).
+    pub fn length_in_bytes(&self) -> usize {
+        32 + self.keys.length_in_bytes() + self.vals.length_in_bytes()
+           + self.times.length_in_bytes() + self.diffs.length_in_bytes()
+    }
 
     /// Convert to fully owned form, copying any `Stash::Bytes` columns into
     /// typed `Lists`. Already-typed columns pass through with no copy.
@@ -339,7 +378,9 @@ impl<U: Update> UpdatesTyped<U> {
     /// Forms a consolidated `UpdatesTyped` trie from unsorted `(key, val, time, diff)` refs.
     pub fn form_unsorted<'a>(unsorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
         let mut data = unsorted.collect::<Vec<_>>();
-        data.sort();
+        // Unstable is faster (pdqsort, no scratch alloc); equal `(k,v,t)` entries
+        // reorder freely since `form` sums their diffs commutatively.
+        data.sort_unstable();
         Self::form(data.into_iter())
     }
 

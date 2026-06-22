@@ -1,30 +1,31 @@
 //! Columnar arrangement plumbing.
 //!
-//! - Type aliases (`ValSpine`, `ValBatcher`, `ValBuilder`) glue columnar storage
-//!   into DD's trace machinery.
-//! - `Coltainer<C>` wraps a columnar `C::Container` as a DD `BatchContainer`.
-//! - `TrieChunker` strips `RecordedUpdates` down to `UpdatesTyped` for the merge batcher.
-//! - `trie_merger` is the batch-at-a-time merging logic.
-//! - `builder::ValMirror` is the `trace::Builder` that seals melded chunks into
-//!   an `OrdValBatch`.
+//! The trace runs on the [`Chunk`](crate::trace::chunk::Chunk) abstraction: a
+//! columnar batch is a sequence of [`ColChunk`](crate::trace::chunk::col::ColChunk)s
+//! (each an `UpdatesTyped` trie behind an `Rc`), and the batcher / builder / spine
+//! are the generic `Chunk` harness specialized to that layout.
+//!
+//! - Type aliases (`ValSpine`, `ValBatcher`, `ValBuilder`) re-export the `Chunk`
+//!   harness over `ColChunk`.
+//! - `Coltainer<C>` wraps a columnar `C::Container` as a DD `BatchContainer`; it
+//!   backs `ColumnarLayout`, which `ColChunk` uses for its cursor GATs and the
+//!   per-chunk batch index.
+//! - `TrieChunker` melds `RecordedUpdates<U>` streams into `ColChunk<U>` for the batcher.
+//! - `trie_merger` is the trie-native survey/merge logic that `ColChunk`'s
+//!   `Chunk::merge` / `extract` / `settle` delegate to.
 
-use std::rc::Rc;
-use crate::trace::implementations::ord_neu::OrdValBatch;
-use crate::trace::rc_blanket_impls::RcBuilder;
-use crate::trace::implementations::spine_fueled::Spine;
-
-use super::layout::ColumnarLayout;
+use crate::trace::chunk::col::ColChunk;
 
 pub mod trie_merger;
 
-/// A trace implementation backed by columnar storage.
-pub type ValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<ColumnarLayout<(K,V,T,R)>>>>;
-/// A batcher for columnar storage.
-pub type ValBatcher<K, V, T, R> = super::batcher::MergeBatcher<(K,V,T,R)>;
-/// A chunker that maps `RecordedUpdates<U>` streams into the batcher's `UpdatesTyped<U>` chunks.
+/// The columnar trace: a spine of `Rc`-shared [`ColChunk`] batches.
+pub type ValSpine<K, V, T, R> = crate::trace::chunk::col::ChunkSpine<K, V, T, R>;
+/// The columnar merge batcher (the `Chunk` harness's `MergeBatcher<ChunkMerger<ColChunk>>`).
+pub type ValBatcher<K, V, T, R> = crate::trace::chunk::col::ChunkBatcher<K, V, T, R>;
+/// A chunker that melds `RecordedUpdates<U>` streams into `ColChunk<U>` chunks.
 pub type ValChunker<U> = TrieChunker<U>;
-/// A builder for columnar storage.
-pub type ValBuilder<K, V, T, R> = RcBuilder<builder::ValMirror<(K,V,T,R)>>;
+/// The columnar batch builder (the `Chunk` harness's `ChunkBuilder<ColChunk>`).
+pub type ValBuilder<K, V, T, R> = crate::trace::chunk::col::ChunkBuilder<K, V, T, R>;
 
 /// A batch container implementation for Coltainer<C>.
 pub use batch_container::Coltainer;
@@ -142,8 +143,8 @@ pub struct TrieChunker<U: super::layout::ColumnarUpdate> {
     /// Ready-to-emit chunks. Each is sorted and consolidated; size ≥ `LINK_TARGET`
     /// (or smaller, only for the final chunk produced by `finish`).
     ready: std::collections::VecDeque<UpdatesTyped<U>>,
-    /// Staging area for the next pull call.
-    stage: Option<UpdatesTyped<U>>,
+    /// Staging area for the next pull call: the ready trie wrapped as a `ColChunk`.
+    stage: Option<ColChunk<U>>,
 }
 
 impl<U: super::layout::ColumnarUpdate> Default for TrieChunker<U> {
@@ -236,9 +237,9 @@ impl<'a, U: super::layout::ColumnarUpdate> timely::container::PushInto<&'a mut R
 }
 
 impl<U: super::layout::ColumnarUpdate> timely::container::ContainerBuilder for TrieChunker<U> {
-    type Container = UpdatesTyped<U>;
+    type Container = ColChunk<U>;
     fn extract(&mut self) -> Option<&mut Self::Container> {
-        self.stage = self.ready.pop_front();
+        self.stage = self.ready.pop_front().map(ColChunk::from_trie);
         self.stage.as_mut()
     }
     fn finish(&mut self) -> Option<&mut Self::Container> {
@@ -248,99 +249,5 @@ impl<U: super::layout::ColumnarUpdate> timely::container::ContainerBuilder for T
             if cons.len() > 0 { self.ready.push_back(cons); }
         }
         self.extract()
-    }
-}
-
-pub mod builder {
-    //! [`ValMirror`] trace builder that seals melded chunks into [`OrdValBatch`].
-
-    use crate::trace::implementations::ord_neu::{Vals, Upds};
-    use crate::trace::implementations::ord_neu::val_batch::{OrdValBatch, OrdValStorage};
-    use crate::trace::Description;
-
-    use super::super::updates::UpdatesTyped;
-    use super::super::layout::ColumnarUpdate as Update;
-    use super::super::layout::ColumnarLayout as Layout;
-    use super::Coltainer;
-
-    use columnar::{Borrow, IndexAs};
-    use columnar::primitive::offsets::Strides;
-    use crate::trace::implementations::OffsetList;
-    fn strides_to_offset_list(bounds: &Strides, count: usize) -> OffsetList {
-        let mut output = OffsetList::with_capacity(count);
-        output.push(0);
-        let bounds_b = bounds.borrow();
-        for i in 0..count {
-            output.push(bounds_b.index_as(i) as usize);
-        }
-        output
-    }
-
-    /// Trace [`Builder`](crate::trace::Builder) that accumulates `UpdatesTyped`
-    /// chunks and seals them into a single [`OrdValBatch`].
-    pub struct ValMirror<U: Update> {
-        chunks: Vec<UpdatesTyped<U>>,
-    }
-    impl<U: Update> crate::trace::Builder for ValMirror<U> {
-        type Time = U::Time;
-        type Input = UpdatesTyped<U>;
-        type Output = OrdValBatch<Layout<U>>;
-
-        fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-            Self { chunks: Vec::new() }
-        }
-        fn push(&mut self, chunk: &mut Self::Input) {
-            if chunk.len() > 0 {
-                self.chunks.push(std::mem::take(chunk));
-            }
-        }
-        fn done(self, description: Description<Self::Time>) -> Self::Output {
-            let mut chain = self.chunks;
-            Self::seal(&mut chain, description)
-        }
-        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
-            use columnar::Len;
-
-            // Meld sorted, consolidated chain entries in order.
-            // Pre-allocate to avoid reallocations during meld.
-            use columnar::Container;
-            let mut updates = UpdatesTyped::<U>::default();
-            updates.keys.reserve_for(chain.iter().map(|c| c.view().keys));
-            updates.vals.reserve_for(chain.iter().map(|c| c.view().vals));
-            updates.times.reserve_for(chain.iter().map(|c| c.view().times));
-            updates.diffs.reserve_for(chain.iter().map(|c| c.view().diffs));
-            let mut builder = super::super::updates::UpdatesBuilder::new_from(updates);
-            for chunk in chain.iter() {
-                builder.meld(chunk);
-            }
-            let merged = builder.done();
-            chain.clear();
-
-            let updates = Len::len(&merged.diffs.values);
-            if updates == 0 {
-                let storage = OrdValStorage {
-                    keys: Default::default(),
-                    vals: Default::default(),
-                    upds: Default::default(),
-                };
-                OrdValBatch { storage, description, updates: 0 }
-            } else {
-                let val_offs = strides_to_offset_list(&merged.vals.bounds, Len::len(&merged.keys.values));
-                let time_offs = strides_to_offset_list(&merged.times.bounds, Len::len(&merged.vals.values));
-                let storage = OrdValStorage {
-                    keys: Coltainer { container: merged.keys.values },
-                    vals: Vals {
-                        offs: val_offs,
-                        vals: Coltainer { container: merged.vals.values },
-                    },
-                    upds: Upds {
-                        offs: time_offs,
-                        times: Coltainer { container: merged.times.values },
-                        diffs: Coltainer { container: merged.diffs.values },
-                    },
-                };
-                OrdValBatch { storage, description, updates }
-            }
-        }
     }
 }

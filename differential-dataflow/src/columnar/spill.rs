@@ -1,49 +1,136 @@
-//! Traits for paging chunks of merge-batcher state to and from backing storage.
+//! Per-worker spill control for the columnar `Chunk` trace.
 //!
-//! Modeled on timely's pager traits in
-//! `timely-dataflow/communication/src/allocator/zero_copy/spill.rs`
-//! (`SpillPolicy`, `BytesSpill`, `BytesFetch`), but parameterized over a chunk
-//! type `C` rather than fixed to `timely::bytes::arc::Bytes`. For the columnar
-//! batcher we expect `C = Updates<U>`; that wiring lives elsewhere — this file
-//! only defines the trait shapes.
+//! [`ColChunk`](crate::trace::chunk::col::ColChunk) is either resident (a trie in
+//! memory) or paged (resident bounds + a byte handle to fetch the trie back).
+//! `Chunk::settle` is where committed chunks may be **paged out**: it calls
+//! [`try_page`], which consults a per-worker [`SpillState`] and, when over budget,
+//! serializes the trie and hands the bytes to a pluggable [`BytesStore`]. Reads
+//! ([`Chunk::merge`] etc., and the cursor) fetch paged chunks back on demand.
+//!
+//! The backend is pluggable: a worker calls [`install`] with its own
+//! [`BytesStore`] (e.g. file-backed). With nothing installed, no chunk is ever
+//! paged and `ColChunk` stays resident — zero overhead beyond a thread-local peek.
+//!
+//! # Known limitation
+//!
+//! `settle` sees only its **local** committed output, not the whole batcher
+//! queue (timely's `MergeBatcher` does not expose it). So the eviction policy is
+//! an approximate per-worker record budget — paged-at-settle, decremented as
+//! chunks are consumed — not the exact head-reserve-over-the-queue policy the
+//! old bespoke batcher could run. It bounds resident memory and round-trips
+//! through the store correctly; it just can't see as much as we'd like.
 
-use std::collections::VecDeque;
+use std::cell::RefCell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
-/// A queue entry: either an in-memory chunk or a handle that can fetch one
-/// (or several) from backing storage.
-pub enum Entry<C> {
-    /// In-memory chunk.
-    Typed(C),
-    /// Paged-out chunk(s); fetch via the handle.
-    Paged(Box<dyn Fetch<C>>),
+use super::layout::ColumnarUpdate as Update;
+use super::updates::{Updates, UpdatesTyped};
+
+/// Append a chunk's bytes to backing storage, returning a handle to read them back.
+pub trait BytesStore {
+    /// Persist `bytes`, returning a source that can reproduce them.
+    fn store(&mut self, bytes: &[u8]) -> Box<dyn BytesSource>;
 }
 
-/// Decides which queue entries to spill out and which to keep resident.
-///
-/// Invoked at well-defined moments by the holder of the queue (e.g., after
-/// pushing a new chunk). The implementation may rewrite entries in either
-/// direction: convert `Typed` to `Paged` (spill out) or `Paged` to `Typed`
-/// (fetch back).
-pub trait SpillPolicy<C> {
-    /// Optionally transform the queue.
-    fn apply(&mut self, queue: &mut VecDeque<Entry<C>>);
+/// A handle to bytes previously written via a [`BytesStore`].
+pub trait BytesSource {
+    /// Read the bytes back. Panics on failure (the trace cannot make progress without them).
+    fn load(&self) -> Vec<u8>;
 }
 
-/// Move in-memory chunks to backing storage, returning fetch handles.
-///
-/// The implementation should drain from `chunks` and push to `handles` as it
-/// goes; on failure it may stop partway, leaving the lists in a consistent
-/// state that will be retried in the future. If it cannot leave the lists in
-/// a consistent state it should panic.
-pub trait Spill<C> {
-    /// Spill `chunks` to storage, producing one fetch handle per spilled group.
-    fn spill(&mut self, chunks: &mut Vec<C>, handles: &mut Vec<Box<dyn Fetch<C>>>);
+/// Cumulative spill counters, shared (via `Arc`) so a run can sum across workers.
+#[derive(Default)]
+pub struct SpillStats {
+    /// Chunks paged out.
+    pub spilled_chunks: AtomicUsize,
+    /// Records (updates) in paged-out chunks.
+    pub spilled_records: AtomicUsize,
+    /// Chunks fetched back in.
+    pub fetched_chunks: AtomicUsize,
+    /// Serialized bytes written.
+    pub bytes_written: AtomicUsize,
 }
 
-/// Handle to spilled chunk(s). Consume to retrieve them from storage.
-pub trait Fetch<C> {
-    /// Consume the handle and return the spilled chunks.
-    ///
-    /// On failure, the handle is returned so the caller can retry later.
-    fn fetch(self: Box<Self>) -> Result<Vec<C>, Box<dyn Fetch<C>>>;
+/// Per-worker spill state: the budget, the running resident estimate, the store,
+/// and counters.
+struct SpillState {
+    /// Keep up to this many records resident before paging committed chunks.
+    budget_records: usize,
+    /// Running estimate of records held resident in the batcher (approximate; see
+    /// the module's "Known limitation").
+    resident_records: usize,
+    /// Pluggable backing store.
+    store: Box<dyn BytesStore>,
+    /// Counters, shared with the installer.
+    stats: Arc<SpillStats>,
+}
+
+thread_local! {
+    static STATE: RefCell<Option<SpillState>> = const { RefCell::new(None) };
+}
+
+/// Install spill on this worker: page committed chunks once resident records
+/// exceed `budget_records`, writing to `store`. `stats` receives the counters.
+pub fn install(budget_records: usize, store: Box<dyn BytesStore>, stats: Arc<SpillStats>) {
+    STATE.with(|s| *s.borrow_mut() = Some(SpillState { budget_records, resident_records: 0, store, stats }));
+}
+
+/// Remove this worker's spill state (so later traces stay resident).
+pub fn uninstall() {
+    STATE.with(|s| *s.borrow_mut() = None);
+}
+
+/// Whether a spiller is installed on this worker (a cheap peek `settle` makes
+/// before computing any per-chunk paging metadata).
+pub(crate) fn active() -> bool {
+    STATE.with(|s| s.borrow().is_some())
+}
+
+/// Try to page `updates` out. On success returns a [`BytesSource`] handle to fetch
+/// it back; otherwise returns the trie to keep resident (and counts it against the
+/// budget). With no spiller installed (or under budget), always keeps.
+pub(crate) fn try_page<U: Update>(updates: UpdatesTyped<U>) -> Result<Box<dyn BytesSource>, UpdatesTyped<U>> {
+    STATE.with(|s| {
+        let mut guard = s.borrow_mut();
+        let Some(state) = guard.as_mut() else { return Err(updates) };
+        let records = updates.len();
+        if state.resident_records + records <= state.budget_records {
+            state.resident_records += records;
+            return Err(updates);
+        }
+        // Over budget: serialize and page out.
+        let mut buf = Vec::new();
+        Updates::<U>::from(updates).write_to(&mut buf);
+        state.stats.spilled_chunks.fetch_add(1, Relaxed);
+        state.stats.spilled_records.fetch_add(records, Relaxed);
+        state.stats.bytes_written.fetch_add(buf.len(), Relaxed);
+        Ok(state.store.store(&buf))
+    })
+}
+
+/// A resident chunk of `records` is leaving the resident set (consumed by a
+/// transducer); discount it from the budget.
+pub(crate) fn note_consumed(records: usize) {
+    STATE.with(|s| {
+        if let Some(state) = s.borrow_mut().as_mut() {
+            state.resident_records = state.resident_records.saturating_sub(records);
+        }
+    });
+}
+
+/// A paged chunk was fetched back in; bump the counter.
+pub(crate) fn note_fetched() {
+    STATE.with(|s| {
+        if let Some(state) = s.borrow_mut().as_mut() {
+            state.stats.fetched_chunks.fetch_add(1, Relaxed);
+        }
+    });
+}
+
+/// Reconstruct a trie from bytes a [`BytesSource`] produced (the inverse of
+/// `try_page`'s serialization).
+pub(crate) fn decode<U: Update>(source: &dyn BytesSource) -> UpdatesTyped<U> {
+    let bytes = timely::bytes::arc::BytesMut::from(source.load()).freeze();
+    Updates::<U>::read_from(bytes).into_typed()
 }

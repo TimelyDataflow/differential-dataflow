@@ -32,7 +32,7 @@ impl<T, U: Update> PushInto<T> for ValBuilder<U> where TupleContainer<U> : Push<
             use columnar::{Borrow, Index};
             let records = self.current.len();
             let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
-            refs.sort();
+            refs.sort_unstable();
             let updates = UpdatesTyped::form(refs.into_iter()).into();
             self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
             self.current.clear();
@@ -70,7 +70,7 @@ impl<U: Update> ContainerBuilder for ValBuilder<U> {
             use columnar::{Borrow, Index};
             let records = self.current.len();
             let mut refs = self.current.borrow().into_index_iter().collect::<Vec<_>>();
-            refs.sort();
+            refs.sort_unstable();
             let updates = UpdatesTyped::form(refs.into_iter()).into();
             self.pending.push_back(RecordedUpdates { updates, records, consolidated: true });
             self.current.clear();

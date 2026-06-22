@@ -13,6 +13,7 @@ use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::chunk::vec::{ChunkBatcher, ChunkBuilder, ChunkSpine, VecChunk};
+use differential_dataflow::trace::chunk::col::ColChunk;
 use differential_dataflow::trace::implementations::chunker::ContainerChunker;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValBatcher, RcOrdValBuilder, OrdValSpine};
 
@@ -33,8 +34,8 @@ fn main() {
     timely::execute_from_args(std::env::args().skip(4), move |worker| {
         let mut probe = Handle::new();
         let (mut data_input, mut keys_input) = worker.dataflow(|scope| {
-            let (data_input, data) = scope.new_collection::<u64, isize>();
-            let (keys_input, keys) = scope.new_collection::<u64, isize>();
+            let (data_input, data) = scope.new_collection::<u64, i64>();
+            let (keys_input, keys) = scope.new_collection::<u64, i64>();
             let data = data.map(|x| (x, ()));
             let keys = keys.map(|x| (x, ()));
 
@@ -43,25 +44,38 @@ fn main() {
                     // The chunk batcher's output (`VecChunk`) differs from the stream
                     // container (`Vec`), so this is a cross-container chunker case:
                     // drop to `arrange_core` with an explicit `ContainerChunker<VecChunk>`.
-                    type Ba = ChunkBatcher<u64, (), u64, isize>;
-                    type Bu = ChunkBuilder<u64, (), u64, isize>;
-                    type Sp = ChunkSpine<u64, (), u64, isize>;
-                    type Chu = ContainerChunker<VecChunk<u64, (), u64, isize>>;
+                    type Ba = ChunkBatcher<u64, (), u64, i64>;
+                    type Bu = ChunkBuilder<u64, (), u64, i64>;
+                    type Sp = ChunkSpine<u64, (), u64, i64>;
+                    type Chu = ContainerChunker<VecChunk<u64, (), u64, i64>>;
                     let data = arrange_core::<_, _, Chu, Ba, Bu, Sp>(
-                        data.inner, Exchange::new(|u: &((u64, ()), u64, isize)| (u.0).0.hashed().into()), "Data");
+                        data.inner, Exchange::new(|u: &((u64, ()), u64, i64)| (u.0).0.hashed().into()), "Data");
                     let keys = arrange_core::<_, _, Chu, Ba, Bu, Sp>(
-                        keys.inner, Exchange::new(|u: &((u64, ()), u64, isize)| (u.0).0.hashed().into()), "Keys");
+                        keys.inner, Exchange::new(|u: &((u64, ()), u64, i64)| (u.0).0.hashed().into()), "Keys");
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None).probe_with(&mut probe);
                 }
+                "col" => {
+                    // Same harness, but the columnar (`UpdatesTyped` trie) `Chunk`.
+                    type Ba = differential_dataflow::trace::chunk::col::ChunkBatcher<u64, (), u64, i64>;
+                    type Bu = differential_dataflow::trace::chunk::col::ChunkBuilder<u64, (), u64, i64>;
+                    type Sp = differential_dataflow::trace::chunk::col::ChunkSpine<u64, (), u64, i64>;
+                    type Chu = ContainerChunker<ColChunk<(u64, (), u64, i64)>>;
+                    let data = arrange_core::<_, _, Chu, Ba, Bu, Sp>(
+                        data.inner, Exchange::new(|u: &((u64, ()), u64, i64)| (u.0).0.hashed().into()), "Data");
+                    let keys = arrange_core::<_, _, Chu, Ba, Bu, Sp>(
+                        keys.inner, Exchange::new(|u: &((u64, ()), u64, i64)| (u.0).0.hashed().into()), "Keys");
+                    // The columnar cursor yields `Val = columnar::Ref<()> = ()`, not `&()`.
+                    keys.join_core(data, |_k, _, _| Option::<()>::None).probe_with(&mut probe);
+                }
                 "ord" => {
-                    type Ba = OrdValBatcher<u64, (), u64, isize>;
-                    type Bu = RcOrdValBuilder<u64, (), u64, isize>;
-                    type Sp = OrdValSpine<u64, (), u64, isize>;
+                    type Ba = OrdValBatcher<u64, (), u64, i64>;
+                    type Bu = RcOrdValBuilder<u64, (), u64, i64>;
+                    type Sp = OrdValSpine<u64, (), u64, i64>;
                     let data = data.arrange::<Ba, Bu, Sp>();
                     let keys = keys.arrange::<Ba, Bu, Sp>();
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None).probe_with(&mut probe);
                 }
-                other => panic!("unrecognized mode: {other:?} (expected `chunk` or `ord`)"),
+                other => panic!("unrecognized mode: {other:?} (expected `chunk`, `col`, or `ord`)"),
             }
 
             (data_input, keys_input)
@@ -73,7 +87,7 @@ fn main() {
         while counter < 10 * keys {
             let mut i = worker.index();
             while i < size {
-                data_input.insert(((counter + i) % keys) as u64);
+                data_input.update(((counter + i) % keys) as u64, 1i64);
                 i += worker.peers();
             }
             counter += size;
@@ -89,7 +103,7 @@ fn main() {
         while queries < 10 * keys {
             let mut i = worker.index();
             while i < size {
-                keys_input.insert(((queries + i) % keys) as u64);
+                keys_input.update(((queries + i) % keys) as u64, 1i64);
                 i += worker.peers();
             }
             queries += size;

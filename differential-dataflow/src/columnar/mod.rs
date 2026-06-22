@@ -19,13 +19,19 @@
 //! [`columnar`](https://docs.rs/columnar) crate should `use columnar as col;`
 //! to disambiguate.
 //!
+//! The trace runs on the [`Chunk`](crate::trace::chunk) abstraction: a batch is a
+//! sequence of [`ColChunk`](crate::trace::chunk::col::ColChunk)s (the [`updates`]
+//! trie, resident or paged), and the batcher / builder / spine are the generic
+//! `Chunk` harness. `settle` pages chunks out via [`spill`].
+//!
 //! Module layout (bottom-up):
 //! - [`layout`] — `ColumnarUpdate` / `ColumnarLayout` / `OrdContainer`.
-//! - [`updates`] — `UpdatesTyped<U>` trie, `Consolidating`, `UpdatesBuilder`.
+//! - [`updates`] — `UpdatesTyped<U>` trie, `Consolidating`, `UpdatesBuilder`, byte codec.
 //! - [`builder`] — `ValColBuilder`: the input-side `ContainerBuilder`.
 //! - [`exchange`] — `ValPact` / `ValDistributor`: PACT for shuffling.
-//! - [`arrangement`] — type aliases + `Coltainer` + `TrieChunker` +
-//!   `trie_merger` + `ValMirror` (trace Builder).
+//! - [`arrangement`] — trace aliases (`ValSpine`/`ValBatcher`/`ValBuilder` over
+//!   `ColChunk`) + `Coltainer` + `TrieChunker` + `trie_merger` (the survey/merge core).
+//! - [`spill`] — per-worker page-out control for `ColChunk` (`Chunk::settle`'s spill hook).
 //! - This file — `RecordedUpdates<U>` (the stream container), container-trait
 //!   impls (`Negate`, `Enter`, `Leave`, `ResultsIn`), and top-level operators
 //!   (`join_function`, `leave_dynamic`, `as_recorded_updates`).
@@ -36,7 +42,6 @@ pub mod updates;
 pub mod builder;
 pub mod exchange;
 pub mod arrangement;
-pub mod batcher;
 pub mod spill;
 
 pub use updates::UpdatesTyped;

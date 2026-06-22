@@ -171,13 +171,13 @@ mod reachability {
                 _,
             >("Distinct", |_node, _input, output| { output.push(((), 1)); },
             |col, key, upds| {
-                use columnar::{Clear, Push};
-                col.keys.clear();
-                col.vals.clear();
-                col.times.clear();
-                col.diffs.clear();
-                for (val, time, diff) in upds.drain(..) { col.push((key, &val, &time, &diff)); }
-                *col = std::mem::take(col).consolidate();
+                use columnar::Push;
+                use differential_dataflow::columnar::updates::UpdatesTyped;
+                // `col` is now a `ColChunk` (the trie behind an `Rc`); build this
+                // key's run in a fresh trie and install it consolidated.
+                let mut trie = UpdatesTyped::default();
+                for (val, time, diff) in upds.drain(..) { trie.push((key, &val, &time, &diff)); }
+                *col.updates_mut() = trie.consolidate();
             });
 
             // Extract RecordedUpdates from the Arranged's batch stream.
