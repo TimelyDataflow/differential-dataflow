@@ -1,35 +1,17 @@
-//! A worked [`Chunk`] implementation: `Vec<((K, V), T, R)>` behind an `Rc`.
+//! A worked [`Chunk`]: `Vec<((K, V), T, R)>` behind an `Rc`.
 //!
-//! This is the reference example — a next implementor (e.g. columnar) follows
-//! its *shape*, not its layout. It shows the two integration points any chunk
-//! type satisfies, and how leaning on the parent module's generic harnesses
-//! keeps the code terse:
+//! The reference implementation. It shows the two integration points any `Chunk`
+//! satisfies; another layout copies this *shape*, not the `Vec`:
 //!
-//! * **Batcher side.** The merge batcher's `ContainerChunker` builds chunks, so
-//!   the type implements timely's container traits (`Accountable`,
-//!   `SizableContainer`, `Consolidate`, `PushInto`). Here they delegate to the
-//!   inner `Vec` via `Rc::make_mut` — free while a chunk is being built
-//!   (refcount 1), and it never copies a *shared* chunk because batches are
-//!   immutable once built.
-//! * **Trace side.** [`Chunk`] (merge / extract / advance / regrade / bounds)
-//!   plus a cursor. Key lookups are logarithmic by galloping search (`seek_*`),
-//!   independent of chunk size; stepping stays linear (short hops).
+//! * **Batcher side.** The chunker builds chunks through timely's container traits
+//!   (`Accountable`, `SizableContainer`, `Consolidate`, `PushInto`), which here
+//!   delegate to the inner `Vec` via `Rc::make_mut` (free while building, never
+//!   copying a shared batch).
+//! * **Trace side.** [`Chunk`] plus a cursor: key lookups gallop (logarithmic in
+//!   chunk size), stepping is linear.
 //!
-//! `Clone` is a refcount bump, so the trace merger shares source chunks instead
-//! of copying them.
-//!
-//! **What a columnar impl can and can't reuse.** The protocol (the `VecDeque`
-//! in/out, withhold-by-`push_front`, grade-at-seal) is layout-agnostic and carries
-//! over unchanged. The *merge body* does not: this one merges a single contiguous
-//! `&[((K,V),T,R)]` and bulk-copies disjoint runs with `extend_from_slice` +
-//! `chunks(TARGET)`. A columnar chunk (ranging over `ord_neu`'s deduped layout) has
-//! no such slice — it must range-copy the key / val / time / diff columns with
-//! offset bookkeeping, emitting one key + its val/time run rather than repeated rows.
-//! That is the operation that beats the flat layout on repetitive keys (see the
-//! module-level note on the row-major vs. columnar crossover), and it is also where
-//! the earlier `col_chunk` got into trouble (decompress-and-recompress instead of a
-//! true range-copy). So a columnar `Chunk` is the open bet: nothing here exercises a
-//! columnar merge, and that body — not the protocol — is the phase-2 risk.
+//! `Clone` is a refcount bump, so the trace merger shares source chunks rather than
+//! copying them.
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
@@ -38,6 +20,7 @@ use std::rc::Rc;
 use timely::Accountable;
 use timely::container::{PushInto, SizableContainer};
 use timely::progress::{Antichain, Timestamp};
+use timely::progress::frontier::AntichainRef;
 
 use crate::consolidation::Consolidate;
 use crate::difference::Semigroup;
@@ -47,9 +30,7 @@ use crate::trace::implementations::{Vector, WithLayout};
 
 use super::Chunk;
 
-/// The chunk size: both the maximum updates per chunk and the coalescing
-/// threshold (see [`Chunk::TARGET`]). Chosen for the reference impl; exposed as
-/// the associated const below, and used internally for buffer sizing.
+/// The chunk size: the [`Chunk::TARGET`] value, also used for buffer sizing.
 const TARGET: usize = 1024;
 
 /// A sorted, consolidated run of `((key, val), time, diff)`, shared via `Rc`.
@@ -64,15 +45,11 @@ impl<K, V, T, R> Default for VecChunk<K, V, T, R> {
 
 /// The trace type for `arrange`: a spine of `Rc`-shared chunk batches.
 pub type ChunkSpine<K, V, T, R> = super::ChunkSpine<VecChunk<K, V, T, R>>;
-/// Merge batcher over `VecChunk`s. Unordered `Vec<((K, V), T, R)>` input is
-/// consolidated into sorted `VecChunk`s by a `ContainerChunker<VecChunk>` supplied
-/// at the `arrange_core` callsite (it drives the container-trait impls below); the
-/// batcher itself only merges the resulting chunks.
+/// Merge batcher over `VecChunk`s; a `ContainerChunker<VecChunk>` at the
+/// `arrange_core` callsite forms the chunks it merges (via the container traits below).
 pub type ChunkBatcher<K, V, T, R> = super::ChunkBatcher<VecChunk<K, V, T, R>>;
-/// Reference-counted batch builder.
-pub type ChunkRcBuilder<K, V, T, R> = super::ChunkRcBuilder<VecChunk<K, V, T, R>>;
-
-// --- batcher side: timely container traits, delegating to the inner `Vec` ---
+/// Batch builder.
+pub type ChunkBuilder<K, V, T, R> = super::ChunkBuilder<VecChunk<K, V, T, R>>;
 
 impl<K: 'static, V: 'static, T: 'static, R: 'static> Accountable for VecChunk<K, V, T, R> {
     fn record_count(&self) -> i64 { self.0.len() as i64 }
@@ -80,9 +57,8 @@ impl<K: 'static, V: 'static, T: 'static, R: 'static> Accountable for VecChunk<K,
 
 impl<K, V, T, R> SizableContainer for VecChunk<K, V, T, R>
 where K: Clone+'static, V: Clone+'static, T: Clone+'static, R: Clone+'static {
-    // The absorb point is the grading target: the chunker fills a scratch chunk
-    // to `TARGET` updates before emitting, so chunks arrive pre-graded rather than
-    // at timely's byte-derived buffer size (which downstream regrading re-melds).
+    // Absorb at `TARGET`, the grading size, so the chunker emits pre-graded chunks
+    // rather than timely's byte-derived ones.
     fn at_capacity(&self) -> bool { self.0.len() >= TARGET }
     fn ensure_capacity(&mut self, _stash: &mut Option<Self>) {
         let inner = Rc::make_mut(&mut self.0);
@@ -103,8 +79,6 @@ impl<K, V, T, R> PushInto<((K, V), T, R)> for VecChunk<K, V, T, R>
 where K: Clone+'static, V: Clone+'static, T: Clone+'static, R: Clone+'static {
     fn push_into(&mut self, item: ((K, V), T, R)) { Rc::make_mut(&mut self.0).push(item); }
 }
-
-// --- trace side: a logarithmic cursor and the `Chunk` operations ---
 
 /// First index `>= start` at which `pred` turns false, by galloping (exponential)
 /// search. `pred` must hold for a prefix then not — i.e. `|u| u < target`.
@@ -221,15 +195,11 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
 
     fn len(&self) -> usize { self.0.len() }
 
-    /// A two-pointer binary merge that drains the two deques' *loaded* content
-    /// through their shared horizon — the lesser of the two deques' last loaded
-    /// `(key, val, time)`s — rather than one front-pair at a time. Consolidates
-    /// equal triples and bulk-copies disjoint runs as slices, walking across chunk
-    /// boundaries with local indices (`p1`/`p2`) that reset as each working chunk
-    /// is retired. The side owning the horizon drains fully; the other's partial
-    /// working chunk is pruned (its prefix dropped) and `push_front`ed back exactly
-    /// once at the yield boundary — so the per-call prune cost amortizes over the
-    /// whole burst the harness loaded, not over each chunk.
+    /// A two-pointer binary merge of the two deques' loaded content, up to their shared
+    /// horizon — the lesser of the two last `(key, val, time)`s. Consolidates equal
+    /// triples and bulk-copies disjoint runs as slices, walking chunk boundaries with
+    /// local indices. The horizon's owner drains fully; the other's partial front is
+    /// pruned and pushed back once, at the yield.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         fn kv<K, V, T, R>(u: &((K, V), T, R)) -> (&K, &V) { (&u.0.0, &u.0.1) }
 
@@ -240,12 +210,9 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
             }
         };
 
-        // Working chunks (the shared `Rc`, read by index — never `take`n, so a
-        // source clone is not deep-copied) and their positions; both deques are
-        // non-empty on entry. The guard keeps both cursors valid for indexing; a
-        // working chunk consumed mid-merge is refilled at the foot of the loop, and
-        // when a deque runs dry we stop — that side has presented all its loaded
-        // data, so its last triple is the horizon and the rest is left for next time.
+        // Read working chunks by index (never `take`n, so a source clone stays shared).
+        // Both deques are non-empty on entry; the loop stops when one runs dry — its
+        // last triple is the horizon, and the rest waits for the next call.
         let mut c1 = in1.pop_front().unwrap();
         let mut c2 = in2.pop_front().unwrap();
         let (mut p1, mut p2) = (0usize, 0usize);
@@ -253,9 +220,8 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
             let a = &c1.0[p1];
             let b = &c2.0[p2];
             match (kv(a), &a.1).cmp(&(kv(b), &b.1)) {
-                // Copy the run of one side strictly below the other's head (within
-                // the current working chunk): collisions are impossible within it,
-                // so it moves as slices cut at the grading target.
+                // Copy the run strictly below the other's head — no collisions there —
+                // as `TARGET`-sized slices.
                 std::cmp::Ordering::Less => {
                     let run = gallop(&c1.0[..], p1 + 1, |u| (kv(u), &u.1) < (kv(b), &b.1));
                     for piece in c1.0[p1..run].chunks(TARGET) {
@@ -283,8 +249,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
                     flush(&mut result, false);
                 }
             }
-            // Refill either working chunk consumed by the step above; stop the drain
-            // once a deque is exhausted (the `&&` guard then never re-enters).
+            // Refill a working chunk consumed above; if its deque is empty, stop.
             if p1 == c1.0.len() {
                 match in1.pop_front() { Some(c) => { c1 = c; p1 = 0; } None => break }
             }
@@ -293,41 +258,27 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
             }
         }
         flush(&mut result, true);
-        // One side's deque emptied with its working chunk exhausted; the other's
-        // working chunk is partial — push back just its unconsumed suffix (one copy
-        // per call), ahead of whatever loaded chunks remain in that deque.
+        // Push back the survivor's unconsumed suffix (one copy), ahead of its
+        // remaining loaded chunks.
         if p1 < c1.0.len() { in1.push_front(VecChunk(Rc::new(c1.0[p1..].to_vec()))); }
         if p2 < c2.0.len() { in2.push_front(VecChunk(Rc::new(c2.0[p2..].to_vec()))); }
     }
 
     fn extract(
         input: &mut VecDeque<Self>,
-        frontier: &Antichain<T>,
+        frontier: AntichainRef<T>,
         residual: &mut Antichain<T>,
         keep: &mut VecDeque<Self>,
         ship: &mut VecDeque<Self>,
     ) {
-        // Fill `TARGET`-sized buffers directly, so the chunks pushed are already
-        // graded and `regrade` passes them through as `Rc` moves rather than
-        // re-splitting (and re-copying) a monolithic chunk. Emptied input `Vec`s
-        // are recycled as the next buffers, so allocations balance input against
-        // output instead of one fresh buffer per emitted chunk.
-        let mut stash: Vec<Vec<((K, V), T, R)>> = Vec::new();
-        let take_buf = |stash: &mut Vec<_>| stash.pop().unwrap_or_default();
-        let (mut k, mut s) = (take_buf(&mut stash), take_buf(&mut stash));
-        for chunk in input.drain(..) {
-            let mut v = take(chunk);
-            for u in v.drain(..) {
-                if frontier.borrow().less_equal(&u.1) {
-                    residual.insert_ref(&u.1);
-                    k.push(u);
-                    if k.len() >= TARGET { keep.push_back(VecChunk(Rc::new(std::mem::replace(&mut k, take_buf(&mut stash))))); }
-                } else {
-                    s.push(u);
-                    if s.len() >= TARGET { ship.push_back(VecChunk(Rc::new(std::mem::replace(&mut s, take_buf(&mut stash))))); }
-                }
-            }
-            stash.push(v);
+        // One input chunk per call: partition it into a keep piece and a ship piece and
+        // return, so the harness settles each side before the next chunk is read. The
+        // pieces may be small; `settle` grades them.
+        let Some(chunk) = input.pop_front() else { return };
+        let (mut k, mut s) = (Vec::new(), Vec::new());
+        for u in take(chunk) {
+            if frontier.less_equal(&u.1) { residual.insert_ref(&u.1); k.push(u); }
+            else { s.push(u); }
         }
         if !k.is_empty() { keep.push_back(VecChunk(Rc::new(k))); }
         if !s.is_empty() { ship.push_back(VecChunk(Rc::new(s))); }
@@ -335,22 +286,17 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
 
     fn advance(
         input: &mut VecDeque<Self>,
-        frontier: &Antichain<T>,
+        frontier: AntichainRef<T>,
         done: bool,
         out: &mut VecDeque<Self>,
     ) {
-        // Advance and consolidate every *complete* `(key, val)` group eagerly,
-        // so its updates can be released as soon as the input proves no later
-        // time for the pair can arrive. A group is contiguous in the sorted
-        // chain, so the only one that might continue in a future call is the last;
-        // unless `done`, we process up to its start and `push_front` the rest as
-        // the withheld carry for the next call.
+        // Advance and consolidate each *complete* `(key, val)` group eagerly. Only the
+        // last group might still grow; unless `done`, withhold it (push it back as the
+        // carry) and emit the rest.
         let mut stash: Vec<Vec<((K, V), T, R)>> = Vec::new();
-        // Build the working buffer by *reusing the front chunk's storage* (the
-        // carry from last time) and appending the rest (recycling each emptied
-        // `Vec`). Reusing the front is what keeps a withheld group from being
-        // recopied across calls: it just accumulates in place, so a `(key, val)`
-        // larger than the working set costs O(total) over the run, not O(total²).
+        // Reuse the front chunk's storage (last call's carry) as the working buffer and
+        // append the rest, so a withheld group accumulates in place: O(total) over the
+        // run, not O(total²).
         let mut buf = match input.pop_front() { Some(chunk) => take(chunk), None => return };
         while let Some(chunk) = input.pop_front() {
             let mut v = take(chunk);
@@ -359,18 +305,15 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
         }
         if buf.is_empty() { return; }
 
-        // If every available update shares one `(key, val)`, no group is provably
-        // complete — a later call may extend it — so make no progress unless
-        // `done`: push the accumulated buffer back as the carry and return. This is
-        // the giant-key case; comparing only the first and last pair detects it
-        // without scanning, and reusing the front above makes the retention free.
+        // Giant-key case: if the whole buffer is one `(key, val)`, no group is provably
+        // complete, so unless `done` withhold it all and return. First-vs-last detects
+        // this without a scan.
         if !done && buf[0].0 == buf[buf.len() - 1].0 {
             input.push_front(VecChunk(Rc::new(buf)));
             return;
         }
 
-        // Otherwise at least the first group is complete. Withhold the last group
-        // (a single `(key, val)`) as the next carry unless the input is complete.
+        // At least the first group is complete; withhold the last as the carry unless `done`.
         let end = if done { buf.len() } else {
             let last_kv = buf[buf.len() - 1].0.clone();
             let mut start = buf.len();
@@ -380,16 +323,15 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
         if end < buf.len() {
             input.push_front(VecChunk(Rc::new(buf.split_off(end))));
         }
-        // Advance + consolidate each group into `TARGET`-sized output chunks,
-        // filling buffers reclaimed from the recycled `Vec`s.
+        // Advance and consolidate each group into `TARGET`-sized output chunks, filling
+        // buffers reclaimed from the recycled `Vec`s.
         let mut result = stash.pop().unwrap_or_default();
         let mut i = 0;
         while i < buf.len() {
             let mut j = i;
             while j < buf.len() && buf[j].0 == buf[i].0 { j += 1; }
-            for u in &mut buf[i..j] { u.1.advance_by(frontier.borrow()); }
-            // Advancing is monotone w.r.t. the lattice but not the
-            // representation's total order, so re-sort the group by time.
+            for u in &mut buf[i..j] { u.1.advance_by(frontier); }
+            // Advancing is lattice-monotone but not total-order-monotone; re-sort by time.
             buf[i..j].sort_by(|a, b| a.1.cmp(&b.1));
             let mut k = i;
             while k < j {
@@ -408,21 +350,12 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
         if !result.is_empty() { out.push_back(VecChunk(Rc::new(result))); }
     }
 
-    fn regrade(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
-        // Maximal packing: emit chunks as large as possible up to `TARGET`,
-        // never splitting a pair that could combine into one legal (`<= TARGET`)
-        // chunk. A chunk of exactly `TARGET` is maximal — it cannot grow — so it
-        // passes straight through as an `Rc` move; only sub-`TARGET` chunks are
-        // copied, and only to coalesce with a neighbour. Producers fill to
-        // `TARGET`, so in steady state every chunk passes through and only the
-        // occasional trailing partial is coalesced.
-        //
-        // `carry` is the (sub-`TARGET`) chunk under construction. It is flushed
-        // once it reaches `TARGET`, `push_front`ed back onto `input` between calls,
-        // or emitted on `done`. Whenever `carry` is non-empty its left neighbour in
-        // `out` is a `TARGET` chunk (or `carry` is `out`'s first chunk), so
-        // emitting `carry` against a neighbour it cannot merge with — their sum
-        // exceeds `TARGET` — keeps the packing maximal on both sides.
+    fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
+        // Maximal packing: a `TARGET` chunk is maximal, so it passes through as an `Rc`
+        // move; only sub-`TARGET` chunks are copied, and only to coalesce a neighbour.
+        // `carry` is the chunk under construction — flushed at `TARGET`, pushed back onto
+        // `input` between calls, or emitted on `done`. Its left neighbour in `out` is
+        // always a `TARGET` chunk, so emitting it keeps the packing maximal on both sides.
         let mut carry: Vec<((K, V), T, R)> = Vec::new();
         while let Some(chunk) = input.pop_front() {
             if carry.is_empty() {
@@ -493,12 +426,12 @@ mod test {
         chunks.into_iter().flat_map(|c| (*c.0).clone()).collect()
     }
 
-    // `extract` partitions by frontier and folds the kept frontier into `residual`;
-    // a terminal `regrade` then grades each side (the seams of near-graded output).
+    // `extract` partitions by frontier, a bounded amount per call, folding the kept
+    // frontier into `residual`; `settle` then fuses each side's pieces into a graded run.
     #[test]
     fn extract_partitions_and_grades() {
         use super::TARGET;
-        use crate::trace::chunk::{is_graded, regrade_all};
+        use crate::trace::chunk::{is_graded, settle_all};
         use timely::progress::Antichain;
 
         // 4·TARGET updates spread over many input chunks; even times ship
@@ -508,12 +441,15 @@ mod test {
         let frontier = Antichain::from_elem(1u64);
         let mut residual = Antichain::new();
         let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
-        VecChunk::extract(&mut input, &frontier, &mut residual, &mut keep, &mut ship);
-        let (keep, ship) = (regrade_all(keep), regrade_all(ship));
+        // Drive to completion, as the harness does (one input chunk per call).
+        while !input.is_empty() {
+            VecChunk::extract(&mut input, frontier.borrow(), &mut residual, &mut keep, &mut ship);
+        }
+        let (keep, ship) = (settle_all(keep), settle_all(ship));
 
         // Kept times are exactly {1}; that is the residual frontier.
         assert_eq!(residual, Antichain::from_elem(1u64));
-        // Both sides are graded after the regrade.
+        // Both sides are graded after the settle.
         assert!(is_graded(&keep), "ungraded keep: {:?}", keep.iter().map(Chunk::len).collect::<Vec<_>>());
         assert!(is_graded(&ship), "ungraded ship: {:?}", ship.iter().map(Chunk::len).collect::<Vec<_>>());
         // Nothing lost: half the updates each way.
@@ -532,7 +468,7 @@ mod test {
         let c0 = chunk(vec![((0, 0), 0, 1), ((0, 0), 1, 1), ((1, 0), 0, 1)]);
         let mut input: VecDeque<_> = VecDeque::from([c0]);
         let mut out = VecDeque::new();
-        VecChunk::advance(&mut input, &frontier, false, &mut out);
+        VecChunk::advance(&mut input, frontier.borrow(), false, &mut out);
 
         // The trailing group (1,0) is withheld as the carry at the front of `input`.
         assert_eq!(input.len(), 1);
@@ -559,15 +495,15 @@ mod test {
         let oneshot = {
             let mut q: VecDeque<_> = input().into();
             let mut out = VecDeque::new();
-            VecChunk::advance(&mut q, &frontier, false, &mut out);
-            VecChunk::advance(&mut q, &frontier, true, &mut out);
+            VecChunk::advance(&mut q, frontier.borrow(), false, &mut out);
+            VecChunk::advance(&mut q, frontier.borrow(), true, &mut out);
             flat(out)
         };
         let incremental = {
             let mut q = VecDeque::new();
             let mut out = VecDeque::new();
-            for c in input() { q.push_back(c); VecChunk::advance(&mut q, &frontier, false, &mut out); }
-            VecChunk::advance(&mut q, &frontier, true, &mut out);
+            for c in input() { q.push_back(c); VecChunk::advance(&mut q, frontier.borrow(), false, &mut out); }
+            VecChunk::advance(&mut q, frontier.borrow(), true, &mut out);
             flat(out)
         };
         assert_eq!(oneshot, incremental);
@@ -588,8 +524,8 @@ mod test {
 
         let mut q = VecDeque::new();
         let mut out = VecDeque::new();
-        for c in make() { q.push_back(c); VecChunk::advance(&mut q, &frontier, false, &mut out); }
-        VecChunk::advance(&mut q, &frontier, true, &mut out);
+        for c in make() { q.push_back(c); VecChunk::advance(&mut q, frontier.borrow(), false, &mut out); }
+        VecChunk::advance(&mut q, frontier.borrow(), true, &mut out);
         // All times advance to 100 and consolidate to one update of diff `n`.
         assert_eq!(flat(out), vec![((7u64, 0u64), 100u64, n as i64)]);
     }
@@ -603,13 +539,13 @@ mod test {
         assert_eq!(flat(out), vec![((0, 0), 0, 2), ((1, 0), 0, 1), ((2, 0), 0, 1)]);
     }
 
-    // Merging runs larger than `TARGET`, then regrading, yields a *graded* sequence
+    // Merging runs larger than `TARGET`, then settling, yields a *graded* sequence
     // (each chunk `<= TARGET`, adjacent pairs summing past `TARGET`) reproducing the
     // consolidated sorted contents.
     #[test]
     fn merge_emits_graded_chunks() {
         use super::TARGET;
-        use crate::trace::chunk::{is_graded, merge_chains, regrade_all};
+        use crate::trace::chunk::{is_graded, merge_chains, settle_all};
 
         // Two interleaving single-chunk chains: evens and odds over `0..4·TARGET`.
         let n = 4 * TARGET as u64;
@@ -618,7 +554,7 @@ mod test {
 
         let mut out = VecDeque::new();
         merge_chains(vec![evens], vec![odds], &mut out);
-        let chunks = regrade_all(out);
+        let chunks = settle_all(out);
 
         assert!(is_graded(&chunks), "merge output not graded: {:?}",
             chunks.iter().map(Chunk::len).collect::<Vec<_>>());
@@ -678,11 +614,91 @@ mod test {
         }
     }
 
-    // `regrade` must produce a *maximal packing*: adjacent sub-`TARGET` chunks
+    // Driving `ChunkBatchMerger` to completion with tiny `fuel` — so it suspends and
+    // settles on nearly every tick — must yield the same advanced-and-consolidated
+    // batch as a one-shot reference, and that batch must be graded. Exercises the
+    // resumable merge→advance→settle pipeline and the grade-at-yield invariant.
+    #[test]
+    fn batch_merger_resumable_matches_reference() {
+        use crate::trace::{BatchReader, Description, Merger};
+        use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
+        use crate::trace::cursor::Cursor;
+        use crate::consolidation::consolidate_updates;
+        use timely::progress::Antichain;
+
+        let mut seed = 0x9E3779B97F4A7C15u64;
+        let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+
+        // A sorted, consolidated set over a small space, so the two sources collide
+        // and a `(key, val)` carries several times.
+        fn gen(rng: &mut impl FnMut() -> u64) -> Vec<((u64, u64), u64, i64)> {
+            let n = rng() as usize % 40 + 1;
+            let mut v: Vec<((u64, u64), u64, i64)> = (0..n).map(|_| {
+                let k = rng() % 10; let val = rng() % 3; let t = rng() % 6;
+                let d = if rng() % 4 == 0 { -1 } else { 1 };
+                ((k, val), t, d)
+            }).collect();
+            consolidate_updates(&mut v);
+            v
+        }
+        // Cut a consolidated set into a batch of small chunks, so groups straddle.
+        fn batch(updates: &[((u64, u64), u64, i64)], sz: usize) -> ChunkBatch<VecChunk<u64, u64, u64, i64>> {
+            let chunks: Vec<_> = updates.chunks(sz).map(|c| VecChunk(Rc::new(c.to_vec()))).collect();
+            let desc = Description::new(
+                Antichain::from_elem(0u64), Antichain::from_elem(10u64), Antichain::from_elem(0u64));
+            ChunkBatch::new(chunks, desc)
+        }
+        // Flatten a batch through its straddle-aware cursor, then consolidate.
+        fn read(b: &ChunkBatch<VecChunk<u64, u64, u64, i64>>) -> Vec<((u64, u64), u64, i64)> {
+            let mut out = Vec::new();
+            let mut c = b.cursor();
+            while c.key_valid(b) {
+                let k = *c.key(b);
+                while c.val_valid(b) {
+                    let v = *c.val(b);
+                    c.map_times(b, |t, d| out.push(((k, v), *t, *d)));
+                    c.step_val(b);
+                }
+                c.step_key(b);
+            }
+            consolidate_updates(&mut out);
+            out
+        }
+
+        for _ in 0..200 {
+            let u1 = gen(&mut rng);
+            let u2 = gen(&mut rng);
+            if u1.is_empty() || u2.is_empty() { continue; }
+            let sz = (rng() as usize % 4) + 1;
+            let f = rng() % 6;
+            let (s1, s2) = (batch(&u1, sz), batch(&u2, sz));
+            let frontier = Antichain::from_elem(f);
+
+            let mut merger = ChunkBatchMerger::new(&s1, &s2, frontier.borrow());
+            loop {
+                let mut fuel = 1isize; // tiny → many yields, each settling
+                merger.work(&s1, &s2, &mut fuel);
+                if fuel > 0 { break; }
+            }
+            let result = merger.done();
+
+            // The produced batch is graded (grade-at-yield, so also at done).
+            assert!(is_graded(&result.chunks), "ungraded result: {:?}",
+                result.chunks.iter().map(Chunk::len).collect::<Vec<_>>());
+            // ...and its contents are the merged sources, advanced to `f`, consolidated.
+            let got = read(&result);
+            let mut want: Vec<_> = u1.iter().chain(u2.iter()).cloned().collect();
+            for u in want.iter_mut() { u.1 = u.1.max(f); }
+            consolidate_updates(&mut want);
+            assert_eq!(got, want, "fuel-driven merge mismatch\n  u1={u1:?}\n  u2={u2:?}\n  f={f}");
+        }
+    }
+
+    // `settle` must produce a *maximal packing*: adjacent sub-`TARGET` chunks
     // that could combine into one legal chunk are coalesced, full chunks pass
     // through as `Rc` moves, and contents are preserved exactly.
     #[test]
-    fn regrade_maximal_packing() {
+    fn settle_maximal_packing() {
         use super::TARGET;
         use crate::trace::chunk::is_graded;
 
@@ -697,9 +713,9 @@ mod test {
         for &s in &sizes {
             let updates: Vec<_> = (0..s).map(|_| { let k = key; key += 1; ((k, 0u64), 0u64, 1i64) }).collect();
             input.push_back(chunk(updates));
-            VecChunk::regrade(&mut input, false, &mut output);
+            VecChunk::settle(&mut input, false, &mut output);
         }
-        VecChunk::regrade(&mut input, true, &mut output);
+        VecChunk::settle(&mut input, true, &mut output);
         let chunks: Vec<_> = output.into();
 
         assert!(is_graded(&chunks), "not graded: {:?}",

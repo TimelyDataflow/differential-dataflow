@@ -1,7 +1,7 @@
 //! Minimal dataflow over the `Vec`-backed `Chunk` container.
 //!
 //! Mirrors the `val` arm of `spines.rs`, but arranges through `ChunkBatcher` /
-//! `ChunkRcBuilder` / `ChunkSpine` — i.e. the merge batcher, builder, and spine
+//! `ChunkBuilder` / `ChunkSpine` — i.e. the merge batcher, builder, and spine
 //! built atop the `Chunk` trait and its `ChunkBatch`. Run as:
 //!
 //! ```text
@@ -12,7 +12,7 @@ use differential_dataflow::Hashable;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
-use differential_dataflow::trace::chunk::vec_chunk::{ChunkBatcher, ChunkRcBuilder, ChunkSpine, VecChunk};
+use differential_dataflow::trace::chunk::vec::{ChunkBatcher, ChunkBuilder, ChunkSpine, VecChunk};
 use differential_dataflow::trace::implementations::chunker::ContainerChunker;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValBatcher, RcOrdValBuilder, OrdValSpine};
 
@@ -44,7 +44,7 @@ fn main() {
                     // container (`Vec`), so this is a cross-container chunker case:
                     // drop to `arrange_core` with an explicit `ContainerChunker<VecChunk>`.
                     type Ba = ChunkBatcher<u64, (), u64, isize>;
-                    type Bu = ChunkRcBuilder<u64, (), u64, isize>;
+                    type Bu = ChunkBuilder<u64, (), u64, isize>;
                     type Sp = ChunkSpine<u64, (), u64, isize>;
                     type Chu = ContainerChunker<VecChunk<u64, (), u64, isize>>;
                     let data = arrange_core::<_, _, Chu, Ba, Bu, Sp>(
