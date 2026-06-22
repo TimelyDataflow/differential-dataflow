@@ -309,7 +309,10 @@ where
     ) {
         let mut merged = VecDeque::new();
         merge_chains(list1, list2, &mut merged);
-        output.extend(regrade_all(merged));
+        // No regrade: the batcher's ladder weighs chains by updates (not chunk count)
+        // since #767, so intermediate grading buys nothing; the final batch is graded
+        // at seal. merge's output is already near-`TARGET`.
+        output.extend(merged);
     }
 
     fn extract(
@@ -327,8 +330,10 @@ where
         let mut input: VecDeque<C> = merged.into();
         let (mut keep, mut shipped) = (VecDeque::new(), VecDeque::new());
         C::extract(&mut input, &upper, frontier, &mut keep, &mut shipped);
-        kept.extend(regrade_all(keep));
-        ship.extend(regrade_all(shipped));
+        // No regrade: `kept` is re-merged later and `shipped` is regraded at seal by
+        // the builder, so neither needs grading here.
+        kept.extend(keep);
+        ship.extend(shipped);
     }
 
     fn len(chunk: &C) -> usize { chunk.len() }
@@ -625,22 +630,25 @@ where
         if self.complete { return; }
 
         while *fuel > 0 {
-            // Refill each empty input deque with the next source chunk (head-of-list
-            // burst). After this, a deque is non-empty iff its source still has data.
-            if self.in1.is_empty() && self.idx1 < source1.chunks.len() {
+            // Refill each input deque up to a burst of source chunks (clones). `merge`
+            // drains the loaded burst per call, so a larger burst amortizes the single
+            // partial-chunk prune it does at the yield boundary. After this, a deque is
+            // non-empty iff its source still has data.
+            const BURST: usize = 8;
+            while self.in1.len() < BURST && self.idx1 < source1.chunks.len() {
                 self.in1.push_back(source1.chunks[self.idx1].clone());
                 self.idx1 += 1;
             }
-            if self.in2.is_empty() && self.idx2 < source2.chunks.len() {
+            while self.in2.len() < BURST && self.idx2 < source2.chunks.len() {
                 self.in2.push_back(source2.chunks[self.idx2].clone());
                 self.idx2 += 1;
             }
 
-            // Merge's per-tick output (small: one front-pair, or one tail chunk),
-            // measured for fuel before it joins the carry already in `merged`.
+            // Merge's per-tick output (a burst's worth, or one tail chunk), measured
+            // for fuel before it joins the carry already in `merged`.
             let mut produced = VecDeque::new();
             if !self.in1.is_empty() && !self.in2.is_empty() {
-                // Both sides have data: one front-pair merge.
+                // Both sides have data: drain the loaded burst.
                 C::merge(&mut self.in1, &mut self.in2, &mut produced);
             } else if let Some(chunk) = self.in1.pop_front().or_else(|| self.in2.pop_front()) {
                 // Exactly one side has data: flush its verbatim tail, one chunk a step.
@@ -930,99 +938,88 @@ pub mod vec_chunk {
 
         fn len(&self) -> usize { self.0.len() }
 
-        /// A dedicated two-pointer binary merge of the two front chunks: one gallop
-        /// pins how far each side may merge (through the lesser of the two last
-        /// `(key, val, time)`s), then a single pass consolidates equal triples and
-        /// bulk-copies disjoint runs as slices. The drained side's front is popped; the
-        /// other's partially-consumed front is pruned (its prefix dropped) and
-        /// `push_front`ed back — so the only persisted state is the deques themselves.
+        /// A two-pointer binary merge that drains the two deques' *loaded* content
+        /// through their shared horizon — the lesser of the two deques' last loaded
+        /// `(key, val, time)`s — rather than one front-pair at a time. Consolidates
+        /// equal triples and bulk-copies disjoint runs as slices, walking across chunk
+        /// boundaries with local indices (`p1`/`p2`) that reset as each working chunk
+        /// is retired. The side owning the horizon drains fully; the other's partial
+        /// working chunk is pruned (its prefix dropped) and `push_front`ed back exactly
+        /// once at the yield boundary — so the per-call prune cost amortizes over the
+        /// whole burst the harness loaded, not over each chunk.
         fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
             fn kv<K, V, T, R>(u: &((K, V), T, R)) -> (&K, &V) { (&u.0.0, &u.0.1) }
-            fn kvt<K, V, T, R>(u: &((K, V), T, R)) -> ((&K, &V), &T) { (kv(u), &u.1) }
 
-            // How far each front may merge, computed while the fronts are borrowed; the
-            // deques are mutated only after these borrows end.
-            let (end1, end2, len1, len2);
-            {
-                let s1 = &in1.front().unwrap().0[..];
-                let s2 = &in2.front().unwrap().0[..];
-                len1 = s1.len();
-                len2 = s2.len();
-
-                // The merge horizon: the lesser of the two last `(key, val, time)`s. The
-                // side owning it drains fully; the other merges through it. The time must
-                // be part of the horizon: a `(key, val)` group can straddle a chunk
-                // boundary on the owning side, and a coarser `(key, val)` horizon would
-                // let the other side's whole group merge before that continuation arrives,
-                // emitting it unconsolidated (caught by `merge_matches_reference`).
-                if kvt(&s1[len1 - 1]) <= kvt(&s2[len2 - 1]) {
-                    let horizon = kvt(&s1[len1 - 1]);
-                    end1 = len1;
-                    end2 = gallop(s2, 0, |u| kvt(u) <= horizon);
-                } else {
-                    let horizon = kvt(&s2[len2 - 1]);
-                    end2 = len2;
-                    end1 = gallop(s1, 0, |u| kvt(u) <= horizon);
+            let mut result: Vec<((K, V), T, R)> = Vec::with_capacity(TARGET);
+            let mut flush = |result: &mut Vec<((K, V), T, R)>, force: bool| {
+                if result.len() >= TARGET || (force && !result.is_empty()) {
+                    out.push_back(VecChunk(Rc::new(std::mem::replace(result, Vec::with_capacity(TARGET)))));
                 }
+            };
 
-                let mut result: Vec<((K, V), T, R)> = Vec::with_capacity(TARGET);
-                let mut flush = |result: &mut Vec<((K, V), T, R)>, force: bool| {
-                    if result.len() >= TARGET || (force && !result.is_empty()) {
-                        out.push_back(VecChunk(Rc::new(std::mem::replace(result, Vec::with_capacity(TARGET)))));
-                    }
-                };
-
-                let (mut i, mut j) = (0, 0);
-                while i < end1 && j < end2 {
-                    let a = &s1[i];
-                    let b = &s2[j];
-                    match (kv(a), &a.1).cmp(&(kv(b), &b.1)) {
-                        // Copy the whole run of one side strictly below the other's head:
-                        // collisions are impossible within it, so it moves as slices (cut
-                        // at the grading target) rather than element by element.
-                        std::cmp::Ordering::Less => {
-                            let run = gallop(s1, i + 1, |u| (kv(u), &u.1) < (kv(b), &b.1)).min(end1);
-                            for piece in s1[i..run].chunks(TARGET) {
-                                result.extend_from_slice(piece);
-                                flush(&mut result, false);
-                            }
-                            i = run;
-                        }
-                        std::cmp::Ordering::Greater => {
-                            let run = gallop(s2, j + 1, |u| (kv(u), &u.1) < (kv(a), &a.1)).min(end2);
-                            for piece in s2[j..run].chunks(TARGET) {
-                                result.extend_from_slice(piece);
-                                flush(&mut result, false);
-                            }
-                            j = run;
-                        }
-                        std::cmp::Ordering::Equal => {
-                            let mut diff = a.2.clone();
-                            diff.plus_equals(&b.2);
-                            if !diff.is_zero() {
-                                result.push((a.0.clone(), a.1.clone(), diff));
-                            }
-                            i += 1;
-                            j += 1;
+            // Working chunks (the shared `Rc`, read by index — never `take`n, so a
+            // source clone is not deep-copied) and positions; both deques are non-empty
+            // on entry. When a working chunk is consumed we refill from its deque; when a
+            // deque is empty that side has presented all its loaded data — its last
+            // triple is the horizon, so we stop and leave the other side's remainder.
+            // Working chunks (the shared `Rc`, read by index — never `take`n, so a
+            // source clone is not deep-copied) and their positions; both deques are
+            // non-empty on entry. The guard keeps both cursors valid for indexing; a
+            // working chunk consumed mid-merge is refilled at the foot of the loop, and
+            // when a deque runs dry we stop — that side has presented all its loaded
+            // data, so its last triple is the horizon and the rest is left for next time.
+            let mut c1 = in1.pop_front().unwrap();
+            let mut c2 = in2.pop_front().unwrap();
+            let (mut p1, mut p2) = (0usize, 0usize);
+            while p1 < c1.0.len() && p2 < c2.0.len() {
+                let a = &c1.0[p1];
+                let b = &c2.0[p2];
+                match (kv(a), &a.1).cmp(&(kv(b), &b.1)) {
+                    // Copy the run of one side strictly below the other's head (within
+                    // the current working chunk): collisions are impossible within it,
+                    // so it moves as slices cut at the grading target.
+                    std::cmp::Ordering::Less => {
+                        let run = gallop(&c1.0[..], p1 + 1, |u| (kv(u), &u.1) < (kv(b), &b.1));
+                        for piece in c1.0[p1..run].chunks(TARGET) {
+                            result.extend_from_slice(piece);
                             flush(&mut result, false);
                         }
+                        p1 = run;
                     }
-                }
-                // Bulk-copy the in-horizon tails, cutting at the grading target.
-                for tail in [&s1[i..end1], &s2[j..end2]] {
-                    for piece in tail.chunks(TARGET) {
-                        result.extend_from_slice(piece);
+                    std::cmp::Ordering::Greater => {
+                        let run = gallop(&c2.0[..], p2 + 1, |u| (kv(u), &u.1) < (kv(a), &a.1));
+                        for piece in c2.0[p2..run].chunks(TARGET) {
+                            result.extend_from_slice(piece);
+                            flush(&mut result, false);
+                        }
+                        p2 = run;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        let mut diff = a.2.clone();
+                        diff.plus_equals(&b.2);
+                        if !diff.is_zero() {
+                            result.push((a.0.clone(), a.1.clone(), diff));
+                        }
+                        p1 += 1;
+                        p2 += 1;
                         flush(&mut result, false);
                     }
                 }
-                flush(&mut result, true);
+                // Refill either working chunk consumed by the step above; stop the drain
+                // once a deque is exhausted (the `&&` guard then never re-enters).
+                if p1 == c1.0.len() {
+                    match in1.pop_front() { Some(c) => { c1 = c; p1 = 0; } None => break }
+                }
+                if p2 == c2.0.len() {
+                    match in2.pop_front() { Some(c) => { c2 = c; p2 = 0; } None => break }
+                }
             }
-
-            // Retire the fronts: pop the drained side, prune+push_front the partial one.
-            if end1 >= len1 { in1.pop_front(); }
-            else { let mut v = take(in1.pop_front().unwrap()); v.drain(..end1); in1.push_front(VecChunk(Rc::new(v))); }
-            if end2 >= len2 { in2.pop_front(); }
-            else { let mut v = take(in2.pop_front().unwrap()); v.drain(..end2); in2.push_front(VecChunk(Rc::new(v))); }
+            flush(&mut result, true);
+            // One side's deque emptied with its working chunk exhausted; the other's
+            // working chunk is partial — push back just its unconsumed suffix (one copy
+            // per call), ahead of whatever loaded chunks remain in that deque.
+            if p1 < c1.0.len() { in1.push_front(VecChunk(Rc::new(c1.0[p1..].to_vec()))); }
+            if p2 < c2.0.len() { in2.push_front(VecChunk(Rc::new(c2.0[p2..].to_vec()))); }
         }
 
         fn extract(
