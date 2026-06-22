@@ -574,14 +574,24 @@ where
 /// The merge is *resumable* and runs a two-stage deque pipeline:
 /// [`merge`](Chunk::merge) feeds `merged`, [`advance`](Chunk::advance) consumes it
 /// into `advanced`; the terminal [`regrade`](Chunk::regrade) runs once at `done`. Each
-/// `work` step clones a head from each source (the burst is head-of-each-list), ticks
-/// `merge` once, then advances the fresh output, debiting `fuel` by the *merged*
-/// records that entered the pipe — the total output across the merge, matching how the
-/// trace's other mergers account (cf. `ord_neu`). The sources are read by *cloning*
-/// chunks (a cheap refcount bump per the [`Chunk`] contract), never consumed or
-/// mutated; the same `source1`/`source2` must be supplied on every call. When a source
-/// exhausts, the harness flushes the other's verbatim tail one chunk per step. Once
-/// both are drained, a final `advance(done)` flushes advance's withheld carry.
+/// `work` step clones a burst from each source, ticks `merge` once, then advances the
+/// fresh output, debiting `fuel` by the *merged* records that entered the pipe — the
+/// total output across the merge, matching how the trace's other mergers account (cf.
+/// `ord_neu`). The sources are read by *cloning* chunks (a cheap refcount bump per the
+/// [`Chunk`] contract), never consumed or mutated; the same `source1`/`source2` must be
+/// supplied on every call. When a source exhausts, the harness flushes the other's
+/// verbatim tail one chunk per step. Once both are drained, a final `advance(done)`
+/// flushes advance's withheld carry.
+///
+/// **Latency bound.** `fuel` bounds each step to roughly one burst-merge's output. Two
+/// things ride *outside* fuel: the terminal `advance(done)` and `done`'s `regrade`. In
+/// the worst case — a single `(key, val)` spanning the whole merge — `advance` withholds
+/// the entire group until `done`, then sorts and consolidates it in one unfueled step.
+/// `vec_chunk` keeps that step *linear* in the group (it accumulates the carry in place,
+/// reusing its storage), so it is not the quadratic blow-up of an earlier design, but it
+/// is one unbounded-latency step bounded by the largest single `(key, val)` group. A
+/// chunk impl must keep this flush linear; the latency claimed is "per step ≈ a burst,
+/// plus a final flush ≤ the largest group."
 pub struct ChunkBatchMerger<C: Chunk> {
     /// Compaction frontier supplied at construction.
     frontier: Antichain<C::Time>,
@@ -630,10 +640,15 @@ where
         if self.complete { return; }
 
         while *fuel > 0 {
-            // Refill each input deque up to a burst of source chunks (clones). `merge`
-            // drains the loaded burst per call, so a larger burst amortizes the single
-            // partial-chunk prune it does at the yield boundary. After this, a deque is
-            // non-empty iff its source still has data.
+            // Refill each input deque up to a burst of source chunks (clones); `merge`
+            // drains the loaded burst per call. The burst trades fuel granularity (a
+            // call does up to a burst's work before checking fuel) against re-pruning:
+            // a chunk that straddles many chunks on the other side is walked by index
+            // within one call but, once its tail spills past the loaded burst, its
+            // unconsumed suffix is pushed back and re-copied next call — a bigger burst
+            // absorbs more straddle per call. This workload is insensitive (1..32 flat
+            // to ~noise at 1M), so 8 is a conservative default, not a tuned optimum.
+            // After this, a deque is non-empty iff its source still has data.
             const BURST: usize = 8;
             while self.in1.len() < BURST && self.idx1 < source1.chunks.len() {
                 self.in1.push_back(source1.chunks[self.idx1].clone());
@@ -747,6 +762,19 @@ pub mod vec_chunk {
     //!
     //! `Clone` is a refcount bump, so the trace merger shares source chunks instead
     //! of copying them.
+    //!
+    //! **What a columnar impl can and can't reuse.** The protocol (the `VecDeque`
+    //! in/out, withhold-by-`push_front`, grade-at-seal) is layout-agnostic and carries
+    //! over unchanged. The *merge body* does not: this one merges a single contiguous
+    //! `&[((K,V),T,R)]` and bulk-copies disjoint runs with `extend_from_slice` +
+    //! `chunks(TARGET)`. A columnar chunk (ranging over `ord_neu`'s deduped layout) has
+    //! no such slice — it must range-copy the key / val / time / diff columns with
+    //! offset bookkeeping, emitting one key + its val/time run rather than repeated rows.
+    //! That is the operation that beats the flat layout on repetitive keys (see the
+    //! module-level note on the row-major vs. columnar crossover), and it is also where
+    //! the earlier `col_chunk` got into trouble (decompress-and-recompress instead of a
+    //! true range-copy). So a columnar `Chunk` is the open bet: nothing here exercises a
+    //! columnar merge, and that body — not the protocol — is the phase-2 risk.
 
     use std::collections::VecDeque;
     use std::marker::PhantomData;
@@ -957,11 +985,6 @@ pub mod vec_chunk {
                 }
             };
 
-            // Working chunks (the shared `Rc`, read by index — never `take`n, so a
-            // source clone is not deep-copied) and positions; both deques are non-empty
-            // on entry. When a working chunk is consumed we refill from its deque; when a
-            // deque is empty that side has presented all its loaded data — its last
-            // triple is the horizon, so we stop and leave the other side's remainder.
             // Working chunks (the shared `Rc`, read by index — never `take`n, so a
             // source clone is not deep-copied) and their positions; both deques are
             // non-empty on entry. The guard keeps both cursors valid for indexing; a
