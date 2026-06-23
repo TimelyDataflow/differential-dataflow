@@ -17,10 +17,10 @@ pub struct ColumnarLayout<U: ColumnarUpdate> {
 
 impl<K, V, T, R> ColumnarUpdate for (K, V, T, R)
 where
-    K: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Clone + 'static,
-    V: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Clone + 'static,
-    T: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Clone + Lattice + Timestamp,
-    R: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Semigroup + 'static,
+    K: Columnar<Container: OrdContainer + Default> + Debug + Ord + Clone + 'static,
+    V: Columnar<Container: OrdContainer + Default> + Debug + Ord + Clone + 'static,
+    T: Columnar<Container: OrdContainer + Default> + Debug + Ord + Default + Clone + Lattice + Timestamp,
+    R: Columnar<Container: OrdContainer + Default> + Debug + Ord + Default + Semigroup + 'static,
 {
     type Key = K;
     type Val = V;
@@ -41,13 +41,13 @@ impl<U: ColumnarUpdate> Layout for ColumnarLayout<U> {
 /// We will use their associated `Columnar::Container`
 pub trait ColumnarUpdate : Debug + 'static {
     /// The key type.
-    type Key:  Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Clone + 'static;
+    type Key:  Columnar<Container: OrdContainer + Default> + Debug + Ord + Clone + 'static;
     /// The value type.
-    type Val:  Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Clone + 'static;
+    type Val:  Columnar<Container: OrdContainer + Default> + Debug + Ord + Clone + 'static;
     /// The time type.
-    type Time: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Clone + Lattice + Timestamp;
+    type Time: Columnar<Container: OrdContainer + Default> + Debug + Ord + Default + Clone + Lattice + Timestamp;
     /// The difference type.
-    type Diff: Columnar<Container: OrdContainer + Debug + Default> + Debug + Ord + Default + Semigroup + 'static;
+    type Diff: Columnar<Container: OrdContainer + Default> + Debug + Ord + Default + Semigroup + 'static;
 }
 
 /// A container whose references can be ordered.
