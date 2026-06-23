@@ -7,8 +7,8 @@
 use std::collections::VecDeque;
 use columnar::{Columnar, Clear, Len, Push};
 
-use super::layout::ColumnarUpdate as Update;
-use super::updates::UpdatesTyped;
+use crate::columnar::layout::ColumnarUpdate as Update;
+use crate::columnar::updates::UpdatesTyped;
 use super::RecordedUpdates;
 
 type TupleContainer<U> = <(<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff) as Columnar>::Container;

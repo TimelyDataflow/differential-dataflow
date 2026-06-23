@@ -1,11 +1,11 @@
 //! Per-worker spill control for the columnar `Chunk` trace.
 //!
-//! [`ColChunk`](crate::trace::chunk::col::ColChunk) is either resident (a trie in
+//! [`ColChunk`](super::ColChunk) is either resident (a trie in
 //! memory) or paged (resident bounds + a byte handle to fetch the trie back).
 //! `Chunk::settle` is where committed chunks may be **paged out**: it calls
 //! [`try_page`], which consults a per-worker [`SpillState`] and, when over budget,
 //! serializes the trie and hands the bytes to a pluggable [`BytesStore`]. Reads
-//! ([`Chunk::merge`] etc., and the cursor) fetch paged chunks back on demand.
+//! ([`Chunk::merge`](crate::trace::chunk::Chunk::merge) etc., and the cursor) fetch paged chunks back on demand.
 //!
 //! The backend is pluggable: a worker calls [`install`] with its own
 //! [`BytesStore`] (e.g. file-backed). With nothing installed, no chunk is ever
@@ -26,8 +26,8 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
-use super::layout::ColumnarUpdate as Update;
-use super::updates::{Updates, UpdatesTyped};
+use crate::columnar::layout::ColumnarUpdate as Update;
+use crate::columnar::updates::{Updates, UpdatesTyped};
 
 /// Append a chunk's bytes to backing storage, returning a handle to read them back.
 pub trait BytesStore {

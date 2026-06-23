@@ -60,7 +60,6 @@ use crate::trace::cursor::Cursor;
 use crate::trace::implementations::{BatchContainer, Layout, LayoutExt, WithLayout};
 
 pub mod vec;
-pub mod col;
 
 /// A non-empty, bounded, consolidated, sorted sequence of `(data, time, diff)`.
 ///

@@ -2,7 +2,7 @@
 //!
 //! The columnar trace runs on the `Chunk` abstraction (`ColChunk`), which is
 //! either resident or paged. `Chunk::settle` pages committed chunks out via
-//! `differential_dataflow::columnar::spill` once a per-worker record budget is
+//! `differential_dataflow::trace::chunk::col::spill` once a per-worker record budget is
 //! exceeded; reads fetch them back. The library serializes the trie and tracks
 //! the budget — this example supplies the *backing store*: a [`BytesStore`] that
 //! lz4-compresses each blob into a rotating tempfile, and a [`BytesSource`] that
@@ -50,8 +50,9 @@ fn reset_stats() {
     BYTES_COMPRESSED.store(0, Ordering::Relaxed);
 }
 
-use differential_dataflow::columnar::{ValBatcher, ValBuilder, ValChunker, ValColBuilder, ValSpine};
-use differential_dataflow::columnar::spill::{self, BytesSource, BytesStore, SpillStats};
+use differential_dataflow::columnar::trace::{Batcher as ValBatcher, Builder as ValBuilder, Chunker as ValChunker, Spine as ValSpine};
+use differential_dataflow::columnar::collection::Builder as ValColBuilder;
+use differential_dataflow::columnar::trace::spill::{self, BytesSource, BytesStore, SpillStats};
 use differential_dataflow::columnar::updates::{Updates, UpdatesTyped};
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use timely::dataflow::channels::pact::Pipeline;

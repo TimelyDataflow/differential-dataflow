@@ -13,8 +13,8 @@ use timely::dataflow::channels::pact::{LogPuller, LogPusher, ParallelizationCont
 use timely::progress::Timestamp;
 use timely::worker::Worker;
 
-use super::layout::ColumnarUpdate as Update;
-use super::updates::UpdatesTyped;
+use crate::columnar::layout::ColumnarUpdate as Update;
+use crate::columnar::updates::UpdatesTyped;
 use super::RecordedUpdates;
 
 /// Distributor that routes `RecordedUpdates` records to workers by hashing keys.
@@ -30,7 +30,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
     // either batch keys by destination first, or detect stride-1 outer bounds and use a
     // simpler single-pass partitioning that seals once at the end.
     fn partition<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, container: &mut RecordedUpdates<U>, time: &T, pushers: &mut [P]) {
-        use super::updates::child_range;
+        use crate::columnar::updates::child_range;
 
         let view = container.updates.view();
         let keys_b = view.keys;

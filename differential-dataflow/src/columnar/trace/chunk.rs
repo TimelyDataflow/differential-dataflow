@@ -1,12 +1,12 @@
 //! A worked [`Chunk`]: the columnar `UpdatesTyped<U>` trie, resident or paged.
 //!
-//! Where [`vec`](super::vec) backs a chunk with a flat `Vec<((K,V),T,R)>`, this
+//! Where [`vec`](crate::trace::chunk::vec) backs a chunk with a flat `Vec<((K,V),T,R)>`, this
 //! backs it with the column-oriented trie from [`crate::columnar::updates`] —
 //! deduplicated keys, per-key val runs, per-val `(time, diff)` runs. It is a
 //! *retargeting* of the columnar trace pile at the [`Chunk`] abstraction: the
 //! storage (`UpdatesTyped`) and the trie-native merge (`trie_merger`) are reused
 //! verbatim, and the four transducers delegate to them. The harness
-//! ([`ChunkBatch`](super::ChunkBatch), the straddle cursor, the batcher/builder/
+//! ([`ChunkBatch`](crate::trace::chunk::ChunkBatch), the straddle cursor, the batcher/builder/
 //! spine aliases) is shared with `vec`.
 //!
 //! This makes columnar trace merges trie-native (the old `OrdValBatch`-backed
@@ -17,7 +17,7 @@
 //! A [`ColChunk`] is either [`Resident`](ColChunk::Resident) (the trie in memory)
 //! or [`Paged`](ColChunk::Paged) (resident bounds + a byte handle). [`Chunk::settle`]
 //! is the spill point: it pages committed chunks out via
-//! [`crate::columnar::spill`] when a worker has installed a spiller. Reads
+//! [`spill`](self::spill) when a worker has installed a spiller. Reads
 //! fetch a paged chunk's trie back, caching it in a [`OnceCell`] so repeated
 //! cursor access pays the fetch once; [`len`](Chunk::len) and [`bounds`](Chunk::bounds)
 //! read the resident metadata and never fetch.
@@ -44,11 +44,12 @@ use crate::trace::cursor::Cursor;
 use crate::trace::implementations::{BatchContainer, WithLayout};
 
 use crate::columnar::layout::{ColumnarLayout, ColumnarUpdate, Coltainer};
-use crate::columnar::spill::{self, BytesSource};
 use crate::columnar::updates::{child_range, Tuple, UpdatesBuilder, UpdatesTyped};
 use crate::columnar::trie_merger;
 
-use super::Chunk;
+use super::spill::{self, BytesSource};
+
+use crate::trace::chunk::Chunk;
 
 /// The chunk size: the [`Chunk::TARGET`] grading value.
 ///
@@ -155,13 +156,6 @@ fn into_trie<U: ColumnarUpdate>(chunk: ColChunk<U>) -> UpdatesTyped<U> {
         },
     }
 }
-
-/// The trace type for `arrange`: a spine of `Rc`-shared columnar chunk batches.
-pub type ChunkSpine<K, V, T, R> = super::ChunkSpine<ColChunk<(K, V, T, R)>>;
-/// Merge batcher over `ColChunk`s.
-pub type ChunkBatcher<K, V, T, R> = super::ChunkBatcher<ColChunk<(K, V, T, R)>>;
-/// Batch builder.
-pub type ChunkBuilder<K, V, T, R> = super::ChunkBuilder<ColChunk<(K, V, T, R)>>;
 
 // --- Container traits (batcher side, via `ContainerChunker<ColChunk>`) ---
 
@@ -416,13 +410,13 @@ where U::Time: 'static {
         emit(staging.consolidate(), out);
     }
 
-    /// Maximal packing via the harness [`pack`](super::pack): coalesce by melding
+    /// Maximal packing via the harness [`pack`](crate::trace::chunk::pack): coalesce by melding
     /// the next trie onto the carry (adjacent chunks of a sorted, consolidated
     /// chain, so meld's "strictly greater first triple" precondition holds), split
     /// with [`trie_merger::split_at`], and seal through [`seal_chunk`] (the spill
     /// point — pages a committed chunk when a spiller is installed).
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
-        super::pack(
+        crate::trace::chunk::pack(
             input, done, out,
             |acc, next| {
                 let mut build = UpdatesBuilder::new_from(into_trie(std::mem::take(acc)));
@@ -663,7 +657,7 @@ mod test {
         use std::rc::Rc;
         use std::sync::Arc;
         use std::sync::atomic::Ordering::Relaxed;
-        use crate::columnar::spill::{self, BytesSource, BytesStore, SpillStats};
+        use crate::columnar::trace::spill::{self, BytesSource, BytesStore, SpillStats};
 
         // In-memory backing store: an arena of byte blobs.
         struct MemStore(Rc<RefCell<Vec<Vec<u8>>>>);

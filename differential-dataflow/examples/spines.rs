@@ -80,7 +80,7 @@ fn main() {
                     // the same generic `Chunk` harness as `vec` via a
                     // `ContainerChunker<ColChunk>`.
                     use differential_dataflow::Hashable;
-                    use differential_dataflow::trace::chunk::col::{ChunkBatcher, ChunkBuilder, ChunkSpine, ColChunk};
+                    use differential_dataflow::columnar::trace::{Batcher, Builder, Spine, ColChunk};
                     use differential_dataflow::trace::implementations::chunker::ContainerChunker;
                     use differential_dataflow::operators::arrange::arrangement::arrange_core;
                     use timely::dataflow::channels::pact::Exchange;
@@ -90,9 +90,9 @@ fn main() {
                     let data = data.map(|x| (x, ()));
                     let keys = keys.map(|x| (x, ()));
 
-                    type Ba = ChunkBatcher<String, (), u64, isize>;
-                    type Bu = ChunkBuilder<String, (), u64, isize>;
-                    type Sp = ChunkSpine<String, (), u64, isize>;
+                    type Ba = Batcher<String, (), u64, isize>;
+                    type Bu = Builder<String, (), u64, isize>;
+                    type Sp = Spine<String, (), u64, isize>;
                     type Chu = ContainerChunker<ColChunk<(String, (), u64, isize)>>;
                     let exchange = || Exchange::new(|u: &((String, ()), u64, isize)| (u.0).0.hashed().into());
                     let data = arrange_core::<_, _, Chu, Ba, Bu, Sp>(data.inner, exchange(), "DataArrange");

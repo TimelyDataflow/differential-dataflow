@@ -24,7 +24,7 @@ use differential_dataflow::consolidation::Consolidate;
 use differential_dataflow::columnar::layout::ColumnarUpdate;
 use differential_dataflow::trace::chunk::{merge_chains, Chunk};
 use differential_dataflow::trace::chunk::vec::VecChunk;
-use differential_dataflow::trace::chunk::col::ColChunk;
+use differential_dataflow::columnar::trace::ColChunk;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::implementations::chunker::ContainerChunker;
 

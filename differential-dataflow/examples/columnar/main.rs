@@ -8,7 +8,7 @@ use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::InputHandle;
 use timely::dataflow::ProbeHandle;
 
-use differential_dataflow::columnar::*;
+use differential_dataflow::columnar::collection::Builder as ValColBuilder;
 
 use mimalloc::MiMalloc;
 
@@ -97,7 +97,8 @@ mod reachability {
     use differential_dataflow::operators::arrange::arrangement::arrange_core;
     use differential_dataflow::operators::join::join_traces;
 
-    use differential_dataflow::columnar::*;
+    use differential_dataflow::columnar::trace::{Batcher as ValBatcher, Builder as ValBuilder, Chunker as ValChunker, Spine as ValSpine};
+    use differential_dataflow::columnar::collection::{Builder as ValColBuilder, Pact as ValPact, RecordedUpdates, as_recorded_updates};
 
     type Node = u32;
     type Time = u64;

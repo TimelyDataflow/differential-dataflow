@@ -1,15 +1,15 @@
 //! The container→batch chunker for the columnar trace.
 //!
 //! [`TrieChunker`] is the `ContainerBuilder` that turns a stream of
-//! [`RecordedUpdates`](super::RecordedUpdates) into
-//! [`ColChunk`](crate::trace::chunk::col::ColChunk) batches for the `Chunk`
+//! [`RecordedUpdates`](crate::columnar::collection::RecordedUpdates) into
+//! [`ColChunk`](crate::columnar::trace::ColChunk) batches for the `Chunk`
 //! harness's batcher. It accumulates small inputs, consolidates, and ships
-//! chunks sized within 1-2x [`LINK_TARGET`](super::LINK_TARGET).
+//! chunks sized within 1-2x [`LINK_TARGET`](crate::columnar::LINK_TARGET).
 
-use crate::trace::chunk::col::ColChunk;
+use super::ColChunk;
 
-use super::updates::UpdatesTyped;
-use super::RecordedUpdates;
+use crate::columnar::updates::UpdatesTyped;
+use crate::columnar::collection::RecordedUpdates;
 
 /// A chunker that unwraps `RecordedUpdates` into bare `UpdatesTyped` for the merge batcher.
 ///
@@ -19,7 +19,7 @@ use super::RecordedUpdates;
 ///
 /// The flow is into (or around) `self.stage`, then consolidated blocks into `self.ready`,
 /// each of which is put in `self.stage`
-pub struct TrieChunker<U: super::layout::ColumnarUpdate> {
+pub struct TrieChunker<U: crate::columnar::layout::ColumnarUpdate> {
     /// Insufficiently large updates we haven't figured out how to ship yet.
     blobs: Vec<(UpdatesTyped<U>, bool)>,
     /// Sum of `len()` across `blobs`.
@@ -31,7 +31,7 @@ pub struct TrieChunker<U: super::layout::ColumnarUpdate> {
     stage: Option<ColChunk<U>>,
 }
 
-impl<U: super::layout::ColumnarUpdate> Default for TrieChunker<U> {
+impl<U: crate::columnar::layout::ColumnarUpdate> Default for TrieChunker<U> {
     fn default() -> Self {
         Self {
             blobs: Default::default(),
@@ -42,7 +42,7 @@ impl<U: super::layout::ColumnarUpdate> Default for TrieChunker<U> {
     }
 }
 
-impl<U: super::layout::ColumnarUpdate> TrieChunker<U> {
+impl<U: crate::columnar::layout::ColumnarUpdate> TrieChunker<U> {
     /// Consolidate and empty `self.blobs`, into `self.ready` if large enough or else return.
     fn consolidate_blobs(&mut self) -> UpdatesTyped<U> {
         // Single consolidated entry: pass through, no work.
@@ -66,7 +66,7 @@ impl<U: super::layout::ColumnarUpdate> TrieChunker<U> {
     }
 }
 
-impl<'a, U: super::layout::ColumnarUpdate> timely::container::PushInto<&'a mut RecordedUpdates<U>> for TrieChunker<U> {
+impl<'a, U: crate::columnar::layout::ColumnarUpdate> timely::container::PushInto<&'a mut RecordedUpdates<U>> for TrieChunker<U> {
     fn push_into(&mut self, container: &'a mut RecordedUpdates<U>) {
         // Early return if an empty container (legit, for accountable progress tracking).
         if container.updates.len() == 0 { return; }
@@ -120,7 +120,7 @@ impl<'a, U: super::layout::ColumnarUpdate> timely::container::PushInto<&'a mut R
     }
 }
 
-impl<U: super::layout::ColumnarUpdate> timely::container::ContainerBuilder for TrieChunker<U> {
+impl<U: crate::columnar::layout::ColumnarUpdate> timely::container::ContainerBuilder for TrieChunker<U> {
     type Container = ColChunk<U>;
     fn extract(&mut self) -> Option<&mut Self::Container> {
         self.stage = self.ready.pop_front().map(ColChunk::from_trie);
