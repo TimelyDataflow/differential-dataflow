@@ -149,10 +149,7 @@ impl<U: ColumnarUpdate> ColChunk<U> {
 /// for budget accounting).
 fn into_trie<U: ColumnarUpdate>(chunk: ColChunk<U>) -> UpdatesTyped<U> {
     match chunk {
-        ColChunk::Resident(rc) => {
-            spill::note_consumed(rc.len());
-            Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
-        }
+        ColChunk::Resident(rc) => Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone()),
         ColChunk::Paged(p) => match p.cache.get() {
             Some(rc) => (**rc).clone(),
             None => { spill::note_fetched(); spill::decode::<U>(&*p.source) }
@@ -281,42 +278,12 @@ fn emit<U: ColumnarUpdate>(updates: UpdatesTyped<U>, out: &mut VecDeque<ColChunk
     if updates.len() > 0 { out.push_back(ColChunk::Resident(Rc::new(updates))); }
 }
 
-/// Commit a settled chunk to `out`, paging it out via [`spill`] when a spiller is
-/// installed and over budget. The spill point of the columnar `Chunk` impl.
-fn commit<U: ColumnarUpdate>(updates: UpdatesTyped<U>, out: &mut VecDeque<ColChunk<U>>) {
-    if updates.len() == 0 { return; }
-    if !spill::active() {
-        out.push_back(ColChunk::Resident(Rc::new(updates)));
-        return;
-    }
-    let meta = meta_of(&updates);
-    match spill::try_page(updates) {
-        Ok(source) => out.push_back(ColChunk::Paged(Rc::new(PagedChunk { meta, source, cache: OnceCell::new() }))),
-        Err(updates) => out.push_back(ColChunk::Resident(Rc::new(updates))),
-    }
-}
-
 /// Drop the empty diff lists `merge_pair`'s `write_diffs` leaves where updates
 /// cancel — but only when some actually cancelled. With no cancellation every
 /// time keeps its singleton diff, so `diffs.values.len() == times.values.len()`
 /// and we skip [`UpdatesTyped::filter_zero`]'s rebuild entirely.
 fn consolidated<U: ColumnarUpdate>(merged: UpdatesTyped<U>) -> UpdatesTyped<U> {
     if merged.diffs.values.len() == merged.times.values.len() { merged } else { merged.filter_zero() }
-}
-
-/// Absorb a chunk when nothing is carried: pass a `TARGET` chunk through, hold a
-/// smaller one in `carry`, or peel `TARGET` pieces off a larger one (cf. `vec`).
-/// Committed pieces go through [`commit`] so they may be paged.
-fn absorb<U: ColumnarUpdate>(chunk: UpdatesTyped<U>, carry: &mut Option<UpdatesTyped<U>>, out: &mut VecDeque<ColChunk<U>>)
-where U::Time: 'static {
-    if chunk.len() < TARGET { *carry = Some(chunk); return; }
-    let mut rest = chunk;
-    while rest.len() >= TARGET {
-        let (first, tail) = trie_merger::split_at(rest, TARGET);
-        commit(first, out);
-        rest = tail;
-    }
-    if rest.len() > 0 { *carry = Some(rest); }
 }
 
 impl<U: ColumnarUpdate> Chunk for ColChunk<U>
@@ -450,31 +417,39 @@ where U::Time: 'static {
         emit(staging.consolidate(), out);
     }
 
-    /// Grade by coalescing adjacent sub-`TARGET` chunks with
-    /// [`UpdatesBuilder::meld`] and splitting over-`TARGET` ones with
-    /// [`trie_merger::split_at`] (cf. `vec`'s carry/absorb/peel). `carry` is the
-    /// chunk under construction: a sorted, consolidated chain, so meld's
-    /// "strictly greater first triple" precondition holds at every boundary.
-    ///
-    /// Committed chunks go through [`commit`], the spill point.
+    /// Maximal packing via the harness [`pack`](super::pack): coalesce by melding
+    /// the next trie onto the carry (adjacent chunks of a sorted, consolidated
+    /// chain, so meld's "strictly greater first triple" precondition holds), split
+    /// with [`trie_merger::split_at`], and seal through [`seal_chunk`] (the spill
+    /// point — pages a committed chunk when a spiller is installed).
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
-        let mut carry: Option<UpdatesTyped<U>> = None;
-        while let Some(chunk) = input.pop_front() {
-            let chunk = into_trie(chunk);
-            match carry.take() {
-                None => absorb(chunk, &mut carry, out),
-                Some(c) if c.len() + chunk.len() <= TARGET => {
-                    let mut build = UpdatesBuilder::new_from(c);
-                    build.meld(&chunk);
-                    let melded = build.done();
-                    if melded.len() == TARGET { commit(melded, out); } else { carry = Some(melded); }
-                }
-                Some(c) => { commit(c, out); absorb(chunk, &mut carry, out); }
-            }
-        }
-        if let Some(c) = carry {
-            if done { commit(c, out); } else { input.push_front(ColChunk::Resident(Rc::new(c))); }
-        }
+        super::pack(
+            input, done, out,
+            |acc, next| {
+                let mut build = UpdatesBuilder::new_from(into_trie(std::mem::take(acc)));
+                build.meld(&into_trie(next));
+                *acc = ColChunk::Resident(Rc::new(build.done()));
+            },
+            |chunk, n| {
+                let (first, rest) = trie_merger::split_at(into_trie(chunk), n);
+                (ColChunk::Resident(Rc::new(first)), ColChunk::Resident(Rc::new(rest)))
+            },
+            seal_chunk,
+        );
+    }
+}
+
+/// The columnar spill point: when a spiller is installed and over the high-water
+/// mark, page a committed chunk out (serialize via [`spill::try_page`], keep
+/// resident bounds + a fetch handle). Otherwise keep it resident.
+fn seal_chunk<U: ColumnarUpdate>(chunk: ColChunk<U>) -> ColChunk<U> {
+    let ColChunk::Resident(rc) = chunk else { return chunk };
+    if !spill::active() { return ColChunk::Resident(rc); }
+    let updates = Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone());
+    let meta = meta_of(&updates);
+    match spill::try_page(updates) {
+        Ok(source) => ColChunk::Paged(Rc::new(PagedChunk { meta, source, cache: OnceCell::new() })),
+        Err(updates) => ColChunk::Resident(Rc::new(updates)),
     }
 }
 

@@ -350,63 +350,17 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
         if !result.is_empty() { out.push_back(VecChunk(Rc::new(result))); }
     }
 
+    /// Maximal packing via the harness [`pack`](super::pack): coalesce by
+    /// extending the inner `Vec` in place (`make_mut` is free while the carry's
+    /// `Rc` is unique, so packing a run of small chunks stays linear), split with
+    /// `split_off`, and seal as a no-op (`Vec` chunks are never paged).
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
-        // Maximal packing: a `TARGET` chunk is maximal, so it passes through as an `Rc`
-        // move; only sub-`TARGET` chunks are copied, and only to coalesce a neighbour.
-        // `carry` is the chunk under construction — flushed at `TARGET`, pushed back onto
-        // `input` between calls, or emitted on `done`. Its left neighbour in `out` is
-        // always a `TARGET` chunk, so emitting it keeps the packing maximal on both sides.
-        let mut carry: Vec<((K, V), T, R)> = Vec::new();
-        while let Some(chunk) = input.pop_front() {
-            if carry.is_empty() {
-                absorb(chunk, &mut carry, out);
-            } else if carry.len() + chunk.0.len() <= TARGET {
-                // Combines into one legal chunk; coalesce in place.
-                carry.extend(take(chunk));
-                if carry.len() == TARGET {
-                    out.push_back(VecChunk(Rc::new(std::mem::take(&mut carry))));
-                }
-            } else {
-                // Cannot combine without exceeding `TARGET`; `carry` is maximal
-                // against this neighbour, so emit it and absorb the chunk afresh.
-                out.push_back(VecChunk(Rc::new(std::mem::take(&mut carry))));
-                absorb(chunk, &mut carry, out);
-            }
-        }
-        if !carry.is_empty() {
-            let chunk = VecChunk(Rc::new(carry));
-            if done { out.push_back(chunk); } else { input.push_front(chunk); }
-        }
-    }
-}
-
-/// Emit maximal `TARGET`-sized chunks off the front of `carry`, leaving the
-/// sub-`TARGET` tail behind.
-fn peel<K: Clone, V: Clone, T: Clone, R: Clone>(
-    carry: &mut Vec<((K, V), T, R)>,
-    out: &mut VecDeque<VecChunk<K, V, T, R>>,
-) {
-    let mut start = 0;
-    while carry.len() - start >= TARGET {
-        out.push_back(VecChunk(Rc::new(carry[start..start + TARGET].to_vec())));
-        start += TARGET;
-    }
-    carry.drain(..start);
-}
-
-/// Absorb a chunk when nothing is carried: pass a `TARGET` chunk through as an
-/// `Rc` move, hold a smaller one in `carry`, or split a larger one (peeling off
-/// `TARGET` pieces and carrying the remainder). `carry` must be empty on entry.
-fn absorb<K: Clone, V: Clone, T: Clone, R: Clone>(
-    chunk: VecChunk<K, V, T, R>,
-    carry: &mut Vec<((K, V), T, R)>,
-    out: &mut VecDeque<VecChunk<K, V, T, R>>,
-) {
-    use std::cmp::Ordering::{Equal, Greater, Less};
-    match chunk.0.len().cmp(&TARGET) {
-        Equal => out.push_back(chunk),
-        Less => *carry = take(chunk),
-        Greater => { *carry = take(chunk); peel(carry, out); }
+        super::pack(
+            input, done, out,
+            |acc, next| Rc::make_mut(&mut acc.0).extend(take(next)),
+            |chunk, n| { let mut rows = take(chunk); let rest = rows.split_off(n); (VecChunk(Rc::new(rows)), VecChunk(Rc::new(rest))) },
+            |chunk| chunk,
+        );
     }
 }
 

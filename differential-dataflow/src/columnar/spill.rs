@@ -14,11 +14,13 @@
 //! # Known limitation
 //!
 //! `settle` sees only its **local** committed output, not the whole batcher
-//! queue (timely's `MergeBatcher` does not expose it). So the eviction policy is
-//! an approximate per-worker record budget — paged-at-settle, decremented as
-//! chunks are consumed — not the exact head-reserve-over-the-queue policy the
-//! old bespoke batcher could run. It bounds resident memory and round-trips
-//! through the store correctly; it just can't see as much as we'd like.
+//! queue (timely's `MergeBatcher` does not expose it, and the shared `settle` is
+//! generic so it can't notify a columnar-specific accountant per consumed chunk).
+//! So the eviction policy is a simple per-worker **high-water mark**: keep the
+//! first `budget_records` worth of committed chunks resident, page the rest. It
+//! bounds the resident set and round-trips through the store correctly, but it
+//! favours keeping older data and can't reclaim budget as data leaves — coarser
+//! than the exact head-reserve-over-the-queue policy the old bespoke batcher ran.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -57,8 +59,9 @@ pub struct SpillStats {
 struct SpillState {
     /// Keep up to this many records resident before paging committed chunks.
     budget_records: usize,
-    /// Running estimate of records held resident in the batcher (approximate; see
-    /// the module's "Known limitation").
+    /// Records kept resident so far — a monotonic high-water mark. Once it reaches
+    /// `budget_records`, every further committed chunk is paged (see the module's
+    /// "Known limitation").
     resident_records: usize,
     /// Pluggable backing store.
     store: Box<dyn BytesStore>,
@@ -88,8 +91,13 @@ pub(crate) fn active() -> bool {
 }
 
 /// Try to page `updates` out. On success returns a [`BytesSource`] handle to fetch
-/// it back; otherwise returns the trie to keep resident (and counts it against the
-/// budget). With no spiller installed (or under budget), always keeps.
+/// it back; otherwise returns the trie to keep resident.
+///
+/// Policy: a **high-water mark** — keep the first `budget_records` worth of
+/// committed chunks resident, page everything after. Simple and robust (the
+/// counter only rises, so paging is deterministic once the budget is reached);
+/// it does not reclaim budget when data later leaves the batcher, since
+/// `settle` only sees its local output (see the module-level limitation).
 pub(crate) fn try_page<U: Update>(updates: UpdatesTyped<U>) -> Result<Box<dyn BytesSource>, UpdatesTyped<U>> {
     STATE.with(|s| {
         let mut guard = s.borrow_mut();
@@ -99,7 +107,7 @@ pub(crate) fn try_page<U: Update>(updates: UpdatesTyped<U>) -> Result<Box<dyn By
             state.resident_records += records;
             return Err(updates);
         }
-        // Over budget: serialize and page out.
+        // Over the high-water mark: serialize and page out.
         let mut buf = Vec::new();
         Updates::<U>::from(updates).write_to(&mut buf);
         state.stats.spilled_chunks.fetch_add(1, Relaxed);
@@ -109,17 +117,7 @@ pub(crate) fn try_page<U: Update>(updates: UpdatesTyped<U>) -> Result<Box<dyn By
     })
 }
 
-/// A resident chunk of `records` is leaving the resident set (consumed by a
-/// transducer); discount it from the budget.
-pub(crate) fn note_consumed(records: usize) {
-    STATE.with(|s| {
-        if let Some(state) = s.borrow_mut().as_mut() {
-            state.resident_records = state.resident_records.saturating_sub(records);
-        }
-    });
-}
-
-/// A paged chunk was fetched back in; bump the counter.
+/// A paged chunk was fetched back in; bump the counter (for stats).
 pub(crate) fn note_fetched() {
     STATE.with(|s| {
         if let Some(state) = s.borrow_mut().as_mut() {

@@ -158,12 +158,78 @@ pub trait Chunk: Sized + Clone + LayoutExt {
     /// When `done` is set the input must be moved to the output.
     ///
     /// This method may be called on already settled data, and should be efficient then.
-    fn settle(
-        input: &mut VecDeque<Self>,
-        done: bool,
-        out: &mut VecDeque<Self>,
-    );
+    ///
+    /// Implementors that want the standard maximal packing can delegate to the
+    /// [`pack`] helper, supplying their layout's coalesce / split / commit closures.
+    fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>);
 
+}
+
+/// Maximal-packing driver an implementor's [`Chunk::settle`] may delegate to.
+///
+/// Holds a `carry` chunk under construction, grown by `combine` until it reaches
+/// `TARGET` (then emitted) and emitted early when the next chunk can't be absorbed
+/// without exceeding `TARGET`; over-sized chunks are peeled with `split`. Each
+/// committed chunk is passed through `seal` (the compress / spill hook — use the
+/// identity closure when there's nothing to do). The closures are the only
+/// layout-specific pieces:
+///
+/// * `combine(&mut acc, next)` — append `next` onto `acc` (caller guarantees their
+///   lengths sum to at most `TARGET`, and `next` follows `acc` in one sorted,
+///   consolidated chain), so packing a run of small chunks stays linear.
+/// * `split(chunk, n)` — the first `n` updates and the remaining `len - n`.
+/// * `seal(chunk)` — commit a chunk (e.g. compress or spill); identity to keep it.
+pub fn pack<C: Chunk>(
+    input: &mut VecDeque<C>,
+    done: bool,
+    out: &mut VecDeque<C>,
+    mut combine: impl FnMut(&mut C, C),
+    mut split: impl FnMut(C, usize) -> (C, C),
+    mut seal: impl FnMut(C) -> C,
+) {
+    let mut carry: Option<C> = None;
+    while let Some(chunk) = input.pop_front() {
+        match carry.take() {
+            None => pack_absorb(chunk, &mut carry, out, &mut split, &mut seal),
+            Some(mut c) if c.len() + chunk.len() <= C::TARGET => {
+                // Combines into one legal chunk; coalesce in place.
+                combine(&mut c, chunk);
+                if c.len() == C::TARGET { out.push_back(seal(c)); } else { carry = Some(c); }
+            }
+            Some(c) => {
+                // `c` is maximal against this neighbour; emit it and absorb afresh.
+                out.push_back(seal(c));
+                pack_absorb(chunk, &mut carry, out, &mut split, &mut seal);
+            }
+        }
+    }
+    if let Some(c) = carry {
+        if done { out.push_back(seal(c)); } else { input.push_front(c); }
+    }
+}
+
+/// Absorb `chunk` into an empty `carry` (a [`pack`] helper): pass a `TARGET` chunk
+/// straight through (sealed), hold a smaller one as the new carry, or peel
+/// `TARGET`-sized pieces off a larger one and carry the remainder.
+fn pack_absorb<C, S, L>(chunk: C, carry: &mut Option<C>, out: &mut VecDeque<C>, split: &mut S, seal: &mut L)
+where
+    C: Chunk,
+    S: FnMut(C, usize) -> (C, C),
+    L: FnMut(C) -> C,
+{
+    match chunk.len().cmp(&C::TARGET) {
+        std::cmp::Ordering::Equal => out.push_back(seal(chunk)),
+        std::cmp::Ordering::Less => *carry = Some(chunk),
+        std::cmp::Ordering::Greater => {
+            let mut rest = chunk;
+            loop {
+                let (head, tail) = split(rest, C::TARGET);
+                out.push_back(seal(head));
+                if tail.len() >= C::TARGET { rest = tail; }
+                else { if tail.len() > 0 { *carry = Some(tail); } break; }
+            }
+        }
+    }
 }
 
 type KeyCon<C> = <<C as WithLayout>::Layout as Layout>::KeyContainer;
