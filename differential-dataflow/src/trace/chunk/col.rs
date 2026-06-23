@@ -43,11 +43,10 @@ use crate::lattice::Lattice;
 use crate::trace::cursor::Cursor;
 use crate::trace::implementations::{BatchContainer, WithLayout};
 
-use crate::columnar::arrangement::Coltainer;
-use crate::columnar::layout::{ColumnarLayout, ColumnarUpdate};
+use crate::columnar::layout::{ColumnarLayout, ColumnarUpdate, Coltainer};
 use crate::columnar::spill::{self, BytesSource};
 use crate::columnar::updates::{child_range, Tuple, UpdatesBuilder, UpdatesTyped};
-use crate::columnar::arrangement::trie_merger;
+use crate::columnar::trie_merger;
 
 use super::Chunk;
 

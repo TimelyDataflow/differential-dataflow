@@ -25,29 +25,42 @@
 //! `Chunk` harness. `settle` pages chunks out via [`spill`].
 //!
 //! Module layout (bottom-up):
-//! - [`layout`] — `ColumnarUpdate` / `ColumnarLayout` / `OrdContainer`.
+//! - [`layout`] — `ColumnarUpdate` / `ColumnarLayout` / `OrdContainer` / `Coltainer`
+//!   (the columnar container as a DD `BatchContainer`).
 //! - [`updates`] — `UpdatesTyped<U>` trie, `Consolidating`, `UpdatesBuilder`, byte codec.
+//! - [`trie_merger`] — the trie-native survey/merge core that `ColChunk`'s
+//!   `Chunk::merge` / `extract` / `settle` delegate to.
 //! - [`builder`] — `ValColBuilder`: the input-side `ContainerBuilder`.
 //! - [`exchange`] — `ValPact` / `ValDistributor`: PACT for shuffling.
-//! - [`arrangement`] — trace aliases (`ValSpine`/`ValBatcher`/`ValBuilder` over
-//!   `ColChunk`) + `Coltainer` + `TrieChunker` + `trie_merger` (the survey/merge core).
+//! - [`chunker`] — `TrieChunker`: melds `RecordedUpdates<U>` streams into `ColChunk<U>`.
 //! - [`spill`] — per-worker page-out control for `ColChunk` (`Chunk::settle`'s spill hook).
-//! - This file — `RecordedUpdates<U>` (the stream container), container-trait
-//!   impls (`Negate`, `Enter`, `Leave`, `ResultsIn`), and top-level operators
-//!   (`join_function`, `leave_dynamic`, `as_recorded_updates`).
+//! - This file — the trace aliases (`ValSpine`/`ValBatcher`/`ValBuilder` over
+//!   `ColChunk`, though `crate::trace::chunk::col` is the canonical entry point),
+//!   `RecordedUpdates<U>` (the stream container), container-trait impls (`Negate`,
+//!   `Enter`, `Leave`, `ResultsIn`), and top-level operators (`join_function`,
+//!   `leave_dynamic`, `as_recorded_updates`).
 
 
 pub mod layout;
 pub mod updates;
 pub mod builder;
 pub mod exchange;
-pub mod arrangement;
+pub mod trie_merger;
+pub mod chunker;
 pub mod spill;
 
 pub use updates::UpdatesTyped;
 pub use builder::ValBuilder as ValColBuilder;
 pub use exchange::ValPact;
-pub use arrangement::{ValBatcher, ValBuilder, ValChunker, ValSpine};
+
+/// The columnar trace: a spine of `Rc`-shared `ColChunk` batches.
+pub type ValSpine<K, V, T, R> = crate::trace::chunk::col::ChunkSpine<K, V, T, R>;
+/// The columnar merge batcher (the `Chunk` harness's `MergeBatcher<ChunkMerger<ColChunk>>`).
+pub type ValBatcher<K, V, T, R> = crate::trace::chunk::col::ChunkBatcher<K, V, T, R>;
+/// The columnar batch builder (the `Chunk` harness's `ChunkBuilder<ColChunk>`).
+pub type ValBuilder<K, V, T, R> = crate::trace::chunk::col::ChunkBuilder<K, V, T, R>;
+/// A chunker that melds `RecordedUpdates<U>` streams into `ColChunk<U>` chunks.
+pub type ValChunker<U> = chunker::TrieChunker<U>;
 
 /// Target size for update batches, in number of updates.
 pub const LINK_TARGET: usize = 64 * 1024;

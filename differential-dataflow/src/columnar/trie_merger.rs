@@ -10,8 +10,8 @@
 use columnar::{Columnar, Len};
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use super::super::layout::ColumnarUpdate as Update;
-use super::super::updates::UpdatesTyped;
+use super::layout::ColumnarUpdate as Update;
+use super::updates::UpdatesTyped;
 
 /// Partition `merged` into chunks ready to ship (times strictly less than `upper`)
 /// and chunks kept for future seals (times at-or-after `upper`), updating
@@ -261,8 +261,8 @@ fn write_from_surveys<U: Update>(
 /// a similar report for the values of the two lists, appropriate for the next layer.
 #[inline(never)]
 pub fn survey<'a, C: columnar::Container<Ref<'a>: Ord>>(
-    lists0: <super::super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
-    lists1: <super::super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
+    lists0: <super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
+    lists1: <super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
     reports: &[Report],
 ) -> Vec<Report> {
     use columnar::Index;
@@ -331,11 +331,11 @@ pub fn survey<'a, C: columnar::Container<Ref<'a>: Ord>>(
 /// be bulk-copied.
 #[inline(never)]
 pub fn write_layer<'a, C: columnar::Container<Ref<'a>: Ord>>(
-    lists0: <super::super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
-    lists1: <super::super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
+    lists0: <super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
+    lists1: <super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
     list_survey: &[Report],
     item_survey: &[Report],
-    output: &mut super::super::updates::Lists<C>,
+    output: &mut super::updates::Lists<C>,
 ) {
     use columnar::{Container, Index};
 
@@ -419,11 +419,11 @@ pub fn write_layer<'a, C: columnar::Container<Ref<'a>: Ord>>(
 /// - `Both(t0, t1)`: consolidate the two singleton diffs. Push `[sum]`
 ///   if non-zero, or an empty list `[]` if they cancel.
 #[inline(never)]
-pub fn write_diffs<U: super::super::layout::ColumnarUpdate>(
-    diffs0: <super::super::updates::Lists<columnar::ContainerOf<U::Diff>> as columnar::Borrow>::Borrowed<'_>,
-    diffs1: <super::super::updates::Lists<columnar::ContainerOf<U::Diff>> as columnar::Borrow>::Borrowed<'_>,
+pub fn write_diffs<U: super::layout::ColumnarUpdate>(
+    diffs0: <super::updates::Lists<columnar::ContainerOf<U::Diff>> as columnar::Borrow>::Borrowed<'_>,
+    diffs1: <super::updates::Lists<columnar::ContainerOf<U::Diff>> as columnar::Borrow>::Borrowed<'_>,
     time_survey: &[Report],
-    output: &mut super::super::updates::Lists<columnar::ContainerOf<U::Diff>>,
+    output: &mut super::updates::Lists<columnar::ContainerOf<U::Diff>>,
 ) {
     use columnar::{Columnar, Container, Index, Len, Push};
     use crate::difference::{Semigroup, IsZero};
