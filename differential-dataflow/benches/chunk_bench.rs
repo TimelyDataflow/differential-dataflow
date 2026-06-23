@@ -1,9 +1,10 @@
 //! Microbenchmark: `VecChunk` (flat) vs `ColChunk` (columnar trie) at the
 //! `Chunk` level — build, merge, full cursor scan, and resident memory — across
-//! data shapes. Isolates the per-layout cost from the dataflow runtime.
+//! data shapes. Isolates the per-layout cost from the dataflow runtime (cf. the
+//! `spines` example, which benchmarks whole trace spines end to end).
 //!
 //! ```text
-//! cargo run --release --example chunk_bench -- [updates]
+//! cargo bench --bench chunk_bench -- [updates]
 //! ```
 //!
 //! Shapes exercise where the trie should and shouldn't help: unique `u64` keys

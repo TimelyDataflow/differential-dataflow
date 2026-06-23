@@ -1,9 +1,16 @@
-//! Quick spines benchmark over `val`, `key`, and `col` arrangements.
+//! End-to-end spines benchmark over `key`, `val`, `vec`, and `col` arrangements
+//! — an `arrange` + `join` of `String` keys, loaded then queried round by round:
+//!
+//! * `key` / `val` — the ord-neu `OrdKeySpine` / `OrdValSpine` traces.
+//! * `vec` — the `Vec`-backed `Chunk` trace (`VecChunk`).
+//! * `col` — the columnar `Chunk` trace (`ColChunk`), fed natively.
+//!
+//! Run as `cargo run --release --example spines -- <keys> <size> <mode>`.
 //!
 //! `col` mode feeds the columnar batcher directly via `InputHandle` +
 //! `ValColBuilder`, formatting integers into a reusable `String` buffer rather
 //! than allocating per record. This way `col`'s measurements aren't polluted
-//! by `String` allocation overhead, since the row-based `val`/`key` paths
+//! by `String` allocation overhead, since the row-based `key`/`val`/`vec` paths
 //! genuinely need owned strings.
 
 use std::fmt::Write as _;
@@ -135,8 +142,34 @@ fn main() {
 
                     Box::new(ColWorkload { data_input, keys_input, buf: String::new() })
                 },
+                "vec" => {
+                    // The `Vec`-backed `Chunk` trace, fed like the row modes (each
+                    // insert allocates a `String`) but arranged through the `Chunk`
+                    // harness via a `ContainerChunker<VecChunk>`.
+                    use differential_dataflow::Hashable;
+                    use differential_dataflow::trace::chunk::vec::{ChunkBatcher, ChunkBuilder, ChunkSpine, VecChunk};
+                    use differential_dataflow::trace::implementations::chunker::ContainerChunker;
+                    use differential_dataflow::operators::arrange::arrangement::arrange_core;
+                    use timely::dataflow::channels::pact::Exchange;
+
+                    let (data_input, data) = scope.new_collection::<String, isize>();
+                    let (keys_input, keys) = scope.new_collection::<String, isize>();
+                    let data = data.map(|x| (x, ()));
+                    let keys = keys.map(|x| (x, ()));
+
+                    type Ba = ChunkBatcher<String, (), u64, isize>;
+                    type Bu = ChunkBuilder<String, (), u64, isize>;
+                    type Sp = ChunkSpine<String, (), u64, isize>;
+                    type Chu = ContainerChunker<VecChunk<String, (), u64, isize>>;
+                    let exchange = || Exchange::new(|u: &((String, ()), u64, isize)| (u.0).0.hashed().into());
+                    let data = arrange_core::<_, _, Chu, Ba, Bu, Sp>(data.inner, exchange(), "DataArrange");
+                    let keys = arrange_core::<_, _, Chu, Ba, Bu, Sp>(keys.inner, exchange(), "KeysArrange");
+                    keys.join_core(data, |_k, &(), &()| Option::<()>::None)
+                        .probe_with(&mut probe);
+                    Box::new(RowWorkload { data_input, keys_input })
+                },
                 _ => {
-                    panic!("unrecognized mode: {:?}", mode);
+                    panic!("unrecognized mode: {:?} (expected `key`, `val`, `vec`, or `col`)", mode);
                 }
             }
         });

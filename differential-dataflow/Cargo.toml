@@ -39,3 +39,7 @@ timely = {workspace = true}
 
 [features]
 default = ["timely/getopts"]
+
+[[bench]]
+name = "chunk_bench"
+harness = false
