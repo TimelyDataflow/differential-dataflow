@@ -1,0 +1,660 @@
+//! Sorted, consolidated runs of updates, and operators over sequences of them.
+//!
+//! A [`Chunk`] is a consolidated, sorted run of `(data, time, diff)` updates.
+//! A sequence of chunks is also expected to be consolidated and sorted.
+//!
+//! The [`Chunk`] trait exposes whole-chunk operations, so that the implementor
+//! can internally divert to their best implementations, with amortized overhead.
+//! Each operation is invoked as if "streaming", providing input and output queues.
+//! An implementor is expected to drain as much as possible of the inputs, and any
+//! chunk written to the output is "committed" and likely to be shipped onward.
+//!
+//! # Wiring a `Chunk` into an arrangement
+//!
+//! Implementing [`Chunk`] for a type `C` is the only bespoke code needed; three
+//! aliases then expand into a full trace:
+//!
+//! * [`ChunkBatcher<C>`](ChunkBatcher) — the merge batcher.
+//! * [`ChunkBuilder<C>`](ChunkBuilder) — the batch builder.
+//! * [`ChunkSpine<C>`](ChunkSpine) — the trace, a spine of `Rc`-shared batches.
+//!
+//! These are the `Batcher` / `Builder` / `Spine` to hand to
+//! [`arrange_core`](crate::operators::arrange::arrangement::arrange_core), along with a
+//! chunker that forms `C` from the input stream — typically
+//! [`ContainerChunker<C>`](crate::trace::implementations::chunker::ContainerChunker).
+//! Everything else here ([`ChunkBatch`], [`ChunkMerger`], [`ChunkBatchMerger`],
+//! [`ChunkBatchCursor`], [`ChunkBatchBuilder`]) is machinery those aliases expand to and is
+//! not named directly. The [`vec`](mod@vec) module is a worked `Chunk`
+//! that re-exports the three aliases specialized to its layout, and the `chunks` example
+//! stands one up.
+//!
+//! # Bounded footprint
+//!
+//! There is a `TARGET` associated constant that signals the intended chunk size.
+//! The constant should be chosen large enough to amortize overheads, but small
+//! enough that per-chunk work does not "stall" the system when invoked.
+//! The implementor is trusted to make a reasonable choice here.
+//!
+//! The [`Chunk::settle`] method "settles" sequences of chunks, and is called as
+//! chunks are no longer expected to be needed in the near future. The implementor
+//! should ensure the chunks are "graded", in that the sequence of chunks are all
+//! at most `TARGET` in size, any two in order sum to strictly more than `TARGET`.
+//! This is also an opportunity to compress data, or spill to disk or cloud storage.
+//!
+//! The active (un-settled) chunk set is kept small from both sides. Every producer
+//! settles its committed output as it goes (see [`Chunk::settle`]), rather than
+//! building a whole sequence and settling at the end. And every walk over a whole
+//! chunk sequence reads only resident metadata — [`len`](Chunk::len) and
+//! [`bounds`](Chunk::bounds) — never a chunk body: a batch indexes its chunks'
+//! bounds once at construction, so cursors binary-search that resident index and
+//! open only the chunk(s) a query touches. Implementors must therefore keep `len`
+//! and `bounds` cheap even when a chunk's body is paged out.
+
+use std::collections::VecDeque;
+
+use timely::progress::Antichain;
+use timely::progress::frontier::AntichainRef;
+use crate::lattice::Lattice;
+use crate::trace::{Batch, BatchReader, Description};
+use crate::trace::cursor::Cursor;
+use crate::trace::implementations::{BatchContainer, Layout, LayoutExt, WithLayout};
+
+pub mod vec;
+
+/// A non-empty, bounded, consolidated, sorted sequence of `(data, time, diff)`.
+///
+/// An implementor gains access to types and trait implementations that provide
+/// batch formation and trace maintenance with no additional effort.
+///
+/// The necessary implementations are either "data" or "metadata" operations.
+/// The "data" operations transform lists of chunks, are expected to do roughly
+/// "one chunk's worth" of work at a time; they can afford to compress and page.
+/// The "metadata" operations provide chunk information, and should be lightweight.
+pub trait Chunk: Sized + Clone + LayoutExt {
+
+    /// The intended maximum chunk size.
+    const TARGET: usize;
+
+    /// A cursor navigating this chunk's contents.
+    type Cursor:
+        Cursor<Storage = Self> +
+        WithLayout<Layout = Self::Layout> +
+        for<'a> LayoutExt<
+            Key<'a> = Self::Key<'a>,
+            Val<'a> = Self::Val<'a>,
+            ValOwn = Self::ValOwn,
+            Time = Self::Time,
+            TimeGat<'a> = Self::TimeGat<'a>,
+            Diff = Self::Diff,
+            DiffGat<'a> = Self::DiffGat<'a>,
+            KeyContainer = Self::KeyContainer,
+            ValContainer = Self::ValContainer,
+            TimeContainer = Self::TimeContainer,
+            DiffContainer = Self::DiffContainer,
+        >;
+
+    /// Acquire a cursor over this chunk.
+    fn cursor(&self) -> Self::Cursor;
+
+    /// The first and last `(key, val, time)` triples in the chunk.
+    fn bounds(&self) -> (
+        (Self::Key<'_>, Self::Val<'_>, Self::TimeGat<'_>),
+        (Self::Key<'_>, Self::Val<'_>, Self::TimeGat<'_>),
+    );
+
+    /// The number of updates in the chunk.
+    fn len(&self) -> usize;
+
+    /// Merge the fronts of two input deques through their shared horizon.
+    ///
+    /// Both deques are non-empty (the caller guarantees it). The two queues are both
+    /// the heads of lists of chunks, and the implementor should only merge through the
+    /// least last `(key, val, time)` update, or risk emitting an unconsolidated
+    /// output chunk.
+    ///
+    /// When a chunk cannot be completely retired, perhaps it had the larger last update,
+    /// it should be rewritten as a new chunk and pushed back to the front of the queue.
+    /// The invocation is expected to consume at least one of its inputs, and the harness
+    /// may continually re-invoke if this doesn't happen.
+    ///
+    /// A merge concludes when the harness sees that either input is now empty, at which
+    /// point it appends the queue to the output without the method's assistance.
+    fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>);
+
+    /// Partition `input` updates into `keep` (greater or equal `frontier`) or not (`ship`).
+    ///
+    /// An implementation should yield with some frequency to allow the output to "settle".
+    /// The harness may guard against this, but it prefers to provide as much context as it
+    /// can in order to allow broader chunk fusion where needed.
+    fn extract(
+        input: &mut VecDeque<Self>,
+        frontier: AntichainRef<Self::Time>,
+        residual: &mut Antichain<Self::Time>,
+        keep: &mut VecDeque<Self>,
+        ship: &mut VecDeque<Self>,
+    );
+
+    /// Advance times by `frontier` producing consolidated chunks.
+    ///
+    /// An output for `(key, val)` should generally not be produced until a later pair
+    /// is observed, or `done` is set, to ensure the output chunks are consolidated.
+    /// Incomplete work can be pushed back to the front of `input`.
+    ///
+    /// On `done` a single `(key, val)` group may span the whole input; advancing and
+    /// consolidating it should cost time linear in its size, not quadratic.
+    fn advance(
+        input: &mut VecDeque<Self>,
+        frontier: AntichainRef<Self::Time>,
+        done: bool,
+        out: &mut VecDeque<Self>,
+    );
+
+    /// Reshape `input` to a sequence that maintains the "grading" structural invariant.
+    ///
+    /// Specifically, the chunks in `output` should have a maximum size of `TARGET` and
+    /// each adjacent pair should have lengths that sum to more than `TARGET`.
+    /// This is also a good moment to consider compression or paging out the contents.
+    /// When `done` is set the input must be moved to the output.
+    ///
+    /// This method may be called on already settled data, and should be efficient then.
+    fn settle(
+        input: &mut VecDeque<Self>,
+        done: bool,
+        out: &mut VecDeque<Self>,
+    );
+
+}
+
+type KeyCon<C> = <<C as WithLayout>::Layout as Layout>::KeyContainer;
+type ValCon<C> = <<C as WithLayout>::Layout as Layout>::ValContainer;
+
+/// A batch is a [`Chunk`] sequence plus a [`Description`].
+///
+/// Metadata about the batches is cached to make subselection efficient.
+pub struct ChunkBatch<C: Chunk> {
+    /// Ordered, consolidated chunks; their concatenation is the batch.
+    pub chunks: Vec<C>,
+    /// The lower, upper, and since frontiers of the batch.
+    pub description: Description<C::Time>,
+    /// Per-chunk first and last key, and first and last val, parallel to `chunks`.
+    first_keys: KeyCon<C>,
+    last_keys: KeyCon<C>,
+    first_vals: ValCon<C>,
+    last_vals: ValCon<C>,
+}
+
+impl<C: Chunk> ChunkBatch<C> {
+    /// Assemble a batch from ordered chunks, building the per-chunk index.
+    pub fn new(chunks: Vec<C>, description: Description<C::Time>) -> Self {
+        let n = chunks.len();
+        let mut first_keys = <KeyCon<C>>::with_capacity(n);
+        let mut last_keys = <KeyCon<C>>::with_capacity(n);
+        let mut first_vals = <ValCon<C>>::with_capacity(n);
+        let mut last_vals = <ValCon<C>>::with_capacity(n);
+        for chunk in &chunks {
+            assert!(chunk.len() > 0, "ChunkBatch chunks must be non-empty");
+            let ((fk, fv, _), (lk, lv, _)) = chunk.bounds();
+            first_keys.push_ref(fk);
+            last_keys.push_ref(lk);
+            first_vals.push_ref(fv);
+            last_vals.push_ref(lv);
+        }
+        ChunkBatch { chunks, description, first_keys, last_keys, first_vals, last_vals }
+    }
+}
+
+impl<C: Chunk> WithLayout for ChunkBatch<C> {
+    type Layout = C::Layout;
+}
+
+impl<C: Chunk> BatchReader for ChunkBatch<C> {
+    type Cursor = ChunkBatchCursor<C>;
+    fn cursor(&self) -> Self::Cursor {
+        ChunkBatchCursor { key_chunk: 0, chunk: 0, inner: self.chunks.first().map(C::cursor) }
+    }
+    fn len(&self) -> usize { self.chunks.iter().map(C::len).sum() }
+    fn description(&self) -> &Description<Self::Time> { &self.description }
+}
+
+impl<C: Chunk + Default + 'static> Batch for ChunkBatch<C>
+where
+    C::Time: timely::progress::Timestamp + Lattice + Ord,
+{
+    type Merger = ChunkBatchMerger<C>;
+
+    fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
+        use timely::progress::Timestamp;
+        let since = Antichain::from_elem(Self::Time::minimum());
+        ChunkBatch::new(Vec::new(), Description::new(lower, upper, since))
+    }
+}
+
+/// A merge-batcher [`Merger`](crate::trace::implementations::merge_batcher::Merger)
+/// over chains of [`Chunk`]s.
+///
+/// `merge` runs the whole-chain binary merger; `extract` splits by the seal frontier
+/// using [`Chunk::extract`]. The batcher consolidates equal `(data, time)` updates
+/// but does *not* advance times — time advancement is advance's job, handled later in
+/// the trace. Both settle their output, since the batcher's chains want to be graded.
+pub type ChunkBatcher<C> = crate::trace::implementations::merge_batcher::MergeBatcher<ChunkMerger<C>>;
+
+/// A spine of `Rc`-shared [`ChunkBatch`]es of type `C`: the trace type for `arrange`.
+pub type ChunkSpine<C> = crate::trace::implementations::spine_fueled::Spine<std::rc::Rc<ChunkBatch<C>>>;
+
+/// A reference-counted [`ChunkBatch`] builder over chunks of type `C`.
+pub type ChunkBuilder<C> = crate::trace::rc_blanket_impls::RcBuilder<ChunkBatchBuilder<C>>;
+
+/// A cursor over a [`ChunkBatch`], merging the per-chunk cursors.
+///
+/// Chunk breakpoints are unconstrained, so a single key — or `(key, val)` — may
+/// straddle consecutive chunks. But the chunks are one globally-sorted sequence
+/// merely cut at arbitrary points, so the operation is *concatenation*, never a
+/// merge: across a boundary a key's vals concatenate and a `(key, val)`'s times
+/// concatenate. The cursor exploits this. It holds the chunk currently being read
+/// and a cursor into it; it seeks by binary-searching the per-chunk index on
+/// `ChunkBatch`, and at boundaries it *continues* into the next chunk rather than
+/// merging — using the index to detect when a key or `(key, val)` spills forward,
+/// without touching chunk contents.
+pub struct ChunkBatchCursor<C: Chunk> {
+    /// First chunk of the current key's run; where `rewind_vals` returns to.
+    key_chunk: usize,
+    /// Chunk currently being read; `>= key_chunk`, within the current key's span.
+    chunk: usize,
+    /// Cursor into `chunk`; `None` once `chunk` is past the last chunk.
+    inner: Option<C::Cursor>,
+}
+
+impl<C: Chunk> WithLayout for ChunkBatchCursor<C> {
+    type Layout = C::Layout;
+}
+
+impl<C: Chunk> ChunkBatchCursor<C> {
+    /// Move the active chunk to `c`, opening a fresh inner cursor at its start.
+    fn goto(&mut self, c: usize, storage: &ChunkBatch<C>) {
+        self.chunk = c;
+        self.inner = storage.chunks.get(c).map(C::cursor);
+    }
+}
+
+impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
+    type Storage = ChunkBatch<C>;
+
+    fn key_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.key_valid(&s.chunks[self.chunk])) }
+    fn val_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.val_valid(&s.chunks[self.chunk])) }
+    fn key<'a>(&self, s: &'a Self::Storage) -> Self::Key<'a> { self.inner.as_ref().unwrap().key(&s.chunks[self.chunk]) }
+    fn val<'a>(&self, s: &'a Self::Storage) -> Self::Val<'a> { self.inner.as_ref().unwrap().val(&s.chunks[self.chunk]) }
+    fn get_key<'a>(&self, s: &'a Self::Storage) -> Option<Self::Key<'a>> { if self.key_valid(s) { Some(self.key(s)) } else { None } }
+    fn get_val<'a>(&self, s: &'a Self::Storage) -> Option<Self::Val<'a>> { if self.val_valid(s) { Some(self.val(s)) } else { None } }
+
+    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, s: &Self::Storage, mut logic: L) {
+        if !self.val_valid(s) { return; }
+        let (k, v) = (self.key(s), self.val(s));
+        self.inner.as_mut().unwrap().map_times(&s.chunks[self.chunk], &mut logic);
+        // Follow the (key, val) forward across boundaries while it spills.
+        let mut c = self.chunk;
+        while c + 1 < s.chunks.len()
+            && s.last_keys.index(c) == k && s.first_keys.index(c + 1) == k
+            && s.last_vals.index(c) == v && s.first_vals.index(c + 1) == v
+        {
+            c += 1;
+            s.chunks[c].cursor().map_times(&s.chunks[c], &mut logic);
+        }
+    }
+
+    fn step_key(&mut self, s: &Self::Storage) {
+        if !self.key_valid(s) { return; }
+        let n = s.chunks.len();
+        let k = self.key(s);
+        // Advance to the last chunk the key spans.
+        while self.chunk + 1 < n && s.last_keys.index(self.chunk) == k && s.first_keys.index(self.chunk + 1) == k {
+            self.goto(self.chunk + 1, s);
+        }
+        // Step past the key within its last chunk.
+        {
+            let inner = self.inner.as_mut().unwrap();
+            inner.seek_key(&s.chunks[self.chunk], k);
+            inner.step_key(&s.chunks[self.chunk]);
+        }
+        // If that exhausted the chunk, the next key (if any) starts the next chunk.
+        if !self.inner.as_ref().unwrap().key_valid(&s.chunks[self.chunk]) && self.chunk + 1 < n {
+            self.goto(self.chunk + 1, s);
+        }
+        self.key_chunk = self.chunk;
+    }
+
+    fn seek_key(&mut self, s: &Self::Storage, key: Self::Key<'_>) {
+        let n = s.chunks.len();
+        // First chunk whose last key is `>= key`: where `key`'s run begins.
+        let c = s.last_keys.advance(0, n, |x| {
+            <KeyCon<C> as BatchContainer>::reborrow(x).lt(&<KeyCon<C> as BatchContainer>::reborrow(key))
+        });
+        self.goto(c, s);
+        self.key_chunk = c;
+        if c < n { self.inner.as_mut().unwrap().seek_key(&s.chunks[c], key); }
+    }
+
+    fn step_val(&mut self, s: &Self::Storage) {
+        if !self.val_valid(s) { return; }
+        let n = s.chunks.len();
+        let (k, v) = (self.key(s), self.val(s));
+        // Advance to the last chunk the (key, val) spans.
+        while self.chunk + 1 < n
+            && s.last_keys.index(self.chunk) == k && s.first_keys.index(self.chunk + 1) == k
+            && s.last_vals.index(self.chunk) == v && s.first_vals.index(self.chunk + 1) == v
+        {
+            self.goto(self.chunk + 1, s);
+        }
+        // Step past the (key, val) within that chunk.
+        self.inner.as_mut().unwrap().step_val(&s.chunks[self.chunk]);
+        // If the key's vals are exhausted here but the key spills, roll forward.
+        if !self.inner.as_ref().unwrap().val_valid(&s.chunks[self.chunk])
+            && self.chunk + 1 < n && s.last_keys.index(self.chunk) == k && s.first_keys.index(self.chunk + 1) == k
+        {
+            self.goto(self.chunk + 1, s);
+            self.inner.as_mut().unwrap().seek_key(&s.chunks[self.chunk], k);
+        }
+    }
+
+    fn seek_val(&mut self, s: &Self::Storage, val: Self::Val<'_>) {
+        if !self.key_valid(s) { return; }
+        let n = s.chunks.len();
+        let k = self.key(s);
+        loop {
+            self.inner.as_mut().unwrap().seek_val(&s.chunks[self.chunk], val);
+            if self.inner.as_ref().unwrap().val_valid(&s.chunks[self.chunk]) { return; }
+            // Key's vals exhausted in this chunk; if the key spills, retry in the next.
+            if self.chunk + 1 < n && s.last_keys.index(self.chunk) == k && s.first_keys.index(self.chunk + 1) == k {
+                self.goto(self.chunk + 1, s);
+                self.inner.as_mut().unwrap().seek_key(&s.chunks[self.chunk], k);
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn rewind_keys(&mut self, s: &Self::Storage) {
+        self.key_chunk = 0;
+        self.goto(0, s);
+    }
+
+    fn rewind_vals(&mut self, s: &Self::Storage) {
+        if !self.key_valid(s) { return; }
+        let k = self.key(s);
+        let kc = self.key_chunk;
+        self.goto(kc, s);
+        self.inner.as_mut().unwrap().seek_key(&s.chunks[kc], k);
+    }
+}
+
+/// A merge-batcher [`Merger`](crate::trace::implementations::merge_batcher::Merger)
+/// over chains of [`Chunk`]s.
+///
+/// `merge` runs the whole-chain binary merger; `extract` splits by the seal frontier
+/// using [`Chunk::extract`]. The batcher consolidates equal `(data, time)` updates
+/// but does *not* advance times — time advancement is advance's job, handled later in
+/// the trace. Both settle their output, since the batcher's chains want to be graded.
+pub struct ChunkMerger<C> {
+    _marker: std::marker::PhantomData<C>,
+}
+
+impl<C> Default for ChunkMerger<C> {
+    fn default() -> Self { Self { _marker: std::marker::PhantomData } }
+}
+
+impl<C> crate::trace::implementations::merge_batcher::Merger for ChunkMerger<C>
+where
+    C: Chunk + Default + 'static,
+    C::Time: Clone + timely::PartialOrder + 'static,
+{
+    type Chunk = C;
+    type Time = C::Time;
+
+    fn merge(
+        &mut self,
+        list1: Vec<C>,
+        list2: Vec<C>,
+        output: &mut Vec<C>,
+        _stash: &mut Vec<C>,
+    ) {
+        // Settle the output after each merge, to maintain bounded active chunks.
+        let mut in1: VecDeque<C> = list1.into();
+        let mut in2: VecDeque<C> = list2.into();
+        let (mut staged, mut settled) = (VecDeque::new(), VecDeque::new());
+        while !in1.is_empty() && !in2.is_empty() {
+            C::merge(&mut in1, &mut in2, &mut staged);
+            C::settle(&mut staged, false, &mut settled);
+        }
+        // Append the non-empty tail from either input, settle as we go.
+        for tail in in1.drain(..).chain(in2.drain(..)) {
+            staged.push_back(tail);
+            C::settle(&mut staged, false, &mut settled);
+        }
+        C::settle(&mut staged, true, &mut settled);
+        output.extend(settled);
+    }
+
+    fn extract(
+        &mut self,
+        merged: Vec<C>,
+        upper: AntichainRef<C::Time>,
+        frontier: &mut Antichain<C::Time>,
+        ship: &mut Vec<C>,
+        kept: &mut Vec<C>,
+        _stash: &mut Vec<C>,
+    ) {
+        // `extract` keeps updates greater-or-equal `upper` and ships the rest, folding
+        // the lower envelope of kept times into `frontier`. Drive it a bounded amount
+        // per call (≈ one input chunk) and `settle` each side as it accumulates, so
+        // neither `keep` (retained across yields) nor `ship` (handed to the builder)
+        // builds up unsettled in core. `settle` may withhold a sub-`TARGET` carry
+        // between calls; the final `settle(done)` flushes it.
+        let mut input: VecDeque<C> = merged.into();
+        let (mut keep, mut shipped) = (VecDeque::new(), VecDeque::new());
+        let (mut kept_q, mut shipped_q) = (VecDeque::new(), VecDeque::new());
+        while !input.is_empty() {
+            C::extract(&mut input, upper, frontier, &mut keep, &mut shipped);
+            C::settle(&mut keep, false, &mut kept_q);
+            C::settle(&mut shipped, false, &mut shipped_q);
+        }
+        C::settle(&mut keep, true, &mut kept_q);
+        C::settle(&mut shipped, true, &mut shipped_q);
+        kept.extend(kept_q);
+        ship.extend(shipped_q);
+    }
+
+    fn len(chunk: &C) -> usize { chunk.len() }
+}
+
+/// The resumable [`Batch::Merger`] for [`ChunkBatch`]: merges two batches and advances
+/// their times to the compaction frontier, a fuel-bounded step at a time.
+///
+/// Each step pipelines [`merge`](Chunk::merge) → [`advance`](Chunk::advance) →
+/// [`settle`](Chunk::settle) and settles its output, so a suspended merge holds only
+/// graded chunks. The sources are read by cloning (a cheap refcount bump) and must be
+/// supplied unchanged on every call.
+pub struct ChunkBatchMerger<C: Chunk> {
+    /// Compaction frontier supplied at construction.
+    frontier: Antichain<C::Time>,
+    /// Result frontiers, retained for the output description.
+    lower: Antichain<C::Time>,
+    upper: Antichain<C::Time>,
+    /// Input deques, refilled from the sources (clones) head-of-list at a time.
+    in1: VecDeque<C>,
+    in2: VecDeque<C>,
+    /// Next source chunk to clone into `in1` / `in2`.
+    idx1: usize,
+    idx2: usize,
+    /// `advance`'s input: the merge output plus advance's withheld carry at the front.
+    merged: VecDeque<C>,
+    /// `advance`'s output and `settle`'s input: merged-and-advanced chunks, with
+    /// settle's withheld sub-`TARGET` carry at the front.
+    advanced: VecDeque<C>,
+    /// `settle`'s output: the committed, graded result, grown by `work`. Graded at
+    /// every yield, so a suspended merge holds well-formed (spillable) chunk state.
+    settled: VecDeque<C>,
+    /// Set once both sources are drained and advance's and settle's final flushes ran.
+    complete: bool,
+}
+
+impl<C> crate::trace::Merger<ChunkBatch<C>> for ChunkBatchMerger<C>
+where
+    C: Chunk + Default + 'static,
+    C::Time: timely::progress::Timestamp + Lattice + Ord + 'static,
+{
+    fn new(source1: &ChunkBatch<C>, source2: &ChunkBatch<C>, frontier: AntichainRef<C::Time>) -> Self {
+        let lower = source1.description.lower().meet(source2.description.lower());
+        let upper = source1.description.upper().join(source2.description.upper());
+        Self {
+            frontier: frontier.to_owned(),
+            lower,
+            upper,
+            in1: VecDeque::new(),
+            in2: VecDeque::new(),
+            idx1: 0,
+            idx2: 0,
+            merged: VecDeque::new(),
+            advanced: VecDeque::new(),
+            settled: VecDeque::new(),
+            complete: false,
+        }
+    }
+
+    fn work(&mut self, source1: &ChunkBatch<C>, source2: &ChunkBatch<C>, fuel: &mut isize) {
+
+        // TODO: The logic is a bit tortured here, and should be improved.
+
+        if self.complete { return; }
+
+        while *fuel > 0 {
+            // Refill each input deque up to a burst of source chunks (clones).
+            // The constant trades away fuel precision for overhead amortization.
+            const BURST: usize = 8;
+            while self.in1.len() < BURST && self.idx1 < source1.chunks.len() {
+                self.in1.push_back(source1.chunks[self.idx1].clone());
+                self.idx1 += 1;
+            }
+            while self.in2.len() < BURST && self.idx2 < source2.chunks.len() {
+                self.in2.push_back(source2.chunks[self.idx2].clone());
+                self.idx2 += 1;
+            }
+
+            // Merge's per-tick output (a burst's worth, or one tail chunk), measured
+            // for fuel before it joins the carry already in `merged`.
+            let mut produced = VecDeque::new();
+            if !self.in1.is_empty() && !self.in2.is_empty() {
+                // Both sides have data: drain the loaded burst.
+                C::merge(&mut self.in1, &mut self.in2, &mut produced);
+            } else if let Some(chunk) = self.in1.pop_front().or_else(|| self.in2.pop_front()) {
+                // Exactly one side has data: flush its verbatim tail, one chunk a step.
+                produced.push_back(chunk);
+            } else {
+                // Both sources drained: final flush of advance's and settle's carries.
+                C::advance(&mut self.merged, self.frontier.borrow(), true, &mut self.advanced);
+                C::settle(&mut self.advanced, true, &mut self.settled);
+                self.complete = true;
+                break;
+            }
+
+            let work: usize = produced.iter().map(C::len).sum();
+            self.merged.extend(produced);
+            C::advance(&mut self.merged, self.frontier.borrow(), false, &mut self.advanced);
+            // Maintain grading at the yield boundary: this step may exhaust `fuel` and
+            // suspend with `advanced` held, and held chunk state must be graded.
+            C::settle(&mut self.advanced, false, &mut self.settled);
+            *fuel -= work as isize;
+        }
+    }
+
+    fn done(self) -> ChunkBatch<C> {
+        debug_assert!(self.merged.is_empty() && self.advanced.is_empty());
+        let description = Description::new(self.lower, self.upper, self.frontier);
+        ChunkBatch::new(self.settled.into(), description)
+    }
+}
+
+/// A [`Builder`](crate::trace::Builder) that collects a chunk sequence into a [`ChunkBatch`].
+pub struct ChunkBatchBuilder<C: Chunk> {
+    /// Pushed chunks awaiting settling; holds settle's sub-`TARGET` carry at the front.
+    input: VecDeque<C>,
+    /// The graded chunks emitted so far.
+    output: VecDeque<C>,
+}
+
+impl<C> crate::trace::Builder for ChunkBatchBuilder<C>
+where
+    C: Chunk + Default + 'static,
+    C::Time: timely::progress::Timestamp,
+{
+    type Input = C;
+    type Time = C::Time;
+    type Output = ChunkBatch<C>;
+
+    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
+        Self { input: VecDeque::new(), output: VecDeque::new() }
+    }
+
+    fn push(&mut self, chunk: &mut C) {
+        let chunk = std::mem::take(chunk);
+        if chunk.len() > 0 {
+            self.input.push_back(chunk);
+            C::settle(&mut self.input, false, &mut self.output);
+        }
+    }
+
+    fn done(self, description: Description<C::Time>) -> ChunkBatch<C> {
+        let ChunkBatchBuilder { mut input, mut output } = self;
+        C::settle(&mut input, true, &mut output);
+        ChunkBatch::new(output.into(), description)
+    }
+
+    fn seal(chain: &mut Vec<C>, description: Description<C::Time>) -> ChunkBatch<C> {
+        // We settle the chain because we are not guaranteed to received pre-settled data.
+        // This should be efficient on pre-settled data.
+        ChunkBatch::new(settle_all(std::mem::take(chain)), description)
+    }
+}
+
+/// Whether `chunks` satisfy the [`Chunk::TARGET`] grading invariant: every chunk
+/// at most `TARGET`, and every adjacent pair summing to more than `TARGET` (so no
+/// two neighbours could be combined into one legal chunk — a *maximal packing*).
+///
+/// This is the post-[`settle`](Chunk::settle) shape; useful as a test/debug check.
+pub fn is_graded<C: Chunk>(chunks: &[C]) -> bool {
+    chunks.iter().all(|c| c.len() <= C::TARGET)
+        && chunks.windows(2).all(|w| w[0].len() + w[1].len() > C::TARGET)
+}
+
+/// Settle `input` to completion into a fresh graded `Vec` (see [`Chunk::settle`]).
+///
+/// A convenience for the one-shot callers (batch sealing, the batcher's merge and
+/// extract) that have a whole sequence in hand and want it graded; the streaming
+/// callers drive [`Chunk::settle`] directly across ticks.
+pub fn settle_all<C: Chunk>(input: impl IntoIterator<Item = C>) -> Vec<C> {
+    let mut input: VecDeque<C> = input.into_iter().collect();
+    let mut out = VecDeque::new();
+    C::settle(&mut input, true, &mut out);
+    debug_assert!(input.is_empty());
+    out.into()
+}
+
+/// Merge two full chains of chunks into one, to completion, appending to `out`.
+///
+/// The plain whole-chain driver: ticks [`Chunk::merge`] until one deque empties, then
+/// appends the other's remainder (the verbatim tail). Output is near-graded, not
+/// settled. The batcher's `merge` runs the same loop but settles after each push (the
+/// bounded-footprint discipline) and so does not use this; it stays as the simplest way
+/// to drive [`Chunk::merge`] to completion.
+pub fn merge_chains<C: Chunk>(
+    chain1: Vec<C>,
+    chain2: Vec<C>,
+    out: &mut VecDeque<C>,
+) {
+    let mut in1: VecDeque<C> = chain1.into();
+    let mut in2: VecDeque<C> = chain2.into();
+    while !in1.is_empty() && !in2.is_empty() {
+        C::merge(&mut in1, &mut in2, out);
+    }
+    // One deque is empty; the other's remainder is all greater than everything merged.
+    out.extend(in1.drain(..));
+    out.extend(in2.drain(..));
+}
