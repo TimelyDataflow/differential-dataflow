@@ -263,6 +263,24 @@ impl<U: Update, B: std::ops::Deref<Target = [u8]> + Clone + 'static> Updates<U, 
 /// The flat `(key, val, time, diff)` tuple for an [`Update`].
 pub type Tuple<U> = (<U as Update>::Key, <U as Update>::Val, <U as Update>::Time, <U as Update>::Diff);
 
+/// Wrap a flat `Tuple<U>` columnar container as a stride-1 [`UpdatesTyped<U>`].
+///
+/// Each layer gets `Strides::new(1, n)` bounds, where `n` is the record count.
+/// The result is unsorted and unconsolidated; pass it through `consolidate()` to
+/// canonicalize. Allocation-free: the four column containers move in place.
+impl<U: Update> From<(ContainerOf<U::Key>, ContainerOf<U::Val>, ContainerOf<U::Time>, ContainerOf<U::Diff>)> for UpdatesTyped<U> {
+    fn from(container: (ContainerOf<U::Key>, ContainerOf<U::Val>, ContainerOf<U::Time>, ContainerOf<U::Diff>)) -> Self {
+        let (k_col, v_col, t_col, d_col) = container;
+        let n = k_col.len() as u64;
+        Self {
+            keys:  Lists { values: k_col, bounds: Strides::new(1, n) },
+            vals:  Lists { values: v_col, bounds: Strides::new(1, n) },
+            times: Lists { values: t_col, bounds: Strides::new(1, n) },
+            diffs: Lists { values: d_col, bounds: Strides::new(1, n) },
+        }
+    }
+}
+
 /// Returns the value-index range for list `i` given cumulative bounds.
 #[inline]
 pub fn child_range<B: IndexAs<u64>>(bounds: B, i: usize) -> std::ops::Range<usize> {
@@ -339,7 +357,7 @@ impl<U: Update> UpdatesTyped<U> {
     /// Forms a consolidated `UpdatesTyped` trie from unsorted `(key, val, time, diff)` refs.
     pub fn form_unsorted<'a>(unsorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
         let mut data = unsorted.collect::<Vec<_>>();
-        data.sort();
+        data.sort_by(|(ak, av, at, _), (bk, bv, bt, _)| (ak, av, at).cmp(&(bk, bv, bt)));
         Self::form(data.into_iter())
     }
 
@@ -402,7 +420,29 @@ impl<U: Update> UpdatesTyped<U> {
     /// Consolidates into canonical trie form:
     /// single outer key list, all lists sorted and deduplicated,
     /// diff lists are singletons (or absent if cancelled).
-    pub fn consolidate(self) -> Self { Self::form_unsorted(self.iter()) }
+    pub fn consolidate(&self) -> Self {
+        // Fast path: stride-1 at every layer (flat tuple list, e.g. produced by
+        // `From<TupleContainer>`). Skip the four-level trie iter and walk the
+        // underlying value columns directly.
+        if self.keys.bounds.strided()  == Some(1)
+            && self.vals.bounds.strided()  == Some(1)
+            && self.times.bounds.strided() == Some(1)
+            && self.diffs.bounds.strided() == Some(1)
+        {
+            let n = Len::len(&self.keys.values);
+            // Tuple up borrows of the four columns — `Index::get(i)` on the
+            // tuple dispatches to each component, yielding a `Ref<Tuple<U>>`
+            // in a single call.
+            let view = (
+                self.keys.values.borrow(),
+                self.vals.values.borrow(),
+                self.times.values.borrow(),
+                self.diffs.values.borrow(),
+            );
+            return Self::form_unsorted((0..n).map(|i| view.get(i)));
+        }
+        Self::form_unsorted(self.iter())
+    }
     /// Drop entries whose diff list is empty (cancelled), rebuilding the trie.
     pub fn filter_zero(self) -> Self {
         if self.diffs.bounds.strided() == Some(1) { self }

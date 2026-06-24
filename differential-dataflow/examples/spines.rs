@@ -29,10 +29,11 @@ trait Workload {
 struct RowWorkload {
     data_input: InputSession<u64, String, isize>,
     keys_input: InputSession<u64, String, isize>,
+    pad: usize,
 }
 impl Workload for RowWorkload {
-    fn insert_data(&mut self, val: usize) { self.data_input.insert(format!("{:?}", val)); }
-    fn insert_keys(&mut self, val: usize) { self.keys_input.insert(format!("{:?}", val)); }
+    fn insert_data(&mut self, val: usize) { self.data_input.insert(format!("{:0width$}", val, width = self.pad)); }
+    fn insert_keys(&mut self, val: usize) { self.keys_input.insert(format!("{:0width$}", val, width = self.pad)); }
     fn advance_to(&mut self, t: u64) {
         self.data_input.advance_to(t); self.data_input.flush();
         self.keys_input.advance_to(t); self.keys_input.flush();
@@ -46,17 +47,18 @@ struct ColWorkload {
     data_input: InputHandle<u64, ColBuilder>,
     keys_input: InputHandle<u64, ColBuilder>,
     buf: String,
+    pad: usize,
 }
 impl Workload for ColWorkload {
     fn insert_data(&mut self, val: usize) {
         self.buf.clear();
-        write!(&mut self.buf, "{:?}", val).unwrap();
+        write!(&mut self.buf, "{:0width$}", val, width = self.pad).unwrap();
         let t = *self.data_input.time();
         self.data_input.send((self.buf.as_str(), (), t, 1i64));
     }
     fn insert_keys(&mut self, val: usize) {
         self.buf.clear();
-        write!(&mut self.buf, "{:?}", val).unwrap();
+        write!(&mut self.buf, "{:0width$}", val, width = self.pad).unwrap();
         let t = *self.keys_input.time();
         self.keys_input.send((self.buf.as_str(), (), t, 1i64));
     }
@@ -72,8 +74,9 @@ fn main() {
     let size: usize = std::env::args().nth(2).unwrap().parse().unwrap();
 
     let mode: String = std::env::args().nth(3).unwrap();
+    let pad: usize = std::env::args().nth(4).and_then(|s| s.parse().ok()).unwrap_or(0);
 
-    println!("Running [{:?}] arrangement", mode);
+    println!("Running [{:?}] arrangement (pad={})", mode, pad);
 
     let timer1 = ::std::time::Instant::now();
     let timer2 = timer1.clone();
@@ -94,7 +97,7 @@ fn main() {
                     let keys = keys.arrange::<OrdKeyBatcher<String,_,isize>, RcOrdKeyBuilder<String,_,isize>, OrdKeySpine<String,_,isize>>();
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
-                    Box::new(RowWorkload { data_input, keys_input }) as Box<dyn Workload>
+                    Box::new(RowWorkload { data_input, keys_input, pad }) as Box<dyn Workload>
                 },
                 "val" => {
                     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatcher, RcOrdValBuilder, OrdValSpine};
@@ -104,7 +107,7 @@ fn main() {
                     let keys = keys.map(|x| (x, ())).arrange::<OrdValBatcher<String,(),_,isize>, RcOrdValBuilder<String,(),_,isize>, OrdValSpine<String,(),_,isize>>();
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
-                    Box::new(RowWorkload { data_input, keys_input })
+                    Box::new(RowWorkload { data_input, keys_input, pad })
                 },
                 "col" => {
                     use timely::dataflow::operators::Input as _;
@@ -133,7 +136,7 @@ fn main() {
                     keys.join_core(data, |_k, (), ()| Option::<()>::None)
                         .probe_with(&mut probe);
 
-                    Box::new(ColWorkload { data_input, keys_input, buf: String::new() })
+                    Box::new(ColWorkload { data_input, keys_input, buf: String::new(), pad })
                 },
                 _ => {
                     panic!("unrecognized mode: {:?}", mode);
