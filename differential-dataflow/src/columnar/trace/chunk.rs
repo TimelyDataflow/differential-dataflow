@@ -22,10 +22,10 @@
 //! cursor access pays the fetch once; [`len`](Chunk::len) and [`bounds`](Chunk::bounds)
 //! read the resident metadata and never fetch.
 //!
-//! Rough edges: [`Chunk::advance`] flattens to owned tuples to advance and
-//! re-consolidate times (the time re-sort is intrinsic, but a per-`(key,val)`
-//! trie-native advance would keep keys/vals columnar); a single `(key, val)`
-//! group spanning many pushes is `O(n²)` rather than linear.
+//! [`Chunk::advance`] is trie-native: it melds its input in place and rewrites
+//! only the time column (keys/vals/diffs stay columnar refs), then re-consolidates
+//! the advanced time runs (a global pass a future per-`(key,val)` streaming
+//! consolidation could narrow).
 
 use std::cell::OnceCell;
 use std::collections::VecDeque;
@@ -44,7 +44,7 @@ use crate::trace::cursor::Cursor;
 use crate::trace::implementations::{BatchContainer, WithLayout};
 
 use crate::columnar::layout::{ColumnarLayout, ColumnarUpdate, Coltainer};
-use crate::columnar::updates::{child_range, Tuple, UpdatesBuilder, UpdatesTyped};
+use crate::columnar::updates::{child_range, UpdatesBuilder, UpdatesTyped};
 use crate::columnar::trie_merger;
 
 use super::spill::{self, BytesSource};
@@ -364,50 +364,61 @@ where U::Time: 'static {
     /// Advance times by `frontier`, consolidating each complete `(key, val)` group
     /// and withholding the last unless `done`.
     ///
-    /// Spike: flattens to owned tuples to advance + re-sort + consolidate (the time
-    /// re-sort is intrinsic). A per-`(key,val)` trie-native advance would keep
-    /// keys/vals columnar; a single group spanning many pushes is `O(n²)` here.
+    /// Streams the input one chunk at a time, holding at most a single chunk plus the
+    /// withheld trailing `(key, val)` group (the `carry`) — it never pulls the whole
+    /// chain into core. Cross-chunk consolidation happens *only* where a `(key, val)`
+    /// straddles a boundary: the (un-advanced) carry is melded onto the next chunk's
+    /// head, a sorted-chain meld that just stitches that one group. [`advance_trie`]
+    /// then advances and consolidates the time runs *within* each chunk (keys / vals /
+    /// diffs stay columnar refs, no global re-sort). Grading the emitted chunks is
+    /// left to [`Chunk::settle`].
     fn advance(
         input: &mut VecDeque<Self>,
         frontier: AntichainRef<U::Time>,
         done: bool,
         out: &mut VecDeque<Self>,
     ) {
-        // Flatten the whole input (prior carry + new chunks); their concatenation is
-        // globally sorted by `(key, val, time)`.
-        let mut buf: Vec<Tuple<U>> = Vec::new();
+        // The withheld trailing `(key, val)` group, kept un-advanced so it melds
+        // cleanly onto the next chunk's head if the group straddles the boundary.
+        let mut carry: Option<UpdatesTyped<U>> = None;
         while let Some(chunk) = input.pop_front() {
-            for (k, v, t, d) in into_trie(chunk).iter() {
-                buf.push((
-                    <U::Key as Columnar>::into_owned(k),
-                    <U::Val as Columnar>::into_owned(v),
-                    <U::Time as Columnar>::into_owned(t),
-                    <U::Diff as Columnar>::into_owned(d),
-                ));
+            // Stitch the carry onto this chunk via a sorted-chain meld (touches only
+            // the straddling group); otherwise take the chunk as-is.
+            let combined = match carry.take() {
+                None => into_trie(chunk),
+                Some(c) => {
+                    let mut builder = UpdatesBuilder::new_from(c);
+                    builder.meld(&into_trie(chunk));
+                    builder.done()
+                }
+            };
+            if combined.len() == 0 { continue; }
+
+            // Withhold the trailing `(key, val)` group (it may continue in the next
+            // chunk). Its size is read from the resident bounds, no body scan.
+            let tail = {
+                let v = combined.view();
+                let last_val = child_range(v.vals.bounds, v.keys.values.len() - 1).end - 1;
+                let times = child_range(v.times.bounds, last_val);
+                child_range(v.diffs.bounds, times.end - 1).end
+                    - child_range(v.diffs.bounds, times.start).start
+            };
+            if tail == combined.len() {
+                // A single `(key, val)` spans the chunk; hold it all as the carry.
+                carry = Some(combined);
+                continue;
             }
+            let split = combined.len() - tail;
+            let (keep, rest) = trie_merger::split_at(combined, split);
+            carry = Some(rest);
+            // Advance the now-complete groups and emit one chunk; `settle` grades.
+            emit(advance_trie(keep, frontier), out);
         }
-        if buf.is_empty() { return; }
-
-        // Withhold the last `(key, val)` group unless `done` (it may continue).
-        let end = if done { buf.len() } else {
-            let last = (buf[buf.len() - 1].0.clone(), buf[buf.len() - 1].1.clone());
-            let mut start = buf.len();
-            while start > 0 && buf[start - 1].0 == last.0 && buf[start - 1].1 == last.1 { start -= 1; }
-            start
-        };
-        if end < buf.len() {
-            let mut carry = UpdatesTyped::<U>::default();
-            for (k, v, t, d) in &buf[end..] { carry.push((k, v, t, d)); }
-            input.push_front(ColChunk::Resident(Rc::new(carry)));
-            buf.truncate(end);
+        // Flush the final carry: advance and emit if `done`, else hold for next call.
+        if let Some(c) = carry {
+            if done { emit(advance_trie(c, frontier), out); }
+            else { input.push_front(ColChunk::Resident(Rc::new(c))); }
         }
-        if buf.is_empty() { return; }
-
-        // Advance, then re-consolidate (advancing is not total-order-monotone).
-        for u in buf.iter_mut() { u.2.advance_by(frontier); }
-        let mut staging = UpdatesTyped::<U>::default();
-        for (k, v, t, d) in &buf { staging.push((k, v, t, d)); }
-        emit(staging.consolidate(), out);
     }
 
     /// Maximal packing via the harness [`pack`](crate::trace::chunk::pack): coalesce by melding
@@ -444,6 +455,72 @@ fn seal_chunk<U: ColumnarUpdate>(chunk: ColChunk<U>) -> ColChunk<U> {
         Ok(source) => ColChunk::Paged(Rc::new(PagedChunk { meta, source, cache: OnceCell::new() })),
         Err(updates) => ColChunk::Resident(Rc::new(updates)),
     }
+}
+
+/// Advance the times in `keep` by `frontier` and rebuild the trie, consolidating
+/// each `(key, val)`'s time run *in isolation*. Advancing preserves `(key, val)`
+/// order, so only the per-group time runs can reorder — they are re-sorted and
+/// merged locally (a no-op sort when advancing is monotone, e.g. total-order
+/// times), never the whole trie. Keys / vals / diffs are copied by columnar ref;
+/// a `(key, val)` whose diffs fully cancel is dropped.
+fn advance_trie<U: ColumnarUpdate>(
+    keep: UpdatesTyped<U>,
+    frontier: AntichainRef<U::Time>,
+) -> UpdatesTyped<U> {
+    use crate::difference::{IsZero, Semigroup};
+    let view = keep.view();
+    let mut out = UpdatesTyped::<U>::default();
+    let mut run: Vec<(U::Time, U::Diff)> = Vec::new();
+    let mut time = U::Time::default();
+    let mut any_key = false;
+
+    for key_idx in 0..view.keys.values.len() {
+        let mut key_emitted = false;
+        for val_idx in child_range(view.vals.bounds, key_idx) {
+            // Gather (advanced time, summed diff) for this `(key, val)`.
+            run.clear();
+            for time_idx in child_range(view.times.bounds, val_idx) {
+                <U::Time as Columnar>::copy_from(&mut time, view.times.values.get(time_idx));
+                time.advance_by(frontier);
+                let mut diff = U::Diff::default();
+                for diff_idx in child_range(view.diffs.bounds, time_idx) {
+                    diff.plus_equals(&<U::Diff as Columnar>::into_owned(view.diffs.values.get(diff_idx)));
+                }
+                run.push((time.clone(), diff));
+            }
+            // Re-sort the run by advanced time and merge equal times, dropping zeros.
+            run.sort_by(|a, b| a.0.cmp(&b.0));
+            let (mut w, mut r) = (0, 0);
+            while r < run.len() {
+                let t = run[r].0.clone();
+                let mut d = run[r].1.clone();
+                r += 1;
+                while r < run.len() && run[r].0 == t { d.plus_equals(&run[r].1); r += 1; }
+                if !d.is_zero() { run[w] = (t, d); w += 1; }
+            }
+            run.truncate(w);
+            if run.is_empty() { continue; }
+
+            // Emit the surviving group, sealing bounds level by level (cf. `form`).
+            if !key_emitted {
+                out.keys.values.push(view.keys.values.get(key_idx));
+                key_emitted = true;
+            }
+            out.vals.values.push(view.vals.values.get(val_idx));
+            for (t, d) in &run {
+                out.times.values.push(t);
+                out.diffs.values.push(d);
+                out.diffs.bounds.push(out.diffs.values.len() as u64);
+            }
+            out.times.bounds.push(out.times.values.len() as u64);
+        }
+        if key_emitted {
+            out.vals.bounds.push(out.vals.values.len() as u64);
+            any_key = true;
+        }
+    }
+    if any_key { out.keys.bounds.push(out.keys.values.len() as u64); }
+    out
 }
 
 #[cfg(test)]
@@ -709,5 +786,100 @@ mod test {
         }
         ColChunk::advance(&mut q, frontier.borrow(), true, &mut out);
         assert_eq!(flat(out), vec![(7, 0, 100, n as i64)]);
+    }
+
+    // `advance` advances and consolidates complete `(key, val)` groups eagerly,
+    // withholding the (possibly-growing) last group as the carry when not `done`.
+    #[test]
+    fn advance_emits_complete_groups_eagerly() {
+        use timely::progress::Antichain;
+        let frontier = Antichain::from_elem(5u64);
+        // Group (0,0) is complete within this chunk; group (1,0) might still grow.
+        let mut q = VecDeque::from([chunk(vec![(0, 0, 0, 1), (0, 0, 1, 1), (1, 0, 0, 1)])]);
+        let mut out = VecDeque::new();
+        ColChunk::advance(&mut q, frontier.borrow(), false, &mut out);
+        // The trailing group (1,0) is withheld as the carry at the front of `input`.
+        assert_eq!(q.len(), 1);
+        assert_eq!(Chunk::len(&q[0]), 1);
+        // Group (0,0)'s times {0,1} advanced to 5 and consolidated, emitted now.
+        assert_eq!(flat(out), vec![(0, 0, 5, 2)]);
+    }
+
+    // Streaming the input one chunk at a time must yield exactly what a single
+    // all-at-once flush does — the resumable path is the one-shot path cut at
+    // group boundaries.
+    #[test]
+    fn advance_resumable_matches_oneshot() {
+        use timely::progress::Antichain;
+        let frontier = Antichain::from_elem(3u64);
+        // Groups span chunk boundaries and carry several times each.
+        let input = || vec![
+            chunk(vec![(0, 0, 0, 1), (0, 0, 1, 1), (1, 0, 0, 1)]),
+            chunk(vec![(1, 0, 5, 1), (1, 1, 0, 1), (2, 0, 0, 1)]),
+            chunk(vec![(2, 0, 2, 1), (2, 0, 9, 1)]),
+        ];
+        let oneshot = {
+            let mut q: VecDeque<_> = input().into();
+            let mut out = VecDeque::new();
+            ColChunk::advance(&mut q, frontier.borrow(), false, &mut out);
+            ColChunk::advance(&mut q, frontier.borrow(), true, &mut out);
+            flat(out)
+        };
+        let incremental = {
+            let mut q = VecDeque::new();
+            let mut out = VecDeque::new();
+            for c in input() { q.push_back(c); ColChunk::advance(&mut q, frontier.borrow(), false, &mut out); }
+            ColChunk::advance(&mut q, frontier.borrow(), true, &mut out);
+            flat(out)
+        };
+        assert_eq!(oneshot, incremental);
+        for u in &oneshot { assert!(u.2 >= 3); }
+    }
+
+    // Property test: driving `advance` resumably over many tiny chunks must match a
+    // row oracle (advance each time to `max(t, frontier)`, then consolidate). Tiny
+    // chunks force `(key, val)` groups — with several times each — to straddle
+    // boundaries, exercising the meld / withhold / split path.
+    #[test]
+    fn advance_matches_row_reference() {
+        use timely::progress::Antichain;
+        use crate::consolidation::consolidate_updates;
+
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+
+        for _ in 0..200 {
+            // A sorted, consolidated set over a small space, so groups collide and
+            // a `(key, val)` carries several times.
+            let n = rng() as usize % 60 + 1;
+            let mut rows: Vec<((u64, u64), u64, i64)> = (0..n).map(|_| {
+                let k = rng() % 8; let v = rng() % 3; let t = rng() % 6;
+                let d = if rng() % 4 == 0 { -1 } else { 1 };
+                ((k, v), t, d)
+            }).collect();
+            consolidate_updates(&mut rows);
+            if rows.is_empty() { continue; }
+            let f = rng() % 6;
+            let frontier = Antichain::from_elem(f);
+            let sz = rng() as usize % 5 + 1; // tiny chunks → heavy straddling
+
+            // Drive resumably: push one chunk, advance(false), … then advance(true).
+            let mut q = VecDeque::new();
+            let mut out = VecDeque::new();
+            for c in rows.chunks(sz) {
+                q.push_back(chunk(c.iter().map(|&((k, v), t, d)| (k, v, t, d)).collect()));
+                ColChunk::advance(&mut q, frontier.borrow(), false, &mut out);
+            }
+            ColChunk::advance(&mut q, frontier.borrow(), true, &mut out);
+            let got = flat(out);
+
+            // Oracle: advance each time (u64 total order → `max(t, f)`), consolidate.
+            let mut want: Vec<((u64, u64), u64, i64)> =
+                rows.iter().map(|&((k, v), t, d)| ((k, v), t.max(f), d)).collect();
+            consolidate_updates(&mut want);
+            let want: Vec<Upd> = want.into_iter().map(|((k, v), t, d)| (k, v, t, d)).collect();
+
+            assert_eq!(got, want, "frontier {f}, chunk size {sz}, rows {rows:?}");
+        }
     }
 }
