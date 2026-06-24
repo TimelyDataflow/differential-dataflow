@@ -1,63 +1,17 @@
-//! Batch-at-a-time merging of sorted, consolidated `UpdatesTyped` chains.
+//! Trie-native merging primitives for sorted, consolidated `UpdatesTyped`.
 //!
-//! The core is `merge_batches`, which walks pairs of chunks via
-//! `merge_batch`, building a chain of merged outputs with `ChainBuilder`.
-//! `survey` maps the interleaving of the two inputs at each trie layer,
-//! `write_from_surveys` (via `write_layer` and `write_diffs`) copies the
-//! ranges that the surveys identify into the output trie.
+//! The columnar [`Chunk`](crate::trace::chunk::Chunk) impl drives these: `merge_pair`
+//! merges one input fully and a prefix of the other, `suffix_chunk` materializes the
+//! survivor's leftover, `extract` partitions by frontier, and `split_at` cuts a chunk.
+//! `survey` maps the interleaving of the two inputs at each trie layer, and
+//! `write_from_surveys` (via `write_layer` and `write_diffs`) copies the ranges the
+//! surveys identify into the output trie.
 
 use columnar::{Columnar, Len};
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use super::super::layout::ColumnarUpdate as Update;
-use super::super::updates::UpdatesTyped;
-
-/// A merging iterator over two sorted iterators.
-struct Merging<I1: Iterator, I2: Iterator> {
-    iter1: std::iter::Peekable<I1>,
-    iter2: std::iter::Peekable<I2>,
-}
-
-impl<K, V, T, D, I1, I2> Iterator for Merging<I1, I2>
-where
-    K: Copy + Ord,
-    V: Copy + Ord,
-    T: Copy + Ord,
-    I1: Iterator<Item = (K, V, T, D)>,
-    I2: Iterator<Item = (K, V, T, D)>,
-{
-    type Item = (K, V, T, D);
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        match (self.iter1.peek(), self.iter2.peek()) {
-            (Some(a), Some(b)) => {
-                if (a.0, a.1, a.2) <= (b.0, b.1, b.2) {
-                    self.iter1.next()
-                } else {
-                    self.iter2.next()
-                }
-            }
-            (Some(_), None) => self.iter1.next(),
-            (None, Some(_)) => self.iter2.next(),
-            (None, None) => None,
-        }
-    }
-}
-
-/// Build sorted `UpdatesTyped` chunks from a sorted iterator of refs,
-/// using `UpdatesTyped::form` (which consolidates internally) on batches.
-fn form_chunks<'a, U: Update>(
-    sorted: impl Iterator<Item = columnar::Ref<'a, super::super::updates::Tuple<U>>>,
-    output: &mut Vec<UpdatesTyped<U>>,
-) {
-    let mut sorted = sorted.peekable();
-    while sorted.peek().is_some() {
-        let chunk = UpdatesTyped::<U>::form((&mut sorted).take(crate::columnar::LINK_TARGET));
-        if chunk.len() > 0 {
-            output.push(chunk);
-        }
-    }
-}
+use super::layout::ColumnarUpdate as Update;
+use super::updates::UpdatesTyped;
 
 /// Partition `merged` into chunks ready to ship (times strictly less than `upper`)
 /// and chunks kept for future seals (times at-or-after `upper`), updating
@@ -138,142 +92,45 @@ where
     }
 }
 
-/// Iterator-based merge: flatten, merge, consolidate, form.
-/// Correct but slow — used as fallback.
-#[allow(dead_code)]
-fn merge_iterator<U: Update>(
-    list1: &[UpdatesTyped<U>],
-    list2: &[UpdatesTyped<U>],
-    output: &mut Vec<UpdatesTyped<U>>,
-)
+/// Reconstruct `batch[cursor..]` as a fresh standalone `UpdatesTyped`, where
+/// `cursor` is a `(key, val, time)` index triple into `batch`'s flat columns.
+///
+/// Used to materialize the unconsumed suffix of a merge survivor: for the
+/// [`Chunk`](crate::trace::chunk::Chunk) deque protocol, the chunk pushed back
+/// to the front of an input deque.
+pub fn suffix_chunk<U: Update>(cursor: (usize, usize, usize), batch: &UpdatesTyped<U>) -> UpdatesTyped<U>
 where
     U::Time: 'static,
 {
-    let iter1 = list1.iter().flat_map(|chunk| chunk.iter());
-    let iter2 = list2.iter().flat_map(|chunk| chunk.iter());
-
-    let merged = Merging {
-        iter1: iter1.peekable(),
-        iter2: iter2.peekable(),
-    };
-
-    form_chunks::<U>(merged, output);
+    let (k, v, t) = cursor;
+    let view = batch.view();
+    let empty: UpdatesTyped<U> = Default::default();
+    let mut out = UpdatesTyped::<U>::default();
+    write_from_surveys(
+        batch,
+        &empty,
+        &[Report::This(0, 1)],
+        &[Report::This(k, view.keys.values.len())],
+        &[Report::This(v, view.vals.values.len())],
+        &[Report::This(t, view.times.values.len())],
+        &mut out,
+    );
+    out
 }
 
-/// A merge implementation that operates batch-at-a-time.
+/// Merge two batches, one completely and the other through the corresponding
+/// prefix, returning the merged output and leaving each input's unconsumed
+/// suffix in `batch1` / `batch2` (via an updated `(key, val, time)` cursor) or
+/// `None` if it was fully consumed.
 ///
-/// Inputs are taken as `IntoIterator` so the caller can stream chunks in
-/// lazily — e.g. fetching paged-out chunks one group at a time — rather than
-/// materializing entire chains up front. Output chunks are emitted via the
-/// caller-supplied `sink` as they become stable, so the caller can apply a
-/// spill policy mid-merge rather than buffering the full result.
+/// Driven by the columnar [`Chunk`](crate::trace::chunk::Chunk) impl's `merge`,
+/// which materializes the surviving suffix with [`suffix_chunk`] and pushes it
+/// back to its deque.
 #[inline(never)]
-pub fn merge_batches<U, I1, I2, S>(
-    list1: I1,
-    list2: I2,
-    sink: S,
-)
-where
-    U: Update,
-    U::Time: 'static,
-    I1: IntoIterator<Item = UpdatesTyped<U>>,
-    I2: IntoIterator<Item = UpdatesTyped<U>>,
-    S: FnMut(UpdatesTyped<U>),
-{
-
-    // The design for efficient "batch" merginging of chains of links is:
-    // 0.   We choose a target link size, K, and will keep the average link size at least K and the max size at 2k.
-    //      K should be large enough to amortize some set-up, but not so large that one or two extra break the bank.
-    // 1.   We will repeatedly consider pairs of links, and fully merge one with a prefix of the other.
-    //      The last elements of each link will tell us which of the two suffixes must be held back.
-    // 2.   We then have a chain of as many links as we started with, with potential defects to correct:
-    //      a.  A link may contain some number of zeros: we can remove them if we are eager, based on size.
-    //      b.  A link may contain more than 2K updates; we can split it.
-    //      c.  Two adjacent links may contain fewer than 2K updates; we can meld (careful append) them.
-    // 3.   After a pass of the above, we should have restored the invariant.
-    //      We can try and me smarter and fuse some of the above work rather than explicitly stage results.
-    //
-    // The challenging moment is the merge that can start with a suffix of one link, involving a prefix of one link.
-    // These could be the same link, different links, and generally there is the potential for complexity here.
-
-    let mut builder = ChainBuilder::new(sink);
-
-    let mut iter1 = list1.into_iter();
-    let mut iter2 = list2.into_iter();
-
-    // The first unconsumed update in each block, via (k_idx, v_idx, t_idx), or None if exhausted.
-    // These are (0,0,0) for a new block, and should become None once there are no remaining updates.
-    let mut cursor1 = iter1.next().map(|b| ((0,0,0), b));
-    let mut cursor2 = iter2.next().map(|b| ((0,0,0), b));
-
-    // For each pair of batches
-    while cursor1.is_some() && cursor2.is_some() {
-        merge_batch(&mut cursor1, &mut cursor2, &mut builder);
-        if cursor1.is_none() { cursor1 = iter1.next().map(|b| ((0,0,0), b)); }
-        if cursor2.is_none() { cursor2 = iter2.next().map(|b| ((0,0,0), b)); }
-    }
-
-    // TODO: create batch for the non-empty cursor.
-    if let Some(((k,v,t),batch)) = cursor1 {
-        let mut out_batch = UpdatesTyped::<U>::default();
-        let empty: UpdatesTyped<U> = Default::default();
-        let view = batch.view();
-        write_from_surveys(
-            &batch,
-            &empty,
-            &[Report::This(0, 1)],
-            &[Report::This(k, view.keys.values.len())],
-            &[Report::This(v, view.vals.values.len())],
-            &[Report::This(t, view.times.values.len())],
-            &mut out_batch,
-        );
-        builder.push(out_batch);
-    }
-    if let Some(((k,v,t),batch)) = cursor2 {
-        let mut out_batch = UpdatesTyped::<U>::default();
-        let empty: UpdatesTyped<U> = Default::default();
-        let view = batch.view();
-        write_from_surveys(
-            &empty,
-            &batch,
-            &[Report::That(0, 1)],
-            &[Report::That(k, view.keys.values.len())],
-            &[Report::That(v, view.vals.values.len())],
-            &[Report::That(t, view.times.values.len())],
-            &mut out_batch,
-        );
-        builder.push(out_batch);
-    }
-
-    builder.extend(iter1);
-    builder.extend(iter2);
-    builder.done();
-    // TODO: Tidy output to satisfy structural invariants.
-}
-
-/// Merge two batches, one completely and another through the corresponding prefix.
-///
-/// Each invocation determines the maximum amount of both batches we can merge, determined
-/// by comparing the elements at the tails of each batch, and locating the lesser in other.
-/// We will merge the whole of the batch containing the lesser, and the prefix up through
-/// the lesser element in the other batch, setting the cursor to the first element strictly
-/// greater than that lesser element.
-///
-/// The algorithm uses a list of `Report` findings to map the interleavings of the layers.
-/// Each indicates either a range exclusive to one of the inputs, or a one element common
-/// to the layers from both inputs, which must be further explored. This map would normally
-/// allow the full merge to happen, but we need to carefully start at each cursor, and end
-/// just before the first element greater than the lesser bound.
-///
-/// The consumed prefix and disjoint suffix should be single report entries, and it seems
-/// fine to first produce all reports and then reflect on the cursors, rather than use the
-/// cursors as part of the mapping.
-#[inline(never)]
-fn merge_batch<U: Update, F: FnMut(UpdatesTyped<U>)>(
+pub fn merge_pair<U: Update>(
     batch1: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
     batch2: &mut Option<((usize, usize, usize), UpdatesTyped<U>)>,
-    builder: &mut ChainBuilder<U, F>,
-)
+) -> UpdatesTyped<U>
 where
     U::Time: 'static,
 {
@@ -362,13 +219,14 @@ where
     let mut out_batch = UpdatesTyped::<U>::default();
     // TODO: We should be able to size `out_batch` pretty accurately from the survey.
     write_from_surveys(&updates0, &updates1, &[Report::Both(0,0)], &key_survey, &val_survey, &time_survey, &mut out_batch);
-    builder.push(out_batch);
 
     match next_cursor {
         Some(Ok(kvt)) => { *batch1 = Some((kvt, updates0)); }
         Some(Err(kvt)) => {*batch2 = Some((kvt, updates1)); }
         None => { }
     }
+
+    out_batch
 }
 
 /// Write merged output from four levels of survey reports.
@@ -403,8 +261,8 @@ fn write_from_surveys<U: Update>(
 /// a similar report for the values of the two lists, appropriate for the next layer.
 #[inline(never)]
 pub fn survey<'a, C: columnar::Container<Ref<'a>: Ord>>(
-    lists0: <super::super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
-    lists1: <super::super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
+    lists0: <super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
+    lists1: <super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
     reports: &[Report],
 ) -> Vec<Report> {
     use columnar::Index;
@@ -473,11 +331,11 @@ pub fn survey<'a, C: columnar::Container<Ref<'a>: Ord>>(
 /// be bulk-copied.
 #[inline(never)]
 pub fn write_layer<'a, C: columnar::Container<Ref<'a>: Ord>>(
-    lists0: <super::super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
-    lists1: <super::super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
+    lists0: <super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
+    lists1: <super::updates::Lists<C> as columnar::Borrow>::Borrowed<'a>,
     list_survey: &[Report],
     item_survey: &[Report],
-    output: &mut super::super::updates::Lists<C>,
+    output: &mut super::updates::Lists<C>,
 ) {
     use columnar::{Container, Index};
 
@@ -561,11 +419,11 @@ pub fn write_layer<'a, C: columnar::Container<Ref<'a>: Ord>>(
 /// - `Both(t0, t1)`: consolidate the two singleton diffs. Push `[sum]`
 ///   if non-zero, or an empty list `[]` if they cancel.
 #[inline(never)]
-pub fn write_diffs<U: super::super::layout::ColumnarUpdate>(
-    diffs0: <super::super::updates::Lists<columnar::ContainerOf<U::Diff>> as columnar::Borrow>::Borrowed<'_>,
-    diffs1: <super::super::updates::Lists<columnar::ContainerOf<U::Diff>> as columnar::Borrow>::Borrowed<'_>,
+pub fn write_diffs<U: super::layout::ColumnarUpdate>(
+    diffs0: <super::updates::Lists<columnar::ContainerOf<U::Diff>> as columnar::Borrow>::Borrowed<'_>,
+    diffs1: <super::updates::Lists<columnar::ContainerOf<U::Diff>> as columnar::Borrow>::Borrowed<'_>,
     time_survey: &[Report],
-    output: &mut super::super::updates::Lists<columnar::ContainerOf<U::Diff>>,
+    output: &mut super::updates::Lists<columnar::ContainerOf<U::Diff>>,
 ) {
     use columnar::{Columnar, Container, Index, Len, Push};
     use crate::difference::{Semigroup, IsZero};
@@ -630,62 +488,10 @@ pub enum Report {
     Both(usize, usize),
 }
 
-/// Accumulates `UpdatesTyped` chunks one at a time, melding small adjacent
-/// chunks. Holds at most one chunk in memory (the meld target); whenever a
-/// push doesn't meld, the prior target becomes "stable" and is emitted via
-/// the caller-provided sink. The sink can spill, count, or forward the chunk
-/// however it likes.
-pub struct ChainBuilder<U: super::super::layout::ColumnarUpdate, F: FnMut(UpdatesTyped<U>)> {
-    last: Option<UpdatesTyped<U>>,
-    sink: F,
-}
-
-impl<U: super::super::layout::ColumnarUpdate, F: FnMut(UpdatesTyped<U>)> ChainBuilder<U, F>
-where
-    U::Time: 'static,
-{
-    fn new(sink: F) -> Self { Self { last: None, sink } }
-
-    fn push(&mut self, mut link: UpdatesTyped<U>) {
-        link = link.filter_zero();
-        if link.len() == 0 { return; }
-        // Split links larger than twice the link target so downstream chains
-        // have multiple entries — required for per-chain spill policies (e.g.
-        // `Threshold` in the columnar_spill example) to actually spill anything.
-        if link.len() > 2 * crate::columnar::LINK_TARGET {
-            let (first, rest) = split_at::<U>(link, crate::columnar::LINK_TARGET);
-            self.push(first);
-            self.push(rest);
-            return;
-        }
-        match self.last.as_mut() {
-            Some(last) if last.len() + link.len() < 2 * crate::columnar::LINK_TARGET => {
-                let mut build = super::super::updates::UpdatesBuilder::new_from(std::mem::take(last));
-                build.meld(&link);
-                *last = build.done();
-            }
-            _ => {
-                if let Some(prev) = self.last.take() {
-                    (self.sink)(prev);
-                }
-                self.last = Some(link);
-            }
-        }
-    }
-    fn extend(&mut self, iter: impl IntoIterator<Item=UpdatesTyped<U>>) {
-        for link in iter { self.push(link); }
-    }
-    fn done(mut self) {
-        if let Some(last) = self.last.take() {
-            (self.sink)(last);
-        }
-    }
-}
-
 /// Split `chunk` into two `UpdatesTyped` parts at record index `n`: the first
 /// `n` records and the remaining `chunk.len() - n`. Bitmap pattern mirrors
 /// `extract`'s split between ship/kept halves.
-fn split_at<U: Update>(chunk: UpdatesTyped<U>, n: usize) -> (UpdatesTyped<U>, UpdatesTyped<U>)
+pub fn split_at<U: Update>(chunk: UpdatesTyped<U>, n: usize) -> (UpdatesTyped<U>, UpdatesTyped<U>)
 where
     U::Time: 'static,
 {
