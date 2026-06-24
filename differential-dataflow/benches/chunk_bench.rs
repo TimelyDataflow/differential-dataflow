@@ -164,6 +164,15 @@ fn main() {
         bench_valbearing("B: few u64 keys, many random vals (interleaved merge)", u, a, b);
     }
 
+    // Shape C: String keys (heap-backed, repeated), no vals — the memory case.
+    {
+        let cardinality = (n / 20).max(1) as u64; // ~20 repeats per key
+        let mut u: Vec<((String, ()), u64, i64)> =
+            (0..n as u64).map(|_| { let k = rng() % cardinality; ((format!("key-{k:012}"), ()), 0u64, 1i64) }).collect();
+        u.sort();
+        compare::<String, _>("C: String keys (~20x repeats), () vals", u);
+    }
+
     // Shape D: few (key,val) pairs, many times each, halves split by time
     // (old vs new) — the LSM-append pattern. Each (key,val)'s time run is one
     // disjoint This-then-That, so the trie merge bulk-copies whole time runs.
@@ -177,15 +186,6 @@ fn main() {
         let a: Vec<_> = u.iter().filter(|(_, t, _)| *t < half / pairs).cloned().collect();
         let b: Vec<_> = u.iter().filter(|(_, t, _)| *t >= half / pairs).cloned().collect();
         bench_valbearing("D: few (k,v), many times, time-disjoint merge (LSM append)", u, a, b);
-    }
-
-    // Shape C: String keys (heap-backed, repeated), no vals — the memory case.
-    {
-        let cardinality = (n / 20).max(1) as u64; // ~20 repeats per key
-        let mut u: Vec<((String, ()), u64, i64)> =
-            (0..n as u64).map(|_| { let k = rng() % cardinality; ((format!("key-{k:012}"), ()), 0u64, 1i64) }).collect();
-        u.sort();
-        compare::<String, _>("C: String keys (~20x repeats), () vals", u);
     }
 }
 
