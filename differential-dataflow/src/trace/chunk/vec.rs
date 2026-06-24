@@ -31,7 +31,7 @@ use crate::trace::implementations::{Vector, WithLayout};
 use super::Chunk;
 
 /// The chunk size: the [`Chunk::TARGET`] value, also used for buffer sizing.
-const TARGET: usize = 1024;
+const TARGET: usize = 8192;
 
 /// A sorted, consolidated run of `((key, val), time, diff)`, shared via `Rc`.
 pub struct VecChunk<K, V, T, R>(Rc<Vec<((K, V), T, R)>>);

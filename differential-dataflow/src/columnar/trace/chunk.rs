@@ -55,7 +55,7 @@ use crate::trace::chunk::Chunk;
 ///
 /// Smaller than `crate::columnar::LINK_TARGET` so multi-chunk batches — and the
 /// straddle cursor — are exercised; the trie operations are happy at any size.
-const TARGET: usize = 1024;
+const TARGET: usize = 8192;
 
 /// Resident bounds for a paged chunk: the first and last `(key, val, time)` as
 /// single-element columnar containers (so [`Chunk::bounds`] returns refs without
