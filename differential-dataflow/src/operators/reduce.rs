@@ -127,8 +127,8 @@ where
                     if capabilities.iter().any(|c| !upper_limit.less_equal(c.time())) {
 
                         // cursors for navigating input and output traces.
-                        let (mut source_cursor, ref source_storage): (Tr1::Cursor, _) = source_trace.cursor_through(lower_limit.borrow()).expect("failed to acquire source cursor");
-                        let (mut output_cursor, ref output_storage): (Tr2::Cursor, _) = output_reader.cursor_through(lower_limit.borrow()).expect("failed to acquire output cursor");
+                        let (mut source_cursor, ref source_storage) = source_trace.cursor_through(lower_limit.borrow()).expect("failed to acquire source cursor");
+                        let (mut output_cursor, ref output_storage) = output_reader.cursor_through(lower_limit.borrow()).expect("failed to acquire output cursor");
                         let (mut batch_cursor, ref batch_storage) = (CursorList::new(batch_cursors, &batch_storage), batch_storage);
 
                         // Prepare an output buffer and builder for each capability.

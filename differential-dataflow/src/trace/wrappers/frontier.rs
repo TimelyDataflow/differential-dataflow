@@ -44,8 +44,6 @@ impl<Tr: TraceReader> WithLayout for TraceFrontier<Tr> {
 impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
 
     type Batch = BatchFrontier<Tr::Batch>;
-    type Storage = Tr::Storage;
-    type Cursor = CursorFrontier<Tr::Cursor, Tr::Time>;
 
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
         let since = self.since.borrow();
@@ -59,10 +57,11 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_physical_compaction(frontier) }
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.trace.get_physical_compaction() }
 
-    fn cursor_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
+    fn cursor_storage(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Self::Batch>> {
+        let storage = self.trace.cursor_storage(upper)?;
         let since = self.since.borrow();
         let until = self.until.borrow();
-        self.trace.cursor_through(upper).map(|(x,y)| (CursorFrontier::new(x, since, until), y))
+        Some(storage.into_iter().map(|batch| BatchFrontier::make_from(batch, since, until)).collect())
     }
 }
 
@@ -118,72 +117,7 @@ impl<B: BatchReader> BatchFrontier<B> {
     }
 }
 
-/// Wrapper to provide cursor to nested scope.
-pub struct CursorFrontier<C, T> {
-    cursor: C,
-    since: Antichain<T>,
-    until: Antichain<T>
-}
-
 use crate::trace::implementations::{Layout, WithLayout};
-impl<C: Cursor> WithLayout for CursorFrontier<C, C::Time> {
-    type Layout = (
-        <C::Layout as Layout>::KeyContainer,
-        <C::Layout as Layout>::ValContainer,
-        Vec<C::Time>,
-        <C::Layout as Layout>::DiffContainer,
-        <C::Layout as Layout>::OffsetContainer,
-    );
-}
-
-impl<C, T: Clone> CursorFrontier<C, T> {
-    fn new(cursor: C, since: AntichainRef<T>, until: AntichainRef<T>) -> Self {
-        CursorFrontier {
-            cursor,
-            since: since.to_owned(),
-            until: until.to_owned(),
-        }
-    }
-}
-
-impl<C: Cursor> Cursor for CursorFrontier<C, C::Time> {
-
-    type Storage = C::Storage;
-
-    #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
-    #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
-
-    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
-    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
-
-    #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { self.cursor.get_key(storage) }
-    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { self.cursor.get_val(storage) }
-
-    #[inline]
-    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        let since = self.since.borrow();
-        let until = self.until.borrow();
-        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
-        self.cursor.map_times(storage, |time, diff| {
-            C::clone_time_onto(time, &mut temp);
-            temp.advance_by(since);
-            if !until.less_equal(&temp) {
-                logic(&temp, diff);
-            }
-        })
-    }
-
-    #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
-
-    #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
-
-    #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
-    #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
-}
-
-
 
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorFrontier<C: Cursor> {

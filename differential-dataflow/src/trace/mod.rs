@@ -19,6 +19,7 @@ use timely::progress::Timestamp;
 
 use crate::logging::Logger;
 pub use self::cursor::Cursor;
+use self::cursor::CursorList;
 pub use self::description::Description;
 
 use crate::trace::implementations::LayoutExt;
@@ -69,30 +70,21 @@ pub trait TraceReader : LayoutExt {
         >;
 
 
-    /// Storage type for `Self::Cursor`. Likely related to `Self::Batch`.
-    type Storage;
-
-    /// The type used to enumerate the collections contents.
-    type Cursor:
-        Cursor<Storage=Self::Storage> +
-        WithLayout<Layout = Self::Layout> +
-        for<'a> LayoutExt<
-            Key<'a> = Self::Key<'a>,
-            Val<'a> = Self::Val<'a>,
-            ValOwn = Self::ValOwn,
-            Time = Self::Time,
-            TimeGat<'a> = Self::TimeGat<'a>,
-            Diff = Self::Diff,
-            DiffGat<'a> = Self::DiffGat<'a>,
-            KeyContainer = Self::KeyContainer,
-            ValContainer = Self::ValContainer,
-            TimeContainer = Self::TimeContainer,
-            DiffContainer = Self::DiffContainer,
-        >;
-
+    /// Acquires the non-empty sequence of batches a cursor would draw from, restricted to updates
+    /// at times not greater or equal to an element of `upper`.
+    ///
+    /// This is the sole primitive each `TraceReader` must implement to expose its contents: the
+    /// `cursor` and `cursor_through` methods assemble a [`CursorList`] over these batches' cursors.
+    /// The returned `Vec` plays the role of the cursor's storage (the cursor borrows from it).
+    ///
+    /// This method is expected to work if called with an `upper` that (i) was an observed bound in batches from
+    /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
+    /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the batches. This
+    /// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
+    fn cursor_storage(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>>;
 
     /// Provides a cursor over updates contained in the trace.
-    fn cursor(&mut self) -> (Self::Cursor, Self::Storage) {
+    fn cursor(&mut self) -> (CursorList<<Self::Batch as BatchReader>::Cursor>, Vec<Self::Batch>) {
         if let Some(cursor) = self.cursor_through(Antichain::new().borrow()) {
             cursor
         }
@@ -104,11 +96,14 @@ pub trait TraceReader : LayoutExt {
     /// Acquires a cursor to the restriction of the collection's contents to updates at times not greater or
     /// equal to an element of `upper`.
     ///
-    /// This method is expected to work if called with an `upper` that (i) was an observed bound in batches from
-    /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
-    /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return a cursor. This
-    /// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
-    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, Self::Storage)>;
+    /// The cursor is a [`CursorList`] that merges the cursors of the batches returned by
+    /// [`cursor_storage`](TraceReader::cursor_storage); see that method for the contract on `upper`.
+    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(CursorList<<Self::Batch as BatchReader>::Cursor>, Vec<Self::Batch>)> {
+        let storage = self.cursor_storage(upper)?;
+        let cursors = storage.iter().map(|batch| batch.cursor()).collect::<Vec<_>>();
+        let cursor = CursorList::new(cursors, &storage);
+        Some((cursor, storage))
+    }
 
     /// Advances the frontier that constrains logical compaction.
     ///
