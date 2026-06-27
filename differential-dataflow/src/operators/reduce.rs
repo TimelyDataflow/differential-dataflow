@@ -14,7 +14,6 @@ use timely::dataflow::channels::pact::Pipeline;
 
 use crate::operators::arrange::{Arranged, TraceAgent};
 use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
-use crate::trace::cursor::CursorList;
 use crate::trace::implementations::containers::BatchContainer;
 use crate::trace::TraceReader;
 
@@ -94,7 +93,6 @@ where
                 // may not be seen in its input. The standard example is that updates at `(0, 1)` and `(1, 0)`
                 // may result in outputs at `(1, 1)` as well, even with no input at that time.
 
-                let mut batch_cursors = Vec::new();
                 let mut batch_storage = Vec::new();
 
                 // Downgrade previous upper limit to be current lower limit.
@@ -106,7 +104,6 @@ where
                     capabilities.insert(capability.retain(0));
                     for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());
-                        batch_cursors.push(batch.cursor());
                         batch_storage.push(batch);
                     }
                 });
@@ -129,7 +126,7 @@ where
                         // cursors for navigating input and output traces.
                         let (mut source_cursor, ref source_storage) = source_trace.cursor_through(lower_limit.borrow()).expect("failed to acquire source cursor");
                         let (mut output_cursor, ref output_storage) = output_reader.cursor_through(lower_limit.borrow()).expect("failed to acquire output cursor");
-                        let (mut batch_cursor, ref batch_storage) = (CursorList::new(batch_cursors, &batch_storage), batch_storage);
+                        let (mut batch_cursor, ref batch_storage) = crate::trace::cursor::cursor_list(batch_storage);
 
                         // Prepare an output buffer and builder for each capability.
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents

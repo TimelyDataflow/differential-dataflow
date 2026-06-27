@@ -124,7 +124,6 @@ where
 
             move |(input, _frontier), output| {
 
-                let mut batch_cursors = Vec::new();
                 let mut batch_storage = Vec::new();
 
                 // Downgrde previous upper limit to be current lower limit.
@@ -138,7 +137,6 @@ where
                     }
                     for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());  // NB: Assumes batches are in-order
-                        batch_cursors.push(batch.cursor());
                         batch_storage.push(batch);
                     }
                 });
@@ -147,8 +145,7 @@ where
 
                     let mut session = output.session(&capability);
 
-                    use crate::trace::cursor::CursorList;
-                    let mut batch_cursor = CursorList::new(batch_cursors, &batch_storage);
+                    let (mut batch_cursor, batch_storage) = crate::trace::cursor::cursor_list(batch_storage);
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {

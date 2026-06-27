@@ -27,21 +27,6 @@ use crate::trace::implementations::LayoutExt;
 /// A type used to express how much effort a trace should exert even in the absence of updates.
 pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize)])->Option<usize>+Send+Sync>;
 
-//     The traces and batch and cursors want the flexibility to appear as if they manage certain types of keys and
-//     values and such, while perhaps using other representations, I'm thinking mostly of wrappers around the keys
-//     and vals that change the `Ord` implementation, or stash hash codes, or the like.
-//
-//     This complicates what requirements we make so that the trace is still usable by someone who knows only about
-//     the base key and value types. For example, the complex types should likely dereference to the simpler types,
-//    so that the user can make sense of the result as if they were given references to the simpler types. At the
-//  same time, the collection should be formable from base types (perhaps we need an `Into` or `From` constraint)
-//  and we should, somehow, be able to take a reference to the simple types to compare against the more complex
-//  types. This second one is also like an `Into` or `From` constraint, except that we start with a reference and
-//  really don't need anything more complex than a reference, but we can't form an owned copy of the complex type
-//  without cloning it.
-//
-//  We could just start by cloning things. Worry about wrapping references later on.
-
 /// A trace whose contents may be read.
 ///
 /// This is a restricted interface to the more general `Trace` trait, which extends this trait with further methods
@@ -99,10 +84,7 @@ pub trait TraceReader : LayoutExt {
     /// The cursor is a [`CursorList`] that merges the cursors of the batches returned by
     /// [`cursor_storage`](TraceReader::cursor_storage); see that method for the contract on `upper`.
     fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(CursorList<<Self::Batch as BatchReader>::Cursor>, Vec<Self::Batch>)> {
-        let storage = self.cursor_storage(upper)?;
-        let cursors = storage.iter().map(|batch| batch.cursor()).collect::<Vec<_>>();
-        let cursor = CursorList::new(cursors, &storage);
-        Some((cursor, storage))
+        Some(self::cursor::cursor_list(self.cursor_storage(upper)?))
     }
 
     /// Advances the frontier that constrains logical compaction.
