@@ -55,8 +55,7 @@ use std::collections::VecDeque;
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 use crate::lattice::Lattice;
-use crate::difference::Semigroup;
-use crate::trace::{Batch, BatchReader, Description};
+use crate::trace::{Batch, BatchReader, Description, Navigable};
 use crate::trace::cursor::Cursor;
 use crate::trace::implementations::BatchContainer;
 
@@ -71,58 +70,20 @@ pub mod vec;
 /// The "data" operations transform lists of chunks, are expected to do roughly
 /// "one chunk's worth" of work at a time; they can afford to compress and page.
 /// The "metadata" operations provide chunk information, and should be lightweight.
-pub trait Chunk: Sized + Clone {
-    /// Alias for a borrowed key.
-    type Key<'a>: Copy + Ord;
-    /// Alias for an owned val.
-    type ValOwn: Clone + Ord;
-    /// Alias for a borrowed val.
-    type Val<'a>: Copy + Ord;
-    /// Alias for an owned time.
+pub trait Chunk: Navigable<Cursor: Cursor<Time = Self::Time>> + Sized + Clone {
+    /// The timestamp type of the chunk's updates.
+    ///
+    /// Key/val/diff opinions live on the chunk's [`Navigable::Cursor`]; the chunk itself only needs
+    /// time, to bound its interval and participate in advancement and compaction.
     type Time: Lattice + timely::progress::Timestamp;
-    /// Alias for a borrowed time.
-    type TimeGat<'a>: Copy + Ord;
-    /// Alias for an owned diff.
-    type Diff: Semigroup + 'static;
-    /// Alias for a borrowed diff.
-    type DiffGat<'a>: Copy + Ord;
-
-    /// Container for update keys.
-    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Key<'a>>;
-    /// Container for update vals.
-    type ValContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Val<'a>, Owned = Self::ValOwn>;
-    /// Container for times.
-    type TimeContainer: for<'a> BatchContainer<ReadItem<'a> = Self::TimeGat<'a>, Owned = Self::Time>;
-    /// Container for diffs.
-    type DiffContainer: for<'a> BatchContainer<ReadItem<'a> = Self::DiffGat<'a>, Owned = Self::Diff>;
 
     /// The intended maximum chunk size.
     const TARGET: usize;
 
-    /// A cursor navigating this chunk's contents.
-    type Cursor:
-        for<'a> Cursor<
-            Storage = Self,
-            Key<'a> = Self::Key<'a>,
-            Val<'a> = Self::Val<'a>,
-            ValOwn = Self::ValOwn,
-            Time = Self::Time,
-            TimeGat<'a> = Self::TimeGat<'a>,
-            Diff = Self::Diff,
-            DiffGat<'a> = Self::DiffGat<'a>,
-            KeyContainer = Self::KeyContainer,
-            ValContainer = Self::ValContainer,
-            TimeContainer = Self::TimeContainer,
-            DiffContainer = Self::DiffContainer,
-        >;
-
-    /// Acquire a cursor over this chunk.
-    fn cursor(&self) -> Self::Cursor;
-
     /// The first and last `(key, val, time)` triples in the chunk.
     fn bounds(&self) -> (
-        (Self::Key<'_>, Self::Val<'_>, Self::TimeGat<'_>),
-        (Self::Key<'_>, Self::Val<'_>, Self::TimeGat<'_>),
+        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
+        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
     );
 
     /// The number of updates in the chunk.
@@ -254,8 +215,8 @@ where
     }
 }
 
-type KeyCon<C> = <C as Chunk>::KeyContainer;
-type ValCon<C> = <C as Chunk>::ValContainer;
+type KeyCon<C> = <<C as Navigable>::Cursor as Cursor>::KeyContainer;
+type ValCon<C> = <<C as Navigable>::Cursor as Cursor>::ValContainer;
 
 /// A batch is a [`Chunk`] sequence plus a [`Description`].
 ///
@@ -364,21 +325,21 @@ impl<C: Chunk> ChunkBatchCursor<C> {
 impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
     type Storage = ChunkBatch<C>;
 
-    type KeyContainer = C::KeyContainer;
-    type Key<'a> = C::Key<'a>;
-    type ValContainer = C::ValContainer;
-    type Val<'a> = C::Val<'a>;
-    type ValOwn = C::ValOwn;
-    type TimeContainer = C::TimeContainer;
-    type TimeGat<'a> = C::TimeGat<'a>;
-    type Time = C::Time;
-    type DiffContainer = C::DiffContainer;
-    type DiffGat<'a> = C::DiffGat<'a>;
-    type Diff = C::Diff;
-    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <C::ValContainer as BatchContainer>::into_owned(val) }
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <C::TimeContainer as BatchContainer>::into_owned(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <C::DiffContainer as BatchContainer>::into_owned(diff) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <C::TimeContainer as BatchContainer>::clone_onto(time, onto) }
+    type KeyContainer = <C::Cursor as Cursor>::KeyContainer;
+    type Key<'a> = <C::Cursor as Cursor>::Key<'a>;
+    type ValContainer = <C::Cursor as Cursor>::ValContainer;
+    type Val<'a> = <C::Cursor as Cursor>::Val<'a>;
+    type ValOwn = <C::Cursor as Cursor>::ValOwn;
+    type TimeContainer = <C::Cursor as Cursor>::TimeContainer;
+    type TimeGat<'a> = <C::Cursor as Cursor>::TimeGat<'a>;
+    type Time = <C::Cursor as Cursor>::Time;
+    type DiffContainer = <C::Cursor as Cursor>::DiffContainer;
+    type DiffGat<'a> = <C::Cursor as Cursor>::DiffGat<'a>;
+    type Diff = <C::Cursor as Cursor>::Diff;
+    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <C::Cursor as Cursor>::owned_val(val) }
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <C::Cursor as Cursor>::owned_time(time) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <C::Cursor as Cursor>::owned_diff(diff) }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <C::Cursor as Cursor>::clone_time_onto(time, onto) }
 
     fn key_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.key_valid(&s.chunks[self.chunk])) }
     fn val_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.val_valid(&s.chunks[self.chunk])) }
