@@ -41,7 +41,7 @@ use timely::progress::frontier::AntichainRef;
 use crate::consolidation::Consolidate;
 use crate::lattice::Lattice;
 use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{BatchContainer, WithLayout};
+use crate::trace::implementations::{BatchContainer, Layout, WithLayout};
 
 use crate::columnar::layout::{ColumnarLayout, ColumnarUpdate, Coltainer};
 use crate::columnar::updates::{child_range, UpdatesBuilder, UpdatesTyped};
@@ -205,6 +205,22 @@ impl<U: ColumnarUpdate> WithLayout for ColChunkCursor<U> {
 impl<U: ColumnarUpdate> Cursor for ColChunkCursor<U> {
     type Storage = ColChunk<U>;
 
+    type KeyContainer = <ColumnarLayout<U> as Layout>::KeyContainer;
+    type Key<'a> = <<ColumnarLayout<U> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type ValContainer = <ColumnarLayout<U> as Layout>::ValContainer;
+    type Val<'a> = <<ColumnarLayout<U> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type ValOwn = <<ColumnarLayout<U> as Layout>::ValContainer as BatchContainer>::Owned;
+    type TimeContainer = <ColumnarLayout<U> as Layout>::TimeContainer;
+    type TimeGat<'a> = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
+    type DiffContainer = <ColumnarLayout<U> as Layout>::DiffContainer;
+    type DiffGat<'a> = <<ColumnarLayout<U> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+    type Diff = <<ColumnarLayout<U> as Layout>::DiffContainer as BatchContainer>::Owned;
+    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <<ColumnarLayout<U> as Layout>::ValContainer as BatchContainer>::into_owned(val) }
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::into_owned(time) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <<ColumnarLayout<U> as Layout>::DiffContainer as BatchContainer>::into_owned(diff) }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::clone_onto(time, onto) }
+
     fn key_valid(&self, s: &Self::Storage) -> bool { self.key_cursor < s.trie().view().keys.values.len() }
     fn val_valid(&self, s: &Self::Storage) -> bool {
         let view = s.trie().view();
@@ -282,6 +298,18 @@ fn consolidated<U: ColumnarUpdate>(merged: UpdatesTyped<U>) -> UpdatesTyped<U> {
 impl<U: ColumnarUpdate> Chunk for ColChunk<U>
 where U::Time: 'static {
     type Cursor = ColChunkCursor<U>;
+
+    type KeyContainer = <ColumnarLayout<U> as Layout>::KeyContainer;
+    type Key<'a> = <<ColumnarLayout<U> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type ValContainer = <ColumnarLayout<U> as Layout>::ValContainer;
+    type Val<'a> = <<ColumnarLayout<U> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type ValOwn = <<ColumnarLayout<U> as Layout>::ValContainer as BatchContainer>::Owned;
+    type TimeContainer = <ColumnarLayout<U> as Layout>::TimeContainer;
+    type TimeGat<'a> = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
+    type DiffContainer = <ColumnarLayout<U> as Layout>::DiffContainer;
+    type DiffGat<'a> = <<ColumnarLayout<U> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+    type Diff = <<ColumnarLayout<U> as Layout>::DiffContainer as BatchContainer>::Owned;
 
     const TARGET: usize = TARGET;
 
@@ -530,6 +558,7 @@ mod test {
     use super::{ColChunk, Chunk};
     use crate::columnar::updates::UpdatesTyped;
     use crate::trace::chunk::merge_chains;
+    use crate::trace::Navigable;
 
     type Upd = (u64, u64, u64, i64);
 

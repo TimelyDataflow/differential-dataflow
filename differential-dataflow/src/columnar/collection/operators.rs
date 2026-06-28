@@ -160,7 +160,7 @@ where
 {
     use timely::dataflow::operators::generic::Operator;
     use timely::dataflow::channels::pact::Pipeline;
-    use crate::trace::{BatchReader, Cursor};
+    use crate::trace::{Navigable, Cursor};
     use crate::AsCollection;
 
     arranged.stream

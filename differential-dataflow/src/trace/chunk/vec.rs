@@ -26,7 +26,7 @@ use crate::consolidation::Consolidate;
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{Vector, WithLayout};
+use crate::trace::implementations::{BatchContainer, Layout, Vector, WithLayout};
 
 use super::Chunk;
 
@@ -120,6 +120,22 @@ impl<K, V, T, R> Cursor for VecChunkCursor<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
     type Storage = VecChunk<K, V, T, R>;
 
+    type KeyContainer = <Vector<((K, V), T, R)> as Layout>::KeyContainer;
+    type Key<'a> = <<Vector<((K, V), T, R)> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type ValContainer = <Vector<((K, V), T, R)> as Layout>::ValContainer;
+    type Val<'a> = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type ValOwn = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::Owned;
+    type TimeContainer = <Vector<((K, V), T, R)> as Layout>::TimeContainer;
+    type TimeGat<'a> = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
+    type DiffContainer = <Vector<((K, V), T, R)> as Layout>::DiffContainer;
+    type DiffGat<'a> = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+    type Diff = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::Owned;
+    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::into_owned(val) }
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::into_owned(time) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::into_owned(diff) }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::clone_onto(time, onto) }
+
     fn key_valid(&self, s: &Self::Storage) -> bool { self.key_pos < s.0.len() }
     fn val_valid(&self, s: &Self::Storage) -> bool {
         self.key_pos < s.0.len() && self.val_pos < s.0.len() && s.0[self.val_pos].0.0 == s.0[self.key_pos].0.0
@@ -180,6 +196,18 @@ fn take<K: Clone, V: Clone, T: Clone, R: Clone>(chunk: VecChunk<K, V, T, R>) -> 
 impl<K, V, T, R> Chunk for VecChunk<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
     type Cursor = VecChunkCursor<K, V, T, R>;
+
+    type KeyContainer = <Vector<((K, V), T, R)> as Layout>::KeyContainer;
+    type Key<'a> = <<Vector<((K, V), T, R)> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type ValContainer = <Vector<((K, V), T, R)> as Layout>::ValContainer;
+    type Val<'a> = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type ValOwn = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::Owned;
+    type TimeContainer = <Vector<((K, V), T, R)> as Layout>::TimeContainer;
+    type TimeGat<'a> = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
+    type DiffContainer = <Vector<((K, V), T, R)> as Layout>::DiffContainer;
+    type DiffGat<'a> = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+    type Diff = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::Owned;
 
     const TARGET: usize = TARGET;
 
@@ -369,6 +397,7 @@ mod test {
     use std::collections::VecDeque;
     use super::{Chunk, VecChunk};
     use crate::trace::chunk::merge_chains;
+    use crate::trace::Navigable;
     use std::rc::Rc;
 
     fn chunk(updates: Vec<((u64, u64), u64, i64)>) -> VecChunk<u64, u64, u64, i64> {

@@ -4,7 +4,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use crate::lattice::Lattice;
-use crate::trace::{TraceReader, BatchReader, Description};
+use crate::trace::{TraceReader, BatchReader, Description, BatchCursor};
 use crate::trace::cursor::Cursor;
 
 /// Wrapper to provide trace to nested scope.
@@ -40,30 +40,15 @@ where
     }
 }
 
-impl<Tr, TInner, F, G> WithLayout for TraceEnter<Tr, TInner, F, G>
-where
-    Tr: TraceReader,
-    TInner: Refines<Tr::Time>+Lattice,
-    F: Clone,
-    G: Clone,
-{
-    type Layout = (
-        <Tr::Layout as Layout>::KeyContainer,
-        <Tr::Layout as Layout>::ValContainer,
-        Vec<TInner>,
-        <Tr::Layout as Layout>::DiffContainer,
-        <Tr::Layout as Layout>::OffsetContainer,
-    );
-}
-
 impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
     TInner: Refines<Tr::Time>+Lattice,
     F: 'static,
-    F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone,
+    F: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>, <BatchCursor<Tr> as Cursor>::TimeGat<'_>)->TInner+Clone,
     G: FnMut(&TInner)->Tr::Time+Clone+'static,
 {
+    type Time = TInner;
     type Batch = BatchEnter<Tr::Batch, TInner,F>;
 
     fn map_batches<F2: FnMut(&Self::Batch)>(&self, mut f: F2) {
@@ -140,32 +125,27 @@ pub struct BatchEnter<B, TInner, F> {
     logic: F,
 }
 
-impl<B, TInner, F> WithLayout for BatchEnter<B, TInner, F>
+use crate::trace::Navigable;
+impl<B, TInner, F> Navigable for BatchEnter<B, TInner, F>
 where
-    B: BatchReader,
+    B: BatchReader + Navigable,
     TInner: Refines<B::Time>+Lattice,
-{
-    type Layout = (
-        <B::Layout as Layout>::KeyContainer,
-        <B::Layout as Layout>::ValContainer,
-        Vec<TInner>,
-        <B::Layout as Layout>::DiffContainer,
-        <B::Layout as Layout>::OffsetContainer,
-    );
-}
-
-use crate::trace::implementations::LayoutExt;
-impl<B, TInner, F> BatchReader for BatchEnter<B, TInner, F>
-where
-    B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
-    F: FnMut(B::Key<'_>, <B::Cursor as LayoutExt>::Val<'_>, B::TimeGat<'_>)->TInner+Clone,
+    F: FnMut(<B::Cursor as Cursor>::Key<'_>, <B::Cursor as Cursor>::Val<'_>, <B::Cursor as Cursor>::TimeGat<'_>)->TInner+Clone,
 {
     type Cursor = BatchCursorEnter<B::Cursor, TInner, F>;
 
     fn cursor(&self) -> Self::Cursor {
         BatchCursorEnter::new(self.batch.cursor(), self.logic.clone())
     }
+}
+
+impl<B, TInner, F> BatchReader for BatchEnter<B, TInner, F>
+where
+    B: BatchReader,
+    TInner: Refines<B::Time>+Lattice,
+    F: FnMut(<B::Cursor as Cursor>::Key<'_>, <B::Cursor as Cursor>::Val<'_>, <B::Cursor as Cursor>::TimeGat<'_>)->TInner+Clone,
+{
+    type Time = TInner;
     fn len(&self) -> usize { self.batch.len() }
     fn description(&self) -> &Description<TInner> { &self.description }
 }
@@ -189,27 +169,13 @@ where
     }
 }
 
-use crate::trace::implementations::{Layout, WithLayout};
+use crate::trace::implementations::BatchContainer;
 
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorEnter<C, TInner, F> {
     phantom: ::std::marker::PhantomData<TInner>,
     cursor: C,
     logic: F,
-}
-
-impl<C, TInner, F> WithLayout for BatchCursorEnter<C, TInner, F>
-where
-    C: Cursor,
-    TInner: Refines<C::Time>+Lattice,
-{
-    type Layout = (
-        <C::Layout as Layout>::KeyContainer,
-        <C::Layout as Layout>::ValContainer,
-        Vec<TInner>,
-        <C::Layout as Layout>::DiffContainer,
-        <C::Layout as Layout>::OffsetContainer,
-    );
 }
 
 impl<C, TInner, F> BatchCursorEnter<C, TInner, F> {
@@ -228,6 +194,22 @@ where
     F: FnMut(C::Key<'_>, C::Val<'_>, C::TimeGat<'_>)->TInner,
 {
     type Storage = BatchEnter<C::Storage, TInner, F>;
+
+    type Key<'a> = C::Key<'a>;
+    type ValOwn = C::ValOwn;
+    type Val<'a> = C::Val<'a>;
+    type KeyContainer = C::KeyContainer;
+    type ValContainer = C::ValContainer;
+    type DiffContainer = C::DiffContainer;
+    type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
+    type TimeContainer = Vec<TInner>;
+    type Time = <Vec<TInner> as BatchContainer>::Owned;
+    type TimeGat<'a> = <Vec<TInner> as BatchContainer>::ReadItem<'a>;
+    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { C::owned_val(val) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Vec<TInner> as BatchContainer>::into_owned(time) }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <Vec<TInner> as BatchContainer>::clone_onto(time, onto) }
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }

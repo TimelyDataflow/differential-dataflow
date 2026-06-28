@@ -13,7 +13,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::operators::arrange::{Arranged, TraceAgent};
-use crate::trace::{BatchReader, Cursor, Trace, Builder, ExertionLogic, Description};
+use crate::trace::{BatchCursor, BatchReader, Cursor, Navigable, Trace, Builder, ExertionLogic, Description};
 use crate::trace::implementations::containers::BatchContainer;
 use crate::trace::TraceReader;
 
@@ -33,10 +33,13 @@ use crate::trace::TraceReader;
 pub fn reduce_trace<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader + 'static,
-    Tr2: for<'a> Trace<Key<'a>=Tr1::Key<'a>, ValOwn: Data, Time = Tr1::Time> + 'static,
+    Tr1::Batch: Navigable,
+    Tr2: Trace<Time = Tr1::Time> + 'static,
+    Tr2::Batch: Navigable,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>, ValOwn: Data>,
     Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default>,
-    L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn,Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
-    P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
+    L: FnMut(<BatchCursor<Tr1> as Cursor>::Key<'_>, &[(<BatchCursor<Tr1> as Cursor>::Val<'_>, <BatchCursor<Tr1> as Cursor>::Diff)], &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>)+'static,
+    P: FnMut(&mut Bu::Input, <BatchCursor<Tr1> as Cursor>::Key<'_>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, Tr2::Time, <BatchCursor<Tr2> as Cursor>::Diff)>) + 'static,
 {
     let mut result_trace = None;
 
@@ -66,10 +69,10 @@ where
 
             // Our implementation maintains a list of outstanding `(key, time)` synthetic interesting times,
             // sorted by (key, time), as well as capabilities for the lower envelope of the times.
-            let mut pending_keys = Tr1::KeyContainer::with_capacity(0);
-            let mut pending_time = Tr1::TimeContainer::with_capacity(0);
-            let mut next_pending_keys = Tr1::KeyContainer::with_capacity(0);
-            let mut next_pending_time = Tr1::TimeContainer::with_capacity(0);
+            let mut pending_keys = <BatchCursor<Tr1> as Cursor>::KeyContainer::with_capacity(0);
+            let mut pending_time = <BatchCursor<Tr1> as Cursor>::TimeContainer::with_capacity(0);
+            let mut next_pending_keys = <BatchCursor<Tr1> as Cursor>::KeyContainer::with_capacity(0);
+            let mut next_pending_time = <BatchCursor<Tr1> as Cursor>::TimeContainer::with_capacity(0);
             let mut capabilities = timely::dataflow::operators::CapabilitySet::<Tr1::Time>::default();
 
             // buffers and logic for computing per-key interesting times "efficiently".
@@ -131,7 +134,7 @@ where
                         // Prepare an output buffer and builder for each capability.
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
-                        let mut buffers = Vec::<(Tr1::Time, Vec<(Tr2::ValOwn, Tr1::Time, Tr2::Diff)>)>::new();
+                        let mut buffers = Vec::<(Tr1::Time, Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, Tr1::Time, <BatchCursor<Tr2> as Cursor>::Diff)>)>::new();
                         let mut builders = Vec::new();
                         for cap in capabilities.iter() {
                             buffers.push((cap.time().clone(), Vec::new()));
@@ -165,7 +168,7 @@ where
                             let prior_pos = pending_pos;
                             interesting_times.clear();
                             while pending_keys.get(pending_pos) == Some(key) {
-                                let owned_time = Tr1::owned_time(pending_time.index(pending_pos));
+                                let owned_time = <BatchCursor<Tr1> as Cursor>::owned_time(pending_time.index(pending_pos));
                                 if !upper_limit.less_equal(&owned_time) { interesting_times.push(owned_time); }
                                 pending_pos += 1;
                             }
@@ -195,7 +198,7 @@ where
                                 // Merge novel pending times with any prior pending times we did not process.
                                 // TODO: This could be a merge, not a sort_dedup, because both lists should be sorted.
                                 for pos in prior_pos .. pending_pos {
-                                    let owned_time = Tr1::owned_time(pending_time.index(pos));
+                                    let owned_time = <BatchCursor<Tr1> as Cursor>::owned_time(pending_time.index(pos));
                                     if upper_limit.less_equal(&owned_time) { new_interesting_times.push(owned_time); }
                                 }
                                 sort_dedup(&mut new_interesting_times);
@@ -269,7 +272,7 @@ where
                         let mut frontier = Antichain::<Tr1::Time>::new();
                         let mut owned_time = Tr1::Time::minimum();
                         for pos in 0 .. pending_time.len() {
-                            Tr1::clone_time_onto(pending_time.index(pos), &mut owned_time);
+                            <BatchCursor<Tr1> as Cursor>::clone_time_onto(pending_time.index(pos), &mut owned_time);
                             frontier.insert_ref(&owned_time);
                         }
                         capabilities.downgrade(frontier);

@@ -43,7 +43,8 @@ where
     propagate_core(edges.arrange_by_key(), nodes, logic)
 }
 
-use crate::trace::TraceReader;
+use crate::trace::{BatchCursor, Navigable, TraceReader};
+use crate::trace::Cursor;
 use crate::operators::arrange::arrangement::Arranged;
 
 /// Propagates labels forward, retaining the minimum label.
@@ -58,7 +59,9 @@ where
     R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    Tr: for<'a> TraceReader<Key<'a>=&'a N, Val<'a>=&'a N, Diff=R, Time: Hash>+Clone+'static,
+    Tr: TraceReader<Time: Hash>+Clone+'static,
+    Tr::Batch: Navigable,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Diff=R>,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified

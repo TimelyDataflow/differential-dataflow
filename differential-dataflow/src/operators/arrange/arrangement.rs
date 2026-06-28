@@ -30,7 +30,7 @@ use timely::dataflow::operators::Capability;
 use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{self, Trace, TraceReader, BatchReader, Batcher, Builder, Cursor};
+use crate::trace::{self, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
@@ -99,8 +99,9 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// not vary with the new timestamp coordinate.
     pub fn enter_at<'inner, TInner, F, P>(self, child: Scope<'inner, TInner>, logic: F, prior: P) -> Arranged<'inner, TraceEnterAt<Tr, TInner, F, P>>
     where
+        Tr::Batch: Navigable,
         TInner: Refines<Tr::Time>+Lattice+'static,
-        F: FnMut(Tr::Key<'_>, Tr::Val<'_>, Tr::TimeGat<'_>)->TInner+Clone+'static,
+        F: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>, <BatchCursor<Tr> as Cursor>::TimeGat<'_>)->TInner+Clone+'static,
         P: FnMut(&TInner)->Tr::Time+Clone+'static,
     {
         let logic1 = logic.clone();
@@ -138,9 +139,10 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// The underlying `Stream<T, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
-    pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<'scope, Tr::Time, D, Tr::Diff>
+    pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<'scope, Tr::Time, D, <BatchCursor<Tr> as Cursor>::Diff>
         where
-            L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> D+'static,
+            Tr::Batch: Navigable,
+            L: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
     }
@@ -154,11 +156,12 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// The method takes `K` and `V` as generic arguments, in order to constrain the reference types to support
     /// cloning into owned types. If this bound does not work, the `as_collection` method allows arbitrary logic
     /// on the reference types.
-    pub fn as_vecs<K, V>(self) -> VecCollection<'scope, Tr::Time, (K, V), Tr::Diff>
+    pub fn as_vecs<K, V>(self) -> VecCollection<'scope, Tr::Time, (K, V), <BatchCursor<Tr> as Cursor>::Diff>
     where
         K: crate::ExchangeData,
         V: crate::ExchangeData,
-        Tr: for<'a> TraceReader<Key<'a> = &'a K, Val<'a> = &'a V>,
+        Tr::Batch: Navigable,
+        for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V>,
     {
         self.flat_map_ref(move |key, val| [(key.clone(), val.clone())])
     }
@@ -167,10 +170,11 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     ///
     /// The supplied logic may produce an iterator over output values, allowing either
     /// filtering or flat mapping as part of the extraction.
-    pub fn flat_map_ref<I, L>(self, logic: L) -> VecCollection<'scope, Tr::Time, I::Item, Tr::Diff>
+    pub fn flat_map_ref<I, L>(self, logic: L) -> VecCollection<'scope, Tr::Time, I::Item, <BatchCursor<Tr> as Cursor>::Diff>
         where
+            Tr::Batch: Navigable,
             I: IntoIterator<Item: Data>,
-            L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
+            L: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>) -> I+'static,
     {
         Self::flat_map_batches(self.stream, logic)
     }
@@ -182,10 +186,11 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     ///
     /// This method exists for streams of batches without the corresponding arrangement.
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
-    pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<Tr::Batch>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, Tr::Diff>
+    pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<Tr::Batch>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, <BatchCursor<Tr> as Cursor>::Diff>
     where
+        Tr::Batch: Navigable,
         I: IntoIterator<Item: Data>,
-        L: FnMut(Tr::Key<'_>, Tr::Val<'_>) -> I+'static,
+        L: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>) -> I+'static,
     {
         stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
             input.for_each(|time, data| {
@@ -197,7 +202,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
                         while let Some(val) = cursor.get_val(batch) {
                             for datum in logic(key, val) {
                                 cursor.map_times(batch, |time, diff| {
-                                    session.give((datum.clone(), Tr::owned_time(time), Tr::owned_diff(diff)));
+                                    session.give((datum.clone(), <BatchCursor<Tr> as Cursor>::owned_time(time), <BatchCursor<Tr> as Cursor>::owned_diff(diff)));
                                 });
                             }
                             cursor.step_val(batch);
@@ -218,14 +223,22 @@ impl<'scope, Tr1: TraceReader+'static> Arranged<'scope, Tr1> {
     /// A convenience method to join and produce `VecCollection` output.
     ///
     /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
-    pub fn join_core<Tr2,I,L>(self, other: Arranged<'scope, Tr2>, mut result: L) -> VecCollection<'scope, Tr1::Time,I::Item,<Tr1::Diff as Multiply<Tr2::Diff>>::Output>
+    pub fn join_core<Tr2,I,L,R1,R2>(self, other: Arranged<'scope, Tr2>, mut result: L) -> VecCollection<'scope, Tr1::Time,I::Item,<R1 as Multiply<R2>>::Output>
     where
-        Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>,Time=Tr1::Time>+Clone+'static,
-        Tr1::Diff: Multiply<Tr2::Diff, Output: Semigroup+'static>,
+        Tr1::Batch: Navigable,
+        Tr2: TraceReader<Time=Tr1::Time>+Clone+'static,
+        Tr2::Batch: Navigable,
+        // Pin the cursor diffs to named params `R1`/`R2`: a `Multiply` bound on a projection
+        // does not connect to its use-site (the solver normalizes the use but not the bound's
+        // subject), so we constrain plain params instead.
+        BatchCursor<Tr1>: Cursor<Diff = R1>,
+        BatchCursor<Tr2>: Cursor<Diff = R2>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>>,
+        R1: Multiply<R2, Output: Semigroup+'static> + Clone,
         I: IntoIterator<Item: Data>,
-        L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>)->I+'static
+        L: FnMut(<BatchCursor<Tr1> as Cursor>::Key<'_>,<BatchCursor<Tr1> as Cursor>::Val<'_>,<BatchCursor<Tr2> as Cursor>::Val<'_>)->I+'static
     {
-        let mut result = move |k: Tr1::Key<'_>, v1: Tr1::Val<'_>, v2: Tr2::Val<'_>, t: Tr1::Time, r1: &Tr1::Diff, r2: &Tr2::Diff| {
+        let mut result = move |k: <BatchCursor<Tr1> as Cursor>::Key<'_>, v1: <BatchCursor<Tr1> as Cursor>::Val<'_>, v2: <BatchCursor<Tr2> as Cursor>::Val<'_>, t: Tr1::Time, r1: &R1, r2: &R2| {
             let r = (r1.clone()).multiply(r2);
             result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
         };
@@ -250,15 +263,13 @@ impl<'scope, Tr1: TraceReader+'static> Arranged<'scope, Tr1> {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
     pub fn reduce_abelian<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
-        Tr2: for<'a> Trace<
-            Key<'a>= Tr1::Key<'a>,
-            ValOwn: Data,
-            Time=Tr1::Time,
-            Diff: Abelian,
-        >+'static,
+        Tr1::Batch: Navigable,
+        Tr2: Trace<Time=Tr1::Time>+'static,
+        Tr2::Batch: Navigable,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>, ValOwn: Data, Diff: Abelian>,
         Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
-        L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
-        P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
+        L: FnMut(<BatchCursor<Tr1> as Cursor>::Key<'_>, &[(<BatchCursor<Tr1> as Cursor>::Val<'_>, <BatchCursor<Tr1> as Cursor>::Diff)], &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, <BatchCursor<Tr1> as Cursor>::Key<'_>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, Tr2::Time, <BatchCursor<Tr2> as Cursor>::Diff)>) + 'static,
     {
         self.reduce_core::<_,Bu,Tr2,_>(name, move |key, input, output, change| {
             if !input.is_empty() {
@@ -272,14 +283,13 @@ impl<'scope, Tr1: TraceReader+'static> Arranged<'scope, Tr1> {
     /// A direct implementation of `ReduceCore::reduce_core`.
     pub fn reduce_core<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
-        Tr2: for<'a> Trace<
-            Key<'a>=Tr1::Key<'a>,
-            ValOwn: Data,
-            Time=Tr1::Time,
-        >+'static,
+        Tr1::Batch: Navigable,
+        Tr2: Trace<Time=Tr1::Time>+'static,
+        Tr2::Batch: Navigable,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>, ValOwn: Data>,
         Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
-        L: FnMut(Tr1::Key<'_>, &[(Tr1::Val<'_>, Tr1::Diff)], &mut Vec<(Tr2::ValOwn, Tr2::Diff)>, &mut Vec<(Tr2::ValOwn, Tr2::Diff)>)+'static,
-        P: FnMut(&mut Bu::Input, Tr1::Key<'_>, &mut Vec<(Tr2::ValOwn, Tr2::Time, Tr2::Diff)>) + 'static,
+        L: FnMut(<BatchCursor<Tr1> as Cursor>::Key<'_>, &[(<BatchCursor<Tr1> as Cursor>::Val<'_>, <BatchCursor<Tr1> as Cursor>::Diff)], &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>)+'static,
+        P: FnMut(&mut Bu::Input, <BatchCursor<Tr1> as Cursor>::Key<'_>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, Tr2::Time, <BatchCursor<Tr2> as Cursor>::Diff)>) + 'static,
     {
         use crate::operators::reduce::reduce_trace;
         reduce_trace::<_,Bu,_,_,_>(self, name, logic, push)

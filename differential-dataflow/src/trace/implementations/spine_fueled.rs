@@ -98,13 +98,9 @@ pub struct Spine<B: Batch> {
     exert_logic: Option<ExertionLogic>,
 }
 
-use crate::trace::WithLayout;
-impl<B: Batch> WithLayout for Spine<B> {
-    type Layout = B::Layout;
-}
-
 impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
 
+    type Time = B::Time;
     type Batch = B;
 
     fn cursor_storage(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {

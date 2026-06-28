@@ -55,9 +55,10 @@ use std::collections::VecDeque;
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 use crate::lattice::Lattice;
+use crate::difference::Semigroup;
 use crate::trace::{Batch, BatchReader, Description};
 use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{BatchContainer, Layout, LayoutExt, WithLayout};
+use crate::trace::implementations::BatchContainer;
 
 pub mod vec;
 
@@ -70,16 +71,38 @@ pub mod vec;
 /// The "data" operations transform lists of chunks, are expected to do roughly
 /// "one chunk's worth" of work at a time; they can afford to compress and page.
 /// The "metadata" operations provide chunk information, and should be lightweight.
-pub trait Chunk: Sized + Clone + LayoutExt {
+pub trait Chunk: Sized + Clone {
+    /// Alias for a borrowed key.
+    type Key<'a>: Copy + Ord;
+    /// Alias for an owned val.
+    type ValOwn: Clone + Ord;
+    /// Alias for a borrowed val.
+    type Val<'a>: Copy + Ord;
+    /// Alias for an owned time.
+    type Time: Lattice + timely::progress::Timestamp;
+    /// Alias for a borrowed time.
+    type TimeGat<'a>: Copy + Ord;
+    /// Alias for an owned diff.
+    type Diff: Semigroup + 'static;
+    /// Alias for a borrowed diff.
+    type DiffGat<'a>: Copy + Ord;
+
+    /// Container for update keys.
+    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Key<'a>>;
+    /// Container for update vals.
+    type ValContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Val<'a>, Owned = Self::ValOwn>;
+    /// Container for times.
+    type TimeContainer: for<'a> BatchContainer<ReadItem<'a> = Self::TimeGat<'a>, Owned = Self::Time>;
+    /// Container for diffs.
+    type DiffContainer: for<'a> BatchContainer<ReadItem<'a> = Self::DiffGat<'a>, Owned = Self::Diff>;
 
     /// The intended maximum chunk size.
     const TARGET: usize;
 
     /// A cursor navigating this chunk's contents.
     type Cursor:
-        Cursor<Storage = Self> +
-        WithLayout<Layout = Self::Layout> +
-        for<'a> LayoutExt<
+        for<'a> Cursor<
+            Storage = Self,
             Key<'a> = Self::Key<'a>,
             Val<'a> = Self::Val<'a>,
             ValOwn = Self::ValOwn,
@@ -231,8 +254,8 @@ where
     }
 }
 
-type KeyCon<C> = <<C as WithLayout>::Layout as Layout>::KeyContainer;
-type ValCon<C> = <<C as WithLayout>::Layout as Layout>::ValContainer;
+type KeyCon<C> = <C as Chunk>::KeyContainer;
+type ValCon<C> = <C as Chunk>::ValContainer;
 
 /// A batch is a [`Chunk`] sequence plus a [`Description`].
 ///
@@ -269,15 +292,15 @@ impl<C: Chunk> ChunkBatch<C> {
     }
 }
 
-impl<C: Chunk> WithLayout for ChunkBatch<C> {
-    type Layout = C::Layout;
-}
-
-impl<C: Chunk> BatchReader for ChunkBatch<C> {
+impl<C: Chunk> crate::trace::Navigable for ChunkBatch<C> {
     type Cursor = ChunkBatchCursor<C>;
     fn cursor(&self) -> Self::Cursor {
         ChunkBatchCursor { key_chunk: 0, chunk: 0, inner: self.chunks.first().map(C::cursor) }
     }
+}
+
+impl<C: Chunk> BatchReader for ChunkBatch<C> {
+    type Time = C::Time;
     fn len(&self) -> usize { self.chunks.iter().map(C::len).sum() }
     fn description(&self) -> &Description<Self::Time> { &self.description }
 }
@@ -330,10 +353,6 @@ pub struct ChunkBatchCursor<C: Chunk> {
     inner: Option<C::Cursor>,
 }
 
-impl<C: Chunk> WithLayout for ChunkBatchCursor<C> {
-    type Layout = C::Layout;
-}
-
 impl<C: Chunk> ChunkBatchCursor<C> {
     /// Move the active chunk to `c`, opening a fresh inner cursor at its start.
     fn goto(&mut self, c: usize, storage: &ChunkBatch<C>) {
@@ -344,6 +363,22 @@ impl<C: Chunk> ChunkBatchCursor<C> {
 
 impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
     type Storage = ChunkBatch<C>;
+
+    type KeyContainer = C::KeyContainer;
+    type Key<'a> = C::Key<'a>;
+    type ValContainer = C::ValContainer;
+    type Val<'a> = C::Val<'a>;
+    type ValOwn = C::ValOwn;
+    type TimeContainer = C::TimeContainer;
+    type TimeGat<'a> = C::TimeGat<'a>;
+    type Time = C::Time;
+    type DiffContainer = C::DiffContainer;
+    type DiffGat<'a> = C::DiffGat<'a>;
+    type Diff = C::Diff;
+    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <C::ValContainer as BatchContainer>::into_owned(val) }
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <C::TimeContainer as BatchContainer>::into_owned(time) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <C::DiffContainer as BatchContainer>::into_owned(diff) }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <C::TimeContainer as BatchContainer>::clone_onto(time, onto) }
 
     fn key_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.key_valid(&s.chunks[self.chunk])) }
     fn val_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.val_valid(&s.chunks[self.chunk])) }

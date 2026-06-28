@@ -25,26 +25,13 @@ impl<Tr: TraceReader + Clone, TInner> Clone for TraceEnter<Tr, TInner> {
     }
 }
 
-impl<Tr, TInner> WithLayout for TraceEnter<Tr, TInner>
-where
-    Tr: TraceReader,
-    TInner: Refines<Tr::Time>+Lattice,
-{
-    type Layout = (
-        <Tr::Layout as Layout>::KeyContainer,
-        <Tr::Layout as Layout>::ValContainer,
-        Vec<TInner>,
-        <Tr::Layout as Layout>::DiffContainer,
-        <Tr::Layout as Layout>::OffsetContainer,
-    );
-}
-
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Batch = BatchEnter<Tr::Batch, TInner>;
+    type Time = TInner;
 
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
         self.trace.map_batches(|batch| {
@@ -115,23 +102,10 @@ pub struct BatchEnter<B, TInner> {
     description: Description<TInner>,
 }
 
-impl<B, TInner> WithLayout for BatchEnter<B, TInner>
+use crate::trace::Navigable;
+impl<B, TInner> Navigable for BatchEnter<B, TInner>
 where
-    B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
-{
-    type Layout = (
-        <B::Layout as Layout>::KeyContainer,
-        <B::Layout as Layout>::ValContainer,
-        Vec<TInner>,
-        <B::Layout as Layout>::DiffContainer,
-        <B::Layout as Layout>::OffsetContainer,
-    );
-}
-
-impl<B, TInner> BatchReader for BatchEnter<B, TInner>
-where
-    B: BatchReader,
+    B: BatchReader + Navigable,
     TInner: Refines<B::Time>+Lattice,
 {
     type Cursor = BatchCursorEnter<B::Cursor, TInner>;
@@ -139,6 +113,14 @@ where
     fn cursor(&self) -> Self::Cursor {
         BatchCursorEnter::new(self.batch.cursor())
     }
+}
+
+impl<B, TInner> BatchReader for BatchEnter<B, TInner>
+where
+    B: BatchReader,
+    TInner: Refines<B::Time>+Lattice,
+{
+    type Time = TInner;
     fn len(&self) -> usize { self.batch.len() }
     fn description(&self) -> &Description<TInner> { &self.description }
 }
@@ -161,7 +143,7 @@ where
     }
 }
 
-use crate::trace::implementations::{Layout, WithLayout};
+use crate::trace::implementations::BatchContainer;
 
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorEnter<C, TInner> {
@@ -178,25 +160,27 @@ impl<C, TInner> BatchCursorEnter<C, TInner> {
     }
 }
 
-impl<C, TInner> WithLayout for BatchCursorEnter<C, TInner>
-where
-    C: Cursor,
-    TInner: Refines<C::Time>+Lattice,
-{
-    type Layout = (
-        <C::Layout as Layout>::KeyContainer,
-        <C::Layout as Layout>::ValContainer,
-        Vec<TInner>,
-        <C::Layout as Layout>::DiffContainer,
-        <C::Layout as Layout>::OffsetContainer,
-    );
-}
-
 impl<TInner, C: Cursor> Cursor for BatchCursorEnter<C, TInner>
 where
     TInner: Refines<C::Time>+Lattice,
 {
     type Storage = BatchEnter<C::Storage, TInner>;
+
+    type Key<'a> = C::Key<'a>;
+    type ValOwn = C::ValOwn;
+    type Val<'a> = C::Val<'a>;
+    type KeyContainer = C::KeyContainer;
+    type ValContainer = C::ValContainer;
+    type DiffContainer = C::DiffContainer;
+    type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
+    type TimeContainer = Vec<TInner>;
+    type Time = <Vec<TInner> as BatchContainer>::Owned;
+    type TimeGat<'a> = <Vec<TInner> as BatchContainer>::ReadItem<'a>;
+    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { C::owned_val(val) }
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Vec<TInner> as BatchContainer>::into_owned(time) }
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <Vec<TInner> as BatchContainer>::clone_onto(time, onto) }
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }

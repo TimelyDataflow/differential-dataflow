@@ -9,7 +9,10 @@ pub mod cursor_list;
 
 pub use self::cursor_list::CursorList;
 
-use crate::trace::implementations::LayoutExt;
+use timely::progress::Timestamp;
+use crate::lattice::Lattice;
+use crate::difference::Semigroup;
+use crate::trace::implementations::containers::BatchContainer;
 
 /// A batch type that has a cursor for navigation.
 ///
@@ -22,28 +25,67 @@ use crate::trace::implementations::LayoutExt;
 pub trait Navigable {
 
     /// The cursor type.
+    ///
+    /// The cursor carries the layout opinions (keys, values, containers); a `Navigable` type only
+    /// promises that it can produce one.
     type Cursor: Cursor<Storage = Self>;
 
     /// Acquire a cursor suitable for the instance.
     fn cursor(&self) -> Self::Cursor;
 }
 
+/// The cursor type for a trace's batches.
+pub type BatchCursor<Tr> = <<Tr as crate::trace::TraceReader>::Batch as Navigable>::Cursor;
+
 /// Assembles a merged cursor over a sequence of batches.
 ///
 /// The batches become the cursor's storage and are returned alongside the cursor; they must be kept
 /// alive and handed to the cursor's navigation methods. This is the shared assembly behind
 /// `TraceReader::cursor_through` and the per-round input cursors in `reduce` / `count` / `threshold`.
-pub fn cursor_list<B: crate::trace::BatchReader>(batches: Vec<B>) -> (CursorList<B::Cursor>, Vec<B>) {
+pub fn cursor_list<B: crate::trace::BatchReader + Navigable>(batches: Vec<B>) -> (CursorList<B::Cursor>, Vec<B>) {
     let cursors = batches.iter().map(|batch| batch.cursor()).collect::<Vec<_>>();
     let cursor = CursorList::new(cursors, &batches);
     (cursor, batches)
 }
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
-pub trait Cursor : LayoutExt {
+pub trait Cursor {
 
     /// Storage required by the cursor.
     type Storage;
+
+    /// Alias for a borrowed key.
+    type Key<'a>: Copy + Ord;
+    /// Alias for an owned val.
+    type ValOwn: Clone + Ord;
+    /// Alias for a borrowed val.
+    type Val<'a>: Copy + Ord;
+    /// Alias for an owned time.
+    type Time: Lattice + Timestamp;
+    /// Alias for a borrowed time.
+    type TimeGat<'a>: Copy + Ord;
+    /// Alias for an owned diff.
+    type Diff: Semigroup + 'static;
+    /// Alias for a borrowed diff.
+    type DiffGat<'a>: Copy + Ord;
+
+    /// Container for update keys.
+    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Key<'a>>;
+    /// Container for update vals.
+    type ValContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Val<'a>, Owned = Self::ValOwn>;
+    /// Container for times.
+    type TimeContainer: for<'a> BatchContainer<ReadItem<'a> = Self::TimeGat<'a>, Owned = Self::Time>;
+    /// Container for diffs.
+    type DiffContainer: for<'a> BatchContainer<ReadItem<'a> = Self::DiffGat<'a>, Owned = Self::Diff>;
+
+    /// Construct an owned val from a reference.
+    fn owned_val(val: Self::Val<'_>) -> Self::ValOwn;
+    /// Construct an owned time from a reference.
+    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
+    /// Construct an owned diff from a reference.
+    fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff;
+    /// Clones a reference time onto an owned time.
+    fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time);
 
     /// Indicates if the current key is valid.
     ///

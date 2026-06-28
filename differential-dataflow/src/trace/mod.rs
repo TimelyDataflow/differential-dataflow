@@ -16,13 +16,14 @@ pub mod wrappers;
 use timely::container::PushInto;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
+use crate::lattice::Lattice;
 
 use crate::logging::Logger;
 pub use self::cursor::Cursor;
+pub use self::cursor::Navigable;
+pub use self::cursor::BatchCursor;
 use self::cursor::CursorList;
 pub use self::description::Description;
-
-use crate::trace::implementations::LayoutExt;
 
 /// A type used to express how much effort a trace should exert even in the absence of updates.
 pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize)])->Option<usize>+Send+Sync>;
@@ -32,28 +33,19 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize
 /// This is a restricted interface to the more general `Trace` trait, which extends this trait with further methods
 /// to update the contents of the trace. These methods are used to examine the contents, and to update the reader's
 /// capabilities (which may release restrictions on the mutations to the underlying trace and cause work to happen).
-pub trait TraceReader : LayoutExt {
+pub trait TraceReader {
+
+    /// The timestamp type of the trace's updates.
+    ///
+    /// Key/val/diff opinions live on the batches' cursors; the trace itself only needs time, to
+    /// bound its contents and to drive compaction.
+    type Time: Timestamp + Lattice;
 
     /// The type of an immutable collection of updates.
     type Batch:
         'static +
         Clone +
-        BatchReader +
-        WithLayout<Layout = Self::Layout> +
-        for<'a> LayoutExt<
-            Key<'a> = Self::Key<'a>,
-            Val<'a> = Self::Val<'a>,
-            ValOwn = Self::ValOwn,
-            Time = Self::Time,
-            TimeGat<'a> = Self::TimeGat<'a>,
-            Diff = Self::Diff,
-            DiffGat<'a> = Self::DiffGat<'a>,
-            KeyContainer = Self::KeyContainer,
-            ValContainer = Self::ValContainer,
-            TimeContainer = Self::TimeContainer,
-            DiffContainer = Self::DiffContainer,
-        >;
-
+        BatchReader<Time = Self::Time>;
 
     /// Acquires the non-empty sequence of batches a cursor would draw from, restricted to updates
     /// at times not greater or equal to an element of `upper`.
@@ -69,7 +61,7 @@ pub trait TraceReader : LayoutExt {
     fn cursor_storage(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>>;
 
     /// Provides a cursor over updates contained in the trace.
-    fn cursor(&mut self) -> (CursorList<<Self::Batch as BatchReader>::Cursor>, Vec<Self::Batch>) {
+    fn cursor(&mut self) -> (CursorList<<Self::Batch as Navigable>::Cursor>, Vec<Self::Batch>) where Self::Batch: Navigable {
         if let Some(cursor) = self.cursor_through(Antichain::new().borrow()) {
             cursor
         }
@@ -83,7 +75,7 @@ pub trait TraceReader : LayoutExt {
     ///
     /// The cursor is a [`CursorList`] that merges the cursors of the batches returned by
     /// [`cursor_storage`](TraceReader::cursor_storage); see that method for the contract on `upper`.
-    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(CursorList<<Self::Batch as BatchReader>::Cursor>, Vec<Self::Batch>)> {
+    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(CursorList<<Self::Batch as Navigable>::Cursor>, Vec<Self::Batch>)> where Self::Batch: Navigable {
         Some(self::cursor::cursor_list(self.cursor_storage(upper)?))
     }
 
@@ -214,36 +206,20 @@ pub trait Trace : TraceReader<Batch: Batch> {
     fn close(&mut self);
 }
 
-use crate::trace::implementations::WithLayout;
-
 /// A batch of updates whose contents may be read.
 ///
 /// This is a restricted interface to batches of updates, which support the reading of the batch's contents,
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader : LayoutExt + Sized {
+pub trait BatchReader : Navigable<Cursor: Cursor<Time = Self::Time>> + Sized {
 
-    /// The type used to enumerate the batch's contents.
-    type Cursor:
-        Cursor<Storage=Self> +
-        WithLayout<Layout = Self::Layout> +
-        for<'a> LayoutExt<
-            Key<'a> = Self::Key<'a>,
-            Val<'a> = Self::Val<'a>,
-            ValOwn = Self::ValOwn,
-            Time = Self::Time,
-            TimeGat<'a> = Self::TimeGat<'a>,
-            Diff = Self::Diff,
-            DiffGat<'a> = Self::DiffGat<'a>,
-            KeyContainer = Self::KeyContainer,
-            ValContainer = Self::ValContainer,
-            TimeContainer = Self::TimeContainer,
-            DiffContainer = Self::DiffContainer,
-        >;
+    /// The timestamp type of the batch's updates.
+    ///
+    /// Key/val/diff opinions live on the batch's [`Navigable::Cursor`]; the batch itself only needs
+    /// time, to describe its interval and to participate in compaction.
+    type Time: Timestamp + Lattice;
 
-      /// Acquires a cursor to the batch's contents.
-    fn cursor(&self) -> Self::Cursor;
     /// The number of updates in the batch.
     fn len(&self) -> usize;
     /// True if the batch is empty.
@@ -354,21 +330,20 @@ pub mod rc_blanket_impls {
     use std::rc::Rc;
 
     use timely::progress::{Antichain, frontier::AntichainRef};
-    use super::{Batch, BatchReader, Builder, Merger, Cursor, Description};
+    use super::{Batch, BatchReader, Builder, Merger, Navigable, Cursor, Description};
 
-    impl<B: BatchReader> WithLayout for Rc<B> {
-        type Layout = B::Layout;
-    }
-
-    impl<B: BatchReader> BatchReader for Rc<B> {
-
+    impl<B: BatchReader + Navigable> Navigable for Rc<B> {
         /// The type used to enumerate the batch's contents.
         type Cursor = RcBatchCursor<B::Cursor>;
         /// Acquires a cursor to the batch's contents.
         fn cursor(&self) -> Self::Cursor {
             RcBatchCursor::new((**self).cursor())
         }
+    }
 
+    impl<B: BatchReader> BatchReader for Rc<B> {
+
+        type Time = B::Time;
         /// The number of updates in the batch.
         fn len(&self) -> usize { (**self).len() }
         /// Describes the times of the updates in the batch.
@@ -378,11 +353,6 @@ pub mod rc_blanket_impls {
     /// Wrapper to provide cursor to nested scope.
     pub struct RcBatchCursor<C> {
         cursor: C,
-    }
-
-    use crate::trace::implementations::WithLayout;
-    impl<C: Cursor> WithLayout for RcBatchCursor<C> {
-        type Layout = C::Layout;
     }
 
     impl<C> RcBatchCursor<C> {
@@ -396,6 +366,22 @@ pub mod rc_blanket_impls {
     impl<C: Cursor> Cursor for RcBatchCursor<C> {
 
         type Storage = Rc<C::Storage>;
+
+        type Key<'a> = C::Key<'a>;
+        type ValOwn = C::ValOwn;
+        type Val<'a> = C::Val<'a>;
+        type Time = C::Time;
+        type TimeGat<'a> = C::TimeGat<'a>;
+        type Diff = C::Diff;
+        type DiffGat<'a> = C::DiffGat<'a>;
+        type KeyContainer = C::KeyContainer;
+        type ValContainer = C::ValContainer;
+        type TimeContainer = C::TimeContainer;
+        type DiffContainer = C::DiffContainer;
+        #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { C::owned_val(val) }
+        #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
+        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
+        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { C::clone_time_onto(time, onto) }
 
         #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
         #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }

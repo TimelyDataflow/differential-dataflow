@@ -14,7 +14,7 @@ use crate::difference::{Semigroup, Abelian};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchReader, Cursor, TraceReader};
+use crate::trace::{BatchCursor, BatchReader, Cursor, Navigable, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait ThresholdTotal<'scope, T: Timestamp + TotalOrder + Lattice, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
@@ -98,20 +98,22 @@ where
     }
 }
 
-impl<'scope, K, Tr> ThresholdTotal<'scope, Tr::Time, K, Tr::Diff> for Arranged<'scope, Tr>
+impl<'scope, K, Tr> ThresholdTotal<'scope, Tr::Time, K, <BatchCursor<Tr> as Cursor>::Diff> for Arranged<'scope, Tr>
 where
-    Tr: for<'a> TraceReader<
+    Tr: TraceReader<Time: TotalOrder> + Clone + 'static,
+    Tr::Batch: Navigable,
+    for<'a> BatchCursor<Tr>: Cursor<
         Key<'a>=&'a K,
         Val<'a>=&'a (),
-        Time: TotalOrder,
-        Diff : ExchangeData + Semigroup<Tr::DiffGat<'a>>,
-    >+Clone+'static,
+        Time = Tr::Time,
+        Diff : ExchangeData + Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>,
+    >,
     K: ExchangeData,
 {
     fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<'scope, Tr::Time, K, R2>
     where
         R2: Semigroup+'static,
-        F: for<'a> FnMut(Tr::Key<'a>,&Tr::Diff,Option<&Tr::Diff>)->Option<R2>+'static,
+        F: for<'a> FnMut(<BatchCursor<Tr> as Cursor>::Key<'a>,&<BatchCursor<Tr> as Cursor>::Diff,Option<&<BatchCursor<Tr> as Cursor>::Diff>)->Option<R2>+'static,
     {
 
         let mut trace = self.trace.clone();
@@ -149,14 +151,14 @@ where
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
-                        let mut count: Option<Tr::Diff> = None;
+                        let mut count: Option<<BatchCursor<Tr> as Cursor>::Diff> = None;
 
                         // Compute the multiplicity of this key before the current batch.
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(Tr::owned_diff(diff)); }
+                                if count.is_none() { count = Some(<BatchCursor<Tr> as Cursor>::owned_diff(diff)); }
                             });
                         }
 
@@ -171,7 +173,7 @@ where
                                     temp.plus_equals(&diff);
                                     thresh(key, &temp, Some(old))
                                 },
-                                None => { thresh(key, &Tr::owned_diff(diff), None) },
+                                None => { thresh(key, &<BatchCursor<Tr> as Cursor>::owned_diff(diff), None) },
                             };
 
                             // Either add or assign `diff` to `count`.
@@ -179,12 +181,12 @@ where
                                 count.plus_equals(&diff);
                             }
                             else {
-                                count = Some(Tr::owned_diff(diff));
+                                count = Some(<BatchCursor<Tr> as Cursor>::owned_diff(diff));
                             }
 
                             if let Some(difference) = difference {
                                 if !difference.is_zero() {
-                                    session.give((key.clone(), Tr::owned_time(time), difference));
+                                    session.give((key.clone(), <BatchCursor<Tr> as Cursor>::owned_time(time), difference));
                                 }
                             }
                         });
