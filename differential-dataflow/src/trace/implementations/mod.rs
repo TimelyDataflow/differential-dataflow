@@ -107,63 +107,6 @@ pub trait WithLayout {
     type Layout: Layout;
 }
 
-/// Automatically implemented trait for types with layouts.
-pub trait LayoutExt : WithLayout<Layout: Layout<KeyContainer = Self::KeyContainer, ValContainer = Self::ValContainer, TimeContainer = Self::TimeContainer, DiffContainer = Self::DiffContainer>> {
-    /// Alias for an borrowed key of a layout.
-    type Key<'a>: Copy + Ord;
-    /// Alias for an owned val of a layout.
-    type ValOwn: Clone + Ord;
-    /// Alias for an borrowed val of a layout.
-    type Val<'a>: Copy + Ord;
-    /// Alias for an owned time of a layout.
-    type Time: Lattice + timely::progress::Timestamp;
-    /// Alias for an borrowed time of a layout.
-    type TimeGat<'a>: Copy + Ord;
-    /// Alias for an owned diff of a layout.
-    type Diff: Semigroup + 'static;
-    /// Alias for an borrowed diff of a layout.
-    type DiffGat<'a>: Copy + Ord;
-
-    /// Container for update keys.
-    type KeyContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Key<'a>>;
-    /// Container for update vals.
-    type ValContainer: for<'a> BatchContainer<ReadItem<'a> = Self::Val<'a>, Owned = Self::ValOwn>;
-    /// Container for times.
-    type TimeContainer: for<'a> BatchContainer<ReadItem<'a> = Self::TimeGat<'a>, Owned = Self::Time>;
-    /// Container for diffs.
-    type DiffContainer: for<'a> BatchContainer<ReadItem<'a> = Self::DiffGat<'a>, Owned = Self::Diff>;
-
-    /// Construct an owned val from a reference.
-    fn owned_val(val: Self::Val<'_>) -> Self::ValOwn;
-    /// Construct an owned time from a reference.
-    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
-    /// Construct an owned diff from a reference.
-    fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff;
-
-    /// Clones a reference time onto an owned time.
-    fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time);
-}
-
-impl<L: WithLayout> LayoutExt for L {
-    type Key<'a> = <<L::Layout as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
-    type ValOwn = <<L::Layout as Layout>::ValContainer as BatchContainer>::Owned;
-    type Val<'a> = <<L::Layout as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
-    type Time = <<L::Layout as Layout>::TimeContainer as BatchContainer>::Owned;
-    type TimeGat<'a> = <<L::Layout as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
-    type Diff = <<L::Layout as Layout>::DiffContainer as BatchContainer>::Owned;
-    type DiffGat<'a> = <<L::Layout as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
-
-    type KeyContainer = <L::Layout as Layout>::KeyContainer;
-    type ValContainer = <L::Layout as Layout>::ValContainer;
-    type TimeContainer = <L::Layout as Layout>::TimeContainer;
-    type DiffContainer = <L::Layout as Layout>::DiffContainer;
-
-    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <Self::Layout as Layout>::ValContainer::into_owned(val) }
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Self::Layout as Layout>::TimeContainer::into_owned(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <Self::Layout as Layout>::DiffContainer::into_owned(diff) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <Self::Layout as Layout>::TimeContainer::clone_onto(time, onto) }
-
-}
 
 // An easy way to provide an explicit layout: as a 5-tuple.
 // Valuable when one wants to perform layout surgery.

@@ -94,14 +94,21 @@ impl<C: Cursor> CursorList<C> {
     }
 }
 
-use crate::trace::implementations::WithLayout;
-impl<C: Cursor> WithLayout for CursorList<C> {
-    type Layout = C::Layout;
-}
-
 impl<C: Cursor> Cursor for CursorList<C> {
 
     type Storage = Vec<C::Storage>;
+
+    type Key<'a> = C::Key<'a>;
+    type ValOwn = C::ValOwn;
+    type Val<'a> = C::Val<'a>;
+    type Time = C::Time;
+    type TimeGat<'a> = C::TimeGat<'a>;
+    type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
+    type KeyContainer = C::KeyContainer;
+    type ValContainer = C::ValContainer;
+    type TimeContainer = C::TimeContainer;
+    type DiffContainer = C::DiffContainer;
 
     // validation methods
     #[inline]

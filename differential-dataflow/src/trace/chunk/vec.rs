@@ -25,8 +25,9 @@ use timely::progress::frontier::AntichainRef;
 use crate::consolidation::Consolidate;
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
+use crate::trace::Navigable;
 use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{Vector, WithLayout};
+use crate::trace::implementations::{BatchContainer, Layout, Vector, WithLayout};
 
 use super::Chunk;
 
@@ -120,6 +121,18 @@ impl<K, V, T, R> Cursor for VecChunkCursor<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
     type Storage = VecChunk<K, V, T, R>;
 
+    type KeyContainer = <Vector<((K, V), T, R)> as Layout>::KeyContainer;
+    type Key<'a> = <<Vector<((K, V), T, R)> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type ValContainer = <Vector<((K, V), T, R)> as Layout>::ValContainer;
+    type Val<'a> = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type ValOwn = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::Owned;
+    type TimeContainer = <Vector<((K, V), T, R)> as Layout>::TimeContainer;
+    type TimeGat<'a> = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
+    type DiffContainer = <Vector<((K, V), T, R)> as Layout>::DiffContainer;
+    type DiffGat<'a> = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+    type Diff = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::Owned;
+
     fn key_valid(&self, s: &Self::Storage) -> bool { self.key_pos < s.0.len() }
     fn val_valid(&self, s: &Self::Storage) -> bool {
         self.key_pos < s.0.len() && self.val_pos < s.0.len() && s.0[self.val_pos].0.0 == s.0[self.key_pos].0.0
@@ -177,15 +190,20 @@ fn take<K: Clone, V: Clone, T: Clone, R: Clone>(chunk: VecChunk<K, V, T, R>) -> 
     Rc::try_unwrap(chunk.0).unwrap_or_else(|rc| (*rc).clone())
 }
 
-impl<K, V, T, R> Chunk for VecChunk<K, V, T, R>
+impl<K, V, T, R> Navigable for VecChunk<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
     type Cursor = VecChunkCursor<K, V, T, R>;
-
-    const TARGET: usize = TARGET;
 
     fn cursor(&self) -> Self::Cursor {
         VecChunkCursor { key_pos: 0, val_pos: 0, phantom: PhantomData }
     }
+}
+
+impl<K, V, T, R> Chunk for VecChunk<K, V, T, R>
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
+    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
+
+    const TARGET: usize = TARGET;
 
     fn bounds(&self) -> ((&K, &V, &T), (&K, &V, &T)) {
         let s = &self.0[..];
@@ -369,6 +387,7 @@ mod test {
     use std::collections::VecDeque;
     use super::{Chunk, VecChunk};
     use crate::trace::chunk::merge_chains;
+    use crate::trace::Navigable;
     use std::rc::Rc;
 
     fn chunk(updates: Vec<((u64, u64), u64, i64)>) -> VecChunk<u64, u64, u64, i64> {
@@ -574,7 +593,7 @@ mod test {
     // resumable merge→advance→settle pipeline and the grade-at-yield invariant.
     #[test]
     fn batch_merger_resumable_matches_reference() {
-        use crate::trace::{BatchReader, Description, Merger};
+        use crate::trace::{Description, Merger};
         use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
         use crate::trace::cursor::Cursor;
         use crate::consolidation::consolidate_updates;
@@ -686,7 +705,7 @@ mod test {
     #[test]
     fn cursor_handles_straddle() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::{BatchReader, Description};
+        use crate::trace::Description;
         use crate::trace::chunk::ChunkBatch;
         use timely::progress::Antichain;
 

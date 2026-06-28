@@ -16,10 +16,8 @@ use timely::dataflow::operators::Capability;
 
 use crate::lattice::Lattice;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchReader, Cursor};
+use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, Cursor, Navigable, TraceReader};
 use crate::operators::ValueHistory;
-
-use crate::trace::TraceReader;
 
 /// The session passed to join closures.
 pub type JoinSession<'a, 'b, T, CB, CT> = Session<'a, 'b, T, EffortBuilder<CB>, CT>;
@@ -68,9 +66,11 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 /// [`AsCollection`]: crate::collection::AsCollection
 pub fn join_traces<'scope, Tr1, Tr2, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut result: L) -> Stream<'scope, Tr1::Time, CB::Container>
 where
-    Tr1: TraceReader+'static,
-    Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>, Time = Tr1::Time>+'static,
-    L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>,Tr1::Time,&Tr1::Diff,&Tr2::Diff,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
+    Tr1: TraceReader<Batch: Navigable>+'static,
+    Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time>+'static,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a>=BatchKey<'a, Tr1>, Time = Tr1::Time>,
+    L: FnMut(BatchKey<'_, Tr1>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
     CB: ContainerBuilder,
 {
     // Rename traces for symmetry from here on out.

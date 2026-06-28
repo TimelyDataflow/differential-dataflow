@@ -8,7 +8,7 @@
 
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use crate::trace::{TraceReader, BatchReader, Description};
+use crate::trace::{BatchReader, Description, Navigable, TraceReader};
 use crate::trace::cursor::Cursor;
 use crate::lattice::Lattice;
 
@@ -31,18 +31,9 @@ impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
     }
 }
 
-impl<Tr: TraceReader> WithLayout for TraceFrontier<Tr> {
-    type Layout = (
-        <Tr::Layout as Layout>::KeyContainer,
-        <Tr::Layout as Layout>::ValContainer,
-        Vec<Tr::Time>,
-        <Tr::Layout as Layout>::DiffContainer,
-        <Tr::Layout as Layout>::OffsetContainer,
-    );
-}
-
 impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
 
+    type Time = Tr::Time;
     type Batch = BatchFrontier<Tr::Batch>;
 
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
@@ -85,23 +76,21 @@ pub struct BatchFrontier<B: BatchReader> {
     until: Antichain<B::Time>,
 }
 
-impl<B: BatchReader> WithLayout for BatchFrontier<B> {
-    type Layout = (
-        <B::Layout as Layout>::KeyContainer,
-        <B::Layout as Layout>::ValContainer,
-        Vec<B::Time>,
-        <B::Layout as Layout>::DiffContainer,
-        <B::Layout as Layout>::OffsetContainer,
-    );
-}
-
-impl<B: BatchReader> BatchReader for BatchFrontier<B> {
+impl<B> Navigable for BatchFrontier<B>
+where
+    B: BatchReader + Navigable,
+    B::Cursor: Cursor<Time = B::Time>,
+{
 
     type Cursor = BatchCursorFrontier<B::Cursor>;
 
     fn cursor(&self) -> Self::Cursor {
         BatchCursorFrontier::new(self.batch.cursor(), self.since.borrow(), self.until.borrow())
     }
+}
+
+impl<B: BatchReader> BatchReader for BatchFrontier<B> {
+    type Time = B::Time;
     fn len(&self) -> usize { self.batch.len() }
     fn description(&self) -> &Description<B::Time> { self.batch.description() }
 }
@@ -117,23 +106,13 @@ impl<B: BatchReader> BatchFrontier<B> {
     }
 }
 
-use crate::trace::implementations::{Layout, WithLayout};
+use crate::trace::implementations::BatchContainer;
 
 /// Wrapper to provide cursor to nested scope.
 pub struct BatchCursorFrontier<C: Cursor> {
     cursor: C,
     since: Antichain<C::Time>,
     until: Antichain<C::Time>,
-}
-
-impl<C: Cursor> WithLayout for BatchCursorFrontier<C> {
-    type Layout = (
-        <C::Layout as Layout>::KeyContainer,
-        <C::Layout as Layout>::ValContainer,
-        Vec<C::Time>,
-        <C::Layout as Layout>::DiffContainer,
-        <C::Layout as Layout>::OffsetContainer,
-    );
 }
 
 impl<C: Cursor> BatchCursorFrontier<C> {
@@ -149,6 +128,18 @@ impl<C: Cursor> BatchCursorFrontier<C> {
 impl<C: Cursor<Storage: BatchReader>> Cursor for BatchCursorFrontier<C> {
 
     type Storage = BatchFrontier<C::Storage>;
+
+    type Key<'a> = C::Key<'a>;
+    type ValOwn = C::ValOwn;
+    type Val<'a> = C::Val<'a>;
+    type KeyContainer = C::KeyContainer;
+    type ValContainer = C::ValContainer;
+    type DiffContainer = C::DiffContainer;
+    type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
+    type TimeContainer = Vec<C::Time>;
+    type Time = <Vec<C::Time> as BatchContainer>::Owned;
+    type TimeGat<'a> = <Vec<C::Time> as BatchContainer>::ReadItem<'a>;
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }

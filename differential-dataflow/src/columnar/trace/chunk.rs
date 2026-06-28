@@ -40,8 +40,9 @@ use timely::progress::frontier::AntichainRef;
 
 use crate::consolidation::Consolidate;
 use crate::lattice::Lattice;
+use crate::trace::Navigable;
 use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{BatchContainer, WithLayout};
+use crate::trace::implementations::{BatchContainer, Layout, WithLayout};
 
 use crate::columnar::layout::{ColumnarLayout, ColumnarUpdate, Coltainer};
 use crate::columnar::updates::{child_range, UpdatesBuilder, UpdatesTyped};
@@ -205,6 +206,18 @@ impl<U: ColumnarUpdate> WithLayout for ColChunkCursor<U> {
 impl<U: ColumnarUpdate> Cursor for ColChunkCursor<U> {
     type Storage = ColChunk<U>;
 
+    type KeyContainer = <ColumnarLayout<U> as Layout>::KeyContainer;
+    type Key<'a> = <<ColumnarLayout<U> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+    type ValContainer = <ColumnarLayout<U> as Layout>::ValContainer;
+    type Val<'a> = <<ColumnarLayout<U> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+    type ValOwn = <<ColumnarLayout<U> as Layout>::ValContainer as BatchContainer>::Owned;
+    type TimeContainer = <ColumnarLayout<U> as Layout>::TimeContainer;
+    type TimeGat<'a> = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+    type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
+    type DiffContainer = <ColumnarLayout<U> as Layout>::DiffContainer;
+    type DiffGat<'a> = <<ColumnarLayout<U> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+    type Diff = <<ColumnarLayout<U> as Layout>::DiffContainer as BatchContainer>::Owned;
+
     fn key_valid(&self, s: &Self::Storage) -> bool { self.key_cursor < s.trie().view().keys.values.len() }
     fn val_valid(&self, s: &Self::Storage) -> bool {
         let view = s.trie().view();
@@ -279,19 +292,24 @@ fn consolidated<U: ColumnarUpdate>(merged: UpdatesTyped<U>) -> UpdatesTyped<U> {
     if merged.diffs.values.len() == merged.times.values.len() { merged } else { merged.filter_zero() }
 }
 
-impl<U: ColumnarUpdate> Chunk for ColChunk<U>
+impl<U: ColumnarUpdate> Navigable for ColChunk<U>
 where U::Time: 'static {
     type Cursor = ColChunkCursor<U>;
-
-    const TARGET: usize = TARGET;
 
     fn cursor(&self) -> Self::Cursor {
         ColChunkCursor { key_cursor: 0, val_cursor: 0, phantom: PhantomData }
     }
+}
+
+impl<U: ColumnarUpdate> Chunk for ColChunk<U>
+where U::Time: 'static {
+    type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
+
+    const TARGET: usize = TARGET;
 
     fn bounds(&self) -> (
-        (Self::Key<'_>, Self::Val<'_>, Self::TimeGat<'_>),
-        (Self::Key<'_>, Self::Val<'_>, Self::TimeGat<'_>),
+        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
+        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
     ) {
         match self {
             ColChunk::Resident(rc) => {
@@ -530,6 +548,7 @@ mod test {
     use super::{ColChunk, Chunk};
     use crate::columnar::updates::UpdatesTyped;
     use crate::trace::chunk::merge_chains;
+    use crate::trace::Navigable;
 
     type Upd = (u64, u64, u64, i64);
 
@@ -625,7 +644,7 @@ mod test {
     #[test]
     fn cursor_handles_straddle() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::{BatchReader, Description};
+        use crate::trace::Description;
         use crate::trace::chunk::ChunkBatch;
         use timely::progress::Antichain;
 
@@ -656,7 +675,7 @@ mod test {
     // resumable merge -> advance -> settle pipeline end to end.
     #[test]
     fn batch_merger_resumable_matches_reference() {
-        use crate::trace::{BatchReader, Description, Merger};
+        use crate::trace::{Description, Merger};
         use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
         use crate::trace::cursor::Cursor;
         use crate::consolidation::consolidate_updates;

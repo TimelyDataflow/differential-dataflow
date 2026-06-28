@@ -55,9 +55,9 @@ use std::collections::VecDeque;
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 use crate::lattice::Lattice;
-use crate::trace::{Batch, BatchReader, Description};
+use crate::trace::{Batch, BatchReader, Description, Navigable};
 use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{BatchContainer, Layout, LayoutExt, WithLayout};
+use crate::trace::implementations::BatchContainer;
 
 pub mod vec;
 
@@ -70,36 +70,20 @@ pub mod vec;
 /// The "data" operations transform lists of chunks, are expected to do roughly
 /// "one chunk's worth" of work at a time; they can afford to compress and page.
 /// The "metadata" operations provide chunk information, and should be lightweight.
-pub trait Chunk: Sized + Clone + LayoutExt {
+pub trait Chunk: Navigable<Cursor: Cursor<Time = Self::Time>> + Sized + Clone {
+    /// The timestamp type of the chunk's updates.
+    ///
+    /// Key/val/diff opinions live on the chunk's [`Navigable::Cursor`]; the chunk itself only needs
+    /// time, to bound its interval and participate in advancement and compaction.
+    type Time: Lattice + timely::progress::Timestamp;
 
     /// The intended maximum chunk size.
     const TARGET: usize;
 
-    /// A cursor navigating this chunk's contents.
-    type Cursor:
-        Cursor<Storage = Self> +
-        WithLayout<Layout = Self::Layout> +
-        for<'a> LayoutExt<
-            Key<'a> = Self::Key<'a>,
-            Val<'a> = Self::Val<'a>,
-            ValOwn = Self::ValOwn,
-            Time = Self::Time,
-            TimeGat<'a> = Self::TimeGat<'a>,
-            Diff = Self::Diff,
-            DiffGat<'a> = Self::DiffGat<'a>,
-            KeyContainer = Self::KeyContainer,
-            ValContainer = Self::ValContainer,
-            TimeContainer = Self::TimeContainer,
-            DiffContainer = Self::DiffContainer,
-        >;
-
-    /// Acquire a cursor over this chunk.
-    fn cursor(&self) -> Self::Cursor;
-
     /// The first and last `(key, val, time)` triples in the chunk.
     fn bounds(&self) -> (
-        (Self::Key<'_>, Self::Val<'_>, Self::TimeGat<'_>),
-        (Self::Key<'_>, Self::Val<'_>, Self::TimeGat<'_>),
+        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
+        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
     );
 
     /// The number of updates in the chunk.
@@ -231,8 +215,8 @@ where
     }
 }
 
-type KeyCon<C> = <<C as WithLayout>::Layout as Layout>::KeyContainer;
-type ValCon<C> = <<C as WithLayout>::Layout as Layout>::ValContainer;
+type KeyCon<C> = <<C as Navigable>::Cursor as Cursor>::KeyContainer;
+type ValCon<C> = <<C as Navigable>::Cursor as Cursor>::ValContainer;
 
 /// A batch is a [`Chunk`] sequence plus a [`Description`].
 ///
@@ -269,15 +253,15 @@ impl<C: Chunk> ChunkBatch<C> {
     }
 }
 
-impl<C: Chunk> WithLayout for ChunkBatch<C> {
-    type Layout = C::Layout;
-}
-
-impl<C: Chunk> BatchReader for ChunkBatch<C> {
+impl<C: Chunk> crate::trace::Navigable for ChunkBatch<C> {
     type Cursor = ChunkBatchCursor<C>;
     fn cursor(&self) -> Self::Cursor {
         ChunkBatchCursor { key_chunk: 0, chunk: 0, inner: self.chunks.first().map(C::cursor) }
     }
+}
+
+impl<C: Chunk> BatchReader for ChunkBatch<C> {
+    type Time = C::Time;
     fn len(&self) -> usize { self.chunks.iter().map(C::len).sum() }
     fn description(&self) -> &Description<Self::Time> { &self.description }
 }
@@ -330,10 +314,6 @@ pub struct ChunkBatchCursor<C: Chunk> {
     inner: Option<C::Cursor>,
 }
 
-impl<C: Chunk> WithLayout for ChunkBatchCursor<C> {
-    type Layout = C::Layout;
-}
-
 impl<C: Chunk> ChunkBatchCursor<C> {
     /// Move the active chunk to `c`, opening a fresh inner cursor at its start.
     fn goto(&mut self, c: usize, storage: &ChunkBatch<C>) {
@@ -344,6 +324,18 @@ impl<C: Chunk> ChunkBatchCursor<C> {
 
 impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
     type Storage = ChunkBatch<C>;
+
+    type KeyContainer = <C::Cursor as Cursor>::KeyContainer;
+    type Key<'a> = <C::Cursor as Cursor>::Key<'a>;
+    type ValContainer = <C::Cursor as Cursor>::ValContainer;
+    type Val<'a> = <C::Cursor as Cursor>::Val<'a>;
+    type ValOwn = <C::Cursor as Cursor>::ValOwn;
+    type TimeContainer = <C::Cursor as Cursor>::TimeContainer;
+    type TimeGat<'a> = <C::Cursor as Cursor>::TimeGat<'a>;
+    type Time = <C::Cursor as Cursor>::Time;
+    type DiffContainer = <C::Cursor as Cursor>::DiffContainer;
+    type DiffGat<'a> = <C::Cursor as Cursor>::DiffGat<'a>;
+    type Diff = <C::Cursor as Cursor>::Diff;
 
     fn key_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.key_valid(&s.chunks[self.chunk])) }
     fn val_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.val_valid(&s.chunks[self.chunk])) }

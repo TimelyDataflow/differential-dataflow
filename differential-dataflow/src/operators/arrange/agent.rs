@@ -35,13 +35,9 @@ pub struct TraceAgent<Tr: TraceReader> {
     logging: Option<crate::logging::Logger>,
 }
 
-use crate::trace::implementations::WithLayout;
-impl<Tr: TraceReader> WithLayout for TraceAgent<Tr> {
-    type Layout = Tr::Layout;
-}
-
 impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
 
+    type Time = Tr::Time;
     type Batch = Tr::Batch;
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {

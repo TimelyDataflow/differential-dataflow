@@ -11,7 +11,7 @@ use crate::difference::{IsZero, Semigroup};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchReader, Cursor, TraceReader};
+use crate::trace::{BatchCursor, BatchDiff, BatchDiffGat, BatchReader, Cursor, Navigable, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
 pub trait CountTotal<'scope, T: Timestamp + TotalOrder + Lattice, K: ExchangeData, R: Semigroup> : Sized {
@@ -52,17 +52,18 @@ where
     }
 }
 
-impl<'scope, K, Tr> CountTotal<'scope, Tr::Time, K, Tr::Diff> for Arranged<'scope, Tr>
+impl<'scope, K, Tr> CountTotal<'scope, Tr::Time, K, BatchDiff<Tr>> for Arranged<'scope, Tr>
 where
-    Tr: for<'a> TraceReader<
+    Tr: TraceReader<Batch: Navigable, Time: TotalOrder> + Clone + 'static,
+    for<'a> BatchCursor<Tr>: Cursor<
         Key<'a> = &'a K,
-        Val<'a>=&'a (),
-        Time: TotalOrder,
-        Diff: ExchangeData+Semigroup<Tr::DiffGat<'a>>
-    >+Clone+'static,
+        Val<'a> = &'a (),
+        Time = Tr::Time,
+        Diff: ExchangeData + Semigroup<BatchDiffGat<'a, Tr>>,
+    >,
     K: ExchangeData,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<'scope, Tr::Time, (K, Tr::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<'scope, Tr::Time, (K, BatchDiff<Tr>), R2> {
 
         let mut trace = self.trace.clone();
 
@@ -74,7 +75,6 @@ where
 
             move |(input, _frontier), output| {
 
-                let mut batch_cursors = Vec::new();
                 let mut batch_storage = Vec::new();
 
                 // Downgrade previous upper limit to be current lower limit.
@@ -88,7 +88,6 @@ where
                     }
                     for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());  // NB: Assumes batches are in-order
-                        batch_cursors.push(batch.cursor());
                         batch_storage.push(batch);
                     }
                 });
@@ -97,18 +96,17 @@ where
 
                     let mut session = output.session(&capability);
 
-                    use crate::trace::cursor::CursorList;
-                    let mut batch_cursor = CursorList::new(batch_cursors, &batch_storage);
+                    let (mut batch_cursor, batch_storage) = crate::trace::cursor::cursor_list(batch_storage);
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
-                        let mut count: Option<Tr::Diff> = None;
+                        let mut count: Option<BatchDiff<Tr>> = None;
 
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.get_key(&trace_storage) == Some(key) {
                             trace_cursor.map_times(&trace_storage, |_, diff| {
                                 count.as_mut().map(|c| c.plus_equals(&diff));
-                                if count.is_none() { count = Some(Tr::owned_diff(diff)); }
+                                if count.is_none() { count = Some(<BatchCursor<Tr> as Cursor>::owned_diff(diff)); }
                             });
                         }
 
@@ -116,14 +114,14 @@ where
 
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.clone(), count.clone()), Tr::owned_time(time), R2::from(-1i8)));
+                                    session.give(((key.clone(), count.clone()), <BatchCursor<Tr> as Cursor>::owned_time(time), R2::from(-1i8)));
                                 }
                             }
                             count.as_mut().map(|c| c.plus_equals(&diff));
-                            if count.is_none() { count = Some(Tr::owned_diff(diff)); }
+                            if count.is_none() { count = Some(<BatchCursor<Tr> as Cursor>::owned_diff(diff)); }
                             if let Some(count) = count.as_ref() {
                                 if !count.is_zero() {
-                                    session.give(((key.clone(), count.clone()), Tr::owned_time(time), R2::from(1i8)));
+                                    session.give(((key.clone(), count.clone()), <BatchCursor<Tr> as Cursor>::owned_time(time), R2::from(1i8)));
                                 }
                             }
                         });
