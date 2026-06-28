@@ -62,8 +62,8 @@ impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
         self.physical_compaction.borrow()
     }
-    fn cursor_storage(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<Vec<Self::Batch>> {
-        self.trace.borrow_mut().trace.cursor_storage(frontier)
+    fn batches_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<Vec<Self::Batch>> {
+        self.trace.borrow_mut().trace.batches_through(frontier)
     }
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }
 }

@@ -69,12 +69,12 @@ where
         self.stash2.borrow()
     }
 
-    fn cursor_storage(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Self::Batch>> {
+    fn batches_through(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Self::Batch>> {
         self.stash1.clear();
         for time in upper.iter() {
             self.stash1.insert(time.clone().to_outer());
         }
-        let storage = self.trace.cursor_storage(self.stash1.borrow())?;
+        let storage = self.trace.batches_through(self.stash1.borrow())?;
         Some(storage.into_iter().map(|batch| BatchEnter::make_from(batch)).collect())
     }
 }

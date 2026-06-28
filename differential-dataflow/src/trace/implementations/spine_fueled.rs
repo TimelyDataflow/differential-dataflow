@@ -102,7 +102,7 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
     type Time = B::Time;
     type Batch = B;
 
-    fn cursor_storage(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
+    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
 
         // If `upper` is the minimum frontier, we can return an empty cursor.
         // This can happen with operators that are written to expect the ability to acquire cursors
