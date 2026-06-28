@@ -11,7 +11,7 @@ use crate::difference::{IsZero, Semigroup};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchCursor, BatchReader, Cursor, Navigable, TraceReader};
+use crate::trace::{BatchCursor, BatchDiff, BatchDiffGat, BatchReader, Cursor, Navigable, TraceReader};
 
 /// Extension trait for the `count` differential dataflow method.
 pub trait CountTotal<'scope, T: Timestamp + TotalOrder + Lattice, K: ExchangeData, R: Semigroup> : Sized {
@@ -52,19 +52,18 @@ where
     }
 }
 
-impl<'scope, K, Tr> CountTotal<'scope, Tr::Time, K, <BatchCursor<Tr> as Cursor>::Diff> for Arranged<'scope, Tr>
+impl<'scope, K, Tr> CountTotal<'scope, Tr::Time, K, BatchDiff<Tr>> for Arranged<'scope, Tr>
 where
-    Tr: TraceReader<Time: TotalOrder> + Clone + 'static,
-    Tr::Batch: Navigable,
+    Tr: TraceReader<Batch: Navigable, Time: TotalOrder> + Clone + 'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Key<'a> = &'a K,
         Val<'a> = &'a (),
         Time = Tr::Time,
-        Diff: ExchangeData + Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>,
+        Diff: ExchangeData + Semigroup<BatchDiffGat<'a, Tr>>,
     >,
     K: ExchangeData,
 {
-    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<'scope, Tr::Time, (K, <BatchCursor<Tr> as Cursor>::Diff), R2> {
+    fn count_total_core<R2: Semigroup + From<i8> + 'static>(self) -> VecCollection<'scope, Tr::Time, (K, BatchDiff<Tr>), R2> {
 
         let mut trace = self.trace.clone();
 
@@ -101,7 +100,7 @@ where
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
-                        let mut count: Option<<BatchCursor<Tr> as Cursor>::Diff> = None;
+                        let mut count: Option<BatchDiff<Tr>> = None;
 
                         trace_cursor.seek_key(&trace_storage, key);
                         if trace_cursor.get_key(&trace_storage) == Some(key) {

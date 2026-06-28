@@ -1,8 +1,7 @@
 use differential_dataflow::{ExchangeData, VecCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchCursor, Navigable, TraceReader};
-use differential_dataflow::trace::Cursor;
+use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchDiffGat, Cursor, Navigable, TraceReader};
 
 /// Proposes extensions to a prefix stream.
 ///
@@ -13,17 +12,16 @@ use differential_dataflow::trace::Cursor;
 /// `arrangement` undergoes. More complicated patterns are also appropriate, as in the case
 /// of delta queries.
 pub fn propose<'scope, Tr, K, F, P, V>(
-    prefixes: VecCollection<'scope, Tr::Time, P, <BatchCursor<Tr> as Cursor>::Diff>,
+    prefixes: VecCollection<'scope, Tr::Time, P, BatchDiff<Tr>>,
     arrangement: Arranged<'scope, Tr>,
     key_selector: F,
-) -> VecCollection<'scope, Tr::Time, (P, V), <BatchCursor<Tr> as Cursor>::Diff>
+) -> VecCollection<'scope, Tr::Time, (P, V), BatchDiff<Tr>>
 where
-    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
-    Tr::Batch: Navigable,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Time = Tr::Time,
         ValOwn = V,
-        Diff: Monoid+Multiply<Output = <BatchCursor<Tr> as Cursor>::Diff>+ExchangeData+Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>,
+        Diff: Monoid+Multiply<Output = BatchDiff<Tr>>+ExchangeData+Semigroup<BatchDiffGat<'a, Tr>>,
     >,
     <BatchCursor<Tr> as Cursor>::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     K: Hashable + Default + Ord + 'static,
@@ -48,17 +46,16 @@ where
 /// prefixes by the number of matches in `arrangement`. This can be useful to
 /// avoid the need to prepare an arrangement of distinct extensions.
 pub fn propose_distinct<'scope, Tr, K, F, P, V>(
-    prefixes: VecCollection<'scope, Tr::Time, P, <BatchCursor<Tr> as Cursor>::Diff>,
+    prefixes: VecCollection<'scope, Tr::Time, P, BatchDiff<Tr>>,
     arrangement: Arranged<'scope, Tr>,
     key_selector: F,
-) -> VecCollection<'scope, Tr::Time, (P, V), <BatchCursor<Tr> as Cursor>::Diff>
+) -> VecCollection<'scope, Tr::Time, (P, V), BatchDiff<Tr>>
 where
-    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
-    Tr::Batch: Navigable,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Time = Tr::Time,
         ValOwn = V,
-        Diff : Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>+Monoid+Multiply<Output = <BatchCursor<Tr> as Cursor>::Diff>+ExchangeData,
+        Diff : Semigroup<BatchDiffGat<'a, Tr>>+Monoid+Multiply<Output = BatchDiff<Tr>>+ExchangeData,
     >,
     <BatchCursor<Tr> as Cursor>::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     K: Hashable + Default + Ord + 'static,

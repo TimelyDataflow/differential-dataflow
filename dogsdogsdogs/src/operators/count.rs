@@ -1,8 +1,7 @@
 use differential_dataflow::{ExchangeData, VecCollection, Hashable};
 use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchCursor, Navigable, TraceReader};
-use differential_dataflow::trace::Cursor;
+use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchDiffGat, Cursor, Navigable, TraceReader};
 
 /// Reports a number of extensions to a stream of prefixes.
 ///
@@ -17,11 +16,10 @@ pub fn count<'scope, Tr, K, R, F, P>(
     index: usize,
 ) -> VecCollection<'scope, Tr::Time, (P, usize, usize), R>
 where
-    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
-    Tr::Batch: Navigable,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
     BatchCursor<Tr>: Cursor<Time = Tr::Time, Diff=isize>,
     <BatchCursor<Tr> as Cursor>::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
-    for<'a> <BatchCursor<Tr> as Cursor>::Diff : Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>,
+    for<'a> BatchDiff<Tr> : Semigroup<BatchDiffGat<'a, Tr>>,
     K: Hashable + Ord + Default + 'static,
     R: Monoid+Multiply<Output = R>+ExchangeData,
     F: Fn(&P)->K+Clone+'static,

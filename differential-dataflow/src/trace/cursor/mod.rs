@@ -37,6 +37,19 @@ pub trait Navigable {
 /// The cursor type for a trace's batches.
 pub type BatchCursor<Tr> = <<Tr as crate::trace::TraceReader>::Batch as Navigable>::Cursor;
 
+/// The borrowed key type of a trace's batch cursor.
+pub type BatchKey<'a, Tr> = <BatchCursor<Tr> as Cursor>::Key<'a>;
+/// The borrowed val type of a trace's batch cursor.
+pub type BatchVal<'a, Tr> = <BatchCursor<Tr> as Cursor>::Val<'a>;
+/// The owned val type of a trace's batch cursor.
+pub type BatchValOwn<Tr> = <BatchCursor<Tr> as Cursor>::ValOwn;
+/// The borrowed diff type of a trace's batch cursor.
+pub type BatchDiffGat<'a, Tr> = <BatchCursor<Tr> as Cursor>::DiffGat<'a>;
+/// The owned diff type of a trace's batch cursor.
+pub type BatchDiff<Tr> = <BatchCursor<Tr> as Cursor>::Diff;
+/// The borrowed time type of a trace's batch cursor.
+pub type BatchTimeGat<'a, Tr> = <BatchCursor<Tr> as Cursor>::TimeGat<'a>;
+
 /// Assembles a merged cursor over a sequence of batches.
 ///
 /// The batches become the cursor's storage and are returned alongside the cursor; they must be kept
@@ -79,13 +92,13 @@ pub trait Cursor {
     type DiffContainer: for<'a> BatchContainer<ReadItem<'a> = Self::DiffGat<'a>, Owned = Self::Diff>;
 
     /// Construct an owned val from a reference.
-    fn owned_val(val: Self::Val<'_>) -> Self::ValOwn;
+    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <Self::ValContainer as BatchContainer>::into_owned(val) }
     /// Construct an owned time from a reference.
-    fn owned_time(time: Self::TimeGat<'_>) -> Self::Time;
+    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Self::TimeContainer as BatchContainer>::into_owned(time) }
     /// Construct an owned diff from a reference.
-    fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff;
+    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <Self::DiffContainer as BatchContainer>::into_owned(diff) }
     /// Clones a reference time onto an owned time.
-    fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time);
+    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <Self::TimeContainer as BatchContainer>::clone_onto(time, onto) }
 
     /// Indicates if the current key is valid.
     ///

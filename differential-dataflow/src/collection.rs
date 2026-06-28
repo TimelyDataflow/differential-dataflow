@@ -329,7 +329,7 @@ pub mod vec {
     use crate::difference::{Semigroup, Abelian, Multiply};
     use crate::lattice::Lattice;
     use crate::hashable::Hashable;
-    use crate::trace::{BatchCursor, Navigable};
+    use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchVal, Navigable};
     use crate::trace::Cursor;
 
     /// An evolving collection of values of type `D`, backed by Rust `Vec` types as containers.
@@ -783,11 +783,10 @@ pub mod vec {
         /// ```
         pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<'scope, TraceAgent<T2>>
         where
-            T2: Trace<Time=T>+'static,
-            T2::Batch: Navigable,
+            T2: Trace<Batch: Navigable, Time=T>+'static,
             for<'a> BatchCursor<T2>: Cursor<Key<'a>= &'a K, ValOwn = V, Time = T2::Time, Diff: Abelian>,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, <BatchCursor<T2> as Cursor>::Diff)>, Output = T2::Batch>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V, <BatchCursor<T2> as Cursor>::Diff)>)+'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output = T2::Batch>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(V, BatchDiff<T2>)>)+'static,
         {
             self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
                 if !input.is_empty() { logic(key, input, change); }
@@ -804,11 +803,10 @@ pub mod vec {
         pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<'scope, TraceAgent<T2>>
         where
             V: Clone+'static,
-            T2: Trace<Time=T>+'static,
-            T2::Batch: Navigable,
+            T2: Trace<Batch: Navigable, Time=T>+'static,
             for<'a> BatchCursor<T2>: Cursor<Key<'a>=&'a K, ValOwn = V, Time = T2::Time>,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, <BatchCursor<T2> as Cursor>::Diff)>, Output = T2::Batch>,
-            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,<BatchCursor<T2> as Cursor>::Diff)>, &mut Vec<(V, <BatchCursor<T2> as Cursor>::Diff)>)+'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output = T2::Batch>,
+            L: FnMut(&K, &[(&V, R)], &mut Vec<(V,BatchDiff<T2>)>, &mut Vec<(V, BatchDiff<T2>)>)+'static,
         {
             self.arrange_by_key_named(&format!("Arrange: {}", name))
                 .reduce_core::<_,Bu,_,_>(
@@ -968,11 +966,10 @@ pub mod vec {
         pub fn consolidate_named<Ba, Bu, Tr, F>(self, name: &str, reify: F) -> Self
         where
             Ba: crate::trace::Batcher<Output=Vec<((D, ()), T, R)>, Time=T> + 'static,
-            Tr: crate::trace::Trace<Time=T>+'static,
-            Tr::Batch: Navigable,
+            Tr: crate::trace::Trace<Batch: Navigable, Time=T>+'static,
             for<'a> BatchCursor<Tr>: Cursor<Time=Tr::Time, Diff=R>,
             Bu: crate::trace::Builder<Time=Tr::Time, Input=Vec<((D, ()), T, R)>, Output=Tr::Batch>,
-            F: Fn(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>) -> D + 'static,
+            F: Fn(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> D + 'static,
         {
             use crate::operators::arrange::arrangement::Arrange;
             self.map(|k| (k, ()))
@@ -1247,15 +1244,14 @@ pub mod vec {
         /// ```
         pub fn join_core<Tr2,I,L,R2> (self, stream2: Arranged<'scope, Tr2>, result: L) -> Collection<'scope, T,I::Item,<R as Multiply<R2>>::Output>
         where
-            Tr2: crate::trace::TraceReader<Time=T>+Clone+'static,
-            Tr2::Batch: Navigable,
+            Tr2: crate::trace::TraceReader<Batch: Navigable, Time=T>+Clone+'static,
             for<'a> BatchCursor<Tr2>: Cursor<Key<'a>=&'a K>,
             // Pin the cursor diff to a named param `R2`: a `Multiply` bound on a projection does not
             // connect to its use-site (the solver normalizes the use but not the bound's subject).
             BatchCursor<Tr2>: Cursor<Diff = R2, Time = T>,
             R: Multiply<R2, Output: Semigroup+'static>,
             I: IntoIterator<Item: crate::Data>,
-            L: FnMut(&K,&V,<BatchCursor<Tr2> as Cursor>::Val<'_>)->I+'static,
+            L: FnMut(&K,&V,BatchVal<'_, Tr2>)->I+'static,
         {
             self.arrange_by_key()
                 .join_core(stream2, result)

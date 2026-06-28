@@ -4,7 +4,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use crate::lattice::Lattice;
-use crate::trace::{TraceReader, BatchReader, Description, BatchCursor};
+use crate::trace::{BatchKey, BatchReader, BatchTimeGat, BatchVal, Description, Navigable, TraceReader};
 use crate::trace::cursor::Cursor;
 
 /// Wrapper to provide trace to nested scope.
@@ -42,11 +42,10 @@ where
 
 impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
-    Tr: TraceReader,
-    Tr::Batch: Navigable,
+    Tr: TraceReader<Batch: Navigable>,
     TInner: Refines<Tr::Time>+Lattice,
     F: 'static,
-    F: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>, <BatchCursor<Tr> as Cursor>::TimeGat<'_>)->TInner+Clone,
+    F: FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>, BatchTimeGat<'_, Tr>)->TInner+Clone,
     G: FnMut(&TInner)->Tr::Time+Clone+'static,
 {
     type Time = TInner;
@@ -126,7 +125,6 @@ pub struct BatchEnter<B, TInner, F> {
     logic: F,
 }
 
-use crate::trace::Navigable;
 impl<B, TInner, F> Navigable for BatchEnter<B, TInner, F>
 where
     B: BatchReader + Navigable,
@@ -208,10 +206,6 @@ where
     type TimeContainer = Vec<TInner>;
     type Time = <Vec<TInner> as BatchContainer>::Owned;
     type TimeGat<'a> = <Vec<TInner> as BatchContainer>::ReadItem<'a>;
-    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { C::owned_val(val) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Vec<TInner> as BatchContainer>::into_owned(time) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <Vec<TInner> as BatchContainer>::clone_onto(time, onto) }
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }

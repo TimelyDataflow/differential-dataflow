@@ -14,7 +14,7 @@ use crate::difference::{Semigroup, Abelian};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchCursor, BatchReader, Cursor, Navigable, TraceReader};
+use crate::trace::{BatchCursor, BatchDiff, BatchDiffGat, BatchKey, BatchReader, Cursor, Navigable, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait ThresholdTotal<'scope, T: Timestamp + TotalOrder + Lattice, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
@@ -98,22 +98,21 @@ where
     }
 }
 
-impl<'scope, K, Tr> ThresholdTotal<'scope, Tr::Time, K, <BatchCursor<Tr> as Cursor>::Diff> for Arranged<'scope, Tr>
+impl<'scope, K, Tr> ThresholdTotal<'scope, Tr::Time, K, BatchDiff<Tr>> for Arranged<'scope, Tr>
 where
-    Tr: TraceReader<Time: TotalOrder> + Clone + 'static,
-    Tr::Batch: Navigable,
+    Tr: TraceReader<Batch: Navigable, Time: TotalOrder> + Clone + 'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Key<'a>=&'a K,
         Val<'a>=&'a (),
         Time = Tr::Time,
-        Diff : ExchangeData + Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>,
+        Diff : ExchangeData + Semigroup<BatchDiffGat<'a, Tr>>,
     >,
     K: ExchangeData,
 {
     fn threshold_semigroup<R2, F>(self, mut thresh: F) -> VecCollection<'scope, Tr::Time, K, R2>
     where
         R2: Semigroup+'static,
-        F: for<'a> FnMut(<BatchCursor<Tr> as Cursor>::Key<'a>,&<BatchCursor<Tr> as Cursor>::Diff,Option<&<BatchCursor<Tr> as Cursor>::Diff>)->Option<R2>+'static,
+        F: for<'a> FnMut(BatchKey<'a, Tr>,&BatchDiff<Tr>,Option<&BatchDiff<Tr>>)->Option<R2>+'static,
     {
 
         let mut trace = self.trace.clone();
@@ -151,7 +150,7 @@ where
                     let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
-                        let mut count: Option<<BatchCursor<Tr> as Cursor>::Diff> = None;
+                        let mut count: Option<BatchDiff<Tr>> = None;
 
                         // Compute the multiplicity of this key before the current batch.
                         trace_cursor.seek_key(&trace_storage, key);

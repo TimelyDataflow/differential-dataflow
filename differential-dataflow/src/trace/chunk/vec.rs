@@ -132,10 +132,6 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
     type DiffContainer = <Vector<((K, V), T, R)> as Layout>::DiffContainer;
     type DiffGat<'a> = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
     type Diff = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::Owned;
-    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::into_owned(val) }
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::into_owned(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::into_owned(diff) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::clone_onto(time, onto) }
 
     fn key_valid(&self, s: &Self::Storage) -> bool { self.key_pos < s.0.len() }
     fn val_valid(&self, s: &Self::Storage) -> bool {

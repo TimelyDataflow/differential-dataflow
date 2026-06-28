@@ -29,8 +29,7 @@ where
     bidijkstra_arranged(forward, reverse, goals)
 }
 
-use crate::trace::{BatchCursor, Navigable, TraceReader};
-use crate::trace::Cursor;
+use crate::trace::{BatchCursor, Cursor, Navigable, TraceReader};
 use crate::operators::arrange::Arranged;
 
 /// Bi-directional Dijkstra search using arranged forward and reverse edge collections.
@@ -41,8 +40,7 @@ pub fn bidijkstra_arranged<'scope, N, Tr>(
 ) -> VecCollection<'scope, Tr::Time, ((N,N), u32)>
 where
     N: ExchangeData+Hash,
-    Tr: TraceReader+Clone+'static,
-    Tr::Batch: Navigable,
+    Tr: TraceReader<Batch: Navigable>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Time=Tr::Time, Diff=isize>,
 {
     let outer = forward.stream.scope();

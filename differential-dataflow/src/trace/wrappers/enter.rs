@@ -5,7 +5,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use crate::lattice::Lattice;
-use crate::trace::{TraceReader, BatchReader, Description};
+use crate::trace::{BatchReader, Description, Navigable, TraceReader};
 use crate::trace::cursor::Cursor;
 
 /// Wrapper to provide trace to nested scope.
@@ -102,7 +102,6 @@ pub struct BatchEnter<B, TInner> {
     description: Description<TInner>,
 }
 
-use crate::trace::Navigable;
 impl<B, TInner> Navigable for BatchEnter<B, TInner>
 where
     B: BatchReader + Navigable,
@@ -178,10 +177,6 @@ where
     type TimeContainer = Vec<TInner>;
     type Time = <Vec<TInner> as BatchContainer>::Owned;
     type TimeGat<'a> = <Vec<TInner> as BatchContainer>::ReadItem<'a>;
-    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { C::owned_val(val) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Vec<TInner> as BatchContainer>::into_owned(time) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <Vec<TInner> as BatchContainer>::clone_onto(time, onto) }
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }

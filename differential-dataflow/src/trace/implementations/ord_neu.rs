@@ -591,10 +591,6 @@ pub mod val_batch {
         type DiffContainer = <L as Layout>::DiffContainer;
         type DiffGat<'a> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
         type Diff = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
-        #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <<L as Layout>::ValContainer as BatchContainer>::into_owned(val) }
-        #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <<L as Layout>::TimeContainer as BatchContainer>::into_owned(time) }
-        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <<L as Layout>::DiffContainer as BatchContainer>::into_owned(diff) }
-        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <<L as Layout>::TimeContainer as BatchContainer>::clone_onto(time, onto) }
 
         fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
         fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
@@ -1017,10 +1013,6 @@ pub mod key_batch {
         type DiffContainer = <L as Layout>::DiffContainer;
         type DiffGat<'a> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
         type Diff = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
-        #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <<L as Layout>::ValContainer as BatchContainer>::into_owned(val) }
-        #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <<L as Layout>::TimeContainer as BatchContainer>::into_owned(time) }
-        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <<L as Layout>::DiffContainer as BatchContainer>::into_owned(diff) }
-        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <<L as Layout>::TimeContainer as BatchContainer>::clone_onto(time, onto) }
 
         fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
         fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }

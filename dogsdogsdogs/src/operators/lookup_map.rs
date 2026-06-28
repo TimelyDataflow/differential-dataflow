@@ -8,7 +8,7 @@ use timely::progress::Antichain;
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchCursor, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchDiffGat, BatchVal, Cursor, Navigable, TraceReader};
 use differential_dataflow::trace::implementations::BatchContainer;
 
 /// Proposes extensions to a stream of prefixes.
@@ -26,11 +26,10 @@ pub fn lookup_map<'scope, D, K, R, Tr, F, DOut, ROut, S>(
     supplied_key2: K,
 ) -> VecCollection<'scope, Tr::Time, DOut, ROut>
 where
-    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
-    Tr::Batch: Navigable,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Time = Tr::Time,
-        Diff : Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>+Monoid+ExchangeData,
+        Diff : Semigroup<BatchDiffGat<'a, Tr>>+Monoid+ExchangeData,
     >,
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
     K: Hashable + Ord + 'static,
@@ -39,7 +38,7 @@ where
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid + 'static,
-    S: FnMut(&D, &R, <BatchCursor<Tr> as Cursor>::Val<'_>, &<BatchCursor<Tr> as Cursor>::Diff)->(DOut, ROut)+'static,
+    S: FnMut(&D, &R, BatchVal<'_, Tr>, &BatchDiff<Tr>)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -99,7 +98,7 @@ where
                             cursor.seek_key(&storage, key_con.index(1));
                             if cursor.get_key(&storage) == Some(key_con.index(1)) {
                                 while let Some(value) = cursor.get_val(&storage) {
-                                    let mut count = <BatchCursor<Tr> as Cursor>::Diff::zero();
+                                    let mut count = BatchDiff::<Tr>::zero();
                                     cursor.map_times(&storage, |t, d| {
                                         if <BatchCursor<Tr> as Cursor>::owned_time(t).less_equal(time) { count.plus_equals(&d); }
                                     });

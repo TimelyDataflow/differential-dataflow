@@ -21,7 +21,7 @@ use crate::lattice::Lattice;
 use crate::logging::Logger;
 pub use self::cursor::Cursor;
 pub use self::cursor::Navigable;
-pub use self::cursor::BatchCursor;
+pub use self::cursor::{BatchCursor, BatchKey, BatchVal, BatchValOwn, BatchDiff, BatchDiffGat, BatchTimeGat};
 use self::cursor::CursorList;
 pub use self::description::Description;
 
@@ -378,10 +378,6 @@ pub mod rc_blanket_impls {
         type ValContainer = C::ValContainer;
         type TimeContainer = C::TimeContainer;
         type DiffContainer = C::DiffContainer;
-        #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { C::owned_val(val) }
-        #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
-        #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-        #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { C::clone_time_onto(time, onto) }
 
         #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
         #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }

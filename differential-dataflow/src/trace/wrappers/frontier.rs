@@ -8,7 +8,7 @@
 
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use crate::trace::{TraceReader, BatchReader, Description};
+use crate::trace::{BatchReader, Description, Navigable, TraceReader};
 use crate::trace::cursor::Cursor;
 use crate::lattice::Lattice;
 
@@ -76,7 +76,6 @@ pub struct BatchFrontier<B: BatchReader> {
     until: Antichain<B::Time>,
 }
 
-use crate::trace::Navigable;
 impl<B> Navigable for BatchFrontier<B>
 where
     B: BatchReader + Navigable,
@@ -141,10 +140,6 @@ impl<C: Cursor<Storage: BatchReader>> Cursor for BatchCursorFrontier<C> {
     type TimeContainer = Vec<C::Time>;
     type Time = <Vec<C::Time> as BatchContainer>::Owned;
     type TimeGat<'a> = <Vec<C::Time> as BatchContainer>::ReadItem<'a>;
-    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { C::owned_val(val) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <Vec<C::Time> as BatchContainer>::into_owned(time) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <Vec<C::Time> as BatchContainer>::clone_onto(time, onto) }
 
     #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
     #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }

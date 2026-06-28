@@ -70,8 +70,7 @@
 
 
 use crate::logging::Logger;
-use crate::trace::{Batch, Trace, TraceReader, ExertionLogic};
-use crate::trace::Merger;
+use crate::trace::{Batch, ExertionLogic, Merger, Trace, TraceReader};
 
 use ::timely::dataflow::operators::generic::OperatorInfo;
 use ::timely::progress::{Antichain, frontier::AntichainRef};

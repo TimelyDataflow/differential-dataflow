@@ -336,10 +336,6 @@ impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
     type DiffContainer = <C::Cursor as Cursor>::DiffContainer;
     type DiffGat<'a> = <C::Cursor as Cursor>::DiffGat<'a>;
     type Diff = <C::Cursor as Cursor>::Diff;
-    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { <C::Cursor as Cursor>::owned_val(val) }
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { <C::Cursor as Cursor>::owned_time(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { <C::Cursor as Cursor>::owned_diff(diff) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { <C::Cursor as Cursor>::clone_time_onto(time, onto) }
 
     fn key_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.key_valid(&s.chunks[self.chunk])) }
     fn val_valid(&self, s: &Self::Storage) -> bool { self.chunk < s.chunks.len() && self.inner.as_ref().is_some_and(|i| i.val_valid(&s.chunks[self.chunk])) }

@@ -13,9 +13,8 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::operators::arrange::{Arranged, TraceAgent};
-use crate::trace::{BatchCursor, BatchReader, Cursor, Navigable, Trace, Builder, ExertionLogic, Description};
+use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
 use crate::trace::implementations::containers::BatchContainer;
-use crate::trace::TraceReader;
 
 /// A key-wise reduction of values in an input trace.
 ///
@@ -32,15 +31,13 @@ use crate::trace::TraceReader;
 /// key's computation to another, and will likely introduce non-determinism.
 pub fn reduce_trace<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, mut logic: L, mut push: P) -> Arranged<'scope, TraceAgent<Tr2>>
 where
-    Tr1: TraceReader + 'static,
-    Tr1::Batch: Navigable,
-    Tr2: Trace<Time = Tr1::Time> + 'static,
-    Tr2::Batch: Navigable,
+    Tr1: TraceReader<Batch: Navigable> + 'static,
+    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
     BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
-    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>, ValOwn: Data, Time = Tr2::Time>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, ValOwn: Data, Time = Tr2::Time>,
     Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default>,
-    L: FnMut(<BatchCursor<Tr1> as Cursor>::Key<'_>, &[(<BatchCursor<Tr1> as Cursor>::Val<'_>, <BatchCursor<Tr1> as Cursor>::Diff)], &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>)+'static,
-    P: FnMut(&mut Bu::Input, <BatchCursor<Tr1> as Cursor>::Key<'_>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, Tr2::Time, <BatchCursor<Tr2> as Cursor>::Diff)>) + 'static,
+    L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+    P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
 {
     let mut result_trace = None;
 
@@ -135,7 +132,7 @@ where
                         // Prepare an output buffer and builder for each capability.
                         // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
                         //       this as long as it requires that there is only one capability for each message.
-                        let mut buffers = Vec::<(Tr1::Time, Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, Tr1::Time, <BatchCursor<Tr2> as Cursor>::Diff)>)>::new();
+                        let mut buffers = Vec::<(Tr1::Time, Vec<(BatchValOwn<Tr2>, Tr1::Time, BatchDiff<Tr2>)>)>::new();
                         let mut builders = Vec::new();
                         for cap in capabilities.iter() {
                             buffers.push((cap.time().clone(), Vec::new()));

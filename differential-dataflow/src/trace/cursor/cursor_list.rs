@@ -109,10 +109,6 @@ impl<C: Cursor> Cursor for CursorList<C> {
     type ValContainer = C::ValContainer;
     type TimeContainer = C::TimeContainer;
     type DiffContainer = C::DiffContainer;
-    #[inline(always)] fn owned_val(val: Self::Val<'_>) -> Self::ValOwn { C::owned_val(val) }
-    #[inline(always)] fn owned_time(time: Self::TimeGat<'_>) -> Self::Time { C::owned_time(time) }
-    #[inline(always)] fn owned_diff(diff: Self::DiffGat<'_>) -> Self::Diff { C::owned_diff(diff) }
-    #[inline(always)] fn clone_time_onto(time: Self::TimeGat<'_>, onto: &mut Self::Time) { C::clone_time_onto(time, onto) }
 
     // validation methods
     #[inline]

@@ -18,16 +18,14 @@ where
     bfs_arranged(edges, roots)
 }
 
-use crate::trace::{BatchCursor, Navigable, TraceReader};
-use crate::trace::Cursor;
+use crate::trace::{BatchCursor, Cursor, Navigable, TraceReader};
 use crate::operators::arrange::Arranged;
 
 /// Returns pairs (node, dist) indicating distance of each node from a root.
 pub fn bfs_arranged<'scope, N, Tr>(edges: Arranged<'scope, Tr>, roots: VecCollection<'scope, Tr::Time, N>) -> VecCollection<'scope, Tr::Time, (N, u32)>
 where
     N: ExchangeData+Hash,
-    Tr: TraceReader+Clone+'static,
-    Tr::Batch: Navigable,
+    Tr: TraceReader<Batch: Navigable>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Time=Tr::Time, Diff=isize>,
 {
     // initialize roots as reaching themselves at distance 0
