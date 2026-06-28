@@ -43,7 +43,7 @@ where
     N: ExchangeData+Hash,
     Tr: TraceReader+Clone+'static,
     Tr::Batch: Navigable,
-    for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Time=Tr::Time, Diff=isize>,
 {
     let outer = forward.stream.scope();
     outer.iterative::<u64,_,_>(|inner| {

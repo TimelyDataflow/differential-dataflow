@@ -87,6 +87,7 @@ where
     R: ExchangeData + Monoid,
     Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::Batch: Navigable,
+    BatchCursor<Tr>: Cursor<Time = Tr::Time>,
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
     R: Mul<<BatchCursor<Tr> as Cursor>::Diff, Output: Semigroup>,
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
@@ -154,6 +155,7 @@ where
     R: ExchangeData + Monoid,
     Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::Batch: Navigable,
+    BatchCursor<Tr>: Cursor<Time = Tr::Time>,
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
     CF: Fn(<BatchCursor<Tr> as Cursor>::TimeGat<'_>, &Tr::Time) -> bool + 'static,
@@ -315,6 +317,7 @@ fn process_proposals<Tr, CF, Y, S, CB, K, V, R>(
 where
     Tr: TraceReader,
     Tr::Batch: Navigable,
+    BatchCursor<Tr>: Cursor<Time = Tr::Time>,
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
     CF: Fn(<BatchCursor<Tr> as Cursor>::TimeGat<'_>, &Tr::Time) -> bool + 'static,
     Y: Fn(Instant, usize) -> bool + 'static,

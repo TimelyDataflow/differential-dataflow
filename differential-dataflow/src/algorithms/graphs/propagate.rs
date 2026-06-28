@@ -61,7 +61,7 @@ where
     L: ExchangeData,
     Tr: TraceReader<Time: Hash>+Clone+'static,
     Tr::Batch: Navigable,
-    for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Diff=R>,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Time=Tr::Time, Diff=R>,
     F: Fn(&L)->u64+Clone+'static,
 {
     // Morally the code performs the following iterative computation. However, in the interest of a simplified

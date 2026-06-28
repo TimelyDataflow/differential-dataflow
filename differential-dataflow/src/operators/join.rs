@@ -72,7 +72,8 @@ where
     Tr1::Batch: Navigable,
     Tr2: TraceReader<Time = Tr1::Time>+'static,
     Tr2::Batch: Navigable,
-    for<'a> BatchCursor<Tr2>: Cursor<Key<'a>=<BatchCursor<Tr1> as Cursor>::Key<'a>>,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a>=<BatchCursor<Tr1> as Cursor>::Key<'a>, Time = Tr1::Time>,
     L: FnMut(<BatchCursor<Tr1> as Cursor>::Key<'_>,<BatchCursor<Tr1> as Cursor>::Val<'_>,<BatchCursor<Tr2> as Cursor>::Val<'_>,Tr1::Time,&<BatchCursor<Tr1> as Cursor>::Diff,&<BatchCursor<Tr2> as Cursor>::Diff,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
     CB: ContainerBuilder,
 {

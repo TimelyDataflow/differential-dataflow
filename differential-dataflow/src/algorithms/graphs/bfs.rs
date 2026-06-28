@@ -28,7 +28,7 @@ where
     N: ExchangeData+Hash,
     Tr: TraceReader+Clone+'static,
     Tr::Batch: Navigable,
-    for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Diff=isize>,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Time=Tr::Time, Diff=isize>,
 {
     // initialize roots as reaching themselves at distance 0
     let nodes = roots.map(|x| (x, 0));

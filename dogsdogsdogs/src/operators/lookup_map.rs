@@ -29,6 +29,7 @@ where
     Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::Batch: Navigable,
     for<'a> BatchCursor<Tr>: Cursor<
+        Time = Tr::Time,
         Diff : Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>+Monoid+ExchangeData,
     >,
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,

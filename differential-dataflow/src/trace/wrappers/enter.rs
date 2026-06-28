@@ -107,6 +107,7 @@ impl<B, TInner> Navigable for BatchEnter<B, TInner>
 where
     B: BatchReader + Navigable,
     TInner: Refines<B::Time>+Lattice,
+    TInner: Refines<<B::Cursor as Cursor>::Time>,
 {
     type Cursor = BatchCursorEnter<B::Cursor, TInner>;
 

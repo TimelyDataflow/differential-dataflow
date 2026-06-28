@@ -21,6 +21,7 @@ where
     Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::Batch: Navigable,
     for<'a> BatchCursor<Tr>: Cursor<
+        Time = Tr::Time,
         ValOwn = V,
         Diff: Monoid+Multiply<Output = <BatchCursor<Tr> as Cursor>::Diff>+ExchangeData+Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>,
     >,
@@ -55,6 +56,7 @@ where
     Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::Batch: Navigable,
     for<'a> BatchCursor<Tr>: Cursor<
+        Time = Tr::Time,
         ValOwn = V,
         Diff : Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>+Monoid+Multiply<Output = <BatchCursor<Tr> as Cursor>::Diff>+ExchangeData,
     >,

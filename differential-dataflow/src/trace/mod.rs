@@ -212,12 +212,12 @@ pub trait Trace : TraceReader<Batch: Batch> {
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader : Navigable<Cursor: Cursor<Time = Self::Time>> + Sized {
+pub trait BatchReader : Sized {
 
     /// The timestamp type of the batch's updates.
     ///
-    /// Key/val/diff opinions live on the batch's [`Navigable::Cursor`]; the batch itself only needs
-    /// time, to describe its interval and to participate in compaction.
+    /// A batch carries only time; navigating its contents is the separate, optional [`Navigable`]
+    /// capability, which an operator requests with a `Self: Navigable` bound when it needs a cursor.
     type Time: Timestamp + Lattice;
 
     /// The number of updates in the batch.

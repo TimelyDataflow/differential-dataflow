@@ -43,6 +43,7 @@ where
 impl<Tr, TInner, F, G> TraceReader for TraceEnter<Tr, TInner, F, G>
 where
     Tr: TraceReader,
+    Tr::Batch: Navigable,
     TInner: Refines<Tr::Time>+Lattice,
     F: 'static,
     F: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>, <BatchCursor<Tr> as Cursor>::TimeGat<'_>)->TInner+Clone,
@@ -130,6 +131,7 @@ impl<B, TInner, F> Navigable for BatchEnter<B, TInner, F>
 where
     B: BatchReader + Navigable,
     TInner: Refines<B::Time>+Lattice,
+    TInner: Refines<<B::Cursor as Cursor>::Time>,
     F: FnMut(<B::Cursor as Cursor>::Key<'_>, <B::Cursor as Cursor>::Val<'_>, <B::Cursor as Cursor>::TimeGat<'_>)->TInner+Clone,
 {
     type Cursor = BatchCursorEnter<B::Cursor, TInner, F>;
@@ -141,7 +143,7 @@ where
 
 impl<B, TInner, F> BatchReader for BatchEnter<B, TInner, F>
 where
-    B: BatchReader,
+    B: BatchReader + Navigable,
     TInner: Refines<B::Time>+Lattice,
     F: FnMut(<B::Cursor as Cursor>::Key<'_>, <B::Cursor as Cursor>::Val<'_>, <B::Cursor as Cursor>::TimeGat<'_>)->TInner+Clone,
 {

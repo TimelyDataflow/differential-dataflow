@@ -142,6 +142,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<'scope, Tr::Time, D, <BatchCursor<Tr> as Cursor>::Diff>
         where
             Tr::Batch: Navigable,
+            BatchCursor<Tr>: Cursor<Time = Tr::Time>,
             L: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>) -> D+'static,
     {
         self.flat_map_ref(move |key, val| Some(logic(key,val)))
@@ -161,6 +162,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
         K: crate::ExchangeData,
         V: crate::ExchangeData,
         Tr::Batch: Navigable,
+        BatchCursor<Tr>: Cursor<Time = Tr::Time>,
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V>,
     {
         self.flat_map_ref(move |key, val| [(key.clone(), val.clone())])
@@ -173,6 +175,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     pub fn flat_map_ref<I, L>(self, logic: L) -> VecCollection<'scope, Tr::Time, I::Item, <BatchCursor<Tr> as Cursor>::Diff>
         where
             Tr::Batch: Navigable,
+            BatchCursor<Tr>: Cursor<Time = Tr::Time>,
             I: IntoIterator<Item: Data>,
             L: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>) -> I+'static,
     {
@@ -189,6 +192,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<Tr::Batch>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, <BatchCursor<Tr> as Cursor>::Diff>
     where
         Tr::Batch: Navigable,
+        BatchCursor<Tr>: Cursor<Time = Tr::Time>,
         I: IntoIterator<Item: Data>,
         L: FnMut(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>) -> I+'static,
     {
@@ -231,8 +235,8 @@ impl<'scope, Tr1: TraceReader+'static> Arranged<'scope, Tr1> {
         // Pin the cursor diffs to named params `R1`/`R2`: a `Multiply` bound on a projection
         // does not connect to its use-site (the solver normalizes the use but not the bound's
         // subject), so we constrain plain params instead.
-        BatchCursor<Tr1>: Cursor<Diff = R1>,
-        BatchCursor<Tr2>: Cursor<Diff = R2>,
+        BatchCursor<Tr1>: Cursor<Diff = R1, Time = Tr1::Time>,
+        BatchCursor<Tr2>: Cursor<Diff = R2, Time = Tr1::Time>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>>,
         R1: Multiply<R2, Output: Semigroup+'static> + Clone,
         I: IntoIterator<Item: Data>,
@@ -266,7 +270,8 @@ impl<'scope, Tr1: TraceReader+'static> Arranged<'scope, Tr1> {
         Tr1::Batch: Navigable,
         Tr2: Trace<Time=Tr1::Time>+'static,
         Tr2::Batch: Navigable,
-        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>, ValOwn: Data, Diff: Abelian>,
+        BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>, ValOwn: Data, Time = Tr2::Time, Diff: Abelian>,
         Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
         L: FnMut(<BatchCursor<Tr1> as Cursor>::Key<'_>, &[(<BatchCursor<Tr1> as Cursor>::Val<'_>, <BatchCursor<Tr1> as Cursor>::Diff)], &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>)+'static,
         P: FnMut(&mut Bu::Input, <BatchCursor<Tr1> as Cursor>::Key<'_>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, Tr2::Time, <BatchCursor<Tr2> as Cursor>::Diff)>) + 'static,
@@ -286,7 +291,8 @@ impl<'scope, Tr1: TraceReader+'static> Arranged<'scope, Tr1> {
         Tr1::Batch: Navigable,
         Tr2: Trace<Time=Tr1::Time>+'static,
         Tr2::Batch: Navigable,
-        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>, ValOwn: Data>,
+        BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = <BatchCursor<Tr1> as Cursor>::Key<'a>, ValOwn: Data, Time = Tr2::Time>,
         Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default>,
         L: FnMut(<BatchCursor<Tr1> as Cursor>::Key<'_>, &[(<BatchCursor<Tr1> as Cursor>::Val<'_>, <BatchCursor<Tr1> as Cursor>::Diff)], &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, <BatchCursor<Tr2> as Cursor>::Diff)>)+'static,
         P: FnMut(&mut Bu::Input, <BatchCursor<Tr1> as Cursor>::Key<'_>, &mut Vec<(<BatchCursor<Tr2> as Cursor>::ValOwn, Tr2::Time, <BatchCursor<Tr2> as Cursor>::Diff)>) + 'static,

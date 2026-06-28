@@ -77,7 +77,11 @@ pub struct BatchFrontier<B: BatchReader> {
 }
 
 use crate::trace::Navigable;
-impl<B: BatchReader + Navigable> Navigable for BatchFrontier<B> {
+impl<B> Navigable for BatchFrontier<B>
+where
+    B: BatchReader + Navigable,
+    B::Cursor: Cursor<Time = B::Time>,
+{
 
     type Cursor = BatchCursorFrontier<B::Cursor>;
 

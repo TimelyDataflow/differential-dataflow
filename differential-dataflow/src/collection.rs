@@ -785,7 +785,7 @@ pub mod vec {
         where
             T2: Trace<Time=T>+'static,
             T2::Batch: Navigable,
-            for<'a> BatchCursor<T2>: Cursor<Key<'a>= &'a K, ValOwn = V, Diff: Abelian>,
+            for<'a> BatchCursor<T2>: Cursor<Key<'a>= &'a K, ValOwn = V, Time = T2::Time, Diff: Abelian>,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, <BatchCursor<T2> as Cursor>::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, <BatchCursor<T2> as Cursor>::Diff)>)+'static,
         {
@@ -806,7 +806,7 @@ pub mod vec {
             V: Clone+'static,
             T2: Trace<Time=T>+'static,
             T2::Batch: Navigable,
-            for<'a> BatchCursor<T2>: Cursor<Key<'a>=&'a K, ValOwn = V>,
+            for<'a> BatchCursor<T2>: Cursor<Key<'a>=&'a K, ValOwn = V, Time = T2::Time>,
             Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, <BatchCursor<T2> as Cursor>::Diff)>, Output = T2::Batch>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,<BatchCursor<T2> as Cursor>::Diff)>, &mut Vec<(V, <BatchCursor<T2> as Cursor>::Diff)>)+'static,
         {
@@ -970,7 +970,7 @@ pub mod vec {
             Ba: crate::trace::Batcher<Output=Vec<((D, ()), T, R)>, Time=T> + 'static,
             Tr: crate::trace::Trace<Time=T>+'static,
             Tr::Batch: Navigable,
-            for<'a> BatchCursor<Tr>: Cursor<Diff=R>,
+            for<'a> BatchCursor<Tr>: Cursor<Time=Tr::Time, Diff=R>,
             Bu: crate::trace::Builder<Time=Tr::Time, Input=Vec<((D, ()), T, R)>, Output=Tr::Batch>,
             F: Fn(<BatchCursor<Tr> as Cursor>::Key<'_>, <BatchCursor<Tr> as Cursor>::Val<'_>) -> D + 'static,
         {
@@ -1252,7 +1252,7 @@ pub mod vec {
             for<'a> BatchCursor<Tr2>: Cursor<Key<'a>=&'a K>,
             // Pin the cursor diff to a named param `R2`: a `Multiply` bound on a projection does not
             // connect to its use-site (the solver normalizes the use but not the bound's subject).
-            BatchCursor<Tr2>: Cursor<Diff = R2>,
+            BatchCursor<Tr2>: Cursor<Diff = R2, Time = T>,
             R: Multiply<R2, Output: Semigroup+'static>,
             I: IntoIterator<Item: crate::Data>,
             L: FnMut(&K,&V,<BatchCursor<Tr2> as Cursor>::Val<'_>)->I+'static,

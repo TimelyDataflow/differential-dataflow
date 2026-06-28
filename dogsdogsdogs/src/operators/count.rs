@@ -19,7 +19,7 @@ pub fn count<'scope, Tr, K, R, F, P>(
 where
     Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
     Tr::Batch: Navigable,
-    BatchCursor<Tr>: Cursor<Diff=isize>,
+    BatchCursor<Tr>: Cursor<Time = Tr::Time, Diff=isize>,
     <BatchCursor<Tr> as Cursor>::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     for<'a> <BatchCursor<Tr> as Cursor>::Diff : Semigroup<<BatchCursor<Tr> as Cursor>::DiffGat<'a>>,
     K: Hashable + Ord + Default + 'static,
