@@ -542,12 +542,15 @@ mod cursors {
 
             /// Pass 1: determine the interesting times for `key` in `[.., upper_limit)`.
             ///
-            /// Reasoning only about times — no value accumulation, no user logic. Loads the histories and
-            /// walks batch/warned/input/output/synth times, generating the join-closure. It does not consult
-            /// `output_produced`: output can only change where accumulated input changed, so output-change
-            /// times lie within the input join-closure and need not separately seed it.
+            /// The interesting times — those at which the output may change — are the lattice-join-closure of
+            /// the input update times (this round's `batch`, the warned `times` carried from prior rounds, and
+            /// the maintained input trace), restricted to the interval. Output is a function of the accumulated
+            /// input, so it can only change where the accumulated input changed; the output trace is therefore
+            /// irrelevant to *which* times are interesting and is not consulted here. We reason purely about
+            /// times: no value accumulation, no user logic.
             ///
-            /// In-interval interesting times land (sorted) in `active`; deferred times in `new_interesting`.
+            /// In-interval interesting times land (sorted) in `discovered`; times at or beyond `upper_limit`
+            /// are deferred to `new_interesting`, to be reintroduced once the frontier advances past them.
             fn discover_times(
                 &mut self,
                 times: &Vec<T>,
@@ -557,21 +560,25 @@ mod cursors {
             {
                 discovered.clear();
 
-                // Replay the already-loaded edits (no cursor traversal).
+                // Replay the already-loaded edits (no cursor traversal). Determination needs only the input
+                // sides: the new `batch` updates and the maintained input trace. (The output history is loaded
+                // for pass 2; it does not bear on which times are interesting.)
                 let mut batch_replay = self.batch_history.replay();
+                let mut input_replay = self.input_history.replay();
 
+                // Meets of each *suffix* of the warned `times`, used to advance maintained times forward as we
+                // play history, keeping their representation compact.
                 self.meets.clear();
                 self.meets.extend(times.iter().cloned());
                 for index in (1 .. self.meets.len()).rev() {
                     self.meets[index-1] = self.meets[index-1].meet(&self.meets[index]);
                 }
 
+                // The meet of the times we must reconsider (`batch` and warned `times`). Maintained input was
+                // already advanced by this on load; we advance buffers by the evolving meet as we proceed.
                 let mut meet = None;
                 update_meet(&mut meet, self.meets.get(0));
                 update_meet(&mut meet, batch_replay.meet());
-
-                let mut input_replay = self.input_history.replay();
-                let mut output_replay = self.output_history.replay();
 
                 self.synth_times.clear();
                 self.times_current.clear();
@@ -579,19 +586,25 @@ mod cursors {
                 let mut times_slice = &times[..];
                 let mut meets_slice = &self.meets[..];
 
+                // Candidate times come from `batch`, the warned `times`, the maintained input trace, and the
+                // synthetic times we generate as joins along the way. Examine them in time order until none
+                // remain.
                 while let Some(next_time) = [   batch_replay.time(),
                                                 times_slice.first(),
                                                 input_replay.time(),
-                                                output_replay.time(),
                                                 self.synth_times.last(),
                                             ].into_iter().flatten().min().cloned() {
 
+                    // Advance the maintained input so its buffer holds the updates active at `next_time`.
                     input_replay.step_while_time_is(&next_time);
-                    output_replay.step_while_time_is(&next_time);
 
+                    // A time is interesting only if it is, or is dominated by, a `batch`, warned, or synthetic
+                    // time — a maintained-input time alone is not enough. Advance `batch`, noting any update.
                     let mut interesting = batch_replay.step_while_time_is(&next_time);
                     if interesting { if let Some(meet) = meet.as_ref() { batch_replay.advance_buffer_by(meet); } }
 
+                    // Pull any synthetic and warned times equal to `next_time` into `times_current` (the running
+                    // accumulation of interesting times), marking the time interesting.
                     while self.synth_times.last() == Some(&next_time) {
                         self.times_current.push(self.synth_times.pop().expect("failed to pop from synth_times"));
                         interesting = true;
@@ -603,30 +616,34 @@ mod cursors {
                         interesting = true;
                     }
 
+                    // `next_time` is also interesting if some accumulated `batch` or interesting time lies at or
+                    // below it, since that time would join up to `next_time`.
                     interesting = interesting || batch_replay.buffer().iter().any(|&((_, ref t),_)| t.less_equal(&next_time));
                     interesting = interesting || self.times_current.iter().any(|t| t.less_equal(&next_time));
 
+                    // Only times within `[.., upper_limit)` can be serviced now.
                     if !upper_limit.less_equal(&next_time) {
 
                         if interesting {
+                            // Record the interesting time for pass 2 to evaluate.
                             discovered.push(next_time.clone());
 
-                            // Mirror the live value-block's synthetic-time generation from the input and
-                            // output buffers, but omit the value-dependent `output_produced` joins.
+                            // Generate synthetic times by joining `next_time` with the maintained input times
+                            // beyond it: these are closure elements where a new/active time and an existing
+                            // input update first combine.
                             if let Some(meet) = meet.as_ref() { input_replay.advance_buffer_by(meet) };
                             for ((_, time), _) in input_replay.buffer().iter() {
                                 if !time.less_equal(&next_time) { self.temporary.push(next_time.join(time)); }
                             }
-                            if let Some(meet) = meet.as_ref() { output_replay.advance_buffer_by(meet) };
-                            for ((_, time), _) in output_replay.buffer().iter() {
-                                if !time.less_equal(&next_time) { self.temporary.push(next_time.join(time)); }
-                            }
                         }
 
+                        // Every time, interesting or not, joins with the accumulated `batch` times and the
+                        // current interesting times to form further synthetic times.
                         self.temporary.extend(batch_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
                         self.temporary.extend(self.times_current.iter().filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
                         sort_dedup(&mut self.temporary);
 
+                        // Service synthetic times in the interval now; defer those at or beyond `upper_limit`.
                         let synth_len = self.synth_times.len();
                         for time in self.temporary.drain(..) {
                             if upper_limit.less_equal(&time) {
@@ -642,13 +659,14 @@ mod cursors {
                         }
                     }
                     else if interesting {
+                        // Interesting but beyond `upper_limit`: defer until the frontier advances.
                         new_interesting.push(next_time.clone());
                     }
 
+                    // Track the meet of the remaining sources of times, and advance `times_current` by it.
                     meet = None;
                     update_meet(&mut meet, batch_replay.meet());
                     update_meet(&mut meet, input_replay.meet());
-                    update_meet(&mut meet, output_replay.meet());
                     for time in self.synth_times.iter() { update_meet(&mut meet, Some(time)); }
                     update_meet(&mut meet, meets_slice.first());
 
