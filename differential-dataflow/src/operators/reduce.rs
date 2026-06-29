@@ -20,46 +20,6 @@ use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, Batc
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 
-/// Reduce phase-split instrumentation (debug builds only): tightness counters for the two-pass reduce.
-///
-/// Pass 1 (`discover_times`) determines interesting times; pass 2 (`evaluate_times`) evaluates them.
-/// `discovered` counts the times pass 1 enumerates; `logic`/`produced` count how many of those actually
-/// invoke user logic and yield a non-empty diff. A test calls [`reset`](audit::reset) then reads
-/// [`snapshot`](audit::snapshot). Output correctness is covered by `tests/scc.rs` (differential vs.
-/// sequential) and `tests/reduce.rs`. Removed once the split is settled.
-#[cfg(debug_assertions)]
-pub mod audit {
-    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-    static DISCOVERED: AtomicU64 = AtomicU64::new(0);
-    static LOGIC: AtomicU64 = AtomicU64::new(0);
-    static PRODUCED: AtomicU64 = AtomicU64::new(0);
-    pub(super) fn record_discovered(n: u64) { DISCOVERED.fetch_add(n, Relaxed); }
-    pub(super) fn record_logic() { LOGIC.fetch_add(1, Relaxed); }
-    pub(super) fn record_produced() { PRODUCED.fetch_add(1, Relaxed); }
-    /// Reset all counters to zero (process-global, across all worker threads).
-    pub fn reset() {
-        for c in [&DISCOVERED, &LOGIC, &PRODUCED] { c.store(0, Relaxed); }
-    }
-    /// Counters across all worker threads.
-    pub fn snapshot() -> Snapshot {
-        Snapshot {
-            discovered: DISCOVERED.load(Relaxed),
-            logic: LOGIC.load(Relaxed),
-            produced: PRODUCED.load(Relaxed),
-        }
-    }
-    /// A snapshot of the audit counters.
-    #[derive(Debug, Clone, Copy)]
-    pub struct Snapshot {
-        /// In-interval interesting times enumerated by pass 1.
-        pub discovered: u64,
-        /// User-logic invocations in pass 2.
-        pub logic: u64,
-        /// Logic invocations that produced a non-empty diff.
-        pub produced: u64,
-    }
-}
-
 /// A type that resolves a key-wise reduction over batches arriving on the input.
 ///
 /// Unlike join, reduce does not suspend: its output is at most linear in its input, so a single
@@ -577,9 +537,6 @@ mod cursors {
                 // reforming collections and running `logic`.
                 let mut active = Vec::new();
                 self.discover_times(times, upper_limit, &mut active, new_interesting);
-                #[cfg(debug_assertions)]
-                super::audit::record_discovered(active.len() as u64);
-
                 self.evaluate_times::<K, C2, L>(key, logic, upper_limit, outputs, &active);
             }
 
@@ -793,16 +750,12 @@ mod cursors {
 
                         // Apply user logic if non-empty input or output and see what happens!
                         if !self.input_buffer.is_empty() || !self.output_buffer.is_empty() {
-                            #[cfg(debug_assertions)]
-                            super::audit::record_logic();
                             logic(key, &self.input_buffer[..], &mut self.output_buffer, &mut self.update_buffer);
                             self.input_buffer.clear();
                             self.output_buffer.clear();
 
                             crate::consolidation::consolidate(&mut self.update_buffer);
                             if !self.update_buffer.is_empty() {
-                                #[cfg(debug_assertions)]
-                                super::audit::record_produced();
 
                                 let oidx = outputs.iter().rev().position(|(time, _)| time.less_equal(&next_time));
                                 let oidx = outputs.len() - oidx.expect("failed to find index") - 1;
