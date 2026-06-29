@@ -554,34 +554,33 @@ mod cursors {
                 K: Copy + Ord,
                 L: FnMut(K, &[(V1, D1)], &mut Vec<(V, D2)>, &mut Vec<(V, D2)>),
             {
-                // Two passes. First determine every interesting time in `[.., upper_limit)` (reasoning only
-                // about times); then evaluate those times in order, reforming collections and running `logic`.
-                // (Each pass currently loads independently; step 5 will share a single load.)
+                // Load the input/output/batch histories once (the only cursor traversal), advancing input
+                // and output by `meet(batch ∪ warned)`. Both passes then operate on these in-memory edits via
+                // `ValueHistory::replay`, touching no cursors.
+                let meet = {
+                    let batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, None);
+                    self.meets.clear();
+                    self.meets.extend(times.iter().cloned());
+                    for index in (1 .. self.meets.len()).rev() {
+                        self.meets[index-1] = self.meets[index-1].meet(&self.meets[index]);
+                    }
+                    let mut meet = None;
+                    update_meet(&mut meet, self.meets.get(0));
+                    update_meet(&mut meet, batch_replay.meet());
+                    meet
+                };
+                self.input_history.replay_key(source_cursor, source_storage, key, meet.as_ref());
+                self.output_history.replay_key(output_cursor, output_storage, key, meet.as_ref());
+
+                // Two passes over the loaded edits. First determine every interesting time in
+                // `[.., upper_limit)` (reasoning only about times); then evaluate those times in order,
+                // reforming collections and running `logic`.
                 let mut active = Vec::new();
-                self.discover_times(
-                    key,
-                    (&mut *source_cursor, source_storage),
-                    (&mut *output_cursor, output_storage),
-                    (&mut *batch_cursor, batch_storage),
-                    times,
-                    upper_limit,
-                    &mut active,
-                    new_interesting,
-                );
+                self.discover_times(times, upper_limit, &mut active, new_interesting);
                 #[cfg(debug_assertions)]
                 super::audit::record_discovered(active.len() as u64);
 
-                self.evaluate_times(
-                    key,
-                    (source_cursor, source_storage),
-                    (output_cursor, output_storage),
-                    (batch_cursor, batch_storage),
-                    times,
-                    logic,
-                    upper_limit,
-                    outputs,
-                    &active,
-                );
+                self.evaluate_times::<K, C2, L>(key, logic, upper_limit, outputs, &active);
             }
 
             /// Pass 1: determine the interesting times for `key` in `[.., upper_limit)`.
@@ -592,25 +591,17 @@ mod cursors {
             /// times lie within the input join-closure and need not separately seed it.
             ///
             /// In-interval interesting times land (sorted) in `active`; deferred times in `new_interesting`.
-            fn discover_times<'a, K, C1, C2, C3>(
+            fn discover_times(
                 &mut self,
-                key: K,
-                (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
-                (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
-                (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
                 times: &Vec<T>,
                 upper_limit: &Antichain<T>,
                 discovered: &mut Vec<T>,
                 new_interesting: &mut Vec<T>)
-            where
-                C1: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
-                C2: Cursor<Key<'a> = K, Val<'a> = V2, ValOwn = V, Time = T, Diff = D2>,
-                C3: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
-                K: Copy + Ord,
             {
                 discovered.clear();
 
-                let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, None);
+                // Replay the already-loaded edits (no cursor traversal).
+                let mut batch_replay = self.batch_history.replay();
 
                 self.meets.clear();
                 self.meets.extend(times.iter().cloned());
@@ -622,10 +613,8 @@ mod cursors {
                 update_meet(&mut meet, self.meets.get(0));
                 update_meet(&mut meet, batch_replay.meet());
 
-                let mut input_replay =
-                self.input_history.replay_key(source_cursor, source_storage, key, meet.as_ref());
-                let mut output_replay =
-                self.output_history.replay_key(output_cursor, output_storage, key, meet.as_ref());
+                let mut input_replay = self.input_history.replay();
+                let mut output_replay = self.output_history.replay();
 
                 self.synth_times.clear();
                 self.times_current.clear();
@@ -720,46 +709,28 @@ mod cursors {
 
             /// Pass 2: evaluate the already-determined interesting times in `active` (sorted, in-interval).
             ///
-            /// Loads the histories (same `meet(batch ∪ warned)` as pass 1), then walks `active` together
-            /// with the input/output/batch time streams. At each active time it reforms the input and output
-            /// collections, runs `logic`, and emits the resulting diffs into `outputs`. There is no time
-            /// discovery here — the set of times is fixed — so the synthetic-time/interestingness machinery
-            /// of the original loop is gone. The running `meet` is the glb of the remaining `active` suffix
-            /// and the replay frontiers, which stays `<=` every remaining active time, so buffer compaction
-            /// is result-preserving.
-            #[allow(clippy::too_many_arguments)]
-            fn evaluate_times<'a, K, C1, C2, C3, L>(
+            /// Replays the shared (already-loaded) edits, then walks `active` together with the input/output/
+            /// batch time streams. At each active time it reforms the input and output collections, runs
+            /// `logic`, and emits the resulting diffs into `outputs`. There is no time discovery here — the
+            /// set of times is fixed — so the synthetic-time/interestingness machinery of the original loop is
+            /// gone. The running `meet` is the glb of the remaining `active` suffix and the replay frontiers,
+            /// which stays `<=` every remaining active time, so buffer compaction is result-preserving.
+            fn evaluate_times<'a, K, C2, L>(
                 &mut self,
                 key: K,
-                (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
-                (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
-                (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
-                times: &Vec<T>,
                 logic: &mut L,
                 upper_limit: &Antichain<T>,
                 outputs: &mut [(T, Vec<(V, T, D2)>)],
                 active: &[T])
             where
-                C1: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
-                C2: Cursor<Key<'a> = K, Val<'a> = V2, ValOwn = V, Time = T, Diff = D2>,
-                C3: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
+                C2: Cursor<Val<'a> = V2, ValOwn = V, Time = T, Diff = D2>,
                 K: Copy + Ord,
                 L: FnMut(K, &[(V1, D1)], &mut Vec<(V, D2)>, &mut Vec<(V, D2)>),
             {
-                // Load the histories with the same meet pass 1 used: meet(batch ∪ warned).
-                let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, None);
-                self.meets.clear();
-                self.meets.extend(times.iter().cloned());
-                for index in (1 .. self.meets.len()).rev() {
-                    self.meets[index-1] = self.meets[index-1].meet(&self.meets[index]);
-                }
-                let mut load_meet = None;
-                update_meet(&mut load_meet, self.meets.get(0));
-                update_meet(&mut load_meet, batch_replay.meet());
-                let mut input_replay =
-                self.input_history.replay_key(source_cursor, source_storage, key, load_meet.as_ref());
-                let mut output_replay =
-                self.output_history.replay_key(output_cursor, output_storage, key, load_meet.as_ref());
+                // Replay the already-loaded edits (no cursor traversal).
+                let mut batch_replay = self.batch_history.replay();
+                let mut input_replay = self.input_history.replay();
+                let mut output_replay = self.output_history.replay();
 
                 self.input_buffer.clear();
                 self.output_buffer.clear();
