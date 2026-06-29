@@ -48,8 +48,8 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_physical_compaction(frontier) }
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.trace.get_physical_compaction() }
 
-    fn cursor_storage(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Self::Batch>> {
-        let storage = self.trace.cursor_storage(upper)?;
+    fn batches_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Self::Batch>> {
+        let storage = self.trace.batches_through(upper)?;
         let since = self.since.borrow();
         let until = self.until.borrow();
         Some(storage.into_iter().map(|batch| BatchFrontier::make_from(batch, since, until)).collect())

@@ -47,18 +47,18 @@ pub trait TraceReader {
         Clone +
         BatchReader<Time = Self::Time>;
 
-    /// Acquires the non-empty sequence of batches a cursor would draw from, restricted to updates
-    /// at times not greater or equal to an element of `upper`.
+    /// Acquires the non-empty sequence of batches covering updates at times not greater or equal to an
+    /// element of `upper`.
     ///
     /// This is the sole primitive each `TraceReader` must implement to expose its contents: the
-    /// `cursor` and `cursor_through` methods assemble a [`CursorList`] over these batches' cursors.
-    /// The returned `Vec` plays the role of the cursor's storage (the cursor borrows from it).
+    /// `cursor` and `cursor_through` methods assemble a [`CursorList`] over these batches' cursors,
+    /// for which the returned `Vec` serves as storage (the cursor borrows from it).
     ///
     /// This method is expected to work if called with an `upper` that (i) was an observed bound in batches from
     /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
     /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the batches. This
     /// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
-    fn cursor_storage(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>>;
+    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>>;
 
     /// Provides a cursor over updates contained in the trace.
     fn cursor(&mut self) -> (CursorList<<Self::Batch as Navigable>::Cursor>, Vec<Self::Batch>) where Self::Batch: Navigable {
@@ -74,9 +74,9 @@ pub trait TraceReader {
     /// equal to an element of `upper`.
     ///
     /// The cursor is a [`CursorList`] that merges the cursors of the batches returned by
-    /// [`cursor_storage`](TraceReader::cursor_storage); see that method for the contract on `upper`.
+    /// [`batches_through`](TraceReader::batches_through); see that method for the contract on `upper`.
     fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(CursorList<<Self::Batch as Navigable>::Cursor>, Vec<Self::Batch>)> where Self::Batch: Navigable {
-        Some(self::cursor::cursor_list(self.cursor_storage(upper)?))
+        Some(self::cursor::cursor_list(self.batches_through(upper)?))
     }
 
     /// Advances the frontier that constrains logical compaction.

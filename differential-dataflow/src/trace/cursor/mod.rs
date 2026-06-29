@@ -18,7 +18,7 @@ use crate::trace::implementations::containers::BatchContainer;
 ///
 /// This is the entry point for accessing batch data through cursors, and the place that opinions
 /// about keys and values are introduced (via the `Cursor` associated type). Cut-and-merge assembly
-/// is the trace's concern: [`TraceReader::cursor_storage`](crate::trace::TraceReader::cursor_storage)
+/// is the trace's concern: [`TraceReader::batches_through`](crate::trace::TraceReader::batches_through)
 /// selects the batches and the defaulted
 /// [`TraceReader::cursor_through`](crate::trace::TraceReader::cursor_through) builds a [`CursorList`]
 /// over their per-batch cursors.
