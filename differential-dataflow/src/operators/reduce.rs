@@ -20,6 +20,65 @@ use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, Batc
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 
+/// Verification scaffolding for the reduce phase split (debug builds only).
+///
+/// Process-global counters comparing, per `(key, interval)`, the times the live logic actually
+/// *reconsidered* against the times a prospective up-front *discovery* pass would enumerate:
+///   - `missed`: reconsidered but NOT discovered — must stay 0 (a phase split would drop this work).
+///   - `extra`: discovered but not reconsidered — harmless over-enumeration.
+/// Plus `logic`/`produced` for tightness. The discovery pass deliberately omits the value-dependent
+/// `output_produced` joins, so the comparison measures exactly what those contribute. A test calls
+/// [`reset`](audit::reset) then reads [`snapshot`](audit::snapshot). Removed once the split lands.
+#[cfg(debug_assertions)]
+pub mod audit {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    static RECONSIDERED: AtomicU64 = AtomicU64::new(0);
+    static DISCOVERED: AtomicU64 = AtomicU64::new(0);
+    static MISSED: AtomicU64 = AtomicU64::new(0);
+    static EXTRA: AtomicU64 = AtomicU64::new(0);
+    static LOGIC: AtomicU64 = AtomicU64::new(0);
+    static PRODUCED: AtomicU64 = AtomicU64::new(0);
+    pub(super) fn record_compare(reconsidered: u64, discovered: u64, missed: u64, extra: u64) {
+        RECONSIDERED.fetch_add(reconsidered, Relaxed);
+        DISCOVERED.fetch_add(discovered, Relaxed);
+        MISSED.fetch_add(missed, Relaxed);
+        EXTRA.fetch_add(extra, Relaxed);
+    }
+    pub(super) fn record_logic() { LOGIC.fetch_add(1, Relaxed); }
+    pub(super) fn record_produced() { PRODUCED.fetch_add(1, Relaxed); }
+    /// Reset all counters to zero (process-global, across all worker threads).
+    pub fn reset() {
+        for c in [&RECONSIDERED, &DISCOVERED, &MISSED, &EXTRA, &LOGIC, &PRODUCED] { c.store(0, Relaxed); }
+    }
+    /// Counters across all worker threads.
+    pub fn snapshot() -> Snapshot {
+        Snapshot {
+            reconsidered: RECONSIDERED.load(Relaxed),
+            discovered: DISCOVERED.load(Relaxed),
+            missed: MISSED.load(Relaxed),
+            extra: EXTRA.load(Relaxed),
+            logic: LOGIC.load(Relaxed),
+            produced: PRODUCED.load(Relaxed),
+        }
+    }
+    /// A snapshot of the audit counters.
+    #[derive(Debug, Clone, Copy)]
+    pub struct Snapshot {
+        /// In-interval times the live logic reconsidered.
+        pub reconsidered: u64,
+        /// In-interval times the discovery shadow would enumerate.
+        pub discovered: u64,
+        /// Reconsidered times discovery would have dropped (must be 0).
+        pub missed: u64,
+        /// Discovered times the live logic did not reconsider (over-enumeration).
+        pub extra: u64,
+        /// User-logic invocations.
+        pub logic: u64,
+        /// Logic invocations that produced a non-empty diff.
+        pub produced: u64,
+    }
+}
+
 /// A type that resolves a key-wise reduction over batches arriving on the input.
 ///
 /// Unlike join, reduce does not suspend: its output is at most linear in its input, so a single
@@ -556,6 +615,11 @@ mod cursors {
                 self.times_current.clear();
                 self.output_produced.clear();
 
+                // Verification scaffolding: collect the in-interval times the live logic reconsiders, to
+                // compare against the prospective discovery pass below. Debug builds only.
+                #[cfg(debug_assertions)]
+                let mut reconsidered = Vec::new();
+
                 // The frontier of times we may still consider.
                 // Derived from frontiers of our update histories, supplied times, and synthetic times.
 
@@ -621,6 +685,9 @@ mod cursors {
                         // output produced. This sounds like a good test to have for debug builds!
                         if interesting {
 
+                            #[cfg(debug_assertions)]
+                            reconsidered.push(next_time.clone());
+
                             // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
                             debug_assert!(self.input_buffer.is_empty());
                             if let Some(meet) = meet.as_ref() { input_replay.advance_buffer_by(meet) };
@@ -648,6 +715,8 @@ mod cursors {
 
                             // Apply user logic if non-empty input or output and see what happens!
                             if !self.input_buffer.is_empty() || !self.output_buffer.is_empty() {
+                                #[cfg(debug_assertions)]
+                                super::audit::record_logic();
                                 logic(key, &self.input_buffer[..], &mut self.output_buffer, &mut self.update_buffer);
                                 self.input_buffer.clear();
                                 self.output_buffer.clear();
@@ -662,6 +731,8 @@ mod cursors {
                                 // times.
                                 crate::consolidation::consolidate(&mut self.update_buffer);
                                 if !self.update_buffer.is_empty() {
+                                    #[cfg(debug_assertions)]
+                                    super::audit::record_produced();
 
                                     // We *should* be able to find a capability for `next_time`. Any thing else would
                                     // indicate a logical error somewhere along the way; either we release a capability
@@ -743,6 +814,174 @@ mod cursors {
                 }
 
                 // Normalize the representation of `new_interesting`, deduplicating and ordering.
+                sort_dedup(new_interesting);
+
+                // Verification scaffolding: run the prospective up-front discovery as a shadow (driving
+                // nothing) and compare the times it enumerates against the times we just reconsidered.
+                // The replayers above end their borrows at their last loop use (NLL), so `discover_times`
+                // can re-borrow the histories; it re-seeks the cursors via `replay_key`.
+                #[cfg(debug_assertions)]
+                {
+                    let mut shadow = Vec::new();
+                    let mut shadow_new = Vec::new();
+                    self.discover_times(
+                        key,
+                        (source_cursor, source_storage),
+                        (output_cursor, output_storage),
+                        (batch_cursor, batch_storage),
+                        times,
+                        upper_limit,
+                        &mut shadow,
+                        &mut shadow_new,
+                    );
+                    sort_dedup(&mut reconsidered);
+                    let (mut i, mut j, mut missed, mut extra) = (0, 0, 0u64, 0u64);
+                    while i < reconsidered.len() && j < shadow.len() {
+                        match reconsidered[i].cmp(&shadow[j]) {
+                            std::cmp::Ordering::Less => { missed += 1; i += 1; }
+                            std::cmp::Ordering::Greater => { extra += 1; j += 1; }
+                            std::cmp::Ordering::Equal => { i += 1; j += 1; }
+                        }
+                    }
+                    missed += (reconsidered.len() - i) as u64;
+                    extra += (shadow.len() - j) as u64;
+                    super::audit::record_compare(reconsidered.len() as u64, shadow.len() as u64, missed, extra);
+                }
+            }
+
+            /// Prospective up-front time discovery, run as a debug-only shadow (drives nothing).
+            ///
+            /// Reasoning only about times, this enumerates the interesting times the way the live algorithm
+            /// would — loading the histories, walking batch/warned/input/output/synth times, generating the
+            /// join-closure — but performs no value accumulation or user logic, and deliberately omits the
+            /// value-dependent `output_produced` joins. Comparing its output against what the live logic
+            /// reconsiders measures whether interesting times are knowable from the inputs alone.
+            ///
+            /// In-interval interesting times land (sorted) in `discovered`; deferred times in `new_interesting`.
+            #[cfg(debug_assertions)]
+            fn discover_times<'a, K, C1, C2, C3>(
+                &mut self,
+                key: K,
+                (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
+                (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
+                (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
+                times: &Vec<T>,
+                upper_limit: &Antichain<T>,
+                discovered: &mut Vec<T>,
+                new_interesting: &mut Vec<T>)
+            where
+                C1: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
+                C2: Cursor<Key<'a> = K, Val<'a> = V2, ValOwn = V, Time = T, Diff = D2>,
+                C3: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
+                K: Copy + Ord,
+            {
+                discovered.clear();
+
+                let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, None);
+
+                self.meets.clear();
+                self.meets.extend(times.iter().cloned());
+                for index in (1 .. self.meets.len()).rev() {
+                    self.meets[index-1] = self.meets[index-1].meet(&self.meets[index]);
+                }
+
+                let mut meet = None;
+                update_meet(&mut meet, self.meets.get(0));
+                update_meet(&mut meet, batch_replay.meet());
+
+                let mut input_replay =
+                self.input_history.replay_key(source_cursor, source_storage, key, meet.as_ref());
+                let mut output_replay =
+                self.output_history.replay_key(output_cursor, output_storage, key, meet.as_ref());
+
+                self.synth_times.clear();
+                self.times_current.clear();
+
+                let mut times_slice = &times[..];
+                let mut meets_slice = &self.meets[..];
+
+                while let Some(next_time) = [   batch_replay.time(),
+                                                times_slice.first(),
+                                                input_replay.time(),
+                                                output_replay.time(),
+                                                self.synth_times.last(),
+                                            ].into_iter().flatten().min().cloned() {
+
+                    input_replay.step_while_time_is(&next_time);
+                    output_replay.step_while_time_is(&next_time);
+
+                    let mut interesting = batch_replay.step_while_time_is(&next_time);
+                    if interesting { if let Some(meet) = meet.as_ref() { batch_replay.advance_buffer_by(meet); } }
+
+                    while self.synth_times.last() == Some(&next_time) {
+                        self.times_current.push(self.synth_times.pop().expect("failed to pop from synth_times"));
+                        interesting = true;
+                    }
+                    while times_slice.first() == Some(&next_time) {
+                        self.times_current.push(times_slice[0].clone());
+                        times_slice = &times_slice[1..];
+                        meets_slice = &meets_slice[1..];
+                        interesting = true;
+                    }
+
+                    interesting = interesting || batch_replay.buffer().iter().any(|&((_, ref t),_)| t.less_equal(&next_time));
+                    interesting = interesting || self.times_current.iter().any(|t| t.less_equal(&next_time));
+
+                    if !upper_limit.less_equal(&next_time) {
+
+                        if interesting {
+                            discovered.push(next_time.clone());
+
+                            // Mirror the live value-block's synthetic-time generation from the input and
+                            // output buffers, but omit the value-dependent `output_produced` joins.
+                            if let Some(meet) = meet.as_ref() { input_replay.advance_buffer_by(meet) };
+                            for ((_, time), _) in input_replay.buffer().iter() {
+                                if !time.less_equal(&next_time) { self.temporary.push(next_time.join(time)); }
+                            }
+                            if let Some(meet) = meet.as_ref() { output_replay.advance_buffer_by(meet) };
+                            for ((_, time), _) in output_replay.buffer().iter() {
+                                if !time.less_equal(&next_time) { self.temporary.push(next_time.join(time)); }
+                            }
+                        }
+
+                        self.temporary.extend(batch_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
+                        self.temporary.extend(self.times_current.iter().filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
+                        sort_dedup(&mut self.temporary);
+
+                        let synth_len = self.synth_times.len();
+                        for time in self.temporary.drain(..) {
+                            if upper_limit.less_equal(&time) {
+                                new_interesting.push(time);
+                            }
+                            else {
+                                self.synth_times.push(time);
+                            }
+                        }
+                        if self.synth_times.len() > synth_len {
+                            self.synth_times.sort_by(|x,y| y.cmp(x));
+                            self.synth_times.dedup();
+                        }
+                    }
+                    else if interesting {
+                        new_interesting.push(next_time.clone());
+                    }
+
+                    meet = None;
+                    update_meet(&mut meet, batch_replay.meet());
+                    update_meet(&mut meet, input_replay.meet());
+                    update_meet(&mut meet, output_replay.meet());
+                    for time in self.synth_times.iter() { update_meet(&mut meet, Some(time)); }
+                    update_meet(&mut meet, meets_slice.first());
+
+                    if let Some(meet) = meet.as_ref() {
+                        for time in self.times_current.iter_mut() {
+                            *time = time.join(meet);
+                        }
+                    }
+                    sort_dedup(&mut self.times_current);
+                }
+
+                sort_dedup(discovered);
                 sort_dedup(new_interesting);
             }
         }
