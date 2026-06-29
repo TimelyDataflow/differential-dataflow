@@ -707,9 +707,12 @@ mod cursors {
                                 if time.less_equal(&next_time) { self.output_buffer.push((C2::owned_val(*value), diff.clone())); }
                                 else { self.temporary.push(next_time.join(time)); }
                             }
+                            // We only read `output_produced` to subtract already-produced output when forming
+                            // the diff; we do NOT seed synthetic interesting times from it. Output can only
+                            // change where the accumulated input changed, so output-change times are contained
+                            // in the join-closure of input times and need not separately seed the closure.
                             for ((value, time), diff) in self.output_produced.iter() {
                                 if time.less_equal(&next_time) { self.output_buffer.push(((*value).to_owned(), diff.clone())); }
-                                else { self.temporary.push(next_time.join(time)); }
                             }
                             crate::consolidation::consolidate(&mut self.output_buffer);
 
