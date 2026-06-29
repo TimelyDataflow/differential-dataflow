@@ -66,14 +66,14 @@ fn reduce_audit_scc() {
     let s = audit::snapshot();
     eprintln!("reduce audit (SCC): {s:?}");
     eprintln!(
-        "  reconsidered={} discovered={} missed={} extra={} logic={} produced={}",
-        s.reconsidered, s.discovered, s.missed, s.extra, s.logic, s.produced,
+        "  discovered={} logic={} produced={}  (idle={}, empty={})",
+        s.discovered, s.logic, s.produced,
+        s.discovered.saturating_sub(s.logic), s.logic.saturating_sub(s.produced),
     );
 
-    assert!(s.reconsidered > 0, "expected the live logic to reconsider some times");
-    // The safety property for any future phase split: up-front discovery must never drop a time the
-    // live logic reconsiders. (`extra` over-enumeration is acceptable and reported, not asserted.)
-    assert_eq!(s.missed, 0, "discovery dropped {} time(s) the live logic reconsidered", s.missed);
+    // Sanity: pass 1 found work and pass 2 evaluated it. Output correctness is asserted by tests/scc.rs.
+    assert!(s.discovered > 0, "expected pass 1 to discover some times");
+    assert!(s.logic > 0, "expected pass 2 to invoke logic");
 }
 
 fn _strongly_connected<'scope, T>(graph: VecCollection<'scope, T, Edge>) -> VecCollection<'scope, T, Edge>
