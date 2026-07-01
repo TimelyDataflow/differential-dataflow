@@ -4,6 +4,10 @@
 //! Records with the same key are grouped together, and a user-supplied reduction function is applied
 //! to the key and the list of values.
 //! The function is expected to populate a list of output values.
+//!
+//! The output can change at times that are joins of input times, not only at input times themselves,
+//! and the operator must determine at which times to re-evaluate the reduction. A machine-checked
+//! account of which times suffice lives in `formal/Differential/Coverage.lean`.
 
 use crate::Data;
 
