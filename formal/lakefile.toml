@@ -1,0 +1,19 @@
+name = "formal"
+version = "0.1.0"
+keywords = ["math"]
+defaultTargets = ["Differential"]
+
+[leanOptions]
+pp.unicode.fun = true # pretty-prints `fun a ↦ b`
+relaxedAutoImplicit = false
+weak.linter.mathlibStandardSet = true
+linter.style.longLine = false # this is our repo; long lines are allowed for readability
+maxSynthPendingDepth = 3
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.31.0"
+
+[[lean_lib]]
+name = "Differential"
