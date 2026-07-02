@@ -199,17 +199,20 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
     }
 }
 
-impl<K, V, T, R> Chunk for VecChunk<K, V, T, R>
+impl<K, V, T, R> super::NavigableChunk for VecChunk<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
-
-    const TARGET: usize = TARGET;
-
     fn bounds(&self) -> ((&K, &V, &T), (&K, &V, &T)) {
         let s = &self.0[..];
         let (f, l) = (&s[0], &s[s.len() - 1]);
         ((&f.0.0, &f.0.1, &f.1), (&l.0.0, &l.0.1, &l.1))
     }
+}
+
+impl<K, V, T, R> Chunk for VecChunk<K, V, T, R>
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
+    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
+
+    const TARGET: usize = TARGET;
 
     fn len(&self) -> usize { self.0.len() }
 

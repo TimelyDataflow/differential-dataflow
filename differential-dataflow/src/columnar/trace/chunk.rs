@@ -301,12 +301,8 @@ where U::Time: 'static {
     }
 }
 
-impl<U: ColumnarUpdate> Chunk for ColChunk<U>
+impl<U: ColumnarUpdate> crate::trace::chunk::NavigableChunk for ColChunk<U>
 where U::Time: 'static {
-    type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
-
-    const TARGET: usize = TARGET;
-
     fn bounds(&self) -> (
         (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
         (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
@@ -327,6 +323,13 @@ where U::Time: 'static {
             }
         }
     }
+}
+
+impl<U: ColumnarUpdate> Chunk for ColChunk<U>
+where U::Time: 'static {
+    type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
+
+    const TARGET: usize = TARGET;
 
     fn len(&self) -> usize {
         match self {

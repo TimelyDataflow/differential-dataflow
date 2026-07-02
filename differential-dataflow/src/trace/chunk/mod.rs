@@ -22,6 +22,8 @@
 //! [`arrange_core`](crate::operators::arrange::arrangement::arrange_core), along with a
 //! chunker that forms `C` from the input stream — typically
 //! [`ContainerChunker<C>`](crate::trace::implementations::chunker::ContainerChunker).
+//! Trace *maintenance* needs only [`Chunk`]; cursor-driven *consumption* of the
+//! arrangement additionally asks `C` for the [`NavigableChunk`] capability.
 //! Everything else here ([`ChunkBatch`], [`ChunkMerger`], [`ChunkBatchMerger`],
 //! [`ChunkBatchCursor`], [`ChunkBatchBuilder`]) is machinery those aliases expand to and is
 //! not named directly. The [`vec`](mod@vec) module is a worked `Chunk`
@@ -45,10 +47,10 @@
 //! settles its committed output as it goes (see [`Chunk::settle`]), rather than
 //! building a whole sequence and settling at the end. And every walk over a whole
 //! chunk sequence reads only resident metadata — [`len`](Chunk::len) and
-//! [`bounds`](Chunk::bounds) — never a chunk body: a batch indexes its chunks'
-//! bounds once at construction, so cursors binary-search that resident index and
-//! open only the chunk(s) a query touches. Implementors must therefore keep `len`
-//! and `bounds` cheap even when a chunk's body is paged out.
+//! [`bounds`](NavigableChunk::bounds) — never a chunk body: the straddle cursor
+//! indexes its chunks' bounds once at construction, binary-searches that resident
+//! index, and opens only the chunk(s) a query touches. Implementors must therefore
+//! keep `len` and `bounds` cheap even when a chunk's body is paged out.
 
 use std::collections::VecDeque;
 
@@ -70,21 +72,19 @@ pub mod vec;
 /// The "data" operations transform lists of chunks, are expected to do roughly
 /// "one chunk's worth" of work at a time; they can afford to compress and page.
 /// The "metadata" operations provide chunk information, and should be lightweight.
-pub trait Chunk: Navigable<Cursor: Cursor<Time = Self::Time>> + Sized + Clone {
+///
+/// The trait has no opinion about keys, vals, or diffs — only time, which trace
+/// maintenance needs. Reading a chunk's contents is a separate, optional
+/// capability: see [`NavigableChunk`].
+pub trait Chunk: Sized + Clone {
     /// The timestamp type of the chunk's updates.
     ///
-    /// Key/val/diff opinions live on the chunk's [`Navigable::Cursor`]; the chunk itself only needs
-    /// time, to bound its interval and participate in advancement and compaction.
+    /// Key/val/diff opinions live on the optional [`NavigableChunk`] capability; the chunk itself
+    /// only needs time, to bound its interval and participate in advancement and compaction.
     type Time: Lattice + timely::progress::Timestamp;
 
     /// The intended maximum chunk size.
     const TARGET: usize;
-
-    /// The first and last `(key, val, time)` triples in the chunk.
-    fn bounds(&self) -> (
-        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
-        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
-    );
 
     /// The number of updates in the chunk.
     fn len(&self) -> usize;
@@ -146,6 +146,24 @@ pub trait Chunk: Navigable<Cursor: Cursor<Time = Self::Time>> + Sized + Clone {
     /// [`pack`] helper, supplying their layout's coalesce / split / commit closures.
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>);
 
+}
+
+/// The navigation capability: a [`Chunk`] whose contents can be read by cursor.
+///
+/// This is optional. Batch formation and trace maintenance need only [`Chunk`];
+/// implementing this trait additionally lets [`ChunkBatch`] offer the straddle
+/// cursor ([`ChunkBatchCursor`]), which is how cursor-driven operator paths read
+/// an arrangement. Chunks consumed only by whole-chunk logic (tactics) can skip it.
+///
+/// `bounds` must stay cheap even when a chunk's body is paged out: the straddle
+/// cursor indexes every chunk's bounds at construction, and opens a chunk's body
+/// only when a query touches it.
+pub trait NavigableChunk: Chunk + Navigable<Cursor: Cursor<Time = <Self as Chunk>::Time>> {
+    /// The first and last `(key, val, time)` triples in the chunk.
+    fn bounds(&self) -> (
+        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
+        (<Self::Cursor as Cursor>::Key<'_>, <Self::Cursor as Cursor>::Val<'_>, <Self::Cursor as Cursor>::TimeGat<'_>),
+    );
 }
 
 /// Maximal-packing driver an implementor's [`Chunk::settle`] may delegate to.
@@ -219,44 +237,48 @@ type KeyCon<C> = <<C as Navigable>::Cursor as Cursor>::KeyContainer;
 type ValCon<C> = <<C as Navigable>::Cursor as Cursor>::ValContainer;
 
 /// A batch is a [`Chunk`] sequence plus a [`Description`].
-///
-/// Metadata about the batches is cached to make subselection efficient.
 pub struct ChunkBatch<C: Chunk> {
     /// Ordered, consolidated chunks; their concatenation is the batch.
     pub chunks: Vec<C>,
     /// The lower, upper, and since frontiers of the batch.
     pub description: Description<C::Time>,
-    /// Per-chunk first and last key, and first and last val, parallel to `chunks`.
-    first_keys: KeyCon<C>,
-    last_keys: KeyCon<C>,
-    first_vals: ValCon<C>,
-    last_vals: ValCon<C>,
 }
 
 impl<C: Chunk> ChunkBatch<C> {
-    /// Assemble a batch from ordered chunks, building the per-chunk index.
+    /// Assemble a batch from ordered chunks.
     pub fn new(chunks: Vec<C>, description: Description<C::Time>) -> Self {
-        let n = chunks.len();
+        for chunk in &chunks {
+            assert!(chunk.len() > 0, "ChunkBatch chunks must be non-empty");
+        }
+        ChunkBatch { chunks, description }
+    }
+}
+
+impl<C: NavigableChunk> crate::trace::Navigable for ChunkBatch<C> {
+    type Cursor = ChunkBatchCursor<C>;
+    fn cursor(&self) -> Self::Cursor {
+        // Index the chunks' resident bounds, so navigation binary-searches the
+        // index and opens only the chunk(s) a query touches. The index lives on
+        // the cursor rather than the batch: its containers are cursor-typed, and
+        // batches of cursor-less chunks must still form, merge, and settle.
+        let n = self.chunks.len();
         let mut first_keys = <KeyCon<C>>::with_capacity(n);
         let mut last_keys = <KeyCon<C>>::with_capacity(n);
         let mut first_vals = <ValCon<C>>::with_capacity(n);
         let mut last_vals = <ValCon<C>>::with_capacity(n);
-        for chunk in &chunks {
-            assert!(chunk.len() > 0, "ChunkBatch chunks must be non-empty");
+        for chunk in &self.chunks {
             let ((fk, fv, _), (lk, lv, _)) = chunk.bounds();
             first_keys.push_ref(fk);
             last_keys.push_ref(lk);
             first_vals.push_ref(fv);
             last_vals.push_ref(lv);
         }
-        ChunkBatch { chunks, description, first_keys, last_keys, first_vals, last_vals }
-    }
-}
-
-impl<C: Chunk> crate::trace::Navigable for ChunkBatch<C> {
-    type Cursor = ChunkBatchCursor<C>;
-    fn cursor(&self) -> Self::Cursor {
-        ChunkBatchCursor { key_chunk: 0, chunk: 0, inner: self.chunks.first().map(C::cursor) }
+        ChunkBatchCursor {
+            key_chunk: 0,
+            chunk: 0,
+            inner: self.chunks.first().map(C::cursor),
+            first_keys, last_keys, first_vals, last_vals,
+        }
     }
 }
 
@@ -301,28 +323,52 @@ pub type ChunkBuilder<C> = crate::trace::rc_blanket_impls::RcBuilder<ChunkBatchB
 /// merely cut at arbitrary points, so the operation is *concatenation*, never a
 /// merge: across a boundary a key's vals concatenate and a `(key, val)`'s times
 /// concatenate. The cursor exploits this. It holds the chunk currently being read
-/// and a cursor into it; it seeks by binary-searching the per-chunk index on
-/// `ChunkBatch`, and at boundaries it *continues* into the next chunk rather than
-/// merging — using the index to detect when a key or `(key, val)` spills forward,
-/// without touching chunk contents.
-pub struct ChunkBatchCursor<C: Chunk> {
+/// and a cursor into it; it seeks by binary-searching the per-chunk bounds index
+/// built at construction, and at boundaries it *continues* into the next chunk
+/// rather than merging — using the index to detect when a key or `(key, val)`
+/// spills forward, without touching chunk contents.
+pub struct ChunkBatchCursor<C: NavigableChunk> {
     /// First chunk of the current key's run; where `rewind_vals` returns to.
     key_chunk: usize,
     /// Chunk currently being read; `>= key_chunk`, within the current key's span.
     chunk: usize,
     /// Cursor into `chunk`; `None` once `chunk` is past the last chunk.
     inner: Option<C::Cursor>,
+    /// Per-chunk first and last key, and first and last val, parallel to the
+    /// batch's `chunks`: the resident index the seeks binary-search.
+    first_keys: KeyCon<C>,
+    last_keys: KeyCon<C>,
+    first_vals: ValCon<C>,
+    last_vals: ValCon<C>,
 }
 
-impl<C: Chunk> ChunkBatchCursor<C> {
+impl<C: NavigableChunk> ChunkBatchCursor<C> {
     /// Move the active chunk to `c`, opening a fresh inner cursor at its start.
     fn goto(&mut self, c: usize, storage: &ChunkBatch<C>) {
         self.chunk = c;
         self.inner = storage.chunks.get(c).map(C::cursor);
     }
+
+    /// Does key `k` span the boundary between chunks `c` and `c + 1` — chunk `c`
+    /// ends with it and chunk `c + 1` begins with it?
+    ///
+    /// The `reborrow`s confine the comparison's lifetime to this call: the bounds
+    /// index lives on `self`, and without them the (invariant) item lifetimes
+    /// would tie the borrow of `self` to `k`, blocking the caller's `goto`.
+    fn key_spills(&self, c: usize, k: <C::Cursor as Cursor>::Key<'_>) -> bool {
+        <KeyCon<C> as BatchContainer>::reborrow(self.last_keys.index(c)) == <KeyCon<C> as BatchContainer>::reborrow(k)
+            && <KeyCon<C> as BatchContainer>::reborrow(self.first_keys.index(c + 1)) == <KeyCon<C> as BatchContainer>::reborrow(k)
+    }
+
+    /// Does `(k, v)` span the boundary between chunks `c` and `c + 1`?
+    fn val_spills(&self, c: usize, k: <C::Cursor as Cursor>::Key<'_>, v: <C::Cursor as Cursor>::Val<'_>) -> bool {
+        self.key_spills(c, k)
+            && <ValCon<C> as BatchContainer>::reborrow(self.last_vals.index(c)) == <ValCon<C> as BatchContainer>::reborrow(v)
+            && <ValCon<C> as BatchContainer>::reborrow(self.first_vals.index(c + 1)) == <ValCon<C> as BatchContainer>::reborrow(v)
+    }
 }
 
-impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
+impl<C: NavigableChunk> Cursor for ChunkBatchCursor<C> {
     type Storage = ChunkBatch<C>;
 
     type KeyContainer = <C::Cursor as Cursor>::KeyContainer;
@@ -350,10 +396,7 @@ impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
         self.inner.as_mut().unwrap().map_times(&s.chunks[self.chunk], &mut logic);
         // Follow the (key, val) forward across boundaries while it spills.
         let mut c = self.chunk;
-        while c + 1 < s.chunks.len()
-            && s.last_keys.index(c) == k && s.first_keys.index(c + 1) == k
-            && s.last_vals.index(c) == v && s.first_vals.index(c + 1) == v
-        {
+        while c + 1 < s.chunks.len() && self.val_spills(c, k, v) {
             c += 1;
             s.chunks[c].cursor().map_times(&s.chunks[c], &mut logic);
         }
@@ -364,7 +407,7 @@ impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
         let n = s.chunks.len();
         let k = self.key(s);
         // Advance to the last chunk the key spans.
-        while self.chunk + 1 < n && s.last_keys.index(self.chunk) == k && s.first_keys.index(self.chunk + 1) == k {
+        while self.chunk + 1 < n && self.key_spills(self.chunk, k) {
             self.goto(self.chunk + 1, s);
         }
         // Step past the key within its last chunk.
@@ -383,7 +426,7 @@ impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
     fn seek_key(&mut self, s: &Self::Storage, key: Self::Key<'_>) {
         let n = s.chunks.len();
         // First chunk whose last key is `>= key`: where `key`'s run begins.
-        let c = s.last_keys.advance(0, n, |x| {
+        let c = self.last_keys.advance(0, n, |x| {
             <KeyCon<C> as BatchContainer>::reborrow(x).lt(&<KeyCon<C> as BatchContainer>::reborrow(key))
         });
         self.goto(c, s);
@@ -396,17 +439,14 @@ impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
         let n = s.chunks.len();
         let (k, v) = (self.key(s), self.val(s));
         // Advance to the last chunk the (key, val) spans.
-        while self.chunk + 1 < n
-            && s.last_keys.index(self.chunk) == k && s.first_keys.index(self.chunk + 1) == k
-            && s.last_vals.index(self.chunk) == v && s.first_vals.index(self.chunk + 1) == v
-        {
+        while self.chunk + 1 < n && self.val_spills(self.chunk, k, v) {
             self.goto(self.chunk + 1, s);
         }
         // Step past the (key, val) within that chunk.
         self.inner.as_mut().unwrap().step_val(&s.chunks[self.chunk]);
         // If the key's vals are exhausted here but the key spills, roll forward.
         if !self.inner.as_ref().unwrap().val_valid(&s.chunks[self.chunk])
-            && self.chunk + 1 < n && s.last_keys.index(self.chunk) == k && s.first_keys.index(self.chunk + 1) == k
+            && self.chunk + 1 < n && self.key_spills(self.chunk, k)
         {
             self.goto(self.chunk + 1, s);
             self.inner.as_mut().unwrap().seek_key(&s.chunks[self.chunk], k);
@@ -421,7 +461,7 @@ impl<C: Chunk> Cursor for ChunkBatchCursor<C> {
             self.inner.as_mut().unwrap().seek_val(&s.chunks[self.chunk], val);
             if self.inner.as_ref().unwrap().val_valid(&s.chunks[self.chunk]) { return; }
             // Key's vals exhausted in this chunk; if the key spills, retry in the next.
-            if self.chunk + 1 < n && s.last_keys.index(self.chunk) == k && s.first_keys.index(self.chunk + 1) == k {
+            if self.chunk + 1 < n && self.key_spills(self.chunk, k) {
                 self.goto(self.chunk + 1, s);
                 self.inner.as_mut().unwrap().seek_key(&s.chunks[self.chunk], k);
             } else {
