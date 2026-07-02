@@ -767,4 +767,34 @@ mod test {
             eprintln!("probes={probes:>7}: gallop={g:>12?}  linear={l:>12?}");
         }
     }
+
+    // `seek_key` must land at the first key `>= target` regardless of where the cursor
+    // starts, so the galloping hint (and its backward-seek fallback) never changes the
+    // answer. Probe every (start, target) pair — forward and backward — against an
+    // analytic oracle.
+    #[test]
+    fn seek_key_hint_is_direction_independent() {
+        use crate::trace::cursor::Cursor;
+        use crate::trace::Description;
+        use crate::trace::chunk::ChunkBatch;
+        use timely::progress::Antichain;
+
+        // One key per chunk (even keys 0, 2, .., 38) so seeks cross boundaries both ways.
+        let chunks: Vec<_> = (0..20u64).map(|k| chunk(vec![((2 * k, 0u64), 0u64, 1i64)])).collect();
+        let desc = Description::new(
+            Antichain::from_elem(0u64), Antichain::from_elem(1u64), Antichain::from_elem(0u64));
+        let batch = ChunkBatch::new(chunks, desc);
+
+        // First key `>= tgt`: the next even at or above `tgt`, or absent past the last (38).
+        let oracle = |tgt: u64| { let e = tgt + (tgt & 1); (e <= 38).then_some(e) };
+        for start in 0..=40u64 {
+            for tgt in 0..=40u64 {
+                let mut c = batch.cursor();
+                c.seek_key(&batch, &start);
+                c.seek_key(&batch, &tgt);
+                assert_eq!(c.get_key(&batch).copied(), oracle(tgt), "start={start} tgt={tgt}");
+            }
+        }
+    }
+
 }

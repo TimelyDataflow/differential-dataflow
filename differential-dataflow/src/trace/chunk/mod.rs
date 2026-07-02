@@ -48,7 +48,7 @@
 //! building a whole sequence and settling at the end. And every walk over a whole
 //! chunk sequence reads only resident metadata — [`len`](Chunk::len) and
 //! [`bounds`](NavigableChunk::bounds) — never a chunk body: the straddle cursor
-//! seeks by binary-searching the chunks' bounds and opens only the chunk(s) a
+//! seeks by galloping the chunks' bounds from a hint and opens only the chunk(s) a
 //! query touches. Implementors must therefore keep `len` and `bounds` cheap even
 //! when a chunk's body is paged out.
 
@@ -303,13 +303,13 @@ pub type ChunkBuilder<C> = crate::trace::rc_blanket_impls::RcBuilder<ChunkBatchB
 /// merely cut at arbitrary points, so the operation is *concatenation*, never a
 /// merge: across a boundary a key's vals concatenate and a `(key, val)`'s times
 /// concatenate. The cursor exploits this. It holds the chunk currently being read
-/// and a cursor into it; it seeks by binary-searching the chunks' resident
-/// [`bounds`](NavigableChunk::bounds), and at boundaries it *continues* into the
-/// next chunk rather than merging — consulting the two neighbouring chunks'
-/// bounds to detect when a key or `(key, val)` spills forward, without touching
-/// chunk contents. No state is materialized up front: a sparse lookup costs
-/// `log(chunks)` bounds reads and a sequential pass two per boundary, so cursor
-/// construction is free either way.
+/// and a cursor into it; it seeks by galloping the chunks' resident
+/// [`bounds`](NavigableChunk::bounds) from a remembered hint (the current key's first
+/// chunk), and at boundaries it *continues* into the next chunk rather than merging —
+/// consulting the two neighbouring chunks' bounds to detect when a key or `(key, val)`
+/// spills forward, without touching chunk contents. No state is materialized up front:
+/// a monotone seek sweep costs `O(log Δ)` bounds reads per seek and a sequential pass two
+/// per boundary, so cursor construction is free.
 pub struct ChunkBatchCursor<C: NavigableChunk> {
     /// First chunk of the current key's run; where `rewind_vals` returns to.
     key_chunk: usize,
@@ -341,6 +341,28 @@ impl<C: NavigableChunk> ChunkBatchCursor<C> {
         Self::key_spills(s, c, k)
             && <ValCon<C> as BatchContainer>::reborrow(s.chunks[c].bounds().1.1) == <ValCon<C> as BatchContainer>::reborrow(v)
             && <ValCon<C> as BatchContainer>::reborrow(s.chunks[c + 1].bounds().0.1) == <ValCon<C> as BatchContainer>::reborrow(v)
+    }
+
+    /// The first chunk, at or after `hint`, whose last key is `>= key`: where `key`'s run
+    /// begins. `hint` — the current key's first chunk (`key_chunk`) — is a valid lower bound
+    /// for a forward seek; a backward seek is detected and served by a full search from the
+    /// front. Galloping keeps a monotone seek sweep at `O(log Δ)` bounds reads per seek rather
+    /// than `O(log chunks)`; only resident [`bounds`](NavigableChunk::bounds) are read.
+    fn locate_key(s: &ChunkBatch<C>, hint: usize, key: <C::Cursor as Cursor>::Key<'_>) -> usize {
+        let n = s.chunks.len();
+        // `last_key(i) < key`, from chunk `i`'s resident bounds.
+        let lt = |i: usize| <KeyCon<C> as BatchContainer>::reborrow(s.chunks[i].bounds().1.0)
+            .lt(&<KeyCon<C> as BatchContainer>::reborrow(key));
+        let hint = hint.min(n);
+        // The hint can skip the answer only on a backward seek; then search from the front.
+        let lo = if hint == 0 || lt(hint - 1) { hint } else { 0 };
+        if lo >= n || !lt(lo) { return lo; }
+        // Exponential search from `lo`, then binary within the final bracket.
+        let (mut prev, mut step) = (lo, 1usize);
+        while prev + step < n && lt(prev + step) { prev += step; step <<= 1; }
+        let (mut a, mut b) = (prev + 1, (prev + step).min(n));
+        while a < b { let m = a + (b - a) / 2; if lt(m) { a = m + 1; } else { b = m; } }
+        a
     }
 }
 
@@ -401,14 +423,9 @@ impl<C: NavigableChunk> Cursor for ChunkBatchCursor<C> {
 
     fn seek_key(&mut self, s: &Self::Storage, key: Self::Key<'_>) {
         let n = s.chunks.len();
-        // First chunk whose last key is `>= key`: where `key`'s run begins.
-        // Binary search over the chunks' resident bounds.
-        let (mut lo, mut hi) = (0, n);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let last = <KeyCon<C> as BatchContainer>::reborrow(s.chunks[mid].bounds().1.0);
-            if last.lt(&<KeyCon<C> as BatchContainer>::reborrow(key)) { lo = mid + 1; } else { hi = mid; }
-        }
+        // First chunk whose last key is `>= key`: where `key`'s run begins. Gallop from the
+        // current key's first chunk (`key_chunk`), a lower bound for forward seeks.
+        let lo = Self::locate_key(s, self.key_chunk, key);
         self.goto(lo, s);
         self.key_chunk = lo;
         if lo < n { self.inner.as_mut().unwrap().seek_key(&s.chunks[lo], key); }
