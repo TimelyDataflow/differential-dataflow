@@ -48,9 +48,9 @@
 //! building a whole sequence and settling at the end. And every walk over a whole
 //! chunk sequence reads only resident metadata — [`len`](Chunk::len) and
 //! [`bounds`](NavigableChunk::bounds) — never a chunk body: the straddle cursor
-//! indexes its chunks' bounds once at construction, binary-searches that resident
-//! index, and opens only the chunk(s) a query touches. Implementors must therefore
-//! keep `len` and `bounds` cheap even when a chunk's body is paged out.
+//! seeks by binary-searching the chunks' bounds and opens only the chunk(s) a
+//! query touches. Implementors must therefore keep `len` and `bounds` cheap even
+//! when a chunk's body is paged out.
 
 use std::collections::VecDeque;
 
@@ -156,8 +156,9 @@ pub trait Chunk: Sized + Clone {
 /// an arrangement. Chunks consumed only by whole-chunk logic (tactics) can skip it.
 ///
 /// `bounds` must stay cheap even when a chunk's body is paged out: the straddle
-/// cursor indexes every chunk's bounds at construction, and opens a chunk's body
-/// only when a query touches it.
+/// cursor consults chunk bounds throughout navigation — seeks binary-search them,
+/// boundary crossings compare against them — and opens a chunk's body only when a
+/// query touches it.
 pub trait NavigableChunk: Chunk + Navigable<Cursor: Cursor<Time = <Self as Chunk>::Time>> {
     /// The first and last `(key, val, time)` triples in the chunk.
     fn bounds(&self) -> (
@@ -257,28 +258,7 @@ impl<C: Chunk> ChunkBatch<C> {
 impl<C: NavigableChunk> crate::trace::Navigable for ChunkBatch<C> {
     type Cursor = ChunkBatchCursor<C>;
     fn cursor(&self) -> Self::Cursor {
-        // Index the chunks' resident bounds, so navigation binary-searches the
-        // index and opens only the chunk(s) a query touches. The index lives on
-        // the cursor rather than the batch: its containers are cursor-typed, and
-        // batches of cursor-less chunks must still form, merge, and settle.
-        let n = self.chunks.len();
-        let mut first_keys = <KeyCon<C>>::with_capacity(n);
-        let mut last_keys = <KeyCon<C>>::with_capacity(n);
-        let mut first_vals = <ValCon<C>>::with_capacity(n);
-        let mut last_vals = <ValCon<C>>::with_capacity(n);
-        for chunk in &self.chunks {
-            let ((fk, fv, _), (lk, lv, _)) = chunk.bounds();
-            first_keys.push_ref(fk);
-            last_keys.push_ref(lk);
-            first_vals.push_ref(fv);
-            last_vals.push_ref(lv);
-        }
-        ChunkBatchCursor {
-            key_chunk: 0,
-            chunk: 0,
-            inner: self.chunks.first().map(C::cursor),
-            first_keys, last_keys, first_vals, last_vals,
-        }
+        ChunkBatchCursor { key_chunk: 0, chunk: 0, inner: self.chunks.first().map(C::cursor) }
     }
 }
 
@@ -323,10 +303,13 @@ pub type ChunkBuilder<C> = crate::trace::rc_blanket_impls::RcBuilder<ChunkBatchB
 /// merely cut at arbitrary points, so the operation is *concatenation*, never a
 /// merge: across a boundary a key's vals concatenate and a `(key, val)`'s times
 /// concatenate. The cursor exploits this. It holds the chunk currently being read
-/// and a cursor into it; it seeks by binary-searching the per-chunk bounds index
-/// built at construction, and at boundaries it *continues* into the next chunk
-/// rather than merging — using the index to detect when a key or `(key, val)`
-/// spills forward, without touching chunk contents.
+/// and a cursor into it; it seeks by binary-searching the chunks' resident
+/// [`bounds`](NavigableChunk::bounds), and at boundaries it *continues* into the
+/// next chunk rather than merging — consulting the two neighbouring chunks'
+/// bounds to detect when a key or `(key, val)` spills forward, without touching
+/// chunk contents. No state is materialized up front: a sparse lookup costs
+/// `log(chunks)` bounds reads and a sequential pass two per boundary, so cursor
+/// construction is free either way.
 pub struct ChunkBatchCursor<C: NavigableChunk> {
     /// First chunk of the current key's run; where `rewind_vals` returns to.
     key_chunk: usize,
@@ -334,12 +317,6 @@ pub struct ChunkBatchCursor<C: NavigableChunk> {
     chunk: usize,
     /// Cursor into `chunk`; `None` once `chunk` is past the last chunk.
     inner: Option<C::Cursor>,
-    /// Per-chunk first and last key, and first and last val, parallel to the
-    /// batch's `chunks`: the resident index the seeks binary-search.
-    first_keys: KeyCon<C>,
-    last_keys: KeyCon<C>,
-    first_vals: ValCon<C>,
-    last_vals: ValCon<C>,
 }
 
 impl<C: NavigableChunk> ChunkBatchCursor<C> {
@@ -352,19 +329,18 @@ impl<C: NavigableChunk> ChunkBatchCursor<C> {
     /// Does key `k` span the boundary between chunks `c` and `c + 1` — chunk `c`
     /// ends with it and chunk `c + 1` begins with it?
     ///
-    /// The `reborrow`s confine the comparison's lifetime to this call: the bounds
-    /// index lives on `self`, and without them the (invariant) item lifetimes
-    /// would tie the borrow of `self` to `k`, blocking the caller's `goto`.
-    fn key_spills(&self, c: usize, k: <C::Cursor as Cursor>::Key<'_>) -> bool {
-        <KeyCon<C> as BatchContainer>::reborrow(self.last_keys.index(c)) == <KeyCon<C> as BatchContainer>::reborrow(k)
-            && <KeyCon<C> as BatchContainer>::reborrow(self.first_keys.index(c + 1)) == <KeyCon<C> as BatchContainer>::reborrow(k)
+    /// Two resident [`bounds`](NavigableChunk::bounds) reads; the `reborrow`s
+    /// unify the (invariant) item lifetimes with `k`'s.
+    fn key_spills(s: &ChunkBatch<C>, c: usize, k: <C::Cursor as Cursor>::Key<'_>) -> bool {
+        <KeyCon<C> as BatchContainer>::reborrow(s.chunks[c].bounds().1.0) == <KeyCon<C> as BatchContainer>::reborrow(k)
+            && <KeyCon<C> as BatchContainer>::reborrow(s.chunks[c + 1].bounds().0.0) == <KeyCon<C> as BatchContainer>::reborrow(k)
     }
 
     /// Does `(k, v)` span the boundary between chunks `c` and `c + 1`?
-    fn val_spills(&self, c: usize, k: <C::Cursor as Cursor>::Key<'_>, v: <C::Cursor as Cursor>::Val<'_>) -> bool {
-        self.key_spills(c, k)
-            && <ValCon<C> as BatchContainer>::reborrow(self.last_vals.index(c)) == <ValCon<C> as BatchContainer>::reborrow(v)
-            && <ValCon<C> as BatchContainer>::reborrow(self.first_vals.index(c + 1)) == <ValCon<C> as BatchContainer>::reborrow(v)
+    fn val_spills(s: &ChunkBatch<C>, c: usize, k: <C::Cursor as Cursor>::Key<'_>, v: <C::Cursor as Cursor>::Val<'_>) -> bool {
+        Self::key_spills(s, c, k)
+            && <ValCon<C> as BatchContainer>::reborrow(s.chunks[c].bounds().1.1) == <ValCon<C> as BatchContainer>::reborrow(v)
+            && <ValCon<C> as BatchContainer>::reborrow(s.chunks[c + 1].bounds().0.1) == <ValCon<C> as BatchContainer>::reborrow(v)
     }
 }
 
@@ -396,7 +372,7 @@ impl<C: NavigableChunk> Cursor for ChunkBatchCursor<C> {
         self.inner.as_mut().unwrap().map_times(&s.chunks[self.chunk], &mut logic);
         // Follow the (key, val) forward across boundaries while it spills.
         let mut c = self.chunk;
-        while c + 1 < s.chunks.len() && self.val_spills(c, k, v) {
+        while c + 1 < s.chunks.len() && Self::val_spills(s, c, k, v) {
             c += 1;
             s.chunks[c].cursor().map_times(&s.chunks[c], &mut logic);
         }
@@ -407,7 +383,7 @@ impl<C: NavigableChunk> Cursor for ChunkBatchCursor<C> {
         let n = s.chunks.len();
         let k = self.key(s);
         // Advance to the last chunk the key spans.
-        while self.chunk + 1 < n && self.key_spills(self.chunk, k) {
+        while self.chunk + 1 < n && Self::key_spills(s, self.chunk, k) {
             self.goto(self.chunk + 1, s);
         }
         // Step past the key within its last chunk.
@@ -426,12 +402,16 @@ impl<C: NavigableChunk> Cursor for ChunkBatchCursor<C> {
     fn seek_key(&mut self, s: &Self::Storage, key: Self::Key<'_>) {
         let n = s.chunks.len();
         // First chunk whose last key is `>= key`: where `key`'s run begins.
-        let c = self.last_keys.advance(0, n, |x| {
-            <KeyCon<C> as BatchContainer>::reborrow(x).lt(&<KeyCon<C> as BatchContainer>::reborrow(key))
-        });
-        self.goto(c, s);
-        self.key_chunk = c;
-        if c < n { self.inner.as_mut().unwrap().seek_key(&s.chunks[c], key); }
+        // Binary search over the chunks' resident bounds.
+        let (mut lo, mut hi) = (0, n);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let last = <KeyCon<C> as BatchContainer>::reborrow(s.chunks[mid].bounds().1.0);
+            if last.lt(&<KeyCon<C> as BatchContainer>::reborrow(key)) { lo = mid + 1; } else { hi = mid; }
+        }
+        self.goto(lo, s);
+        self.key_chunk = lo;
+        if lo < n { self.inner.as_mut().unwrap().seek_key(&s.chunks[lo], key); }
     }
 
     fn step_val(&mut self, s: &Self::Storage) {
@@ -439,14 +419,14 @@ impl<C: NavigableChunk> Cursor for ChunkBatchCursor<C> {
         let n = s.chunks.len();
         let (k, v) = (self.key(s), self.val(s));
         // Advance to the last chunk the (key, val) spans.
-        while self.chunk + 1 < n && self.val_spills(self.chunk, k, v) {
+        while self.chunk + 1 < n && Self::val_spills(s, self.chunk, k, v) {
             self.goto(self.chunk + 1, s);
         }
         // Step past the (key, val) within that chunk.
         self.inner.as_mut().unwrap().step_val(&s.chunks[self.chunk]);
         // If the key's vals are exhausted here but the key spills, roll forward.
         if !self.inner.as_ref().unwrap().val_valid(&s.chunks[self.chunk])
-            && self.chunk + 1 < n && self.key_spills(self.chunk, k)
+            && self.chunk + 1 < n && Self::key_spills(s, self.chunk, k)
         {
             self.goto(self.chunk + 1, s);
             self.inner.as_mut().unwrap().seek_key(&s.chunks[self.chunk], k);
@@ -461,7 +441,7 @@ impl<C: NavigableChunk> Cursor for ChunkBatchCursor<C> {
             self.inner.as_mut().unwrap().seek_val(&s.chunks[self.chunk], val);
             if self.inner.as_ref().unwrap().val_valid(&s.chunks[self.chunk]) { return; }
             // Key's vals exhausted in this chunk; if the key spills, retry in the next.
-            if self.chunk + 1 < n && self.key_spills(self.chunk, k) {
+            if self.chunk + 1 < n && Self::key_spills(s, self.chunk, k) {
                 self.goto(self.chunk + 1, s);
                 self.inner.as_mut().unwrap().seek_key(&s.chunks[self.chunk], k);
             } else {
