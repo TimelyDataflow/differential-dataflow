@@ -10,13 +10,54 @@ use std::time::Instant;
 
 use rand::{Rng, SeedableRng, StdRng};
 
+use differential_dataflow::{Data, ExchangeData, Hashable};
 use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
+use differential_dataflow::difference::{Abelian, Semigroup};
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::reduce::reduce_trace_reference;
+use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
 use differential_dataflow::lattice::Lattice;
 
 type Node = usize;
 type Edge = (Node, Node);
+
+// Stand-alone equivalent of the default `reduce`, driven by the model-derived reference tactic. The
+// library exposes only the low-level, doc-hidden `reduce_trace_reference`; this helper supplies the
+// same arrange / abelian-negate / as_collection glue `reduce_named` uses, so the benchmark drives the
+// reference tactic without it living on the public `Collection`/`Arranged` API.
+fn reduce_reference<'scope, Ti, K, V, R, V2, R2, L>(
+    collection: VecCollection<'scope, Ti, (K, V), R>,
+    mut logic: L,
+) -> VecCollection<'scope, Ti, (K, V2), R2>
+where
+    Ti: timely::progress::Timestamp + Lattice + Ord,
+    K: ExchangeData + Hashable,
+    V: ExchangeData,
+    R: ExchangeData + Semigroup,
+    V2: Data,
+    R2: Ord + Abelian + 'static,
+    L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>) + 'static,
+{
+    // See tests/reduce_reference.rs for why `Tr1` and the spine/builder types are pinned explicitly:
+    // as a free function the output-key bound is checked before the argument would infer `Tr1`, and
+    // the closure params are annotated to the concrete `&K`/`&V` types so the user-logic coercion
+    // normalizes here, exactly as the default `reduce_named` gets for free.
+    let arranged: Arranged<'scope, TraceAgent<ValSpine<K, V, Ti, R>>> =
+        collection.arrange_by_key_named("Arrange: ReduceReference");
+    reduce_trace_reference::<TraceAgent<ValSpine<K, V, Ti, R>>, ValBuilder<K, V2, Ti, R2>, ValSpine<K, V2, Ti, R2>, _, _>(
+        arranged,
+        "ReduceReference",
+        move |key: &K, input: &[(&V, R)], output: &mut Vec<(V2, R2)>, change: &mut Vec<(V2, R2)>| {
+            if !input.is_empty() { logic(key, input, change); }
+            change.extend(output.drain(..).map(|(x, mut d)| { d.negate(); (x, d) }));
+            differential_dataflow::consolidation::consolidate(change);
+        },
+        |vec, key: &K, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v, t, r)| ((key.clone(), v), t, r))); },
+    )
+    .as_collection(|k, v| (k.clone(), v.clone()))
+}
 
 fn main() {
     for _ in 0 .. 2 {
@@ -66,7 +107,7 @@ fn reduce_churn(reference: bool) -> std::time::Duration {
         let mut input = worker.dataflow::<usize, _, _>(|scope| {
             let (input, coll) = scope.new_collection::<(usize, usize), isize>();
             let reduced = if reference {
-                coll.reduce_reference(|_k, s, t| t.push((s.len() as isize, 1)))
+                reduce_reference(coll, |_k, s, t| t.push((s.len() as isize, 1)))
             } else {
                 coll.reduce(|_k, s, t| t.push((s.len() as isize, 1)))
             };
@@ -105,7 +146,7 @@ fn fewkeys(reference: bool) -> std::time::Duration {
         let mut input = worker.dataflow::<usize, _, _>(|scope| {
             let (input, coll) = scope.new_collection::<(usize, usize), isize>();
             let reduced = if reference {
-                coll.reduce_reference(|_k, s, t| t.push((s.len() as isize, 1)))
+                reduce_reference(coll, |_k, s, t| t.push((s.len() as isize, 1)))
             } else {
                 coll.reduce(|_k, s, t| t.push((s.len() as isize, 1)))
             };
@@ -180,7 +221,7 @@ where
         let nodes = nodes.enter(scope);
         let combined = inner.join_map(edges, |_k, l, d| (*d, l + 1)).concat(nodes);
         if reference {
-            combined.reduce_reference(|_, s, t| t.push((*s[0].0, 1)))
+            reduce_reference(combined, |_, s, t| t.push((*s[0].0, 1)))
         } else {
             combined.reduce(|_, s, t| t.push((*s[0].0, 1)))
         }

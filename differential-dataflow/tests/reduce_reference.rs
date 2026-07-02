@@ -25,11 +25,15 @@ use timely::PartialOrder;
 use timely::dataflow::operators::capture::{Capture, Extract};
 use timely::dataflow::operators::vec::unordered_input::UnorderedInput;
 
-use differential_dataflow::AsCollection;
+use differential_dataflow::{AsCollection, Data, ExchangeData, Hashable};
 use differential_dataflow::VecCollection;
+use differential_dataflow::difference::{Abelian, Semigroup};
 use differential_dataflow::input::Input;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::*;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::reduce::reduce_trace_reference;
+use differential_dataflow::trace::implementations::{ValBuilder, ValSpine};
 
 use pair::Pair;
 type Time = Pair<u64, u64>;
@@ -50,6 +54,44 @@ fn min(_key: &u64, input: &[(&u64, isize)], output: &mut Vec<(i64, isize)>) {
 }
 
 type Logic = fn(&u64, &[(&u64, isize)], &mut Vec<(i64, isize)>);
+
+// Stand-alone equivalent of the default `reduce`, driven by the model-derived reference tactic. The
+// library exposes only the low-level, doc-hidden `reduce_trace_reference`; this helper supplies the
+// same arrange / abelian-negate / as_collection glue `reduce_named` uses, so the tests compare the
+// two tactics without the reference living on the public `Collection`/`Arranged` API.
+fn reduce_reference<'scope, Ti, K, V, R, V2, R2, L>(
+    collection: VecCollection<'scope, Ti, (K, V), R>,
+    mut logic: L,
+) -> VecCollection<'scope, Ti, (K, V2), R2>
+where
+    Ti: timely::progress::Timestamp + Lattice + Ord,
+    K: ExchangeData + Hashable,
+    V: ExchangeData,
+    R: ExchangeData + Semigroup,
+    V2: Data,
+    R2: Ord + Abelian + 'static,
+    L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>) + 'static,
+{
+    // Bind the input arrangement to an explicitly-typed local so `Tr1` is concrete going into
+    // `reduce_trace_reference` (otherwise its output-key bound is checked before the argument pins it).
+    let arranged: Arranged<'scope, TraceAgent<ValSpine<K, V, Ti, R>>> =
+        collection.arrange_by_key_named("Arrange: ReduceReference");
+
+    // The closure params are annotated to the concrete `&K` / `&V` / owned-output types (rather than
+    // left to infer the cursor's `Key<'_>` projection) so the coercion to the user's `&K` logic
+    // normalizes here, exactly as the default `reduce_named` gets for free by passing its logic through.
+    reduce_trace_reference::<TraceAgent<ValSpine<K, V, Ti, R>>, ValBuilder<K, V2, Ti, R2>, ValSpine<K, V2, Ti, R2>, _, _>(
+        arranged,
+        "ReduceReference",
+        move |key: &K, input: &[(&V, R)], output: &mut Vec<(V2, R2)>, change: &mut Vec<(V2, R2)>| {
+            if !input.is_empty() { logic(key, input, change); }
+            change.extend(output.drain(..).map(|(x, mut d)| { d.negate(); (x, d) }));
+            differential_dataflow::consolidation::consolidate(change);
+        },
+        |vec, key: &K, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v, t, r)| ((key.clone(), v), t, r))); },
+    )
+    .as_collection(|k, v| (k.clone(), v.clone()))
+}
 
 // A random input: `((key, val), Pair(a, b), diff)`, diffs ±1 so updates cancel.
 fn random_input(seed: usize, n: usize, keys: u64, vals: u64, span: u64) -> Vec<((u64, u64), Time, isize)> {
@@ -78,7 +120,7 @@ fn differential(seed: usize, logic: Logic) {
             let ((input, capability), stream) = scope.new_unordered_input::<((u64, u64), Time, isize)>();
             let collection = stream.as_collection();
             let via_cursor    = collection.clone().reduce(logic);
-            let via_reference = collection.reduce_reference(logic);
+            let via_reference = reduce_reference(collection, logic);
             via_cursor.assert_eq(via_reference);
             (input, capability)
         });
@@ -107,7 +149,7 @@ fn oracle(seed: usize, reference: bool, logic: Logic) {
         let (mut input, capability) = worker.dataflow::<Time, _, _>(|scope| {
             let ((input, capability), stream) = scope.new_unordered_input::<((u64, u64), Time, isize)>();
             let collection = stream.as_collection();
-            let out = if reference { collection.reduce_reference(logic) } else { collection.reduce(logic) };
+            let out = if reference { reduce_reference(collection, logic) } else { collection.reduce(logic) };
             out.inner.capture_into(send);
             (input, capability)
         });
@@ -180,7 +222,7 @@ fn over_derivation() {
                 let ((input, capability), stream) = scope.new_unordered_input::<((u64, u64), Time, isize)>();
                 let collection = stream.as_collection();
                 collection.clone().reduce(count).inspect(|_| {});     // drive the cursor tactic
-                collection.reduce_reference(count).inspect(|_| {});   // drive the reference tactic
+                reduce_reference(collection, count).inspect(|_| {});  // drive the reference tactic
                 (input, capability)
             });
             for u in updates { input.activate().session(&capability).give(u); }
@@ -252,7 +294,7 @@ where
         let nodes = nodes.enter(scope);
         let combined = inner.join_map(edges, |_k, l, d| (*d, l + 1)).concat(nodes);
         if reference {
-            combined.reduce_reference(|_, s, t| t.push((*s[0].0, 1)))
+            reduce_reference(combined, |_, s, t| t.push((*s[0].0, 1)))
         } else {
             combined.reduce(|_, s, t| t.push((*s[0].0, 1)))
         }

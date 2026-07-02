@@ -295,46 +295,6 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         reduce_trace::<_,Bu,_,_,_>(self, name, logic, push)
     }
 
-    /// As [`reduce_abelian`](Self::reduce_abelian), but using the model-derived reference tactic.
-    ///
-    /// Hidden from the public API: the reference tactic is a testing and demonstration oracle,
-    /// not a stable entry point to build on.
-    #[doc(hidden)]
-    pub fn reduce_abelian_reference<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
-    where
-        Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
-        BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
-        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, ValOwn: Data, Time = Tr2::Time, Diff: Abelian>,
-        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default> + 'static,
-        L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
-        P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
-    {
-        self.reduce_core_reference::<_,Bu,Tr2,_>(name, move |key, input, output, change| {
-            if !input.is_empty() {
-                logic(key, input, change);
-            }
-            change.extend(output.drain(..).map(|(x,mut d)| { d.negate(); (x, d) }));
-            crate::consolidation::consolidate(change);
-        }, push)
-    }
-
-    /// As [`reduce_core`](Self::reduce_core), but using the model-derived reference tactic.
-    ///
-    /// Hidden from the public API: the reference tactic is a testing and demonstration oracle,
-    /// not a stable entry point to build on.
-    #[doc(hidden)]
-    pub fn reduce_core_reference<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
-    where
-        Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
-        BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
-        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, ValOwn: Data, Time = Tr2::Time>,
-        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default> + 'static,
-        L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
-        P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
-    {
-        use crate::operators::reduce::reduce_trace_reference;
-        reduce_trace_reference::<_,Bu,_,_,_>(self, name, logic, push)
-    }
 }
 
 
