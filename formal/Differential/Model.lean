@@ -25,7 +25,10 @@ Correspondence with TARGETS2.md:
   advance-and-consolidate is one instance of the adversary
 * "The operator, abstracted", steps 1–4 → `seedSet`, `Reached`/`activeSet`/`pendedSet`
   (step 2, with the truncated closure: a time reached in `Beyond upper` is closed no
-  further), the `emit_*` fields of `Step` (step 3), `pending_eq` (step 4)
+  further), the `emit_*` fields of `Step` (step 3), the `pending_*` fields of `Step`
+  (step 4, relaxed: the implementation may warn about MORE times than the enumeration
+  defers, so long as they stay beyond the frontier; `Step.of_pending_eq` recovers the
+  exact choice)
 * "The goal theorem"                  → `Run.StreamCorrect`, `StreamCorrectness`
 * "The round invariant"               → `Run.INV` (clause 1 = finalized correctness,
   clause 2 = pending coverage); `inv_zero` is the base case
@@ -106,6 +109,27 @@ theorem acc_mapDomain (g : T → T) (d : T →₀ A) (t : T)
       Finsupp.sum_mapDomain_index (by simp) (fun b m₁ m₂ => by split <;> simp)]
   exact Finsupp.sum_congr fun x hx => by simp only [hg x hx]
 
+/-! ### Intra-round compaction is invisible
+
+The implementation also compacts WITHIN a round: moving through the interesting times in
+order, it advances its input and output buffers by joining their times with the meet `m`
+of every time still to be examined, and consolidates.  Because `m` is at or below
+everything the round still reads, this needs no adversary move at all: the two lemmas
+below (TARGETS2.md's *join preservation*, specialized to a one-element frontier) say the
+compacted buffer yields the same accumulation at every remaining evaluation point and the
+same join against every remaining seed as the uncompacted history would. -/
+
+/-- Advancing by a meet below `t` and consolidating leaves the accumulation at `t`
+    unchanged. -/
+theorem acc_mapDomain_sup (d : T →₀ A) {m t : T} (hmt : m ≤ t) :
+    acc (Finsupp.mapDomain (· ⊔ m) d) t = acc d t :=
+  acc_mapDomain _ d t fun _ _ => ⟨fun h => le_trans le_sup_left h, fun h => sup_le h hmt⟩
+
+/-- Joins against a seed above the meet are unchanged by advancing the joinee, so the
+    enumeration discovers the same interesting times from the compacted buffer. -/
+theorem sup_advance_eq {m s : T} (x : T) (hms : m ≤ s) : s ⊔ (x ⊔ m) = s ⊔ x := by
+  rw [sup_comm x m, ← sup_assoc, sup_eq_left.mpr hms]
+
 /-! ## The operator, abstracted (`TARGETS2.md`, steps 1–4) -/
 
 /-- Operator state after a round: the stored input and output representatives and the
@@ -151,15 +175,20 @@ def pendedSet (σ : State T A) (b : T →₀ A) (upper : Finset T) : Set T :=
     state after, delivering batch `b` and advancing the frontier to `upper`.
 
     The emission `e` is supported on the active times and makes the output correct there
-    (step 3).  The new pending set is exactly the deferred times plus the carried ones
-    (step 4).  The new stored input and output are ADVERSARIAL: any update sets whose
-    accumulations agree with the true ones on `Beyond upper` ("Compaction, modeled
-    adversarially"). -/
+    (step 3).  The new pending set CONTAINS the deferred times plus the carried ones, and
+    is confined beyond the frontier (step 4, relaxed): the implementation warns about
+    more times than the enumeration defers — e.g. joins with already-finalized times it
+    kept around "to scare future times" — and over-warning is harmless, since a warned
+    time that owes nothing is evaluated to an empty correction when it comes due.  The
+    new stored input and output are ADVERSARIAL: any update sets whose accumulations
+    agree with the true ones on `Beyond upper` ("Compaction, modeled adversarially"). -/
 structure Step (f : A → A) (upper : Finset T) (b : T →₀ A)
     (σ : State T A) (e : T →₀ A) (σ' : State T A) : Prop where
   emit_support : ↑e.support ⊆ activeSet σ b upper
   emit_correct : ∀ t ∈ activeSet σ b upper, acc (σ.output + e) t = f (acc (σ.stored + b) t)
-  pending_eq : σ'.pending = pendedSet σ b upper ∪ (σ.pending ∩ Beyond upper)
+  pending_super : pendedSet σ b upper ∪ (σ.pending ∩ Beyond upper) ⊆ σ'.pending
+  pending_confined : σ'.pending ⊆ Beyond upper
+  pending_finite : σ'.pending.Finite
   stored_agrees : ∀ t ∈ Beyond upper, acc σ'.stored t = acc (σ.stored + b) t
   output_agrees : ∀ t ∈ Beyond upper, acc σ'.output t = acc (σ.output + e) t
 
@@ -252,9 +281,8 @@ theorem active_not_beyond {σ : State T A} {b : T →₀ A} {upper : Finset T} {
     set. -/
 theorem Step.reached_beyond_pended {f : A → A} {upper : Finset T} {b : T →₀ A}
     {σ σ' : State T A} {e : T →₀ A} (hs : Step f upper b σ e σ')
-    {x : T} (hr : x ∈ reachedSet σ b upper) (hb : x ∈ Beyond upper) : x ∈ σ'.pending := by
-  rw [hs.pending_eq]
-  exact Or.inl ⟨hr, hb⟩
+    {x : T} (hr : x ∈ reachedSet σ b upper) (hb : x ∈ Beyond upper) : x ∈ σ'.pending :=
+  hs.pending_super (Or.inl ⟨hr, hb⟩)
 
 /-- Scenario 1 (cancellation), concretely over `ℕ × ℕ` and `ℤ`: the batch
     `{+1 at (1,0), −1 at (0,1)}` accumulates to zero at every point of `Beyond {(1,1)}`,
@@ -589,18 +617,12 @@ theorem Run.output_agrees_emitted {f : A → A} {n : ℕ} (R : Run T A f n) :
 /-- Pending times always sit at or beyond the current frontier. -/
 theorem Run.pending_beyond {f : A → A} {n : ℕ} (R : Run T A f n) :
     ∀ r ≤ n, (R.state r).pending ⊆ Beyond (R.frontier r) := by
-  intro r
-  induction r with
+  intro r hr
+  cases r with
   | zero =>
-    intro _
     rw [R.state_zero]
     exact Set.empty_subset _
-  | succ r _ =>
-    intro hr x hx
-    rw [(R.step r (by omega)).pending_eq] at hx
-    rcases hx with hx | hx
-    · exact hx.2
-    · exact hx.2
+  | succ r => exact (R.step r (by omega)).pending_confined
 
 /-- The three-part discrepancy trace of a round: the change term, the carried staleness,
     minus the emission. -/
@@ -877,14 +899,10 @@ theorem Run.step_residual {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ} (h
               · exact Or.inl (Or.inl hy)
               · exact Or.inr (Or.inl hy))
             (Or.inl (Finset.mem_coe.mpr hnu)) hnux hcl hxb
-        refine ⟨p, ?_, hple⟩
-        rw [hstep.pending_eq]
-        exact Or.inl ⟨hpr, hpb⟩
+        exact ⟨p, hstep.pending_super (Or.inl ⟨hpr, hpb⟩), hple⟩
       · by_cases hyp : ∃ y ∈ (R.state r).pending, y ≤ x ∧ y ∈ Beyond (R.frontier (r + 1))
         · obtain ⟨y, hyP, hyx, hyb⟩ := hyp
-          refine ⟨y, ?_, hyx⟩
-          rw [hstep.pending_eq]
-          exact Or.inr ⟨hyP, hyb⟩
+          exact ⟨y, hstep.pending_super (Or.inr ⟨hyP, hyb⟩), hyx⟩
         · replace hyp : ∀ y ∈ (R.state r).pending, y ≤ x →
               y ∉ Beyond (R.frontier (r + 1)) :=
             fun y hy hyx hyb => hyp ⟨y, hy, hyx, hyb⟩
@@ -900,9 +918,7 @@ theorem Run.step_residual {f : A → A} {n : ℕ} (R : Run T A f n) {r : ℕ} (h
                 · exact Or.inl (Or.inl hy)
                 · exact Or.inl (Or.inr hy))
               (Or.inr ⟨hp₀P, hp₀due⟩) hp₀x hcl hxb
-          refine ⟨p, ?_, hple⟩
-          rw [hstep.pending_eq]
-          exact Or.inl ⟨hpr, hpb⟩
+          exact ⟨p, hstep.pending_super (Or.inl ⟨hpr, hpb⟩), hple⟩
 
 /-- **The transfer property**: the residual staleness trace, supported in the OLD ground
     set's closure above a new pending time, can be re-based onto the NEW representatives'
@@ -1016,6 +1032,41 @@ theorem pendedSet_subset_supClosure (σ : State T A) (b : T →₀ A) (upper : F
     pendedSet σ b upper ⊆ supClosure (baseSet σ b upper) :=
   fun _ hx => Reached.mem_supClosure Set.subset_union_right hx.1
 
+/-- The deferred set is finite: it lives in the sup-closure of a finite base. -/
+theorem pendedSet_finite (σ : State T A) (b : T →₀ A) (upper : Finset T)
+    (hP : σ.pending.Finite) : (pendedSet σ b upper).Finite := by
+  refine Set.Finite.subset ?_ (pendedSet_subset_supClosure σ b upper)
+  refine Set.Finite.supClosure ?_
+  exact Set.Finite.union
+    (Set.Finite.union (Finset.finite_toSet _) (Finset.finite_toSet _))
+    (Set.Finite.union (Finset.finite_toSet _)
+      (Set.Finite.subset hP Set.sdiff_subset))
+
+/-- Build a `Step` from the EXACT pending choice — the deferred times plus the carried
+    ones, nothing more.  This is TARGETS2.md's step 4 as originally written; the relaxed
+    `pending_*` fields follow from exactness. -/
+theorem Step.of_pending_eq {f : A → A} {upper : Finset T} {b : T →₀ A}
+    {σ σ' : State T A} {e : T →₀ A} (hP : σ.pending.Finite)
+    (emit_support : ↑e.support ⊆ activeSet σ b upper)
+    (emit_correct : ∀ t ∈ activeSet σ b upper,
+      acc (σ.output + e) t = f (acc (σ.stored + b) t))
+    (pending_eq : σ'.pending = pendedSet σ b upper ∪ (σ.pending ∩ Beyond upper))
+    (stored_agrees : ∀ t ∈ Beyond upper, acc σ'.stored t = acc (σ.stored + b) t)
+    (output_agrees : ∀ t ∈ Beyond upper, acc σ'.output t = acc (σ.output + e) t) :
+    Step f upper b σ e σ' where
+  emit_support := emit_support
+  emit_correct := emit_correct
+  pending_super := by rw [pending_eq]
+  pending_confined := by
+    rw [pending_eq]
+    exact Set.union_subset (fun _ hx => hx.2) (fun _ hx => hx.2)
+  pending_finite := by
+    rw [pending_eq]
+    exact Set.Finite.union (pendedSet_finite σ b upper hP)
+      (Set.Finite.subset hP Set.inter_subset_left)
+  stored_agrees := stored_agrees
+  output_agrees := output_agrees
+
 /-! ## Consumption-time re-derivation: the with-output trace, for ANY adversary
 
 Rather than carrying the staleness trace across the adversary (the `Transfer`), rebuild
@@ -1029,27 +1080,15 @@ stored output times, as the implementation does): it is exactly what makes
 `Run.stream_correct` unconditional.  An output-free variant of the model would still
 need `Transfer` proved by other means. -/
 
-/-- Pending sets are finite: they live in the closure of a finite base. -/
+/-- Pending sets are finite. -/
 theorem Run.pending_finite {f : A → A} {n : ℕ} (R : Run T A f n) :
     ∀ r ≤ n, ((R.state r).pending).Finite := by
-  intro r
-  induction r with
+  intro r hr
+  cases r with
   | zero =>
-    intro _
     rw [R.state_zero]
     exact Set.finite_empty
-  | succ r ih =>
-    intro hr
-    have hrn : r < n := by omega
-    rw [(R.step r hrn).pending_eq]
-    refine Set.Finite.union ?_ ?_
-    · refine Set.Finite.subset ?_ (pendedSet_subset_supClosure _ _ _)
-      refine Set.Finite.supClosure ?_
-      refine Set.Finite.union
-        (Set.Finite.union (Finset.finite_toSet _) (Finset.finite_toSet _))
-        (Set.Finite.union (Finset.finite_toSet _) ?_)
-      exact Set.Finite.subset (ih (by omega)) Set.sdiff_subset
-    · exact Set.Finite.subset (ih (by omega)) Set.inter_subset_left
+  | succ r => exact (R.step r (by omega)).pending_finite
 
 /-- **The with-output re-derivation.**  If the staleness at round `r` vanishes wherever no
     pending time reaches (which `step_residual` supplies), then it has a trace supported
@@ -1293,7 +1332,7 @@ noncomputable def scenario1Run : Run (ℕ × ℕ) ℤ s1f 2 where
     interval_cases r
     · -- Round 1: seeds `(1,0)` and `(0,1)`, join pended, adversary cancels the input.
       show Step s1f {(1, 1)} s1b s1st0 s1e1 s1st1
-      refine ⟨?_, ?_, rfl, ?_, ?_⟩
+      refine Step.of_pending_eq (by exact Set.finite_empty) ?_ ?_ rfl ?_ ?_
       · -- emissions at the two seeds, both active
         intro x hx
         have hmem : x ∈ ({(1, 0), (0, 1)} : Set (ℕ × ℕ)) := by
@@ -1363,7 +1402,11 @@ noncomputable def scenario1Run : Run (ℕ × ℕ) ℤ s1f 2 where
           s1_not_beyond_10
           (Reached.seed (Or.inl (Finsupp.mem_support_iff.mpr (by simp [s1b_apply_01]))))
           s1_not_beyond_01
-      refine ⟨?_, ?_, rfl, ?_, ?_⟩
+      have hP1 : (s1st1.pending).Finite := by
+        exact Set.Finite.union
+          (pendedSet_finite s1st0 s1b {(1, 1)} (by exact Set.finite_empty))
+          (Set.Finite.subset (by exact Set.finite_empty) Set.inter_subset_left)
+      refine Step.of_pending_eq hP1 ?_ ?_ rfl ?_ ?_
       · intro x hx
         have hmem : x = ((1, 1) : ℕ × ℕ) := by
           have := Finsupp.support_single_subset (Finset.mem_coe.mp hx)
