@@ -22,7 +22,7 @@ use timely::container::{PushInto, SizableContainer};
 
 use differential_dataflow::consolidation::Consolidate;
 use differential_dataflow::columnar::layout::ColumnarUpdate;
-use differential_dataflow::trace::chunk::{merge_chains, Chunk};
+use differential_dataflow::trace::chunk::{merge_chains, Chunk, NavigableChunk};
 use differential_dataflow::trace::chunk::vec::VecChunk;
 use differential_dataflow::columnar::trace::ColChunk;
 use differential_dataflow::trace::cursor::Cursor;
@@ -60,7 +60,7 @@ where
 
 /// Walk every `(key, val, time, diff)` via the chunk cursors, counting updates
 /// (a uniform proxy for scan cost across layouts).
-fn scan<C: Chunk>(chunks: &[C]) -> usize {
+fn scan<C: NavigableChunk>(chunks: &[C]) -> usize {
     let mut count = 0;
     for c in chunks {
         let mut cur = c.cursor();
@@ -81,7 +81,7 @@ fn ms(t: Instant) -> f64 { t.elapsed().as_secs_f64() * 1000.0 }
 /// two interleaving halves for the merge. Returns timings + footprint.
 fn bench<C, I>(updates: &[I], half_a: &[I], half_b: &[I]) -> (f64, f64, f64, f64, usize, usize)
 where
-    C: Chunk + Default + SizableContainer + Consolidate + Container + PushInto<I>,
+    C: NavigableChunk + Default + SizableContainer + Consolidate + Container + PushInto<I>,
     I: Clone,
 {
     let (half_a, half_b) = (half_a.to_vec(), half_b.to_vec());
