@@ -1,4 +1,4 @@
-//! Test harness for the model-derived `reference` reduce tactic. Four things:
+//! Test harness for the model-derived `reference` reduce tactic. Three things:
 //!
 //! * `differential_*` — run the default (cursor) reduce and the `reference` reduce on the SAME random
 //!   input and `assert_eq` their outputs at every time. The drift detector: if either tactic changes
@@ -13,9 +13,6 @@
 //!
 //! * `bfs_*` — an iterative BFS (product time via iteration; a real computation shape) computed both
 //!   ways over a graph that grows and shrinks; another differential check.
-//!
-//! * `over_derivation` — with `--features reduce-metrics`, count how many interesting times each
-//!   tactic evaluates on a cancellation-heavy input, to measure the value-blind over-derivation.
 
 use std::collections::BTreeMap;
 
@@ -193,45 +190,6 @@ fn oracle(seed: usize, reference: bool, logic: Logic) {
         actual.retain(|_, d| *d != 0);
 
         assert_eq!(expected, actual, "seed {seed} reference {reference} at time {q:?}");
-    }
-}
-
-// ============= over-derivation: interesting-time counts, cursor vs reference =============
-// Run with:  cargo test -p differential-dataflow --features reduce-metrics over_derivation -- --nocapture
-
-#[cfg(feature = "reduce-metrics")]
-#[test]
-fn over_derivation() {
-    use differential_dataflow::operators::reduce::metrics;
-    // Cancellation-heavy configs: few keys/values over dense product-time grids with ±1 diffs, so many
-    // updates advance-cancel — the cursor drops those (zero-debt) addresses, the reference keeps them.
-    // Sweep densities to look for any case where the value-blind reference derives more.
-    let configs = [
-        (1, 1200usize, 4u64, 3u64, 10u64),
-        (2, 1500, 3, 2, 12),
-        (3, 2000, 2, 2, 8),
-        (4, 1000, 6, 4, 10),
-        (5, 1800, 2, 3, 14),
-    ];
-    println!();
-    for (seed, n, keys, vals, span) in configs {
-        let updates = random_input(seed, n, keys, vals, span);
-        metrics::reset();
-        timely::execute_directly(move |worker| {
-            let (mut input, capability) = worker.dataflow::<Time, _, _>(|scope| {
-                let ((input, capability), stream) = scope.new_unordered_input::<((u64, u64), Time, isize)>();
-                let collection = stream.as_collection();
-                collection.clone().reduce(count).inspect(|_| {});     // drive the cursor tactic
-                reduce_reference(collection, count).inspect(|_| {});  // drive the reference tactic
-                (input, capability)
-            });
-            for u in updates { input.activate().session(&capability).give(u); }
-            drop(capability);
-        });
-        let (c, r) = (metrics::cursor(), metrics::reference());
-        println!("  keys={keys} vals={vals} span={span} n={n}: cursor {c}, reference {r}  ({:.2}x)",
-                 r as f64 / (c.max(1)) as f64);
-        assert!(r >= c, "value-blind reference should derive at least as many interesting times as the cursor");
     }
 }
 

@@ -675,9 +675,6 @@ mod cursors {
                         // output produced. This sounds like a good test to have for debug builds!
                         if interesting {
 
-                            #[cfg(feature = "reduce-metrics")]
-                            crate::operators::reduce::metrics::CURSOR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
                             // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
                             // The buffers were advanced by `meet` in the determination step above.
                             debug_assert!(self.input_buffer.is_empty());
@@ -1202,9 +1199,6 @@ pub(crate) mod reference {
                 }
 
                 sort_dedup(&mut self.active);
-
-                #[cfg(feature = "reduce-metrics")]
-                crate::operators::reduce::metrics::REFERENCE.fetch_add(self.active.len(), std::sync::atomic::Ordering::Relaxed);
             }
 
             // ===================== PHASE 2 — APPLICATION (`emit_correct`) =====================
@@ -1281,23 +1275,4 @@ pub(crate) mod reference {
             }
         }
     }
-}
-
-/// Optional interesting-time counters. They measure how many in-band interesting times each tactic
-/// evaluates, and hence how much the value-blind `reference` over-derives relative to the value-aware
-/// cursor (whose consolidation drops the zero-debt addresses the reference keeps). Off unless built
-/// with `--features reduce-metrics`; the increments compile to nothing otherwise.
-#[cfg(feature = "reduce-metrics")]
-pub mod metrics {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    /// In-band interesting times evaluated by the default `cursors::CursorTactic`.
-    pub static CURSOR: AtomicUsize = AtomicUsize::new(0);
-    /// In-band interesting times evaluated by the model-derived `reference::ReferenceTactic`.
-    pub static REFERENCE: AtomicUsize = AtomicUsize::new(0);
-    /// Reset both counters to zero.
-    pub fn reset() { CURSOR.store(0, Ordering::Relaxed); REFERENCE.store(0, Ordering::Relaxed); }
-    /// Read the cursor tactic's count.
-    pub fn cursor() -> usize { CURSOR.load(Ordering::Relaxed) }
-    /// Read the reference tactic's count.
-    pub fn reference() -> usize { REFERENCE.load(Ordering::Relaxed) }
 }
