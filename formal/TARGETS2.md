@@ -59,6 +59,7 @@ Round `r+1` computes:
 3. Emission: an update set `e_{r+1}` supported on `active`, chosen so that for every `t ∈ active`, `acc (O_r + e_{r+1}) t = f (acc (S_r + b_{r+1}) t)`.
    (The greedy `dtrace` construction of `Coverage.lean` builds it.)
 4. `P_{r+1} = pended ∪ (P_r ∩ Beyond u_{r+1})`, and the adversary chooses fresh representatives `S_{r+1}`, `O_{r+1}`.
+   (Amended 2026-07-02: the model requires only `P_{r+1} ⊇ pended ∪ (P_r ∩ Beyond u_{r+1})` with `P_{r+1} ⊆ Beyond u_{r+1}` finite — the implementation warns about MORE times than the enumeration defers, e.g. joins with already-finalized times it keeps around "to scare future times", and over-warning is harmless: a warned time owing nothing evaluates to an empty correction when due.  The exact choice above is one instance, `Step.of_pending_eq` in the Lean.)
 
 ## The goal theorem
 
