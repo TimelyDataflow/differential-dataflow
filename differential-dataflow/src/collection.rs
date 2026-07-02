@@ -759,12 +759,20 @@ pub mod vec {
 
         /// As [`reduce`](Self::reduce), but driven by the model-derived reference tactic. Same result;
         /// intended for differential testing against the default reduce.
+        ///
+        /// Hidden from the public API: the reference tactic is a testing and demonstration oracle,
+        /// not a stable entry point to build on.
+        #[doc(hidden)]
         pub fn reduce_reference<L, V2: crate::Data, R2: Ord+Abelian+'static>(self, logic: L) -> Collection<'scope, T, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
             self.reduce_named_reference("Reduce", logic)
         }
 
         /// As [`reduce_named`](Self::reduce_named), but driven by the model-derived reference tactic.
+        ///
+        /// Hidden from the public API: the reference tactic is a testing and demonstration oracle,
+        /// not a stable entry point to build on.
+        #[doc(hidden)]
         pub fn reduce_named_reference<L, V2: crate::Data, R2: Ord+Abelian+'static>(self, name: &str, logic: L) -> Collection<'scope, T, (K, V2), R2>
         where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
             use crate::trace::implementations::{ValBuilder, ValSpine};

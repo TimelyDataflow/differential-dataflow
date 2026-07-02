@@ -95,6 +95,10 @@ where
 /// As [`reduce_trace`], but driven by the model-derived [`reference::ReferenceTactic`] instead of the
 /// default `cursors::CursorTactic`. Same result contract; intended for differential testing of the
 /// two tactics against each other.
+///
+/// Hidden from the public API: the reference tactic is a testing and demonstration oracle, not a
+/// stable entry point to build on.
+#[doc(hidden)]
 pub fn reduce_trace_reference<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,

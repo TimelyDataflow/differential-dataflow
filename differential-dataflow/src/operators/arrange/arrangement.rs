@@ -296,6 +296,10 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
     }
 
     /// As [`reduce_abelian`](Self::reduce_abelian), but using the model-derived reference tactic.
+    ///
+    /// Hidden from the public API: the reference tactic is a testing and demonstration oracle,
+    /// not a stable entry point to build on.
+    #[doc(hidden)]
     pub fn reduce_abelian_reference<L, Bu, Tr2, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
         Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
@@ -315,6 +319,10 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
     }
 
     /// As [`reduce_core`](Self::reduce_core), but using the model-derived reference tactic.
+    ///
+    /// Hidden from the public API: the reference tactic is a testing and demonstration oracle,
+    /// not a stable entry point to build on.
+    #[doc(hidden)]
     pub fn reduce_core_reference<L, Bu, Tr2, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
         Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
