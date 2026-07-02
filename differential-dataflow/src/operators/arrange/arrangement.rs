@@ -294,9 +294,7 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         use crate::operators::reduce::reduce_trace;
         reduce_trace::<_,Bu,_,_,_>(self, name, logic, push)
     }
-
 }
-
 
 impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// Brings an arranged collection out of a nested region.

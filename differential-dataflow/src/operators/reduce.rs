@@ -24,25 +24,6 @@ use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, Batc
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 
-/// Optional interesting-time counters. They measure how many in-band interesting times each tactic
-/// evaluates, and hence how much the value-blind `reference` over-derives relative to the value-aware
-/// cursor (whose consolidation drops the zero-debt addresses the reference keeps). Off unless built
-/// with `--features reduce-metrics`; the increments compile to nothing otherwise.
-#[cfg(feature = "reduce-metrics")]
-pub mod metrics {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    /// In-band interesting times evaluated by the default `cursors::CursorTactic`.
-    pub static CURSOR: AtomicUsize = AtomicUsize::new(0);
-    /// In-band interesting times evaluated by the model-derived `reference::ReferenceTactic`.
-    pub static REFERENCE: AtomicUsize = AtomicUsize::new(0);
-    /// Reset both counters to zero.
-    pub fn reset() { CURSOR.store(0, Ordering::Relaxed); REFERENCE.store(0, Ordering::Relaxed); }
-    /// Read the cursor tactic's count.
-    pub fn cursor() -> usize { CURSOR.load(Ordering::Relaxed) }
-    /// Read the reference tactic's count.
-    pub fn reference() -> usize { REFERENCE.load(Ordering::Relaxed) }
-}
-
 /// A type that resolves a key-wise reduction over batches arriving on the input.
 ///
 /// Unlike join, reduce does not suspend: its output is at most linear in its input, so a single
@@ -92,25 +73,10 @@ where
     reduce_with_tactic(trace, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
 }
 
-/// As [`reduce_trace`], but driven by the model-derived [`reference::ReferenceTactic`] instead of the
-/// default `cursors::CursorTactic`. Same result contract; intended for differential testing of the
-/// two tactics against each other.
-///
-/// Hidden from the public API: the reference tactic is a testing and demonstration oracle, not a
-/// stable entry point to build on.
+// The model-derived reference tactic and its entry point live in `mod reference`; re-exported here
+// (doc-hidden) as the sole public handle for its differential and oracle tests.
 #[doc(hidden)]
-pub fn reduce_trace_reference<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
-where
-    Tr1: TraceReader<Batch: Navigable> + 'static,
-    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
-    BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
-    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, ValOwn: Data, Time = Tr2::Time>,
-    Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default> + 'static,
-    L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
-    P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
-{
-    reduce_with_tactic(trace, name, reference::ReferenceTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
-}
+pub use reference::reduce_trace_reference;
 
 /// Drives a key-wise reduction using a supplied [`ReduceTactic`].
 ///
@@ -822,11 +788,29 @@ mod cursors {
 /// the corrections — the model's `emit_correct`. Determination never consults the output produced
 /// this round (it finishes first), so this tactic embodies the proven algorithm exactly and is the
 /// clean subject for differential testing against [`cursors::CursorTactic`].
-mod reference {
+pub(crate) mod reference {
 
     use super::*;
     use crate::lattice::Lattice;
     use crate::operators::ValueHistory;
+
+    /// Drives a key-wise reduction with the model-derived [`ReferenceTactic`], the analogue of the
+    /// default [`super::reduce_trace`]. Same result contract; intended for differential testing of the
+    /// two tactics against each other. Re-exported (doc-hidden) from the parent module as the sole
+    /// public handle: the reference tactic is a testing and demonstration oracle, not a stable entry
+    /// point to build on.
+    pub fn reduce_trace_reference<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
+    where
+        Tr1: TraceReader<Batch: Navigable> + 'static,
+        Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
+        BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, ValOwn: Data, Time = Tr2::Time>,
+        Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default> + 'static,
+        L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+        P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
+    {
+        reduce_with_tactic(trace, name, ReferenceTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
+    }
 
     /// Sorts and deduplicates, matching `cursors::sort_dedup`.
     #[inline(never)]
@@ -1297,4 +1281,23 @@ mod reference {
             }
         }
     }
+}
+
+/// Optional interesting-time counters. They measure how many in-band interesting times each tactic
+/// evaluates, and hence how much the value-blind `reference` over-derives relative to the value-aware
+/// cursor (whose consolidation drops the zero-debt addresses the reference keeps). Off unless built
+/// with `--features reduce-metrics`; the increments compile to nothing otherwise.
+#[cfg(feature = "reduce-metrics")]
+pub mod metrics {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    /// In-band interesting times evaluated by the default `cursors::CursorTactic`.
+    pub static CURSOR: AtomicUsize = AtomicUsize::new(0);
+    /// In-band interesting times evaluated by the model-derived `reference::ReferenceTactic`.
+    pub static REFERENCE: AtomicUsize = AtomicUsize::new(0);
+    /// Reset both counters to zero.
+    pub fn reset() { CURSOR.store(0, Ordering::Relaxed); REFERENCE.store(0, Ordering::Relaxed); }
+    /// Read the cursor tactic's count.
+    pub fn cursor() -> usize { CURSOR.load(Ordering::Relaxed) }
+    /// Read the reference tactic's count.
+    pub fn reference() -> usize { REFERENCE.load(Ordering::Relaxed) }
 }
