@@ -1052,6 +1052,11 @@ mod reference {
         times_current: Vec<T>,
         temporary: Vec<T>,
         meets: Vec<T>,
+        // Reusable time-only buffers for phase 1's `TimeReplay` walks. Pooled here (rather than in
+        // `ValueHistory`) so the reference tactic pays for them and the standard value walk does not.
+        batch_times: Vec<T>,
+        input_times: Vec<T>,
+        output_times: Vec<T>,
         // The interesting (in-band reached) times, handed from phase 1 to phase 2.
         active: Vec<T>,
     }
@@ -1078,6 +1083,9 @@ mod reference {
                 times_current: Vec::new(),
                 temporary: Vec::new(),
                 meets: Vec::new(),
+                batch_times: Vec::new(),
+                input_times: Vec::new(),
+                output_times: Vec::new(),
                 active: Vec::new(),
             }
         }
@@ -1122,9 +1130,9 @@ mod reference {
                 drop(self.batch_history.replay_key(batch_cursor, batch_storage, key, None));
                 drop(self.input_history.replay_key(source_cursor, source_storage, key, None));
                 drop(self.output_history.replay_key(output_cursor, output_storage, key, None));
-                let mut batch_replay = self.batch_history.replay_times();
-                let mut input_replay = self.input_history.replay_times();
-                let mut output_replay = self.output_history.replay_times();
+                let mut batch_replay = self.batch_history.replay_times(&mut self.batch_times);
+                let mut input_replay = self.input_history.replay_times(&mut self.input_times);
+                let mut output_replay = self.output_history.replay_times(&mut self.output_times);
 
                 self.synth_times.clear();
                 self.times_current.clear();

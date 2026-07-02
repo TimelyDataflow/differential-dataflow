@@ -91,7 +91,6 @@ struct ValueHistory<V, T, D> {
     edits: EditList<V, T, D>,
     history: Vec<(T, T, usize, usize)>,     // (time, meet, value_index, edit_offset)
     buffer: Vec<((V, T), D)>,               // where we accumulate / collapse updates.
-    time_buffer: Vec<T>,                    // like `buffer`, but times only, for `TimeReplay`.
 }
 
 impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> ValueHistory<V, T, D> {
@@ -100,14 +99,12 @@ impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> V
             edits: EditList::new(),
             history: Vec::new(),
             buffer: Vec::new(),
-            time_buffer: Vec::new(),
         }
     }
     fn clear(&mut self) {
         self.edits.clear();
         self.history.clear();
         self.buffer.clear();
-        self.time_buffer.clear();
     }
 
     /// Loads and replays a specified key.
@@ -138,11 +135,12 @@ impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> V
     }
 
     /// A time-only, non-destructive walk over the already-built `history` (see [`TimeReplay`]). It
-    /// reads times and their precomputed meets and accumulates only *times*, leaving `history`
-    /// intact for a later [`walk`](Self::walk) over values.
-    fn replay_times<'history>(&'history mut self) -> TimeReplay<'history, T> {
-        self.time_buffer.clear();
-        TimeReplay { history: &self.history[..], buffer: &mut self.time_buffer }
+    /// reads times and their precomputed meets and accumulates only *times* into the caller-supplied
+    /// `buffer`, leaving `history` intact for a later [`walk`](Self::walk) over values. The buffer is
+    /// owned by the caller so the standard value walk pays nothing for this reference-only capability.
+    fn replay_times<'history>(&'history self, buffer: &'history mut Vec<T>) -> TimeReplay<'history, T> {
+        buffer.clear();
+        TimeReplay { history: &self.history[..], buffer }
     }
 
     /// Organizes history based on current contents of edits.
