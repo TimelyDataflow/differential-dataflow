@@ -24,6 +24,25 @@ use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, Batc
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 
+/// Optional interesting-time counters. They measure how many in-band interesting times each tactic
+/// evaluates, and hence how much the value-blind `reference` over-derives relative to the value-aware
+/// cursor (whose consolidation drops the zero-debt addresses the reference keeps). Off unless built
+/// with `--features reduce-metrics`; the increments compile to nothing otherwise.
+#[cfg(feature = "reduce-metrics")]
+pub mod metrics {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    /// In-band interesting times evaluated by the default `cursors::CursorTactic`.
+    pub static CURSOR: AtomicUsize = AtomicUsize::new(0);
+    /// In-band interesting times evaluated by the model-derived `reference::ReferenceTactic`.
+    pub static REFERENCE: AtomicUsize = AtomicUsize::new(0);
+    /// Reset both counters to zero.
+    pub fn reset() { CURSOR.store(0, Ordering::Relaxed); REFERENCE.store(0, Ordering::Relaxed); }
+    /// Read the cursor tactic's count.
+    pub fn cursor() -> usize { CURSOR.load(Ordering::Relaxed) }
+    /// Read the reference tactic's count.
+    pub fn reference() -> usize { REFERENCE.load(Ordering::Relaxed) }
+}
+
 /// A type that resolves a key-wise reduction over batches arriving on the input.
 ///
 /// Unlike join, reduce does not suspend: its output is at most linear in its input, so a single
@@ -71,6 +90,22 @@ where
     P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
 {
     reduce_with_tactic(trace, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
+}
+
+/// As [`reduce_trace`], but driven by the model-derived [`reference::ReferenceTactic`] instead of the
+/// default `cursors::CursorTactic`. Same result contract; intended for differential testing of the
+/// two tactics against each other.
+pub fn reduce_trace_reference<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
+where
+    Tr1: TraceReader<Batch: Navigable> + 'static,
+    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, ValOwn: Data, Time = Tr2::Time>,
+    Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default> + 'static,
+    L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+    P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
+{
+    reduce_with_tactic(trace, name, reference::ReferenceTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
 }
 
 /// Drives a key-wise reduction using a supplied [`ReduceTactic`].
@@ -620,33 +655,76 @@ mod cursors {
                     // before we add the time to `synth_times`.
                     if !upper_limit.less_equal(&next_time) {
 
+                        // DETERMINATION (times only). Determine synthetic interesting times.
+                        //
+                        // Synthetic interesting times are produced differently for interesting and uninteresting
+                        // times. An uninteresting time must join with an interesting time to become interesting,
+                        // which means joins with `self.batch_history` and  `self.times_current`. I think we can
+                        // skip `self.synth_times` as we haven't gotten to them yet, but we will and they will be
+                        // joined against everything.
+
+                        // Any time, even uninteresting times, must be joined with the current accumulation of
+                        // batch times as well as the current accumulation of `times_current`.
+                        self.temporary.extend(batch_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
+                        self.temporary.extend(self.times_current.iter().filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
+
+                        // An interesting time additionally joins with `input` and `output` history and this round's
+                        // produced output: it carries the seed, so those joins stay interesting (an uninteresting
+                        // time does not, as `input`/`output` times are not themselves seeds). We advance the buffers
+                        // by `meet` first, exactly as evaluation reads them below; by join preservation the advanced
+                        // and unadvanced times spawn the same synthetics, so this matches the pre-split behavior.
+                        if interesting {
+                            if let Some(meet) = meet.as_ref() { input_replay.advance_buffer_by(meet) };
+                            if let Some(meet) = meet.as_ref() { output_replay.advance_buffer_by(meet) };
+                            self.temporary.extend(input_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
+                            self.temporary.extend(output_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
+                            self.temporary.extend(self.output_produced.iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
+                        }
+                        sort_dedup(&mut self.temporary);
+
+                        // Introduce synthetic times, and re-organize if we add any.
+                        let synth_len = self.synth_times.len();
+                        for time in self.temporary.drain(..) {
+                            // We can either service `join` now, or must delay for the future.
+                            if upper_limit.less_equal(&time) {
+                                debug_assert!(outputs.iter().any(|(t,_)| t.less_equal(&time)));
+                                new_interesting.push(time);
+                            }
+                            else {
+                                self.synth_times.push(time);
+                            }
+                        }
+                        if self.synth_times.len() > synth_len {
+                            self.synth_times.sort_by(|x,y| y.cmp(x));
+                            self.synth_times.dedup();
+                        }
+
+                        // EVALUATION (values only).
                         // We should re-evaluate the computation if this is an interesting time.
                         // If the time is uninteresting (and our logic is sound) it is not possible for there to be
                         // output produced. This sounds like a good test to have for debug builds!
                         if interesting {
 
+                            #[cfg(feature = "reduce-metrics")]
+                            crate::operators::reduce::metrics::CURSOR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
                             // Assemble the input collection at `next_time`. (`self.input_buffer` cleared just after use).
+                            // The buffers were advanced by `meet` in the determination step above.
                             debug_assert!(self.input_buffer.is_empty());
-                            if let Some(meet) = meet.as_ref() { input_replay.advance_buffer_by(meet) };
                             for ((value, time), diff) in input_replay.buffer().iter() {
                                 if time.less_equal(&next_time) { self.input_buffer.push((*value, diff.clone())); }
-                                else { self.temporary.push(next_time.join(time)); }
                             }
                             for ((value, time), diff) in batch_replay.buffer().iter() {
                                 if time.less_equal(&next_time) { self.input_buffer.push((*value, diff.clone())); }
-                                else { self.temporary.push(next_time.join(time)); }
                             }
                             crate::consolidation::consolidate(&mut self.input_buffer);
 
                             // Assemble the output collection at `next_time`. (`self.output_buffer` cleared just after use).
-                            if let Some(meet) = meet.as_ref() { output_replay.advance_buffer_by(meet) };
                             for ((value, time), diff) in output_replay.buffer().iter() {
                                 if time.less_equal(&next_time) { self.output_buffer.push((C2::owned_val(*value), diff.clone())); }
-                                else { self.temporary.push(next_time.join(time)); }
                             }
                             for ((value, time), diff) in self.output_produced.iter() {
                                 if time.less_equal(&next_time) { self.output_buffer.push(((*value).to_owned(), diff.clone())); }
-                                else { self.temporary.push(next_time.join(time)); }
                             }
                             crate::consolidation::consolidate(&mut self.output_buffer);
 
@@ -685,37 +763,6 @@ mod cursors {
                                     crate::consolidation::consolidate(&mut self.output_produced);
                                 }
                             }
-                        }
-
-                        // Determine synthetic interesting times.
-                        //
-                        // Synthetic interesting times are produced differently for interesting and uninteresting
-                        // times. An uninteresting time must join with an interesting time to become interesting,
-                        // which means joins with `self.batch_history` and  `self.times_current`. I think we can
-                        // skip `self.synth_times` as we haven't gotten to them yet, but we will and they will be
-                        // joined against everything.
-
-                        // Any time, even uninteresting times, must be joined with the current accumulation of
-                        // batch times as well as the current accumulation of `times_current`.
-                        self.temporary.extend(batch_replay.buffer().iter().map(|((_,time),_)| time).filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
-                        self.temporary.extend(self.times_current.iter().filter(|time| !time.less_equal(&next_time)).map(|time| time.join(&next_time)));
-                        sort_dedup(&mut self.temporary);
-
-                        // Introduce synthetic times, and re-organize if we add any.
-                        let synth_len = self.synth_times.len();
-                        for time in self.temporary.drain(..) {
-                            // We can either service `join` now, or must delay for the future.
-                            if upper_limit.less_equal(&time) {
-                                debug_assert!(outputs.iter().any(|(t,_)| t.less_equal(&time)));
-                                new_interesting.push(time);
-                            }
-                            else {
-                                self.synth_times.push(time);
-                            }
-                        }
-                        if self.synth_times.len() > synth_len {
-                            self.synth_times.sort_by(|x,y| y.cmp(x));
-                            self.synth_times.dedup();
                         }
                     }
                     else if interesting {
@@ -756,6 +803,485 @@ mod cursors {
             if let Some(time) = other {
                 if let Some(meet) = meet.as_mut() { meet.meet_assign(time); }
                 else { *meet = Some(time.clone()); }
+            }
+        }
+    }
+}
+
+/// A second [`ReduceTactic`], written directly from the incremental model in
+/// `formal/Differential/Model.lean`.
+///
+/// Per key it runs two phases over one cursor walk. Phase 1 (determination) computes the
+/// interesting times as the truncated join-closure over {input, output, seeds} — the model's
+/// `Reached` — advancing by meets so the synthetic set stays bounded. Phase 2 (application) walks
+/// exactly those times in order, maintaining tight input/output accumulations by meets, and emits
+/// the corrections — the model's `emit_correct`. Determination never consults the output produced
+/// this round (it finishes first), so this tactic embodies the proven algorithm exactly and is the
+/// clean subject for differential testing against [`cursors::CursorTactic`].
+mod reference {
+
+    use super::*;
+    use crate::lattice::Lattice;
+    use crate::operators::ValueHistory;
+
+    /// Sorts and deduplicates, matching `cursors::sort_dedup`.
+    #[inline(never)]
+    fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
+        list.dedup();
+        list.sort();
+        list.dedup();
+    }
+
+    /// Updates an optional meet by an optional time.
+    fn update_meet<T: Lattice+Clone>(meet: &mut Option<T>, other: Option<&T>) {
+        if let Some(time) = other {
+            if let Some(meet) = meet.as_mut() { meet.meet_assign(time); }
+            else { *meet = Some(time.clone()); }
+        }
+    }
+
+    /// The model-derived [`ReduceTactic`]. Structurally a twin of [`cursors::CursorTactic`]; only the
+    /// per-key engine differs.
+    pub struct ReferenceTactic<B1, B2, Bu, L, P>
+    where
+        B1: BatchReader + Navigable,
+        B2: BatchReader<Time = B1::Time> + Navigable,
+        B1::Cursor: Cursor<Time = B1::Time>,
+        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = B1::Time>,
+    {
+        logic: L,
+        push: P,
+        pending_keys: <B1::Cursor as Cursor>::KeyContainer,
+        pending_time: <B1::Cursor as Cursor>::TimeContainer,
+        next_pending_keys: <B1::Cursor as Cursor>::KeyContainer,
+        next_pending_time: <B1::Cursor as Cursor>::TimeContainer,
+        interesting_times: Vec<B1::Time>,
+        new_interesting_times: Vec<B1::Time>,
+        output_upper: Antichain<B1::Time>,
+        output_lower: Antichain<B1::Time>,
+        _marker: PhantomData<(B2, Bu)>,
+    }
+
+    impl<B1, B2, Bu, L, P> ReferenceTactic<B1, B2, Bu, L, P>
+    where
+        B1: BatchReader + Navigable,
+        B2: BatchReader<Time = B1::Time> + Navigable,
+        B1::Cursor: Cursor<Time = B1::Time>,
+        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = B1::Time>,
+    {
+        /// Construct a tactic that applies `logic` to each key and shapes output with `push`.
+        pub fn new(logic: L, push: P) -> Self {
+            ReferenceTactic {
+                logic,
+                push,
+                pending_keys: <B1::Cursor as Cursor>::KeyContainer::with_capacity(0),
+                pending_time: <B1::Cursor as Cursor>::TimeContainer::with_capacity(0),
+                next_pending_keys: <B1::Cursor as Cursor>::KeyContainer::with_capacity(0),
+                next_pending_time: <B1::Cursor as Cursor>::TimeContainer::with_capacity(0),
+                interesting_times: Vec::new(),
+                new_interesting_times: Vec::new(),
+                output_upper: Antichain::from_elem(<B1::Time as Timestamp>::minimum()),
+                output_lower: Antichain::from_elem(<B1::Time as Timestamp>::minimum()),
+                _marker: PhantomData,
+            }
+        }
+    }
+
+    impl<B1, B2, Bu, L, P> ReduceTactic<B1, B2> for ReferenceTactic<B1, B2, Bu, L, P>
+    where
+        B1: BatchReader + Navigable,
+        B2: BatchReader<Time = B1::Time> + Navigable,
+        B1::Cursor: Cursor<Time = B1::Time>,
+        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = B1::Time>,
+        Bu: Builder<Time = B1::Time, Output = B2, Input: Default>,
+        L: FnMut(<B1::Cursor as Cursor>::Key<'_>, &[(<B1::Cursor as Cursor>::Val<'_>, <B1::Cursor as Cursor>::Diff)], &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>),
+        P: FnMut(&mut Bu::Input, <B1::Cursor as Cursor>::Key<'_>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>),
+    {
+        fn retire(
+            &mut self,
+            source_batches: Vec<B1>,
+            output_batches: Vec<B2>,
+            input_batches: Vec<B1>,
+            lower: &Antichain<B1::Time>,
+            upper: &Antichain<B1::Time>,
+            held: &Antichain<B1::Time>,
+        ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>)
+        {
+            let mut produced = Vec::new();
+
+            if held.elements().iter().any(|time| !upper.less_equal(time)) {
+
+                let (mut source_cursor, ref source_storage) = cursor_list(source_batches);
+                let (mut output_cursor, ref output_storage) = cursor_list(output_batches);
+                let (mut batch_cursor, ref batch_storage) = cursor_list(input_batches);
+
+                let mut buffers = Vec::<(B1::Time, Vec<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>)>::new();
+                let mut builders = Vec::new();
+                for time in held.elements().iter() {
+                    buffers.push((time.clone(), Vec::new()));
+                    builders.push(Bu::new());
+                }
+                let mut buffer = Bu::Input::default();
+
+                // Reuseable state for performing the computation.
+                let mut thinker = ReferenceThinker::new();
+
+                let mut pending_pos = 0;
+                while batch_cursor.key_valid(batch_storage) || pending_pos < self.pending_keys.len() {
+
+                    let key1 = self.pending_keys.get(pending_pos);
+                    let key2 = batch_cursor.get_key(batch_storage);
+                    let key = match (key1, key2) {
+                        (Some(key1), Some(key2)) => ::std::cmp::min(key1, key2),
+                        (Some(key1), None)       => key1,
+                        (None, Some(key2))       => key2,
+                        (None, None)             => unreachable!(),
+                    };
+
+                    let prior_pos = pending_pos;
+                    self.interesting_times.clear();
+                    while self.pending_keys.get(pending_pos) == Some(key) {
+                        let owned_time = <B1::Cursor as Cursor>::owned_time(self.pending_time.index(pending_pos));
+                        if !upper.less_equal(&owned_time) { self.interesting_times.push(owned_time); }
+                        pending_pos += 1;
+                    }
+
+                    sort_dedup(&mut self.interesting_times);
+
+                    if batch_cursor.get_key(batch_storage) == Some(key) || !self.interesting_times.is_empty() {
+
+                        thinker.compute(
+                            key,
+                            (&mut source_cursor, source_storage),
+                            (&mut output_cursor, output_storage),
+                            (&mut batch_cursor, batch_storage),
+                            &self.interesting_times,
+                            &mut self.logic,
+                            upper,
+                            &mut buffers[..],
+                            &mut self.new_interesting_times,
+                        );
+
+                        if batch_cursor.get_key(batch_storage) == Some(key) { batch_cursor.step_key(batch_storage); }
+
+                        for pos in prior_pos .. pending_pos {
+                            let owned_time = <B1::Cursor as Cursor>::owned_time(self.pending_time.index(pos));
+                            if upper.less_equal(&owned_time) { self.new_interesting_times.push(owned_time); }
+                        }
+                        sort_dedup(&mut self.new_interesting_times);
+                        for time in self.new_interesting_times.drain(..) {
+                            self.next_pending_keys.push_ref(key);
+                            self.next_pending_time.push_own(&time);
+                        }
+
+                        for index in 0 .. buffers.len() {
+                            buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
+                            (self.push)(&mut buffer, key, &mut buffers[index].1);
+                            buffers[index].1.clear();
+                            builders[index].push(&mut buffer);
+
+                        }
+                    }
+                    else {
+                        for pos in prior_pos .. pending_pos {
+                            self.next_pending_keys.push_ref(self.pending_keys.index(pos));
+                            self.next_pending_time.push_ref(self.pending_time.index(pos));
+                        }
+                    }
+                }
+                drop(thinker);
+
+                self.output_lower.clear();
+                self.output_lower.extend(lower.borrow().iter().cloned());
+
+                for (index, builder) in builders.drain(..).enumerate() {
+
+                    self.output_upper.clear();
+                    self.output_upper.extend(upper.borrow().iter().cloned());
+                    for time in &held.elements()[index + 1 ..] {
+                        self.output_upper.insert_ref(time);
+                    }
+
+                    if self.output_upper.borrow() != self.output_lower.borrow() {
+
+                        let description = Description::new(self.output_lower.clone(), self.output_upper.clone(), Antichain::from_elem(<B1::Time as Timestamp>::minimum()));
+                        let batch = builder.done(description);
+
+                        produced.push((held.elements()[index].clone(), batch));
+
+                        self.output_lower.clear();
+                        self.output_lower.extend(self.output_upper.borrow().iter().cloned());
+                    }
+                }
+                assert!(self.output_upper.borrow() == upper.borrow());
+
+                self.pending_keys.clear(); std::mem::swap(&mut self.next_pending_keys, &mut self.pending_keys);
+                self.pending_time.clear(); std::mem::swap(&mut self.next_pending_time, &mut self.pending_time);
+
+                let mut frontier = Antichain::<B1::Time>::new();
+                let mut owned_time = <B1::Time as Timestamp>::minimum();
+                for pos in 0 .. self.pending_time.len() {
+                    <B1::Cursor as Cursor>::clone_time_onto(self.pending_time.index(pos), &mut owned_time);
+                    frontier.insert_ref(&owned_time);
+                }
+
+                (produced, frontier)
+            }
+            else {
+                (produced, held.clone())
+            }
+        }
+    }
+
+    /// The two-phase per-key engine.
+    ///
+    /// Phase 1 (determination) reads the input/output/seed *times* and closes them into `active`
+    /// (the interesting times) and the pended set — Model.lean's `Reached`, directly. Phase 2
+    /// (application) walks the same, still-loaded histories for *values* and emits corrections.
+    pub struct ReferenceThinker<V1, V2, V, T, D1, D2> {
+        input_history: ValueHistory<V1, T, D1>,
+        output_history: ValueHistory<V2, T, D2>,
+        batch_history: ValueHistory<V1, T, D1>,
+        input_buffer: Vec<(V1, D1)>,
+        output_buffer: Vec<(V, D2)>,
+        update_buffer: Vec<(V, D2)>,
+        output_produced: Vec<((V, T), D2)>,
+        // Phase 1 (the compacted closure): synthetic reached times still to visit, the reached times
+        // in play as join partners, scratch for the joins, and suffix-meets of the supplied times.
+        synth_times: Vec<T>,
+        times_current: Vec<T>,
+        temporary: Vec<T>,
+        meets: Vec<T>,
+        // The interesting (in-band reached) times, handed from phase 1 to phase 2.
+        active: Vec<T>,
+    }
+
+    impl<V1, V2, V, T, D1, D2> ReferenceThinker<V1, V2, V, T, D1, D2>
+    where
+        V1: Copy + Ord,
+        V2: Copy + Ord,
+        V: Clone + Ord,
+        T: Ord + Clone + Lattice + 'static,
+        D1: Clone + crate::difference::Semigroup,
+        D2: Clone + crate::difference::Semigroup,
+    {
+        pub fn new() -> Self {
+            ReferenceThinker {
+                input_history: ValueHistory::new(),
+                output_history: ValueHistory::new(),
+                batch_history: ValueHistory::new(),
+                input_buffer: Vec::new(),
+                output_buffer: Vec::new(),
+                update_buffer: Vec::new(),
+                output_produced: Vec::new(),
+                synth_times: Vec::new(),
+                times_current: Vec::new(),
+                temporary: Vec::new(),
+                meets: Vec::new(),
+                active: Vec::new(),
+            }
+        }
+
+        #[inline(never)]
+        pub fn compute<'a, K, C1, C2, C3, L>(
+            &mut self,
+            key: K,
+            (source_cursor, source_storage): (&mut C1, &'a C1::Storage),
+            (output_cursor, output_storage): (&mut C2, &'a C2::Storage),
+            (batch_cursor, batch_storage): (&mut C3, &'a C3::Storage),
+            times: &Vec<T>,
+            logic: &mut L,
+            upper_limit: &Antichain<T>,
+            outputs: &mut [(T, Vec<(V, T, D2)>)],
+            new_interesting: &mut Vec<T>)
+        where
+            C1: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
+            C2: Cursor<Key<'a> = K, Val<'a> = V2, ValOwn = V, Time = T, Diff = D2>,
+            C3: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
+            K: Copy + Ord,
+            L: FnMut(K, &[(V1, D1)], &mut Vec<(V, D2)>, &mut Vec<(V, D2)>),
+        {
+            // ================== PHASE 1 — DETERMINATION (`Reached`, compacted) ==================
+            // The interesting times are Model.lean's `Reached` — but computed the non-quadratic way.
+            // Walk the input/output/seed times in increasing order; a time is *reached* only via a
+            // seed (a batch update, a due pending time, or a synthetic join of earlier reached times);
+            // a reached in-band time joins against the live partners to spawn more reached times, and
+            // a join beyond `upper` is pended. The live partner sets are kept an antichain by
+            // `advance_buffer_by(meet)` — coincident times collapse under the running meet — so this is
+            // the closure without the all-pairs blow-up. Time-only: `TimeReplay` reads the histories
+            // without touching values or stepping the underlying `history`, so phase 2 can walk them.
+            {
+                // Suffix-meets of the supplied (due pending) times, consumed as we pass them.
+                self.meets.clear();
+                self.meets.extend(times.iter().cloned());
+                for index in (1 .. self.meets.len()).rev() {
+                    self.meets[index-1] = self.meets[index-1].meet(&self.meets[index]);
+                }
+
+                // Build each history, then read it time-only (leaving it intact for phase 2).
+                drop(self.batch_history.replay_key(batch_cursor, batch_storage, key, None));
+                drop(self.input_history.replay_key(source_cursor, source_storage, key, None));
+                drop(self.output_history.replay_key(output_cursor, output_storage, key, None));
+                let mut batch_replay = self.batch_history.replay_times();
+                let mut input_replay = self.input_history.replay_times();
+                let mut output_replay = self.output_history.replay_times();
+
+                self.synth_times.clear();
+                self.times_current.clear();
+                self.temporary.clear();
+                self.active.clear();
+
+                let mut times_slice = &times[..];
+                let mut meets_slice = &self.meets[..];
+                let mut meet: Option<T> = None;
+
+                while let Some(next_time) = [   batch_replay.time(),
+                                                times_slice.first(),
+                                                input_replay.time(),
+                                                output_replay.time(),
+                                                self.synth_times.last(),
+                                            ].into_iter().flatten().min().cloned() {
+
+                    input_replay.step_while_time_is(&next_time);
+                    output_replay.step_while_time_is(&next_time);
+
+                    // Reached via a seed: a batch update, a due pending time, or a synthetic join.
+                    // (Input/output times alone are not reached — they are only join partners.)
+                    let mut interesting = batch_replay.step_while_time_is(&next_time);
+                    if interesting { if let Some(m) = meet.as_ref() { batch_replay.advance_buffer_by(m); } }
+                    while self.synth_times.last() == Some(&next_time) {
+                        self.times_current.push(self.synth_times.pop().unwrap());
+                        interesting = true;
+                    }
+                    while times_slice.first() == Some(&next_time) {
+                        self.times_current.push(next_time.clone());
+                        times_slice = &times_slice[1..];
+                        meets_slice = &meets_slice[1..];
+                        interesting = true;
+                    }
+                    // Absorb: a time at or above a reached time is itself reached.
+                    interesting = interesting
+                        || batch_replay.buffer().iter().any(|t| t.less_equal(&next_time))
+                        || self.times_current.iter().any(|t| t.less_equal(&next_time));
+
+                    if !upper_limit.less_equal(&next_time) {
+                        // A reached in-band time is `active`; join it against the live partners —
+                        // input/output (`joinBase`) and reached-so-far (`joinActive`) — for new times.
+                        if interesting {
+                            self.active.push(next_time.clone());
+                            if let Some(m) = meet.as_ref() { input_replay.advance_buffer_by(m); output_replay.advance_buffer_by(m); }
+                            self.temporary.extend(input_replay.buffer().iter().filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
+                            self.temporary.extend(output_replay.buffer().iter().filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
+                        }
+                        self.temporary.extend(batch_replay.buffer().iter().filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
+                        self.temporary.extend(self.times_current.iter().filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
+                        sort_dedup(&mut self.temporary);
+
+                        let synth_len = self.synth_times.len();
+                        for time in self.temporary.drain(..) {
+                            if upper_limit.less_equal(&time) { new_interesting.push(time); }  // pended
+                            else { self.synth_times.push(time); }                             // reached, later
+                        }
+                        if self.synth_times.len() > synth_len {
+                            self.synth_times.sort_by(|x,y| y.cmp(x));
+                            self.synth_times.dedup();
+                        }
+                    }
+                    else if interesting {
+                        new_interesting.push(next_time.clone());
+                    }
+
+                    // Running meet (a lower bound on every time still to visit); compact the reached
+                    // partners `times_current` with it.
+                    meet = None;
+                    update_meet(&mut meet, batch_replay.meet());
+                    update_meet(&mut meet, input_replay.meet());
+                    update_meet(&mut meet, output_replay.meet());
+                    for time in self.synth_times.iter() { update_meet(&mut meet, Some(time)); }
+                    update_meet(&mut meet, meets_slice.first());
+                    if let Some(m) = meet.as_ref() {
+                        for time in self.times_current.iter_mut() { *time = time.join(m); }
+                    }
+                    sort_dedup(&mut self.times_current);
+                }
+
+                sort_dedup(&mut self.active);
+
+                #[cfg(feature = "reduce-metrics")]
+                crate::operators::reduce::metrics::REFERENCE.fetch_add(self.active.len(), std::sync::atomic::Ordering::Relaxed);
+            }
+
+            // ===================== PHASE 2 — APPLICATION (`emit_correct`) =====================
+            // Walk `self.active` in order over the SAME per-key edits (via `replay`, no cursor), keep
+            // the input/output accumulations tight by advancing to the meet of the times still to be
+            // produced, apply `logic`, and emit corrections.
+            {
+                self.meets.clear();
+                self.meets.extend(self.active.iter().cloned());
+                for index in (1 .. self.meets.len()).rev() {
+                    self.meets[index-1] = self.meets[index-1].meet(&self.meets[index]);
+                }
+
+                // Walk the histories loaded (and left intact) by phase 1 — no cursor re-read, no
+                // rebuild, no re-sort; just a fresh walk of the same sorted `history` for values.
+                let mut batch_replay = self.batch_history.walk();
+                let mut input_replay = self.input_history.walk();
+                let mut output_replay = self.output_history.walk();
+
+                self.output_produced.clear();
+
+                for index in 0 .. self.active.len() {
+                    let next_time = self.active[index].clone();
+                    let meet = self.meets[index].clone();
+
+                    // Phase 2 visits only the active times, so we must consume ALL history edits at or
+                    // below `next_time` (not just those exactly at it, as a full time-order walk would
+                    // reach incrementally); edits at non-active times still contribute to the
+                    // accumulation here.
+                    while input_replay.time().map_or(false, |t| t.less_equal(&next_time)) { input_replay.step(); }
+                    while batch_replay.time().map_or(false, |t| t.less_equal(&next_time)) { batch_replay.step(); }
+                    while output_replay.time().map_or(false, |t| t.less_equal(&next_time)) { output_replay.step(); }
+                    input_replay.advance_buffer_by(&meet);
+                    batch_replay.advance_buffer_by(&meet);
+                    output_replay.advance_buffer_by(&meet);
+
+                    debug_assert!(self.input_buffer.is_empty());
+                    for ((value, time), diff) in input_replay.buffer().iter() {
+                        if time.less_equal(&next_time) { self.input_buffer.push((*value, diff.clone())); }
+                    }
+                    for ((value, time), diff) in batch_replay.buffer().iter() {
+                        if time.less_equal(&next_time) { self.input_buffer.push((*value, diff.clone())); }
+                    }
+                    crate::consolidation::consolidate(&mut self.input_buffer);
+
+                    for ((value, time), diff) in output_replay.buffer().iter() {
+                        if time.less_equal(&next_time) { self.output_buffer.push((C2::owned_val(*value), diff.clone())); }
+                    }
+                    for ((value, time), diff) in self.output_produced.iter() {
+                        if time.less_equal(&next_time) { self.output_buffer.push((value.clone(), diff.clone())); }
+                    }
+                    crate::consolidation::consolidate(&mut self.output_buffer);
+
+                    if !self.input_buffer.is_empty() || !self.output_buffer.is_empty() {
+                        logic(key, &self.input_buffer[..], &mut self.output_buffer, &mut self.update_buffer);
+                        self.input_buffer.clear();
+                        self.output_buffer.clear();
+
+                        crate::consolidation::consolidate(&mut self.update_buffer);
+                        if !self.update_buffer.is_empty() {
+
+                            let idx = outputs.iter().rev().position(|(time, _)| time.less_equal(&next_time));
+                            let idx = outputs.len() - idx.expect("failed to find index") - 1;
+                            for (val, diff) in self.update_buffer.drain(..) {
+                                self.output_produced.push(((val.clone(), next_time.clone()), diff.clone()));
+                                outputs[idx].1.push((val, next_time.clone(), diff));
+                            }
+
+                            for entry in &mut self.output_produced { (entry.0).1.join_assign(&meet); }
+                            crate::consolidation::consolidate(&mut self.output_produced);
+                        }
+                    }
+                }
             }
         }
     }

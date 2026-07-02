@@ -39,6 +39,8 @@ timely = {workspace = true}
 
 [features]
 default = ["timely/getopts"]
+# Enables the reduce interesting-time counters in `operators::reduce::metrics`.
+reduce-metrics = []
 
 [[bench]]
 name = "chunk_bench"

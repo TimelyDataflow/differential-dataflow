@@ -757,6 +757,27 @@ pub mod vec {
                 .as_collection(|k,v| (k.clone(), v.clone()))
         }
 
+        /// As [`reduce`](Self::reduce), but driven by the model-derived reference tactic. Same result;
+        /// intended for differential testing against the default reduce.
+        pub fn reduce_reference<L, V2: crate::Data, R2: Ord+Abelian+'static>(self, logic: L) -> Collection<'scope, T, (K, V2), R2>
+        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+            self.reduce_named_reference("Reduce", logic)
+        }
+
+        /// As [`reduce_named`](Self::reduce_named), but driven by the model-derived reference tactic.
+        pub fn reduce_named_reference<L, V2: crate::Data, R2: Ord+Abelian+'static>(self, name: &str, logic: L) -> Collection<'scope, T, (K, V2), R2>
+        where L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>)+'static {
+            use crate::trace::implementations::{ValBuilder, ValSpine};
+
+            self.arrange_by_key_named(&format!("Arrange: {}", name))
+                .reduce_abelian_reference::<_,ValBuilder<_,_,_,_>,ValSpine<K,V2,_,_>,_>(
+                    name,
+                    logic,
+                    |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
+                )
+                .as_collection(|k,v| (k.clone(), v.clone()))
+        }
+
         /// Applies `reduce` to arranged data, and returns an arrangement of output data.
         ///
         /// This method is used by the more ergonomic `reduce`, `distinct`, and `count` methods, although
