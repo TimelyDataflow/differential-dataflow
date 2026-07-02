@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 columnar = { workspace = true }
+corgi = { path = "../../wip/corgi" }
 differential-dataflow = { workspace = true }
 mimalloc = "0.1.48"
 serde = { version = "1.0", features = ["derive"] }

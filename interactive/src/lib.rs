@@ -1,5 +1,11 @@
 pub mod parse;
 pub mod ir;
+pub mod corgi_logic;
+pub mod corgi_backend;
+pub mod corgi_arrange;
+pub mod corgi_chunk;
+pub mod corgi_join;
+pub mod corgi_reduce;
 pub mod lower;
 pub mod scope_ir;
 pub mod backend;
