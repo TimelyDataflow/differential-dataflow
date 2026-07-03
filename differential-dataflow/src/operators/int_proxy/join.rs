@@ -28,10 +28,16 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// The output container built from matched index lists.
     type Output;
 
-    /// (read) Flatten `batches` into one sorted, consolidated proxy run.
-    fn present0(&mut self, batches: &[B0]) -> ProxyChunk<B0::Time, Self::R0>;
+    /// (read) Flatten `batches` into one sorted, consolidated proxy run. When `filter` is
+    /// set (sorted key hashes), restrict to records of those keys: the tactic presents a
+    /// unit's fresh side unfiltered and passes its key set when presenting the
+    /// accumulated side, so per-unit work tracks the fresh batch, not the accumulated
+    /// trace — the join analogue of reduce's changed-key restriction, and just as
+    /// load-bearing (without it, a small update against a large trace re-reads the
+    /// trace).
+    fn present0(&mut self, batches: &[B0], filter: Option<&[u64]>) -> ProxyChunk<B0::Time, Self::R0>;
     /// (read) As `present0`, for the second input.
-    fn present1(&mut self, batches: &[B1]) -> ProxyChunk<B0::Time, Self::R1>;
+    fn present1(&mut self, batches: &[B1], filter: Option<&[u64]>) -> ProxyChunk<B0::Time, Self::R1>;
     /// (value work) The projection. `left[i]`/`right[i]` index the current presentations;
     /// each pair matched on `key_hash`. `times[i]`/`diffs[i]` are the DD-computed lattice
     /// join of the pair's times and product of its diffs, to carry through per record.
@@ -54,6 +60,9 @@ pub struct ProxyJoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, Bk
 struct JoinUnit<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     left: Vec<B0>,
     right: Vec<B1>,
+    /// Which side carried the fresh batch; the other side is presented restricted to the
+    /// fresh side's keys.
+    fresh: Fresh,
     capability: Capability<B0::Time>,
 }
 
@@ -72,11 +81,11 @@ where
     CB: ContainerBuilder<Container = Bk::Output>,
 {
     fn defer(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, capability: Capability<B0::Time>) {
-        let unit = JoinUnit { left: input0, right: input1, capability };
-        match fresh {
-            Fresh::Input0 => self.todo0.push_back(unit),
-            Fresh::Input1 => self.todo1.push_back(unit),
-        }
+        let queue = match fresh {
+            Fresh::Input0 => &mut self.todo0,
+            Fresh::Input1 => &mut self.todo1,
+        };
+        queue.push_back(JoinUnit { left: input0, right: input1, fresh, capability });
     }
 
     fn work(&mut self, fuel: &mut isize, output: &mut OutputBuilderSession<B0::Time, EffortBuilder<CB>>) {
@@ -99,8 +108,26 @@ where
     Bk: ProxyJoinBackend<B0, B1>,
     CB: ContainerBuilder<Container = Bk::Output>,
 {
-    let p0 = backend.present0(&unit.left);
-    let p1 = backend.present1(&unit.right);
+    // Present the fresh side first (delta-sized), then the accumulated side restricted
+    // to the fresh side's keys, so a unit's work tracks the fresh batch.
+    let (p0, p1) = match unit.fresh {
+        Fresh::Input0 => {
+            let p0 = backend.present0(&unit.left, None);
+            if p0.is_empty() { return; }
+            let mut keys = p0.key_hashes().to_vec();
+            keys.dedup();
+            let p1 = backend.present1(&unit.right, Some(&keys));
+            (p0, p1)
+        }
+        Fresh::Input1 => {
+            let p1 = backend.present1(&unit.right, None);
+            if p1.is_empty() { return; }
+            let mut keys = p1.key_hashes().to_vec();
+            keys.dedup();
+            let p0 = backend.present0(&unit.left, Some(&keys));
+            (p0, p1)
+        }
+    };
     if p0.is_empty() || p1.is_empty() { return; }
     let (k0, k1) = (p0.key_hashes(), p1.key_hashes());
 

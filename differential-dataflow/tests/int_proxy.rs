@@ -339,3 +339,210 @@ fn proxy_reduce_synthesizes_and_pends_product_times() {
     );
     assert!(frontier3.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Asymptotics: presented work must track the delta, not the accumulated trace.
+// ---------------------------------------------------------------------------
+//
+// The cursor tactics touch an arrangement only at the keys a fresh batch names
+// (plus, for reduce, pending keys), at logarithmic seek cost. The proxy tactics
+// must not be asymptotically worse: the changed-key filter (reduce) and the
+// fresh-side filter (join) exist precisely so a backend can seek rather than
+// scan. These tests pin that: with `N` arranged keys and rounds touching one
+// key, the number of *presented* records — a deterministic work measure the
+// backend observes directly — must stay far below `N`, where a scanning
+// implementation would present `Ω(rounds · N)`.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+use differential_dataflow::operators::int_proxy::{ProxyChunk, ProxyJoinBackend, ProxyReduceBackend};
+use differential_dataflow::trace::BatchReader;
+
+/// A reduce backend wrapper counting records presented by the inner backend.
+struct CountingReduce<B> {
+    inner: B,
+    presented: Arc<AtomicUsize>,
+}
+
+impl<B1, B2, B> ProxyReduceBackend<B1, B2> for CountingReduce<B>
+where
+    B1: BatchReader,
+    B2: BatchReader<Time = B1::Time>,
+    B: ProxyReduceBackend<B1, B2>,
+{
+    type RIn = B::RIn;
+    type ROut = B::ROut;
+
+    fn key_hashes(&self, batches: &[B1]) -> Vec<u64> {
+        self.inner.key_hashes(batches)
+    }
+    fn present_input(&mut self, history: &[B1], novel: &[B1], keys: &[u64]) -> ProxyChunk<B1::Time, B::RIn> {
+        let chunk = self.inner.present_input(history, novel, keys);
+        self.presented.fetch_add(chunk.len(), AtomicOrdering::SeqCst);
+        chunk
+    }
+    fn present_output(&mut self, batches: &[B2], keys: &[u64]) -> ProxyChunk<B1::Time, B::ROut> {
+        let chunk = self.inner.present_output(batches, keys);
+        self.presented.fetch_add(chunk.len(), AtomicOrdering::SeqCst);
+        chunk
+    }
+    fn reduce(&mut self, key_hash: u64, input: &[(usize, B::RIn)]) -> Vec<(u64, B::ROut)> {
+        self.inner.reduce(key_hash, input)
+    }
+    fn materialize(&mut self, records: ProxyChunk<B1::Time, B::ROut>, description: Description<B1::Time>) -> B2 {
+        self.inner.materialize(records, description)
+    }
+}
+
+/// A join backend wrapper counting records presented by the inner backend.
+struct CountingJoin<B> {
+    inner: B,
+    presented: Arc<AtomicUsize>,
+}
+
+impl<B0, B1, B> ProxyJoinBackend<B0, B1> for CountingJoin<B>
+where
+    B0: BatchReader,
+    B1: BatchReader<Time = B0::Time>,
+    B: ProxyJoinBackend<B0, B1>,
+{
+    type R0 = B::R0;
+    type R1 = B::R1;
+    type ROut = B::ROut;
+    type Output = B::Output;
+
+    fn present0(&mut self, batches: &[B0], filter: Option<&[u64]>) -> ProxyChunk<B0::Time, B::R0> {
+        let chunk = self.inner.present0(batches, filter);
+        self.presented.fetch_add(chunk.len(), AtomicOrdering::SeqCst);
+        chunk
+    }
+    fn present1(&mut self, batches: &[B1], filter: Option<&[u64]>) -> ProxyChunk<B0::Time, B::R1> {
+        let chunk = self.inner.present1(batches, filter);
+        self.presented.fetch_add(chunk.len(), AtomicOrdering::SeqCst);
+        chunk
+    }
+    fn cross(&mut self, left: &[usize], right: &[usize], times: Vec<B0::Time>, diffs: Vec<B::ROut>) -> B::Output {
+        self.inner.cross(left, right, times, diffs)
+    }
+}
+
+#[test]
+fn proxy_reduce_work_is_delta_proportional() {
+    use timely::dataflow::operators::probe::{Handle, Probe};
+
+    const N: u64 = 20_000;
+    const ROUNDS: u64 = 5;
+    let presented = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&presented);
+
+    timely::execute_directly(move |worker| {
+        let mut probe = Handle::new();
+        let mut input = worker.dataflow::<u64, _, _>(|scope| {
+            let (input, c) = scope.new_collection::<(u64, u64), isize>();
+            let arranged = arrange_core::<_, _, Chunker<u64, u64>, Batcher<u64, u64>, Bldr<u64, u64>, Spine<u64, u64>>(c.inner, Pipeline, "Arrange");
+            let backend = CountingReduce {
+                inner: VecReduceBackend::new(|_k: &u64, input: &[(&u64, isize)], output: &mut Vec<(isize, isize)>| {
+                    let count: isize = input.iter().map(|(_, d)| *d).sum();
+                    if count > 0 {
+                        output.push((count, 1));
+                    }
+                }),
+                presented: counter,
+            };
+            let reduced = reduce_with_tactic::<_, Spine<u64, isize>, _>(arranged, "ProxyReduce", ProxyReduceTactic::new(backend));
+            reduced.stream.probe_with(&probe);
+            input
+        });
+
+        // Round 0: a large arrangement. This work is inherently O(N); let it drain.
+        for k in 0..N {
+            input.update((k, k % 5), 1);
+        }
+        input.advance_to(1);
+        input.flush();
+        while probe.less_than(input.time()) {
+            worker.step();
+        }
+        let after_load = presented.load(AtomicOrdering::SeqCst);
+
+        // Rounds 1..: touch ONE key per round. Presented work must track that key's
+        // history, independent of N; a scanning backend would present ≥ ROUNDS · N.
+        for t in 1..=ROUNDS {
+            input.update((7, 100 + t), 1);
+            input.advance_to(t + 1);
+            input.flush();
+            while probe.less_than(input.time()) {
+                worker.step();
+            }
+        }
+        let total = presented.load(AtomicOrdering::SeqCst);
+        let incremental = total - after_load;
+        assert!(incremental > 0, "the incremental rounds presented nothing");
+        assert!(
+            incremental < (N as usize) / 4,
+            "presented {incremental} records over {ROUNDS} single-key rounds against {N} keys: not delta-proportional"
+        );
+    });
+}
+
+#[test]
+fn proxy_join_work_is_delta_proportional() {
+    use timely::dataflow::operators::probe::{Handle, Probe};
+
+    const N: u64 = 20_000;
+    const ROUNDS: u64 = 5;
+    let presented = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&presented);
+
+    timely::execute_directly(move |worker| {
+        let mut probe = Handle::new();
+        let (mut left, mut right) = worker.dataflow::<u64, _, _>(|scope| {
+            let (left, c0) = scope.new_collection::<(u64, u64), isize>();
+            let (right, c1) = scope.new_collection::<(u64, u64), isize>();
+            let a0 = arrange_core::<_, _, Chunker<u64, u64>, Batcher<u64, u64>, Bldr<u64, u64>, Spine<u64, u64>>(c0.inner, Pipeline, "Arrange0");
+            let a1 = arrange_core::<_, _, Chunker<u64, u64>, Batcher<u64, u64>, Bldr<u64, u64>, Spine<u64, u64>>(c1.inner, Pipeline, "Arrange1");
+            let backend = CountingJoin {
+                inner: VecJoinBackend::new(|k: &u64, v0: &u64, v1: &u64| (*k, (*v0, *v1))),
+                presented: counter,
+            };
+            let joined = join_with_tactic::<_, _, _, CapacityContainerBuilder<Vec<(JoinOut, u64, isize)>>>(a0, a1, ProxyJoinTactic::new(backend));
+            joined.probe_with(&probe);
+            (left, right)
+        });
+
+        // Round 0: a large accumulated right side. Inherently O(N); let it drain.
+        for k in 0..N {
+            right.update((k, k), 1);
+        }
+        left.advance_to(1);
+        right.advance_to(1);
+        left.flush();
+        right.flush();
+        while probe.less_than(left.time()) {
+            worker.step();
+        }
+        let after_load = presented.load(AtomicOrdering::SeqCst);
+
+        // Rounds 1..: one fresh left record per round. The unit joins it against the
+        // accumulated right trace; the fresh-side filter must keep presented work at
+        // the matched key's records, independent of N.
+        for t in 1..=ROUNDS {
+            left.update((7, 100 + t), 1);
+            left.advance_to(t + 1);
+            right.advance_to(t + 1);
+            left.flush();
+            right.flush();
+            while probe.less_than(left.time()) {
+                worker.step();
+            }
+        }
+        let total = presented.load(AtomicOrdering::SeqCst);
+        let incremental = total - after_load;
+        assert!(incremental > 0, "the incremental rounds presented nothing");
+        assert!(
+            incremental < (N as usize) / 4,
+            "presented {incremental} records over {ROUNDS} single-record rounds against {N} keys: not delta-proportional"
+        );
+    });
+}
