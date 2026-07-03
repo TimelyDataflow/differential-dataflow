@@ -1,4 +1,4 @@
-//! Test harness for the model-derived `reference` reduce tactic. Three things:
+//! Test harness for the model-derived `reference` reduce tactic. Four things:
 //!
 //! * `differential_*` — run the default (cursor) reduce and the `reference` reduce on the SAME random
 //!   input and `assert_eq` their outputs at every time. The drift detector: if either tactic changes
@@ -13,6 +13,12 @@
 //!
 //! * `bfs_*` — an iterative BFS (product time via iteration; a real computation shape) computed both
 //!   ways over a graph that grows and shrinks; another differential check.
+//!
+//! * `scc_*` — strongly connected components: two nested product-timed fixpoints (edge trimming around
+//!   iterative label propagation), so the reduce runs at three nested time coordinates. This depth is
+//!   what exposed the phase-2 catch-up walk stepping the partial-order `less_equal` set instead of the
+//!   total-`Ord` prefix (see the note at that walk in `operators/reduce.rs`); the two-coordinate shapes
+//!   above never reached it.
 
 use std::collections::BTreeMap;
 
@@ -251,6 +257,93 @@ where
         let edges = edges.enter(scope);
         let nodes = nodes.enter(scope);
         let combined = inner.join_map(edges, |_k, l, d| (*d, l + 1)).concat(nodes);
+        if reference {
+            reduce_reference(combined, |_, s, t| t.push((*s[0].0, 1)))
+        } else {
+            combined.reduce(|_, s, t| t.push((*s[0].0, 1)))
+        }
+    })
+}
+
+// ===================== iterative SCC differential (a deeper shape) =====================
+// SCC nests two Product-timed fixpoints: an outer edge-trimming loop and, inside each trim, an
+// iterative label propagation whose `reduce` is the tactic under test. The doubly-nested product
+// time produces far more synthetic interesting times than BFS, over joins / concats / filters.
+
+#[test] fn scc_tiny_a() { scc_differential(6, 12, 4, &[1, 2, 3, 4]); }
+#[test] fn scc_tiny_b() { scc_differential(8, 16, 4, &[5, 6, 7, 8]); }
+#[test] fn scc_12_24()  { scc_differential(12, 24, 5, &[2, 4, 6, 8]); }
+#[test] fn scc_sweep()  { for s in 0u8 .. 6 { scc_differential(15, 30, 5, &[s as usize, (s as usize) + 7, 13, 29]); } }
+
+fn scc_differential(nodes: usize, edges: usize, rounds: usize, seed: &[usize]) {
+    let mut rng1: StdRng = SeedableRng::from_seed(seed);
+    let mut rng2: StdRng = SeedableRng::from_seed(seed);
+    let mut edge_list: Vec<((usize, usize), usize, isize)> = Vec::new();
+    for _ in 0 .. edges { edge_list.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), 0, 1)); }
+    for round in 1 .. rounds {
+        edge_list.push(((rng1.gen_range(0, nodes), rng1.gen_range(0, nodes)), round, 1));
+        edge_list.push(((rng2.gen_range(0, nodes), rng2.gen_range(0, nodes)), round, -1));
+    }
+
+    timely::execute_directly(move |worker| {
+        let mut edges_list = edge_list.clone();
+        let mut edges = worker.dataflow::<usize, _, _>(|scope| {
+            let (edge_input, edges) = scope.new_collection();
+            let via_cursor    = scc(edges.clone(), false);
+            let via_reference = scc(edges, true);
+            via_cursor.assert_eq(via_reference);
+            edge_input
+        });
+        edges_list.sort_by(|x, y| y.1.cmp(&x.1));
+        let mut round = 0;
+        while !edges_list.is_empty() {
+            while edges_list.last().map(|x| x.1) == Some(round) { let ((s, t), _, d) = edges_list.pop().unwrap(); edges.update((s, t), d); }
+            round += 1;
+            edges.advance_to(round);
+        }
+    });
+}
+
+// The subset of edges within a strongly connected component, mirroring
+// `algorithms::graphs::scc::strongly_connected` but with the propagation `reduce` swappable.
+fn scc<'scope, T>(graph: VecCollection<'scope, T, Edge>, reference: bool) -> VecCollection<'scope, T, Edge>
+where
+    T: timely::progress::Timestamp + Lattice + Ord,
+{
+    let graph2 = graph.clone();
+    graph.iterate(move |scope, inner| {
+        let edges = graph2.enter(scope);
+        let trans = edges.clone().map(|(a, b)| (b, a));
+        let trimmed = trim_edges(inner, edges, reference);
+        trim_edges(trimmed, trans, reference)
+    })
+}
+
+// Keep only edges whose endpoints propagate to the same label; run twice (forward then transposed)
+// this converges on the SCC edges.
+fn trim_edges<'scope, T>(cycle: VecCollection<'scope, T, Edge>, edges: VecCollection<'scope, T, Edge>, reference: bool) -> VecCollection<'scope, T, Edge>
+where
+    T: timely::progress::Timestamp + Lattice + Ord,
+{
+    let nodes = edges.clone().map(|(_a, b)| (b, b));
+    let labels = propagate(cycle, nodes, reference);
+    edges.join_map(labels.clone(), |&src, &dst, &l1| (dst, (src, l1)))
+         .join_map(labels, |&dst, &(src, l1), &l2| ((src, dst), (l1, l2)))
+         .filter(|(_, (l1, l2))| l1 == l2)
+         .map(|((src, dst), _)| (dst, src))
+}
+
+// Forward min-label propagation along `edges` from per-node seed labels; the inner `reduce` (min
+// label per node) is the tactic under test.
+fn propagate<'scope, T>(edges: VecCollection<'scope, T, Edge>, nodes: VecCollection<'scope, T, (Node, Node)>, reference: bool) -> VecCollection<'scope, T, (Node, Node)>
+where
+    T: timely::progress::Timestamp + Lattice + Ord,
+{
+    let seed = nodes.clone();
+    nodes.filter(|_| false).iterate(move |scope, inner| {
+        let edges = edges.enter(scope);
+        let seed = seed.enter(scope);
+        let combined = inner.join_map(edges, |&_n, &l, &d| (d, l)).concat(seed);
         if reference {
             reduce_reference(combined, |_, s, t| t.push((*s[0].0, 1)))
         } else {

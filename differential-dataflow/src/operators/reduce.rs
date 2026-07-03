@@ -1224,13 +1224,19 @@ pub(crate) mod reference {
                     let next_time = self.active[index].clone();
                     let meet = self.meets[index].clone();
 
-                    // Phase 2 visits only the active times, so we must consume ALL history edits at or
-                    // below `next_time` (not just those exactly at it, as a full time-order walk would
-                    // reach incrementally); edits at non-active times still contribute to the
-                    // accumulation here.
-                    while input_replay.time().map_or(false, |t| t.less_equal(&next_time)) { input_replay.step(); }
-                    while batch_replay.time().map_or(false, |t| t.less_equal(&next_time)) { batch_replay.step(); }
-                    while output_replay.time().map_or(false, |t| t.less_equal(&next_time)) { output_replay.step(); }
+                    // Phase 2 visits only the active times, so at each we must catch up the histories to
+                    // include every edit that will contribute to the accumulation at `next_time` (edits
+                    // at non-active times count too). `history` is sorted by the total `Ord` and `step`
+                    // pops the least, so we step the `Ord`-prefix `t <= next_time`, NOT the partial
+                    // `t.less_equal(next_time)`: the partial order interleaves with the sort, so an
+                    // `Ord`-earlier time incomparable to `next_time` would halt a `less_equal` walk early
+                    // and strand later edits that *are* `less_equal(next_time)`. Stepping the `Ord`-prefix
+                    // takes a superset; the `less_equal` filter below then selects the true `<= next_time`
+                    // edits. (Assembling with `less_equal` while stepping with `<=` is what the value-aware
+                    // cursor does via its full time-order frontier walk.)
+                    while input_replay.time().map_or(false, |t| *t <= next_time) { input_replay.step(); }
+                    while batch_replay.time().map_or(false, |t| *t <= next_time) { batch_replay.step(); }
+                    while output_replay.time().map_or(false, |t| *t <= next_time) { output_replay.step(); }
                     input_replay.advance_buffer_by(&meet);
                     batch_replay.advance_buffer_by(&meet);
                     output_replay.advance_buffer_by(&meet);
