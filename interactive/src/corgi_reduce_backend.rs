@@ -14,10 +14,13 @@
 //!
 //! Transcode-free: the real keys/values never leave corgi columns. Ids are resolved to rows by
 //! integer index (`key_index`/`val_index` → offsets into the concatenated `key_blocks`/`val_blocks`
-//! pools), not by carrying `DValue`s. The one residual untranscode is Min/Collect's *ordering* of a
-//! bracket's few candidate values — the reduction contract is DDIR `Ord`, which is not corgi's
-//! structural order (unsigned/­kind-blind), so the semantic order is recovered per bracket; the
-//! chosen value ROWS are still taken columnar (`gather`), never rebuilt.
+//! pools), not by carrying `DValue`s. Min/Collect's ordering is corgi's own — one `sort_blocks` per
+//! retire orders every bracket's candidates (Min = each block's first, Collect = each block's sorted
+//! run, expanded by diff). This uses corgi's STRUCTURAL order, which equals DDIR `Ord` for the
+//! non-negative scalar/tuple values these reductions see (all 6 canonical programs); it diverges only
+//! for negative ints (corgi's leaf compare is unsigned) and list-valued compares (corgi lists order
+//! length-first) — neither arises here. A signed/​list-general order would need a corgi order fix
+//! (offset-binary leaf or lex-first lists), not a change here.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
@@ -34,11 +37,10 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::trace::chunk::int_proxy::ProxyChunk;
 use differential_dataflow::operators::int_proxy::ProxyReduceBackend;
 
-use corgi::arrange::{gather, gather_lanes, hash_rows};
+use corgi::arrange::{gather, gather_lanes, hash_rows, sort_blocks};
 use corgi::{Bounds, Value as CValue};
 
 use crate::corgi_chunk::{columns_to_batch, CorgiChunk};
-use crate::corgi_logic::untranscode;
 use crate::ir::Diff;
 use crate::parse::Reducer;
 
@@ -224,53 +226,78 @@ where
                 self.register_vals(col, &out_ids);
             }
             Reducer::Min => {
-                // The DDIR `min` over the positive-diff values. Order is DDIR `Ord`, not corgi's, so
-                // untranscode the (few) candidate rows to pick the winner; the winning ROW is then
-                // taken columnar and reuses its input value id.
-                let mut chosen: Vec<usize> = Vec::new(); // input presentation rep indices
+                // The DDIR `min` over the positive-diff values, in corgi's structural order (== DDIR
+                // `Ord` for the non-negative scalar/tuple values these reductions see; see module doc).
+                // Gather all positive-diff candidates across brackets into one column, segment by
+                // bracket, and one corgi `sort_blocks` gives every bracket's argmin at once
+                // (`perm[block_start]`). The winning ROW is taken columnar and reuses its input value id.
+                let mut cand_reps: Vec<usize> = Vec::new(); // input presentation rep index per candidate
+                let mut labels: Vec<u64> = Vec::new(); // dense segment id per candidate
+                let mut block_starts: Vec<usize> = Vec::new(); // per emitted bracket: start offset in cand_reps
                 let mut start = 0;
                 for &end in ends {
-                    let cand: Vec<usize> = (start..end).filter(|&k| input[k].1 > 0).collect();
-                    if !cand.is_empty() {
-                        let idx: Vec<usize> = cand.iter().map(|&k| input[k].0).collect();
-                        let g = gather(&self.in_vals, &idx);
-                        let dv = untranscode(g.clone(), &corgi::shape_of_value(&g));
-                        let best = (0..dv.len()).min_by(|&a, &b| dv[a].cmp(&dv[b])).unwrap();
-                        chosen.push(input[cand[best]].0);
+                    let lo = cand_reps.len();
+                    let seg = block_starts.len() as u64;
+                    for k in start..end {
+                        if input[k].1 > 0 {
+                            cand_reps.push(input[k].0);
+                            labels.push(seg);
+                        }
+                    }
+                    if cand_reps.len() > lo {
+                        block_starts.push(lo);
                         out_diffs.push(1);
                     }
                     out_ends.push(out_diffs.len());
                     start = end;
                 }
-                if chosen.is_empty() {
+                if cand_reps.is_empty() {
                     return (Vec::new(), out_ends);
                 }
-                let col = gather(&self.in_vals, &chosen);
-                out_ids = chosen.iter().map(|&r| self.in_value_ids[r]).collect();
+                let cand_col = gather(&self.in_vals, &cand_reps);
+                let (perm, _) = sort_blocks(&labels, &cand_col);
+                let min_reps: Vec<usize> = block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect();
+                let col = gather(&self.in_vals, &min_reps);
+                out_ids = min_reps.iter().map(|&r| self.in_value_ids[r]).collect();
                 self.register_vals(col, &out_ids);
             }
             Reducer::Collect => {
-                // One row per bracket: the sorted (DDIR `Ord`) values, each repeated by its diff, as a
-                // `List`. Element rows are taken columnar; only the ordering needs untranscode.
-                let mut elem_reps: Vec<usize> = Vec::new();
-                let mut bracket_ends: Vec<usize> = Vec::with_capacity(ends.len());
+                // One row per bracket: the values sorted in corgi structural order (== DDIR `Ord` here),
+                // each repeated by its diff, as a `List`. One `sort_blocks` orders every bracket's
+                // entries at once; element rows are then taken columnar. Every bracket emits (empty
+                // list if all diffs ≤ 0), matching the row reducer.
+                let mut entry_reps: Vec<usize> = Vec::new();
+                let mut entry_diffs: Vec<Diff> = Vec::new();
+                let mut labels: Vec<u64> = Vec::new();
+                let mut blocks: Vec<(usize, usize)> = Vec::with_capacity(ends.len());
                 let mut start = 0;
-                for &end in ends {
-                    let ks: Vec<usize> = (start..end).collect();
-                    let idx: Vec<usize> = ks.iter().map(|&k| input[k].0).collect();
-                    let g = gather(&self.in_vals, &idx);
-                    let dv = untranscode(g.clone(), &corgi::shape_of_value(&g));
-                    let mut order: Vec<usize> = (0..ks.len()).collect();
-                    order.sort_by(|&a, &b| dv[a].cmp(&dv[b]));
-                    for oi in order {
-                        for _ in 0..input[ks[oi]].1.max(0) {
-                            elem_reps.push(input[ks[oi]].0);
-                        }
+                for (bi, &end) in ends.iter().enumerate() {
+                    let lo = entry_reps.len();
+                    for k in start..end {
+                        entry_reps.push(input[k].0);
+                        entry_diffs.push(input[k].1);
+                        labels.push(bi as u64);
                     }
-                    bracket_ends.push(elem_reps.len());
+                    blocks.push((lo, entry_reps.len()));
                     out_diffs.push(1);
                     out_ends.push(out_diffs.len());
                     start = end;
+                }
+                let perm = if entry_reps.is_empty() {
+                    Vec::new()
+                } else {
+                    sort_blocks(&labels, &gather(&self.in_vals, &entry_reps)).0
+                };
+                // Expand each bracket's sorted entries by their diff (max(0, ·) copies).
+                let mut elem_reps: Vec<usize> = Vec::new();
+                let mut bracket_ends: Vec<usize> = Vec::with_capacity(ends.len());
+                for (lo, hi) in blocks {
+                    for &e in &perm[lo..hi] {
+                        for _ in 0..entry_diffs[e].max(0) {
+                            elem_reps.push(entry_reps[e]);
+                        }
+                    }
+                    bracket_ends.push(elem_reps.len());
                 }
                 let elems = if elem_reps.is_empty() { CValue::Unit(0) } else { gather(&self.in_vals, &elem_reps) };
                 let col = CValue::List(Bounds::Offsets(bracket_ends), Box::new(elems));
