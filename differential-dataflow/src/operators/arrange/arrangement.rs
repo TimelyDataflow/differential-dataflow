@@ -296,7 +296,6 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
     }
 }
 
-
 impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// Brings an arranged collection out of a nested region.
     ///
