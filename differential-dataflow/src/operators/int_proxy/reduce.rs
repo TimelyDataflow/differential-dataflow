@@ -34,14 +34,18 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// what keeps small-delta recursion from re-reading the accumulated trace each round.
     fn present_input(&mut self, history: &[B1], novel: &[B1], keys: &[u64]) -> ProxyChunk<B1::Time, Self::RIn>;
     /// (read) As `present_input`, for the operator's own output trace. The `value_id`s
-    /// here are the stable output-value hashes and must agree with ids minted by
-    /// [`reduce`](Self::reduce) — which they do for free when both hash the value.
+    /// here must agree, on equal output values, with the ids [`reduce`](Self::reduce)
+    /// mints later in this retire — desired and current output cancel by id. Content
+    /// hashing achieves this statelessly; an exact per-retire value→id map achieves it
+    /// with no collision risk.
     fn present_output(&mut self, batches: &[B2], keys: &[u64]) -> ProxyChunk<B1::Time, Self::ROut>;
     /// (value callback) Apply the reduction to one key's accumulated input: `input` holds
     /// one entry per value with a nonzero accumulation — a representative record index
     /// into the current input presentation, and the accumulated diff. Never called with
     /// `input` empty. Returns the reduced output as `(value_id, diff)`, minting ids for
-    /// produced values (`id = hash(value)`) and recording `id → value` for `materialize`.
+    /// produced values — by any scheme that agrees with
+    /// [`present_output`](Self::present_output) on equal values within this retire — and
+    /// recording `id → value` for `materialize`.
     fn reduce(&mut self, key_hash: u64, input: &[(usize, Self::RIn)]) -> Vec<(u64, Self::ROut)>;
     /// (egress) Seal proxy-space output records into a real output batch: resolve each
     /// record's `key_hash` and `value_id` to real data, order by the backend's own record

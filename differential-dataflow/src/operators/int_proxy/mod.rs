@@ -37,11 +37,18 @@
 //!   output→input boundary. The hash function is a property of the *backend* (all of its
 //!   operators must share it); DD never hashes anything.
 //! * `value_id: u64` — an intra-key value identifier, consistent within one operator
-//!   computation: equal ids ⇒ equal values there, which is what consolidation and
-//!   presence need. On the write side ids must be content hashes (see above); on the
-//!   read side a backend may use any per-computation-consistent scheme, and `id =
-//!   hash(value)` is the natural choice since it makes the read and write id spaces
-//!   coincide (min "reusing an input value's id" is then automatic).
+//!   computation: equal values ⇔ equal ids there (both directions — a value-id collision
+//!   merges two values' diffs, a correctness bug of the same character as a key
+//!   collision). No id outlives a computation: a join work unit's presentations, or one
+//!   reduce retire — within which the output presentation and minted ids must agree on
+//!   equal values (see [`ProxyReduceBackend`]); `materialize` resolves ids to real data
+//!   before anything leaves the retire. Content hashing (`id = hash(value)`) is the
+//!   stateless scheme that discharges all of this at once — the reference backend's
+//!   choice, and it makes min "reusing an input value's id" automatic — but *exact*
+//!   schemes are equally valid and collision-free: dense ordinals from grouping the
+//!   presented values, plus a per-retire value→id map on the output side. Only a future
+//!   design that persists ids into an output arrangement itself would force stable
+//!   (hashed) value ids.
 //!
 //! # Design note: `value_id` is *not* order-preserving
 //!
@@ -69,14 +76,19 @@
 //!
 //! # Collision risk
 //!
-//! Ids are 64-bit content hashes. Colliding *keys* merge two groups (a join would
-//! cross-match them; a reduce would reduce their union); colliding output *values* would
-//! alias two outputs. By the birthday bound the probability of any collision among `n`
-//! distinct keys (or values) is ≈ `n²/2⁶⁵`: about `5·10⁻⁸` at a million, `5·10⁻²` at a
-//! billion. This is the accepted risk of the design — it buys global id stability with no
-//! registry and no coordination. If a deployment's key cardinality makes the bound
-//! uncomfortable, the upgrade path is widening the id to 128 bits (a second id column),
-//! not a registry.
+//! Key ids are 64-bit content hashes, and colliding *keys* merge two groups (a join
+//! would cross-match them; a reduce would reduce their union). By the birthday bound the
+//! probability of any collision among `n` distinct keys is ≈ `n²/2⁶⁵`: about `5·10⁻⁸` at
+//! a million, `5·10⁻²` at a billion. This is the accepted risk of the design — it buys
+//! key-id stability across the operator's lifetime with no registry and no coordination,
+//! which the cross-retire `pending` set and the changed-key restriction rely on. If a
+//! deployment's key cardinality makes the bound uncomfortable, the upgrade path is
+//! widening the id to 128 bits (a second id column), not a registry.
+//!
+//! Value ids carry the same exposure only if the backend hashes them (as the reference
+//! backend does). Because they are scoped to one computation, a backend can instead
+//! assign them exactly (see above) and eliminate value-side collisions outright; the key
+//! side is the irreducible exposure.
 //!
 //! # What DD owns vs what the backend owns
 //!

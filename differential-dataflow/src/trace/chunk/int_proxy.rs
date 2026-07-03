@@ -11,8 +11,9 @@
 //!   note in [`operators::int_proxy`](crate::operators::int_proxy)).
 //! * `value_id: u64` — an intra-key identifier for a value, **ephemeral**: consistent only
 //!   within a single operator computation (one presentation, one retire's waves). Equal
-//!   ids ⇒ equal values there, which is all DD needs to consolidate diffs per value and
-//!   decide presence. It is *not* order-preserving with respect to the value type's
+//!   values ⇔ equal ids there — a bijection per computation, which is all DD needs to
+//!   consolidate diffs per value and decide presence; a hash is one scheme, not a
+//!   requirement. It is *not* order-preserving with respect to the value type's
 //!   semantic order — see the design note in [`operators::int_proxy`](crate::operators::int_proxy).
 //!
 //! Chunks sort by `(key_hash, value_id, time)` — an arbitrary but consistent total order
