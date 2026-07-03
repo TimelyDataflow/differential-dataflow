@@ -370,6 +370,22 @@ where
         self.in_vals = gather(&vals_col, &reps);
         self.in_value_ids = chunk.value_ids().to_vec();
         if std::env::var("CORGI_DBG").is_ok() {
+            eprintln!("  [RETIRE] changed_has_node2_hash? novel_chunks={} hist_chunks={}", chunks_of(novel).len(), chunks_of(history).len());
+            // RAW: every node-2 record in the incoming arrangement batches (novel + history), BEFORE
+            // present's changed-key filter — i.e. what the CorgiChunk arrange actually produced.
+            for (tag, chs) in [("novel", chunks_of(novel)), ("hist", chunks_of(history))] {
+                for ch in &chs {
+                    if ch.keys().len() == 0 { continue; }
+                    let kr = crate::corgi_logic::untranscode(ch.keys().clone(), &corgi::shape_of_value(ch.keys()));
+                    let vr = crate::corgi_logic::untranscode(ch.vals().clone(), &corgi::shape_of_value(ch.vals()));
+                    for i in 0..kr.len() {
+                        if format!("{:?}", kr[i]).contains("Int(2)") {
+                            eprintln!("  [RAW-{tag}] key={:?} val={:?} t={:?} d={}", kr[i], vr[i], ch.times()[i], ch.diffs()[i]);
+                        }
+                    }
+                }
+            }
+            // PIN: what present actually returns to the tactic (after filter + consolidate).
             let kcol = gather(&keys_col, &reps);
             let krows = crate::corgi_logic::untranscode(kcol.clone(), &corgi::shape_of_value(&kcol));
             let vrows = crate::corgi_logic::untranscode(self.in_vals.clone(), &corgi::shape_of_value(&self.in_vals));
@@ -395,8 +411,17 @@ where
         let (chunk, reps) = ProxyChunk::from_unsorted(khs, vids, times, diffs);
         // Register representative output keys and values (aligned with the sorted presentation).
         let rep_keys = gather(&keys_col, &reps);
-        self.register_keys(rep_keys, chunk.key_hashes());
         let rep_vals = gather(&vals_col, &reps);
+        if std::env::var("CORGI_DBG").is_ok() {
+            let kr = crate::corgi_logic::untranscode(rep_keys.clone(), &corgi::shape_of_value(&rep_keys));
+            let vr = crate::corgi_logic::untranscode(rep_vals.clone(), &corgi::shape_of_value(&rep_vals));
+            for i in 0..chunk.len() {
+                if format!("{:?}", kr[i]).contains("Int(2)") {
+                    eprintln!("  [POUT-current] key={:?} val={:?} t={:?} d={}", kr[i], vr[i], chunk.times()[i], chunk.diffs()[i]);
+                }
+            }
+        }
+        self.register_keys(rep_keys, chunk.key_hashes());
         self.register_vals(rep_vals, chunk.value_ids());
         chunk
     }
@@ -420,6 +445,15 @@ where
             .collect();
         let keys = gather(&key_pool, &kidx);
         let vals = gather(&val_pool, &vidx);
+        if std::env::var("CORGI_DBG").is_ok() {
+            let kr = crate::corgi_logic::untranscode(keys.clone(), &corgi::shape_of_value(&keys));
+            let vr = crate::corgi_logic::untranscode(vals.clone(), &corgi::shape_of_value(&vals));
+            for i in 0..records.len() {
+                if format!("{:?}", kr[i]).contains("Int(2)") {
+                    eprintln!("  [MAT-emit] key={:?} val={:?} t={:?} d={}", kr[i], vr[i], records.times()[i], records.diffs()[i]);
+                }
+            }
+        }
         Rc::new(columns_to_batch(keys, vals, records.times().to_vec(), records.diffs().to_vec(), description))
     }
 }
