@@ -369,6 +369,16 @@ where
         let (chunk, reps) = ProxyChunk::from_unsorted(khs, vids, times, diffs);
         self.in_vals = gather(&vals_col, &reps);
         self.in_value_ids = chunk.value_ids().to_vec();
+        if std::env::var("CORGI_DBG").is_ok() {
+            let kcol = gather(&keys_col, &reps);
+            let krows = crate::corgi_logic::untranscode(kcol.clone(), &corgi::shape_of_value(&kcol));
+            let vrows = crate::corgi_logic::untranscode(self.in_vals.clone(), &corgi::shape_of_value(&self.in_vals));
+            for i in 0..chunk.len() {
+                if format!("{:?}", krows[i]).contains("Int(2)") {
+                    eprintln!("  [PIN] key={:?} val={:?} t={:?} d={}", krows[i], vrows[i], chunk.times()[i], chunk.diffs()[i]);
+                }
+            }
+        }
         // Register representative keys (aligned with the sorted presentation) for materialize.
         let rep_keys = gather(&keys_col, &reps);
         self.register_keys(rep_keys, chunk.key_hashes());
