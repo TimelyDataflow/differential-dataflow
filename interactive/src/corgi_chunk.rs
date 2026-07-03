@@ -459,6 +459,27 @@ where
     R: Semigroup + Clone + 'static,
 {
     let chunk = CorgiChunk::from_rows(&rows);
+    settle_one(chunk, description)
+}
+
+/// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
+/// consolidate into one chunk, then `settle`. The column-native egress the reduce backend seals its
+/// output with (it resolves proxy ids to real columns by `gather` and hands them here).
+pub fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>, description: Description<T>) -> ChunkBatch<CorgiChunk<T, R>>
+where
+    T: Timestamp + Lattice,
+    R: Semigroup + Clone + 'static,
+{
+    let chunk = CorgiChunk::from_columns(keys, vals, times, diffs);
+    settle_one(chunk, description)
+}
+
+/// Grade one chunk into a `ChunkBatch` (shared tail of `rows_to_batch`/`columns_to_batch`).
+fn settle_one<T, R>(chunk: CorgiChunk<T, R>, description: Description<T>) -> ChunkBatch<CorgiChunk<T, R>>
+where
+    T: Timestamp + Lattice,
+    R: Semigroup + Clone + 'static,
+{
     let mut input = VecDeque::new();
     if chunk.len_() > 0 { input.push_back(chunk); }
     let mut output = VecDeque::new();
