@@ -30,11 +30,52 @@ use differential_dataflow::trace::Builder as _;
 use differential_dataflow::trace::Description;
 use differential_dataflow::trace::chunk::ChunkBatch;
 
+use corgi::{eval_graph, parse_ml, Bounds, Value as CValue};
+
 use crate::corgi_chunk::{batch_to_rows, CorgiChunk, CorgiChunkBuilder};
 use crate::ir::{Diff, Value as DValue};
 use crate::parse::Reducer;
 
 type Row = DValue;
+
+/// Columnar per-key sum — the monoid `Count`/consolidate fold as the value building block for a
+/// column-native reduce, driven entirely by corgi ops (`group → map(fold_add) → filter`), touching
+/// no `Value` rows. Diffs are passed as RAW two's-complement `u64` bits so `fold_add`'s wrapping add
+/// is the correct `i64` sum and `ne 0` is the sign-agnostic zero-drop (per the corgi note). Returns
+/// the surviving `(key column, per-key raw-bit sums)`. (Groundwork: the wave loop will call this
+/// across many keys at once; not yet wired into the live reduce.)
+#[allow(dead_code)]
+fn columnar_sum_by_key(keys: CValue, diffs_raw: CValue) -> (CValue, Vec<u64>) {
+    const ML: &str = "let acc = input group map ((k, vs) -> (k, vs fold_add)) in \
+                      let keep = acc map ((k, s) -> s ne 0) in \
+                      (acc, keep) filter";
+    let n = keys.len();
+    if n == 0 {
+        return (CValue::Unit(0), Vec::new());
+    }
+    let input = CValue::List(Bounds::Offsets(vec![n]), Box::new(CValue::Prod(vec![keys, diffs_raw])));
+    let graph = parse_ml(ML).expect("parse consolidate ML");
+    let out = eval_graph(&graph, input);
+    let (_bounds, vals) = out.into_list("consolidate output");
+    let (keys_out, sums) = vals.into_pair("consolidate (key, sum)");
+    (keys_out, sums.into_u64("consolidate sums"))
+}
+
+#[cfg(test)]
+mod consolidate_test {
+    use super::*;
+
+    #[test]
+    fn columnar_consolidate_sums_and_drops_zeros() {
+        // keys 1,1,2,3,3 with raw-bit diffs +1,-1,5,9,1 → key 1 nets 0 (dropped), 2→5, 3→10.
+        let keys = CValue::u64(vec![1, 1, 2, 3, 3]);
+        let diffs = CValue::u64(vec![1u64, (-1i64) as u64, 5, 9, 1]);
+        let (kout, sums) = columnar_sum_by_key(keys, diffs);
+        let ks = kout.into_u64("k");
+        let got: Vec<(u64, i64)> = ks.iter().zip(&sums).map(|(&k, &s)| (k, s as i64)).collect();
+        assert_eq!(got, vec![(2, 5), (3, 10)]);
+    }
+}
 
 /// Determines the active times for an interval `[lower, upper)` (Frank's definition).
 ///
