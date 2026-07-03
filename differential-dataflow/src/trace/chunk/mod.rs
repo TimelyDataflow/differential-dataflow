@@ -61,6 +61,7 @@ use crate::trace::{Batch, BatchReader, Description, Navigable};
 use crate::trace::cursor::Cursor;
 use crate::trace::implementations::BatchContainer;
 
+pub mod int_proxy;
 pub mod vec;
 
 /// A non-empty, bounded, consolidated, sorted sequence of `(data, time, diff)`.

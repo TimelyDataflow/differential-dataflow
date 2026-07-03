@@ -9,6 +9,7 @@ pub use self::count::CountTotal;
 pub use self::threshold::ThresholdTotal;
 
 pub mod arrange;
+pub mod int_proxy;
 pub mod reduce;
 pub mod iterate;
 pub mod join;

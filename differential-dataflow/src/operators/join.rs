@@ -53,7 +53,7 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 }
 
 /// A type that can manage the joining of lists of batches.
-pub(crate) trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, CB: ContainerBuilder> {
+pub trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, CB: ContainerBuilder> {
     /// Prepare for work the join of two lists of corresponding batches, against a sufficient capability.
     ///
     /// `fresh` names which input contributed the freshly-arrived batch; its times all lie at or beyond
@@ -70,7 +70,7 @@ pub(crate) trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C
 /// The fresh batch's times all lie at or beyond the capability, so its side is not advanced by the
 /// capability's meet; the opposing accumulated trace is. The marker also selects which queue a unit
 /// joins, so a burst on one input cannot starve the other.
-pub(crate) enum Fresh {
+pub enum Fresh {
     /// The first input (`B0`) contributed the fresh batch.
     Input0,
     /// The second input (`B1`) contributed the fresh batch.
@@ -108,7 +108,7 @@ where
 /// compaction) and routes the per-batch work through the tactic. It requires only `TraceReader` of its
 /// inputs, never `Navigable`: it extracts trace batches via `batches_through`, and building cursors over
 /// them (if that is how the join proceeds) is the tactic's concern.
-pub(crate) fn join_with_tactic<'scope, Tr1, Tr2, T, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut tactic: T) -> Stream<'scope, Tr1::Time, CB::Container>
+pub fn join_with_tactic<'scope, Tr1, Tr2, T, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut tactic: T) -> Stream<'scope, Tr1::Time, CB::Container>
 where
     Tr1: TraceReader+'static,
     Tr2: TraceReader<Time = Tr1::Time>+'static,

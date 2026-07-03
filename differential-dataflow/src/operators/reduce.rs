@@ -29,7 +29,7 @@ use crate::trace::implementations::containers::BatchContainer;
 /// Unlike join, reduce does not suspend: its output is at most linear in its input, so a single
 /// `retire` runs the whole `[lower, upper)` interval to completion rather than yielding under a fuel
 /// budget.
-pub(crate) trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
+pub trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
     /// Retire the interval `[lower, upper)`, producing the output batches it informs.
     ///
     /// It is presented with the pre-existing input batches and output batches (those before `lower`),
@@ -85,7 +85,7 @@ pub use reference::reduce_trace_reference;
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
 /// `batches_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
-pub(crate) fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
+pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
