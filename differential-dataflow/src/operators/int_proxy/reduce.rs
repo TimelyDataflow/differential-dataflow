@@ -1,6 +1,7 @@
 //! The proxy reduce: all interesting-time logic in proxy space, value work by callback.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -12,6 +13,18 @@ use crate::trace::chunk::int_proxy::ProxyChunk;
 use crate::operators::reduce::ReduceTactic;
 
 use super::history::IdHistory;
+
+/// Identity hasher for `value_id`-keyed scratch maps: `value_id`s are already 64-bit content hashes,
+/// so re-hashing them is waste. Reused across moments (cleared, not reallocated) to avoid a
+/// per-moment map alloc/free.
+#[derive(Default)]
+struct IdHasher(u64);
+impl Hasher for IdHasher {
+    #[inline] fn write_u64(&mut self, i: u64) { self.0 = i; }
+    #[inline] fn write(&mut self, _: &[u8]) { unreachable!("value_id keys are u64") }
+    #[inline] fn finish(&self) -> u64 { self.0 }
+}
+type IdMap<R> = HashMap<u64, R, BuildHasherDefault<IdHasher>>;
 
 /// The reduce backend: value semantics for a proxy-space reduction.
 ///
@@ -244,6 +257,9 @@ where
         let mut meets: Vec<B1::Time> = Vec::new();
         let mut out_replay = IdHistory::new();
         let mut emitted: Vec<((u64, B1::Time), Bk::ROut)> = Vec::new();
+        // Reused `value_id → diff` accumulator, cleared each moment (retains capacity — no per-moment
+        // map alloc/free).
+        let mut acc: IdMap<Bk::ROut> = IdMap::default();
         for w in work {
             meets.clear();
             meets.extend(w.moments.iter().map(|(t, _)| t.clone()));
@@ -266,38 +282,37 @@ where
                 crate::consolidation::consolidate(&mut emitted);
 
                 // Current output at `t`: committed history plus this pass's deltas.
-                let mut cur: BTreeMap<u64, Bk::ROut> = BTreeMap::new();
+                acc.clear();
                 for ((vid, et), d) in out_replay.buffer().iter().chain(emitted.iter()) {
                     if et.less_equal(t) {
-                        match cur.entry(*vid) {
-                            std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(d),
-                            std::collections::btree_map::Entry::Vacant(e) => { e.insert(d.clone()); }
+                        match acc.entry(*vid) {
+                            std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(d),
+                            std::collections::hash_map::Entry::Vacant(e) => { e.insert(d.clone()); }
                         }
                     }
                 }
-                cur.retain(|_, d| !d.is_zero());
+                acc.retain(|_, d| !d.is_zero());
 
-                // delta = desired − current, in proxy space.
-                let mut delta: BTreeMap<u64, Bk::ROut> = cur;
-                for d in delta.values_mut() {
+                // delta = desired − current, in proxy space (negate current, add desired).
+                for d in acc.values_mut() {
                     d.negate();
                 }
                 if let Some(b) = *bracket {
                     let lo = if b == 0 { 0 } else { out_ends[b - 1] };
                     for (vid, d) in outs[lo..out_ends[b]].iter().cloned() {
-                        match delta.entry(vid) {
-                            std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(&d),
-                            std::collections::btree_map::Entry::Vacant(e) => { e.insert(d); }
+                        match acc.entry(vid) {
+                            std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(&d),
+                            std::collections::hash_map::Entry::Vacant(e) => { e.insert(d); }
                         }
                     }
                 }
-                delta.retain(|_, d| !d.is_zero());
-                if delta.is_empty() {
+                acc.retain(|_, d| !d.is_zero());
+                if acc.is_empty() {
                     continue;
                 }
 
                 let idx = held_elems.iter().rposition(|h| h.less_equal(t)).expect("no held capability <= active time");
-                for (vid, d) in delta {
+                for (vid, d) in acc.drain() {
                     emitted.push(((vid, t.clone()), d.clone()));
                     buckets[idx].push(((w.key, vid), t.clone(), d));
                 }
