@@ -135,8 +135,7 @@ where
     pub fn from_unsorted(keys: Vec<u64>, vals: Vec<u64>, times: Vec<T>, diffs: Vec<R>) -> (Self, Vec<usize>) {
         let n = times.len();
         debug_assert!(keys.len() == n && vals.len() == n && diffs.len() == n);
-        let mut perm: Vec<usize> = (0..n).collect();
-        perm.sort_by(|&a, &b| (keys[a], vals[a], &times[a]).cmp(&(keys[b], vals[b], &times[b])));
+        let perm = sort_perm(&keys, &vals, &times);
 
         let (mut ok, mut ov) = (Vec::new(), Vec::new());
         let (mut ot, mut od) = (Vec::new(), Vec::new());
@@ -165,6 +164,43 @@ where
         }
         (ProxyChunk(Rc::new(Inner { keys: ok, vals: ov, times: ot, diffs: od })), reps)
     }
+}
+
+/// The permutation sorting records by `(key_hash, value_id, time)`.
+///
+/// `key_hash` is a full 64-bit content hash (uniformly distributed), so a single MSD counting pass on
+/// its high byte splits the records into 256 near-equal buckets; each bucket is then finished by a
+/// comparison sort on the full `(key_hash, value_id, time)` key. That replaces most of the global
+/// `n log n` with one linear pass plus small local sorts — and degrades gracefully to the plain
+/// comparison sort when the hashes cluster (one bucket) or `n` is too small to amortize the pass.
+/// Stability is irrelevant: `from_unsorted` consolidates by full-key equality, order-blind within a
+/// group.
+fn sort_perm<T: Ord>(keys: &[u64], vals: &[u64], times: &[T]) -> Vec<usize> {
+    let n = keys.len();
+    let cmp = |&a: &usize, &b: &usize| (keys[a], vals[a], &times[a]).cmp(&(keys[b], vals[b], &times[b]));
+    if n < 512 {
+        let mut perm: Vec<usize> = (0..n).collect();
+        perm.sort_unstable_by(cmp);
+        return perm;
+    }
+    // MSD counting sort on the top byte of key_hash → contiguous, ascending buckets.
+    let bucket = |i: usize| (keys[i] >> 56) as usize;
+    let mut counts = [0usize; 256];
+    for i in 0..n { counts[bucket(i)] += 1; }
+    let mut starts = [0usize; 257];
+    for b in 0..256 { starts[b + 1] = starts[b] + counts[b]; }
+    let mut perm = vec![0usize; n];
+    let mut cursor = starts;
+    for i in 0..n {
+        let b = bucket(i);
+        perm[cursor[b]] = i;
+        cursor[b] += 1;
+    }
+    // Finish each bucket by the full key (all share the high byte, so ties on it are common).
+    for b in 0..256 {
+        perm[starts[b]..starts[b + 1]].sort_unstable_by(cmp);
+    }
+    perm
 }
 
 /// Column builders for one output chunk, emitted at `TARGET`.
