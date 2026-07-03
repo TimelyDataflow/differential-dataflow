@@ -629,6 +629,34 @@ where
     Some(SortedRun { keys, vals, times, diffs })
 }
 
+/// Group a key column by identity, returning integers only — the Rust↔corgi boundary primitive.
+/// `perm` lists row indices in group order; `ends[g]` is the exclusive end of group `g` within `perm`
+/// (so group `g`'s member rows are `perm[ends[g-1]..ends[g]]`, with `ends[-1] = 0`). DD orchestrates
+/// per group by index — it never sees a key `Value`; keys and payloads stay columnar in corgi. Built
+/// on the columnar discrimination sort + one batched adjacent-compare (no per-pair `compare_at`).
+pub fn group_offsets(col: &CValue) -> (Vec<usize>, Vec<usize>) {
+    let n = col.len();
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let perm = sort_perm(col);
+    let sorted = gather(col, &perm);
+    let mut ends = Vec::new();
+    if n > 1 {
+        let left: Vec<usize> = (0..n - 1).collect();
+        let right: Vec<usize> = (1..n).collect();
+        // adj[i] == 0 iff sorted[i] == sorted[i+1] — a group boundary is where adj[i] != 0.
+        let adj = compare_idx(&sorted, &sorted, &left, &right);
+        for (i, &a) in adj.iter().enumerate() {
+            if a != 0 {
+                ends.push(i + 1);
+            }
+        }
+    }
+    ends.push(n);
+    (perm, ends)
+}
+
 /// Semijoin: for each key in `needle_keys` (a set of DDIR keys), gather its `(val, time, diff)`
 /// history from `batches` via a batched `find` probe over the flattened, sorted source — untranscoding
 /// only the matched rows, never the whole trace. Returns a `key -> history` map (only matched keys
@@ -698,6 +726,22 @@ mod test {
     use std::collections::BTreeMap;
 
     fn xorshift(s: &mut u64) -> u64 { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; *s }
+
+    #[test]
+    fn group_offsets_partitions_by_key() {
+        // keys 3,1,1,2,3 → groups key1={rows 1,2}, key2={row 3}, key3={rows 0,4}.
+        let col = CValue::u64(vec![3, 1, 1, 2, 3]);
+        let (perm, ends) = group_offsets(&col);
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        let mut start = 0;
+        for &e in &ends {
+            let mut g = perm[start..e].to_vec();
+            g.sort();
+            groups.push(g);
+            start = e;
+        }
+        assert_eq!(groups, vec![vec![1, 2], vec![3], vec![0, 4]]);
+    }
 
     /// Build a single sorted+consolidated CorgiChunk from u64 (key,val,time,diff) rows.
     fn chunk(rows: &[((u64, u64), u64, i64)]) -> CorgiChunk<u64, i64> {
