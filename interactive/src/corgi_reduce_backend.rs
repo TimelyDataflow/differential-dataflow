@@ -335,30 +335,30 @@ where
     type RIn = Diff;
     type ROut = Diff;
 
-    fn key_hashes(&self, batches: &[CBatch<T>]) -> Vec<u64> {
-        let mut hashes = Vec::new();
-        for ch in chunks_of(batches) {
-            hashes.extend(hash_rows(ch.keys()));
+    fn present_novel(&mut self, novel: &[CBatch<T>]) -> ProxyChunk<T, Diff> {
+        // The batch's own support: read the (delta-sized) novel batches ALONE, unfiltered and never
+        // merged with stored history, so no compacted history record can cancel a seed. Also how the
+        // tactic learns the changed keys (its key set is the delta's keys).
+        let chunks = chunks_of(novel);
+        let (_keys_col, vals_col, khs, times, diffs) = collect_present(&chunks, |_| true);
+        if khs.is_empty() {
+            return ProxyChunk::default();
         }
-        hashes.sort_unstable();
-        hashes.dedup();
-        hashes
+        let vids = hash_rows(&vals_col);
+        let (chunk, _reps) = ProxyChunk::from_unsorted(khs, vids, times, diffs);
+        chunk
     }
 
     fn present_input(&mut self, history: &[CBatch<T>], novel: &[CBatch<T>], keys: &[u64]) -> ProxyChunk<T, Diff> {
         self.reset_pools();
 
-        // Read novel whole + history filtered to the changed keys (columnar semijoin). Novel chunks
-        // come first, so the first `novel_len` candidate records are the (unfiltered) novel side.
+        // History ∪ novel, restricted to the changed keys (a columnar semijoin). Novel keys are all in
+        // `keys` (the delta's keys, as `present_novel` reports them), so this keeps the novel side whole
+        // and filters the accumulated history to the changed keys. The seeds come from `present_novel`;
+        // this merged run is used only for accumulation (compaction here is accumulation-preserving).
         let mut chunks = chunks_of(novel);
         chunks.extend(chunks_of(history));
-        let novel_len: usize = chunks_of(novel).iter().map(|c| c.keys().len()).sum();
-        let mut seen = 0usize;
-        let (keys_col, vals_col, khs, times, diffs) = collect_present(&chunks, |h| {
-            let keep = seen < novel_len || keys.binary_search(&h).is_ok();
-            seen += 1;
-            keep
-        });
+        let (keys_col, vals_col, khs, times, diffs) = collect_present(&chunks, |h| keys.binary_search(&h).is_ok());
 
         if khs.is_empty() {
             self.in_vals = CValue::Unit(0);
@@ -369,32 +369,6 @@ where
         let (chunk, reps) = ProxyChunk::from_unsorted(khs, vids, times, diffs);
         self.in_vals = gather(&vals_col, &reps);
         self.in_value_ids = chunk.value_ids().to_vec();
-        if std::env::var("CORGI_DBG").is_ok() {
-            eprintln!("  [RETIRE] changed_has_node2_hash? novel_chunks={} hist_chunks={}", chunks_of(novel).len(), chunks_of(history).len());
-            // RAW: every node-2 record in the incoming arrangement batches (novel + history), BEFORE
-            // present's changed-key filter — i.e. what the CorgiChunk arrange actually produced.
-            for (tag, chs) in [("novel", chunks_of(novel)), ("hist", chunks_of(history))] {
-                for ch in &chs {
-                    if ch.keys().len() == 0 { continue; }
-                    let kr = crate::corgi_logic::untranscode(ch.keys().clone(), &corgi::shape_of_value(ch.keys()));
-                    let vr = crate::corgi_logic::untranscode(ch.vals().clone(), &corgi::shape_of_value(ch.vals()));
-                    for i in 0..kr.len() {
-                        if format!("{:?}", kr[i]).contains("Int(2)") {
-                            eprintln!("  [RAW-{tag}] key={:?} val={:?} t={:?} d={}", kr[i], vr[i], ch.times()[i], ch.diffs()[i]);
-                        }
-                    }
-                }
-            }
-            // PIN: what present actually returns to the tactic (after filter + consolidate).
-            let kcol = gather(&keys_col, &reps);
-            let krows = crate::corgi_logic::untranscode(kcol.clone(), &corgi::shape_of_value(&kcol));
-            let vrows = crate::corgi_logic::untranscode(self.in_vals.clone(), &corgi::shape_of_value(&self.in_vals));
-            for i in 0..chunk.len() {
-                if format!("{:?}", krows[i]).contains("Int(2)") {
-                    eprintln!("  [PIN] key={:?} val={:?} t={:?} d={}", krows[i], vrows[i], chunk.times()[i], chunk.diffs()[i]);
-                }
-            }
-        }
         // Register representative keys (aligned with the sorted presentation) for materialize.
         let rep_keys = gather(&keys_col, &reps);
         self.register_keys(rep_keys, chunk.key_hashes());
@@ -412,15 +386,6 @@ where
         // Register representative output keys and values (aligned with the sorted presentation).
         let rep_keys = gather(&keys_col, &reps);
         let rep_vals = gather(&vals_col, &reps);
-        if std::env::var("CORGI_DBG").is_ok() {
-            let kr = crate::corgi_logic::untranscode(rep_keys.clone(), &corgi::shape_of_value(&rep_keys));
-            let vr = crate::corgi_logic::untranscode(rep_vals.clone(), &corgi::shape_of_value(&rep_vals));
-            for i in 0..chunk.len() {
-                if format!("{:?}", kr[i]).contains("Int(2)") {
-                    eprintln!("  [POUT-current] key={:?} val={:?} t={:?} d={}", kr[i], vr[i], chunk.times()[i], chunk.diffs()[i]);
-                }
-            }
-        }
         self.register_keys(rep_keys, chunk.key_hashes());
         self.register_vals(rep_vals, chunk.value_ids());
         chunk
@@ -445,15 +410,6 @@ where
             .collect();
         let keys = gather(&key_pool, &kidx);
         let vals = gather(&val_pool, &vidx);
-        if std::env::var("CORGI_DBG").is_ok() {
-            let kr = crate::corgi_logic::untranscode(keys.clone(), &corgi::shape_of_value(&keys));
-            let vr = crate::corgi_logic::untranscode(vals.clone(), &corgi::shape_of_value(&vals));
-            for i in 0..records.len() {
-                if format!("{:?}", kr[i]).contains("Int(2)") {
-                    eprintln!("  [MAT-emit] key={:?} val={:?} t={:?} d={}", kr[i], vr[i], records.times()[i], records.diffs()[i]);
-                }
-            }
-        }
         Rc::new(columns_to_batch(keys, vals, records.times().to_vec(), records.diffs().to_vec(), description))
     }
 }

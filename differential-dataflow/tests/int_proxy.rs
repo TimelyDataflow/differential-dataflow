@@ -375,8 +375,10 @@ where
     type RIn = B::RIn;
     type ROut = B::ROut;
 
-    fn key_hashes(&self, batches: &[B1]) -> Vec<u64> {
-        self.inner.key_hashes(batches)
+    fn present_novel(&mut self, novel: &[B1]) -> ProxyChunk<B1::Time, B::RIn> {
+        let chunk = self.inner.present_novel(novel);
+        self.presented.fetch_add(chunk.len(), AtomicOrdering::SeqCst);
+        chunk
     }
     fn present_input(&mut self, history: &[B1], novel: &[B1], keys: &[u64]) -> ProxyChunk<B1::Time, B::RIn> {
         let chunk = self.inner.present_input(history, novel, keys);
@@ -616,11 +618,9 @@ mod identity {
         type RIn = isize;
         type ROut = isize;
 
-        fn key_hashes(&self, batches: &[Batch<T>]) -> Vec<u64> {
-            let (mut ks, _, _, _) = records(batches, None);
-            ks.sort_unstable();
-            ks.dedup();
-            ks
+        fn present_novel(&mut self, novel: &[Batch<T>]) -> ProxyChunk<T, isize> {
+            let (ks, vs, ts, ds) = records(novel, None);
+            ProxyChunk::from_unsorted(ks, vs, ts, ds).0
         }
 
         fn present_input(&mut self, history: &[Batch<T>], novel: &[Batch<T>], keys: &[u64]) -> ProxyChunk<T, isize> {
@@ -678,15 +678,25 @@ mod identity {
 /// emulating the driver protocol: `lower` chases `upper`, `held` is the previous
 /// returned frontier joined with the round's input times (the batch capabilities),
 /// and source/output batch lists accumulate.
-fn drive_identity_reduce<L>(
+/// Drive `ProxyReduceTactic` over the identity backend through a sequence of retires,
+/// emulating the driver protocol. With `compact`, plays the COMPACTION ADVERSARY: before
+/// each retire, every accumulated source and output batch has its times advanced to the
+/// interval's lower bound and is re-consolidated — accumulation-preserving (the model's
+/// `acc_mapDomain`), and exactly the move that can cancel a stored record against a
+/// novel one in a merged view. A correct tactic's output must not change.
+fn drive_identity_reduce_compacting<L>(
     rounds: &[(Antichain<PT>, Vec<((u64, u64), PT, isize)>)],
     logic: L,
+    compact: bool,
 ) -> Vec<((u64, u64), PT, isize)>
 where
     L: FnMut(&[(u64, isize)]) -> Vec<(u64, isize)>,
 {
     use differential_dataflow::operators::int_proxy::ProxyChunk;
     use differential_dataflow::trace::chunk::ChunkBatch;
+
+    #[allow(unused_imports)]
+    use differential_dataflow::trace::BatchReader as _;
 
     let mut tactic = ProxyReduceTactic::new(identity::IdentityReduce::new(logic));
     let mut lower = Antichain::from_elem(pt(0, 0));
@@ -713,6 +723,31 @@ where
         let mut held = frontier.clone();
         for (_, t, _) in updates {
             held.insert(t.clone());
+        }
+
+        if compact {
+            use differential_dataflow::lattice::Lattice;
+            let advance = |batches: &mut Vec<identity::Batch<PT>>| {
+                for batch in batches.iter_mut() {
+                    let (mut ks, mut vs) = (Vec::new(), Vec::new());
+                    let (mut ts, mut ds) = (Vec::new(), Vec::new());
+                    for chunk in &batch.chunks {
+                        for i in 0..chunk.len() {
+                            ks.push(chunk.key_hashes()[i]);
+                            vs.push(chunk.value_ids()[i]);
+                            let mut t = chunk.times()[i].clone();
+                            t.advance_by(lower.borrow());
+                            ts.push(t);
+                            ds.push(chunk.diffs()[i]);
+                        }
+                    }
+                    let (chunk, _) = ProxyChunk::from_unsorted(ks, vs, ts, ds);
+                    let chunks = if chunk.is_empty() { Vec::new() } else { vec![chunk] };
+                    *batch = std::rc::Rc::new(ChunkBatch::new(chunks, batch.description().clone()));
+                }
+            };
+            advance(&mut source);
+            advance(&mut outputs);
         }
 
         let (produced, new_frontier) = tactic.retire(source.clone(), outputs.clone(), input.clone(), &lower, upper, &held);
@@ -798,7 +833,8 @@ fn proxy_reduce_identity_fuzz_matches_grid_oracle() {
         let tail = updates.iter().filter(|(_, t, _)| t.outer + t.inner >= prev).cloned().collect();
         rounds.push((Antichain::new(), tail));
 
-        let produced = drive_identity_reduce(&rounds, logic);
+        let compact = iteration % 2 == 1;
+        let produced = drive_identity_reduce_compacting(&rounds, logic, compact);
 
         // The oracle: at every grid point, per key, the accumulated output equals the
         // reduction of the accumulated input.
@@ -1046,4 +1082,59 @@ fn proxy_join_scaling() {
         .flat_map(|(_, v)| v.iter().map(|(_, _, d)| *d))
         .sum();
     assert_eq!(total, 0);
+}
+
+/// The formal model's `scenario1_cancels`, realized against a compacted trace (the SCC
+/// field bug): compaction legally advances a stored `+1` onto a novel `−1`'s exact
+/// `(value, time)`, so the two cancel in the merged input presentation — but the batch
+/// still owes a change there (the standing output must be retracted). Interesting-time
+/// seeds must come from the batch's own support (`seedSet = b.support ∪ pending`), never
+/// from a time-filter over the merged view.
+#[test]
+fn proxy_reduce_seeds_survive_compaction_cancellation() {
+    let count = |_k: &u64, input: &[(&u64, isize)], output: &mut Vec<(isize, isize)>| {
+        let c: isize = input.iter().map(|(_, d)| *d).sum();
+        if c > 0 {
+            output.push((c, 1));
+        }
+    };
+    let mut tactic = ProxyReduceTactic::new(VecReduceBackend::new(count));
+
+    // Retire 1: (key 1, value 10) +1 at (0,1); interval [(0,0), {(1,1)}).
+    let batch1 = pbatch(vec![((1u64, 10u64), pt(0, 1), 1)], vec![pt(0, 0)], vec![pt(1, 1)]);
+    let lower1 = Antichain::from_elem(pt(0, 0));
+    let upper1 = Antichain::from_elem(pt(1, 1));
+    let held1 = Antichain::from_elem(pt(0, 1));
+    let (produced1, _) = tactic.retire(vec![], vec![], vec![batch1], &lower1, &upper1, &held1);
+    assert_eq!(produced1.len(), 1);
+    assert_eq!(pbatch_rows(&produced1[0].1), vec![((1, 1isize), pt(0, 1), 1)]);
+
+    // Between retires the trace compacts to since = {(1,1)} — legal, since every later
+    // evaluation time is at or beyond it. advance_by maps (0,1) → (1,1) in both the
+    // source and the output trace.
+    let source_compacted = pbatch(vec![((1u64, 10u64), pt(1, 1), 1)], vec![pt(0, 0)], vec![pt(1, 1)]);
+    let output_compacted = pbatch(vec![((1u64, 1isize), pt(1, 1), 1)], vec![pt(0, 0)], vec![pt(1, 1)]);
+
+    // Retire 2: the novel batch retracts the input at exactly (1,1) — the time the
+    // compacted stored record now occupies. Merged and consolidated, they cancel; the
+    // batch support still holds (1,1), and the owed output retraction hangs on it.
+    let batch2 = pbatch(vec![((1u64, 10u64), pt(1, 1), -1)], vec![pt(1, 1)], vec![]);
+    let lower2 = upper1.clone();
+    let upper2 = Antichain::new();
+    let held2 = Antichain::from_elem(pt(1, 1));
+    let (produced2, frontier2) = tactic.retire(
+        vec![source_compacted],
+        vec![output_compacted],
+        vec![batch2],
+        &lower2,
+        &upper2,
+        &held2,
+    );
+    let rows: Vec<_> = produced2.iter().flat_map(|(_, b)| pbatch_rows(b)).collect();
+    assert_eq!(
+        rows,
+        vec![((1, 1isize), pt(1, 1), -1)],
+        "the standing count must be retracted at (1,1); an empty result means the seed was cancelled out of the merged presentation"
+    );
+    assert!(frontier2.is_empty());
 }

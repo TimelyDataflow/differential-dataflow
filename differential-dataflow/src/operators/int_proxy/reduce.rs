@@ -41,12 +41,23 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// Diff type of the output; the desired-vs-current delta needs negation.
     type ROut: Abelian + 'static;
 
-    /// The `key_hash`es appearing in `batches`, sorted and deduplicated. Used by the
-    /// tactic to find the keys whose output can change this interval.
-    fn key_hashes(&self, batches: &[B1]) -> Vec<u64>;
+    /// (read) Present the freshly arrived batches ALONE as a sorted, consolidated proxy
+    /// run: the batch's own support, before any merge with stored history. Unfiltered —
+    /// the batches are the delta — and also how the tactic learns the changed keys.
+    ///
+    /// Seeding interesting times from this run (rather than from a time-filter over the
+    /// merged presentation) is load-bearing for CORRECTNESS, not just structure: legal
+    /// compaction may advance a stored record onto a novel record's exact
+    /// `(value, time)`, cancelling it out of the merged view while the batch still owes
+    /// output changes at that time. The formal model pins this: seeds are
+    /// `b.support ∪ pending` (`Model.lean`'s `seedSet`; its `scenario1_cancels` is
+    /// exactly the compaction-cancellation case).
+    fn present_novel(&mut self, novel: &[B1]) -> ProxyChunk<B1::Time, Self::RIn>;
     /// (read) Flatten the input history (`history` ∪ `novel`, the accumulated trace and
     /// the freshly arrived batches) into one sorted, consolidated proxy run, restricted to
-    /// the sorted `keys`. The restriction is load-bearing: presenting only changed keys is
+    /// the sorted `keys` — the ACCUMULATION run (consolidation across history and novel
+    /// is fine here: compaction is accumulation-preserving; only seeding must not read
+    /// this view). The restriction is load-bearing: presenting only changed keys is
     /// what keeps small-delta recursion from re-reading the accumulated trace each round.
     fn present_input(&mut self, history: &[B1], novel: &[B1], keys: &[u64]) -> ProxyChunk<B1::Time, Self::RIn>;
     /// (read) As `present_input`, for the operator's own output trace. The `value_id`s
@@ -146,7 +157,8 @@ where
         // Only keys touched by the new input delta or carrying pending times can change
         // output in [lower, upper); everything else is untouched. This restriction keeps
         // per-retire cost proportional to the delta, not the accumulation.
-        let mut changed: BTreeSet<u64> = self.backend.key_hashes(&input_batches).into_iter().collect();
+        let p_novel = self.backend.present_novel(&input_batches);
+        let mut changed: BTreeSet<u64> = p_novel.key_hashes().iter().copied().collect();
         changed.extend(self.pending.keys().copied());
         if changed.is_empty() {
             // No input delta and no carried pending: no key's output can change, and
@@ -193,7 +205,7 @@ where
         // Reused across keys (cleared each iteration) so per-key work doesn't reallocate.
         let mut rep: Vec<(u64, usize)> = Vec::new();
         let mut raw_moments: Vec<(B1::Time, (usize, usize))> = Vec::new();
-        let (mut is, mut os) = (0usize, 0usize);
+        let (mut is, mut os, mut ns) = (0usize, 0usize, 0usize);
         for &key in &changed {
             while is < p_in.len() && p_in.key_hashes()[is] < key { is += 1; }
             let i0 = is;
@@ -203,6 +215,10 @@ where
             let o0 = os;
             while os < p_out.len() && p_out.key_hashes()[os] == key { os += 1; }
             let o1 = os;
+            while ns < p_novel.len() && p_novel.key_hashes()[ns] < key { ns += 1; }
+            let n0 = ns;
+            while ns < p_novel.len() && p_novel.key_hashes()[ns] == key { ns += 1; }
+            let n1 = ns;
 
             // value_id → representative record index (the first of the vid's run; the
             // key's records are sorted by (value_id, time)).
@@ -217,7 +233,7 @@ where
             raw_moments.clear();
             let mut pended: Vec<B1::Time> = Vec::new();
             discover_and_accumulate(
-                &p_in, i0, i1, &rep, pending, lower, upper,
+                &p_in, i0, i1, &p_novel, n0, n1, &rep, pending, upper,
                 &mut raw_moments, &mut entries, &mut pended,
             );
             if !pended.is_empty() {
@@ -361,14 +377,21 @@ where
 /// Phase A of one key's retire: the time-replay loop of the cursor tactic
 /// (`history_replay::compute`), ported to proxy space with the value callback deferred.
 ///
-/// It replays the key's input records — split into `prior` (before `lower`, the
-/// accumulated history) and the novel interval — together with the carried `pending`
+/// It replays the key's NOVEL batch records (`p_novel[n0..n1]` — the batch's own
+/// support, presented apart from the stored history) together with the carried `pending`
 /// times, in ascending time order, discovering the interesting times: those carrying
-/// novel or pending updates, and joins thereof (synthesized as replay proceeds). At each
-/// interesting time within `[lower, upper)` it assembles the consolidated input
-/// accumulation as a bracket appended to `entries` (recorded in `moments` with its entry
-/// range; an empty range marks a moment whose accumulation vanished but whose current
-/// output may need retracting). Times at or beyond `upper` are `pended`.
+/// novel or pending updates, and joins thereof (synthesized as replay proceeds). The
+/// merged input presentation (`p_in[i0..i1]`, which already contains the novel records)
+/// is replayed alongside purely for ACCUMULATION: at each interesting time within the
+/// interval its buffer supplies the consolidated input, appended to `entries` as a
+/// bracket (recorded in `moments` with its entry range; an empty range marks a moment
+/// whose accumulation vanished but whose current output may need retracting). Times at
+/// or beyond `upper` are `pended`.
+///
+/// Seeding from the batch's own support — never from a time-filter over the merged
+/// presentation — is the formal model's `seedSet = b.support ∪ pending`: compaction can
+/// legally advance a stored record onto a novel one and cancel it out of the MERGED
+/// view, but it still owes changes at that time (`scenario1_cancels`).
 ///
 /// The replay buffers are repeatedly advanced by the meet of the times still to come and
 /// consolidated — the collapse that keeps a key with many distinct times linear rather
@@ -378,9 +401,11 @@ fn discover_and_accumulate<T, RIn>(
     p_in: &ProxyChunk<T, RIn>,
     i0: usize,
     i1: usize,
+    p_novel: &ProxyChunk<T, RIn>,
+    n0: usize,
+    n1: usize,
     rep: &[(u64, usize)],
     pending: &[T],
-    lower: &Antichain<T>,
     upper: &Antichain<T>,
     moments: &mut Vec<(T, (usize, usize))>,
     entries: &mut Vec<(usize, RIn)>,
@@ -389,12 +414,11 @@ fn discover_and_accumulate<T, RIn>(
     T: Timestamp + Lattice,
     RIn: Semigroup + Clone,
 {
-    // The novel interval's records seed interestingness; prior records are join partners.
+    // The batch's support seeds interestingness (and its buffered times generate joins);
+    // its diffs do NOT feed accumulation — the merged run below already contains them.
     let mut batch_replay = IdHistory::new();
     batch_replay.load(
-        (i0..i1)
-            .filter(|&i| lower.less_equal(&p_in.times()[i]))
-            .map(|i| (p_in.value_ids()[i], p_in.times()[i].clone(), p_in.diffs()[i].clone())),
+        (n0..n1).map(|i| (p_novel.value_ids()[i], p_novel.times()[i].clone(), p_novel.diffs()[i].clone())),
         None,
     );
 
@@ -409,11 +433,10 @@ fn discover_and_accumulate<T, RIn>(
     update_meet(&mut meet, meets.first());
     update_meet(&mut meet, batch_replay.meet());
 
+    // The merged (history ⊎ novel, consolidated) run: the accumulation source.
     let mut input_replay = IdHistory::new();
     input_replay.load(
-        (i0..i1)
-            .filter(|&i| !lower.less_equal(&p_in.times()[i]))
-            .map(|i| (p_in.value_ids()[i], p_in.times()[i].clone(), p_in.diffs()[i].clone())),
+        (i0..i1).map(|i| (p_in.value_ids()[i], p_in.times()[i].clone(), p_in.diffs()[i].clone())),
         meet.as_ref(),
     );
 
@@ -454,10 +477,11 @@ fn discover_and_accumulate<T, RIn>(
                 if let Some(m) = meet.as_ref() {
                     input_replay.advance_buffer_by(m);
                 }
-                // Assemble the accumulation at `next_time` from both buffers; buffered
-                // times beyond it contribute synthetic joins.
+                // Assemble the accumulation at `next_time` from the merged run's buffer
+                // (the batch's records are already in it — the batch buffer must not
+                // contribute diffs twice); buffered times beyond it contribute joins.
                 let mut acc: Vec<(u64, RIn)> = Vec::new();
-                for ((vid, t), d) in input_replay.buffer().iter().chain(batch_replay.buffer().iter()) {
+                for ((vid, t), d) in input_replay.buffer().iter() {
                     if t.less_equal(&next_time) {
                         acc.push((*vid, d.clone()));
                     } else {
