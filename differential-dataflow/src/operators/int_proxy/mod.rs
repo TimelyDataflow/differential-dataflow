@@ -102,6 +102,8 @@
 //! hashing, the value function, and building real columns from ids. The backend never
 //! sees a timestamp except as an opaque payload.
 
+mod history;
+
 pub mod join;
 pub mod reduce;
 pub mod reference;

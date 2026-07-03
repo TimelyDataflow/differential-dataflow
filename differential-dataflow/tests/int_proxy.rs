@@ -978,3 +978,72 @@ fn bench_wall_clock_vs_row() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Scaling: one key, many distinct times, in a single batch (the shapes of the
+// row suite's `reduce_scaling` / `join_scaling` tests). These are linear-ish
+// only if the tactics replay histories with meet-advancement; a per-moment
+// rescan or a naive per-key cross product is quadratic and would hang here.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn proxy_reduce_scaling() {
+    use timely::dataflow::operators::ToStream;
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::vec::Map;
+    use differential_dataflow::AsCollection;
+
+    let scale = 100_000u64;
+    let data = timely::example(move |scope| {
+        let arranged = arrange_core::<_, _, Chunker<(), ()>, Batcher<(), ()>, Bldr<(), ()>, Spine<(), ()>>(
+            (0..1)
+                .to_stream(scope)
+                .flat_map(move |_| (0..scale).map(|i| ((((), ())), i, 1)))
+                .as_collection()
+                .inner,
+            Pipeline,
+            "Arrange",
+        );
+        let count = |_k: &(), input: &[(&(), isize)], output: &mut Vec<(isize, isize)>| {
+            let c: isize = input.iter().map(|(_, d)| *d).sum();
+            if c > 0 {
+                output.push((c, 1));
+            }
+        };
+        let tactic = ProxyReduceTactic::new(VecReduceBackend::new(count));
+        let reduced = reduce_with_tactic::<_, Spine<(), isize>, _>(arranged, "ProxyReduce", tactic);
+        reduced.as_collection(|_k, v| *v).inner.capture()
+    });
+    let extracted: Vec<_> = data.extract();
+    assert_eq!(extracted.len(), 1);
+}
+
+#[test]
+fn proxy_join_scaling() {
+    use timely::dataflow::operators::ToStream;
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::vec::Map;
+    use differential_dataflow::AsCollection;
+
+    let scale = 100_000u64;
+    let data = timely::example(move |scope| {
+        let counts = (0..1)
+            .to_stream(scope)
+            .flat_map(move |_| (0..scale).map(|i| ((), i, 1)))
+            .as_collection()
+            .count();
+        let odds = counts.clone().filter(|x| x.1 % 2 == 1).inner;
+        let evens = counts.filter(|x| x.1 % 2 == 0).inner;
+        let a0 = arrange_core::<_, _, Chunker<(), isize>, Batcher<(), isize>, Bldr<(), isize>, Spine<(), isize>>(odds, Pipeline, "Odds");
+        let a1 = arrange_core::<_, _, Chunker<(), isize>, Batcher<(), isize>, Bldr<(), isize>, Spine<(), isize>>(evens, Pipeline, "Evens");
+        let tactic = ProxyJoinTactic::new(VecJoinBackend::new(|_k: &(), v0: &isize, v1: &isize| (*v0, *v1)));
+        join_with_tactic::<_, _, _, CapacityContainerBuilder<Vec<((isize, isize), u64, isize)>>>(a0, a1, tactic).capture()
+    });
+    // Odd and even counts are never simultaneously present: the join is empty.
+    let total: isize = data
+        .extract()
+        .iter()
+        .flat_map(|(_, v)| v.iter().map(|(_, _, d)| *d))
+        .sum();
+    assert_eq!(total, 0);
+}

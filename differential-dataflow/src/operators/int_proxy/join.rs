@@ -6,11 +6,15 @@ use timely::ContainerBuilder;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::OutputBuilderSession;
 
+use timely::progress::Timestamp;
+
 use crate::difference::{Multiply, Semigroup};
 use crate::lattice::Lattice;
 use crate::trace::BatchReader;
 use crate::trace::chunk::int_proxy::ProxyChunk;
 use crate::operators::join::{EffortBuilder, Fresh, JoinTactic};
+
+use super::history::IdHistory;
 
 /// The join backend: value semantics for a proxy-space equijoin.
 ///
@@ -145,14 +149,7 @@ where
             while e0 < k0.len() && k0[e0] == key { e0 += 1; }
             let mut e1 = j;
             while e1 < k1.len() && k1[e1] == key { e1 += 1; }
-            for a in i..e0 {
-                for b in j..e1 {
-                    li.push(a);
-                    ri.push(b);
-                    ot.push(p0.times()[a].join(&p1.times()[b]));
-                    od.push(p0.diffs()[a].clone().multiply(&p1.diffs()[b]));
-                }
-            }
+            join_key(&p0, i..e0, &p1, j..e1, &mut li, &mut ri, &mut ot, &mut od);
             i = e0;
             j = e1;
         }
@@ -160,4 +157,113 @@ where
     if li.is_empty() { return; }
     let mut container = backend.cross(&li, &ri, ot, od);
     output.session_with_builder(&unit.capability).give_container(&mut container);
+}
+
+/// Match one key's records across the two presented runs.
+///
+/// For reasonably sized histories, the dead-simple cross product. For larger ones, the
+/// [`JoinThinker`]'s replay (ported to proxy space): both sides' edits are replayed in
+/// ascending time order, each edit joined against the *other* side's accumulated buffer,
+/// which is repeatedly advanced by the meet of the times still to come and consolidated —
+/// so a key whose two histories carry many distinct times costs the histories' sum times
+/// the buffer width, not their product. Emitted times are identical either way
+/// (`t0 ∨ (t1 ∨ meet) = t0 ∨ t1` since `meet ≤ t0`), and consolidation only pre-sums
+/// diffs whose product terms would have consolidated downstream.
+///
+/// Matched records reach the backend as representative indices per `value_id` (equal ids
+/// denote equal values, so any representative serves the projection).
+///
+/// [`JoinThinker`]: crate::operators::join (private; see the cursor tactic)
+#[allow(clippy::too_many_arguments)]
+fn join_key<T, R0, R1, RO>(
+    p0: &ProxyChunk<T, R0>,
+    r0: std::ops::Range<usize>,
+    p1: &ProxyChunk<T, R1>,
+    r1: std::ops::Range<usize>,
+    li: &mut Vec<usize>,
+    ri: &mut Vec<usize>,
+    ot: &mut Vec<T>,
+    od: &mut Vec<RO>,
+) where
+    T: Lattice + Timestamp,
+    R0: Semigroup + Multiply<R1, Output = RO> + Clone,
+    R1: Semigroup + Clone,
+{
+    if r0.len() < 16 || r1.len() < 16 {
+        for a in r0 {
+            for b in r1.clone() {
+                li.push(a);
+                ri.push(b);
+                ot.push(p0.times()[a].join(&p1.times()[b]));
+                od.push(p0.diffs()[a].clone().multiply(&p1.diffs()[b]));
+            }
+        }
+        return;
+    }
+
+    // value_id → representative record index, per side (each side's records are sorted
+    // by (value_id, time) within the key).
+    let rep = |p_vids: &[u64], range: std::ops::Range<usize>| {
+        let mut rep: Vec<(u64, usize)> = Vec::new();
+        for i in range {
+            if rep.last().is_none_or(|(v, _)| *v != p_vids[i]) {
+                rep.push((p_vids[i], i));
+            }
+        }
+        rep
+    };
+    let rep0 = rep(p0.value_ids(), r0.clone());
+    let rep1 = rep(p1.value_ids(), r1.clone());
+    let find = |rep: &[(u64, usize)], vid: u64| rep[rep.binary_search_by_key(&vid, |x| x.0).expect("vid presented")].1;
+
+    let mut h0: IdHistory<T, R0> = IdHistory::new();
+    h0.load(r0.map(|i| (p0.value_ids()[i], p0.times()[i].clone(), p0.diffs()[i].clone())), None);
+    let mut h1: IdHistory<T, R1> = IdHistory::new();
+    h1.load(r1.map(|i| (p1.value_ids()[i], p1.times()[i].clone(), p1.diffs()[i].clone())), None);
+
+    while h0.time().is_some() && h1.time().is_some() {
+        if h0.time().unwrap() < h1.time().unwrap() {
+            h1.advance_buffer_by(h0.meet().unwrap());
+            let (v0, t0, d0) = h0.edit().unwrap();
+            for ((v1, t1), d1) in h1.buffer() {
+                li.push(find(&rep0, v0));
+                ri.push(find(&rep1, *v1));
+                ot.push(t0.join(t1));
+                od.push(d0.clone().multiply(d1));
+            }
+            h0.step();
+        } else {
+            h0.advance_buffer_by(h1.meet().unwrap());
+            let (v1, t1, d1) = h1.edit().unwrap();
+            for ((v0, t0), d0) in h0.buffer() {
+                li.push(find(&rep0, *v0));
+                ri.push(find(&rep1, v1));
+                ot.push(t0.join(t1));
+                od.push(d0.clone().multiply(d1));
+            }
+            h1.step();
+        }
+    }
+    while h0.time().is_some() {
+        h1.advance_buffer_by(h0.meet().unwrap());
+        let (v0, t0, d0) = h0.edit().unwrap();
+        for ((v1, t1), d1) in h1.buffer() {
+            li.push(find(&rep0, v0));
+            ri.push(find(&rep1, *v1));
+            ot.push(t0.join(t1));
+            od.push(d0.clone().multiply(d1));
+        }
+        h0.step();
+    }
+    while h1.time().is_some() {
+        h0.advance_buffer_by(h1.meet().unwrap());
+        let (v1, t1, d1) = h1.edit().unwrap();
+        for ((v0, t0), d0) in h0.buffer() {
+            li.push(find(&rep0, *v0));
+            ri.push(find(&rep1, v1));
+            ot.push(t0.join(t1));
+            od.push(d0.clone().multiply(d1));
+        }
+        h1.step();
+    }
 }

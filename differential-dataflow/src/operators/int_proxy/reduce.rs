@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::progress::frontier::AntichainRef;
 
 use crate::difference::{Abelian, IsZero, Semigroup};
 use crate::lattice::Lattice;
@@ -12,12 +11,15 @@ use crate::trace::{BatchReader, Description};
 use crate::trace::chunk::int_proxy::ProxyChunk;
 use crate::operators::reduce::ReduceTactic;
 
+use super::history::IdHistory;
+
 /// The reduce backend: value semantics for a proxy-space reduction.
 ///
 /// Protocol (per `retire`, driven by [`ProxyReduceTactic`]): one `key_hashes` (over the
-/// new input batches), one `present_input`, one `present_output`, one `reduce_many` call
-/// per distinct interesting time — batching every key active at that time, with indices
-/// referring to the input presentation — then one `materialize` per output batch. Within
+/// new input batches), one `present_input`, one `present_output`, ONE batched
+/// `reduce_many` call carrying every `(key, interesting time)` moment of the retire —
+/// with indices referring to the input presentation — then one `materialize` per output
+/// batch. Within
 /// one retire the backend must be able to resolve every presented `key_hash` to its key
 /// and every presented or minted `value_id` to its value.
 pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
@@ -108,32 +110,6 @@ impl<T, Bk> ProxyReduceTactic<T, Bk> {
     }
 }
 
-/// The active times for an interval `[lower, upper)`: joins of input times (`novel` +
-/// `prior`) reachable from the `novel` seeds that are not at or beyond `upper`; those at
-/// or beyond are `pended` for a future interval. Over-derivation is sound (a non-changing
-/// time yields a zero delta).
-fn active_times<T: Lattice + Ord + Clone>(
-    upper: AntichainRef<T>,
-    prior: &[T],
-    novel: &[T],
-    active: &mut BTreeSet<T>,
-    pended: &mut BTreeSet<T>,
-) {
-    let mut todo: BTreeSet<T> = novel.iter().cloned().collect();
-    while let Some(next) = todo.pop_first() {
-        if upper.less_equal(&next) {
-            pended.insert(next);
-        } else if active.insert(next.clone()) {
-            for t in novel.iter().chain(prior.iter()) {
-                let join = next.join(t);
-                if !active.contains(&join) {
-                    todo.insert(join);
-                }
-            }
-        }
-    }
-}
-
 impl<B1, B2, Bk> ReduceTactic<B1, B2> for ProxyReduceTactic<B1::Time, Bk>
 where
     B1: BatchReader,
@@ -180,19 +156,27 @@ where
 
         let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
 
-        // Pass 1: march through the changed keys — both presentations hold only changed
-        // keys, in hash order, so the ranges advance monotonically — derive each key's
-        // active times, and collect the `(key, time)` moments (grouped by time, so the
-        // later passes run in ascending time order).
-        struct Plan {
+        // Per changed key, phase A: the time-replay loop of the cursor tactic
+        // (`history_replay::compute`), ported to proxy space with the value callback
+        // deferred — it discovers the interesting times in `[lower, upper)`, assembles
+        // each one's consolidated input accumulation as a bracket, and pends times at or
+        // beyond `upper`. Both presentations hold only changed keys, in hash order, so
+        // the ranges advance monotonically. Keys are independent: their brackets share
+        // the retire's single batched callback, and phase B below replays each key's
+        // output side over its own (ascending) moments.
+        let mut keys_v: Vec<u64> = Vec::new();
+        let mut ends: Vec<usize> = Vec::new();
+        let mut entries: Vec<(usize, Bk::RIn)> = Vec::new();
+        struct KeyWork<T> {
             key: u64,
-            i0: usize,
-            i1: usize,
             o0: usize,
             o1: usize,
+            /// The key's interesting in-interval moments, ascending, each with its
+            /// bracket index (`None`: empty accumulation — the callback is only
+            /// consulted for non-empty input, but current output may need retracting).
+            moments: Vec<(T, Option<usize>)>,
         }
-        let mut plans: Vec<Plan> = Vec::new();
-        let mut waves: BTreeMap<B1::Time, Vec<usize>> = BTreeMap::new();
+        let mut work: Vec<KeyWork<B1::Time>> = Vec::new();
         let (mut is, mut os) = (0usize, 0usize);
         for &key in &changed {
             while is < p_in.len() && p_in.key_hashes()[is] < key { is += 1; }
@@ -204,90 +188,41 @@ where
             while os < p_out.len() && p_out.key_hashes()[os] == key { os += 1; }
             let o1 = os;
 
-            // Seeds: input times in [lower, upper) plus carried pending times; join
-            // partners: input times before `lower`.
-            let mut novel: Vec<B1::Time> = p_in.times()[i0..i1]
-                .iter()
-                .filter(|t| lower.less_equal(t) && !upper.less_equal(t))
-                .cloned()
-                .collect();
-            if let Some(p) = self.pending.get(&key) {
-                novel.extend(p.iter().cloned());
+            // value_id → representative record index (the first of the vid's run; the
+            // key's records are sorted by (value_id, time)).
+            let mut rep: Vec<(u64, usize)> = Vec::new();
+            for i in i0..i1 {
+                if rep.last().is_none_or(|(v, _)| *v != p_in.value_ids()[i]) {
+                    rep.push((p_in.value_ids()[i], i));
+                }
             }
-            novel.sort();
-            novel.dedup();
-            let prior: Vec<B1::Time> = p_in.times()[i0..i1]
-                .iter()
-                .filter(|t| !lower.less_equal(t))
-                .cloned()
-                .collect();
+            let pending = self.pending.get(&key).map(|p| &p[..]).unwrap_or(&[]);
 
-            let mut active = BTreeSet::new();
-            let mut pended = BTreeSet::new();
-            active_times(upper.borrow(), &prior, &novel, &mut active, &mut pended);
+            let mut raw_moments: Vec<(B1::Time, (usize, usize))> = Vec::new();
+            let mut pended: Vec<B1::Time> = Vec::new();
+            discover_and_accumulate(
+                &p_in, i0, i1, &rep, pending, lower, upper,
+                &mut raw_moments, &mut entries, &mut pended,
+            );
             if !pended.is_empty() {
-                new_pending.entry(key).or_default().extend(pended);
+                new_pending.insert(key, pended);
             }
-            if active.is_empty() {
+            if raw_moments.is_empty() {
                 continue;
             }
-            let index = plans.len();
-            plans.push(Plan { key, i0, i1, o0, o1 });
-            for t in active {
-                waves.entry(t).or_default().push(index);
-            }
-        }
-
-        // Pass 2a: assemble ONE batched value callback for the whole retire. The desired
-        // output at a `(key, time)` moment is a function of the key's input accumulation
-        // at that time alone — no output-side state — so every moment can share one
-        // crossing into the backend's value logic; a key contributes one bracket per
-        // active time. The time-sensitive bookkeeping (subtracting the current output,
-        // which includes deltas emitted at earlier times) is pure proxy-space arithmetic
-        // and stays in pass 2b.
-        let mut keys_v: Vec<u64> = Vec::new();
-        let mut ends: Vec<usize> = Vec::new();
-        let mut entries: Vec<(usize, Bk::RIn)> = Vec::new();
-        // Every `(key, active time)` moment, in ascending time order, with its bracket
-        // index (`None` when the accumulation is empty: the callback is only consulted
-        // for non-empty input, matching the row reduce contract; the moment may still
-        // need to retract current output).
-        let mut moments: Vec<(usize, B1::Time, Option<usize>)> = Vec::new();
-        for (t, members) in waves {
-            for pi in members {
-                let plan = &plans[pi];
-                // Input accumulation at `t`, consolidated by value id: the key's records
-                // are sorted by (value_id, time), so each id is one contiguous run.
-                let mut bracket = None;
-                let mut len = 0;
-                let mut a = plan.i0;
-                while a < plan.i1 {
-                    let vid = p_in.value_ids()[a];
-                    let rep = a;
-                    let mut net: Option<Bk::RIn> = None;
-                    while a < plan.i1 && p_in.value_ids()[a] == vid {
-                        if p_in.times()[a].less_equal(&t) {
-                            match net.as_mut() {
-                                Some(n) => n.plus_equals(&p_in.diffs()[a]),
-                                None => net = Some(p_in.diffs()[a].clone()),
-                            }
-                        }
-                        a += 1;
+            let moments = raw_moments
+                .into_iter()
+                .map(|(t, (lo, hi))| {
+                    if lo < hi {
+                        keys_v.push(key);
+                        ends.push(hi);
+                        (t, Some(keys_v.len() - 1))
+                    } else {
+                        (t, None)
                     }
-                    if let Some(n) = net {
-                        if !n.is_zero() {
-                            entries.push((rep, n));
-                            len += 1;
-                        }
-                    }
-                }
-                if len > 0 {
-                    keys_v.push(plan.key);
-                    ends.push(entries.len());
-                    bracket = Some(keys_v.len() - 1);
-                }
-                moments.push((pi, t.clone(), bracket));
-            }
+                })
+                .collect();
+            work.push(KeyWork { key, o0, o1, moments });
         }
 
         // The one crossing for this retire.
@@ -297,55 +232,67 @@ where
             self.backend.reduce_many(&keys_v, &ends, &entries)
         };
 
-        // Pass 2b: play the moments in ascending time order — `Ord` extends the partial
-        // order, so a key's earlier deltas are always emitted before a later time reads
-        // them — computing delta = desired − current in proxy space and routing it to
-        // the held-time bucket.
-        let mut emitted: Vec<Vec<(u64, B1::Time, Bk::ROut)>> = (0..plans.len()).map(|_| Vec::new()).collect();
-        for (pi, t, bracket) in moments {
-            let plan = &plans[pi];
-            // Current output at `t`: committed history plus this pass's deltas.
-            let mut cur: BTreeMap<u64, Bk::ROut> = BTreeMap::new();
-            for o in plan.o0..plan.o1 {
-                if p_out.times()[o].less_equal(&t) {
-                    match cur.entry(p_out.value_ids()[o]) {
-                        std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(&p_out.diffs()[o]),
-                        std::collections::btree_map::Entry::Vacant(e) => { e.insert(p_out.diffs()[o].clone()); }
-                    }
-                }
+        // Phase B, per key: replay the output side over the key's moments in ascending
+        // time order — `Ord` extends the partial order, so earlier deltas are always
+        // emitted before a later moment reads them — with the same meet-advancement
+        // keeping the output buffer and this pass's deltas consolidated.
+        for w in work {
+            let mut meets: Vec<B1::Time> = w.moments.iter().map(|(t, _)| t.clone()).collect();
+            for i in (1..meets.len()).rev() {
+                let m = meets[i].clone();
+                meets[i - 1].meet_assign(&m);
             }
-            for (vid, et, d) in emitted[pi].iter() {
-                if et.less_equal(&t) {
-                    match cur.entry(*vid) {
-                        std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(d),
-                        std::collections::btree_map::Entry::Vacant(e) => { e.insert(d.clone()); }
-                    }
+            let mut out_replay = IdHistory::new();
+            out_replay.load(
+                (w.o0..w.o1).map(|o| (p_out.value_ids()[o], p_out.times()[o].clone(), p_out.diffs()[o].clone())),
+                meets.first(),
+            );
+            // Deltas emitted for this key earlier in this pass; part of "current output".
+            let mut emitted: Vec<((u64, B1::Time), Bk::ROut)> = Vec::new();
+            for (j, (t, bracket)) in w.moments.iter().enumerate() {
+                out_replay.step_through(t);
+                out_replay.advance_buffer_by(&meets[j]);
+                for ((_, et), _) in emitted.iter_mut() {
+                    *et = et.join(&meets[j]);
                 }
-            }
-            cur.retain(|_, d| !d.is_zero());
+                crate::consolidation::consolidate(&mut emitted);
 
-            let mut delta: BTreeMap<u64, Bk::ROut> = cur;
-            for d in delta.values_mut() {
-                d.negate();
-            }
-            if let Some(b) = bracket {
-                let lo = if b == 0 { 0 } else { out_ends[b - 1] };
-                for (vid, d) in outs[lo..out_ends[b]].iter().cloned() {
-                    match delta.entry(vid) {
-                        std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(&d),
-                        std::collections::btree_map::Entry::Vacant(e) => { e.insert(d); }
+                // Current output at `t`: committed history plus this pass's deltas.
+                let mut cur: BTreeMap<u64, Bk::ROut> = BTreeMap::new();
+                for ((vid, et), d) in out_replay.buffer().iter().chain(emitted.iter()) {
+                    if et.less_equal(t) {
+                        match cur.entry(*vid) {
+                            std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(d),
+                            std::collections::btree_map::Entry::Vacant(e) => { e.insert(d.clone()); }
+                        }
                     }
                 }
-            }
-            delta.retain(|_, d| !d.is_zero());
-            if delta.is_empty() {
-                continue;
-            }
+                cur.retain(|_, d| !d.is_zero());
 
-            let idx = held_elems.iter().rposition(|h| h.less_equal(&t)).expect("no held capability <= active time");
-            for (vid, d) in delta {
-                emitted[pi].push((vid, t.clone(), d.clone()));
-                buckets[idx].push(((plan.key, vid), t.clone(), d));
+                // delta = desired − current, in proxy space.
+                let mut delta: BTreeMap<u64, Bk::ROut> = cur;
+                for d in delta.values_mut() {
+                    d.negate();
+                }
+                if let Some(b) = *bracket {
+                    let lo = if b == 0 { 0 } else { out_ends[b - 1] };
+                    for (vid, d) in outs[lo..out_ends[b]].iter().cloned() {
+                        match delta.entry(vid) {
+                            std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(&d),
+                            std::collections::btree_map::Entry::Vacant(e) => { e.insert(d); }
+                        }
+                    }
+                }
+                delta.retain(|_, d| !d.is_zero());
+                if delta.is_empty() {
+                    continue;
+                }
+
+                let idx = held_elems.iter().rposition(|h| h.less_equal(t)).expect("no held capability <= active time");
+                for (vid, d) in delta {
+                    emitted.push(((vid, t.clone()), d.clone()));
+                    buckets[idx].push(((w.key, vid), t.clone(), d));
+                }
             }
         }
 
@@ -385,5 +332,174 @@ where
             }
         }
         (produced, frontier)
+    }
+}
+
+/// Phase A of one key's retire: the time-replay loop of the cursor tactic
+/// (`history_replay::compute`), ported to proxy space with the value callback deferred.
+///
+/// It replays the key's input records — split into `prior` (before `lower`, the
+/// accumulated history) and the novel interval — together with the carried `pending`
+/// times, in ascending time order, discovering the interesting times: those carrying
+/// novel or pending updates, and joins thereof (synthesized as replay proceeds). At each
+/// interesting time within `[lower, upper)` it assembles the consolidated input
+/// accumulation as a bracket appended to `entries` (recorded in `moments` with its entry
+/// range; an empty range marks a moment whose accumulation vanished but whose current
+/// output may need retracting). Times at or beyond `upper` are `pended`.
+///
+/// The replay buffers are repeatedly advanced by the meet of the times still to come and
+/// consolidated — the collapse that keeps a key with many distinct times linear rather
+/// than quadratic, exactly as in the cursor tactic.
+#[allow(clippy::too_many_arguments)]
+fn discover_and_accumulate<T, RIn>(
+    p_in: &ProxyChunk<T, RIn>,
+    i0: usize,
+    i1: usize,
+    rep: &[(u64, usize)],
+    pending: &[T],
+    lower: &Antichain<T>,
+    upper: &Antichain<T>,
+    moments: &mut Vec<(T, (usize, usize))>,
+    entries: &mut Vec<(usize, RIn)>,
+    pended: &mut Vec<T>,
+) where
+    T: Timestamp + Lattice,
+    RIn: Semigroup + Clone,
+{
+    // The novel interval's records seed interestingness; prior records are join partners.
+    let mut batch_replay = IdHistory::new();
+    batch_replay.load(
+        (i0..i1)
+            .filter(|&i| lower.less_equal(&p_in.times()[i]))
+            .map(|i| (p_in.value_ids()[i], p_in.times()[i].clone(), p_in.diffs()[i].clone())),
+        None,
+    );
+
+    // Suffix meets of the carried pending times (ascending, so meets accumulate from the end).
+    let mut meets: Vec<T> = pending.to_vec();
+    for i in (1..meets.len()).rev() {
+        let m = meets[i].clone();
+        meets[i - 1].meet_assign(&m);
+    }
+
+    let mut meet: Option<T> = None;
+    update_meet(&mut meet, meets.first());
+    update_meet(&mut meet, batch_replay.meet());
+
+    let mut input_replay = IdHistory::new();
+    input_replay.load(
+        (i0..i1)
+            .filter(|&i| !lower.less_equal(&p_in.times()[i]))
+            .map(|i| (p_in.value_ids()[i], p_in.times()[i].clone(), p_in.diffs()[i].clone())),
+        meet.as_ref(),
+    );
+
+    let mut synth: Vec<T> = Vec::new(); // sorted descending: pop ascending
+    let mut times_current: Vec<T> = Vec::new();
+    let mut temporary: Vec<T> = Vec::new();
+    let mut times_slice = pending;
+    let mut meets_slice = &meets[..];
+
+    while let Some(next_time) = [batch_replay.time(), times_slice.first(), input_replay.time(), synth.last()]
+        .into_iter()
+        .flatten()
+        .min()
+        .cloned()
+    {
+        input_replay.step_while_time_is(&next_time);
+        let mut interesting = batch_replay.step_while_time_is(&next_time);
+        if interesting {
+            if let Some(m) = meet.as_ref() {
+                batch_replay.advance_buffer_by(m);
+            }
+        }
+        while synth.last() == Some(&next_time) {
+            times_current.push(synth.pop().expect("nonempty"));
+            interesting = true;
+        }
+        while times_slice.first() == Some(&next_time) {
+            times_current.push(times_slice[0].clone());
+            times_slice = &times_slice[1..];
+            meets_slice = &meets_slice[1..];
+            interesting = true;
+        }
+        interesting = interesting || batch_replay.buffer().iter().any(|((_, t), _)| t.less_equal(&next_time));
+        interesting = interesting || times_current.iter().any(|t| t.less_equal(&next_time));
+
+        if !upper.less_equal(&next_time) {
+            if interesting {
+                if let Some(m) = meet.as_ref() {
+                    input_replay.advance_buffer_by(m);
+                }
+                // Assemble the accumulation at `next_time` from both buffers; buffered
+                // times beyond it contribute synthetic joins.
+                let mut acc: Vec<(u64, RIn)> = Vec::new();
+                for ((vid, t), d) in input_replay.buffer().iter().chain(batch_replay.buffer().iter()) {
+                    if t.less_equal(&next_time) {
+                        acc.push((*vid, d.clone()));
+                    } else {
+                        temporary.push(next_time.join(t));
+                    }
+                }
+                crate::consolidation::consolidate(&mut acc);
+                let lo = entries.len();
+                for (vid, d) in acc {
+                    let r = rep[rep.binary_search_by_key(&vid, |x| x.0).expect("vid presented")].1;
+                    entries.push((r, d));
+                }
+                moments.push((next_time.clone(), (lo, entries.len())));
+            }
+            // Synthetic interesting times: joins with the remaining batch times and the
+            // times seen so far.
+            temporary.extend(batch_replay.buffer().iter().map(|((_, t), _)| t).filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
+            temporary.extend(times_current.iter().filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
+            sort_dedup(&mut temporary);
+            let synth_len = synth.len();
+            for time in temporary.drain(..) {
+                if upper.less_equal(&time) {
+                    pended.push(time);
+                } else {
+                    synth.push(time);
+                }
+            }
+            if synth.len() > synth_len {
+                synth.sort_by(|x, y| y.cmp(x));
+                synth.dedup();
+            }
+        } else if interesting {
+            pended.push(next_time.clone());
+        }
+
+        // Track the meet of every remaining source of times, and keep `times_current`
+        // advanced by it (the same collapse as the buffers).
+        meet = None;
+        update_meet(&mut meet, batch_replay.meet());
+        update_meet(&mut meet, input_replay.meet());
+        for t in synth.iter() {
+            update_meet(&mut meet, Some(t));
+        }
+        update_meet(&mut meet, meets_slice.first());
+        if let Some(m) = meet.as_ref() {
+            for t in times_current.iter_mut() {
+                *t = t.join(m);
+            }
+        }
+        sort_dedup(&mut times_current);
+    }
+    sort_dedup(pended);
+}
+
+fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
+    list.sort();
+    list.dedup();
+}
+
+/// Updates an optional meet by an optional time.
+fn update_meet<T: Lattice + Clone>(meet: &mut Option<T>, other: Option<&T>) {
+    if let Some(time) = other {
+        match meet.as_mut() {
+            Some(m) => m.meet_assign(time),
+            None => *meet = Some(time.clone()),
+        }
     }
 }
