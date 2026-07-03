@@ -329,13 +329,19 @@ where
             })
             .collect();
         crate::consolidation::consolidate_updates(&mut rows);
-        let mut chunk = VecChunk::default();
-        for row in rows {
-            use timely::container::PushInto;
-            chunk.push_into(row);
-        }
+        // Feed the builder TARGET-sized chunks: handing it one giant chunk would make its
+        // settle peel TARGET-sized pieces off the front, copying the remaining tail each
+        // time — quadratic in the batch size.
         let mut builder = ChunkBuilder::<VecChunk<K, V2, T, ROut>>::with_capacity(0, 0, 0);
-        builder.push(&mut chunk);
+        let mut rows = rows.into_iter().peekable();
+        while rows.peek().is_some() {
+            let mut chunk = VecChunk::default();
+            for row in rows.by_ref().take(<VecChunk<K, V2, T, ROut> as crate::trace::chunk::Chunk>::TARGET) {
+                use timely::container::PushInto;
+                chunk.push_into(row);
+            }
+            builder.push(&mut chunk);
+        }
         builder.done(description)
     }
 }
