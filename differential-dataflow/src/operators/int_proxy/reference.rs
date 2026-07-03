@@ -266,8 +266,11 @@ where
 
     fn present_input(&mut self, history: &[RefBatch<K, V, T, RIn>], novel: &[RefBatch<K, V, T, RIn>], keys: &[u64]) -> ProxyChunk<T, RIn> {
         // Prune the hash→key map to the changed set: what survives from earlier retires
-        // is exactly the pending keys, so the map is bounded by the delta.
+        // is exactly the pending keys, so the map is bounded by the delta. Shrink too —
+        // `retain` keeps the backing table, and a table sized by a past big retire would
+        // make every later `values()` walk pay for its capacity, not its contents.
         self.keys.retain(|h, _| keys.binary_search(h).is_ok());
+        self.keys.shrink_to_fit();
         // The novel batches are delta-sized and their keys are all changed: read them
         // fully, and prime the map from what was read.
         let mut rows = Rows::new();
@@ -283,8 +286,10 @@ where
     }
 
     fn present_output(&mut self, batches: &[RefBatch<K, V2, T, ROut>], _keys: &[u64]) -> ProxyChunk<T, ROut> {
-        // The id → value map is per-retire state; start it afresh.
-        self.out_vals.clear();
+        // The id → value map is per-retire state; start it afresh. A fresh map, not
+        // `clear()`: clearing keeps the backing table, whose capacity a past big retire
+        // set, and later walks would pay for it.
+        self.out_vals = HashMap::new();
         // Seek the changed keys (the same set `present_input` resolved).
         let mut rows = Rows::new();
         rows.seek(batches, &self.seek_keys());

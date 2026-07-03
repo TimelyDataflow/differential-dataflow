@@ -816,3 +816,143 @@ fn proxy_reduce_identity_fuzz_matches_grid_oracle() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Wall clock: the proxy stack against the stock row stack.
+// ---------------------------------------------------------------------------
+//
+// Not run by default. Run with:
+//   cargo test --release -p differential-dataflow --test int_proxy -- --ignored --nocapture
+//
+// Compares full stacks end to end — the stock row operators (their own arrangements
+// included) against chunk arrangements plus the proxy tactics over the reference
+// backend — for a bulk load of `n` keys and an incremental phase of single-key rounds.
+// The counting tests above pin the asymptotics; this reports the constants.
+
+fn bench_reduce(n: u64, rounds: u64, proxy: bool) -> (std::time::Duration, std::time::Duration) {
+    use std::time::Instant;
+    use timely::dataflow::operators::probe::{Handle, Probe};
+
+    timely::execute_directly(move |worker| {
+        let probe = Handle::new();
+        let mut input = worker.dataflow::<u64, _, _>(|scope| {
+            let (input, c) = scope.new_collection::<(u64, u64), isize>();
+            let count = |_k: &u64, input: &[(&u64, isize)], output: &mut Vec<(isize, isize)>| {
+                let count: isize = input.iter().map(|(_, d)| *d).sum();
+                if count > 0 {
+                    output.push((count, 1));
+                }
+            };
+            if proxy {
+                let arranged = arrange_core::<_, _, Chunker<u64, u64>, Batcher<u64, u64>, Bldr<u64, u64>, Spine<u64, u64>>(c.inner, Pipeline, "Arrange");
+                let reduced = reduce_with_tactic::<_, Spine<u64, isize>, _>(arranged, "ProxyReduce", ProxyReduceTactic::new(VecReduceBackend::new(count)));
+                reduced.stream.probe_with(&probe);
+            } else {
+                c.reduce(count).inner.probe_with(&probe);
+            }
+            input
+        });
+
+        let start = Instant::now();
+        for k in 0..n {
+            input.update((k, k % 5), 1);
+        }
+        input.advance_to(1);
+        input.flush();
+        while probe.less_than(input.time()) {
+            worker.step();
+        }
+        let load = start.elapsed();
+
+        // Warm up with unmeasured incremental rounds: the load leaves amortized
+        // trace-maintenance debt (compaction-driven merges) that the first couple
+        // thousand rounds pay down; the measured phase is steady state.
+        let warmup = 5_000;
+        let mut timer = Instant::now();
+        for t in 1..=(warmup + rounds) {
+            if t == warmup + 1 { timer = Instant::now(); }
+            input.update((t % 97, 100 + t), 1);
+            input.advance_to(t + 1);
+            input.flush();
+            while probe.less_than(input.time()) {
+                worker.step();
+            }
+        }
+        (load, timer.elapsed())
+    })
+}
+
+fn bench_join(n: u64, rounds: u64, proxy: bool) -> (std::time::Duration, std::time::Duration) {
+    use std::time::Instant;
+    use timely::dataflow::operators::probe::{Handle, Probe};
+
+    timely::execute_directly(move |worker| {
+        let probe = Handle::new();
+        let (mut left, mut right) = worker.dataflow::<u64, _, _>(|scope| {
+            let (left, c0) = scope.new_collection::<(u64, u64), isize>();
+            let (right, c1) = scope.new_collection::<(u64, u64), isize>();
+            if proxy {
+                let a0 = arrange_core::<_, _, Chunker<u64, u64>, Batcher<u64, u64>, Bldr<u64, u64>, Spine<u64, u64>>(c0.inner, Pipeline, "Arrange0");
+                let a1 = arrange_core::<_, _, Chunker<u64, u64>, Batcher<u64, u64>, Bldr<u64, u64>, Spine<u64, u64>>(c1.inner, Pipeline, "Arrange1");
+                let tactic = ProxyJoinTactic::new(VecJoinBackend::new(|k: &u64, v0: &u64, v1: &u64| (*k, (*v0, *v1))));
+                let joined = join_with_tactic::<_, _, _, CapacityContainerBuilder<Vec<(JoinOut, u64, isize)>>>(a0, a1, tactic);
+                joined.probe_with(&probe);
+            } else {
+                c0.join(c1).inner.probe_with(&probe);
+            }
+            (left, right)
+        });
+
+        let start = Instant::now();
+        for k in 0..n {
+            left.update((k, k), 1);
+            right.update((k, 2 * k), 1);
+        }
+        left.advance_to(1);
+        right.advance_to(1);
+        left.flush();
+        right.flush();
+        while probe.less_than(left.time()) {
+            worker.step();
+        }
+        let load = start.elapsed();
+
+        // Warm up with unmeasured incremental rounds (see bench_reduce).
+        let warmup = 5_000;
+        let mut timer = Instant::now();
+        for t in 1..=(warmup + rounds) {
+            if t == warmup + 1 { timer = Instant::now(); }
+            left.update((t % 97, 100 + t), 1);
+            left.advance_to(t + 1);
+            right.advance_to(t + 1);
+            left.flush();
+            right.flush();
+            while probe.less_than(left.time()) {
+                worker.step();
+            }
+        }
+        (load, timer.elapsed())
+    })
+}
+
+#[test]
+#[ignore = "wall-clock benchmark; run --release with --ignored --nocapture"]
+fn bench_wall_clock_vs_row() {
+    for &n in &[10_000u64, 100_000, 1_000_000] {
+        let rounds = 1_000;
+        let (row_l, row_i) = bench_reduce(n, rounds, false);
+        let (px_l, px_i) = bench_reduce(n, rounds, true);
+        eprintln!(
+            "reduce n={n:>9}: load row {row_l:>10.2?} proxy {px_l:>10.2?} ({:>5.2}x) | {rounds} steady single-key rounds row {row_i:>10.2?} proxy {px_i:>10.2?} ({:>5.2}x)",
+            px_l.as_secs_f64() / row_l.as_secs_f64(),
+            px_i.as_secs_f64() / row_i.as_secs_f64(),
+        );
+        let (row_l, row_i) = bench_join(n, rounds, false);
+        let (px_l, px_i) = bench_join(n, rounds, true);
+        eprintln!(
+            "join   n={n:>9}: load row {row_l:>10.2?} proxy {px_l:>10.2?} ({:>5.2}x) | {rounds} steady single-key rounds row {row_i:>10.2?} proxy {px_i:>10.2?} ({:>5.2}x)",
+            px_l.as_secs_f64() / row_l.as_secs_f64(),
+            px_i.as_secs_f64() / row_i.as_secs_f64(),
+        );
+    }
+}
