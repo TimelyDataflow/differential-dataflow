@@ -27,6 +27,7 @@
 //! (a columnar semijoin — matching the row-wise tactic's read).
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
 use timely::progress::Timestamp;
@@ -46,6 +47,22 @@ use crate::parse::Reducer;
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 
+/// An identity `Hasher` for the id-index maps: their keys are already well-distributed 64-bit
+/// content hashes (`hash_rows`), so passing the id straight through avoids re-hashing it (siphash
+/// on `register_keys`/lookups was ~7% of the reduce in profiling). Only `write_u64` is used.
+#[derive(Default)]
+struct IdHasher(u64);
+impl Hasher for IdHasher {
+    #[inline]
+    fn write_u64(&mut self, i: u64) { self.0 = i; }
+    #[inline]
+    fn write(&mut self, _: &[u8]) { unreachable!("IdMap keys are u64") }
+    #[inline]
+    fn finish(&self) -> u64 { self.0 }
+}
+/// `key_hash`/`value_id` → row index, hashed by identity.
+type IdMap = HashMap<u64, usize, BuildHasherDefault<IdHasher>>;
+
 /// A corgi reduce backend for a single `Reducer`. All per-retire scratch is corgi columns + integer
 /// id→row-index maps; nothing carries a `DValue`.
 pub struct CorgiReduceBackend<T> {
@@ -56,12 +73,12 @@ pub struct CorgiReduceBackend<T> {
     in_value_ids: Vec<u64>,
     /// Key-resolution pool for the current retire: `key_hash → row index` into the concatenation of
     /// `key_blocks` (representative keys from the input + output presentations).
-    key_index: HashMap<u64, usize>,
+    key_index: IdMap,
     key_blocks: Vec<CValue>,
     key_len: usize,
     /// Value-resolution pool for the current retire: `value_id → row index` into the concatenation of
     /// `val_blocks` (output-history values + values minted by `reduce_many`).
-    val_index: HashMap<u64, usize>,
+    val_index: IdMap,
     val_blocks: Vec<CValue>,
     val_len: usize,
     _t: std::marker::PhantomData<T>,
@@ -73,10 +90,10 @@ impl<T> CorgiReduceBackend<T> {
             reducer,
             in_vals: CValue::Unit(0),
             in_value_ids: Vec::new(),
-            key_index: HashMap::new(),
+            key_index: IdMap::default(),
             key_blocks: Vec::new(),
             key_len: 0,
-            val_index: HashMap::new(),
+            val_index: IdMap::default(),
             val_blocks: Vec::new(),
             val_len: 0,
             _t: std::marker::PhantomData,
