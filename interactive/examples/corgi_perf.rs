@@ -15,6 +15,33 @@ use interactive::backend::{corgi, vec};
 use interactive::ir::Value;
 use interactive::{lower, parse};
 
+use differential_dataflow::algorithms::graphs::scc::strongly_connected;
+use differential_dataflow::input::Input;
+use timely::dataflow::operators::probe::Handle;
+
+/// One from-scratch run of the HAND-WRITTEN native DD `strongly_connected` on a static graph — the
+/// "SCC in Rust" reference to compare the DDIR-interpreted SCC against. Same shape as `evaluate`:
+/// a full single-worker `execute_directly` (setup + load at t0 + run to fixpoint).
+fn native_scc_once(edges: &[(usize, usize)]) {
+    let edges = edges.to_vec();
+    timely::execute_directly(move |worker| {
+        let mut probe = Handle::new();
+        let mut input = worker.dataflow::<u64, _, _>(|scope| {
+            let (input, graph) = scope.new_collection::<(usize, usize), isize>();
+            strongly_connected(graph).probe_with(&mut probe);
+            input
+        });
+        for &(s, d) in &edges {
+            input.insert((s, d));
+        }
+        input.advance_to(1);
+        input.flush();
+        while probe.less_than(input.time()) {
+            worker.step();
+        }
+    });
+}
+
 type Row = Value;
 
 fn tup(fields: &[i64]) -> Row {
@@ -147,23 +174,29 @@ fn main() {
         export "result" = outer::scc | map(;) | arrange;
     "#);
 
-    println!("\n2b. SCC (nested recursion; fwd/bwd label propagation via min; the sharp case):");
+    println!("\n2b. SCC — hand-written native DD vs DDIR-vec vs DDIR-corgi (the whole point of the exercise):");
     for &nodes in &[200usize, 500, 800, 1_000] {
-        let mut seed = 0xc0ff_ee42u64;
         let n_edges = nodes * 2;
+        // Same random graph fed to all three (identical xorshift seed → identical edge sequence).
+        let mut seed = 0xc0ff_ee42u64;
         let edges: Vec<(Row, Row)> = (0..n_edges)
             .map(|_| (tup(&[(xorshift(&mut seed) % nodes as u64) as i64, (xorshift(&mut seed) % nodes as u64) as i64]), Value::unit()))
             .collect();
+        let mut seed2 = 0xc0ff_ee42u64;
+        let native_edges: Vec<(usize, usize)> = (0..n_edges)
+            .map(|_| ((xorshift(&mut seed2) % nodes as u64) as usize, (xorshift(&mut seed2) % nodes as u64) as usize))
+            .collect();
         let inputs = vec![edges];
-        // NB: corgi diverges from vec on larger random graphs (a corgi-backend bug — the proxy reduce
-        // tactic + reference backend pass the scc oracles in `reduce_reference.rs`). Flag, don't panic.
-        let (co, ve) = (corgi::evaluate(&scc, &inputs), vec::evaluate(&scc, &inputs));
-        if co != ve {
-            println!("  scc                    n={nodes:<7}  !! MISMATCH corgi={co:?} vec={ve:?}");
-        }
+        // SCC is now correct in corgi — pin it.
+        assert_eq!(corgi::evaluate(&scc, &inputs), vec::evaluate(&scc, &inputs), "corgi != vec scc at n={nodes}");
+        let nt = bench(3, || native_scc_once(&native_edges));
         let vt = bench(3, || { std::hint::black_box(vec::evaluate(&scc, &inputs)); });
         let ct = bench(3, || { std::hint::black_box(corgi::evaluate(&scc, &inputs)); });
-        report("scc", nodes, vt, ct);
+        let (nf, vf, cf) = (nt.as_secs_f64(), vt.as_secs_f64(), ct.as_secs_f64());
+        println!(
+            "  scc n={nodes:<5}  native {nt:>9.2?}   vec-DDIR {vt:>9.2?} ({:.1}x native)   corgi-DDIR {ct:>9.2?} ({:.1}x native, {:.2}x vec)",
+            vf / nf, cf / nf, cf / vf,
+        );
     }
 
     // ---------- 3. LINEAR COMPUTE ONLY (deep chain, NO arrange) — isolates the columnar eval ----------
