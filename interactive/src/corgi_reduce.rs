@@ -263,15 +263,22 @@ where
             // Running output (committed output + deltas emitted this pass), accumulated as-of each t.
             let mut emitted: Vec<(Row, T, Diff)> = Vec::new();
             for t in active {
-                let in_acc = consolidate_vals(
-                    in_hist.iter().filter(|(_, ti, _)| ti.less_equal(&t)).map(|(v, _, d)| (v.clone(), *d)).collect(),
-                );
+                // Count = Σ diffs ≤ t: summing the consolidated per-value diffs equals summing the raw
+                // diffs, so skip the per-value consolidation (and its Value sort/clones) entirely.
+                let desired = if matches!(self.reducer, Reducer::Count) {
+                    let c: Diff = in_hist.iter().filter(|(_, ti, _)| ti.less_equal(&t)).map(|(_, _, d)| *d).sum();
+                    if c > 0 { vec![(DValue::Tuple(vec![DValue::Int(c)]), 1)] } else { Vec::new() }
+                } else {
+                    let in_acc = consolidate_vals(
+                        in_hist.iter().filter(|(_, ti, _)| ti.less_equal(&t)).map(|(v, _, d)| (v.clone(), *d)).collect(),
+                    );
+                    reduce_logic(&self.reducer, &in_acc)
+                };
+
                 let mut cur: Vec<(Row, Diff)> =
                     out_hist.iter().filter(|(_, ti, _)| ti.less_equal(&t)).map(|(v, _, d)| (v.clone(), *d)).collect();
                 cur.extend(emitted.iter().filter(|(_, ti, _)| ti.less_equal(&t)).map(|(v, _, d)| (v.clone(), *d)));
                 let cur = consolidate_vals(cur);
-
-                let desired = reduce_logic(&self.reducer, &in_acc);
 
                 let mut delta: HashMap<Row, Diff> = HashMap::new();
                 for (v, d) in desired {
