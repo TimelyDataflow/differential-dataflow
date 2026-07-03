@@ -576,3 +576,78 @@ corgi-data CHUNK/container once the scalar-logic path exists.
 3. How rich a `Term` subset for real programs (datalog/eqsat need Variant/List/Fold/Hash)? (OPEN)
 4. Does it run inside a real DD dataflow, and does corgi-columnar storage actually remove the
    transcode in that setting? (rung 2 → rung 4)
+
+---
+
+## ★ CHUNK BACKEND + TRANSCODE REMOVAL + BOUNDARY MODEL (2026-07-02)
+
+Branch `corgi-chunk` off `master-next` (has #778 Chunk/NavigableChunk split). corgi on
+`dd-arrange-api`. Both pushed to frankmcsherry forks. Correctness gate: `corgi_progs` (all 6
+canonical programs vs `vec`) after EVERY change; `corgi_scorecard` = per-operator triage.
+
+### Result — measured, per operator (corgi/vec, scorecard)
+`CorgiChunk: Chunk` (cursor-less) is the arrangement; the fueled `ChunkBatchMerger` comes free.
+Removing the columns↔rows transcode boundaries (they were self-inflicted, not inherent):
+- `as_collection` reads chunk columns straight into a CorgiContainer (no untranscode).
+- join emits corgi columns via `give_container` into a `CapacityContainerBuilder<CorgiContainer>`
+  (no untranscode + per-row give + re-transcode; no `JoinToCorgi` unary).
+- arrange ingest: `CorgiChunker` sort-consolidates each input container's columns directly into
+  CorgiChunks (replacing `ContainerChunker`'s drain-to-rows), ACCUMULATING to TARGET so it emits
+  few large chunks (else columnar per-chunk set-up dominates on many small batches).
+
+| operator | before | after |
+|---|---|---|
+| map8 / filter (no arrange) | 0.30x / 0.75x | unchanged — columnar eval wins |
+| arrange | 1.5x | 0.90x (BEATS vec) |
+| join | 1.5x | 0.70x (BEATS vec) |
+| reduce_distinct/count | 2.0x | 1.30-1.35x (reduce still row-wise) |
+| reach | 1.9x | 1.45x |
+
+Thesis validated: vec spends ~22% of reach in `Value::cmp`/`partial_cmp` (pointer-chasing nested
+enums); corgi ~5% (columnar `compare_idx`). corgi beats vec wherever it stays columnar; it only
+loses where it drops back to `Value` rows — now just the reduce.
+
+### Multi-record primitives exposed in corgi `arrange` (dd-arrange-api)
+`sort_perm` (discrimination argsort), `compare_idx` (batched compare), `find_ranges` (single-row
+`find` = equal-range probe → multi-record merge-join/semijoin). Fixed a real corgi bug:
+`Reduce(Red::Add)` used checked `.sum()` while its Scan sibling wraps — made it wrapping so raw
+two's-complement diff sums are correct.
+
+### Reduce: proven building blocks, NOT yet wired (row-wise reduce still runs)
+- `columnar_sum_by_key` (Count) and `columnar_distinct_keys` (two-level (key,val) consolidate) —
+  pure corgi ML (`group -> map(fold_add) -> filter`) via `parse_ml`+`eval_graph`, tested.
+- Count fast-path landed (skip needless per-value consolidation): reduce_count 1.39x->1.30x.
+- Diffs cross as RAW two's-complement u64 bits (`ne 0` drop = sign-agnostic). "present" simplified
+  to net!=0 (ignore signed sign) -> keeps everything on the raw-bit path, no signed encoding yet.
+- `group_offsets(key_col) -> (perm, ends)` — integers-only boundary primitive, tested.
+
+### ★ DESIGN CAPTURE — a data-blind reduce tactic (the reusable DD asset)
+A framework that presents outward as (int-id, time, diff) can supply a reduce tactic that owns ALL
+the time navigation, backend-agnostic. Only integers cross the boundary; the value never becomes a
+`Value` in DD.
+
+Tactic (DD) owns — the hard part, written once: interesting-times (`active_times`), wave/interval
+navigation, per-(key,interesting-time) delta (desired vs current output), `pending`, held
+capabilities, output-trace maintenance — all over `(key-id: u64, val-id: u64, time: T, diff: R)`.
+
+Backend (corgi) supplies:
+1. present-as-ints (input): each record -> (key-id, val-id) as u64 hashes; times/diffs DD-native.
+2. value callback (consolidate): given input record indices (a key's rows <= t), return reduced
+   output as `[(out-val-id, diff)]` — backend runs its columnar value logic. Reducer semantics live
+   here. (`group_offsets` + `gather` + the consolidate blocks are the pieces.)
+3. mint output ids: Min/Distinct REUSE ids (min = an input val-id; distinct = the unit-id) — easy.
+   Count/Collect create NEW objects -> mint an id. HASHING is the id function: same output value ->
+   same id, globally consistent across the output->input boundary (a reduce output is a downstream
+   input). Collisions = accepted risk. This is why ids should be HASHES not per-batch indices —
+   indices are stable only within a batch; hashes are stable everywhere without a registry.
+4. materialize (egress): id -> value to build the output arrangement (or build it columnar by id).
+
+The one structural cost: cross-retire `pending` must be keyed by the stable hash-id, not a
+per-retire group index — this ripples through the delta logic, so the columnar reduce is a REDESIGN
+of `retire` into id/hash space, not a patch. Also carries the workload trade-off: columnar
+consolidate wins on wide/batch reduction but must PRESERVE the changed-key restriction (columnar
+semijoin) so small-delta recursion (reach) doesn't regress to O(accumulated x rounds).
+
+Next effort (well-scoped, primitives ready): rewrite `retire` in id/hash space — read changed keys'
+input as columns, `group_offsets` -> per-group `active_times` -> per (group,wave-time) hand corgi
+the include-index list -> consolidate -> delta/emit keyed by hash -> columnar output.
