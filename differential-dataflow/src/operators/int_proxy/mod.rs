@@ -12,7 +12,9 @@
 //!   into the presented run*.
 //! * **Write side.** Reduce produces `((key_hash, value_id), time, diff)` deltas. The
 //!   `key_hash` is carried from the input key; output `value_id`s are *minted by hashing
-//!   the produced value* ([`ProxyReduceBackend::reduce`]), and the backend's
+//!   the produced value* ([`ProxyReduceBackend::reduce`] — batched per wave of active
+//!   keys as [`reduce_many`](ProxyReduceBackend::reduce_many), so a backend whose value
+//!   logic is interpreted or columnar pays one crossing per wave, not per key), and the backend's
 //!   [`materialize`](ProxyReduceBackend::materialize) seals the proxy records into a real
 //!   output batch — a real arrangement, fit to be a downstream operator's input, where
 //!   the same value presents with the same id because the id *is* its content hash.

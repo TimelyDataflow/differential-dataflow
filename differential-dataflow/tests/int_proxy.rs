@@ -391,6 +391,9 @@ where
     fn reduce(&mut self, key_hash: u64, input: &[(usize, B::RIn)]) -> Vec<(u64, B::ROut)> {
         self.inner.reduce(key_hash, input)
     }
+    fn reduce_many(&mut self, keys: &[u64], ends: &[usize], input: &[(usize, B::RIn)]) -> (Vec<(u64, B::ROut)>, Vec<usize>) {
+        self.inner.reduce_many(keys, ends, input)
+    }
     fn materialize(&mut self, records: ProxyChunk<B1::Time, B::ROut>, description: Description<B1::Time>) -> B2 {
         self.inner.materialize(records, description)
     }
@@ -641,6 +644,25 @@ mod identity {
             // Resolve representative indices to ids; the ids are the values.
             let pairs: Vec<(u64, isize)> = input.iter().map(|&(i, d)| (self.current.value_ids()[i], d)).collect();
             (self.logic)(&pairs)
+        }
+
+        // Override the batched form (a stand-in for one bulk crossing into columnar
+        // logic), asserting the bracket protocol from the backend's seat, so the fuzz
+        // exercises the wave-batched path rather than the per-key default.
+        fn reduce_many(&mut self, keys: &[u64], ends: &[usize], input: &[(usize, isize)]) -> (Vec<(u64, isize)>, Vec<usize>) {
+            assert_eq!(keys.len(), ends.len(), "one bracket end per key");
+            assert!(ends.windows(2).all(|w| w[0] < w[1]), "brackets non-empty and increasing");
+            assert_eq!(ends.last().copied().unwrap_or(0), input.len(), "brackets cover the input");
+            let mut outs = Vec::new();
+            let mut out_ends = Vec::with_capacity(keys.len());
+            let mut start = 0;
+            for &end in ends {
+                let pairs: Vec<(u64, isize)> = input[start..end].iter().map(|&(i, d)| (self.current.value_ids()[i], d)).collect();
+                outs.extend((self.logic)(&pairs));
+                out_ends.push(outs.len());
+                start = end;
+            }
+            (outs, out_ends)
         }
 
         fn materialize(&mut self, chunk: ProxyChunk<T, isize>, description: Description<T>) -> Batch<T> {
