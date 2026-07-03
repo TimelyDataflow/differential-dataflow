@@ -116,6 +116,56 @@ fn main() {
         report("reach", nodes, vt, ct);
     }
 
+    // ---------- 2b. SCC (nested recursion: fwd/bwd label propagation via `min`) ----------
+    let scc = compile(r#"
+        let edges = input 0 | key($0[0] ; $0[1]);
+        let trans = edges | key($1 ; $0);
+        outer: {
+            let scc = edges + trim;
+            fwd: {
+                let nodes = edges | key($1 ; $1) | enter_at($1[0]);
+                let labels = proposals + nodes | min;
+                var proposals = labels | join(scc, ($2 ; $1));
+            }
+            let trim_fwd = edges
+                | join(fwd::labels, ($1 ; $0, $2))
+                | join(fwd::labels, ($0 ; $1, $2))
+                | filter($1[1] == $1[2])
+                | key($0 ; $1[0]);
+            bwd: {
+                let nodes = trans | key($1 ; $1) | enter_at($1[0]);
+                let labels = proposals + nodes | min;
+                var proposals = labels | join(trim_fwd, ($2 ; $1));
+            }
+            let trim_bwd = trans
+                | join(bwd::labels, ($1 ; $0, $2))
+                | join(bwd::labels, ($0 ; $1, $2))
+                | filter($1[1] == $1[2])
+                | key($0 ; $1[0]);
+            var trim = trim_bwd - edges;
+        }
+        export "result" = outer::scc | map(;) | arrange;
+    "#);
+
+    println!("\n2b. SCC (nested recursion; fwd/bwd label propagation via min; the sharp case):");
+    for &nodes in &[200usize, 500, 800, 1_000] {
+        let mut seed = 0xc0ff_ee42u64;
+        let n_edges = nodes * 2;
+        let edges: Vec<(Row, Row)> = (0..n_edges)
+            .map(|_| (tup(&[(xorshift(&mut seed) % nodes as u64) as i64, (xorshift(&mut seed) % nodes as u64) as i64]), Value::unit()))
+            .collect();
+        let inputs = vec![edges];
+        // NB: corgi diverges from vec on larger random graphs (a corgi-backend bug — the proxy reduce
+        // tactic + reference backend pass the scc oracles in `reduce_reference.rs`). Flag, don't panic.
+        let (co, ve) = (corgi::evaluate(&scc, &inputs), vec::evaluate(&scc, &inputs));
+        if co != ve {
+            println!("  scc                    n={nodes:<7}  !! MISMATCH corgi={co:?} vec={ve:?}");
+        }
+        let vt = bench(3, || { std::hint::black_box(vec::evaluate(&scc, &inputs)); });
+        let ct = bench(3, || { std::hint::black_box(corgi::evaluate(&scc, &inputs)); });
+        report("scc", nodes, vt, ct);
+    }
+
     // ---------- 3. LINEAR COMPUTE ONLY (deep chain, NO arrange) — isolates the columnar eval ----------
     // 8 wide arithmetic maps, exported without arrange (only ToCorgi in / FromCorgi out transcode
     // bracket the columnar chain). This is where corgi's columnar scalar logic should actually pay.
