@@ -177,6 +177,9 @@ where
             moments: Vec<(T, Option<usize>)>,
         }
         let mut work: Vec<KeyWork<B1::Time>> = Vec::new();
+        // Reused across keys (cleared each iteration) so per-key work doesn't reallocate.
+        let mut rep: Vec<(u64, usize)> = Vec::new();
+        let mut raw_moments: Vec<(B1::Time, (usize, usize))> = Vec::new();
         let (mut is, mut os) = (0usize, 0usize);
         for &key in &changed {
             while is < p_in.len() && p_in.key_hashes()[is] < key { is += 1; }
@@ -190,7 +193,7 @@ where
 
             // value_id → representative record index (the first of the vid's run; the
             // key's records are sorted by (value_id, time)).
-            let mut rep: Vec<(u64, usize)> = Vec::new();
+            rep.clear();
             for i in i0..i1 {
                 if rep.last().is_none_or(|(v, _)| *v != p_in.value_ids()[i]) {
                     rep.push((p_in.value_ids()[i], i));
@@ -198,7 +201,7 @@ where
             }
             let pending = self.pending.get(&key).map(|p| &p[..]).unwrap_or(&[]);
 
-            let mut raw_moments: Vec<(B1::Time, (usize, usize))> = Vec::new();
+            raw_moments.clear();
             let mut pended: Vec<B1::Time> = Vec::new();
             discover_and_accumulate(
                 &p_in, i0, i1, &rep, pending, lower, upper,
@@ -211,7 +214,7 @@ where
                 continue;
             }
             let moments = raw_moments
-                .into_iter()
+                .drain(..)
                 .map(|(t, (lo, hi))| {
                     if lo < hi {
                         keys_v.push(key);
@@ -236,19 +239,24 @@ where
         // time order — `Ord` extends the partial order, so earlier deltas are always
         // emitted before a later moment reads them — with the same meet-advancement
         // keeping the output buffer and this pass's deltas consolidated.
+        // Reused across keys: `IdHistory::load` clears+refills (retaining capacity), and `meets`/
+        // `emitted` are cleared each key — so per-key replay doesn't reallocate.
+        let mut meets: Vec<B1::Time> = Vec::new();
+        let mut out_replay = IdHistory::new();
+        let mut emitted: Vec<((u64, B1::Time), Bk::ROut)> = Vec::new();
         for w in work {
-            let mut meets: Vec<B1::Time> = w.moments.iter().map(|(t, _)| t.clone()).collect();
+            meets.clear();
+            meets.extend(w.moments.iter().map(|(t, _)| t.clone()));
             for i in (1..meets.len()).rev() {
                 let m = meets[i].clone();
                 meets[i - 1].meet_assign(&m);
             }
-            let mut out_replay = IdHistory::new();
             out_replay.load(
                 (w.o0..w.o1).map(|o| (p_out.value_ids()[o], p_out.times()[o].clone(), p_out.diffs()[o].clone())),
                 meets.first(),
             );
             // Deltas emitted for this key earlier in this pass; part of "current output".
-            let mut emitted: Vec<((u64, B1::Time), Bk::ROut)> = Vec::new();
+            emitted.clear();
             for (j, (t, bracket)) in w.moments.iter().enumerate() {
                 out_replay.step_through(t);
                 out_replay.advance_buffer_by(&meets[j]);
