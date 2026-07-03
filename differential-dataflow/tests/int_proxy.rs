@@ -375,10 +375,10 @@ where
     type RIn = B::RIn;
     type ROut = B::ROut;
 
-    fn present_novel(&mut self, novel: &[B1]) -> ProxyChunk<B1::Time, B::RIn> {
-        let chunk = self.inner.present_novel(novel);
-        self.presented.fetch_add(chunk.len(), AtomicOrdering::SeqCst);
-        chunk
+    fn seed_times(&self, novel: &[B1]) -> Vec<(u64, B1::Time)> {
+        let seeds = self.inner.seed_times(novel);
+        self.presented.fetch_add(seeds.len(), AtomicOrdering::SeqCst);
+        seeds
     }
     fn present_input(&mut self, history: &[B1], novel: &[B1], keys: &[u64]) -> ProxyChunk<B1::Time, B::RIn> {
         let chunk = self.inner.present_input(history, novel, keys);
@@ -618,9 +618,12 @@ mod identity {
         type RIn = isize;
         type ROut = isize;
 
-        fn present_novel(&mut self, novel: &[Batch<T>]) -> ProxyChunk<T, isize> {
-            let (ks, vs, ts, ds) = records(novel, None);
-            ProxyChunk::from_unsorted(ks, vs, ts, ds).0
+        fn seed_times(&self, novel: &[Batch<T>]) -> Vec<(u64, T)> {
+            // Raw (key_hash, time) support, sorted by key_hash — no value work.
+            let (ks, _vs, ts, _ds) = records(novel, None);
+            let mut out: Vec<(u64, T)> = ks.into_iter().zip(ts).collect();
+            out.sort_by_key(|(k, _)| *k);
+            out
         }
 
         fn present_input(&mut self, history: &[Batch<T>], novel: &[Batch<T>], keys: &[u64]) -> ProxyChunk<T, isize> {

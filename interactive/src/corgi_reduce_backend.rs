@@ -335,18 +335,20 @@ where
     type RIn = Diff;
     type ROut = Diff;
 
-    fn present_novel(&mut self, novel: &[CBatch<T>]) -> ProxyChunk<T, Diff> {
-        // The batch's own support: read the (delta-sized) novel batches ALONE, unfiltered and never
-        // merged with stored history, so no compacted history record can cancel a seed. Also how the
-        // tactic learns the changed keys (its key set is the delta's keys).
-        let chunks = chunks_of(novel);
-        let (_keys_col, vals_col, khs, times, diffs) = collect_present(&chunks, |_| true);
-        if khs.is_empty() {
-            return ProxyChunk::default();
+    fn seed_times(&self, novel: &[CBatch<T>]) -> Vec<(u64, T)> {
+        // The batch's raw (key_hash, time) support — hash the novel KEY columns only (no value work,
+        // no consolidation), one entry per record, sorted by key_hash. Seeds may over-derive (a
+        // non-changing seed yields a zero delta), so this superset of b.support suffices; the tactic
+        // reads only the times. Never merged with stored history, so no compacted record cancels a seed.
+        let mut out: Vec<(u64, T)> = Vec::new();
+        for ch in chunks_of(novel) {
+            let kh = hash_rows(ch.keys());
+            for (h, t) in kh.into_iter().zip(ch.times()) {
+                out.push((h, t.clone()));
+            }
         }
-        let vids = hash_rows(&vals_col);
-        let (chunk, _reps) = ProxyChunk::from_unsorted(khs, vids, times, diffs);
-        chunk
+        out.sort_by_key(|(k, _)| *k);
+        out
     }
 
     fn present_input(&mut self, history: &[CBatch<T>], novel: &[CBatch<T>], keys: &[u64]) -> ProxyChunk<T, Diff> {

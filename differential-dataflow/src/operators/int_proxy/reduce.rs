@@ -12,7 +12,7 @@ use crate::trace::{BatchReader, Description};
 use crate::trace::chunk::int_proxy::ProxyChunk;
 use crate::operators::reduce::ReduceTactic;
 
-use super::history::IdHistory;
+use super::history::{IdHistory, TimeHistory};
 
 /// Identity hasher for `value_id`-keyed scratch maps: `value_id`s are already 64-bit content hashes,
 /// so re-hashing them is waste. Reused across moments (cleared, not reallocated) to avoid a
@@ -28,11 +28,11 @@ type IdMap<R> = HashMap<u64, R, BuildHasherDefault<IdHasher>>;
 
 /// The reduce backend: value semantics for a proxy-space reduction.
 ///
-/// Protocol (per `retire`, driven by [`ProxyReduceTactic`]): one `key_hashes` (over the
-/// new input batches), one `present_input`, one `present_output`, ONE batched
-/// `reduce_many` call carrying every `(key, interesting time)` moment of the retire —
-/// with indices referring to the input presentation — then one `materialize` per output
-/// batch. Within
+/// Protocol (per `retire`, driven by [`ProxyReduceTactic`]): one `seed_times` (over the
+/// new input batches — the batch's `(key, time)` support and the changed keys), one
+/// `present_input`, one `present_output`, ONE batched `reduce_many` call carrying every
+/// `(key, interesting time)` moment of the retire — with indices referring to the input
+/// presentation — then one `materialize` per output batch. Within
 /// one retire the backend must be able to resolve every presented `key_hash` to its key
 /// and every presented or minted `value_id` to its value.
 pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
@@ -41,18 +41,24 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// Diff type of the output; the desired-vs-current delta needs negation.
     type ROut: Abelian + 'static;
 
-    /// (read) Present the freshly arrived batches ALONE as a sorted, consolidated proxy
-    /// run: the batch's own support, before any merge with stored history. Unfiltered —
-    /// the batches are the delta — and also how the tactic learns the changed keys.
+    /// (read) The freshly arrived batches' `(key_hash, time)` support: one entry per
+    /// novel record, sorted by `key_hash`. RAW — no merge with stored history, no
+    /// consolidation, no value work (no `value_id`, no diffs). Also how the tactic learns
+    /// the changed keys (their distinct `key_hash`es).
     ///
-    /// Seeding interesting times from this run (rather than from a time-filter over the
-    /// merged presentation) is load-bearing for CORRECTNESS, not just structure: legal
-    /// compaction may advance a stored record onto a novel record's exact
-    /// `(value, time)`, cancelling it out of the merged view while the batch still owes
-    /// output changes at that time. The formal model pins this: seeds are
-    /// `b.support ∪ pending` (`Model.lean`'s `seedSet`; its `scenario1_cancels` is
-    /// exactly the compaction-cancellation case).
-    fn present_novel(&mut self, novel: &[B1]) -> ProxyChunk<B1::Time, Self::RIn>;
+    /// Seeding interesting times from the batch's OWN times — never from a time-filter
+    /// over the merged accumulation — is load-bearing for CORRECTNESS: legal compaction
+    /// may advance a stored record onto a novel record's exact `(value, time)`,
+    /// cancelling it out of the merged view while the batch still owes output changes at
+    /// that time. The model pins this: seeds are `b.support ∪ pending` (`Model.lean`'s
+    /// `seedSet`; `scenario1_cancels` is the compaction-cancellation case).
+    ///
+    /// Cheap by design: seeds need only key hashes and times. Interesting-time
+    /// over-derivation is sound (a non-changing seed yields a zero delta), so the raw
+    /// novel times — a superset of `b.support` — suffice, and the tactic reads only times
+    /// from them. So this method does NOT hash values, assign `value_id`s, sort by value,
+    /// or consolidate; a full value-present of the delta happens once, in `present_input`.
+    fn seed_times(&self, novel: &[B1]) -> Vec<(u64, B1::Time)>;
     /// (read) Flatten the input history (`history` ∪ `novel`, the accumulated trace and
     /// the freshly arrived batches) into one sorted, consolidated proxy run, restricted to
     /// the sorted `keys` — the ACCUMULATION run (consolidation across history and novel
@@ -157,8 +163,9 @@ where
         // Only keys touched by the new input delta or carrying pending times can change
         // output in [lower, upper); everything else is untouched. This restriction keeps
         // per-retire cost proportional to the delta, not the accumulation.
-        let p_novel = self.backend.present_novel(&input_batches);
-        let mut changed: BTreeSet<u64> = p_novel.key_hashes().iter().copied().collect();
+        let seeds = self.backend.seed_times(&input_batches);
+        debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "seed_times must be sorted by key_hash");
+        let mut changed: BTreeSet<u64> = seeds.iter().map(|(k, _)| *k).collect();
         changed.extend(self.pending.keys().copied());
         if changed.is_empty() {
             // No input delta and no carried pending: no key's output can change, and
@@ -215,9 +222,9 @@ where
             let o0 = os;
             while os < p_out.len() && p_out.key_hashes()[os] == key { os += 1; }
             let o1 = os;
-            while ns < p_novel.len() && p_novel.key_hashes()[ns] < key { ns += 1; }
+            while ns < seeds.len() && seeds[ns].0 < key { ns += 1; }
             let n0 = ns;
-            while ns < p_novel.len() && p_novel.key_hashes()[ns] == key { ns += 1; }
+            while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
             let n1 = ns;
 
             // value_id → representative record index (the first of the vid's run; the
@@ -232,8 +239,9 @@ where
 
             raw_moments.clear();
             let mut pended: Vec<B1::Time> = Vec::new();
+            let seed_times = seeds[n0..n1].iter().map(|(_, t)| t.clone());
             discover_and_accumulate(
-                &p_in, i0, i1, &p_novel, n0, n1, &rep, pending, upper,
+                &p_in, i0, i1, seed_times, &rep, pending, upper,
                 &mut raw_moments, &mut entries, &mut pended,
             );
             if !pended.is_empty() {
@@ -377,8 +385,8 @@ where
 /// Phase A of one key's retire: the time-replay loop of the cursor tactic
 /// (`history_replay::compute`), ported to proxy space with the value callback deferred.
 ///
-/// It replays the key's NOVEL batch records (`p_novel[n0..n1]` — the batch's own
-/// support, presented apart from the stored history) together with the carried `pending`
+/// It replays the key's NOVEL batch times (`seed_times` — the batch's own `(key, time)`
+/// support, raw, apart from the stored history) together with the carried `pending`
 /// times, in ascending time order, discovering the interesting times: those carrying
 /// novel or pending updates, and joins thereof (synthesized as replay proceeds). The
 /// merged input presentation (`p_in[i0..i1]`, which already contains the novel records)
@@ -388,10 +396,11 @@ where
 /// whose accumulation vanished but whose current output may need retracting). Times at
 /// or beyond `upper` are `pended`.
 ///
-/// Seeding from the batch's own support — never from a time-filter over the merged
+/// Seeding from the batch's own times — never from a time-filter over the merged
 /// presentation — is the formal model's `seedSet = b.support ∪ pending`: compaction can
 /// legally advance a stored record onto a novel one and cancel it out of the MERGED
-/// view, but it still owes changes at that time (`scenario1_cancels`).
+/// view, but it still owes changes at that time (`scenario1_cancels`). The seed times are
+/// raw (a superset of `b.support`); the spurious extras are sound over-derivation.
 ///
 /// The replay buffers are repeatedly advanced by the meet of the times still to come and
 /// consolidated — the collapse that keeps a key with many distinct times linear rather
@@ -401,9 +410,7 @@ fn discover_and_accumulate<T, RIn>(
     p_in: &ProxyChunk<T, RIn>,
     i0: usize,
     i1: usize,
-    p_novel: &ProxyChunk<T, RIn>,
-    n0: usize,
-    n1: usize,
+    seed_times: impl Iterator<Item = T>,
     rep: &[(u64, usize)],
     pending: &[T],
     upper: &Antichain<T>,
@@ -414,13 +421,10 @@ fn discover_and_accumulate<T, RIn>(
     T: Timestamp + Lattice,
     RIn: Semigroup + Clone,
 {
-    // The batch's support seeds interestingness (and its buffered times generate joins);
-    // its diffs do NOT feed accumulation — the merged run below already contains them.
-    let mut batch_replay = IdHistory::new();
-    batch_replay.load(
-        (n0..n1).map(|i| (p_novel.value_ids()[i], p_novel.times()[i].clone(), p_novel.diffs()[i].clone())),
-        None,
-    );
+    // The batch's times seed interestingness and generate the synthetic joins; the batch
+    // carries no values here — accumulation comes wholly from the merged run below.
+    let mut batch_replay = TimeHistory::new();
+    batch_replay.load(seed_times, None);
 
     // Suffix meets of the carried pending times (ascending, so meets accumulate from the end).
     let mut meets: Vec<T> = pending.to_vec();
@@ -469,7 +473,7 @@ fn discover_and_accumulate<T, RIn>(
             meets_slice = &meets_slice[1..];
             interesting = true;
         }
-        interesting = interesting || batch_replay.buffer().iter().any(|((_, t), _)| t.less_equal(&next_time));
+        interesting = interesting || batch_replay.buffer().iter().any(|t| t.less_equal(&next_time));
         interesting = interesting || times_current.iter().any(|t| t.less_equal(&next_time));
 
         if !upper.less_equal(&next_time) {
@@ -498,7 +502,7 @@ fn discover_and_accumulate<T, RIn>(
             }
             // Synthetic interesting times: joins with the remaining batch times and the
             // times seen so far.
-            temporary.extend(batch_replay.buffer().iter().map(|((_, t), _)| t).filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
+            temporary.extend(batch_replay.buffer().iter().filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
             temporary.extend(times_current.iter().filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
             sort_dedup(&mut temporary);
             let synth_len = synth.len();

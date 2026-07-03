@@ -250,12 +250,24 @@ where
     type RIn = RIn;
     type ROut = ROut;
 
-    fn present_novel(&mut self, novel: &[RefBatch<K, V, T, RIn>]) -> ProxyChunk<T, RIn> {
-        // The batch's own support: read the (delta-sized) novel batches alone, never
-        // merged with stored history, so no compacted record can cancel a seed.
-        let mut rows = Rows::new();
-        rows.scan(novel);
-        rows.present().0
+    fn seed_times(&self, novel: &[RefBatch<K, V, T, RIn>]) -> Vec<(u64, T)> {
+        // The batch's raw (key_hash, time) support: hash keys only (no value work), one
+        // entry per record, sorted by key_hash. Never merged with stored history, so no
+        // compacted record can cancel a seed.
+        let mut out = Vec::new();
+        for batch in novel {
+            let mut cursor = batch.cursor();
+            while let Some(k) = cursor.get_key(batch) {
+                let kh = stable_hash(k);
+                while cursor.get_val(batch).is_some() {
+                    cursor.map_times(batch, |t, _| out.push((kh, t.clone())));
+                    cursor.step_val(batch);
+                }
+                cursor.step_key(batch);
+            }
+        }
+        out.sort_by_key(|(k, _)| *k);
+        out
     }
 
     fn present_input(&mut self, history: &[RefBatch<K, V, T, RIn>], novel: &[RefBatch<K, V, T, RIn>], keys: &[u64]) -> ProxyChunk<T, RIn> {
