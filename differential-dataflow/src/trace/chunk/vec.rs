@@ -208,6 +208,64 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
     }
 }
 
+impl<K, V, T, R> super::UnloadChunk for VecChunk<K, V, T, R>
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
+    type Staging = super::ChunkBatchBuilder<Self>;
+    type Probes<'a> = &'a [K];
+
+    fn probe_count(probes: &[K]) -> usize { probes.len() }
+
+    fn locate(&self, probes: &[K], probe_index: usize) -> std::cmp::Ordering {
+        let rows = &self.0[..];
+        let probe = &probes[probe_index];
+        if probe < &rows[0].0.0 { std::cmp::Ordering::Less }
+        else if probe > &rows[rows.len() - 1].0.0 { std::cmp::Ordering::Greater }
+        else { std::cmp::Ordering::Equal }
+    }
+
+    fn extract_into(&self, probes: &[K], probe_index: &mut usize, staging: &mut Self::Staging) {
+        use crate::trace::Builder;
+        let rows = &self.0[..];
+        let last = &rows[rows.len() - 1].0.0;
+        let mut pos = 0;
+        // Hit rows accumulate here and stage as one chunk per call.
+        let mut carry: Vec<((K, V), T, R)> = Vec::new();
+        while *probe_index < probes.len() {
+            let probe = &probes[*probe_index];
+            // Past this chunk's span: the probe (and everything after) is the next
+            // chunk's business.
+            if probe > last { break; }
+            // The probe's rows, if any: gallop to the key, then span its group,
+            // emitted as a chunk for the staging builder to settle.
+            pos = gallop(rows, pos, |u| &u.0.0 < probe);
+            let start = pos;
+            while pos < rows.len() && &rows[pos].0.0 == probe { pos += 1; }
+            if pos > start {
+                if start == 0 && pos == rows.len() {
+                    // The run is the whole chunk: push the handle, no copy.
+                    staging.push(&mut self.clone());
+                } else {
+                    carry.extend_from_slice(&rows[start..pos]);
+                }
+            }
+            // A probe equal to the last key may continue in the next chunk:
+            // extracted, but left unconsumed for re-offer.
+            if probe == last { break; }
+            *probe_index += 1;
+        }
+        // This chunk's accumulated hits, staged as one chunk.
+        if !carry.is_empty() {
+            staging.push(&mut VecChunk(Rc::new(carry)));
+        }
+    }
+
+    fn fetch_into(&self, staging: &mut Self::Staging) {
+        use crate::trace::Builder;
+        // The whole chunk, by handle: a refcount bump, no copy.
+        staging.push(&mut self.clone());
+    }
+}
+
 impl<K, V, T, R> Chunk for VecChunk<K, V, T, R>
 where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
     type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
@@ -765,6 +823,113 @@ mod test {
                 acc
             });
             eprintln!("probes={probes:>7}: gallop={g:>12?}  linear={l:>12?}");
+        }
+    }
+
+    // Finish an extraction staging builder and flatten its chunks to rows.
+    fn drain(staging: crate::trace::chunk::ChunkBatchBuilder<VecChunk<u64, u64, u64, i64>>) -> Vec<((u64, u64), u64, i64)> {
+        use crate::trace::{Builder, Description};
+        use timely::progress::Antichain;
+        let desc = Description::new(
+            Antichain::from_elem(0u64), Antichain::new(), Antichain::from_elem(0u64));
+        flat(staging.done(desc).chunks)
+    }
+
+    // Cut a consolidated update set into a `ChunkBatch` of `sz`-row chunks, so keys
+    // and `(key, val)` groups straddle chunk boundaries.
+    fn extract_batch(updates: &[((u64, u64), u64, i64)], sz: usize) -> crate::trace::chunk::ChunkBatch<VecChunk<u64, u64, u64, i64>> {
+        use crate::trace::Description;
+        use timely::progress::Antichain;
+        let chunks: Vec<_> = updates.chunks(sz).map(|c| chunk(c.to_vec())).collect();
+        let desc = Description::new(
+            Antichain::from_elem(0u64), Antichain::from_elem(10u64), Antichain::from_elem(0u64));
+        crate::trace::chunk::ChunkBatch::new(chunks, desc)
+    }
+
+    // Property test: `ChunkBatch::extract_into` over random chains and random probe
+    // sets equals the analytic filter of the raw updates by probe membership. Tiny
+    // chunks force keys (with several vals and times) to straddle boundaries,
+    // exercising the extract/re-offer protocol; probe sets include misses and
+    // probes past the batch.
+    #[test]
+    fn extract_matches_filter() {
+        use crate::consolidation::consolidate_updates;
+
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+
+        for _ in 0..300 {
+            // Consolidated updates over a small key space, so groups collide and straddle.
+            let n = rng() as usize % 60 + 1;
+            let mut rows: Vec<((u64, u64), u64, i64)> = (0..n).map(|_| {
+                let k = rng() % 20; let v = rng() % 3; let t = rng() % 6;
+                let d = if rng() % 4 == 0 { -1 } else { 1 };
+                ((k, v), t, d)
+            }).collect();
+            consolidate_updates(&mut rows);
+            if rows.is_empty() { continue; }
+            let sz = rng() as usize % 5 + 1;
+            let batch = extract_batch(&rows, sz);
+
+            // A sorted, deduplicated probe set over a slightly larger space (misses included).
+            let mut probes: Vec<u64> = (0..(rng() % 30)).map(|_| rng() % 25).collect();
+            probes.sort();
+            probes.dedup();
+
+            let mut staging = Default::default();
+            batch.extract_into(&probes[..], &mut staging);
+
+            let want: Vec<_> = rows.iter().filter(|u| probes.binary_search(&u.0.0).is_ok()).cloned().collect();
+            assert_eq!(drain(staging), want, "chunk size {sz}\n  probes={probes:?}\n  rows={rows:?}");
+        }
+    }
+
+    // Exhaustive boundary coverage: for every chunk cut and every single-probe
+    // placement — below, between, at, and past the keys, including a key whose
+    // rows span several chunks — extraction equals the filter, and the protocol
+    // holds under multi-probe sets crossing the spanning key.
+    #[test]
+    fn extract_boundary_exhaustive() {
+        // Even keys 0..=16; key 8 carries 6 rows (distinct vals/times) so it spans
+        // multiple chunks at every cut size below 6.
+        let mut rows: Vec<((u64, u64), u64, i64)> = Vec::new();
+        for k in (0..=16u64).step_by(2) {
+            let copies = if k == 8 { 6 } else { 1 };
+            for c in 0..copies { rows.push(((k, c), c, 1)); }
+        }
+        for sz in 1..=5 {
+            let batch = extract_batch(&rows, sz);
+            // Every single probe.
+            for probe in 0..=18u64 {
+                let mut staging = Default::default();
+                batch.extract_into(&[probe][..], &mut staging);
+                let want: Vec<_> = rows.iter().filter(|u| u.0.0 == probe).cloned().collect();
+                assert_eq!(drain(staging), want, "sz={sz} probe={probe}");
+            }
+            // Every contiguous probe range (hits and misses interleaved).
+            for lo in 0..=18u64 {
+                for hi in lo..=18u64 {
+                    let probes: Vec<u64> = (lo..=hi).collect();
+                    let mut staging = Default::default();
+                    batch.extract_into(&probes[..], &mut staging);
+                    let want: Vec<_> = rows.iter().filter(|u| lo <= u.0.0 && u.0.0 <= hi).cloned().collect();
+                    assert_eq!(drain(staging), want, "sz={sz} probes={lo}..={hi}");
+                }
+            }
+        }
+    }
+
+    // `fetch_into` reproduces the batch's full contents in order (the scan path).
+    #[test]
+    fn fetch_matches_contents() {
+        let rows: Vec<((u64, u64), u64, i64)> =
+            (0..40u64).map(|i| ((i / 3, i % 3), i % 5, 1)).collect();
+        // `rows` is sorted and consolidated by construction.
+        for sz in [1, 3, 7] {
+            let batch = extract_batch(&rows, sz);
+            let mut staging = Default::default();
+            batch.fetch_into(&mut staging);
+            assert_eq!(drain(staging), rows, "sz={sz}");
         }
     }
 
