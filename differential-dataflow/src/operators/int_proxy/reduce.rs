@@ -48,17 +48,20 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// [`present_output`](Self::present_output) on equal values within this retire — and
     /// recording `id → value` for `materialize`.
     fn reduce(&mut self, key_hash: u64, input: &[(usize, Self::RIn)]) -> Vec<(u64, Self::ROut)>;
-    /// (value callback, batched) As [`reduce`](Self::reduce), for a run of keys in one
-    /// call: `keys[i]`'s accumulated input is `input[ends[i-1]..ends[i]]` (with
-    /// `ends[-1] = 0`), every bracket non-empty. Returns the concatenated per-key outputs
-    /// together with their own bracket ends, aligned with `keys`.
+    /// (value callback, batched) As [`reduce`](Self::reduce), for a run of brackets in
+    /// one call: bracket `i` is the accumulated input `input[ends[i-1]..ends[i]]` (with
+    /// `ends[-1] = 0`, every bracket non-empty) for `keys[i]` — and a key may appear
+    /// several times, once per moment the tactic evaluates it at (the bracket is the
+    /// unit, not the key). Returns the concatenated per-bracket outputs together with
+    /// their own bracket ends, aligned with `keys`.
     ///
-    /// This is the boundary's bulk crossing: the tactic calls only this method, batching
-    /// all keys that share an interesting time, so a backend whose value logic crosses
-    /// into interpreted or columnar execution (where per-call overhead dominates) can do
-    /// a whole wave's work per crossing. The default implementation loops
-    /// [`reduce`](Self::reduce); backends with cheap native per-key logic need not
-    /// override it.
+    /// This is the boundary's bulk crossing: the tactic calls this method once per
+    /// retire, with every `(key, interesting time)` moment as a bracket — desired
+    /// outputs depend only on input accumulations, so no time ordering constrains the
+    /// batch — and a backend whose value logic crosses into interpreted or columnar
+    /// execution (where per-call overhead dominates) does the whole retire's value work
+    /// in one crossing. The default implementation loops [`reduce`](Self::reduce);
+    /// backends with cheap native per-key logic need not override it.
     fn reduce_many(&mut self, keys: &[u64], ends: &[usize], input: &[(usize, Self::RIn)]) -> (Vec<(u64, Self::ROut)>, Vec<usize>) {
         let mut outs = Vec::new();
         let mut out_ends = Vec::with_capacity(keys.len());
@@ -82,14 +85,15 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
 ///
 /// Per changed key (keys touched by new input, plus keys carrying pending times) it
 /// derives the active times in `[lower, upper)` — joins of input times, seeded by the
-/// novel times — and groups the work into *waves*: at each distinct time, every active
-/// key's input is consolidated by `value_id` (presence) and the whole wave is handed to
-/// the backend in one batched value callback ([`ProxyReduceBackend::reduce_many`]) — one
-/// crossing into the backend's value logic per wave. Each key's desired output is then
-/// diffed against its current output (committed history plus deltas emitted this pass)
-/// and the difference emitted into the held-time bucket. Times at or beyond `upper` are
-/// pended, keyed by the stable `key_hash`, so they survive retires without any reference
-/// to backend state.
+/// novel times — consolidates each `(key, active time)` moment's input by `value_id`
+/// (presence), and hands ALL moments to the backend in one batched value callback per
+/// retire ([`ProxyReduceBackend::reduce_many`]): desired outputs depend only on input
+/// accumulations, so the batch needs no time ordering. Each moment's desired output is
+/// then diffed against its current output (committed history plus deltas emitted at
+/// earlier moments — the order-sensitive part, kept in proxy space) and the difference
+/// emitted into the held-time bucket. Times at or beyond `upper` are pended, keyed by
+/// the stable `key_hash`, so they survive retires without any reference to backend
+/// state.
 pub struct ProxyReduceTactic<T, Bk> {
     backend: Bk,
     /// Outstanding interesting `(key, time)` moments at or beyond the last interval,
@@ -178,9 +182,8 @@ where
 
         // Pass 1: march through the changed keys — both presentations hold only changed
         // keys, in hash order, so the ranges advance monotonically — derive each key's
-        // active times, and group the work into WAVES: all keys active at a time are
-        // handled by one batched value callback, so a whole wave costs one crossing into
-        // the backend's value logic.
+        // active times, and collect the `(key, time)` moments (grouped by time, so the
+        // later passes run in ascending time order).
         struct Plan {
             key: u64,
             i0: usize,
@@ -235,27 +238,28 @@ where
             }
         }
 
-        // Deltas emitted per key earlier in this pass; part of "current output".
-        let mut emitted: Vec<Vec<(u64, B1::Time, Bk::ROut)>> = (0..plans.len()).map(|_| Vec::new()).collect();
-
-        // Pass 2: play the waves in ascending time order — `Ord` extends the partial
-        // order, so a key's earlier deltas are always emitted before a later time
-        // consults them. Each wave makes at most one (batched) value callback.
+        // Pass 2a: assemble ONE batched value callback for the whole retire. The desired
+        // output at a `(key, time)` moment is a function of the key's input accumulation
+        // at that time alone — no output-side state — so every moment can share one
+        // crossing into the backend's value logic; a key contributes one bracket per
+        // active time. The time-sensitive bookkeeping (subtracting the current output,
+        // which includes deltas emitted at earlier times) is pure proxy-space arithmetic
+        // and stays in pass 2b.
+        let mut keys_v: Vec<u64> = Vec::new();
+        let mut ends: Vec<usize> = Vec::new();
+        let mut entries: Vec<(usize, Bk::RIn)> = Vec::new();
+        // Every `(key, active time)` moment, in ascending time order, with its bracket
+        // index (`None` when the accumulation is empty: the callback is only consulted
+        // for non-empty input, matching the row reduce contract; the moment may still
+        // need to retract current output).
+        let mut moments: Vec<(usize, B1::Time, Option<usize>)> = Vec::new();
         for (t, members) in waves {
-            // Assemble the batch: per member, the input accumulation at `t` consolidated
-            // by value id (each key's records are sorted by (value_id, time), so each id
-            // is one contiguous run) and the current output at `t` (committed history
-            // plus this pass's deltas). Members with empty accumulation skip the callback
-            // — the row reduce contract consults logic only for non-empty input — and go
-            // straight to retracting `cur`.
-            let mut keys_v: Vec<u64> = Vec::new();
-            let mut ends: Vec<usize> = Vec::new();
-            let mut entries: Vec<(usize, Bk::RIn)> = Vec::new();
-            let mut batched: Vec<(usize, BTreeMap<u64, Bk::ROut>)> = Vec::new();
-            let mut retract_only: Vec<(usize, BTreeMap<u64, Bk::ROut>)> = Vec::new();
-            for &pi in &members {
+            for pi in members {
                 let plan = &plans[pi];
-                let mut acc: Vec<(usize, Bk::RIn)> = Vec::new();
+                // Input accumulation at `t`, consolidated by value id: the key's records
+                // are sorted by (value_id, time), so each id is one contiguous run.
+                let mut bracket = None;
+                let mut len = 0;
                 let mut a = plan.i0;
                 while a < plan.i1 {
                     let vid = p_in.value_ids()[a];
@@ -272,90 +276,76 @@ where
                     }
                     if let Some(n) = net {
                         if !n.is_zero() {
-                            acc.push((rep, n));
+                            entries.push((rep, n));
+                            len += 1;
                         }
                     }
                 }
-
-                let mut cur: BTreeMap<u64, Bk::ROut> = BTreeMap::new();
-                for o in plan.o0..plan.o1 {
-                    if p_out.times()[o].less_equal(&t) {
-                        match cur.entry(p_out.value_ids()[o]) {
-                            std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(&p_out.diffs()[o]),
-                            std::collections::btree_map::Entry::Vacant(e) => { e.insert(p_out.diffs()[o].clone()); }
-                        }
-                    }
-                }
-                for (vid, et, d) in emitted[pi].iter() {
-                    if et.less_equal(&t) {
-                        match cur.entry(*vid) {
-                            std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(d),
-                            std::collections::btree_map::Entry::Vacant(e) => { e.insert(d.clone()); }
-                        }
-                    }
-                }
-                cur.retain(|_, d| !d.is_zero());
-
-                if acc.is_empty() && cur.is_empty() {
-                    continue;
-                }
-                if acc.is_empty() {
-                    retract_only.push((pi, cur));
-                } else {
+                if len > 0 {
                     keys_v.push(plan.key);
-                    entries.extend(acc);
                     ends.push(entries.len());
-                    batched.push((pi, cur));
+                    bracket = Some(keys_v.len() - 1);
+                }
+                moments.push((pi, t.clone(), bracket));
+            }
+        }
+
+        // The one crossing for this retire.
+        let (outs, out_ends) = if keys_v.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            self.backend.reduce_many(&keys_v, &ends, &entries)
+        };
+
+        // Pass 2b: play the moments in ascending time order — `Ord` extends the partial
+        // order, so a key's earlier deltas are always emitted before a later time reads
+        // them — computing delta = desired − current in proxy space and routing it to
+        // the held-time bucket.
+        let mut emitted: Vec<Vec<(u64, B1::Time, Bk::ROut)>> = (0..plans.len()).map(|_| Vec::new()).collect();
+        for (pi, t, bracket) in moments {
+            let plan = &plans[pi];
+            // Current output at `t`: committed history plus this pass's deltas.
+            let mut cur: BTreeMap<u64, Bk::ROut> = BTreeMap::new();
+            for o in plan.o0..plan.o1 {
+                if p_out.times()[o].less_equal(&t) {
+                    match cur.entry(p_out.value_ids()[o]) {
+                        std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(&p_out.diffs()[o]),
+                        std::collections::btree_map::Entry::Vacant(e) => { e.insert(p_out.diffs()[o].clone()); }
+                    }
                 }
             }
-
-            // One crossing for the whole wave.
-            let (outs, out_ends) = if keys_v.is_empty() {
-                (Vec::new(), Vec::new())
-            } else {
-                self.backend.reduce_many(&keys_v, &ends, &entries)
-            };
-
-            // delta = desired − current, in proxy space, routed to the held-time bucket.
-            let mut start = 0;
-            let desired_of = |lo: usize, hi: usize| outs[lo..hi].iter().cloned();
-            for (m, (pi, cur)) in batched.into_iter().enumerate() {
-                let end = out_ends[m];
-                let mut delta: BTreeMap<u64, Bk::ROut> = cur;
-                for d in delta.values_mut() {
-                    d.negate();
+            for (vid, et, d) in emitted[pi].iter() {
+                if et.less_equal(&t) {
+                    match cur.entry(*vid) {
+                        std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(d),
+                        std::collections::btree_map::Entry::Vacant(e) => { e.insert(d.clone()); }
+                    }
                 }
-                for (vid, d) in desired_of(start, end) {
+            }
+            cur.retain(|_, d| !d.is_zero());
+
+            let mut delta: BTreeMap<u64, Bk::ROut> = cur;
+            for d in delta.values_mut() {
+                d.negate();
+            }
+            if let Some(b) = bracket {
+                let lo = if b == 0 { 0 } else { out_ends[b - 1] };
+                for (vid, d) in outs[lo..out_ends[b]].iter().cloned() {
                     match delta.entry(vid) {
                         std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().plus_equals(&d),
                         std::collections::btree_map::Entry::Vacant(e) => { e.insert(d); }
                     }
                 }
-                start = end;
-                delta.retain(|_, d| !d.is_zero());
-                if delta.is_empty() {
-                    continue;
-                }
-                let idx = held_elems.iter().rposition(|h| h.less_equal(&t)).expect("no held capability <= active time");
-                for (vid, d) in delta {
-                    emitted[pi].push((vid, t.clone(), d.clone()));
-                    buckets[idx].push(((plans[pi].key, vid), t.clone(), d));
-                }
             }
-            for (pi, cur) in retract_only {
-                let mut delta = cur;
-                for d in delta.values_mut() {
-                    d.negate();
-                }
-                delta.retain(|_, d| !d.is_zero());
-                if delta.is_empty() {
-                    continue;
-                }
-                let idx = held_elems.iter().rposition(|h| h.less_equal(&t)).expect("no held capability <= active time");
-                for (vid, d) in delta {
-                    emitted[pi].push((vid, t.clone(), d.clone()));
-                    buckets[idx].push(((plans[pi].key, vid), t.clone(), d));
-                }
+            delta.retain(|_, d| !d.is_zero());
+            if delta.is_empty() {
+                continue;
+            }
+
+            let idx = held_elems.iter().rposition(|h| h.less_equal(&t)).expect("no held capability <= active time");
+            for (vid, d) in delta {
+                emitted[pi].push((vid, t.clone(), d.clone()));
+                buckets[idx].push(((plan.key, vid), t.clone(), d));
             }
         }
 
