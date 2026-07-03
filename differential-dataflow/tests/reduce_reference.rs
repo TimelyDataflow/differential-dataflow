@@ -96,6 +96,42 @@ where
     .as_collection(|k, v| (k.clone(), v.clone()))
 }
 
+// Same shape as `reduce_reference`, but driven by the INT_PROXY `ProxyReduceTactic` + the reference
+// (Vec) value backend over `VecChunk` arrangements — i.e. the int_proxy reduce with NO corgi. Used to
+// isolate the int_proxy tactic from the corgi backend on SCC.
+fn reduce_int_proxy<'scope, Ti, K, V, R, V2, R2, L>(
+    collection: VecCollection<'scope, Ti, (K, V), R>,
+    logic: L,
+) -> VecCollection<'scope, Ti, (K, V2), R2>
+where
+    Ti: timely::progress::Timestamp + Lattice + Ord,
+    K: ExchangeData + Hashable + std::hash::Hash + Ord,
+    V: ExchangeData + std::hash::Hash + Ord,
+    R: ExchangeData + Semigroup + Ord,
+    V2: Data + std::hash::Hash + Ord,
+    R2: ExchangeData + Ord + Abelian,
+    L: FnMut(&K, &[(&V, R)], &mut Vec<(V2, R2)>) + 'static,
+{
+    use differential_dataflow::operators::arrange::arrangement::arrange_core;
+    use differential_dataflow::operators::int_proxy::ProxyReduceTactic;
+    use differential_dataflow::operators::int_proxy::reference::VecReduceBackend;
+    use differential_dataflow::operators::reduce::reduce_with_tactic;
+    use differential_dataflow::trace::chunk::vec::{ChunkBatcher, ChunkBuilder, ChunkSpine, VecChunk};
+    use differential_dataflow::trace::implementations::chunker::ContainerChunker;
+    use timely::dataflow::channels::pact::Pipeline;
+
+    let arranged = arrange_core::<
+        _, _,
+        ContainerChunker<VecChunk<K, V, Ti, R>>,
+        ChunkBatcher<K, V, Ti, R>,
+        ChunkBuilder<K, V, Ti, R>,
+        ChunkSpine<K, V, Ti, R>,
+    >(collection.inner, Pipeline, "Arrange: IntProxy");
+    let tactic = ProxyReduceTactic::new(VecReduceBackend::new(logic));
+    let reduced = reduce_with_tactic::<_, ChunkSpine<K, V2, Ti, R2>, _>(arranged, "IntProxyReduce", tactic);
+    reduced.as_collection(|k, v| (k.clone(), v.clone()))
+}
+
 // A random input: `((key, val), Pair(a, b), diff)`, diffs ±1 so updates cancel.
 fn random_input(seed: usize, n: usize, keys: u64, vals: u64, span: u64) -> Vec<((u64, u64), Time, isize)> {
     let s: &[usize] = &[seed, 7, 13, 29];
@@ -230,8 +266,8 @@ fn bfs_differential(nodes: usize, edges: usize, rounds: usize, seed: &[usize]) {
         let (mut roots, mut edges) = worker.dataflow::<usize, _, _>(|scope| {
             let (root_input, roots) = scope.new_collection();
             let (edge_input, edges) = scope.new_collection();
-            let via_cursor    = bfs(edges.clone(), roots.clone(), false);
-            let via_reference = bfs(edges, roots, true);
+            let via_cursor    = bfs(edges.clone(), roots.clone(), 0);
+            let via_reference = bfs(edges, roots, 1);
             via_cursor.assert_eq(via_reference);
             (root_input, edge_input)
         });
@@ -248,7 +284,7 @@ fn bfs_differential(nodes: usize, edges: usize, rounds: usize, seed: &[usize]) {
     });
 }
 
-fn bfs<'scope, T>(edges: VecCollection<'scope, T, Edge>, roots: VecCollection<'scope, T, Node>, reference: bool) -> VecCollection<'scope, T, (Node, usize)>
+fn bfs<'scope, T>(edges: VecCollection<'scope, T, Edge>, roots: VecCollection<'scope, T, Node>, mode: u8) -> VecCollection<'scope, T, (Node, usize)>
 where
     T: timely::progress::Timestamp + Lattice + Ord,
 {
@@ -257,7 +293,9 @@ where
         let edges = edges.enter(scope);
         let nodes = nodes.enter(scope);
         let combined = inner.join_map(edges, |_k, l, d| (*d, l + 1)).concat(nodes);
-        if reference {
+        if mode == 2 {
+            reduce_int_proxy(combined, |_, s, t| t.push((*s[0].0, 1)))
+        } else if mode == 1 {
             reduce_reference(combined, |_, s, t| t.push((*s[0].0, 1)))
         } else {
             combined.reduce(|_, s, t| t.push((*s[0].0, 1)))
@@ -270,12 +308,19 @@ where
 // iterative label propagation whose `reduce` is the tactic under test. The doubly-nested product
 // time produces far more synthetic interesting times than BFS, over joins / concats / filters.
 
-#[test] fn scc_tiny_a() { scc_differential(6, 12, 4, &[1, 2, 3, 4]); }
-#[test] fn scc_tiny_b() { scc_differential(8, 16, 4, &[5, 6, 7, 8]); }
-#[test] fn scc_12_24()  { scc_differential(12, 24, 5, &[2, 4, 6, 8]); }
-#[test] fn scc_sweep()  { for s in 0u8 .. 6 { scc_differential(15, 30, 5, &[s as usize, (s as usize) + 7, 13, 29]); } }
+#[test] fn scc_tiny_a() { scc_differential(6, 12, 4, &[1, 2, 3, 4], 1); }
+#[test] fn scc_tiny_b() { scc_differential(8, 16, 4, &[5, 6, 7, 8], 1); }
+#[test] fn scc_12_24()  { scc_differential(12, 24, 5, &[2, 4, 6, 8], 1); }
+#[test] fn scc_sweep()  { for s in 0u8 .. 6 { scc_differential(15, 30, 5, &[s as usize, (s as usize) + 7, 13, 29], 1); } }
 
-fn scc_differential(nodes: usize, edges: usize, rounds: usize, seed: &[usize]) {
+// int_proxy reduce (no corgi) vs cursor: does the int_proxy TACTIC diverge on SCC depth?
+#[test] fn scc_int_proxy_tiny_a() { scc_differential(6, 12, 4, &[1, 2, 3, 4], 2); }
+#[test] fn scc_int_proxy_tiny_b() { scc_differential(8, 16, 4, &[5, 6, 7, 8], 2); }
+#[test] fn scc_int_proxy_12_24()  { scc_differential(12, 24, 5, &[2, 4, 6, 8], 2); }
+#[test] fn scc_int_proxy_sweep()  { for s in 0u8 .. 12 { scc_differential(15, 30, 5, &[s as usize, (s as usize) + 7, 13, 29], 2); } }
+#[test] fn scc_int_proxy_big()    { for s in 0u8 .. 20 { scc_differential(50, 120, 8, &[s as usize, 3, 11, 23], 2); } }
+
+fn scc_differential(nodes: usize, edges: usize, rounds: usize, seed: &[usize], mode: u8) {
     let mut rng1: StdRng = SeedableRng::from_seed(seed);
     let mut rng2: StdRng = SeedableRng::from_seed(seed);
     let mut edge_list: Vec<((usize, usize), usize, isize)> = Vec::new();
@@ -289,9 +334,9 @@ fn scc_differential(nodes: usize, edges: usize, rounds: usize, seed: &[usize]) {
         let mut edges_list = edge_list.clone();
         let mut edges = worker.dataflow::<usize, _, _>(|scope| {
             let (edge_input, edges) = scope.new_collection();
-            let via_cursor    = scc(edges.clone(), false);
-            let via_reference = scc(edges, true);
-            via_cursor.assert_eq(via_reference);
+            let via_cursor = scc(edges.clone(), 0);
+            let via_mode   = scc(edges, mode);
+            via_cursor.assert_eq(via_mode);
             edge_input
         });
         edges_list.sort_by(|x, y| y.1.cmp(&x.1));
@@ -306,7 +351,7 @@ fn scc_differential(nodes: usize, edges: usize, rounds: usize, seed: &[usize]) {
 
 // The subset of edges within a strongly connected component, mirroring
 // `algorithms::graphs::scc::strongly_connected` but with the propagation `reduce` swappable.
-fn scc<'scope, T>(graph: VecCollection<'scope, T, Edge>, reference: bool) -> VecCollection<'scope, T, Edge>
+fn scc<'scope, T>(graph: VecCollection<'scope, T, Edge>, mode: u8) -> VecCollection<'scope, T, Edge>
 where
     T: timely::progress::Timestamp + Lattice + Ord,
 {
@@ -314,19 +359,19 @@ where
     graph.iterate(move |scope, inner| {
         let edges = graph2.enter(scope);
         let trans = edges.clone().map(|(a, b)| (b, a));
-        let trimmed = trim_edges(inner, edges, reference);
-        trim_edges(trimmed, trans, reference)
+        let trimmed = trim_edges(inner, edges, mode);
+        trim_edges(trimmed, trans, mode)
     })
 }
 
 // Keep only edges whose endpoints propagate to the same label; run twice (forward then transposed)
 // this converges on the SCC edges.
-fn trim_edges<'scope, T>(cycle: VecCollection<'scope, T, Edge>, edges: VecCollection<'scope, T, Edge>, reference: bool) -> VecCollection<'scope, T, Edge>
+fn trim_edges<'scope, T>(cycle: VecCollection<'scope, T, Edge>, edges: VecCollection<'scope, T, Edge>, mode: u8) -> VecCollection<'scope, T, Edge>
 where
     T: timely::progress::Timestamp + Lattice + Ord,
 {
     let nodes = edges.clone().map(|(_a, b)| (b, b));
-    let labels = propagate(cycle, nodes, reference);
+    let labels = propagate(cycle, nodes, mode);
     edges.join_map(labels.clone(), |&src, &dst, &l1| (dst, (src, l1)))
          .join_map(labels, |&dst, &(src, l1), &l2| ((src, dst), (l1, l2)))
          .filter(|(_, (l1, l2))| l1 == l2)
@@ -335,7 +380,7 @@ where
 
 // Forward min-label propagation along `edges` from per-node seed labels; the inner `reduce` (min
 // label per node) is the tactic under test.
-fn propagate<'scope, T>(edges: VecCollection<'scope, T, Edge>, nodes: VecCollection<'scope, T, (Node, Node)>, reference: bool) -> VecCollection<'scope, T, (Node, Node)>
+fn propagate<'scope, T>(edges: VecCollection<'scope, T, Edge>, nodes: VecCollection<'scope, T, (Node, Node)>, mode: u8) -> VecCollection<'scope, T, (Node, Node)>
 where
     T: timely::progress::Timestamp + Lattice + Ord,
 {
@@ -344,7 +389,9 @@ where
         let edges = edges.enter(scope);
         let seed = seed.enter(scope);
         let combined = inner.join_map(edges, |&_n, &l, &d| (d, l)).concat(seed);
-        if reference {
+        if mode == 2 {
+            reduce_int_proxy(combined, |_, s, t| t.push((*s[0].0, 1)))
+        } else if mode == 1 {
             reduce_reference(combined, |_, s, t| t.push((*s[0].0, 1)))
         } else {
             combined.reduce(|_, s, t| t.push((*s[0].0, 1)))
