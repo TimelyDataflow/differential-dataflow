@@ -26,7 +26,8 @@ use crate::backend::Backend;
 use crate::corgi_chunk::{chunks_to_columns, CorgiChunk, CorgiChunker};
 use crate::corgi_backend::CorgiContainer;
 use crate::corgi_join::CorgiJoinTactic;
-use crate::corgi_reduce::CorgiReduceTactic;
+use crate::corgi_reduce_backend::CorgiReduceBackend;
+use differential_dataflow::operators::int_proxy::ProxyReduceTactic;
 use crate::corgi_logic::{compilable, compile_predicate, compile_projection};
 use crate::ir::{Diff, LinearOp, Time, Value as DValue};
 use crate::parse::{Projection, Reducer};
@@ -215,7 +216,7 @@ impl Backend for CorgiBackend {
     }
 
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
-        reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", CorgiReduceTactic::new(reducer.clone()))
+        reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone())))
     }
 
     fn inspect<'s>(c: Collection<'s, Time, CC>, label: String) -> Collection<'s, Time, CC> {
