@@ -651,3 +651,77 @@ semijoin) so small-delta recursion (reach) doesn't regress to O(accumulated x ro
 Next effort (well-scoped, primitives ready): rewrite `retire` in id/hash space — read changed keys'
 input as columns, `group_offsets` -> per-group `active_times` -> per (group,wave-time) hand corgi
 the include-index list -> consolidate -> delta/emit keyed by hash -> columnar output.
+
+## ★ INT-PROXY FRAMEWORK LANDED UPSTREAM; CORGI-BACKEND HAND-OFF (2026-07-03)
+
+The boundary model above is now a complete, tested framework in the DD crate — PR #781
+(`frankmcsherry/differential-dataflow@int-proxy`, ~3k lines, unmerged/settling; this branch is
+rebased onto it). It is corgi-free by construction; corgi is its first real backend. READ ORDER:
+`operators/int_proxy/mod.rs` (the boundary contract + design notes), then `reduce.rs` / `join.rs`
+(backend traits + tactics), `reference.rs` (the in-memory backend to mimic), `trace/chunk/
+int_proxy.rs` (ProxyChunk), `tests/int_proxy.rs` (the assessment harness).
+
+### What the framework is (names changed from the earlier note: ids -> int_proxy, Id* -> Proxy*)
+- `ProxyChunk<T,R>`: sorted, consolidated `((key_hash, value_id), time, diff)` columns; a #778
+  `Chunk` (not Navigable). `from_unsorted` = int sort+consolidate returning REPRESENTATIVE
+  PROVENANCE (sorted-run index -> original record) — the alignment a backend keeps.
+- `ProxyReduceBackend` (reduce.rs): `key_hashes` (delta scan), `present_input(history, novel,
+  changed-keys filter)`, `present_output(batches, filter)`, `reduce`/`reduce_many`, `materialize`.
+  The tactic makes ONE `reduce_many` crossing PER RETIRE: every `(key, interesting time)` moment is
+  a bracket (group_offsets-shaped `ends`; keys repeat, one bracket per moment; brackets non-empty).
+  Desired outputs depend only on input accumulations, so no time ordering constrains the batch —
+  the order-sensitive delta bookkeeping stays in the tactic. THIS is corgi's crossing: override
+  `reduce_many`, run the columnar consolidate blocks over all brackets at once.
+- `ProxyJoinBackend` (join.rs): `present0/present1(batches, filter)` + `cross(matched index
+  lists, times, diffs)`. The tactic presents the FRESH side first and passes its key hashes as the
+  accumulated side's filter — the join analogue of the changed-key restriction (interface-level;
+  without it any backend is forced O(trace) per fresh batch).
+- Contracts: `key_hash` = stable pure function of the key, backend-wide (pending + changed-key
+  filter + join sides rely on it). `value_id` = per-computation bijection with value equality ONLY
+  (never outlives a join unit / one retire; `materialize` resolves ids before anything escapes).
+  Hashing is one scheme, not a requirement — exact per-retire registries are collision-free and
+  valid. corgi: `corgi::hash` (#6, on master; WIDTH-BLIND unsigned — keep signed/float widths
+  consistent across join inputs and output→input) serves both, or exact ids via `group_offsets`.
+- The tactics carry the row operators' history-replay machinery in id space (`history.rs`:
+  IdHistory = ValueHistory with u64 values; reduce discovery ports `history_replay::compute`;
+  join ports `JoinThinker::think`) — the row suite's `reduce_scaling`/`join_scaling` shapes are
+  linear (tests `proxy_*_scaling` pin it). Interesting-time discovery is LAZY now (no explicit
+  `active_times` closure).
+
+### Assessment harness to reuse (tests/int_proxy.rs) — corgi should replicate the middle layer
+1. Tactic alone: identity backend + 300-case Product-grid brute-force oracle (no values, no hash).
+2. Backend contract: reference backend vs the ROW operators (join; count/distinct/min reduces;
+   scripted Product-time pending test) — the corgi backend replaces this layer 1:1.
+3. Asymptotics: counting-wrapper gates (presented records must be delta-proportional; single-key
+   rounds vs a 20k-key trace) + scaling shapes + the `--ignored` wall-clock bench (steady state:
+   reduce ~1.4x row, join ~1.0x; bulk load 2-4.5x = the per-row presentation constants corgi's
+   columnar primitives exist to beat).
+
+### The corgi backend plan (reduce first; keep CorgiJoinTactic — it already beats vec)
+- `present_input/present_output`: flatten via existing `merge_chains`/`flatten_batches` machinery
+  restricted to changed keys by `find_ranges` SEMIJOIN (never scan-and-filter: the reference
+  backend's seek-based presents are the model; a scan re-imports O(trace) per retire), then
+  `corgi::hash` the key/val columns, `ProxyChunk::from_unsorted`, keep the reps vec + gathered
+  real columns as alignment.
+- `reduce_many` override: ONE crossing — gather the brackets' value rows by rep index
+  (`gather_lanes`), run the columnar consolidate/Count/Distinct blocks across all brackets
+  (`group_offsets` shape matches `ends` by design), mint output ids by `corgi::hash` of the
+  produced column, record id→value.
+- `materialize`: build output key/val columns from id→value, order by corgi structural order
+  (`sort_perm`), emit CorgiChunk batches in TARGET-SIZED chunks (a single giant chunk makes
+  `settle`'s split path quadratic — reference.rs learned this the hard way; also consider fixing
+  `VecChunk::settle`'s split upstream).
+- Swap `CorgiReduceTactic` -> `ProxyReduceTactic<corgi backend>`; delete the row-wise retire.
+- Traps already hit once, don't repeat: capacity leaks in per-retire maps (shrink or rebuild —
+  `retain`/`clear` keep the table); presenting by scan instead of seek; giant-chunk settle.
+- Gate `cargo run --release -p interactive --example corgi_progs` after EVERY change (scc is the
+  sharp case; the empty-frontier downgrade is already in the tactic). `corgi_scorecard` for the
+  perf verdict: the target is closing reduce's 1.3x vs vec.
+
+### Suitability review (the point of the hand-off): confirm or disconfirm, from corgi's seat
+- Does `present` map cheaply onto corgi columns (hash op + find_ranges + gather + from_unsorted)?
+- Does the `reduce_many` bracket shape line up with `group_offsets`/the consolidate ML blocks?
+- Is the per-record `(rep, diff)` entry list the right currency, or does corgi want columnar
+  (vid-run) brackets? Interface pressure flows back to #781 as evidence, not as corgi types.
+- Diffs cross as DD-native `R` here (not raw u64 bits) — reconcile with the raw-bits convention
+  inside corgi's blocks at corgi's own boundary.
