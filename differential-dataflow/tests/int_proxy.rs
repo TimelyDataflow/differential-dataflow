@@ -15,6 +15,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::Capture;
 use timely::order::Product;
+use timely::PartialOrder;
 use timely::progress::Antichain;
 
 use differential_dataflow::consolidation::consolidate_updates;
@@ -437,7 +438,7 @@ fn proxy_reduce_work_is_delta_proportional() {
     let counter = Arc::clone(&presented);
 
     timely::execute_directly(move |worker| {
-        let mut probe = Handle::new();
+        let probe = Handle::new();
         let mut input = worker.dataflow::<u64, _, _>(|scope| {
             let (input, c) = scope.new_collection::<(u64, u64), isize>();
             let arranged = arrange_core::<_, _, Chunker<u64, u64>, Batcher<u64, u64>, Bldr<u64, u64>, Spine<u64, u64>>(c.inner, Pipeline, "Arrange");
@@ -496,7 +497,7 @@ fn proxy_join_work_is_delta_proportional() {
     let counter = Arc::clone(&presented);
 
     timely::execute_directly(move |worker| {
-        let mut probe = Handle::new();
+        let probe = Handle::new();
         let (mut left, mut right) = worker.dataflow::<u64, _, _>(|scope| {
             let (left, c0) = scope.new_collection::<(u64, u64), isize>();
             let (right, c1) = scope.new_collection::<(u64, u64), isize>();
@@ -545,4 +546,273 @@ fn proxy_join_work_is_delta_proportional() {
             "presented {incremental} records over {ROUNDS} single-record rounds against {N} keys: not delta-proportional"
         );
     });
+}
+
+// ---------------------------------------------------------------------------
+// The minimal self-contained assessment: the framework closed over itself.
+// ---------------------------------------------------------------------------
+//
+// The tactics are operator-side: they demand only `BatchReader` of the trace, so the
+// minimal arrangement is a batch of `ProxyChunk` itself — the proxy data IS the data.
+// The `IdentityReduce` backend makes the loop close: values are `u64`s and the id
+// function is the identity, so there is no hashing, no resolution machinery, and no
+// collision possibility. What remains under test is exactly the framework's own
+// contribution — the interesting-time logic, desired-vs-current deltas, pending, and
+// held-time routing — which a brute-force oracle checks at EVERY point of a
+// partially-ordered time grid: the accumulated output must equal the reduction of the
+// accumulated input, everywhere, under randomized inputs and randomized retire
+// boundaries (diagonal frontiers, so synthetic joins pend across retires).
+
+mod identity {
+    use std::rc::Rc;
+    use differential_dataflow::operators::int_proxy::{ProxyChunk, ProxyReduceBackend};
+    use differential_dataflow::trace::Description;
+    use differential_dataflow::trace::chunk::ChunkBatch;
+    use differential_dataflow::lattice::Lattice;
+    use timely::progress::Timestamp;
+
+    pub type Batch<T> = Rc<ChunkBatch<ProxyChunk<T, isize>>>;
+
+    /// The identity backend: batches are proxy chunks, values are the ids themselves.
+    pub struct IdentityReduce<T, L> {
+        pub logic: L,
+        /// The live input presentation, for representative-index → id resolution.
+        current: ProxyChunk<T, isize>,
+    }
+
+    impl<T: Timestamp + Lattice, L> IdentityReduce<T, L> {
+        pub fn new(logic: L) -> Self {
+            IdentityReduce { logic, current: ProxyChunk::default() }
+        }
+    }
+
+    fn records<T: Timestamp + Lattice>(batches: &[Batch<T>], keys: Option<&[u64]>) -> (Vec<u64>, Vec<u64>, Vec<T>, Vec<isize>) {
+        let (mut ks, mut vs) = (Vec::new(), Vec::new());
+        let (mut ts, mut ds) = (Vec::new(), Vec::new());
+        for batch in batches {
+            for chunk in &batch.chunks {
+                for i in 0..chunk.len() {
+                    let k = chunk.key_hashes()[i];
+                    if keys.is_none_or(|f| f.binary_search(&k).is_ok()) {
+                        ks.push(k);
+                        vs.push(chunk.value_ids()[i]);
+                        ts.push(chunk.times()[i].clone());
+                        ds.push(chunk.diffs()[i]);
+                    }
+                }
+            }
+        }
+        (ks, vs, ts, ds)
+    }
+
+    impl<T, L> ProxyReduceBackend<Batch<T>, Batch<T>> for IdentityReduce<T, L>
+    where
+        T: Timestamp + Lattice,
+        L: FnMut(&[(u64, isize)]) -> Vec<(u64, isize)>,
+    {
+        type RIn = isize;
+        type ROut = isize;
+
+        fn key_hashes(&self, batches: &[Batch<T>]) -> Vec<u64> {
+            let (mut ks, _, _, _) = records(batches, None);
+            ks.sort_unstable();
+            ks.dedup();
+            ks
+        }
+
+        fn present_input(&mut self, history: &[Batch<T>], novel: &[Batch<T>], keys: &[u64]) -> ProxyChunk<T, isize> {
+            let (mut ks, mut vs, mut ts, mut ds) = records(history, Some(keys));
+            let (k2, v2, t2, d2) = records(novel, Some(keys));
+            ks.extend(k2);
+            vs.extend(v2);
+            ts.extend(t2);
+            ds.extend(d2);
+            let (chunk, _reps) = ProxyChunk::from_unsorted(ks, vs, ts, ds);
+            self.current = chunk.clone();
+            chunk
+        }
+
+        fn present_output(&mut self, batches: &[Batch<T>], keys: &[u64]) -> ProxyChunk<T, isize> {
+            let (ks, vs, ts, ds) = records(batches, Some(keys));
+            ProxyChunk::from_unsorted(ks, vs, ts, ds).0
+        }
+
+        fn reduce(&mut self, _key_hash: u64, input: &[(usize, isize)]) -> Vec<(u64, isize)> {
+            // Resolve representative indices to ids; the ids are the values.
+            let pairs: Vec<(u64, isize)> = input.iter().map(|&(i, d)| (self.current.value_ids()[i], d)).collect();
+            (self.logic)(&pairs)
+        }
+
+        fn materialize(&mut self, chunk: ProxyChunk<T, isize>, description: Description<T>) -> Batch<T> {
+            // The proxy records ARE the output records: the output arrangement is proxy
+            // chunks (incidentally exercising `ChunkBatch<ProxyChunk>` as a real batch).
+            let chunks = if chunk.is_empty() { Vec::new() } else { vec![chunk] };
+            Rc::new(ChunkBatch::new(chunks, description))
+        }
+    }
+}
+
+/// Drive `ProxyReduceTactic` over the identity backend through a sequence of retires,
+/// emulating the driver protocol: `lower` chases `upper`, `held` is the previous
+/// returned frontier joined with the round's input times (the batch capabilities),
+/// and source/output batch lists accumulate.
+fn drive_identity_reduce<L>(
+    rounds: &[(Antichain<PT>, Vec<((u64, u64), PT, isize)>)],
+    logic: L,
+) -> Vec<((u64, u64), PT, isize)>
+where
+    L: FnMut(&[(u64, isize)]) -> Vec<(u64, isize)>,
+{
+    use differential_dataflow::operators::int_proxy::ProxyChunk;
+    use differential_dataflow::trace::chunk::ChunkBatch;
+
+    let mut tactic = ProxyReduceTactic::new(identity::IdentityReduce::new(logic));
+    let mut lower = Antichain::from_elem(pt(0, 0));
+    let mut frontier: Antichain<PT> = Antichain::new();
+    let mut source: Vec<identity::Batch<PT>> = Vec::new();
+    let mut outputs: Vec<identity::Batch<PT>> = Vec::new();
+    let mut produced_records = Vec::new();
+
+    for (upper, updates) in rounds {
+        let input: Vec<identity::Batch<PT>> = if updates.is_empty() {
+            Vec::new()
+        } else {
+            let (ks, vs): (Vec<u64>, Vec<u64>) = updates.iter().map(|((k, v), _, _)| (*k, *v)).unzip();
+            let ts: Vec<PT> = updates.iter().map(|(_, t, _)| t.clone()).collect();
+            let ds: Vec<isize> = updates.iter().map(|(_, _, d)| *d).collect();
+            let (chunk, _) = ProxyChunk::from_unsorted(ks, vs, ts, ds);
+            let desc = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(pt(0, 0)));
+            let chunks = if chunk.is_empty() { Vec::new() } else { vec![chunk] };
+            vec![std::rc::Rc::new(ChunkBatch::new(chunks, desc))]
+        };
+
+        // Held capabilities: what the driver would hold — previously returned frontier
+        // plus the capabilities that arrived with this round's batches.
+        let mut held = frontier.clone();
+        for (_, t, _) in updates {
+            held.insert(t.clone());
+        }
+
+        let (produced, new_frontier) = tactic.retire(source.clone(), outputs.clone(), input.clone(), &lower, upper, &held);
+        for (_, batch) in produced {
+            for chunk in &batch.chunks {
+                for i in 0..chunk.len() {
+                    produced_records.push((
+                        (chunk.key_hashes()[i], chunk.value_ids()[i]),
+                        chunk.times()[i].clone(),
+                        chunk.diffs()[i],
+                    ));
+                }
+            }
+            outputs.push(batch);
+        }
+        source.extend(input);
+        frontier = new_frontier;
+        lower = upper.clone();
+    }
+    assert!(frontier.is_empty(), "everything retired, but times remain pending");
+    produced_records
+}
+
+
+/// Randomized closure test of the reduce tactic alone, over partially ordered times:
+/// random updates on a `Product` grid, retired through random diagonal frontiers (so
+/// synthetic joins arise inside and across intervals and must pend), checked against a
+/// brute-force oracle at EVERY grid point — the accumulated output there must equal the
+/// reduction of the accumulated input.
+#[test]
+fn proxy_reduce_identity_fuzz_matches_grid_oracle() {
+    const T: u64 = 3; // times range over the (T+1)×(T+1) grid
+    let mut seed = 0x853C49E6748FEA9Bu64;
+
+    // Reducers over ids (values are ids; the id order is the value order here).
+    type Logic = fn(&[(u64, isize)]) -> Vec<(u64, isize)>;
+    let reducers: Vec<Logic> = vec![
+        // count: the number of present records, as a value.
+        |acc| {
+            let s: isize = acc.iter().map(|(_, d)| *d).sum();
+            if s > 0 { vec![(s as u64, 1)] } else { Vec::new() }
+        },
+        // distinct: the unit value if anything is present.
+        |acc| {
+            if acc.iter().any(|(_, d)| *d > 0) { vec![(0, 1)] } else { Vec::new() }
+        },
+        // min: the least present id.
+        |acc| {
+            acc.iter().filter(|(_, d)| *d > 0).map(|(v, _)| *v).min().map(|m| vec![(m, 1)]).unwrap_or_default()
+        },
+    ];
+
+    for iteration in 0..300 {
+        let logic = reducers[iteration % reducers.len()];
+
+        // Random updates over a small key/value space and the time grid.
+        let n = (xorshift(&mut seed) % 12) as usize + 1;
+        let updates: Vec<((u64, u64), PT, isize)> = (0..n)
+            .map(|_| {
+                let k = xorshift(&mut seed) % 2;
+                let v = xorshift(&mut seed) % 3;
+                let t = pt(xorshift(&mut seed) % (T + 1), xorshift(&mut seed) % (T + 1));
+                let d = if xorshift(&mut seed) % 3 == 0 { -1 } else { 1 };
+                ((k, v), t, d)
+            })
+            .collect();
+
+        // Random increasing diagonal frontiers: upper_r = { p : |p| = s_r } for an
+        // increasing random set of diagonals, closed by the empty frontier (retire all).
+        let mut cuts: Vec<u64> = (1..=2 * T).filter(|_| xorshift(&mut seed) % 2 == 0).collect();
+        cuts.dedup();
+        let mut rounds: Vec<(Antichain<PT>, Vec<((u64, u64), PT, isize)>)> = Vec::new();
+        let mut prev = 0u64;
+        for &s in &cuts {
+            let upper = Antichain::from_iter((0..=s).map(|x| pt(x, s - x)));
+            let batch = updates.iter().filter(|(_, t, _)| {
+                let sum = t.outer + t.inner;
+                prev <= sum && sum < s
+            }).cloned().collect();
+            rounds.push((upper, batch));
+            prev = s;
+        }
+        let tail = updates.iter().filter(|(_, t, _)| t.outer + t.inner >= prev).cloned().collect();
+        rounds.push((Antichain::new(), tail));
+
+        let produced = drive_identity_reduce(&rounds, logic);
+
+        // The oracle: at every grid point, per key, the accumulated output equals the
+        // reduction of the accumulated input.
+        for x in 0..=T {
+            for y in 0..=T {
+                let p = pt(x, y);
+                for key in 0..2u64 {
+                    let mut acc: BTreeMap<u64, isize> = BTreeMap::new();
+                    for ((k, v), t, d) in &updates {
+                        if *k == key && t.less_equal(&p) {
+                            *acc.entry(*v).or_insert(0) += d;
+                        }
+                    }
+                    acc.retain(|_, d| *d != 0);
+                    let pairs: Vec<(u64, isize)> = acc.into_iter().collect();
+                    let mut want: BTreeMap<u64, isize> = BTreeMap::new();
+                    if !pairs.is_empty() {
+                        for (v, d) in (logic)(&pairs) {
+                            *want.entry(v).or_insert(0) += d;
+                        }
+                        want.retain(|_, d| *d != 0);
+                    }
+                    let mut got: BTreeMap<u64, isize> = BTreeMap::new();
+                    for ((k, v), t, d) in &produced {
+                        if *k == key && t.less_equal(&p) {
+                            *got.entry(*v).or_insert(0) += d;
+                        }
+                    }
+                    got.retain(|_, d| *d != 0);
+                    assert_eq!(
+                        got, want,
+                        "iteration {iteration}, key {key}, point {p:?}\nupdates: {updates:?}\nrounds: {:?}\nproduced: {produced:?}",
+                        rounds.iter().map(|(u, b)| (u.elements().to_vec(), b.len())).collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+    }
 }
