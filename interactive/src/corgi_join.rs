@@ -23,10 +23,10 @@ use differential_dataflow::operators::join::{EffortBuilder, Fresh, JoinTactic};
 use corgi::arrange::{find_ranges, gather};
 use corgi::Value as CValue;
 
-use differential_dataflow::trace::chunk::ChunkBatch;
+use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use crate::corgi_backend::CorgiContainer;
-use crate::corgi_chunk::{flatten_batches, CorgiChunk};
+use crate::corgi_chunk::{flatten_batches, flatten_restricted, CorgiChunk};
 use crate::corgi_logic::compile_join_projection;
 use crate::ir::Diff;
 use crate::parse::Term;
@@ -38,6 +38,9 @@ type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 struct CorgiDeferred<T: Timestamp + Lattice> {
     left: Vec<CBatch<T>>,
     right: Vec<CBatch<T>>,
+    /// Which side carried the fresh batch; the other (accumulated) side is restricted to the fresh
+    /// side's keys rather than fully flattened.
+    fresh: Fresh,
     capability: Capability<T>,
 }
 
@@ -63,11 +66,11 @@ where
     CB: ContainerBuilder<Container = CorgiContainer<T, Diff>>,
 {
     fn defer(&mut self, input0: Vec<CBatch<T>>, input1: Vec<CBatch<T>>, fresh: Fresh, capability: Capability<T>) {
-        let unit = CorgiDeferred { left: input0, right: input1, capability };
-        match fresh {
-            Fresh::Input0 => self.todo0.push_back(unit),
-            Fresh::Input1 => self.todo1.push_back(unit),
-        }
+        let queue = match &fresh {
+            Fresh::Input0 => &mut self.todo0,
+            Fresh::Input1 => &mut self.todo1,
+        };
+        queue.push_back(CorgiDeferred { left: input0, right: input1, fresh, capability });
     }
 
     fn work(&mut self, fuel: &mut isize, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>) {
@@ -90,8 +93,31 @@ where
     T: Timestamp + Lattice,
     CB: ContainerBuilder<Container = CorgiContainer<T, Diff>>,
 {
-    let Some(left) = flatten_batches(&unit.left) else { return };
-    let Some(right) = flatten_batches(&unit.right) else { return };
+    // Materialize the FRESH (delta-sized) side whole; then present the ACCUMULATED side. When it is
+    // meaningfully larger than the fresh delta (recursive joins against a built-up trace), probe it
+    // with the fresh keys and gather only matches (delta-proportional, not O(trace)); otherwise
+    // (non-recursive / comparable sizes) a plain flatten is cheaper than the probe + reconsolidate.
+    // Roles (left/right) are preserved for the projection.
+    let accumulated = |acc: &[CBatch<T>], fresh: &crate::corgi_chunk::SortedRun<T, Diff>| {
+        let acc_len: usize = acc.iter().flat_map(|b| b.chunks.iter()).map(|c| c.len()).sum();
+        if acc_len > 2 * fresh.times.len() {
+            flatten_restricted(acc, &fresh.keys)
+        } else {
+            flatten_batches(acc)
+        }
+    };
+    let (left, right) = match unit.fresh {
+        Fresh::Input0 => {
+            let Some(left) = flatten_batches(&unit.left) else { return };
+            let Some(right) = accumulated(&unit.right, &left) else { return };
+            (left, right)
+        }
+        Fresh::Input1 => {
+            let Some(right) = flatten_batches(&unit.right) else { return };
+            let Some(left) = accumulated(&unit.left, &right) else { return };
+            (left, right)
+        }
+    };
     let nl = left.times.len();
 
     // Multi-record merge-join: one batched `find` gives, per left row, the equal-range of its key in

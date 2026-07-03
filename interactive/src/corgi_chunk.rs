@@ -650,6 +650,44 @@ where
     Some(SortedRun { keys, vals, times, diffs })
 }
 
+/// A DELTA-PROPORTIONAL flatten of the accumulated side of a bilinear join: instead of merging the
+/// whole trace, probe each accumulated chunk with the fresh side's `needle` keys (`find_ranges`, a
+/// batched equal-range seek — each chunk is structurally sorted by key) and gather ONLY the matched
+/// records, then sort+consolidate the (small) matched set into one run. Keys absent from `needles`
+/// can never join, so dropping them is exact. Cost tracks the fresh key set + matches, never the
+/// trace — replacing the O(trace)-per-work-unit `flatten_batches` that dominated recursive joins.
+pub fn flatten_restricted<T, R>(acc: &[Rc<ChunkBatch<CorgiChunk<T, R>>>], needles: &CValue) -> Option<SortedRun<T, R>>
+where
+    T: Timestamp + Lattice,
+    R: Semigroup + Clone + 'static,
+{
+    let (mut kblocks, mut vblocks): (Vec<CValue>, Vec<CValue>) = (Vec::new(), Vec::new());
+    let (mut times, mut diffs): (Vec<T>, Vec<R>) = (Vec::new(), Vec::new());
+    for b in acc {
+        for ch in &b.chunks {
+            if ch.len_() == 0 { continue; }
+            // Per needle key, its equal-range in this chunk's (key-sorted) key column.
+            let (lo, hi) = find_ranges(needles, ch.keys());
+            let mut idx: Vec<usize> = Vec::new();
+            for i in 0..lo.len() { idx.extend(lo[i]..hi[i]); }
+            idx.sort_unstable();
+            idx.dedup();
+            if idx.is_empty() { continue; }
+            kblocks.push(gather(ch.keys(), &idx));
+            vblocks.push(gather(ch.vals(), &idx));
+            for &j in &idx {
+                times.push(ch.times()[j].clone());
+                diffs.push(ch.diffs()[j].clone());
+            }
+        }
+    }
+    if times.is_empty() { return None; }
+    let keys = concat_blocks(&kblocks);
+    let vals = concat_blocks(&vblocks);
+    let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
+    Some(SortedRun { keys, vals, times, diffs })
+}
+
 /// Group a key column by identity, returning integers only — the Rust↔corgi boundary primitive.
 /// `perm` lists row indices in group order; `ends[g]` is the exclusive end of group `g` within `perm`
 /// (so group `g`'s member rows are `perm[ends[g-1]..ends[g]]`, with `ends[-1] = 0`). DD orchestrates
