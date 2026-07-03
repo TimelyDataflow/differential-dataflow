@@ -402,6 +402,13 @@ where
         Self::from_parts(keys, vals, times, diffs)
     }
 
+    /// One sorted+consolidated chunk from columns already in corgi form (the column-native arrange
+    /// ingest — no transcode, unlike `from_rows`).
+    pub fn from_columns(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> Self {
+        let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
+        Self::from_parts(keys, vals, times, diffs)
+    }
+
     /// Untranscode this chunk back to DDIR rows (egress / history read).
     pub fn to_rows(&self) -> Vec<Upd<T, R>> {
         if self.len_() == 0 { return Vec::new(); }
@@ -426,6 +433,22 @@ where
     let mut out = Vec::new();
     for ch in &b.chunks { out.extend(ch.to_rows()); }
     out
+}
+
+/// Concatenate chunks' columns into flat `(keys, vals, times, diffs)` with **no transcode** — for
+/// reading an arrangement back column-natively (e.g. `Backend::as_collection` straight into a
+/// `CorgiContainer`), instead of untranscoding to rows and re-transcoding.
+pub fn chunks_to_columns<T, R>(chunks: &[CorgiChunk<T, R>]) -> (CValue, CValue, Vec<T>, Vec<R>)
+where
+    T: Timestamp + Lattice,
+    R: Semigroup + Clone + 'static,
+{
+    if chunks.iter().all(|c| c.len_() == 0) {
+        return (CValue::Unit(0), CValue::Unit(0), Vec::new(), Vec::new());
+    }
+    let (kv, times, diffs) = CorgiChunk::concat(chunks);
+    let (keys, vals) = split_kv(kv);
+    (keys, vals, times, diffs)
 }
 
 /// Build a `ChunkBatch<CorgiChunk>` from DDIR rows: transcode+sort+consolidate into one chunk, then
@@ -469,6 +492,103 @@ where
         let mut all = Vec::new();
         for c in chain.iter_mut() { all.append(c); }
         rows_to_batch(all, description)
+    }
+}
+
+/// A column-native arrange **chunker**: turns input `CorgiContainer`s into sorted+consolidated
+/// `CorgiChunk`s WITHOUT `ContainerChunker`'s drain-to-rows (which untranscodes). Paired with the
+/// standard `ChunkBatcher`/`ChunkBuilder`, the arrange ingest stays column-native — no
+/// columns→rows→columns round-trip at the arrangement boundary.
+///
+/// Crucially it **accumulates to `TARGET`** before consolidating (like `ContainerChunker`), so it
+/// emits few large chunks rather than one tiny chunk per input container — otherwise the columnar
+/// per-chunk set-up (`gather`/`sort_perm`) dominates when input arrives as many small batches.
+pub struct CorgiChunker<T, R> {
+    /// Un-consolidated key/val column blocks (one per absorbed container), flat time/diff.
+    k_blocks: Vec<CValue>,
+    v_blocks: Vec<CValue>,
+    times: Vec<T>,
+    diffs: Vec<R>,
+    ready: VecDeque<CorgiChunk<T, R>>,
+    current: Option<CorgiChunk<T, R>>,
+}
+
+impl<T, R> Default for CorgiChunker<T, R> {
+    fn default() -> Self {
+        CorgiChunker { k_blocks: Vec::new(), v_blocks: Vec::new(), times: Vec::new(), diffs: Vec::new(), ready: VecDeque::new(), current: None }
+    }
+}
+
+/// Concatenate column blocks into one column (multi-source `gather_lanes`, no sort).
+fn concat_blocks(blocks: &[CValue]) -> CValue {
+    if blocks.len() == 1 {
+        return blocks[0].clone();
+    }
+    let srcs: Vec<Option<&CValue>> = blocks.iter().map(Some).collect();
+    let (mut tags, mut offs) = (Vec::new(), Vec::new());
+    for (ti, b) in blocks.iter().enumerate() {
+        for o in 0..b.len() { tags.push(ti); offs.push(o); }
+    }
+    gather_lanes(&srcs, &tags, &offs)
+}
+
+impl<T, R> CorgiChunker<T, R>
+where
+    T: Timestamp + Lattice,
+    R: Semigroup + Clone + 'static,
+{
+    /// Consolidate the accumulated blocks into one graded chunk (concat columns, then sort+consolidate).
+    fn flush(&mut self) {
+        if self.times.is_empty() {
+            return;
+        }
+        let keys = concat_blocks(&self.k_blocks);
+        let vals = concat_blocks(&self.v_blocks);
+        self.k_blocks.clear();
+        self.v_blocks.clear();
+        let times = std::mem::take(&mut self.times);
+        let diffs = std::mem::take(&mut self.diffs);
+        let chunk = CorgiChunk::from_columns(keys, vals, times, diffs);
+        if chunk.len_() > 0 {
+            self.ready.push_back(chunk);
+        }
+    }
+}
+
+impl<T, R> timely::container::PushInto<&mut crate::corgi_backend::CorgiContainer<T, R>> for CorgiChunker<T, R>
+where
+    T: Timestamp + Lattice,
+    R: Semigroup + Clone + 'static,
+{
+    fn push_into(&mut self, c: &mut crate::corgi_backend::CorgiContainer<T, R>) {
+        if c.times.is_empty() {
+            return;
+        }
+        self.k_blocks.push(std::mem::replace(&mut c.keys, CValue::Unit(0)));
+        self.v_blocks.push(std::mem::replace(&mut c.vals, CValue::Unit(0)));
+        self.times.append(&mut c.times);
+        self.diffs.append(&mut c.diffs);
+        if self.times.len() >= TARGET {
+            self.flush();
+        }
+    }
+}
+
+impl<T, R> timely::container::ContainerBuilder for CorgiChunker<T, R>
+where
+    T: Timestamp + Lattice,
+    R: Semigroup + Clone + 'static,
+{
+    type Container = CorgiChunk<T, R>;
+    // `extract` ships ready chunks, leaving the sub-TARGET remainder to accumulate further.
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        self.current = self.ready.pop_front();
+        self.current.as_mut()
+    }
+    // `finish` also flushes the remainder (called until it returns None).
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        self.flush();
+        self.extract()
     }
 }
 

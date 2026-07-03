@@ -12,7 +12,6 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use timely::container::PushInto;
 use timely::ContainerBuilder;
 use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::dataflow::operators::Capability;
@@ -26,12 +25,11 @@ use corgi::Value as CValue;
 
 use differential_dataflow::trace::chunk::ChunkBatch;
 
+use crate::corgi_backend::CorgiContainer;
 use crate::corgi_chunk::{flatten_batches, CorgiChunk};
-use crate::corgi_logic::{compile_join_projection, untranscode};
-use crate::ir::{Diff, Value as DValue};
+use crate::corgi_logic::compile_join_projection;
+use crate::ir::Diff;
 use crate::parse::Term;
-
-type Row = DValue;
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 
 /// A deferred bilinear join unit: a fresh batch list joined against the accumulated other side.
@@ -62,7 +60,7 @@ impl<T: Timestamp + Lattice> CorgiJoinTactic<T> {
 impl<T, CB> JoinTactic<CBatch<T>, CBatch<T>, CB> for CorgiJoinTactic<T>
 where
     T: Timestamp + Lattice,
-    CB: ContainerBuilder + PushInto<((Row, Row), T, Diff)>,
+    CB: ContainerBuilder<Container = CorgiContainer<T, Diff>>,
 {
     fn defer(&mut self, input0: Vec<CBatch<T>>, input1: Vec<CBatch<T>>, fresh: Fresh, capability: Capability<T>) {
         let unit = CorgiDeferred { left: input0, right: input1, capability };
@@ -90,7 +88,7 @@ where
 fn run_unit<T, CB>(unit: CorgiDeferred<T>, key: &Term, val: &Term, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>)
 where
     T: Timestamp + Lattice,
-    CB: ContainerBuilder + PushInto<((Row, Row), T, Diff)>,
+    CB: ContainerBuilder<Container = CorgiContainer<T, Diff>>,
 {
     let Some(left) = flatten_batches(&unit.left) else { return };
     let Some(right) = flatten_batches(&unit.right) else { return };
@@ -124,11 +122,8 @@ where
     let mut cols = projected.into_prod("corgi join projection");
     let nv = cols.pop().unwrap();
     let nk = cols.pop().unwrap();
-    let newkeys = untranscode(nk.clone(), &corgi::shape_of_value(&nk));
-    let newvals = untranscode(nv.clone(), &corgi::shape_of_value(&nv));
-
-    let mut session = output.session_with_builder(&unit.capability);
-    for x in 0..li.len() {
-        session.give(((newkeys[x].clone(), newvals[x].clone()), ot[x].clone(), od[x]));
-    }
+    // Emit the projection's corgi columns directly as a CorgiContainer via `give_container` — no
+    // untranscode-to-rows + re-transcode. The output stream is column-native.
+    let mut container = CorgiContainer { keys: nk, vals: nv, times: ot, diffs: od };
+    output.session_with_builder(&unit.capability).give_container(&mut container);
 }

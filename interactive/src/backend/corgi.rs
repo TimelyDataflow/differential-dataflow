@@ -17,16 +17,13 @@ use differential_dataflow::operators::join::join_with_tactic;
 use differential_dataflow::operators::reduce::reduce_with_tactic;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::implementations::chunker::ContainerChunker;
-use differential_dataflow::trace::implementations::merge_batcher::vec::VecMerger;
-use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkBuilder};
 
 use corgi::arrange::gather;
 use corgi::Value as CValue;
 
 use crate::backend::Backend;
-use crate::corgi_chunk::{batch_to_rows, CorgiChunk, CorgiChunkBuilder};
+use crate::corgi_chunk::{chunks_to_columns, CorgiChunk, CorgiChunker};
 use crate::corgi_backend::CorgiContainer;
 use crate::corgi_join::CorgiJoinTactic;
 use crate::corgi_reduce::CorgiReduceTactic;
@@ -178,7 +175,10 @@ impl Backend for CorgiBackend {
     }
 
     fn arrange<'s>(c: Collection<'s, Time, CC>) -> Self::Arr<'s> {
-        arrange_core::<_, CC, ContainerChunker<Vec<Upd>>, MergeBatcher<VecMerger<(Row, Row), Time, Diff>>, RcBuilder<CorgiChunkBuilder<Time, Diff>>, CTrace>(
+        // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
+        // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
+        // builder. No columns→rows→columns round-trip at the arrangement boundary.
+        arrange_core::<_, CC, CorgiChunker<Time, Diff>, ChunkBatcher<CorgiChunk<Time, Diff>>, ChunkBuilder<CorgiChunk<Time, Diff>>, CTrace>(
             c.inner,
             Pipeline,
             "CorgiArrange",
@@ -186,17 +186,19 @@ impl Backend for CorgiBackend {
     }
 
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, CC> {
-        // Cursor-free: the arrangement's stream carries `Vec<Rc<CorgiBatch>>`; read each batch's
-        // updates (corgi columns → rows) and reassemble a corgi container of those updates.
+        // Cursor-free AND transcode-free: the arrangement's batches already hold corgi columns, so
+        // concatenate each batch's chunk columns straight into a `CorgiContainer` — no columns→rows→
+        // columns round-trip (the old `batch_to_rows` + `from_updates` path).
         a.stream
             .unary(Pipeline, "CorgiAsCollection", |_, _| {
                 |input, output| {
                     input.for_each(|cap, data| {
-                        let mut rows = Vec::new();
+                        let mut chunks: Vec<CorgiChunk<Time, Diff>> = Vec::new();
                         for batch in data.iter() {
-                            rows.extend(batch_to_rows(batch));
+                            chunks.extend(batch.chunks.iter().cloned());
                         }
-                        let mut c = CorgiContainer::from_updates(rows);
+                        let (keys, vals, times, diffs) = chunks_to_columns(&chunks);
+                        let mut c = CorgiContainer { keys, vals, times, diffs };
                         output.session(&cap).give_container(&mut c);
                     });
                 }
@@ -205,20 +207,11 @@ impl Backend for CorgiBackend {
     }
 
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, CC> {
-        // The tactic compiles the projection per work-unit (shape-directed, for `Spread`).
+        // The tactic compiles the projection per work-unit (shape-directed, for `Spread`) and emits
+        // corgi columns directly into a `CorgiContainer` (via `give_container`) — the output stream is
+        // column-native, so there is no row round-trip / no `JoinToCorgi` unary.
         let tactic = CorgiJoinTactic::new(projection.key.clone(), projection.val.clone());
-        // join_with_tactic emits Vec-rows (via the output session); a ToCorgi unary rebuilds the
-        // corgi container at the operator output boundary.
-        let rows = join_with_tactic::<_, _, _, CapacityContainerBuilder<Vec<Upd>>>(l, r, tactic);
-        rows.unary(Pipeline, "JoinToCorgi", |_, _| {
-            |input, output| {
-                input.for_each(|cap, data| {
-                    let mut c = CorgiContainer::from_updates(std::mem::take(data));
-                    output.session(&cap).give_container(&mut c);
-                });
-            }
-        })
-        .as_collection()
+        join_with_tactic::<_, _, _, CapacityContainerBuilder<CC>>(l, r, tactic).as_collection()
     }
 
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
