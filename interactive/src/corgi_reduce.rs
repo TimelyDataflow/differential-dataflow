@@ -61,9 +61,44 @@ fn columnar_sum_by_key(keys: CValue, diffs_raw: CValue) -> (CValue, Vec<u64>) {
     (keys_out, sums.into_u64("consolidate sums"))
 }
 
+/// Columnar `Distinct`: the keys with at least one **present** value, where "present" = net diff ≠ 0
+/// (the nonzero simplification — ignores the signed sign of the accumulation for now). Two-level
+/// consolidate over `(key, val)`: group by the `(key,val)` composite, `fold_add` the raw diffs, keep
+/// the nonzero, then take the distinct keys of the survivors. Returns the surviving key column.
+#[allow(dead_code)]
+fn columnar_distinct_keys(keys: CValue, vals: CValue, diffs_raw: CValue) -> CValue {
+    // input : List<((key,val), diff)> — group by the (key,val) composite, sum diffs, drop net-zero,
+    // re-key to (key, _), group by key → distinct present keys.
+    const ML: &str = "let net = input group map ((kv, ds) -> (kv, ds fold_add)) in \
+                      let keep = net map ((kv, s) -> s ne 0) in \
+                      let present = (net, keep) filter in \
+                      let rekey = present map ((kv, s) -> (kv.0, s)) in \
+                      rekey group map ((k, ss) -> k)";
+    let n = keys.len();
+    if n == 0 {
+        return CValue::Unit(0);
+    }
+    let composite = CValue::Prod(vec![keys, vals]);
+    let input = CValue::List(Bounds::Offsets(vec![n]), Box::new(CValue::Prod(vec![composite, diffs_raw])));
+    let out = eval_graph(&parse_ml(ML).expect("parse distinct ML"), input);
+    // out : List<key> — one row of the surviving keys.
+    let (_bounds, keys_out) = out.into_list("distinct output");
+    keys_out
+}
+
 #[cfg(test)]
 mod consolidate_test {
     use super::*;
+
+    #[test]
+    fn columnar_distinct_keeps_present_keys() {
+        // (1,10):+1,-1 → net 0 (absent); (2,20):+1, (2,21):+1 (present); (3,30):+1 (present).
+        let keys = CValue::u64(vec![1, 1, 2, 2, 3]);
+        let vals = CValue::u64(vec![10, 10, 20, 21, 30]);
+        let diffs = CValue::u64(vec![1u64, (-1i64) as u64, 1, 1, 1]);
+        let present = columnar_distinct_keys(keys, vals, diffs);
+        assert_eq!(present.into_u64("present"), vec![2, 3]);
+    }
 
     #[test]
     fn columnar_consolidate_sums_and_drops_zeros() {
