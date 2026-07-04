@@ -201,23 +201,26 @@ machinery of `Coverage.lean` is reused. -/
     yields a `Finsupp` whose `acc` is `g`.  Clamp `d` to `S` and check the accumulation against the
     `Represents` sum. -/
 theorem represents_acc {S : Finset T} {d : T → A} {g : T → A} (hrep : Coverage.Represents S d g) :
-    ∃ e : T →₀ A, acc e = g := by
+    ∃ e : T →₀ A, acc e = g ∧ (↑e.support : Set T) ⊆ (↑S : Set T) := by
   refine ⟨Finsupp.onFinset S (fun x => if x ∈ S then d x else 0)
-      (fun a ha => by by_contra hns; apply ha; simp only [if_neg hns]), ?_⟩
-  funext t
-  rw [Trace.acc_eq_sum_superset _ Finsupp.support_onFinset_subset t,
-      show g t = ∑ s ∈ Coverage.Cut S t, d s from hrep t]
-  refine Finset.sum_congr rfl fun x hx => ?_
-  show (if x ∈ S then d x else 0) = d x
-  rw [if_pos (Finset.mem_filter.mp hx).1]
+      (fun a ha => by by_contra hns; apply ha; simp only [if_neg hns]), ?_, ?_⟩
+  · funext t
+    rw [Trace.acc_eq_sum_superset _ Finsupp.support_onFinset_subset t,
+        show g t = ∑ s ∈ Coverage.Cut S t, d s from hrep t]
+    refine Finset.sum_congr rfl fun x hx => ?_
+    show (if x ∈ S then d x else 0) = d x
+    rw [if_pos (Finset.mem_filter.mp hx).1]
+  · exact Finset.coe_subset.mpr Finsupp.support_onFinset_subset
 
 /-- For `φ 0 = 0`, `φ ∘ acc δ` is realized by SOME finitely-supported trace — via
     `Coverage.exists_diff_trace_comp` (support in the join-closure of `δ`'s edits) and `represents_acc`.
     (Endomaps `A → A`, matching `exists_diff_trace_comp`; the `A → B` case is the same over `B`.) -/
 theorem exists_acc_eq_comp (φ : A → A) (hφ : φ 0 = 0) (δ : T →₀ A) :
-    ∃ e : T →₀ A, acc e = fun t => φ (acc δ t) := by
-  obtain ⟨S, d, _, hrep⟩ := Coverage.exists_diff_trace_comp (Model.acc_represents δ) φ hφ
-  exact represents_acc hrep
+    ∃ e : T →₀ A, acc e = (fun t => φ (acc δ t))
+      ∧ (↑e.support : Set T) ⊆ Coverage.cl δ.support := by
+  obtain ⟨S, d, hScl, hrep⟩ := Coverage.exists_diff_trace_comp (Model.acc_represents δ) φ hφ
+  obtain ⟨e, he, hes⟩ := represents_acc hrep
+  exact ⟨e, he, hes.trans hScl⟩
 
 /-- Implementation of `REDUCE φ`: the (unique, by `acc_injective`) trace accumulating to `φ ∘ acc δ`. -/
 noncomputable def reduceImpl (φ : A → A) (hφ : φ 0 = 0) (δ : T →₀ A) : T →₀ A :=
@@ -225,7 +228,61 @@ noncomputable def reduceImpl (φ : A → A) (hφ : φ 0 = 0) (δ : T →₀ A) :
 
 theorem reduce_adequate (φ : A → A) (hφ : φ 0 = 0) :
     Adequate (fun (g : T → A) (t : T) => φ (g t)) (reduceImpl φ hφ) :=
-  fun δ => (exists_acc_eq_comp φ hφ δ).choose_spec
+  fun δ => (exists_acc_eq_comp φ hφ δ).choose_spec.1
+
+/-! ## #1/#2: spatial coverage carried through the square, and its composition (work axis)
+
+`Adequate` says the square commutes; it says nothing about WHERE the output edits land.
+`Coverage.exists_diff_trace_comp` proves they lie in the join-closure of the input's edits, and
+`exists_acc_eq_comp` now *carries* that clause rather than discarding it.  `AdequateCov` bundles the
+bound onto the square, and `AdequateCov.comp` shows it composes — closure idempotence (neighbourhoods
+do not inflate under nesting, `supClosure_min`) plus `.trans`.  This is the statement that *bounded
+work is compositional*.  Mono-typed in time (same `T` in and out): the regime where coverage applies;
+the time-relocation operators (`timeImpl`) live on a different bound. -/
+
+/-- Adequacy WITH the spatial-coverage bound: the square commutes AND the output edits lie in the
+    join-closure of the input's edit set. -/
+def AdequateCov (D : (T → A) → (T → A)) (impl : (T →₀ A) → (T →₀ A)) : Prop :=
+  ∀ δ, acc (impl δ) = D (acc δ) ∧ (↑(impl δ).support : Set T) ⊆ Coverage.cl δ.support
+
+/-- The commuting-square half of `AdequateCov` is exactly `Adequate`. -/
+theorem AdequateCov.toAdequate {D : (T → A) → (T → A)} {impl : (T →₀ A) → (T →₀ A)}
+    (h : AdequateCov D impl) : Adequate D impl := fun δ => (h δ).1
+
+/-- **#2 — the spatial bound composes.**  `i₁`'s edits lie in `cl δ.support`; `i₂`'s in the closure
+    of `i₁`'s edits; closure-of-closure is closure, so the composite's edits stay in `cl δ.support`. -/
+theorem AdequateCov.comp {D₁ D₂ : (T → A) → (T → A)} {i₁ i₂ : (T →₀ A) → (T →₀ A)}
+    (h₁ : AdequateCov D₁ i₁) (h₂ : AdequateCov D₂ i₂) :
+    AdequateCov (D₂ ∘ D₁) (i₂ ∘ i₁) := by
+  intro δ
+  refine ⟨?_, ?_⟩
+  · show acc (i₂ (i₁ δ)) = D₂ (D₁ (acc δ))
+    rw [(h₂ (i₁ δ)).1, (h₁ δ).1]
+  · refine (h₂ (i₁ δ)).2.trans ?_
+    exact supClosure_min (h₁ δ).2 supClosed_supClosure
+
+/-- Identity is `AdequateCov` (edits unchanged, trivially in the closure). -/
+theorem AdequateCov.id : AdequateCov (T := T) (A := A) id id :=
+  fun δ => ⟨rfl, Coverage.subset_cl δ.support⟩
+
+/-- LINEAR tightens the bound: an additive map manufactures no new times, so the output edits sit in
+    the INPUT edits, a fortiori in their closure. -/
+theorem linImpl_adequateCov (φ : A →+ A) :
+    AdequateCov (fun (g : T → A) (t : T) => φ (g t)) (linImpl φ) := by
+  intro δ
+  refine ⟨linImpl_adequate φ δ, ?_⟩
+  have hsub : (linImpl φ δ).support ⊆ δ.support := Finsupp.support_mapRange
+  exact (Finset.coe_subset.mpr hsub).trans (Coverage.subset_cl δ.support)
+
+/-- REDUCE at full strength: the output edits lie in the join-closure of the input edits — the clause
+    `exists_acc_eq_comp` now carries. -/
+theorem reduce_support (φ : A → A) (hφ : φ 0 = 0) (δ : T →₀ A) :
+    (↑(reduceImpl φ hφ δ).support : Set T) ⊆ Coverage.cl δ.support :=
+  (exists_acc_eq_comp φ hφ δ).choose_spec.2
+
+theorem reduce_adequateCov (φ : A → A) (hφ : φ 0 = 0) :
+    AdequateCov (fun (g : T → A) (t : T) => φ (g t)) (reduceImpl φ hφ) :=
+  fun δ => ⟨reduce_adequate φ hφ δ, reduce_support φ hφ δ⟩
 
 /-! ## Shape 3: bilinear (`JOIN`)
 
