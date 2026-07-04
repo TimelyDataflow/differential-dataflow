@@ -1,3 +1,4 @@
+import Differential.Basic
 import Differential.Coverage
 import Differential.Compaction
 
@@ -47,6 +48,7 @@ open scoped Classical
 namespace Model
 
 open Coverage
+open Trace
 
 variable {T : Type*} [SemilatticeSup T]
 variable {A : Type*} [AddCommGroup A]
@@ -59,55 +61,15 @@ theorem beyond_isUpperSet (u : Finset T) : IsUpperSet (Beyond u) := by
   rintro a b hab ⟨x, hx, hxa⟩
   exact ⟨x, hx, hxa.trans hab⟩
 
-/-! ## Update sets and accumulation -/
+/-! ## Update sets and accumulation
 
-/-- The accumulation of an update set at `t`: the sum of updates at times `≤ t`. -/
-noncomputable def acc (d : T →₀ A) (t : T) : A := ∑ x ∈ d.support.filter (· ≤ t), d x
-
-theorem acc_eq_sum_superset (d : T →₀ A) {E : Finset T} (h : d.support ⊆ E) (t : T) :
-    acc d t = ∑ x ∈ E.filter (· ≤ t), d x := by
-  refine Finset.sum_subset (Finset.filter_subset_filter _ h) ?_
-  intro x hxE hxd
-  simp only [Finset.mem_filter] at hxE hxd
-  exact Finsupp.notMem_support_iff.mp (fun hc => hxd ⟨hc, hxE.2⟩)
-
-@[simp] theorem acc_zero (t : T) : acc (0 : T →₀ A) t = 0 := by
-  simp [acc]
-
-theorem acc_add (d1 d2 : T →₀ A) (t : T) : acc (d1 + d2) t = acc d1 t + acc d2 t := by
-  rw [acc_eq_sum_superset (d1 + d2) Finsupp.support_add t,
-      acc_eq_sum_superset d1 Finset.subset_union_left t,
-      acc_eq_sum_superset d2 Finset.subset_union_right t,
-      ← Finset.sum_add_distrib]
-  exact Finset.sum_congr rfl fun x _ => Finsupp.add_apply d1 d2 x
-
-theorem acc_single (x : T) (a : A) (t : T) :
-    acc (Finsupp.single x a) t = if x ≤ t then a else 0 := by
-  rw [acc_eq_sum_superset _ Finsupp.support_single_subset t, Finset.filter_singleton]
-  by_cases h : x ≤ t <;> simp [h]
+`acc` and its group-hom API live in `Differential.Basic` (`namespace Trace`), reached here via
+`open Trace`.  Only the bridge to `Coverage.Represents` — which needs both in scope — stays here. -/
 
 /-- The bridge to `Coverage.lean`: an update set is a difference trace of its own
     accumulation, supported on its support. -/
 theorem acc_represents (d : T →₀ A) : Represents d.support ⇑d (acc d) := by
   intro t; rfl
-
-/-- `acc` as a `Finsupp.sum`, for transport along support relocations. -/
-theorem acc_eq_finsupp_sum (d : T →₀ A) (t : T) :
-    acc d t = d.sum fun x a => if x ≤ t then a else 0 := by
-  unfold acc Finsupp.sum
-  rw [Finset.sum_filter]
-
-/-- Any support relocation `g` that preserves comparison to `t` on the support preserves
-    the accumulation at `t`.  `Finsupp.mapDomain g` is relocation *with consolidation*
-    (colliding times merge, cancelled updates vanish), so with `g = Compaction.advance · F hF` and
-    `t ∈ Beyond F` (see `Compaction.advance_le_iff`) this shows advance-and-consolidate is one
-    instance of TARGETS2's adversary. -/
-theorem acc_mapDomain (g : T → T) (d : T →₀ A) (t : T)
-    (hg : ∀ x ∈ d.support, (g x ≤ t ↔ x ≤ t)) :
-    acc (Finsupp.mapDomain g d) t = acc d t := by
-  rw [acc_eq_finsupp_sum, acc_eq_finsupp_sum,
-      Finsupp.sum_mapDomain_index (by simp) (fun b m₁ m₂ => by split <;> simp)]
-  exact Finsupp.sum_congr fun x hx => by simp only [hg x hx]
 
 /-! ### Intra-round compaction is invisible
 
@@ -972,14 +934,6 @@ theorem Run.stream_correct_of_transfer {f : A → A} {n : ℕ} (R : Run T A f n)
   exact fun t ht => (hinv n le_rfl).1 t ht
 
 /-! ## Uniqueness: the emitted stream is THE difference trace (`TARGETS2.md` corollary) -/
-
-theorem acc_neg (d : T →₀ A) (t : T) : acc (-d) t = -acc d t := by
-  unfold acc
-  rw [Finsupp.support_neg, ← Finset.sum_neg_distrib]
-  exact Finset.sum_congr rfl (fun x _ => Finsupp.neg_apply d x)
-
-theorem acc_sub (d1 d2 : T →₀ A) (t : T) : acc (d1 - d2) t = acc d1 t - acc d2 t := by
-  rw [sub_eq_add_neg, acc_add, acc_neg, sub_eq_add_neg]
 
 /-- Update sets with equal accumulations everywhere are equal: a nonzero difference has a
     minimal support point, where its accumulation is its (nonzero) value. -/

@@ -2,7 +2,19 @@
 
 Machine-checked arguments about differential dataflow, in Lean 4 with Mathlib.
 
+These files split along one line.
+`Differential/Compositional.lean` argues that differential computation *abstractly* produces the right thing: each operator, as a transformation of difference traces, computes what re-evaluating its mathematics moment by moment would, and this composes to whole programs.
+The other three — `Coverage.lean`, `Compaction.lean`, `Model.lean` — argue that a *specific, efficient implementation* of that computation, the incremental `reduce` operator (interesting-time enumeration, pending obligations, logical compaction), adheres to that intent.
+
 ## Contents
+
+`Differential/Compositional.lean` concerns compositional adequacy: that each operator's difference-trace implementation computes its mathematics applied pointwise to the accumulated data, and that operators compose.
+A collection is a difference trace; `Model.acc` accumulates it, and `acc_injective` shows a trace is determined by its accumulation.
+An operator is then a commuting square `Adequate D impl := acc ∘ impl = D ∘ acc`, and these squares compose (`Adequate.comp`): correctness of a whole program reduces to correctness of its pieces.
+Each generator is a square — LINEAR/SUM (`linImpl_adequate`), `enter` and temporal time-actions (`timeImpl_adequate`), REDUCE (`reduce_adequate`, whose existence half is exactly `Coverage.exists_diff_trace_comp`), and JOIN as a bilinear convolution over the lattice (`join_adequate`, which is bilinearity plus `sup_le_iff`) — and a deep-embedded `Program` (`id`/`linear`/`reduce`/`par`/`join`/`seq`) is adequate by induction (`Program.adequate`).
+The batch square is only a specification; the content of differential dataflow is that `impl` runs *incrementally*, as a per-batch increment (`Refines`) that composes by a discrete chain rule (`Refines.comp`) — this is why difference traces are the composable interface between operators, and the locality that makes the increment cheap for the nonlinear REDUCE is precisely the interesting-times argument of `Coverage.lean` and `Model.lean`.
+ITERATE adds an iteration coordinate `T × ℕ`: the loop's accumulated output is the from-scratch iteration of the body's denotation (`round_matches`, `iterate_program`), stabilization is free from finite support (`leave_stabilizes`, no termination hypothesis needed), and a DELAY-ing (`Causal`) body still has a unique accumulated fixpoint (`acc_unique`) — evaluation-order independence *is* the adequacy statement.
+Everything is axiom-clean and monomorphic in the group (one type `A` per program); the deferred extensions are heterogeneous typing (typed `Program X Y`, the foundation for *verified program transformations* — e.g. moving computation in and out of loops — and for key/value-changing joins) and the confluence question of when two different arrival schedules compute the same value (distinct from the adequacy proved here).
 
 `Differential/Coverage.lean` concerns which times an incremental computation must revisit.
 A collection is a difference trace: updates at lattice-valued times, accumulated over all times less or equal to a query time.
@@ -62,6 +74,6 @@ lake build
 
 A fresh checkout fetches Mathlib; `lake exe cache get` downloads prebuilt artifacts, which is much faster than compiling it.
 
-To confirm a theorem is fully proved, check its axioms: in a scratch file importing `Differential.Coverage`, `#print axioms Coverage.round_coverage` (or `Model.streamCorrectness_holds`, importing `Differential.Model`) should report only `propext`, `Classical.choice`, and `Quot.sound` — in particular no `sorryAx`.
+To confirm a theorem is fully proved, check its axioms: in a scratch file importing `Differential.Coverage`, `#print axioms Coverage.round_coverage` (or `Model.streamCorrectness_holds`, importing `Differential.Model`; or `Compositional.Program.adequate`, importing `Differential.Compositional`) should report only `propext`, `Classical.choice`, and `Quot.sound` — in particular no `sorryAx`.
 
 Nothing in the Rust workspace depends on this directory, and no CI gates on it.
