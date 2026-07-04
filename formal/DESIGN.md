@@ -205,8 +205,16 @@ lives (6); and the concrete reduce schedule as the bottom realization (7).
   `lake build` and axiom-clean capstones (`exists_diff_trace_comp`, `round_coverage`,
   `Model.streamCorrectness_holds`, `Compositional.Program.adequate`). Graduated into
   `README.md`.
-- [ ] Pull the compaction lemmas (`acc_mapDomain` / `Compaction` / "invisible") up into
-  their own temporal-keystone root (spine #3), frontier as an explicit parameter.
+- [~] **State axis, first cut done.** `compact` + `acc_compact` (compaction invisible
+  beyond the frontier, an instance of `Trace.acc_mapDomain` via `Compaction.advance_le_iff`);
+  `adequate_compact_sufficient` (pointwise operators tolerate input compaction beyond the
+  frontier) + `_comp` (composes). Graduated into `README.md`. Still open on this axis: the
+  frontier-STRENGTH gradient (delta joins compact only up to just behind the frontier) and
+  the composition of state *demand* across a pipeline (#2' proper) — the genuinely harder part.
+- [ ] Pull the compaction lemmas (`acc_mapDomain` / `Compaction` / "invisible") into their
+  own temporal-keystone root (spine #3) — note: `acc_mapDomain` stays foundational in `Basic`;
+  the bridge is the currently-scattered `acc`-preservation lemmas. Low-value relocation; do it
+  only when the frontier-strength `#1'/#2'` work gives it a purpose.
 - [x] **#1 — carry the join-closure bound through the adequacy square.** Re-exposed the
   `↑S ⊆ cl E` clause `exists_acc_eq_comp` discarded; `AdequateCov` bundles it onto the
   square; `reduce_adequateCov` (general operator) and `linImpl_adequateCov` (linear
