@@ -13,7 +13,9 @@ workspace = true
 
 [dependencies]
 columnar = { workspace = true }
-corgi = { path = "../../wip/corgi" }
+# Local dev: `path = "../../wip/corgi"`. Pinned to a git rev so the branch builds standalone
+# (frankmcsherry/wip @ dd-arrange-api) — see int-proxy-columnar-findings.md.
+corgi = { git = "https://github.com/frankmcsherry/wip", rev = "9b41cdc4cd070a98f5a82d412cf19ac48f8e88cb" }
 differential-dataflow = { workspace = true }
 mimalloc = "0.1.48"
 serde = { version = "1.0", features = ["derive"] }
