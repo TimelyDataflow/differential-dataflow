@@ -1,8 +1,11 @@
 # Design note: differential operators as refinements of coverage
 
-Status: roadmap for the reorganization that follows the compositional-adequacy work
-(`Basic.lean`, `Compositional.lean`). This note states the intended *shape* of the
-directory; the files do not yet match it. It exists so the reorganization is a
+Status: living roadmap for the reorganization that follows the compositional-adequacy
+work (`Basic.lean`, `Compositional.lean`), updated as each step lands. It states the
+intended *shape* of the directory and tracks how far the files have been moved toward it
+(see **Progress** at the end). As each piece is realized in code its durable description
+graduates into `README.md` and drops out of the aspirational prose here; the burndown
+shrinks to nothing and this file is then deleted. It exists so the reorganization is a
 mechanical realization of a decided structure rather than an improvisation.
 
 ## The claim
@@ -155,7 +158,8 @@ the schedule.
 1. `Basic` — `acc`, its group-hom API, injectivity.
 2. `Coverage` (spatial keystone only) — function-of-accumulation ⇒ finite trace in
    join-closure; the adequacy square; the composition laws for correctness (#1) and work
-   (#2).
+   (#2). *(Split landed: the Stage-2/3 reduce schedule now lives in `RoundCoverage.lean`,
+   described in `README.md`; #1/#2 remain to be added.)*
 3. `Compaction` (temporal keystone, pulled up) — `acc_mapDomain` / `advance` /
    "compaction is invisible," gathered out of where they are scattered; frontier as an
    explicit parameter; the state-composition law (#1'/#2').
@@ -165,11 +169,14 @@ the schedule.
 5. `Time` — the adjoint family; the product order; a single progress/causality notion.
 6. `Iterate` — built on `Time` + `Operators`; stabilization as iteration-axis compaction;
    the home of the confluence question.
-7. `Model` (the reduce schedule) — the deepest refinement: DATA-PARALLEL-REDUCE + normal
-   compaction realized as an executable per-round schedule with pending obligations. This
-   is where `Coverage`'s current Stage-2/3 material (round coverage, frontier `≥ lower`,
-   the novel-joins/pending decomposition) belongs; it is implementation-side reasoning
-   about a per-round schedule, not part of the general keystone.
+7. `RoundCoverage` + `Model` (the reduce schedule) — the deepest refinement:
+   DATA-PARALLEL-REDUCE + normal compaction realized as an executable per-round schedule
+   with pending obligations. `Coverage`'s former Stage-2/3 material (round coverage,
+   frontier `≥ lower`, the novel-joins/pending decomposition) now lives in
+   `RoundCoverage.lean` — implementation-side reasoning about a per-round schedule, not
+   part of the general keystone — and `Model` builds the executable run on top of it.
+   (Whether `RoundCoverage` eventually folds into `Model` is a later call; keeping it a
+   distinct module first makes the keystone/schedule boundary explicit.)
 
 Reading the tower top-down: correctness and two composing resource bounds at the trunk
 (2–3); two orthogonal structural gradients that tighten them per operator (4); a separate
@@ -181,9 +188,28 @@ lives (6); and the concrete reduce schedule as the bottom realization (7).
 - The reorganization is mostly *moving and re-exposing*, not reproving — the mathematics
   already exists; it is stacked in the wrong order (specializations proved before the
   general result they instantiate).
-- Start by splitting `Coverage` into spatial-keystone vs. reduce-schedule, since every
-  other move hangs off getting that root clean.
 - The genuinely new content is the four composition theorems (#1/#2 on work, #1'/#2' on
   state). Everything else is relocation.
-- Land the compositional-adequacy PR first; this reorganization is a self-contained
-  follow-up against a stable base.
+- Each landed step graduates its durable description into `README.md` (present tense, what
+  the files are) and leaves only a checked box here — so `README` stays accurate and this
+  note never competes with it as a second description.
+
+## Progress
+
+- [x] Land the compositional-adequacy work (#783, merged to `master-next`).
+- [x] Land this design note (#784).
+- [x] **Split `Coverage` into spatial-keystone vs. reduce-schedule** — the move every
+  other step hangs off. `Coverage.lean` keeps the general keystone through
+  `exists_diff_trace_comp`; Stage 2/3 moved to `RoundCoverage.lean` (`namespace Coverage`,
+  imports `Coverage`), imported by `Model` and the umbrella. Pure relocation; verified by
+  `lake build` and axiom-clean capstones (`exists_diff_trace_comp`, `round_coverage`,
+  `Model.streamCorrectness_holds`, `Compositional.Program.adequate`). Graduated into
+  `README.md`.
+- [ ] Pull the compaction lemmas (`acc_mapDomain` / `Compaction` / "invisible") up into
+  their own temporal-keystone root (spine #3), frontier as an explicit parameter.
+- [ ] #1 — carry the join-closure bound through the adequacy square (re-expose the
+  `↑S ⊆ cl E` clause that `Compositional.exists_acc_eq_comp` currently discards).
+- [ ] #2 — prove the join-closure bound composes (closure-idempotence + transitivity).
+- [ ] #1'/#2' — the compaction-frontier analogues on the state axis.
+- [ ] Factor the operator tightenings (`Operators`) and the time/iterate roots
+  (`Time`, `Iterate`); confluence is the residual open question.
