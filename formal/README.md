@@ -4,7 +4,7 @@ Machine-checked arguments about differential dataflow, in Lean 4 with Mathlib.
 
 These files split along one line.
 `Differential/Compositional.lean` argues that differential computation *abstractly* produces the right thing: each operator, as a transformation of difference traces, computes what re-evaluating its mathematics moment by moment would, and this composes to whole programs.
-The other three — `Coverage.lean`, `Compaction.lean`, `Model.lean` — argue that a *specific, efficient implementation* of that computation, the incremental `reduce` operator (interesting-time enumeration, pending obligations, logical compaction), adheres to that intent.
+The other four refine that intent into a *specific, efficient implementation* of the `reduce` operator: `Coverage.lean` states the general coverage keystone (any function of the accumulated input changes only at join-closure times of its edits), and `RoundCoverage.lean`, `Compaction.lean`, and `Model.lean` build the incremental schedule on it — interesting-time enumeration, pending obligations, logical compaction.
 
 ## Contents
 
@@ -16,9 +16,11 @@ The batch square is only a specification; the content of differential dataflow i
 ITERATE adds an iteration coordinate `T × ℕ`: the loop's accumulated output is the from-scratch iteration of the body's denotation (`round_matches`, `iterate_program`), stabilization is free from finite support (`leave_stabilizes`, no termination hypothesis needed), and a DELAY-ing (`Causal`) body still has a unique accumulated fixpoint (`acc_unique`) — evaluation-order independence *is* the adequacy statement.
 Everything is axiom-clean and monomorphic in the group (one type `A` per program); the deferred extensions are heterogeneous typing (typed `Program X Y`, the foundation for *verified program transformations* — e.g. moving computation in and out of loops — and for key/value-changing joins) and the confluence question of when two different arrival schedules compute the same value (distinct from the adequacy proved here).
 
-`Differential/Coverage.lean` concerns which times an incremental computation must revisit.
+`Differential/Coverage.lean` is the general keystone: which times an incremental computation must revisit, for *any* operator.
 A collection is a difference trace: updates at lattice-valued times, accumulated over all times less or equal to a query time.
-The file proves that for any function `f` of the accumulated input, the output is again a difference trace, with updates only at joins of input update times (`exists_diff_trace`, `exists_diff_trace_comp`).
+The file proves that for any function `f` of the accumulated input (assuming only `f 0 = 0`), the output is again a difference trace, with updates only at joins of input update times (`exists_diff_trace`, `exists_diff_trace_comp`) — a statement about differential computation as such, of which LINEAR, JOIN, and REDUCE are specializations.
+
+`Differential/RoundCoverage.lean` refines the keystone into the `reduce` operator's per-round schedule.
 Per round — an old input plus a batch of novel updates — the output change is covered by the joins involving at least one novel time (`round_coverage`), and that set coincides exactly with what an implementation enumerates by seeding on the novel times and closing under join against novel and prior times (`cl_inter_above_eq_novelJoins`; `active_times` in `reduce.rs`).
 Emitting corrections at those times keeps the output correct up to the frontier (`round_advances_invariant`).
 Joins landing at or beyond the frontier are deferred as pending obligations; the pending set covers exactly the staleness of the stored output (`round_needed_set_decomposition`), and a round with no new input shows it cannot be dropped (`draining_round_needs_pending`).
@@ -74,6 +76,6 @@ lake build
 
 A fresh checkout fetches Mathlib; `lake exe cache get` downloads prebuilt artifacts, which is much faster than compiling it.
 
-To confirm a theorem is fully proved, check its axioms: in a scratch file importing `Differential.Coverage`, `#print axioms Coverage.round_coverage` (or `Model.streamCorrectness_holds`, importing `Differential.Model`; or `Compositional.Program.adequate`, importing `Differential.Compositional`) should report only `propext`, `Classical.choice`, and `Quot.sound` — in particular no `sorryAx`.
+To confirm a theorem is fully proved, check its axioms: in a scratch file importing `Differential.Coverage`, `#print axioms Coverage.exists_diff_trace_comp` (or `Coverage.round_coverage`, importing `Differential.RoundCoverage`; or `Model.streamCorrectness_holds`, importing `Differential.Model`; or `Compositional.Program.adequate`, importing `Differential.Compositional`) should report only `propext`, `Classical.choice`, and `Quot.sound` — in particular no `sorryAx`.
 
 Nothing in the Rust workspace depends on this directory, and no CI gates on it.
