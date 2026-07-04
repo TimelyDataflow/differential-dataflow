@@ -1,5 +1,6 @@
 import Differential.Basic
 import Differential.Compaction
 import Differential.Coverage
+import Differential.RoundCoverage
 import Differential.Model
 import Differential.Compositional

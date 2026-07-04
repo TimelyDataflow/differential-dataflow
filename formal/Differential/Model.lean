@@ -1,5 +1,6 @@
 import Differential.Basic
 import Differential.Coverage
+import Differential.RoundCoverage
 import Differential.Compaction
 
 /-!
