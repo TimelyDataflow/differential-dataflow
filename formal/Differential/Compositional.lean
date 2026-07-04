@@ -284,6 +284,21 @@ theorem reduce_adequateCov (φ : A → A) (hφ : φ 0 = 0) :
     AdequateCov (fun (g : T → A) (t : T) => φ (g t)) (reduceImpl φ hφ) :=
   fun δ => ⟨reduce_adequate φ hφ δ, reduce_support φ hφ δ⟩
 
+/-- `AdequateCov` is closed under pointwise ADDITION (the `par`/pairing primitive): the sum's edits
+    lie in the union of the two branches' edits, hence in the common closure. -/
+theorem AdequateCov.add {D₁ D₂ : (T → A) → (T → A)} {i₁ i₂ : (T →₀ A) → (T →₀ A)}
+    (h₁ : AdequateCov D₁ i₁) (h₂ : AdequateCov D₂ i₂) :
+    AdequateCov (fun g => D₁ g + D₂ g) (fun δ => i₁ δ + i₂ δ) := by
+  intro δ
+  refine ⟨?_, ?_⟩
+  · funext t
+    show acc (i₁ δ + i₂ δ) t = (D₁ (acc δ) + D₂ (acc δ)) t
+    rw [Trace.acc_add, congrFun (h₁ δ).1 t, congrFun (h₂ δ).1 t]
+    simp only [Pi.add_apply]
+  · refine (Finset.coe_subset.mpr Finsupp.support_add).trans ?_
+    rw [Finset.coe_union]
+    exact Set.union_subset (h₁ δ).2 (h₂ δ).2
+
 /-! ## Shape 3: bilinear (`JOIN`)
 
 `β : A →+ A' →+ B` bilinear.  Output update at the JOIN `a ⊔ b` of paired input times, valued
@@ -714,6 +729,67 @@ theorem Program.adequate (p : Program A) :
   | reduce φ hφ => exact reduce_adequate φ hφ
   | par p q ihp ihq => exact ihp.add ihq
   | join β p q ihp ihq => exact Adequate.join β ihp ihq
+  | seq p q ihp ihq => exact ihp.comp ihq
+
+/-! ### #1/#2 for whole programs: bounded work composes end-to-end
+
+`Program.adequateCov` lifts the batch square to `AdequateCov` over `id / linear / reduce / par / join /
+seq`, by the same induction as `Program.adequate` with the coverage-carrying lemmas.  JOIN needs its
+own support tightening (`joinImpl_support_cl`): the convolution's edits are joins of a `δ`-edit with a
+`δ'`-edit, so they land in the join-closure of the two edit sets. -/
+
+/-- The JOIN tightening: the convolution's output edits lie in the join-closure of the two inputs'
+    edit sets — each output time is `a ⊔ b` for edits `a`, `b` of the two inputs. -/
+theorem joinImpl_support_cl (β : A →+ A' →+ B) (δ : T →₀ A) (δ' : T →₀ A') :
+    (↑(joinImpl β δ δ').support : Set T) ⊆ Coverage.cl (δ.support ∪ δ'.support) := by
+  have hsupp : (joinImpl β δ δ').support ⊆
+      δ.support.biUnion (fun a => δ'.support.biUnion (fun b => {a ⊔ b})) := by
+    refine Finsupp.support_sum.trans (Finset.biUnion_mono fun a _ => ?_)
+    exact Finsupp.support_sum.trans (Finset.biUnion_mono fun b _ => Finsupp.support_single_subset)
+  intro x hx
+  rw [Finset.mem_coe] at hx
+  have hxF := hsupp hx
+  rw [Finset.mem_biUnion] at hxF
+  obtain ⟨a, ha, hxF⟩ := hxF
+  rw [Finset.mem_biUnion] at hxF
+  obtain ⟨b, hb, hxF⟩ := hxF
+  rw [Finset.mem_singleton] at hxF
+  subst hxF
+  have ha' : a ∈ Coverage.cl (δ.support ∪ δ'.support) :=
+    subset_supClosure (Finset.mem_coe.mpr (Finset.mem_union_left _ ha))
+  have hb' : b ∈ Coverage.cl (δ.support ∪ δ'.support) :=
+    subset_supClosure (Finset.mem_coe.mpr (Finset.mem_union_right _ hb))
+  exact supClosed_supClosure ha' hb'
+
+/-- `AdequateCov` is closed under BILINEAR combination (the `join` primitive): the acc-equation from
+    `join_adequate`, the bound from `joinImpl_support_cl` narrowed to `cl δ.support` (both branches'
+    edits already sit there, and closure-of-closure is closure). -/
+theorem AdequateCov.join (β : A →+ A →+ A) {Dp Dq : (T → A) → (T → A)}
+    {ip iq : (T →₀ A) → (T →₀ A)} (hp : AdequateCov Dp ip) (hq : AdequateCov Dq iq) :
+    AdequateCov (fun g t => β (Dp g t) (Dq g t)) (fun δ => joinImpl β (ip δ) (iq δ)) := by
+  intro δ
+  refine ⟨?_, ?_⟩
+  · funext t
+    show acc (joinImpl β (ip δ) (iq δ)) t = β (Dp (acc δ) t) (Dq (acc δ) t)
+    have hj : acc (joinImpl β (ip δ) (iq δ)) t = β (acc (ip δ) t) (acc (iq δ) t) :=
+      congrFun (join_adequate β (ip δ) (iq δ)) t
+    rw [hj, congrFun (hp δ).1 t, congrFun (hq δ).1 t]
+  · refine (joinImpl_support_cl β (ip δ) (iq δ)).trans ?_
+    refine supClosure_min ?_ supClosed_supClosure
+    rw [Finset.coe_union]
+    exact Set.union_subset (hp δ).2 (hq δ).2
+
+/-- **End-to-end bounded work.**  Every program is `AdequateCov`: it maintains the right answer AND
+    its edits stay in the join-closure of the input's edits — by induction, each case citing the
+    coverage-carrying operator lemma, composition citing `AdequateCov.comp`. -/
+theorem Program.adequateCov (p : Program A) :
+    AdequateCov (T := T) (Program.denote (T := T) p) (Program.impl (T := T) p) := by
+  induction p with
+  | id => exact AdequateCov.id
+  | linear φ => exact linImpl_adequateCov φ
+  | reduce φ hφ => exact reduce_adequateCov φ hφ
+  | par p q ihp ihq => exact ihp.add ihq
+  | join β p q ihp ihq => exact AdequateCov.join β ihp ihq
   | seq p q ihp ihq => exact ihp.comp ihq
 
 /-! ## Phase B: lifting a `Program` body into the loop
