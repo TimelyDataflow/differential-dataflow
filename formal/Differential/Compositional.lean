@@ -1,3 +1,4 @@
+import Differential.Basic
 import Differential.Coverage
 import Differential.Model
 
@@ -15,8 +16,8 @@ interesting times, pending sets, frontiers, or compaction.  The single claim is:
 
 ## The spine
 
-`Model.acc : (T →₀ A) → (T → A)` accumulates updates (`acc d t = ∑_{s ≤ t} d s`).  It is an
-`AddCommGroup` homomorphism (`Model.acc_add`, `acc_zero`, `acc_sub`) over ANY `[SemilatticeSup T]`
+`Trace.acc : (T →₀ A) → (T → A)` accumulates updates (`acc d t = ∑_{s ≤ t} d s`).  It is an
+`AddCommGroup` homomorphism (`Trace.acc_add`, `acc_zero`, `acc_sub`) over ANY `[SemilatticeSup T]`
 and `[AddCommGroup A]`.  We add its missing structural fact — INJECTIVITY on finitely-supported
 traces (`acc_injective`) — which makes "the implementation trace" well defined.
 
@@ -65,7 +66,7 @@ open scoped Classical
 
 namespace Compositional
 
-open Model (acc)
+open Trace (acc)
 
 variable {T T' T'' : Type*} [SemilatticeSup T] [SemilatticeSup T'] [SemilatticeSup T'']
 variable {A A' B C : Type*} [AddCommGroup A] [AddCommGroup A'] [AddCommGroup B] [AddCommGroup C]
@@ -100,7 +101,7 @@ theorem acc_injective {d1 d2 : T →₀ A} (h : acc d1 = acc d2) : d1 = d2 := by
   have hz : d1 - d2 = 0 := by
     apply acc_eq_zero
     intro t
-    rw [Model.acc_sub, congrFun h t, sub_self]
+    rw [Trace.acc_sub, congrFun h t, sub_self]
   exact sub_eq_zero.mp hz
 
 /-! ## The commuting-square predicate and its composition law -/
@@ -136,7 +137,7 @@ theorem Adequate.add {D₁ D₂ : (T → A) → (T → B)} {i₁ i₂ : (T →�
   intro δ
   funext t
   show acc (i₁ δ + i₂ δ) t = (D₁ (acc δ) + D₂ (acc δ)) t
-  rw [Model.acc_add, congrFun (h₁ δ) t, congrFun (h₂ δ) t]
+  rw [Trace.acc_add, congrFun (h₁ δ) t, congrFun (h₂ δ) t]
   simp only [Pi.add_apply]
 
 /-! ## Shape 1a: linear, pointwise in time (`map`, `filter`, `SUM`, `negate`, `concat`)
@@ -154,7 +155,7 @@ theorem linImpl_adequate (φ : A →+ B) :
   funext t
   calc acc (linImpl φ δ) t
       = ∑ x ∈ δ.support.filter (· ≤ t), (linImpl φ δ) x :=
-        Model.acc_eq_sum_superset _ Finsupp.support_mapRange t
+        Trace.acc_eq_sum_superset _ Finsupp.support_mapRange t
     _ = ∑ x ∈ δ.support.filter (· ≤ t), φ (δ x) := by
         refine Finset.sum_congr rfl fun x _ => ?_
         simp only [linImpl, Finsupp.mapRange_apply]
@@ -169,7 +170,7 @@ Galois adjoint `h♯`:
 
     acc (mapDomain h δ) t' = ∑_{s : h s ≤ t'} δ s = ∑_{s : s ≤ h♯ t'} δ s = acc δ (h♯ t').
 
-`Model.acc_mapDomain` is the special case `h♯ = id`.  For `enter : t ↦ (t,0)` into `T × ℕ`,
+`Trace.acc_mapDomain` is the special case `h♯ = id`.  For `enter : t ↦ (t,0)` into `T × ℕ`,
 `h♯ (t,n) = t`: entered data reads as the outer accumulation at EVERY round.  This is exactly what
 lets `enter_at` inject fresh diffs at a chosen round and thereby spoil the "value at round n =
 bodyⁿ ⊥" shortcut for `ITERATE`. -/
@@ -186,7 +187,7 @@ theorem timeImpl_adequate (h : T → T') (hstar : T' → T)
   intro δ
   funext t'
   show acc (Finsupp.mapDomain h δ) t' = acc δ (hstar t')
-  rw [Model.acc_eq_finsupp_sum, Model.acc_eq_finsupp_sum,
+  rw [Trace.acc_eq_finsupp_sum, Trace.acc_eq_finsupp_sum,
       Finsupp.sum_mapDomain_index (by simp) (fun b m₁ m₂ => by split <;> simp)]
   exact Finsupp.sum_congr fun x _ => by simp only [hadj x t']
 
@@ -204,7 +205,7 @@ theorem represents_acc {S : Finset T} {d : T → A} {g : T → A} (hrep : Covera
   refine ⟨Finsupp.onFinset S (fun x => if x ∈ S then d x else 0)
       (fun a ha => by by_contra hns; apply ha; simp only [if_neg hns]), ?_⟩
   funext t
-  rw [Model.acc_eq_sum_superset _ Finsupp.support_onFinset_subset t,
+  rw [Trace.acc_eq_sum_superset _ Finsupp.support_onFinset_subset t,
       show g t = ∑ s ∈ Coverage.Cut S t, d s from hrep t]
   refine Finset.sum_congr rfl fun x hx => ?_
   show (if x ∈ S then d x else 0) = d x
@@ -237,7 +238,7 @@ so that `acc (joinImpl β δ δ') t = β (acc δ t) (acc δ' t)`.  `JOIN` is "bi
 
 /-- `acc · t` bundled as a group hom, for pushing through `Finsupp.sum`. -/
 noncomputable def accHom (t : T) : (T →₀ A) →+ A :=
-  AddMonoidHom.mk' (fun d => acc d t) (fun d1 d2 => Model.acc_add d1 d2 t)
+  AddMonoidHom.mk' (fun d => acc d t) (fun d1 d2 => Trace.acc_add d1 d2 t)
 
 @[simp] theorem accHom_apply (t : T) (d : T →₀ A) : accHom t d = acc d t := rfl
 
@@ -260,14 +261,14 @@ theorem join_adequate (β : A →+ A' →+ B) :
     rw [Finsupp.sum, map_sum]
     refine Finset.sum_congr rfl fun b _ => ?_
     show acc (Finsupp.single (a ⊔ b) (β (δ a) (δ' b))) t = _
-    simp only [Model.acc_single, sup_le_iff]
+    simp only [Trace.acc_single, sup_le_iff]
   have hR : β (acc δ t) (acc δ' t)
       = ∑ a ∈ δ.support, ∑ b ∈ δ'.support,
           (if a ≤ t ∧ b ≤ t then β (δ a) (δ' b) else 0) := by
     have e1 : acc δ t = ∑ a ∈ δ.support, (if a ≤ t then δ a else 0) := by
-      rw [Model.acc_eq_finsupp_sum, Finsupp.sum]
+      rw [Trace.acc_eq_finsupp_sum, Finsupp.sum]
     have e2 : acc δ' t = ∑ b ∈ δ'.support, (if b ≤ t then δ' b else 0) := by
-      rw [Model.acc_eq_finsupp_sum, Finsupp.sum]
+      rw [Trace.acc_eq_finsupp_sum, Finsupp.sum]
     rw [e1, e2, map_sum β, AddMonoidHom.finsetSum_apply]
     refine Finset.sum_congr rfl fun a _ => ?_
     rw [map_sum (β _)]
@@ -306,7 +307,7 @@ noncomputable def leave (δ : (T × ℕ) →₀ A) : T →₀ A :=
 /-- Entered data reads as the outer accumulation at EVERY round (adjoint of `enter` is `Prod.fst`). -/
 theorem acc_enter (input : T →₀ A) (t : T) (n : ℕ) :
     acc (enter input) (t, n) = acc input t := by
-  rw [enter, Model.acc_eq_finsupp_sum, Model.acc_eq_finsupp_sum,
+  rw [enter, Trace.acc_eq_finsupp_sum, Trace.acc_eq_finsupp_sum,
       Finsupp.sum_mapDomain_index (by simp) (fun _ m₁ m₂ => by split <;> simp)]
   refine Finsupp.sum_congr fun s _ => ?_
   have h : ((s, 0) ≤ (t, n)) ↔ (s ≤ t) := by simp [Prod.mk_le_mk]
@@ -315,7 +316,7 @@ theorem acc_enter (input : T →₀ A) (t : T) (n : ℕ) :
 /-- `feedback` lands only at rounds `≥ 1`: at round 0 it contributes nothing. -/
 theorem acc_feedback_zero (y : (T × ℕ) →₀ A) (t : T) :
     acc (feedback y) (t, 0) = 0 := by
-  rw [feedback, Model.acc_eq_finsupp_sum,
+  rw [feedback, Trace.acc_eq_finsupp_sum,
       Finsupp.sum_mapDomain_index (by simp) (fun _ m₁ m₂ => by split <;> simp), Finsupp.sum]
   apply Finset.sum_eq_zero
   intro p _
@@ -325,7 +326,7 @@ theorem acc_feedback_zero (y : (T × ℕ) →₀ A) (t : T) :
 /-- `feedback` at round `n+1` reads `y` at round `n`: it is the round-shift. -/
 theorem acc_feedback_succ (y : (T × ℕ) →₀ A) (t : T) (n : ℕ) :
     acc (feedback y) (t, n + 1) = acc y (t, n) := by
-  rw [feedback, Model.acc_eq_finsupp_sum, Model.acc_eq_finsupp_sum,
+  rw [feedback, Trace.acc_eq_finsupp_sum, Trace.acc_eq_finsupp_sum,
       Finsupp.sum_mapDomain_index (by simp) (fun _ m₁ m₂ => by split <;> simp)]
   refine Finsupp.sum_congr fun p _ => ?_
   rcases p with ⟨p1, p2⟩
@@ -366,9 +367,9 @@ theorem iterate_unroll (s x : (T × ℕ) →₀ A)
     (∀ t n, acc x (t, n + 1) = acc s (t, n + 1) + acc (body x) (t, n)) := by
   refine ⟨fun t => ?_, fun t n => ?_⟩
   · conv_lhs => rw [hfix]
-    rw [Model.acc_add, acc_feedback_zero, add_zero]
+    rw [Trace.acc_add, acc_feedback_zero, add_zero]
   · conv_lhs => rw [hfix]
-    rw [Model.acc_add, acc_feedback_succ]
+    rw [Trace.acc_add, acc_feedback_succ]
 
 /-- The from-scratch iteration on COLLECTIONS: round 0 is the seed's round-0 accumulation; each
     further round adds the seed's round-`n+1` accumulation to the body's round-wise action `f`.
@@ -407,9 +408,9 @@ theorem leave_stabilizes (x : (T × ℕ) →₀ A) :
     ⟨(x.support.image Prod.snd).sup id, fun p hp =>
       Finset.le_sup (f := id) (Finset.mem_image_of_mem Prod.snd hp)⟩
   refine ⟨N, fun K hK t => ?_⟩
-  rw [leave, Model.acc_eq_finsupp_sum,
+  rw [leave, Trace.acc_eq_finsupp_sum,
       Finsupp.sum_mapDomain_index (by simp) (fun _ m₁ m₂ => by split <;> simp),
-      Model.acc_eq_finsupp_sum]
+      Trace.acc_eq_finsupp_sum]
   refine Finsupp.sum_congr fun p hp => ?_
   have hp2 : p.2 ≤ K := le_trans (hN p hp) hK
   have hcond : (p ≤ (t, K)) ↔ (p.1 ≤ t) := by
@@ -451,7 +452,7 @@ theorem leave_fixpoint (f : (T → A) → (T → A)) (s x : (T × ℕ) →₀ A)
     rw [h₂ (max N₁ N₂) (le_max_right N₁ N₂) t, congrFun (hbody x (max N₁ N₂)) t, harg]
   funext t
   have hL0 : acc (leave x) t = acc (leave s) t + acc (leave (body x)) t := by
-    rw [leave_loop body s x hfix, Model.acc_add]
+    rw [leave_loop body s x hfix, Trace.acc_add]
   rw [hL0, congrFun e2 t]
   simp only [Pi.add_apply]
 
@@ -476,7 +477,7 @@ theorem leave_fixpoint_impulse (f : (T → A) → (T → A)) (input : T →₀ A
   have hs0 : (fun t => acc (leave (enter input - feedback (enter input))) t) = (0 : T → A) := by
     have hz : leave (enter input - feedback (enter input)) = 0 := by
       rw [leave_sub, leave_feedback, sub_self]
-    rw [hz]; funext t; exact Model.acc_zero t
+    rw [hz]; funext t; exact Trace.acc_zero t
   rw [hs0, zero_add] at h
   exact h
 
