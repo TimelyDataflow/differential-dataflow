@@ -860,4 +860,70 @@ theorem acc_prod_fst {A₁ A₂ : Type*} [AddCommGroup A₁] [AddCommGroup A₂]
     acc (linImpl (AddMonoidHom.fst A₁ A₂) d) t = (acc d t).1 :=
   congrFun (linImpl_adequate (AddMonoidHom.fst A₁ A₂) d) t
 
+/-! ## #1'/#2' (first cut): the state axis — compaction sufficiency
+
+The work axis (`AdequateCov`) bounds WHERE edits land; this bounds HOW MUCH history the operator must
+keep.  The "additional information" is the frontier `F` — a finite set generating the upper set
+`Compaction.Beyond F` of still-live query times.  Compacting a trace advances every update time to its
+frontier representative (`Compaction.advance`, the join-with-frontier-meet); the temporal keystone
+`acc_compact` says this is INVISIBLE beyond the frontier — the accumulation at every live `t` is
+unchanged.  Hence any operator whose denotation is pointwise in time (LINEAR, REDUCE, and their
+composites) can be fed the COMPACTED input and produce the same output beyond the frontier: the
+pre-frontier history need not be retained as state (`adequate_compact_sufficient`).
+
+This is the *base case* of the state axis, and it composes for the pointwise class
+(`adequate_compact_sufficient_comp`: pointwise is closed under `∘`).  Deferred (the genuinely harder
+part, see `DESIGN.md`): the frontier-STRENGTH gradient — a normal operator tolerates any old frontier,
+a DELTA JOIN only compaction up to just behind the current frontier — and the composition of *state
+demand* across a pipeline (#2' proper), where a downstream delta join forces finer compaction upstream. -/
+
+section StateAxis
+variable {T : Type*} [Lattice T]
+variable {A : Type*} [AddCommGroup A]
+
+/-- Compact a trace to a frontier `F`: advance every update time to its frontier representative
+    `Compaction.advance · F hF`, consolidating collisions (`Finsupp.mapDomain`). -/
+noncomputable def compact (F : Finset T) (hF : F.Nonempty) (d : T →₀ A) : T →₀ A :=
+  Finsupp.mapDomain (fun x => Compaction.advance x F hF) d
+
+/-- **Temporal keystone — compaction is invisible beyond the frontier.**  At every live query time
+    `t ∈ Beyond F`, the compacted trace accumulates exactly as the original.  An instance of
+    `Trace.acc_mapDomain`: `advance` preserves comparison-to-`t` for every `t` beyond the frontier
+    (`Compaction.advance_le_iff`). -/
+theorem acc_compact (F : Finset T) (hF : F.Nonempty) (d : T →₀ A) {t : T}
+    (ht : t ∈ Compaction.Beyond F) :
+    acc (compact F hF d) t = acc d t := by
+  unfold compact
+  apply Trace.acc_mapDomain
+  intro x _
+  exact Compaction.advance_le_iff hF ht
+
+/-- **Compaction sufficiency for a pointwise operator (state-axis base case).**  If `impl` is adequate
+    with a pointwise-in-time denotation (output at `t` depends on the input accumulation only at `t` —
+    LINEAR, REDUCE), then beyond the frontier, running it on the COMPACTED input gives the same output:
+    the operator never needs pre-frontier history as state. -/
+theorem adequate_compact_sufficient {φ : A → A} {impl : (T →₀ A) → (T →₀ A)}
+    (had : Adequate (fun (g : T → A) (t : T) => φ (g t)) impl)
+    (F : Finset T) (hF : F.Nonempty) (δ : T →₀ A) {t : T} (ht : t ∈ Compaction.Beyond F) :
+    acc (impl (compact F hF δ)) t = acc (impl δ) t := by
+  have h1 : acc (impl (compact F hF δ)) t = φ (acc (compact F hF δ) t) := congrFun (had _) t
+  have h2 : acc (impl δ) t = φ (acc δ t) := congrFun (had _) t
+  rw [h1, h2, acc_compact F hF δ ht]
+
+/-- **#2' base case — the pointwise class is closed under composition,** so compaction sufficiency
+    composes: a two-stage pipeline of pointwise operators tolerates input compaction beyond the
+    frontier.  (`ψ ∘ φ` is again pointwise, so `adequate_compact_sufficient` applies to the composite.) -/
+theorem adequate_compact_sufficient_comp {φ ψ : A → A} {i₁ i₂ : (T →₀ A) → (T →₀ A)}
+    (h₁ : Adequate (fun (g : T → A) (t : T) => φ (g t)) i₁)
+    (h₂ : Adequate (fun (g : T → A) (t : T) => ψ (g t)) i₂)
+    (F : Finset T) (hF : F.Nonempty) (δ : T →₀ A) {t : T} (ht : t ∈ Compaction.Beyond F) :
+    acc (i₂ (i₁ (compact F hF δ))) t = acc (i₂ (i₁ δ)) t := by
+  have h1 : acc (i₂ (i₁ (compact F hF δ))) t = ψ (acc (i₁ (compact F hF δ)) t) := congrFun (h₂ _) t
+  have h2 : acc (i₂ (i₁ δ)) t = ψ (acc (i₁ δ) t) := congrFun (h₂ _) t
+  rw [h1, h2]
+  congr 1
+  exact adequate_compact_sufficient h₁ F hF δ ht
+
+end StateAxis
+
 end Compositional
