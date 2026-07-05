@@ -14,8 +14,12 @@ what the framework already gives and what it's missing.
 | corgi DDIR backend (the consumer; `interactive` crate, `SPIKE.md`, benches) | `frankmcsherry/differential-dataflow @ corgi-chunk` |
 | corgi kernel crate (the `arrange` API: `find_ranges`, `sort_blocks`, content-hash, …) | `frankmcsherry/wip @ dd-arrange-api` |
 
-The DD tree on `corgi-chunk` is **byte-identical to #781** — there are no differential-dataflow
-edits beyond the PR. Everything stacked on top is the corgi backend in the `interactive` crate.
+The DD-core work is #781; the corgi backend stacked on top lives entirely in the `interactive`
+crate. One caveat for reviewers: `corgi-chunk` currently carries **~148 lines of framework
+improvements ahead of #781** — an MSD-bucket sort in `ProxyChunk::from_unsorted`, reduce
+buffer-reuse, and test extensions — that were developed against the backend and should be pushed
+back onto the `int-proxy` branch so the PR carries its own improvements. So diff `pr781..corgi-chunk`
+for the true backend delta, but don't assume the DD subtree equals the PR verbatim.
 
 ## Why `int_proxy` is the right (and only) extension point here
 

@@ -17,7 +17,7 @@
 //! refill), so `gather_lanes` source indices stay valid for the whole call. The `Chunk` contract
 //! permits this — "consume at least one input; the harness may re-invoke."
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use timely::progress::{Antichain, Timestamp};
@@ -26,12 +26,11 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::{merge_chains, pack, Chunk, ChunkBatch};
-use differential_dataflow::trace::{Builder as DdBuilder, Description};
+use differential_dataflow::trace::Description;
 
 use corgi::arrange::{compare_at, compare_idx, find_ranges, gather, gather_lanes, sort_perm};
 use corgi::Value as CValue;
 
-use crate::corgi_logic::{infer_shape_cols, transcode, untranscode};
 use crate::ir::Value as DValue;
 
 use std::cmp::Ordering;
@@ -388,51 +387,13 @@ where
     T: Timestamp + Lattice,
     R: Semigroup + Clone + 'static,
 {
-    /// One sorted+consolidated chunk from DDIR rows (the arrange-ingest transcode boundary). Shapes
-    /// are inferred by whole-column scan ([`infer_shape_cols`]) so variant arms resolve correctly.
-    pub fn from_rows(rows: &[Upd<T, R>]) -> Self {
-        if rows.is_empty() { return Self::default(); }
-        let keys_rows: Vec<DValue> = rows.iter().map(|u| u.0 .0.clone()).collect();
-        let vals_rows: Vec<DValue> = rows.iter().map(|u| u.0 .1.clone()).collect();
-        let keys = transcode(&keys_rows, &infer_shape_cols(&keys_rows));
-        let vals = transcode(&vals_rows, &infer_shape_cols(&vals_rows));
-        let times = rows.iter().map(|u| u.1.clone()).collect();
-        let diffs = rows.iter().map(|u| u.2.clone()).collect();
-        let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
-        Self::from_parts(keys, vals, times, diffs)
-    }
-
     /// One sorted+consolidated chunk from columns already in corgi form (the column-native arrange
-    /// ingest — no transcode, unlike `from_rows`).
+    /// ingest — no transcode).
     pub fn from_columns(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> Self {
         let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
         Self::from_parts(keys, vals, times, diffs)
     }
 
-    /// Untranscode this chunk back to DDIR rows (egress / history read).
-    pub fn to_rows(&self) -> Vec<Upd<T, R>> {
-        if self.len_() == 0 { return Vec::new(); }
-        let keys = untranscode(self.0.keys.clone(), &corgi::shape_of_value(&self.0.keys));
-        let vals = untranscode(self.0.vals.clone(), &corgi::shape_of_value(&self.0.vals));
-        keys.into_iter()
-            .zip(vals)
-            .zip(&self.0.times)
-            .zip(&self.0.diffs)
-            .map(|(((k, v), t), d)| ((k, v), t.clone(), d.clone()))
-            .collect()
-    }
-}
-
-/// Read a whole `ChunkBatch<CorgiChunk>` back to DDIR rows (across all chunks) — the cursor-less
-/// history read used by `as_collection` and the reduce tactic.
-pub fn batch_to_rows<T, R>(b: &ChunkBatch<CorgiChunk<T, R>>) -> Vec<Upd<T, R>>
-where
-    T: Timestamp + Lattice,
-    R: Semigroup + Clone + 'static,
-{
-    let mut out = Vec::new();
-    for ch in &b.chunks { out.extend(ch.to_rows()); }
-    out
 }
 
 /// Concatenate chunks' columns into flat `(keys, vals, times, diffs)` with **no transcode** — for
@@ -449,17 +410,6 @@ where
     let (kv, times, diffs) = CorgiChunk::concat(chunks);
     let (keys, vals) = split_kv(kv);
     (keys, vals, times, diffs)
-}
-
-/// Build a `ChunkBatch<CorgiChunk>` from DDIR rows: transcode+sort+consolidate into one chunk, then
-/// `settle` it into a graded chunk sequence.
-fn rows_to_batch<T, R>(rows: Vec<Upd<T, R>>, description: Description<T>) -> ChunkBatch<CorgiChunk<T, R>>
-where
-    T: Timestamp + Lattice,
-    R: Semigroup + Clone + 'static,
-{
-    let chunk = CorgiChunk::from_rows(&rows);
-    settle_one(chunk, description)
 }
 
 /// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
@@ -485,35 +435,6 @@ where
     let mut output = VecDeque::new();
     CorgiChunk::settle(&mut input, true, &mut output);
     ChunkBatch::new(output.into(), description)
-}
-
-/// DD [`Builder`](DdBuilder) that consumes sorted/consolidated row chains (the vec batcher's `Output`)
-/// and builds a `ChunkBatch<CorgiChunk>`. `Input = Vec<Upd>` so the existing `MergeBatcher` over vec
-/// rows can stay the arrange batcher; only the builder + trace become chunk-native. `RcBuilder` wraps
-/// it → `Rc<ChunkBatch<CorgiChunk>>`.
-pub struct CorgiChunkBuilder<T, R> {
-    rows: Vec<Upd<T, R>>,
-}
-
-impl<T, R> DdBuilder for CorgiChunkBuilder<T, R>
-where
-    T: Timestamp + Lattice,
-    R: Semigroup + Clone + 'static,
-{
-    type Input = Vec<Upd<T, R>>;
-    type Time = T;
-    type Output = ChunkBatch<CorgiChunk<T, R>>;
-
-    fn with_capacity(_keys: usize, _vals: usize, upds: usize) -> Self {
-        CorgiChunkBuilder { rows: Vec::with_capacity(upds) }
-    }
-    fn push(&mut self, chunk: &mut Self::Input) { self.rows.append(chunk); }
-    fn done(self, description: Description<T>) -> Self::Output { rows_to_batch(self.rows, description) }
-    fn seal(chain: &mut Vec<Self::Input>, description: Description<T>) -> Self::Output {
-        let mut all = Vec::new();
-        for c in chain.iter_mut() { all.append(c); }
-        rows_to_batch(all, description)
-    }
 }
 
 /// A column-native arrange **chunker**: turns input `CorgiContainer`s into sorted+consolidated
@@ -688,95 +609,6 @@ where
     Some(SortedRun { keys, vals, times, diffs })
 }
 
-/// Group a key column by identity, returning integers only — the Rust↔corgi boundary primitive.
-/// `perm` lists row indices in group order; `ends[g]` is the exclusive end of group `g` within `perm`
-/// (so group `g`'s member rows are `perm[ends[g-1]..ends[g]]`, with `ends[-1] = 0`). DD orchestrates
-/// per group by index — it never sees a key `Value`; keys and payloads stay columnar in corgi. Built
-/// on the columnar discrimination sort + one batched adjacent-compare (no per-pair `compare_at`).
-pub fn group_offsets(col: &CValue) -> (Vec<usize>, Vec<usize>) {
-    let n = col.len();
-    if n == 0 {
-        return (Vec::new(), Vec::new());
-    }
-    let perm = sort_perm(col);
-    let sorted = gather(col, &perm);
-    let mut ends = Vec::new();
-    if n > 1 {
-        let left: Vec<usize> = (0..n - 1).collect();
-        let right: Vec<usize> = (1..n).collect();
-        // adj[i] == 0 iff sorted[i] == sorted[i+1] — a group boundary is where adj[i] != 0.
-        let adj = compare_idx(&sorted, &sorted, &left, &right);
-        for (i, &a) in adj.iter().enumerate() {
-            if a != 0 {
-                ends.push(i + 1);
-            }
-        }
-    }
-    ends.push(n);
-    (perm, ends)
-}
-
-/// Semijoin: for each key in `needle_keys` (a set of DDIR keys), gather its `(val, time, diff)`
-/// history from `batches` via a batched `find` probe over the flattened, sorted source — untranscoding
-/// only the matched rows, never the whole trace. Returns a `key -> history` map (only matched keys
-/// present), the drop-in replacement for grouping untranscode-all rows by key. `O(|needle|·log|source|)`
-/// probe + `O(matched)` untranscode, vs the old `O(|source|)` untranscode + hash-group.
-pub fn semijoin_history<T, R>(
-    batches: &[Rc<ChunkBatch<CorgiChunk<T, R>>>],
-    needle_keys: &[DValue],
-) -> HashMap<DValue, Vec<(DValue, T, R)>>
-where
-    T: Timestamp + Lattice,
-    R: Semigroup + Clone + 'static,
-{
-    let mut out: HashMap<DValue, Vec<(DValue, T, R)>> = HashMap::new();
-    if needle_keys.is_empty() {
-        return out;
-    }
-    // Each chunk already holds a sorted key column, so probe each in place — NO flatten/merge (which
-    // would re-materialize the whole accumulated trace every round). Transcode the needle once with
-    // the arrangement's key shape (taken from the first non-empty chunk; the schema is uniform).
-    let shape = batches
-        .iter()
-        .flat_map(|b| b.chunks.iter())
-        .find(|c| c.len_() > 0)
-        .map(|c| corgi::shape_of_value(c.keys()));
-    let Some(shape) = shape else { return out };
-    let needle_col = transcode(needle_keys, &shape);
-
-    for b in batches {
-        for chunk in &b.chunks {
-            if chunk.len_() == 0 {
-                continue;
-            }
-            let (lo, hi) = find_ranges(&needle_col, chunk.keys());
-            let mut matched: Vec<usize> = Vec::new();
-            for i in 0..needle_keys.len() {
-                matched.extend(lo[i]..hi[i]);
-            }
-            if matched.is_empty() {
-                continue;
-            }
-            let vcol = gather(chunk.vals(), &matched);
-            let vals = untranscode(vcol.clone(), &corgi::shape_of_value(&vcol));
-            let mut c = 0;
-            for i in 0..needle_keys.len() {
-                let len = hi[i] - lo[i];
-                if len == 0 {
-                    continue;
-                }
-                let entry = out.entry(needle_keys[i].clone()).or_default();
-                for k in 0..len {
-                    let r = matched[c + k];
-                    entry.push((vals[c + k].clone(), chunk.times()[r].clone(), chunk.diffs()[r].clone()));
-                }
-                c += len;
-            }
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -785,22 +617,6 @@ mod test {
     use std::collections::BTreeMap;
 
     fn xorshift(s: &mut u64) -> u64 { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; *s }
-
-    #[test]
-    fn group_offsets_partitions_by_key() {
-        // keys 3,1,1,2,3 → groups key1={rows 1,2}, key2={row 3}, key3={rows 0,4}.
-        let col = CValue::u64(vec![3, 1, 1, 2, 3]);
-        let (perm, ends) = group_offsets(&col);
-        let mut groups: Vec<Vec<usize>> = Vec::new();
-        let mut start = 0;
-        for &e in &ends {
-            let mut g = perm[start..e].to_vec();
-            g.sort();
-            groups.push(g);
-            start = e;
-        }
-        assert_eq!(groups, vec![vec![1, 2], vec![3], vec![0, 4]]);
-    }
 
     /// Build a single sorted+consolidated CorgiChunk from u64 (key,val,time,diff) rows.
     fn chunk(rows: &[((u64, u64), u64, i64)]) -> CorgiChunk<u64, i64> {
