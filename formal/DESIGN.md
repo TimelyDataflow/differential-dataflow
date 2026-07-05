@@ -207,9 +207,13 @@ lives (6); and the concrete reduce schedule as the bottom realization (7).
   `README.md`.
 - [ ] Pull the compaction lemmas (`acc_mapDomain` / `Compaction` / "invisible") up into
   their own temporal-keystone root (spine #3), frontier as an explicit parameter.
-- [ ] #1 — carry the join-closure bound through the adequacy square (re-expose the
-  `↑S ⊆ cl E` clause that `Compositional.exists_acc_eq_comp` currently discards).
-- [ ] #2 — prove the join-closure bound composes (closure-idempotence + transitivity).
+- [x] **#1 — carry the join-closure bound through the adequacy square.** Re-exposed the
+  `↑S ⊆ cl E` clause `exists_acc_eq_comp` discarded; `AdequateCov` bundles it onto the
+  square; `reduce_adequateCov` (general operator) and `linImpl_adequateCov` (linear
+  tightening) supply it. Graduated into `README.md`.
+- [x] **#2 — the join-closure bound composes.** `AdequateCov.comp` (supClosure idempotence
+  + transitivity), lifted to whole programs by `Program.adequateCov` (with `AdequateCov.add`
+  for par and `joinImpl_support_cl`/`AdequateCov.join` for join). Verified axiom-clean.
 - [ ] #1'/#2' — the compaction-frontier analogues on the state axis.
 - [ ] Factor the operator tightenings (`Operators`) and the time/iterate roots
   (`Time`, `Iterate`); confluence is the residual open question.
