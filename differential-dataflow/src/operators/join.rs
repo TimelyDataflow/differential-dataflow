@@ -61,7 +61,13 @@ pub(crate) trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C
     fn defer(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, capability: Capability<B0::Time>);
     /// Perform an amount of work that just barely exceeds `fuel`, which is decremented.
     ///
-    /// Returning with a non-negative fuel indicates that all work was exhausted.
+    /// **Fuel protocol.** On return, `fuel` is non-negative *iff* all outstanding work is exhausted,
+    /// and left negative exactly when work remains. The driver ([`join_with_tactic`]) reschedules the
+    /// operator iff `fuel < 0`, so returning non-negative with work still queued silently drops it
+    /// (and returning negative with nothing to do spins). The protocol is not driver-checkable — the
+    /// work-remaining state is tactic-internal — so derive the sign *from* that state rather than
+    /// tracking it separately, and it holds by construction (as the in-tree tactic does, setting
+    /// `fuel` from whether its queues are empty).
     fn work(&mut self, fuel: &mut isize, output: &mut OutputBuilderSession<B0::Time, EffortBuilder<CB>>);
 }
 
