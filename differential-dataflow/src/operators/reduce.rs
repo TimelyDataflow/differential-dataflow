@@ -36,6 +36,26 @@ pub(crate) trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>>
     /// the new input batches, and `held`: the times the operator currently holds capabilities for. It
     /// reasons only about times, returning the output batches to ship — each tagged with the time at
     /// which to ship it — and the new frontier of interesting times for the operator to hold.
+    ///
+    /// # Contract
+    ///
+    /// The driver ([`reduce_with_tactic`]) relies on the following; the first two are cheap to check
+    /// and are `debug_assert!`ed there.
+    ///
+    /// * **Ordered, tiling output.** The returned `(time, batch)` pairs are in ascending order and
+    ///   their descriptions *tile* `[lower, upper)`: the first batch's lower is `lower`, each batch's
+    ///   upper is the next batch's lower, and the last batch's upper is `upper` — no gaps, no overlaps.
+    ///   Sub-intervals with no updates are skipped; the next batch's lower simply picks up where the
+    ///   last left off. Producing *in order* is a requirement, not a convenience — it is what lets the
+    ///   driver check the tiling with a single linear scan.
+    /// * **Shipped at a held time.** Each batch's `time` tag is an element of `held`; the driver mints
+    ///   a capability at it, which is only valid for a held time.
+    /// * **Frontier bounds withheld work, and collapses to empty when there is none.** The returned
+    ///   frontier must be at-or-below every time the tactic defers, so the driver knows what is safe to
+    ///   release. In particular, with no work to defer it must be the *empty* antichain. Derive it from
+    ///   the actual withheld set rather than constructing it and this holds for free; returning a
+    ///   non-empty frontier with nothing pending holds capabilities forever and **deadlocks recursive
+    ///   scopes**. (Not driver-checkable — the withheld set is tactic-internal — so tactics self-enforce.)
     fn retire(
         &mut self,
         source_batches: Vec<B1>,
@@ -168,6 +188,26 @@ where
                     // Retire the interval. The tactic reasons only about times: it returns output batches
                     // each tagged with the time to ship it at, and the new frontier of interesting times.
                     let (produced, new_frontier) = tactic.retire(source_batches, output_batches, batch_storage, &lower_limit, &upper_limit, &held);
+
+                    // Contract checks (see `ReduceTactic::retire`). Cheap, debug-only.
+                    debug_assert!(
+                        produced.iter().all(|(time, _)| held.elements().contains(time)),
+                        "ReduceTactic::retire shipped a batch at a time not held as a capability",
+                    );
+                    debug_assert!(
+                        {
+                            // Ordered output makes tiling a single linear scan: each description's lower
+                            // must meet the previous upper (starting at `lower_limit`), ending at `upper_limit`.
+                            let mut edge = lower_limit.clone();
+                            let abutting = produced.iter().all(|(_, batch)| {
+                                let matches = batch.description().lower() == &edge;
+                                edge.clone_from(batch.description().upper());
+                                matches
+                            });
+                            abutting && (produced.is_empty() || edge == upper_limit)
+                        },
+                        "ReduceTactic::retire output must be ordered and tile [lower, upper)",
+                    );
 
                     // Ship each batch at a capability minted from the set at its time, and commit it to the
                     // output trace. The times are elements of `held`, so they stay valid until we downgrade.
