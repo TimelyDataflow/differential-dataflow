@@ -4,9 +4,7 @@
 //! the multiplication distributes over addition. That is, we will repeatedly evaluate (a + b) * c as (a * c)
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::cmp::Ordering;
-use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::rc::Rc;
 
 use timely::{Accountable, ContainerBuilder};
 use timely::order::PartialOrder;
@@ -23,20 +21,11 @@ use crate::trace::cursor::cursor_list;
 use crate::operators::ValueHistory;
 
 /// A type that can manage the joining of lists of batches.
-///
-/// A tactic maps two lists of batches to an iterator of output containers; it holds neither
-/// capabilities nor a fuel budget. The driver ([`join_with_tactic`]) pairs the returned iterator with
-/// the capability under which to ship its output, pulls it under a fuel budget, ships each yielded
-/// container, and drops the unit when the iterator goes dry. The iterator is the suspension mechanism:
-/// a container the driver is free to stop reading. Because "work remains" is just "the iterator has
-/// not yet yielded `None`," dryness is driver-observable rather than a protocol the tactic reports.
 pub(crate) trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, CB: ContainerBuilder> {
-    /// Prepare the join of two lists of corresponding batches into an iterator of output containers.
+    /// Prepare the join of two lists of batches into an iterator of output containers.
     ///
-    /// `fresh` names which input contributed the freshly-arrived batch; its times all lie at or beyond
-    /// `meet`, so a tactic need not advance that side by `meet`. `meet` is the time of the capability
-    /// the driver will ship this unit's output under — the lower envelope at which output is produced,
-    /// which the tactic may use to consolidate the accumulated side before the cross-product.
+    /// The supplied `fresh` and `meet` indicate respectively which input is "novel", and should drive the
+    /// join, as well as a lower bound on that input's times, so that the other input can be loaded compacted.
     fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = CB::Container>>;
 }
 
@@ -323,6 +312,10 @@ where
 
 /// Cursor-based join: the conventional [`JoinTactic`] implementation and its per-batch worker.
 mod cursors {
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
 
     /// The conventional cursor-based [`JoinTactic`].
@@ -491,6 +484,7 @@ mod cursors {
 
                             // Move any completed containers aside; we yield them one at a time.
                             while let Some(container) = builder.extract() {
+                                // Avoiding the mem::take would require a non-iterator trait.
                                 ready.push_back(std::mem::take(container));
                             }
                         }
@@ -504,6 +498,7 @@ mod cursors {
                 self.done = true;
                 // Flush the final partial container.
                 while let Some(container) = builder.finish() {
+                    // Avoiding the mem::take would require a non-iterator trait.
                     ready.push_back(std::mem::take(container));
                 }
             }
