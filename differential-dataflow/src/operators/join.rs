@@ -6,7 +6,8 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 
-use timely::{Accountable, ContainerBuilder};
+use timely::{Container, ContainerBuilder};
+use timely::container::NoopBuilder;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::dataflow::Stream;
@@ -21,12 +22,16 @@ use crate::trace::cursor::cursor_list;
 use crate::operators::ValueHistory;
 
 /// A type that can manage the joining of lists of batches.
-pub(crate) trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, CB: ContainerBuilder> {
+///
+/// The trait is parameterized by the output container `C`, not by the builder that assembles it: a tactic
+/// yields finished containers, and how it produces them (pushing records into a [`ContainerBuilder`], or
+/// otherwise) is its own concern.
+pub(crate) trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C> {
     /// Prepare the join of two lists of batches into an iterator of output containers.
     ///
     /// The supplied `fresh` and `meet` indicate respectively which input is "novel", and should drive the
     /// join, as well as a lower bound on that input's times, so that the other input can be loaded compacted.
-    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = CB::Container>>;
+    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = C>>;
 }
 
 /// Which input contributed the freshly-arrived batch of a deferred join unit.
@@ -63,7 +68,7 @@ where
     L: FnMut(BatchKey<'_, Tr1>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut CB)+'static,
     CB: ContainerBuilder<Container: Default> + 'static,
 {
-    join_with_tactic(arranged1, arranged2, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, _>::new(result))
+    join_with_tactic(arranged1, arranged2, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, _, CB>::new(result))
 }
 
 /// Drives an equijoin of two traces using a supplied [`JoinTactic`].
@@ -72,12 +77,12 @@ where
 /// compaction) and routes the per-batch work through the tactic. It requires only `TraceReader` of its
 /// inputs, never `Navigable`: it extracts trace batches via `batches_through`, and building cursors over
 /// them (if that is how the join proceeds) is the tactic's concern.
-pub(crate) fn join_with_tactic<'scope, Tr1, Tr2, T, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut tactic: T) -> Stream<'scope, Tr1::Time, CB::Container>
+pub(crate) fn join_with_tactic<'scope, Tr1, Tr2, T, C>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut tactic: T) -> Stream<'scope, Tr1::Time, C>
 where
     Tr1: TraceReader+'static,
     Tr2: TraceReader<Time = Tr1::Time>+'static,
-    T: JoinTactic<Tr1::Batch, Tr2::Batch, CB>+'static,
-    CB: ContainerBuilder + 'static,
+    T: JoinTactic<Tr1::Batch, Tr2::Batch, C>+'static,
+    C: Container + 'static,
 {
     // Rename traces for symmetry from here on out.
     let mut trace1 = arranged1.trace;
@@ -109,8 +114,8 @@ where
         // batch (so a burst on one input cannot starve the other). The driver owns the capabilities and
         // the fuel budget; each iterator, prepared by the tactic, yields the output containers to ship
         // under its paired capability, and is dropped once it goes dry.
-        let mut todo0: VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = CB::Container>>)> = VecDeque::new();
-        let mut todo1: VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = CB::Container>>)> = VecDeque::new();
+        let mut todo0: VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
+        let mut todo1: VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
 
         // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
         trace1.map_batches(|batch1| {
@@ -248,8 +253,11 @@ where
             // on one input cannot starve the other. We reschedule the operator whenever any work remains,
             // which is observable directly: an iterator has yet to yield `None`. The budget is split from
             // `2_000_000` to preserve the historical `1_000_000` of progress per input each activation.
-            let output: &mut OutputBuilderSession<'_, Tr1::Time, CB> = output;
-            let mut drain = |queue: &mut VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = CB::Container>>)>, mut fuel: isize| {
+            // The driver only ships finished containers (`give_container`), never pushing records, so it
+            // pins the operator output to `NoopBuilder<C>` — the builder for exactly this "containers ready
+            // to go" case, which is a `ContainerBuilder` for any `C` without further bounds.
+            let output: &mut OutputBuilderSession<'_, Tr1::Time, NoopBuilder<C>> = output;
+            let mut drain = |queue: &mut VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = C>>)>, mut fuel: isize| {
                 while fuel >= 0 {
                     let Some((capability, work)) = queue.front_mut() else { break };
                     match work.next() {
@@ -326,7 +334,10 @@ mod cursors {
     /// shared across all outstanding units (an `Rc<RefCell<_>>`), preserving the single mutable-state
     /// semantics of one closure threaded through every match — each unit is a self-contained `'static`
     /// iterator, so it cannot borrow the tactic.
-    pub struct CursorTactic<B0, B1, L>
+    ///
+    /// It is parameterized by the builder `CB` into which `logic` pushes output; the [`JoinTactic`] it
+    /// implements is over the container `CB` yields (`CB::Container`).
+    pub struct CursorTactic<B0, B1, L, CB>
     where
         B0: BatchReader + Navigable,
         B1: BatchReader<Time = B0::Time> + Navigable,
@@ -334,10 +345,10 @@ mod cursors {
         B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
     {
         logic: Rc<RefCell<L>>,
-        _marker: std::marker::PhantomData<(B0, B1)>,
+        _marker: std::marker::PhantomData<(B0, B1, CB)>,
     }
 
-    impl<B0, B1, L> CursorTactic<B0, B1, L>
+    impl<B0, B1, L, CB> CursorTactic<B0, B1, L, CB>
     where
         B0: BatchReader + Navigable,
         B1: BatchReader<Time = B0::Time> + Navigable,
@@ -350,7 +361,7 @@ mod cursors {
         }
     }
 
-    impl<B0, B1, L, CB> JoinTactic<B0, B1, CB> for CursorTactic<B0, B1, L>
+    impl<B0, B1, L, CB> JoinTactic<B0, B1, CB::Container> for CursorTactic<B0, B1, L, CB>
     where
         B0: BatchReader + Navigable + 'static,
         B1: BatchReader<Time = B0::Time> + Navigable + 'static,
