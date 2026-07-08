@@ -26,7 +26,7 @@ use crate::operators::ValueHistory;
 /// The trait is parameterized by the output container `C`, not by the builder that assembles it: a tactic
 /// yields finished containers, and how it produces them (pushing records into a [`ContainerBuilder`], or
 /// otherwise) is its own concern.
-pub(crate) trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C> {
+pub trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C> {
     /// Prepare the join of two lists of batches into an iterator of output containers.
     ///
     /// The supplied `fresh` and `meet` indicate respectively which input is "novel", and should drive the
@@ -39,7 +39,7 @@ pub(crate) trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C
 /// The fresh batch's times all lie at or beyond the capability, so its side is not advanced by the
 /// capability's meet; the opposing accumulated trace is. The marker also selects which queue a unit
 /// joins, so a burst on one input cannot starve the other.
-pub(crate) enum Fresh {
+pub enum Fresh {
     /// The first input (`B0`) contributed the fresh batch.
     Input0,
     /// The second input (`B1`) contributed the fresh batch.
@@ -77,7 +77,7 @@ where
 /// compaction) and routes the per-batch work through the tactic. It requires only `TraceReader` of its
 /// inputs, never `Navigable`: it extracts trace batches via `batches_through`, and building cursors over
 /// them (if that is how the join proceeds) is the tactic's concern.
-pub(crate) fn join_with_tactic<'scope, Tr1, Tr2, T, C>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut tactic: T) -> Stream<'scope, Tr1::Time, C>
+pub fn join_with_tactic<'scope, Tr1, Tr2, T, C>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut tactic: T) -> Stream<'scope, Tr1::Time, C>
 where
     Tr1: TraceReader+'static,
     Tr2: TraceReader<Time = Tr1::Time>+'static,
