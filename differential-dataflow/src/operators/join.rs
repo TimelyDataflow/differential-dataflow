@@ -9,7 +9,6 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use timely::{Accountable, ContainerBuilder};
-use timely::container::PushInto;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::dataflow::Stream;
@@ -22,49 +21,6 @@ use crate::operators::arrange::Arranged;
 use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, Cursor, Navigable, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::operators::ValueHistory;
-
-/// The sink presented to join closures: a thin [`ContainerBuilder`] wrapper providing [`give`](Self::give).
-///
-/// The wrapped `usize` cell once counted built records, so the driver could meter fuel from a closure's
-/// output volume. The driver now meters fuel from the record counts of the containers each prepared unit
-/// yields, so the counter is no longer read. This leaves the type a candidate for reduction to a bare
-/// sink, or removal in favor of pushing into `CB` directly (at the cost of the `give` ergonomics that
-/// closures rely on). Left in place pending review.
-#[derive(Default, Debug)]
-pub struct EffortBuilder<CB>(pub std::cell::Cell<usize>, pub CB);
-
-impl<CB: ContainerBuilder> EffortBuilder<CB> {
-    /// Push one output record into the builder. This is the sink presented to join closures.
-    #[inline]
-    pub fn give<D>(&mut self, item: D) where Self: PushInto<D> {
-        self.push_into(item);
-    }
-}
-
-impl<CB: ContainerBuilder> timely::container::ContainerBuilder for EffortBuilder<CB> {
-    type Container = CB::Container;
-
-    #[inline]
-    fn extract(&mut self) -> Option<&mut Self::Container> {
-        let extracted = self.1.extract();
-        self.0.replace(self.0.take() + extracted.as_ref().map_or(0, |e| e.record_count() as usize));
-        extracted
-    }
-
-    #[inline]
-    fn finish(&mut self) -> Option<&mut Self::Container> {
-        let finished = self.1.finish();
-        self.0.replace(self.0.take() + finished.as_ref().map_or(0, |e| e.record_count() as usize));
-        finished
-    }
-}
-
-impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
-    #[inline]
-    fn push_into(&mut self, item: D) {
-        self.1.push_into(item);
-    }
-}
 
 /// A type that can manage the joining of lists of batches.
 ///
@@ -115,7 +71,7 @@ where
     Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time>+'static,
     BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a>=BatchKey<'a, Tr1>, Time = Tr1::Time>,
-    L: FnMut(BatchKey<'_, Tr1>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut EffortBuilder<CB>)+'static,
+    L: FnMut(BatchKey<'_, Tr1>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut CB)+'static,
     CB: ContainerBuilder<Container: Default> + 'static,
 {
     join_with_tactic(arranged1, arranged2, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, _>::new(result))
@@ -368,7 +324,6 @@ where
 /// Cursor-based join: the conventional [`JoinTactic`] implementation and its per-batch worker.
 mod cursors {
     use super::*;
-    use timely::container::ContainerBuilder as _;
 
     /// The conventional cursor-based [`JoinTactic`].
     ///
@@ -409,7 +364,7 @@ mod cursors {
         B0::Cursor: Cursor<Time = B0::Time>,
         B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
         CB: ContainerBuilder<Container: Default> + 'static,
-        L: for<'a> FnMut(<B0::Cursor as Cursor>::Key<'a>, <B0::Cursor as Cursor>::Val<'a>, <B1::Cursor as Cursor>::Val<'a>, B0::Time, &<B0::Cursor as Cursor>::Diff, &<B1::Cursor as Cursor>::Diff, &mut EffortBuilder<CB>) + 'static,
+        L: for<'a> FnMut(<B0::Cursor as Cursor>::Key<'a>, <B0::Cursor as Cursor>::Val<'a>, <B1::Cursor as Cursor>::Val<'a>, B0::Time, &<B0::Cursor as Cursor>::Diff, &<B1::Cursor as Cursor>::Diff, &mut CB) + 'static,
     {
         fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = CB::Container>> {
             // The accumulated side's history is advanced by `meet` to consolidate it before the
@@ -439,7 +394,7 @@ mod cursors {
                 advance1,
                 advance2,
                 logic: Rc::clone(&self.logic),
-                builder: EffortBuilder::default(),
+                builder: CB::default(),
                 ready: VecDeque::new(),
                 done: false,
             })
@@ -473,7 +428,7 @@ mod cursors {
         /// The output closure, shared across all outstanding units.
         logic: Rc<RefCell<L>>,
         /// The builder `logic` fills; drained into `ready` as containers complete.
-        builder: EffortBuilder<CB>,
+        builder: CB,
         /// Completed containers awaiting a `next` call.
         ready: VecDeque<CB::Container>,
         done: bool,
@@ -485,7 +440,7 @@ mod cursors {
         C1: Cursor<Time=T>,
         C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
         CB: ContainerBuilder<Container: Default>,
-        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, T, &C1::Diff, &C2::Diff, &mut EffortBuilder<CB>),
+        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, T, &C1::Diff, &C2::Diff, &mut CB),
     {
         type Item = CB::Container;
 
