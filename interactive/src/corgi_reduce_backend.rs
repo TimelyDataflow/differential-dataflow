@@ -40,7 +40,7 @@ use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 use corgi::arrange::{gather, gather_lanes, hash_rows, sort_blocks};
-use corgi::{Bounds, Value as CValue};
+use corgi::{Bounds, Shape, Value as CValue};
 
 use crate::corgi_chunk::{columns_to_batch, CorgiChunk};
 use crate::ir::Diff;
@@ -158,6 +158,25 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
     }
 }
 
+/// Id column for a key/value column. For a PRIMITIVE column — a bare 64-bit `Prim`, or a 1-field
+/// `Prod([Prim(64)])` — the value itself is already a collision-free id (`i64 as u64` is a bijection),
+/// so pass it straight through and skip the `hash_rows` content hash. Compound shapes (Unit / List /
+/// Sum / multi-field `Prod`) still hash. The id is used ONLY as an identity for netting/dedup — its
+/// numeric order is never relied upon — so the raw two's-complement `u64` is correct even for negative
+/// ints (no order-preserving swizzle needed). Must be applied CONSISTENTLY at every id site (both
+/// value presentations AND the freshly-produced `reduce_brackets` outputs), else `desired − current`
+/// nets across mismatched ids for the same value.
+fn ids(col: &CValue) -> Vec<u64> {
+    match corgi::shape_of_value(col) {
+        Shape::Prim(64) => col.clone().into_u64("ids"),
+        Shape::Prod(ref fs) if fs.len() == 1 && matches!(fs[0], Shape::Prim(64)) => match col {
+            CValue::Prod(fields) => fields[0].clone().into_u64("ids"),
+            _ => unreachable!("shape Prod but value not Prod"),
+        },
+        _ => hash_rows(col),
+    }
+}
+
 /// Concatenate selected records across a run of chunks into parallel `(keys_col, vals_col)` corgi
 /// columns plus per-record `(key_hash, time, diff)`. `keep(kh)` decides inclusion by key hash.
 fn collect_present<T, F>(chunks: &[&CorgiChunk<T, Diff>], mut keep: F) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>)
@@ -170,7 +189,7 @@ where
     let (mut tags, mut offs) = (Vec::new(), Vec::new());
     let (mut khs, mut times, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
     for (ci, ch) in chunks.iter().enumerate() {
-        let kh = hash_rows(ch.keys());
+        let kh = ids(ch.keys());
         for i in 0..kh.len() {
             if keep(kh[i]) {
                 tags.push(ci);
@@ -228,7 +247,7 @@ where
                     return (Vec::new(), out_ends);
                 }
                 let col = CValue::Prod(vec![CValue::u64(sums)]);
-                out_ids = hash_rows(&col);
+                out_ids = ids(&col);
                 self.register_vals(col, &out_ids);
             }
             Reducer::Distinct => {
@@ -247,7 +266,7 @@ where
                     return (Vec::new(), out_ends);
                 }
                 let col = CValue::Unit(present);
-                out_ids = hash_rows(&col); // all equal (unit content hash)
+                out_ids = ids(&col); // all equal (unit content hash)
                 self.register_vals(col, &out_ids);
             }
             Reducer::Min => {
@@ -283,7 +302,7 @@ where
                 let (perm, _) = sort_blocks(&labels, &cand_col);
                 let min_reps: Vec<usize> = block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect();
                 let col = gather(&self.in_vals, &min_reps);
-                out_ids = hash_rows(&col);
+                out_ids = ids(&col);
                 self.register_vals(col, &out_ids);
             }
             Reducer::Collect => {
@@ -326,7 +345,7 @@ where
                 }
                 let elems = if elem_reps.is_empty() { CValue::Unit(0) } else { gather(&self.in_vals, &elem_reps) };
                 let col = CValue::List(Bounds::Offsets(bracket_ends), Box::new(elems));
-                out_ids = hash_rows(&col);
+                out_ids = ids(&col);
                 self.register_vals(col, &out_ids);
             }
         }
@@ -349,7 +368,7 @@ where
         // so this superset of b.support suffices; `instance.lower` is not applied (see ReduceInstance).
         let mut out: Vec<(u64, T)> = Vec::new();
         for ch in chunks_of(instance.input_batches) {
-            let kh = hash_rows(ch.keys());
+            let kh = ids(ch.keys());
             for (h, t) in kh.into_iter().zip(ch.times()) {
                 out.push((h, t.clone()));
             }
@@ -386,7 +405,7 @@ where
             self.in_vals = CValue::Unit(0);
             Vec::new()
         } else {
-            let vids = hash_rows(&in_vals);
+            let vids = ids(&in_vals);
             for (r, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(r); }
             self.in_vals = in_vals;
             self.register_keys(in_keys, &in_khs);
@@ -401,7 +420,7 @@ where
         let output: ProxyBridge<T, Diff> = if o_khs.is_empty() {
             Vec::new()
         } else {
-            let vids = hash_rows(&o_vals);
+            let vids = ids(&o_vals);
             self.register_keys(o_keys, &o_khs);
             self.register_vals(o_vals, &vids);
             let mut b: ProxyBridge<T, Diff> =
