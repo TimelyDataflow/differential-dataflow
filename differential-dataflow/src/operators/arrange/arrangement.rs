@@ -251,7 +251,7 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
             other,
             move |k, v1, v2, t, d1, d2, c| {
                 for datum in result(k, v1, v2, t, d1, d2) {
-                    c.give(datum);
+                    c.push_into(datum);
                 }
             }
         )

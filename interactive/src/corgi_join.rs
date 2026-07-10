@@ -9,16 +9,12 @@
 //! THIS ITERATION: struct + `defer` + a stub `work`, compiling as a valid `JoinTactic` (validates the
 //! generic-bound wiring). The join COMPUTE is already validated in `examples/corgi_join_mechanism.rs`.
 
-use std::collections::VecDeque;
 use std::rc::Rc;
 
-use timely::ContainerBuilder;
-use timely::dataflow::operators::generic::OutputBuilderSession;
-use timely::dataflow::operators::Capability;
 use timely::progress::Timestamp;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::join::{EffortBuilder, Fresh, JoinTactic};
+use differential_dataflow::operators::join::{Fresh, JoinTactic};
 
 use corgi::arrange::{find_ranges, gather};
 use corgi::Value as CValue;
@@ -32,66 +28,38 @@ use crate::ir::Diff;
 use crate::parse::Term;
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 
-/// A deferred bilinear join unit: a fresh batch list joined against the accumulated other side.
-/// (The accumulated-side advance-by-meet — an output-neutral consolidation optimization — is deferred;
-/// `merge_one` consolidates each side without advancing, which is correct.)
-struct CorgiDeferred<T: Timestamp + Lattice> {
-    left: Vec<CBatch<T>>,
-    right: Vec<CBatch<T>>,
-    /// Which side carried the fresh batch; the other (accumulated) side is restricted to the fresh
-    /// side's keys rather than fully flattened.
-    fresh: Fresh,
-    capability: Capability<T>,
-}
-
 /// Cursor-less corgi join tactic. Holds the projection `Term`s (`Var(0)=key`, `Var(1)=val0`,
 /// `Var(2)=val1`); compiled to a corgi graph per work-unit using the matched columns' shapes (so
 /// `Spread` resolves against the actual key/val arities).
 pub struct CorgiJoinTactic<T: Timestamp + Lattice> {
     key: Term,
     val: Term,
-    todo0: VecDeque<CorgiDeferred<T>>, // fresh on input0
-    todo1: VecDeque<CorgiDeferred<T>>, // fresh on input1
+    _t: std::marker::PhantomData<T>,
 }
 
 impl<T: Timestamp + Lattice> CorgiJoinTactic<T> {
     pub fn new(key: Term, val: Term) -> Self {
-        CorgiJoinTactic { key, val, todo0: VecDeque::new(), todo1: VecDeque::new() }
+        CorgiJoinTactic { key, val, _t: std::marker::PhantomData }
     }
 }
 
-impl<T, CB> JoinTactic<CBatch<T>, CBatch<T>, CB> for CorgiJoinTactic<T>
+impl<T> JoinTactic<CBatch<T>, CBatch<T>, CorgiContainer<T, Diff>> for CorgiJoinTactic<T>
 where
     T: Timestamp + Lattice,
-    CB: ContainerBuilder<Container = CorgiContainer<T, Diff>>,
 {
-    fn defer(&mut self, input0: Vec<CBatch<T>>, input1: Vec<CBatch<T>>, fresh: Fresh, capability: Capability<T>) {
-        let queue = match &fresh {
-            Fresh::Input0 => &mut self.todo0,
-            Fresh::Input1 => &mut self.todo1,
-        };
-        queue.push_back(CorgiDeferred { left: input0, right: input1, fresh, capability });
-    }
-
-    fn work(&mut self, fuel: &mut isize, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>) {
-        // Eager (correctness-first): run every queued unit fully. Fuel budgeting is a later
-        // refinement; leaving `fuel` non-negative signals "complete" to the operator.
-        while let Some(unit) = self.todo0.pop_front() {
-            run_unit(unit, &self.key, &self.val, output);
-        }
-        while let Some(unit) = self.todo1.pop_front() {
-            run_unit(unit, &self.key, &self.val, output);
-        }
-        *fuel = 0;
+    /// One bilinear unit → its output container. The operator (`join_with_tactic`) drives capabilities
+    /// and fuel by draining the returned iterator; `meet` (compaction) is ignored (correctness-first,
+    /// like the reference identity backend — output times are just less compact, never wrong).
+    fn prep(&mut self, input0: Vec<CBatch<T>>, input1: Vec<CBatch<T>>, fresh: Fresh, _meet: T) -> Box<dyn Iterator<Item = CorgiContainer<T, Diff>>> {
+        Box::new(run_unit(input0, input1, fresh, &self.key, &self.val).into_iter())
     }
 }
 
 /// Join one deferred bilinear unit: merge-join the two runs by key over corgi columns, cross-product
 /// matched val runs (lattice time-join + diff-multiply), project via corgi, emit at the capability.
-fn run_unit<T, CB>(unit: CorgiDeferred<T>, key: &Term, val: &Term, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>)
+fn run_unit<T>(left_b: Vec<CBatch<T>>, right_b: Vec<CBatch<T>>, fresh: Fresh, key: &Term, val: &Term) -> Option<CorgiContainer<T, Diff>>
 where
     T: Timestamp + Lattice,
-    CB: ContainerBuilder<Container = CorgiContainer<T, Diff>>,
 {
     // Materialize the FRESH (delta-sized) side whole; then present the ACCUMULATED side. When it is
     // meaningfully larger than the fresh delta (recursive joins against a built-up trace), probe it
@@ -106,15 +74,15 @@ where
             flatten_batches(acc)
         }
     };
-    let (left, right) = match unit.fresh {
+    let (left, right) = match fresh {
         Fresh::Input0 => {
-            let Some(left) = flatten_batches(&unit.left) else { return };
-            let Some(right) = accumulated(&unit.right, &left) else { return };
+            let left = flatten_batches(&left_b)?;
+            let right = accumulated(&right_b, &left)?;
             (left, right)
         }
         Fresh::Input1 => {
-            let Some(right) = flatten_batches(&unit.right) else { return };
-            let Some(left) = accumulated(&unit.left, &right) else { return };
+            let right = flatten_batches(&right_b)?;
+            let left = accumulated(&left_b, &right)?;
             (left, right)
         }
     };
@@ -135,7 +103,7 @@ where
         }
     }
     if li.is_empty() {
-        return;
+        return None;
     }
 
     // gather matched (key, val0, val1) columns, run the projection corgi program, untranscode.
@@ -148,8 +116,6 @@ where
     let mut cols = projected.into_prod("corgi join projection");
     let nv = cols.pop().unwrap();
     let nk = cols.pop().unwrap();
-    // Emit the projection's corgi columns directly as a CorgiContainer via `give_container` — no
-    // untranscode-to-rows + re-transcode. The output stream is column-native.
-    let mut container = CorgiContainer { keys: nk, vals: nv, times: ot, diffs: od };
-    output.session_with_builder(&unit.capability).give_container(&mut container);
+    // The projection's corgi columns directly as a column-native CorgiContainer (no untranscode).
+    Some(CorgiContainer { keys: nk, vals: nv, times: ot, diffs: od })
 }

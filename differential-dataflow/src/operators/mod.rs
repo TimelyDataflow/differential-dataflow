@@ -144,9 +144,8 @@ impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> V
         TimeReplay { history: &self.history[..], buffer }
     }
 
-    /// Organizes history based on current contents of edits.
-    fn replay<'history>(&'history mut self) -> HistoryReplay<'history, V, T, D> {
-
+    /// Organizes history based on current contents of edits (sort + suffix meets).
+    fn build(&mut self) {
         self.buffer.clear();
         self.history.clear();
         for value_index in 0 .. self.edits.values.len() {
@@ -160,45 +159,86 @@ impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> V
 
         self.history.sort_by(|x,y| y.cmp(x));
         self.history.iter_mut().reduce(|prev, cur| { cur.1.meet_assign(&prev.1); cur });
+    }
 
+    /// Organizes history based on current contents of edits, returning a fresh replay.
+    fn replay<'history>(&'history mut self) -> HistoryReplay<'history, V, T, D> {
+        self.build();
         HistoryReplay { replay: self }
     }
+
+    /// Loads `edits` from a plain iterator (grouped by consecutive value — the presentation
+    /// order), advancing each time by `advance_by` if supplied, then organizes. This is the
+    /// cursor-free ingestion path: the `int_proxy` tactics present `(value_id, time, diff)`
+    /// runs directly rather than through a `Cursor`, and share this machinery instead of
+    /// re-implementing it. Ungrouped input is still correct, only less compact.
+    fn load_iter(&mut self, edits: impl Iterator<Item = (V, T, D)>, advance_by: Option<&T>) {
+        self.edits.clear();
+        let mut cur: Option<V> = None;
+        for (v, mut time, diff) in edits {
+            if cur != Some(v) {
+                if let Some(pv) = cur { self.edits.seal(pv); }
+                cur = Some(v);
+            }
+            if let Some(m) = advance_by { time.join_assign(m); }
+            self.edits.push(time, diff);
+        }
+        if let Some(pv) = cur { self.edits.seal(pv); }
+        self.build();
+    }
+}
+
+impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: Clone + crate::difference::Semigroup> ValueHistory<V, T, D> {
+    /// The next (least) un-replayed time.
+    fn time(&self) -> Option<&T> { self.history.last().map(|x| &x.0) }
+    /// The meet of all un-replayed times.
+    fn meet(&self) -> Option<&T> { self.history.last().map(|x| &x.1) }
+    /// The next un-replayed edit, as `(value, time, diff)`.
+    fn edit(&self) -> Option<(V, &T, &D)> {
+        self.history.last().map(|&(ref t, _, v, e)| (self.edits.values[v].0, t, &self.edits.edits[e].1))
+    }
+    /// The buffered (stepped-in, advanced, consolidated) edits.
+    fn buffer(&self) -> &[((V, T), D)] { &self.buffer[..] }
+    /// Move the next edit into the buffer.
+    fn step(&mut self) {
+        let (time, _, value_index, edit_offset) = self.history.pop().unwrap();
+        self.buffer.push(((self.edits.values[value_index].0, time), self.edits.edits[edit_offset].1.clone()));
+    }
+    /// Step edits while the next time equals `time`; true iff any did.
+    fn step_while_time_is(&mut self, time: &T) -> bool {
+        let mut found = false;
+        while self.time() == Some(time) { found = true; self.step(); }
+        found
+    }
+    /// Step edits while the next time is `<= time` in the TOTAL order (a superset of the
+    /// partially-ordered downset; readers filter the buffer by `less_equal` themselves).
+    fn step_through(&mut self, time: &T) {
+        while self.time().is_some_and(|t| t <= time) { self.step(); }
+    }
+    /// Advance buffered times by `meet` and consolidate — the collapse that keeps replay linear.
+    fn advance_buffer_by(&mut self, meet: &T) {
+        for element in self.buffer.iter_mut() { (element.0).1.join_assign(meet); }
+        crate::consolidation::consolidate(&mut self.buffer);
+    }
+    fn is_done(&self) -> bool { self.history.is_empty() }
 }
 
 struct HistoryReplay<'history, V, T, D> {
     replay: &'history mut ValueHistory<V, T, D>,
 }
 
+// A `HistoryReplay` is a thin cursor-facing handle over a `ValueHistory`; the replay
+// machinery lives on `ValueHistory` itself (shared with the `int_proxy` tactics), and
+// these forward to it.
 impl<'history, V: Copy + Ord, T: Ord + Clone + Lattice, D: Clone + crate::difference::Semigroup> HistoryReplay<'history, V, T, D> {
-    fn time(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.0) }
-    fn meet(&self) -> Option<&T> { self.replay.history.last().map(|x| &x.1) }
-    fn edit(&self) -> Option<(V, &T, &D)> {
-        self.replay.history.last().map(|&(ref t, _, v, e)| (self.replay.edits.values[v].0, t, &self.replay.edits.edits[e].1))
-    }
-
-    fn buffer(&self) -> &[((V, T), D)] {
-        &self.replay.buffer[..]
-    }
-
-    fn step(&mut self) {
-        let (time, _, value_index, edit_offset) = self.replay.history.pop().unwrap();
-        self.replay.buffer.push(((self.replay.edits.values[value_index].0, time), self.replay.edits.edits[edit_offset].1.clone()));
-    }
-    fn step_while_time_is(&mut self, time: &T) -> bool {
-        let mut found = false;
-        while self.time() == Some(time) {
-            found = true;
-            self.step();
-        }
-        found
-    }
-    fn advance_buffer_by(&mut self, meet: &T) {
-        for element in self.replay.buffer.iter_mut() {
-            (element.0).1.join_assign(meet);
-        }
-        crate::consolidation::consolidate(&mut self.replay.buffer);
-    }
-    fn is_done(&self) -> bool { self.replay.history.is_empty() }
+    fn time(&self) -> Option<&T> { self.replay.time() }
+    fn meet(&self) -> Option<&T> { self.replay.meet() }
+    fn edit(&self) -> Option<(V, &T, &D)> { self.replay.edit() }
+    fn buffer(&self) -> &[((V, T), D)] { self.replay.buffer() }
+    fn step(&mut self) { self.replay.step() }
+    fn step_while_time_is(&mut self, time: &T) -> bool { self.replay.step_while_time_is(time) }
+    fn advance_buffer_by(&mut self, meet: &T) { self.replay.advance_buffer_by(meet) }
+    fn is_done(&self) -> bool { self.replay.is_done() }
 }
 
 /// A time-only, non-destructive walk over an already-built [`ValueHistory`] history.

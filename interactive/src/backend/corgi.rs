@@ -212,7 +212,7 @@ impl Backend for CorgiBackend {
         // corgi columns directly into a `CorgiContainer` (via `give_container`) — the output stream is
         // column-native, so there is no row round-trip / no `JoinToCorgi` unary.
         let tactic = CorgiJoinTactic::new(projection.key.clone(), projection.val.clone());
-        join_with_tactic::<_, _, _, CapacityContainerBuilder<CC>>(l, r, tactic).as_collection()
+        join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection()
     }
 
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {

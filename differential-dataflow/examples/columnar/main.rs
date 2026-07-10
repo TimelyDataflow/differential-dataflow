@@ -90,6 +90,7 @@ fn main() {
 /// Push on UpdatesTyped for the reduce builder path.
 mod reachability {
 
+    use timely::container::PushInto;
     use timely::order::Product;
     use differential_dataflow::Collection;
     use differential_dataflow::AsCollection;
@@ -149,7 +150,7 @@ mod reachability {
                         use differential_dataflow::difference::Multiply;
                         let dst: Node = *dst;
                         let diff: Diff = d1.clone().multiply(d2);
-                        session.give::<(Node, (), IterTime, Diff)>((dst, (), time.clone(), diff));
+                        session.push_into((dst, (), time.clone(), diff));
                     },
                 ).as_collection();
 
