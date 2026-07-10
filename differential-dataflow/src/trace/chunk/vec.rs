@@ -44,14 +44,6 @@ impl<K, V, T, R> Default for VecChunk<K, V, T, R> {
     fn default() -> Self { VecChunk(Rc::new(Vec::new())) }
 }
 
-impl<K, V, T, R> VecChunk<K, V, T, R> {
-    /// The chunk's records as a flat, sorted, consolidated slice. The reference layout *is* a
-    /// `Vec`, so a backend that knows its storage is `VecChunk` can read the seam columns directly
-    /// rather than walking the generic cursor (each record is already a `((key, val), time, diff)`
-    /// tuple in order).
-    pub fn as_slice(&self) -> &[((K, V), T, R)] { &self.0 }
-}
-
 /// The trace type for `arrange`: a spine of `Rc`-shared chunk batches.
 pub type ChunkSpine<K, V, T, R> = super::ChunkSpine<VecChunk<K, V, T, R>>;
 /// Merge batcher over `VecChunk`s; a `ContainerChunker<VecChunk>` at the

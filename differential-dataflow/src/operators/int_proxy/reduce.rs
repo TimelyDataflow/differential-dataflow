@@ -1,4 +1,7 @@
-//! The proxy reduce: all interesting-time logic in proxy space, value work by callback.
+//! The proxy reduce framework.
+//!
+//! A conventional differential reduce against `(u64, u64)`, where the backend supplies the
+//! implementation of the interpretation of the integers.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,15 +17,7 @@ use crate::operators::reduce::{ReduceTactic, sort_dedup};
 
 use super::history::{IdHistory, TimeHistory};
 
-/// The retire-wide context the tactic shares with the backend: the batches it is working
-/// over, and the `lower` frontier below which loaded data may be advanced and consolidated.
-///
-/// The batches are live for the whole retire, so a backend may resolve `value_id`s against
-/// them (rather than copying data out at presentation — a later refinement). The `lower`
-/// frontier is the compaction frontier for *loading*: a backend presenting the accumulation
-/// may advance every time by it and consolidate, collapsing the historical tail. It is **not**
-/// for `seed_times`, whose times are `lower`-bounded already (so advancing is a no-op) and
-/// which must draw raw novel support, never the compacted view.
+/// A unit of proxied reduce work, presented to the backend.
 pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
     /// The accumulated input history.
     pub source_batches: &'a [B1],
@@ -34,77 +29,53 @@ pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>>
     pub lower: AntichainRef<'a, B1::Time>,
 }
 
-/// One window of a retire's changed keys: a bounded, hash-contiguous snip the backend sizes,
-/// presenting the input (accumulated ∪ novel) and output history restricted to the window's
-/// keys. The backend holds the matching value resolution as current-window state (so peak read
-/// memory tracks a window, not the retire); the tactic merge-walks these bridges. Produced by
-/// [`ProxyReduceBackend::next_window`].
+/// One window of a retire's changed keys: a bounded, hash-contiguous snip the backend sizes.
+///
+/// The window has the input (old and new) and output histories, restricted to the window's keys.
 pub struct ReduceWindow<T, RIn, ROut> {
+    /// The window's key hashes: a contiguous, ascending slice of the retire's `changed` keys.
+    pub keys: Vec<u64>,
     /// Input presentation for `keys`, sorted & consolidated by `((key_hash, value_id), time)`.
     pub input: ProxyBridge<T, RIn>,
     /// Output-history presentation for `keys`, same ordering.
     pub output: ProxyBridge<T, ROut>,
-    /// The window's key hashes: a contiguous, ascending slice of the retire's `changed` keys.
-    pub keys: Vec<u64>,
 }
 
 /// The reduce backend: value semantics for a proxy-space reduction, driven by [`ProxyReduceTactic`].
 ///
-/// Protocol (per `retire`): one `seed_times` (the new input batches' `(key, time)` support and the
-/// changed keys); one `begin` opening the output session with the retire's output tiles; then the
-/// **windowed loop** — repeatedly `next_window` (a bounded, hash-contiguous snip of the changed
-/// keys, presenting input + output history for just those keys and priming the current-window
-/// resolution), `reduce_corrections` over that round's active keys, and `emit` per output tile a
-/// window touches; then one `finish` sealing the tiled batches. Values never round-trip through the
-/// tactic: `reduce_corrections` differences and mints internally, and `emit`/`finish` resolve. The
-/// backend need only resolve the **current window's** ids — windows are hash-contiguous, so a key
-/// (and its hash collisions) lives wholly in one window.
-///
-/// The differencing (`desired − current`) lives in `reduce_corrections`, inside the backend, so a
-/// backend's `ROut` need not truly be a group — the reference backends happen to subtract, but the
-/// seam does not require it (this is what "non-Abelian" bought; see DESIGN.md F8).
+/// The protocol is currently (temporarily) for each round of invocation:
+/// `seed_times begin [ next_window reduce_correction* emit ]* finish`
+/// This should be improved to put the `seed_times` in the per-window loop, or remove it entirely.
 pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
-
     /// Diff type presented for the input.
     type RIn: Semigroup;
-
-    /// Diff type of the output. Only `Semigroup` — the tactic merely consolidates corrections; a
-    /// backend that computes `desired − current` in `reduce_corrections` imposes `Abelian` on its own
-    /// impl (as `vec_backend` does), it is not a seam requirement.
+    /// Diff type of the output.
     type ROut: Semigroup + 'static;
 
     /// Hash keys and associated times in the instance's novel input batches.
     ///
-    /// This is used (with held times) to seed the interesting times for each key. It reads
-    /// only the novel batches' raw support; `instance.lower` is not applied (see [`ReduceInstance`]).
-    /// The returned entries **must be sorted by `key_hash`** (the tactic merge-walks them against
-    /// the presentations, and `debug_assert!`s it).
+    /// This is used (with held times) to seed the interesting times for each key.
     fn seed_times(&self, instance: &ReduceInstance<'_, B1, B2>) -> Vec<(u64, B1::Time)>;
 
-    /// Open the retire's output session: one output builder per tile, in tile order. The `tiles`
-    /// descriptions abut to cover `[lower, upper)` — a time-only tiling the tactic owns.
-    /// Subsequent `emit`s route to these builders by index; `finish` seals them.
+    /// Initiate a session to create batches for these descriptions, which span `[lower, upper)`.
+    ///
+    /// It is the backend's job to prepare output batches for each of these descriptions.
+    /// The computation proceeds in windows of keys, where only the backend maintains this
+    /// work in progress, until `finish()` is called.
     fn begin(&mut self, tiles: &[Description<B1::Time>]);
 
-    /// Produce the next window of changed keys — a bounded, hash-contiguous snip the backend
-    /// sizes to cap peak read memory — presenting the input (accumulated ∪ novel) and output
-    /// history restricted to the window's keys, and priming the current-window resolution.
-    /// `cursor` walks `changed` across calls (the backend advances it by the window it took);
-    /// `None` once `changed` is exhausted. Each presented bridge **must be sorted and
-    /// consolidated** by `((key_hash, value_id), time)` — the tactic merge-walks it, so an
-    /// unsorted/unconsolidated run silently drops records. Advancing loaded times by
-    /// `instance.lower` first is an *optional* efficiency; the sort/consolidate is not.
+    /// Produce the next window, resticted to `changed[cursor..]`, and update `cursor` to track.
+    ///
+    /// The size of the window is up to the backend, where the window should be large enough to
+    /// amortize the crossings between the harness and the backend. The proxy bridges for the
+    /// whole window will be active at the same time, so tighter windows reduce the required state.
     fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, changed: &[u64], cursor: &mut usize) -> Option<ReduceWindow<B1::Time, Self::RIn, Self::ROut>>;
 
-    /// The per-round value crossing. For each of `keys` (one entry per active-moment this round):
-    /// its input accumulation bracket (`input`/`in_ends`, `(value_id, diff)` resolved against the
-    /// current window's input) and its current-output bracket (`output`/`out_ends`, resolved
-    /// against the current window's output). Returns the per-key output **corrections**
-    /// (`out_ends`-demarcated) as `(value_id, diff)`: the backend resolves both, applies the
-    /// reduction to the input, differences the result against the current output, and mints ids for
-    /// the corrections. Time-free — the harness supplies the accumulations already time-filtered,
-    /// and tags/tiles the corrections afterward. A key's moments are sequential (each sees its
-    /// earlier corrections), so peak materialization is one moment deep, mirroring the reference.
+    /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
+    ///
+    /// Multiple keys are provided concurrently, for each an accumulated input and tentative output.
+    /// The backend should provide for each key the necessary output updates to bring the output in
+    /// with its desires. The `usize` integers upper bound the range for the corresponding key.
     fn reduce_corrections(
         &mut self,
         keys: &[u64],
@@ -114,25 +85,17 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
         output: &[(u64, Self::ROut)],
     ) -> (Vec<(u64, Self::ROut)>, Vec<usize>);
 
-    /// Route the current window's output deltas for one tile into that tile's builder: the
-    /// `((key_hash, value_id), time, diff)` the tactic derived (desired − current), which the
-    /// backend resolves against the **current window's** value maps — no value round-trips
-    /// through the tactic. Accumulates into the session; produces no batch. `tile` indexes the
-    /// `begin` descriptions.
+    /// Commit to a collection of updates at a specific batch in progress.
+    ///
+    /// The `tile: usize` indexes the list of descriptions provided to `begin()`, and these updates
+    /// are aimed at that batch in progress.
     fn emit(&mut self, tile: usize, records: &[((u64, u64), B1::Time, Self::ROut)]);
 
-    /// Seal the session opened by `begin`: the tiled output batches, in tile order (one per
-    /// `begin` description).
+    /// Complete the session matching `begin`. The outputs correspond to the descriptions it was provided.
     fn finish(&mut self) -> Vec<B2>;
 }
 
-/// The reduce tactic, mirroring the reference cursor reduce's bounded, per-moment application (ref
-/// `reduce.rs` :715–776). Determination is [`discover_times`] (interesting times only); application
-/// walks all a window's keys' moments in rounds, keeping each key's input, output, and
-/// produced-output accumulations *one moment deep* and crossing a round's active keys via
-/// [`ProxyReduceBackend::reduce_corrections`]. Peak memory is O(window presentation), never
-/// O(times × values). The differencing lives inside the backend, so any diff works, not only groups
-/// (see DESIGN.md F8).
+/// A proxy-space [`ReduceTactic`]: matches input and output records by `key_hash`.
 pub struct ProxyReduceTactic<T, Bk> {
     backend: Bk,
     /// Pending interesting times beyond the upper frontier, keyed by key hash.

@@ -20,9 +20,7 @@ pub(crate) struct TimeHistory<T> {
 }
 
 impl<T: Lattice + Clone + Ord> TimeHistory<T> {
-    pub fn new() -> Self {
-        TimeHistory { history: Vec::new(), buffer: Vec::new() }
-    }
+    pub fn new() -> Self { TimeHistory { history: Vec::new(), buffer: Vec::new() } }
 
     /// Load `times`, advancing each by `advance_by` if supplied, and organize the replay
     /// (sort + suffix meets).

@@ -1,4 +1,7 @@
-//! The proxy join: equi-join by `key_hash`, value work by matched index lists.
+//! The proxy join framework.
+//!
+//! A conventional differential join against `(u64, u64)` values, which are provided by
+//! and then interpreted by a backend, who is relieved of lattice-time reasoning.
 
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::AntichainRef;
@@ -11,14 +14,7 @@ use crate::operators::join::{Fresh, JoinTactic};
 
 use super::history::IdHistory;
 
-/// The work-unit context the tactic shares with the backend: the two input batch lists, and
-/// a `lower` frontier below which loaded times may be advanced and consolidated.
-///
-/// The batches are live for the whole unit, so a backend may resolve `value_id`s against them
-/// (rather than copying data out at presentation — a later refinement). `lower` is the unit's
-/// capability time: every output is produced under that capability, so no output time falls
-/// below it, and advancing loaded times by it leaves the output unchanged while collapsing the
-/// accumulated tail.
+/// A unit of proxied join work, presented to the backend.
 pub struct JoinInstance<'a, B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// The first input's batches.
     pub batches0: &'a [B0],
@@ -30,10 +26,8 @@ pub struct JoinInstance<'a, B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
 
 /// A type that can interpret and retire pairs of batches, joined by key hashes.
 ///
-/// The protocol is one call to each `present*` method, followed by at most one
-/// call to `cross`. The `value_id`s named in `cross` are exactly those the backend
-/// supplied in the `present*` bridges (the harness returns them unchanged), so the
-/// backend resolves them to real data by whatever scheme it minted them under.
+/// The protocol invokes the `present*` methods with the instance to produce the proxy collection,
+/// and then returns with any number (including zero) calls to `cross` to produce outputs.
 pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// Diff type presented for the first input.
     type R0: Semigroup + Multiply<Self::R1, Output = Self::ROut>;
@@ -45,39 +39,25 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     type Output;
 
     /// Prepare a proxy bridge from the instance's first input, optionally key-hash restricted.
-    /// The returned bridge **must be sorted and consolidated** by `((key_hash, value_id), time)`
-    /// — the tactic merge-joins the two runs on `key_hash`, so an unsorted or unconsolidated run
-    /// silently drops matches. Advancing loaded times by `instance.lower` first is optional; the
-    /// sort/consolidate is not.
+    ///
+    /// The returned bridge **must be sorted and consolidated** by `((key_hash, value_id), time)`.
     fn present0(&mut self, instance: &JoinInstance<'_, B0, B1>, filter: Option<&[u64]>) -> ProxyBridge<B0::Time, Self::R0>;
     /// Prepare a proxy bridge from the instance's second input, optionally key-hash restricted.
-    /// **Must be sorted and consolidated** by `((key_hash, value_id), time)` (as `present0`);
-    /// advancing by `instance.lower` is optional.
+    ///
+    /// The returned bridge **must be sorted and consolidated** by `((key_hash, value_id), time)`.
     fn present1(&mut self, instance: &JoinInstance<'_, B0, B1>, filter: Option<&[u64]>) -> ProxyBridge<B0::Time, Self::R1>;
-    /// For matched pairs from the most recent bridges — each identified by its full
-    /// `(key_hash, value_id)` bridge key — with times and diffs, produce an output. A bare
-    /// `value_id` is only meaningful within a `key_hash` (it is an intra-hash identifier), so
-    /// the pair is what pins a record; the backend resolves each against its presentation.
+    /// From a list of left and right identifiers, and corresponding times and diffs, the output.
     fn cross(&mut self, instance: &JoinInstance<'_, B0, B1>, left: &[(u64, u64)], right: &[(u64, u64)], times: Vec<B0::Time>, diffs: Vec<Self::ROut>) -> Self::Output;
 }
 
 /// A proxy-space [`JoinTactic`]: matches records of the two presented runs by `key_hash`,
-/// cross-products matched records with DD-computed times (lattice join) and diffs
-/// (product), and hands the backend the matched value ids for the value work.
-///
-/// The tactic is pure data-to-data: `prep` maps two batch lists to output containers, holding no
-/// capabilities and no fuel — the driver owns the queues, pairs each unit with its shipping
-/// capability, and meters fuel. `prep` chunks the unit's output at `key_hash` boundaries (a
-/// container per ~[`JOIN_CHUNK`] matches), so a large unit ships in bounded pieces the driver meters
-/// fuel against. Bounding the *presentation* of a single huge unit (both sides in full) is F7's
-/// hash-native windowing; see DESIGN.md F8.
 pub struct ProxyJoinTactic<B0, B1, Bk> {
     backend: Bk,
     _marker: std::marker::PhantomData<(B0, B1)>,
 }
 
 impl<B0, B1, Bk> ProxyJoinTactic<B0, B1, Bk> {
-    /// A tactic deferring all value semantics to `backend`.
+    /// A join tactic deferring all value semantics to `backend`.
     pub fn new(backend: Bk) -> Self {
         ProxyJoinTactic { backend, _marker: std::marker::PhantomData }
     }
@@ -95,15 +75,8 @@ where
     }
 }
 
-/// Target matched-pair count per emitted container. The merge-join accumulates matches and ships a
-/// container once the batch reaches this size — so the unit's output leaves in bounded pieces
-/// (downstream backpressure and the driver's fuel granularity) rather than one container, and
-/// delta-sized units keep a small working set. The flush fires wherever the batch fills, **including
-/// mid-key inside a high-fanout key's cross-product wave**, so no single key materializes more than a
-/// chunk (a match is an independent output record, so splitting anywhere is sound). Tunable.
-/// (Bounding the *presentation* of a single huge unit — both sides in full — is a separate matter,
-/// gated on hash-native storage; see DESIGN.md F8/F7.)
-const JOIN_CHUNK: usize = 1 << 18;
+/// Update count threshold used to return to the backend with join output to instantiate.
+const JOIN_CHUNK: usize = 1 << 20;
 
 /// Prepare one join unit: present both sides, merge-match key runs over the sorted hashes, and
 /// cross-product matched records into a sequence of output containers — one per ~[`JOIN_CHUNK`]
@@ -192,10 +165,6 @@ where
 /// If either history is small, this performs a simple cross product.
 /// If both histories are large, this replays the histories compacting as it goes in
 /// order to (potentially) avoid quadratic blow-up.
-///
-/// All records here share the key hash `kh` (the merge-join matched on it), so matches are
-/// reported to `li`/`ri` as their full `(kh, value_id)` bridge keys — equal keys denote equal
-/// records — which the backend resolves; the harness never needs a representative.
 #[allow(clippy::too_many_arguments)]
 fn join_key<T, R0, R1, RO, F>(
     kh: u64,
