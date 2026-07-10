@@ -24,6 +24,16 @@ use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, Batc
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 
+/// Sort and deduplicate a list. Shared by the cursor and reference tactics (via their
+/// `use super::*`) and the proxy tactic (`crate::operators::reduce::sort_dedup`), which
+/// each previously carried an identical copy.
+#[inline(never)]
+pub(crate) fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
+    list.dedup();
+    list.sort();
+    list.dedup();
+}
+
 /// A type that resolves a key-wise reduction over batches arriving on the input.
 ///
 /// Unlike join, reduce does not suspend: its output is at most linear in its input, so a single
@@ -486,13 +496,6 @@ mod cursors {
     }
 
 
-    #[inline(never)]
-    fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
-        list.dedup();
-        list.sort();
-        list.dedup();
-    }
-
     /// Implementation based on replaying historical and new updates together.
     mod history_replay {
 
@@ -502,7 +505,7 @@ mod cursors {
         use crate::trace::Cursor;
         use crate::operators::ValueHistory;
 
-        use super::sort_dedup;
+        use crate::operators::reduce::sort_dedup;
 
         /// The `HistoryReplayer` is a compute strategy based on moving through existing inputs, interesting times, etc in
         /// time order, maintaining consolidated representations of updates with respect to future interesting times.
@@ -849,13 +852,6 @@ pub(crate) mod reference {
         reduce_with_tactic(trace, name, ReferenceTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
     }
 
-    /// Sorts and deduplicates, matching `cursors::sort_dedup`.
-    #[inline(never)]
-    fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
-        list.dedup();
-        list.sort();
-        list.dedup();
-    }
 
     /// Updates an optional meet by an optional time.
     fn update_meet<T: Lattice+Clone>(meet: &mut Option<T>, other: Option<&T>) {
