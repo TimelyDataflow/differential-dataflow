@@ -197,178 +197,43 @@ The work publishes **two extension tiers**, and implementors should self-select:
   is what a large-value columnar backend needs. Blocked *for the reference* only by `VecChunk`
   exposing no positional record access; a hash-native store (F7) makes it natural. The seam is
   ready; this is the backend's to take.
-* [~] **F7 — hash-native storage (`HashChunk`): the actual performance path.** The reference
-  stores Ord-ordered (`VecChunk`), so every `present` re-hashes and re-sorts the input into the
-  seam's `(key_hash, value_id)` order — and *that transform* is the measured ~4× reduce-load
-  overhead (profiled 2026-07-06), **not** the ~13% SipHash slice (which `ahash` would trim). A
-
-  **Spiked 2026-07-09 (the boring version; `tests/int_proxy.rs`).** Rather than build `HashChunk`,
-  pre-map `(k,v) → (hash(k), v)` and store in the *existing* `VecChunk<u64,u64>` — now the key IS
-  the `key_hash` and (identity model) the value IS the `value_id`, so the store is already in seam
-  order. Boring `HashReduce`/`HashJoin` backends then `present` by an in-order scan (`read_hash`),
-  drop the real key, and skip value resolution entirely (`value_id` *is* the value). Measured wall
-  clock (1M keys, `bench_wall_clock_vs_row`, `mode=2`):
-  * **join load 3.0× → 1.3×; join steady ~2× → ~1×** — hash-native brings join to *stock parity* on
-    both axes. The `present` re-sort of the accumulated side was the entire join overhead.
-  * **reduce load 6.4× → 2.9×** — the re-sort penalty (which *grew* with n) is more than halved and
-    no longer the dominant scaling term. F7's thesis holds: hash-native storage removes the `present`
-    re-sort, and the two integers are all the operator logic needs (the boring backends drop reals).
-  * **The reduce residual (~2.9×) is allocation churn, not algorithm.** Profiled (samply/pollard,
-    `prof_reduce_load`): the tactic spends **54% of load in `malloc`** (43% self) vs the cursor
-    reduce's **10%**; `grow_one`/`finish_grow` are ~25% (un-reserved `push` loops). Pure-compute
-    delta over the cursor is only ~1.5× — the tactic re-implements the same per-moment reduce loop as
-    the reference but with fresh per-key/per-window `Vec`s (`KeyState` fields, `IdHistory` buffers,
-    window input/output, corrections) where the cursor reduce reuses scratch. So it is **not** an
-    inherent overhead: buffer reuse / capacity reservation is the follow-up, independent of `HashChunk`.
-  * **Buffer reuse (2026-07-09): reduce load 2.9× → 1.37×; the tactic is now compute-bound.** Two
-    rounds, both behavior-preserving (grid-oracle fuzz + SCC green throughout):
-    * *Round 1 (→ 2.2×):* retire-wide reusable scratch — a `DiscoverScratch` (the `discover_times`
-      replays + time buffers, mirroring the reference `HistoryReplayer`'s field-held scratch) plus
-      hoisted phase-2 round/moment buffers (`batch_keys`/`in_*`/`out_*`/`active`/`in_accum`/`cur_out`)
-      and `tile_deltas`, all cleared not reallocated. `malloc` 54% → 43% of load. Residual then
-      dominated by `drop_in_place<KeyState>` (~18% — per-key `moments`/`meets`/histories/`produced`
-      freed on `states.clear()`).
-    * *Round 2 (→ 1.37×):* made `states` a **long-lived buffer reloaded slot-by-slot** — index
-      `[0..n_states)`, reload each slot in place (`clear`+refill keeps capacity; `drain` moves
-      discovered moments in), grow by one only when a window is wider than any before. No pool /
-      free-list — a slot's `Vec`s and replays are allocated once and reused, so keys cost no per-key
-      alloc/free. `malloc` 43% → **12.8%** (≈ the cursor reduce's own 10.5%); `int_proxy` self-time
-      41.5% → **82%**. The remaining 1.37× is genuine compute (cursor walk + consolidate), not
-      allocation — the "not inherent" claim above, cashed.
-    * *Join (same pattern):* the join tactic was already allocation-lean at 1×1 (`malloc` ~9%, tactic
-      self ~3%; the load is `present` + arrangement `merge`, not tactic allocation). Its one real
-      per-key allocation is `h0`/`h1` in `join_key`'s replay wave (fired only when *both* sides have
-      ≥16 records for a key). Hoisting those into reusable scratch held across the unit cut a
-      **high-fanout** join (fanout 32) ~9% (`malloc` 17% → 12%); 1×1 is unchanged (it never enters the
-      wave). Both operators' residual is now `present`, the seam's intrinsic cost (below).
-  * **What the residual ~0.3–0.4× actually is: `present`.** Both tactics re-materialize each input from
-    the arrangement into a consolidated `(key_hash, value_id, time, diff)` bridge before the operator
-    logic runs, where the stock operator reads its trace cursor directly. That re-read + consolidate is
-    the abstraction boundary's cost — the integers-only seam made concrete.
-    * *Read by slice, not cursor (2026-07-09): join load 1.31× → 1.17×, reduce 1.37× → 1.32×.* The
-      reference `VecChunk` is a flat sorted `Vec<((key,value),time,diff)>` — already the bridge tuple
-      in seam order — so the backend reads `ChunkBatch.chunks[..].as_slice()` directly (full scan =
-      `extend_from_slice` memcpy; filtered = two-pointer *galloping both* pointers) instead of walking
-      the generic galloping cursor. That deleted the `Cursor` stepping (`seek_key`/`step_val`/
-      `val_spills`, ~17% of load). Needs no tactic change — `present` still returns an owned bridge.
-    * *What remains, and why:* (1) the **copy** into the owned bridge (`read_hash` ~15%) — inherent
-      unless the tactic accepts borrowed slices (a signature change, deferred); (2) the **`consolidate`
-      sort** (~16% of join load) — the bridge is a union of *already-sorted* runs (each chunk; source ∪
-      novel), so a k-way merge would be linear where the current general `consolidate_updates`
-      quicksorts. Replacing sort→merge is the next lever and also needs no tactic change.
-    (`VecChunk::merge` ~30% of join load is arrangement *build*, shared with the stock path — *not*
-    part of the residual.)
-  Corollary: the boring pre-map is a *bench/validation* device (identity-model values, dropped reals,
-  collision risk); the real `HashChunk` below is still what a production backend with arbitrary values
-  wants. The elaborate real-value store stays on the shelf.
-
-  A
-  `HashChunk` — a `Chunk` ordered by `(key_hash, value_id)`, carrying the reals alongside — makes
-  `present` an in-order scan (no re-sort; the hash *is* the stored sort key) and folds in F6 (reals
-  resolved by offset); merge/compaction is a hash-order merge, streaming with bounded footprint.
-  Caveat: as things stand it is a *fifth* hand-rolled `Chunk` (~450 lines, mostly a re-sorted
-  `VecChunk`) — do **F3 first** so it costs ~100 lines of payload instead. Corollary: `VecChunk` is
-  an *anti-example* as a backend template — Ord-ordered, it performs exactly the impedance-match a
-  real backend must avoid — so a `HashChunk`-backed reference would be the honest (and fast) exemplar.
-  **Design note (review):** the *system-wide* stability of `key_hash` (mod.rs) is load-bearing
-  precisely here — once arrangements are stored in hash order and shared across operators without
-  re-hashing, operator B reads operator A's hash-ordered output directly. Within one operator (today
-  each backend re-hashes on present) per-backend consistency would suffice, so the system-wide claim
-  is a deliberate commitment *toward this storage*, not a current requirement — which makes F7 the
-  most consequential follow-up. It follows that S1's recovery-cost story (verify-at-`cross`,
-  key-qualified vids) should be weighed against hash-native storage, not against `VecChunk`.
-* [ ] **F8 — windowed (bounded-footprint) processing for ~100M-key scale. Mandatory before long.**
-  Both tactics `present_*` **a whole second integer copy — the bridge — of the snapshot** (all
-  changed/matched keys) before processing, so peak memory is O(keyspace). Even where the driver
-  yields output (join, done — see below), that materialization is the floor: making whole integer
-  copies of the entire snapshot exhausts us at scale. The fix is to process the keyspace in
-  **windows**, diverting a *bounded chunk* of value work to the backend per window. This stays true
-  to the seam's purpose — a bulk crossing (`reduce_many`/`cross` over a whole window) amortizes the
-  boundary once per window — and is the reason **not** to stream through a cursor: per-record backend
-  calls would reintroduce exactly the overhead the bulk seam removes. It is a **trait change per
-  operator** — both window the keyspace into bounded key subsets, but the interface differs by driver:
-  reduce's synchronous `retire` takes a **session** (`begin → {next_window, reduce_many, emit}* →
-  finish`, landed — see Reduce), while join's interleaved driver needs the chunked/lazy `prep` (see
-  Join). The early guess that *one* trait serves both was wrong: the two drivers pull opposite ways on
-  ownership (§ session type, under Reduce). (The reduce changed-key restriction *looks* like windowing
-  but isn't — at an initial load every key is "changed," so the restriction is the whole keyspace.)
-  The *efficient* form — bounded metadata, O(range) presentation — is F7-adjacent.
-  * **Window by key-hash *range* `[lo, hi)`, not a subset — and keep the metadata bounded too.**
-    Present should take a hash *range*, not an explicit key subset: a subset of 100M keys is itself
-    O(keyspace) to name, whereas a range is O(1) and is what "align batches on key-hash boundaries"
-    wants — the backend seeks each batch to the range bound and merges (O(range) on hash-ordered
-    storage, F7; on Ord storage it degrades to scan-and-filter, O(batch) per range, so the *interface*
-    can precede F7 but is only *cheap* with it). Bracketing picks the range boundaries from an
-    **elicited coarse size distribution** — a histogram over hash *prefixes* (~256 buckets by top
-    byte), not per-key `(hash, size)`, or the bracketing metadata is itself O(keyspace). Reduce's
-    `seed_times` is the elicit hook (hand back the histogram); join needs the analog over its fresh
-    side. Two independent axes: *output* emission (join chunking, done) and *input* materialization
-    (range-present) — this bullet is the second.
-  * **Reduce — DONE (2026-07-09; Abelian oracle retired 2026-07-11).** The reduce tactic
-    (`ProxyReduceTactic`) mirrors the reference cursor reduce's bounded application (`operators/reduce.rs`
-    :715–776). Determination is `discover_times` (interesting times only, so O(times), no cliff).
-    Application walks all a window's keys' moments in **rounds**, keeping each key's input / output /
-    `output_produced` accumulations **one moment deep** and crossing a round's active keys via
-    `reduce_corrections` — which takes the input accumulation **and** the current output and returns the
-    *corrections*, so the differencing lives in the backend and needs no group (also relaxing the fragile
-    vid-must-collide-to-cancel minting contract, since the backend differences real values). Peak memory
-    is O(window presentation); the O(times × values) cliff is gone by construction. `output_produced` is
-    meet-collapsed each round, exactly like the reference. The backend drives a session: `begin(tiles)` /
-    per-window `next_window` / `reduce_corrections` / `emit(tile, deltas)` / `finish` — resolving inside
-    the backend so no value round-trips, and tiling without a spine change (`finish` builds once per tile
-    over key-disjoint cross-window contributions). Validated against the brute-force grid oracle and —
-    the exemplar — the stock row reduce through SCC's doubly-nested product-timed fixpoint (`scc_proxy_*`).
-    * **An earlier Abelian batched-crossing tactic** did one bulk `reduce_many` per window, which
-      materialized *every* moment's input and output accumulation at once — the O(times × values) memory
-      cliff (wide time antichains × large per-key outputs, i.e. iterative dataflow). It was never
-      shippable, served only as a development oracle (and earned its keep — it caught the cross-key
-      batching bug), and has been **retired**; its two backend traits folded into one `ProxyReduceBackend`.
-    * **Tiling complication resolved without touching the spine.** The tactic computes the time-only
-      tiles from `(lower, upper, held)` and hands them to `begin`; `emit` routes per tile; `finish`
-      builds **once per tile** at the end (real records accumulated across windows, which are
-      key-disjoint — hash-contiguous windows — so one consolidation suffices). No per-window
-      `materialize`, hence no duplicate-description batches and no chain-tolerant-spine change.
-    * **The reference demonstrates the bound, not just the interface.** `next_window` seeks only the
-      window's keys, so it materializes a *window's* history, not the retire's — the win reduce gets
-      and join doesn't, because `seed_times` decouples key-discovery from presentation (no full-present
-      floor). The cost is a per-window re-seek of source/output; F7's hash-native storage removes it.
-      Windows are a fixed `WINDOW_KEYS` count for now; hash-range + coarse-histogram sizing (above) is
-      the F7 refinement. Parity verified by the int_proxy suite — row-reduce matches, the identity fuzz
-      grid oracle, and SCC — with one key per window forced.
-    * **Cross-key round batching — DONE.** The application walks all a window's keys' moments in
-      *rounds*: each round crosses every active key's current moment in a single `reduce_corrections`,
-      cutting backend calls from O(Σ moments) to O(max moments over keys) — the concurrency the batched
-      Abelian tactic had, without its cliff (peak materialization stays one moment deep per key). A key's
-      own moments stay sequential (each sees its earlier corrections). One subtlety cost a bug worth
-      recording: the round loop must terminate only when every key is *exhausted*, not when a round
-      produces no crossing — an all-empty-gated round can precede later non-empty moments, and breaking
-      early drops them. Found by tracing the identity backend's per-key crossings against the per-moment
-      version (they now match byte-for-byte) after reasoning wrongly "proved" they must already agree.
-    * **Deferred axes.** (b) *Incremental batch formation for huge outputs* (not histories):
-      `finish` accumulates then builds; a backend wanting a bounded output footprint could trickle into
-      sorted runs inside `emit` — the session already accommodates it. Pre-existing (the row reduce also
-      builds all-at-once), on its own axis. (c) *A session type*: the lifecycle is a documented
-      convention with state inlined as backend fields. A borrowing GAT `Session` would make
-      begin/finish RAII-paired and split cross-retire state (`keys`) from per-retire state — worth
-      doing on a trigger (a second driver, a state-leak bug), but it does **not** unify with join
-      (whose interleaved driver needs an *owning* session), so it's a reduce-local ergonomics choice,
-      not a shared abstraction.
-  * **Join — output chunking DONE (incl. mid-wave 2026-07-09); the rest is F7-gated.** *(Subsumes the
-    old F8 join-fuel item; footgun removed by the #790 port.)* `prep` **chunks the unit's output** — a
-    container per ~`JOIN_CHUNK` matches — so a large unit ships in bounded pieces the driver meters fuel
-    against, and delta-sized units keep a small working set. The flush fires **wherever the batch
-    fills, including *mid-key* inside a high-fanout key's replay wave** (a match is an independent
-    output record, so splitting anywhere is sound), so no single key materializes more than a chunk of
-    its cross product — the join echo of reduce's per-moment emit, but far easier: join's matches carry
-    no dependency, so it's one size knob applied continuously, no relocation. This needs **no**
-    relocation because `prep` stays synchronous (present + all crosses finish before it returns), so
-    the shared resolution state never spans a yield. (Parity verified by forcing the replay path and a
-    flush per pair.) What it does **not** bound is a single huge unit's **presentation** — `prep` still
-    presents *both sides in full* up front. That, not the crossing, is join's cliff, and windowing the
-    fresh side by hash needs hash-native storage (F7). The fuller *lazy* `prep` (yield mid-cross,
-    relocating resolution onto the iterator) is what would stream the output rather than hold the
-    container `Vec`, and it's the same relocation the fresh-side windowing wants — so both wait on and
-    compose with F7 for a fully bounded join.
-  Sequencing: reduce tactic done — bounded, cross-key-batched, SCC-validated (the Abelian oracle
-  retired) — and join output-chunking done. Remaining: join single-unit load, and both operators'
-  *efficient* hash-range/coarse-histogram form — both compose with F7.
+* [~] **F7 — hash-native storage (`HashChunk`).** The reference stores Ord-ordered (`VecChunk`), so
+  every `present` re-derives the seam's `(key_hash, value_id)` order from the stored `(key, value)`
+  order — the measured reduce-load overhead (profiled 2026-07-06), not the ~13% SipHash slice. **The
+  work: build a `HashChunk`** — a `Chunk` natively ordered by `(key_hash, value_id)`, carrying the
+  reals alongside and resolving ids by *offset* (subsumes F6). Then `present` is an in-order scan, and
+  merge/compaction a hash-order merge with bounded footprint. Do **F3 first**, or it is a fifth
+  hand-rolled `Chunk` (~450 lines, vs ~100 of payload plumbing). It is the honest fast exemplar;
+  `VecChunk` is the anti-example (Ord-ordered, it performs exactly the impedance-match a real backend
+  must avoid). **Load-bearing:** the *system-wide* stability of `key_hash` (mod.rs) pays off here —
+  arrangements stored in hash order let a downstream operator read an upstream's output directly, no
+  re-hash and no re-present; within one operator per-backend consistency would suffice, so the
+  system-wide claim is a commitment *toward* this storage, which makes F7 the most consequential
+  follow-up. (Weigh S1's collision-recovery cost against hash-native storage, not `VecChunk`.)
+  * *Thesis validated, not built (git; `tests/int_proxy.rs`).* A boring pre-map (`(k,v) → (hash(k), v)`,
+    values as ids) puts the existing `VecChunk` in seam order; with backend-only present tuning already
+    landed (buffer reuse, slice-based reads) it reaches stock parity for join and ~1.3× for reduce — a
+    bench/validation device (identity-model values, dropped reals, collision risk), not the real thing.
+    One backend-only present win remains (no tactic change): `present` still `consolidate`-sorts a
+    union of *already-sorted* runs, so a k-way **merge** would be linear.
+* [ ] **F8 — bounded-footprint (windowed) presentation for ~100M-key scale.** Both tactics `present`
+  a whole second integer copy of the snapshot before processing, so peak memory is O(keyspace). The
+  fix: window the keyspace and divert a *bounded chunk* of value work to the backend per window — a
+  bulk crossing amortizes the boundary once per window (the reason **not** to stream per-record, which
+  would reintroduce the overhead the bulk seam removes). It is a **trait change per operator**, not one
+  shared trait: the two drivers pull opposite ways on ownership — reduce's synchronous `retire` wants a
+  session, join's interleaved `prep` wants a chunked/lazy iterator. *Landed:* reduce windowing (the
+  `begin → {next_window, reduce_corrections, emit}* → finish` session, one key per window forced in the
+  suite) and join output-chunking (a container per `JOIN_CHUNK` matches, flushed mid-wave). **Remaining:**
+  * **Join single-unit load.** `prep` still presents *both sides in full* up front — that, not the
+    crossing, is join's cliff. Window the fresh side by hash range; the fuller *lazy* `prep` (yield
+    mid-cross, relocating resolution onto the iterator) also streams the output rather than holding the
+    container `Vec`. Both need F7.
+  * **The *efficient* form for both: window by hash *range* `[lo, hi)`, not a key subset.** A subset of
+    100M keys is itself O(keyspace) to name; a range is O(1) and is what "align on key-hash boundaries"
+    wants (seek each batch to the bound and merge — O(range) on hash-ordered storage F7; O(batch)
+    scan-and-filter on Ord, so the interface can precede F7 but is cheap only with it). Size the ranges
+    from an **elicited coarse histogram** — hash-*prefix* buckets (~256 by top byte), not per-key
+    `(hash, size)`, or the bracketing metadata is itself O(keyspace). `seed_times` is reduce's elicit
+    hook; join needs the analog over its fresh side. (This replaces reduce's placeholder fixed
+    `WINDOW_KEYS` count.)
