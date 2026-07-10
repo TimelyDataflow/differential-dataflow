@@ -98,23 +98,7 @@ The work publishes **two extension tiers**, and implementors should self-select:
   seam (`operators/int_proxy/mod.rs`), and the operator's own state is never a
   "proxy trace" of arranged proxy records. A test that wants to store proxy records
   as an arrangement wraps them in its own `Chunk` (`IdentityChunk`), in test code.
-* **S7 — the reduce seam differences *inside the backend*; it is no longer Abelian by name.**
-  The crossing `reduce_corrections(keys, in_ends, input, out_ends, output)` receives both the input
-  accumulation **and** the current output, and returns the output *corrections* — so `desired −
-  current` is computed by the backend, not in framework code. The differencing therefore no longer
-  requires `ROut` to be a group *at the seam* (the reference backends happen to subtract; the
-  `ROut: Abelian` bound survives as a convenience, not a seam commitment), and the trait is named
-  `ProxyReduceBackend` — the `Abelian*` prefix, added 2026-07-05 when framework code did the
-  subtraction, was dropped when the differencing moved into the backend (2026-07-11). Both relaxation
-  axes this point once flagged as future work are now realized:
-  * **Batching granularity** — the tactic crosses per *round* (all a window's keys at their current
-    moment), one moment deep, capping peak intermediate state at O(window presentation) rather than
-    O(times × values). A tactic property, never a trait one.
-  * **Non-Abelian** — presenting current output to the backend (the change this point predicted as
-    "a trait change") is exactly what `reduce_corrections` does. `ProxyJoin*` never carried the
-    constraint (join differences nothing), so the earlier `AbelianReduce*` asymmetry is gone; both
-    seams are now `Proxy*`.
-* **S8 — the presentation is a plain `Vec`, not a bespoke type.** `ProxyBridge<T, R>` is a
+* **S7 — the presentation is a plain `Vec`, not a bespoke type.** `ProxyBridge<T, R>` is a
   *type alias* for `Vec<((key_hash, value_id), time, diff)>` — DD's standard `(data, time, diff)`
   update shape — so [`consolidate_updates`](crate::consolidation::consolidate_updates) sorts and
   consolidates it directly. There is **no struct, no accessors, no `from_unsorted`, no
@@ -129,7 +113,7 @@ The work publishes **two extension tiers**, and implementors should self-select:
   (ids *are* values). Being a plain `Vec`, the bridge also can't be arranged or persisted — S6's
   ephemeral-id guarantee now holds *structurally*, by type. The alias lives in `mod.rs`
   (`bridge.rs` is gone).
-* **S9 — the seam shares the retire/unit context with the backend, via an `Instance`.**
+* **S8 — the seam shares the retire/unit context with the backend, via an `Instance`.**
   `ReduceInstance`/`JoinInstance` bundle the batches the tactic already holds plus the `lower`
   compaction frontier, and are passed to the read/value methods (`present_*`, `cross`, `reduce*`);
   `materialize` is exempt — its values are *produced*, not drawn from a batch. This is not
@@ -192,7 +176,7 @@ The work publishes **two extension tiers**, and implementors should self-select:
   fuzz/model safety net currently covers only the reduce.
 * [ ] **F6 — resolve value ids by offset, not by copy.** The reference copies `(key, value)`
   into `(key_hash, value_id) → (key, value)` maps at `present`, so it can answer `cross`/`reduce`
-  later. With the batches now on the `Instance` (S9), a backend can instead keep
+  later. With the batches now on the `Instance` (S8), a backend can instead keep
   `(key_hash, value_id) → offset` and dereference the batch at the callback — no data copy, which
   is what a large-value columnar backend needs. Blocked *for the reference* only by `VecChunk`
   exposing no positional record access; a hash-native store (F7) makes it natural. The seam is

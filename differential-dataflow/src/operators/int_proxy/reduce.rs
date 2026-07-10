@@ -6,7 +6,7 @@ use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::AntichainRef;
 
-use crate::difference::{Abelian, Semigroup};
+use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{BatchReader, Description};
 use super::ProxyBridge;
@@ -68,8 +68,10 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// Diff type presented for the input.
     type RIn: Semigroup;
 
-    /// Diff type of the output.
-    type ROut: Abelian + 'static;
+    /// Diff type of the output. Only `Semigroup` — the tactic merely consolidates corrections; a
+    /// backend that computes `desired − current` in `reduce_corrections` imposes `Abelian` on its own
+    /// impl (as `vec_backend` does), it is not a seam requirement.
+    type ROut: Semigroup + 'static;
 
     /// Hash keys and associated times in the instance's novel input batches.
     ///
