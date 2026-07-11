@@ -13,9 +13,10 @@ use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{BatchReader, Description};
 use super::ProxyBridge;
-use crate::operators::reduce::{ReduceTactic, sort_dedup};
+use crate::operators::reduce::ReduceTactic;
 
-use super::history::{IdHistory, TimeHistory};
+use super::history::IdHistory;
+use crate::operators::common::{discover_times, tile_descriptions, DiscoverScratch, KeyView};
 
 /// A unit of proxied reduce work, presented to the backend.
 pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
@@ -148,24 +149,7 @@ where
         // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
         // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
         let held_elems: Vec<B1::Time> = held.elements().to_vec();
-        let mut tile_descs: Vec<Description<B1::Time>> = Vec::new();
-        let mut tile_held: Vec<B1::Time> = Vec::new();
-        let mut tile_of: Vec<Option<usize>> = vec![None; held_elems.len()];
-        {
-            let mut out_lower = lower.clone();
-            for index in 0..held_elems.len() {
-                let mut out_upper = upper.clone();
-                for t in &held_elems[index + 1..] {
-                    out_upper.insert(t.clone());
-                }
-                if out_upper != out_lower {
-                    tile_of[index] = Some(tile_descs.len());
-                    tile_descs.push(Description::new(out_lower.clone(), out_upper.clone(), Antichain::from_elem(<B1::Time as Timestamp>::minimum())));
-                    tile_held.push(held_elems[index].clone());
-                    out_lower = out_upper;
-                }
-            }
-        }
+        let (tile_descs, tile_held, tile_of) = tile_descriptions(lower, upper, &held_elems);
         self.backend.begin(&tile_descs);
 
         let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
@@ -226,7 +210,7 @@ where
                     let seed_times = seeds[n0..n1].iter().map(|(_, t)| t.clone());
                     let out_times = (o0..o1).map(|o| p_out[o].1.clone());
                     discover_times(
-                        KeyView { p_in, i0, i1, pending },
+                        KeyView { p_in: &p_in[..], i0, i1, pending },
                         seed_times, out_times, upper,
                         &mut discover_scratch,
                         &mut moments_scratch, &mut pended_scratch,
@@ -249,7 +233,7 @@ where
                 st.cursor = 0;
                 st.produced.clear();
                 st.moments.clear();
-                st.moments.extend(moments_scratch.drain(..));
+                st.moments.append(&mut moments_scratch);
                 st.meets.clear();
                 st.meets.extend(st.moments.iter().cloned());
                 for i in (1..st.meets.len()).rev() {
@@ -312,9 +296,9 @@ where
                         continue;
                     }
                     batch_keys.push(st.key);
-                    in_all.extend(in_accum.drain(..));
+                    in_all.append(&mut in_accum);
                     in_ends.push(in_all.len());
-                    out_all.extend(cur_out.drain(..));
+                    out_all.append(&mut cur_out);
                     out_ends.push(out_all.len());
                     active.push((si, t));
                 }
@@ -390,190 +374,3 @@ impl<T: Timestamp + Lattice, RIn: Semigroup, ROut: Semigroup> KeyState<T, RIn, R
     }
 }
 
-/// Reusable per-key scratch for [`discover_times`], held once per retire and threaded through every
-/// key so the replays and time buffers are cleared-and-refilled (`load`/`load_iter` reset while
-/// keeping capacity) rather than reallocated. Mirrors the reference `HistoryReplayer`'s field-held
-/// scratch; without it each of ~n keys paid ~7 fresh allocations per call — profiled at ~54% of the
-/// hash-reduce load in `malloc`, against the cursor reduce's ~10% (see DESIGN.md F7).
-struct DiscoverScratch<T, RIn> {
-    batch_replay: TimeHistory<T>,
-    input_replay: IdHistory<T, RIn>,
-    output_replay: TimeHistory<T>,
-    synth: Vec<T>,
-    times_current: Vec<T>,
-    temporary: Vec<T>,
-    meets: Vec<T>,
-}
-
-impl<T: Timestamp + Lattice, RIn: Semigroup + Clone> DiscoverScratch<T, RIn> {
-    fn new() -> Self {
-        DiscoverScratch {
-            batch_replay: TimeHistory::new(),
-            input_replay: IdHistory::new(),
-            output_replay: TimeHistory::new(),
-            synth: Vec::new(),
-            times_current: Vec::new(),
-            temporary: Vec::new(),
-            meets: Vec::new(),
-        }
-    }
-}
-
-/// A one-key view into the input presentation: the read-only arguments [`discover_times`] needs
-/// about a single key — its slice `[i0, i1)` of the merged input run `p_in` and the carried
-/// `pending` times.
-struct KeyView<'a, T, RIn> {
-    p_in: &'a ProxyBridge<T, RIn>,
-    i0: usize,
-    i1: usize,
-    pending: &'a [T],
-}
-
-/// Updates an optional meet by an optional time.
-fn update_meet<T: Lattice + Clone>(meet: &mut Option<T>, other: Option<&T>) {
-    if let Some(time) = other {
-        match meet.as_mut() {
-            Some(m) => m.meet_assign(time),
-            None => *meet = Some(time.clone()),
-        }
-    }
-}
-
-/// Phase A: discover a key's interesting times in `[lower, upper)` (pending those at/after `upper`)
-/// **without** accumulating input brackets. It mirrors the reference's DETERMINATION step (times
-/// only, ref `reduce.rs` :671–713): it replays the key's novel (`seed_times`) and `pending` times
-/// in ascending order, marking those carrying novel/pending updates interesting and synthesizing the
-/// joins thereof — joins against the input/output histories and the reached times. Nothing
-/// materializes an input collection, so peak memory is O(times), never O(times × values); the
-/// application walk re-assembles each moment's accumulation on the fly, one moment deep — the whole
-/// point of the tactic (see DESIGN.md F8). Buffers are advanced by the meet of the times still to
-/// come and consolidated, keeping a key with many distinct times linear rather than quadratic.
-#[allow(clippy::too_many_arguments)]
-fn discover_times<T, RIn>(
-    key: KeyView<'_, T, RIn>,
-    seed_times: impl Iterator<Item = T>,
-    out_times: impl Iterator<Item = T>,
-    upper: &Antichain<T>,
-    scratch: &mut DiscoverScratch<T, RIn>,
-    moments: &mut Vec<T>,
-    pended: &mut Vec<T>,
-) where
-    T: Timestamp + Lattice,
-    RIn: Semigroup + Clone,
-{
-    // Reuse the retire's scratch: `load`/`load_iter` reset the replays (keeping capacity); the plain
-    // buffers are cleared here. `meets_slice` reborrows `meets` immutably; the rest stay disjoint.
-    let DiscoverScratch { batch_replay, input_replay, output_replay, synth, times_current, temporary, meets } = scratch;
-    synth.clear();
-    times_current.clear();
-    temporary.clear();
-
-    batch_replay.load(seed_times, None);
-
-    meets.clear();
-    meets.extend(key.pending.iter().cloned());
-    for i in (1..meets.len()).rev() {
-        let m = meets[i].clone();
-        meets[i - 1].meet_assign(&m);
-    }
-
-    let mut meet: Option<T> = None;
-    update_meet(&mut meet, meets.first());
-    update_meet(&mut meet, batch_replay.meet());
-
-    // The merged (history ⊎ novel) run — replayed for its TIMES only (join base), never
-    // accumulated. Output times likewise: base joins, never seeds.
-    input_replay.load_iter(
-        (key.i0..key.i1).map(|i| (key.p_in[i].0.1, key.p_in[i].1.clone(), key.p_in[i].2.clone())),
-        meet.as_ref(),
-    );
-    output_replay.load(out_times, meet.as_ref());
-
-    let mut times_slice = key.pending;
-    let mut meets_slice = &meets[..];
-
-    while let Some(next_time) = [batch_replay.time(), times_slice.first(), input_replay.time(), output_replay.time(), synth.last()]
-        .into_iter()
-        .flatten()
-        .min()
-        .cloned()
-    {
-        input_replay.step_while_time_is(&next_time);
-        output_replay.step_while_time_is(&next_time);
-        let mut interesting = batch_replay.step_while_time_is(&next_time);
-        if interesting {
-            if let Some(m) = meet.as_ref() {
-                batch_replay.advance_buffer_by(m);
-            }
-        }
-        while synth.last() == Some(&next_time) {
-            times_current.push(synth.pop().expect("nonempty"));
-            interesting = true;
-        }
-        while times_slice.first() == Some(&next_time) {
-            times_current.push(times_slice[0].clone());
-            times_slice = &times_slice[1..];
-            meets_slice = &meets_slice[1..];
-            interesting = true;
-        }
-        interesting = interesting || batch_replay.buffer().iter().any(|t| t.less_equal(&next_time));
-        interesting = interesting || times_current.iter().any(|t| t.less_equal(&next_time));
-
-        if !upper.less_equal(&next_time) {
-            if interesting {
-                // Synthesize joins against the input/output histories (times only — no
-                // accumulation), then record `next_time` as an interesting moment.
-                if let Some(m) = meet.as_ref() {
-                    input_replay.advance_buffer_by(m);
-                }
-                for ((_, t), _) in input_replay.buffer().iter() {
-                    if !t.less_equal(&next_time) {
-                        temporary.push(next_time.join(t));
-                    }
-                }
-                if let Some(m) = meet.as_ref() {
-                    output_replay.advance_buffer_by(m);
-                }
-                for t in output_replay.buffer().iter() {
-                    if !t.less_equal(&next_time) {
-                        temporary.push(next_time.join(t));
-                    }
-                }
-                moments.push(next_time.clone());
-            }
-            temporary.extend(batch_replay.buffer().iter().filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
-            temporary.extend(times_current.iter().filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
-            sort_dedup(temporary);
-            let synth_len = synth.len();
-            for time in temporary.drain(..) {
-                if upper.less_equal(&time) {
-                    pended.push(time);
-                } else {
-                    synth.push(time);
-                }
-            }
-            if synth.len() > synth_len {
-                synth.sort_by(|x, y| y.cmp(x));
-                synth.dedup();
-            }
-        } else if interesting {
-            pended.push(next_time.clone());
-        }
-
-        meet = None;
-        update_meet(&mut meet, batch_replay.meet());
-        update_meet(&mut meet, input_replay.meet());
-        update_meet(&mut meet, output_replay.meet());
-        for t in synth.iter() {
-            update_meet(&mut meet, Some(t));
-        }
-        update_meet(&mut meet, meets_slice.first());
-        if let Some(m) = meet.as_ref() {
-            for t in times_current.iter_mut() {
-                *t = t.join(m);
-            }
-        }
-        sort_dedup(times_current);
-    }
-    sort_dedup(pended);
-}

@@ -206,53 +206,13 @@ fn join_key<T, R0, R1, RO, F>(
     h0.load_iter(r0.map(|i| (p0[i].0.1, p0[i].1.clone(), p0[i].2.clone())), None);
     h1.load_iter(r1.map(|i| (p1[i].0.1, p1[i].1.clone(), p1[i].2.clone())), None);
 
-    while h0.time().is_some() && h1.time().is_some() {
-        if h0.time().unwrap() < h1.time().unwrap() {
-            h1.advance_buffer_by(h0.meet().unwrap());
-            let (v0, t0, d0) = h0.edit().unwrap();
-            for ((v1, t1), d1) in h1.buffer() {
-                li.push((kh, v0));
-                ri.push((kh, *v1));
-                ot.push(t0.join(t1));
-                od.push(d0.clone().multiply(d1));
-                if li.len() >= JOIN_CHUNK { flush(li, ri, ot, od); }
-            }
-            h0.step();
-        } else {
-            h0.advance_buffer_by(h1.meet().unwrap());
-            let (v1, t1, d1) = h1.edit().unwrap();
-            for ((v0, t0), d0) in h0.buffer() {
-                li.push((kh, *v0));
-                ri.push((kh, v1));
-                ot.push(t0.join(t1));
-                od.push(d0.clone().multiply(d1));
-                if li.len() >= JOIN_CHUNK { flush(li, ri, ot, od); }
-            }
-            h1.step();
+    crate::operators::common::bilinear_wave(h0, h1, |v0, v1, t, d| {
+        li.push((kh, v0));
+        ri.push((kh, v1));
+        ot.push(t);
+        od.push(d);
+        if li.len() >= JOIN_CHUNK {
+            flush(li, ri, ot, od);
         }
-    }
-    while h0.time().is_some() {
-        h1.advance_buffer_by(h0.meet().unwrap());
-        let (v0, t0, d0) = h0.edit().unwrap();
-        for ((v1, t1), d1) in h1.buffer() {
-            li.push((kh, v0));
-            ri.push((kh, *v1));
-            ot.push(t0.join(t1));
-            od.push(d0.clone().multiply(d1));
-            if li.len() >= JOIN_CHUNK { flush(li, ri, ot, od); }
-        }
-        h0.step();
-    }
-    while h1.time().is_some() {
-        h0.advance_buffer_by(h1.meet().unwrap());
-        let (v1, t1, d1) = h1.edit().unwrap();
-        for ((v0, t0), d0) in h0.buffer() {
-            li.push((kh, *v0));
-            ri.push((kh, v1));
-            ot.push(t0.join(t1));
-            od.push(d0.clone().multiply(d1));
-            if li.len() >= JOIN_CHUNK { flush(li, ri, ot, od); }
-        }
-        h1.step();
-    }
+    });
 }
