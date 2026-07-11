@@ -176,12 +176,18 @@ fn ids(col: &CValue) -> Vec<u64> {
     }
 }
 
-/// Concatenate selected records across a run of chunks into parallel `(keys_col, vals_col)` corgi
-/// columns plus per-record `(key_hash, time, diff)`. `keep(kh)` decides inclusion by key hash.
-fn collect_present<T, F>(chunks: &[&CorgiChunk<T, Diff>], mut keep: F) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>)
+/// Concatenate the records of the `changed` keys across a run of chunks into parallel
+/// `(keys_col, vals_col)` corgi columns plus per-record `(key_hash, time, diff)`. `changed` is the
+/// ASCENDING set of changed key hashes; a row is kept iff its key hash is in it.
+///
+/// NB this is a full scan of the presented chunks (incl. `source_batches`, the accumulated trace).
+/// A `find_ranges` seek of the changed keys was tried (delta-proportional in principle) but REGRESSED
+/// SCC (1.62x→2.16x): SCC's changed set is broad (label propagation touches most keys each retire), so
+/// the scan already touches ~every row while the per-chunk gallop only adds overhead. The O(history)
+/// re-presentation is inherent to SCC here, not a seekable-few-keys case.
+fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>)
 where
     T: ColTime,
-    F: FnMut(u64) -> bool,
 {
     let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
     let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
@@ -190,7 +196,7 @@ where
     for (ci, ch) in chunks.iter().enumerate() {
         let kh = ids(ch.keys());
         for i in 0..kh.len() {
-            if keep(kh[i]) {
+            if changed.binary_search(&kh[i]).is_ok() {
                 tags.push(ci);
                 offs.push(i);
                 khs.push(kh[i]);
@@ -392,7 +398,7 @@ where
         }
         let keys: Vec<u64> = changed[*cursor..].to_vec();
         *cursor = changed.len();
-        let present = |chunks: &[&CorgiChunk<T, Diff>]| collect_present(chunks, |h| keys.binary_search(&h).is_ok());
+        let present = |chunks: &[&CorgiChunk<T, Diff>]| collect_present(chunks, &keys);
 
         // Input presentation: accumulated history ∪ novel delta, restricted to the window's keys.
         // value_id = content hash of the value (equal values share an id → the tactic nets them);
