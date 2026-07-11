@@ -13,7 +13,7 @@ use interactive::backend::{corgi, vec};
 use interactive::ir::Value;
 use interactive::{lower, parse};
 
-use differential_dataflow::algorithms::graphs::scc::strongly_connected;
+use differential_dataflow::algorithms::graphs::scc::{strongly_connected, strongly_connected_at};
 use differential_dataflow::input::Input;
 use timely::dataflow::operators::probe::Handle;
 
@@ -59,6 +59,25 @@ fn native_scc_once(edges: &[(usize, usize)]) {
     });
 }
 
+/// The FAIR compiled baseline: label introduction log-bucketed exactly as DDIR's
+/// `enter_at($1[0])` (propagate_core applies `256 * (64 - leading_zeros(logic(label)))`,
+/// the same delay vec.rs/corgi.rs compute), so native and DDIR run the same algorithm.
+fn native_scc_at_once(edges: &[(usize, usize)]) {
+    let edges = edges.to_vec();
+    timely::execute_directly(move |worker| {
+        let mut probe = Handle::new();
+        let mut input = worker.dataflow::<u64, _, _>(|scope| {
+            let (input, graph) = scope.new_collection::<(usize, usize), isize>();
+            strongly_connected_at(graph, |x| *x as u64).probe_with(&mut probe);
+            input
+        });
+        for &(s, d) in &edges { input.insert((s, d)); }
+        input.advance_to(1);
+        input.flush();
+        while probe.less_than(input.time()) { worker.step(); }
+    });
+}
+
 fn once<F: FnMut()>(mut f: F) -> Duration { let t = Instant::now(); f(); t.elapsed() }
 
 fn main() {
@@ -68,7 +87,7 @@ fn main() {
         .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
         .unwrap_or_else(|| vec![100_000, 250_000, 500_000, 1_000_000]);
 
-    println!("SCC large-N — native DD vs DDIR-vec vs DDIR-corgi (e = 2n):");
+    println!("SCC large-N — native DD / fair native (enter_at) / DDIR-vec / DDIR-corgi (e = 2n):");
     for (i, &nodes) in sizes.iter().enumerate() {
         let n_edges = nodes * 2;
         let mut seed = 0xc0ff_ee42u64;
@@ -88,12 +107,13 @@ fn main() {
         }
 
         let nt = once(|| native_scc_once(&native_edges));
+        let ft = once(|| native_scc_at_once(&native_edges));
         let vt = once(|| { std::hint::black_box(vec::evaluate(&p, &inputs)); });
         let ct = once(|| { std::hint::black_box(corgi::evaluate(&p, &inputs)); });
-        let (nf, vf, cf) = (nt.as_secs_f64(), vt.as_secs_f64(), ct.as_secs_f64());
+        let (nf, ff, vf, cf) = (nt.as_secs_f64(), ft.as_secs_f64(), vt.as_secs_f64(), ct.as_secs_f64());
         println!(
-            "  n={nodes:<8} e={n_edges:<9}  native {nt:>9.2?}   vec-DDIR {vt:>9.2?} ({:.1}x nat)   corgi-DDIR {ct:>9.2?} ({:.1}x nat, {:.2}x vec){}",
-            vf / nf, cf / nf, cf / vf, if check { "  [checked]" } else { "" },
+            "  n={nodes:<8} e={n_edges:<9}  native {nt:>8.2?}   fair(enter_at) {ft:>8.2?} ({:.2}x nat)   vec-DDIR {vt:>8.2?} ({:.2}x fair)   corgi-DDIR {ct:>8.2?} ({:.2}x fair, {:.2}x vec){}",
+            ff / nf, vf / ff, cf / ff, cf / vf, if check { "  [checked]" } else { "" },
         );
     }
 }
