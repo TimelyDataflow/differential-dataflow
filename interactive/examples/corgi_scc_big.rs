@@ -88,13 +88,14 @@ fn main() {
         .unwrap_or_else(|| vec![100_000, 250_000, 500_000, 1_000_000]);
 
     println!("SCC large-N — native DD / fair native (enter_at) / DDIR-vec / DDIR-corgi (e = 2n):");
+    let seed0: u64 = std::env::var("SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(0xc0ff_ee42);
     for (i, &nodes) in sizes.iter().enumerate() {
         let n_edges = nodes * 2;
-        let mut seed = 0xc0ff_ee42u64;
+        let mut seed = seed0;
         let edges: Vec<(Value, Value)> = (0..n_edges)
             .map(|_| (tup(&[(xorshift(&mut seed) % nodes) as i64, (xorshift(&mut seed) % nodes) as i64]), Value::unit()))
             .collect();
-        let mut seed2 = 0xc0ff_ee42u64;
+        let mut seed2 = seed0;
         let native_edges: Vec<(usize, usize)> = (0..n_edges)
             .map(|_| ((xorshift(&mut seed2) % nodes) as usize, (xorshift(&mut seed2) % nodes) as usize))
             .collect();
