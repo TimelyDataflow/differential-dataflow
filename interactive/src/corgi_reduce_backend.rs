@@ -3,9 +3,9 @@
 //! The tactic (differential's `operators::int_proxy::reduce`) owns ALL time/lattice logic over
 //! integer proxies `(key_hash, value_id, time, diff)`; this backend supplies only:
 //!
-//!   * hashing — `key_hash`/`value_id` are corgi `hash_rows` over the corgi key/val COLUMNS
-//!     (columnar, content-addressed, so ids coincide across the output→input boundary); DD never
-//!     hashes.
+//!   * ids — `key_hash`/`value_id` are value-as-id for primitive columns (the value IS the id) and
+//!     the canonical native `corgi::hash` for compound columns (columnar, content-addressed, so ids
+//!     coincide across the output→input boundary); DD never hashes.
 //!   * the value callback — `reduce_many` runs ONE crossing per retire over every `(key, time)`
 //!     bracket, building the output value COLUMNS directly (Count → a `u64` prim, Distinct → a
 //!     `Unit`, Min → the chosen input rows, Collect → a `List`), never through DDIR rows.
@@ -37,7 +37,7 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{gather, gather_lanes, hash_rows, sort_blocks};
+use corgi::arrange::{gather, gather_lanes, sort_blocks};
 use corgi::{Bounds, Shape, Value as CValue};
 
 use crate::col_times::ColTime;
@@ -159,12 +159,15 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
 
 /// Id column for a key/value column. For a PRIMITIVE column — a bare 64-bit `Prim`, or a 1-field
 /// `Prod([Prim(64)])` — the value itself is already a collision-free id (`i64 as u64` is a bijection),
-/// so pass it straight through and skip the `hash_rows` content hash. Compound shapes (Unit / List /
-/// Sum / multi-field `Prod`) still hash. The id is used ONLY as an identity for netting/dedup — its
-/// numeric order is never relied upon — so the raw two's-complement `u64` is correct even for negative
-/// ints (no order-preserving swizzle needed). Must be applied CONSISTENTLY at every id site (both
-/// value presentations AND the freshly-produced `reduce_brackets` outputs), else `desired − current`
-/// nets across mismatched ids for the same value.
+/// so pass it straight through and skip the content hash. Compound shapes (Unit / List / Sum /
+/// multi-field `Prod`) hash via the CANONICAL native `corgi::hash` (the designed boundary-id fold,
+/// width-blind and consistent-with-equality) — not the branch-local `arrange::hash_rows`; DDIR
+/// transcodes every leaf to `u64`, so width-blindness is a no-op for us and there is no cross-path
+/// hash comparison (value-as-id and native hash are never used for the same value: shape is uniform
+/// per column). The id is used ONLY as an identity for netting/dedup — its numeric order is never
+/// relied upon — so the raw two's-complement `u64` is correct even for negative ints (no swizzle).
+/// Applied CONSISTENTLY at every id site (both value presentations AND the freshly-produced
+/// `reduce_brackets` outputs), else `desired − current` nets across mismatched ids for the same value.
 fn ids(col: &CValue) -> Vec<u64> {
     match corgi::shape_of_value(col) {
         Shape::Prim(64) => col.clone().into_u64("ids"),
@@ -172,7 +175,7 @@ fn ids(col: &CValue) -> Vec<u64> {
             CValue::Prod(fields) => fields[0].clone().into_u64("ids"),
             _ => unreachable!("shape Prod but value not Prod"),
         },
-        _ => hash_rows(col),
+        _ => corgi::hash(col).into_u64("ids"),
     }
 }
 
