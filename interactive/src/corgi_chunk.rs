@@ -22,11 +22,10 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::{merge_chains, pack, Chunk, ChunkBatch};
 use differential_dataflow::trace::Description;
 

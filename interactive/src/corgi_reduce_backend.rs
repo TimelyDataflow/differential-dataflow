@@ -30,9 +30,7 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
-use timely::progress::Timestamp;
 
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::Description;
 use differential_dataflow::trace::chunk::ChunkBatch;

@@ -11,9 +11,7 @@
 
 use std::rc::Rc;
 
-use timely::progress::Timestamp;
 
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::join::{Fresh, JoinTactic};
 
 use corgi::arrange::{find_ranges, gather};
