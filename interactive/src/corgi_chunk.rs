@@ -29,7 +29,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{merge_chains, pack, Chunk, ChunkBatch};
 use differential_dataflow::trace::Description;
 
-use corgi::arrange::{compare_at, compare_idx, find_ranges, gather, gather_lanes, sort_perm};
+use corgi::arrange::{compare_idx, find_ranges, gather, gather_lanes, group_bounds, sort_perm, survey, Run};
 use corgi::Value as CValue;
 
 use columnar::Columnar;
@@ -152,51 +152,54 @@ where
 
     fn len(&self) -> usize { self.0.times.len() }
 
-    /// Two-pointer merge of the two front chunks through their shared horizon, consolidating equal
-    /// `(key, val, time)` triples. Accumulates `(tag, off)` against the two stable source kv columns
-    /// and materializes output via `gather_lanes`; the survivor's suffix is pushed back once.
+    /// Merge the two front chunks via corgi `survey`: one bidirectional gallop over the `(key, val)`
+    /// columns yields `Run`s — maximal exclusive ranges (`A`/`B`, bulk-copied, no per-row compare) and
+    /// single matched pairs (`Both`, ordered/consolidated by `time` here, since corgi owns no time).
+    /// Both chunks are consumed fully into one output run (no suffix push-back).
+    ///
+    /// NOTE on times: `Both(ia, ib)` is a *positional* `(key, val)` match. For a `(key, val)` that
+    /// recurs at multiple times with unequal per-side counts, positional pairing can mis-order the
+    /// out-of-band times — this is the survey/time composition edge the gate is checking.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         let c1 = in1.pop_front().unwrap();
         let c2 = in2.pop_front().unwrap();
         let (kv1, kv2) = (c1.kv(), c2.kv());
-        let (n1, n2) = (c1.len_(), c2.len_());
         let (t1, d1) = (c1.times(), c1.diffs());
         let (t2, d2) = (c2.times(), c2.diffs());
 
         let (mut tags, mut offs) = (Vec::new(), Vec::new());
         let (mut times, mut diffs) = (ColTimes::new(), Vec::new());
-        let (mut p1, mut p2) = (0usize, 0usize);
-        while p1 < n1 && p2 < n2 {
-            // `(key, val)` structurally, then `time` in place via the columnar `Ref: Ord`.
-            let ord = compare_at(&kv1, p1, &kv2, p2).then_with(|| t1.cmp_cross(p1, t2, p2));
-            match ord {
-                Ordering::Less => { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d1[p1].clone()); p1 += 1; }
-                Ordering::Greater => { tags.push(1); offs.push(p2); times.push_ref(t2, p2); diffs.push(d2[p2].clone()); p2 += 1; }
-                Ordering::Equal => {
-                    let mut d = d1[p1].clone();
-                    d.plus_equals(&d2[p2]);
-                    if !d.is_zero() { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d); }
-                    p1 += 1; p2 += 1;
+        for run in survey(&kv1, &kv2) {
+            match run {
+                Run::A(lo, hi) => {
+                    for p in lo..hi { tags.push(0); offs.push(p); times.push_ref(t1, p); diffs.push(d1[p].clone()); }
+                }
+                Run::B(lo, hi) => {
+                    for p in lo..hi { tags.push(1); offs.push(p); times.push_ref(t2, p); diffs.push(d2[p].clone()); }
+                }
+                Run::Both(ia, ib) => {
+                    // Equal `(key, val)`; order/consolidate by time.
+                    match t1.cmp_cross(ia, t2, ib) {
+                        Ordering::Less => {
+                            tags.push(0); offs.push(ia); times.push_ref(t1, ia); diffs.push(d1[ia].clone());
+                            tags.push(1); offs.push(ib); times.push_ref(t2, ib); diffs.push(d2[ib].clone());
+                        }
+                        Ordering::Greater => {
+                            tags.push(1); offs.push(ib); times.push_ref(t2, ib); diffs.push(d2[ib].clone());
+                            tags.push(0); offs.push(ia); times.push_ref(t1, ia); diffs.push(d1[ia].clone());
+                        }
+                        Ordering::Equal => {
+                            let mut d = d1[ia].clone();
+                            d.plus_equals(&d2[ib]);
+                            if !d.is_zero() { tags.push(0); offs.push(ia); times.push_ref(t1, ia); diffs.push(d); }
+                        }
+                    }
                 }
             }
         }
 
         let srcs = [Some(&kv1), Some(&kv2)];
         Self::emit(&srcs, &tags, &offs, &times, &diffs, out);
-
-        // Push back the survivor's unconsumed suffix (all `>` the horizon), ahead of its deque.
-        if p1 < n1 {
-            let idx: Vec<usize> = (p1..n1).collect();
-            let mut t = ColTimes::new();
-            t.push_range(t1, p1, n1);
-            in1.push_front(Self::from_kv(gather(&kv1, &idx), t, d1[p1..].to_vec()));
-        }
-        if p2 < n2 {
-            let idx: Vec<usize> = (p2..n2).collect();
-            let mut t = ColTimes::new();
-            t.push_range(t2, p2, n2);
-            in2.push_front(Self::from_kv(gather(&kv2, &idx), t, d2[p2..].to_vec()));
-        }
     }
 
     fn extract(
@@ -243,20 +246,17 @@ where
         let n = ctimes.len();
         if n == 0 { return; }
 
-        // Giant-key case: whole buffer is one `(key, val)` → no group provably complete.
-        if !done && compare_at(&ckv, 0, &ckv, n - 1) == Ordering::Equal {
+        // Group boundaries in ONE pass (corgi `group_bounds`) instead of a per-row `compare_at` scan.
+        let bounds = group_bounds(&ckv); // exclusive group ends, ascending, `bounds.last() == n`
+
+        // Giant-key case: a single group spanning the whole buffer → no group provably complete.
+        if !done && bounds.len() == 1 {
             input.push_front(Self::from_kv(ckv, ctimes, cdiffs));
             return;
         }
 
-        // Withhold the trailing group as the carry unless `done`.
-        let end = if done {
-            n
-        } else {
-            let mut start = n;
-            while start > 0 && compare_at(&ckv, start - 1, &ckv, n - 1) == Ordering::Equal { start -= 1; }
-            start
-        };
+        // Withhold the trailing group as the carry unless `done` (its start = the 2nd-to-last end).
+        let end = if done { n } else { bounds[bounds.len() - 2] };
         if end < n {
             let idx: Vec<usize> = (end..n).collect();
             let mut ct = ColTimes::new();
@@ -272,10 +272,9 @@ where
         let (mut tags, mut offs) = (Vec::new(), Vec::new());
         let (mut otimes, mut odiffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
         let mut i = 0;
-        while i < end {
-            let mut j = i;
-            while j < end && compare_at(&ckv, i, &ckv, j) == Ordering::Equal { j += 1; }
-            let mut pairs: Vec<(T, R)> = (i..j)
+        for &g_end in &bounds {
+            if g_end > end { break; }
+            let mut pairs: Vec<(T, R)> = (i..g_end)
                 .map(|k| { let mut t = ctimes.get(k); t.advance_by(frontier); (t, cdiffs[k].clone()) })
                 .collect();
             pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -293,7 +292,7 @@ where
                     }
                 }
             }
-            i = j;
+            i = g_end;
         }
         if !otimes.is_empty() { Self::emit(&srcs, &tags, &offs, &otimes, &odiffs, out); }
     }
