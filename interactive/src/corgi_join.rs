@@ -22,6 +22,7 @@ use corgi::Value as CValue;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use crate::corgi_backend::CorgiContainer;
+use crate::col_times::ColTime;
 use crate::corgi_chunk::{flatten_batches, flatten_restricted, CorgiChunk};
 use crate::corgi_logic::compile_join_projection;
 use crate::ir::Diff;
@@ -31,13 +32,13 @@ type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 /// Cursor-less corgi join tactic. Holds the projection `Term`s (`Var(0)=key`, `Var(1)=val0`,
 /// `Var(2)=val1`); compiled to a corgi graph per work-unit using the matched columns' shapes (so
 /// `Spread` resolves against the actual key/val arities).
-pub struct CorgiJoinTactic<T: Timestamp + Lattice> {
+pub struct CorgiJoinTactic<T: ColTime> {
     key: Term,
     val: Term,
     _t: std::marker::PhantomData<T>,
 }
 
-impl<T: Timestamp + Lattice> CorgiJoinTactic<T> {
+impl<T: ColTime> CorgiJoinTactic<T> {
     pub fn new(key: Term, val: Term) -> Self {
         CorgiJoinTactic { key, val, _t: std::marker::PhantomData }
     }
@@ -45,7 +46,7 @@ impl<T: Timestamp + Lattice> CorgiJoinTactic<T> {
 
 impl<T> JoinTactic<CBatch<T>, CBatch<T>, CorgiContainer<T, Diff>> for CorgiJoinTactic<T>
 where
-    T: Timestamp + Lattice,
+    T: ColTime,
 {
     /// One bilinear unit → its output container. The operator (`join_with_tactic`) drives capabilities
     /// and fuel by draining the returned iterator; `meet` (compaction) is ignored (correctness-first,
@@ -59,7 +60,7 @@ where
 /// matched val runs (lattice time-join + diff-multiply), project via corgi, emit at the capability.
 fn run_unit<T>(left_b: Vec<CBatch<T>>, right_b: Vec<CBatch<T>>, fresh: Fresh, key: &Term, val: &Term) -> Option<CorgiContainer<T, Diff>>
 where
-    T: Timestamp + Lattice,
+    T: ColTime,
 {
     // Materialize the FRESH (delta-sized) side whole; then present the ACCUMULATED side. When it is
     // meaningfully larger than the fresh delta (recursive joins against a built-up trace), probe it

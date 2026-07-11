@@ -17,7 +17,38 @@
 
 use std::cmp::Ordering;
 
-use columnar::{Borrow, Columnar, Index, Len, Push};
+use columnar::{Borrow, Clear, Columnar, Index, Len, Push};
+
+use differential_dataflow::lattice::Lattice;
+use timely::progress::Timestamp;
+
+/// A timestamp usable as a columnar time column: `Timestamp + Lattice` (DD's algebra) plus
+/// `Columnar` with an *ordered* `Ref` (so times compare in their SoA form). Our
+/// `Product<u64, PointStamp<u64>>` satisfies it — every layer derives `Columnar` with
+/// `#[columnar(derive(Ord, PartialOrd))]`.
+///
+/// The `Ref: Ord` requirement is an HRTB on a projection (`for<'a> Ref<'a, Self>: Ord`), which Rust
+/// does NOT imply from a plain `T: ColTime` bound at use sites — so it would otherwise go viral
+/// across every fn driving the `Chunk` methods. We discharge it ONCE here, in the blanket impl,
+/// behind [`ColTime::cmp_refs`]; downstream code compares times through that method and needs only
+/// `T: ColTime`.
+pub trait ColTime: Timestamp + Lattice + Columnar {
+    /// Order two SoA time references (via the derived `Ref: Ord`, lifetimes reborrowed to unify).
+    fn cmp_refs(a: columnar::Ref<'_, Self>, b: columnar::Ref<'_, Self>) -> Ordering;
+}
+
+impl<T> ColTime for T
+where
+    T: Timestamp + Lattice + Columnar,
+    for<'a> columnar::Ref<'a, T>: Ord,
+{
+    #[inline]
+    fn cmp_refs(a: columnar::Ref<'_, T>, b: columnar::Ref<'_, T>) -> Ordering {
+        let a = <<T as Columnar>::Container as Borrow>::reborrow_ref(a);
+        let b = <<T as Columnar>::Container as Borrow>::reborrow_ref(b);
+        a.cmp(&b)
+    }
+}
 
 /// SoA column of per-tuple times, backed by `<T as Columnar>::Container`.
 #[derive(Default)]
@@ -41,6 +72,12 @@ impl<T: Columnar> ColTimes<T> {
         self.len() == 0
     }
 
+    /// Empty the column, retaining allocation (the emit-flush reuse in `advance`).
+    #[inline]
+    pub fn clear(&mut self) {
+        self.store.clear();
+    }
+
     /// Append an owned time (columnar `Push<&T>`); the value is stored SoA, not cloned whole.
     #[inline]
     pub fn push(&mut self, t: &T) {
@@ -61,29 +98,42 @@ impl<T: Columnar> ColTimes<T> {
         <T as Columnar>::into_owned(self.store.borrow().get(i))
     }
 
-    /// Order rows `i` and `j` within this column, via the derived `Ref` `Ord` (no `T`).
+    /// Append rows `[s, e)` of `other`, pushing `Ref`s straight across — no `T` materialized. The
+    /// range copy used by `emit`/`concat`/merge-suffix.
+    #[inline]
+    pub fn push_range(&mut self, other: &ColTimes<T>, s: usize, e: usize) {
+        let b = other.store.borrow();
+        for i in s..e {
+            self.store.push(b.get(i));
+        }
+    }
+
+    /// Materialize the whole column to `Vec<T>` — the egress boundary (`SortedRun` for the join,
+    /// `CorgiContainer` for `as_collection`), where owned `T` is wanted anyway.
+    pub fn to_vec(&self) -> Vec<T> {
+        let b = self.store.borrow();
+        (0..b.len()).map(|i| <T as Columnar>::into_owned(b.get(i))).collect()
+    }
+
+    /// Order rows `i` and `j` within this column, in place via [`ColTime::cmp_refs`] (no `T`).
     #[inline]
     pub fn cmp(&self, i: usize, j: usize) -> Ordering
     where
-        for<'a> columnar::Ref<'a, T>: Ord,
+        T: ColTime,
     {
         let b = self.store.borrow();
-        let ri = <<T as Columnar>::Container as columnar::Borrow>::reborrow_ref(b.get(i));
-        let rj = <<T as Columnar>::Container as columnar::Borrow>::reborrow_ref(b.get(j));
-        ri.cmp(&rj)
+        T::cmp_refs(b.get(i), b.get(j))
     }
 
     /// Order this column's row `i` against `other`'s row `j` (the two-pointer merge compare).
     #[inline]
     pub fn cmp_cross(&self, i: usize, other: &ColTimes<T>, j: usize) -> Ordering
     where
-        for<'a> columnar::Ref<'a, T>: Ord,
+        T: ColTime,
     {
         let ba = self.store.borrow();
         let bb = other.store.borrow();
-        let ri = <<T as Columnar>::Container as columnar::Borrow>::reborrow_ref(ba.get(i));
-        let rj = <<T as Columnar>::Container as columnar::Borrow>::reborrow_ref(bb.get(j));
-        ri.cmp(&rj)
+        T::cmp_refs(ba.get(i), bb.get(j))
     }
 }
 

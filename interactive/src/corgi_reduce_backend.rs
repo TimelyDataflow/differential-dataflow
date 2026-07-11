@@ -42,6 +42,7 @@ use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, Re
 use corgi::arrange::{gather, gather_lanes, hash_rows, sort_blocks};
 use corgi::{Bounds, Shape, Value as CValue};
 
+use crate::col_times::ColTime;
 use crate::corgi_chunk::{columns_to_batch, CorgiChunk};
 use crate::ir::Diff;
 use crate::parse::Reducer;
@@ -181,7 +182,7 @@ fn ids(col: &CValue) -> Vec<u64> {
 /// columns plus per-record `(key_hash, time, diff)`. `keep(kh)` decides inclusion by key hash.
 fn collect_present<T, F>(chunks: &[&CorgiChunk<T, Diff>], mut keep: F) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>)
 where
-    T: Timestamp + Lattice,
+    T: ColTime,
     F: FnMut(u64) -> bool,
 {
     let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
@@ -195,7 +196,7 @@ where
                 tags.push(ci);
                 offs.push(i);
                 khs.push(kh[i]);
-                times.push(ch.times()[i].clone());
+                times.push(ch.times().get(i));
                 diffs.push(ch.diffs()[i]);
             }
         }
@@ -211,14 +212,14 @@ where
 /// All chunks of a batch list, flattened (empty chunks included — `hash_rows` yields nothing for them).
 fn chunks_of<T>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>>
 where
-    T: Timestamp + Lattice,
+    T: ColTime,
 {
     batches.iter().flat_map(|b| b.chunks.iter()).collect()
 }
 
 impl<T> CorgiReduceBackend<T>
 where
-    T: Timestamp + Lattice + Ord,
+    T: ColTime + Ord,
 {
     /// The one value crossing for a retire: every `(key, time)` bracket at once. Builds the output
     /// value COLUMN directly per reducer, registers it (id → row) into the val pool, and returns the
@@ -357,7 +358,7 @@ where
 
 impl<T> ProxyReduceBackend<CBatch<T>, CBatch<T>> for CorgiReduceBackend<T>
 where
-    T: Timestamp + Lattice + Ord,
+    T: ColTime + Ord,
 {
     type RIn = Diff;
     type ROut = Diff;
@@ -369,8 +370,9 @@ where
         let mut out: Vec<(u64, T)> = Vec::new();
         for ch in chunks_of(instance.input_batches) {
             let kh = ids(ch.keys());
-            for (h, t) in kh.into_iter().zip(ch.times()) {
-                out.push((h, t.clone()));
+            let times = ch.times();
+            for (i, h) in kh.into_iter().enumerate() {
+                out.push((h, times.get(i)));
             }
         }
         out.sort_by_key(|(k, _)| *k);
