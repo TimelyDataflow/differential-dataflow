@@ -1,5 +1,6 @@
 pub mod parse;
 pub mod ir;
+pub mod col_times;
 pub mod corgi_logic;
 pub mod corgi_backend;
 pub mod corgi_chunk;
