@@ -63,25 +63,50 @@ where
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     fn seal(&mut self, upper: Antichain<M::Time>) -> (Vec<Self::Output>, Description<M::Time>) {
-        // Merge all remaining chains into a single chain.
-        while self.chains.len() > 1 {
-            let list1 = self.chain_pop().unwrap();
-            let list2 = self.chain_pop().unwrap();
-            let merged = self.merge_by(list1, list2);
-            self.chain_push(merged);
-        }
-        let merged = self.chain_pop().unwrap_or_default();
-
-        // Extract readied data.
-        let mut kept = Vec::new();
-        let mut readied = Vec::new();
+        // Split each chain by `upper` without draining the ladder: only the shipped parts
+        // need linear (merged, consolidated) form for the builder. Kept updates (e.g.
+        // delayed far beyond `upper`) stay in their chains, and are copied only when the
+        // ladder's geometric maintenance merges them.
         self.frontier.clear();
-
-        self.merger.extract(merged, upper.borrow(), &mut self.frontier, &mut readied, &mut kept, &mut self.stash);
-
-        if !kept.is_empty() {
-            self.chain_push(kept);
+        let mut ship_chains: Vec<Vec<M::Chunk>> = Vec::new();
+        let mut kept_chains: Vec<Vec<M::Chunk>> = Vec::new();
+        while let Some(chain) = self.chain_pop() {
+            let mut kept = Vec::new();
+            let mut ship = Vec::new();
+            self.merger.extract(chain, upper.borrow(), &mut self.frontier, &mut ship, &mut kept, &mut self.stash);
+            if !kept.is_empty() {
+                kept_chains.push(kept);
+            }
+            if !ship.is_empty() {
+                ship_chains.push(ship);
+            }
         }
+        // Re-ladder the residue through the standard insertion, largest first: each
+        // `insert_chain` cascades tail merges until the geometric invariant holds, so
+        // inserting into the (currently empty) chain list maintains it inductively.
+        kept_chains.sort_by_key(|c| std::cmp::Reverse(c.iter().map(M::len).sum::<usize>()));
+        for kept in kept_chains {
+            self.insert_chain(kept);
+        }
+        // Merge the shipped chains smallest pair first, so total copying stays near-linear
+        // in shipped rows even when the readied set is large (pending updates eventually
+        // ship, and one frontier advance can release a whole residue). These merges also
+        // provide cross-chain consolidation of shipped updates; equal (data, time) updates
+        // cannot straddle the ship/keep split (it is by time), so this suffices.
+        let mut ship_chains: Vec<(usize, Vec<M::Chunk>)> = ship_chains
+            .into_iter()
+            .map(|c| (c.iter().map(M::len).sum::<usize>(), c))
+            .collect();
+        ship_chains.sort_by_key(|&(w, _)| std::cmp::Reverse(w));
+        while ship_chains.len() > 1 {
+            let (_, a) = ship_chains.pop().unwrap();
+            let (_, b) = ship_chains.pop().unwrap();
+            let merged = self.merge_by(a, b);
+            let w = merged.iter().map(M::len).sum::<usize>();
+            let pos = ship_chains.partition_point(|&(cw, _)| cw > w);
+            ship_chains.insert(pos, (w, merged));
+        }
+        let readied = ship_chains.pop().map(|(_, c)| c).unwrap_or_default();
 
         self.stash.clear();
 
