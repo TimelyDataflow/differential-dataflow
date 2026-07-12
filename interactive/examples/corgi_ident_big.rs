@@ -12,6 +12,12 @@
 //! corgi asserted == vec, and the hand-written native twin captured + checked against the
 //! same oracle. CHECK=1 forces checks at every size (default: smallest size only).
 
+// The suite runs on mimalloc (as a real deployment would — ddir_server does): the
+// system allocator was 27-28% of both DDIR backends' SCC profiles. One binary per
+// benchmark, so every column (native/fair/vec/corgi) shares the same allocator.
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::time::{Duration, Instant};
 
 use interactive::backend::{corgi, vec};

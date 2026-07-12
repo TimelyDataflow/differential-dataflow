@@ -14,6 +14,12 @@
 //! edge set, and the compound program's output mapped back through the encoding equals
 //! the plain-encoding program's output (vec backend) on the same graph.
 
+// The suite runs on mimalloc (as a real deployment would — ddir_server does): the
+// system allocator was 27-28% of both DDIR backends' SCC profiles. One binary per
+// benchmark, so every column (native/fair/vec/corgi) shares the same allocator.
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::time::{Duration, Instant};
 
 use interactive::backend::{corgi, vec};

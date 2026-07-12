@@ -5,6 +5,12 @@
 //!
 //! BACKEND=corgi (default) or vec — built identically for apples-to-apples profiles.
 
+// The suite runs on mimalloc (as a real deployment would — ddir_server does): the
+// system allocator was 27-28% of both DDIR backends' SCC profiles. One binary per
+// benchmark, so every column (native/fair/vec/corgi) shares the same allocator.
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use interactive::backend::{corgi, vec};
 use interactive::ir::Value;
 use interactive::{lower, parse};

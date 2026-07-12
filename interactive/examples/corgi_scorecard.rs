@@ -13,6 +13,12 @@
 //! Targets encode the thesis: parity with vec is the FLOOR (never lose on an operator), beating vec
 //! is the GOAL (columnar corgi should avoid the row backend's interpretation + Value pointer-chasing).
 
+// The suite runs on mimalloc (as a real deployment would — ddir_server does): the
+// system allocator was 27-28% of both DDIR backends' SCC profiles. One binary per
+// benchmark, so every column (native/fair/vec/corgi) shares the same allocator.
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::time::{Duration, Instant};
 
 use interactive::backend::{corgi, vec};
