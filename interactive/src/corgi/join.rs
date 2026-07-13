@@ -7,7 +7,7 @@
 //! lattice time-join + diff-multiply, runs the projection corgi program, and emits via the session.
 //!
 //! THIS ITERATION: struct + `defer` + a stub `work`, compiling as a valid `JoinTactic` (validates the
-//! generic-bound wiring). The join COMPUTE is already validated in `examples/corgi_join_mechanism.rs`.
+//! generic-bound wiring).
 
 use std::rc::Rc;
 
@@ -19,10 +19,10 @@ use corgi::Value as CValue;
 
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
-use crate::corgi_backend::CorgiContainer;
+use crate::corgi::container::CorgiContainer;
 use crate::col_times::ColTime;
-use crate::corgi_chunk::{flatten_batches, flatten_restricted, CorgiChunk};
-use crate::corgi_logic::compile_join_projection;
+use crate::corgi::chunk::{flatten_batches, flatten_restricted, CorgiChunk};
+use crate::corgi::logic::compile_join_projection;
 use crate::ir::Diff;
 use crate::parse::Term;
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
@@ -65,7 +65,7 @@ where
     // with the fresh keys and gather only matches (delta-proportional, not O(trace)); otherwise
     // (non-recursive / comparable sizes) a plain flatten is cheaper than the probe + reconsolidate.
     // Roles (left/right) are preserved for the projection.
-    let accumulated = |acc: &[CBatch<T>], fresh: &crate::corgi_chunk::SortedRun<T, Diff>| {
+    let accumulated = |acc: &[CBatch<T>], fresh: &crate::corgi::chunk::SortedRun<T, Diff>| {
         let acc_len: usize = acc.iter().flat_map(|b| b.chunks.iter()).map(|c| c.len()).sum();
         if acc_len > 2 * fresh.times.len() {
             flatten_restricted(acc, &fresh.keys)

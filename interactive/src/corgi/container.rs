@@ -12,7 +12,7 @@ use timely::progress::{PathSummary, Timestamp};
 use differential_dataflow::collection::containers::{Enter, Leave, Negate, ResultsIn};
 use differential_dataflow::difference::Abelian;
 
-use crate::corgi_logic::{infer_shape_cols, transcode, untranscode};
+use crate::corgi::logic::{infer_shape_cols, transcode, untranscode};
 use crate::ir::Value as DValue;
 
 type Row = DValue;

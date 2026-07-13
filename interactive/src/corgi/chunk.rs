@@ -516,12 +516,12 @@ where
     }
 }
 
-impl<T, R> timely::container::PushInto<&mut crate::corgi_backend::CorgiContainer<T, R>> for CorgiChunker<T, R>
+impl<T, R> timely::container::PushInto<&mut crate::corgi::container::CorgiContainer<T, R>> for CorgiChunker<T, R>
 where
     T: ColTime,
     R: Semigroup + Clone + 'static,
 {
-    fn push_into(&mut self, c: &mut crate::corgi_backend::CorgiContainer<T, R>) {
+    fn push_into(&mut self, c: &mut crate::corgi::container::CorgiContainer<T, R>) {
         if c.times.is_empty() {
             return;
         }

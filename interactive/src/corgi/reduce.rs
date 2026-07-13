@@ -41,7 +41,7 @@ use corgi::arrange::{gather, gather_lanes, sort_blocks};
 use corgi::{Bounds, Shape, Value as CValue};
 
 use crate::col_times::ColTime;
-use crate::corgi_chunk::{columns_to_batch, CorgiChunk};
+use crate::corgi::chunk::{columns_to_batch, CorgiChunk};
 use crate::ir::Diff;
 use crate::parse::Reducer;
 

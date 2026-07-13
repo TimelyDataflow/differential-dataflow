@@ -22,12 +22,12 @@ use corgi::arrange::gather;
 use corgi::Value as CValue;
 
 use crate::backend::Backend;
-use crate::corgi_chunk::{chunks_to_columns, CorgiChunk, CorgiChunker};
-use crate::corgi_backend::CorgiContainer;
-use crate::corgi_join::CorgiJoinTactic;
-use crate::corgi_reduce_backend::CorgiReduceBackend;
+use crate::corgi::chunk::{chunks_to_columns, CorgiChunk, CorgiChunker};
+use crate::corgi::container::CorgiContainer;
+use crate::corgi::join::CorgiJoinTactic;
+use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::ProxyReduceTactic;
-use crate::corgi_logic::{compilable, compile_predicate, compile_projection};
+use crate::corgi::logic::{compilable, compile_predicate, compile_projection};
 use crate::ir::{Diff, LinearOp, Time, Value as DValue};
 use crate::parse::{Projection, Reducer};
 use crate::scope_ir as st;
@@ -297,7 +297,7 @@ pub fn evaluate(
     use differential_dataflow::input::Input;
     use differential_dataflow::AsCollection;
     use differential_dataflow::dynamic::pointstamp::PointStamp;
-    use crate::corgi_backend::CorgiContainer;
+    use crate::corgi::container::CorgiContainer;
 
     let names: Vec<String> = program.root.exports.iter().map(|e| e.name.clone()).collect();
     let mut txs = Vec::new();
