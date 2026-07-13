@@ -110,7 +110,7 @@ fn scc_edges(nodes: u64, seed0: u64) -> (Vec<(Value, Value)>, Vec<(usize, usize)
 }
 
 fn bench_scc() {
-    let p = program("scc");
+    let p = program("scc_bench");
     let seed0: u64 = std::env::var("SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(0xc0ff_ee42);
     let sizes = sizes(&[100_000, 250_000, 500_000, 1_000_000]);
 
