@@ -6,7 +6,6 @@
 //! This iteration: the `Backend` impl SHAPE compiles (arrange + leave_dynamic real; linear/join/
 //! as_collection/reduce/inspect = `todo!()`), validating the trait wiring + `render_tree::<CorgiBackend>`.
 
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
