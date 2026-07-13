@@ -1,0 +1,17 @@
+con Fwd(1) = 0;
+    con Bwd(1) = 1;
+
+    let rows = input 0 | key($0[0] ; $0[1]);
+    let lists = rows | map($0 ; list($0[0], $1[0], $0[0] + $1[0], $0[0] * $1[0], $0[0] - $1[0] + 32768, $1[0] * $1[0], $0[0] * $0[0], $0[0] + $1[0] * $1[0]));
+    let exploded = lists | flatmap($1[0]);
+    let tagged = exploded
+        | map( $1[0] + 8 * if($1[1] < 500000, 0, 1)
+             ; case if($1[1] < 250000,
+                       Fwd(fold(list($0[0], $1[1], $0[0] * $1[1], $1[1] * $1[1]), 0, ^0 + ^1)),
+                       Bwd(fold(list($0[0], $1[1], $0[0] * $1[1], $1[1] * $1[1]), 0, ^0 + ^1)))
+               {
+                 Fwd(s) => s,
+                 Bwd(s) => s,
+               } );
+    let buckets = tagged | min;
+    export "result" = buckets | arrange;

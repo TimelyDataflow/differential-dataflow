@@ -16,4 +16,4 @@ let edges = input 0 | key($0[0] ; $0[1]);
         let trim_bwd = trans | join(bwd::labels, ($1 ; $0, $2)) | join(bwd::labels, ($0 ; $1, $2)) | filter($1[1] == $1[2]) | key($0 ; $1[0]);
         var trim = trim_bwd - edges;
     }
-    export "result" = outer::scc | map(;) | arrange;
+    export "result" = outer::scc | arrange;
