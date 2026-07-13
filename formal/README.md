@@ -2,11 +2,31 @@
 
 Machine-checked arguments about differential dataflow, in Lean 4 with Mathlib.
 
+These files split along one line.
+`Differential/Compositional.lean` argues that differential computation *abstractly* produces the right thing: each operator, as a transformation of difference traces, computes what re-evaluating its mathematics moment by moment would, and this composes to whole programs.
+The other four refine that intent into a *specific, efficient implementation* of the `reduce` operator: `Coverage.lean` states the general coverage keystone (any function of the accumulated input changes only at join-closure times of its edits), and `RoundCoverage.lean`, `Compaction.lean`, and `Model.lean` build the incremental schedule on it — interesting-time enumeration, pending obligations, logical compaction.
+
 ## Contents
 
-`Differential/Coverage.lean` concerns which times an incremental computation must revisit.
+`Differential/Compositional.lean` concerns compositional adequacy.
+A collection is a difference trace; `Trace.acc` accumulates it, and `acc_injective` shows a trace is determined by its accumulation.
+An operator is a commuting square `Adequate D impl := acc ∘ impl = D ∘ acc`; the squares compose (`Adequate.comp`), so a whole program is adequate by induction over its pieces (`Program.adequate`, over `id`/`linear`/`reduce`/`par`/`join`/`seq`).
+Each generator is one square: LINEAR/SUM (`linImpl_adequate`), `enter`/temporal time-actions (`timeImpl_adequate`), REDUCE (`reduce_adequate`, from `Coverage.exists_diff_trace_comp`), and JOIN as a bilinear convolution (`join_adequate`).
+
+The square carries two independent resource bounds, each proved generally and each composing to whole programs:
+
+- **work** — the output edits lie in the join-closure of the input's edits (`AdequateCov`, from `exists_diff_trace_comp`), composing via closure idempotence to `Program.adequateCov`;
+- **state** — beyond a frontier, advancing update times to their representative is invisible (`acc_compact`), so a pointwise operator fed the *compacted* input keeps no pre-frontier history (`adequate_compact_sufficient`). *(First cut; the frontier-strength gradient and pipeline state-demand are open — see `DESIGN.md`.)*
+
+Beneath the batch square, `impl` runs *incrementally*: a per-batch increment (`Refines`) composing by a chain rule (`Refines.comp`), whose locality for the nonlinear REDUCE is the interesting-times argument of `RoundCoverage.lean` and `Model.lean`.
+ITERATE adds an iteration coordinate `T × ℕ`: the loop's accumulated output is the from-scratch iteration of the body's denotation (`round_matches`, `iterate_program`), stabilization is free from finite support (`leave_stabilizes`), and a DELAY-ing (`Causal`) body has a unique accumulated fixpoint (`acc_unique`) — evaluation-order independence *is* adequacy.
+Everything is axiom-clean and monomorphic in the group; deferred are heterogeneous typing (`Program X Y`, for verified program transformations and key/value-changing joins) and confluence (when two arrival schedules compute the same value).
+
+`Differential/Coverage.lean` is the general keystone: which times an incremental computation must revisit, for *any* operator.
 A collection is a difference trace: updates at lattice-valued times, accumulated over all times less or equal to a query time.
-The file proves that for any function `f` of the accumulated input, the output is again a difference trace, with updates only at joins of input update times (`exists_diff_trace`, `exists_diff_trace_comp`).
+The file proves that for any function `f` of the accumulated input (assuming only `f 0 = 0`), the output is again a difference trace, with updates only at joins of input update times (`exists_diff_trace`, `exists_diff_trace_comp`) — a statement about differential computation as such, of which LINEAR, JOIN, and REDUCE are specializations.
+
+`Differential/RoundCoverage.lean` refines the keystone into the `reduce` operator's per-round schedule.
 Per round — an old input plus a batch of novel updates — the output change is covered by the joins involving at least one novel time (`round_coverage`), and that set coincides exactly with what an implementation enumerates by seeding on the novel times and closing under join against novel and prior times (`cl_inter_above_eq_novelJoins`; `active_times` in `reduce.rs`).
 Emitting corrections at those times keeps the output correct up to the frontier (`round_advances_invariant`).
 Joins landing at or beyond the frontier are deferred as pending obligations; the pending set covers exactly the staleness of the stored output (`round_needed_set_decomposition`), and a round with no new input shows it cannot be dropped (`draining_round_needs_pending`).
@@ -62,6 +82,6 @@ lake build
 
 A fresh checkout fetches Mathlib; `lake exe cache get` downloads prebuilt artifacts, which is much faster than compiling it.
 
-To confirm a theorem is fully proved, check its axioms: in a scratch file importing `Differential.Coverage`, `#print axioms Coverage.round_coverage` (or `Model.streamCorrectness_holds`, importing `Differential.Model`) should report only `propext`, `Classical.choice`, and `Quot.sound` — in particular no `sorryAx`.
+To confirm a theorem is fully proved, check its axioms: in a scratch file importing `Differential.Coverage`, `#print axioms Coverage.exists_diff_trace_comp` (or `Coverage.round_coverage`, importing `Differential.RoundCoverage`; or `Model.streamCorrectness_holds`, importing `Differential.Model`; or `Compositional.Program.adequate`, importing `Differential.Compositional`) should report only `propext`, `Classical.choice`, and `Quot.sound` — in particular no `sorryAx`.
 
 Nothing in the Rust workspace depends on this directory, and no CI gates on it.

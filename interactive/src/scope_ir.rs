@@ -214,13 +214,35 @@ impl Scope {
         for e in self.exports.iter_mut() { f(&mut e.value); }
     }
 
-    /// Count, for each item, the references to it (`Local` or `ChildExport`).
-    fn use_counts(&mut self) -> Vec<usize> {
+    /// Count, for each item, the references to it (`Local` or `ChildExport`)
+    /// from LIVE holders only. Dead items keep their (stale, already-redirected-
+    /// around) input refs until `compact`, and counting those would make a
+    /// single-consumer item look shared — blocking fusion after its consumer
+    /// chain has partially fused (e.g. the middle of a three-op linear chain
+    /// dies into its consumer, and its stale input ref still counts against
+    /// the head, so the chain never finishes fusing).
+    fn use_counts(&self, dead: &[bool]) -> Vec<usize> {
         let mut counts = vec![0usize; self.items.len()];
-        self.for_each_ref(|r| match r {
+        let mut tally = |r: &Ref| match r {
             Ref::Local(i) | Ref::ChildExport(i, _) => counts[*i] += 1,
             Ref::Import(_) | Ref::Var(_) => {},
-        });
+        };
+        for (i, item) in self.items.iter().enumerate() {
+            if dead[i] { continue; }
+            match item {
+                Item::Op(node) => match node {
+                    Node::Linear { input, .. } | Node::Arrange(input)
+                    | Node::Reduce { input, .. } | Node::Inspect { input, .. } => tally(input),
+                    Node::Join { left, right, .. } => { tally(left); tally(right); },
+                    Node::Concat(refs) => for r in refs { tally(r); },
+                },
+                Item::Sub(child) => for imp in &child.imports {
+                    if let Source::Parent(r) = &imp.from { tally(r); }
+                },
+            }
+        }
+        for b in &self.binds { tally(&b.value); }
+        for e in &self.exports { tally(&e.value); }
         counts
     }
 
@@ -247,7 +269,7 @@ impl Scope {
 
     /// Fuse a `Linear` into its `Linear` input when it is the only consumer.
     fn fuse_linear(&mut self, dead: &mut [bool]) -> bool {
-        let counts = self.use_counts();
+        let counts = self.use_counts(dead);
         let mut changed = false;
         for i in 0..self.items.len() {
             if dead[i] { continue; }
