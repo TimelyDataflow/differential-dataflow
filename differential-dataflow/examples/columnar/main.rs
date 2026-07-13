@@ -171,6 +171,7 @@ mod reachability {
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
                 _,
+                _,
             >("Distinct", |_node, _input, output| { output.push(((), 1)); },
             |col, key, upds| {
                 use columnar::Push;

@@ -146,7 +146,7 @@ impl Backend for VecBackend {
                 output.push((Value::List(items), 1));
             }),
         };
-        a.reduce_abelian::<_, ValBuilder<_, _, _, _>, ValSpine<_, _, _, _>, _>(
+        a.reduce_abelian::<_, ValBuilder<_, _, _, _>, ValSpine<_, _, _, _>, _, _>(
             "Reduce",
             move |k, v, o| f(k, v, o),
             |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v, t, r)| ((key.clone(), v), t, r))); },
