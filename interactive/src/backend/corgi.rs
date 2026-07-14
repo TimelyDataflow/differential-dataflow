@@ -34,6 +34,13 @@ use crate::ir::{Diff, LinearOp, Time, Value as DValue};
 use crate::parse::{Projection, Reducer};
 use crate::scope_ir as st;
 
+/// A DDIR row, an update, the corgi container on dataflow edges, and the columnar trace —
+/// the shorthands the `Backend` methods below are written in terms of.
+type Row = DValue;
+type Upd = ((Row, Row), Time, Diff);
+type CC = CorgiContainer<Time, Diff>;
+type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, Diff>>;
+
 /// Apply a `LinearOp` chain to one corgi container (the corgi-native row-wise compute per batch).
 /// Project = corgi `eval_graph`; Filter = corgi mask + `gather`; Negate = Rust — all columnar.
 /// The time/list-shaping ops (EnterAt/LiftIter/FlatMap) take a correctness-first row-wise path
@@ -149,10 +156,6 @@ fn append_iter(val: DValue, iter: i64) -> DValue {
     }
 }
 
-type Row = DValue;
-type Upd = ((Row, Row), Time, Diff);
-type CC = CorgiContainer<Time, Diff>;
-type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, Diff>>;
 
 /// The corgi rendering substrate.
 pub enum CorgiBackend {}
