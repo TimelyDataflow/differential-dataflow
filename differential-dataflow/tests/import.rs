@@ -60,7 +60,7 @@ fn test_import_vanilla() {
                 ::std::mem::drop(trace);
                 let captured =
                 imported
-                    .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<u64,i64,_,_>,_>(
+                    .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<u64,i64,_,_>,_,_>(
                         "Reduce",
                         |_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)),
                         |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
@@ -139,7 +139,7 @@ fn test_import_completed_dataflow() {
                 ::std::mem::drop(trace);
                 let stream =
                 imported
-                    .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<u64,i64,_,_>,_>(
+                    .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<u64,i64,_,_>,_,_>(
                         "Reduce",
                         |_k, s, t| t.push((s.iter().map(|&(_, w)| w).sum(), 1i64)),
                         |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r)));

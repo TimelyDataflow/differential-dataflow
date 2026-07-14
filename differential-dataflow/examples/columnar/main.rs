@@ -143,7 +143,7 @@ mod reachability {
 
             // join_traces with ValColBuilder: produces Stream<_, RecordedUpdates<...>>.
             let proposed =
-                join_traces::<_, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
+                join_traces::<_, _, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
                     edges_arr,
                     reach_arr,
                     |_src, dst, (), time, d1, d2, session| {
@@ -170,6 +170,7 @@ mod reachability {
             let result = combined_arr.reduce_abelian::<_,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
+                _,
                 _,
             >("Distinct", |_node, _input, output| { output.push(((), 1)); },
             |col, key, upds| {

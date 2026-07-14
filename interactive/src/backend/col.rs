@@ -161,7 +161,7 @@ mod render {
         use differential_dataflow::operators::join::join_traces;
         use differential_dataflow::collection::AsCollection;
         use super::columnar::ValColBuilder;
-        let stream = join_traces::<_, _, _, ValColBuilder<DdirUpdate>>(l, r, move |k, v1, v2, t, d1, d2, c| {
+        let stream = join_traces::<_, _, _, _, ValColBuilder<DdirUpdate>>(l, r, move |k, v1, v2, t, d1, d2, c| {
             use differential_dataflow::difference::Multiply;
             let d = d1.clone().multiply(d2);
             let i = [k.as_slice(), v1.as_slice(), v2.as_slice()];
@@ -186,7 +186,7 @@ mod render {
                 if count != 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); }
             }),
         };
-        a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>, _>(
+        a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>, _, _>(
             "Reduce",
             move |k, vals, output| { f(k, vals, output); },
             |col, key, upds| {

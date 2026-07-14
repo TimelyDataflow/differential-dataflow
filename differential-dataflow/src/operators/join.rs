@@ -17,8 +17,9 @@ use timely::dataflow::operators::Capability;
 
 use crate::lattice::Lattice;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, Cursor, Navigable, TraceReader};
+use crate::trace::{BatchCursor, BatchDiff, BatchReader, BatchVal, Cursor, Navigable, TraceReader};
 use crate::trace::cursor::cursor_list;
+use crate::trace::implementations::containers::BatchContainer;
 use crate::operators::ValueHistory;
 
 /// A type that can manage the joining of lists of batches.
@@ -59,13 +60,15 @@ pub enum Fresh {
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
 ///
 /// [`AsCollection`]: crate::collection::AsCollection
-pub fn join_traces<'scope, Tr1, Tr2, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, result: L) -> Stream<'scope, Tr1::Time, CB::Container>
+pub fn join_traces<'scope, Tr1, Tr2, KC, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, result: L) -> Stream<'scope, Tr1::Time, CB::Container>
 where
     Tr1: TraceReader<Batch: Navigable>+'static,
     Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time>+'static,
-    BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
-    for<'a> BatchCursor<Tr2>: Cursor<Key<'a>=BatchKey<'a, Tr1>, Time = Tr1::Time>,
-    L: FnMut(BatchKey<'_, Tr1>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut CB)+'static,
+    KC: BatchContainer,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
+    for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, Time = Tr1::Time>,
+    L: FnMut(KC::ReadItem<'_>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut CB)+'static,
     CB: ContainerBuilder<Container: Default> + 'static,
 {
     join_with_tactic(arranged1, arranged2, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, _, CB>::new(result))

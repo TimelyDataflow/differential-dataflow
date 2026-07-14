@@ -63,50 +63,25 @@ where
     // which we call `lower`, by assumption that after sealing a batcher we receive no more
     // updates with times not greater or equal to `upper`.
     fn seal(&mut self, upper: Antichain<M::Time>) -> (Vec<Self::Output>, Description<M::Time>) {
-        // Split each chain by `upper` without draining the ladder: only the shipped parts
-        // need linear (merged, consolidated) form for the builder. Kept updates (e.g.
-        // delayed far beyond `upper`) stay in their chains, and are copied only when the
-        // ladder's geometric maintenance merges them.
+        // Merge all remaining chains into a single chain.
+        while self.chains.len() > 1 {
+            let list1 = self.chain_pop().unwrap();
+            let list2 = self.chain_pop().unwrap();
+            let merged = self.merge_by(list1, list2);
+            self.chain_push(merged);
+        }
+        let merged = self.chain_pop().unwrap_or_default();
+
+        // Extract readied data.
+        let mut kept = Vec::new();
+        let mut readied = Vec::new();
         self.frontier.clear();
-        let mut ship_chains: Vec<Vec<M::Chunk>> = Vec::new();
-        let mut kept_chains: Vec<Vec<M::Chunk>> = Vec::new();
-        while let Some(chain) = self.chain_pop() {
-            let mut kept = Vec::new();
-            let mut ship = Vec::new();
-            self.merger.extract(chain, upper.borrow(), &mut self.frontier, &mut ship, &mut kept, &mut self.stash);
-            if !kept.is_empty() {
-                kept_chains.push(kept);
-            }
-            if !ship.is_empty() {
-                ship_chains.push(ship);
-            }
+
+        self.merger.extract(merged, upper.borrow(), &mut self.frontier, &mut readied, &mut kept, &mut self.stash);
+
+        if !kept.is_empty() {
+            self.chain_push(kept);
         }
-        // Re-ladder the residue through the standard insertion, largest first: each
-        // `insert_chain` cascades tail merges until the geometric invariant holds, so
-        // inserting into the (currently empty) chain list maintains it inductively.
-        kept_chains.sort_by_key(|c| std::cmp::Reverse(c.iter().map(M::len).sum::<usize>()));
-        for kept in kept_chains {
-            self.insert_chain(kept);
-        }
-        // Merge the shipped chains smallest pair first, so total copying stays near-linear
-        // in shipped rows even when the readied set is large (pending updates eventually
-        // ship, and one frontier advance can release a whole residue). These merges also
-        // provide cross-chain consolidation of shipped updates; equal (data, time) updates
-        // cannot straddle the ship/keep split (it is by time), so this suffices.
-        let mut ship_chains: Vec<(usize, Vec<M::Chunk>)> = ship_chains
-            .into_iter()
-            .map(|c| (c.iter().map(M::len).sum::<usize>(), c))
-            .collect();
-        ship_chains.sort_by_key(|&(w, _)| std::cmp::Reverse(w));
-        while ship_chains.len() > 1 {
-            let (_, a) = ship_chains.pop().unwrap();
-            let (_, b) = ship_chains.pop().unwrap();
-            let merged = self.merge_by(a, b);
-            let w = merged.iter().map(M::len).sum::<usize>();
-            let pos = ship_chains.partition_point(|&(cw, _)| cw > w);
-            ship_chains.insert(pos, (w, merged));
-        }
-        let readied = ship_chains.pop().map(|(_, c)| c).unwrap_or_default();
 
         self.stash.clear();
 
@@ -403,5 +378,42 @@ pub mod vec {
         }
 
         fn len(chunk: &Vec<(D, T, R)>) -> usize { chunk.len() }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use timely::progress::frontier::Antichain;
+    use crate::trace::Batcher;
+    use super::MergeBatcher;
+    use super::vec::VecMerger;
+
+    type Bt = MergeBatcher<VecMerger<u64, u64, i64>>;
+
+    /// The sealed frontier must reflect the POST-CONSOLIDATION set of distinct kept times:
+    /// two chains carry cancelling updates at a kept time (`t=5`), plus a survivor at a later
+    /// kept time (`t=7`). After `seal(upper=[3])` the frontier must be `{7}` — `(100, 5)` nets
+    /// to zero and needs no capability. (A per-chain extract that folds the frontier before
+    /// consolidating would wrongly report `{5}`.)
+    #[test]
+    fn frontier_is_post_consolidation() {
+        let mut b = Bt::new(None, 0);
+        b.chain_push(vec![vec![(100u64, 5u64, 1i64), (200u64, 7u64, 1i64)]]);
+        b.chain_push(vec![vec![(100u64, 5u64, -1i64)]]);
+        let _ = b.seal(Antichain::from_elem(3));
+        let got: Vec<u64> = b.frontier().iter().cloned().collect();
+        assert_eq!(got, vec![7u64],
+            "frontier held a capability at t=5, which consolidates to zero (got {got:?})");
+    }
+
+    /// Sanity: with no cross-chain cancellation, the frontier is the minimal kept time.
+    #[test]
+    fn frontier_survivor_minimum() {
+        let mut b = Bt::new(None, 0);
+        b.chain_push(vec![vec![(100u64, 5u64, 1i64)]]);
+        b.chain_push(vec![vec![(200u64, 7u64, 1i64)]]);
+        let _ = b.seal(Antichain::from_elem(3));
+        let got: Vec<u64> = b.frontier().iter().cloned().collect();
+        assert_eq!(got, vec![5u64]);
     }
 }
