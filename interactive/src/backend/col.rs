@@ -161,7 +161,7 @@ mod render {
         use differential_dataflow::operators::join::join_traces;
         use differential_dataflow::collection::AsCollection;
         use super::columnar::ValColBuilder;
-        let stream = join_traces::<_, _, _, ValColBuilder<DdirUpdate>>(l, r, move |k, v1, v2, t, d1, d2, c| {
+        let stream = join_traces::<_, _, _, _, ValColBuilder<DdirUpdate>>(l, r, move |k, v1, v2, t, d1, d2, c| {
             use differential_dataflow::difference::Multiply;
             let d = d1.clone().multiply(d2);
             let i = [k.as_slice(), v1.as_slice(), v2.as_slice()];
