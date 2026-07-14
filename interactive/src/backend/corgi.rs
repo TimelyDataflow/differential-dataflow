@@ -157,7 +157,10 @@ fn append_iter(val: DValue, iter: i64) -> DValue {
 }
 
 
-/// The corgi rendering substrate.
+/// The corgi rendering substrate. An uninhabited type used only as a type-level tag: it
+/// carries the [`Backend`] impl (a namespace of rendering functions selected by type) and is
+/// never a value — rendering goes through `render_tree::<CorgiBackend>`. The empty enum (vs a
+/// unit struct) makes constructing one impossible, signalling "type only". Mirrors `VecBackend`.
 pub enum CorgiBackend {}
 
 impl Backend for CorgiBackend {
