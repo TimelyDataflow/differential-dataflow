@@ -186,7 +186,7 @@ mod render {
                 if count != 0 { let mut r = Row::new(); r.push(count); output.push((r, 1)); }
             }),
         };
-        a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>, _>(
+        a.reduce_abelian::<_, ColValBuilder<_,_,_,_>, ColValSpine<_,_,_,_>, _, _>(
             "Reduce",
             move |k, vals, output| { f(k, vals, output); },
             |col, key, upds| {

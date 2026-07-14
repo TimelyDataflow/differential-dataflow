@@ -198,7 +198,7 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     ///     // create a second dataflow
     ///     worker.dataflow(move |scope| {
     ///         trace.import(scope)
-    ///              .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>,_>(
+    ///              .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>,_,_>(
     ///                  "Reduce",
     ///                  |_key, src, dst| dst.push((*src[0].0, 1)),
     ///                  |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },
