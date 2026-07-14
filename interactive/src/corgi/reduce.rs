@@ -40,7 +40,7 @@ use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, Re
 use corgi::arrange::{gather, gather_lanes, sort_blocks};
 use corgi::{Bounds, Shape, Value as CValue};
 
-use crate::col_times::ColTime;
+use crate::corgi::col_times::ColTime;
 use crate::corgi::chunk::{columns_to_batch, CorgiChunk};
 use crate::ir::Diff;
 use crate::parse::Reducer;

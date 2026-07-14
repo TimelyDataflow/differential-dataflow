@@ -1,6 +1,5 @@
 pub mod parse;
 pub mod ir;
-pub mod col_times;
 pub mod corgi;
 pub mod lower;
 pub mod scope_ir;

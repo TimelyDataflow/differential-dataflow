@@ -5,6 +5,7 @@
 //! [`crate::backend::corgi`].
 
 pub mod chunk;
+pub mod col_times;
 pub mod container;
 pub mod join;
 pub mod logic;

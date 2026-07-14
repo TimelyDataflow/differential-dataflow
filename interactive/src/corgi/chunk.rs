@@ -34,7 +34,7 @@ use corgi::Value as CValue;
 
 use columnar::Columnar;
 
-use crate::col_times::{ColTime, ColTimes};
+use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::ir::Value as DValue;
 
 use std::cmp::Ordering;

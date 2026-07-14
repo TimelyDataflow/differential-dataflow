@@ -20,7 +20,7 @@ use corgi::Value as CValue;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use crate::corgi::container::CorgiContainer;
-use crate::col_times::ColTime;
+use crate::corgi::col_times::ColTime;
 use crate::corgi::chunk::{flatten_batches, flatten_restricted, CorgiChunk};
 use crate::corgi::logic::compile_join_projection;
 use crate::ir::Diff;
