@@ -227,26 +227,28 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
     /// A convenience method to join and produce `VecCollection` output.
     ///
     /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
-    pub fn join_core<Tr2,I,L,R1,R2>(self, other: Arranged<'scope, Tr2>, mut result: L) -> VecCollection<'scope, Tr1::Time,I::Item,<R1 as Multiply<R2>>::Output>
+    pub fn join_core<Tr2,I,L,R1,R2,KC>(self, other: Arranged<'scope, Tr2>, mut result: L) -> VecCollection<'scope, Tr1::Time,I::Item,<R1 as Multiply<R2>>::Output>
     where
         Tr2: TraceReader<Batch: Navigable, Time=Tr1::Time>+Clone+'static,
         // Pin the cursor diffs to named params `R1`/`R2`: a `Multiply` bound on a projection
         // does not connect to its use-site (the solver normalizes the use but not the bound's
         // subject), so we constrain plain params instead.
-        BatchCursor<Tr1>: Cursor<Diff = R1, Time = Tr1::Time>,
+        BatchCursor<Tr1>: Cursor<Diff = R1, Time = Tr1::Time, KeyContainer = KC>,
         BatchCursor<Tr2>: Cursor<Diff = R2, Time = Tr1::Time>,
-        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>>,
+        KC: BatchContainer,
+        for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         R1: Multiply<R2, Output: Semigroup+'static> + Clone,
         I: IntoIterator<Item: Data>,
-        L: FnMut(BatchKey<'_, Tr1>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>)->I+'static
+        L: FnMut(KC::ReadItem<'_>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>)->I+'static
     {
-        let mut result = move |k: BatchKey<'_, Tr1>, v1: BatchVal<'_, Tr1>, v2: BatchVal<'_, Tr2>, t: Tr1::Time, r1: &R1, r2: &R2| {
+        let mut result = move |k: KC::ReadItem<'_>, v1: BatchVal<'_, Tr1>, v2: BatchVal<'_, Tr2>, t: Tr1::Time, r1: &R1, r2: &R2| {
             let r = (r1.clone()).multiply(r2);
             result(k, v1, v2).into_iter().map(move |d| (d, t.clone(), r.clone()))
         };
 
         use crate::operators::join::join_traces;
-        join_traces::<_, _, _, crate::consolidation::ConsolidatingContainerBuilder<_>>(
+        join_traces::<_, _, _, _, crate::consolidation::ConsolidatingContainerBuilder<_>>(
             self,
             other,
             move |k, v1, v2, t, d1, d2, c| {
