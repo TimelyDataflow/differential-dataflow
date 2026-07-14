@@ -1,10 +1,12 @@
-//! corgi-native rendering substrate (Route B): corgi columns are the native representation, the
-//! arrangement is `Spine<Rc<CorgiBatch>>` (cursor-less), and the scalar logic is `eval_graph`.
-//! Parallels `backend::vec`. Linear/arrange/join are corgi-native; `reduce` awaits Frank's
-//! cursor-less `retire` design (the operator's interesting-times machinery).
+//! The corgi rendering substrate: corgi columns are the native representation on dataflow edges,
+//! arrangements are chains of sorted columnar chunks (`ChunkSpine<CorgiChunk>`, cursor-less), and
+//! scalar logic runs columnar via `eval_graph`. Parallels the row-wise `backend::vec`, which stays
+//! the correctness reference.
 //!
-//! This iteration: the `Backend` impl SHAPE compiles (arrange + leave_dynamic real; linear/join/
-//! as_collection/reduce/inspect = `todo!()`), validating the trait wiring + `render_tree::<CorgiBackend>`.
+//! All `Backend` methods are corgi-native: `linear` folds a `LinearOp` chain over each container
+//! ([`apply_ops`], columnar fast paths with row-wise fallbacks); `arrange` ingests columns without
+//! a row round-trip; `join`/`reduce` run through whole-chunk tactics ([`CorgiJoinTactic`], the
+//! rank/int-proxy reduce backends) over the columnar chunks.
 
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
