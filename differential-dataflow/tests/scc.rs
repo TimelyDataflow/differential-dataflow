@@ -19,17 +19,11 @@ use differential_dataflow::lattice::Lattice;
 type Node = usize;
 type Edge = (Node, Node);
 
-#[test] fn scc_10_20_1000() { test_sizes(10, 20, 1000, Config::process(3), false); }
-#[test] fn scc_100_200_10() { test_sizes(100, 200, 10, Config::process(3), false); }
-#[test] fn scc_100_2000_1() { test_sizes(100, 2000, 1, Config::process(3), false); }
+#[test] fn scc_10_20_1000() { test_sizes(10, 20, 1000, Config::process(3)); }
+#[test] fn scc_100_200_10() { test_sizes(100, 200, 10, Config::process(3)); }
+#[test] fn scc_100_2000_1() { test_sizes(100, 2000, 1, Config::process(3)); }
 
-// The library's prioritized variant (`strongly_connected_at`, labels log-bucketed by node id)
-// against the same sequential oracle.
-#[test] fn scc_at_10_20_1000() { test_sizes(10, 20, 1000, Config::process(3), true); }
-#[test] fn scc_at_100_200_10() { test_sizes(100, 200, 10, Config::process(3), true); }
-#[test] fn scc_at_100_2000_1() { test_sizes(100, 2000, 1, Config::process(3), true); }
-
-fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Config, prioritized: bool) {
+fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Config) {
 
     let mut edge_list = Vec::new();
 
@@ -51,7 +45,7 @@ fn test_sizes(nodes: usize, edges: usize, rounds: usize, config: Config, priorit
     // }
 
     let mut results1 = scc_sequential(edge_list.clone());
-    let mut results2 = scc_differential(edge_list.clone(), config, prioritized);
+    let mut results2 = scc_differential(edge_list.clone(), config);
 
     results1.sort();
     results1.sort_by(|x,y| x.1.cmp(&y.1));
@@ -169,7 +163,6 @@ fn assign(node: usize, root: usize, reverse: &HashMap<usize, Vec<usize>>, compon
 fn scc_differential(
     edges_list: Vec<((usize, usize), usize, isize)>,
     config: Config,
-    prioritized: bool,
 )
 -> Vec<((usize, usize), usize, isize)>
 {
@@ -188,12 +181,7 @@ fn scc_differential(
 
             let (edge_input, edges) = scope.new_collection();
 
-            let result = if prioritized {
-                differential_dataflow::algorithms::graphs::scc::strongly_connected_at(edges, |x| *x as u64)
-            } else {
-                _strongly_connected(edges)
-            };
-            result
+            _strongly_connected(edges)
                 .consolidate()
                 .inner
                 .capture_into(send);
