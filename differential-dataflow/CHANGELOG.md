@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.24.0...differential-dataflow-v0.25.0) - 2026-07-15
+
+### Other
+
+- name the shared key container to fix HRTB normalization ([#798](https://github.com/TimelyDataflow/differential-dataflow/pull/798))
+- name the shared key container to fix HRTB normalization ([#797](https://github.com/TimelyDataflow/differential-dataflow/pull/797))
+- Revert the extract-first seal; restore merge-then-extract ([#796](https://github.com/TimelyDataflow/differential-dataflow/pull/796))
+- :common — types and methods generally useful for differential computation ([#794](https://github.com/TimelyDataflow/differential-dataflow/pull/794))
+- extract-first seal ([#793](https://github.com/TimelyDataflow/differential-dataflow/pull/793))
+- Integer-proxy chunks: backend-agnostic join and reduce over (key_hash, value_id) ([#781](https://github.com/TimelyDataflow/differential-dataflow/pull/781))
+- Flip tactics from pub(crate) to pub ([#791](https://github.com/TimelyDataflow/differential-dataflow/pull/791))
+- reshape JoinTactic to an iterator of output containers ([#790](https://github.com/TimelyDataflow/differential-dataflow/pull/790))
+- document and assert the ReduceTactic / JoinTactic contracts ([#789](https://github.com/TimelyDataflow/differential-dataflow/pull/789))
+- add a model-derived `reference` tactic (differential oracle) ([#780](https://github.com/TimelyDataflow/differential-dataflow/pull/780))
+- Chunk navigation capability ([#778](https://github.com/TimelyDataflow/differential-dataflow/pull/778))
+- Add formal/: machine-checked coverage and compaction arguments in Lean ([#776](https://github.com/TimelyDataflow/differential-dataflow/pull/776))
+- Generalize join and reduce into navigation-free drivers over pluggable tactics ([#773](https://github.com/TimelyDataflow/differential-dataflow/pull/773))
+- Move layout onto the Cursor; make navigation an optional capability ([#772](https://github.com/TimelyDataflow/differential-dataflow/pull/772))
+- Remove `TraceReader::Cursor`; hard-wire `CursorList<Batch::Cursor>` ([#771](https://github.com/TimelyDataflow/differential-dataflow/pull/771))
+- Chunk columnar retarget ([#769](https://github.com/TimelyDataflow/differential-dataflow/pull/769))
+- `Chunk` abstraction for collections, merge batching, and batches. ([#744](https://github.com/TimelyDataflow/differential-dataflow/pull/744))
+- weigh the geometric ladder by updates; split Merger::account ([#767](https://github.com/TimelyDataflow/differential-dataflow/pull/767))
+
 ## [0.24.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.23.0...differential-dataflow-v0.24.0) - 2026-05-29
 
 ### Added
