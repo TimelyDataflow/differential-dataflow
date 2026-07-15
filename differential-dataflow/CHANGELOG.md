@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.24.0...differential-dataflow-v0.25.0) - 2026-07-15
+
+### Added
+
+- `operators::common`: shared building blocks for differential operators — `TimeHistory`, `bilinear_wave`, `tile_descriptions`, `KeyView`, and `discover_times`. ([#794](https://github.com/TimelyDataflow/differential-dataflow/pull/794))
+- `TraceReader::batches_through`, exposing the batches up to a given frontier for the tactic-driven operators. ([#773](https://github.com/TimelyDataflow/differential-dataflow/pull/773))
+- `formal/`: machine-checked Lean models of differential's coverage and compaction arguments, plus a model-derived `reference` reduce tactic used as a differential oracle in tests. ([#776](https://github.com/TimelyDataflow/differential-dataflow/pull/776), [#780](https://github.com/TimelyDataflow/differential-dataflow/pull/780))
+
+The following surface is new and **experimental**: it is public to enable experimentation, but the API is unstable and expected to change.
+
+- `Chunk` trait abstracting the container that backs collections, merge batching, and batches, with the `columnar` module retargeted onto it. ([#744](https://github.com/TimelyDataflow/differential-dataflow/pull/744), [#769](https://github.com/TimelyDataflow/differential-dataflow/pull/769), [#778](https://github.com/TimelyDataflow/differential-dataflow/pull/778))
+- Public `JoinTactic` and `ReduceTactic` traits, letting callers supply per-batch join and reduce strategies; documented with asserted contracts. ([#789](https://github.com/TimelyDataflow/differential-dataflow/pull/789), [#790](https://github.com/TimelyDataflow/differential-dataflow/pull/790), [#791](https://github.com/TimelyDataflow/differential-dataflow/pull/791))
+- Integer-proxy chunks: a backend-agnostic join and reduce over `(key_hash, value_id)` pairs. ([#781](https://github.com/TimelyDataflow/differential-dataflow/pull/781))
+
+### Changed
+
+- Update to timely 0.31. ([f7c799c](https://github.com/TimelyDataflow/differential-dataflow/commit/f7c799c9))
+- Move layout onto the `Cursor`. Cursors now carry the key, value, time, and diff types and their containers as associated types; `BatchReader` and `TraceReader` retain only `Time`. Navigation becomes an optional cursor capability rather than a universal one. ([#771](https://github.com/TimelyDataflow/differential-dataflow/pull/771), [#772](https://github.com/TimelyDataflow/differential-dataflow/pull/772))
+- Generalize `join` and `reduce` into navigation-free drivers over pluggable tactics. `join_core`, `reduce_abelian`, and `reduce_core` gain type parameters for the tactic and output container. ([#773](https://github.com/TimelyDataflow/differential-dataflow/pull/773), [#790](https://github.com/TimelyDataflow/differential-dataflow/pull/790))
+- Rework `MergeBatcher` merge effort: weigh the geometric ladder by update counts, split `Merger::account`, and add `Merger::len`. ([#767](https://github.com/TimelyDataflow/differential-dataflow/pull/767))
+- Name the shared key container in `join` and `reduce` to fix HRTB normalization for non-reference key containers. ([#797](https://github.com/TimelyDataflow/differential-dataflow/pull/797), [#798](https://github.com/TimelyDataflow/differential-dataflow/pull/798))
+- Reorganize the experimental `columnar` module: the 0.24 `spill`, `batcher`, `builder`, `exchange`, and `arrangement` submodules give way to `layout`, `updates`, `trie_merger`, `collection`, and `trace`. Many 0.24 public types (`ValBuilder`, `ValPact`, `ValChunker`, `RecordedUpdates`, `Coltainer`, the `Spill` / `Fetch` / `SpillPolicy` traits) are removed or relocated. ([#769](https://github.com/TimelyDataflow/differential-dataflow/pull/769), [#781](https://github.com/TimelyDataflow/differential-dataflow/pull/781))
+
+### Removed
+
+- The `LayoutExt` trait, and its supertrait bound on `BatchReader`, `TraceReader`, and `Cursor`. ([#772](https://github.com/TimelyDataflow/differential-dataflow/pull/772))
+- `TraceReader::Cursor`, `TraceReader::Storage`, and `BatchReader::Cursor` associated types, along with `BatchReader::cursor`; `CursorList<Batch::Cursor>` is hard-wired instead. ([#771](https://github.com/TimelyDataflow/differential-dataflow/pull/771))
+
+This is a heavily breaking release.
+Layout information moves off the trace and batch types onto the `Cursor`, which now carries the key, value, time, and diff types and their containers as associated types; `BatchReader` and `TraceReader` retain only `Time`.
+Navigation becomes an optional cursor capability, and `join` and `reduce` are rebuilt as navigation-free drivers parameterized by the public `JoinTactic` / `ReduceTactic` traits, so `join_core`, `reduce_abelian`, and `reduce_core` gain tactic and container type parameters.
+Downstream cursor, trace, and batch implementations must migrate to the associated-type form and drop the removed `LayoutExt` supertrait.
+The experimental `columnar` module is reorganized and most of its 0.24 public surface relocated.
+The `Chunk` trait, the `JoinTactic` / `ReduceTactic` traits, and the integer-proxy chunks are new and explicitly experimental: they are public to enable experimentation, but their APIs are unstable and expected to change.
+Dependency tracking follows timely 0.31.
+
 ## [0.24.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.23.0...differential-dataflow-v0.24.0) - 2026-05-29
 
 ### Added
