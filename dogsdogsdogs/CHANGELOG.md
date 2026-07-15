@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.25.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.24.0...differential-dogs3-v0.25.0) - 2026-07-15
 
-### Other
+### Changed
 
-- Fix off-by-one in lookup_map: key_con.index(1) -> index(0) ([#765](https://github.com/TimelyDataflow/differential-dataflow/pull/765))
-- Move layout onto the Cursor; make navigation an optional capability ([#772](https://github.com/TimelyDataflow/differential-dataflow/pull/772))
+- Track differential-dataflow 0.25: layout moves onto the `Cursor` and navigation becomes an optional capability. ([#772](https://github.com/TimelyDataflow/differential-dataflow/pull/772))
+
+### Fixed
+
+- `lookup_map`: correct an off-by-one in key-container indexing (`index(1)` -> `index(0)`). ([#765](https://github.com/TimelyDataflow/differential-dataflow/pull/765))
 
 ## [0.24.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dogs3-v0.23.0...differential-dogs3-v0.24.0) - 2026-05-29
 
