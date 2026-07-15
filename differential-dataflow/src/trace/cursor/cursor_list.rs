@@ -40,21 +40,27 @@ impl<C: Cursor> CursorList<C> {
         self.min_key.clear();
 
         // We'll visit each non-`None` key, maintaining the indexes of the least keys in `self.min_key`.
-        let mut iter = self.cursors.iter().enumerate().flat_map(|(idx, cur)| cur.get_key(&storage[idx]).map(|key| (idx, key)));
-        if let Some((idx, key)) = iter.next() {
-            let mut min_key = key;
-            self.min_key.push(idx);
-            for (idx, key) in iter {
-                match key.cmp(&min_key) {
-                    std::cmp::Ordering::Less => {
-                        self.min_key.clear();
+        // An explicit min-tracking loop rather than `flat_map`: the adapter's inner `next` fails to
+        // inline in hot callers (e.g. reduce's per-key replay) and surfaces as a hot `FlattenCompat::next`.
+        let mut min_key = None;
+        for (idx, cursor) in self.cursors.iter().enumerate() {
+            if let Some(key) = cursor.get_key(&storage[idx]) {
+                match min_key {
+                    None => {
                         self.min_key.push(idx);
-                        min_key = key;
+                        min_key = Some(key);
                     }
-                    std::cmp::Ordering::Equal => {
-                        self.min_key.push(idx);
+                    Some(min) => match key.cmp(&min) {
+                        std::cmp::Ordering::Less => {
+                            self.min_key.clear();
+                            self.min_key.push(idx);
+                            min_key = Some(key);
+                        }
+                        std::cmp::Ordering::Equal => {
+                            self.min_key.push(idx);
+                        }
+                        std::cmp::Ordering::Greater => { }
                     }
-                    std::cmp::Ordering::Greater => { }
                 }
             }
         }
@@ -73,35 +79,47 @@ impl<C: Cursor> CursorList<C> {
         self.min_val.clear();
 
         // We'll visit each non-`None` value, maintaining the indexes of the least values in `self.min_val`.
-        let mut iter = self.min_key.iter().cloned().flat_map(|idx| self.cursors[idx].get_val(&storage[idx]).map(|val| (idx, val)));
-        if let Some((idx, val)) = iter.next() {
-            let mut min_val = val;
-            self.min_val.push(idx);
-            for (idx, val) in iter {
-                match val.cmp(&min_val) {
-                    std::cmp::Ordering::Less => {
-                        self.min_val.clear();
+        // Explicit loop rather than `flat_map`, for the inlining reason noted in `minimize_keys`.
+        let mut min_val = None;
+        for idx in self.min_key.iter().cloned() {
+            if let Some(val) = self.cursors[idx].get_val(&storage[idx]) {
+                match min_val {
+                    None => {
                         self.min_val.push(idx);
-                        min_val = val;
+                        min_val = Some(val);
                     }
-                    std::cmp::Ordering::Equal => {
-                        self.min_val.push(idx);
+                    Some(min) => match val.cmp(&min) {
+                        std::cmp::Ordering::Less => {
+                            self.min_val.clear();
+                            self.min_val.push(idx);
+                            min_val = Some(val);
+                        }
+                        std::cmp::Ordering::Equal => {
+                            self.min_val.push(idx);
+                        }
+                        std::cmp::Ordering::Greater => { }
                     }
-                    std::cmp::Ordering::Greater => { }
                 }
             }
         }
     }
 }
 
-use crate::trace::implementations::WithLayout;
-impl<C: Cursor> WithLayout for CursorList<C> {
-    type Layout = C::Layout;
-}
-
 impl<C: Cursor> Cursor for CursorList<C> {
 
     type Storage = Vec<C::Storage>;
+
+    type Key<'a> = C::Key<'a>;
+    type ValOwn = C::ValOwn;
+    type Val<'a> = C::Val<'a>;
+    type Time = C::Time;
+    type TimeGat<'a> = C::TimeGat<'a>;
+    type Diff = C::Diff;
+    type DiffGat<'a> = C::DiffGat<'a>;
+    type KeyContainer = C::KeyContainer;
+    type ValContainer = C::ValContainer;
+    type TimeContainer = C::TimeContainer;
+    type DiffContainer = C::DiffContainer;
 
     // validation methods
     #[inline]

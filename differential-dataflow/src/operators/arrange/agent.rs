@@ -35,16 +35,10 @@ pub struct TraceAgent<Tr: TraceReader> {
     logging: Option<crate::logging::Logger>,
 }
 
-use crate::trace::implementations::WithLayout;
-impl<Tr: TraceReader> WithLayout for TraceAgent<Tr> {
-    type Layout = Tr::Layout;
-}
-
 impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
 
+    type Time = Tr::Time;
     type Batch = Tr::Batch;
-    type Storage = Tr::Storage;
-    type Cursor = Tr::Cursor;
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         // This method does not enforce that `frontier` is greater or equal to `self.logical_compaction`.
@@ -68,8 +62,8 @@ impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
         self.physical_compaction.borrow()
     }
-    fn cursor_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<(Self::Cursor, Self::Storage)> {
-        self.trace.borrow_mut().trace.cursor_through(frontier)
+    fn batches_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<Vec<Self::Batch>> {
+        self.trace.borrow_mut().trace.batches_through(frontier)
     }
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }
 }
@@ -204,7 +198,7 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     ///     // create a second dataflow
     ///     worker.dataflow(move |scope| {
     ///         trace.import(scope)
-    ///              .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>,_>(
+    ///              .reduce_abelian::<_,ValBuilder<_,_,_,_>,ValSpine<_,_,_,_>,_,_>(
     ///                  "Reduce",
     ///                  |_key, src, dst| dst.push((*src[0].0, 1)),
     ///                  |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v,t,r)| ((key.clone(), v),t,r))); },

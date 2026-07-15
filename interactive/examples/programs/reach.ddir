@@ -10,4 +10,4 @@ reach: {
     var reach = REDUCE(CONCAT(roots, proposals), DISTINCT);
 }
 
-result INSPECT(ARRANGE(MAP(reach::reach, (;))), total);
+export "result" = INSPECT(ARRANGE(MAP(reach::reach, (;))), total);

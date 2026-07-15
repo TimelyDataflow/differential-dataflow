@@ -1,0 +1,3 @@
+-- Echoes input 0 to its output, so `inspect` shows whatever is fed — used to
+-- demonstrate structured (ADT) values and time-scheduled input.
+export "out" = input 0 | inspect(echo);

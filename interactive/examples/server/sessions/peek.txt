@@ -1,0 +1,18 @@
+# Reading results back out with `peek`.
+install prod examples/server/programs/producer.ddp
+install reach examples/server/programs/reach_import.ddp
+
+# graph 1 -> 2 -> 3, root 1
+feed prod 0 1,2
+feed prod 0 2,3
+feed reach 0 1
+tick
+
+# Snapshot the shared edge trace, and the reachability result.
+peek edges
+peek result
+# Just one key of the result.
+peek result 2
+# An unknown trace reports an error, not a crash.
+peek nope
+exit

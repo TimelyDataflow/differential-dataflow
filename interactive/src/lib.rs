@@ -1,35 +1,50 @@
 pub mod parse;
 pub mod ir;
 pub mod lower;
+pub mod scope_ir;
+pub mod backend;
 pub mod explain;
+pub mod server;
+// `folded` (the flat `[i64]` per-coordinate time-filter algebra) is retired:
+// the Value reverse model implements `time_le`/`strip` directly over the nested
+// chain tuple, so explain no longer needs it.
+
+use std::collections::BTreeSet;
 
 use parse::{Stmt, Expr};
 
-/// Count the number of distinct inputs referenced in a program.
-pub fn count_inputs(stmts: &[Stmt]) -> usize {
-    let mut max_input = 0usize;
-    for stmt in stmts {
-        match stmt {
-            Stmt::Let(_, expr) | Stmt::Var(_, expr) | Stmt::Result(expr) => {
-                max_input = max_input.max(count_inputs_expr(expr));
-            },
-            Stmt::Scope(_, body) => {
-                max_input = max_input.max(count_inputs(body));
-            },
-        }
-    }
-    max_input
+/// Survey a program's external sources: the count of positional inputs (one
+/// more than the largest `input N` index, zero if none appear) and the set of
+/// names referenced by `import "name"`. Two kinds because `import` does not yet
+/// subsume `input` — see `ir::Node::Import`; this returns one number when that
+/// cutover happens.
+pub fn survey_sources(stmts: &[Stmt]) -> (usize, BTreeSet<String>) {
+    let mut positional = 0usize;
+    let mut imports = BTreeSet::new();
+    walk_stmts(stmts, &mut positional, &mut imports);
+    (positional, imports)
 }
 
-fn count_inputs_expr(expr: &Expr) -> usize {
+fn walk_stmts(stmts: &[Stmt], positional: &mut usize, imports: &mut BTreeSet<String>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let(_, expr) | Stmt::Var(_, expr) | Stmt::Export(_, expr) => walk_expr(expr, positional, imports),
+            Stmt::Scope(_, body) => walk_stmts(body, positional, imports),
+        }
+    }
+}
+
+fn walk_expr(expr: &Expr, positional: &mut usize, imports: &mut BTreeSet<String>) {
     match expr {
-        Expr::Input(n) => n + 1,
+        Expr::Input(n) => { *positional = (*positional).max(n + 1); },
+        Expr::Import(name) => { imports.insert(name.clone()); },
         Expr::Map(e, _) | Expr::Negate(e) | Expr::Arrange(e)
             | Expr::EnterAt(e, _) | Expr::LiftIter(e) | Expr::Filter(e, _)
-            | Expr::Reduce(e, _) | Expr::Inspect(e, _) => count_inputs_expr(e),
-        Expr::Join(l, r, _) => count_inputs_expr(l).max(count_inputs_expr(r)),
-        Expr::Concat(es) => es.iter().map(|e| count_inputs_expr(e)).max().unwrap_or(0),
-        Expr::Name(_) | Expr::Qualified(_, _) => 0,
+            | Expr::FlatMap(e, _)
+            | Expr::Reduce(e, _) | Expr::Inspect(e, _) => walk_expr(e, positional, imports),
+        Expr::Join(l, r, _) => { walk_expr(l, positional, imports); walk_expr(r, positional, imports); },
+        Expr::Concat(es) => { for e in es { walk_expr(e, positional, imports); } },
+        Expr::Name(_) | Expr::Qualified(_, _) => {},
     }
 }
 
@@ -46,12 +61,20 @@ pub fn hash_u64(index: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// Generate one row: arity fields, each hash-derived, magnitude < nodes.
-pub fn gen_row<R: ir::RowLike>(edge_index: u64, nodes: u64, arity: usize) -> (R, R) {
-    let mut key = R::new();
+/// Generate one row: a key `Tuple` of `arity` hash-derived `Int`s (each of
+/// magnitude < nodes) and an empty-tuple value.
+pub fn gen_row(edge_index: u64, nodes: u64, arity: usize) -> (ir::Value, ir::Value) {
+    gen_row_seeded(0, edge_index, nodes, arity)
+}
+
+/// As [`gen_row`], but mixes a `seed` so distinct seeds give distinct graphs.
+/// `seed == 0` reproduces [`gen_row`] exactly.
+pub fn gen_row_seeded(seed: u64, edge_index: u64, nodes: u64, arity: usize) -> (ir::Value, ir::Value) {
+    let mut fields = Vec::with_capacity(arity);
+    let base = edge_index.wrapping_mul(31).wrapping_add(seed.wrapping_mul(0x9e3779b97f4a7c15));
     for col in 0..arity {
-        let h = hash_u64(edge_index.wrapping_mul(31).wrapping_add(col as u64));
-        key.push((h % nodes) as i64);
+        let h = hash_u64(base.wrapping_add(col as u64));
+        fields.push(ir::Value::Int((h % nodes) as i64));
     }
-    (key, R::new())
+    (ir::Value::Tuple(fields), ir::Value::unit())
 }

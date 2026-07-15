@@ -8,7 +8,7 @@ use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::InputHandle;
 use timely::dataflow::ProbeHandle;
 
-use differential_dataflow::columnar::*;
+use differential_dataflow::columnar::collection::Builder as ValColBuilder;
 
 use mimalloc::MiMalloc;
 
@@ -90,6 +90,7 @@ fn main() {
 /// Push on UpdatesTyped for the reduce builder path.
 mod reachability {
 
+    use timely::container::PushInto;
     use timely::order::Product;
     use differential_dataflow::Collection;
     use differential_dataflow::AsCollection;
@@ -97,7 +98,8 @@ mod reachability {
     use differential_dataflow::operators::arrange::arrangement::arrange_core;
     use differential_dataflow::operators::join::join_traces;
 
-    use differential_dataflow::columnar::*;
+    use differential_dataflow::columnar::trace::{Batcher as ValBatcher, Builder as ValBuilder, Chunker as ValChunker, Spine as ValSpine};
+    use differential_dataflow::columnar::collection::{Builder as ValColBuilder, Pact as ValPact, RecordedUpdates, as_recorded_updates};
 
     type Node = u32;
     type Time = u64;
@@ -141,14 +143,14 @@ mod reachability {
 
             // join_traces with ValColBuilder: produces Stream<_, RecordedUpdates<...>>.
             let proposed =
-                join_traces::<_, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
+                join_traces::<_, _, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
                     edges_arr,
                     reach_arr,
                     |_src, dst, (), time, d1, d2, session| {
                         use differential_dataflow::difference::Multiply;
                         let dst: Node = *dst;
                         let diff: Diff = d1.clone().multiply(d2);
-                        session.give::<(Node, (), IterTime, Diff)>((dst, (), time.clone(), diff));
+                        session.push_into((dst, (), time.clone(), diff));
                     },
                 ).as_collection();
 
@@ -169,15 +171,16 @@ mod reachability {
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
                 _,
+                _,
             >("Distinct", |_node, _input, output| { output.push(((), 1)); },
             |col, key, upds| {
-                use columnar::{Clear, Push};
-                col.keys.clear();
-                col.vals.clear();
-                col.times.clear();
-                col.diffs.clear();
-                for (val, time, diff) in upds.drain(..) { col.push((key, &val, &time, &diff)); }
-                *col = std::mem::take(col).consolidate();
+                use columnar::Push;
+                use differential_dataflow::columnar::updates::UpdatesTyped;
+                // `col` is now a `ColChunk` (the trie behind an `Rc`); build this
+                // key's run in a fresh trie and install it consolidated.
+                let mut trie = UpdatesTyped::default();
+                for (val, time, diff) in upds.drain(..) { trie.push((key, &val, &time, &diff)); }
+                *col.updates_mut() = trie.consolidate();
             });
 
             // Extract RecordedUpdates from the Arranged's batch stream.

@@ -33,7 +33,7 @@ use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable}
 use differential_dataflow::difference::{Monoid, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchTimeGat, BatchVal, Cursor, Navigable, TraceReader};
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::trace::implementations::BatchContainer;
 
@@ -67,20 +67,21 @@ pub fn half_join<'scope, K, V, R, Tr, FF, CF, DOut, S>(
     frontier_func: FF,
     comparison: CF,
     mut output_func: S,
-) -> VecCollection<'scope, Tr::Time, (DOut, Tr::Time), <R as Mul<Tr::Diff>>::Output>
+) -> VecCollection<'scope, Tr::Time, (DOut, Tr::Time), <R as Mul<BatchDiff<Tr>>>::Output>
 where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
-    Tr::KeyContainer: BatchContainer<Owned=K>,
-    R: Mul<Tr::Diff, Output: Semigroup>,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
+    BatchCursor<Tr>: Cursor<Time = Tr::Time>,
+    <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
+    R: Mul<BatchDiff<Tr>, Output: Semigroup>,
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
-    CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
+    CF: Fn(BatchTimeGat<'_, Tr>, &Tr::Time) -> bool + 'static,
     DOut: Clone+'static,
-    S: FnMut(&K, &V, Tr::Val<'_>)->DOut+'static,
+    S: FnMut(&K, &V, BatchVal<'_, Tr>)->DOut+'static,
 {
-    let output_func = move |builder: &mut CapacityContainerBuilder<Vec<_>>, k: &K, v1: &V, v2: Tr::Val<'_>, initial: &Tr::Time, diff1: &R, output: &mut Vec<(Tr::Time, Tr::Diff)>| {
+    let output_func = move |builder: &mut CapacityContainerBuilder<Vec<_>>, k: &K, v1: &V, v2: BatchVal<'_, Tr>, initial: &Tr::Time, diff1: &R, output: &mut Vec<(Tr::Time, BatchDiff<Tr>)>| {
         for (time, diff2) in output.drain(..) {
             let diff = diff1.clone() * diff2.clone();
             let dout = (output_func(k, v1, v2), time.clone());
@@ -129,12 +130,13 @@ where
     K: Hashable + ExchangeData,
     V: ExchangeData,
     R: ExchangeData + Monoid,
-    Tr: TraceReader<Time: std::hash::Hash>+Clone+'static,
-    Tr::KeyContainer: BatchContainer<Owned=K>,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
+    BatchCursor<Tr>: Cursor<Time = Tr::Time>,
+    <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
-    CF: Fn(Tr::TimeGat<'_>, &Tr::Time) -> bool + 'static,
+    CF: Fn(BatchTimeGat<'_, Tr>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    S: FnMut(&mut CB, &K, &V, Tr::Val<'_>, &Tr::Time, &R, &mut Vec<(Tr::Time, Tr::Diff)>) + 'static,
+    S: FnMut(&mut CB, &K, &V, BatchVal<'_, Tr>, &Tr::Time, &R, &mut Vec<(Tr::Time, BatchDiff<Tr>)>) + 'static,
     CB: ContainerBuilder,
 {
     // No need to block physical merging for this operator.
@@ -183,7 +185,7 @@ where
 
                 // Determine the total-order minimum of the arrangement frontier,
                 // used to partition arrivals into immediately-eligible vs stuck.
-                let mut time_con = Tr::TimeContainer::with_capacity(1);
+                let mut time_con = <BatchCursor<Tr> as Cursor>::TimeContainer::with_capacity(1);
                 if let Some(min_time) = frontier.iter().min() {
                     time_con.push_own(min_time);
                 }
@@ -262,7 +264,7 @@ where
                     let mut builders = (0..blob.caps.len()).map(|_| CB::default()).collect::<Vec<_>>();
 
                     let (mut cursor, storage) = trace.cursor();
-                    let mut key_con = Tr::KeyContainer::with_capacity(1);
+                    let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
                     let mut removals: ChangeBatch<Tr::Time> = ChangeBatch::new();
 
                     // Process ready elements from the front.
@@ -282,9 +284,9 @@ where
                             while let Some(val2) = cursor.get_val(&storage) {
                                 cursor.map_times(&storage, |t, d| {
                                     if comparison(t, initial) {
-                                        let mut t = Tr::owned_time(t);
+                                        let mut t = <BatchCursor<Tr> as Cursor>::owned_time(t);
                                         t.join_assign(time);
-                                        output_buffer.push((t, Tr::owned_diff(d)))
+                                        output_buffer.push((t, <BatchCursor<Tr> as Cursor>::owned_diff(d)))
                                     }
                                 });
                                 consolidate(&mut output_buffer);

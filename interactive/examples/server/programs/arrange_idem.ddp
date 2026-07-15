@@ -1,0 +1,54 @@
+-- A minimal but genuine e-graph in DDIR: congruence closure PLUS one rewrite
+-- rule (arrange-idempotence). Unlike pure CSE, the rule asserts an equality
+-- between *structurally different* nodes, and congruence then propagates it to
+-- a fixpoint — equality saturation, expressed as a differential dataflow.
+--
+-- The inner `eqsat:` scope is the reusable saturation core on its own: variable-
+-- arity congruence closure (flatmap/collect) driven to a fixpoint by min-leader
+-- propagation — the whole of an equality-saturation engine. Everything outside
+-- the rule block is that engine; the `rule` lines are the one rewrite plugged
+-- into it. Swap or add rules there.
+--
+-- input 0: nodes  — feed  key=<id>  val=tuple(<op>, list(<child ids…>))
+-- Op convention (this demo): 1 = Arrange, 2 = Reduce. Both yield an
+-- arrangement, so a class containing either is "already arranged".
+--
+-- RULE  arrange(x) ≡ x   when x's class is already arranged.
+-- output trace "classes": (node-id ; class-leader).
+
+let node  = input 0 | key($0[0] ; $1[0], $1[1]);    -- id ; op, [children]
+let elems = node | map($0 ; $0);                     -- id ; id   (seed each to itself)
+
+-- explode each node's children (UNNEST via flatmap) so they can be
+-- canonicalized through the current class map, then regrouped into a signature
+let pc = node
+    | map($0, $1[0] ; $1[1])
+    | flatmap($1[0])
+    | map($1[1] ; $0[0], $0[1], $1[0]);              -- child ; (id, op, pos)
+
+-- nodes that produce an arrangement (op 1 = Arrange, op 2 = Reduce)
+let producing = (node | filter($1[0] == 1) | map($0 ;))
+              + (node | filter($1[0] == 2) | map($0 ;));        -- id ;
+
+-- arrange nodes paired with their single child
+let arr = node | filter($1[0] == 1) | map($0 ; $1[1][0]);      -- arrange_id ; child
+
+eqsat: {
+    -- congruence closure: group nodes by (op ++ canonicalized children)
+    let canon = pc | join(eq, ($1[0], $1[1] ; $1[2], $2[0]));   -- (id,op) ; (pos,class)
+    let bsig  = canon | collect | map($0[1], $1 ; $0[0]);       -- signature ; id
+    let reps  = bsig | min;                                     -- signature ; min id
+    let cong  = bsig | join(reps, ($1[0] ; $2[0]));             -- id ; representative
+
+    -- arrange-idempotence rule:
+    let arranged = producing | join(eq, ($2 ;)) | distinct;     -- arranged class ;
+    let arr_cls  = arr | key($1 ; $0) | join(eq, ($1 ; $2));    -- arrange_id ; child class
+    let rule     = arr_cls | key($1 ; $0) | join(arranged, ($1 ; $0));  -- arrange_id ; child class
+
+    -- congruence edges + rule edges, symmetrized, then one min-label hop
+    let edges = cong + (cong | key($1 ; $0)) + rule + (rule | key($1 ; $0));
+    let prop  = eq | join(edges, ($2 ; $1));
+    var eq = elems + prop | min;
+}
+
+export "classes" = eqsat::eq | arrange | inspect(classes);

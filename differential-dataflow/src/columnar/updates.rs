@@ -116,27 +116,21 @@ impl<'a, U: Update> Clone for UpdatesView<'a, U> { fn clone(&self) -> Self { *se
 
 impl<'a, U: Update> UpdatesView<'a, U> {
     /// Iterate all `(key, val, time, diff)` entries as refs.
-    pub fn iter(self) -> impl Iterator<Item = (
-        columnar::Ref<'a, U::Key>,
-        columnar::Ref<'a, U::Val>,
-        columnar::Ref<'a, U::Time>,
-        columnar::Ref<'a, U::Diff>,
-    )> {
-        let UpdatesView { keys, vals, times, diffs } = self;
-        (0..Len::len(&keys))
-            .flat_map(move |outer| child_range(keys.bounds, outer))
-            .flat_map(move |k| {
-                let key = keys.values.get(k);
-                child_range(vals.bounds, k).map(move |v| (key, v))
-            })
-            .flat_map(move |(key, v)| {
-                let val = vals.values.get(v);
-                child_range(times.bounds, v).map(move |t| (key, val, t))
-            })
-            .flat_map(move |(key, val, t)| {
-                let time = times.values.get(t);
-                child_range(diffs.bounds, t).map(move |d| (key, val, time, diffs.values.get(d)))
-            })
+    ///
+    /// A streaming cursor over the four columns (see [`UpdatesIter`]) — one cheap
+    /// boundary advance per leaf, with an exact length — rather than a 4-level
+    /// nested `flat_map`. This is the hot flattening path (`consolidate`,
+    /// `form_unsorted`, every `iter()` consumer), so it earns the hand-rolling.
+    pub fn iter(self) -> UpdatesIter<'a, U> {
+        // One output per leaf diff; `index_as(0)` is each first group's end
+        // (== `child_range(_, 0).end`). Guard the empty trie so `next` short-circuits.
+        let leaves = Len::len(&self.diffs.values);
+        let (v_end, t_end, d_end) = if leaves > 0 {
+            (self.vals.bounds.index_as(0) as usize,
+             self.times.bounds.index_as(0) as usize,
+             self.diffs.bounds.index_as(0) as usize)
+        } else { (0, 0, 0) };
+        UpdatesIter { view: self, k: 0, v: 0, t: 0, d: 0, v_end, t_end, d_end, leaves }
     }
 
     /// Translate a key-range into the corresponding val-range via `vals.bounds`.
@@ -158,6 +152,65 @@ impl<'a, U: Update> UpdatesView<'a, U> {
         } else { val_range }
     }
 }
+
+/// Streaming cursor over a trie's `(key, val, time, diff)` leaves.
+///
+/// Walks the four columns with running boundary cursors `(k, v, t, d)`: `d`
+/// drives one output per leaf diff, and `k`/`v`/`t` advance lazily as each
+/// group is exhausted (`*_end` is the current group's upper bound, the same
+/// `child_range(_, i).end == bounds.index_as(i)`). Empty groups are skipped by
+/// the cascade; `leaves` bounds the walk and yields an exact `size_hint`.
+pub struct UpdatesIter<'a, U: Update> {
+    view: UpdatesView<'a, U>,
+    k: usize, v: usize, t: usize, d: usize,
+    v_end: usize, t_end: usize, d_end: usize,
+    leaves: usize,
+}
+
+impl<'a, U: Update> Iterator for UpdatesIter<'a, U> {
+    type Item = (
+        columnar::Ref<'a, U::Key>,
+        columnar::Ref<'a, U::Val>,
+        columnar::Ref<'a, U::Time>,
+        columnar::Ref<'a, U::Diff>,
+    );
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.d >= self.leaves { return None; }
+        // Advance key/val/time cursors until `d` lands in the current time's diff
+        // run. Each `*_end` is the exhausted group's upper bound; contiguity means
+        // the next group's lower bound is exactly where we already sit.
+        while self.d >= self.d_end {
+            self.t += 1;
+            while self.t >= self.t_end {
+                self.v += 1;
+                while self.v >= self.v_end {
+                    self.k += 1;
+                    self.v_end = self.view.vals.bounds.index_as(self.k) as usize;
+                }
+                self.t_end = self.view.times.bounds.index_as(self.v) as usize;
+            }
+            self.d_end = self.view.diffs.bounds.index_as(self.t) as usize;
+        }
+        let item = (
+            self.view.keys.values.get(self.k),
+            self.view.vals.values.get(self.v),
+            self.view.times.values.get(self.t),
+            self.view.diffs.values.get(self.d),
+        );
+        self.d += 1;
+        Some(item)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let rem = self.leaves - self.d;
+        (rem, Some(rem))
+    }
+}
+
+impl<'a, U: Update> ExactSizeIterator for UpdatesIter<'a, U> {}
 
 impl<U: Update> UpdatesTyped<U> {
     /// Borrow the four columns as a single `UpdatesView`.
@@ -211,6 +264,22 @@ impl<U: Update, B: Clone> Clone for Updates<U, B> {
     }
 }
 
+impl<U: Update> Updates<U> {
+    /// Reconstruct from bytes produced by [`write_to`](Updates::write_to). Columns
+    /// are wrapped as `Stash::Bytes` (zero-copy, read-only) over the input `bytes`.
+    pub fn read_from(mut bytes: timely::bytes::arc::Bytes) -> Self {
+        use columnar::bytes::stash::Stash;
+        let header = bytes.extract_to(32);
+        let len = |i: usize| u64::from_le_bytes(header[i*8..i*8+8].try_into().unwrap()) as usize;
+        let (kl, vl, tl, dl) = (len(0), len(1), len(2), len(3));
+        let keys  = Stash::try_from_bytes(bytes.extract_to(kl)).expect("keys decode");
+        let vals  = Stash::try_from_bytes(bytes.extract_to(vl)).expect("vals decode");
+        let times = Stash::try_from_bytes(bytes.extract_to(tl)).expect("times decode");
+        let diffs = Stash::try_from_bytes(bytes.extract_to(dl)).expect("diffs decode");
+        Updates { keys, vals, times, diffs }
+    }
+}
+
 impl<U: Update, B> From<UpdatesTyped<U>> for Updates<U, B> {
     fn from(owned: UpdatesTyped<U>) -> Self {
         use columnar::bytes::stash::Stash;
@@ -241,6 +310,29 @@ impl<U: Update, B: std::ops::Deref<Target = [u8]> + Clone + 'static> Updates<U, 
 
     /// Whether the trie is empty.
     pub fn is_empty(&self) -> bool { self.len() == 0 }
+
+    /// Serialize the four columns to `writer`: a 32-byte header of per-column
+    /// byte lengths, then each column's `Stash` encoding. Round-trips with
+    /// [`read_from`](Updates::read_from). Used to spill a chunk to backing storage.
+    pub fn write_to<W: std::io::Write>(&self, writer: &mut W) {
+        let lens = [
+            self.keys.length_in_bytes()  as u64,
+            self.vals.length_in_bytes()  as u64,
+            self.times.length_in_bytes() as u64,
+            self.diffs.length_in_bytes() as u64,
+        ];
+        for l in lens { writer.write_all(&l.to_le_bytes()).unwrap(); }
+        self.keys.write_bytes(writer).unwrap();
+        self.vals.write_bytes(writer).unwrap();
+        self.times.write_bytes(writer).unwrap();
+        self.diffs.write_bytes(writer).unwrap();
+    }
+
+    /// Total serialized size in bytes (matches what [`write_to`](Updates::write_to) emits).
+    pub fn length_in_bytes(&self) -> usize {
+        32 + self.keys.length_in_bytes() + self.vals.length_in_bytes()
+           + self.times.length_in_bytes() + self.diffs.length_in_bytes()
+    }
 
     /// Convert to fully owned form, copying any `Stash::Bytes` columns into
     /// typed `Lists`. Already-typed columns pass through with no copy.
@@ -339,7 +431,9 @@ impl<U: Update> UpdatesTyped<U> {
     /// Forms a consolidated `UpdatesTyped` trie from unsorted `(key, val, time, diff)` refs.
     pub fn form_unsorted<'a>(unsorted: impl Iterator<Item = columnar::Ref<'a, Tuple<U>>>) -> Self {
         let mut data = unsorted.collect::<Vec<_>>();
-        data.sort();
+        // Unstable is faster (pdqsort, no scratch alloc); equal `(k,v,t)` entries
+        // reorder freely since `form` sums their diffs commutatively.
+        data.sort_unstable();
         Self::form(data.into_iter())
     }
 

@@ -1,0 +1,24 @@
+# Teardown / drop-gate demo.
+# `reach` imports the "edges" trace published by `prod`.
+install prod examples/server/programs/producer.ddp
+install reach examples/server/programs/reach_import.ddp
+feed prod 0 1,2
+feed prod 0 2,3
+feed reach 0 1
+tick
+list
+
+# The gate: dropping `prod` is refused while `reach` still imports "edges".
+drop prod
+
+# Drop the consumer first; then the producer drops cleanly.
+drop reach
+drop prod
+list
+
+# Re-install a fresh producer under the now-free name to show the registry freed it.
+install prod examples/server/programs/producer.ddp
+feed prod 0 7,8
+tick
+list
+exit

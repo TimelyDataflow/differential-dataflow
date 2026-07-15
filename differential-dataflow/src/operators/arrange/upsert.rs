@@ -108,8 +108,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::dataflow::operators::Capability;
 
 use crate::operators::arrange::arrangement::Arranged;
-use crate::trace::{Builder, Description};
-use crate::trace::{self, Trace, TraceReader, Cursor};
+use crate::trace::{self, BatchCursor, BatchDiff, Builder, Cursor, Description, Navigable, Trace, TraceReader};
 use crate::{ExchangeData, Hashable};
 
 use crate::trace::implementations::containers::BatchContainer;
@@ -133,13 +132,13 @@ pub fn arrange_from_upsert<'scope, Bu, Tr, K, V>(
 where
     K: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
-    Tr: for<'a> Trace<
+    Tr: Trace<Batch: Navigable, Time: TotalOrder+ExchangeData>+'static,
+    for<'a> BatchCursor<Tr>: Cursor<
         Key<'a> = &'a K,
         Val<'a> = &'a V,
-        Time: TotalOrder+ExchangeData,
         Diff=isize,
-    >+'static,
-    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, Tr::Diff)>, Output = Tr::Batch>,
+    >,
+    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output = Tr::Batch>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -234,7 +233,7 @@ where
                                 // new stuff that we add.
                                 let (mut trace_cursor, trace_storage) = reader_local.cursor();
                                 let mut builder = Bu::new();
-                                let mut key_con = Tr::KeyContainer::with_capacity(1);
+                                let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
                                 for (key, mut list) in to_process {
 
                                     key_con.clear(); key_con.push_ref(&key);
@@ -248,7 +247,7 @@ where
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;
-                                            trace_cursor.map_times(&trace_storage, |_time, diff| count += Tr::owned_diff(diff));
+                                            trace_cursor.map_times(&trace_storage, |_time, diff| count += <BatchCursor<Tr> as Cursor>::owned_diff(diff));
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());

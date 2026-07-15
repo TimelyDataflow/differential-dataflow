@@ -4,53 +4,47 @@
 //! the multiplication distributes over addition. That is, we will repeatedly evaluate (a + b) * c as (a * c)
 //! + (b * c), and if this is not equal to the former term, little is known about the actual output.
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 
-use timely::{Accountable, ContainerBuilder};
-use timely::container::PushInto;
+use timely::{Container, ContainerBuilder};
+use timely::container::NoopBuilder;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::dataflow::Stream;
-use timely::dataflow::operators::generic::{Operator, OutputBuilderSession, Session};
+use timely::dataflow::operators::generic::{Operator, OutputBuilderSession};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
 use crate::lattice::Lattice;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchReader, Cursor};
+use crate::trace::{BatchCursor, BatchDiff, BatchReader, BatchVal, Cursor, Navigable, TraceReader};
+use crate::trace::cursor::cursor_list;
+use crate::trace::implementations::containers::BatchContainer;
 use crate::operators::ValueHistory;
 
-use crate::trace::TraceReader;
-
-/// The session passed to join closures.
-pub type JoinSession<'a, 'b, T, CB, CT> = Session<'a, 'b, T, EffortBuilder<CB>, CT>;
-
-/// A container builder that tracks the length of outputs to estimate the effort of join closures.
-#[derive(Default, Debug)]
-pub struct EffortBuilder<CB>(pub std::cell::Cell<usize>, pub CB);
-
-impl<CB: ContainerBuilder> timely::container::ContainerBuilder for EffortBuilder<CB> {
-    type Container = CB::Container;
-
-    #[inline]
-    fn extract(&mut self) -> Option<&mut Self::Container> {
-        let extracted = self.1.extract();
-        self.0.replace(self.0.take() + extracted.as_ref().map_or(0, |e| e.record_count() as usize));
-        extracted
-    }
-
-    #[inline]
-    fn finish(&mut self) -> Option<&mut Self::Container> {
-        let finished = self.1.finish();
-        self.0.replace(self.0.take() + finished.as_ref().map_or(0, |e| e.record_count() as usize));
-        finished
-    }
+/// A type that can manage the joining of lists of batches.
+///
+/// The trait is parameterized by the output container `C`, not by the builder that assembles it: a tactic
+/// yields finished containers, and how it produces them (pushing records into a [`ContainerBuilder`], or
+/// otherwise) is its own concern.
+pub trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C> {
+    /// Prepare the join of two lists of batches into an iterator of output containers.
+    ///
+    /// The supplied `fresh` and `meet` indicate respectively which input is "novel", and should drive the
+    /// join, as well as a lower bound on that input's times, so that the other input can be loaded compacted.
+    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = C>>;
 }
 
-impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
-    #[inline]
-    fn push_into(&mut self, item: D) {
-        self.1.push_into(item);
-    }
+/// Which input contributed the freshly-arrived batch of a deferred join unit.
+///
+/// The fresh batch's times all lie at or beyond the capability, so its side is not advanced by the
+/// capability's meet; the opposing accumulated trace is. The marker also selects which queue a unit
+/// joins, so a burst on one input cannot starve the other.
+pub enum Fresh {
+    /// The first input (`B0`) contributed the fresh batch.
+    Input0,
+    /// The second input (`B1`) contributed the fresh batch.
+    Input1,
 }
 
 /// An equijoin of two traces, sharing a common key type.
@@ -66,12 +60,32 @@ impl<CB: PushInto<D>, D> PushInto<D> for EffortBuilder<CB> {
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
 ///
 /// [`AsCollection`]: crate::collection::AsCollection
-pub fn join_traces<'scope, Tr1, Tr2, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut result: L) -> Stream<'scope, Tr1::Time, CB::Container>
+pub fn join_traces<'scope, Tr1, Tr2, KC, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, result: L) -> Stream<'scope, Tr1::Time, CB::Container>
+where
+    Tr1: TraceReader<Batch: Navigable>+'static,
+    Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time>+'static,
+    KC: BatchContainer,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
+    for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, Time = Tr1::Time>,
+    L: FnMut(KC::ReadItem<'_>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut CB)+'static,
+    CB: ContainerBuilder<Container: Default> + 'static,
+{
+    join_with_tactic(arranged1, arranged2, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, _, CB>::new(result))
+}
+
+/// Drives an equijoin of two traces using a supplied [`JoinTactic`].
+///
+/// This is the general join operator: it does the dataflow plumbing (frontiers, capabilities, trace
+/// compaction) and routes the per-batch work through the tactic. It requires only `TraceReader` of its
+/// inputs, never `Navigable`: it extracts trace batches via `batches_through`, and building cursors over
+/// them (if that is how the join proceeds) is the tactic's concern.
+pub fn join_with_tactic<'scope, Tr1, Tr2, T, C>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut tactic: T) -> Stream<'scope, Tr1::Time, C>
 where
     Tr1: TraceReader+'static,
-    Tr2: for<'a> TraceReader<Key<'a>=Tr1::Key<'a>, Time = Tr1::Time>+'static,
-    L: FnMut(Tr1::Key<'_>,Tr1::Val<'_>,Tr2::Val<'_>,Tr1::Time,&Tr1::Diff,&Tr2::Diff,&mut JoinSession<Tr1::Time, CB, Capability<Tr1::Time>>)+'static,
-    CB: ContainerBuilder,
+    Tr2: TraceReader<Time = Tr1::Time>+'static,
+    T: JoinTactic<Tr1::Batch, Tr2::Batch, C>+'static,
+    C: Container + 'static,
 {
     // Rename traces for symmetry from here on out.
     let mut trace1 = arranged1.trace;
@@ -99,9 +113,12 @@ where
         let mut acknowledged1 = Antichain::from_elem(Tr1::Time::minimum());
         let mut acknowledged2 = Antichain::from_elem(Tr1::Time::minimum());
 
-        // deferred work of batches from each input.
-        let mut todo1 = std::collections::VecDeque::new();
-        let mut todo2 = std::collections::VecDeque::new();
+        // Deferred work, as `(capability, iterator)` pairs bucketed by which input carried the fresh
+        // batch (so a burst on one input cannot starve the other). The driver owns the capabilities and
+        // the fuel budget; each iterator, prepared by the tactic, yields the output containers to ship
+        // under its paired capability, and is dropped once it goes dry.
+        let mut todo0: VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
+        let mut todo1: VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
 
         // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
         trace1.map_batches(|batch1| {
@@ -118,12 +135,12 @@ where
         // TODO: in the case that this does not hold, instead "upgrade" the physical compaction frontier.
         assert!(PartialOrder::less_equal(&trace1.get_physical_compaction(), &acknowledged1.borrow()));
 
-        // We capture batch2 cursors first and establish work second to avoid taking a `RefCell` lock
+        // We capture batch2's batches first and establish work second to avoid taking a `RefCell` lock
         // on both traces at the same time, as they could be the same trace and this would panic.
-        let mut batch2_cursors = Vec::new();
+        let mut batch2_list = Vec::new();
         trace2.map_batches(|batch2| {
             acknowledged2.clone_from(batch2.upper());
-            batch2_cursors.push((batch2.cursor(), batch2.clone()));
+            batch2_list.push(batch2.clone());
         });
         // At this point, `ack2` should exactly equal `trace2.read_upper()`, as they are both determined by
         // iterating through batches and capturing the upper bound. This is a great moment to assert that
@@ -131,15 +148,16 @@ where
         // TODO: in the case that this does not hold, instead "upgrade" the physical compaction frontier.
         assert!(PartialOrder::less_equal(&trace2.get_physical_compaction(), &acknowledged2.borrow()));
 
-        // Load up deferred work using trace2 cursors and batches captured just above.
-        for (batch2_cursor, batch2) in batch2_cursors.into_iter() {
+        // Load up deferred work joining each captured `trace2` batch against `trace1`.
+        for batch2 in batch2_list.into_iter() {
             // It is safe to ask for `ack1` because we have confirmed it to be in advance of `distinguish_since`.
-            let (trace1_cursor, trace1_storage) = trace1.cursor_through(acknowledged1.borrow()).unwrap();
+            let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap();
             // We could downgrade the capability here, but doing so is a bit complicated mathematically.
             // TODO: downgrade the capability by searching out the one time in `batch2.lower()` and not
             // in `batch2.upper()`. Only necessary for non-empty batches, as empty batches may not have
             // that property.
-            todo2.push_back(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone()));
+            let work = tactic.prep(trace1_storage, vec![batch2], Fresh::Input1, capability.time().clone());
+            todo1.push_back((capability.clone(), work));
         }
 
         // Droppable handles to shared trace data structures.
@@ -172,9 +190,9 @@ where
                             if !batch1.is_empty() {
                                 // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let (trace2_cursor, trace2_storage) = trace2.cursor_through(acknowledged2.borrow()).unwrap();
-                                let batch1_cursor = batch1.cursor();
-                                todo1.push_back(Deferred::new(trace2_cursor, trace2_storage, batch1_cursor, batch1.clone(), capability.clone()));
+                                let trace2_storage = trace2.batches_through(acknowledged2.borrow()).unwrap();
+                                let work = tactic.prep(vec![batch1.clone()], trace2_storage, Fresh::Input0, capability.time().clone());
+                                todo0.push_back((capability.clone(), work));
                             }
 
                             // To update `acknowledged1` we might presume that `batch1.lower` should equal it, but we
@@ -199,9 +217,9 @@ where
                             if !batch2.is_empty() {
                                 // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let (trace1_cursor, trace1_storage) = trace1.cursor_through(acknowledged1.borrow()).unwrap();
-                                let batch2_cursor = batch2.cursor();
-                                todo2.push_back(Deferred::new(trace1_cursor, trace1_storage, batch2_cursor, batch2.clone(), capability.clone()));
+                                let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap();
+                                let work = tactic.prep(trace1_storage, vec![batch2.clone()], Fresh::Input1, capability.time().clone());
+                                todo1.push_back((capability.clone(), work));
                             }
 
                             // To update `acknowledged2` we might presume that `batch2.lower` should equal it, but we
@@ -233,30 +251,31 @@ where
             // which results in unintentionally quadratic processing time (each batch of either
             // input must scan all batches from the other input).
 
-            // Perform some amount of outstanding work.
-            let mut fuel = 1_000_000;
-            while !todo1.is_empty() && fuel > 0 {
-                todo1.front_mut().unwrap().work(
-                    output,
-                    |k,v2,v1,t,r2,r1,c| result(k,v1,v2,t,r1,r2,c),
-                    &mut fuel
-                );
-                if !todo1.front().unwrap().work_remains() { todo1.pop_front(); }
-            }
-
-            // Perform some amount of outstanding work.
-            let mut fuel = 1_000_000;
-            while !todo2.is_empty() && fuel > 0 {
-                todo2.front_mut().unwrap().work(
-                    output,
-                    |k,v1,v2,t,r1,r2,c| result(k,v1,v2,t,r1,r2,c),
-                    &mut fuel
-                );
-                if !todo2.front().unwrap().work_remains() { todo2.pop_front(); }
-            }
-
-            // Re-activate operator if work remains.
-            if !todo1.is_empty() || !todo2.is_empty() {
+            // Perform some amount of outstanding work by pulling the deferred iterators and shipping the
+            // containers they yield. Each direction drains against its own half of the budget, so a burst
+            // on one input cannot starve the other. We reschedule the operator whenever any work remains,
+            // which is observable directly: an iterator has yet to yield `None`. The budget is split from
+            // `2_000_000` to preserve the historical `1_000_000` of progress per input each activation.
+            // The driver only ships finished containers (`give_container`), never pushing records, so it
+            // pins the operator output to `NoopBuilder<C>` — the builder for exactly this "containers ready
+            // to go" case, which is a `ContainerBuilder` for any `C` without further bounds.
+            let output: &mut OutputBuilderSession<'_, Tr1::Time, NoopBuilder<C>> = output;
+            let mut drain = |queue: &mut VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = C>>)>, mut fuel: isize| {
+                while fuel >= 0 {
+                    let Some((capability, work)) = queue.front_mut() else { break };
+                    match work.next() {
+                        Some(mut container) => {
+                            fuel -= container.record_count() as isize;
+                            output.session_with_builder(&*capability).give_container(&mut container);
+                        }
+                        None => { queue.pop_front(); }
+                    }
+                }
+            };
+            let fuel = 2_000_000;
+            drain(&mut todo0, fuel / 2);
+            drain(&mut todo1, fuel / 2);
+            if !todo0.is_empty() || !todo1.is_empty() {
                 activator.activate();
             }
 
@@ -302,144 +321,268 @@ where
     })
 }
 
+/// Cursor-based join: the conventional [`JoinTactic`] implementation and its per-batch worker.
+mod cursors {
 
-/// Deferred join computation.
-///
-/// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
-/// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
-/// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<T, C1, C2>
-where
-    T: Timestamp+Lattice,
-    C1: Cursor<Time=T>,
-    C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
-{
-    trace: C1,
-    trace_storage: C1::Storage,
-    batch: C2,
-    batch_storage: C2::Storage,
-    capability: Capability<T>,
-    done: bool,
-}
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
-impl<T, C1, C2> Deferred<T, C1, C2>
-where
-    C1: Cursor<Time=T>,
-    C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
-    T: Timestamp+Lattice,
-{
-    fn new(trace: C1, trace_storage: C1::Storage, batch: C2, batch_storage: C2::Storage, capability: Capability<T>) -> Self {
-        Deferred {
-            trace,
-            trace_storage,
-            batch,
-            batch_storage,
-            capability,
-            done: false,
-        }
-    }
+    use super::*;
 
-    fn work_remains(&self) -> bool {
-        !self.done
-    }
-
-    /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
-    #[inline(never)]
-    fn work<L, CB: ContainerBuilder>(&mut self, output: &mut OutputBuilderSession<T, EffortBuilder<CB>>, mut logic: L, fuel: &mut usize)
+    /// The conventional cursor-based [`JoinTactic`].
+    ///
+    /// It builds a [`CursorList`] over each input batch list and plays the merge-join out at whatever rate
+    /// the driver's fuel allows. Each prepared unit joins a `B0`-side cursor against a `B1`-side cursor,
+    /// emitting `(val0, val1)` to `logic` and yielding the output containers `logic` fills. `logic` is
+    /// shared across all outstanding units (an `Rc<RefCell<_>>`), preserving the single mutable-state
+    /// semantics of one closure threaded through every match — each unit is a self-contained `'static`
+    /// iterator, so it cannot borrow the tactic.
+    ///
+    /// It is parameterized by the builder `CB` into which `logic` pushes output; the [`JoinTactic`] it
+    /// implements is over the container `CB` yields (`CB::Container`).
+    pub struct CursorTactic<B0, B1, L, CB>
     where
-        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, T, &C1::Diff, &C2::Diff, &mut JoinSession<T, CB, Capability<T>>),
+        B0: BatchReader + Navigable,
+        B1: BatchReader<Time = B0::Time> + Navigable,
+        B0::Cursor: Cursor<Time = B0::Time>,
+        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
     {
-
-        let meet = self.capability.time();
-
-        let mut effort = 0;
-        let mut session = output.session_with_builder(&self.capability);
-
-        let trace_storage = &self.trace_storage;
-        let batch_storage = &self.batch_storage;
-
-        let trace = &mut self.trace;
-        let batch = &mut self.batch;
-
-        let mut thinker = JoinThinker::new();
-
-        while let (Some(batch_key), Some(trace_key), true) = (batch.get_key(batch_storage), trace.get_key(trace_storage), effort < *fuel) {
-
-            match trace_key.cmp(&batch_key) {
-                Ordering::Less => trace.seek_key(trace_storage, batch_key),
-                Ordering::Greater => batch.seek_key(batch_storage, trace_key),
-                Ordering::Equal => {
-
-                    thinker.history1.edits.load(trace, trace_storage, Some(meet));
-                    thinker.history2.edits.load(batch, batch_storage, None);
-
-                    // populate `temp` with the results in the best way we know how.
-                    thinker.think(|v1,v2,t,r1,r2| {
-                        logic(batch_key, v1, v2, t, r1, r2, &mut session);
-                    });
-
-                    // TODO: Effort isn't perfectly tracked as we might still have some data in the
-                    // session at the moment it's dropped.
-                    effort += session.builder().0.take();
-                    batch.step_key(batch_storage);
-                    trace.step_key(trace_storage);
-
-                    thinker.history1.clear();
-                    thinker.history2.clear();
-                }
-            }
-        }
-        self.done = !batch.key_valid(batch_storage) || !trace.key_valid(trace_storage);
-
-        if effort > *fuel { *fuel = 0; }
-        else              { *fuel -= effort; }
+        logic: Rc<RefCell<L>>,
+        _marker: std::marker::PhantomData<(B0, B1, CB)>,
     }
-}
 
-struct JoinThinker<V1, V2, T, D1, D2> {
-    pub history1: ValueHistory<V1, T, D1>,
-    pub history2: ValueHistory<V2, T, D2>,
-}
-
-impl<V1, V2, T, D1, D2> JoinThinker<V1, V2, T, D1, D2>
-where
-    V1: Copy + Ord,
-    V2: Copy + Ord,
-    T: Ord + Clone + Lattice,
-    D1: Clone + crate::difference::Semigroup,
-    D2: Clone + crate::difference::Semigroup,
-{
-    fn new() -> Self {
-        JoinThinker {
-            history1: ValueHistory::new(),
-            history2: ValueHistory::new(),
+    impl<B0, B1, L, CB> CursorTactic<B0, B1, L, CB>
+    where
+        B0: BatchReader + Navigable,
+        B1: BatchReader<Time = B0::Time> + Navigable,
+        B0::Cursor: Cursor<Time = B0::Time>,
+        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
+    {
+        /// Construct a tactic that applies `logic` to each matched `(key, val0, val1)`.
+        pub fn new(logic: L) -> Self {
+            CursorTactic { logic: Rc::new(RefCell::new(logic)), _marker: std::marker::PhantomData }
         }
     }
 
-    fn think<F: FnMut(V1, V2, T, &D1, &D2)>(&mut self, mut results: F) {
-
-        // for reasonably sized edits, do the dead-simple thing.
-        if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
-            self.history1.edits.map(|v1, t1, d1| {
-                self.history2.edits.map(|v2, t2, d2| {
-                    results(v1, v2, t1.join(t2), d1, d2);
-                })
+    impl<B0, B1, L, CB> JoinTactic<B0, B1, CB::Container> for CursorTactic<B0, B1, L, CB>
+    where
+        B0: BatchReader + Navigable + 'static,
+        B1: BatchReader<Time = B0::Time> + Navigable + 'static,
+        B0::Cursor: Cursor<Time = B0::Time>,
+        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
+        CB: ContainerBuilder<Container: Default> + 'static,
+        L: for<'a> FnMut(<B0::Cursor as Cursor>::Key<'a>, <B0::Cursor as Cursor>::Val<'a>, <B1::Cursor as Cursor>::Val<'a>, B0::Time, &<B0::Cursor as Cursor>::Diff, &<B1::Cursor as Cursor>::Diff, &mut CB) + 'static,
+    {
+        fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = CB::Container>> {
+            // The accumulated side's history is advanced by `meet` to consolidate it before the
+            // cross-product; the fresh side is left, as its times already lie at or beyond `meet`. `fresh`
+            // fixes which side is which. The advance is output-neutral either way (the fresh side's times are
+            // at or beyond `meet`, so the joined time is too), so it is purely a consolidation: it pays off
+            // when the accumulated side carries times below `meet`, and is a wasted scan when it does not. A
+            // more precise rule would skip the scan when the side is already entirely at or beyond `meet`,
+            // but detecting that needs both frontiers, not just `lower`: a batch's times lie at or beyond
+            // both its `lower` and its `since`, so the side is entirely beyond `meet` exactly when
+            // `meet <= lower` or `meet <= since`. A fresh batch is caught by `lower` (its `since` is
+            // `minimum`), a compacted trace by `since` (its `lower` is `minimum`); checking `lower` alone
+            // would wrongly advance a compacted trace whose times are all already at or beyond `meet`. We
+            // keep the simpler fresh-based choice and accept the occasional no-op scan.
+            let (cursor1, storage1) = cursor_list(input0);
+            let (cursor2, storage2) = cursor_list(input1);
+            let (advance1, advance2) = match fresh {
+                Fresh::Input0 => (false, true),
+                Fresh::Input1 => (true, false),
+            };
+            Box::new(DeferredIter {
+                cursor1,
+                storage1,
+                cursor2,
+                storage2,
+                meet,
+                advance1,
+                advance2,
+                logic: Rc::clone(&self.logic),
+                builder: CB::default(),
+                ready: VecDeque::new(),
+                done: false,
             })
         }
-        else {
+    }
 
-            let mut replay1 = self.history1.replay();
-            let mut replay2 = self.history2.replay();
+    /// Deferred join computation, as an iterator of output containers.
+    ///
+    /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
+    /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
+    /// dataflow system a chance to run operators that can consume and aggregate the data. Each `next` plays
+    /// the merge-join forward until the builder yields a container (or the cursors run dry), matching the
+    /// former per-unit `work` loop but suspending at container boundaries rather than under a fuel budget:
+    /// the driver stops pulling once its budget is spent and resumes the same iterator next activation.
+    struct DeferredIter<T, C1, C2, L, CB>
+    where
+        T: Timestamp+Lattice,
+        C1: Cursor<Time=T>,
+        C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
+        CB: ContainerBuilder,
+    {
+        cursor1: C1,
+        storage1: C1::Storage,
+        cursor2: C2,
+        storage2: C2::Storage,
+        /// The capability's time, at which this unit's output ships; the lower envelope for consolidation.
+        meet: T,
+        /// Whether to advance each side's history by `meet` before consolidation.
+        advance1: bool,
+        advance2: bool,
+        /// The output closure, shared across all outstanding units.
+        logic: Rc<RefCell<L>>,
+        /// The builder `logic` fills; drained into `ready` as containers complete.
+        builder: CB,
+        /// Completed containers awaiting a `next` call.
+        ready: VecDeque<CB::Container>,
+        done: bool,
+    }
 
-            // TODO: It seems like there is probably a good deal of redundant `advance_buffer_by`
-            //       in here. If a time is ever repeated, for example, the call will be identical
-            //       and accomplish nothing. If only a single record has been added, it may not
-            //       be worth the time to collapse (advance, re-sort) the data when a linear scan
-            //       is sufficient.
+    impl<T, C1, C2, L, CB> Iterator for DeferredIter<T, C1, C2, L, CB>
+    where
+        T: Timestamp+Lattice,
+        C1: Cursor<Time=T>,
+        C2: for<'a> Cursor<Key<'a>=C1::Key<'a>, Time=T>,
+        CB: ContainerBuilder<Container: Default>,
+        L: for<'a> FnMut(C1::Key<'a>, C1::Val<'a>, C2::Val<'a>, T, &C1::Diff, &C2::Diff, &mut CB),
+    {
+        type Item = CB::Container;
 
-            while !replay1.is_done() && !replay2.is_done() {
+        /// Play the merge-join forward until a container is ready, or the cursors run dry.
+        #[inline(never)]
+        fn next(&mut self) -> Option<CB::Container> {
+            // Serve any container completed on an earlier call first.
+            if let Some(container) = self.ready.pop_front() { return Some(container); }
+            if self.done { return None; }
 
-                if replay1.time().unwrap().cmp(replay2.time().unwrap()) == ::std::cmp::Ordering::Less {
+            // The accumulated side is advanced by `meet` to consolidate its history; the fresh side is left,
+            // as its times already lie at or beyond `meet`. The choice was fixed per side at construction,
+            // from which input carried the fresh batch.
+            let meet1 = if self.advance1 { Some(&self.meet) } else { None };
+            let meet2 = if self.advance2 { Some(&self.meet) } else { None };
+
+            let storage1 = &self.storage1;
+            let storage2 = &self.storage2;
+            let cursor1 = &mut self.cursor1;
+            let cursor2 = &mut self.cursor2;
+            let builder = &mut self.builder;
+            let ready = &mut self.ready;
+            let mut logic = self.logic.borrow_mut();
+            let logic = &mut *logic;
+
+            let mut thinker = JoinThinker::new();
+            let mut exhausted = false;
+
+            while ready.is_empty() {
+                match (cursor1.get_key(storage1), cursor2.get_key(storage2)) {
+                    (Some(key1), Some(key2)) => match key1.cmp(&key2) {
+                        Ordering::Less => cursor1.seek_key(storage1, key2),
+                        Ordering::Greater => cursor2.seek_key(storage2, key1),
+                        Ordering::Equal => {
+
+                            thinker.history1.edits.load(cursor1, storage1, meet1);
+                            thinker.history2.edits.load(cursor2, storage2, meet2);
+
+                            thinker.think(|v1,v2,t,r1,r2| {
+                                logic(key1, v1, v2, t, r1, r2, builder);
+                            });
+
+                            cursor1.step_key(storage1);
+                            cursor2.step_key(storage2);
+
+                            thinker.history1.clear();
+                            thinker.history2.clear();
+
+                            // Move any completed containers aside; we yield them one at a time.
+                            while let Some(container) = builder.extract() {
+                                // Avoiding the mem::take would require a non-iterator trait.
+                                ready.push_back(std::mem::take(container));
+                            }
+                        }
+                    },
+                    // One side is exhausted; no further keys can match.
+                    _ => { exhausted = true; break; }
+                }
+            }
+
+            if exhausted {
+                self.done = true;
+                // Flush the final partial container.
+                while let Some(container) = builder.finish() {
+                    // Avoiding the mem::take would require a non-iterator trait.
+                    ready.push_back(std::mem::take(container));
+                }
+            }
+
+            ready.pop_front()
+        }
+    }
+
+    struct JoinThinker<V1, V2, T, D1, D2> {
+        pub history1: ValueHistory<V1, T, D1>,
+        pub history2: ValueHistory<V2, T, D2>,
+    }
+
+    impl<V1, V2, T, D1, D2> JoinThinker<V1, V2, T, D1, D2>
+    where
+        V1: Copy + Ord,
+        V2: Copy + Ord,
+        T: Ord + Clone + Lattice,
+        D1: Clone + crate::difference::Semigroup,
+        D2: Clone + crate::difference::Semigroup,
+    {
+        fn new() -> Self {
+            JoinThinker {
+                history1: ValueHistory::new(),
+                history2: ValueHistory::new(),
+            }
+        }
+
+        fn think<F: FnMut(V1, V2, T, &D1, &D2)>(&mut self, mut results: F) {
+
+            // for reasonably sized edits, do the dead-simple thing.
+            if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
+                self.history1.edits.map(|v1, t1, d1| {
+                    self.history2.edits.map(|v2, t2, d2| {
+                        results(v1, v2, t1.join(t2), d1, d2);
+                    })
+                })
+            }
+            else {
+
+                let mut replay1 = self.history1.replay();
+                let mut replay2 = self.history2.replay();
+
+                // TODO: It seems like there is probably a good deal of redundant `advance_buffer_by`
+                //       in here. If a time is ever repeated, for example, the call will be identical
+                //       and accomplish nothing. If only a single record has been added, it may not
+                //       be worth the time to collapse (advance, re-sort) the data when a linear scan
+                //       is sufficient.
+
+                while !replay1.is_done() && !replay2.is_done() {
+
+                    if replay1.time().unwrap().cmp(replay2.time().unwrap()) == ::std::cmp::Ordering::Less {
+                        replay2.advance_buffer_by(replay1.meet().unwrap());
+                        for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
+                            let (val1, time1, diff1) = replay1.edit().unwrap();
+                            results(val1, val2, time1.join(time2), diff1, diff2);
+                        }
+                        replay1.step();
+                    }
+                    else {
+                        replay1.advance_buffer_by(replay2.meet().unwrap());
+                        for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
+                            let (val2, time2, diff2) = replay2.edit().unwrap();
+                            results(val1, val2, time1.join(time2), diff1, diff2);
+                        }
+                        replay2.step();
+                    }
+                }
+
+                while !replay1.is_done() {
                     replay2.advance_buffer_by(replay1.meet().unwrap());
                     for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
                         let (val1, time1, diff1) = replay1.edit().unwrap();
@@ -447,7 +590,7 @@ where
                     }
                     replay1.step();
                 }
-                else {
+                while !replay2.is_done() {
                     replay1.advance_buffer_by(replay2.meet().unwrap());
                     for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
                         let (val2, time2, diff2) = replay2.edit().unwrap();
@@ -455,23 +598,6 @@ where
                     }
                     replay2.step();
                 }
-            }
-
-            while !replay1.is_done() {
-                replay2.advance_buffer_by(replay1.meet().unwrap());
-                for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
-                    let (val1, time1, diff1) = replay1.edit().unwrap();
-                    results(val1, val2, time1.join(time2), diff1, diff2);
-                }
-                replay1.step();
-            }
-            while !replay2.is_done() {
-                replay1.advance_buffer_by(replay2.meet().unwrap());
-                for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
-                    let (val2, time2, diff2) = replay2.edit().unwrap();
-                    results(val1, val2, time1.join(time2), diff1, diff2);
-                }
-                replay2.step();
             }
         }
     }

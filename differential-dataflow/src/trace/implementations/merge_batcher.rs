@@ -17,10 +17,14 @@ use crate::trace::{Batcher, Description};
 
 /// Creates batches from chunks of sorted, consolidated tuples.
 pub struct MergeBatcher<M: Merger> {
-    /// A sequence of power-of-two length lists of sorted, consolidated containers.
+    /// Sorted, consolidated chains, each paired with its cached summed update count.
+    ///
+    /// The cached count is the chain's *merge weight*: the geometric ladder weighs
+    /// chains by updates, not chunk counts, since regrading decouples the two. A
+    /// chain is immutable until merged, so the weight is computed once at push.
     ///
     /// Do not push/pop directly but use the corresponding functions ([`Self::chain_push`]/[`Self::chain_pop`]).
-    chains: Vec<Vec<M::Chunk>>,
+    chains: Vec<(usize, Vec<M::Chunk>)>,
     /// Stash of empty chunks, recycled through the merging process.
     stash: Vec<M::Chunk>,
     /// Merges consolidated chunks, and extracts the subset of an update chain that lies in an interval of time.
@@ -100,12 +104,12 @@ impl<M: Merger> PushInto<M::Chunk> for MergeBatcher<M> {
 }
 
 impl<M: Merger> MergeBatcher<M> {
-    /// Insert a chain and maintain chain properties: Chains are geometrically sized and ordered
-    /// by decreasing length.
+    /// Insert a chain and maintain chain properties: Chains are geometrically sized
+    /// (by summed updates) and ordered by decreasing update weight.
     fn insert_chain(&mut self, chain: Vec<M::Chunk>) {
         if !chain.is_empty() {
             self.chain_push(chain);
-            while self.chains.len() > 1 && (self.chains[self.chains.len() - 1].len() >= self.chains[self.chains.len() - 2].len() / 2) {
+            while self.chains.len() > 1 && (self.chains[self.chains.len() - 1].0 >= self.chains[self.chains.len() - 2].0 / 2) {
                 let list1 = self.chain_pop().unwrap();
                 let list2 = self.chain_pop().unwrap();
                 let merged = self.merge_by(list1, list2);
@@ -126,16 +130,27 @@ impl<M: Merger> MergeBatcher<M> {
     /// Pop a chain and account size changes.
     #[inline]
     fn chain_pop(&mut self) -> Option<Vec<M::Chunk>> {
-        let chain = self.chains.pop();
-        self.account(chain.iter().flatten().map(M::account), -1);
-        chain
+        let (_weight, chain) = self.chains.pop()?;
+        self.account(chain.iter().map(Self::record), -1);
+        Some(chain)
     }
 
     /// Push a chain and account size changes.
+    ///
+    /// Caches the chain's summed update count alongside it for the ladder.
     #[inline]
     fn chain_push(&mut self, chain: Vec<M::Chunk>) {
-        self.account(chain.iter().map(M::account), 1);
-        self.chains.push(chain);
+        let weight = chain.iter().map(M::len).sum();
+        self.account(chain.iter().map(Self::record), 1);
+        self.chains.push((weight, chain));
+    }
+
+    /// The `(records, size, capacity, allocations)` logger tuple for one chunk,
+    /// assembled from the two focused `Merger` methods.
+    #[inline]
+    fn record(chunk: &M::Chunk) -> (usize, usize, usize, usize) {
+        let (size, capacity, allocations) = M::allocation(chunk);
+        (M::len(chunk), size, capacity, allocations)
     }
 
     /// Account size changes. Only performs work if a logger exists.
@@ -189,8 +204,19 @@ pub trait Merger: Default {
         stash: &mut Vec<Self::Chunk>,
     );
 
-    /// Account size and allocation changes. Returns a tuple of (records, size, capacity, allocations).
-    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize);
+    /// The number of updates in a chunk.
+    ///
+    /// Drives the geometric ladder (chains are weighed by summed updates, not chunk
+    /// counts, since regrading decouples the two) and the `records` field of the
+    /// size logger.
+    fn len(chunk: &Self::Chunk) -> usize;
+
+    /// Backing-allocation figures for a chunk: `(size, capacity, allocations)`, for
+    /// the size logger's memory telemetry.
+    ///
+    /// Defaults to zero — most chunk types do not track this. Override to report
+    /// real figures (e.g. Materialize's memory accounting).
+    fn allocation(_chunk: &Self::Chunk) -> (usize, usize, usize) { (0, 0, 0) }
 }
 
 /// A `Merger` implementation for vector update containers.
@@ -351,8 +377,43 @@ pub mod vec {
             if !ready.is_empty() { ship.push(ready); }
         }
 
-        fn account(chunk: &Vec<(D, T, R)>) -> (usize, usize, usize, usize) {
-            (chunk.len(), 0, 0, 0)
-        }
+        fn len(chunk: &Vec<(D, T, R)>) -> usize { chunk.len() }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use timely::progress::frontier::Antichain;
+    use crate::trace::Batcher;
+    use super::MergeBatcher;
+    use super::vec::VecMerger;
+
+    type Bt = MergeBatcher<VecMerger<u64, u64, i64>>;
+
+    /// The sealed frontier must reflect the POST-CONSOLIDATION set of distinct kept times:
+    /// two chains carry cancelling updates at a kept time (`t=5`), plus a survivor at a later
+    /// kept time (`t=7`). After `seal(upper=[3])` the frontier must be `{7}` — `(100, 5)` nets
+    /// to zero and needs no capability. (A per-chain extract that folds the frontier before
+    /// consolidating would wrongly report `{5}`.)
+    #[test]
+    fn frontier_is_post_consolidation() {
+        let mut b = Bt::new(None, 0);
+        b.chain_push(vec![vec![(100u64, 5u64, 1i64), (200u64, 7u64, 1i64)]]);
+        b.chain_push(vec![vec![(100u64, 5u64, -1i64)]]);
+        let _ = b.seal(Antichain::from_elem(3));
+        let got: Vec<u64> = b.frontier().iter().cloned().collect();
+        assert_eq!(got, vec![7u64],
+            "frontier held a capability at t=5, which consolidates to zero (got {got:?})");
+    }
+
+    /// Sanity: with no cross-chain cancellation, the frontier is the minimal kept time.
+    #[test]
+    fn frontier_survivor_minimum() {
+        let mut b = Bt::new(None, 0);
+        b.chain_push(vec![vec![(100u64, 5u64, 1i64)]]);
+        b.chain_push(vec![vec![(200u64, 7u64, 1i64)]]);
+        let _ = b.seal(Antichain::from_elem(3));
+        let got: Vec<u64> = b.frontier().iter().cloned().collect();
+        assert_eq!(got, vec![5u64]);
     }
 }

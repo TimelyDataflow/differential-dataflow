@@ -1,0 +1,10 @@
+# A random graph derived in-language from `iota` via `hash` — the composable
+# form of `random:`, computed once. No baked-in generator; just iota + hash.
+install reach examples/server/programs/rand_reach.ddp
+feed reach 0 0
+tick
+# The derived edge set (note iota:12 was installed on demand to back it):
+peek iota:12
+peek result
+list
+exit

@@ -8,7 +8,7 @@ use timely::progress::Antichain;
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchDiffGat, BatchVal, Cursor, Navigable, TraceReader};
 use differential_dataflow::trace::implementations::BatchContainer;
 
 /// Proposes extensions to a stream of prefixes.
@@ -26,18 +26,19 @@ pub fn lookup_map<'scope, D, K, R, Tr, F, DOut, ROut, S>(
     supplied_key2: K,
 ) -> VecCollection<'scope, Tr::Time, DOut, ROut>
 where
-    Tr: for<'a> TraceReader<
-        Time: std::hash::Hash,
-        Diff : Semigroup<Tr::DiffGat<'a>>+Monoid+ExchangeData,
-    >+Clone+'static,
-    Tr::KeyContainer: BatchContainer<Owned=K>,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
+    for<'a> BatchCursor<Tr>: Cursor<
+        Time = Tr::Time,
+        Diff : Semigroup<BatchDiffGat<'a, Tr>>+Monoid+ExchangeData,
+    >,
+    <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
     K: Hashable + Ord + 'static,
     F: FnMut(&D, &mut K)+Clone+'static,
     D: ExchangeData,
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid + 'static,
-    S: FnMut(&D, &R, Tr::Val<'_>, &Tr::Diff)->(DOut, ROut)+'static,
+    S: FnMut(&D, &R, BatchVal<'_, Tr>, &BatchDiff<Tr>)->(DOut, ROut)+'static,
 {
     // No need to block physical merging for this operator.
     arrangement.trace.set_physical_compaction(Antichain::new().borrow());
@@ -89,17 +90,17 @@ where
 
                     let (mut cursor, storage) = trace.cursor();
                     // Key container to stage keys for comparison.
-                    let mut key_con = Tr::KeyContainer::with_capacity(1);
+                    let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
                         if !frontier2.less_equal(time) {
                             logic2(prefix, &mut key1);
                             key_con.clear(); key_con.push_own(&key1);
-                            cursor.seek_key(&storage, key_con.index(1));
-                            if cursor.get_key(&storage) == Some(key_con.index(1)) {
+                            cursor.seek_key(&storage, key_con.index(0));
+                            if cursor.get_key(&storage) == Some(key_con.index(0)) {
                                 while let Some(value) = cursor.get_val(&storage) {
-                                    let mut count = Tr::Diff::zero();
+                                    let mut count = BatchDiff::<Tr>::zero();
                                     cursor.map_times(&storage, |t, d| {
-                                        if Tr::owned_time(t).less_equal(time) { count.plus_equals(&d); }
+                                        if <BatchCursor<Tr> as Cursor>::owned_time(t).less_equal(time) { count.plus_equals(&d); }
                                     });
                                     if !count.is_zero() {
                                         let (dout, rout) = output_func(prefix, diff, value, &count);

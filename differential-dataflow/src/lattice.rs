@@ -100,6 +100,9 @@ pub trait Lattice : PartialOrder {
     /// the sense that any other element with the same property (compares identically to times
     /// greater or equal to `frontier`) must be less or equal to the result.
     ///
+    /// Both properties are machine-checked in `formal/Differential/Compaction.lean`, as
+    /// `advance_le_iff` (soundness) and `advance_eq_iff` (canonicity).
+    ///
     /// When provided an empty frontier `self` is not modified.
     ///
     /// # Examples

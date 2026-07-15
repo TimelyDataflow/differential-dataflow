@@ -1,0 +1,15 @@
+-- A random graph DERIVED from a generated `iota` source via `hash` — the
+-- composable, in-language form of `random:...`, materialized once (static; no
+-- per-tick churn). `hash(bound, keys...)` is a deterministic draw in [0, bound).
+-- Each iota row `(i)` becomes an edge (hash(8,i,0) ; hash(8,i,1)).
+-- input 0: roots (node ;)
+
+let edges = import "iota:12" | map( hash(8,$0[0],0) ; hash(8,$0[0],1) );
+let roots = input 0 | key($0[0] ;);
+
+reach: {
+    let proposals = reach | join(edges, ($2 ;));
+    var reach = roots + proposals | distinct;
+}
+
+export "result" = reach::reach | inspect(reach);

@@ -1,0 +1,25 @@
+# Cross-dataflow shared-trace demo.
+# `prod` publishes the edge set as trace "edges"; `reach` imports it and
+# tracks the nodes reachable from its roots. Run from the interactive/ dir:
+#   cargo run --release --example ddir_server -- examples/server/sessions/shared_trace.txt
+
+install prod examples/server/programs/producer.ddp
+install reach examples/server/programs/reach_import.ddp
+list
+
+# graph: 1 -> 2 -> 3 ; root: 1   (reach should become {1, 2, 3})
+feed prod 0 1,2
+feed prod 0 2,3
+feed reach 0 1
+tick
+
+# extend the graph with 3 -> 4 ; reach should grow to include 4
+feed prod 0 3,4
+tick
+
+# retract 2 -> 3 ; reach should drop 3 and 4
+feed prod 0 2,3 diff=-1
+tick
+
+list
+exit

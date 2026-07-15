@@ -301,8 +301,7 @@ pub mod val_batch {
         type Layout = L;
     }
 
-    impl<L: Layout> BatchReader for OrdValBatch<L> {
-
+    impl<L: Layout> crate::trace::Navigable for OrdValBatch<L> {
         type Cursor = OrdValCursor<L>;
         fn cursor(&self) -> Self::Cursor {
             OrdValCursor {
@@ -311,6 +310,11 @@ pub mod val_batch {
                 phantom: PhantomData,
             }
         }
+    }
+
+    impl<L: Layout> BatchReader for OrdValBatch<L> {
+
+        type Time = layout::Time<L>;
         fn len(&self) -> usize {
             // Normally this would be `self.updates.len()`, but we have a clever compact encoding.
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
@@ -576,6 +580,18 @@ pub mod val_batch {
 
         type Storage = OrdValBatch<L>;
 
+        type KeyContainer = <L as Layout>::KeyContainer;
+        type Key<'a> = <<L as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type ValContainer = <L as Layout>::ValContainer;
+        type Val<'a> = <<L as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+        type ValOwn = <<L as Layout>::ValContainer as BatchContainer>::Owned;
+        type TimeContainer = <L as Layout>::TimeContainer;
+        type TimeGat<'a> = <<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type Time = <<L as Layout>::TimeContainer as BatchContainer>::Owned;
+        type DiffContainer = <L as Layout>::DiffContainer;
+        type DiffGat<'a> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type Diff = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
+
         fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
         fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }
 
@@ -786,8 +802,7 @@ pub mod key_batch {
         type Layout = L;
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> BatchReader for OrdKeyBatch<L> {
-
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> crate::trace::Navigable for OrdKeyBatch<L> {
         type Cursor = OrdKeyCursor<L>;
         fn cursor(&self) -> Self::Cursor {
             OrdKeyCursor {
@@ -796,6 +811,11 @@ pub mod key_batch {
                 phantom: std::marker::PhantomData,
             }
         }
+    }
+
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> BatchReader for OrdKeyBatch<L> {
+
+        type Time = layout::Time<L>;
         fn len(&self) -> usize {
             // Normally this would be `self.updates.len()`, but we have a clever compact encoding.
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
@@ -981,6 +1001,18 @@ pub mod key_batch {
     impl<L: for<'a> Layout<ValContainer: BatchContainer<Owned: Default>>> Cursor for OrdKeyCursor<L> {
 
         type Storage = OrdKeyBatch<L>;
+
+        type KeyContainer = <L as Layout>::KeyContainer;
+        type Key<'a> = <<L as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type ValContainer = <L as Layout>::ValContainer;
+        type Val<'a> = <<L as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+        type ValOwn = <<L as Layout>::ValContainer as BatchContainer>::Owned;
+        type TimeContainer = <L as Layout>::TimeContainer;
+        type TimeGat<'a> = <<L as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type Time = <<L as Layout>::TimeContainer as BatchContainer>::Owned;
+        type DiffContainer = <L as Layout>::DiffContainer;
+        type DiffGat<'a> = <<L as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type Diff = <<L as Layout>::DiffContainer as BatchContainer>::Owned;
 
         fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { storage.storage.keys.get(self.key_cursor) }
         fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { if self.val_valid(storage) { Some(self.val(storage)) } else { None } }

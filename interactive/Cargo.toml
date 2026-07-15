@@ -15,8 +15,12 @@ workspace = true
 columnar = { workspace = true }
 differential-dataflow = { workspace = true }
 mimalloc = "0.1.48"
+serde = { version = "1.0", features = ["derive"] }
 smallvec = "1.15.1"
 timely = { workspace = true }
+
+[dev-dependencies]
+diagnostics = { path = "../diagnostics" }
 
 [features]
 default = ["timely/getopts"]

@@ -70,9 +70,7 @@
 
 
 use crate::logging::Logger;
-use crate::trace::{Batch, BatchReader, Trace, TraceReader, ExertionLogic};
-use crate::trace::cursor::CursorList;
-use crate::trace::Merger;
+use crate::trace::{Batch, ExertionLogic, Merger, Trace, TraceReader};
 
 use ::timely::dataflow::operators::generic::OperatorInfo;
 use ::timely::progress::{Antichain, frontier::AntichainRef};
@@ -99,26 +97,18 @@ pub struct Spine<B: Batch> {
     exert_logic: Option<ExertionLogic>,
 }
 
-use crate::trace::WithLayout;
-impl<B: Batch> WithLayout for Spine<B> {
-    type Layout = B::Layout;
-}
-
 impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
 
+    type Time = B::Time;
     type Batch = B;
-    type Storage = Vec<B>;
-    type Cursor = CursorList<<B as BatchReader>::Cursor>;
 
-    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(Self::Cursor, Self::Storage)> {
+    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
 
         // If `upper` is the minimum frontier, we can return an empty cursor.
         // This can happen with operators that are written to expect the ability to acquire cursors
         // for their prior frontiers, and which start at `[T::minimum()]`, such as `Reduce`, sadly.
         if upper.less_equal(&<Self::Time as timely::progress::Timestamp>::minimum()) {
-            let cursors = Vec::new();
-            let storage = Vec::new();
-            return Some((CursorList::new(cursors, &storage), storage));
+            return Some(Vec::new());
         }
 
         // The supplied `upper` should have the property that for each of our
@@ -139,7 +129,6 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
         // assert!(upper.iter().all(|t1| self.physical_frontier.iter().any(|t2| t2.less_equal(t1))));
         assert!(PartialOrder::less_equal(&self.physical_frontier.borrow(), &upper));
 
-        let mut cursors = Vec::new();
         let mut storage = Vec::new();
 
         for merge_state in self.merging.iter().rev() {
@@ -148,17 +137,14 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
                     match variant {
                         MergeVariant::InProgress(batch1, batch2, _) => {
                             if !batch1.is_empty() {
-                                cursors.push(batch1.cursor());
                                 storage.push(batch1.clone());
                             }
                             if !batch2.is_empty() {
-                                cursors.push(batch2.cursor());
                                 storage.push(batch2.clone());
                             }
                         },
                         MergeVariant::Complete(Some((batch, _))) => {
                             if !batch.is_empty() {
-                                cursors.push(batch.cursor());
                                 storage.push(batch.clone());
                             }
                         }
@@ -167,7 +153,6 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
                 },
                 MergeState::Single(Some(batch)) => {
                     if !batch.is_empty() {
-                        cursors.push(batch.cursor());
                         storage.push(batch.clone());
                     }
                 },
@@ -197,13 +182,12 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
 
                 // include pending batches
                 if include_upper {
-                    cursors.push(batch.cursor());
                     storage.push(batch.clone());
                 }
             }
         }
 
-        Some((CursorList::new(cursors, &storage), storage))
+        Some(storage)
     }
     #[inline]
     fn set_logical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
