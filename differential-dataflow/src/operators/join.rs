@@ -148,6 +148,17 @@ where
         // TODO: in the case that this does not hold, instead "upgrade" the physical compaction frontier.
         assert!(PartialOrder::less_equal(&trace2.get_physical_compaction(), &acknowledged2.borrow()));
 
+        // Batches wholly at or before these frontiers were joined by the start-up loading
+        // above; batches arriving on the input streams are ignored up to them. Beyond them,
+        // every non-empty arriving batch must be joined, even when `acknowledged` has been
+        // advanced past it: `advance_upper` consults the shared trace, whose merges may have
+        // consolidated an in-flight batch's updates away (e.g. an add/remove pair collapsing
+        // once logical compaction equates their times). The trace's emptiness there is valid
+        // only for readers at or beyond the compaction frontier, while our consumers may read
+        // finer times; the raw batch still owes them its updates. (#801)
+        let preload_upper1 = acknowledged1.clone();
+        let preload_upper2 = acknowledged2.clone();
+
         // Load up deferred work joining each captured `trace2` batch against `trace1`.
         for batch2 in batch2_list.into_iter() {
             // It is safe to ask for `ack1` because we have confirmed it to be in advance of `distinguish_since`.
@@ -185,8 +196,13 @@ where
                 if let Some(ref mut trace2) = trace2_option {
                     let capability = capability.retain(0);
                     for batch1 in data.drain(..) {
-                        // Ignore any pre-loaded data.
-                        if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
+                        // Ignore any pre-loaded data, which was joined at start-up. Note that this
+                        // is a test against the preload boundary, not against `acknowledged1`: the
+                        // latter can be advanced past an in-flight batch by `advance_upper`, when
+                        // trace merges consolidate the batch's updates away, and such a batch must
+                        // still be joined (its updates remain real at times finer than the trace's
+                        // compaction frontier, and no other work item has accounted for them).
+                        if !PartialOrder::less_equal(batch1.upper(), &preload_upper1) {
                             if !batch1.is_empty() {
                                 // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
@@ -197,9 +213,12 @@ where
 
                             // To update `acknowledged1` we might presume that `batch1.lower` should equal it, but we
                             // may have skipped over empty batches. Still, the batches are in-order, and we should be
-                            // able to just assume the most recent `batch1.upper`
-                            debug_assert!(PartialOrder::less_equal(&acknowledged1, batch1.upper()));
-                            acknowledged1.clone_from(batch1.upper());
+                            // able to just assume the most recent `batch1.upper`, unless `advance_upper` has already
+                            // moved `acknowledged1` past this batch, in which case we keep the further frontier.
+                            if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
+                                debug_assert!(PartialOrder::less_equal(&acknowledged1, batch1.upper()));
+                                acknowledged1.clone_from(batch1.upper());
+                            }
                         }
                     }
                 }
@@ -212,8 +231,13 @@ where
                 if let Some(ref mut trace1) = trace1_option {
                     let capability = capability.retain(0);
                     for batch2 in data.drain(..) {
-                        // Ignore any pre-loaded data.
-                        if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
+                        // Ignore any pre-loaded data, which was joined at start-up. Note that this
+                        // is a test against the preload boundary, not against `acknowledged2`: the
+                        // latter can be advanced past an in-flight batch by `advance_upper`, when
+                        // trace merges consolidate the batch's updates away, and such a batch must
+                        // still be joined (its updates remain real at times finer than the trace's
+                        // compaction frontier, and no other work item has accounted for them).
+                        if !PartialOrder::less_equal(batch2.upper(), &preload_upper2) {
                             if !batch2.is_empty() {
                                 // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
@@ -224,9 +248,12 @@ where
 
                             // To update `acknowledged2` we might presume that `batch2.lower` should equal it, but we
                             // may have skipped over empty batches. Still, the batches are in-order, and we should be
-                            // able to just assume the most recent `batch2.upper`
-                            debug_assert!(PartialOrder::less_equal(&acknowledged2, batch2.upper()));
-                            acknowledged2.clone_from(batch2.upper());
+                            // able to just assume the most recent `batch2.upper`, unless `advance_upper` has already
+                            // moved `acknowledged2` past this batch, in which case we keep the further frontier.
+                            if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
+                                debug_assert!(PartialOrder::less_equal(&acknowledged2, batch2.upper()));
+                                acknowledged2.clone_from(batch2.upper());
+                            }
                         }
                     }
                 }
