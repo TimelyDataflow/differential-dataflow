@@ -196,6 +196,22 @@ where
                 if let Some(ref mut trace2) = trace2_option {
                     let capability = capability.retain(0);
                     for batch1 in data.drain(..) {
+                        // An arriving batch must lie wholly on one side of the preload boundary,
+                        // and wholly on one side of `acknowledged1`: both frontiers are drawn from
+                        // the lattice of stream batch boundaries (received uppers, and uppers of
+                        // trace merges of whole stream batches). A batch spanning the former would
+                        // be partially double-processed; one spanning the latter mis-accounted.
+                        assert!(
+                            PartialOrder::less_equal(batch1.upper(), &preload_upper1) ||
+                            PartialOrder::less_equal(&preload_upper1, batch1.lower()),
+                            "batch spans the preload boundary",
+                        );
+                        assert!(
+                            PartialOrder::less_equal(&acknowledged1, batch1.lower()) ||
+                            PartialOrder::less_equal(batch1.upper(), &acknowledged1),
+                            "batch spans the acknowledged frontier",
+                        );
+
                         // Ignore any pre-loaded data, which was joined at start-up. Note that this
                         // is a test against the preload boundary, not against `acknowledged1`: the
                         // latter can be advanced past an in-flight batch by `advance_upper`, when
@@ -231,6 +247,22 @@ where
                 if let Some(ref mut trace1) = trace1_option {
                     let capability = capability.retain(0);
                     for batch2 in data.drain(..) {
+                        // An arriving batch must lie wholly on one side of the preload boundary,
+                        // and wholly on one side of `acknowledged2`: both frontiers are drawn from
+                        // the lattice of stream batch boundaries (received uppers, and uppers of
+                        // trace merges of whole stream batches). A batch spanning the former would
+                        // be partially double-processed; one spanning the latter mis-accounted.
+                        assert!(
+                            PartialOrder::less_equal(batch2.upper(), &preload_upper2) ||
+                            PartialOrder::less_equal(&preload_upper2, batch2.lower()),
+                            "batch spans the preload boundary",
+                        );
+                        assert!(
+                            PartialOrder::less_equal(&acknowledged2, batch2.lower()) ||
+                            PartialOrder::less_equal(batch2.upper(), &acknowledged2),
+                            "batch spans the acknowledged frontier",
+                        );
+
                         // Ignore any pre-loaded data, which was joined at start-up. Note that this
                         // is a test against the preload boundary, not against `acknowledged2`: the
                         // latter can be advanced past an in-flight batch by `advance_upper`, when
