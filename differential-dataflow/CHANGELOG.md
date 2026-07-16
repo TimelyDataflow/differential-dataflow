@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.25.0...differential-dataflow-v0.25.1) - 2026-07-15
+
+### Other
+
+- assert arriving batches span neither preload nor acknowledged
+- Restore strongly_connected_at; add prioritized SCC regression tests
+- process in-flight batches overtaken by advance_upper
+
 ## [0.25.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.24.0...differential-dataflow-v0.25.0) - 2026-07-15
 
 ### Added
