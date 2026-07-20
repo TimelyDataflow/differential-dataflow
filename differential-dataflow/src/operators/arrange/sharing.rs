@@ -25,9 +25,11 @@
 //!
 //! Every reader registers logical and physical holds. The publisher forwards their *meet* (the
 //! greatest lower bound, so the trace never compacts past the least reader's hold) to its own
-//! `TraceAgent`, which is the sole writer of the trace's compaction frontiers. With no readers the
-//! publisher holds compaction at the published `since` rather than forwarding the empty meet, which
-//! would be the empty frontier and would irreversibly release the trace.
+//! `TraceAgent`, which is the sole writer of the trace's compaction frontiers. Publishing itself
+//! carries no compaction floor: with no readers the publisher advances its hold to the
+//! writer-driven frontier (the meet of the other agents' holds), so the trace compacts and merges
+//! as the writer advances. The publisher never forwards the empty frontier, which would
+//! irreversibly release the trace.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
@@ -35,7 +37,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use timely::dataflow::operators::generic::{source, Operator};
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
-use timely::progress::{frontier::AntichainRef, Antichain};
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
+use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 
 use crate::lattice::{antichain_meet, Lattice};
@@ -68,8 +71,8 @@ struct SharedTraceState<Tr: TraceReader> {
     /// Seal frontier: the join of the chain's batch uppers. Batches strictly below `upper` are
     /// complete and readable.
     upper: Antichain<Tr::Time>,
-    /// Per-registration logical holds. The publisher forwards their meet, falling back to `since`
-    /// when empty (never the destructive empty meet of zero holds).
+    /// Per-registration logical holds. The publisher forwards their meet, falling back to the
+    /// writer-driven frontier when empty (never the destructive empty meet of zero holds).
     logical_holds: BTreeMap<usize, Antichain<Tr::Time>>,
     /// Per-registration physical holds, forwarded independently of the logical holds.
     physical_holds: BTreeMap<usize, Antichain<Tr::Time>>,
@@ -434,26 +437,48 @@ where
                 if chain.is_empty() {
                     upper = Antichain::from_elem(batch_min::<Tr>());
                 }
-                // TODO(sharing): this pins compaction. `get_logical_compaction` returns the
-                // publisher agent's OWN hold, which starts at the publish-time `since` and, with no
-                // readers, `compaction_target` returns it unchanged (see below) and
-                // `set_logical_compaction` re-applies it as a no-op. So the publisher agent's hold
-                // never advances, and because that agent registers a counted hold in the trace's
-                // `TraceBox`, the trace's effective compaction is pinned at the publish-time `since`
-                // for the life of the arrangement, regardless of the writer/controller advancing a
-                // different handle. Merely publishing then prevents the trace from ever compacting
-                // or merging.
+                // Contract: publishing carries no independent compaction floor. The trace's writer
+                // (and, in Materialize, the controller) drive `since` through their own trace
+                // handles. Only a live importer's registered hold may hold the trace back, and it
+                // releases on drop. The publisher keeps a holding agent solely so importer holds
+                // have somewhere to forward to, so that hold must FOLLOW the writer rather than pin
+                // the trace.
                 //
-                // The fix is that publishing must carry no independent compaction floor. The
-                // trace's writer (and, in Materialize, the controller) drive `since`, and only a
-                // live importer's own `as_of` hold may hold the trace back. Candidate mechanisms,
-                // to be settled with the integration and covered by tests: derive the published
-                // `since` from the trace's batch descriptions rather than the agent's own hold, and
-                // either drop the publisher's holding agent entirely (relying on the writer handle
-                // plus importer holds to keep the trace live) or continuously advance the
-                // publisher's hold to the writer-driven frontier so it never constrains. An
-                // importer's registered hold (correct and intended) stays as-is.
-                let since = agent.get_logical_compaction().to_owned();
+                // The writer-driven frontier is the meet of all other agents' holds, i.e. the
+                // frontier the trace would compact to if the publisher were not holding it. The
+                // `TraceBox` accumulates every agent's hold in a `MutableAntichain`; cloning it and
+                // subtracting the publisher's own contribution yields that meet. Advancing the
+                // publisher's hold to it lets the trace compact and merge as the writer advances.
+                //
+                // NOTE: the per-batch `since` from `map_batches` cannot serve as this source. Those
+                // frontiers advance only when the Spine actually compacts, which the publisher's own
+                // pinning hold prevents, so they stay frozen at the publish-time `since`. Reading
+                // the trace-box meet breaks that circularity.
+                let publisher_logical = agent.get_logical_compaction().to_owned();
+                let publisher_physical = agent.get_physical_compaction().to_owned();
+                // The writer-driven frontier for one dimension: the meet of the accumulated holds
+                // with the publisher's own contribution removed. An empty result means the
+                // publisher is the sole holder. Never forward the empty frontier: it would compact
+                // everything and release the publisher's capability, so fall back to the publisher's
+                // current hold and keep the current floor.
+                let others_meet =
+                    |accumulated: &MutableAntichain<Tr::Time>, own: &Antichain<Tr::Time>| {
+                        let mut others = accumulated.clone();
+                        others.update_iter(own.iter().map(|t| (t.clone(), -1)));
+                        if others.frontier().is_empty() {
+                            own.clone()
+                        } else {
+                            others.frontier().to_owned()
+                        }
+                    };
+                let (writer_logical, writer_physical) = {
+                    let trace_box = agent.trace_box_unstable();
+                    let trace_box = trace_box.borrow();
+                    (
+                        others_meet(&trace_box.logical_compaction, &publisher_logical),
+                        others_meet(&trace_box.physical_compaction, &publisher_physical),
+                    )
+                };
 
                 let (logical_target, physical_target) = {
                     let mut state = sink_shared.state.lock().expect("shared trace poisoned");
@@ -476,18 +501,30 @@ where
                         }
                     }
 
-                    let logical =
-                        SharedTraceState::<Tr>::compaction_target(&state.logical_holds, &since);
-                    let physical =
-                        SharedTraceState::<Tr>::compaction_target(&state.physical_holds, &since);
+                    // Fall back to the writer-driven frontier (not the publisher's frozen hold) when
+                    // there are no reader holds, so with zero readers the target follows the writer.
+                    let logical = SharedTraceState::<Tr>::compaction_target(
+                        &state.logical_holds,
+                        &writer_logical,
+                    );
+                    let physical = SharedTraceState::<Tr>::compaction_target(
+                        &state.physical_holds,
+                        &writer_physical,
+                    );
 
                     state.chain = chain;
-                    // Publish the `since` the trace will actually hold after we forward `logical`
-                    // below, which is `join(since, logical)` because agent compaction only advances
-                    // and is irreversible. Publishing the raw pre-forward `since` would let a handle
-                    // registering in this window latch a floor below the trace's real compaction,
-                    // an anti-conservative `since` that claims accuracy at already-merged times.
-                    state.since = since.join(&logical);
+                    // Publish the trace's real logical compaction after we forward `logical` below.
+                    // Agent compaction only advances (joins), so the publisher's hold becomes
+                    // `join(publisher_logical, logical)`. The trace's real compaction is the meet of
+                    // every agent's hold: the publisher's post-forward hold and the writer-driven
+                    // meet of the others. Publishing exactly that keeps the gate in step with the
+                    // trace, so a reader hold keeps its own frontier readable rather than being
+                    // raced past by the writer. It is never below the real compaction (it equals
+                    // it), so a handle registering in this window cannot latch an anti-conservative
+                    // `since` that claims accuracy at already-merged times.
+                    let publisher_after = publisher_logical.join(&logical);
+                    state.since =
+                        antichain_meet(&publisher_after.borrow()[..], &writer_logical.borrow()[..]);
                     state.upper = upper;
 
                     // Wake importers and any peek waiters.
