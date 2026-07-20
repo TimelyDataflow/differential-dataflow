@@ -115,6 +115,12 @@ where
 struct SharedTrace<Tr: TraceReader> {
     state: Mutex<SharedTraceState<Tr>>,
     upper_changed: Condvar,
+    /// Total peer count (workers-per-process times processes) of the scope that published this
+    /// arrangement. Set once at publish time and never mutated afterward, so `import` reads it
+    /// without taking `state`'s lock. Pairwise import (importer worker `i` reads publisher worker
+    /// `i`) is sound only when an importing scope shards keys the same way, which requires this to
+    /// match the importing scope's own `peers()`.
+    peers: usize,
 }
 
 type SharedTraceRef<Tr> = Arc<SharedTrace<Tr>>;
@@ -391,6 +397,7 @@ where
                 closed: false,
             }),
             upper_changed: Condvar::new(),
+            peers: self.stream.scope().peers(),
         });
 
         let publisher = Publisher {
@@ -536,6 +543,11 @@ where
     /// Imports the published arrangement into `scope`, returning an [`Arranged`] backed by this
     /// shared trace.
     ///
+    /// Requires `scope`'s total peer count (workers-per-process times processes) to equal the
+    /// publisher's, panicking otherwise. Pairwise import (importer worker `i` reads publisher
+    /// worker `i`) is sound only when both sides shard by the same `key.hashed() % peers`; a
+    /// mismatched peer count would silently read the wrong shard instead of failing loudly.
+    ///
     /// The importer registers a replay queue seeded with the current chain and drains it as the
     /// publisher appends. The registration is owned by the source operator, so dropping the import
     /// dataflow deregisters it and releases its holds even while other handle clones and the reader
@@ -545,12 +557,12 @@ where
         scope: Scope<'scope, Tr::Time>,
         name: &str,
     ) -> Arranged<'scope, SharedTraceHandle<Tr>> {
-        // TODO(sharing): assert the importing scope's total peer count equals the publisher's.
-        // Pairwise import (importer worker `i` reads publisher worker `i`) is sound only when both
-        // sides shard by the same `key.hashed() % peers`, which requires equal total peers
-        // (workers-per-process times processes), not just equal workers-per-process. Record the
-        // publisher's peer count at publish time in `SharedTrace` and assert `scope.peers()` matches
-        // here, so a misconfiguration fails loudly instead of silently reading the wrong shard.
+        assert_eq!(
+            scope.peers(),
+            self.shared.peers,
+            "shared-trace import requires equal total peers (workers_per_process * num_processes)"
+        );
+
         let shared = Arc::clone(&self.shared);
         let trace = self.clone();
 

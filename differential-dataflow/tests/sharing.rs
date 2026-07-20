@@ -1,6 +1,6 @@
 //! Sharing arrangements across threads and runtimes.
 
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 
 use timely::dataflow::operators::capture::Extract;
 use timely::dataflow::operators::{Capture, Probe};
@@ -156,4 +156,43 @@ fn import_through_shared_handle() {
         .collect();
     results.sort();
     assert_eq!(results, vec![((1, 2), 0, 1), ((2, 1), 0, 1)]);
+}
+
+/// A publisher on a two-worker runtime (`peers() == 2`) hands its handle to an importer on a
+/// single-threaded runtime (`peers() == 1`). Pairwise import assumes both sides shard keys the
+/// same way, which requires equal total peers, so `import` must assert and panic rather than
+/// silently reading the wrong shard.
+#[test]
+#[should_panic(expected = "peers")]
+fn import_asserts_equal_peers() {
+    let (handle_tx, handle_rx) = mpsc::channel::<Handle>();
+    let handle_tx = Mutex::new(handle_tx);
+
+    // Publisher runtime: two worker threads, so the publishing scope's `peers()` is 2.
+    timely::execute(timely::Config::process(2), move |worker| {
+        let mut input = InputSession::<u64, (u64, u64), isize>::new();
+        let published = worker.dataflow(|scope| {
+            let arranged = input
+                .to_collection(scope)
+                .arrange::<ValBatcher<_, _, _, _>, ArcValBuilder<_, _, _, _>, Spine>();
+            arranged.publish()
+        });
+        // Only one worker needs to hand out a handle; the others publish redundantly (mirroring
+        // real SPMD dataflows) but nobody reads their handles.
+        if worker.index() == 0 {
+            handle_tx.lock().unwrap().send(published.handle()).unwrap();
+        }
+    })
+    .expect("publisher runtime failed to start");
+
+    let handle = handle_rx.recv().expect("publisher did not send a handle");
+
+    // Importer runtime: single-threaded (`execute_directly` never spawns worker threads), so
+    // `peers()` is 1, mismatching the publisher's 2. `import` runs on this same thread, so its
+    // panic unwinds directly into the test rather than being swallowed at a thread boundary.
+    timely::execute_directly(move |worker| {
+        worker.dataflow::<u64, _, _>(|scope| {
+            let _imported = handle.import(scope, "Import");
+        });
+    });
 }
