@@ -437,3 +437,122 @@ pub mod rc_blanket_impls {
         fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
     }
 }
+
+/// Blanket implementations for atomically reference counted batches.
+///
+/// These mirror [`rc_blanket_impls`], but use `Arc` so that batches whose contents
+/// are `Send + Sync` can be shared across threads. This enables reading a trace's
+/// batches from outside the worker that maintains the trace, for example to import
+/// a snapshot of an arrangement into a dataflow running elsewhere.
+pub mod arc_blanket_impls {
+
+    use std::sync::Arc;
+
+    use timely::progress::{Antichain, frontier::AntichainRef};
+    use super::{Batch, BatchReader, Builder, Merger, Navigable, Cursor, Description};
+
+    impl<B: BatchReader + Navigable> Navigable for Arc<B> {
+        /// The type used to enumerate the batch's contents.
+        type Cursor = ArcBatchCursor<B::Cursor>;
+        /// Acquires a cursor to the batch's contents.
+        fn cursor(&self) -> Self::Cursor {
+            ArcBatchCursor::new((**self).cursor())
+        }
+    }
+
+    impl<B: BatchReader> BatchReader for Arc<B> {
+
+        type Time = B::Time;
+        /// The number of updates in the batch.
+        fn len(&self) -> usize { (**self).len() }
+        /// Describes the times of the updates in the batch.
+        fn description(&self) -> &Description<Self::Time> { (**self).description() }
+    }
+
+    /// Wrapper to provide cursor to nested scope.
+    pub struct ArcBatchCursor<C> {
+        cursor: C,
+    }
+
+    impl<C> ArcBatchCursor<C> {
+        fn new(cursor: C) -> Self {
+            ArcBatchCursor {
+                cursor,
+            }
+        }
+    }
+
+    impl<C: Cursor> Cursor for ArcBatchCursor<C> {
+
+        type Storage = Arc<C::Storage>;
+
+        type Key<'a> = C::Key<'a>;
+        type ValOwn = C::ValOwn;
+        type Val<'a> = C::Val<'a>;
+        type Time = C::Time;
+        type TimeGat<'a> = C::TimeGat<'a>;
+        type Diff = C::Diff;
+        type DiffGat<'a> = C::DiffGat<'a>;
+        type KeyContainer = C::KeyContainer;
+        type ValContainer = C::ValContainer;
+        type TimeContainer = C::TimeContainer;
+        type DiffContainer = C::DiffContainer;
+
+        #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+        #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
+
+        #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
+        #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
+
+        #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { self.cursor.get_key(storage) }
+        #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { self.cursor.get_val(storage) }
+
+        #[inline]
+        fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
+            self.cursor.map_times(storage, logic)
+        }
+
+        #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+        #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
+
+        #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+        #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
+
+        #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+        #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
+    }
+
+    /// An immutable collection of updates.
+    impl<B: Batch> Batch for Arc<B> {
+        type Merger = ArcMerger<B>;
+        fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
+            Arc::new(B::empty(lower, upper))
+        }
+    }
+
+    /// Wrapper type for building atomically reference counted batches.
+    pub struct ArcBuilder<B: Builder> { builder: B }
+
+    /// Functionality for building batches from ordered update sequences.
+    impl<B: Builder> Builder for ArcBuilder<B> {
+        type Input = B::Input;
+        type Time = B::Time;
+        type Output = Arc<B::Output>;
+        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { ArcBuilder { builder: B::with_capacity(keys, vals, upds) } }
+        fn push(&mut self, input: &mut Self::Input) { self.builder.push(input) }
+        fn done(self, description: Description<Self::Time>) -> Arc<B::Output> { Arc::new(self.builder.done(description)) }
+        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
+            Arc::new(B::seal(chain, description))
+        }
+    }
+
+    /// Wrapper type for merging atomically reference counted batches.
+    pub struct ArcMerger<B:Batch> { merger: B::Merger }
+
+    /// Represents a merge in progress.
+    impl<B:Batch> Merger<Arc<B>> for ArcMerger<B> {
+        fn new(source1: &Arc<B>, source2: &Arc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self { ArcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
+        fn work(&mut self, source1: &Arc<B>, source2: &Arc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
+        fn done(self) -> Arc<B> { Arc::new(self.merger.done()) }
+    }
+}

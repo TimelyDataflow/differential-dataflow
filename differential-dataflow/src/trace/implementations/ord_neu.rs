@@ -9,11 +9,13 @@
 //! and should consume fewer resources (computation and memory) when it applies.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::MergeBatcher;
 use crate::trace::implementations::merge_batcher::vec::VecMerger;
 use crate::trace::rc_blanket_impls::RcBuilder;
+use crate::trace::arc_blanket_impls::ArcBuilder;
 
 use super::{Layout, Vector};
 
@@ -22,17 +24,29 @@ pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R)>>>>;
+/// An `Arc`-backed variant of [`OrdValSpine`].
+///
+/// Its batches are `Arc`'d rather than `Rc`'d, so a batch whose contents are `Send + Sync` can be
+/// read from a thread other than the one maintaining the trace. Prefer [`OrdValSpine`] unless that
+/// cross-thread sharing is needed, since atomic reference counting is marginally more expensive.
+pub type ArcOrdValSpine<K, V, T, R> = Spine<Arc<OrdValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher using ordered lists.
 pub type OrdValBatcher<K, V, T, R> = MergeBatcher<VecMerger<(K, V), T, R>>;
 /// A builder using ordered lists.
 pub type RcOrdValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
+/// An `Arc`-backed variant of [`RcOrdValBuilder`], pairing with [`ArcOrdValSpine`].
+pub type ArcOrdValBuilder<K, V, T, R> = ArcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
+/// An `Arc`-backed variant of [`OrdKeySpine`], readable from other threads. See [`ArcOrdValSpine`].
+pub type ArcOrdKeySpine<K, T, R> = Spine<Arc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 /// A batcher for ordered lists.
 pub type OrdKeyBatcher<K, T, R> = MergeBatcher<VecMerger<(K, ()), T, R>>;
 /// A builder for ordered lists.
 pub type RcOrdKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>;
+/// An `Arc`-backed variant of [`RcOrdKeyBuilder`], pairing with [`ArcOrdKeySpine`].
+pub type ArcOrdKeyBuilder<K, T, R> = ArcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>;
 
 pub use layers::{Vals, Upds};
 /// Layers are containers of lists of some type.

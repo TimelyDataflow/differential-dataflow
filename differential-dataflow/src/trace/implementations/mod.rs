@@ -53,6 +53,13 @@ pub use self::ord_neu::OrdKeySpine as KeySpine;
 pub use self::ord_neu::OrdKeyBatcher as KeyBatcher;
 pub use self::ord_neu::RcOrdKeyBuilder as KeyBuilder;
 
+// `Arc`-backed variants of the `Val`/`Key` aliases, whose batches can be shared across threads.
+// The batcher is shared with the `Rc` variants, since batchers do not reference-count batches.
+pub use self::ord_neu::ArcOrdValSpine as ArcValSpine;
+pub use self::ord_neu::ArcOrdValBuilder as ArcValBuilder;
+pub use self::ord_neu::ArcOrdKeySpine as ArcKeySpine;
+pub use self::ord_neu::ArcOrdKeyBuilder as ArcKeyBuilder;
+
 use std::convert::TryInto;
 
 use serde::{Deserialize, Serialize};

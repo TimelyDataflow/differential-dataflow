@@ -57,3 +57,34 @@ fn test_trace() {
     let vec_4 = cursor4.to_vec(&storage4, |k| k.clone(), |v| v.clone());
     assert_eq!(vec_4, vec_3);
 }
+
+/// Batches of the `Arc`-backed spines can be handed to another thread, which can hold and read
+/// them independently. This is the property that enables sharing a trace's contents outside the
+/// worker that maintains it. The default `Rc`-backed spines do not have it, by design.
+#[test]
+fn test_batches_read_from_other_thread() {
+    use differential_dataflow::trace::Navigable;
+    use differential_dataflow::trace::implementations::ord_neu::{ArcOrdValBuilder, OrdValBatcher};
+
+    fn assert_send_sync<T: Send + Sync>(_: &T) {}
+
+    let mut batcher = OrdValBatcher::<u64, u64, usize, i64>::new(None, 0);
+    batcher.push_into(vec![
+        ((1, 2), 0, 1),
+        ((2, 3), 1, 1),
+    ]);
+    let (mut chain, description) = batcher.seal(Antichain::from_elem(2));
+    let batch = ArcOrdValBuilder::<u64, u64, usize, i64>::seal(&mut chain, description);
+
+    assert_send_sync(&batch);
+
+    let read = std::thread::spawn(move || {
+        let mut cursor = batch.cursor();
+        cursor.to_vec(&batch, |k| k.clone(), |v| v.clone())
+    }).join().unwrap();
+
+    assert_eq!(read, vec![
+        ((1, 2), vec![(0, 1)]),
+        ((2, 3), vec![(1, 1)]),
+    ]);
+}
