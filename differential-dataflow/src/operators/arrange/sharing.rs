@@ -178,10 +178,15 @@ where
         }
     }
 
-    /// Takes a consistent snapshot of the published arrangement as of a time at or beyond `since`
-    /// and strictly below `upper`, blocking until `upper` passes `time` (or the publisher closes).
+    /// Takes a consistent snapshot of the published arrangement as of `time`, blocking until `upper`
+    /// passes `time`.
     ///
-    /// Works from any thread. Returns `None` if the publisher closed before `upper` passed `time`.
+    /// Works from any thread. Returns `None` when the snapshot cannot serve `time`, which is either
+    /// the publisher closed before `upper` passed `time`, or compaction has advanced `since` beyond
+    /// `time` so the accumulation at `time` is no longer accurate. The gate on `since` mirrors the
+    /// single-runtime peek path, which errors when the compaction frontier is beyond the read time
+    /// rather than returning coalesced results. A caller that needs to tell the two `None` cases
+    /// apart should inspect `since` before the read.
     pub fn snapshot_at(&self, time: &Tr::Time) -> Option<TraceSnapshot<Tr>> {
         let mut state = self.shared.state.lock().expect("shared trace poisoned");
         // `upper` not less-equal `time` means all updates at `time` are sealed.
@@ -194,6 +199,11 @@ where
                 .upper_changed
                 .wait(state)
                 .expect("shared trace poisoned");
+        }
+        // `since` beyond `time` means times at `time` have been coalesced and a read there would be
+        // inaccurate. Fail to `None` rather than serve stale data.
+        if !state.since.less_equal(time) {
+            return None;
         }
         Some(TraceSnapshot {
             chain: state.chain.clone(),
@@ -259,8 +269,7 @@ where
         let state = self.shared.state.lock().expect("shared trace poisoned");
         // A clean cut of the published chain: all non-empty batches whose upper is not beyond
         // `upper`, and none whose lower is beyond `upper`. Empty batches are dropped, as
-        // `Spine::batches_through` does. The published chain is totally ordered by description, so a
-        // straddling non-empty batch would be a bug upstream, not something to handle here.
+        // `Spine::batches_through` does.
         let mut out = Vec::new();
         for batch in state.chain.iter() {
             // A batch whose lower is beyond the cut, and everything after it in the totally
@@ -269,6 +278,15 @@ where
                 break;
             }
             if !batch.is_empty() {
+                // Fail-stop on a batch that straddles the cut (`lower < upper < batch.upper()`),
+                // matching `Spine::batches_through`. Returning it would hand back updates at times
+                // not before `upper`, corrupting a downstream `cursor_through` consumer such as
+                // `join`. The published chain is totally ordered by description, so this cut is
+                // clean unless a caller requested a frontier that is not batch-aligned.
+                assert!(
+                    timely::PartialOrder::less_equal(&batch.upper().borrow(), &upper),
+                    "batches_through: upper straddles batch"
+                );
                 out.push(batch.clone());
             }
         }
@@ -409,6 +427,25 @@ where
                 if chain.is_empty() {
                     upper = Antichain::from_elem(batch_min::<Tr>());
                 }
+                // TODO(sharing): this pins compaction. `get_logical_compaction` returns the
+                // publisher agent's OWN hold, which starts at the publish-time `since` and, with no
+                // readers, `compaction_target` returns it unchanged (see below) and
+                // `set_logical_compaction` re-applies it as a no-op. So the publisher agent's hold
+                // never advances, and because that agent registers a counted hold in the trace's
+                // `TraceBox`, the trace's effective compaction is pinned at the publish-time `since`
+                // for the life of the arrangement, regardless of the writer/controller advancing a
+                // different handle. Merely publishing then prevents the trace from ever compacting
+                // or merging.
+                //
+                // The fix is that publishing must carry no independent compaction floor. The
+                // trace's writer (and, in Materialize, the controller) drive `since`, and only a
+                // live importer's own `as_of` hold may hold the trace back. Candidate mechanisms,
+                // to be settled with the integration and covered by tests: derive the published
+                // `since` from the trace's batch descriptions rather than the agent's own hold, and
+                // either drop the publisher's holding agent entirely (relying on the writer handle
+                // plus importer holds to keep the trace live) or continuously advance the
+                // publisher's hold to the writer-driven frontier so it never constrains. An
+                // importer's registered hold (correct and intended) stays as-is.
                 let since = agent.get_logical_compaction().to_owned();
 
                 let (logical_target, physical_target) = {
@@ -508,6 +545,12 @@ where
         scope: Scope<'scope, Tr::Time>,
         name: &str,
     ) -> Arranged<'scope, SharedTraceHandle<Tr>> {
+        // TODO(sharing): assert the importing scope's total peer count equals the publisher's.
+        // Pairwise import (importer worker `i` reads publisher worker `i`) is sound only when both
+        // sides shard by the same `key.hashed() % peers`, which requires equal total peers
+        // (workers-per-process times processes), not just equal workers-per-process. Record the
+        // publisher's peer count at publish time in `SharedTrace` and assert `scope.peers()` matches
+        // here, so a misconfiguration fails loudly instead of silently reading the wrong shard.
         let shared = Arc::clone(&self.shared);
         let trace = self.clone();
 
