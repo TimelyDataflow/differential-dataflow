@@ -63,6 +63,7 @@ type TraceAgentQueueWriter<Tr> = Weak<(Activator, RefCell<BatchQueue<Tr>>)>;
 pub mod writer;
 pub mod agent;
 pub mod arrangement;
+pub mod sharing;
 
 pub mod upsert;
 
