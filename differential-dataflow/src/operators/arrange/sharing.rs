@@ -43,6 +43,7 @@ use timely::scheduling::activate::SyncActivator;
 
 use crate::lattice::{antichain_meet, Lattice};
 use crate::trace::cursor::{cursor_list, CursorList, Navigable};
+use crate::trace::wrappers::frontier::{BatchFrontier, TraceFrontier};
 use crate::trace::{BatchReader, TraceReader};
 
 use super::{Arranged, TraceAgent, TraceReplayInstruction};
@@ -683,6 +684,125 @@ where
                         }
                     }
                 }
+            }
+        });
+
+        Arranged { stream, trace }
+    }
+
+    /// Imports a static snapshot of the published arrangement at `as_of`, for single-time reads.
+    ///
+    /// Unlike [`Self::import`], which replays the live change stream, this emits the published chain
+    /// exactly once (when the arrangement has sealed through `as_of`) and then releases its
+    /// capability, so the imported collection is complete for a single logical time. Times are
+    /// presented through a [`TraceFrontier`]/[`BatchFrontier`] wrapper advanced to `as_of` and
+    /// bounded by `until`, so a downstream reader sees the accumulation at `as_of` with no
+    /// pre-`as_of` retractions. This is what a one-shot peek or its query dataflow needs, and it
+    /// sidesteps the live import's forward-batch capability handling entirely: there is no forward
+    /// stream.
+    ///
+    /// The wrapper advances times on read, so the shared `Arc` batches are reused as-is, never
+    /// re-arranged.
+    ///
+    /// The snapshot is emitted only once `upper` is strictly beyond `as_of` (the same gate as
+    /// [`Self::snapshot_at`]), so the accumulation at `as_of` is final. Until then the operator holds
+    /// its capability at the minimum time and re-checks on each publisher activation, so the output
+    /// frontier does not advance and a downstream result read waits rather than observing a partial
+    /// (often empty) snapshot. The caller's read hold must keep `since` at or below `as_of`, matching
+    /// [`Self::snapshot_at`]; a `since` past `as_of` would make the read inaccurate.
+    ///
+    /// Requires `scope`'s total peer count to equal the publisher's, as [`Self::import`] does.
+    pub fn import_snapshot_at<'scope>(
+        &self,
+        scope: Scope<'scope, Tr::Time>,
+        name: &str,
+        as_of: Antichain<Tr::Time>,
+        until: Antichain<Tr::Time>,
+    ) -> Arranged<'scope, TraceFrontier<SharedTraceHandle<Tr>>> {
+        assert_eq!(
+            scope.peers(),
+            self.shared.peers,
+            "shared-trace import requires equal total peers (workers_per_process * num_processes)"
+        );
+
+        let trace = TraceFrontier::make_from(self.clone(), as_of.borrow(), until.borrow());
+        let shared = Arc::clone(&self.shared);
+
+        let stream = source(scope, name, move |capability, info| {
+            let activator = scope.worker().sync_activator_for(info.address.to_vec());
+
+            // Register an (instruction-less) queue purely to receive the publisher's activations on
+            // each `upper` advance and on close, so we re-check the seal condition without polling.
+            let reg_id = {
+                let mut state = shared.state.lock().expect("shared trace poisoned");
+                let reg_id = state.next_id;
+                state.next_id += 1;
+                state.queues.insert(
+                    reg_id,
+                    ImportQueue {
+                        instructions: VecDeque::new(),
+                        activator,
+                    },
+                );
+                reg_id
+            };
+
+            // Deregisters the queue when the source operator (and thus this closure) drops.
+            let _guard = QueueGuard {
+                shared: Arc::clone(&shared),
+                reg_id,
+            };
+
+            let mut capabilities = Some(CapabilitySet::new());
+            capabilities.as_mut().unwrap().insert(capability);
+
+            move |output| {
+                let _guard = &_guard;
+                let Some(caps) = capabilities.as_mut() else {
+                    // The snapshot was already emitted and the capability released.
+                    return;
+                };
+
+                let (chain, upper, closed) = {
+                    let mut state = shared.state.lock().expect("shared trace poisoned");
+                    // Drain any queued instructions to reset the coalescing activator flag; this
+                    // path reads `chain`/`upper` directly rather than replaying instructions.
+                    if let Some(queue) = state.queues.get_mut(&reg_id) {
+                        queue.instructions.clear();
+                    }
+                    (state.chain.clone(), state.upper.clone(), state.closed)
+                };
+
+                // Emit once `upper` is strictly beyond every `as_of` time, mirroring the wait in
+                // `snapshot_at`: only then is the accumulation at `as_of` final (all updates at times
+                // not beyond `as_of` are sealed, so advancing them to `as_of` yields a fixed answer).
+                // Keying on `as_of` rather than `until` is deliberate: `until` may be the empty
+                // (unbounded) frontier for a long-lived index, which a live `upper` never reaches. A
+                // premature emit at `upper == as_of` would ship an incomplete (often empty) snapshot
+                // and then close, so the read must wait for `upper` to pass `as_of`. If the publisher
+                // has closed we emit whatever has been sealed.
+                let sealed = closed || as_of.iter().all(|t| !upper.less_equal(t));
+                if !sealed {
+                    // Not yet sealed. Hold the capability and wait for the next publisher activation.
+                    return;
+                }
+
+                for batch in chain {
+                    if !batch.is_empty() {
+                        // Emit whole `Arc` batches under a capability at the minimum time, exactly as
+                        // the live `import` seeds historical batches. The `BatchFrontier` wrapper
+                        // advances the batches' times to `as_of` on read, so the emitted capability
+                        // (minimum) is always at or below the presented times.
+                        let cap = caps.delayed(&batch_min::<Tr>());
+                        output
+                            .session(&cap)
+                            .give(BatchFrontier::make_from(batch, as_of.borrow(), until.borrow()));
+                    }
+                }
+
+                // Release the capability: the single-time snapshot is complete, so the output
+                // frontier advances to the empty antichain.
+                capabilities = None;
             }
         });
 
