@@ -3,7 +3,7 @@
 //! A conventional differential reduce against `(group, token)` values, where the backend
 //! supplies the implementation of the interpretation of the tokens.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -34,8 +34,16 @@ pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>>
 ///
 /// The window has the input (old and new) and output histories, restricted to the window's keys.
 pub struct ReduceWindow<G, I, T, RIn, ROut> {
-    /// The window's group tokens: a contiguous, ascending slice of the retire's `changed` keys.
+    /// The window's group tokens: a contiguous, ascending run of the groups needing work.
     pub keys: Vec<G>,
+    /// Novel-batch time support for `keys`: `(group, time)` sorted by group, drawn from the
+    /// instance's `input_batches` alone.
+    ///
+    /// These seed the interesting-time discovery, and must be the novel batches' own times,
+    /// not a view consolidated with history: compaction may advance a history record onto a
+    /// novel time, where consolidation cancels the novel update and its interesting time is
+    /// missed (see `discover_times`' seeding contract).
+    pub seeds: Vec<(G, T)>,
     /// Input presentation for `keys`, sorted & consolidated by `((group, token), time)`.
     pub input: ProxyBridge<G, I, T, RIn>,
     /// Output-history presentation for `keys`, same ordering.
@@ -44,9 +52,10 @@ pub struct ReduceWindow<G, I, T, RIn, ROut> {
 
 /// The reduce backend: value semantics for a proxy-space reduction, driven by [`ProxyReduceTactic`].
 ///
-/// The protocol is currently (temporarily) for each round of invocation:
-/// `seed_times begin [ next_window reduce_correction* emit ]* finish`
-/// This should be improved to put the `seed_times` in the per-window loop, or remove it entirely.
+/// The protocol for each round of invocation:
+/// `begin [ next_window reduce_corrections* emit ]* finish`
+/// Seed times arrive per window (on [`ReduceWindow`]), so nothing is staged for the whole
+/// invocation: peak state is one window's presentations.
 pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
     /// The group token: names the granule of independence.
     ///
@@ -60,11 +69,6 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// Diff type of the output.
     type ROut: Semigroup + 'static;
 
-    /// Group tokens and associated times in the instance's novel input batches.
-    ///
-    /// This is used (with held times) to seed the interesting times for each key.
-    fn seed_times(&self, instance: &ReduceInstance<'_, B1, B2>) -> Vec<(Self::Group, B1::Time)>;
-
     /// Initiate a session to create batches for these descriptions, which span `[lower, upper)`.
     ///
     /// It is the backend's job to prepare output batches for each of these descriptions.
@@ -72,12 +76,19 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// work in progress, until `finish()` is called.
     fn begin(&mut self, tiles: &[Description<B1::Time>]);
 
-    /// Produce the next window, resticted to `changed[cursor..]`, and update `cursor` to track.
+    /// Produce the next window of groups needing work, and advance `cursor`.
+    ///
+    /// Windows must cover contiguous, strictly ascending group ranges, and together must cover
+    /// the union of the groups appearing in the instance's novel `input_batches` and the
+    /// supplied `pending` groups (carried interesting times from earlier retires; such a group
+    /// must appear in `keys` even when it has no novel input). `cursor` indexes `pending`:
+    /// the backend advances it past the pending entries its window covers, and tracks its own
+    /// progress through the novel groups (e.g. positions in its batches).
     ///
     /// The size of the window is up to the backend, where the window should be large enough to
     /// amortize the crossings between the harness and the backend. The proxy bridges for the
     /// whole window will be active at the same time, so tighter windows reduce the required state.
-    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, changed: &[Self::Group], cursor: &mut usize) -> Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>;
+    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, pending: &[Self::Group], cursor: &mut usize) -> Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>;
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
     ///
@@ -136,22 +147,18 @@ where
             return (Vec::new(), held.clone());
         }
 
+        // Nothing to do when there are no novel updates and no carried times.
+        if self.pending.is_empty() && input_batches.iter().all(|b| b.len() == 0) {
+            return (Vec::new(), Antichain::new());
+        }
+        let pending_keys: Vec<Bk::Group> = self.pending.keys().copied().collect();
+
         let instance = ReduceInstance {
             source_batches: &source_batches,
             input_batches: &input_batches,
             output_batches: &output_batches,
             lower: lower.borrow(),
         };
-
-        let seeds = self.backend.seed_times(&instance);
-        debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "seed_times must be sorted by group token");
-        let mut changed: BTreeSet<Bk::Group> = seeds.iter().map(|(k, _)| *k).collect();
-        changed.extend(self.pending.keys().copied());
-        if changed.is_empty() {
-            self.pending.clear();
-            return (Vec::new(), Antichain::new());
-        }
-        let changed: Vec<Bk::Group> = changed.into_iter().collect();
 
         // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
         // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
@@ -162,7 +169,6 @@ where
         let mut new_pending: BTreeMap<Bk::Group, Vec<B1::Time>> = BTreeMap::new();
 
         let mut cursor = 0usize;
-        let mut ns = 0usize;
 
         // Retire-wide reusable scratch (cleared per window/round/moment, not reallocated). See the
         // profiling note on `DiscoverScratch`: fresh per-key/per-round `Vec`s were the dominant cost.
@@ -180,11 +186,14 @@ where
         let mut moments_scratch: Vec<B1::Time> = Vec::new();
         let mut pended_scratch: Vec<B1::Time> = Vec::new();
 
-        while let Some(window) = self.backend.next_window(&instance, &changed, &mut cursor) {
+        while let Some(window) = self.backend.next_window(&instance, &pending_keys, &mut cursor) {
             let p_in = &window.input;
             let p_out = &window.output;
+            let seeds = &window.seeds;
             super::debug_assert_sorted_bridge(p_in, "next_window.input");
             super::debug_assert_sorted_bridge(p_out, "next_window.output");
+            debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "window seeds must be sorted by group token");
+            let mut ns = 0usize;
 
             for deltas in tile_deltas.iter_mut() { deltas.clear(); }
 
@@ -345,6 +354,7 @@ where
             }
         }
 
+        debug_assert_eq!(cursor, pending_keys.len(), "next_window must cover all pending groups before finishing");
         self.pending = new_pending;
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
         let mut frontier = Antichain::new();

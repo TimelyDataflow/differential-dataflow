@@ -40,6 +40,7 @@ pub trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C> {
 /// The fresh batch's times all lie at or beyond the capability, so its side is not advanced by the
 /// capability's meet; the opposing accumulated trace is. The marker also selects which queue a unit
 /// joins, so a burst on one input cannot starve the other.
+#[derive(Clone, Copy, Debug)]
 pub enum Fresh {
     /// The first input (`B0`) contributed the fresh batch.
     Input0,
