@@ -187,6 +187,7 @@ where
         let mut cur_out: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
         let mut moments_scratch: Vec<B1::Time> = Vec::new();
         let mut pended_scratch: Vec<B1::Time> = Vec::new();
+        let mut live: Vec<usize> = Vec::new();
 
         while let Some(window) = self.backend.next_window(&instance, &pending_keys) {
             let p_in = &window.input;
@@ -196,15 +197,18 @@ where
             super::debug_assert_sorted_bridge(p_out, "next_window.output");
             debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "window seeds must be sorted by group token");
             debug_assert!(window.keys.windows(2).all(|w| w[0] < w[1]), "window keys must be strictly ascending");
-            debug_assert!(
-                prev_high.map_or(true, |h| window.keys.first().map_or(true, |k| *k > h)),
-                "next_window: windows must present strictly ascending group ranges",
-            );
-            if let Some(last) = window.keys.last() { prev_high = Some(*last); }
+            // Progress guard: an empty window cannot advance the watermark, so a backend
+            // emitting them repeatedly would spin this loop forever inside one retire.
+            assert!(!window.keys.is_empty(), "next_window: windows must list at least one key");
+            super::assert_ascending_window(&mut prev_high, window.keys.first().copied(), window.keys.last().copied(), "reduce");
             // Pending coverage: windows ascend, so a pending group below a presented key can
             // never appear later; it must have been included in this or an earlier window.
+            // A hard assert, not debug: a skipped pending group's carried times would be
+            // silently dropped below, collapsing the frontier and releasing the capability
+            // that its deferred correction needs — permanent wrong output. The walk is a few
+            // integer compares per key, noise against the per-key reduction work.
             for key in &window.keys {
-                debug_assert!(
+                assert!(
                     pending_keys.get(pend_idx).map_or(true, |p| p >= key),
                     "next_window skipped a pending group",
                 );
@@ -223,15 +227,19 @@ where
             let mut n_states = 0usize;
             let (mut is, mut os) = (0usize, 0usize);
             for &key in &window.keys {
-                while is < p_in.len() && p_in[is].0.0 < key { is += 1; }
+                // Strays are hard errors: a record or seed whose group is below the current
+                // key belongs to no listed key (earlier keys consumed their runs), and the
+                // old skip-loops would have silently discarded it — wrong output with no
+                // diagnostic. Ascending keys make the check one compare per key.
+                assert!(is >= p_in.len() || p_in[is].0.0 >= key, "next_window presented input records for a group absent from keys");
                 let i0 = is;
                 while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
                 let i1 = is;
-                while os < p_out.len() && p_out[os].0.0 < key { os += 1; }
+                assert!(os >= p_out.len() || p_out[os].0.0 >= key, "next_window presented output records for a group absent from keys");
                 let o0 = os;
                 while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
                 let o1 = os;
-                while ns < seeds.len() && seeds[ns].0 < key { ns += 1; }
+                assert!(ns >= seeds.len() || seeds[ns].0 >= key, "next_window presented seeds for a group absent from keys");
                 let n0 = ns;
                 while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
                 let n1 = ns;
@@ -277,6 +285,11 @@ where
                 st.out_replay.load_iter((o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())), st.meets.first());
                 n_states += 1;
             }
+            // Everything presented must have belonged to a listed key (the strays-below
+            // case is asserted per key above; this is the trailing case).
+            assert_eq!(is, p_in.len(), "next_window presented trailing input records past the last key");
+            assert_eq!(os, p_out.len(), "next_window presented trailing output records past the last key");
+            assert_eq!(ns, seeds.len(), "next_window presented trailing seeds past the last key");
 
             // Phase 2 (application): walk all keys' moments in ROUNDS. Each round assembles every
             // active key's one-moment-deep input and current-output accumulations and crosses them in
@@ -285,6 +298,8 @@ where
             // call count at O(max moments over keys), not O(sum of moments), with peak materialization
             // one moment deep per key. `produced` is meet-collapsed each round, exactly like the
             // reference — bounded, not the O(times × values) delta history.
+            live.clear();
+            live.extend(0..n_states);
             loop {
                 batch_keys.clear();
                 in_ends.clear();
@@ -292,12 +307,19 @@ where
                 out_ends.clear();
                 out_all.clear();
                 active.clear();
-                let mut advanced = false;
-                for (si, st) in states[..n_states].iter_mut().enumerate() {
+                // Sweep the live keys, retiring exhausted ones by swap-remove, so each round
+                // costs O(live keys) rather than rescanning every exhausted slot under
+                // moment-count skew (order across keys within a round does not matter —
+                // distinct keys are independent; a key's own moments stay sequential).
+                let mut idx = 0;
+                while idx < live.len() {
+                    let si = live[idx];
+                    let st = &mut states[si];
                     if st.cursor >= st.moments.len() {
+                        live.swap_remove(idx);
                         continue;
                     }
-                    advanced = true;
+                    idx += 1;
                     let j = st.cursor;
                     st.cursor += 1;
                     let t = st.moments[j].clone();
@@ -338,7 +360,7 @@ where
                 // Terminate only when every key is EXHAUSTED — not merely when this round produced no
                 // crossing. A round can be empty because every key's current moment is empty-gated
                 // while keys still have later (non-empty) moments; breaking here would drop them.
-                if !advanced {
+                if live.is_empty() {
                     break;
                 }
                 if batch_keys.is_empty() {
@@ -371,7 +393,10 @@ where
             }
         }
 
-        debug_assert_eq!(pend_idx, pending_keys.len(), "next_window must cover all pending groups before finishing");
+        // Hard for the same reason as the per-window pending walk: an uncovered pending
+        // group's carried times would be dropped and its capability released — permanent
+        // silent wrong output in exchange for one integer compare.
+        assert_eq!(pend_idx, pending_keys.len(), "next_window must cover all pending groups before finishing");
         self.pending = new_pending;
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
         let mut frontier = Antichain::new();

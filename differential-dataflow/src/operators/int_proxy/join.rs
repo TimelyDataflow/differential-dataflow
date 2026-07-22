@@ -68,16 +68,25 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// Produce the next window of the join unit, and advance `cursor`.
     ///
     /// Windows must cover contiguous, strictly ascending group ranges, and together must cover
-    /// every group appearing in the `fresh` side's data; groups absent from either side may be
-    /// omitted (they produce no matches). Both bridges **must be sorted and consolidated** by
-    /// `((group, token), time)`. The backend sizes windows to amortize harness crossings; both
-    /// bridges are live at once, so tighter windows mean less state.
+    /// every group appearing in the `fresh` side's data; groups absent from either side should
+    /// be omitted (they produce no matches, and driving the unit by the fresh side's groups is
+    /// what makes a small fresh batch against a large trace cost `O(fresh)` presentations
+    /// rather than `O(trace)`). Note: the harness is data-oblivious and *cannot check* the
+    /// coverage clause — it checks ordering, progress, and sortedness; missing a fresh group
+    /// silently loses that group's matches. Both bridges **must be sorted and consolidated**
+    /// by `((group, token), time)`. The backend sizes windows to amortize harness crossings;
+    /// both bridges are live at once, so tighter windows mean less state.
     fn next_window(&mut self, instance: &JoinInstance<'_, B0, B1>, fresh: Fresh, cursor: &mut Self::Cursor) -> Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>;
     /// From a list of left and right tokens, and corresponding times and diffs, the output.
-    fn cross(&mut self, instance: &JoinInstance<'_, B0, B1>, left: &[(Self::Group, Self::Token0)], right: &[(Self::Group, Self::Token1)], times: Vec<B0::Time>, diffs: Vec<Self::ROut>) -> Self::Output;
+    ///
+    /// All four slices have equal length, entry `n` describing match `n`. The slices are the
+    /// harness's reused buffers: read them, build the output, and take nothing.
+    fn cross(&mut self, instance: &JoinInstance<'_, B0, B1>, left: &[(Self::Group, Self::Token0)], right: &[(Self::Group, Self::Token1)], times: &[B0::Time], diffs: &[Self::ROut]) -> Self::Output;
 }
 
 /// A proxy-space [`JoinTactic`]: matches records of the presented windows by group token,
+/// crosses matched pairs with joined times and multiplied diffs, and defers all value
+/// semantics to the backend.
 ///
 /// The backend sits behind an `Rc<RefCell<_>>` because prepared units are *lazy*: the join
 /// driver holds each unit's iterator across scheduler activations and drains it under fuel,
@@ -113,8 +122,13 @@ where
             cursor: Bk::Cursor::default(),
             high: None,
             done: false,
+            current: None,
             h0: IdHistory::new(),
             h1: IdHistory::new(),
+            li: Vec::new(),
+            ri: Vec::new(),
+            ot: Vec::new(),
+            od: Vec::new(),
             ready: std::collections::VecDeque::new(),
         })
     }
@@ -123,13 +137,19 @@ where
 /// Update count threshold used to return to the backend with join output to instantiate.
 const JOIN_CHUNK: usize = 1 << 20;
 
-/// One lazy join unit: owns its batches and streams outputs window by window.
+/// One lazy join unit: owns its batches and streams outputs a key at a time.
 ///
-/// Each `next` first drains `ready`; when empty it asks the backend for the next window,
-/// merge-matches the window's two presented runs by group, and cross-products matched
-/// records into output containers — one per ~[`JOIN_CHUNK`] matches, flushed wherever the
-/// batch fills (including mid-key; parity: their concatenation is the single-container
-/// output). Peak state is one window's presentations plus the containers it produced.
+/// Each `next` first drains `ready`; when empty it advances the unit by one step —
+/// fetching the next window if none is in progress, or merge-matching **one** key from
+/// the window in progress and crossing its matched records. Containers are cut at
+/// ~[`JOIN_CHUNK`] matches, wherever that lands (mid-key included; parity: their
+/// concatenation is the single-container output), with any remainder flushed when the
+/// unit exhausts. Peak state is one window's presentations plus one key's containers.
+///
+/// The match buffers (`li`/`ri`/`ot`/`od`) and replay histories (`h0`/`h1`) live on the
+/// unit, reused across keys and windows, so steady-state operation allocates only what
+/// the backend's presentations and outputs themselves require.
+///
 /// `lower` is the capability's time, a lower bound on the fresh side's times, so the
 /// accumulated side loads compacted (see [`JoinInstance`]); every output is produced under
 /// that capability, so advancing loaded times by it leaves the output unchanged.
@@ -144,11 +164,18 @@ struct JoinUnit<B0: BatchReader, B1: BatchReader<Time = B0::Time>, Bk: ProxyJoin
     /// Greatest group presented so far, to enforce ascending windows.
     high: Option<Bk::Group>,
     done: bool,
+    /// The window in progress and the merge positions into its two bridges.
+    current: Option<(JoinWindow<Bk::Group, Bk::Token0, Bk::Token1, B0::Time, Bk::R0, Bk::R1>, usize, usize)>,
     /// Per-key replay histories, held across the unit and reloaded per key (only the >=16/>=16
     /// replay-wave path touches them), so a high-fanout join pays no per-key `IdHistory` alloc.
     h0: IdHistory<Bk::Token0, B0::Time, Bk::R0>,
     h1: IdHistory<Bk::Token1, B0::Time, Bk::R1>,
-    /// Outputs produced by the current window, not yet handed to the driver.
+    /// Match buffers, held across keys and windows; flushed at `JOIN_CHUNK` and at unit end.
+    li: Vec<(Bk::Group, Bk::Token0)>,
+    ri: Vec<(Bk::Group, Bk::Token1)>,
+    ot: Vec<B0::Time>,
+    od: Vec<Bk::ROut>,
+    /// Outputs produced but not yet handed to the driver: at most one key's containers.
     ready: std::collections::VecDeque<Bk::Output>,
 }
 
@@ -160,59 +187,87 @@ where
 {
     type Item = Bk::Output;
     fn next(&mut self) -> Option<Bk::Output> {
-        while self.ready.is_empty() && !self.done {
-            let mut backend = self.backend.borrow_mut();
+        while self.ready.is_empty() {
+            let backend = self.backend.clone();
+            let mut backend = backend.borrow_mut();
             let instance = JoinInstance { batches0: &self.input0, batches1: &self.input1, lower: self.lower.borrow() };
-            match backend.next_window(&instance, self.fresh, &mut self.cursor) {
-                None => { self.done = true; }
-                Some(window) => {
-                    let p0 = &window.input0;
-                    let p1 = &window.input1;
-                    super::debug_assert_sorted_bridge(p0, "next_window.input0");
-                    super::debug_assert_sorted_bridge(p1, "next_window.input1");
-                    debug_assert!(
-                        self.high.map_or(true, |h| p0.first().map_or(true, |r| r.0.0 > h) && p1.first().map_or(true, |r| r.0.0 > h)),
-                        "next_window: windows must present strictly ascending group ranges",
-                    );
-                    if let Some(hi) = p0.last().map(|r| r.0.0).into_iter().chain(p1.last().map(|r| r.0.0)).max() {
-                        self.high = Some(hi);
-                    }
 
-                    // Merge-join the window's runs on group token (both sorted) and cross matched
-                    // pairs. `flush` ships the accumulated batch as a container and resets the
-                    // buffers; `join_key` calls it at each `JOIN_CHUNK` boundary — including
-                    // *within* a high-fanout key's wave — so no single key materializes more than
-                    // a chunk of its cross product.
-                    let ready = &mut self.ready;
-                    let mut flush = |li: &mut Vec<(Bk::Group, Bk::Token0)>, ri: &mut Vec<(Bk::Group, Bk::Token1)>, ot: &mut Vec<B0::Time>, od: &mut Vec<Bk::ROut>| {
-                        ready.push_back(backend.cross(&instance, li.as_slice(), ri.as_slice(), std::mem::take(ot), std::mem::take(od)));
-                        li.clear();
-                        ri.clear();
-                    };
+            // Exhausted: flush any straggling matches as the final container.
+            if self.done && self.current.is_none() {
+                if self.li.is_empty() {
+                    return None;
+                }
+                let out = backend.cross(&instance, &self.li, &self.ri, &self.ot, &self.od);
+                self.li.clear();
+                self.ri.clear();
+                self.ot.clear();
+                self.od.clear();
+                return Some(out);
+            }
 
-                    let (mut li, mut ri) = (Vec::new(), Vec::new());
-                    let (mut ot, mut od) = (Vec::new(), Vec::new());
-                    let (mut i, mut j) = (0usize, 0usize);
-                    while i < p0.len() && j < p1.len() {
-                        let (ki, kj) = (p0[i].0.0, p1[j].0.0);
-                        if ki < kj {
-                            i += 1;
-                        } else if kj < ki {
-                            j += 1;
-                        } else {
-                            let mut e0 = i;
-                            while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
-                            let mut e1 = j;
-                            while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
-                            join_key(ki, p0, i..e0, p1, j..e1, &mut self.h0, &mut self.h1, &mut li, &mut ri, &mut ot, &mut od, &mut flush);
-                            i = e0;
-                            j = e1;
-                        }
+            // Fetch the next window if none is in progress.
+            if self.current.is_none() {
+                match backend.next_window(&instance, self.fresh, &mut self.cursor) {
+                    None => {
+                        self.done = true;
                     }
-                    if !li.is_empty() {
-                        flush(&mut li, &mut ri, &mut ot, &mut od);
+                    Some(window) => {
+                        super::debug_assert_sorted_bridge(&window.input0, "next_window.input0");
+                        super::debug_assert_sorted_bridge(&window.input1, "next_window.input1");
+                        // Progress guard: an empty window cannot advance the watermark, so a
+                        // backend emitting them repeatedly would spin this loop forever. Skip
+                        // fully-cancelled ranges internally, or return `None`.
+                        assert!(
+                            !window.input0.is_empty() || !window.input1.is_empty(),
+                            "next_window: windows must present at least one record",
+                        );
+                        let first = window.input0.first().map(|r| r.0.0).into_iter().chain(window.input1.first().map(|r| r.0.0)).min();
+                        let last = window.input0.last().map(|r| r.0.0).into_iter().chain(window.input1.last().map(|r| r.0.0)).max();
+                        super::assert_ascending_window(&mut self.high, first, last, "join");
+                        self.current = Some((window, 0, 0));
                     }
                 }
+                continue;
+            }
+
+            // Merge-match at most ONE key from the window in progress, so `ready` holds at
+            // most one key's containers. `flush` ships the accumulated batch as a container
+            // and resets the buffers; `join_key` calls it at each `JOIN_CHUNK` boundary —
+            // including *within* a high-fanout key's wave — so no single key materializes
+            // more than a chunk of its cross product at a time in the match buffers.
+            let (window, i, j) = self.current.as_mut().unwrap();
+            let p0 = &window.input0;
+            let p1 = &window.input1;
+            let (h0, h1) = (&mut self.h0, &mut self.h1);
+            let (li, ri, ot, od) = (&mut self.li, &mut self.ri, &mut self.ot, &mut self.od);
+            let ready = &mut self.ready;
+            let mut flush = |li: &mut Vec<(Bk::Group, Bk::Token0)>, ri: &mut Vec<(Bk::Group, Bk::Token1)>, ot: &mut Vec<B0::Time>, od: &mut Vec<Bk::ROut>| {
+                ready.push_back(backend.cross(&instance, li.as_slice(), ri.as_slice(), ot.as_slice(), od.as_slice()));
+                li.clear();
+                ri.clear();
+                ot.clear();
+                od.clear();
+            };
+            let mut matched = false;
+            while !matched && *i < p0.len() && *j < p1.len() {
+                let (ki, kj) = (p0[*i].0.0, p1[*j].0.0);
+                if ki < kj {
+                    *i += 1;
+                } else if kj < ki {
+                    *j += 1;
+                } else {
+                    let mut e0 = *i;
+                    while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
+                    let mut e1 = *j;
+                    while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
+                    join_key(ki, p0, *i..e0, p1, *j..e1, h0, h1, li, ri, ot, od, &mut flush);
+                    *i = e0;
+                    *j = e1;
+                    matched = true;
+                }
+            }
+            if *i >= p0.len() || *j >= p1.len() {
+                self.current = None;
             }
         }
         self.ready.pop_front()

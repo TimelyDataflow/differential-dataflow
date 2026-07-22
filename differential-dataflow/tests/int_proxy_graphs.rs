@@ -55,6 +55,9 @@ fn advance(t: Time, lower: AntichainRef<'_, Time>) -> Time {
 }
 
 /// The next group at or after the per-batch positions `pos` into `batches`.
+///
+/// Test-grade: rescans every batch head per group. A real backend should k-way merge
+/// with a heap over batch cursors.
 fn next_group(batches: &[GraphBatch], pos: &[usize]) -> Option<u32> {
     batches
         .iter()
@@ -85,7 +88,6 @@ fn drain_group(
 /// `usize` could not carry — the finding that motivated `type Cursor`.
 #[derive(Default)]
 struct GraphJoinCursor {
-    started: bool,
     pos0: Vec<usize>,
     pos1: Vec<usize>,
 }
@@ -109,38 +111,58 @@ impl ProxyJoinBackend<GraphBatch, GraphBatch> for GraphJoinBackend {
     fn next_window(
         &mut self,
         instance: &JoinInstance<'_, GraphBatch, GraphBatch>,
-        _fresh: Fresh,
+        fresh: Fresh,
         cursor: &mut GraphJoinCursor,
     ) -> Option<JoinWindow<u32, Edge, Edge, Time, Diff, Diff>> {
-        if !cursor.started {
-            cursor.started = true;
-            cursor.pos0 = vec![0; instance.batches0.len()];
-            cursor.pos1 = vec![0; instance.batches1.len()];
-        }
-        let mut input0 = Vec::new();
-        let mut input1 = Vec::new();
-        let mut groups = 0;
-        while groups < self.window {
-            let g0 = next_group(instance.batches0, &cursor.pos0);
-            let g1 = next_group(instance.batches1, &cursor.pos1);
-            let g = match (g0, g1) {
-                (None, None) => break,
-                (a, b) => a.into_iter().chain(b).min().unwrap(),
+        cursor.pos0.resize(instance.batches0.len(), 0);
+        cursor.pos1.resize(instance.batches1.len(), 0);
+        // Drive by the fresh side's groups: matches need both sides, so the accumulated
+        // side's other groups are skipped (never presented) — a small fresh batch against
+        // a large trace costs O(fresh) presentations, and an empty fresh side is free.
+        let (fresh_b, other_b) = match fresh {
+            Fresh::Input0 => (instance.batches0, instance.batches1),
+            Fresh::Input1 => (instance.batches1, instance.batches0),
+        };
+        loop {
+            let mut fresh_run = Vec::new();
+            let mut other_run = Vec::new();
+            let mut groups = 0;
+            while groups < self.window {
+                let (fresh_pos, other_pos) = match fresh {
+                    Fresh::Input0 => (&mut cursor.pos0, &mut cursor.pos1),
+                    Fresh::Input1 => (&mut cursor.pos1, &mut cursor.pos0),
+                };
+                let Some(g) = next_group(fresh_b, fresh_pos) else { break };
+                groups += 1;
+                drain_group(fresh_b, fresh_pos, g, |e, t, r| {
+                    fresh_run.push(((g, e), advance(t, instance.lower), r));
+                });
+                // Skip the accumulated side below `g`, then drain its matching group.
+                for (b, p) in other_b.iter().zip(other_pos.iter_mut()) {
+                    while *p < b.updates.len() && b.updates[*p].0 .0 < g {
+                        *p += 1;
+                    }
+                }
+                drain_group(other_b, other_pos, g, |e, t, r| {
+                    other_run.push(((g, e), advance(t, instance.lower), r));
+                });
+            }
+            if groups == 0 {
+                return None;
+            }
+            consolidate_updates(&mut fresh_run);
+            consolidate_updates(&mut other_run);
+            // A fully-cancelled quota presents nothing; keep going rather than emit an
+            // empty window (the harness's progress guard forbids those).
+            if fresh_run.is_empty() && other_run.is_empty() {
+                continue;
+            }
+            let (input0, input1) = match fresh {
+                Fresh::Input0 => (fresh_run, other_run),
+                Fresh::Input1 => (other_run, fresh_run),
             };
-            groups += 1;
-            drain_group(instance.batches0, &mut cursor.pos0, g, |e, t, r| {
-                input0.push(((g, e), advance(t, instance.lower), r));
-            });
-            drain_group(instance.batches1, &mut cursor.pos1, g, |e, t, r| {
-                input1.push(((g, e), advance(t, instance.lower), r));
-            });
+            return Some(JoinWindow { input0, input1 });
         }
-        if groups == 0 {
-            return None;
-        }
-        consolidate_updates(&mut input0);
-        consolidate_updates(&mut input1);
-        Some(JoinWindow { input0, input1 })
     }
 
     fn cross(
@@ -148,15 +170,15 @@ impl ProxyJoinBackend<GraphBatch, GraphBatch> for GraphJoinBackend {
         _instance: &JoinInstance<'_, GraphBatch, GraphBatch>,
         left: &[(u32, Edge)],
         right: &[(u32, Edge)],
-        times: Vec<Time>,
-        diffs: Vec<Diff>,
+        times: &[Time],
+        diffs: &[Diff],
     ) -> Self::Output {
         // Self-redeeming tokens: the output is built from the tokens alone.
         left.iter()
             .zip(right)
             .zip(times)
             .zip(diffs)
-            .map(|(((l, r), t), d)| (l.1, r.1, t, d))
+            .map(|(((l, r), t), d)| (l.1, r.1, *t, *d))
             .collect()
     }
 }
@@ -210,6 +232,52 @@ fn join_matches_naive() {
     }
 }
 
+#[test]
+fn interleaved_units_share_backend() {
+    // Two units prepped from one tactic and drained alternately: the scenario that
+    // motivated per-unit `Cursor` state and the shared `Rc<RefCell>` backend — the
+    // driver holds half-drained units from both queues and polls them under fuel.
+    let a = vec![
+        batch(vec![((0, 1), 0, 1), ((1, 5), 0, 1), ((2, 2), 1, 1)], 0, 2),
+        batch(vec![((3, 3), 1, 1)], 0, 2),
+    ];
+    let b = vec![batch(vec![((0, 7), 1, 1), ((2, 6), 0, 1), ((3, 8), 1, 1)], 0, 2)];
+    let c = vec![batch(vec![((5, 1), 0, 1), ((6, 2), 0, 1)], 0, 2)];
+    let d = vec![
+        batch(vec![((5, 9), 1, 1), ((6, 4), 0, 1)], 0, 2),
+        batch(vec![((5, 9), 1, 1)], 0, 2),
+    ];
+
+    let all = |bs: &[GraphBatch]| bs.iter().flat_map(|b| b.updates.iter().cloned()).collect::<Vec<_>>();
+    let expected1 = naive_join(&all(&a), &all(&b));
+    let expected2 = naive_join(&all(&c), &all(&d));
+
+    let mut tactic = ProxyJoinTactic::new(GraphJoinBackend { window: 1 });
+    let mut u1 = tactic.prep(a, b, Fresh::Input0, 0);
+    let mut u2 = tactic.prep(c, d, Fresh::Input1, 0);
+    let mut got1: Vec<((Edge, Edge), Time, Diff)> = Vec::new();
+    let mut got2: Vec<((Edge, Edge), Time, Diff)> = Vec::new();
+    let (mut done1, mut done2) = (false, false);
+    while !done1 || !done2 {
+        if !done1 {
+            match u1.next() {
+                Some(out) => got1.extend(out.into_iter().map(|(l, r, t, d)| ((l, r), t, d))),
+                None => done1 = true,
+            }
+        }
+        if !done2 {
+            match u2.next() {
+                Some(out) => got2.extend(out.into_iter().map(|(l, r, t, d)| ((l, r), t, d))),
+                None => done2 = true,
+            }
+        }
+    }
+    consolidate_updates(&mut got1);
+    consolidate_updates(&mut got2);
+    assert_eq!(got1, expected1);
+    assert_eq!(got2, expected2);
+}
+
 // -------------------------------------------------------------- reduce backend
 
 /// Counts edges per source: the output value for source `s` is `(s, count)`.
@@ -219,7 +287,6 @@ struct GraphReduceBackend {
     // Session state, bracketed by `begin`/`finish`.
     tiles: Vec<Description<Time>>,
     emitted: Vec<Vec<(Edge, Time, Diff)>>,
-    started: bool,
     pos_source: Vec<usize>,
     pos_input: Vec<usize>,
     pos_output: Vec<usize>,
@@ -232,7 +299,6 @@ impl GraphReduceBackend {
             window,
             tiles: Vec::new(),
             emitted: Vec::new(),
-            started: false,
             pos_source: Vec::new(),
             pos_input: Vec::new(),
             pos_output: Vec::new(),
@@ -250,7 +316,9 @@ impl ProxyReduceBackend<GraphBatch, GraphBatch> for GraphReduceBackend {
     fn begin(&mut self, tiles: &[Description<Time>]) {
         self.tiles = tiles.to_vec();
         self.emitted = vec![Vec::new(); tiles.len()];
-        self.started = false;
+        self.pos_source.clear();
+        self.pos_input.clear();
+        self.pos_output.clear();
         self.pend_idx = 0;
     }
 
@@ -259,12 +327,9 @@ impl ProxyReduceBackend<GraphBatch, GraphBatch> for GraphReduceBackend {
         instance: &ReduceInstance<'_, GraphBatch, GraphBatch>,
         pending: &[u32],
     ) -> Option<ReduceWindow<u32, Edge, Time, Diff, Diff>> {
-        if !self.started {
-            self.started = true;
-            self.pos_source = vec![0; instance.source_batches.len()];
-            self.pos_input = vec![0; instance.input_batches.len()];
-            self.pos_output = vec![0; instance.output_batches.len()];
-        }
+        self.pos_source.resize(instance.source_batches.len(), 0);
+        self.pos_input.resize(instance.input_batches.len(), 0);
+        self.pos_output.resize(instance.output_batches.len(), 0);
         let mut keys = Vec::new();
         let mut seeds = Vec::new();
         let mut input = Vec::new();

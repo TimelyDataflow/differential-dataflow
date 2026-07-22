@@ -1,4 +1,4 @@
-//! Backend-agnostic operator tactics using integer proxies.
+//! Backend-agnostic operator tactics using token proxies.
 //!
 //! The tactics are intended to support custom operator implementations without rebuilding
 //! the non-trivial and often non-obvious time-based logic that supports them.
@@ -9,9 +9,9 @@
 //! backend-chosen `Copy + Ord` types — commonly `u64` hashes, but exact values for small
 //! data (`G = u32` node ids, tokens `(u32, u32)` edges), wider hashes for insurance, or
 //! dense ids where exactness is required.
-//! The tactics first elicit proxy identifiers from the backends, perform their necessary time
-//! and difference based computations to stage integer collections, and then re-invoke the
-//! backends with those same identifiers to produce the necessary output.
+//! The tactics first elicit proxy tokens from the backends, perform their necessary time
+//! and difference based computations to stage token collections, and then re-invoke the
+//! backends with those same tokens to produce the necessary output.
 //!
 //! The backend is oblivious to the navigation of time, and the operator to the backend's
 //! implementation.
@@ -72,6 +72,22 @@ pub(crate) fn debug_assert_sorted_bridge<G: Ord, I: Ord, T: Ord, R>(bridge: &Pro
         "{}: a presented bridge must be sorted & consolidated by ((group, token), time)",
         who,
     );
+}
+
+/// Contract helper: `first`/`last` are a window's least and greatest group; the window
+/// must sit strictly above the `high` watermark of everything already presented, which
+/// is then advanced.
+///
+/// A hard assert, not a debug assert: the checks are O(1) per window, and the failure
+/// class they catch — a backend presenting overlapping or regressed windows — corrupts
+/// output silently (dropped matches, doubled corrections) rather than crashing.
+pub(crate) fn assert_ascending_window<G: Copy + Ord>(high: &mut Option<G>, first: Option<G>, last: Option<G>, who: &str) {
+    if let (Some(h), Some(f)) = (*high, first) {
+        assert!(f > h, "{}: windows must present strictly ascending group ranges", who);
+    }
+    if last.is_some() {
+        *high = last;
+    }
 }
 
 pub use join::{JoinInstance, JoinWindow, ProxyJoinBackend, ProxyJoinTactic};
