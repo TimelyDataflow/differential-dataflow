@@ -188,6 +188,14 @@ where
         let mut moments_scratch: Vec<B1::Time> = Vec::new();
         let mut pended_scratch: Vec<B1::Time> = Vec::new();
         let mut live: Vec<usize> = Vec::new();
+        // Fast-path staging: keys evaluated directly from their slices, one batched
+        // `reduce_corrections` for all of them per window (round zero, in effect).
+        let mut fast_keys: Vec<Bk::Group> = Vec::new();
+        let mut fast_times: Vec<B1::Time> = Vec::new();
+        let mut fast_in_ends: Vec<usize> = Vec::new();
+        let mut fast_in_all: Vec<(Bk::Token, Bk::RIn)> = Vec::new();
+        let mut fast_out_ends: Vec<usize> = Vec::new();
+        let mut fast_out_all: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
 
         while let Some(window) = self.backend.next_window(&instance, &pending_keys) {
             let p_in = &window.input;
@@ -244,6 +252,41 @@ where
                 while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
                 let n1 = ns;
 
+                // Fast path: no pending, one distinct seed time `t*`, and every presented
+                // input/output time at-or-before it. Then `discover_times` would compute
+                // moments == [t*] with nothing pended (history times before `t*` pass
+                // without becoming moments, and no join can escape `t*`), so discovery
+                // and the replay loads are skipped and the key is evaluated directly
+                // from its slices. This is the steady-state snapshot shape, where the
+                // full apparatus was measured as the dominant per-key cost.
+                if self.pending.get(&key).is_none() {
+                    if n0 == n1 {
+                        // No seeds and no pending: no interesting times; nothing to do.
+                        continue;
+                    }
+                    let t_star = seeds[n0].1.clone();
+                    if seeds[n0..n1].iter().all(|s| s.1 == t_star)
+                        && p_in[i0..i1].iter().all(|x| x.1.less_equal(&t_star))
+                        && p_out[o0..o1].iter().all(|x| x.1.less_equal(&t_star))
+                    {
+                        in_accum.clear();
+                        in_accum.extend(p_in[i0..i1].iter().map(|x| (x.0 .1, x.2.clone())));
+                        crate::consolidation::consolidate(&mut in_accum);
+                        cur_out.clear();
+                        cur_out.extend(p_out[o0..o1].iter().map(|x| (x.0 .1, x.2.clone())));
+                        crate::consolidation::consolidate(&mut cur_out);
+                        if !in_accum.is_empty() || !cur_out.is_empty() {
+                            fast_keys.push(key);
+                            fast_times.push(t_star);
+                            fast_in_all.append(&mut in_accum);
+                            fast_in_ends.push(fast_in_all.len());
+                            fast_out_all.append(&mut cur_out);
+                            fast_out_ends.push(fast_out_all.len());
+                        }
+                        continue;
+                    }
+                }
+
                 moments_scratch.clear();
                 pended_scratch.clear();
                 {
@@ -290,6 +333,29 @@ where
             assert_eq!(is, p_in.len(), "next_window presented trailing input records past the last key");
             assert_eq!(os, p_out.len(), "next_window presented trailing output records past the last key");
             assert_eq!(ns, seeds.len(), "next_window presented trailing seeds past the last key");
+
+            // Round zero: the window's fast-path keys, one batched crossing. Their
+            // corrections go straight to the tiles — a fast key has no later moments.
+            if !fast_keys.is_empty() {
+                let (corr, corr_ends) = self.backend.reduce_corrections(&fast_keys, &fast_in_ends, &fast_in_all, &fast_out_ends, &fast_out_all);
+                let mut cstart = 0usize;
+                for (fi, t) in fast_times.iter().enumerate() {
+                    let cend = corr_ends[fi];
+                    if cstart != cend {
+                        let idx = held_elems.iter().rposition(|h| h.less_equal(t)).expect("no held capability <= fast-path time");
+                        for (vid, d) in &corr[cstart..cend] {
+                            tile_deltas[idx].push(((fast_keys[fi], *vid), t.clone(), d.clone()));
+                        }
+                    }
+                    cstart = cend;
+                }
+                fast_keys.clear();
+                fast_times.clear();
+                fast_in_ends.clear();
+                fast_in_all.clear();
+                fast_out_ends.clear();
+                fast_out_all.clear();
+            }
 
             // Phase 2 (application): walk all keys' moments in ROUNDS. Each round assembles every
             // active key's one-moment-deep input and current-output accumulations and crosses them in

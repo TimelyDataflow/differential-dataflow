@@ -101,6 +101,64 @@ fn interleaved_units_share_backend() {
     assert_eq!(got2, expected2);
 }
 
+/// Per-time count oracle shared by the reduce tests.
+fn assert_counts(source: &[GraphBatch], outputs: &[GraphBatch], t: Time, label: &str) {
+    let input_acc = accumulate(source.iter().flat_map(|b| b.updates.iter().cloned()), &t);
+    let mut counts: BTreeMap<u32, Diff> = BTreeMap::new();
+    for ((src, _dst), d) in &input_acc {
+        *counts.entry(*src).or_insert(0) += d;
+    }
+    let mut expected: Vec<(Edge, Diff)> = Vec::new();
+    for (src, c) in counts {
+        assert!(c >= 0);
+        if c > 0 {
+            expected.push(((src, c as u32), 1));
+        }
+    }
+    let got = accumulate(outputs.iter().flat_map(|b| b.updates.iter().cloned()), &t);
+    assert_eq!(got, expected, "{label} at time={t}");
+}
+
+#[test]
+fn reduce_multitime_rounds() {
+    // Intervals of width two, two distinct times per batch: under total order this
+    // exercises the slow (discovery) path even with the single-moment fast path in
+    // place — a key with two distinct seed times cannot take it — and mixes fast
+    // and slow keys within one window.
+    let rounds: Vec<(Vec<(Edge, Time, Diff)>, Time, Time)> = vec![
+        (vec![((0, 1), 0, 1), ((0, 2), 1, 1), ((1, 5), 0, 1), ((1, 6), 1, 1)], 0, 2),
+        (vec![((0, 3), 2, 1), ((1, 5), 3, -1), ((2, 7), 2, 1), ((2, 8), 3, 1)], 2, 4),
+    ];
+    for window in [1, 100] {
+        let mut tactic = ProxyReduceTactic::new(EdgeReduceBackend::new(window));
+        let mut source: Vec<GraphBatch> = Vec::new();
+        let mut outputs: Vec<GraphBatch> = Vec::new();
+        for (updates, lo, hi) in rounds.iter() {
+            let input = batch(updates.clone(), *lo, *hi);
+            let lower = Antichain::from_elem(*lo);
+            let upper = Antichain::from_elem(*hi);
+            let held = Antichain::from_elem(*lo);
+            let (produced, frontier) = tactic.retire(
+                source.clone(),
+                outputs.clone(),
+                vec![input.clone()],
+                &lower,
+                &upper,
+                &held,
+            );
+            assert!(frontier.is_empty(), "total order should defer nothing");
+            for (time, b) in produced {
+                assert!(held.elements().contains(&time));
+                outputs.push(b);
+            }
+            source.push(input);
+        }
+        for t in 0..4u64 {
+            assert_counts(&source, &outputs, t, &format!("multitime window={window}"));
+        }
+    }
+}
+
 #[test]
 fn reduce_counts_match_naive() {
     // Rounds of edge updates, including deletions that drop a source's count to zero
