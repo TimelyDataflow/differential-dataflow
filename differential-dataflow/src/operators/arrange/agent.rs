@@ -568,6 +568,15 @@ pub mod trace_box {
         ///
         /// This is used to inspect batches for purposes of resource accounting in external systems.
         pub fn trace(&self) -> &Tr { &self.trace }
+        /// The accumulated logical-compaction holds of all referees of the trace.
+        ///
+        /// This is the `MutableAntichain` whose frontier the trace compacts to. Exposed so an
+        /// external referee (for example a cross-runtime publisher) can compute the frontier the
+        /// trace would compact to without its own hold, by cloning this and subtracting that hold.
+        pub fn logical_compaction(&self) -> &MutableAntichain<Tr::Time> { &self.logical_compaction }
+        /// The accumulated physical-compaction holds of all referees of the trace. See
+        /// [`TraceBox::logical_compaction`].
+        pub fn physical_compaction(&self) -> &MutableAntichain<Tr::Time> { &self.physical_compaction }
         /// Replaces elements of `lower` with those of `upper`.
         #[inline]
         pub fn adjust_logical_compaction(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
