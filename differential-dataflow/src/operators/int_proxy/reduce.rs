@@ -1,7 +1,7 @@
 //! The proxy reduce framework.
 //!
-//! A conventional differential reduce against `(u64, u64)`, where the backend supplies the
-//! implementation of the interpretation of the integers.
+//! A conventional differential reduce against `(group, token)` values, where the backend
+//! supplies the implementation of the interpretation of the tokens.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,16 +30,16 @@ pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>>
     pub lower: AntichainRef<'a, B1::Time>,
 }
 
-/// One window of a retire's changed keys: a bounded, hash-contiguous snip the backend sizes.
+/// One window of a retire's changed keys: a bounded, group-contiguous snip the backend sizes.
 ///
 /// The window has the input (old and new) and output histories, restricted to the window's keys.
-pub struct ReduceWindow<T, RIn, ROut> {
-    /// The window's key hashes: a contiguous, ascending slice of the retire's `changed` keys.
-    pub keys: Vec<u64>,
-    /// Input presentation for `keys`, sorted & consolidated by `((key_hash, value_id), time)`.
-    pub input: ProxyBridge<T, RIn>,
+pub struct ReduceWindow<G, I, T, RIn, ROut> {
+    /// The window's group tokens: a contiguous, ascending slice of the retire's `changed` keys.
+    pub keys: Vec<G>,
+    /// Input presentation for `keys`, sorted & consolidated by `((group, token), time)`.
+    pub input: ProxyBridge<G, I, T, RIn>,
     /// Output-history presentation for `keys`, same ordering.
-    pub output: ProxyBridge<T, ROut>,
+    pub output: ProxyBridge<G, I, T, ROut>,
 }
 
 /// The reduce backend: value semantics for a proxy-space reduction, driven by [`ProxyReduceTactic`].
@@ -48,15 +48,22 @@ pub struct ReduceWindow<T, RIn, ROut> {
 /// `seed_times begin [ next_window reduce_correction* emit ]* finish`
 /// This should be improved to put the `seed_times` in the per-window loop, or remove it entirely.
 pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
+    /// The group token: names the granule of independence.
+    ///
+    /// Commonly a `u64` key hash; exactly the key for small `Copy` keys. `'static` because
+    /// groups are the one token that crosses invocations (pending times are held per group).
+    type Group: Copy + Ord + 'static;
+    /// The value token, scoped to one invocation; output values share the same token space.
+    type Token: Copy + Ord;
     /// Diff type presented for the input.
     type RIn: Semigroup;
     /// Diff type of the output.
     type ROut: Semigroup + 'static;
 
-    /// Hash keys and associated times in the instance's novel input batches.
+    /// Group tokens and associated times in the instance's novel input batches.
     ///
     /// This is used (with held times) to seed the interesting times for each key.
-    fn seed_times(&self, instance: &ReduceInstance<'_, B1, B2>) -> Vec<(u64, B1::Time)>;
+    fn seed_times(&self, instance: &ReduceInstance<'_, B1, B2>) -> Vec<(Self::Group, B1::Time)>;
 
     /// Initiate a session to create batches for these descriptions, which span `[lower, upper)`.
     ///
@@ -70,7 +77,7 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// The size of the window is up to the backend, where the window should be large enough to
     /// amortize the crossings between the harness and the backend. The proxy bridges for the
     /// whole window will be active at the same time, so tighter windows reduce the required state.
-    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, changed: &[u64], cursor: &mut usize) -> Option<ReduceWindow<B1::Time, Self::RIn, Self::ROut>>;
+    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, changed: &[Self::Group], cursor: &mut usize) -> Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>;
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
     ///
@@ -79,38 +86,38 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// with its desires. The `usize` integers upper bound the range for the corresponding key.
     fn reduce_corrections(
         &mut self,
-        keys: &[u64],
+        keys: &[Self::Group],
         in_ends: &[usize],
-        input: &[(u64, Self::RIn)],
+        input: &[(Self::Token, Self::RIn)],
         out_ends: &[usize],
-        output: &[(u64, Self::ROut)],
-    ) -> (Vec<(u64, Self::ROut)>, Vec<usize>);
+        output: &[(Self::Token, Self::ROut)],
+    ) -> (Vec<(Self::Token, Self::ROut)>, Vec<usize>);
 
     /// Commit to a collection of updates at a specific batch in progress.
     ///
     /// The `tile: usize` indexes the list of descriptions provided to `begin()`, and these updates
     /// are aimed at that batch in progress.
-    fn emit(&mut self, tile: usize, records: &[((u64, u64), B1::Time, Self::ROut)]);
+    fn emit(&mut self, tile: usize, records: &[((Self::Group, Self::Token), B1::Time, Self::ROut)]);
 
     /// Complete the session matching `begin`. The outputs correspond to the descriptions it was provided.
     fn finish(&mut self) -> Vec<B2>;
 }
 
-/// A proxy-space [`ReduceTactic`]: matches input and output records by `key_hash`.
-pub struct ProxyReduceTactic<T, Bk> {
+/// A proxy-space [`ReduceTactic`]: matches input and output records by group token.
+pub struct ProxyReduceTactic<G, T, Bk> {
     backend: Bk,
-    /// Pending interesting times beyond the upper frontier, keyed by key hash.
-    pending: BTreeMap<u64, Vec<T>>,
+    /// Pending interesting times beyond the upper frontier, keyed by group token.
+    pending: BTreeMap<G, Vec<T>>,
 }
 
-impl<T, Bk> ProxyReduceTactic<T, Bk> {
+impl<G, T, Bk> ProxyReduceTactic<G, T, Bk> {
     /// A tactic deferring all value semantics to `backend`.
     pub fn new(backend: Bk) -> Self {
         ProxyReduceTactic { backend, pending: BTreeMap::new() }
     }
 }
 
-impl<B1, B2, Bk> ReduceTactic<B1, B2> for ProxyReduceTactic<B1::Time, Bk>
+impl<B1, B2, Bk> ReduceTactic<B1, B2> for ProxyReduceTactic<Bk::Group, B1::Time, Bk>
 where
     B1: BatchReader,
     B2: BatchReader<Time = B1::Time>,
@@ -137,14 +144,14 @@ where
         };
 
         let seeds = self.backend.seed_times(&instance);
-        debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "seed_times must be sorted by key_hash");
-        let mut changed: BTreeSet<u64> = seeds.iter().map(|(k, _)| *k).collect();
+        debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "seed_times must be sorted by group token");
+        let mut changed: BTreeSet<Bk::Group> = seeds.iter().map(|(k, _)| *k).collect();
         changed.extend(self.pending.keys().copied());
         if changed.is_empty() {
             self.pending.clear();
             return (Vec::new(), Antichain::new());
         }
-        let changed: Vec<u64> = changed.into_iter().collect();
+        let changed: Vec<Bk::Group> = changed.into_iter().collect();
 
         // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
         // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
@@ -152,24 +159,24 @@ where
         let (tile_descs, tile_held, tile_of) = tile_descriptions(lower, upper, &held_elems);
         self.backend.begin(&tile_descs);
 
-        let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
+        let mut new_pending: BTreeMap<Bk::Group, Vec<B1::Time>> = BTreeMap::new();
 
         let mut cursor = 0usize;
         let mut ns = 0usize;
 
         // Retire-wide reusable scratch (cleared per window/round/moment, not reallocated). See the
         // profiling note on `DiscoverScratch`: fresh per-key/per-round `Vec`s were the dominant cost.
-        let mut discover_scratch: DiscoverScratch<B1::Time, Bk::RIn> = DiscoverScratch::new();
-        let mut states: Vec<KeyState<B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
-        let mut tile_deltas: Vec<Vec<((u64, u64), B1::Time, Bk::ROut)>> = (0..held_elems.len()).map(|_| Vec::new()).collect();
-        let mut batch_keys: Vec<u64> = Vec::new();
+        let mut discover_scratch: DiscoverScratch<Bk::Token, B1::Time, Bk::RIn> = DiscoverScratch::new();
+        let mut states: Vec<KeyState<Bk::Group, Bk::Token, B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
+        let mut tile_deltas: Vec<Vec<((Bk::Group, Bk::Token), B1::Time, Bk::ROut)>> = (0..held_elems.len()).map(|_| Vec::new()).collect();
+        let mut batch_keys: Vec<Bk::Group> = Vec::new();
         let mut in_ends: Vec<usize> = Vec::new();
-        let mut in_all: Vec<(u64, Bk::RIn)> = Vec::new();
+        let mut in_all: Vec<(Bk::Token, Bk::RIn)> = Vec::new();
         let mut out_ends: Vec<usize> = Vec::new();
-        let mut out_all: Vec<(u64, Bk::ROut)> = Vec::new();
+        let mut out_all: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
         let mut active: Vec<(usize, B1::Time)> = Vec::new();
-        let mut in_accum: Vec<(u64, Bk::RIn)> = Vec::new();
-        let mut cur_out: Vec<(u64, Bk::ROut)> = Vec::new();
+        let mut in_accum: Vec<(Bk::Token, Bk::RIn)> = Vec::new();
+        let mut cur_out: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
         let mut moments_scratch: Vec<B1::Time> = Vec::new();
         let mut pended_scratch: Vec<B1::Time> = Vec::new();
 
@@ -226,7 +233,7 @@ where
                 // Reload slot `n_states` in place (grow the buffer by one only when a window is wider
                 // than any before). `drain` moves the discovered moments in without copy or realloc.
                 if n_states == states.len() {
-                    states.push(KeyState::empty());
+                    states.push(KeyState::empty(key));
                 }
                 let st = &mut states[n_states];
                 st.key = key;
@@ -355,22 +362,22 @@ where
 /// the corrections `produced` this round so far, and a `cursor` into `moments`. Held for all of a
 /// window's keys at once so each round's crossing batches across keys — a key's own moments stay
 /// sequential (each sees its earlier corrections via `produced`), but distinct keys are independent.
-struct KeyState<T, RIn, ROut> {
-    key: u64,
+struct KeyState<G, I, T, RIn, ROut> {
+    key: G,
     moments: Vec<T>,
     meets: Vec<T>,
-    in_replay: IdHistory<T, RIn>,
-    out_replay: IdHistory<T, ROut>,
-    produced: Vec<((u64, T), ROut)>,
+    in_replay: IdHistory<I, T, RIn>,
+    out_replay: IdHistory<I, T, ROut>,
+    produced: Vec<((I, T), ROut)>,
     cursor: usize,
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup, ROut: Semigroup> KeyState<T, RIn, ROut> {
+impl<G: Copy + Ord, I: Copy + Ord, T: Timestamp + Lattice, RIn: Semigroup, ROut: Semigroup> KeyState<G, I, T, RIn, ROut> {
     /// An empty slot, to be filled by [`ProxyReduceTactic`]'s phase 1 (`reload`-style). The `states`
     /// vector holds these across windows and reloads them in place, so a key's buffers are allocated
     /// once (per slot) and reused — never dropped per key (which was ~18% of load in `free`).
-    fn empty() -> Self {
-        KeyState { key: 0, moments: Vec::new(), meets: Vec::new(), in_replay: IdHistory::new(), out_replay: IdHistory::new(), produced: Vec::new(), cursor: 0 }
+    fn empty(key: G) -> Self {
+        KeyState { key, moments: Vec::new(), meets: Vec::new(), in_replay: IdHistory::new(), out_replay: IdHistory::new(), produced: Vec::new(), cursor: 0 }
     }
 }
 
