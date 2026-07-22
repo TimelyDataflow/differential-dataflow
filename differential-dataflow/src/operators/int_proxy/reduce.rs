@@ -76,19 +76,19 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// work in progress, until `finish()` is called.
     fn begin(&mut self, tiles: &[Description<B1::Time>]);
 
-    /// Produce the next window of groups needing work, and advance `cursor`.
+    /// Produce the next window of groups needing work.
     ///
     /// Windows must cover contiguous, strictly ascending group ranges, and together must cover
     /// the union of the groups appearing in the instance's novel `input_batches` and the
     /// supplied `pending` groups (carried interesting times from earlier retires; such a group
-    /// must appear in `keys` even when it has no novel input). `cursor` indexes `pending`:
-    /// the backend advances it past the pending entries its window covers, and tracks its own
-    /// progress through the novel groups (e.g. positions in its batches).
+    /// must appear in `keys` even when it has no novel input). Unlike join, a retire's windows
+    /// all happen within one synchronous call bracketed by `begin`/`finish`, so the backend
+    /// keeps its own progress (batch positions, pending index) in its session state.
     ///
     /// The size of the window is up to the backend, where the window should be large enough to
     /// amortize the crossings between the harness and the backend. The proxy bridges for the
     /// whole window will be active at the same time, so tighter windows reduce the required state.
-    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, pending: &[Self::Group], cursor: &mut usize) -> Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>;
+    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, pending: &[Self::Group]) -> Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>;
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
     ///
@@ -168,7 +168,9 @@ where
 
         let mut new_pending: BTreeMap<Bk::Group, Vec<B1::Time>> = BTreeMap::new();
 
-        let mut cursor = 0usize;
+        // Coverage/monotonicity tracking for the debug contract checks below.
+        let mut pend_idx = 0usize;
+        let mut prev_high: Option<Bk::Group> = None;
 
         // Retire-wide reusable scratch (cleared per window/round/moment, not reallocated). See the
         // profiling note on `DiscoverScratch`: fresh per-key/per-round `Vec`s were the dominant cost.
@@ -186,13 +188,28 @@ where
         let mut moments_scratch: Vec<B1::Time> = Vec::new();
         let mut pended_scratch: Vec<B1::Time> = Vec::new();
 
-        while let Some(window) = self.backend.next_window(&instance, &pending_keys, &mut cursor) {
+        while let Some(window) = self.backend.next_window(&instance, &pending_keys) {
             let p_in = &window.input;
             let p_out = &window.output;
             let seeds = &window.seeds;
             super::debug_assert_sorted_bridge(p_in, "next_window.input");
             super::debug_assert_sorted_bridge(p_out, "next_window.output");
             debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "window seeds must be sorted by group token");
+            debug_assert!(window.keys.windows(2).all(|w| w[0] < w[1]), "window keys must be strictly ascending");
+            debug_assert!(
+                prev_high.map_or(true, |h| window.keys.first().map_or(true, |k| *k > h)),
+                "next_window: windows must present strictly ascending group ranges",
+            );
+            if let Some(last) = window.keys.last() { prev_high = Some(*last); }
+            // Pending coverage: windows ascend, so a pending group below a presented key can
+            // never appear later; it must have been included in this or an earlier window.
+            for key in &window.keys {
+                debug_assert!(
+                    pending_keys.get(pend_idx).map_or(true, |p| p >= key),
+                    "next_window skipped a pending group",
+                );
+                if pending_keys.get(pend_idx) == Some(key) { pend_idx += 1; }
+            }
             let mut ns = 0usize;
 
             for deltas in tile_deltas.iter_mut() { deltas.clear(); }
@@ -354,7 +371,7 @@ where
             }
         }
 
-        debug_assert_eq!(cursor, pending_keys.len(), "next_window must cover all pending groups before finishing");
+        debug_assert_eq!(pend_idx, pending_keys.len(), "next_window must cover all pending groups before finishing");
         self.pending = new_pending;
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
         let mut frontier = Antichain::new();

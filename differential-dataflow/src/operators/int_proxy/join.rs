@@ -57,19 +57,22 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// The output container built from matched value tokens.
     type Output;
 
+    /// Per-unit resumption state, owned by the unit and interpreted only by the backend.
+    ///
+    /// Unit progress cannot live on `&mut self`: the driver holds units across scheduler
+    /// activations and drains them under fuel, so several half-drained units (from both input
+    /// queues) may interleave their windows against one shared backend. `Default` is the state
+    /// of a fresh unit; a typical backend records a position per batch per side.
+    type Cursor: Default;
+
     /// Produce the next window of the join unit, and advance `cursor`.
     ///
     /// Windows must cover contiguous, strictly ascending group ranges, and together must cover
     /// every group appearing in the `fresh` side's data; groups absent from either side may be
     /// omitted (they produce no matches). Both bridges **must be sorted and consolidated** by
-    /// `((group, token), time)`.
-    ///
-    /// `cursor` is an opaque progress token: zero at the unit's start, thereafter interpreted
-    /// only by the backend (unit progress cannot live on `&mut self`: several half-drained
-    /// units may interleave their windows under the driver's fuel). The backend sizes windows
-    /// to amortize harness crossings; both bridges are live at once, so tighter windows mean
-    /// less state.
-    fn next_window(&mut self, instance: &JoinInstance<'_, B0, B1>, fresh: Fresh, cursor: &mut usize) -> Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>;
+    /// `((group, token), time)`. The backend sizes windows to amortize harness crossings; both
+    /// bridges are live at once, so tighter windows mean less state.
+    fn next_window(&mut self, instance: &JoinInstance<'_, B0, B1>, fresh: Fresh, cursor: &mut Self::Cursor) -> Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>;
     /// From a list of left and right tokens, and corresponding times and diffs, the output.
     fn cross(&mut self, instance: &JoinInstance<'_, B0, B1>, left: &[(Self::Group, Self::Token0)], right: &[(Self::Group, Self::Token1)], times: Vec<B0::Time>, diffs: Vec<Self::ROut>) -> Self::Output;
 }
@@ -107,7 +110,7 @@ where
             input1,
             fresh,
             lower: Antichain::from_elem(meet),
-            cursor: 0,
+            cursor: Bk::Cursor::default(),
             high: None,
             done: false,
             h0: IdHistory::new(),
@@ -136,8 +139,8 @@ struct JoinUnit<B0: BatchReader, B1: BatchReader<Time = B0::Time>, Bk: ProxyJoin
     input1: Vec<B1>,
     fresh: Fresh,
     lower: Antichain<B0::Time>,
-    /// Backend-interpreted progress token; zero at the unit's start.
-    cursor: usize,
+    /// Backend-interpreted resumption state; `Default` at the unit's start.
+    cursor: Bk::Cursor,
     /// Greatest group presented so far, to enforce ascending windows.
     high: Option<Bk::Group>,
     done: bool,
