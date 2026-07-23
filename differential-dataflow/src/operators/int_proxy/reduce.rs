@@ -1,9 +1,9 @@
 //! The proxy reduce framework.
 //!
-//! A conventional differential reduce against `(u64, u64)`, where the backend supplies the
-//! implementation of the interpretation of the integers.
+//! A conventional differential reduce against `(group, token)` values, where the backend
+//! supplies the implementation of the interpretation of the tokens.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -30,33 +30,44 @@ pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>>
     pub lower: AntichainRef<'a, B1::Time>,
 }
 
-/// One window of a retire's changed keys: a bounded, hash-contiguous snip the backend sizes.
+/// One window of a retire's changed keys: a bounded, group-contiguous snip the backend sizes.
 ///
 /// The window has the input (old and new) and output histories, restricted to the window's keys.
-pub struct ReduceWindow<T, RIn, ROut> {
-    /// The window's key hashes: a contiguous, ascending slice of the retire's `changed` keys.
-    pub keys: Vec<u64>,
-    /// Input presentation for `keys`, sorted & consolidated by `((key_hash, value_id), time)`.
-    pub input: ProxyBridge<T, RIn>,
+pub struct ReduceWindow<G, I, T, RIn, ROut> {
+    /// The window's group tokens: a contiguous, ascending run of the groups needing work.
+    pub keys: Vec<G>,
+    /// Novel-batch time support for `keys`: `(group, time)` sorted by group, drawn from the
+    /// instance's `input_batches` alone.
+    ///
+    /// These seed the interesting-time discovery, and must be the novel batches' own times,
+    /// not a view consolidated with history: compaction may advance a history record onto a
+    /// novel time, where consolidation cancels the novel update and its interesting time is
+    /// missed (see `discover_times`' seeding contract).
+    pub seeds: Vec<(G, T)>,
+    /// Input presentation for `keys`, sorted & consolidated by `((group, token), time)`.
+    pub input: ProxyBridge<G, I, T, RIn>,
     /// Output-history presentation for `keys`, same ordering.
-    pub output: ProxyBridge<T, ROut>,
+    pub output: ProxyBridge<G, I, T, ROut>,
 }
 
 /// The reduce backend: value semantics for a proxy-space reduction, driven by [`ProxyReduceTactic`].
 ///
-/// The protocol is currently (temporarily) for each round of invocation:
-/// `seed_times begin [ next_window reduce_correction* emit ]* finish`
-/// This should be improved to put the `seed_times` in the per-window loop, or remove it entirely.
+/// The protocol for each round of invocation:
+/// `begin [ next_window reduce_corrections* emit ]* finish`
+/// Seed times arrive per window (on [`ReduceWindow`]), so nothing is staged for the whole
+/// invocation: peak state is one window's presentations.
 pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
+    /// The group token: names the granule of independence.
+    ///
+    /// Commonly a `u64` key hash; exactly the key for small `Copy` keys. `'static` because
+    /// groups are the one token that crosses invocations (pending times are held per group).
+    type Group: Copy + Ord + 'static;
+    /// The value token, scoped to one invocation; output values share the same token space.
+    type Token: Copy + Ord;
     /// Diff type presented for the input.
     type RIn: Semigroup;
     /// Diff type of the output.
     type ROut: Semigroup + 'static;
-
-    /// Hash keys and associated times in the instance's novel input batches.
-    ///
-    /// This is used (with held times) to seed the interesting times for each key.
-    fn seed_times(&self, instance: &ReduceInstance<'_, B1, B2>) -> Vec<(u64, B1::Time)>;
 
     /// Initiate a session to create batches for these descriptions, which span `[lower, upper)`.
     ///
@@ -65,12 +76,23 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// work in progress, until `finish()` is called.
     fn begin(&mut self, tiles: &[Description<B1::Time>]);
 
-    /// Produce the next window, resticted to `changed[cursor..]`, and update `cursor` to track.
+    /// Produce the next window of groups needing work.
+    ///
+    /// Windows must cover contiguous, strictly ascending group ranges, and together must cover
+    /// the union of the groups appearing in the instance's novel `input_batches` and the
+    /// supplied `pending` groups (carried interesting times from earlier retires; such a group
+    /// must appear in `keys` even when it has no novel input). Unlike join, a retire's windows
+    /// all happen within one synchronous call bracketed by `begin`/`finish`, so the backend
+    /// keeps its own progress (batch positions, pending index) in its session state.
     ///
     /// The size of the window is up to the backend, where the window should be large enough to
     /// amortize the crossings between the harness and the backend. The proxy bridges for the
     /// whole window will be active at the same time, so tighter windows reduce the required state.
-    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, changed: &[u64], cursor: &mut usize) -> Option<ReduceWindow<B1::Time, Self::RIn, Self::ROut>>;
+    ///
+    /// `reuse` returns the previous, fully-processed window: reclaim its buffer capacity
+    /// (`clear()` and refill) rather than allocating fresh, so steady-state windowing does
+    /// not churn allocation proportional to data volume.
+    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, pending: &[Self::Group], reuse: Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>) -> Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>;
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
     ///
@@ -79,38 +101,38 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// with its desires. The `usize` integers upper bound the range for the corresponding key.
     fn reduce_corrections(
         &mut self,
-        keys: &[u64],
+        keys: &[Self::Group],
         in_ends: &[usize],
-        input: &[(u64, Self::RIn)],
+        input: &[(Self::Token, Self::RIn)],
         out_ends: &[usize],
-        output: &[(u64, Self::ROut)],
-    ) -> (Vec<(u64, Self::ROut)>, Vec<usize>);
+        output: &[(Self::Token, Self::ROut)],
+    ) -> (Vec<(Self::Token, Self::ROut)>, Vec<usize>);
 
     /// Commit to a collection of updates at a specific batch in progress.
     ///
     /// The `tile: usize` indexes the list of descriptions provided to `begin()`, and these updates
     /// are aimed at that batch in progress.
-    fn emit(&mut self, tile: usize, records: &[((u64, u64), B1::Time, Self::ROut)]);
+    fn emit(&mut self, tile: usize, records: &[((Self::Group, Self::Token), B1::Time, Self::ROut)]);
 
     /// Complete the session matching `begin`. The outputs correspond to the descriptions it was provided.
     fn finish(&mut self) -> Vec<B2>;
 }
 
-/// A proxy-space [`ReduceTactic`]: matches input and output records by `key_hash`.
-pub struct ProxyReduceTactic<T, Bk> {
+/// A proxy-space [`ReduceTactic`]: matches input and output records by group token.
+pub struct ProxyReduceTactic<G, T, Bk> {
     backend: Bk,
-    /// Pending interesting times beyond the upper frontier, keyed by key hash.
-    pending: BTreeMap<u64, Vec<T>>,
+    /// Pending interesting times beyond the upper frontier, keyed by group token.
+    pending: BTreeMap<G, Vec<T>>,
 }
 
-impl<T, Bk> ProxyReduceTactic<T, Bk> {
+impl<G, T, Bk> ProxyReduceTactic<G, T, Bk> {
     /// A tactic deferring all value semantics to `backend`.
     pub fn new(backend: Bk) -> Self {
         ProxyReduceTactic { backend, pending: BTreeMap::new() }
     }
 }
 
-impl<B1, B2, Bk> ReduceTactic<B1, B2> for ProxyReduceTactic<B1::Time, Bk>
+impl<B1, B2, Bk> ReduceTactic<B1, B2> for ProxyReduceTactic<Bk::Group, B1::Time, Bk>
 where
     B1: BatchReader,
     B2: BatchReader<Time = B1::Time>,
@@ -129,6 +151,12 @@ where
             return (Vec::new(), held.clone());
         }
 
+        // Nothing to do when there are no novel updates and no carried times.
+        if self.pending.is_empty() && input_batches.iter().all(|b| b.len() == 0) {
+            return (Vec::new(), Antichain::new());
+        }
+        let pending_keys: Vec<Bk::Group> = self.pending.keys().copied().collect();
+
         let instance = ReduceInstance {
             source_batches: &source_batches,
             input_batches: &input_batches,
@@ -136,48 +164,70 @@ where
             lower: lower.borrow(),
         };
 
-        let seeds = self.backend.seed_times(&instance);
-        debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "seed_times must be sorted by key_hash");
-        let mut changed: BTreeSet<u64> = seeds.iter().map(|(k, _)| *k).collect();
-        changed.extend(self.pending.keys().copied());
-        if changed.is_empty() {
-            self.pending.clear();
-            return (Vec::new(), Antichain::new());
-        }
-        let changed: Vec<u64> = changed.into_iter().collect();
-
         // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
         // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
         let held_elems: Vec<B1::Time> = held.elements().to_vec();
         let (tile_descs, tile_held, tile_of) = tile_descriptions(lower, upper, &held_elems);
         self.backend.begin(&tile_descs);
 
-        let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
+        let mut new_pending: BTreeMap<Bk::Group, Vec<B1::Time>> = BTreeMap::new();
 
-        let mut cursor = 0usize;
-        let mut ns = 0usize;
+        // Coverage/monotonicity tracking for the debug contract checks below.
+        let mut pend_idx = 0usize;
+        let mut prev_high: Option<Bk::Group> = None;
 
         // Retire-wide reusable scratch (cleared per window/round/moment, not reallocated). See the
         // profiling note on `DiscoverScratch`: fresh per-key/per-round `Vec`s were the dominant cost.
-        let mut discover_scratch: DiscoverScratch<B1::Time, Bk::RIn> = DiscoverScratch::new();
-        let mut states: Vec<KeyState<B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
-        let mut tile_deltas: Vec<Vec<((u64, u64), B1::Time, Bk::ROut)>> = (0..held_elems.len()).map(|_| Vec::new()).collect();
-        let mut batch_keys: Vec<u64> = Vec::new();
+        let mut discover_scratch: DiscoverScratch<Bk::Token, B1::Time, Bk::RIn> = DiscoverScratch::new();
+        let mut states: Vec<KeyState<Bk::Group, Bk::Token, B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
+        let mut tile_deltas: Vec<Vec<((Bk::Group, Bk::Token), B1::Time, Bk::ROut)>> = (0..held_elems.len()).map(|_| Vec::new()).collect();
+        let mut batch_keys: Vec<Bk::Group> = Vec::new();
         let mut in_ends: Vec<usize> = Vec::new();
-        let mut in_all: Vec<(u64, Bk::RIn)> = Vec::new();
+        let mut in_all: Vec<(Bk::Token, Bk::RIn)> = Vec::new();
         let mut out_ends: Vec<usize> = Vec::new();
-        let mut out_all: Vec<(u64, Bk::ROut)> = Vec::new();
+        let mut out_all: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
         let mut active: Vec<(usize, B1::Time)> = Vec::new();
-        let mut in_accum: Vec<(u64, Bk::RIn)> = Vec::new();
-        let mut cur_out: Vec<(u64, Bk::ROut)> = Vec::new();
+        let mut in_accum: Vec<(Bk::Token, Bk::RIn)> = Vec::new();
+        let mut cur_out: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
         let mut moments_scratch: Vec<B1::Time> = Vec::new();
         let mut pended_scratch: Vec<B1::Time> = Vec::new();
+        let mut live: Vec<usize> = Vec::new();
+        // Fast-path staging: keys evaluated directly from their slices, one batched
+        // `reduce_corrections` for all of them per window (round zero, in effect).
+        let mut fast_keys: Vec<Bk::Group> = Vec::new();
+        let mut fast_times: Vec<B1::Time> = Vec::new();
+        let mut fast_in_ends: Vec<usize> = Vec::new();
+        let mut fast_in_all: Vec<(Bk::Token, Bk::RIn)> = Vec::new();
+        let mut fast_out_ends: Vec<usize> = Vec::new();
+        let mut fast_out_all: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
 
-        while let Some(window) = self.backend.next_window(&instance, &changed, &mut cursor) {
+        let mut spent: Option<ReduceWindow<Bk::Group, Bk::Token, B1::Time, Bk::RIn, Bk::ROut>> = None;
+        while let Some(window) = self.backend.next_window(&instance, &pending_keys, spent.take()) {
             let p_in = &window.input;
             let p_out = &window.output;
+            let seeds = &window.seeds;
             super::debug_assert_sorted_bridge(p_in, "next_window.input");
             super::debug_assert_sorted_bridge(p_out, "next_window.output");
+            debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "window seeds must be sorted by group token");
+            debug_assert!(window.keys.windows(2).all(|w| w[0] < w[1]), "window keys must be strictly ascending");
+            // Progress guard: an empty window cannot advance the watermark, so a backend
+            // emitting them repeatedly would spin this loop forever inside one retire.
+            assert!(!window.keys.is_empty(), "next_window: windows must list at least one key");
+            super::assert_ascending_window(&mut prev_high, window.keys.first().copied(), window.keys.last().copied(), "reduce");
+            // Pending coverage: windows ascend, so a pending group below a presented key can
+            // never appear later; it must have been included in this or an earlier window.
+            // A hard assert, not debug: a skipped pending group's carried times would be
+            // silently dropped below, collapsing the frontier and releasing the capability
+            // that its deferred correction needs — permanent wrong output. The walk is a few
+            // integer compares per key, noise against the per-key reduction work.
+            for key in &window.keys {
+                assert!(
+                    pending_keys.get(pend_idx).map_or(true, |p| p >= key),
+                    "next_window skipped a pending group",
+                );
+                if pending_keys.get(pend_idx) == Some(key) { pend_idx += 1; }
+            }
+            let mut ns = 0usize;
 
             for deltas in tile_deltas.iter_mut() { deltas.clear(); }
 
@@ -190,18 +240,57 @@ where
             let mut n_states = 0usize;
             let (mut is, mut os) = (0usize, 0usize);
             for &key in &window.keys {
-                while is < p_in.len() && p_in[is].0.0 < key { is += 1; }
+                // Strays are hard errors: a record or seed whose group is below the current
+                // key belongs to no listed key (earlier keys consumed their runs), and the
+                // old skip-loops would have silently discarded it — wrong output with no
+                // diagnostic. Ascending keys make the check one compare per key.
+                assert!(is >= p_in.len() || p_in[is].0.0 >= key, "next_window presented input records for a group absent from keys");
                 let i0 = is;
                 while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
                 let i1 = is;
-                while os < p_out.len() && p_out[os].0.0 < key { os += 1; }
+                assert!(os >= p_out.len() || p_out[os].0.0 >= key, "next_window presented output records for a group absent from keys");
                 let o0 = os;
                 while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
                 let o1 = os;
-                while ns < seeds.len() && seeds[ns].0 < key { ns += 1; }
+                assert!(ns >= seeds.len() || seeds[ns].0 >= key, "next_window presented seeds for a group absent from keys");
                 let n0 = ns;
                 while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
                 let n1 = ns;
+
+                // Fast path: no pending, one distinct seed time `t*`, and every presented
+                // input/output time at-or-before it. Then `discover_times` would compute
+                // moments == [t*] with nothing pended (history times before `t*` pass
+                // without becoming moments, and no join can escape `t*`), so discovery
+                // and the replay loads are skipped and the key is evaluated directly
+                // from its slices. This is the steady-state snapshot shape, where the
+                // full apparatus was measured as the dominant per-key cost.
+                if self.pending.get(&key).is_none() {
+                    if n0 == n1 {
+                        // No seeds and no pending: no interesting times; nothing to do.
+                        continue;
+                    }
+                    let t_star = seeds[n0].1.clone();
+                    if seeds[n0..n1].iter().all(|s| s.1 == t_star)
+                        && p_in[i0..i1].iter().all(|x| x.1.less_equal(&t_star))
+                        && p_out[o0..o1].iter().all(|x| x.1.less_equal(&t_star))
+                    {
+                        in_accum.clear();
+                        in_accum.extend(p_in[i0..i1].iter().map(|x| (x.0 .1, x.2.clone())));
+                        crate::consolidation::consolidate(&mut in_accum);
+                        cur_out.clear();
+                        cur_out.extend(p_out[o0..o1].iter().map(|x| (x.0 .1, x.2.clone())));
+                        crate::consolidation::consolidate(&mut cur_out);
+                        if !in_accum.is_empty() || !cur_out.is_empty() {
+                            fast_keys.push(key);
+                            fast_times.push(t_star);
+                            fast_in_all.append(&mut in_accum);
+                            fast_in_ends.push(fast_in_all.len());
+                            fast_out_all.append(&mut cur_out);
+                            fast_out_ends.push(fast_out_all.len());
+                        }
+                        continue;
+                    }
+                }
 
                 moments_scratch.clear();
                 pended_scratch.clear();
@@ -226,7 +315,7 @@ where
                 // Reload slot `n_states` in place (grow the buffer by one only when a window is wider
                 // than any before). `drain` moves the discovered moments in without copy or realloc.
                 if n_states == states.len() {
-                    states.push(KeyState::empty());
+                    states.push(KeyState::empty(key));
                 }
                 let st = &mut states[n_states];
                 st.key = key;
@@ -244,6 +333,34 @@ where
                 st.out_replay.load_iter((o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())), st.meets.first());
                 n_states += 1;
             }
+            // Everything presented must have belonged to a listed key (the strays-below
+            // case is asserted per key above; this is the trailing case).
+            assert_eq!(is, p_in.len(), "next_window presented trailing input records past the last key");
+            assert_eq!(os, p_out.len(), "next_window presented trailing output records past the last key");
+            assert_eq!(ns, seeds.len(), "next_window presented trailing seeds past the last key");
+
+            // Round zero: the window's fast-path keys, one batched crossing. Their
+            // corrections go straight to the tiles — a fast key has no later moments.
+            if !fast_keys.is_empty() {
+                let (corr, corr_ends) = self.backend.reduce_corrections(&fast_keys, &fast_in_ends, &fast_in_all, &fast_out_ends, &fast_out_all);
+                let mut cstart = 0usize;
+                for (fi, t) in fast_times.iter().enumerate() {
+                    let cend = corr_ends[fi];
+                    if cstart != cend {
+                        let idx = held_elems.iter().rposition(|h| h.less_equal(t)).expect("no held capability <= fast-path time");
+                        for (vid, d) in &corr[cstart..cend] {
+                            tile_deltas[idx].push(((fast_keys[fi], *vid), t.clone(), d.clone()));
+                        }
+                    }
+                    cstart = cend;
+                }
+                fast_keys.clear();
+                fast_times.clear();
+                fast_in_ends.clear();
+                fast_in_all.clear();
+                fast_out_ends.clear();
+                fast_out_all.clear();
+            }
 
             // Phase 2 (application): walk all keys' moments in ROUNDS. Each round assembles every
             // active key's one-moment-deep input and current-output accumulations and crosses them in
@@ -252,6 +369,8 @@ where
             // call count at O(max moments over keys), not O(sum of moments), with peak materialization
             // one moment deep per key. `produced` is meet-collapsed each round, exactly like the
             // reference — bounded, not the O(times × values) delta history.
+            live.clear();
+            live.extend(0..n_states);
             loop {
                 batch_keys.clear();
                 in_ends.clear();
@@ -259,12 +378,19 @@ where
                 out_ends.clear();
                 out_all.clear();
                 active.clear();
-                let mut advanced = false;
-                for (si, st) in states[..n_states].iter_mut().enumerate() {
+                // Sweep the live keys, retiring exhausted ones by swap-remove, so each round
+                // costs O(live keys) rather than rescanning every exhausted slot under
+                // moment-count skew (order across keys within a round does not matter —
+                // distinct keys are independent; a key's own moments stay sequential).
+                let mut idx = 0;
+                while idx < live.len() {
+                    let si = live[idx];
+                    let st = &mut states[si];
                     if st.cursor >= st.moments.len() {
+                        live.swap_remove(idx);
                         continue;
                     }
-                    advanced = true;
+                    idx += 1;
                     let j = st.cursor;
                     st.cursor += 1;
                     let t = st.moments[j].clone();
@@ -305,7 +431,7 @@ where
                 // Terminate only when every key is EXHAUSTED — not merely when this round produced no
                 // crossing. A round can be empty because every key's current moment is empty-gated
                 // while keys still have later (non-empty) moments; breaking here would drop them.
-                if !advanced {
+                if live.is_empty() {
                     break;
                 }
                 if batch_keys.is_empty() {
@@ -336,10 +462,19 @@ where
                     self.backend.emit(tile, &deltas[..]);
                 }
             }
+            spent = Some(window);
         }
 
+        // Hard for the same reason as the per-window pending walk: an uncovered pending
+        // group's carried times would be dropped and its capability released — permanent
+        // silent wrong output in exchange for one integer compare.
+        assert_eq!(pend_idx, pending_keys.len(), "next_window must cover all pending groups before finishing");
         self.pending = new_pending;
-        let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
+        let finished = self.backend.finish();
+        // Hard for the same reason as the other contract asserts: `zip` would silently
+        // truncate a miscounting backend, shipping batches at the wrong held times.
+        assert_eq!(finished.len(), tile_held.len(), "finish() must return exactly one batch per tile description");
+        let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(finished).collect();
         let mut frontier = Antichain::new();
         for times in self.pending.values() {
             for t in times {
@@ -355,22 +490,22 @@ where
 /// the corrections `produced` this round so far, and a `cursor` into `moments`. Held for all of a
 /// window's keys at once so each round's crossing batches across keys — a key's own moments stay
 /// sequential (each sees its earlier corrections via `produced`), but distinct keys are independent.
-struct KeyState<T, RIn, ROut> {
-    key: u64,
+struct KeyState<G, I, T, RIn, ROut> {
+    key: G,
     moments: Vec<T>,
     meets: Vec<T>,
-    in_replay: IdHistory<T, RIn>,
-    out_replay: IdHistory<T, ROut>,
-    produced: Vec<((u64, T), ROut)>,
+    in_replay: IdHistory<I, T, RIn>,
+    out_replay: IdHistory<I, T, ROut>,
+    produced: Vec<((I, T), ROut)>,
     cursor: usize,
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup, ROut: Semigroup> KeyState<T, RIn, ROut> {
+impl<G: Copy + Ord, I: Copy + Ord, T: Timestamp + Lattice, RIn: Semigroup, ROut: Semigroup> KeyState<G, I, T, RIn, ROut> {
     /// An empty slot, to be filled by [`ProxyReduceTactic`]'s phase 1 (`reload`-style). The `states`
     /// vector holds these across windows and reloads them in place, so a key's buffers are allocated
     /// once (per slot) and reused — never dropped per key (which was ~18% of load in `free`).
-    fn empty() -> Self {
-        KeyState { key: 0, moments: Vec::new(), meets: Vec::new(), in_replay: IdHistory::new(), out_replay: IdHistory::new(), produced: Vec::new(), cursor: 0 }
+    fn empty(key: G) -> Self {
+        KeyState { key, moments: Vec::new(), meets: Vec::new(), in_replay: IdHistory::new(), out_replay: IdHistory::new(), produced: Vec::new(), cursor: 0 }
     }
 }
 

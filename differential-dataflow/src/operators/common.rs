@@ -103,12 +103,13 @@ impl<T: Lattice + Clone + Ord> TimeHistory<T> {
 /// `emit` receives every produced `(id0, id1, joined time, multiplied diff)`. Both histories
 /// must be pre-loaded (`load`/`load_iter`) and are fully drained. For small histories a plain
 /// cross product is cheaper; callers should gate on size.
-pub fn bilinear_wave<V, T, R0, R1, RO>(
-    h0: &mut ValueHistory<V, T, R0>,
-    h1: &mut ValueHistory<V, T, R1>,
-    mut emit: impl FnMut(V, V, T, RO),
+pub fn bilinear_wave<V0, V1, T, R0, R1, RO>(
+    h0: &mut ValueHistory<V0, T, R0>,
+    h1: &mut ValueHistory<V1, T, R1>,
+    mut emit: impl FnMut(V0, V1, T, RO),
 ) where
-    V: Copy + Ord,
+    V0: Copy + Ord,
+    V1: Copy + Ord,
     T: Ord + Clone + Lattice,
     R0: Semigroup + Multiply<R1, Output = RO> + Clone,
     R1: Semigroup + Clone,
@@ -180,11 +181,11 @@ pub fn tile_descriptions<T: Timestamp + Lattice>(
 }
 
 /// A one-key view into an input presentation: the read-only arguments [`discover_times`] needs
-/// about a single key — its slice `[i0, i1)` of the merged `(id, time, diff)` run `p_in` and
+/// about a single key — its slice `[i0, i1)` of the merged `(token, time, diff)` run `p_in` and
 /// the carried `pending` times.
-pub struct KeyView<'a, T, RIn> {
-    /// The presented `((key_hash, value_id), time, diff)` run the key's records live in.
-    pub p_in: &'a [((u64, u64), T, RIn)],
+pub struct KeyView<'a, G, I, T, RIn> {
+    /// The presented `((group, token), time, diff)` run the key's records live in.
+    pub p_in: &'a [((G, I), T, RIn)],
     /// The key's first record.
     pub i0: usize,
     /// One past the key's last record.
@@ -205,9 +206,9 @@ fn update_meet<T: Lattice + Clone>(meet: &mut Option<T>, other: Option<&T>) {
 
 /// Reusable per-key scratch for [`discover_times`]: held once and threaded through every key,
 /// so replays and time buffers are cleared and refilled rather than reallocated per key.
-pub struct DiscoverScratch<T, RIn> {
+pub struct DiscoverScratch<I, T, RIn> {
     batch_replay: TimeHistory<T>,
-    input_replay: ValueHistory<u64, T, RIn>,
+    input_replay: ValueHistory<I, T, RIn>,
     output_replay: TimeHistory<T>,
     synth: Vec<T>,
     times_current: Vec<T>,
@@ -215,7 +216,7 @@ pub struct DiscoverScratch<T, RIn> {
     meets: Vec<T>,
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup + Clone> DiscoverScratch<T, RIn> {
+impl<I: Copy + Ord, T: Timestamp + Lattice, RIn: Semigroup + Clone> DiscoverScratch<I, T, RIn> {
     /// Fresh scratch; hold one per retire and thread it through every key.
     pub fn new() -> Self {
         DiscoverScratch {
@@ -230,7 +231,7 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone> DiscoverScratch<T, RIn> {
     }
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup + Clone> Default for DiscoverScratch<T, RIn> {
+impl<I: Copy + Ord, T: Timestamp + Lattice, RIn: Semigroup + Clone> Default for DiscoverScratch<I, T, RIn> {
     fn default() -> Self { Self::new() }
 }
 
@@ -246,15 +247,16 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone> Default for DiscoverScratch
 /// consolidated view is unsound: compaction may advance a history record onto a novel time,
 /// where consolidation cancels the novel update and its interesting time is missed.
 #[allow(clippy::too_many_arguments)]
-pub fn discover_times<T, RIn>(
-    key: KeyView<'_, T, RIn>,
+pub fn discover_times<G, I, T, RIn>(
+    key: KeyView<'_, G, I, T, RIn>,
     seed_times: impl Iterator<Item = T>,
     out_times: impl Iterator<Item = T>,
     upper: &Antichain<T>,
-    scratch: &mut DiscoverScratch<T, RIn>,
+    scratch: &mut DiscoverScratch<I, T, RIn>,
     moments: &mut Vec<T>,
     pended: &mut Vec<T>,
 ) where
+    I: Copy + Ord,
     T: Timestamp + Lattice,
     RIn: Semigroup + Clone,
 {

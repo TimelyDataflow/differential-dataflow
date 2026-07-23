@@ -40,6 +40,7 @@ pub trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C> {
 /// The fresh batch's times all lie at or beyond the capability, so its side is not advanced by the
 /// capability's meet; the opposing accumulated trace is. The marker also selects which queue a unit
 /// joins, so a burst on one input cannot starve the other.
+#[derive(Clone, Copy, Debug)]
 pub enum Fresh {
     /// The first input (`B0`) contributed the fresh batch.
     Input0,
@@ -390,7 +391,7 @@ mod cursors {
 
     /// The conventional cursor-based [`JoinTactic`].
     ///
-    /// It builds a [`CursorList`] over each input batch list and plays the merge-join out at whatever rate
+    /// It builds a [`CursorList`](crate::trace::cursor::CursorList) over each input batch list and plays the merge-join out at whatever rate
     /// the driver's fuel allows. Each prepared unit joins a `B0`-side cursor against a `B1`-side cursor,
     /// emitting `(val0, val1)` to `logic` and yielding the output containers `logic` fills. `logic` is
     /// shared across all outstanding units (an `Rc<RefCell<_>>`), preserving the single mutable-state
