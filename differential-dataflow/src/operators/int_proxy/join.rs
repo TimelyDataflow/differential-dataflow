@@ -136,17 +136,12 @@ where
 {
     fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = Bk::Output>> {
         Box::new(JoinUnit {
+            task: Task { input0, input1, fresh, lower: Antichain::from_elem(meet) },
             backend: std::rc::Rc::clone(&self.backend),
-            input0,
-            input1,
-            fresh,
-            lower: Antichain::from_elem(meet),
             cursor: Bk::Cursor::default(),
             sink: Bk::Sink::default(),
+            phase: Phase::Fetch,
             high: None,
-            done: false,
-            flushed: false,
-            current: None,
             spent: None,
             h0: IdHistory::new(),
             h1: IdHistory::new(),
@@ -155,48 +150,87 @@ where
     }
 }
 
-/// One lazy join unit: owns its batches and streams outputs a key at a time.
-///
-/// Each `next` first drains `ready`; when empty it advances the unit by one step —
-/// fetching the next window if none is in progress, or merge-matching **one** key from
-/// the window in progress, feeding each match to the backend's `absorb` (which yields
-/// containers at its own granularity; the final remainder comes from `flush` when the
-/// unit exhausts). Matches are never staged in the harness: peak state is one window's
-/// presentations, plus one key's yielded containers in `ready` (a fanout-F key at
-/// container target t enqueues F/t containers in one step), plus the sink's partial.
-///
-/// Spent windows are handed back to the backend through `next_window`'s `reuse`
-/// argument, and the replay histories (`h0`/`h1`) live on the unit, so steady-state
-/// operation allocates only what the backend's own representations require.
-///
-/// `lower` is the capability's time, a lower bound on the fresh side's times, so the
-/// accumulated side loads compacted (see [`JoinInstance`]); every output is produced under
-/// that capability, so advancing loaded times by it leaves the output unchanged.
-struct JoinUnit<B0: BatchReader, B1: BatchReader<Time = B0::Time>, Bk: ProxyJoinBackend<B0, B1>> {
-    backend: std::rc::Rc<std::cell::RefCell<Bk>>,
+/// The bridge type a backend `Bk` presents for batches `B0`/`B1` — [`JoinWindow`] at
+/// the backend's tokens and the batches' time. Named to keep the unit's fields legible.
+type WindowFor<B0, B1, Bk> = JoinWindow<
+    <Bk as ProxyJoinBackend<B0, B1>>::Group,
+    <Bk as ProxyJoinBackend<B0, B1>>::Token0,
+    <Bk as ProxyJoinBackend<B0, B1>>::Token1,
+    <B0 as BatchReader>::Time,
+    <Bk as ProxyJoinBackend<B0, B1>>::R0,
+    <Bk as ProxyJoinBackend<B0, B1>>::R1,
+>;
+
+/// The immutable description of a unit's work: both batch lists, which side is fresh,
+/// and the capability's time (a lower bound on the fresh side's times, so the
+/// accumulated side loads compacted — see [`JoinInstance`]; every output ships under
+/// that capability, so advancing loaded times by it leaves the output unchanged).
+struct Task<B0: BatchReader, B1> {
     input0: Vec<B0>,
     input1: Vec<B1>,
     fresh: Fresh,
     lower: Antichain<B0::Time>,
-    /// Backend-interpreted resumption state; `Default` at the unit's start.
+}
+
+impl<B0: BatchReader, B1: BatchReader<Time = B0::Time>> Task<B0, B1> {
+    /// The borrowed view of the task that every backend call receives.
+    fn instance(&self) -> JoinInstance<'_, B0, B1> {
+        JoinInstance { batches0: &self.input0, batches1: &self.input1, lower: self.lower.borrow() }
+    }
+}
+
+/// Where a unit stands in its march through the backend's windows.
+enum Phase<W> {
+    /// No window in progress; ask the backend for the next one.
+    Fetch,
+    /// Merging through a window, one key per step; the `usize`s are the merge
+    /// positions into its two bridges.
+    Merge(W, usize, usize),
+    /// The backend returned `None`: windows are exhausted, final `flush` not yet taken.
+    Drained,
+    /// `flush` taken; the iterator is spent and yields only `None`.
+    Spent,
+}
+
+/// One lazy join unit: owns its batches and streams outputs a key at a time.
+///
+/// Each `next` first drains `ready`; when empty it advances `phase` by one step —
+/// fetching the next window, or merge-matching **one** key from the current one,
+/// feeding each match to the backend's `absorb` (which yields containers at its own
+/// granularity; the final remainder comes from `flush` at `Drained`). Matches are
+/// never staged in the harness: peak state is one window's presentations, plus one
+/// key's yielded containers in `ready` (a fanout-F key at container target t enqueues
+/// F/t containers in one step), plus the sink's partial.
+///
+/// The fields group by owner. The *task* is the immutable work description. The
+/// *backend* is shared by every live unit of the operator, so the two state halves it
+/// interprets — `cursor` (read resumption) and `sink` (output staging) — live here,
+/// per unit; a shared sink would ship one unit's matches in another's containers (see
+/// [`ProxyJoinBackend::Sink`]). The harness owns the window *machine*: `phase`,
+/// the `high` watermark enforcing ascending windows, and the `spent` window awaiting
+/// return to the backend for buffer reuse. `h0`/`h1` are merge *scratch*, reloaded
+/// per key (only the >=16/>=16 wave path touches them) so high-fanout keys pay no
+/// per-key allocation. `ready` is the *output* queue toward the driver.
+struct JoinUnit<B0, B1, Bk>
+where
+    B0: BatchReader,
+    B1: BatchReader<Time = B0::Time>,
+    Bk: ProxyJoinBackend<B0, B1>,
+{
+    // The work.
+    task: Task<B0, B1>,
+    // The shared backend, and the two per-unit state halves it interprets.
+    backend: std::rc::Rc<std::cell::RefCell<Bk>>,
     cursor: Bk::Cursor,
-    /// Backend-interpreted output staging; unit-owned so interleaved units cannot
-    /// contaminate each other's containers (see [`ProxyJoinBackend::Sink`]).
     sink: Bk::Sink,
-    /// Greatest group presented so far, to enforce ascending windows.
+    // The harness's window machine.
+    phase: Phase<WindowFor<B0, B1, Bk>>,
     high: Option<Bk::Group>,
-    done: bool,
-    /// Whether the end-of-unit `flush` has been taken.
-    flushed: bool,
-    /// The window in progress and the merge positions into its two bridges.
-    current: Option<(JoinWindow<Bk::Group, Bk::Token0, Bk::Token1, B0::Time, Bk::R0, Bk::R1>, usize, usize)>,
-    /// The previous, fully-processed window, awaiting return to the backend for reuse.
-    spent: Option<JoinWindow<Bk::Group, Bk::Token0, Bk::Token1, B0::Time, Bk::R0, Bk::R1>>,
-    /// Per-key replay histories, held across the unit and reloaded per key (only the >=16/>=16
-    /// replay-wave path touches them), so a high-fanout join pays no per-key `IdHistory` alloc.
+    spent: Option<WindowFor<B0, B1, Bk>>,
+    // Per-key merge scratch, reused across keys and windows.
     h0: IdHistory<Bk::Token0, B0::Time, Bk::R0>,
     h1: IdHistory<Bk::Token1, B0::Time, Bk::R1>,
-    /// Outputs produced but not yet handed to the driver: at most one key's containers.
+    // Outputs not yet handed to the driver: at most one key's containers.
     ready: std::collections::VecDeque<Bk::Output>,
 }
 
@@ -211,77 +245,79 @@ where
         while self.ready.is_empty() {
             let backend = self.backend.clone();
             let mut backend = backend.borrow_mut();
-            let instance = JoinInstance { batches0: &self.input0, batches1: &self.input1, lower: self.lower.borrow() };
+            let instance = self.task.instance();
 
-            // Exhausted: take this unit's final partial container, exactly once.
-            if self.done && self.current.is_none() {
-                if self.flushed {
-                    return None;
+            match &mut self.phase {
+                Phase::Spent => return None,
+
+                // Take this unit's final partial container, exactly once.
+                Phase::Drained => {
+                    self.phase = Phase::Spent;
+                    return backend.flush(&instance, &mut self.sink);
                 }
-                self.flushed = true;
-                return backend.flush(&instance, &mut self.sink);
-            }
 
-            // Fetch the next window if none is in progress, returning the spent one.
-            if self.current.is_none() {
-                match backend.next_window(&instance, self.fresh, &mut self.cursor, self.spent.take()) {
-                    None => {
-                        self.done = true;
+                // Ask for the next window, returning the spent one for buffer reuse.
+                Phase::Fetch => {
+                    match backend.next_window(&instance, self.task.fresh, &mut self.cursor, self.spent.take()) {
+                        None => self.phase = Phase::Drained,
+                        Some(window) => {
+                            super::debug_assert_sorted_bridge(&window.input0, "next_window.input0");
+                            super::debug_assert_sorted_bridge(&window.input1, "next_window.input1");
+                            // Progress guard: an empty window cannot advance the watermark, so a
+                            // backend emitting them repeatedly would spin this loop forever. Skip
+                            // fully-cancelled ranges internally, or return `None`.
+                            assert!(
+                                !window.input0.is_empty() || !window.input1.is_empty(),
+                                "next_window: windows must present at least one record",
+                            );
+                            let first = window.input0.first().map(|r| r.0.0).into_iter().chain(window.input1.first().map(|r| r.0.0)).min();
+                            let last = window.input0.last().map(|r| r.0.0).into_iter().chain(window.input1.last().map(|r| r.0.0)).max();
+                            super::assert_ascending_window(&mut self.high, first, last, "join");
+                            self.phase = Phase::Merge(window, 0, 0);
+                        }
                     }
-                    Some(window) => {
-                        super::debug_assert_sorted_bridge(&window.input0, "next_window.input0");
-                        super::debug_assert_sorted_bridge(&window.input1, "next_window.input1");
-                        // Progress guard: an empty window cannot advance the watermark, so a
-                        // backend emitting them repeatedly would spin this loop forever. Skip
-                        // fully-cancelled ranges internally, or return `None`.
-                        assert!(
-                            !window.input0.is_empty() || !window.input1.is_empty(),
-                            "next_window: windows must present at least one record",
-                        );
-                        let first = window.input0.first().map(|r| r.0.0).into_iter().chain(window.input1.first().map(|r| r.0.0)).min();
-                        let last = window.input0.last().map(|r| r.0.0).into_iter().chain(window.input1.last().map(|r| r.0.0)).max();
-                        super::assert_ascending_window(&mut self.high, first, last, "join");
-                        self.current = Some((window, 0, 0));
+                }
+
+                // Merge-match at most ONE key, so `ready` holds at most one key's
+                // containers. Each match goes straight to the backend's `absorb` — no
+                // staging — which yields containers at its own granularity, including
+                // *within* a high-fanout key's wave.
+                Phase::Merge(window, i, j) => {
+                    let p0 = &window.input0;
+                    let p1 = &window.input1;
+                    let (h0, h1) = (&mut self.h0, &mut self.h1);
+                    let ready = &mut self.ready;
+                    let sink = &mut self.sink;
+                    let mut emit = |l: (Bk::Group, Bk::Token0), r: (Bk::Group, Bk::Token1), t: B0::Time, d: Bk::ROut| {
+                        if let Some(out) = backend.absorb(&instance, sink, l, r, t, d) {
+                            ready.push_back(out);
+                        }
+                    };
+                    let mut matched = false;
+                    while !matched && *i < p0.len() && *j < p1.len() {
+                        let (ki, kj) = (p0[*i].0.0, p1[*j].0.0);
+                        if ki < kj {
+                            *i += 1;
+                        } else if kj < ki {
+                            *j += 1;
+                        } else {
+                            let mut e0 = *i;
+                            while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
+                            let mut e1 = *j;
+                            while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
+                            join_key(ki, p0, *i..e0, p1, *j..e1, h0, h1, &mut emit);
+                            *i = e0;
+                            *j = e1;
+                            matched = true;
+                        }
+                    }
+                    if *i >= p0.len() || *j >= p1.len() {
+                        match std::mem::replace(&mut self.phase, Phase::Fetch) {
+                            Phase::Merge(window, _, _) => self.spent = Some(window),
+                            _ => unreachable!("phase was Merge above"),
+                        }
                     }
                 }
-                continue;
-            }
-
-            // Merge-match at most ONE key from the window in progress, so `ready` holds at
-            // most one key's containers. Each match goes straight to the backend's `absorb`
-            // — no staging — which yields containers at its own granularity, including
-            // *within* a high-fanout key's wave.
-            let (window, i, j) = self.current.as_mut().unwrap();
-            let p0 = &window.input0;
-            let p1 = &window.input1;
-            let (h0, h1) = (&mut self.h0, &mut self.h1);
-            let ready = &mut self.ready;
-            let sink = &mut self.sink;
-            let mut emit = |l: (Bk::Group, Bk::Token0), r: (Bk::Group, Bk::Token1), t: B0::Time, d: Bk::ROut| {
-                if let Some(out) = backend.absorb(&instance, sink, l, r, t, d) {
-                    ready.push_back(out);
-                }
-            };
-            let mut matched = false;
-            while !matched && *i < p0.len() && *j < p1.len() {
-                let (ki, kj) = (p0[*i].0.0, p1[*j].0.0);
-                if ki < kj {
-                    *i += 1;
-                } else if kj < ki {
-                    *j += 1;
-                } else {
-                    let mut e0 = *i;
-                    while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
-                    let mut e1 = *j;
-                    while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
-                    join_key(ki, p0, *i..e0, p1, *j..e1, h0, h1, &mut emit);
-                    *i = e0;
-                    *j = e1;
-                    matched = true;
-                }
-            }
-            if *i >= p0.len() || *j >= p1.len() {
-                self.spent = self.current.take().map(|(w, _, _)| w);
             }
         }
         self.ready.pop_front()
