@@ -38,7 +38,7 @@ fn join_matches_naive() {
 
     for window in [1, 2, 100] {
         for fresh in [Fresh::Input0, Fresh::Input1] {
-            let mut tactic = ProxyJoinTactic::new(EdgeJoinBackend { window });
+            let mut tactic = ProxyJoinTactic::new(EdgeJoinBackend::new(window));
             let work = tactic.prep(
                 vec![a0.clone(), a1.clone()],
                 vec![b0.clone(), b1.clone()],
@@ -75,7 +75,7 @@ fn interleaved_units_share_backend() {
     let expected1 = naive_join(&all(&a), &all(&b));
     let expected2 = naive_join(&all(&c), &all(&d));
 
-    let mut tactic = ProxyJoinTactic::new(EdgeJoinBackend { window: 1 });
+    let mut tactic = ProxyJoinTactic::new(EdgeJoinBackend::new(1));
     let mut u1 = tactic.prep(a, b, Fresh::Input0, 0);
     let mut u2 = tactic.prep(c, d, Fresh::Input1, 0);
     let mut got1: Vec<((Edge, Edge), Time, Diff)> = Vec::new();

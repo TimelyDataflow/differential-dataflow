@@ -88,7 +88,11 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// The size of the window is up to the backend, where the window should be large enough to
     /// amortize the crossings between the harness and the backend. The proxy bridges for the
     /// whole window will be active at the same time, so tighter windows reduce the required state.
-    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, pending: &[Self::Group]) -> Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>;
+    ///
+    /// `reuse` returns the previous, fully-processed window: reclaim its buffer capacity
+    /// (`clear()` and refill) rather than allocating fresh, so steady-state windowing does
+    /// not churn allocation proportional to data volume.
+    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, pending: &[Self::Group], reuse: Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>) -> Option<ReduceWindow<Self::Group, Self::Token, B1::Time, Self::RIn, Self::ROut>>;
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
     ///
@@ -197,7 +201,8 @@ where
         let mut fast_out_ends: Vec<usize> = Vec::new();
         let mut fast_out_all: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
 
-        while let Some(window) = self.backend.next_window(&instance, &pending_keys) {
+        let mut spent: Option<ReduceWindow<Bk::Group, Bk::Token, B1::Time, Bk::RIn, Bk::ROut>> = None;
+        while let Some(window) = self.backend.next_window(&instance, &pending_keys, spent.take()) {
             let p_in = &window.input;
             let p_out = &window.output;
             let seeds = &window.seeds;
@@ -457,6 +462,7 @@ where
                     self.backend.emit(tile, &deltas[..]);
                 }
             }
+            spent = Some(window);
         }
 
         // Hard for the same reason as the per-window pending walk: an uncovered pending

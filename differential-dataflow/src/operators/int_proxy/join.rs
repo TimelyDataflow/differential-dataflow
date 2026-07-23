@@ -76,12 +76,23 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// silently loses that group's matches. Both bridges **must be sorted and consolidated**
     /// by `((group, token), time)`. The backend sizes windows to amortize harness crossings;
     /// both bridges are live at once, so tighter windows mean less state.
-    fn next_window(&mut self, instance: &JoinInstance<'_, B0, B1>, fresh: Fresh, cursor: &mut Self::Cursor) -> Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>;
-    /// From a list of left and right tokens, and corresponding times and diffs, the output.
     ///
-    /// All four slices have equal length, entry `n` describing match `n`. The slices are the
-    /// harness's reused buffers: read them, build the output, and take nothing.
-    fn cross(&mut self, instance: &JoinInstance<'_, B0, B1>, left: &[(Self::Group, Self::Token0)], right: &[(Self::Group, Self::Token1)], times: &[B0::Time], diffs: &[Self::ROut]) -> Self::Output;
+    /// `reuse` returns the previous, fully-processed window: reclaim its bridge capacity
+    /// (`clear()` and refill) rather than allocating fresh, so steady-state windowing does
+    /// not churn allocation proportional to data volume.
+    fn next_window(&mut self, instance: &JoinInstance<'_, B0, B1>, fresh: Fresh, cursor: &mut Self::Cursor, reuse: Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>) -> Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>;
+
+    /// Absorb one match: left and right tokens, joined time, multiplied diff.
+    ///
+    /// The backend accumulates matches into its own output representation and returns a
+    /// finished container whenever its own size target is reached (the backend, not the
+    /// harness, decides container granularity). Matches arrive grouped by key, keys in
+    /// window order. Called at most once per match: there is no staging in the harness,
+    /// so this is the only time the match exists outside the backend.
+    fn absorb(&mut self, instance: &JoinInstance<'_, B0, B1>, left: (Self::Group, Self::Token0), right: (Self::Group, Self::Token1), time: B0::Time, diff: Self::ROut) -> Option<Self::Output>;
+
+    /// Yield the final partial container, if any. Called once, after the last window.
+    fn flush(&mut self, instance: &JoinInstance<'_, B0, B1>) -> Option<Self::Output>;
 }
 
 /// A proxy-space [`JoinTactic`]: matches records of the presented windows by group token,
@@ -122,33 +133,28 @@ where
             cursor: Bk::Cursor::default(),
             high: None,
             done: false,
+            flushed: false,
             current: None,
+            spent: None,
             h0: IdHistory::new(),
             h1: IdHistory::new(),
-            li: Vec::new(),
-            ri: Vec::new(),
-            ot: Vec::new(),
-            od: Vec::new(),
             ready: std::collections::VecDeque::new(),
         })
     }
 }
 
-/// Update count threshold used to return to the backend with join output to instantiate.
-const JOIN_CHUNK: usize = 1 << 20;
-
 /// One lazy join unit: owns its batches and streams outputs a key at a time.
 ///
 /// Each `next` first drains `ready`; when empty it advances the unit by one step —
 /// fetching the next window if none is in progress, or merge-matching **one** key from
-/// the window in progress and crossing its matched records. Containers are cut at
-/// ~[`JOIN_CHUNK`] matches, wherever that lands (mid-key included; parity: their
-/// concatenation is the single-container output), with any remainder flushed when the
-/// unit exhausts. Peak state is one window's presentations plus one key's containers.
+/// the window in progress, feeding each match to the backend's `absorb` (which yields
+/// containers at its own granularity; the final remainder comes from `flush` when the
+/// unit exhausts). Matches are never staged in the harness: peak state is one window's
+/// presentations plus whatever the backend buffers toward its next container.
 ///
-/// The match buffers (`li`/`ri`/`ot`/`od`) and replay histories (`h0`/`h1`) live on the
-/// unit, reused across keys and windows, so steady-state operation allocates only what
-/// the backend's presentations and outputs themselves require.
+/// Spent windows are handed back to the backend through `next_window`'s `reuse`
+/// argument, and the replay histories (`h0`/`h1`) live on the unit, so steady-state
+/// operation allocates only what the backend's own representations require.
 ///
 /// `lower` is the capability's time, a lower bound on the fresh side's times, so the
 /// accumulated side loads compacted (see [`JoinInstance`]); every output is produced under
@@ -164,17 +170,16 @@ struct JoinUnit<B0: BatchReader, B1: BatchReader<Time = B0::Time>, Bk: ProxyJoin
     /// Greatest group presented so far, to enforce ascending windows.
     high: Option<Bk::Group>,
     done: bool,
+    /// Whether the end-of-unit `flush` has been taken.
+    flushed: bool,
     /// The window in progress and the merge positions into its two bridges.
     current: Option<(JoinWindow<Bk::Group, Bk::Token0, Bk::Token1, B0::Time, Bk::R0, Bk::R1>, usize, usize)>,
+    /// The previous, fully-processed window, awaiting return to the backend for reuse.
+    spent: Option<JoinWindow<Bk::Group, Bk::Token0, Bk::Token1, B0::Time, Bk::R0, Bk::R1>>,
     /// Per-key replay histories, held across the unit and reloaded per key (only the >=16/>=16
     /// replay-wave path touches them), so a high-fanout join pays no per-key `IdHistory` alloc.
     h0: IdHistory<Bk::Token0, B0::Time, Bk::R0>,
     h1: IdHistory<Bk::Token1, B0::Time, Bk::R1>,
-    /// Match buffers, held across keys and windows; flushed at `JOIN_CHUNK` and at unit end.
-    li: Vec<(Bk::Group, Bk::Token0)>,
-    ri: Vec<(Bk::Group, Bk::Token1)>,
-    ot: Vec<B0::Time>,
-    od: Vec<Bk::ROut>,
     /// Outputs produced but not yet handed to the driver: at most one key's containers.
     ready: std::collections::VecDeque<Bk::Output>,
 }
@@ -192,22 +197,18 @@ where
             let mut backend = backend.borrow_mut();
             let instance = JoinInstance { batches0: &self.input0, batches1: &self.input1, lower: self.lower.borrow() };
 
-            // Exhausted: flush any straggling matches as the final container.
+            // Exhausted: take the backend's final partial container, exactly once.
             if self.done && self.current.is_none() {
-                if self.li.is_empty() {
+                if self.flushed {
                     return None;
                 }
-                let out = backend.cross(&instance, &self.li, &self.ri, &self.ot, &self.od);
-                self.li.clear();
-                self.ri.clear();
-                self.ot.clear();
-                self.od.clear();
-                return Some(out);
+                self.flushed = true;
+                return backend.flush(&instance);
             }
 
-            // Fetch the next window if none is in progress.
+            // Fetch the next window if none is in progress, returning the spent one.
             if self.current.is_none() {
-                match backend.next_window(&instance, self.fresh, &mut self.cursor) {
+                match backend.next_window(&instance, self.fresh, &mut self.cursor, self.spent.take()) {
                     None => {
                         self.done = true;
                     }
@@ -231,22 +232,18 @@ where
             }
 
             // Merge-match at most ONE key from the window in progress, so `ready` holds at
-            // most one key's containers. `flush` ships the accumulated batch as a container
-            // and resets the buffers; `join_key` calls it at each `JOIN_CHUNK` boundary —
-            // including *within* a high-fanout key's wave — so no single key materializes
-            // more than a chunk of its cross product at a time in the match buffers.
+            // most one key's containers. Each match goes straight to the backend's `absorb`
+            // — no staging — which yields containers at its own granularity, including
+            // *within* a high-fanout key's wave.
             let (window, i, j) = self.current.as_mut().unwrap();
             let p0 = &window.input0;
             let p1 = &window.input1;
             let (h0, h1) = (&mut self.h0, &mut self.h1);
-            let (li, ri, ot, od) = (&mut self.li, &mut self.ri, &mut self.ot, &mut self.od);
             let ready = &mut self.ready;
-            let mut flush = |li: &mut Vec<(Bk::Group, Bk::Token0)>, ri: &mut Vec<(Bk::Group, Bk::Token1)>, ot: &mut Vec<B0::Time>, od: &mut Vec<Bk::ROut>| {
-                ready.push_back(backend.cross(&instance, li.as_slice(), ri.as_slice(), ot.as_slice(), od.as_slice()));
-                li.clear();
-                ri.clear();
-                ot.clear();
-                od.clear();
+            let mut emit = |l: (Bk::Group, Bk::Token0), r: (Bk::Group, Bk::Token1), t: B0::Time, d: Bk::ROut| {
+                if let Some(out) = backend.absorb(&instance, l, r, t, d) {
+                    ready.push_back(out);
+                }
             };
             let mut matched = false;
             while !matched && *i < p0.len() && *j < p1.len() {
@@ -260,26 +257,25 @@ where
                     while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
                     let mut e1 = *j;
                     while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
-                    join_key(ki, p0, *i..e0, p1, *j..e1, h0, h1, li, ri, ot, od, &mut flush);
+                    join_key(ki, p0, *i..e0, p1, *j..e1, h0, h1, &mut emit);
                     *i = e0;
                     *j = e1;
                     matched = true;
                 }
             }
             if *i >= p0.len() || *j >= p1.len() {
-                self.current = None;
+                self.spent = self.current.take().map(|(w, _, _)| w);
             }
         }
         self.ready.pop_front()
     }
 }
 
-/// Match one key's records across the two presented runs.
+/// Match one key's records across the two presented runs, emitting each match.
 ///
 /// If either history is small, this performs a simple cross product.
 /// If both histories are large, this replays the histories compacting as it goes in
 /// order to (potentially) avoid quadratic blow-up.
-#[allow(clippy::too_many_arguments)]
 fn join_key<G, I0, I1, T, R0, R1, RO, F>(
     kh: G,
     p0: &ProxyBridge<G, I0, T, R0>,
@@ -288,11 +284,7 @@ fn join_key<G, I0, I1, T, R0, R1, RO, F>(
     r1: std::ops::Range<usize>,
     h0: &mut IdHistory<I0, T, R0>,
     h1: &mut IdHistory<I1, T, R1>,
-    li: &mut Vec<(G, I0)>,
-    ri: &mut Vec<(G, I1)>,
-    ot: &mut Vec<T>,
-    od: &mut Vec<RO>,
-    flush: &mut F,
+    emit: &mut F,
 ) where
     G: Copy + Ord,
     I0: Copy + Ord,
@@ -300,19 +292,12 @@ fn join_key<G, I0, I1, T, R0, R1, RO, F>(
     T: Lattice + Timestamp,
     R0: Semigroup + Multiply<R1, Output = RO> + Clone,
     R1: Semigroup + Clone,
-    F: FnMut(&mut Vec<(G, I0)>, &mut Vec<(G, I1)>, &mut Vec<T>, &mut Vec<RO>),
+    F: FnMut((G, I0), (G, I1), T, RO),
 {
-    // `flush` ships the accumulated batch once it reaches `JOIN_CHUNK` and resets the buffers. It's
-    // checked after every produced pair — *including inside the replay wave below* — so even a key
-    // whose fanout dwarfs `JOIN_CHUNK` never materializes more than a chunk of its cross product.
     if r0.len() < 16 || r1.len() < 16 {
         for a in r0 {
             for b in r1.clone() {
-                li.push((kh, p0[a].0.1));
-                ri.push((kh, p1[b].0.1));
-                ot.push(p0[a].1.join(&p1[b].1));
-                od.push(p0[a].2.clone().multiply(&p1[b].2));
-                if li.len() >= JOIN_CHUNK { flush(li, ri, ot, od); }
+                emit((kh, p0[a].0.1), (kh, p1[b].0.1), p0[a].1.join(&p1[b].1), p0[a].2.clone().multiply(&p1[b].2));
             }
         }
         return;
@@ -324,12 +309,6 @@ fn join_key<G, I0, I1, T, R0, R1, RO, F>(
     h1.load_iter(r1.map(|i| (p1[i].0.1, p1[i].1.clone(), p1[i].2.clone())), None);
 
     crate::operators::common::bilinear_wave(h0, h1, |v0, v1, t, d| {
-        li.push((kh, v0));
-        ri.push((kh, v1));
-        ot.push(t);
-        od.push(d);
-        if li.len() >= JOIN_CHUNK {
-            flush(li, ri, ot, od);
-        }
+        emit((kh, v0), (kh, v1), t, d);
     });
 }

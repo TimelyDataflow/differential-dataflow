@@ -198,6 +198,15 @@ struct RowJoinCursor {
 struct RowJoinBackend {
     /// Groups per window; tiny in tests to force many windows.
     window: usize,
+    /// Matches per output container; tiny in tests to force many containers.
+    target: usize,
+    staged: Vec<(Row, Row, Time, Diff)>,
+}
+
+impl RowJoinBackend {
+    fn new(window: usize) -> Self {
+        RowJoinBackend { window, target: 8, staged: Vec::new() }
+    }
 }
 
 impl ProxyJoinBackend<RowBatch, RowBatch> for RowJoinBackend {
@@ -216,6 +225,7 @@ impl ProxyJoinBackend<RowBatch, RowBatch> for RowJoinBackend {
         instance: &JoinInstance<'_, RowBatch, RowBatch>,
         fresh: Fresh,
         cursor: &mut RowJoinCursor,
+        reuse: Option<JoinWindow<u64, u64, u64, Time, Diff, Diff>>,
     ) -> Option<JoinWindow<u64, u64, u64, Time, Diff, Diff>> {
         cursor.pos0.resize(instance.batches0.len(), 0);
         cursor.pos1.resize(instance.batches1.len(), 0);
@@ -225,9 +235,14 @@ impl ProxyJoinBackend<RowBatch, RowBatch> for RowJoinBackend {
             Fresh::Input0 => (instance.batches0, instance.batches1),
             Fresh::Input1 => (instance.batches1, instance.batches0),
         };
+        // Reclaim the spent window's bridge capacity.
+        let (mut fresh_run, mut other_run) = match reuse {
+            Some(JoinWindow { input0, input1 }) => (input0, input1),
+            None => (Vec::new(), Vec::new()),
+        };
         loop {
-            let mut fresh_run = Vec::new();
-            let mut other_run = Vec::new();
+            fresh_run.clear();
+            other_run.clear();
             let mut groups = 0;
             while groups < self.window {
                 let (fresh_pos, other_pos) = match fresh {
@@ -266,31 +281,36 @@ impl ProxyJoinBackend<RowBatch, RowBatch> for RowJoinBackend {
         }
     }
 
-    fn cross(
+    fn absorb(
         &mut self,
         instance: &JoinInstance<'_, RowBatch, RowBatch>,
-        left: &[(u64, u64)],
-        right: &[(u64, u64)],
-        times: &[Time],
-        diffs: &[Diff],
-    ) -> Self::Output {
+        left: (u64, u64),
+        right: (u64, u64),
+        time: Time,
+        diff: Diff,
+    ) -> Option<Self::Output> {
         // Not self-redeeming: tokens are redeemed against the columns, T1-checked. Group
         // collisions are resolved here, per the module contract: matching was by group
         // token, so re-check real key bytes and drop false pairs.
-        left.iter()
-            .zip(right)
-            .zip(times)
-            .zip(diffs)
-            .filter_map(|(((l, r), t), d)| {
-                let lrow = redeem(instance.batches0, *l);
-                let rrow = redeem(instance.batches1, *r);
-                if key_of(lrow) == key_of(rrow) {
-                    Some((lrow.to_vec(), rrow.to_vec(), *t, *d))
-                } else {
-                    None
-                }
-            })
-            .collect()
+        let lrow = redeem(instance.batches0, left);
+        let rrow = redeem(instance.batches1, right);
+        if key_of(lrow) == key_of(rrow) {
+            let (lrow, rrow) = (lrow.to_vec(), rrow.to_vec());
+            self.staged.push((lrow, rrow, time, diff));
+        }
+        if self.staged.len() >= self.target {
+            Some(std::mem::take(&mut self.staged))
+        } else {
+            None
+        }
+    }
+
+    fn flush(&mut self, _instance: &JoinInstance<'_, RowBatch, RowBatch>) -> Option<Self::Output> {
+        if self.staged.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.staged))
+        }
     }
 }
 
@@ -331,7 +351,7 @@ fn check_join(hasher: Hasher) {
 
     for window in [1, 2, 100] {
         for fresh in [Fresh::Input0, Fresh::Input1] {
-            let mut tactic = ProxyJoinTactic::new(RowJoinBackend { window });
+            let mut tactic = ProxyJoinTactic::new(RowJoinBackend::new(window));
             let work = tactic.prep(
                 vec![RowBatch::form(a0.clone(), 0, 3, hasher), RowBatch::form(a1.clone(), 0, 3, hasher)],
                 vec![RowBatch::form(b0.clone(), 0, 3, hasher), RowBatch::form(b1.clone(), 0, 3, hasher)],
@@ -391,7 +411,7 @@ fn redemption_detects_cross_batch_collisions() {
     let left1 = RowBatch::form(vec![(r1, 0, 1)], 0, 1, weak_hash);
     let right = RowBatch::form(rows(&[("k|hit", 0, 1)]), 0, 1, weak_hash);
 
-    let mut tactic = ProxyJoinTactic::new(RowJoinBackend { window: 100 });
+    let mut tactic = ProxyJoinTactic::new(RowJoinBackend::new(100));
     let work = tactic.prep(vec![left0, left1], vec![right], Fresh::Input0, 0);
     let _: Vec<_> = work.collect();
 }
@@ -475,14 +495,22 @@ impl ProxyReduceBackend<RowBatch, RowBatch> for RowReduceBackend {
         &mut self,
         instance: &ReduceInstance<'_, RowBatch, RowBatch>,
         pending: &[u64],
+        reuse: Option<ReduceWindow<u64, u64, Time, Diff, Diff>>,
     ) -> Option<ReduceWindow<u64, u64, Time, Diff, Diff>> {
         self.pos_source.resize(instance.source_batches.len(), 0);
         self.pos_input.resize(instance.input_batches.len(), 0);
         self.pos_output.resize(instance.output_batches.len(), 0);
-        let mut keys = Vec::new();
-        let mut seeds = Vec::new();
-        let mut input = Vec::new();
-        let mut output = Vec::new();
+        // Reclaim the spent window's buffer capacity.
+        let (mut keys, mut seeds, mut input, mut output) = match reuse {
+            Some(ReduceWindow { mut keys, mut seeds, mut input, mut output }) => {
+                keys.clear();
+                seeds.clear();
+                input.clear();
+                output.clear();
+                (keys, seeds, input, output)
+            }
+            None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        };
         while keys.len() < self.window {
             let g = [
                 next_group(instance.source_batches, &self.pos_source),

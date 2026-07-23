@@ -87,6 +87,14 @@ struct GraphJoinCursor {
 
 struct GraphJoinBackend {
     window: usize,
+    target: usize,
+    staged: Vec<(Edge, Edge, Time, Diff)>,
+}
+
+impl GraphJoinBackend {
+    fn new(window: usize) -> Self {
+        GraphJoinBackend { window, target: 1 << 20, staged: Vec::new() }
+    }
 }
 
 impl ProxyJoinBackend<GraphBatch, GraphBatch> for GraphJoinBackend {
@@ -104,6 +112,7 @@ impl ProxyJoinBackend<GraphBatch, GraphBatch> for GraphJoinBackend {
         instance: &JoinInstance<'_, GraphBatch, GraphBatch>,
         fresh: Fresh,
         cursor: &mut GraphJoinCursor,
+        reuse: Option<JoinWindow<u32, Edge, Edge, Time, Diff, Diff>>,
     ) -> Option<JoinWindow<u32, Edge, Edge, Time, Diff, Diff>> {
         cursor.pos0.resize(instance.batches0.len(), 0);
         cursor.pos1.resize(instance.batches1.len(), 0);
@@ -111,9 +120,13 @@ impl ProxyJoinBackend<GraphBatch, GraphBatch> for GraphJoinBackend {
             Fresh::Input0 => (instance.batches0, instance.batches1),
             Fresh::Input1 => (instance.batches1, instance.batches0),
         };
+        let (mut fresh_run, mut other_run) = match reuse {
+            Some(JoinWindow { input0, input1 }) => (input0, input1),
+            None => (Vec::new(), Vec::new()),
+        };
         loop {
-            let mut fresh_run = Vec::new();
-            let mut other_run = Vec::new();
+            fresh_run.clear();
+            other_run.clear();
             let mut groups = 0;
             while groups < self.window {
                 let (fresh_pos, other_pos) = match fresh {
@@ -150,20 +163,24 @@ impl ProxyJoinBackend<GraphBatch, GraphBatch> for GraphJoinBackend {
         }
     }
 
-    fn cross(
+    fn absorb(
         &mut self,
         _instance: &JoinInstance<'_, GraphBatch, GraphBatch>,
-        left: &[(u32, Edge)],
-        right: &[(u32, Edge)],
-        times: &[Time],
-        diffs: &[Diff],
-    ) -> Self::Output {
-        left.iter()
-            .zip(right)
-            .zip(times)
-            .zip(diffs)
-            .map(|(((l, r), t), d)| (l.1, r.1, *t, *d))
-            .collect()
+        left: (u32, Edge),
+        right: (u32, Edge),
+        time: Time,
+        diff: Diff,
+    ) -> Option<Self::Output> {
+        self.staged.push((left.1, right.1, time, diff));
+        if self.staged.len() >= self.target {
+            Some(std::mem::take(&mut self.staged))
+        } else {
+            None
+        }
+    }
+
+    fn flush(&mut self, _instance: &JoinInstance<'_, GraphBatch, GraphBatch>) -> Option<Self::Output> {
+        if self.staged.is_empty() { None } else { Some(std::mem::take(&mut self.staged)) }
     }
 }
 
@@ -212,14 +229,18 @@ impl ProxyReduceBackend<GraphBatch, GraphBatch> for GraphReduceBackend {
         &mut self,
         instance: &ReduceInstance<'_, GraphBatch, GraphBatch>,
         pending: &[u32],
+        reuse: Option<ReduceWindow<u32, Edge, Time, Diff, Diff>>,
     ) -> Option<ReduceWindow<u32, Edge, Time, Diff, Diff>> {
         self.pos_source.resize(instance.source_batches.len(), 0);
         self.pos_input.resize(instance.input_batches.len(), 0);
         self.pos_output.resize(instance.output_batches.len(), 0);
-        let mut keys = Vec::new();
-        let mut seeds = Vec::new();
-        let mut input = Vec::new();
-        let mut output = Vec::new();
+        let (mut keys, mut seeds, mut input, mut output) = match reuse {
+            Some(ReduceWindow { mut keys, mut seeds, mut input, mut output }) => {
+                keys.clear(); seeds.clear(); input.clear(); output.clear();
+                (keys, seeds, input, output)
+            }
+            None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        };
         while keys.len() < self.window {
             let g = [
                 next_group(instance.source_batches, &self.pos_source),
@@ -460,6 +481,14 @@ mod ordval {
 
     pub struct OrdJoinBackend {
         pub window: usize,
+        pub target: usize,
+        staged: Vec<(Edge, Edge, Time, Diff)>,
+    }
+
+    impl OrdJoinBackend {
+        pub fn new(window: usize) -> Self {
+            OrdJoinBackend { window, target: 1 << 20, staged: Vec::new() }
+        }
     }
 
     impl ProxyJoinBackend<Bt, Bt> for OrdJoinBackend {
@@ -477,12 +506,17 @@ mod ordval {
             instance: &JoinInstance<'_, Bt, Bt>,
             fresh: Fresh,
             cursor: &mut OrdJoinCursor,
+            reuse: Option<JoinWindow<u32, Edge, Edge, Time, Diff, Diff>>,
         ) -> Option<JoinWindow<u32, Edge, Edge, Time, Diff, Diff>> {
             cursor.c0.start(instance.batches0);
             cursor.c1.start(instance.batches1);
+            let (mut fresh_run, mut other_run) = match reuse {
+                Some(JoinWindow { input0, input1 }) => (input0, input1),
+                None => (Vec::new(), Vec::new()),
+            };
             loop {
-                let mut fresh_run = Vec::new();
-                let mut other_run = Vec::new();
+                fresh_run.clear();
+                other_run.clear();
                 let mut groups = 0;
                 while groups < self.window {
                     let (fc, ob, oc, fb) = match fresh {
@@ -515,20 +549,24 @@ mod ordval {
             }
         }
 
-        fn cross(
+        fn absorb(
             &mut self,
             _instance: &JoinInstance<'_, Bt, Bt>,
-            left: &[(u32, Edge)],
-            right: &[(u32, Edge)],
-            times: &[Time],
-            diffs: &[Diff],
-        ) -> Self::Output {
-            left.iter()
-                .zip(right)
-                .zip(times)
-                .zip(diffs)
-                .map(|(((l, r), t), d)| (l.1, r.1, *t, *d))
-                .collect()
+            left: (u32, Edge),
+            right: (u32, Edge),
+            time: Time,
+            diff: Diff,
+        ) -> Option<Self::Output> {
+            self.staged.push((left.1, right.1, time, diff));
+            if self.staged.len() >= self.target {
+                Some(std::mem::take(&mut self.staged))
+            } else {
+                None
+            }
+        }
+
+        fn flush(&mut self, _instance: &JoinInstance<'_, Bt, Bt>) -> Option<Self::Output> {
+            if self.staged.is_empty() { None } else { Some(std::mem::take(&mut self.staged)) }
         }
     }
 
@@ -577,14 +615,18 @@ mod ordval {
             &mut self,
             instance: &ReduceInstance<'_, Bt, Bt>,
             pending: &[u32],
+            reuse: Option<ReduceWindow<u32, Edge, Time, Diff, Diff>>,
         ) -> Option<ReduceWindow<u32, Edge, Time, Diff, Diff>> {
             self.source.start(instance.source_batches);
             self.input.start(instance.input_batches);
             self.output.start(instance.output_batches);
-            let mut keys = Vec::new();
-            let mut seeds = Vec::new();
-            let mut input = Vec::new();
-            let mut output = Vec::new();
+            let (mut keys, mut seeds, mut input, mut output) = match reuse {
+                Some(ReduceWindow { mut keys, mut seeds, mut input, mut output }) => {
+                    keys.clear(); seeds.clear(); input.clear(); output.clear();
+                    (keys, seeds, input, output)
+                }
+                None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            };
             while keys.len() < self.window {
                 let g = [
                     self.source.next_group(instance.source_batches),
@@ -708,7 +750,7 @@ fn main() {
     );
     let t_native = time("native merge-join", reps, || native_join(&a, &b, 1 << 20));
     let t_proxy = time("proxy join (value tokens)", reps, || {
-        let mut tactic = ProxyJoinTactic::new(GraphJoinBackend { window });
+        let mut tactic = ProxyJoinTactic::new(GraphJoinBackend::new(window));
         let work = tactic.prep(a.clone(), b.clone(), Fresh::Input0, 0);
         work.collect::<Vec<_>>()
     });
@@ -746,7 +788,7 @@ fn main() {
         work.collect::<Vec<_>>()
     });
     let t_proxy = time("proxy join (cursor backend)", reps, || {
-        let mut tactic = ProxyJoinTactic::new(ordval::OrdJoinBackend { window });
+        let mut tactic = ProxyJoinTactic::new(ordval::OrdJoinBackend::new(window));
         let work = tactic.prep(a_ord.clone(), b_ord.clone(), Fresh::Input0, 0);
         work.collect::<Vec<_>>()
     });

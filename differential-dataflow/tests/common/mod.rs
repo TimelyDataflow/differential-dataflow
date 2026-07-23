@@ -93,12 +93,21 @@ pub struct EdgeJoinCursor {
     pub pos1: Vec<usize>,
 }
 
-pub struct EdgeJoinBackend {
+pub struct EdgeJoinBackend<T> {
     /// Groups per window; tiny in tests to force many windows.
     pub window: usize,
+    /// Matches per output container; tiny in tests to force many containers.
+    pub target: usize,
+    staged: Vec<(Edge, Edge, T, Diff)>,
 }
 
-impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> for EdgeJoinBackend {
+impl<T> EdgeJoinBackend<T> {
+    pub fn new(window: usize) -> Self {
+        EdgeJoinBackend { window, target: 8, staged: Vec::new() }
+    }
+}
+
+impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> for EdgeJoinBackend<T> {
     type Group = u32;
     type Token0 = Edge;
     type Token1 = Edge;
@@ -114,6 +123,7 @@ impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> 
         instance: &JoinInstance<'_, EdgeBatch<T>, EdgeBatch<T>>,
         fresh: Fresh,
         cursor: &mut EdgeJoinCursor,
+        reuse: Option<JoinWindow<u32, Edge, Edge, T, Diff, Diff>>,
     ) -> Option<JoinWindow<u32, Edge, Edge, T, Diff, Diff>> {
         cursor.pos0.resize(instance.batches0.len(), 0);
         cursor.pos1.resize(instance.batches1.len(), 0);
@@ -123,9 +133,14 @@ impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> 
             Fresh::Input0 => (instance.batches0, instance.batches1),
             Fresh::Input1 => (instance.batches1, instance.batches0),
         };
+        // Reclaim the spent window's bridge capacity.
+        let (mut fresh_run, mut other_run) = match reuse {
+            Some(JoinWindow { input0, input1 }) => (input0, input1),
+            None => (Vec::new(), Vec::new()),
+        };
         loop {
-            let mut fresh_run = Vec::new();
-            let mut other_run = Vec::new();
+            fresh_run.clear();
+            other_run.clear();
             let mut groups = 0;
             while groups < self.window {
                 let (fresh_pos, other_pos) = match fresh {
@@ -165,21 +180,29 @@ impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> 
         }
     }
 
-    fn cross(
+    fn absorb(
         &mut self,
         _instance: &JoinInstance<'_, EdgeBatch<T>, EdgeBatch<T>>,
-        left: &[(u32, Edge)],
-        right: &[(u32, Edge)],
-        times: &[T],
-        diffs: &[Diff],
-    ) -> Self::Output {
+        left: (u32, Edge),
+        right: (u32, Edge),
+        time: T,
+        diff: Diff,
+    ) -> Option<Self::Output> {
         // Self-redeeming tokens: the output is built from the tokens alone.
-        left.iter()
-            .zip(right)
-            .zip(times)
-            .zip(diffs)
-            .map(|(((l, r), t), d)| (l.1, r.1, t.clone(), *d))
-            .collect()
+        self.staged.push((left.1, right.1, time, diff));
+        if self.staged.len() >= self.target {
+            Some(std::mem::take(&mut self.staged))
+        } else {
+            None
+        }
+    }
+
+    fn flush(&mut self, _instance: &JoinInstance<'_, EdgeBatch<T>, EdgeBatch<T>>) -> Option<Self::Output> {
+        if self.staged.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.staged))
+        }
     }
 }
 
@@ -248,14 +271,22 @@ impl<T: Timestamp + Lattice + Ord> ProxyReduceBackend<EdgeBatch<T>, EdgeBatch<T>
         &mut self,
         instance: &ReduceInstance<'_, EdgeBatch<T>, EdgeBatch<T>>,
         pending: &[u32],
+        reuse: Option<ReduceWindow<u32, Edge, T, Diff, Diff>>,
     ) -> Option<ReduceWindow<u32, Edge, T, Diff, Diff>> {
         self.pos_source.resize(instance.source_batches.len(), 0);
         self.pos_input.resize(instance.input_batches.len(), 0);
         self.pos_output.resize(instance.output_batches.len(), 0);
-        let mut keys = Vec::new();
-        let mut seeds = Vec::new();
-        let mut input = Vec::new();
-        let mut output = Vec::new();
+        // Reclaim the spent window's buffer capacity.
+        let (mut keys, mut seeds, mut input, mut output) = match reuse {
+            Some(ReduceWindow { mut keys, mut seeds, mut input, mut output }) => {
+                keys.clear();
+                seeds.clear();
+                input.clear();
+                output.clear();
+                (keys, seeds, input, output)
+            }
+            None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        };
         while keys.len() < self.window {
             let g = [
                 next_group(instance.source_batches, &self.pos_source),
