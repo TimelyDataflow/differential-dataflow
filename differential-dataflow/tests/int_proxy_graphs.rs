@@ -101,6 +101,71 @@ fn interleaved_units_share_backend() {
     assert_eq!(got2, expected2);
 }
 
+#[test]
+fn reduce_fuzz_matches_oracle() {
+    // Deterministic randomized differential test: random updates over a small key
+    // space, random times within each round's interval (so rounds mix fast-path
+    // keys — one distinct time — with slow-path keys), random retractions of live
+    // edges, several window sizes. The oracle is exact per-time counting.
+    let mut state = 0x853c49e6748fea9bu64;
+    let mut rng = move || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 33) as u32
+    };
+
+    for window in [1, 3, 100] {
+        let mut tactic = ProxyReduceTactic::new(EdgeReduceBackend::new(window));
+        let mut source: Vec<GraphBatch> = Vec::new();
+        let mut outputs: Vec<GraphBatch> = Vec::new();
+        let mut live: Vec<Edge> = Vec::new();
+        const ROUNDS: u64 = 8;
+        const WIDTH: u64 = 3;
+        for round in 0..ROUNDS {
+            let lo = round * WIDTH;
+            let hi = lo + WIDTH;
+            let mut updates: Vec<(Edge, Time, Diff)> = Vec::new();
+            // Retract only edges from PRIOR rounds (any time this round is at or after
+            // their insertion, keeping every prefix accumulation non-negative); this
+            // round's insertions join `live` only at round end.
+            let mut fresh: Vec<Edge> = Vec::new();
+            for _ in 0..40 {
+                let t = lo + (rng() as u64) % WIDTH;
+                if !live.is_empty() && rng() % 4 == 0 {
+                    let e = live[(rng() as usize) % live.len()];
+                    live.retain(|x| *x != e);
+                    updates.push((e, t, -1));
+                } else {
+                    let e = (rng() % 16, rng() % 64);
+                    fresh.push(e);
+                    updates.push((e, t, 1));
+                }
+            }
+            live.append(&mut fresh);
+            let input = batch(updates, lo, hi);
+            let lower = Antichain::from_elem(lo);
+            let upper = Antichain::from_elem(hi);
+            let held = Antichain::from_elem(lo);
+            let (produced, frontier) = tactic.retire(
+                source.clone(),
+                outputs.clone(),
+                vec![input.clone()],
+                &lower,
+                &upper,
+                &held,
+            );
+            assert!(frontier.is_empty(), "total order should defer nothing");
+            for (time, b) in produced {
+                assert!(held.elements().contains(&time));
+                outputs.push(b);
+            }
+            source.push(input);
+            for t in lo..hi {
+                assert_counts(&source, &outputs, t, &format!("fuzz window={window} round={round}"));
+            }
+        }
+    }
+}
+
 /// Per-time count oracle shared by the reduce tests.
 fn assert_counts(source: &[GraphBatch], outputs: &[GraphBatch], t: Time, label: &str) {
     let input_acc = accumulate(source.iter().flat_map(|b| b.updates.iter().cloned()), &t);
