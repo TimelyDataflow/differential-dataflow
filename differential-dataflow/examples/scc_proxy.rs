@@ -251,8 +251,14 @@ where
 }
 
 /// `strongly_connected`, with `trim_edges`' joins run through the proxy tactic.
+///
+/// `stagger` selects the label-introduction logic: `false` is `|_| 0` (stock
+/// `strongly_connected`); `true` is `|x| x as u64` (the prioritized
+/// `strongly_connected_at` shape — the #801 trigger, with labels completing
+/// their propagation in rounds while later labels are still being introduced).
 fn strongly_connected_proxy<'scope, T>(
     graph: VecCollection<'scope, T, (usize, usize), Diff>,
+    stagger: bool,
 ) -> VecCollection<'scope, T, (usize, usize), Diff>
 where
     T: Timestamp + Lattice + Hash + Ord,
@@ -262,7 +268,7 @@ where
         let edges = graph.enter(scope);
         let trans = edges.clone().map_in_place(|x| mem::swap(&mut x.0, &mut x.1));
         let (variable, inner) = Variable::new_from(edges.clone(), Product::new(Default::default(), 1));
-        let result = trim_edges_proxy(trim_edges_proxy(inner, edges), trans);
+        let result = trim_edges_proxy(trim_edges_proxy(inner, edges, stagger), trans, stagger);
         variable.set(result.clone());
         result.leave(outer)
     })
@@ -271,6 +277,7 @@ where
 fn trim_edges_proxy<'scope, T>(
     cycle: VecCollection<'scope, T, (usize, usize), Diff>,
     edges: VecCollection<'scope, T, (usize, usize), Diff>,
+    stagger: bool,
 ) -> VecCollection<'scope, T, (usize, usize), Diff>
 where
     T: Timestamp + Lattice + Hash + Ord,
@@ -285,8 +292,13 @@ where
             .map_in_place(|x| x.0 = x.1)
             .consolidate();
 
-        // `|_| 0` (no label staggering), matching stock `strongly_connected` exactly.
-        let labels = propagate_at(cycle, nodes, |_| 0).arrange_by_key();
+        let labels = if stagger {
+            propagate_at(cycle, nodes, |x| *x as u64)
+        } else {
+            // `|_| 0` (no label staggering), matching stock `strongly_connected` exactly.
+            propagate_at(cycle, nodes, |_| 0)
+        }
+        .arrange_by_key();
 
         let step1 = proxy_join(
             edges.arrange_by_key(),
@@ -338,14 +350,20 @@ fn main() {
         }
 
         let validate = std::env::var("SCC_VALIDATE").is_ok();
+        let stagger = std::env::var("SCC_STAGGER").is_ok();
         let mut probe = Handle::new();
         let mut input = worker.dataflow(|scope| {
             let (input, graph) = scope.new_collection::<(usize, usize), Diff>();
-            let scc = strongly_connected_proxy(graph.clone());
+            let scc = strongly_connected_proxy(graph.clone(), stagger);
             if validate {
                 // Oracle: stock and proxy SCC must agree exactly, at every time.
-                use differential_dataflow::algorithms::graphs::scc::strongly_connected;
-                strongly_connected(graph)
+                use differential_dataflow::algorithms::graphs::scc::{strongly_connected, strongly_connected_at};
+                let oracle = if stagger {
+                    strongly_connected_at(graph, |x| *x as u64)
+                } else {
+                    strongly_connected(graph)
+                };
+                oracle
                     .negate()
                     .concat(scc.clone())
                     .consolidate()
