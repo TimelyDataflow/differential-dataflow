@@ -93,21 +93,20 @@ pub struct EdgeJoinCursor {
     pub pos1: Vec<usize>,
 }
 
-pub struct EdgeJoinBackend<T> {
+pub struct EdgeJoinBackend {
     /// Groups per window; tiny in tests to force many windows.
     pub window: usize,
     /// Matches per output container; tiny in tests to force many containers.
     pub target: usize,
-    staged: Vec<(Edge, Edge, T, Diff)>,
 }
 
-impl<T> EdgeJoinBackend<T> {
+impl EdgeJoinBackend {
     pub fn new(window: usize) -> Self {
-        EdgeJoinBackend { window, target: 8, staged: Vec::new() }
+        EdgeJoinBackend { window, target: 8 }
     }
 }
 
-impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> for EdgeJoinBackend<T> {
+impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> for EdgeJoinBackend {
     type Group = u32;
     type Token0 = Edge;
     type Token1 = Edge;
@@ -117,6 +116,7 @@ impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> 
     /// Matched edge pairs with their joined time and multiplied diff.
     type Output = Vec<(Edge, Edge, T, Diff)>;
     type Cursor = EdgeJoinCursor;
+    type Sink = Vec<(Edge, Edge, T, Diff)>;
 
     fn next_window(
         &mut self,
@@ -134,9 +134,12 @@ impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> 
             Fresh::Input1 => (instance.batches1, instance.batches0),
         };
         // Reclaim the spent window's bridge capacity.
-        let (mut fresh_run, mut other_run) = match reuse {
-            Some(JoinWindow { input0, input1 }) => (input0, input1),
-            None => (Vec::new(), Vec::new()),
+        // Route each reclaimed vec back to the side it served, so capacities stay
+        // side-stable rather than alternating duties across round trips.
+        let (mut fresh_run, mut other_run) = match (reuse, fresh) {
+            (Some(JoinWindow { input0, input1 }), Fresh::Input0) => (input0, input1),
+            (Some(JoinWindow { input0, input1 }), Fresh::Input1) => (input1, input0),
+            (None, _) => (Vec::new(), Vec::new()),
         };
         loop {
             fresh_run.clear();
@@ -183,25 +186,26 @@ impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> 
     fn absorb(
         &mut self,
         _instance: &JoinInstance<'_, EdgeBatch<T>, EdgeBatch<T>>,
+        sink: &mut Self::Sink,
         left: (u32, Edge),
         right: (u32, Edge),
         time: T,
         diff: Diff,
     ) -> Option<Self::Output> {
         // Self-redeeming tokens: the output is built from the tokens alone.
-        self.staged.push((left.1, right.1, time, diff));
-        if self.staged.len() >= self.target {
-            Some(std::mem::take(&mut self.staged))
+        sink.push((left.1, right.1, time, diff));
+        if sink.len() >= self.target {
+            Some(std::mem::take(sink))
         } else {
             None
         }
     }
 
-    fn flush(&mut self, _instance: &JoinInstance<'_, EdgeBatch<T>, EdgeBatch<T>>) -> Option<Self::Output> {
-        if self.staged.is_empty() {
+    fn flush(&mut self, _instance: &JoinInstance<'_, EdgeBatch<T>, EdgeBatch<T>>, sink: &mut Self::Sink) -> Option<Self::Output> {
+        if sink.is_empty() {
             None
         } else {
-            Some(std::mem::take(&mut self.staged))
+            Some(std::mem::take(sink))
         }
     }
 }

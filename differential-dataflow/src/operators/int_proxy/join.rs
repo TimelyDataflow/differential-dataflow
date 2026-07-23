@@ -35,8 +35,8 @@ pub struct JoinWindow<G, I0, I1, T, R0, R1> {
 /// A type that can interpret and retire pairs of batches, joined by group tokens.
 ///
 /// The protocol repeatedly invokes `next_window` to produce bounded presentations of the two
-/// inputs, matched by group, and calls `cross` (any number of times per window, including zero)
-/// to produce outputs. Windows are produced lazily as the join driver's fuel allows, so at most
+/// inputs, matched by group; each match is handed to `absorb`, and `flush` yields the final
+/// partial container. Windows are produced lazily as the join driver's fuel allows, so at most
 /// one window's presentations are live at a time.
 pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// The group token: names the granule of independence, shared by both inputs.
@@ -65,6 +65,15 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// of a fresh unit; a typical backend records a position per batch per side.
     type Cursor: Default;
 
+    /// Per-unit output staging, owned by the unit — the write-side twin of [`Cursor`](Self::Cursor).
+    ///
+    /// Staging cannot live on `&mut self` for the same reason unit progress cannot: two
+    /// half-drained units interleave `absorb` calls against one shared backend, and a
+    /// shared buffer would ship one unit's matches in another unit's containers — under
+    /// the wrong capability. `Default` is empty staging; a typical backend uses its
+    /// partially-built output container.
+    type Sink: Default;
+
     /// Produce the next window of the join unit, and advance `cursor`.
     ///
     /// Windows must cover contiguous, strictly ascending group ranges, and together must cover
@@ -84,15 +93,17 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
 
     /// Absorb one match: left and right tokens, joined time, multiplied diff.
     ///
-    /// The backend accumulates matches into its own output representation and returns a
+    /// The backend accumulates matches into `sink` (this unit's staging) and returns a
     /// finished container whenever its own size target is reached (the backend, not the
     /// harness, decides container granularity). Matches arrive grouped by key, keys in
     /// window order. Called at most once per match: there is no staging in the harness,
-    /// so this is the only time the match exists outside the backend.
-    fn absorb(&mut self, instance: &JoinInstance<'_, B0, B1>, left: (Self::Group, Self::Token0), right: (Self::Group, Self::Token1), time: B0::Time, diff: Self::ROut) -> Option<Self::Output>;
+    /// so this is the only time the match exists outside the sink. Container boundaries
+    /// must be semantically invisible — the concatenation of all yielded containers
+    /// (including `flush`'s) must equal the single-container output.
+    fn absorb(&mut self, instance: &JoinInstance<'_, B0, B1>, sink: &mut Self::Sink, left: (Self::Group, Self::Token0), right: (Self::Group, Self::Token1), time: B0::Time, diff: Self::ROut) -> Option<Self::Output>;
 
-    /// Yield the final partial container, if any. Called once, after the last window.
-    fn flush(&mut self, instance: &JoinInstance<'_, B0, B1>) -> Option<Self::Output>;
+    /// Yield `sink`'s final partial container, if any. Called once, after the last window.
+    fn flush(&mut self, instance: &JoinInstance<'_, B0, B1>, sink: &mut Self::Sink) -> Option<Self::Output>;
 }
 
 /// A proxy-space [`JoinTactic`]: matches records of the presented windows by group token,
@@ -131,6 +142,7 @@ where
             fresh,
             lower: Antichain::from_elem(meet),
             cursor: Bk::Cursor::default(),
+            sink: Bk::Sink::default(),
             high: None,
             done: false,
             flushed: false,
@@ -150,7 +162,8 @@ where
 /// the window in progress, feeding each match to the backend's `absorb` (which yields
 /// containers at its own granularity; the final remainder comes from `flush` when the
 /// unit exhausts). Matches are never staged in the harness: peak state is one window's
-/// presentations plus whatever the backend buffers toward its next container.
+/// presentations, plus one key's yielded containers in `ready` (a fanout-F key at
+/// container target t enqueues F/t containers in one step), plus the sink's partial.
 ///
 /// Spent windows are handed back to the backend through `next_window`'s `reuse`
 /// argument, and the replay histories (`h0`/`h1`) live on the unit, so steady-state
@@ -167,6 +180,9 @@ struct JoinUnit<B0: BatchReader, B1: BatchReader<Time = B0::Time>, Bk: ProxyJoin
     lower: Antichain<B0::Time>,
     /// Backend-interpreted resumption state; `Default` at the unit's start.
     cursor: Bk::Cursor,
+    /// Backend-interpreted output staging; unit-owned so interleaved units cannot
+    /// contaminate each other's containers (see [`ProxyJoinBackend::Sink`]).
+    sink: Bk::Sink,
     /// Greatest group presented so far, to enforce ascending windows.
     high: Option<Bk::Group>,
     done: bool,
@@ -197,13 +213,13 @@ where
             let mut backend = backend.borrow_mut();
             let instance = JoinInstance { batches0: &self.input0, batches1: &self.input1, lower: self.lower.borrow() };
 
-            // Exhausted: take the backend's final partial container, exactly once.
+            // Exhausted: take this unit's final partial container, exactly once.
             if self.done && self.current.is_none() {
                 if self.flushed {
                     return None;
                 }
                 self.flushed = true;
-                return backend.flush(&instance);
+                return backend.flush(&instance, &mut self.sink);
             }
 
             // Fetch the next window if none is in progress, returning the spent one.
@@ -240,8 +256,9 @@ where
             let p1 = &window.input1;
             let (h0, h1) = (&mut self.h0, &mut self.h1);
             let ready = &mut self.ready;
+            let sink = &mut self.sink;
             let mut emit = |l: (Bk::Group, Bk::Token0), r: (Bk::Group, Bk::Token1), t: B0::Time, d: Bk::ROut| {
-                if let Some(out) = backend.absorb(&instance, l, r, t, d) {
+                if let Some(out) = backend.absorb(&instance, sink, l, r, t, d) {
                     ready.push_back(out);
                 }
             };

@@ -88,12 +88,11 @@ struct GraphJoinCursor {
 struct GraphJoinBackend {
     window: usize,
     target: usize,
-    staged: Vec<(Edge, Edge, Time, Diff)>,
 }
 
 impl GraphJoinBackend {
     fn new(window: usize) -> Self {
-        GraphJoinBackend { window, target: 1 << 20, staged: Vec::new() }
+        GraphJoinBackend { window, target: 1 << 20 }
     }
 }
 
@@ -106,6 +105,7 @@ impl ProxyJoinBackend<GraphBatch, GraphBatch> for GraphJoinBackend {
     type ROut = Diff;
     type Output = Vec<(Edge, Edge, Time, Diff)>;
     type Cursor = GraphJoinCursor;
+    type Sink = Vec<(Edge, Edge, Time, Diff)>;
 
     fn next_window(
         &mut self,
@@ -120,9 +120,12 @@ impl ProxyJoinBackend<GraphBatch, GraphBatch> for GraphJoinBackend {
             Fresh::Input0 => (instance.batches0, instance.batches1),
             Fresh::Input1 => (instance.batches1, instance.batches0),
         };
-        let (mut fresh_run, mut other_run) = match reuse {
-            Some(JoinWindow { input0, input1 }) => (input0, input1),
-            None => (Vec::new(), Vec::new()),
+        // Route each reclaimed vec back to the side it served, so capacities stay
+        // side-stable rather than alternating duties across round trips.
+        let (mut fresh_run, mut other_run) = match (reuse, fresh) {
+            (Some(JoinWindow { input0, input1 }), Fresh::Input0) => (input0, input1),
+            (Some(JoinWindow { input0, input1 }), Fresh::Input1) => (input1, input0),
+            (None, _) => (Vec::new(), Vec::new()),
         };
         loop {
             fresh_run.clear();
@@ -166,21 +169,22 @@ impl ProxyJoinBackend<GraphBatch, GraphBatch> for GraphJoinBackend {
     fn absorb(
         &mut self,
         _instance: &JoinInstance<'_, GraphBatch, GraphBatch>,
+        sink: &mut Self::Sink,
         left: (u32, Edge),
         right: (u32, Edge),
         time: Time,
         diff: Diff,
     ) -> Option<Self::Output> {
-        self.staged.push((left.1, right.1, time, diff));
-        if self.staged.len() >= self.target {
-            Some(std::mem::take(&mut self.staged))
+        sink.push((left.1, right.1, time, diff));
+        if sink.len() >= self.target {
+            Some(std::mem::take(sink))
         } else {
             None
         }
     }
 
-    fn flush(&mut self, _instance: &JoinInstance<'_, GraphBatch, GraphBatch>) -> Option<Self::Output> {
-        if self.staged.is_empty() { None } else { Some(std::mem::take(&mut self.staged)) }
+    fn flush(&mut self, _instance: &JoinInstance<'_, GraphBatch, GraphBatch>, sink: &mut Self::Sink) -> Option<Self::Output> {
+        if sink.is_empty() { None } else { Some(std::mem::take(sink)) }
     }
 }
 
@@ -287,10 +291,11 @@ impl ProxyReduceBackend<GraphBatch, GraphBatch> for GraphReduceBackend {
     ) -> (Vec<(Edge, Diff)>, Vec<usize>) {
         let mut corr = Vec::new();
         let mut ends = Vec::new();
+        let mut delta: Vec<(Edge, Diff)> = Vec::new();
         let (mut i0, mut o0) = (0, 0);
         for (k, (&i1, &o1)) in keys.iter().zip(in_ends.iter().zip(out_ends)) {
             let count: Diff = input[i0..i1].iter().map(|(_, d)| d).sum();
-            let mut delta: Vec<(Edge, Diff)> = Vec::new();
+            delta.clear();
             if count > 0 {
                 delta.push(((*k, count as u32), 1));
             }
@@ -298,7 +303,7 @@ impl ProxyReduceBackend<GraphBatch, GraphBatch> for GraphReduceBackend {
                 delta.push((*v, -d));
             }
             differential_dataflow::consolidation::consolidate(&mut delta);
-            corr.extend(delta);
+            corr.extend(delta.drain(..));
             ends.push(corr.len());
             i0 = i1;
             o0 = o1;
@@ -482,12 +487,11 @@ mod ordval {
     pub struct OrdJoinBackend {
         pub window: usize,
         pub target: usize,
-        staged: Vec<(Edge, Edge, Time, Diff)>,
     }
 
     impl OrdJoinBackend {
         pub fn new(window: usize) -> Self {
-            OrdJoinBackend { window, target: 1 << 20, staged: Vec::new() }
+            OrdJoinBackend { window, target: 1 << 20 }
         }
     }
 
@@ -500,6 +504,7 @@ mod ordval {
         type ROut = Diff;
         type Output = Vec<(Edge, Edge, Time, Diff)>;
         type Cursor = OrdJoinCursor;
+        type Sink = Vec<(Edge, Edge, Time, Diff)>;
 
         fn next_window(
             &mut self,
@@ -510,9 +515,12 @@ mod ordval {
         ) -> Option<JoinWindow<u32, Edge, Edge, Time, Diff, Diff>> {
             cursor.c0.start(instance.batches0);
             cursor.c1.start(instance.batches1);
-            let (mut fresh_run, mut other_run) = match reuse {
-                Some(JoinWindow { input0, input1 }) => (input0, input1),
-                None => (Vec::new(), Vec::new()),
+            // Route each reclaimed vec back to the side it served, so capacities stay
+            // side-stable rather than alternating duties across round trips.
+            let (mut fresh_run, mut other_run) = match (reuse, fresh) {
+                (Some(JoinWindow { input0, input1 }), Fresh::Input0) => (input0, input1),
+                (Some(JoinWindow { input0, input1 }), Fresh::Input1) => (input1, input0),
+                (None, _) => (Vec::new(), Vec::new()),
             };
             loop {
                 fresh_run.clear();
@@ -552,21 +560,22 @@ mod ordval {
         fn absorb(
             &mut self,
             _instance: &JoinInstance<'_, Bt, Bt>,
+            sink: &mut Self::Sink,
             left: (u32, Edge),
             right: (u32, Edge),
             time: Time,
             diff: Diff,
         ) -> Option<Self::Output> {
-            self.staged.push((left.1, right.1, time, diff));
-            if self.staged.len() >= self.target {
-                Some(std::mem::take(&mut self.staged))
+            sink.push((left.1, right.1, time, diff));
+            if sink.len() >= self.target {
+                Some(std::mem::take(sink))
             } else {
                 None
             }
         }
 
-        fn flush(&mut self, _instance: &JoinInstance<'_, Bt, Bt>) -> Option<Self::Output> {
-            if self.staged.is_empty() { None } else { Some(std::mem::take(&mut self.staged)) }
+        fn flush(&mut self, _instance: &JoinInstance<'_, Bt, Bt>, sink: &mut Self::Sink) -> Option<Self::Output> {
+            if sink.is_empty() { None } else { Some(std::mem::take(sink)) }
         }
     }
 
@@ -673,10 +682,11 @@ mod ordval {
         ) -> (Vec<(Edge, Diff)>, Vec<usize>) {
             let mut corr = Vec::new();
             let mut ends = Vec::new();
+            let mut delta: Vec<(Edge, Diff)> = Vec::new();
             let (mut i0, mut o0) = (0, 0);
             for (k, (&i1, &o1)) in keys.iter().zip(in_ends.iter().zip(out_ends)) {
                 let count: Diff = input[i0..i1].iter().map(|(_, d)| d).sum();
-                let mut delta: Vec<(Edge, Diff)> = Vec::new();
+                delta.clear();
                 if count > 0 {
                     delta.push(((*k, count as u32), 1));
                 }
@@ -684,7 +694,7 @@ mod ordval {
                     delta.push((*v, -d));
                 }
                 differential_dataflow::consolidation::consolidate(&mut delta);
-                corr.extend(delta);
+                corr.extend(delta.drain(..));
                 ends.push(corr.len());
                 i0 = i1;
                 o0 = o1;

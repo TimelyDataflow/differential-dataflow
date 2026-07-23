@@ -2,7 +2,7 @@
 //!
 //! The value-token instantiation from the seam design: data is edges `(src, dst)`,
 //! grouped by source. `Group = u32` is the source itself (exact — no hashing, no
-//! collisions), and the value token is the whole edge (self-redeeming: `cross` and
+//! collisions), and the value token is the whole edge (self-redeeming: `absorb` and
 //! `finish` build outputs straight from tokens without consulting storage). Window
 //! sizes are kept tiny to force many windows and exercise the streaming protocols.
 //! The scaffold lives in `tests/common/mod.rs`, shared with the partial-order test.
@@ -61,7 +61,7 @@ fn interleaved_units_share_backend() {
     // motivated per-unit `Cursor` state and the shared `Rc<RefCell>` backend — the
     // driver holds half-drained units from both queues and polls them under fuel.
     let a = vec![
-        batch(vec![((0, 1), 0, 1), ((1, 5), 0, 1), ((2, 2), 1, 1)], 0, 2),
+        batch(vec![((0, 1), 0, 1), ((0, 2), 0, 1), ((0, 3), 1, 1), ((1, 5), 0, 1), ((2, 2), 1, 1)], 0, 2),
         batch(vec![((3, 3), 1, 1)], 0, 2),
     ];
     let b = vec![batch(vec![((0, 7), 1, 1), ((2, 6), 0, 1), ((3, 8), 1, 1)], 0, 2)];
@@ -75,7 +75,15 @@ fn interleaved_units_share_backend() {
     let expected1 = naive_join(&all(&a), &all(&b));
     let expected2 = naive_join(&all(&c), &all(&d));
 
-    let mut tactic = ProxyJoinTactic::new(EdgeJoinBackend::new(1));
+    // target = 2 with a 3-match key (key 0): unit 1 yields a full container and PAUSES
+    // holding one staged match, then unit 2 absorbs against the same shared backend.
+    // Staging must be unit-owned (`Sink`): with a shared buffer — the bug shape this
+    // test pins — unit 1's held match ships inside unit 2's next container, under
+    // unit 2's capability. target = 1 would NOT catch this (staging empty at every
+    // yield); the straddling partial container is the point.
+    let mut backend = EdgeJoinBackend::new(1);
+    backend.target = 2;
+    let mut tactic = ProxyJoinTactic::new(backend);
     let mut u1 = tactic.prep(a, b, Fresh::Input0, 0);
     let mut u2 = tactic.prep(c, d, Fresh::Input1, 0);
     let mut got1: Vec<((Edge, Edge), Time, Diff)> = Vec::new();

@@ -12,9 +12,9 @@
 //! adjacent and batch formation doubles as T1 *value*-collision detection; join's
 //! `redeem` and reduce's key/row stashes re-check at redemption, the other T1 sites.
 //! *Group* collisions (distinct keys, equal `G`) are not errors under compression —
-//! they are **resolved** per the module contract: join's `cross` re-checks real key
-//! bytes and drops false pairs; reduce partitions each granule by real key and reduces
-//! the parts separately. Weak-hash tests force both collision kinds: value collisions
+//! they are **resolved** per the module contract: join's `absorb` re-checks real key
+//! bytes per match and drops false pairs; reduce partitions each granule by real key
+//! and reduces the parts separately. Weak-hash tests force both collision kinds: value collisions
 //! must panic at their detection site; group collisions must yield *correct output*.
 
 use std::collections::BTreeMap;
@@ -200,12 +200,11 @@ struct RowJoinBackend {
     window: usize,
     /// Matches per output container; tiny in tests to force many containers.
     target: usize,
-    staged: Vec<(Row, Row, Time, Diff)>,
 }
 
 impl RowJoinBackend {
     fn new(window: usize) -> Self {
-        RowJoinBackend { window, target: 8, staged: Vec::new() }
+        RowJoinBackend { window, target: 8 }
     }
 }
 
@@ -219,6 +218,7 @@ impl ProxyJoinBackend<RowBatch, RowBatch> for RowJoinBackend {
     /// Matched row pairs with their joined time and multiplied diff.
     type Output = Vec<(Row, Row, Time, Diff)>;
     type Cursor = RowJoinCursor;
+    type Sink = Vec<(Row, Row, Time, Diff)>;
 
     fn next_window(
         &mut self,
@@ -236,9 +236,12 @@ impl ProxyJoinBackend<RowBatch, RowBatch> for RowJoinBackend {
             Fresh::Input1 => (instance.batches1, instance.batches0),
         };
         // Reclaim the spent window's bridge capacity.
-        let (mut fresh_run, mut other_run) = match reuse {
-            Some(JoinWindow { input0, input1 }) => (input0, input1),
-            None => (Vec::new(), Vec::new()),
+        // Route each reclaimed vec back to the side it served, so capacities stay
+        // side-stable rather than alternating duties across round trips.
+        let (mut fresh_run, mut other_run) = match (reuse, fresh) {
+            (Some(JoinWindow { input0, input1 }), Fresh::Input0) => (input0, input1),
+            (Some(JoinWindow { input0, input1 }), Fresh::Input1) => (input1, input0),
+            (None, _) => (Vec::new(), Vec::new()),
         };
         loop {
             fresh_run.clear();
@@ -284,6 +287,7 @@ impl ProxyJoinBackend<RowBatch, RowBatch> for RowJoinBackend {
     fn absorb(
         &mut self,
         instance: &JoinInstance<'_, RowBatch, RowBatch>,
+        sink: &mut Self::Sink,
         left: (u64, u64),
         right: (u64, u64),
         time: Time,
@@ -296,20 +300,20 @@ impl ProxyJoinBackend<RowBatch, RowBatch> for RowJoinBackend {
         let rrow = redeem(instance.batches1, right);
         if key_of(lrow) == key_of(rrow) {
             let (lrow, rrow) = (lrow.to_vec(), rrow.to_vec());
-            self.staged.push((lrow, rrow, time, diff));
+            sink.push((lrow, rrow, time, diff));
         }
-        if self.staged.len() >= self.target {
-            Some(std::mem::take(&mut self.staged))
+        if sink.len() >= self.target {
+            Some(std::mem::take(sink))
         } else {
             None
         }
     }
 
-    fn flush(&mut self, _instance: &JoinInstance<'_, RowBatch, RowBatch>) -> Option<Self::Output> {
-        if self.staged.is_empty() {
+    fn flush(&mut self, _instance: &JoinInstance<'_, RowBatch, RowBatch>, sink: &mut Self::Sink) -> Option<Self::Output> {
+        if sink.is_empty() {
             None
         } else {
-            Some(std::mem::take(&mut self.staged))
+            Some(std::mem::take(sink))
         }
     }
 }
@@ -373,7 +377,7 @@ fn join_rows_matches_naive() {
 
 #[test]
 fn join_resolves_group_collisions() {
-    // Forced group collisions (weak key hashes, strong row hashes): cross must re-check
+    // Forced group collisions (weak key hashes, strong row hashes): absorb must re-check
     // real key bytes and drop false pairs, yielding exactly the naive output.
     check_join(weak_group_hash);
 }
