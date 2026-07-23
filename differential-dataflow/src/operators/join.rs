@@ -382,7 +382,11 @@ where
 }
 
 /// Cursor-based join: the conventional [`JoinTactic`] implementation and its per-batch worker.
-mod cursors {
+/// The conventional cursor-based [`JoinTactic`] implementation.
+///
+/// Public since the tactic entry points are: it is the incumbent reference
+/// implementation, and benchmarks and differential tests drive it directly.
+pub mod cursors {
 
     use std::cell::RefCell;
     use std::rc::Rc;

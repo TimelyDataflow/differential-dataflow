@@ -260,7 +260,10 @@ where
 /// updates and replays them together per key, applying `logic` and shaping output with `push`. It holds
 /// the outstanding synthetic interesting `(key, time)` moments across activations, and reasons only
 /// about times: capabilities are the driver's concern.
-mod cursors {
+///
+/// Public since the tactic entry points are: it is the incumbent reference implementation,
+/// and benchmarks and differential tests drive it directly.
+pub mod cursors {
 
     use super::*;
 
