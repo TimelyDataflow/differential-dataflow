@@ -470,7 +470,11 @@ where
         // silent wrong output in exchange for one integer compare.
         assert_eq!(pend_idx, pending_keys.len(), "next_window must cover all pending groups before finishing");
         self.pending = new_pending;
-        let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
+        let finished = self.backend.finish();
+        // Hard for the same reason as the other contract asserts: `zip` would silently
+        // truncate a miscounting backend, shipping batches at the wrong held times.
+        assert_eq!(finished.len(), tile_held.len(), "finish() must return exactly one batch per tile description");
+        let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(finished).collect();
         let mut frontier = Antichain::new();
         for times in self.pending.values() {
             for t in times {

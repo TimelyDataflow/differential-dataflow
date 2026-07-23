@@ -464,6 +464,48 @@ pub mod pair {
 
 // ----------------------------------------------------------------- the tests
 
+#[test]
+fn join_wave_path_matches_naive() {
+    // `join_key` switches implementations at 16 records per side: below, a nested-loop
+    // cross product; at or above (on BOTH sides), the `bilinear_wave` time-ordered
+    // compacting replay. Every other key in this suite is small, so this test exists to
+    // run the wave path at all: one deliberately fat key (20 presented records per
+    // side — insertions at spread times plus non-cancelling retractions at later
+    // times, so consolidation keeps all of them), alongside a small key so the two
+    // paths mix within one unit, checked against the naive oracle.
+    let mut a_upds: Vec<(Edge, Time, Diff)> = Vec::new();
+    let mut b_upds: Vec<(Edge, Time, Diff)> = Vec::new();
+    for v in 0..12u32 {
+        a_upds.push(((0, v), (v % 4) as Time, 1));
+        b_upds.push(((0, 100 + v), (v % 3) as Time, 1));
+    }
+    for v in 0..8u32 {
+        // Retractions at times distinct from the insertions: two bridge records each,
+        // netting to zero late — cancellation the wave must navigate, not lose.
+        a_upds.push(((0, v), 4 + (v % 2) as Time, -1));
+        b_upds.push(((0, 100 + v), 4 + (v % 3) as Time, -1));
+    }
+    // A small key too, so nested-loop and wave paths run in the same unit.
+    a_upds.push(((1, 7), 0, 1));
+    b_upds.push(((1, 9), 2, 1));
+
+    let a = batch(a_upds.clone(), 0, 8);
+    let b = batch(b_upds.clone(), 0, 8);
+    assert!(a.updates.iter().filter(|u| u.0 .0 == 0).count() >= 16, "fat key must reach the wave threshold");
+    assert!(b.updates.iter().filter(|u| u.0 .0 == 0).count() >= 16, "fat key must reach the wave threshold");
+    let expected = naive_join(&a.updates, &b.updates);
+
+    for window in [1, 100] {
+        for fresh in [Fresh::Input0, Fresh::Input1] {
+            let mut tactic = ProxyJoinTactic::new(EdgeJoinBackend::new(window));
+            let work = tactic.prep(vec![a.clone()], vec![b.clone()], fresh, 0);
+            let mut got: Vec<((Edge, Edge), Time, Diff)> =
+                work.flatten().map(|(l, r, t, d)| ((l, r), t, d)).collect();
+            consolidate_updates(&mut got);
+            assert_eq!(got, expected, "window={window}");
+        }
+    }
+}
 
 #[test]
 fn join_matches_naive() {
