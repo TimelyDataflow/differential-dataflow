@@ -10,9 +10,9 @@
 //! data (`G = u32` node ids, tokens `(u32, u32)` edges), wider hashes for insurance, or
 //! dense ids where exactness is required.
 //! The tactics first elicit proxy tokens from the backends, perform their necessary time
-//! and difference based computations, and then hand results back in token form — reduce
-//! re-invokes its backend with staged token collections; join feeds its backend matches
-//! one at a time — for the backend to produce the necessary output.
+//! and difference based computations, and then hand results back in token form — both
+//! tactics re-invoke their backend with batches of tokens, never one record at a time —
+//! for the backend to produce the necessary output.
 //!
 //! The backend is oblivious to the navigation of time, and the operator to the backend's
 //! implementation.

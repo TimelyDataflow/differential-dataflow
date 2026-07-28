@@ -104,10 +104,10 @@ pub fn drain_group<T: Clone>(
 
 // ---------------------------------------------------------------- join backend
 
-/// Per-unit resumption: a position per batch per side. This is the state a single
-/// `usize` could not carry — the finding that motivated `type Cursor`.
+/// Per-unit state: a position per batch per side. This is the state a single `usize`
+/// could not carry — the finding that motivated `type UnitState`.
 #[derive(Default)]
-pub struct EdgeJoinCursor {
+pub struct EdgeJoinState {
     pub pos0: Vec<usize>,
     pub pos1: Vec<usize>,
 }
@@ -134,14 +134,15 @@ impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> 
     type ROut = Diff;
     /// Matched edge pairs with their joined time and multiplied diff.
     type Output = Vec<(Edge, Edge, T, Diff)>;
-    type Cursor = EdgeJoinCursor;
-    type Sink = Vec<(Edge, Edge, T, Diff)>;
+    type UnitState = EdgeJoinState;
+    /// Tiny in tests, to force many crossings and many partial batches.
+    const MATCH_BATCH: usize = 4;
 
     fn next_window(
         &mut self,
         instance: &JoinInstance<'_, EdgeBatch<T>, EdgeBatch<T>>,
         fresh: Fresh,
-        cursor: &mut EdgeJoinCursor,
+        cursor: &mut EdgeJoinState,
         reuse: Option<JoinWindow<u32, Edge, Edge, T, Diff, Diff>>,
     ) -> Option<JoinWindow<u32, Edge, Edge, T, Diff, Diff>> {
         cursor.pos0.resize(instance.batches0.len(), 0);
@@ -202,29 +203,24 @@ impl<T: Timestamp + Lattice + Ord> ProxyJoinBackend<EdgeBatch<T>, EdgeBatch<T>> 
         }
     }
 
-    fn absorb(
+    fn produce(
         &mut self,
         _instance: &JoinInstance<'_, EdgeBatch<T>, EdgeBatch<T>>,
-        sink: &mut Self::Sink,
-        left: (u32, Edge),
-        right: (u32, Edge),
-        time: T,
-        diff: Diff,
-    ) -> Option<Self::Output> {
-        // Self-redeeming tokens: the output is built from the tokens alone.
-        sink.push((left.1, right.1, time, diff));
-        if sink.len() >= self.target {
-            Some(std::mem::take(sink))
-        } else {
-            None
-        }
-    }
-
-    fn flush(&mut self, _instance: &JoinInstance<'_, EdgeBatch<T>, EdgeBatch<T>>, sink: &mut Self::Sink) -> Option<Self::Output> {
-        if sink.is_empty() {
-            None
-        } else {
-            Some(std::mem::take(sink))
+        _unit: &Self::UnitState,
+        keys: &[u32],
+        ends: &[usize],
+        matches: &[(Edge, Edge, T, Diff)],
+        out: &mut Vec<Self::Output>,
+    ) {
+        // The run structure must describe exactly this batch.
+        assert_eq!(keys.len(), ends.len(), "produce: one end per key run");
+        assert!(ends.windows(2).all(|w| w[0] < w[1]), "produce: run ends must ascend");
+        assert_eq!(ends.last().copied().unwrap_or(0), matches.len(), "produce: runs must cover the batch");
+        // Self-redeeming tokens: the output is built from the tokens alone. Containers are
+        // cut at `target`, and the batch's remainder becomes an undersized container of its
+        // own — nothing is carried to the next call.
+        for chunk in matches.chunks(self.target) {
+            out.push(chunk.to_vec());
         }
     }
 }

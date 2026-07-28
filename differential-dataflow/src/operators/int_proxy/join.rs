@@ -34,10 +34,13 @@ pub struct JoinWindow<G, I0, I1, T, R0, R1> {
 
 /// A type that can interpret and retire pairs of batches, joined by group tokens.
 ///
-/// The protocol repeatedly invokes `next_window` to produce bounded presentations of the two
-/// inputs, matched by group; each match is handed to `absorb`, and `flush` yields the final
-/// partial container. Windows are produced lazily as the join driver's fuel allows, so at most
-/// one window's presentations are live at a time.
+/// The protocol, per unit, is `[ next_window produce* ]* produce?`: `next_window` yields a
+/// bounded presentation of both inputs over one group range, the harness matches by group and
+/// hands the matches to `produce` a batch at a time, and a trailing `produce` delivers the last
+/// partial batch once the windows run out. Windows are produced lazily as the join driver's
+/// fuel allows, so at most one window's presentations are live at a time.
+///
+/// Both methods move data in bulk. Neither is called per record.
 pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// The group token: names the granule of independence, shared by both inputs.
     ///
@@ -57,22 +60,24 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// The output container built from matched value tokens.
     type Output;
 
-    /// Per-unit resumption state, owned by the unit and interpreted only by the backend.
+    /// Per-unit state, owned by the unit and interpreted only by the backend.
     ///
-    /// Unit progress cannot live on `&mut self`: the driver holds units across scheduler
-    /// activations and drains them under fuel, so several half-drained units (from both input
-    /// queues) may interleave their windows against one shared backend. `Default` is the state
-    /// of a fresh unit; a typical backend records a position per batch per side.
-    type Cursor: Default;
+    /// It cannot live on `&mut self`: the driver holds units across scheduler activations and
+    /// drains them under fuel, so several half-drained units — from both input queues, and from
+    /// different invocations — interleave against one shared backend. `Default` is the state of
+    /// a fresh unit; a typical backend records a position per batch per side, plus whatever it
+    /// needs to interpret its own tokens when building output.
+    ///
+    /// [`next_window`](Self::next_window) may update it. [`produce`](Self::produce) sees it
+    /// immutably, which is what stops output from accumulating between calls.
+    type UnitState: Default;
 
-    /// Per-unit output staging, owned by the unit — the write-side twin of [`Cursor`](Self::Cursor).
+    /// Matches the harness buffers per [`produce`](Self::produce) call.
     ///
-    /// Staging cannot live on `&mut self` for the same reason unit progress cannot: two
-    /// half-drained units interleave `absorb` calls against one shared backend, and a
-    /// shared buffer would ship one unit's matches in another unit's containers — under
-    /// the wrong capability. `Default` is empty staging; a typical backend uses its
-    /// partially-built output container.
-    type Sink: Default;
+    /// This is the dial that amortizes the boundary crossing, and it bounds output container
+    /// size, since a backend may not carry a partial container between calls. It costs
+    /// `live units * MATCH_BATCH` buffered matches.
+    const MATCH_BATCH: usize = 1024;
 
     /// Produce the next window of the join unit, and advance `cursor`.
     ///
@@ -89,21 +94,24 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// `reuse` returns the previous, fully-processed window: reclaim its bridge capacity
     /// (`clear()` and refill) rather than allocating fresh, so steady-state windowing does
     /// not churn allocation proportional to data volume.
-    fn next_window(&mut self, instance: &JoinInstance<'_, B0, B1>, fresh: Fresh, cursor: &mut Self::Cursor, reuse: Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>) -> Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>;
+    fn next_window(&mut self, instance: &JoinInstance<'_, B0, B1>, fresh: Fresh, unit: &mut Self::UnitState, reuse: Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>) -> Option<JoinWindow<Self::Group, Self::Token0, Self::Token1, B0::Time, Self::R0, Self::R1>>;
 
-    /// Absorb one match: left and right tokens, joined time, multiplied diff.
+    /// Build output containers from a batch of matches, appending them to `out`.
     ///
-    /// The backend accumulates matches into `sink` (this unit's staging) and returns a
-    /// finished container whenever its own size target is reached (the backend, not the
-    /// harness, decides container granularity). Matches arrive grouped by key, keys in
-    /// window order. Called at most once per match: there is no staging in the harness,
-    /// so this is the only time the match exists outside the sink. Container boundaries
-    /// must be semantically invisible — the concatenation of all yielded containers
-    /// (including `flush`'s) must equal the single-container output.
-    fn absorb(&mut self, instance: &JoinInstance<'_, B0, B1>, sink: &mut Self::Sink, left: (Self::Group, Self::Token0), right: (Self::Group, Self::Token1), time: B0::Time, diff: Self::ROut) -> Option<Self::Output>;
-
-    /// Yield `sink`'s final partial container, if any. Called once, after the last window.
-    fn flush(&mut self, instance: &JoinInstance<'_, B0, B1>, sink: &mut Self::Sink) -> Option<Self::Output>;
+    /// `matches` holds at most [`MATCH_BATCH`](Self::MATCH_BATCH) matched pairs — each a left
+    /// token, a right token, the joined time, and the multiplied diff — in window order.
+    /// `keys` and `ends` cut it into per-group runs: `keys[i]` owns
+    /// `matches[ends[i-1] .. ends[i]]`, reading `ends[-1]` as `0` — the same shape reduce's
+    /// [`reduce_corrections`](super::ProxyReduceBackend::reduce_corrections) uses. A group whose
+    /// fanout exceeds the batch has its run split across calls, so a call is **not** guaranteed
+    /// to hold whole groups.
+    ///
+    /// The backend decides how many containers to append. Container boundaries must be
+    /// semantically invisible: the concatenation of everything appended across all of a unit's
+    /// calls must equal the single-container output. Nothing may be carried between calls —
+    /// there is no end-of-unit call to collect a remainder, and a partial container held on
+    /// `&mut self` would ship under another unit's capability.
+    fn produce(&mut self, instance: &JoinInstance<'_, B0, B1>, unit: &Self::UnitState, keys: &[Self::Group], ends: &[usize], matches: &[(Self::Token0, Self::Token1, B0::Time, Self::ROut)], out: &mut Vec<Self::Output>);
 }
 
 /// A proxy-space [`JoinTactic`]: matches records of the presented windows by group token,
@@ -138,13 +146,16 @@ where
         Box::new(JoinUnit {
             task: Task { input0, input1, fresh, lower: Antichain::from_elem(meet) },
             backend: std::rc::Rc::clone(&self.backend),
-            cursor: Bk::Cursor::default(),
-            sink: Bk::Sink::default(),
+            unit: Bk::UnitState::default(),
             phase: Phase::Fetch,
             high: None,
             spent: None,
             h0: IdHistory::new(),
             h1: IdHistory::new(),
+            keys: Vec::new(),
+            ends: Vec::new(),
+            matches: Vec::with_capacity(Bk::MATCH_BATCH),
+            produced: Vec::new(),
             ready: std::collections::VecDeque::new(),
         })
     }
@@ -186,31 +197,30 @@ enum Phase<W> {
     /// Merging through a window, one key per step; the `usize`s are the merge
     /// positions into its two bridges.
     Merge(W, usize, usize),
-    /// The backend returned `None`: windows are exhausted, final `flush` not yet taken.
+    /// The backend returned `None`: windows are exhausted, trailing batch not yet produced.
     Drained,
-    /// `flush` taken; the iterator is spent and yields only `None`.
+    /// The trailing batch is produced; the iterator is spent and yields only `None`.
     Spent,
 }
 
 /// One lazy join unit: owns its batches and streams outputs a key at a time.
 ///
 /// Each `next` first drains `ready`; when empty it advances `phase` by one step —
-/// fetching the next window, or merge-matching **one** key from the current one,
-/// feeding each match to the backend's `absorb` (which yields containers at its own
-/// granularity; the final remainder comes from `flush` at `Drained`). Matches are
-/// never staged in the harness: peak state is one window's presentations, plus one
-/// key's yielded containers in `ready` (a fanout-F key at container target t enqueues
-/// F/t containers in one step), plus the sink's partial.
+/// fetching the next window, or merge-matching **one** key from the current one into
+/// the match buffer, which goes to the backend's `produce` whenever it fills (and once
+/// more at `Drained`). Peak state is one window's presentations, one batch of buffered
+/// matches, and the containers `produce` has appended but the driver has not taken.
 ///
 /// The fields group by owner. The *task* is the immutable work description. The
-/// *backend* is shared by every live unit of the operator, so the two state halves it
-/// interprets — `cursor` (read resumption) and `sink` (output staging) — live here,
-/// per unit; a shared sink would ship one unit's matches in another's containers (see
-/// [`ProxyJoinBackend::Sink`]). The harness owns the window *machine*: `phase`,
-/// the `high` watermark enforcing ascending windows, and the `spent` window awaiting
-/// return to the backend for buffer reuse. `h0`/`h1` are merge *scratch*, reloaded
-/// per key (only the >=16/>=16 wave path touches them) so high-fanout keys pay no
-/// per-key allocation. `ready` is the *output* queue toward the driver.
+/// *backend* is shared by every live unit of the operator, so the state it interprets
+/// per unit — `unit` — lives here (see [`ProxyJoinBackend::UnitState`]). The harness
+/// owns the window *machine*: `phase`, the `high` watermark enforcing ascending
+/// windows, and the `spent` window awaiting return to the backend for buffer reuse.
+/// `h0`/`h1` are merge *scratch*, reloaded per key (only the >=16/>=16 wave path
+/// touches them) so high-fanout keys pay no per-key allocation. `keys`/`ends`/`matches`
+/// are the *match buffer* handed to `produce`, in its `(keys, ends, matches)` shape;
+/// `produced` is the vector it appends containers to. `ready` is the *output* queue
+/// toward the driver.
 struct JoinUnit<B0, B1, Bk>
 where
     B0: BatchReader,
@@ -219,10 +229,9 @@ where
 {
     // The work.
     task: Task<B0, B1>,
-    // The shared backend, and the two per-unit state halves it interprets.
+    // The shared backend, and the per-unit state it interprets.
     backend: std::rc::Rc<std::cell::RefCell<Bk>>,
-    cursor: Bk::Cursor,
-    sink: Bk::Sink,
+    unit: Bk::UnitState,
     // The harness's window machine.
     phase: Phase<WindowFor<B0, B1, Bk>>,
     high: Option<Bk::Group>,
@@ -230,7 +239,12 @@ where
     // Per-key merge scratch, reused across keys and windows.
     h0: IdHistory<Bk::Token0, B0::Time, Bk::R0>,
     h1: IdHistory<Bk::Token1, B0::Time, Bk::R1>,
-    // Outputs not yet handed to the driver: at most one key's containers.
+    // The match buffer bound for `produce`, and the containers it appends.
+    keys: Vec<Bk::Group>,
+    ends: Vec<usize>,
+    matches: Vec<(Bk::Token0, Bk::Token1, B0::Time, Bk::ROut)>,
+    produced: Vec<Bk::Output>,
+    // Outputs not yet handed to the driver.
     ready: std::collections::VecDeque<Bk::Output>,
 }
 
@@ -250,15 +264,21 @@ where
             match &mut self.phase {
                 Phase::Spent => return None,
 
-                // Take this unit's final partial container, exactly once.
+                // Hand over the trailing partial batch, exactly once.
                 Phase::Drained => {
                     self.phase = Phase::Spent;
-                    return backend.flush(&instance, &mut self.sink);
+                    if !self.matches.is_empty() {
+                        backend.produce(&instance, &self.unit, &self.keys, &self.ends, &self.matches, &mut self.produced);
+                        self.keys.clear();
+                        self.ends.clear();
+                        self.matches.clear();
+                        self.ready.extend(self.produced.drain(..));
+                    }
                 }
 
                 // Ask for the next window, returning the spent one for buffer reuse.
                 Phase::Fetch => {
-                    match backend.next_window(&instance, self.task.fresh, &mut self.cursor, self.spent.take()) {
+                    match backend.next_window(&instance, self.task.fresh, &mut self.unit, self.spent.take()) {
                         None => self.phase = Phase::Drained,
                         Some(window) => {
                             super::debug_assert_sorted_bridge(&window.input0, "next_window.input0");
@@ -278,21 +298,20 @@ where
                     }
                 }
 
-                // Merge-match at most ONE key, so `ready` holds at most one key's
-                // containers. Each match goes straight to the backend's `absorb` — no
-                // staging — which yields containers at its own granularity, including
-                // *within* a high-fanout key's wave.
+                // Merge-match at most ONE key per step. Matches accumulate in the buffer
+                // and cross to the backend whenever it fills — including *within* a
+                // high-fanout key's wave, which is what bounds the buffer at
+                // `MATCH_BATCH` regardless of fanout.
                 Phase::Merge(window, i, j) => {
                     let p0 = &window.input0;
                     let p1 = &window.input1;
                     let (h0, h1) = (&mut self.h0, &mut self.h1);
                     let ready = &mut self.ready;
-                    let sink = &mut self.sink;
-                    let mut emit = |l: (Bk::Group, Bk::Token0), r: (Bk::Group, Bk::Token1), t: B0::Time, d: Bk::ROut| {
-                        if let Some(out) = backend.absorb(&instance, sink, l, r, t, d) {
-                            ready.push_back(out);
-                        }
-                    };
+                    let unit = &self.unit;
+                    let keys = &mut self.keys;
+                    let ends = &mut self.ends;
+                    let matches = &mut self.matches;
+                    let produced = &mut self.produced;
                     let mut matched = false;
                     while !matched && *i < p0.len() && *j < p1.len() {
                         let (ki, kj) = (p0[*i].0.0, p1[*j].0.0);
@@ -305,7 +324,29 @@ where
                             while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
                             let mut e1 = *j;
                             while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
-                            join_key(ki, p0, *i..e0, p1, *j..e1, h0, h1, &mut emit);
+                            {
+                                // Close `ki`'s run and cross whenever the buffer fills; a run
+                                // continued after a crossing reopens under `ki` in the next batch.
+                                let mut emit = |i0: Bk::Token0, i1: Bk::Token1, t: B0::Time, d: Bk::ROut| {
+                                    matches.push((i0, i1, t, d));
+                                    if matches.len() >= Bk::MATCH_BATCH {
+                                        keys.push(ki);
+                                        ends.push(matches.len());
+                                        backend.produce(&instance, unit, keys, ends, matches, produced);
+                                        keys.clear();
+                                        ends.clear();
+                                        matches.clear();
+                                        ready.extend(produced.drain(..));
+                                    }
+                                };
+                                join_key(p0, *i..e0, p1, *j..e1, h0, h1, &mut emit);
+                            }
+                            // Close the tail run, if this key left anything unclosed.
+                            let closed = ends.last().copied().unwrap_or(0);
+                            if matches.len() > closed {
+                                keys.push(ki);
+                                ends.push(matches.len());
+                            }
                             *i = e0;
                             *j = e1;
                             matched = true;
@@ -330,7 +371,6 @@ where
 /// If both histories are large, this replays the histories compacting as it goes in
 /// order to (potentially) avoid quadratic blow-up.
 fn join_key<G, I0, I1, T, R0, R1, RO, F>(
-    kh: G,
     p0: &ProxyBridge<G, I0, T, R0>,
     r0: std::ops::Range<usize>,
     p1: &ProxyBridge<G, I1, T, R1>,
@@ -345,12 +385,12 @@ fn join_key<G, I0, I1, T, R0, R1, RO, F>(
     T: Lattice + Timestamp,
     R0: Semigroup + Multiply<R1, Output = RO> + Clone,
     R1: Semigroup + Clone,
-    F: FnMut((G, I0), (G, I1), T, RO),
+    F: FnMut(I0, I1, T, RO),
 {
     if r0.len() < 16 || r1.len() < 16 {
         for a in r0 {
             for b in r1.clone() {
-                emit((kh, p0[a].0.1), (kh, p1[b].0.1), p0[a].1.join(&p1[b].1), p0[a].2.clone().multiply(&p1[b].2));
+                emit(p0[a].0.1, p1[b].0.1, p0[a].1.join(&p1[b].1), p0[a].2.clone().multiply(&p1[b].2));
             }
         }
         return;
@@ -361,7 +401,5 @@ fn join_key<G, I0, I1, T, R0, R1, RO, F>(
     h0.load_iter(r0.map(|i| (p0[i].0.1, p0[i].1.clone(), p0[i].2.clone())), None);
     h1.load_iter(r1.map(|i| (p1[i].0.1, p1[i].1.clone(), p1[i].2.clone())), None);
 
-    crate::operators::common::bilinear_wave(h0, h1, |v0, v1, t, d| {
-        emit((kh, v0), (kh, v1), t, d);
-    });
+    crate::operators::common::bilinear_wave(h0, h1, emit);
 }
