@@ -3,7 +3,7 @@
 //! A conventional differential reduce against `(u64, u64)`, where the backend supplies the
 //! implementation of the interpretation of the integers.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -32,14 +32,36 @@ pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>>
 
 /// One window of a retire's changed keys: a bounded, hash-contiguous snip the backend sizes.
 ///
-/// The window has the input (old and new) and output histories, restricted to the window's keys.
+/// The window has the input (old and new) and output histories, restricted to the window's keys,
+/// and the times the new input makes interesting for them.
 pub struct ReduceWindow<T, RIn, ROut> {
-    /// The window's key hashes: a contiguous, ascending slice of the retire's `changed` keys.
+    /// The window's key hashes: a contiguous, ascending slice of the retire's changed keys.
     pub keys: Vec<u64>,
     /// Input presentation for `keys`, sorted & consolidated by `((key_hash, value_id), time)`.
     pub input: ProxyBridge<T, RIn>,
     /// Output-history presentation for `keys`, same ordering.
     pub output: ProxyBridge<T, ROut>,
+    /// Times the instance's *new* input batches carry for `keys`, sorted by key hash.
+    ///
+    /// These seed each key's interesting times, together with the times held over from earlier
+    /// retires. A key needs an entry here or in those held times to belong in `keys` at all.
+    pub seeds: Vec<(u64, T)>,
+}
+
+impl<T, RIn, ROut> Default for ReduceWindow<T, RIn, ROut> {
+    fn default() -> Self {
+        Self { keys: vec![], input: vec![], output: vec![], seeds: vec![] }
+    }
+}
+
+impl<T, RIn, ROut> ReduceWindow<T, RIn, ROut> {
+    /// Empties the window, retaining its allocations for the next one.
+    pub fn clear(&mut self) {
+        self.keys.clear();
+        self.input.clear();
+        self.output.clear();
+        self.seeds.clear();
+    }
 }
 
 /// One round of reconciliation: for each of several keys, an accumulated input and tentative output.
@@ -105,19 +127,17 @@ impl<ROut> ReduceCorrections<ROut> {
 
 /// The reduce backend: value semantics for a proxy-space reduction, driven by [`ProxyReduceTactic`].
 ///
-/// The protocol is currently (temporarily) for each round of invocation:
-/// `seed_times begin [ next_window reduce_correction* emit ]* finish`
-/// This should be improved to put the `seed_times` in the per-window loop, or remove it entirely.
+/// The harness repeatedly invokes [`advance`](Self::advance) to draw a window of changed keys, then
+/// reconciles that window's keys against their output with [`reduce_corrections`](Self::reduce_corrections),
+/// handing the resulting updates back with [`emit`](Self::emit), until `advance` reports the key space
+/// exhausted. The output session brackets whatever windows have work:
+/// `advance ( begin [ reduce_corrections* emit* advance ]* finish )?`
+/// A retire with no changed keys draws one window, finds it empty, and never opens the session.
 pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
     /// Diff type presented for the input.
     type RIn: Semigroup;
     /// Diff type of the output.
     type ROut: Semigroup;
-
-    /// Hash keys and associated times in the instance's novel input batches.
-    ///
-    /// This is used (with held times) to seed the interesting times for each key.
-    fn seed_times(&self, instance: &ReduceInstance<'_, B1, B2>) -> Vec<(u64, B1::Time)>;
 
     /// Initiate a session to create batches for these descriptions, which span `[lower, upper)`.
     ///
@@ -126,12 +146,26 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// work in progress, until `finish()` is called.
     fn begin(&mut self, tiles: &[Description<B1::Time>]);
 
-    /// Produce the next window, resticted to `changed[cursor..]`, and update `cursor` to track.
+    /// Populates `window` with the next range of changed keys, and everything known about them.
+    ///
+    /// The `from` indicates an inclusive lower bound on key hash, and should be updated by the
+    /// implementor to an exclusive upper bound for the range of keys it covers in this call. The
+    /// `None` value indicates the keys are exhausted. A key is *changed* if the instance's new input
+    /// batches carry a time for it, or if it appears in `pending`: the interesting times earlier
+    /// retires withheld, ascending by key hash, which the implementor moves through alongside its own
+    /// input. The window must hold every changed key in the range, with all of both inputs' updates
+    /// for those keys, and it must be non-empty unless `from` is returned as `None`.
     ///
     /// The size of the window is up to the backend, where the window should be large enough to
     /// amortize the crossings between the harness and the backend. The proxy bridges for the
     /// whole window will be active at the same time, so tighter windows reduce the required state.
-    fn next_window(&mut self, instance: &ReduceInstance<'_, B1, B2>, changed: &[u64], cursor: &mut usize) -> Option<ReduceWindow<B1::Time, Self::RIn, Self::ROut>>;
+    fn advance(
+        &mut self,
+        instance: &ReduceInstance<'_, B1, B2>,
+        from: &mut Option<u64>,
+        pending: &[(u64, B1::Time)],
+        window: &mut ReduceWindow<B1::Time, Self::RIn, Self::ROut>,
+    );
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
     ///
@@ -194,27 +228,27 @@ where
             lower: lower.borrow(),
         };
 
-        let seeds = self.backend.seed_times(&instance);
-        debug_assert!(seeds.windows(2).all(|w| w[0].0 <= w[1].0), "seed_times must be sorted by key_hash");
-        let mut changed: BTreeSet<u64> = seeds.iter().map(|(k, _)| *k).collect();
-        changed.extend(self.pending.keys().copied());
-        if changed.is_empty() {
-            self.pending.clear();
-            return (Vec::new(), Antichain::new());
-        }
-        let changed: Vec<u64> = changed.into_iter().collect();
-
         // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
         // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
         let held_elems: Vec<B1::Time> = held.elements().to_vec();
         let (tile_descs, tile_held, tile_of) = tile_descriptions(lower, upper, &held_elems);
-        self.backend.begin(&tile_descs);
 
-        let mut retire = Retire::new(&mut self.backend, instance, upper, held_elems, tile_of, &self.pending);
-        retire.run(&changed, &seeds);
+        // The withheld times as the backend sees them: one flat, key-ordered list to move through.
+        // The harness keeps its own map, which it indexes by key as it determines each one.
+        let pending_flat: Vec<(u64, B1::Time)> = self.pending.iter()
+            .flat_map(|(key, times)| times.iter().map(move |t| (*key, t.clone())))
+            .collect();
+
+        let mut retire = Retire::new(&mut self.backend, instance, upper, held_elems, tile_of, &self.pending, &pending_flat);
+        let began = retire.run(&tile_descs);
         let new_pending = retire.new_pending;
 
         self.pending = new_pending;
+        // No window had work, so no session was opened and there is nothing to finish or to withhold.
+        if !began {
+            debug_assert!(self.pending.is_empty(), "a retire that determined no key cannot withhold a time");
+            return (Vec::new(), Antichain::new());
+        }
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
         let mut frontier = Antichain::new();
         for times in self.pending.values() {
@@ -239,7 +273,7 @@ where
     B2: BatchReader<Time = B1::Time>,
     Bk: ProxyReduceBackend<B1, B2>,
 {
-    /// The backend, between its `begin` and its `finish`.
+    /// The backend, whose output session [`run`](Self::run) opens and the caller closes.
     backend: &'a mut Bk,
     /// The batches under retirement, as presented to the backend.
     instance: ReduceInstance<'a, B1, B2>,
@@ -248,12 +282,20 @@ where
     /// The held capability times, ascending; `tile_of[i]` is `held[i]`'s tile, if it has one.
     held: Vec<B1::Time>,
     tile_of: Vec<Option<usize>>,
-    /// Interesting times withheld by earlier retires, by key hash.
+    /// Interesting times withheld by earlier retires, by key hash, and the flat presentation of
+    /// the same times the backend moves through.
     pending: &'a BTreeMap<u64, Vec<B1::Time>>,
+    pending_flat: &'a [(u64, B1::Time)],
     /// Interesting times this retire withholds, by key hash.
     new_pending: BTreeMap<u64, Vec<B1::Time>>,
     /// Output updates by held index, accumulated across a window and emitted at its end.
     tile_deltas: Vec<Vec<((u64, u64), B1::Time, Bk::ROut)>>,
+
+    /// Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
+    /// once the backend reports the keys exhausted.
+    from: Option<u64>,
+    /// The window last drawn, held across draws to keep its allocations.
+    window: ReduceWindow<B1::Time, Bk::RIn, Bk::ROut>,
 
     /// Per-key application state; `n_states` is the prefix [`determine`](Self::determine) filled
     /// this window. Higher slots persist, retaining their capacity for a later, wider window.
@@ -280,7 +322,7 @@ where
     B2: BatchReader<Time = B1::Time>,
     Bk: ProxyReduceBackend<B1, B2>,
 {
-    /// A retire against a backend whose session has begun, with empty scratch.
+    /// A retire at the start of the key space, with empty scratch and no session yet opened.
     fn new(
         backend: &'a mut Bk,
         instance: ReduceInstance<'a, B1, B2>,
@@ -288,12 +330,15 @@ where
         held: Vec<B1::Time>,
         tile_of: Vec<Option<usize>>,
         pending: &'a BTreeMap<u64, Vec<B1::Time>>,
+        pending_flat: &'a [(u64, B1::Time)],
     ) -> Self {
         let tile_deltas = (0..held.len()).map(|_| Vec::new()).collect();
         Retire {
-            backend, instance, upper, held, tile_of, pending,
+            backend, instance, upper, held, tile_of, pending, pending_flat,
             new_pending: BTreeMap::new(),
             tile_deltas,
+            from: Some(0),
+            window: ReduceWindow::default(),
             states: Vec::new(),
             n_states: 0,
             discover_scratch: DiscoverScratch::new(),
@@ -307,34 +352,73 @@ where
         }
     }
 
-    /// Retire every window the backend offers, in ascending key-hash order.
-    fn run(&mut self, changed: &[u64], seeds: &[(u64, B1::Time)]) {
-        let mut cursor = 0usize;
-        let mut ns = 0usize;
-        while let Some(window) = self.backend.next_window(&self.instance, changed, &mut cursor) {
-            super::debug_assert_sorted_bridge(&window.input, "next_window.input");
-            super::debug_assert_sorted_bridge(&window.output, "next_window.output");
-            self.determine(&window, seeds, &mut ns);
+    /// Retire every window the backend offers, in ascending key-hash order, opening the output
+    /// session on the first window that has work. Reports whether the session was opened.
+    fn run(&mut self, tiles: &[Description<B1::Time>]) -> bool {
+        let mut began = false;
+        while self.from.is_some() {
+            self.draw();
+            // The backend should only report an empty window when it reports exhaustion, but skipping
+            // one costs nothing, where terminating on one would abandon the keys beyond it.
+            if self.window.keys.is_empty() { continue; }
+            if !began {
+                self.backend.begin(tiles);
+                began = true;
+            }
+            self.determine();
             self.apply();
             self.flush();
         }
+        began
+    }
+
+    /// Draw the next window from the backend.
+    fn draw(&mut self) {
+        self.window.clear();
+        let before = self.from;
+        self.backend.advance(&self.instance, &mut self.from, self.pending_flat, &mut self.window);
+        // Without progress the retire would never terminate, so this guards liveness as well as contract.
+        debug_assert!(
+            self.from.is_none() || self.from > before,
+            "advance must either strictly increase `from` or report the keys exhausted",
+        );
+        debug_assert!(
+            self.from.is_none() || !self.window.keys.is_empty(),
+            "advance must draw a non-empty window unless it reports the keys exhausted",
+        );
+        super::debug_assert_sorted_bridge(&self.window.input, "advance (input)");
+        super::debug_assert_sorted_bridge(&self.window.output, "advance (output)");
+        debug_assert!(self.window.keys.windows(2).all(|w| w[0] < w[1]), "a window's keys must ascend");
+        debug_assert!(self.window.seeds.windows(2).all(|w| w[0].0 <= w[1].0), "a window's seeds must be sorted by key hash");
+        // A changed key outside `[before, from)` is either one an earlier window already retired, or
+        // one a later window may yet report: both split a key's times across windows, which reconciles
+        // it against an input it is not yet whole.
+        debug_assert!(
+            {
+                let mut keys = self.window.keys.iter().copied()
+                    .chain(self.window.input.iter().map(|r| r.0.0))
+                    .chain(self.window.output.iter().map(|r| r.0.0))
+                    .chain(self.window.seeds.iter().map(|s| s.0));
+                keys.all(|k| before.is_none_or(|b| b <= k) && self.from.is_none_or(|f| k < f))
+            },
+            "advance must report a key hash entirely within the window that first mentions it",
+        );
     }
 
     /// Phase 1 (determination): for every key in the window, discover its interesting times (times
     /// only — no accumulation) and stand up its per-moment replays, leaving them in `states[..n_states]`.
     ///
-    /// Peak state is O(window presentation), bounded by the window `next_window` already materialized.
+    /// Peak state is O(window presentation), bounded by the window `advance` already materialized.
     /// `states` is a long-lived buffer reloaded slot-by-slot (not cleared/rebuilt): a slot's `Vec`s
     /// and replays are allocated once and reused, so keys cost no per-key alloc/free.
-    ///
-    /// `ns` is the caller's cursor into `seeds`, which the windows consume in key order.
-    fn determine(&mut self, window: &ReduceWindow<B1::Time, Bk::RIn, Bk::ROut>, seeds: &[(u64, B1::Time)], ns: &mut usize) {
-        let p_in = &window.input;
-        let p_out = &window.output;
+    fn determine(&mut self) {
+        let p_in = &self.window.input;
+        let p_out = &self.window.output;
+        let seeds = &self.window.seeds;
 
         self.n_states = 0;
-        let (mut is, mut os) = (0usize, 0usize);
-        for &key in &window.keys {
+        let (mut is, mut os, mut ns) = (0usize, 0usize, 0usize);
+        for &key in &self.window.keys {
             while is < p_in.len() && p_in[is].0.0 < key { is += 1; }
             let i0 = is;
             while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
@@ -343,10 +427,10 @@ where
             let o0 = os;
             while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
             let o1 = os;
-            while *ns < seeds.len() && seeds[*ns].0 < key { *ns += 1; }
-            let n0 = *ns;
-            while *ns < seeds.len() && seeds[*ns].0 == key { *ns += 1; }
-            let n1 = *ns;
+            while ns < seeds.len() && seeds[ns].0 < key { ns += 1; }
+            let n0 = ns;
+            while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
+            let n1 = ns;
 
             self.moments.clear();
             self.pended.clear();
