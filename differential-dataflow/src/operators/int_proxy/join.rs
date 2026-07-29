@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 
 use crate::difference::{Multiply, Semigroup};
 use crate::lattice::Lattice;
@@ -16,46 +16,24 @@ use crate::operators::join::{Fresh, JoinTactic};
 
 use super::history::IdHistory;
 
-/// A unit of proxied join work, presented to the backend.
-pub struct JoinInstance<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
-    /// The first input's batches.
-    pub batches0: Vec<B0>,
-    /// The second input's batches.
-    pub batches1: Vec<B1>,
-    /// The compaction frontier for loading (the unit's capability time).
-    pub lower: Antichain<B0::Time>,
-}
-
-/// A type that can interpret and retire pairs of batches, joined by key hashes.
+/// A type that can interpret and retire pairs of lists of batches, joined by key hashes.
 ///
-/// The protocol repeatedly invokes [`advance`](Self::advance) to draw a block of the proxy
-/// collection, then [`cross`](Self::cross) to turn that block's matches into output containers.
-/// The unit is retired when `advance` reports the key space exhausted.
-///
-/// The two granularities are the backend's, and independent: `advance` sizes the input it draws,
-/// `cross` sizes the containers it produces from the matches that block yields.
-///
-/// The backend holds no state across the calls of one unit: its progress lives in the `from`
-/// argument, which the harness owns. This is load-bearing, as the harness may have many units
-/// in flight against the same backend, and interleaves their calls freely.
+/// The harness repeatedly invokes [`advance`](Self::advance) to draw a block of the proxy collection,
+/// then [`cross`](Self::cross) to turn that block's matches into output containers, until `advance` reports the key space exhausted.
 pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
-    /// Diff type presented for the first input.
+    /// Diff type of the first input.
     type R0: Semigroup + Multiply<Self::R1, Output = Self::ROut>;
-    /// Diff type presented for the second input.
+    /// Diff type of the second input.
     type R1: Semigroup;
-    /// Diff type of matched records (`R0 * R1`), computed by the tactic.
+    /// Diff type of matched records (`R0 * R1`), computed by the harness.
     type ROut: Semigroup;
     /// The output container built from matched value ids.
     type Output;
 
-    /// Populates two bridges with intersecting keys from `from` onward, updating `from` to the new limit.
+    /// Populates two bridges with all updates of a range of matched keys.
     ///
-    /// The `from` argument is an inclusive lower bound on key identifier, initially `Some(0)`, with `None`
-    /// used to indicate that the keyspace has been exhausted.
-    ///
-    /// A key hash must be reported entirely by the call that first mentions it: all of its updates,
-    /// from both inputs, and none in any other block. Equivalently, each reported key hash lies in
-    /// `[from, from')` for the argument's values before and after the call.
+    /// The key range should start with `from`, and be updated to reflect the new inclusive lower bound,
+    /// with `None` used to indicate completion.
     fn advance(
         &mut self,
         instance: &JoinInstance<B0, B1>,
@@ -64,17 +42,41 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
         bridge1: &mut ProxyBridge<B0::Time, Self::R1>,
     );
 
-    /// From a list of left and right identifiers, and corresponding times and diffs, the output.
+    /// From a list of matching identifiers, interpret and populate `output` with resulting containers.
+    fn cross(
+        &mut self,
+        instance: &JoinInstance<B0, B1>,
+        matches: &mut JoinMatches<B0::Time, Self::ROut>,
+        output: &mut Vec<Self::Output>,
+    );
+}
+
+/// A unit of proxied join work, presented to the backend.
+pub struct JoinInstance<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
+    /// The first input's batches.
+    pub batches0: Vec<B0>,
+    /// The second input's batches.
+    pub batches1: Vec<B1>,
+    /// A lower bound on the meet of pairs of update times.
     ///
-    /// The four are parallel arrays with one entry per matched pair: `left[i]` and `right[i]` are the
-    /// `(key_hash, value_id)` of the pair's two records, which share a key hash, and `times[i]` and
-    /// `diffs[i]` are the join of their times and the product of their diffs. They are not
-    /// consolidated, and a pair can repeat at distinct times. Drain `times` and `diffs` to take their
-    /// contents; the harness keeps their allocations.
-    ///
-    /// The containers are pushed to `output`, which arrives empty, and are shipped one at a time:
-    /// their sizing is the backend's, independent of the block `advance` drew the matches from.
-    fn cross(&mut self, instance: &JoinInstance<B0, B1>, left: &[(u64, u64)], right: &[(u64, u64)], times: &mut Vec<B0::Time>, diffs: &mut Vec<Self::ROut>, output: &mut Vec<Self::Output>);
+    /// This can be applied when loading updates to consolidate on load.
+    pub lower: B0::Time,
+}
+
+/// Presentation of discovered join matches.
+///
+/// The arrays have common lengths, and are in key order but may not be consolidated.
+pub struct JoinMatches<T, R> {
+    /// Triples of `(key, (val0, val1))` of matches.
+    pub ids: Vec<(u64, (u64, u64))>,
+    /// Times of the updates.
+    pub times: Vec<T>,
+    /// Diffs of the updates.
+    pub diffs: Vec<R>,
+}
+
+impl<T, R> Default for JoinMatches<T, R> {
+    fn default() -> Self { Self { ids: vec![], times: vec![], diffs: vec![] } }
 }
 
 /// A proxy-space [`JoinTactic`]: matches records of the two drawn runs by `key_hash`.
@@ -104,16 +106,13 @@ where
     fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, _fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = Bk::Output>> {
         Box::new(ProxyJoinIter {
             backend: Rc::clone(&self.backend),
-            instance: JoinInstance { batches0: input0, batches1: input1, lower: Antichain::from_elem(meet) },
+            instance: JoinInstance { batches0: input0, batches1: input1, lower: meet },
             from: Some(0),
             p0: Vec::new(),
             p1: Vec::new(),
             h0: IdHistory::new(),
             h1: IdHistory::new(),
-            li: Vec::new(),
-            ri: Vec::new(),
-            ot: Vec::new(),
-            od: Vec::new(),
+            matches: JoinMatches::default(),
             ready: Vec::new(),
         })
     }
@@ -139,7 +138,7 @@ where
 {
     /// The backend, shared across all outstanding units.
     backend: Rc<RefCell<Bk>>,
-    /// The unit's inputs, and the compaction frontier at which they load.
+    /// The unit's inputs, and the time at which they can consolidate as they load.
     instance: JoinInstance<B0, B1>,
     /// Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
     /// once the backend reports the unit drawn.
@@ -151,12 +150,8 @@ where
     /// replay-wave path touches them), so a high-fanout join pays no per-key `IdHistory` alloc.
     h0: IdHistory<B0::Time, Bk::R0>,
     h1: IdHistory<B0::Time, Bk::R1>,
-    /// The block's matched records, as the four parallel arrays `cross` reads. Held across blocks
-    /// only to keep their allocations.
-    li: Vec<(u64, u64)>,
-    ri: Vec<(u64, u64)>,
-    ot: Vec<B0::Time>,
-    od: Vec<Bk::ROut>,
+    /// The block's matched records, held across blocks to keep their allocations.
+    matches: JoinMatches<B0::Time, Bk::ROut>,
     /// The last block's containers, in reverse, served from the back one `next` at a time.
     ready: Vec<Bk::Output>,
 }
@@ -177,7 +172,7 @@ where
         while self.ready.is_empty() && self.from.is_some() {
             self.refill();
             self.work();
-            if !self.li.is_empty() { self.cross(); }
+            if !self.matches.ids.is_empty() { self.cross(); }
         }
         self.ready.pop()
     }
@@ -214,59 +209,47 @@ where
         );
     }
 
-    /// Merge-match the whole of the current block into the match buffers.
-    ///
-    /// Both runs are sorted by `key_hash`, so matching keys are found by a merge.
+    /// Match the whole of the current block into the match buffers.
     fn work(&mut self) {
         // Disjoint field borrows, as `join_key` holds the bridges and the buffers at once.
         let (p0, p1) = (&self.p0, &self.p1);
-        let (li, ri, ot, od) = (&mut self.li, &mut self.ri, &mut self.ot, &mut self.od);
         let (h0, h1) = (&mut self.h0, &mut self.h1);
 
         let (mut i, mut j) = (0usize, 0usize);
         while i < p0.len() && j < p1.len() {
-            let (ki, kj) = (p0[i].0.0, p1[j].0.0);
-            if ki < kj {
-                i += 1;
-            } else if kj < ki {
-                j += 1;
-            } else {
-                let mut e0 = i;
-                while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
-                let mut e1 = j;
-                while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
-                join_key(ki, p0, i..e0, p1, j..e1, h0, h1, li, ri, ot, od);
-                i = e0;
-                j = e1;
-            }
+            let ki = p0[i].0.0;
+            debug_assert_eq!(ki, p1[j].0.0, "advance must report common keys");
+            let mut e0 = i;
+            while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
+            let mut e1 = j;
+            while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
+            join_key(ki, p0, i..e0, p1, j..e1, h0, h1, &mut self.matches);
+            i = e0;
+            j = e1;
         }
+        debug_assert!(i == p0.len() && j == p1.len(), "both bridges must drain together");
     }
 
     /// Turn the block's matches into containers, ready to be served one at a time.
     fn cross(&mut self) {
         self.backend.borrow_mut().cross(
             &self.instance,
-            self.li.as_slice(),
-            self.ri.as_slice(),
-            &mut self.ot,
-            &mut self.od,
+            &mut self.matches,
             &mut self.ready,
         );
         // `next` serves from the back, so reverse to ship in the order the backend produced.
         self.ready.reverse();
-        self.li.clear();
-        self.ri.clear();
-        self.ot.clear();
-        self.od.clear();
+        self.matches.ids.clear();
+        self.matches.times.clear();
+        self.matches.diffs.clear();
     }
 }
 
 /// Match one key's records across the two presented runs.
 ///
-/// If either history is small, this performs a simple cross product.
+/// If either history is small, this performs a direct cross product.
 /// If both histories are large, this replays the histories compacting as it goes in
 /// order to (potentially) avoid quadratic blow-up.
-#[allow(clippy::too_many_arguments)]
 fn join_key<T, R0, R1, RO>(
     kh: u64,
     p0: &ProxyBridge<T, R0>,
@@ -275,10 +258,7 @@ fn join_key<T, R0, R1, RO>(
     r1: std::ops::Range<usize>,
     h0: &mut IdHistory<T, R0>,
     h1: &mut IdHistory<T, R1>,
-    li: &mut Vec<(u64, u64)>,
-    ri: &mut Vec<(u64, u64)>,
-    ot: &mut Vec<T>,
-    od: &mut Vec<RO>,
+    matches: &mut JoinMatches<T, RO>,
 ) where
     T: Lattice + Timestamp,
     R0: Semigroup + Multiply<R1, Output = RO> + Clone,
@@ -287,24 +267,19 @@ fn join_key<T, R0, R1, RO>(
     if r0.len() < 16 || r1.len() < 16 {
         for a in r0 {
             for b in r1.clone() {
-                li.push((kh, p0[a].0.1));
-                ri.push((kh, p1[b].0.1));
-                ot.push(p0[a].1.join(&p1[b].1));
-                od.push(p0[a].2.clone().multiply(&p1[b].2));
+                matches.ids.push((kh, (p0[a].0.1, p1[b].0.1)));
+                matches.times.push(p0[a].1.join(&p1[b].1));
+                matches.diffs.push(p0[a].2.clone().multiply(&p1[b].2));
             }
         }
-        return;
     }
-
-    // Reusable replay scratch, reloaded per key (`load_iter` clears + rebuilds, keeping capacity);
-    // the caller holds `h0`/`h1` across the unit so a high-fanout join allocates no per-key history.
-    h0.load_iter(r0.map(|i| (p0[i].0.1, p0[i].1.clone(), p0[i].2.clone())), None);
-    h1.load_iter(r1.map(|i| (p1[i].0.1, p1[i].1.clone(), p1[i].2.clone())), None);
-
-    crate::operators::common::bilinear_wave(h0, h1, |v0, v1, t, d| {
-        li.push((kh, v0));
-        ri.push((kh, v1));
-        ot.push(t);
-        od.push(d);
-    });
+    else {
+        h0.load_iter(r0.map(|i| (p0[i].0.1, p0[i].1.clone(), p0[i].2.clone())), None);
+        h1.load_iter(r1.map(|i| (p1[i].0.1, p1[i].1.clone(), p1[i].2.clone())), None);
+        crate::operators::common::bilinear_wave(h0, h1, |v0, v1, t, d| {
+            matches.ids.push((kh, (v0, v1)));
+            matches.times.push(t);
+            matches.diffs.push(d);
+        });
+    }
 }
