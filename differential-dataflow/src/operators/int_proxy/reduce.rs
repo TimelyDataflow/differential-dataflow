@@ -232,6 +232,7 @@ where
         // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
         let held_elems: Vec<B1::Time> = held.elements().to_vec();
         let (tile_descs, tile_held, tile_of) = tile_descriptions(lower, upper, &held_elems);
+        let tiles: Vec<(B1::Time, Option<usize>)> = held_elems.into_iter().zip(tile_of).collect();
 
         // The withheld times as the backend sees them: one flat, key-ordered list to move through.
         // The harness keeps its own map, which it indexes by key as it determines each one.
@@ -239,7 +240,7 @@ where
             .flat_map(|(key, times)| times.iter().map(move |t| (*key, t.clone())))
             .collect();
 
-        let mut retire = Retire::new(&mut self.backend, instance, upper, held_elems, tile_of, &self.pending, &pending_flat);
+        let mut retire = Retire::new(&mut self.backend, instance, upper, tiles, &self.pending, &pending_flat);
         let began = retire.run(&tile_descs);
         let new_pending = retire.new_pending;
 
@@ -279,9 +280,10 @@ where
     instance: ReduceInstance<'a, B1, B2>,
     /// The retire's upper bound: times at or beyond it are withheld rather than applied.
     upper: &'a Antichain<B1::Time>,
-    /// The held capability times, ascending; `tile_of[i]` is `held[i]`'s tile, if it has one.
-    held: Vec<B1::Time>,
-    tile_of: Vec<Option<usize>>,
+    /// The held capability times, ascending, each with the tile it commits to.
+    ///
+    /// A held time whose interval was degenerate has no tile; `tile_descriptions` skipped it.
+    tiles: Vec<(B1::Time, Option<usize>)>,
     /// Interesting times withheld by earlier retires, by key hash, and the flat presentation of
     /// the same times the backend moves through.
     pending: &'a BTreeMap<u64, Vec<B1::Time>>,
@@ -297,23 +299,27 @@ where
     /// The window last drawn, held across draws to keep its allocations.
     window: ReduceWindow<B1::Time, Bk::RIn, Bk::ROut>,
 
-    /// Per-key application state; `n_states` is the prefix [`determine`](Self::determine) filled
-    /// this window. Higher slots persist, retaining their capacity for a later, wider window.
+    /// Per-key application state, in slots [`determine`](Self::determine) refills window by window.
+    /// It reports how many it filled; higher slots persist, retaining their capacity for a later,
+    /// wider window.
     states: Vec<KeyState<B1::Time, Bk::RIn, Bk::ROut>>,
-    n_states: usize,
-    /// Time-discovery scratch, and the two lists one key's discovery writes.
+    /// Time-discovery scratch.
     discover_scratch: DiscoverScratch<B1::Time, Bk::RIn>,
+    /// One key's discovered times inside `upper`, before they move into its state slot.
+    ///
+    /// A field rather than a local because `append` drains it and leaves its capacity behind, so the
+    /// next key reuses it. Its counterpart — the times at or beyond `upper` — is a local, because
+    /// `new_pending` takes that allocation whole and leaves nothing to reuse.
     moments: Vec<B1::Time>,
-    pended: Vec<B1::Time>,
 
     /// One round's crossing, assembled across all active keys, and the corrections it draws.
     round: ReduceRound<Bk::RIn, Bk::ROut>,
     corrections: ReduceCorrections<Bk::ROut>,
-    /// The key slot and moment each of the round's keys was assembled for.
+    /// The state slot and moment each of the round's keys was assembled for, parallel to its `keys`.
     active: Vec<(usize, B1::Time)>,
-    /// One key's accumulations, before they are appended to the round.
+    /// One key's accumulations, before `append` drains them into the round and leaves their capacity.
     in_accum: Vec<(u64, Bk::RIn)>,
-    cur_out: Vec<(u64, Bk::ROut)>,
+    out_accum: Vec<(u64, Bk::ROut)>,
 }
 
 impl<'a, B1, B2, Bk> Retire<'a, B1, B2, Bk>
@@ -327,28 +333,25 @@ where
         backend: &'a mut Bk,
         instance: ReduceInstance<'a, B1, B2>,
         upper: &'a Antichain<B1::Time>,
-        held: Vec<B1::Time>,
-        tile_of: Vec<Option<usize>>,
+        tiles: Vec<(B1::Time, Option<usize>)>,
         pending: &'a BTreeMap<u64, Vec<B1::Time>>,
         pending_flat: &'a [(u64, B1::Time)],
     ) -> Self {
-        let tile_deltas = (0..held.len()).map(|_| Vec::new()).collect();
+        let tile_deltas = (0..tiles.len()).map(|_| Vec::new()).collect();
         Retire {
-            backend, instance, upper, held, tile_of, pending, pending_flat,
+            backend, instance, upper, tiles, pending, pending_flat,
             new_pending: BTreeMap::new(),
             tile_deltas,
             from: Some(0),
             window: ReduceWindow::default(),
             states: Vec::new(),
-            n_states: 0,
             discover_scratch: DiscoverScratch::new(),
             moments: Vec::new(),
-            pended: Vec::new(),
             round: ReduceRound::default(),
             corrections: ReduceCorrections::default(),
             active: Vec::new(),
             in_accum: Vec::new(),
-            cur_out: Vec::new(),
+            out_accum: Vec::new(),
         }
     }
 
@@ -365,8 +368,8 @@ where
                 self.backend.begin(tiles);
                 began = true;
             }
-            self.determine();
-            self.apply();
+            let live = self.determine();
+            self.apply(live);
             self.flush();
         }
         began
@@ -406,17 +409,20 @@ where
     }
 
     /// Phase 1 (determination): for every key in the window, discover its interesting times (times
-    /// only — no accumulation) and stand up its per-moment replays, leaving them in `states[..n_states]`.
+    /// only — no accumulation) and stand up its per-moment replays. Returns how many `states` slots
+    /// it filled, which is what [`apply`](Self::apply) then walks.
     ///
     /// Peak state is O(window presentation), bounded by the window `advance` already materialized.
     /// `states` is a long-lived buffer reloaded slot-by-slot (not cleared/rebuilt): a slot's `Vec`s
     /// and replays are allocated once and reused, so keys cost no per-key alloc/free.
-    fn determine(&mut self) {
+    fn determine(&mut self) -> usize {
         let p_in = &self.window.input;
         let p_out = &self.window.output;
         let seeds = &self.window.seeds;
 
-        self.n_states = 0;
+        // The times at or beyond `upper`, which `new_pending` takes whole; see the `moments` field.
+        let mut withheld: Vec<B1::Time> = Vec::new();
+        let mut live = 0usize;
         let (mut is, mut os, mut ns) = (0usize, 0usize, 0usize);
         for &key in &self.window.keys {
             while is < p_in.len() && p_in[is].0.0 < key { is += 1; }
@@ -433,7 +439,7 @@ where
             let n1 = ns;
 
             self.moments.clear();
-            self.pended.clear();
+            withheld.clear();
             {
                 let pending = self.pending.get(&key).map(|p| &p[..]).unwrap_or(&[]);
                 let seed_times = seeds[n0..n1].iter().map(|(_, t)| t.clone());
@@ -442,22 +448,22 @@ where
                     KeyView { p_in: &p_in[..], i0, i1, pending },
                     seed_times, out_times, self.upper,
                     &mut self.discover_scratch,
-                    &mut self.moments, &mut self.pended,
+                    &mut self.moments, &mut withheld,
                 );
             }
-            if !self.pended.is_empty() {
-                self.new_pending.insert(key, std::mem::take(&mut self.pended));
+            if !withheld.is_empty() {
+                self.new_pending.insert(key, std::mem::take(&mut withheld));
             }
             if self.moments.is_empty() {
                 continue;
             }
 
-            // Reload slot `n_states` in place (grow the buffer by one only when a window is wider
-            // than any before). `append` moves the discovered moments in without copy or realloc.
-            if self.n_states == self.states.len() {
+            // Reload slot `live` in place (grow the buffer by one only when a window is wider than
+            // any before). `append` moves the discovered moments in without copy or realloc.
+            if live == self.states.len() {
                 self.states.push(KeyState::empty());
             }
-            let st = &mut self.states[self.n_states];
+            let st = &mut self.states[live];
             st.key = key;
             st.cursor = 0;
             st.produced.clear();
@@ -471,8 +477,9 @@ where
             }
             st.in_replay.load_iter((i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())), st.meets.first());
             st.out_replay.load_iter((o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())), st.meets.first());
-            self.n_states += 1;
+            live += 1;
         }
+        live
     }
 
     /// Phase 2 (application): walk all keys' moments in ROUNDS, accumulating output updates into
@@ -484,14 +491,14 @@ where
     /// call count at O(max moments over keys), not O(sum of moments), with peak materialization one
     /// moment deep per key. `produced` is meet-collapsed each round, exactly like the reference —
     /// bounded, not the O(times × values) delta history.
-    fn apply(&mut self) {
+    fn apply(&mut self, live: usize) {
         for deltas in self.tile_deltas.iter_mut() { deltas.clear(); }
 
         loop {
             self.round.clear();
             self.active.clear();
             let mut advanced = false;
-            for (si, st) in self.states[..self.n_states].iter_mut().enumerate() {
+            for (si, st) in self.states[..live].iter_mut().enumerate() {
                 if st.cursor >= st.moments.len() {
                     continue;
                 }
@@ -515,21 +522,21 @@ where
                     }
                 }
                 crate::consolidation::consolidate(&mut self.in_accum);
-                self.cur_out.clear();
+                self.out_accum.clear();
                 for ((vid, et), d) in st.out_replay.buffer().iter().chain(st.produced.iter()) {
                     if et.less_equal(&t) {
-                        self.cur_out.push((*vid, d.clone()));
+                        self.out_accum.push((*vid, d.clone()));
                     }
                 }
-                crate::consolidation::consolidate(&mut self.cur_out);
+                crate::consolidation::consolidate(&mut self.out_accum);
 
-                if self.in_accum.is_empty() && self.cur_out.is_empty() {
+                if self.in_accum.is_empty() && self.out_accum.is_empty() {
                     continue;
                 }
                 self.round.keys.push(st.key);
                 self.round.input.append(&mut self.in_accum);
                 self.round.in_ends.push(self.round.input.len());
-                self.round.output.append(&mut self.cur_out);
+                self.round.output.append(&mut self.out_accum);
                 self.round.out_ends.push(self.round.output.len());
                 self.active.push((si, t));
             }
@@ -550,7 +557,7 @@ where
             for (bi, (si, t)) in self.active.iter().enumerate() {
                 let cend = self.corrections.ends[bi];
                 if cstart != cend {
-                    let idx = self.held.iter().rposition(|h| h.less_equal(t)).expect("no held capability <= active time");
+                    let idx = self.tiles.iter().rposition(|(h, _)| h.less_equal(t)).expect("no held capability <= active time");
                     for (vid, d) in &self.corrections.updates[cstart..cend] {
                         self.states[*si].produced.push(((*vid, t.clone()), d.clone()));
                         self.tile_deltas[idx].push(((self.states[*si].key, *vid), t.clone(), d.clone()));
@@ -567,7 +574,7 @@ where
             if deltas.is_empty() {
                 continue;
             }
-            if let Some(tile) = self.tile_of[held_index] {
+            if let Some(tile) = self.tiles[held_index].1 {
                 crate::consolidation::consolidate_updates(deltas);
                 self.backend.emit(tile, &deltas[..]);
             }
