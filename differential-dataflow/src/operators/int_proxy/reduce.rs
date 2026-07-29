@@ -42,6 +42,67 @@ pub struct ReduceWindow<T, RIn, ROut> {
     pub output: ProxyBridge<T, ROut>,
 }
 
+/// One round of reconciliation: for each of several keys, an accumulated input and tentative output.
+///
+/// The lists are segmented, parallel to `keys`: key `keys[i]` has input `input[..]` over the range
+/// ending at `in_ends[i]` and starting at `in_ends[i-1]` (at zero for `i == 0`), and output `output[..]`
+/// over the range likewise delimited by `out_ends`. So `in_ends` and `out_ends` have `keys`' length,
+/// ascend, and end at the lengths of `input` and `output`. Within a key's range the `u64` are value
+/// ids, ascending and consolidated.
+pub struct ReduceRound<RIn, ROut> {
+    /// The keys reconciled this round, ascending.
+    pub keys: Vec<u64>,
+    /// One past each key's last input record.
+    pub in_ends: Vec<usize>,
+    /// The accumulated input, by key.
+    pub input: Vec<(u64, RIn)>,
+    /// One past each key's last output record.
+    pub out_ends: Vec<usize>,
+    /// The tentative accumulated output, by key.
+    pub output: Vec<(u64, ROut)>,
+}
+
+impl<RIn, ROut> Default for ReduceRound<RIn, ROut> {
+    fn default() -> Self {
+        Self { keys: vec![], in_ends: vec![], input: vec![], out_ends: vec![], output: vec![] }
+    }
+}
+
+impl<RIn, ROut> ReduceRound<RIn, ROut> {
+    /// Empties the round, retaining its allocations for the next one.
+    pub fn clear(&mut self) {
+        self.keys.clear();
+        self.in_ends.clear();
+        self.input.clear();
+        self.out_ends.clear();
+        self.output.clear();
+    }
+}
+
+/// The output updates a backend supplies for a [`ReduceRound`], as one segmented list.
+///
+/// `ends` is parallel to the round's `keys`: key `keys[i]`'s corrections are the `updates` ending at
+/// `ends[i]` and starting at `ends[i-1]` (at zero for `i == 0`). A key needing no correction gets an
+/// empty range, not an omitted one, so `ends` has `keys`' length and ends at `updates`' length.
+pub struct ReduceCorrections<ROut> {
+    /// The corrections, by key. The `u64` are value ids.
+    pub updates: Vec<(u64, ROut)>,
+    /// One past each key's last correction.
+    pub ends: Vec<usize>,
+}
+
+impl<ROut> Default for ReduceCorrections<ROut> {
+    fn default() -> Self { Self { updates: vec![], ends: vec![] } }
+}
+
+impl<ROut> ReduceCorrections<ROut> {
+    /// Empties the corrections, retaining their allocations for the next round.
+    pub fn clear(&mut self) {
+        self.updates.clear();
+        self.ends.clear();
+    }
+}
+
 /// The reduce backend: value semantics for a proxy-space reduction, driven by [`ProxyReduceTactic`].
 ///
 /// The protocol is currently (temporarily) for each round of invocation:
@@ -75,16 +136,13 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
     ///
     /// Multiple keys are provided concurrently, for each an accumulated input and tentative output.
-    /// The backend should provide for each key the necessary output updates to bring the output in
-    /// with its desires. The `usize` integers upper bound the range for the corresponding key.
+    /// The backend should populate `corrections`, which arrives empty, with for each key the output
+    /// updates that bring the output in line with its desires.
     fn reduce_corrections(
         &mut self,
-        keys: &[u64],
-        in_ends: &[usize],
-        input: &[(u64, Self::RIn)],
-        out_ends: &[usize],
-        output: &[(u64, Self::ROut)],
-    ) -> (Vec<(u64, Self::ROut)>, Vec<usize>);
+        round: &ReduceRound<Self::RIn, Self::ROut>,
+        corrections: &mut ReduceCorrections<Self::ROut>,
+    );
 
     /// Commit to a collection of updates at a specific batch in progress.
     ///
@@ -206,16 +264,12 @@ where
     moments: Vec<B1::Time>,
     pended: Vec<B1::Time>,
 
-    /// One round's crossing, assembled across all active keys: their hashes, and their input and
-    /// output accumulations as runs delimited by `in_ends` and `out_ends` (see `reduce_corrections`).
-    batch_keys: Vec<u64>,
-    in_ends: Vec<usize>,
-    in_all: Vec<(u64, Bk::RIn)>,
-    out_ends: Vec<usize>,
-    out_all: Vec<(u64, Bk::ROut)>,
-    /// The key slot and moment each of `batch_keys` was assembled for.
+    /// One round's crossing, assembled across all active keys, and the corrections it draws.
+    round: ReduceRound<Bk::RIn, Bk::ROut>,
+    corrections: ReduceCorrections<Bk::ROut>,
+    /// The key slot and moment each of the round's keys was assembled for.
     active: Vec<(usize, B1::Time)>,
-    /// One key's accumulations, before they are appended to `in_all` and `out_all`.
+    /// One key's accumulations, before they are appended to the round.
     in_accum: Vec<(u64, Bk::RIn)>,
     cur_out: Vec<(u64, Bk::ROut)>,
 }
@@ -245,11 +299,8 @@ where
             discover_scratch: DiscoverScratch::new(),
             moments: Vec::new(),
             pended: Vec::new(),
-            batch_keys: Vec::new(),
-            in_ends: Vec::new(),
-            in_all: Vec::new(),
-            out_ends: Vec::new(),
-            out_all: Vec::new(),
+            round: ReduceRound::default(),
+            corrections: ReduceCorrections::default(),
             active: Vec::new(),
             in_accum: Vec::new(),
             cur_out: Vec::new(),
@@ -353,11 +404,7 @@ where
         for deltas in self.tile_deltas.iter_mut() { deltas.clear(); }
 
         loop {
-            self.batch_keys.clear();
-            self.in_ends.clear();
-            self.in_all.clear();
-            self.out_ends.clear();
-            self.out_all.clear();
+            self.round.clear();
             self.active.clear();
             let mut advanced = false;
             for (si, st) in self.states[..self.n_states].iter_mut().enumerate() {
@@ -395,11 +442,11 @@ where
                 if self.in_accum.is_empty() && self.cur_out.is_empty() {
                     continue;
                 }
-                self.batch_keys.push(st.key);
-                self.in_all.append(&mut self.in_accum);
-                self.in_ends.push(self.in_all.len());
-                self.out_all.append(&mut self.cur_out);
-                self.out_ends.push(self.out_all.len());
+                self.round.keys.push(st.key);
+                self.round.input.append(&mut self.in_accum);
+                self.round.in_ends.push(self.round.input.len());
+                self.round.output.append(&mut self.cur_out);
+                self.round.out_ends.push(self.round.output.len());
                 self.active.push((si, t));
             }
             // Terminate only when every key is EXHAUSTED — not merely when this round produced no
@@ -408,17 +455,19 @@ where
             if !advanced {
                 break;
             }
-            if self.batch_keys.is_empty() {
+            if self.round.keys.is_empty() {
                 continue;
             }
 
-            let (corr, corr_ends) = self.backend.reduce_corrections(&self.batch_keys, &self.in_ends, &self.in_all, &self.out_ends, &self.out_all);
+            self.corrections.clear();
+            self.backend.reduce_corrections(&self.round, &mut self.corrections);
+            debug_assert_eq!(self.corrections.ends.len(), self.round.keys.len(), "corrections must delimit one run per key");
             let mut cstart = 0usize;
             for (bi, (si, t)) in self.active.iter().enumerate() {
-                let cend = corr_ends[bi];
+                let cend = self.corrections.ends[bi];
                 if cstart != cend {
                     let idx = self.held.iter().rposition(|h| h.less_equal(t)).expect("no held capability <= active time");
-                    for (vid, d) in &corr[cstart..cend] {
+                    for (vid, d) in &self.corrections.updates[cstart..cend] {
                         self.states[*si].produced.push(((*vid, t.clone()), d.clone()));
                         self.tile_deltas[idx].push(((self.states[*si].key, *vid), t.clone(), d.clone()));
                     }

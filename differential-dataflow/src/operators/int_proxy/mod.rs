@@ -64,4 +64,4 @@ pub(crate) fn debug_assert_sorted_bridge<T: Ord, R>(bridge: &ProxyBridge<T, R>, 
 }
 
 pub use join::{JoinInstance, ProxyJoinBackend, ProxyJoinTactic};
-pub use reduce::{ProxyReduceBackend, ProxyReduceTactic, ReduceInstance, ReduceWindow};
+pub use reduce::{ProxyReduceBackend, ProxyReduceTactic, ReduceCorrections, ReduceInstance, ReduceRound, ReduceWindow};
