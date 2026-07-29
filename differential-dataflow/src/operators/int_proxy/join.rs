@@ -30,10 +30,12 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// The output container built from matched value ids.
     type Output;
 
-    /// Populates two bridges with all updates of a range of matched keys.
+    /// Populates the two bridges with all updates for all keys that match in a returned range.
     ///
-    /// The key range should start with `from`, and be updated to reflect the new inclusive lower bound,
-    /// with `None` used to indicate completion.
+    /// The `from` indicates an inclusive lower bound on key hash, and should be updated by the implementor to an exclusive
+    /// upper bound for the range of keys it intends to return in this call. The `None` value indicates the keys are exhausted.
+    /// The returned bridges must contain all updates from both `instance` inputs for keys that are present in both inputs, and
+    /// which are greater or equal to the initial `from`, and not greater or equal to its value when returned.
     fn advance(
         &mut self,
         instance: &JoinInstance<B0, B1>,
@@ -42,7 +44,7 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
         bridge1: &mut ProxyBridge<B0::Time, Self::R1>,
     );
 
-    /// From a list of matching identifiers, interpret and populate `output` with resulting containers.
+    /// Interpret a list of matching identifiers, translate them to outputs, and place them in `output`.
     fn cross(
         &mut self,
         instance: &JoinInstance<B0, B1>,
@@ -51,7 +53,7 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     );
 }
 
-/// A unit of proxied join work, presented to the backend.
+/// A unit of proxied join work, for presentation to the backend.
 pub struct JoinInstance<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// The first input's batches.
     pub batches0: Vec<B0>,
@@ -80,10 +82,6 @@ impl<T, R> Default for JoinMatches<T, R> {
 }
 
 /// A proxy-space [`JoinTactic`]: matches records of the two drawn runs by `key_hash`.
-///
-/// The backend is shared across all outstanding units (an `Rc<RefCell<_>>`), as each prepared unit
-/// is a self-contained `'static` iterator and cannot borrow the tactic. Units are safe to interleave
-/// because a unit's progress through the key space rides in its own `from`, not in the backend.
 pub struct ProxyJoinTactic<B0, B1, Bk> {
     backend: Rc<RefCell<Bk>>,
     _marker: std::marker::PhantomData<(B0, B1)>,
@@ -120,34 +118,26 @@ where
 
 /// Deferred proxy join computation, as an iterator of output containers.
 ///
-/// The unit draws the proxy collection a block at a time (`Bk::advance`), merge-matches the two
-/// drawn runs by `key_hash`, and hands the matches back to be cut into containers (`Bk::cross`).
-/// Both granularities are the backend's: `advance` sizes the block, `cross` the containers. One
-/// key's matches are held whole however the block is sized, as the replay wave cannot be
-/// interrupted. The driver stops pulling once its budget is spent and resumes the same iterator on
-/// the next activation.
-///
-/// `meet` is a lower bound on the fresh side's times, and `lower` presents it to the backend
-/// (see [`JoinInstance`]). Loaded times can be advanced by it on either input: the fresh side's
-/// times dominate `meet`, so the joined time does too.
+/// The iterator draws the proxy collection from the back-end a block at a time (`Bk::advance`).
+/// Each block is then translated to output updates with joined times and multiplied differences,
+/// which are provided to the back-end to translate into output containers, which are then returned.
 struct ProxyJoinIter<B0, B1, Bk>
 where
     B0: BatchReader,
     B1: BatchReader<Time = B0::Time>,
     Bk: ProxyJoinBackend<B0, B1>,
 {
-    /// The backend, shared across all outstanding units.
+    /// The backend, shared across all outstanding iterators.
     backend: Rc<RefCell<Bk>>,
-    /// The unit's inputs, and the time at which they can consolidate as they load.
+    /// The iterator's inputs, and the time at which they can consolidate as they load.
     instance: JoinInstance<B0, B1>,
     /// Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
-    /// once the backend reports the unit drawn.
+    /// once the backend reports the iteration is complete.
     from: Option<u64>,
     /// The current block: the two runs `advance` last drew, which one `next` consumes entirely.
     p0: ProxyBridge<B0::Time, Bk::R0>,
     p1: ProxyBridge<B0::Time, Bk::R1>,
-    /// Per-key replay histories, held across the unit and reloaded per key (only the >=16/>=16
-    /// replay-wave path touches them), so a high-fanout join pays no per-key `IdHistory` alloc.
+    /// Per-key replay histories, held across the iterator and reloaded per key when needed.
     h0: IdHistory<B0::Time, Bk::R0>,
     h1: IdHistory<B0::Time, Bk::R1>,
     /// The block's matched records, held across blocks to keep their allocations.
@@ -165,9 +155,6 @@ where
     type Item = Bk::Output;
 
     /// Serve a ready container, else draw and cross blocks until one yields any.
-    ///
-    /// A block that yields no matches is not an empty container; it is a region of the key space
-    /// with no intersection, and the unit moves on to the next block.
     fn next(&mut self) -> Option<Bk::Output> {
         while self.ready.is_empty() && self.from.is_some() {
             self.refill();
@@ -190,10 +177,10 @@ where
         self.p1.clear();
         let before = self.from;
         self.backend.borrow_mut().advance(&self.instance, &mut self.from, &mut self.p0, &mut self.p1);
-        // Without progress the unit would never retire, so this guards liveness as well as contract.
+        // Without progress the iterator would never retire, so this guards liveness as well as contract.
         debug_assert!(
             self.from.is_none() || self.from > before,
-            "advance must either strictly increase `from` or report the unit drawn",
+            "advance must either strictly increase `from` or report the iteration complete",
         );
         super::debug_assert_sorted_bridge(&self.p0, "advance (bridge0)");
         super::debug_assert_sorted_bridge(&self.p1, "advance (bridge1)");
