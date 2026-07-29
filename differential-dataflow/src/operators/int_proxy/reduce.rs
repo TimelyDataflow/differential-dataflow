@@ -51,7 +51,7 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// Diff type presented for the input.
     type RIn: Semigroup;
     /// Diff type of the output.
-    type ROut: Semigroup + 'static;
+    type ROut: Semigroup;
 
     /// Hash keys and associated times in the instance's novel input batches.
     ///
@@ -152,191 +152,9 @@ where
         let (tile_descs, tile_held, tile_of) = tile_descriptions(lower, upper, &held_elems);
         self.backend.begin(&tile_descs);
 
-        let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
-
-        let mut cursor = 0usize;
-        let mut ns = 0usize;
-
-        // Retire-wide reusable scratch (cleared per window/round/moment, not reallocated). See the
-        // profiling note on `DiscoverScratch`: fresh per-key/per-round `Vec`s were the dominant cost.
-        let mut discover_scratch: DiscoverScratch<B1::Time, Bk::RIn> = DiscoverScratch::new();
-        let mut states: Vec<KeyState<B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
-        let mut tile_deltas: Vec<Vec<((u64, u64), B1::Time, Bk::ROut)>> = (0..held_elems.len()).map(|_| Vec::new()).collect();
-        let mut batch_keys: Vec<u64> = Vec::new();
-        let mut in_ends: Vec<usize> = Vec::new();
-        let mut in_all: Vec<(u64, Bk::RIn)> = Vec::new();
-        let mut out_ends: Vec<usize> = Vec::new();
-        let mut out_all: Vec<(u64, Bk::ROut)> = Vec::new();
-        let mut active: Vec<(usize, B1::Time)> = Vec::new();
-        let mut in_accum: Vec<(u64, Bk::RIn)> = Vec::new();
-        let mut cur_out: Vec<(u64, Bk::ROut)> = Vec::new();
-        let mut moments_scratch: Vec<B1::Time> = Vec::new();
-        let mut pended_scratch: Vec<B1::Time> = Vec::new();
-
-        while let Some(window) = self.backend.next_window(&instance, &changed, &mut cursor) {
-            let p_in = &window.input;
-            let p_out = &window.output;
-            super::debug_assert_sorted_bridge(p_in, "next_window.input");
-            super::debug_assert_sorted_bridge(p_out, "next_window.output");
-
-            for deltas in tile_deltas.iter_mut() { deltas.clear(); }
-
-            // Phase 1 (determination): for every key in the window, discover its interesting times
-            // (times only — no accumulation) and stand up its per-moment replays. Peak state is
-            // O(window presentation), bounded by the window `next_window` already materialized.
-            // `states` is a long-lived buffer reloaded slot-by-slot (not cleared/rebuilt): a slot's
-            // `Vec`s and replays are allocated once and reused, so keys cost no per-key alloc/free.
-            // `n_states` is the live prefix this window; higher slots persist (retaining capacity).
-            let mut n_states = 0usize;
-            let (mut is, mut os) = (0usize, 0usize);
-            for &key in &window.keys {
-                while is < p_in.len() && p_in[is].0.0 < key { is += 1; }
-                let i0 = is;
-                while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
-                let i1 = is;
-                while os < p_out.len() && p_out[os].0.0 < key { os += 1; }
-                let o0 = os;
-                while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
-                let o1 = os;
-                while ns < seeds.len() && seeds[ns].0 < key { ns += 1; }
-                let n0 = ns;
-                while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
-                let n1 = ns;
-
-                moments_scratch.clear();
-                pended_scratch.clear();
-                {
-                    let pending = self.pending.get(&key).map(|p| &p[..]).unwrap_or(&[]);
-                    let seed_times = seeds[n0..n1].iter().map(|(_, t)| t.clone());
-                    let out_times = (o0..o1).map(|o| p_out[o].1.clone());
-                    discover_times(
-                        KeyView { p_in: &p_in[..], i0, i1, pending },
-                        seed_times, out_times, upper,
-                        &mut discover_scratch,
-                        &mut moments_scratch, &mut pended_scratch,
-                    );
-                }
-                if !pended_scratch.is_empty() {
-                    new_pending.insert(key, std::mem::take(&mut pended_scratch));
-                }
-                if moments_scratch.is_empty() {
-                    continue;
-                }
-
-                // Reload slot `n_states` in place (grow the buffer by one only when a window is wider
-                // than any before). `drain` moves the discovered moments in without copy or realloc.
-                if n_states == states.len() {
-                    states.push(KeyState::empty());
-                }
-                let st = &mut states[n_states];
-                st.key = key;
-                st.cursor = 0;
-                st.produced.clear();
-                st.moments.clear();
-                st.moments.append(&mut moments_scratch);
-                st.meets.clear();
-                st.meets.extend(st.moments.iter().cloned());
-                for i in (1..st.meets.len()).rev() {
-                    let m = st.meets[i].clone();
-                    st.meets[i - 1].meet_assign(&m);
-                }
-                st.in_replay.load_iter((i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())), st.meets.first());
-                st.out_replay.load_iter((o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())), st.meets.first());
-                n_states += 1;
-            }
-
-            // Phase 2 (application): walk all keys' moments in ROUNDS. Each round assembles every
-            // active key's one-moment-deep input and current-output accumulations and crosses them in
-            // a SINGLE `reduce_corrections` — batching across keys (a key's own moments stay
-            // sequential, each seeing its earlier corrections via `produced`). This caps the backend
-            // call count at O(max moments over keys), not O(sum of moments), with peak materialization
-            // one moment deep per key. `produced` is meet-collapsed each round, exactly like the
-            // reference — bounded, not the O(times × values) delta history.
-            loop {
-                batch_keys.clear();
-                in_ends.clear();
-                in_all.clear();
-                out_ends.clear();
-                out_all.clear();
-                active.clear();
-                let mut advanced = false;
-                for (si, st) in states[..n_states].iter_mut().enumerate() {
-                    if st.cursor >= st.moments.len() {
-                        continue;
-                    }
-                    advanced = true;
-                    let j = st.cursor;
-                    st.cursor += 1;
-                    let t = st.moments[j].clone();
-                    st.in_replay.step_through(&t);
-                    st.out_replay.step_through(&t);
-                    st.in_replay.advance_buffer_by(&st.meets[j]);
-                    st.out_replay.advance_buffer_by(&st.meets[j]);
-                    for ((_, et), _) in st.produced.iter_mut() {
-                        *et = et.join(&st.meets[j]);
-                    }
-                    crate::consolidation::consolidate(&mut st.produced);
-
-                    in_accum.clear();
-                    for ((vid, et), d) in st.in_replay.buffer().iter() {
-                        if et.less_equal(&t) {
-                            in_accum.push((*vid, d.clone()));
-                        }
-                    }
-                    crate::consolidation::consolidate(&mut in_accum);
-                    cur_out.clear();
-                    for ((vid, et), d) in st.out_replay.buffer().iter().chain(st.produced.iter()) {
-                        if et.less_equal(&t) {
-                            cur_out.push((*vid, d.clone()));
-                        }
-                    }
-                    crate::consolidation::consolidate(&mut cur_out);
-
-                    if in_accum.is_empty() && cur_out.is_empty() {
-                        continue;
-                    }
-                    batch_keys.push(st.key);
-                    in_all.append(&mut in_accum);
-                    in_ends.push(in_all.len());
-                    out_all.append(&mut cur_out);
-                    out_ends.push(out_all.len());
-                    active.push((si, t));
-                }
-                // Terminate only when every key is EXHAUSTED — not merely when this round produced no
-                // crossing. A round can be empty because every key's current moment is empty-gated
-                // while keys still have later (non-empty) moments; breaking here would drop them.
-                if !advanced {
-                    break;
-                }
-                if batch_keys.is_empty() {
-                    continue;
-                }
-
-                let (corr, corr_ends) = self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all);
-                let mut cstart = 0usize;
-                for (bi, (si, t)) in active.iter().enumerate() {
-                    let cend = corr_ends[bi];
-                    if cstart != cend {
-                        let idx = held_elems.iter().rposition(|h| h.less_equal(t)).expect("no held capability <= active time");
-                        for (vid, d) in &corr[cstart..cend] {
-                            states[*si].produced.push(((*vid, t.clone()), d.clone()));
-                            tile_deltas[idx].push(((states[*si].key, *vid), t.clone(), d.clone()));
-                        }
-                    }
-                    cstart = cend;
-                }
-            }
-
-            for (held_index, deltas) in tile_deltas.iter_mut().enumerate() {
-                if deltas.is_empty() {
-                    continue;
-                }
-                if let Some(tile) = tile_of[held_index] {
-                    crate::consolidation::consolidate_updates(deltas);
-                    self.backend.emit(tile, &deltas[..]);
-                }
-            }
-        }
+        let mut retire = Retire::new(&mut self.backend, instance, upper, held_elems, tile_of, &self.pending);
+        retire.run(&changed, &seeds);
+        let new_pending = retire.new_pending;
 
         self.pending = new_pending;
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
@@ -347,6 +165,280 @@ where
             }
         }
         (produced, frontier)
+    }
+}
+
+/// One retire in progress: the backend session it drives, the times it reasons against, and the
+/// scratch its two phases reuse.
+///
+/// The retire proceeds window by window (see [`run`](Self::run)), each window determined then
+/// applied then flushed. All buffers below are cleared per window, round, or moment rather than
+/// reallocated. See the profiling note on [`DiscoverScratch`]: fresh per-key and per-round `Vec`s
+/// were the dominant cost.
+struct Retire<'a, B1, B2, Bk>
+where
+    B1: BatchReader,
+    B2: BatchReader<Time = B1::Time>,
+    Bk: ProxyReduceBackend<B1, B2>,
+{
+    /// The backend, between its `begin` and its `finish`.
+    backend: &'a mut Bk,
+    /// The batches under retirement, as presented to the backend.
+    instance: ReduceInstance<'a, B1, B2>,
+    /// The retire's upper bound: times at or beyond it are withheld rather than applied.
+    upper: &'a Antichain<B1::Time>,
+    /// The held capability times, ascending; `tile_of[i]` is `held[i]`'s tile, if it has one.
+    held: Vec<B1::Time>,
+    tile_of: Vec<Option<usize>>,
+    /// Interesting times withheld by earlier retires, by key hash.
+    pending: &'a BTreeMap<u64, Vec<B1::Time>>,
+    /// Interesting times this retire withholds, by key hash.
+    new_pending: BTreeMap<u64, Vec<B1::Time>>,
+    /// Output updates by held index, accumulated across a window and emitted at its end.
+    tile_deltas: Vec<Vec<((u64, u64), B1::Time, Bk::ROut)>>,
+
+    /// Per-key application state; `n_states` is the prefix [`determine`](Self::determine) filled
+    /// this window. Higher slots persist, retaining their capacity for a later, wider window.
+    states: Vec<KeyState<B1::Time, Bk::RIn, Bk::ROut>>,
+    n_states: usize,
+    /// Time-discovery scratch, and the two lists one key's discovery writes.
+    discover_scratch: DiscoverScratch<B1::Time, Bk::RIn>,
+    moments: Vec<B1::Time>,
+    pended: Vec<B1::Time>,
+
+    /// One round's crossing, assembled across all active keys: their hashes, and their input and
+    /// output accumulations as runs delimited by `in_ends` and `out_ends` (see `reduce_corrections`).
+    batch_keys: Vec<u64>,
+    in_ends: Vec<usize>,
+    in_all: Vec<(u64, Bk::RIn)>,
+    out_ends: Vec<usize>,
+    out_all: Vec<(u64, Bk::ROut)>,
+    /// The key slot and moment each of `batch_keys` was assembled for.
+    active: Vec<(usize, B1::Time)>,
+    /// One key's accumulations, before they are appended to `in_all` and `out_all`.
+    in_accum: Vec<(u64, Bk::RIn)>,
+    cur_out: Vec<(u64, Bk::ROut)>,
+}
+
+impl<'a, B1, B2, Bk> Retire<'a, B1, B2, Bk>
+where
+    B1: BatchReader,
+    B2: BatchReader<Time = B1::Time>,
+    Bk: ProxyReduceBackend<B1, B2>,
+{
+    /// A retire against a backend whose session has begun, with empty scratch.
+    fn new(
+        backend: &'a mut Bk,
+        instance: ReduceInstance<'a, B1, B2>,
+        upper: &'a Antichain<B1::Time>,
+        held: Vec<B1::Time>,
+        tile_of: Vec<Option<usize>>,
+        pending: &'a BTreeMap<u64, Vec<B1::Time>>,
+    ) -> Self {
+        let tile_deltas = (0..held.len()).map(|_| Vec::new()).collect();
+        Retire {
+            backend, instance, upper, held, tile_of, pending,
+            new_pending: BTreeMap::new(),
+            tile_deltas,
+            states: Vec::new(),
+            n_states: 0,
+            discover_scratch: DiscoverScratch::new(),
+            moments: Vec::new(),
+            pended: Vec::new(),
+            batch_keys: Vec::new(),
+            in_ends: Vec::new(),
+            in_all: Vec::new(),
+            out_ends: Vec::new(),
+            out_all: Vec::new(),
+            active: Vec::new(),
+            in_accum: Vec::new(),
+            cur_out: Vec::new(),
+        }
+    }
+
+    /// Retire every window the backend offers, in ascending key-hash order.
+    fn run(&mut self, changed: &[u64], seeds: &[(u64, B1::Time)]) {
+        let mut cursor = 0usize;
+        let mut ns = 0usize;
+        while let Some(window) = self.backend.next_window(&self.instance, changed, &mut cursor) {
+            super::debug_assert_sorted_bridge(&window.input, "next_window.input");
+            super::debug_assert_sorted_bridge(&window.output, "next_window.output");
+            self.determine(&window, seeds, &mut ns);
+            self.apply();
+            self.flush();
+        }
+    }
+
+    /// Phase 1 (determination): for every key in the window, discover its interesting times (times
+    /// only — no accumulation) and stand up its per-moment replays, leaving them in `states[..n_states]`.
+    ///
+    /// Peak state is O(window presentation), bounded by the window `next_window` already materialized.
+    /// `states` is a long-lived buffer reloaded slot-by-slot (not cleared/rebuilt): a slot's `Vec`s
+    /// and replays are allocated once and reused, so keys cost no per-key alloc/free.
+    ///
+    /// `ns` is the caller's cursor into `seeds`, which the windows consume in key order.
+    fn determine(&mut self, window: &ReduceWindow<B1::Time, Bk::RIn, Bk::ROut>, seeds: &[(u64, B1::Time)], ns: &mut usize) {
+        let p_in = &window.input;
+        let p_out = &window.output;
+
+        self.n_states = 0;
+        let (mut is, mut os) = (0usize, 0usize);
+        for &key in &window.keys {
+            while is < p_in.len() && p_in[is].0.0 < key { is += 1; }
+            let i0 = is;
+            while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
+            let i1 = is;
+            while os < p_out.len() && p_out[os].0.0 < key { os += 1; }
+            let o0 = os;
+            while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
+            let o1 = os;
+            while *ns < seeds.len() && seeds[*ns].0 < key { *ns += 1; }
+            let n0 = *ns;
+            while *ns < seeds.len() && seeds[*ns].0 == key { *ns += 1; }
+            let n1 = *ns;
+
+            self.moments.clear();
+            self.pended.clear();
+            {
+                let pending = self.pending.get(&key).map(|p| &p[..]).unwrap_or(&[]);
+                let seed_times = seeds[n0..n1].iter().map(|(_, t)| t.clone());
+                let out_times = (o0..o1).map(|o| p_out[o].1.clone());
+                discover_times(
+                    KeyView { p_in: &p_in[..], i0, i1, pending },
+                    seed_times, out_times, self.upper,
+                    &mut self.discover_scratch,
+                    &mut self.moments, &mut self.pended,
+                );
+            }
+            if !self.pended.is_empty() {
+                self.new_pending.insert(key, std::mem::take(&mut self.pended));
+            }
+            if self.moments.is_empty() {
+                continue;
+            }
+
+            // Reload slot `n_states` in place (grow the buffer by one only when a window is wider
+            // than any before). `append` moves the discovered moments in without copy or realloc.
+            if self.n_states == self.states.len() {
+                self.states.push(KeyState::empty());
+            }
+            let st = &mut self.states[self.n_states];
+            st.key = key;
+            st.cursor = 0;
+            st.produced.clear();
+            st.moments.clear();
+            st.moments.append(&mut self.moments);
+            st.meets.clear();
+            st.meets.extend(st.moments.iter().cloned());
+            for i in (1..st.meets.len()).rev() {
+                let m = st.meets[i].clone();
+                st.meets[i - 1].meet_assign(&m);
+            }
+            st.in_replay.load_iter((i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())), st.meets.first());
+            st.out_replay.load_iter((o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())), st.meets.first());
+            self.n_states += 1;
+        }
+    }
+
+    /// Phase 2 (application): walk all keys' moments in ROUNDS, accumulating output updates into
+    /// `tile_deltas`.
+    ///
+    /// Each round assembles every active key's one-moment-deep input and current-output accumulations
+    /// and crosses them in a SINGLE `reduce_corrections` — batching across keys (a key's own moments
+    /// stay sequential, each seeing its earlier corrections via `produced`). This caps the backend
+    /// call count at O(max moments over keys), not O(sum of moments), with peak materialization one
+    /// moment deep per key. `produced` is meet-collapsed each round, exactly like the reference —
+    /// bounded, not the O(times × values) delta history.
+    fn apply(&mut self) {
+        for deltas in self.tile_deltas.iter_mut() { deltas.clear(); }
+
+        loop {
+            self.batch_keys.clear();
+            self.in_ends.clear();
+            self.in_all.clear();
+            self.out_ends.clear();
+            self.out_all.clear();
+            self.active.clear();
+            let mut advanced = false;
+            for (si, st) in self.states[..self.n_states].iter_mut().enumerate() {
+                if st.cursor >= st.moments.len() {
+                    continue;
+                }
+                advanced = true;
+                let j = st.cursor;
+                st.cursor += 1;
+                let t = st.moments[j].clone();
+                st.in_replay.step_through(&t);
+                st.out_replay.step_through(&t);
+                st.in_replay.advance_buffer_by(&st.meets[j]);
+                st.out_replay.advance_buffer_by(&st.meets[j]);
+                for ((_, et), _) in st.produced.iter_mut() {
+                    *et = et.join(&st.meets[j]);
+                }
+                crate::consolidation::consolidate(&mut st.produced);
+
+                self.in_accum.clear();
+                for ((vid, et), d) in st.in_replay.buffer().iter() {
+                    if et.less_equal(&t) {
+                        self.in_accum.push((*vid, d.clone()));
+                    }
+                }
+                crate::consolidation::consolidate(&mut self.in_accum);
+                self.cur_out.clear();
+                for ((vid, et), d) in st.out_replay.buffer().iter().chain(st.produced.iter()) {
+                    if et.less_equal(&t) {
+                        self.cur_out.push((*vid, d.clone()));
+                    }
+                }
+                crate::consolidation::consolidate(&mut self.cur_out);
+
+                if self.in_accum.is_empty() && self.cur_out.is_empty() {
+                    continue;
+                }
+                self.batch_keys.push(st.key);
+                self.in_all.append(&mut self.in_accum);
+                self.in_ends.push(self.in_all.len());
+                self.out_all.append(&mut self.cur_out);
+                self.out_ends.push(self.out_all.len());
+                self.active.push((si, t));
+            }
+            // Terminate only when every key is EXHAUSTED — not merely when this round produced no
+            // crossing. A round can be empty because every key's current moment is empty-gated
+            // while keys still have later (non-empty) moments; breaking here would drop them.
+            if !advanced {
+                break;
+            }
+            if self.batch_keys.is_empty() {
+                continue;
+            }
+
+            let (corr, corr_ends) = self.backend.reduce_corrections(&self.batch_keys, &self.in_ends, &self.in_all, &self.out_ends, &self.out_all);
+            let mut cstart = 0usize;
+            for (bi, (si, t)) in self.active.iter().enumerate() {
+                let cend = corr_ends[bi];
+                if cstart != cend {
+                    let idx = self.held.iter().rposition(|h| h.less_equal(t)).expect("no held capability <= active time");
+                    for (vid, d) in &corr[cstart..cend] {
+                        self.states[*si].produced.push(((*vid, t.clone()), d.clone()));
+                        self.tile_deltas[idx].push(((self.states[*si].key, *vid), t.clone(), d.clone()));
+                    }
+                }
+                cstart = cend;
+            }
+        }
+    }
+
+    /// Hand the window's output updates to the backend, one call per tile they land in.
+    fn flush(&mut self) {
+        for (held_index, deltas) in self.tile_deltas.iter_mut().enumerate() {
+            if deltas.is_empty() {
+                continue;
+            }
+            if let Some(tile) = self.tile_of[held_index] {
+                crate::consolidation::consolidate_updates(deltas);
+                self.backend.emit(tile, &deltas[..]);
+            }
+        }
     }
 }
 
