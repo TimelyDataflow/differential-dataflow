@@ -3,8 +3,10 @@
 //! A conventional differential join against `(u64, u64)` values, which are provided by
 //! and then interpreted by a backend, who is relieved of lattice-time reasoning.
 
-use timely::progress::{Antichain, Timestamp};
-use timely::progress::frontier::AntichainRef;
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use timely::progress::Timestamp;
 
 use crate::difference::{Multiply, Semigroup};
 use crate::lattice::Lattice;
@@ -14,159 +16,228 @@ use crate::operators::join::{Fresh, JoinTactic};
 
 use super::history::IdHistory;
 
-/// A unit of proxied join work, presented to the backend.
-pub struct JoinInstance<'a, B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
-    /// The first input's batches.
-    pub batches0: &'a [B0],
-    /// The second input's batches.
-    pub batches1: &'a [B1],
-    /// The compaction frontier for loading (the unit's capability time).
-    pub lower: AntichainRef<'a, B0::Time>,
-}
-
-/// A type that can interpret and retire pairs of batches, joined by key hashes.
+/// A type that can interpret and retire pairs of lists of batches, joined by key hashes.
 ///
-/// The protocol invokes the `present*` methods with the instance to produce the proxy collection,
-/// and then returns with any number (including zero) calls to `cross` to produce outputs.
+/// The harness repeatedly invokes [`advance`](Self::advance) to draw a block of the proxy collection,
+/// then [`cross`](Self::cross) to turn that block's matches into output containers, until `advance` reports the key space exhausted.
 pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
-    /// Diff type presented for the first input.
+    /// Diff type of the first input.
     type R0: Semigroup + Multiply<Self::R1, Output = Self::ROut>;
-    /// Diff type presented for the second input.
+    /// Diff type of the second input.
     type R1: Semigroup;
-    /// Diff type of matched records (`R0 * R1`), computed by the tactic.
+    /// Diff type of matched records (`R0 * R1`), computed by the harness.
     type ROut: Semigroup;
     /// The output container built from matched value ids.
     type Output;
 
-    /// Prepare a proxy bridge from the instance's first input, optionally key-hash restricted.
+    /// Populates the two bridges with all updates for all keys that match in a returned range.
     ///
-    /// The returned bridge **must be sorted and consolidated** by `((key_hash, value_id), time)`.
-    fn present0(&mut self, instance: &JoinInstance<'_, B0, B1>, filter: Option<&[u64]>) -> ProxyBridge<B0::Time, Self::R0>;
-    /// Prepare a proxy bridge from the instance's second input, optionally key-hash restricted.
-    ///
-    /// The returned bridge **must be sorted and consolidated** by `((key_hash, value_id), time)`.
-    fn present1(&mut self, instance: &JoinInstance<'_, B0, B1>, filter: Option<&[u64]>) -> ProxyBridge<B0::Time, Self::R1>;
-    /// From a list of left and right identifiers, and corresponding times and diffs, the output.
-    fn cross(&mut self, instance: &JoinInstance<'_, B0, B1>, left: &[(u64, u64)], right: &[(u64, u64)], times: Vec<B0::Time>, diffs: Vec<Self::ROut>) -> Self::Output;
+    /// The `from` indicates an inclusive lower bound on key hash, and should be updated by the implementor to an exclusive
+    /// upper bound for the range of keys it intends to return in this call. The `None` value indicates the keys are exhausted.
+    /// The returned bridges must contain all updates from both `instance` inputs for keys that are present in both inputs, and
+    /// which are greater or equal to the initial `from`, and not greater or equal to its value when returned.
+    fn advance(
+        &mut self,
+        instance: &JoinInstance<B0, B1>,
+        from: &mut Option<u64>,
+        bridge0: &mut ProxyBridge<B0::Time, Self::R0>,
+        bridge1: &mut ProxyBridge<B0::Time, Self::R1>,
+    );
+
+    /// Interpret a list of matching identifiers, translate them to outputs, and place them in `output`.
+    fn cross(
+        &mut self,
+        instance: &JoinInstance<B0, B1>,
+        matches: &mut JoinMatches<B0::Time, Self::ROut>,
+        output: &mut Vec<Self::Output>,
+    );
 }
 
-/// A proxy-space [`JoinTactic`]: matches records of the two presented runs by `key_hash`,
+/// A unit of proxied join work, for presentation to the backend.
+pub struct JoinInstance<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
+    /// The first input's batches.
+    pub batches0: Vec<B0>,
+    /// The second input's batches.
+    pub batches1: Vec<B1>,
+    /// A lower bound on the meet of pairs of update times.
+    ///
+    /// This can be applied when loading updates to consolidate on load.
+    pub lower: B0::Time,
+}
+
+/// Presentation of discovered join matches.
+///
+/// The arrays have common lengths, and are in key order but may not be consolidated.
+pub struct JoinMatches<T, R> {
+    /// Triples of `(key, (val0, val1))` of matches.
+    pub ids: Vec<(u64, (u64, u64))>,
+    /// Times of the updates.
+    pub times: Vec<T>,
+    /// Diffs of the updates.
+    pub diffs: Vec<R>,
+}
+
+impl<T, R> Default for JoinMatches<T, R> {
+    fn default() -> Self { Self { ids: vec![], times: vec![], diffs: vec![] } }
+}
+
+/// A proxy-space [`JoinTactic`]: matches records of the two drawn runs by `key_hash`.
 pub struct ProxyJoinTactic<B0, B1, Bk> {
-    backend: Bk,
+    backend: Rc<RefCell<Bk>>,
     _marker: std::marker::PhantomData<(B0, B1)>,
 }
 
 impl<B0, B1, Bk> ProxyJoinTactic<B0, B1, Bk> {
     /// A join tactic deferring all value semantics to `backend`.
     pub fn new(backend: Bk) -> Self {
-        ProxyJoinTactic { backend, _marker: std::marker::PhantomData }
+        ProxyJoinTactic { backend: Rc::new(RefCell::new(backend)), _marker: std::marker::PhantomData }
     }
 }
 
 impl<B0, B1, Bk> JoinTactic<B0, B1, Bk::Output> for ProxyJoinTactic<B0, B1, Bk>
 where
-    B0: BatchReader,
-    B1: BatchReader<Time = B0::Time>,
-    Bk: ProxyJoinBackend<B0, B1>,
+    B0: BatchReader + 'static,
+    B1: BatchReader<Time = B0::Time> + 'static,
+    Bk: ProxyJoinBackend<B0, B1> + 'static,
     Bk::Output: 'static,
 {
-    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = Bk::Output>> {
-        Box::new(join_prep(&mut self.backend, input0, input1, fresh, meet).into_iter())
+    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, _fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = Bk::Output>> {
+        Box::new(ProxyJoinIter {
+            backend: Rc::clone(&self.backend),
+            instance: JoinInstance { batches0: input0, batches1: input1, lower: meet },
+            from: Some(0),
+            p0: Vec::new(),
+            p1: Vec::new(),
+            h0: IdHistory::new(),
+            h1: IdHistory::new(),
+            matches: JoinMatches::default(),
+            ready: Vec::new(),
+        })
     }
 }
 
-/// Update count threshold used to return to the backend with join output to instantiate.
-const JOIN_CHUNK: usize = 1 << 20;
-
-/// Prepare one join unit: present both sides, merge-match key runs over the sorted hashes, and
-/// cross-product matched records into a sequence of output containers — one per ~[`JOIN_CHUNK`]
-/// matches, flushed wherever the batch fills (including mid-key; parity: their concatenation is the
-/// single-container output). `meet` is a lower bound on the fresh side's times, so the accumulated
-/// side loads compacted (see [`JoinInstance`]); every output is produced under the capability at
-/// `meet`, so advancing loaded times by it leaves the output unchanged.
-fn join_prep<B0, B1, Bk>(backend: &mut Bk, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Vec<Bk::Output>
+/// Deferred proxy join computation, as an iterator of output containers.
+///
+/// The iterator draws the proxy collection from the back-end a block at a time (`Bk::advance`).
+/// Each block is then translated to output updates with joined times and multiplied differences,
+/// which are provided to the back-end to translate into output containers, which are then returned.
+struct ProxyJoinIter<B0, B1, Bk>
 where
     B0: BatchReader,
     B1: BatchReader<Time = B0::Time>,
     Bk: ProxyJoinBackend<B0, B1>,
 {
-    let lower = Antichain::from_elem(meet);
-    let instance = JoinInstance { batches0: &input0, batches1: &input1, lower: lower.borrow() };
+    /// The backend, shared across all outstanding iterators.
+    backend: Rc<RefCell<Bk>>,
+    /// The iterator's inputs, and the time at which they can consolidate as they load.
+    instance: JoinInstance<B0, B1>,
+    /// Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
+    /// once the backend reports the iteration is complete.
+    from: Option<u64>,
+    /// The current block: the two runs `advance` last drew, which one `next` consumes entirely.
+    p0: ProxyBridge<B0::Time, Bk::R0>,
+    p1: ProxyBridge<B0::Time, Bk::R1>,
+    /// Per-key replay histories, held across the iterator and reloaded per key when needed.
+    h0: IdHistory<B0::Time, Bk::R0>,
+    h1: IdHistory<B0::Time, Bk::R1>,
+    /// The block's matched records, held across blocks to keep their allocations.
+    matches: JoinMatches<B0::Time, Bk::ROut>,
+    /// The last block's containers, in reverse, served from the back one `next` at a time.
+    ready: Vec<Bk::Output>,
+}
 
-    // Prepare work using the keys of the just-received side.
-    // FIXME: Use the smaller of the two instead.
-    let (p0, p1) = match fresh {
-        Fresh::Input0 => {
-            let p0 = backend.present0(&instance, None);
-            if p0.is_empty() { return Vec::new(); }
-            let mut keys: Vec<u64> = p0.iter().map(|r| r.0.0).collect();
-            keys.dedup();
-            let p1 = backend.present1(&instance, Some(&keys));
-            (p0, p1)
+impl<B0, B1, Bk> Iterator for ProxyJoinIter<B0, B1, Bk>
+where
+    B0: BatchReader,
+    B1: BatchReader<Time = B0::Time>,
+    Bk: ProxyJoinBackend<B0, B1>,
+{
+    type Item = Bk::Output;
+
+    /// Serve a ready container, else draw and cross blocks until one yields any.
+    fn next(&mut self) -> Option<Bk::Output> {
+        while self.ready.is_empty() && self.from.is_some() {
+            self.refill();
+            self.work();
+            if !self.matches.ids.is_empty() { self.cross(); }
         }
-        Fresh::Input1 => {
-            let p1 = backend.present1(&instance, None);
-            if p1.is_empty() { return Vec::new(); }
-            let mut keys: Vec<u64> = p1.iter().map(|r| r.0.0).collect();
-            keys.dedup();
-            let p0 = backend.present0(&instance, Some(&keys));
-            (p0, p1)
-        }
-    };
-    if p0.is_empty() || p1.is_empty() { return Vec::new(); }
-    super::debug_assert_sorted_bridge(&p0, "present0");
-    super::debug_assert_sorted_bridge(&p1, "present1");
+        self.ready.pop()
+    }
+}
 
-    // Merge-join the two presented runs on `key_hash` (both sorted) and cross matched pairs. `flush`
-    // ships the accumulated batch as a container and resets the buffers; `join_key` calls it at each
-    // `JOIN_CHUNK` boundary — including *within* a high-fanout key's wave — so no single key
-    // materializes more than a chunk of its cross product. The closure scope releases its
-    // `backend`/`out` borrow before `out` is returned.
-    let mut out: Vec<Bk::Output> = Vec::new();
-    {
-        let mut flush = |li: &mut Vec<(u64, u64)>, ri: &mut Vec<(u64, u64)>, ot: &mut Vec<B0::Time>, od: &mut Vec<Bk::ROut>| {
-            out.push(backend.cross(&instance, li.as_slice(), ri.as_slice(), std::mem::take(ot), std::mem::take(od)));
-            li.clear();
-            ri.clear();
-        };
+impl<B0, B1, Bk> ProxyJoinIter<B0, B1, Bk>
+where
+    B0: BatchReader,
+    B1: BatchReader<Time = B0::Time>,
+    Bk: ProxyJoinBackend<B0, B1>,
+{
+    /// Draw the next block from the backend.
+    fn refill(&mut self) {
+        self.p0.clear();
+        self.p1.clear();
+        let before = self.from;
+        self.backend.borrow_mut().advance(&self.instance, &mut self.from, &mut self.p0, &mut self.p1);
+        // Without progress the iterator would never retire, so this guards liveness as well as contract.
+        debug_assert!(
+            self.from.is_none() || self.from > before,
+            "advance must either strictly increase `from` or report the iteration complete",
+        );
+        super::debug_assert_sorted_bridge(&self.p0, "advance (bridge0)");
+        super::debug_assert_sorted_bridge(&self.p1, "advance (bridge1)");
+        // A key hash outside `[before, from)` is either one an earlier block already retired, or one
+        // a later block may yet report: both split a key across blocks, which silently drops the
+        // matches that would have crossed the split.
+        debug_assert!(
+            {
+                let mut keys = self.p0.iter().map(|r| r.0.0).chain(self.p1.iter().map(|r| r.0.0));
+                keys.all(|k| before.is_none_or(|b| b <= k) && self.from.is_none_or(|f| k < f))
+            },
+            "advance must report a key hash entirely within the block that first mentions it",
+        );
+    }
 
-        let (mut li, mut ri) = (Vec::new(), Vec::new());
-        let (mut ot, mut od) = (Vec::new(), Vec::new());
-        // Per-key replay histories, held across the unit and reloaded per key (only the >=16/>=16
-        // replay-wave path touches them), so a high-fanout join pays no per-key `IdHistory` alloc.
-        let mut h0 = IdHistory::new();
-        let mut h1 = IdHistory::new();
+    /// Match the whole of the current block into the match buffers.
+    fn work(&mut self) {
+        // Disjoint field borrows, as `join_key` holds the bridges and the buffers at once.
+        let (p0, p1) = (&self.p0, &self.p1);
+        let (h0, h1) = (&mut self.h0, &mut self.h1);
+
         let (mut i, mut j) = (0usize, 0usize);
         while i < p0.len() && j < p1.len() {
-            let (ki, kj) = (p0[i].0.0, p1[j].0.0);
-            if ki < kj {
-                i += 1;
-            } else if kj < ki {
-                j += 1;
-            } else {
-                let mut e0 = i;
-                while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
-                let mut e1 = j;
-                while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
-                join_key(ki, &p0, i..e0, &p1, j..e1, &mut h0, &mut h1, &mut li, &mut ri, &mut ot, &mut od, &mut flush);
-                i = e0;
-                j = e1;
-            }
+            let ki = p0[i].0.0;
+            debug_assert_eq!(ki, p1[j].0.0, "advance must report common keys");
+            let mut e0 = i;
+            while e0 < p0.len() && p0[e0].0.0 == ki { e0 += 1; }
+            let mut e1 = j;
+            while e1 < p1.len() && p1[e1].0.0 == ki { e1 += 1; }
+            join_key(ki, p0, i..e0, p1, j..e1, h0, h1, &mut self.matches);
+            i = e0;
+            j = e1;
         }
-        if !li.is_empty() {
-            flush(&mut li, &mut ri, &mut ot, &mut od);
-        }
+        debug_assert!(i == p0.len() && j == p1.len(), "both bridges must drain together");
     }
-    out
+
+    /// Turn the block's matches into containers, ready to be served one at a time.
+    fn cross(&mut self) {
+        self.backend.borrow_mut().cross(
+            &self.instance,
+            &mut self.matches,
+            &mut self.ready,
+        );
+        // `next` serves from the back, so reverse to ship in the order the backend produced.
+        self.ready.reverse();
+        self.matches.ids.clear();
+        self.matches.times.clear();
+        self.matches.diffs.clear();
+    }
 }
 
 /// Match one key's records across the two presented runs.
 ///
-/// If either history is small, this performs a simple cross product.
+/// If either history is small, this performs a direct cross product.
 /// If both histories are large, this replays the histories compacting as it goes in
 /// order to (potentially) avoid quadratic blow-up.
-#[allow(clippy::too_many_arguments)]
-fn join_key<T, R0, R1, RO, F>(
+fn join_key<T, R0, R1, RO>(
     kh: u64,
     p0: &ProxyBridge<T, R0>,
     r0: std::ops::Range<usize>,
@@ -174,45 +245,28 @@ fn join_key<T, R0, R1, RO, F>(
     r1: std::ops::Range<usize>,
     h0: &mut IdHistory<T, R0>,
     h1: &mut IdHistory<T, R1>,
-    li: &mut Vec<(u64, u64)>,
-    ri: &mut Vec<(u64, u64)>,
-    ot: &mut Vec<T>,
-    od: &mut Vec<RO>,
-    flush: &mut F,
+    matches: &mut JoinMatches<T, RO>,
 ) where
     T: Lattice + Timestamp,
     R0: Semigroup + Multiply<R1, Output = RO> + Clone,
     R1: Semigroup + Clone,
-    F: FnMut(&mut Vec<(u64, u64)>, &mut Vec<(u64, u64)>, &mut Vec<T>, &mut Vec<RO>),
 {
-    // `flush` ships the accumulated batch once it reaches `JOIN_CHUNK` and resets the buffers. It's
-    // checked after every produced pair — *including inside the replay wave below* — so even a key
-    // whose fanout dwarfs `JOIN_CHUNK` never materializes more than a chunk of its cross product.
     if r0.len() < 16 || r1.len() < 16 {
         for a in r0 {
             for b in r1.clone() {
-                li.push((kh, p0[a].0.1));
-                ri.push((kh, p1[b].0.1));
-                ot.push(p0[a].1.join(&p1[b].1));
-                od.push(p0[a].2.clone().multiply(&p1[b].2));
-                if li.len() >= JOIN_CHUNK { flush(li, ri, ot, od); }
+                matches.ids.push((kh, (p0[a].0.1, p1[b].0.1)));
+                matches.times.push(p0[a].1.join(&p1[b].1));
+                matches.diffs.push(p0[a].2.clone().multiply(&p1[b].2));
             }
         }
-        return;
     }
-
-    // Reusable replay scratch, reloaded per key (`load_iter` clears + rebuilds, keeping capacity);
-    // the caller holds `h0`/`h1` across the unit so a high-fanout join allocates no per-key history.
-    h0.load_iter(r0.map(|i| (p0[i].0.1, p0[i].1.clone(), p0[i].2.clone())), None);
-    h1.load_iter(r1.map(|i| (p1[i].0.1, p1[i].1.clone(), p1[i].2.clone())), None);
-
-    crate::operators::common::bilinear_wave(h0, h1, |v0, v1, t, d| {
-        li.push((kh, v0));
-        ri.push((kh, v1));
-        ot.push(t);
-        od.push(d);
-        if li.len() >= JOIN_CHUNK {
-            flush(li, ri, ot, od);
-        }
-    });
+    else {
+        h0.load_iter(r0.map(|i| (p0[i].0.1, p0[i].1.clone(), p0[i].2.clone())), None);
+        h1.load_iter(r1.map(|i| (p1[i].0.1, p1[i].1.clone(), p1[i].2.clone())), None);
+        crate::operators::common::bilinear_wave(h0, h1, |v0, v1, t, d| {
+            matches.ids.push((kh, (v0, v1)));
+            matches.times.push(t);
+            matches.diffs.push(d);
+        });
+    }
 }
