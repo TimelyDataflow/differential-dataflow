@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.25.1...differential-dataflow-v0.26.0) - 2026-07-29
+
+### Other
+
+- int_proxy join: draw the proxy collection lazily, a block at a time ([#809](https://github.com/TimelyDataflow/differential-dataflow/pull/809))
+
 ## [0.25.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.25.0...differential-dataflow-v0.25.1) - 2026-07-15
 
 ### Other
