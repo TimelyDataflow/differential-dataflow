@@ -99,6 +99,14 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// Multiple keys are provided concurrently, for each an accumulated input and tentative output.
     /// The backend should provide for each key the necessary output updates to bring the output in
     /// with its desires. The `usize` integers upper bound the range for the corresponding key.
+    ///
+    /// Corrections are **appended** to `corrections`, one run per key in `keys` order, with
+    /// `ends` receiving each run's upper bound — the same `(values, ends)` shape the inputs
+    /// arrive in, and the same caller-owned-buffer convention as join's
+    /// [`produce`](super::ProxyJoinBackend::produce). The harness clears both first and keeps
+    /// their capacity, so a steady state of many rounds does not churn allocation. `ends` must
+    /// end with exactly one entry per key, even for keys needing no correction (an entry equal
+    /// to its predecessor).
     fn reduce_corrections(
         &mut self,
         keys: &[Self::Group],
@@ -106,7 +114,9 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
         input: &[(Self::Token, Self::RIn)],
         out_ends: &[usize],
         output: &[(Self::Token, Self::ROut)],
-    ) -> (Vec<(Self::Token, Self::ROut)>, Vec<usize>);
+        corrections: &mut Vec<(Self::Token, Self::ROut)>,
+        ends: &mut Vec<usize>,
+    );
 
     /// Commit to a collection of updates at a specific batch in progress.
     ///
@@ -200,6 +210,10 @@ where
         let mut fast_in_all: Vec<(Bk::Token, Bk::RIn)> = Vec::new();
         let mut fast_out_ends: Vec<usize> = Vec::new();
         let mut fast_out_all: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
+        // The backend appends its corrections here; cleared before each crossing so the
+        // capacity survives every round of every window.
+        let mut corr: Vec<(Bk::Token, Bk::ROut)> = Vec::new();
+        let mut corr_ends: Vec<usize> = Vec::new();
 
         let mut spent: Option<ReduceWindow<Bk::Group, Bk::Token, B1::Time, Bk::RIn, Bk::ROut>> = None;
         while let Some(window) = self.backend.next_window(&instance, &pending_keys, spent.take()) {
@@ -342,7 +356,10 @@ where
             // Round zero: the window's fast-path keys, one batched crossing. Their
             // corrections go straight to the tiles — a fast key has no later moments.
             if !fast_keys.is_empty() {
-                let (corr, corr_ends) = self.backend.reduce_corrections(&fast_keys, &fast_in_ends, &fast_in_all, &fast_out_ends, &fast_out_all);
+                corr.clear();
+                corr_ends.clear();
+                self.backend.reduce_corrections(&fast_keys, &fast_in_ends, &fast_in_all, &fast_out_ends, &fast_out_all, &mut corr, &mut corr_ends);
+                assert_eq!(corr_ends.len(), fast_keys.len(), "reduce_corrections must return one run end per key");
                 let mut cstart = 0usize;
                 for (fi, t) in fast_times.iter().enumerate() {
                     let cend = corr_ends[fi];
@@ -438,7 +455,10 @@ where
                     continue;
                 }
 
-                let (corr, corr_ends) = self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all);
+                corr.clear();
+                corr_ends.clear();
+                self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all, &mut corr, &mut corr_ends);
+                assert_eq!(corr_ends.len(), batch_keys.len(), "reduce_corrections must return one run end per key");
                 let mut cstart = 0usize;
                 for (bi, (si, t)) in active.iter().enumerate() {
                     let cend = corr_ends[bi];

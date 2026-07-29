@@ -350,9 +350,11 @@ impl<T: Timestamp + Lattice + Ord> ProxyReduceBackend<EdgeBatch<T>, EdgeBatch<T>
         input: &[(Edge, Diff)],
         out_ends: &[usize],
         output: &[(Edge, Diff)],
-    ) -> (Vec<(Edge, Diff)>, Vec<usize>) {
-        let mut corr = Vec::new();
-        let mut ends = Vec::new();
+        corr: &mut Vec<(Edge, Diff)>,
+        ends: &mut Vec<usize>,
+    ) {
+        // The harness hands over cleared buffers and keeps their capacity.
+        assert!(corr.is_empty() && ends.is_empty(), "reduce_corrections: buffers arrive cleared");
         let (mut i0, mut o0) = (0, 0);
         for (k, (&i1, &o1)) in keys.iter().zip(in_ends.iter().zip(out_ends)) {
             let count: Diff = input[i0..i1].iter().map(|(_, d)| d).sum();
@@ -371,7 +373,6 @@ impl<T: Timestamp + Lattice + Ord> ProxyReduceBackend<EdgeBatch<T>, EdgeBatch<T>
             i0 = i1;
             o0 = o1;
         }
-        (corr, ends)
     }
 
     fn emit(&mut self, tile: usize, records: &[((u32, Edge), T, Diff)]) {
