@@ -224,6 +224,10 @@ impl Backend for CorgiBackend {
     }
 
     fn arrange<'s>(c: Collection<'s, Time, CC>) -> Self::Arr<'s> {
+        // Single-worker guard: this arrange is `Pipeline` (no key exchange), so multi-worker
+        // execution would MIS-PLACE keys — silently wrong, not slow. A columnar exchange
+        // (radix partition by key hash) lifts this; it pairs with the stored-hash-column work.
+        assert_eq!(c.inner.scope().peers(), 1, "the corgi backend is single-worker: arrange does not exchange keys");
         // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
         // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
         // builder. No columns→rows→columns round-trip at the arrangement boundary.
