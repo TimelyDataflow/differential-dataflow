@@ -351,6 +351,49 @@ pub fn render_tree<'s>(
     crate::backend::render_tree::<CorgiBackend>(s, scope, depth, imports)
 }
 
+/// Render `s` with the corgi substrate over ROW collections: each import converts to corgi
+/// containers at the boundary (`ToCorgi`), the tree renders columnar, and each export
+/// converts back (`FromCorgi`). Signature-compatible with
+/// [`vec::render_tree`](crate::backend::vec::render_tree) (hence the `vec::Col` alias), so a
+/// row-speaking driver switches backends by switching this one call.
+pub fn render_tree_rows<'s>(
+    s: &st::Scope,
+    scope: Scope<'s, Time>,
+    depth: usize,
+    imports: Vec<crate::backend::vec::Col<'s>>,
+) -> Vec<crate::backend::vec::Col<'s>> {
+    let corgi_imports: Vec<Collection<'s, Time, CC>> = imports
+        .into_iter()
+        .map(|c| {
+            c.inner
+                .unary(Pipeline, "ToCorgi", |_, _| {
+                    |input, output| {
+                        input.for_each(|cap, data| {
+                            let mut cc = CorgiContainer::from_updates(std::mem::take(data));
+                            output.session(&cap).give_container(&mut cc);
+                        });
+                    }
+                })
+                .as_collection()
+        })
+        .collect();
+    render_tree(s, scope, depth, corgi_imports)
+        .into_iter()
+        .map(|c| {
+            c.inner
+                .unary(Pipeline, "FromCorgi", |_, _| {
+                    |input, output| {
+                        input.for_each(|cap, data| {
+                            let mut rows = std::mem::take(data).into_updates();
+                            output.session(&cap).give_container(&mut rows);
+                        });
+                    }
+                })
+                .as_collection()
+        })
+        .collect()
+}
+
 /// Evaluate `program` on explicit inputs via the **corgi** backend (mirrors [`crate::backend::vec::evaluate`]).
 ///
 /// Inputs/exports cross the iterative-scope boundary as Vec rows (which support refinement
@@ -363,11 +406,8 @@ pub fn evaluate(
     use std::collections::BTreeMap;
     use std::sync::mpsc::channel;
     use timely::dataflow::operators::core::capture::{Capture, Event};
-    use timely::dataflow::operators::generic::Operator;
     use differential_dataflow::input::Input;
-    use differential_dataflow::AsCollection;
     use differential_dataflow::dynamic::pointstamp::PointStamp;
-    use crate::corgi::container::CorgiContainer;
 
     let names: Vec<String> = program.root.exports.iter().map(|e| e.name.clone()).collect();
     let mut txs = Vec::new();
@@ -390,49 +430,22 @@ pub fn evaluate(
                 collections.push(c);
             }
             let exports = scope.iterative::<PointStamp<u64>, _, _>(|inner| {
-                // Enter Vec collections (refinement), then convert each to a corgi container.
-                let mut corgi_imports = Vec::new();
-                for c in collections.iter().map(|c| c.clone().enter(inner)) {
-                    let cs = c
-                        .inner
-                        .unary(Pipeline, "ToCorgi", |_, _| {
-                            |input, output| {
-                                input.for_each(|cap, data| {
-                                    let mut cc = CorgiContainer::from_updates(std::mem::take(data));
-                                    output.session(&cap).give_container(&mut cc);
-                                });
-                            }
-                        })
-                        .as_collection();
-                    corgi_imports.push(cs);
-                }
+                // Enter row collections (refinement); rows convert to corgi containers and
+                // back inside `render_tree_rows`.
+                let entered: Vec<_> = collections.iter().map(|c| c.clone().enter(inner)).collect();
                 let root_imports: Vec<_> = program
                     .root
                     .imports
                     .iter()
                     .map(|imp| match &imp.from {
-                        st::Source::Input(n) => corgi_imports[*n].clone(),
+                        st::Source::Input(n) => entered[*n].clone(),
                         other => panic!("corgi evaluate: unsupported source {other:?}"),
                     })
                     .collect();
-                let exports = render_tree(&program.root, inner.clone(), 0, root_imports);
-                // Convert corgi exports back to Vec rows, then leave the scope.
-                let mut leaved = Vec::new();
-                for c in exports {
-                    let rows = c
-                        .inner
-                        .unary(Pipeline, "FromCorgi", |_, _| {
-                            |input, output| {
-                                input.for_each(|cap, data| {
-                                    let mut rows = std::mem::take(data).into_updates();
-                                    output.session(&cap).give_container(&mut rows);
-                                });
-                            }
-                        })
-                        .as_collection();
-                    leaved.push(rows.leave(scope));
-                }
-                leaved
+                render_tree_rows(&program.root, inner.clone(), 0, root_imports)
+                    .into_iter()
+                    .map(|rows| rows.leave(scope))
+                    .collect::<Vec<_>>()
             });
             for (col, tx) in exports.into_iter().zip(txs) {
                 col.inner.capture_into(tx);
