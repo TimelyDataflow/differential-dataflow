@@ -92,47 +92,46 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
 
     for op in ops {
         c = match op {
-            LinearOp::Project(p) if compilable(&p.key) && compilable(&p.val) => {
-                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
-                let g = compile_projection(&p.key, &p.val, &kshape, &vshape);
-                let mut cols = corgi::eval_graph(&g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project");
-                let vals = cols.pop().unwrap();
-                let keys = cols.pop().unwrap();
-                CorgiContainer { keys, vals, times: c.times, diffs: c.diffs }
-            }
-            LinearOp::Filter(cond) if compilable(cond) => {
-                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
-                let g = compile_predicate(cond, &kshape, &vshape);
-                let mask = corgi::eval_graph(&g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask");
-                let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
-                let keys = gather(&c.keys, &keep);
-                let vals = gather(&c.vals, &keep);
-                let times = keep.iter().map(|&i| c.times[i].clone()).collect();
-                let diffs = keep.iter().map(|&i| c.diffs[i]).collect();
-                CorgiContainer { keys, vals, times, diffs }
-            }
-            // Row-wise fallback (`ir::eval`, parity with `backend::vec`) for terms whose LOWERING
-            // isn't written yet (`Case`/`Inject`/`IsTag`, `List` intro — corgi models sums and
-            // lists: `Branch`/`MapSum`/`CapSum`/`Unwrap`, `Enlist`/`MapList`/`Fold`) plus `Hash`,
-            // the one kernel gap (splitmix parity needs lane-wise xor and integer rem). See
-            // `logic::compilable`.
             LinearOp::Project(p) => {
-                let mut out: Vec<Upd> = Vec::new();
-                for ((k, v), t, d) in c.into_updates() {
-                    let mut env = vec![k, v];
-                    let nk = crate::ir::eval(&p.key, &mut env);
-                    let nv = crate::ir::eval(&p.val, &mut env);
-                    out.push(((nk, nv), t, d));
+                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
+                // The shape-aware gate: attempt the lowering with this container's shapes and
+                // fall back to rows only when it declines (`Case` with conflicting arms, list
+                // intro, `hash`...). Corgi models sums and lists; `hash` is the one kernel gap
+                // (splitmix parity needs lane-wise xor and integer rem).
+                if let Some(g) = compile_projection(&p.key, &p.val, &kshape, &vshape) {
+                    let mut cols = corgi::eval_graph(&g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project");
+                    let vals = cols.pop().unwrap();
+                    let keys = cols.pop().unwrap();
+                    CorgiContainer { keys, vals, times: c.times, diffs: c.diffs }
+                } else {
+                    let mut out: Vec<Upd> = Vec::new();
+                    for ((k, v), t, d) in c.into_updates() {
+                        let mut env = vec![k, v];
+                        let nk = crate::ir::eval(&p.key, &mut env);
+                        let nv = crate::ir::eval(&p.val, &mut env);
+                        out.push(((nk, nv), t, d));
+                    }
+                    CorgiContainer::from_updates(out)
                 }
-                CorgiContainer::from_updates(out)
             }
             LinearOp::Filter(cond) => {
-                let mut out: Vec<Upd> = Vec::new();
-                for ((k, v), t, d) in c.into_updates() {
-                    let keep = { let mut env = vec![k.clone(), v.clone()]; crate::ir::eval(cond, &mut env).truthy() };
-                    if keep { out.push(((k, v), t, d)); }
+                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
+                if let Some(g) = compile_predicate(cond, &kshape, &vshape) {
+                    let mask = corgi::eval_graph(&g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask");
+                    let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
+                    let keys = gather(&c.keys, &keep);
+                    let vals = gather(&c.vals, &keep);
+                    let times = keep.iter().map(|&i| c.times[i].clone()).collect();
+                    let diffs = keep.iter().map(|&i| c.diffs[i]).collect();
+                    CorgiContainer { keys, vals, times, diffs }
+                } else {
+                    let mut out: Vec<Upd> = Vec::new();
+                    for ((k, v), t, d) in c.into_updates() {
+                        let keep = { let mut env = vec![k.clone(), v.clone()]; crate::ir::eval(cond, &mut env).truthy() };
+                        if keep { out.push(((k, v), t, d)); }
+                    }
+                    CorgiContainer::from_updates(out)
                 }
-                CorgiContainer::from_updates(out)
             }
             LinearOp::Negate => {
                 for d in c.diffs.iter_mut() {
