@@ -256,6 +256,12 @@ fn infer_term_shape(t: &Term, env_shapes: &[Shape]) -> Shape {
             if fs.is_empty() { Shape::Unit } else { Shape::Prod(fs) }
         }
         Term::If { then, .. } => infer_term_shape(then, env_shapes),
+        Term::Inject(tag, payload) => {
+            let t = match &**tag { Term::Int(t) => *t as usize, _ => 0 };
+            let mut lanes: Vec<Option<Shape>> = vec![None; t + 1];
+            lanes[t] = Some(infer_term_shape(payload, env_shapes));
+            Shape::Sum(lanes)
+        }
         // Arithmetic, comparisons, and anything else scalar-ish reduce to a primitive column.
         _ => Shape::Prim(64),
     }
@@ -275,8 +281,11 @@ pub fn compilable(t: &Term) -> bool {
         Term::Binary(_, l, r) => compilable(l) && compilable(r),
         Term::If { cond, then, els } => compilable(cond) && compilable(then) && compilable(els),
         Term::Fold { list, init, step } => compilable(list) && compilable(init) && compilable(step),
-        Term::Unary(op, inner) => matches!(op, UnOp::Neg | UnOp::Not | UnOp::Len) && compilable(inner),
-        _ => false, // List, Inject, Case, IsTag, Hash — row-wise fallback.
+        Term::Unary(op, inner) => matches!(op, UnOp::Neg | UnOp::Not | UnOp::Len | UnOp::IsTag(_)) && compilable(inner),
+        // Literal-tag sum intro lowers (`Op::Inject`); a data-driven tag has no static lane
+        // count, so it stays row-wise.
+        Term::Inject(tag, payload) => matches!(&**tag, Term::Int(_)) && compilable(payload),
+        _ => false, // List, Case, data-driven Inject, Hash — row-wise fallback.
     }
 }
 
@@ -369,6 +378,11 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
             let body = compile_fold_body(step);
             b.add(Op::Fold(Box::new(body)), vec![pair])
         }
+        Term::Inject(tag, payload) => {
+            let Term::Int(t) = &**tag else { unreachable!("gated by compilable") };
+            let pid = compile(payload, b, env, env_shapes, anchor);
+            b.add(Op::Inject(*t as usize, *t as usize + 1), vec![pid])
+        }
         Term::Unary(op, inner) => {
             let id = compile(inner, b, env, env_shapes, anchor);
             match op {
@@ -406,7 +420,29 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
                     }
                     other => panic!("len on non-aggregate shape {other:?}"),
                 },
-                UnOp::IsTag(_) => unreachable!("gated by compilable"),
+                // On a sum, every committed lane maps to its constant answer and the result
+                // unwraps (lanes are homogeneous `U64`); on any other shape, `istag` is
+                // constantly 0 (matching `eval`'s "non-Variant is never the tag").
+                UnOp::IsTag(t) => match infer_term_shape(inner, env_shapes) {
+                    Shape::Sum(lanes) => {
+                        let arms: Vec<(usize, Graph<NumOp>)> = lanes
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, lane)| {
+                                lane.as_ref().map(|_| {
+                                    let mut bb = Builder::<NumOp>::default();
+                                    let inp = bb.input();
+                                    let v = (i as u32 == *t) as u64;
+                                    let out = bb.add(Op::Lit(CValue::u64(vec![v])), vec![inp]);
+                                    (i, bb.finish(out))
+                                })
+                            })
+                            .collect();
+                        let mapped = b.add(Op::MapSum(arms), vec![id]);
+                        b.add(Op::Unwrap, vec![mapped])
+                    }
+                    _ => b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]),
+                },
             }
         }
         other => panic!("compile: unsupported Term: {other:?}"),

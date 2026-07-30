@@ -30,6 +30,7 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         ],
         // scalar_ops: (key, a, b) triples; a values straddle the `> 2` and `= -5` tests.
         "scalar_ops" => vec![rows(&[&[1, 1, 9], &[1, 4, 8], &[2, 3, 7], &[3, -5, 6], &[3, 2, 5]])],
+        "sum_ops" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21]])],
         other => panic!("no inputs configured for {other}"),
     }
 }
@@ -56,3 +57,4 @@ fn assert_backends_agree(prog: &str) {
 #[test] fn binders() { assert_backends_agree("binders"); }
 #[test] fn join_fallback() { assert_backends_agree("join_fallback"); }
 #[test] fn scalar_ops() { assert_backends_agree("scalar_ops"); }
+#[test] fn sum_ops() { assert_backends_agree("sum_ops"); }

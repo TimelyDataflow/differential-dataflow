@@ -58,7 +58,7 @@ fn rebase_join_term(t: &crate::parse::Term) -> crate::parse::Term {
         List(fs) => List(fs.iter().map(rebase_join_term).collect()),
         Spread(inner) => Spread(Box::new(rebase_join_term(inner))),
         Proj(inner, i) => Proj(Box::new(rebase_join_term(inner)), *i),
-        Inject(payload, tag) => Inject(Box::new(rebase_join_term(payload)), Box::new(rebase_join_term(tag))),
+        Inject(tag, payload) => Inject(Box::new(rebase_join_term(tag)), Box::new(rebase_join_term(payload))),
         Case { scrutinee, arms, default } => Case {
             scrutinee: Box::new(rebase_join_term(scrutinee)),
             arms: arms.iter().map(rebase_join_term).collect(),

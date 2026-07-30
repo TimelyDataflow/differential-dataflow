@@ -1,0 +1,9 @@
+-- Sum intro and tag tests on the corgi compiled path, checked against vec:
+-- literal-tag `variant` (Op::Inject), `istag` on a sum (MapSum + Unwrap, incl.
+-- an uncommitted-lane tag), and `istag` on a non-sum (constant 0).
+
+let pairs = input 0 | key($0[0] ; $0[1]);
+let tagged = pairs
+    | map($0 ; variant(2, $1[0]), istag(2, variant(2, $1[0])), istag(1, variant(2, $1[0])), istag(0, $1));
+
+export "result" = tagged | arrange | inspect(total);
