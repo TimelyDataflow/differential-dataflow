@@ -1,0 +1,46 @@
+-- A tour of the DDIR surface: the constructs, composed. Doubles as the grammar's
+-- worked example and, in the gate, as the integration check — the per-feature
+-- fixtures under tests/programs/ pin individual lowerings and their fallback
+-- routing; this program pins that the constructs work TOGETHER.
+
+con Fwd(1) = 0;
+con Bwd(1) = 1;
+
+let edges = input 0 | key($0[0] ; $0[1]);
+let roots = input 1 | key($0[0] ;);
+
+-- Scalars: arithmetic, (signed) compares, unaries, `hash`, `if`.
+let scored = edges
+    | map($0 ; $1[0] * 2, -$1[0], if($1[0] > 2, 1, 0), hash(97, $0[0]))
+    | filter(not($1[1] == 0 - 99));
+
+-- Sums: tagged intro, `case` with binder + captured var + default, `istag`.
+let tagged = edges
+    | map($0 ; if($0[0] < $1[0], Fwd($1[0]), Bwd($1[0])))
+    | map($0 ; case $1[0] { Fwd(x) => x + $0[0], _ => 0 - 1 }, istag(1, $1[0]));
+
+-- Lists: intro, `fold` (binders ^0/^1), `len`; `flatmap`/`collect` round trip.
+let folded = edges
+    | map($0 ; list($0[0], $1[0], 7))
+    | map($0 ; fold($1[0], 0, ^0 + ^1), len($1[0]));
+let nested = edges | flatmap(list($1[0], $0[0])) | collect;
+
+-- Reducers.
+let counted = edges | count;
+let least   = edges | min;
+let uniq    = edges | distinct;
+
+-- Iteration: reach, with concat (+) and distinct.
+reach: {
+    let proposals = reach | join(edges, ($2 ;));
+    var reach = roots + proposals | distinct;
+}
+
+export "scored" = scored | arrange | inspect(total);
+export "sums"   = tagged | arrange | inspect(total);
+export "folded" = folded | arrange | inspect(total);
+export "nested" = nested | arrange | inspect(nest);
+export "counts" = counted | arrange | inspect(total);
+export "least"  = least | arrange | inspect(total);
+export "uniq"   = uniq | arrange | inspect(total);
+export "reach"  = reach::reach | key(;) | arrange | inspect(total);
