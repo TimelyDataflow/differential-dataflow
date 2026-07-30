@@ -23,6 +23,11 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         "unnest" => vec![rows(&[&[1, 2], &[3, 4]])],
         "adt" => vec![edges],
         "binders" => vec![rows(&[&[1, 2], &[3, 4]])],
+        // join_fallback: two keyed relations with overlapping keys (incl. a key with fanout).
+        "join_fallback" => vec![
+            rows(&[&[1, 10], &[2, 20], &[2, 21], &[3, 30]]),
+            rows(&[&[1, 5], &[2, 6], &[4, 7]]),
+        ],
         other => panic!("no inputs configured for {other}"),
     }
 }
@@ -47,3 +52,4 @@ fn assert_backends_agree(prog: &str) {
 #[test] fn unnest() { assert_backends_agree("unnest"); }
 #[test] fn adt() { assert_backends_agree("adt"); }
 #[test] fn binders() { assert_backends_agree("binders"); }
+#[test] fn join_fallback() { assert_backends_agree("join_fallback"); }

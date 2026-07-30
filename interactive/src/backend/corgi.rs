@@ -41,6 +41,45 @@ type Upd = ((Row, Row), Time, Diff);
 type CC = CorgiContainer<Time, Diff>;
 type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, Diff>>;
 
+/// Rebase a join-projection term from the join environment (`$0`=key, `$1`=left val,
+/// `$2`=right val) onto the row environment of the identity join's output
+/// (`$0`=key, `$1`=(left val, right val)): `$1 -> $1[0]`, `$2 -> $1[1]`, structurally
+/// everywhere. `Bound` binders are scope-relative and pass through untouched.
+fn rebase_join_term(t: &crate::parse::Term) -> crate::parse::Term {
+    use crate::parse::Term::*;
+    match t {
+        Var(0) => Var(0),
+        Var(1) => Proj(Box::new(Var(1)), 0),
+        Var(2) => Proj(Box::new(Var(1)), 1),
+        Var(n) => panic!("join projection references ${n}"),
+        Bound(k) => Bound(*k),
+        Int(n) => Int(*n),
+        Tuple(fs) => Tuple(fs.iter().map(rebase_join_term).collect()),
+        List(fs) => List(fs.iter().map(rebase_join_term).collect()),
+        Spread(inner) => Spread(Box::new(rebase_join_term(inner))),
+        Proj(inner, i) => Proj(Box::new(rebase_join_term(inner)), *i),
+        Inject(payload, tag) => Inject(Box::new(rebase_join_term(payload)), Box::new(rebase_join_term(tag))),
+        Case { scrutinee, arms, default } => Case {
+            scrutinee: Box::new(rebase_join_term(scrutinee)),
+            arms: arms.iter().map(rebase_join_term).collect(),
+            default: default.as_ref().map(|d| Box::new(rebase_join_term(d))),
+        },
+        Fold { list, init, step } => Fold {
+            list: Box::new(rebase_join_term(list)),
+            init: Box::new(rebase_join_term(init)),
+            step: Box::new(rebase_join_term(step)),
+        },
+        If { cond, then, els } => If {
+            cond: Box::new(rebase_join_term(cond)),
+            then: Box::new(rebase_join_term(then)),
+            els: Box::new(rebase_join_term(els)),
+        },
+        Binary(op, l, r) => Binary(*op, Box::new(rebase_join_term(l)), Box::new(rebase_join_term(r))),
+        Unary(op, inner) => Unary(*op, Box::new(rebase_join_term(inner))),
+        Hash(args) => Hash(args.iter().map(rebase_join_term).collect()),
+    }
+}
+
 /// Apply a `LinearOp` chain to one corgi container (the corgi-native row-wise compute per batch).
 /// Project = corgi `eval_graph`; Filter = corgi mask + `gather`; Negate = Rust — all columnar.
 /// The time/list-shaping ops (EnterAt/LiftIter/FlatMap) take a correctness-first row-wise path
@@ -226,8 +265,23 @@ impl Backend for CorgiBackend {
         // The proxy-join seam drives the backend blockwise under the driver's fuel; the backend
         // compiles the projection per container (shape-directed, for `Spread`) and emits corgi
         // columns directly as `CorgiContainer`s — column-native, no row round-trip.
-        let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone()));
-        join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection()
+        if compilable(&projection.key) && compilable(&projection.val) {
+            let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone()));
+            join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection()
+        } else {
+            // Projections the lowering can't compile take the same shape as `linear`'s gate:
+            // join with the identity projection (compilable by construction), then apply the
+            // original terms as a row-wise `Project`, rebased from the join env
+            // `[$0=key, $1=left val, $2=right val]` onto the row env `[$0=key, $1=(lv, rv)]`.
+            // Capability never depends on the lowering's coverage; only speed does.
+            use crate::parse::Term;
+            let key = Term::Var(0);
+            let val = Term::Tuple(vec![Term::Var(1), Term::Var(2)]);
+            let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(key, val));
+            let joined = join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection();
+            let rebased = Projection { key: rebase_join_term(&projection.key), val: rebase_join_term(&projection.val) };
+            Self::linear(joined, vec![LinearOp::Project(rebased)], 0)
+        }
     }
 
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
