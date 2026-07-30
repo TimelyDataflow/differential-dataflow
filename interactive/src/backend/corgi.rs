@@ -5,8 +5,8 @@
 //!
 //! All `Backend` methods are corgi-native: `linear` folds a `LinearOp` chain over each container
 //! ([`apply_ops`], columnar fast paths with row-wise fallbacks); `arrange` ingests columns without
-//! a row round-trip; `join`/`reduce` run through whole-chunk tactics ([`CorgiJoinTactic`], the
-//! rank/int-proxy reduce backends) over the columnar chunks.
+//! a row round-trip; `join`/`reduce` run through the int-proxy tactics ([`CorgiJoinBackend`],
+//! [`CorgiReduceBackend`]) over the columnar chunks.
 
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
@@ -18,13 +18,13 @@ use differential_dataflow::operators::join::join_with_tactic;
 use differential_dataflow::operators::reduce::reduce_with_tactic;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkBuilder};
+use differential_dataflow::trace::chunk::{Chunk, ChunkBatcher, ChunkBuilder};
 
 use corgi::arrange::gather;
 use corgi::Value as CValue;
 
 use crate::backend::Backend;
-use crate::corgi::chunk::{chunks_to_columns, CorgiChunk, CorgiChunker};
+use crate::corgi::chunk::{CorgiChunk, CorgiChunker};
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::join::CorgiJoinBackend;
 use crate::corgi::reduce::CorgiReduceBackend;
@@ -72,8 +72,10 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
                 let diffs = keep.iter().map(|&i| c.diffs[i]).collect();
                 CorgiContainer { keys, vals, times, diffs }
             }
-            // Row-wise fallback for projections/predicates the corgi compiler can't lower (List,
-            // Case/Inject, Unary, Hash) — `ir::eval`, parity with `backend::vec`.
+            // Row-wise fallback (`ir::eval`, parity with `backend::vec`) for terms whose LOWERING
+            // isn't written yet: `Case`/`Inject`, `List`, `Unary`, `Hash`. Corgi itself models sums
+            // and lists (`Branch`/`MapSum`/`CapSum`/`Unwrap`, `Enlist`/`MapList`/`Fold`); only
+            // list-intro (and possibly hash/len ops) may need kernels. See `logic::compilable`.
             LinearOp::Project(p) => {
                 let mut out: Vec<Upd> = Vec::new();
                 for ((k, v), t, d) in c.into_updates() {
@@ -194,20 +196,26 @@ impl Backend for CorgiBackend {
     }
 
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, CC> {
-        // Cursor-free AND transcode-free: the arrangement's batches already hold corgi columns, so
-        // concatenate each batch's chunk columns straight into a `CorgiContainer` — no columns→rows→
-        // columns round-trip (the old `batch_to_rows` + `from_updates` path).
+        // Each chunk already IS a columnar container: its key/val columns clone by Arc bump,
+        // so a chunk becomes a `CorgiContainer` for the price of materializing its times
+        // (`ColTimes` → `Vec<T>`, the owned-time egress) and a diffs memcpy. One container
+        // per chunk — no concatenation, no gather, no columns→rows→columns round-trip.
         a.stream
             .unary(Pipeline, "CorgiAsCollection", |_, _| {
                 |input, output| {
                     input.for_each(|cap, data| {
-                        let mut chunks: Vec<CorgiChunk<Time, Diff>> = Vec::new();
+                        let mut session = output.session(&cap);
                         for batch in data.iter() {
-                            chunks.extend(batch.chunks.iter().cloned());
+                            for ch in batch.chunks.iter().filter(|c| c.len() > 0) {
+                                let mut c = CorgiContainer {
+                                    keys: ch.keys().clone(),
+                                    vals: ch.vals().clone(),
+                                    times: ch.times().to_vec(),
+                                    diffs: ch.diffs().to_vec(),
+                                };
+                                session.give_container(&mut c);
+                            }
                         }
-                        let (keys, vals, times, diffs) = chunks_to_columns(&chunks);
-                        let mut c = CorgiContainer { keys, vals, times, diffs };
-                        output.session(&cap).give_container(&mut c);
                     });
                 }
             })

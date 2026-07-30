@@ -1,6 +1,6 @@
 //! corgi as DDIR's columnar scalar logic: compile a `Term` to a corgi `Graph<NumOp>`,
 //! transcode DDIR rows (`ir::Value`) to/from corgi columnar `Value`, directed by a `Shape`
-//! inferred from the data (the dynamic-typing primitive). See SPIKE.md.
+//! inferred from the data (the dynamic-typing primitive).
 //!
 //! The compiler (`compile`) covers Var/Bound/Int/Tuple(+Spread)/Proj/Binary/If/Fold over non-negative
 //! ints; terms it can't lower (List, Case/Inject, Unary, Hash — see `compilable`) fall back to row-wise
@@ -19,7 +19,7 @@ pub fn infer_shape(sample: &DValue) -> Shape {
         DValue::Tuple(xs) if xs.is_empty() => Shape::Unit, // DDIR unit ↔ corgi length-carrying Unit
         DValue::Tuple(xs) => Shape::Prod(xs.iter().map(infer_shape).collect()),
         DValue::List(xs) => Shape::List(Box::new(infer_shape(xs.first().expect("nonempty list")))),
-        DValue::Variant(..) => panic!("variant shape inference is a later rung"),
+        DValue::Variant(..) => panic!("variant shape inference is unimplemented"),
     }
 }
 
@@ -259,9 +259,11 @@ fn infer_term_shape(t: &Term, env_shapes: &[Shape]) -> Shape {
     }
 }
 
-/// Whether [`compile`] can lower this term to a corgi graph. Terms that use features the corgi
-/// compiler doesn't model yet — `List`, `Inject`/`Case` (sum types), `Unary`, `Hash` — return false,
-/// and the backend falls back to row-wise `ir::eval` (parity with `backend::vec`).
+/// Whether [`compile`] can lower this term to a corgi graph. Terms whose lowering is not yet
+/// written — `Inject`/`Case` (corgi has `Branch`/`MapSum`/`CapSum`/`Unwrap`), `List` (intro may
+/// need a kernel), `Unary`, `Hash` — return false, and the backend falls back to row-wise
+/// `ir::eval` (parity with `backend::vec`). The gap is compiler debt here, not expressiveness
+/// in corgi.
 pub fn compilable(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::Bound(_) | Term::Int(_) => true,
@@ -351,7 +353,7 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
         // Fold over a List. corgi `Op::Fold` consumes `Prod([seed, List<A>])` and folds each row's
         // list; its body is a closed sub-graph over `Prod([acc, elem])`. DDIR's step sees
         // elem=Bound(0), acc=Bound(1), so the body env is [acc, elem] (Bound counts from the top).
-        // Restriction (this rung): the step references only its binders (monoid-style), not outer
+        // Restriction: the step references only its binders (monoid-style), not outer
         // Vars — corgi closes the body; an outer reference would need CapList capture.
         Term::Fold { list, init, step } => {
             let init_id = compile(init, b, env, env_shapes, anchor);
@@ -360,7 +362,7 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
             let body = compile_fold_body(step);
             b.add(Op::Fold(Box::new(body)), vec![pair])
         }
-        other => panic!("compile: unsupported Term in this rung: {other:?}"),
+        other => panic!("compile: unsupported Term: {other:?}"),
     }
 }
 

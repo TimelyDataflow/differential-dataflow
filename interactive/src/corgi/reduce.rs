@@ -183,11 +183,16 @@ fn ids(col: &CValue) -> Vec<u64> {
 /// `(keys_col, vals_col)` corgi columns plus per-record `(key_hash, time, diff)`. `changed` is the
 /// ASCENDING set of changed key hashes; a row is kept iff its key hash is in it.
 ///
-/// NB this is a full scan of the presented chunks (incl. `source_batches`, the accumulated trace).
-/// A `find_ranges` seek of the changed keys was tried (delta-proportional in principle) but REGRESSED
-/// SCC (1.62x→2.16x): SCC's changed set is broad (label propagation touches most keys each retire), so
-/// the scan already touches ~every row while the per-chunk gallop only adds overhead. The O(history)
-/// re-presentation is inherent to SCC here, not a seekable-few-keys case.
+/// NB this is a full scan of the presented chunks (incl. `source_batches`, the accumulated trace),
+/// and deliberately NOT a `find_ranges` seek of the changed keys: under label-propagation-shaped
+/// workloads the changed set is broad (most keys change each retire), so a scan touches ~every row
+/// regardless and the per-chunk gallop only adds overhead. The O(history) re-presentation is
+/// inherent to broad change sets, not a seekable-few-keys case.
+///
+/// TODO: the scan's per-row work can still batch: `ids` re-derives (and copies) each chunk's key
+/// hashes every retire (memoize per chunk, or a stored hash column), the membership test is a
+/// per-row `binary_search`, and each hit materializes an owned time (`times().get`); kept RANGES
+/// could move via `push_range`.
 fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>)
 where
     T: ColTime,

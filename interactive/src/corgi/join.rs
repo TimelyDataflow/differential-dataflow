@@ -3,9 +3,8 @@
 //! [`CorgiJoinBackend`] implements [`ProxyJoinBackend`]: `advance` draws blocks of the two
 //! inputs' key intersection as `((group, coord), time, diff)` bridges, and `cross` redeems
 //! matched coordinates directly against the instance's chunks (`gather_lanes`), runs the
-//! compiled projection, and cuts `TARGET_OUT`-sized [`CorgiContainer`]s. This replaces the
-//! bespoke whole-unit tactic (`run_unit`), whose single giant output container was an OOM
-//! for large snapshots; peak state is now one block's bridges plus one container.
+//! compiled projection, and cuts `TARGET_OUT`-sized [`CorgiContainer`]s. Peak state is one
+//! block's bridges plus one container, however large the unit.
 //!
 //! # Tokens
 //!
@@ -499,11 +498,11 @@ impl<'a, T: ColTime> Probe<'a, T> {
 /// Blockwise `advance` for leaf-keyed inputs: group token = the key's own `u64` (chunk order
 /// IS `u64` order), so blocks resume by seeking `from` and end at key boundaries.
 ///
-/// Two regimes, mirroring the bespoke tactic's probe heuristic: when one side is much
-/// smaller (the fresh delta against an accumulated trace), the small side DRIVES and the
-/// large side is presented only at the driver's keys (batched `find_ranges` — cost tracks
-/// the driver plus matches). When the sides are comparable, probing costs `n log n` against
-/// a merge's `n`, so both sides are pulled and merged symmetrically instead.
+/// Two regimes: when one side is much smaller (the fresh delta against an accumulated
+/// trace), the small side DRIVES and the large side is presented only at the driver's keys
+/// (batched `find_ranges` — cost tracks the driver plus matches). When the sides are
+/// comparable, probing costs `n log n` against a merge's `n`, so both sides are pulled and
+/// merged symmetrically instead.
 fn advance_leaf<T: ColTime>(
     chunks0: &[&CorgiChunk<T, Diff>],
     chunks1: &[&CorgiChunk<T, Diff>],

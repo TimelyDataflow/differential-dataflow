@@ -10,7 +10,7 @@
 //! This is a faithful port of the reference [`VecChunk`](differential_dataflow::trace::chunk::vec):
 //! same resumable merge→advance→settle pipeline and grade-at-yield invariant, with the flat
 //! `Rc<Vec<row>>` swapped for corgi columns. Adopting the `Chunk` framework gives us the fueled,
-//! graded `ChunkBatchMerger` for free — replacing the eager whole-trace `CorgiMerger`.
+//! graded `ChunkBatchMerger` for free.
 //!
 //! Order: `(key, val)` by corgi structural order (`compare_at` over `Prod([keys, vals])`), then `time`
 //! by `Ord`. Any consistent total order is fine — correctness compares multisets, not DDIR's `Ord`.
@@ -35,12 +35,8 @@ use corgi::Value as CValue;
 use columnar::Columnar;
 
 use crate::corgi::col_times::{ColTime, ColTimes};
-use crate::ir::Value as DValue;
 
 use std::cmp::Ordering;
-
-/// A DDIR row update: `((key, val), time, diff)`.
-pub type Upd<T, R> = ((DValue, DValue), T, R);
 
 /// The grading target (also the merge/advance emit-chunk size). Larger than `VecChunk`'s 8192 to
 /// amortize corgi's per-chunk columnar set-up (each chunk boundary costs a `gather` materialization);
@@ -154,12 +150,16 @@ where
 
     /// Two-pointer merge of the two front chunks through their shared horizon, FULLY consolidating
     /// equal `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
-    /// contract). Reverted from a `survey`-based merge: survey aligns only `(key, val)` (corgi owns no
-    /// time), so its positional `Both` under-consolidates cross-side times, and — consuming both chunks
-    /// with no push-back — bloats the multi-chunk arrangement, which the reduce then re-presents each
-    /// retire → super-linear past the chunk boundary (n≳131k). A survey merge needs a group-RANGE
-    /// `Both` (both sides' full equal-`(key,val)` group) to time-merge correctly; the corgi agent has
-    /// that flagged. `group_bounds` in `advance` is kept (it doesn't touch consolidation).
+    /// contract). NB a `survey`-based merge cannot be substituted as-is: survey aligns only
+    /// `(key, val)` (corgi owns no time), so its positional `Both` under-consolidates cross-side
+    /// times, and consuming both chunks with no push-back un-grades the chain; it would need a
+    /// group-RANGE `Both` (both sides' full equal-`(key,val)` group) to time-merge correctly.
+    ///
+    /// TODO: newer corgi revs export exactly that (`survey_groups` -> `GroupRun::{A, B, Both}`,
+    /// with `Both` carrying both sides' group ranges). Once the pin moves past it, rewrite this
+    /// merge batched: bulk-copy `A`/`B` runs (range gather + `push_range` + `extend_from_slice`),
+    /// row-merge times only within `Both` classes. This row-at-a-time loop is the largest
+    /// `compare_at`-in-a-hot-path residue in the backend (the ingest batcher's merge).
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         let c1 = in1.pop_front().unwrap();
         let c2 = in2.pop_front().unwrap();
@@ -417,20 +417,6 @@ where
 
 /// Concatenate chunks' columns into flat `(keys, vals, times, diffs)` with **no transcode** — for
 /// reading an arrangement back column-natively (e.g. `Backend::as_collection` straight into a
-/// `CorgiContainer`), instead of untranscoding to rows and re-transcoding.
-pub fn chunks_to_columns<T, R>(chunks: &[CorgiChunk<T, R>]) -> (CValue, CValue, Vec<T>, Vec<R>)
-where
-    T: ColTime,
-    R: Semigroup + Clone + 'static,
-{
-    if chunks.iter().all(|c| c.len_() == 0) {
-        return (CValue::Unit(0), CValue::Unit(0), Vec::new(), Vec::new());
-    }
-    let (kv, times, diffs) = CorgiChunk::concat(chunks);
-    let (keys, vals) = split_kv(kv);
-    (keys, vals, times.to_vec(), diffs)
-}
-
 /// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
 /// consolidate into one chunk, then `settle`. The column-native egress the reduce backend seals its
 /// output with (it resolves proxy ids to real columns by `gather` and hands them here).
