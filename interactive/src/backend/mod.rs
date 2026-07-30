@@ -11,6 +11,7 @@
 //! that pick a backend and call [`render_tree`].
 
 pub mod vec;
+pub mod corgi;
 // The columnar substrate is deferred on the Value-model port (it needs a
 // `Columnar`/columnar-storage story for `Value`); see `backend::vec`.
 // pub mod col;

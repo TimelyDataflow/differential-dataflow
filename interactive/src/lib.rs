@@ -1,5 +1,6 @@
 pub mod parse;
 pub mod ir;
+pub mod corgi;
 pub mod lower;
 pub mod scope_ir;
 pub mod backend;
