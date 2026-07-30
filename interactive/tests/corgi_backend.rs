@@ -23,13 +23,39 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         "unnest" => vec![rows(&[&[1, 2], &[3, 4]])],
         "adt" => vec![edges],
         "binders" => vec![rows(&[&[1, 2], &[3, 4]])],
+        // join_fallback: two keyed relations with overlapping keys (incl. a key with fanout).
+        "join_fallback" => vec![
+            rows(&[&[1, 10], &[2, 20], &[2, 21], &[3, 30]]),
+            rows(&[&[1, 5], &[2, 6], &[4, 7]]),
+        ],
+        // scalar_ops: (key, a, b) triples; a values straddle the `> 2` and `= -5` tests.
+        "scalar_ops" => vec![rows(&[&[1, 1, 9], &[1, 4, 8], &[2, 3, 7], &[3, -5, 6], &[3, 2, 5]])],
+        "sum_ops" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21]])],
+        "case_ops" => vec![rows(&[&[1, 10], &[2, 20], &[3, 14], &[3, 30]])],
+        // pair_keys: composite keys with overlap, fanout, and one-sided keys on both sides.
+        "pair_keys" => vec![
+            rows(&[&[1, 1, 10], &[1, 2, 20], &[2, 1, 30], &[2, 1, 31], &[9, 9, 90]]),
+            rows(&[&[1, 1, 5], &[2, 1, 6], &[3, 3, 7]]),
+        ],
+        // tour: edges (with a cycle and a chord) + roots.
+        "tour" => vec![
+            rows(&[&[1, 2], &[2, 3], &[3, 1], &[3, 4], &[5, 2]]),
+            rows(&[&[1], &[5]]),
+        ],
         other => panic!("no inputs configured for {other}"),
     }
 }
 
 /// Evaluate `prog` through both backends and assert the outputs match.
 fn assert_backends_agree(prog: &str) {
-    let path = format!("{}/examples/programs/{prog}.ddp", env!("CARGO_MANIFEST_DIR"));
+    // Fixtures pinning individual lowerings live with the gate (tests/programs); the
+    // algorithm programs double as examples and stay in examples/programs.
+    let fixture = format!("{}/tests/programs/{prog}.ddp", env!("CARGO_MANIFEST_DIR"));
+    let path = if std::path::Path::new(&fixture).exists() {
+        fixture
+    } else {
+        format!("{}/examples/programs/{prog}.ddp", env!("CARGO_MANIFEST_DIR"))
+    };
     let src = interactive::load_program(&path);
     let mut tree = lower::lower_tree(parse::pipe::parse(&src));
     tree.optimize();
@@ -47,3 +73,9 @@ fn assert_backends_agree(prog: &str) {
 #[test] fn unnest() { assert_backends_agree("unnest"); }
 #[test] fn adt() { assert_backends_agree("adt"); }
 #[test] fn binders() { assert_backends_agree("binders"); }
+#[test] fn join_fallback() { assert_backends_agree("join_fallback"); }
+#[test] fn scalar_ops() { assert_backends_agree("scalar_ops"); }
+#[test] fn sum_ops() { assert_backends_agree("sum_ops"); }
+#[test] fn case_ops() { assert_backends_agree("case_ops"); }
+#[test] fn tour() { assert_backends_agree("tour"); }
+#[test] fn pair_keys() { assert_backends_agree("pair_keys"); }

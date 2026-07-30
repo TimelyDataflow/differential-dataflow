@@ -1,0 +1,19 @@
+-- `case` on the compiled path (CapSum/MapSum/Unwrap), checked against vec:
+-- an arm using both the payload binder and a captured outer var, a `_ =>`
+-- default (evaluated without the binder), and a shape-conflicted case (in a
+-- filter, so the program stays valid) that defers to rows.
+
+con Small(1) = 0;
+con Big(1) = 1;
+
+let pairs = input 0 | key($0[0] ; $0[1]);
+let tagged = pairs | map($0 ; if($1[0] < 15, Small($1[0]), Big($1[0])));
+
+let picked = tagged
+    | map($0 ; case $1[0] { Small(x) => x + $0[0], _ => 0 - 1 });
+
+let clash = tagged
+    | filter(case $1[0] { Small(x) => x < 12, Big(x) => tuple(x, x) });
+
+export "picked" = picked | arrange | inspect(total);
+export "clash" = clash | arrange | inspect(adt);

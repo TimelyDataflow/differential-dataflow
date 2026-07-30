@@ -1,0 +1,9 @@
+-- A join keyed on a 2-tuple: exercises the lane-tuple key path (lexicographic
+-- lane-buffer walk + tuple-needle probe, ordinal tokens) rather than the
+-- single-lane or structural walks. The gate is agreement with vec.
+
+let left  = input 0 | key($0[0], $0[1] ; $0[2]);
+let right = input 1 | key($0[0], $0[1] ; $0[2]);
+let out = left | join(right, ($0 ; $1[0] + $2[0]));
+
+export "result" = out | arrange | inspect(total);

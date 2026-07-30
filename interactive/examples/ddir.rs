@@ -1,6 +1,6 @@
-//! DD IR vec-backed driver: parse, lower, render (via `interactive::backend::vec`), execute.
+//! The DDIR driver: parse, lower, render on the chosen backend, execute.
 //!
-//! Usage: `ddir_vec [flags] <program> <arity> <nodes> <edges> [batch] [rounds] [timely args]`
+//! Usage: `ddir [flags] <program> <arity> <nodes> <edges> [batch] [rounds] [timely args]`
 //!
 //! Inputs: with `EDGES_FILE` set, rows come from that file — one row per line,
 //! whitespace-separated `i64` fields, assigned round-robin to the program's
@@ -12,6 +12,8 @@
 //! - `--query=K:V[,q]`: seed the query input with one row (requires --explain).
 //! - `--debug-demand`: tap every demand collection with an Inspect.
 //! - `--diag`: serve timely/DD diagnostics on port 51371.
+//! - `--backend=vec|corgi`: rendering substrate (default `vec`). The corgi
+//!   backend is single-worker (its arrange does not exchange).
 
 use mimalloc::MiMalloc;
 
@@ -26,6 +28,7 @@ use interactive::lower;
 use interactive::scope_ir as st;
 use interactive::ir::{Diff, Value};
 use interactive::backend::vec::{render_tree, Row};
+use interactive::backend::corgi::render_tree_rows;
 
 #[derive(Clone, Default)]
 struct Flags {
@@ -33,6 +36,7 @@ struct Flags {
     query: Option<String>,
     debug_demand: bool,
     diag: bool,
+    corgi: bool,
 }
 
 fn run(
@@ -55,7 +59,7 @@ fn run(
     if explain {
         let source_shapes: Vec<(usize, usize)> = tree.root.imports.iter().map(|imp| match &imp.from {
             st::Source::Input(_) => (arity, 0usize),
-            other => panic!("ddir_vec --explain: unsupported source {:?}", other),
+            other => panic!("ddir --explain: unsupported source {:?}", other),
         }).collect();
         let shape = interactive::explain::export_shape(&tree, &source_shapes);
         eprintln!("explain: first export shape (k={}, v={}); query is (key[{}] ; val[{}] ++ q)", shape.0, shape.1, shape.0, shape.1);
@@ -98,10 +102,14 @@ fn run(
                 let entered: Vec<_> = collections.iter().map(|c| c.clone().enter(inner)).collect();
                 let root_imports: Vec<_> = tree.root.imports.iter().map(|imp| match &imp.from {
                     st::Source::Input(n) => entered[*n].clone(),
-                    st::Source::Trace(name) => panic!("ddir_vec: Import {:?} not supported in this harness (no trace registry).", name),
+                    st::Source::Trace(name) => panic!("ddir: Import {:?} not supported in this harness (no trace registry).", name),
                     st::Source::Parent(_) => unreachable!("root scope cannot import from a parent"),
                 }).collect();
-                let exports = render_tree(&tree.root, inner, 0, root_imports);
+                let exports = if flags.corgi {
+                    render_tree_rows(&tree.root, inner, 0, root_imports)
+                } else {
+                    render_tree(&tree.root, inner, 0, root_imports)
+                };
                 exports[tree_export_idx].clone().leave(scope)
             });
             output.probe_with(&mut probe);
@@ -201,6 +209,9 @@ fn main() {
             else if let Some(q) = a.strip_prefix("--query=") { flags.query = Some(q.to_string()); }
             else if a == "--debug-demand" { flags.debug_demand = true; }
             else if a == "--diag" { flags.diag = true; }
+            else if let Some(b) = a.strip_prefix("--backend=") {
+                flags.corgi = match b { "corgi" => true, "vec" => false, other => panic!("unknown backend {other:?} (vec|corgi)") };
+            }
             else { rest.push(a); }
         }
         let mut out = vec![prog]; out.extend(rest);
@@ -221,7 +232,7 @@ fn main() {
     };
     let (n_inputs, imports) = interactive::survey_sources(&stmts);
     if !imports.is_empty() {
-        panic!("ddir_vec: program references imports {:?} but this harness has no trace registry.", imports);
+        panic!("ddir: program references imports {:?} but this harness has no trace registry.", imports);
     }
     let name = std::path::Path::new(&program).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(program.clone());
     let timely_args: Vec<String> = args.iter().skip(4).cloned().collect();

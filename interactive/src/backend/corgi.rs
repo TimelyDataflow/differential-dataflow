@@ -41,6 +41,45 @@ type Upd = ((Row, Row), Time, Diff);
 type CC = CorgiContainer<Time, Diff>;
 type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, Diff>>;
 
+/// Rebase a join-projection term from the join environment (`$0`=key, `$1`=left val,
+/// `$2`=right val) onto the row environment of the identity join's output
+/// (`$0`=key, `$1`=(left val, right val)): `$1 -> $1[0]`, `$2 -> $1[1]`, structurally
+/// everywhere. `Bound` binders are scope-relative and pass through untouched.
+fn rebase_join_term(t: &crate::parse::Term) -> crate::parse::Term {
+    use crate::parse::Term::*;
+    match t {
+        Var(0) => Var(0),
+        Var(1) => Proj(Box::new(Var(1)), 0),
+        Var(2) => Proj(Box::new(Var(1)), 1),
+        Var(n) => panic!("join projection references ${n}"),
+        Bound(k) => Bound(*k),
+        Int(n) => Int(*n),
+        Tuple(fs) => Tuple(fs.iter().map(rebase_join_term).collect()),
+        List(fs) => List(fs.iter().map(rebase_join_term).collect()),
+        Spread(inner) => Spread(Box::new(rebase_join_term(inner))),
+        Proj(inner, i) => Proj(Box::new(rebase_join_term(inner)), *i),
+        Inject(tag, payload) => Inject(Box::new(rebase_join_term(tag)), Box::new(rebase_join_term(payload))),
+        Case { scrutinee, arms, default } => Case {
+            scrutinee: Box::new(rebase_join_term(scrutinee)),
+            arms: arms.iter().map(rebase_join_term).collect(),
+            default: default.as_ref().map(|d| Box::new(rebase_join_term(d))),
+        },
+        Fold { list, init, step } => Fold {
+            list: Box::new(rebase_join_term(list)),
+            init: Box::new(rebase_join_term(init)),
+            step: Box::new(rebase_join_term(step)),
+        },
+        If { cond, then, els } => If {
+            cond: Box::new(rebase_join_term(cond)),
+            then: Box::new(rebase_join_term(then)),
+            els: Box::new(rebase_join_term(els)),
+        },
+        Binary(op, l, r) => Binary(*op, Box::new(rebase_join_term(l)), Box::new(rebase_join_term(r))),
+        Unary(op, inner) => Unary(*op, Box::new(rebase_join_term(inner))),
+        Hash(args) => Hash(args.iter().map(rebase_join_term).collect()),
+    }
+}
+
 /// Apply a `LinearOp` chain to one corgi container (the corgi-native row-wise compute per batch).
 /// Project = corgi `eval_graph`; Filter = corgi mask + `gather`; Negate = Rust — all columnar.
 /// The time/list-shaping ops (EnterAt/LiftIter/FlatMap) take a correctness-first row-wise path
@@ -53,46 +92,46 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
 
     for op in ops {
         c = match op {
-            LinearOp::Project(p) if compilable(&p.key) && compilable(&p.val) => {
-                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
-                let g = compile_projection(&p.key, &p.val, &kshape, &vshape);
-                let mut cols = corgi::eval_graph(&g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project");
-                let vals = cols.pop().unwrap();
-                let keys = cols.pop().unwrap();
-                CorgiContainer { keys, vals, times: c.times, diffs: c.diffs }
-            }
-            LinearOp::Filter(cond) if compilable(cond) => {
-                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
-                let g = compile_predicate(cond, &kshape, &vshape);
-                let mask = corgi::eval_graph(&g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask");
-                let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
-                let keys = gather(&c.keys, &keep);
-                let vals = gather(&c.vals, &keep);
-                let times = keep.iter().map(|&i| c.times[i].clone()).collect();
-                let diffs = keep.iter().map(|&i| c.diffs[i]).collect();
-                CorgiContainer { keys, vals, times, diffs }
-            }
-            // Row-wise fallback (`ir::eval`, parity with `backend::vec`) for terms whose LOWERING
-            // isn't written yet: `Case`/`Inject`, `List`, `Unary`, `Hash`. Corgi itself models sums
-            // and lists (`Branch`/`MapSum`/`CapSum`/`Unwrap`, `Enlist`/`MapList`/`Fold`); only
-            // list-intro (and possibly hash/len ops) may need kernels. See `logic::compilable`.
             LinearOp::Project(p) => {
-                let mut out: Vec<Upd> = Vec::new();
-                for ((k, v), t, d) in c.into_updates() {
-                    let mut env = vec![k, v];
-                    let nk = crate::ir::eval(&p.key, &mut env);
-                    let nv = crate::ir::eval(&p.val, &mut env);
-                    out.push(((nk, nv), t, d));
+                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
+                // The shape-aware gate: attempt the lowering with this container's shapes and
+                // fall back to rows only when it declines (`Case` with conflicting arms, list
+                // intro, `hash`...). Corgi models sums and lists; `hash` is the one kernel gap
+                // (splitmix parity needs lane-wise xor and integer rem).
+                if let Some(g) = compile_projection(&p.key, &p.val, &kshape, &vshape) {
+                    let mut cols = corgi::eval_graph(&g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project");
+                    let vals = cols.pop().unwrap();
+                    let keys = cols.pop().unwrap();
+                    CorgiContainer { keys, vals, times: c.times, diffs: c.diffs }
+                } else {
+                    let mut out: Vec<Upd> = Vec::new();
+                    for ((k, v), t, d) in c.into_updates() {
+                        let mut env = vec![k, v];
+                        let nk = crate::ir::eval(&p.key, &mut env);
+                        let nv = crate::ir::eval(&p.val, &mut env);
+                        out.push(((nk, nv), t, d));
+                    }
+                    CorgiContainer::from_updates(out)
                 }
-                CorgiContainer::from_updates(out)
             }
             LinearOp::Filter(cond) => {
-                let mut out: Vec<Upd> = Vec::new();
-                for ((k, v), t, d) in c.into_updates() {
-                    let keep = { let mut env = vec![k.clone(), v.clone()]; crate::ir::eval(cond, &mut env).truthy() };
-                    if keep { out.push(((k, v), t, d)); }
+                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
+                if let Some(g) = compile_predicate(cond, &kshape, &vshape) {
+                    let mask = corgi::eval_graph(&g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask");
+                    let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
+                    let keys = gather(&c.keys, &keep);
+                    let vals = gather(&c.vals, &keep);
+                    let times = keep.iter().map(|&i| c.times[i].clone()).collect();
+                    let diffs = keep.iter().map(|&i| c.diffs[i]).collect();
+                    CorgiContainer { keys, vals, times, diffs }
+                } else {
+                    let mut out: Vec<Upd> = Vec::new();
+                    for ((k, v), t, d) in c.into_updates() {
+                        let keep = { let mut env = vec![k.clone(), v.clone()]; crate::ir::eval(cond, &mut env).truthy() };
+                        if keep { out.push(((k, v), t, d)); }
+                    }
+                    CorgiContainer::from_updates(out)
                 }
-                CorgiContainer::from_updates(out)
             }
             LinearOp::Negate => {
                 for d in c.diffs.iter_mut() {
@@ -185,6 +224,10 @@ impl Backend for CorgiBackend {
     }
 
     fn arrange<'s>(c: Collection<'s, Time, CC>) -> Self::Arr<'s> {
+        // Single-worker guard: this arrange is `Pipeline` (no key exchange), so multi-worker
+        // execution would MIS-PLACE keys — silently wrong, not slow. A columnar exchange
+        // (radix partition by key hash) lifts this; it pairs with the stored-hash-column work.
+        assert_eq!(c.inner.scope().peers(), 1, "the corgi backend is single-worker: arrange does not exchange keys");
         // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
         // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
         // builder. No columns→rows→columns round-trip at the arrangement boundary.
@@ -226,8 +269,23 @@ impl Backend for CorgiBackend {
         // The proxy-join seam drives the backend blockwise under the driver's fuel; the backend
         // compiles the projection per container (shape-directed, for `Spread`) and emits corgi
         // columns directly as `CorgiContainer`s — column-native, no row round-trip.
-        let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone()));
-        join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection()
+        if compilable(&projection.key) && compilable(&projection.val) {
+            let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone()));
+            join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection()
+        } else {
+            // Projections the lowering can't compile take the same shape as `linear`'s gate:
+            // join with the identity projection (compilable by construction), then apply the
+            // original terms as a row-wise `Project`, rebased from the join env
+            // `[$0=key, $1=left val, $2=right val]` onto the row env `[$0=key, $1=(lv, rv)]`.
+            // Capability never depends on the lowering's coverage; only speed does.
+            use crate::parse::Term;
+            let key = Term::Var(0);
+            let val = Term::Tuple(vec![Term::Var(1), Term::Var(2)]);
+            let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(key, val));
+            let joined = join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection();
+            let rebased = Projection { key: rebase_join_term(&projection.key), val: rebase_join_term(&projection.val) };
+            Self::linear(joined, vec![LinearOp::Project(rebased)], 0)
+        }
     }
 
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
@@ -297,6 +355,49 @@ pub fn render_tree<'s>(
     crate::backend::render_tree::<CorgiBackend>(s, scope, depth, imports)
 }
 
+/// Render `s` with the corgi substrate over ROW collections: each import converts to corgi
+/// containers at the boundary (`ToCorgi`), the tree renders columnar, and each export
+/// converts back (`FromCorgi`). Signature-compatible with
+/// [`vec::render_tree`](crate::backend::vec::render_tree) (hence the `vec::Col` alias), so a
+/// row-speaking driver switches backends by switching this one call.
+pub fn render_tree_rows<'s>(
+    s: &st::Scope,
+    scope: Scope<'s, Time>,
+    depth: usize,
+    imports: Vec<crate::backend::vec::Col<'s>>,
+) -> Vec<crate::backend::vec::Col<'s>> {
+    let corgi_imports: Vec<Collection<'s, Time, CC>> = imports
+        .into_iter()
+        .map(|c| {
+            c.inner
+                .unary(Pipeline, "ToCorgi", |_, _| {
+                    |input, output| {
+                        input.for_each(|cap, data| {
+                            let mut cc = CorgiContainer::from_updates(std::mem::take(data));
+                            output.session(&cap).give_container(&mut cc);
+                        });
+                    }
+                })
+                .as_collection()
+        })
+        .collect();
+    render_tree(s, scope, depth, corgi_imports)
+        .into_iter()
+        .map(|c| {
+            c.inner
+                .unary(Pipeline, "FromCorgi", |_, _| {
+                    |input, output| {
+                        input.for_each(|cap, data| {
+                            let mut rows = std::mem::take(data).into_updates();
+                            output.session(&cap).give_container(&mut rows);
+                        });
+                    }
+                })
+                .as_collection()
+        })
+        .collect()
+}
+
 /// Evaluate `program` on explicit inputs via the **corgi** backend (mirrors [`crate::backend::vec::evaluate`]).
 ///
 /// Inputs/exports cross the iterative-scope boundary as Vec rows (which support refinement
@@ -309,11 +410,8 @@ pub fn evaluate(
     use std::collections::BTreeMap;
     use std::sync::mpsc::channel;
     use timely::dataflow::operators::core::capture::{Capture, Event};
-    use timely::dataflow::operators::generic::Operator;
     use differential_dataflow::input::Input;
-    use differential_dataflow::AsCollection;
     use differential_dataflow::dynamic::pointstamp::PointStamp;
-    use crate::corgi::container::CorgiContainer;
 
     let names: Vec<String> = program.root.exports.iter().map(|e| e.name.clone()).collect();
     let mut txs = Vec::new();
@@ -336,49 +434,22 @@ pub fn evaluate(
                 collections.push(c);
             }
             let exports = scope.iterative::<PointStamp<u64>, _, _>(|inner| {
-                // Enter Vec collections (refinement), then convert each to a corgi container.
-                let mut corgi_imports = Vec::new();
-                for c in collections.iter().map(|c| c.clone().enter(inner)) {
-                    let cs = c
-                        .inner
-                        .unary(Pipeline, "ToCorgi", |_, _| {
-                            |input, output| {
-                                input.for_each(|cap, data| {
-                                    let mut cc = CorgiContainer::from_updates(std::mem::take(data));
-                                    output.session(&cap).give_container(&mut cc);
-                                });
-                            }
-                        })
-                        .as_collection();
-                    corgi_imports.push(cs);
-                }
+                // Enter row collections (refinement); rows convert to corgi containers and
+                // back inside `render_tree_rows`.
+                let entered: Vec<_> = collections.iter().map(|c| c.clone().enter(inner)).collect();
                 let root_imports: Vec<_> = program
                     .root
                     .imports
                     .iter()
                     .map(|imp| match &imp.from {
-                        st::Source::Input(n) => corgi_imports[*n].clone(),
+                        st::Source::Input(n) => entered[*n].clone(),
                         other => panic!("corgi evaluate: unsupported source {other:?}"),
                     })
                     .collect();
-                let exports = render_tree(&program.root, inner.clone(), 0, root_imports);
-                // Convert corgi exports back to Vec rows, then leave the scope.
-                let mut leaved = Vec::new();
-                for c in exports {
-                    let rows = c
-                        .inner
-                        .unary(Pipeline, "FromCorgi", |_, _| {
-                            |input, output| {
-                                input.for_each(|cap, data| {
-                                    let mut rows = std::mem::take(data).into_updates();
-                                    output.session(&cap).give_container(&mut rows);
-                                });
-                            }
-                        })
-                        .as_collection();
-                    leaved.push(rows.leave(scope));
-                }
-                leaved
+                render_tree_rows(&program.root, inner.clone(), 0, root_imports)
+                    .into_iter()
+                    .map(|rows| rows.leave(scope))
+                    .collect::<Vec<_>>()
             });
             for (col, tx) in exports.into_iter().zip(txs) {
                 col.inner.capture_into(tx);
