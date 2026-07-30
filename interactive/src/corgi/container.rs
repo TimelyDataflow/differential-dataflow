@@ -18,6 +18,11 @@ use crate::ir::Value as DValue;
 type Row = DValue;
 
 /// A batch of `(key, val, time, diff)` updates: payload columnar (corgi), time/diff native Rust.
+///
+/// Same payload as the chunk contents in [`chunk`](crate::corgi::chunk), and the two should
+/// eventually be ONE type — see the note on the chunk's `Inner`. Times are `Vec<T>` here only
+/// because timely's feedback/enter mutate them row-wise on edges; that difference dies with a
+/// bulk-mutation time container.
 pub struct CorgiContainer<T, R> {
     /// Key column (corgi columnar `Value`).
     pub keys: corgi::Value,
@@ -52,6 +57,13 @@ impl<T: 'static, R: 'static> Accountable for CorgiContainer<T, R> {
 
 impl<T: Clone + 'static, R: Clone + 'static> CorgiContainer<T, R> {
     /// Build a container from DDIR row updates — the **ingest boundary** transcode (once per batch).
+    ///
+    /// Intended to have exactly ONE caller: external rows entering the dataflow. The other
+    /// callers (with [`into_updates`](Self::into_updates)) are `apply_ops`' row-wise fallbacks,
+    /// each scheduled to disappear: `Project`/`Filter` with the `Case`/`Inject`/`List`/`Unary`/
+    /// `Hash` lowerings, `EnterAt` with bulk time mutation, `LiftIter` with a columnar
+    /// column-append, `FlatMap` with corgi's list ops. Row↔column round-trips inside the
+    /// dataflow are debt, not design.
     /// Shapes are inferred by scanning the whole column ([`infer_shape_cols`]) — required so a
     /// `Variant` column discovers all its arms (a single sample shows only one tag).
     pub fn from_updates(updates: Vec<((Row, Row), T, R)>) -> Self {
@@ -68,7 +80,9 @@ impl<T: Clone + 'static, R: Clone + 'static> CorgiContainer<T, R> {
     }
 
     /// Read the container back to DDIR row updates — the **egress boundary** transcode (once).
-    /// corgi `Value` is self-describing, so shapes come from `shape_of_value`.
+    /// corgi `Value` is self-describing, so shapes come from `shape_of_value`. Intended callers
+    /// are inspection/output edges; in-dataflow uses are fallback debt (see
+    /// [`from_updates`](Self::from_updates)).
     pub fn into_updates(self) -> Vec<((Row, Row), T, R)> {
         if self.times.is_empty() {
             return Vec::new();

@@ -44,6 +44,12 @@ use std::cmp::Ordering;
 const TARGET: usize = 1 << 18;
 
 /// Shared, immutable chunk contents. `Clone` of a `CorgiChunk` is an `Rc` bump.
+///
+/// Same payload as [`CorgiContainer`](crate::corgi::container::CorgiContainer), and the two
+/// should eventually be ONE type: today they differ only in time storage (`ColTimes` here —
+/// bulk-read, never mutated — vs `Vec<T>` there, because feedback/enter mutate times row-wise)
+/// and in invariants (sorted+consolidated+shared here, raw+owned there). A time container with
+/// bulk mutation verbs (apply one summary across a range) removes the last real difference.
 struct Inner<T: Columnar, R> {
     /// Key column (corgi), aligned with `vals`/`times`/`diffs`, sorted by `(key, val, time)`.
     keys: CValue,
