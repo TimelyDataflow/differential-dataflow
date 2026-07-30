@@ -2,13 +2,15 @@
 //! transcode DDIR rows (`ir::Value`) to/from corgi columnar `Value`, directed by a `Shape`
 //! inferred from the data (the dynamic-typing primitive).
 //!
-//! The compiler (`compile`) covers Var/Bound/Int/Tuple(+Spread)/Proj/Binary/If/Fold over non-negative
-//! ints; terms it can't lower (List, Case/Inject, Unary, Hash — see `compilable`) fall back to row-wise
-//! `ir::eval` in the backend. The transcode layer is total over `Shape` (Prim/Unit/Prod/List/Sum), so a
+//! The compiler (`compile`) covers Var/Bound/Int/Tuple(+Spread)/Proj/Binary/If/Fold and the
+//! Neg/Not/Len unaries. Ordered compares are signed-correct (`ToSigned`); the residual
+//! non-negative-int assumption is confined to order-SENSITIVE contexts (the `Min` reducer and
+//! structural sort order compare raw `u64` bits). Terms it can't lower (List, Case/Inject,
+//! IsTag, Hash — see `compilable`) fall back to row-wise `ir::eval` in the backend. The transcode layer is total over `Shape` (Prim/Unit/Prod/List/Sum), so a
 //! `Variant` column round-trips via corgi `Sum` (see `infer_shape_cols` for the all-rows arm scan).
 
 use crate::ir::Value as DValue;
-use crate::parse::{BinOp, Term};
+use crate::parse::{BinOp, Term, UnOp};
 
 use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, Kind, NumOp, Op, Pred, Shape, Value as CValue};
 
@@ -260,10 +262,11 @@ fn infer_term_shape(t: &Term, env_shapes: &[Shape]) -> Shape {
 }
 
 /// Whether [`compile`] can lower this term to a corgi graph. Terms whose lowering is not yet
-/// written — `Inject`/`Case` (corgi has `Branch`/`MapSum`/`CapSum`/`Unwrap`), `List` (intro may
-/// need a kernel), `Unary`, `Hash` — return false, and the backend falls back to row-wise
-/// `ir::eval` (parity with `backend::vec`). The gap is compiler debt here, not expressiveness
-/// in corgi.
+/// written — `Inject`/`Case` and `IsTag` (corgi has `Branch`/`MapSum`/`CapSum`/`Unwrap`),
+/// `List` (intro may need a kernel) — return false, and the backend falls back to row-wise
+/// `ir::eval` (parity with `backend::vec`); that gap is compiler debt here, not expressiveness
+/// in corgi. `Hash` is the one true kernel gap: exact splitmix64 parity with `ir::eval` needs
+/// lane-wise xor and integer rem, which corgi's arithmetic does not yet have.
 pub fn compilable(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::Bound(_) | Term::Int(_) => true,
@@ -272,7 +275,8 @@ pub fn compilable(t: &Term) -> bool {
         Term::Binary(_, l, r) => compilable(l) && compilable(r),
         Term::If { cond, then, els } => compilable(cond) && compilable(then) && compilable(els),
         Term::Fold { list, init, step } => compilable(list) && compilable(init) && compilable(step),
-        _ => false, // List, Inject, Case, Unary, Hash — row-wise fallback.
+        Term::Unary(op, inner) => matches!(op, UnOp::Neg | UnOp::Not | UnOp::Len) && compilable(inner),
+        _ => false, // List, Inject, Case, IsTag, Hash — row-wise fallback.
     }
 }
 
@@ -335,10 +339,13 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
                         b.add(CmpOp::Rel(pred), vec![p])
                     }
                 }
-                BinOp::Lt => { let p = pair(b, lid, rid); b.add(CmpOp::Rel(Pred::Lt), vec![p]) }
-                BinOp::Le => { let p = pair(b, lid, rid); b.add(CmpOp::Rel(Pred::Le), vec![p]) }
-                BinOp::Gt => { let p = pair(b, rid, lid); b.add(CmpOp::Rel(Pred::Lt), vec![p]) }
-                BinOp::Ge => { let p = pair(b, rid, lid); b.add(CmpOp::Rel(Pred::Le), vec![p]) }
+                // Ordered compares go through `ToSigned` (XOR the sign bit: the order-preserving
+                // signed encoding), so they agree with `ir::eval`'s signed semantics for negative
+                // ints too. `Eq`/`Ne` are bit-equality — sign-safe as raw bits.
+                BinOp::Lt => { let (ls, rs) = (b.add(ArithOp::ToSigned, vec![lid]), b.add(ArithOp::ToSigned, vec![rid])); let p = pair(b, ls, rs); b.add(CmpOp::Rel(Pred::Lt), vec![p]) }
+                BinOp::Le => { let (ls, rs) = (b.add(ArithOp::ToSigned, vec![lid]), b.add(ArithOp::ToSigned, vec![rid])); let p = pair(b, ls, rs); b.add(CmpOp::Rel(Pred::Le), vec![p]) }
+                BinOp::Gt => { let (ls, rs) = (b.add(ArithOp::ToSigned, vec![lid]), b.add(ArithOp::ToSigned, vec![rid])); let p = pair(b, rs, ls); b.add(CmpOp::Rel(Pred::Lt), vec![p]) }
+                BinOp::Ge => { let (ls, rs) = (b.add(ArithOp::ToSigned, vec![lid]), b.add(ArithOp::ToSigned, vec![rid])); let p = pair(b, rs, ls); b.add(CmpOp::Rel(Pred::Le), vec![p]) }
                 BinOp::And => { let p = pair(b, lid, rid); b.add(CmpOp::Min, vec![p]) }
                 BinOp::Or => { let p = pair(b, lid, rid); b.add(CmpOp::Max, vec![p]) }
             }
@@ -361,6 +368,46 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
             let pair = b.tuple(vec![init_id, list_id]);
             let body = compile_fold_body(step);
             b.add(Op::Fold(Box::new(body)), vec![pair])
+        }
+        Term::Unary(op, inner) => {
+            let id = compile(inner, b, env, env_shapes, anchor);
+            match op {
+                // Wrapping negate on the raw two's-complement bits — exactly `-as_int()`.
+                // (Order-sensitive use of negatives inherits the crate-wide non-negative-int
+                // comparison contract; `Neg` adds no new exposure over `Sub` below zero.)
+                UnOp::Neg => b.add(ArithOp::Neg(Kind::U, 64), vec![id]),
+                // `truthy` is "nonzero Int": scalars compare against zero; non-`Int` values
+                // are never truthy, so their `not` folds to the constant 1 (the cross-shape
+                // `Eq` fold's precedent).
+                UnOp::Not => match infer_term_shape(inner, env_shapes) {
+                    Shape::Prim(_) => {
+                        let zero = b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]);
+                        let p = b.tuple(vec![id, zero]);
+                        b.add(CmpOp::Rel(Pred::Eq), vec![p])
+                    }
+                    _ => b.add(Op::Lit(CValue::u64(vec![1])), vec![anchor]),
+                },
+                // Tuple arity is static (a shape fact); list length folds `acc + 1` along
+                // each row's list.
+                UnOp::Len => match infer_term_shape(inner, env_shapes) {
+                    Shape::Prod(fs) => b.add(Op::Lit(CValue::u64(vec![fs.len() as u64])), vec![anchor]),
+                    Shape::Unit => b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]),
+                    Shape::List(_) => {
+                        let zero = b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]);
+                        let seed = b.tuple(vec![zero, id]);
+                        let body = {
+                            let mut bb = Builder::<NumOp>::default();
+                            let inp = bb.input();
+                            let acc = bb.add(Op::Field(0), vec![inp]);
+                            let out = bb.add(ArithOp::AddU64(1), vec![acc]);
+                            bb.finish(out)
+                        };
+                        b.add(Op::Fold(Box::new(body)), vec![seed])
+                    }
+                    other => panic!("len on non-aggregate shape {other:?}"),
+                },
+                UnOp::IsTag(_) => unreachable!("gated by compilable"),
+            }
         }
         other => panic!("compile: unsupported Term: {other:?}"),
     }

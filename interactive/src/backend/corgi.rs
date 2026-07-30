@@ -112,9 +112,10 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
                 CorgiContainer { keys, vals, times, diffs }
             }
             // Row-wise fallback (`ir::eval`, parity with `backend::vec`) for terms whose LOWERING
-            // isn't written yet: `Case`/`Inject`, `List`, `Unary`, `Hash`. Corgi itself models sums
-            // and lists (`Branch`/`MapSum`/`CapSum`/`Unwrap`, `Enlist`/`MapList`/`Fold`); only
-            // list-intro (and possibly hash/len ops) may need kernels. See `logic::compilable`.
+            // isn't written yet (`Case`/`Inject`/`IsTag`, `List` intro — corgi models sums and
+            // lists: `Branch`/`MapSum`/`CapSum`/`Unwrap`, `Enlist`/`MapList`/`Fold`) plus `Hash`,
+            // the one kernel gap (splitmix parity needs lane-wise xor and integer rem). See
+            // `logic::compilable`.
             LinearOp::Project(p) => {
                 let mut out: Vec<Upd> = Vec::new();
                 for ((k, v), t, d) in c.into_updates() {

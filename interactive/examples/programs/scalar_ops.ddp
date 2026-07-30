@@ -1,0 +1,13 @@
+-- Scalar unaries on the corgi compiled path, checked against the vec backend:
+-- negation, `not` (scalar and — constant-folded — non-scalar), tuple `len`
+-- (static arity), and list `len` (folded along `collect`ed values).
+
+let pairs = input 0 | key($0[0] ; $0[1], $0[2]);
+let mapped = pairs
+    | map($0 ; -$1[0], not($1[0] > 2), len($1))
+    | filter(not($1[0] == 0 - 5));
+
+let lengths = pairs | map($0 ; $1[0]) | collect | map($0 ; len($1));
+
+export "mapped" = mapped | arrange | inspect(total);
+export "lengths" = lengths | arrange | inspect(total);

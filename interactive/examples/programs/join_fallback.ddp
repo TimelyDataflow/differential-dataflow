@@ -1,9 +1,9 @@
--- A join whose projection the corgi lowering cannot compile (unary negation, in a
--- val that reads both sides): exercises the identity-join + row-wise-Project
--- fallback. The gate is agreement with the vec backend.
+-- A join whose projection the corgi lowering cannot compile (`hash`, reading both
+-- sides): exercises the identity-join + row-wise-Project fallback. The gate is
+-- agreement with the vec backend.
 
 let left = input 0 | key($0[0] ; $0[1]);
 let right = input 1 | key($0[0] ; $0[1]);
-let out = left | join(right, ($0 ; -$1[0], $2[0]));
+let out = left | join(right, ($0 ; hash(0, $1[0], $2[0]), $2[0]));
 
 export "result" = out | arrange | inspect(total);
