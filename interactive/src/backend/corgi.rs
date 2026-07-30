@@ -26,9 +26,9 @@ use corgi::Value as CValue;
 use crate::backend::Backend;
 use crate::corgi::chunk::{chunks_to_columns, CorgiChunk, CorgiChunker};
 use crate::corgi::container::CorgiContainer;
-use crate::corgi::join::CorgiJoinTactic;
+use crate::corgi::join::CorgiJoinBackend;
 use crate::corgi::reduce::CorgiReduceBackend;
-use differential_dataflow::operators::int_proxy::ProxyReduceTactic;
+use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
 use crate::corgi::logic::{compilable, compile_predicate, compile_projection};
 use crate::ir::{Diff, LinearOp, Time, Value as DValue};
 use crate::parse::{Projection, Reducer};
@@ -215,10 +215,10 @@ impl Backend for CorgiBackend {
     }
 
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, CC> {
-        // The tactic compiles the projection per work-unit (shape-directed, for `Spread`) and emits
-        // corgi columns directly into a `CorgiContainer` (via `give_container`) — the output stream is
-        // column-native, so there is no row round-trip / no `JoinToCorgi` unary.
-        let tactic = CorgiJoinTactic::new(projection.key.clone(), projection.val.clone());
+        // The proxy-join seam drives the backend blockwise under the driver's fuel; the backend
+        // compiles the projection per container (shape-directed, for `Spread`) and emits corgi
+        // columns directly as `CorgiContainer`s — column-native, no row round-trip.
+        let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone()));
         join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection()
     }
 
