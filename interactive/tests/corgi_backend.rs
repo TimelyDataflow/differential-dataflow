@@ -32,6 +32,11 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         "scalar_ops" => vec![rows(&[&[1, 1, 9], &[1, 4, 8], &[2, 3, 7], &[3, -5, 6], &[3, 2, 5]])],
         "sum_ops" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21]])],
         "case_ops" => vec![rows(&[&[1, 10], &[2, 20], &[3, 14], &[3, 30]])],
+        // pair_keys: composite keys with overlap, fanout, and one-sided keys on both sides.
+        "pair_keys" => vec![
+            rows(&[&[1, 1, 10], &[1, 2, 20], &[2, 1, 30], &[2, 1, 31], &[9, 9, 90]]),
+            rows(&[&[1, 1, 5], &[2, 1, 6], &[3, 3, 7]]),
+        ],
         // tour: edges (with a cycle and a chord) + roots.
         "tour" => vec![
             rows(&[&[1, 2], &[2, 3], &[3, 1], &[3, 4], &[5, 2]]),
@@ -73,3 +78,4 @@ fn assert_backends_agree(prog: &str) {
 #[test] fn sum_ops() { assert_backends_agree("sum_ops"); }
 #[test] fn case_ops() { assert_backends_agree("case_ops"); }
 #[test] fn tour() { assert_backends_agree("tour"); }
+#[test] fn pair_keys() { assert_backends_agree("pair_keys"); }

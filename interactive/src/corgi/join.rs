@@ -87,10 +87,10 @@ impl<T: ColTime> ProxyJoinBackend<CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> 
             *from = None;
             return;
         }
-        if single_lane_keyed(&chunks0) && single_lane_keyed(&chunks1) {
-            advance_leaf(&chunks0, &chunks1, &instance.lower, from, bridge0, bridge1);
-        } else {
-            advance_structured(&chunks0, &chunks1, &instance.lower, from, bridge0, bridge1);
+        match (leaf_key_lanes(&chunks0), leaf_key_lanes(&chunks1)) {
+            (Some(1), Some(1)) => advance_leaf(&chunks0, &chunks1, &instance.lower, from, bridge0, bridge1),
+            (Some(_), Some(_)) => advance_lanes(&chunks0, &chunks1, &instance.lower, from, bridge0, bridge1),
+            _ => advance_structured(&chunks0, &chunks1, &instance.lower, from, bridge0, bridge1),
         }
     }
 
@@ -163,10 +163,21 @@ fn leaf_lanes(col: &CValue) -> Option<Vec<&CValue>> {
     if walk(col, &mut out) { Some(out) } else { None }
 }
 
-/// Whether every nonempty chunk's key column is a single `u64` leaf lane, making the key's
-/// own value the group token (chunk order IS `u64` order for a one-lane lexicographic key).
-fn single_lane_keyed<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
-    chunks.iter().filter(|c| c.len() > 0).all(|c| leaf_lanes(c.keys()).is_some_and(|l| l.len() == 1))
+/// The key columns' common leaf-lane count: `Some(n)` when every nonempty chunk's key
+/// flattens to exactly `n` 64-bit lanes. `Some(1)` keys use their own value as the group
+/// token (chunk order IS `u64` order); `Some(n>1)` keys walk the lane-tuple path (ordinal
+/// tokens, one block); `None` keys (sums/lists in the key) take the structural walk.
+fn leaf_key_lanes<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> Option<usize> {
+    let mut lanes: Option<usize> = None;
+    for c in chunks.iter().filter(|c| c.len() > 0) {
+        let n = leaf_lanes(c.keys())?.len();
+        match lanes {
+            None => lanes = Some(n),
+            Some(m) if m == n => {}
+            _ => return None,
+        }
+    }
+    lanes
 }
 
 /// Whether every nonempty chunk's val column flattens to `u64` leaf lanes.
@@ -667,10 +678,210 @@ fn leaf_merge<'a, T: ColTime>(
     }
 }
 
-/// Fallback `advance` for structured keys, which have no order-preserving `u64` embedding to
-/// resume by: the whole intersection in one block, group tokens an ordinal counter (block-
-/// scoped; both sides named by this single walk). Output is still cut at `TARGET_OUT` by
-/// `cross`; only the bounded-bridge property is forgone.
+/// A fully-pulled view over one chunk for the LANE-TUPLE key path: every key lane (and,
+/// when leaf-shaped, val lane) as `u64` buffers, so the key walk is lexicographic machine
+/// compares — no per-row structural dispatch. `side` routes emission; tuples have no
+/// order-preserving `u64` embedding, so this path runs as ONE block with ordinal tokens
+/// (resumable blocking for tuples would need a digest scheme; the walk, not the blocking,
+/// is what scales).
+struct LaneView<'a, T: ColTime> {
+    chunk: &'a CorgiChunk<T, Diff>,
+    cid: usize,
+    side: usize,
+    keys: Vec<Vec<u64>>,
+    vals: Option<Vec<Vec<u64>>>,
+    cur: usize,
+}
+
+impl<'a, T: ColTime> LaneView<'a, T> {
+    fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, side: usize, leaf_vals: bool) -> Self {
+        let idx: Vec<usize> = (0..chunk.len()).collect();
+        let keys = pull_lanes(chunk.keys(), &idx);
+        let vals = leaf_vals.then(|| pull_lanes(chunk.vals(), &idx));
+        LaneView { chunk, cid, side, keys, vals, cur: 0 }
+    }
+    fn exhausted(&self) -> bool {
+        self.cur >= self.chunk.len()
+    }
+    fn run_ref(&self, s: usize, e: usize) -> RunRef<'_, T> {
+        RunRef { chunk: self.chunk, cid: self.cid, s, e, vals: self.vals.as_ref().map(|lanes| (&lanes[..], 0)) }
+    }
+}
+
+/// Lexicographic compare of `views[a]`'s row `ai` against `views[b]`'s row `bi`.
+fn lane_key_cmp<T: ColTime>(views: &[LaneView<'_, T>], a: usize, ai: usize, b: usize, bi: usize) -> Ordering {
+    for (la, lb) in views[a].keys.iter().zip(views[b].keys.iter()) {
+        match la[ai].cmp(&lb[bi]) {
+            Ordering::Equal => {}
+            other => return other,
+        }
+    }
+    Ordering::Equal
+}
+
+/// One past the end of the run of rows equal to row `s` in `views[v]`.
+fn lane_run_end<T: ColTime>(views: &[LaneView<'_, T>], v: usize, s: usize) -> usize {
+    let len = views[v].chunk.len();
+    let mut e = s + 1;
+    while e < len && lane_key_cmp(views, v, e, v, s) == Ordering::Equal {
+        e += 1;
+    }
+    e
+}
+
+/// `advance` for lane-tuple keys: the whole intersection in one call (ordinal group tokens,
+/// ascending with key order), with the same two regimes as the single-lane path — a much
+/// smaller side DRIVES and the other is probed at the driver's keys (`find_ranges` with
+/// gathered tuple needles, so per-round cost tracks the delta); comparable sides merge
+/// symmetrically on the pulled lane buffers.
+fn advance_lanes<T: ColTime>(
+    chunks0: &[&CorgiChunk<T, Diff>],
+    chunks1: &[&CorgiChunk<T, Diff>],
+    lower: &T,
+    from: &mut Option<u64>,
+    bridge0: &mut ProxyBridge<T, Diff>,
+    bridge1: &mut ProxyBridge<T, Diff>,
+) {
+    *from = None; // one block: tuples have no resumable `u64` embedding
+    let (r0, r1): (usize, usize) = (chunks0.iter().map(|c| c.len()).sum(), chunks1.iter().map(|c| c.len()).sum());
+    if r0 == 0 || r1 == 0 {
+        return;
+    }
+    fn views_of<'a, T: ColTime>(chunks: &[&'a CorgiChunk<T, Diff>], side: usize) -> Vec<LaneView<'a, T>> {
+        let leaf_vals = leaf_valued(chunks);
+        chunks.iter().enumerate().filter(|(_, c)| c.len() > 0).map(|(cid, c)| LaneView::new(c, cid, side, leaf_vals)).collect()
+    }
+
+    if r0.max(r1) >= 2 * r0.min(r1) {
+        // Lopsided: walk only the DRIVER's keys; probe the other side wholesale.
+        let drive0 = r0 <= r1;
+        let (dchunks, pchunks) = if drive0 { (chunks0, chunks1) } else { (chunks1, chunks0) };
+        let mut dviews = views_of(dchunks, 0);
+        // Collect the driver's distinct keys (as gather coordinates for the needle column)
+        // and each key's runs.
+        let mut needle_tags: Vec<usize> = Vec::new();
+        let mut needle_offs: Vec<usize> = Vec::new();
+        let mut druns: Vec<(usize, usize, usize, usize)> = Vec::new(); // (key idx, view, s, e)
+        loop {
+            let mut min: Option<usize> = None;
+            for v in 0..dviews.len() {
+                if dviews[v].exhausted() {
+                    continue;
+                }
+                min = Some(match min {
+                    None => v,
+                    Some(m) if lane_key_cmp(&dviews, v, dviews[v].cur, m, dviews[m].cur) == Ordering::Less => v,
+                    Some(m) => m,
+                });
+            }
+            let Some(m) = min else { break };
+            let j = needle_tags.len();
+            needle_tags.push(m);
+            needle_offs.push(dviews[m].cur);
+            let ends: Vec<(usize, usize, usize)> = (0..dviews.len())
+                .filter(|&v| !dviews[v].exhausted() && lane_key_cmp(&dviews, v, dviews[v].cur, m, dviews[m].cur) == Ordering::Equal)
+                .map(|v| (v, dviews[v].cur, lane_run_end(&dviews, v, dviews[v].cur)))
+                .collect();
+            for (v, ss, e) in ends {
+                druns.push((j, v, ss, e));
+                dviews[v].cur = e;
+            }
+        }
+        if needle_tags.is_empty() {
+            return;
+        }
+        // One tuple-shaped needle column, one batched probe per probee chunk.
+        let key_srcs: Vec<Option<&CValue>> = dviews.iter().map(|v| Some(v.chunk.keys())).collect();
+        let needles = gather_lanes(&key_srcs, &needle_tags, &needle_offs);
+        let pvleaf = leaf_valued(pchunks);
+        let probes: Vec<Probe<T>> = pchunks.iter().enumerate()
+            .filter(|(_, c)| c.len() > 0)
+            .map(|(cid, c)| Probe::new(c, cid, &needles, pvleaf))
+            .collect();
+        let (mut sd, mut sp) = (SideScratch::new(), SideScratch::new());
+        let (bd, bp) = if drive0 { (bridge0, bridge1) } else { (bridge1, bridge0) };
+        let mut drun_at = 0usize;
+        let mut refs: Vec<RunRef<T>> = Vec::new();
+        let mut token = 0u64;
+        for j in 0..needle_tags.len() {
+            refs.clear();
+            while drun_at < druns.len() && druns[drun_at].0 == j {
+                let (_, v, ss, e) = druns[drun_at];
+                refs.push(dviews[v].run_ref(ss, e));
+                drun_at += 1;
+            }
+            let dref_count = refs.len();
+            refs.extend(probes.iter().filter_map(|p| p.run_ref(j)));
+            if refs.len() == dref_count {
+                continue;
+            }
+            let (drefs, prefs) = refs.split_at(dref_count);
+            sd.stage_runs(drefs, lower);
+            sp.stage_runs(prefs, lower);
+            if sd.entries.is_empty() || sp.entries.is_empty() {
+                continue;
+            }
+            sd.emit(token, bd);
+            sp.emit(token, bp);
+            token += 1;
+        }
+    } else {
+        // Comparable sides: one tagged view set, symmetric lexicographic merge.
+        let mut views = views_of(chunks0, 0);
+        views.extend(views_of(chunks1, 1));
+        let (mut s0, mut s1) = (SideScratch::new(), SideScratch::new());
+        let mut token = 0u64;
+        loop {
+            let mut min: Option<usize> = None;
+            for v in 0..views.len() {
+                if views[v].exhausted() {
+                    continue;
+                }
+                min = Some(match min {
+                    None => v,
+                    Some(m) if lane_key_cmp(&views, v, views[v].cur, m, views[m].cur) == Ordering::Less => v,
+                    Some(m) => m,
+                });
+            }
+            let Some(m) = min else { break };
+            let ends: Vec<(usize, usize, usize)> = (0..views.len())
+                .filter(|&v| !views[v].exhausted() && lane_key_cmp(&views, v, views[v].cur, m, views[m].cur) == Ordering::Equal)
+                .map(|v| (v, views[v].cur, lane_run_end(&views, v, views[v].cur)))
+                .collect();
+            let both_sides = {
+                // Reads only: the run refs borrow `views` and end with this block.
+                let mut refs0: Vec<RunRef<T>> = Vec::new();
+                let mut refs1: Vec<RunRef<T>> = Vec::new();
+                for &(v, ss, e) in &ends {
+                    let r = views[v].run_ref(ss, e);
+                    if views[v].side == 0 { refs0.push(r) } else { refs1.push(r) }
+                }
+                let both = !refs0.is_empty() && !refs1.is_empty();
+                if both {
+                    s0.stage_runs(&refs0, lower);
+                    s1.stage_runs(&refs1, lower);
+                }
+                both
+            };
+            for (v, _, e) in ends {
+                views[v].cur = e;
+            }
+            if !both_sides {
+                continue;
+            }
+            if s0.entries.is_empty() || s1.entries.is_empty() {
+                continue;
+            }
+            s0.emit(token, bridge0);
+            s1.emit(token, bridge1);
+            token += 1;
+        }
+    }
+}
+
+/// Last-resort `advance` for keys that do not flatten to integer lanes at all (sums or
+/// lists in the key): the whole intersection in one block, ordinal tokens, and a structural
+/// (`compare_at`) walk. Rare by construction — tuple keys take [`advance_lanes`].
 fn advance_structured<T: ColTime>(
     chunks0: &[&CorgiChunk<T, Diff>],
     chunks1: &[&CorgiChunk<T, Diff>],
