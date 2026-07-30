@@ -50,18 +50,6 @@ impl<T: 'static, R: 'static> Accountable for CorgiContainer<T, R> {
     }
 }
 
-/// Draining a `CorgiContainer` yields its DDIR row updates (untranscode) — lets the standard
-/// `ContainerChunker<Vec<((key,val),T,R)>>` chunk a corgi-container stream into row chains for the
-/// reused `MergeBatcher`, which the `CorgiBatchBuilder` then transcodes back to corgi columns at
-/// arrangement build (the one ingest-boundary round-trip; reduce/join read corgi columns).
-impl<T: Clone + 'static, R: Clone + 'static> timely::container::DrainContainer for CorgiContainer<T, R> {
-    type Item<'a> = ((Row, Row), T, R) where Self: 'a;
-    type DrainIter<'a> = std::vec::IntoIter<((Row, Row), T, R)> where Self: 'a;
-    fn drain(&mut self) -> Self::DrainIter<'_> {
-        std::mem::take(self).into_updates().into_iter()
-    }
-}
-
 impl<T: Clone + 'static, R: Clone + 'static> CorgiContainer<T, R> {
     /// Build a container from DDIR row updates — the **ingest boundary** transcode (once per batch).
     /// Shapes are inferred by scanning the whole column ([`infer_shape_cols`]) — required so a

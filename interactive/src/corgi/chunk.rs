@@ -26,10 +26,10 @@ use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::trace::chunk::{merge_chains, pack, Chunk, ChunkBatch};
+use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 use differential_dataflow::trace::Description;
 
-use corgi::arrange::{compare_at, compare_idx, find_ranges, gather, gather_lanes, group_bounds, sort_perm};
+use corgi::arrange::{compare_at, compare_idx, gather, gather_lanes, group_bounds, sort_perm};
 use corgi::Value as CValue;
 
 use columnar::Columnar;
@@ -551,81 +551,6 @@ where
         self.flush();
         self.extract()
     }
-}
-
-/// A single sorted+consolidated run over corgi columns — the join tactic's per-side input, produced
-/// by merging a batch list [`flatten_batches`]. Separate `keys`/`vals` columns so the merge-join can
-/// compare by key (`compare_at`) and `gather` matched runs.
-pub struct SortedRun<T, R> {
-    pub keys: CValue,
-    pub vals: CValue,
-    pub times: Vec<T>,
-    pub diffs: Vec<R>,
-}
-
-/// Flatten a list of batches into one sorted+consolidated run over columns (no row round-trip, no
-/// re-sort). Each batch's `.chunks` is already a sorted, consolidated chain; we **merge** those chains
-/// (reusing their order via `merge_chains` → `CorgiChunk::merge`) into one, then concatenate. `None`
-/// if empty. This replaces an earlier concat+full-sort that dominated recursive (reach) cost.
-pub fn flatten_batches<T, R>(batches: &[Rc<ChunkBatch<CorgiChunk<T, R>>>]) -> Option<SortedRun<T, R>>
-where
-    T: ColTime,
-    R: Semigroup + Clone + 'static,
-{
-    let mut merged: VecDeque<CorgiChunk<T, R>> = VecDeque::new();
-    for b in batches {
-        if b.chunks.is_empty() { continue; }
-        if merged.is_empty() {
-            merged.extend(b.chunks.iter().cloned());
-        } else {
-            let chain: Vec<CorgiChunk<T, R>> = merged.drain(..).collect();
-            merge_chains(chain, b.chunks.clone(), &mut merged);
-        }
-    }
-    if merged.is_empty() { return None; }
-    // The merged chain is globally sorted+consolidated: concatenate (no sort) into one flat run.
-    let chunks: Vec<CorgiChunk<T, R>> = merged.into();
-    let (kv, times, diffs) = CorgiChunk::concat(&chunks);
-    let (keys, vals) = split_kv(kv);
-    Some(SortedRun { keys, vals, times: times.to_vec(), diffs })
-}
-
-/// A DELTA-PROPORTIONAL flatten of the accumulated side of a bilinear join: instead of merging the
-/// whole trace, probe each accumulated chunk with the fresh side's `needle` keys (`find_ranges`, a
-/// batched equal-range seek — each chunk is structurally sorted by key) and gather ONLY the matched
-/// records, then sort+consolidate the (small) matched set into one run. Keys absent from `needles`
-/// can never join, so dropping them is exact. Cost tracks the fresh key set + matches, never the
-/// trace — replacing the O(trace)-per-work-unit `flatten_batches` that dominated recursive joins.
-pub fn flatten_restricted<T, R>(acc: &[Rc<ChunkBatch<CorgiChunk<T, R>>>], needles: &CValue) -> Option<SortedRun<T, R>>
-where
-    T: ColTime,
-    R: Semigroup + Clone + 'static,
-{
-    let (mut kblocks, mut vblocks): (Vec<CValue>, Vec<CValue>) = (Vec::new(), Vec::new());
-    let (mut times, mut diffs): (Vec<T>, Vec<R>) = (Vec::new(), Vec::new());
-    for b in acc {
-        for ch in &b.chunks {
-            if ch.len_() == 0 { continue; }
-            // Per needle key, its equal-range in this chunk's (key-sorted) key column.
-            let (lo, hi) = find_ranges(needles, ch.keys());
-            let mut idx: Vec<usize> = Vec::new();
-            for i in 0..lo.len() { idx.extend(lo[i]..hi[i]); }
-            idx.sort_unstable();
-            idx.dedup();
-            if idx.is_empty() { continue; }
-            kblocks.push(gather(ch.keys(), &idx));
-            vblocks.push(gather(ch.vals(), &idx));
-            for &j in &idx {
-                times.push(ch.times().get(j));
-                diffs.push(ch.diffs()[j].clone());
-            }
-        }
-    }
-    if times.is_empty() { return None; }
-    let keys = concat_blocks(&kblocks);
-    let vals = concat_blocks(&vblocks);
-    let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
-    Some(SortedRun { keys, vals, times, diffs })
 }
 
 #[cfg(test)]

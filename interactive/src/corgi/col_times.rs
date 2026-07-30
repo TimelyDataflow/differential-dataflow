@@ -108,7 +108,7 @@ impl<T: Columnar> ColTimes<T> {
         }
     }
 
-    /// Materialize the whole column to `Vec<T>` — the egress boundary (`SortedRun` for the join,
+    /// Materialize the whole column to `Vec<T>` — the egress boundary (owned times for
     /// `CorgiContainer` for `as_collection`), where owned `T` is wanted anyway.
     pub fn to_vec(&self) -> Vec<T> {
         let b = self.store.borrow();
