@@ -14,22 +14,10 @@ use crate::parse::{BinOp, Term, UnOp};
 
 use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, Kind, NumOp, Op, Pred, Shape, Value as CValue};
 
-/// Dynamic typing: form a corgi `Shape` by observing a sample row.
-pub fn infer_shape(sample: &DValue) -> Shape {
-    match sample {
-        DValue::Int(_) => Shape::Prim(64),
-        DValue::Tuple(xs) if xs.is_empty() => Shape::Unit, // DDIR unit ↔ corgi length-carrying Unit
-        DValue::Tuple(xs) => Shape::Prod(xs.iter().map(infer_shape).collect()),
-        DValue::List(xs) => Shape::List(Box::new(infer_shape(xs.first().expect("nonempty list")))),
-        DValue::Variant(..) => panic!("variant shape inference is unimplemented"),
-    }
-}
-
 /// Dynamic typing over a whole COLUMN: infer a `Shape` by scanning every row, not just a sample.
 /// Required for sum types — a `Variant` column's shape is the union of all arms that appear, which a
-/// single sample can't reveal (it shows only one tag). Non-sum shapes match [`infer_shape`] but recurse
-/// column-wise so nested variants are covered too. (`from_updates` uses this; `infer_shape` stays for
-/// the single-sample callers that never carry variants.)
+/// single sample can't reveal (it shows only one tag), so the scan is over every row, recursing
+/// column-wise to cover nested variants too.
 pub fn infer_shape_cols(rows: &[DValue]) -> Shape {
     let Some(first) = rows.first() else { return Shape::Unit };
     match first {
