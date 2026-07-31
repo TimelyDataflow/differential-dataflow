@@ -169,14 +169,13 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
 /// Applied CONSISTENTLY at every id site (both value presentations AND the freshly-produced
 /// `reduce_brackets` outputs), else `desired − current` nets across mismatched ids for the same value.
 fn ids(col: &CValue) -> Vec<u64> {
-    match corgi::shape_of_value(col) {
-        Shape::Prim(64) => col.clone().into_u64("ids"),
-        Shape::Prod(ref fs) if fs.len() == 1 && matches!(fs[0], Shape::Prim(64)) => match col {
-            CValue::Prod(fields) => fields[0].clone().into_u64("ids"),
-            _ => unreachable!("shape Prod but value not Prod"),
-        },
-        _ => corgi::hash(col).into_u64("ids"),
+    // Value-as-id: borrow the leaf and copy once, rather than `clone().into_u64()` — the
+    // clone bumps the `Arc`, so `into_u64`'s try-unwrap always fails and copies anyway,
+    // even for a freshly-gathered column with one holder.
+    if let Some(sl) = corgi::arrange::leaf_slice(col) {
+        return sl.to_vec();
     }
+    corgi::hash(col).into_u64("ids")
 }
 
 /// The `changed` set as a needle column in the chunks' own key shape — possible exactly
@@ -248,7 +247,16 @@ where
         }
     } else {
         for (ci, ch) in chunks.iter().enumerate() {
-            let kh = ids(ch.keys());
+            // Borrow the key leaf when there is one (`ids`' value-as-id fast paths); only
+            // structural keys need the hash, and only they pay a materialization. A shared
+            // column's `Arc` cannot be unwrapped, so `ids` would copy the whole key column
+            // here, once per chunk per retire, to read values it never mutates.
+            let hashed: Option<Vec<u64>> = corgi::arrange::leaf_slice(ch.keys()).is_none().then(|| ids(ch.keys()));
+            let kh: &[u64] = match (&hashed, corgi::arrange::leaf_slice(ch.keys())) {
+                (Some(v), _) => &v[..],
+                (None, Some(sl)) => sl,
+                (None, None) => unreachable!("leaf_slice absent implies hashed present"),
+            };
             for i in 0..kh.len() {
                 if changed.binary_search(&kh[i]).is_ok() {
                     tags.push(ci);
