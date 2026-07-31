@@ -14,6 +14,9 @@
 //! - `--diag`: serve timely/DD diagnostics on port 51371.
 //! - `--backend=vec|corgi`: rendering substrate (default `vec`). The corgi
 //!   backend is single-worker (its arrange does not exchange).
+//! - `--sync=K`: await completion only every K rounds (default 1), letting K
+//!   timestamps retire with whatever inter-timestamp concurrency the system
+//!   finds — the open(er)-loop regime DD adapts into under load.
 
 use mimalloc::MiMalloc;
 
@@ -37,6 +40,7 @@ struct Flags {
     debug_demand: bool,
     diag: bool,
     corgi: bool,
+    sync: u64,
 }
 
 fn run(
@@ -184,7 +188,10 @@ fn run(
                 cursor += 1;
             }
             for i in inputs.iter_mut() { i.advance_to(time); i.flush(); }
-            while probe.less_than(&time) { worker.step(); }
+            let sync = flags.sync.max(1);
+            if (round + 1) % sync == 0 || round + 1 == limit {
+                while probe.less_than(&time) { worker.step(); }
+            }
 
             round += 1;
             if round % 100 == 0 {
@@ -209,6 +216,7 @@ fn main() {
             else if let Some(q) = a.strip_prefix("--query=") { flags.query = Some(q.to_string()); }
             else if a == "--debug-demand" { flags.debug_demand = true; }
             else if a == "--diag" { flags.diag = true; }
+            else if let Some(k) = a.strip_prefix("--sync=") { flags.sync = k.parse().expect("--sync=K"); }
             else if let Some(b) = a.strip_prefix("--backend=") {
                 flags.corgi = match b { "corgi" => true, "vec" => false, other => panic!("unknown backend {other:?} (vec|corgi)") };
             }
