@@ -454,8 +454,13 @@ where
     }
 
     fn next_window(&mut self, instance: &ReduceInstance<'_, CBatch<T>, CBatch<T>>, changed: &[u64], cursor: &mut usize) -> Option<ReduceWindow<T, Diff, Diff>> {
-        // Single window: present ALL remaining changed keys at once (bounded-memory windowing is a
-        // later refinement). `changed` is ascending, so `binary_search` is the changed-key filter.
+        // Single window: present ALL remaining changed keys at once. This is NOT a deferred
+        // refinement — bounded windows were measured and rejected: at WINDOW = 1<<14, scc
+        // (100 rounds x batch 100) cost 84.4s against 63.7s, a 33% regression, while peak RSS
+        // fell only 356MB -> 340MB. Two reasons: the per-window, per-chunk seek setup is a
+        // fixed cost that multiplies by the window count, and the presentation is not the
+        // memory peak in the first place (the trace is). `changed` is ascending, so
+        // `binary_search` is the changed-key filter.
         if *cursor >= changed.len() {
             return None;
         }
