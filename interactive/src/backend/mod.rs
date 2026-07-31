@@ -12,9 +12,6 @@
 
 pub mod vec;
 pub mod corgi;
-// The columnar substrate is deferred on the Value-model port (it needs a
-// `Columnar`/columnar-storage story for `Value`); see `backend::vec`.
-// pub mod col;
 
 use timely::Container;
 use timely::order::Product;
