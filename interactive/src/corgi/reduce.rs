@@ -37,7 +37,7 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{gather, gather_lanes, sort_blocks};
+use corgi::arrange::{find_ranges, gather, gather_lanes, sort_blocks};
 use corgi::{Bounds, Shape, Value as CValue};
 
 use crate::corgi::col_times::ColTime;
@@ -168,6 +168,19 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
 /// relied upon — so the raw two's-complement `u64` is correct even for negative ints (no swizzle).
 /// Applied CONSISTENTLY at every id site (both value presentations AND the freshly-produced
 /// `reduce_brackets` outputs), else `desired − current` nets across mismatched ids for the same value.
+/// The `changed` set as a needle column in the chunks' own key shape — possible exactly
+/// when `ids` uses key VALUES (a bare `u64` leaf, or a 1-tuple of one); the hashed ids of
+/// structural keys cannot be inverted into needles.
+fn seek_needles(sample: &CValue, changed: &[u64]) -> Option<CValue> {
+    match corgi::shape_of_value(sample) {
+        Shape::Prim(64) => Some(CValue::u64(changed.to_vec())),
+        Shape::Prod(ref fs) if fs.len() == 1 && matches!(fs[0], Shape::Prim(64)) => {
+            Some(CValue::Prod(vec![CValue::u64(changed.to_vec())]))
+        }
+        _ => None,
+    }
+}
+
 fn ids(col: &CValue) -> Vec<u64> {
     match corgi::shape_of_value(col) {
         Shape::Prim(64) => col.clone().into_u64("ids"),
@@ -183,33 +196,67 @@ fn ids(col: &CValue) -> Vec<u64> {
 /// `(keys_col, vals_col)` corgi columns plus per-record `(key_hash, time, diff)`. `changed` is the
 /// ASCENDING set of changed key hashes; a row is kept iff its key hash is in it.
 ///
-/// NB this is a full scan of the presented chunks (incl. `source_batches`, the accumulated trace),
-/// and deliberately NOT a `find_ranges` seek of the changed keys: under label-propagation-shaped
-/// workloads the changed set is broad (most keys change each retire), so a scan touches ~every row
-/// regardless and the per-chunk gallop only adds overhead. The O(history) re-presentation is
-/// inherent to broad change sets, not a seekable-few-keys case.
+/// Seek-vs-scan, decided per retire, now that the sizes are known: seeking the changed keys
+/// (`find_ranges`, O(|changed|·log rows) per chunk, no key hashing at all) wins when the
+/// changed set is narrow — the steady incremental case; the full scan (O(rows) per chunk,
+/// plus each chunk's key hashes re-derived) wins for broad churn — loads and label-cascade
+/// retires, where most keys change and a gallop per key only adds overhead. Seeking requires
+/// ids that ARE key values (single-leaf keys, `ids`' fast paths): hashed ids of structural
+/// keys cannot be inverted into needles, so those always scan.
 ///
-/// TODO: the scan's per-row work can still batch: `ids` re-derives (and copies) each chunk's key
-/// hashes every retire (memoize per chunk, or a stored hash column), the membership test is a
-/// per-row `binary_search`, and each hit materializes an owned time (`times().get`); kept RANGES
-/// could move via `push_range`.
+/// TODO: the scan's per-row work can still batch: `ids` re-derives (and copies) each chunk's
+/// key hashes every retire (memoize per chunk, or a stored hash column), and each hit
+/// materializes an owned time (`times().get`); kept RANGES could move via `push_range`.
 fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>)
 where
     T: ColTime,
 {
+    /// Seek only when the changed set is at least this many times narrower than the
+    /// presented rows: a `find_ranges` probe is a structurally-dispatched binary search
+    /// (~log(rows) compares, each far costlier than the scan's flat membership test), so
+    /// marginal seeks LOSE to the scan — measured, not modeled; 16 regressed load-shaped
+    /// retires before this was widened.
+    const SEEK_ADVANTAGE: usize = 64;
+
     let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
     let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
     let (mut tags, mut offs) = (Vec::new(), Vec::new());
     let (mut khs, mut times, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
-    for (ci, ch) in chunks.iter().enumerate() {
-        let kh = ids(ch.keys());
-        for i in 0..kh.len() {
-            if changed.binary_search(&kh[i]).is_ok() {
-                tags.push(ci);
-                offs.push(i);
-                khs.push(kh[i]);
-                times.push(ch.times().get(i));
-                diffs.push(ch.diffs()[i]);
+    let total: usize = chunks.iter().map(|c| c.diffs().len()).sum();
+    let needles = if changed.len().saturating_mul(SEEK_ADVANTAGE) < total {
+        chunks.iter().find(|c| c.diffs().len() > 0).and_then(|c| seek_needles(c.keys(), changed))
+    } else {
+        None
+    };
+    if let Some(needles) = needles {
+        // Narrow changed set over seekable keys: gallop each chunk once per changed key.
+        // Chunks are key-ordered and `changed` ascends, so emission order matches the scan's.
+        for (ci, ch) in chunks.iter().enumerate() {
+            if ch.diffs().is_empty() {
+                continue;
+            }
+            let (lo, hi) = find_ranges(&needles, ch.keys());
+            for (j, (&l, &h)) in lo.iter().zip(hi.iter()).enumerate() {
+                for i in l..h {
+                    tags.push(ci);
+                    offs.push(i);
+                    khs.push(changed[j]);
+                    times.push(ch.times().get(i));
+                    diffs.push(ch.diffs()[i]);
+                }
+            }
+        }
+    } else {
+        for (ci, ch) in chunks.iter().enumerate() {
+            let kh = ids(ch.keys());
+            for i in 0..kh.len() {
+                if changed.binary_search(&kh[i]).is_ok() {
+                    tags.push(ci);
+                    offs.push(i);
+                    khs.push(kh[i]);
+                    times.push(ch.times().get(i));
+                    diffs.push(ch.diffs()[i]);
+                }
             }
         }
     }
