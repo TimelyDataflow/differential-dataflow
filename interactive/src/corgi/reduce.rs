@@ -168,6 +168,17 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
 /// relied upon — so the raw two's-complement `u64` is correct even for negative ints (no swizzle).
 /// Applied CONSISTENTLY at every id site (both value presentations AND the freshly-produced
 /// `reduce_brackets` outputs), else `desired − current` nets across mismatched ids for the same value.
+fn ids(col: &CValue) -> Vec<u64> {
+    match corgi::shape_of_value(col) {
+        Shape::Prim(64) => col.clone().into_u64("ids"),
+        Shape::Prod(ref fs) if fs.len() == 1 && matches!(fs[0], Shape::Prim(64)) => match col {
+            CValue::Prod(fields) => fields[0].clone().into_u64("ids"),
+            _ => unreachable!("shape Prod but value not Prod"),
+        },
+        _ => corgi::hash(col).into_u64("ids"),
+    }
+}
+
 /// The `changed` set as a needle column in the chunks' own key shape — possible exactly
 /// when `ids` uses key VALUES (a bare `u64` leaf, or a 1-tuple of one); the hashed ids of
 /// structural keys cannot be inverted into needles.
@@ -178,17 +189,6 @@ fn seek_needles(sample: &CValue, changed: &[u64]) -> Option<CValue> {
             Some(CValue::Prod(vec![CValue::u64(changed.to_vec())]))
         }
         _ => None,
-    }
-}
-
-fn ids(col: &CValue) -> Vec<u64> {
-    match corgi::shape_of_value(col) {
-        Shape::Prim(64) => col.clone().into_u64("ids"),
-        Shape::Prod(ref fs) if fs.len() == 1 && matches!(fs[0], Shape::Prim(64)) => match col {
-            CValue::Prod(fields) => fields[0].clone().into_u64("ids"),
-            _ => unreachable!("shape Prod but value not Prod"),
-        },
-        _ => corgi::hash(col).into_u64("ids"),
     }
 }
 
