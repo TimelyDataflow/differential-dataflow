@@ -271,7 +271,7 @@ impl Backend for CorgiBackend {
         // columns directly as `CorgiContainer`s — column-native, no row round-trip.
         if compilable(&projection.key) && compilable(&projection.val) {
             let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone()));
-            join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection()
+            join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic).as_collection()
         } else {
             // Projections the lowering can't compile take the same shape as `linear`'s gate:
             // join with the identity projection (compilable by construction), then apply the
@@ -282,7 +282,7 @@ impl Backend for CorgiBackend {
             let key = Term::Var(0);
             let val = Term::Tuple(vec![Term::Var(1), Term::Var(2)]);
             let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(key, val));
-            let joined = join_with_tactic::<_, _, _, CC>(l, r, tactic).as_collection();
+            let joined = join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic).as_collection();
             let rebased = Projection { key: rebase_join_term(&projection.key), val: rebase_join_term(&projection.val) };
             Self::linear(joined, vec![LinearOp::Project(rebased)], 0)
         }

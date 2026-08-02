@@ -251,6 +251,7 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         join_traces::<_, _, _, _, crate::consolidation::ConsolidatingContainerBuilder<_>>(
             self,
             other,
+            "Join",
             move |k, v1, v2, t, d1, d2, c| {
                 for datum in result(k, v1, v2, t, d1, d2) {
                     c.push_into(datum);

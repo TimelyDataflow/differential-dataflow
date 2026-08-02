@@ -60,7 +60,7 @@ pub enum Fresh {
 /// The "correctness" of this method depends heavily on the behavior of the supplied `result` function.
 ///
 /// [`AsCollection`]: crate::collection::AsCollection
-pub fn join_traces<'scope, Tr1, Tr2, KC, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, result: L) -> Stream<'scope, Tr1::Time, CB::Container>
+pub fn join_traces<'scope, Tr1, Tr2, KC, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, name: &str, result: L) -> Stream<'scope, Tr1::Time, CB::Container>
 where
     Tr1: TraceReader<Batch: Navigable>+'static,
     Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time>+'static,
@@ -71,7 +71,7 @@ where
     L: FnMut(KC::ReadItem<'_>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut CB)+'static,
     CB: ContainerBuilder<Container: Default> + 'static,
 {
-    join_with_tactic(arranged1, arranged2, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, _, CB>::new(result))
+    join_with_tactic(arranged1, arranged2, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, _, CB>::new(result))
 }
 
 /// Drives an equijoin of two traces using a supplied [`JoinTactic`].
@@ -80,7 +80,7 @@ where
 /// compaction) and routes the per-batch work through the tactic. It requires only `TraceReader` of its
 /// inputs, never `Navigable`: it extracts trace batches via `batches_through`, and building cursors over
 /// them (if that is how the join proceeds) is the tactic's concern.
-pub fn join_with_tactic<'scope, Tr1, Tr2, T, C>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, mut tactic: T) -> Stream<'scope, Tr1::Time, C>
+pub fn join_with_tactic<'scope, Tr1, Tr2, T, C>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, name: &str, mut tactic: T) -> Stream<'scope, Tr1::Time, C>
 where
     Tr1: TraceReader+'static,
     Tr2: TraceReader<Time = Tr1::Time>+'static,
@@ -92,7 +92,7 @@ where
     let mut trace2 = arranged2.trace;
 
     let scope = arranged1.stream.scope();
-    arranged1.stream.binary_frontier(arranged2.stream, Pipeline, Pipeline, "Join", move |capability, info| {
+    arranged1.stream.binary_frontier(arranged2.stream, Pipeline, Pipeline, name, move |capability, info| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         use timely::scheduling::Activator;
