@@ -146,6 +146,7 @@ mod reachability {
                 join_traces::<_, _, _, _, ValColBuilder<(Node, (), IterTime, Diff)>>(
                     edges_arr,
                     reach_arr,
+                    "Join",
                     |_src, dst, (), time, d1, d2, session| {
                         use differential_dataflow::difference::Multiply;
                         let dst: Node = *dst;
