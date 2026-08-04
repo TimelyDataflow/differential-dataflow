@@ -1,143 +1,121 @@
-use std::collections::HashMap;
+//! Accumulate a request's admitted arrangement updates into one diff, and emit once.
+//!
+//! This is the second layer over [`crate::operators::lookup`]: the shape is entirely that
+//! operator's, and what lives here is a single choice of behavior — sum the `(time, diff)`
+//! updates the cut admits into one accumulated diff, hand it to the caller, and emit the
+//! caller's output at the request's own time.
+//!
+//! Its one caller is `count`, whose output is a routing *decision* rather than a record: it
+//! names the atom offering fewest extensions and contributes nothing to any output tuple's
+//! time. `propose` and `validate` do contribute records, so they take the other behavior,
+//! [`lookup_join`](crate::operators::lookup_join), which visits admitted updates individually.
+//!
+//! # Emitting at the request's time
+//!
+//! Emitting the output at `initial` rather than at a lifted time is licensed, not free: it is
+//! correct exactly when every admitted update's time is dominated by `initial`, so that their
+//! join *is* `initial`. Under [`Cut`] that holds when the timestamp is totally ordered, which
+//! is the setting these operators are for. On a partially ordered timestamp a cut admits
+//! updates incomparable to `initial`, their join is strictly greater, and the behavior a
+//! caller wants there is `half_join`'s — carry a time in the payload and lift the output onto
+//! it.
 
-use timely::dataflow::channels::pact::{Pipeline, Exchange};
-use timely::dataflow::operators::Operator;
-use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::progress::Antichain;
 
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
-use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
+use differential_dataflow::difference::{Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchDiffGat, BatchVal, Cursor, Navigable, TraceReader};
 use differential_dataflow::trace::implementations::BatchContainer;
 
-/// Proposes extensions to a stream of prefixes.
+use crate::operators::lookup::{Cut, lookup};
+
+/// Looks up each request's key and reports the accumulated matching diff per value.
 ///
-/// This method takes a stream of prefixes and for each determines a
-/// key with `key_selector` and then proposes all pair af the prefix
-/// and values associated with the key in `arrangement`.
-pub fn lookup_map<'scope, D, K, R, Tr, F, DOut, ROut, S>(
+/// For each request and each value under its key, the arrangement updates the `cut` admits are
+/// summed into a single diff and handed to `output_func`, whose record is emitted at the
+/// request's own time.
+///
+/// The request is skipped only when the cut admits *nothing* — never on the admitted diffs
+/// summing to zero. That distinction is load-bearing: admitted updates can carry different
+/// join times, so a sum across them is not the count at any one of them, and skipping on it
+/// removes the request from the collection outright. In a worst-case-optimal join that means
+/// no atom proposes the prefix and the extension is lost, where a merely inaccurate count
+/// would only have chosen a worse proposer.
+///
+/// # The `frontier_func` obligation
+///
+/// As in [`lookup`], this bounds how far the arrangement may compact logically. The rule is
+/// sharper than it looks, and the two cuts differ:
+///
+/// * [`Cut::AtOrBefore`] on a totally ordered timestamp can use the identity — inserting the
+///   time unchanged. Compaction advances an admitted `t` to `max(t, F)`, and since a held
+///   `initial` is at or after the frontier, `t <= initial` and `F <= initial` give
+///   `max(t, F) <= initial`. The match survives. (This is why the previous implementation
+///   never needed such a hook.)
+/// * [`Cut::Before`] cannot. If `F` sits exactly at a held `initial`, an admitted `t < initial`
+///   advances to `initial`, and `initial < initial` is false — the match is silently dropped.
+///   The bound must be a strict predecessor, which the lattice does not supply, so the caller
+///   writes it (`t.saturating_sub(1)`, `Product::new(outer-1, inner-1)`).
+pub fn lookup_map<'scope, D, K, R, Tr, F, FF, DOut, ROut, S>(
     prefixes: VecCollection<'scope, Tr::Time, D, R>,
-    mut arrangement: Arranged<'scope, Tr>,
+    arrangement: Arranged<'scope, Tr>,
+    cut: Cut,
+    frontier_func: FF,
     key_selector: F,
     mut output_func: S,
-    supplied_key0: K,
-    supplied_key1: K,
-    supplied_key2: K,
 ) -> VecCollection<'scope, Tr::Time, DOut, ROut>
 where
-    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash + ExchangeData>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Time = Tr::Time,
         Diff : Semigroup<BatchDiffGat<'a, Tr>>+Monoid+ExchangeData,
     >,
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
-    K: Hashable + Ord + 'static,
+    K: Hashable + Ord + Default + 'static,
     F: FnMut(&D, &mut K)+Clone+'static,
+    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
     D: ExchangeData,
     R: ExchangeData+Monoid,
     DOut: Clone+'static,
     ROut: Monoid + 'static,
     S: FnMut(&D, &R, BatchVal<'_, Tr>, &BatchDiff<Tr>)->(DOut, ROut)+'static,
 {
-    // No need to block physical merging for this operator.
-    arrangement.trace.set_physical_compaction(Antichain::new().borrow());
-    let mut propose_trace = Some(arrangement.trace);
-    let propose_stream = arrangement.stream;
-
-    let mut stash = HashMap::new();
-    let mut logic1 = key_selector.clone();
-    let mut logic2 = key_selector.clone();
-
-    let mut key: K = supplied_key0;
-    let exchange = Exchange::new(move |update: &(D,Tr::Time,R)| {
-        logic1(&update.0, &mut key);
-        key.hashed().into()
-    });
-
-    let mut key1: K = supplied_key1;
-    let mut key2: K = supplied_key2;
-
-    prefixes.inner.binary_frontier(propose_stream, exchange, Pipeline, "LookupMap", move |_,_| move |(input1, frontier1), (input2, frontier2), output| {
-
-        // drain the first input, stashing requests.
-        input1.for_each(|capability, data| {
-            stash.entry(capability.retain(0))
-                 .or_insert(Vec::new())
-                 .extend(data.drain(..))
-        });
-
-        // Drain input batches; although we do not observe them, we want access to the input
-        // to observe the frontier and to drive scheduling.
-        input2.for_each(|_, _| { });
-
-        if let Some(ref mut trace) = propose_trace {
-
-            for (capability, prefixes) in stash.iter_mut() {
-
-                // defer requests at incomplete times.
-                // NOTE: not all updates may be at complete times, but if this test fails then none of them are.
-                if !frontier2.less_equal(capability.time()) {
-
-                    let mut session = output.session(capability);
-
-                    // sort requests for in-order cursor traversal. could consolidate?
-                    prefixes.sort_by(|x,y| {
-                        logic2(&x.0, &mut key1);
-                        logic2(&y.0, &mut key2);
-                        key1.cmp(&key2)
-                    });
-
-                    let (mut cursor, storage) = trace.cursor();
-                    // Key container to stage keys for comparison.
-                    let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
-                    for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {
-                        if !frontier2.less_equal(time) {
-                            logic2(prefix, &mut key1);
-                            key_con.clear(); key_con.push_own(&key1);
-                            cursor.seek_key(&storage, key_con.index(0));
-                            if cursor.get_key(&storage) == Some(key_con.index(0)) {
-                                while let Some(value) = cursor.get_val(&storage) {
-                                    let mut count = BatchDiff::<Tr>::zero();
-                                    cursor.map_times(&storage, |t, d| {
-                                        if <BatchCursor<Tr> as Cursor>::owned_time(t).less_equal(time) { count.plus_equals(&d); }
-                                    });
-                                    if !count.is_zero() {
-                                        let (dout, rout) = output_func(prefix, diff, value, &count);
-                                        if !rout.is_zero() {
-                                            session.give((dout, time.clone(), rout));
-                                        }
-                                    }
-                                    cursor.step_val(&storage);
-                                }
-                                cursor.rewind_vals(&storage);
-                            }
-                            *diff = R::zero();
-                        }
-                    }
-
-                    prefixes.retain(|ptd| !ptd.2.is_zero());
+    lookup(
+        prefixes,
+        arrangement,
+        cut,
+        frontier_func,
+        key_selector,
+        |_timer, _count| false,
+        move |
+            builder: &mut CapacityContainerBuilder<Vec<(DOut, Tr::Time, ROut)>>,
+            request: &D,
+            initial: &Tr::Time,
+            diff: &R,
+            value: BatchVal<'_, Tr>,
+            admitted: &mut Vec<(Tr::Time, BatchDiff<Tr>)>,
+        | {
+            // Prune on *nothing admitted*, not on the diffs summing to zero. The admitted
+            // updates can carry different join times, and a sum across them is not the count
+            // at any one of them: `+1` at one time and `-1` at a later one sum to zero while
+            // the extension genuinely exists in between. Dropping the request on that sum
+            // deletes it from the collection entirely, so no atom proposes it and the answer
+            // is lost — where an inaccurate *non-zero* count would only have chosen a worse
+            // proposer. An empty admitted list does mean no extension at any time, so that
+            // prune is sound and keeps the cheap early-out.
+            let admitted_any = !admitted.is_empty();
+            let mut count = <BatchDiff<Tr> as Monoid>::zero();
+            for (_time, d) in admitted.drain(..) { count.plus_equals(&d); }
+            if admitted_any {
+                let (dout, rout) = output_func(request, diff, value, &count);
+                if !rout.is_zero() {
+                    use timely::container::PushInto;
+                    builder.push_into((dout, initial.clone(), rout));
                 }
             }
-
-        }
-
-        // drop fully processed capabilities.
-        stash.retain(|_,prefixes| !prefixes.is_empty());
-
-        // The logical merging frontier depends on both input1 and stash.
-        let mut frontier = timely::progress::frontier::Antichain::new();
-        for time in frontier1.frontier().to_vec() {
-            frontier.insert(time);
-        }
-        for key in stash.keys() {
-            frontier.insert(key.time().clone());
-        }
-        propose_trace.as_mut().map(|trace| trace.set_logical_compaction(frontier.borrow()));
-
-        if frontier1.is_empty() && stash.is_empty() {
-            propose_trace = None;
-        }
-
-    }).as_collection()
+        },
+    )
+    .as_collection()
 }

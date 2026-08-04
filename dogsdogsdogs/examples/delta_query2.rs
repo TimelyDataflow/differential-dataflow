@@ -31,7 +31,7 @@ fn main() {
                 let changes1 = edges1.inner.map(|((k,v),t,r)| ((k,v,t.clone()),t,r)).as_collection();
                 let changes2 = edges2.inner.map(|((k,v),t,r)| ((k,v,t.clone()),t,r)).as_collection();
 
-                use differential_dogs3::operators::half_join;
+                use differential_dogs3::operators::{half_join, Cut};
 
                 // pick a frontier that will not mislead TOTAL ORDER comparisons.
                 let closure = |time: &Product<usize, usize>, antichain: &mut timely::progress::Antichain<Product<usize, usize>>| {
@@ -43,7 +43,7 @@ fn main() {
                     changes1,
                     forward2,
                     closure,
-                    |t1,t2| t1.lt(t2),  // This one ignores concurrent updates.
+                    Cut::Before,        // This one ignores concurrent updates.
                     |key, val1, val2| (key.clone(), (val1.clone(), val2.clone())),
                 );
 
@@ -52,7 +52,7 @@ fn main() {
                     changes2,
                     forward1,
                     closure,
-                    |t1,t2| t1.le(t2),  // This one can "see" concurrent updates.
+                    Cut::AtOrBefore,    // This one can "see" concurrent updates.
                     |key, val1, val2| (key.clone(), (val2.clone(), val1.clone())),
                 );
 

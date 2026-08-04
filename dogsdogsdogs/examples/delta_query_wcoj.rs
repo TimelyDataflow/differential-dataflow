@@ -2,6 +2,7 @@ use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
+use differential_dogs3::operators::{identity_frontier, Cut};
 use differential_dogs3::{CollectionIndex, altneu::AltNeu};
 use differential_dogs3::{ProposeExtensionMethod};
 
@@ -56,8 +57,8 @@ fn main() {
                 forward
                     .clone()
                     .extend(&mut [
-                        &mut neu_forward.extend_using(|(_a,b)| *b),
-                        &mut neu_forward.extend_using(|(a,_b)| *a),
+                        &mut neu_forward.extend_using(|(_a,b)| *b, Cut::AtOrBefore, identity_frontier),
+                        &mut neu_forward.extend_using(|(a,_b)| *a, Cut::AtOrBefore, identity_frontier),
                     ])
                     .map(|((a,b),c)| (a,b,c));
 
@@ -66,16 +67,16 @@ fn main() {
                 forward
                     .clone()
                     .extend(&mut [
-                        &mut alt_reverse.extend_using(|(b,_c)| *b),
-                        &mut neu_reverse.extend_using(|(_b,c)| *c),
+                        &mut alt_reverse.extend_using(|(b,_c)| *b, Cut::AtOrBefore, identity_frontier),
+                        &mut neu_reverse.extend_using(|(_b,c)| *c, Cut::AtOrBefore, identity_frontier),
                     ])
                     .map(|((b,c),a)| (a,b,c));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
                 let changes3 = forward
                     .extend(&mut [
-                        &mut alt_forward.extend_using(|(a,_c)| *a),
-                        &mut alt_reverse.extend_using(|(_a,c)| *c),
+                        &mut alt_forward.extend_using(|(a,_c)| *a, Cut::AtOrBefore, identity_frontier),
+                        &mut alt_reverse.extend_using(|(_a,c)| *c, Cut::AtOrBefore, identity_frontier),
                     ])
                     .map(|((a,c),b)| (a,b,c));
 

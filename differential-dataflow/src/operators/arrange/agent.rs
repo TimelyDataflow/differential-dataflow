@@ -173,6 +173,24 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     /// responsibility this should be (the trace/batch should only reveal these times, or an operator should know
     /// to advance times before using them).
     ///
+    /// # Import a trace from elsewhere, not one this dataflow just built
+    ///
+    /// This method exists to replay a trace captured *some other way* — typically by a dataflow that has already
+    /// been built, as in the example below. Re-importing an arrangement produced by the same dataflow is an
+    /// antipattern, and inside a recursive scope it does not merely cost extra, it fails to terminate.
+    ///
+    /// An imported stream conveys progress by in-line progress statements rather than by participating in the
+    /// scope's progress tracking. Ordinary progress tracking can observe that a whole iterative subgraph is done
+    /// and let it exit; in-line statements have no whole-scope perspective, so capabilities advance only by
+    /// repeated frontier advancement — counting the timestamp upward round after round, and concluding only when
+    /// the timestamp would overflow. The symptom is a loop that emits a little output and then spins at full CPU
+    /// indefinitely, which reads like a hang but is really a count toward `u64::MAX`. There is also a risk that
+    /// times simply fail to advance.
+    ///
+    /// If the arrangement was built in this dataflow, keep the [`Arranged`] and share it: it is `Clone`, so any
+    /// number of operators can read it over ordinary dataflow edges, which is both correct and cheaper than a
+    /// replay operator per consumer. To carry an arrangement into a nested scope, use `enter`, not `import`.
+    ///
     /// # Examples
     ///
     /// ```

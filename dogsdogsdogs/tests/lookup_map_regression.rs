@@ -12,6 +12,7 @@ use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::input::Input;
 
 use differential_dogs3::{CollectionIndex, altneu::AltNeu, ProposeExtensionMethod};
+use differential_dogs3::operators::{identity_frontier, Cut};
 
 #[test]
 fn lookup_map_triangle_wcoj_finds_triangle() {
@@ -42,24 +43,24 @@ fn lookup_map_triangle_wcoj_finds_triangle() {
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
                 let changes1 = forward.clone()
                     .extend(&mut [
-                        &mut neu_forward.extend_using(|(_a, b)| *b),
-                        &mut neu_forward.extend_using(|(a, _b)| *a),
+                        &mut neu_forward.extend_using(|(_a, b)| *b, Cut::AtOrBefore, identity_frontier),
+                        &mut neu_forward.extend_using(|(a, _b)| *a, Cut::AtOrBefore, identity_frontier),
                     ])
                     .map(|((a, b), c)| (a, b, c));
 
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
                 let changes2 = forward.clone()
                     .extend(&mut [
-                        &mut alt_reverse.extend_using(|(b, _c)| *b),
-                        &mut neu_reverse.extend_using(|(_b, c)| *c),
+                        &mut alt_reverse.extend_using(|(b, _c)| *b, Cut::AtOrBefore, identity_frontier),
+                        &mut neu_reverse.extend_using(|(_b, c)| *c, Cut::AtOrBefore, identity_frontier),
                     ])
                     .map(|((b, c), a)| (a, b, c));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
                 let changes3 = forward
                     .extend(&mut [
-                        &mut alt_forward.extend_using(|(a, _c)| *a),
-                        &mut alt_reverse.extend_using(|(_a, c)| *c),
+                        &mut alt_forward.extend_using(|(a, _c)| *a, Cut::AtOrBefore, identity_frontier),
+                        &mut alt_reverse.extend_using(|(_a, c)| *c, Cut::AtOrBefore, identity_frontier),
                     ])
                     .map(|((a, c), b)| (a, b, c));
 

@@ -1,4 +1,6 @@
 use timely::dataflow::operators::probe::Handle;
+use timely::dataflow::operators::vec::Map;
+use differential_dataflow::AsCollection;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
@@ -72,22 +74,38 @@ fn main() {
 
                 use differential_dogs3::operators::propose;
                 use differential_dogs3::operators::validate;
+                // The alt/neu distinction rides on the arrangement times here, so every atom
+                // reads at the same cut; `AltNeu<usize>` is totally ordered, so the identity
+                // compaction bound is sound (see `operators::lookup::identity_frontier`).
+                use differential_dogs3::operators::{identity_frontier, Cut};
+
+                // Entering the delta region: each update carries its own time as the initial
+                // join time, while its dataflow timestamp stays the order time the cuts compare
+                // against. `leave_region` below turns the accumulated join time back into the
+                // update's own time. (`extend` brackets this for you; these calls are raw.)
+                let seeded = changes.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
 
                 // Prior technology
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 = propose(changes.clone(), forward_key_neu.clone(), key2.clone());
-                let changes1 = validate(changes1, forward_self_neu.clone(), key1.clone());
-                let changes1 = changes1.map(|((a,b),c)| (a,b,c));
+                let changes1 = propose(seeded.clone(), forward_key_neu.clone(), Cut::AtOrBefore, identity_frontier, key2.clone());
+                let changes1 = validate(changes1, forward_self_neu.clone(), Cut::AtOrBefore, identity_frontier, key1.clone());
+                let changes1 = changes1
+                    .inner.map(|((data, carried), _order, r)| (data, carried, r)).as_collection()
+                    .map(|((a,b),c)| (a,b,c));
 
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 = propose(changes.clone(), reverse_key_alt.clone(), key1.clone());
-                let changes2 = validate(changes2, reverse_self_neu.clone(), key2.clone());
-                let changes2 = changes2.map(|((b,c),a)| (a,b,c));
+                let changes2 = propose(seeded.clone(), reverse_key_alt.clone(), Cut::AtOrBefore, identity_frontier, key1.clone());
+                let changes2 = validate(changes2, reverse_self_neu.clone(), Cut::AtOrBefore, identity_frontier, key2.clone());
+                let changes2 = changes2
+                    .inner.map(|((data, carried), _order, r)| (data, carried, r)).as_collection()
+                    .map(|((b,c),a)| (a,b,c));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = propose(changes, forward_key_alt.clone(), key1.clone());
-                let changes3 = validate(changes3, reverse_self_alt.clone(), key2.clone());
-                let changes3 = changes3.map(|((a,c),b)| (a,b,c));
+                let changes3 = propose(seeded, forward_key_alt.clone(), Cut::AtOrBefore, identity_frontier, key1.clone());
+                let changes3 = validate(changes3, reverse_self_alt.clone(), Cut::AtOrBefore, identity_frontier, key2.clone());
+                let changes3 = changes3
+                    .inner.map(|((data, carried), _order, r)| (data, carried, r)).as_collection()
+                    .map(|((a,c),b)| (a,b,c));
 
                 let prev_changes = changes1.concat(changes2).concat(changes3).leave(scope);
 
