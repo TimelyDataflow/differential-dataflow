@@ -9,10 +9,17 @@
 use std::sync::{Arc, Mutex};
 
 use timely::dataflow::operators::probe::Handle;
+use timely::progress::Antichain;
 use differential_dataflow::input::Input;
 
-use differential_dogs3::{CollectionIndex, altneu::AltNeu, ProposeExtensionMethod};
-use differential_dogs3::operators::{identity_frontier, Cut};
+use differential_dogs3::{CollectionIndex, ProposeExtensionMethod};
+use differential_dogs3::operators::Cut;
+
+/// `Cut::Before` is strict, and logical compaction destroys strictness, so the bound must sit
+/// strictly below every time still held.
+fn step_back(time: &usize, antichain: &mut Antichain<usize>) {
+    antichain.insert(time.saturating_sub(1));
+}
 
 #[test]
 fn lookup_map_triangle_wcoj_finds_triangle() {
@@ -26,46 +33,40 @@ fn lookup_map_triangle_wcoj_finds_triangle() {
         let mut input = worker.dataflow::<usize, _, _>(|scope| {
             let (input, edges) = scope.new_collection::<(u32, u32), isize>();
 
-            let forward = edges.clone();
-            let reverse = edges.map(|(x, y)| (y, x));
-
             // Q(a,b,c) := E1(a,b), E2(b,c), E3(a,c), via the dogsdogsdogs WCOJ `extend`
             // path, which routes through propose/count/validate -> lookup_map.
-            let triangles = scope.scoped::<AltNeu<usize>, _, _>("Triangles", |inner| {
-                let forward = forward.enter(inner);
-                let reverse = reverse.enter(inner);
+            //
+            // Atom positions are E1 = 0, E2 = 1, E3 = 2, and every cut is derived from the
+            // pair of positions rather than encoded in the timestamp. Two indices suffice —
+            // one per orientation — where the alt/neu encoding needed four.
+            let forward = CollectionIndex::index(edges.clone());
+            let reverse = CollectionIndex::index(edges.clone().map(|(x, y)| (y, x)));
 
-                let alt_forward = CollectionIndex::index(forward.clone());
-                let alt_reverse = CollectionIndex::index(reverse.clone());
-                let neu_forward = CollectionIndex::index(forward.clone().delay(|t| AltNeu::neu(t.time.clone())));
-                let neu_reverse = CollectionIndex::index(reverse.clone().delay(|t| AltNeu::neu(t.time.clone())));
+            //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c);  bind (a,b), extend by c
+            let changes1 = edges.clone()
+                .extend(&mut [
+                    &mut forward.extend_using(|(_a, b): &(u32, u32)| *b, Cut::for_positions(0, 1), step_back),
+                    &mut forward.extend_using(|(a, _b): &(u32, u32)| *a, Cut::for_positions(0, 2), step_back),
+                ])
+                .map(|((a, b), c)| (a, b, c));
 
-                //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 = forward.clone()
-                    .extend(&mut [
-                        &mut neu_forward.extend_using(|(_a, b)| *b, Cut::AtOrBefore, identity_frontier),
-                        &mut neu_forward.extend_using(|(a, _b)| *a, Cut::AtOrBefore, identity_frontier),
-                    ])
-                    .map(|((a, b), c)| (a, b, c));
+            //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c);  bind (b,c), extend by a
+            let changes2 = edges.clone()
+                .extend(&mut [
+                    &mut reverse.extend_using(|(b, _c): &(u32, u32)| *b, Cut::for_positions(1, 0), step_back),
+                    &mut reverse.extend_using(|(_b, c): &(u32, u32)| *c, Cut::for_positions(1, 2), step_back),
+                ])
+                .map(|((b, c), a)| (a, b, c));
 
-                //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 = forward.clone()
-                    .extend(&mut [
-                        &mut alt_reverse.extend_using(|(b, _c)| *b, Cut::AtOrBefore, identity_frontier),
-                        &mut neu_reverse.extend_using(|(_b, c)| *c, Cut::AtOrBefore, identity_frontier),
-                    ])
-                    .map(|((b, c), a)| (a, b, c));
+            //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c);  bind (a,c), extend by b
+            let changes3 = edges
+                .extend(&mut [
+                    &mut forward.extend_using(|(a, _c): &(u32, u32)| *a, Cut::for_positions(2, 0), step_back),
+                    &mut reverse.extend_using(|(_a, c): &(u32, u32)| *c, Cut::for_positions(2, 1), step_back),
+                ])
+                .map(|((a, c), b)| (a, b, c));
 
-                //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = forward
-                    .extend(&mut [
-                        &mut alt_forward.extend_using(|(a, _c)| *a, Cut::AtOrBefore, identity_frontier),
-                        &mut alt_reverse.extend_using(|(_a, c)| *c, Cut::AtOrBefore, identity_frontier),
-                    ])
-                    .map(|((a, c), b)| (a, b, c));
-
-                changes1.concat(changes2).concat(changes3).leave(scope)
-            });
+            let triangles = changes1.concat(changes2).concat(changes3);
 
             triangles
                 .inspect_batch(move |_t, xs| {

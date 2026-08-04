@@ -10,8 +10,6 @@ use differential_dataflow::difference::{Monoid, Multiply};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::TraceAgent;
 
-pub mod altneu;
-pub mod calculus;
 pub mod operators;
 
 /// A type capable of extending a stream of prefixes.

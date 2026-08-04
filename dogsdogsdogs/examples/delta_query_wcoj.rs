@@ -2,9 +2,17 @@ use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
-use differential_dogs3::operators::{identity_frontier, Cut};
-use differential_dogs3::{CollectionIndex, altneu::AltNeu};
-use differential_dogs3::{ProposeExtensionMethod};
+use timely::progress::Antichain;
+
+use differential_dogs3::operators::Cut;
+use differential_dogs3::CollectionIndex;
+use differential_dogs3::ProposeExtensionMethod;
+
+/// `Cut::Before` is strict, and logical compaction destroys strictness, so the bound must sit
+/// strictly below every time still held.
+fn step_back(time: &usize, antichain: &mut Antichain<usize>) {
+    antichain.insert(time.saturating_sub(1));
+}
 
 fn main() {
 
@@ -27,61 +35,44 @@ fn main() {
 
             let (edges_input, edges) = scope.new_collection();
 
-            let forward = edges.clone();
-            let reverse = edges.map(|(x,y)| (y,x));
-
             // Q(a,b,c) :=  E1(a,b),  E2(b,c),  E3(a,c)
-            let triangles = scope.scoped::<AltNeu<usize>,_,_>("DeltaQuery (Triangles)", |inner| {
+            //
+            // One delta query per relation, driven by changes to that relation. Relations are
+            // sequenced so each introduces a variable sharing a bound attribute with the
+            // running prefix, and directed { forward, reverse } by whether the bound variable
+            // occurs first or second.
+            //
+            // Which side of a tie each atom reads at is derived from the atoms' positions
+            // (E1 = 0, E2 = 1, E3 = 2), so two indices suffice. Encoding the same distinction
+            // in the timestamp needed an "old" and a "new" copy of each, and four indices.
+            let forward = CollectionIndex::index(edges.clone());
+            let reverse = CollectionIndex::index(edges.clone().map(|(x, y)| (y, x)));
 
-                // Each relation we'll need.
-                let forward = forward.enter(inner);
-                let reverse = reverse.enter(inner);
+            //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c);  bind (a,b), extend by c
+            let changes1 = edges.clone()
+                .extend(&mut [
+                    &mut forward.extend_using(|(_a, b): &(u32, u32)| *b, Cut::for_positions(0, 1), step_back),
+                    &mut forward.extend_using(|(a, _b): &(u32, u32)| *a, Cut::for_positions(0, 2), step_back),
+                ])
+                .map(|((a, b), c)| (a, b, c));
 
-                // Without using wrappers yet, maintain an "old" and a "new" copy of edges.
-                let alt_forward = CollectionIndex::index(forward.clone());
-                let alt_reverse = CollectionIndex::index(reverse.clone());
-                let neu_forward = CollectionIndex::index(forward.clone().delay(|time| AltNeu::neu(time.time.clone())));
-                let neu_reverse = CollectionIndex::index(reverse.clone().delay(|time| AltNeu::neu(time.time.clone())));
+            //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c);  bind (b,c), extend by a
+            let changes2 = edges.clone()
+                .extend(&mut [
+                    &mut reverse.extend_using(|(b, _c): &(u32, u32)| *b, Cut::for_positions(1, 0), step_back),
+                    &mut reverse.extend_using(|(_b, c): &(u32, u32)| *c, Cut::for_positions(1, 2), step_back),
+                ])
+                .map(|((b, c), a)| (a, b, c));
 
-                // For each relation, we form a delta query driven by changes to that relation.
-                //
-                // The sequence of joined relations are such that we only introduce relations
-                // which share some bound attributes with the current stream of deltas.
-                // Each joined relation is delayed { alt -> neu } if its position in the
-                // sequence is greater than the delta stream.
-                // Each joined relation is directed { forward, reverse } by whether the
-                // bound variable occurs in the first or second position.
+            //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c);  bind (a,c), extend by b
+            let changes3 = edges
+                .extend(&mut [
+                    &mut forward.extend_using(|(a, _c): &(u32, u32)| *a, Cut::for_positions(2, 0), step_back),
+                    &mut reverse.extend_using(|(_a, c): &(u32, u32)| *c, Cut::for_positions(2, 1), step_back),
+                ])
+                .map(|((a, c), b)| (a, b, c));
 
-                //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 =
-                forward
-                    .clone()
-                    .extend(&mut [
-                        &mut neu_forward.extend_using(|(_a,b)| *b, Cut::AtOrBefore, identity_frontier),
-                        &mut neu_forward.extend_using(|(a,_b)| *a, Cut::AtOrBefore, identity_frontier),
-                    ])
-                    .map(|((a,b),c)| (a,b,c));
-
-                //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 =
-                forward
-                    .clone()
-                    .extend(&mut [
-                        &mut alt_reverse.extend_using(|(b,_c)| *b, Cut::AtOrBefore, identity_frontier),
-                        &mut neu_reverse.extend_using(|(_b,c)| *c, Cut::AtOrBefore, identity_frontier),
-                    ])
-                    .map(|((b,c),a)| (a,b,c));
-
-                //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = forward
-                    .extend(&mut [
-                        &mut alt_forward.extend_using(|(a,_c)| *a, Cut::AtOrBefore, identity_frontier),
-                        &mut alt_reverse.extend_using(|(_a,c)| *c, Cut::AtOrBefore, identity_frontier),
-                    ])
-                    .map(|((a,c),b)| (a,b,c));
-
-                changes1.concat(changes2).concat(changes3).leave(scope)
-            });
+            let triangles = changes1.concat(changes2).concat(changes3);
 
             triangles
                 .filter(move |_| inspect)

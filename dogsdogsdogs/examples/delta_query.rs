@@ -4,8 +4,15 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
-use differential_dogs3::altneu::AltNeu;
-use differential_dogs3::calculus::{Differentiate, Integrate};
+use timely::progress::Antichain;
+
+use differential_dogs3::operators::{propose, validate, Cut};
+
+/// `Cut::Before` is strict, and logical compaction destroys strictness, so the bound must sit
+/// strictly below every time still held. Sound for the lax cuts here too, just conservative.
+fn step_back(time: &usize, antichain: &mut Antichain<usize>) {
+    antichain.insert(time.saturating_sub(1));
+}
 
 fn main() {
 
@@ -44,102 +51,43 @@ fn main() {
             // let reverse_count = edges.map(|(x,y)| y).arrange_by_self();
 
             // Q(a,b,c) :=  E1(a,b),  E2(b,c),  E3(a,c)
-            let (triangles_prev, triangles_next) = scope.scoped::<AltNeu<usize>,_,_>("DeltaQuery (Triangles)", |inner| {
+            //
+            // One delta query per relation, driven by changes to that relation. Each rule
+            // proposes from one atom and validates against the other; which side of a tie
+            // each is read at follows from the atoms' positions (E1 = 0, E2 = 1, E3 = 2).
+            //
+            // These are the raw `propose` / `validate` operators rather than `extend`, so the
+            // delta region is bracketed by hand: each update carries its own time as the
+            // initial join time while its dataflow timestamp stays the order time the cuts
+            // compare against, and the carried time becomes the update's own time on the way
+            // out. `extend` does both for you.
+            let key1 = |x: &(u32, u32)| x.0;
+            let key2 = |x: &(u32, u32)| x.1;
 
-                // Grab the stream of changes.
-                let changes = edges.clone().enter(inner);
+            let seeded = edges.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
 
-                // Each relation we'll need.
-                let forward_key_alt = forward_key.clone().enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
-                let reverse_key_alt = reverse_key.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
-                let forward_key_neu = forward_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
-                // let reverse_key_neu = reverse_key.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
+            //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
+            let changes1 = propose(seeded.clone(), forward_key.clone(), Cut::for_positions(0, 1), step_back, key2);
+            let changes1 = validate(changes1, forward_self.clone(), Cut::for_positions(0, 2), step_back, key1);
+            let changes1 = changes1
+                .inner.map(|((data, carried), _order, r)| (data, carried, r)).as_collection()
+                .map(|((a, b), c)| (a, b, c));
 
-                // let forward_self_alt = forward_self.enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
-                let reverse_self_alt = reverse_self.clone().enter_at(inner, |_,_,t| AltNeu::alt(t.clone()), |t| t.time.saturating_sub(1));
-                let forward_self_neu = forward_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
-                let reverse_self_neu = reverse_self.enter_at(inner, |_,_,t| AltNeu::neu(t.clone()), |t| t.time.saturating_sub(1));
+            //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
+            let changes2 = propose(seeded.clone(), reverse_key.clone(), Cut::for_positions(1, 0), step_back, key1);
+            let changes2 = validate(changes2, reverse_self.clone(), Cut::for_positions(1, 2), step_back, key2);
+            let changes2 = changes2
+                .inner.map(|((data, carried), _order, r)| (data, carried, r)).as_collection()
+                .map(|((b, c), a)| (a, b, c));
 
-                // For each relation, we form a delta query driven by changes to that relation.
-                //
-                // The sequence of joined relations are such that we only introduce relations
-                // which share some bound attributes with the current stream of deltas.
-                // Each joined relation is delayed { alt -> neu } if its position in the
-                // sequence is greater than the delta stream.
-                // Each joined relation is directed { forward, reverse } by whether the
-                // bound variable occurs in the first or second position.
+            //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
+            let changes3 = propose(seeded, forward_key, Cut::for_positions(2, 0), step_back, key1);
+            let changes3 = validate(changes3, reverse_self, Cut::for_positions(2, 1), step_back, key2);
+            let changes3 = changes3
+                .inner.map(|((data, carried), _order, r)| (data, carried, r)).as_collection()
+                .map(|((a, c), b)| (a, b, c));
 
-                let key1 = |x: &(u32, u32)| x.0;
-                let key2 = |x: &(u32, u32)| x.1;
-
-                use differential_dogs3::operators::propose;
-                use differential_dogs3::operators::validate;
-                // The alt/neu distinction rides on the arrangement times here, so every atom
-                // reads at the same cut; `AltNeu<usize>` is totally ordered, so the identity
-                // compaction bound is sound (see `operators::lookup::identity_frontier`).
-                use differential_dogs3::operators::{identity_frontier, Cut};
-
-                // Entering the delta region: each update carries its own time as the initial
-                // join time, while its dataflow timestamp stays the order time the cuts compare
-                // against. `leave_region` below turns the accumulated join time back into the
-                // update's own time. (`extend` brackets this for you; these calls are raw.)
-                let seeded = changes.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
-
-                // Prior technology
-                //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 = propose(seeded.clone(), forward_key_neu.clone(), Cut::AtOrBefore, identity_frontier, key2.clone());
-                let changes1 = validate(changes1, forward_self_neu.clone(), Cut::AtOrBefore, identity_frontier, key1.clone());
-                let changes1 = changes1
-                    .inner.map(|((data, carried), _order, r)| (data, carried, r)).as_collection()
-                    .map(|((a,b),c)| (a,b,c));
-
-                //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 = propose(seeded.clone(), reverse_key_alt.clone(), Cut::AtOrBefore, identity_frontier, key1.clone());
-                let changes2 = validate(changes2, reverse_self_neu.clone(), Cut::AtOrBefore, identity_frontier, key2.clone());
-                let changes2 = changes2
-                    .inner.map(|((data, carried), _order, r)| (data, carried, r)).as_collection()
-                    .map(|((b,c),a)| (a,b,c));
-
-                //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = propose(seeded, forward_key_alt.clone(), Cut::AtOrBefore, identity_frontier, key1.clone());
-                let changes3 = validate(changes3, reverse_self_alt.clone(), Cut::AtOrBefore, identity_frontier, key2.clone());
-                let changes3 = changes3
-                    .inner.map(|((data, carried), _order, r)| (data, carried, r)).as_collection()
-                    .map(|((a,c),b)| (a,b,c));
-
-                let prev_changes = changes1.concat(changes2).concat(changes3).leave(scope);
-
-                // New ideas
-                let d_edges = edges.differentiate(inner);
-
-                //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 =
-                d_edges
-                    .clone()
-                    .map(|(x,y)| (y,x))
-                    .join_core(forward_key_neu, |b,a,c| Some(((*a, *c), *b)))
-                    .join_core(forward_self_neu.clone(), |(a,c), b, &()| Some((*a,*b,*c)));
-
-                //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 =
-                d_edges
-                    .clone()
-                    .join_core(reverse_key_alt, |b,c,a| Some(((*a, *c), *b)))
-                    .join_core(forward_self_neu, |(a,c), b, &()| Some((*a,*b,*c)));
-
-                //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 =
-                d_edges
-                    .join_core(forward_key_alt, |a,c,b| Some(((*c, *b), *a)))
-                    .join_core(reverse_self_alt, |(c,b), a, &()| Some((*a,*b,*c)));
-
-                let next_changes = changes1.concat(changes2).concat(changes3).integrate(scope);
-
-                (prev_changes, next_changes)
-            });
-
-            // Test if our two methods do the same thing.
-            triangles_prev.clone().assert_eq(triangles_next);
+            let triangles_prev = changes1.concat(changes2).concat(changes3);
 
             triangles_prev
                 .filter(move |_| inspect)
