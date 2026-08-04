@@ -29,7 +29,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 use differential_dataflow::trace::Description;
 
-use corgi::arrange::{compare_at, compare_idx, gather, gather_lanes, group_bounds, sort_perm};
+use corgi::arrange::{compare_at, compare_idx, gather, gather_lanes, group_bounds, sort_perm, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
 use columnar::Columnar;
@@ -180,18 +180,44 @@ where
 
         let (mut tags, mut offs) = (Vec::new(), Vec::new());
         let (mut times, mut diffs) = (ColTimes::new(), Vec::new());
-        let (mut p1, mut p2) = (0usize, 0usize);
-        while p1 < n1 && p2 < n2 {
-            // `(key, val)` structurally, then `time` in place via the columnar `Ref: Ord`.
-            let ord = compare_at(&kv1, p1, &kv2, p2).then_with(|| t1.cmp_cross(p1, t2, p2));
-            match ord {
-                Ordering::Less => { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d1[p1].clone()); p1 += 1; }
-                Ordering::Greater => { tags.push(1); offs.push(p2); times.push_ref(t2, p2); diffs.push(d2[p2].clone()); p2 += 1; }
-                Ordering::Equal => {
-                    let mut d = d1[p1].clone();
-                    d.plus_equals(&d2[p2]);
-                    if !d.is_zero() { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d); }
-                    p1 += 1; p2 += 1;
+
+        // Survey the interleaving at EQUAL-CLASS granularity: corgi does the structural compares
+        // in bulk (one boundary crossing per range, not per row-pair) and hands back each matched
+        // `(key, val)` class as both sides' ranges, which is what a time-carrying merge needs to
+        // consolidate across sides.
+        let runs = survey_groups(&kv1, &kv2);
+        // A trailing exclusive run is the survivor's suffix past the shared horizon (once one side
+        // is exhausted the rest of the other is one maximal run). Push it back rather than emit it,
+        // so the chain stays graded — same contract as the two-pointer's `p < n` push-back.
+        let split = match runs.last() {
+            Some(GroupRun::A(..)) | Some(GroupRun::B(..)) => runs.len() - 1,
+            _ => runs.len(),
+        };
+        for run in &runs[..split] {
+            match *run {
+                GroupRun::A(lo, hi) => for p in lo..hi {
+                    tags.push(0); offs.push(p); times.push_ref(t1, p); diffs.push(d1[p].clone());
+                },
+                GroupRun::B(lo, hi) => for p in lo..hi {
+                    tags.push(1); offs.push(p); times.push_ref(t2, p); diffs.push(d2[p].clone());
+                },
+                GroupRun::Both(alo, ahi, blo, bhi) => {
+                    // One equal-`(key, val)` class: merge it by time, consolidating across sides.
+                    let (mut p1, mut p2) = (alo, blo);
+                    while p1 < ahi && p2 < bhi {
+                        match t1.cmp_cross(p1, t2, p2) {
+                            Ordering::Less => { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d1[p1].clone()); p1 += 1; }
+                            Ordering::Greater => { tags.push(1); offs.push(p2); times.push_ref(t2, p2); diffs.push(d2[p2].clone()); p2 += 1; }
+                            Ordering::Equal => {
+                                let mut d = d1[p1].clone();
+                                d.plus_equals(&d2[p2]);
+                                if !d.is_zero() { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d); }
+                                p1 += 1; p2 += 1;
+                            }
+                        }
+                    }
+                    for p in p1..ahi { tags.push(0); offs.push(p); times.push_ref(t1, p); diffs.push(d1[p].clone()); }
+                    for p in p2..bhi { tags.push(1); offs.push(p); times.push_ref(t2, p); diffs.push(d2[p].clone()); }
                 }
             }
         }
@@ -199,18 +225,20 @@ where
         let srcs = [Some(&kv1), Some(&kv2)];
         Self::emit(&srcs, &tags, &offs, &times, &diffs, out);
 
-        // Push back the survivor's unconsumed suffix (all `>` the horizon), ahead of its deque.
-        if p1 < n1 {
-            let idx: Vec<usize> = (p1..n1).collect();
-            let mut t = ColTimes::new();
-            t.push_range(t1, p1, n1);
-            in1.push_front(Self::from_kv(gather(&kv1, &idx), t, d1[p1..].to_vec()));
-        }
-        if p2 < n2 {
-            let idx: Vec<usize> = (p2..n2).collect();
-            let mut t = ColTimes::new();
-            t.push_range(t2, p2, n2);
-            in2.push_front(Self::from_kv(gather(&kv2, &idx), t, d2[p2..].to_vec()));
+        match runs.get(split) {
+            Some(&GroupRun::A(lo, hi)) => {
+                let idx: Vec<usize> = (lo..hi).collect();
+                let mut t = ColTimes::new();
+                t.push_range(t1, lo, hi);
+                in1.push_front(Self::from_kv(gather(&kv1, &idx), t, d1[lo..hi].to_vec()));
+            }
+            Some(&GroupRun::B(lo, hi)) => {
+                let idx: Vec<usize> = (lo..hi).collect();
+                let mut t = ColTimes::new();
+                t.push_range(t2, lo, hi);
+                in2.push_front(Self::from_kv(gather(&kv2, &idx), t, d2[lo..hi].to_vec()));
+            }
+            _ => {}
         }
     }
 
