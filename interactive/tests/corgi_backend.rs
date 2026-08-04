@@ -31,6 +31,8 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         // scalar_ops: (key, a, b) triples; a values straddle the `> 2` and `= -5` tests.
         "scalar_ops" => vec![rows(&[&[1, 1, 9], &[1, 4, 8], &[2, 3, 7], &[3, -5, 6], &[3, 2, 5]])],
         "sum_ops" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21]])],
+        // sum_skew: any keyed pairs — the skew is in the program, not the data.
+        "sum_skew" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21], &[3, 30]])],
         "case_ops" => vec![rows(&[&[1, 10], &[2, 20], &[3, 14], &[3, 30]])],
         // pair_keys: composite keys with overlap, fanout, and one-sided keys on both sides.
         "pair_keys" => vec![
@@ -76,6 +78,7 @@ fn assert_backends_agree(prog: &str) {
 #[test] fn join_fallback() { assert_backends_agree("join_fallback"); }
 #[test] fn scalar_ops() { assert_backends_agree("scalar_ops"); }
 #[test] fn sum_ops() { assert_backends_agree("sum_ops"); }
+#[test] fn sum_skew() { assert_backends_agree("sum_skew"); }
 #[test] fn case_ops() { assert_backends_agree("case_ops"); }
 #[test] fn tour() { assert_backends_agree("tour"); }
 #[test] fn pair_keys() { assert_backends_agree("pair_keys"); }

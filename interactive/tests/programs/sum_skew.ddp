@@ -1,0 +1,17 @@
+-- Two collections whose variant columns commit DIFFERENT arms, concatenated into one
+-- arrangement. Shapes are inferred per batch from the data, so one side infers
+-- `Sum([Some(_)])` (tag 0 only) and the other `Sum([None, Some(_)])` (tag 1 only) —
+-- two arities for one DDIR type. corgi reads a differing Sum arity as a type error, so
+-- the chunker must widen with uncommitted (⊥) lanes before it compares or gathers them.
+--
+-- `hash` keeps both maps on the ROW-WISE fallback, the only path whose shape comes from
+-- the data rather than from the term (the compiled path derives it from `con`).
+con Rare(1)   = 0;
+con Common(1) = 1;
+
+let pairs = input 0 | key($0[0] ; $0[1]);
+
+let onlyRare   = pairs | map( $0[0] ; Rare(hash(1000000, $1[0])) );
+let onlyCommon = pairs | map( $0[0] ; Common(hash(1000000, $1[0])) );
+
+export "result" = (onlyRare + onlyCommon) | arrange | inspect(total);

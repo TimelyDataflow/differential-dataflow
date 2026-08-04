@@ -127,7 +127,8 @@ where
 
     /// Concatenate a run of (globally-sorted) chunks into one combined `(kv, times, diffs)`.
     fn concat(chunks: &[Self]) -> (CValue, ColTimes<T>, Vec<R>) {
-        let kvs: Vec<CValue> = chunks.iter().map(Self::kv).collect();
+        let mut kvs: Vec<CValue> = chunks.iter().map(Self::kv).collect();
+        unify_all(&mut kvs);
         let srcs: Vec<Option<&CValue>> = kvs.iter().map(Some).collect();
         let total: usize = chunks.iter().map(Self::len_).sum();
         let (mut tags, mut offs) = (Vec::with_capacity(total), Vec::with_capacity(total));
@@ -169,7 +170,10 @@ where
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         let c1 = in1.pop_front().unwrap();
         let c2 = in2.pop_front().unwrap();
-        let (kv1, kv2) = (c1.kv(), c2.kv());
+        let (mut kv1, mut kv2) = (c1.kv(), c2.kv());
+        // Chunks are sealed by separate flushes, so their inferred arities can differ; the
+        // compare below is undefined on a tag with no lane.
+        unify_sum_arity(&mut kv1, &mut kv2);
         let (n1, n2) = (c1.len_(), c2.len_());
         let (t1, d1) = (c1.times(), c1.diffs());
         let (t2, d2) = (c2.times(), c2.diffs());
@@ -314,7 +318,8 @@ where
             out,
             |acc, next| {
                 let (na, nb) = (acc.len_(), next.len_());
-                let kvs = [acc.kv(), next.kv()];
+                let mut kvs = [acc.kv(), next.kv()];
+                unify_all(&mut kvs);
                 let srcs = [Some(&kvs[0]), Some(&kvs[1])];
                 let mut tags = Vec::with_capacity(na + nb);
                 let mut offs = Vec::with_capacity(na + nb);
@@ -472,12 +477,54 @@ impl<T: Columnar, R> Default for CorgiChunker<T, R> {
     }
 }
 
+/// Pad two columns' `Sum` lane vectors to their common arity, `None` (`⊥`) filling.
+///
+/// Shapes here are inferred per batch by `infer_shape_cols`, which commits only the arms it
+/// actually SEES — so two batches of one DDIR type can disagree on arity (a batch of only
+/// `Rare(_)` gives `Sum([Some])`, one of only `Common(_)` gives `Sum([None, Some])`). corgi
+/// reads that as two unrelated types (`shape::join` calls a differing arity the genuine type
+/// error), and `gather_lanes` then indexes a lane vector shorter than the tags it is given.
+/// Widening with `⊥` is sound by corgi's own rule that an uncommitted lane holds no rows, and
+/// leaves the within-variant offsets untouched (they depend only on tags and per-tag cursors).
+fn unify_sum_arity(a: &mut CValue, b: &mut CValue) {
+    match (a, b) {
+        (CValue::Prod(xs), CValue::Prod(ys)) => {
+            for (x, y) in xs.iter_mut().zip(ys.iter_mut()) { unify_sum_arity(x, y); }
+        }
+        (CValue::List(_, x), CValue::List(_, y)) => unify_sum_arity(x, y),
+        (CValue::Sum(_, _, xs), CValue::Sum(_, _, ys)) => {
+            let k = xs.len().max(ys.len());
+            xs.resize(k, None);
+            ys.resize(k, None);
+            for (x, y) in xs.iter_mut().zip(ys.iter_mut()) {
+                if let (Some(x), Some(y)) = (x, y) { unify_sum_arity(x, y); }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Bring a set of columns to a common `Sum` arity. Pairwise against column 0 twice: `resize`
+/// only grows, so the first pass leaves column 0 at the running max and the second lifts the
+/// rest to it.
+///
+/// Every site that reads two independently-inferred columns together must call this first —
+/// `compare_at` as much as `gather_lanes`, since a tag with no lane has no defined order.
+fn unify_all(cols: &mut [CValue]) {
+    if cols.len() < 2 { return; }
+    for _ in 0..2 {
+        let (head, tail) = cols.split_at_mut(1);
+        for c in tail.iter_mut() { unify_sum_arity(&mut head[0], c); }
+    }
+}
+
 /// Concatenate column blocks into one column (multi-source `gather_lanes`, no sort).
-fn concat_blocks(blocks: &[CValue]) -> CValue {
+fn concat_blocks(blocks: &mut [CValue]) -> CValue {
     if blocks.len() == 1 {
         return blocks[0].clone();
     }
-    let srcs: Vec<Option<&CValue>> = blocks.iter().map(Some).collect();
+    unify_all(blocks);
+    let srcs: Vec<Option<&CValue>> = blocks.iter().map(|b| Some(&*b)).collect();
     let (mut tags, mut offs) = (Vec::new(), Vec::new());
     for (ti, b) in blocks.iter().enumerate() {
         for o in 0..b.len() { tags.push(ti); offs.push(o); }
@@ -495,8 +542,8 @@ where
         if self.times.is_empty() {
             return;
         }
-        let keys = concat_blocks(&self.k_blocks);
-        let vals = concat_blocks(&self.v_blocks);
+        let keys = concat_blocks(&mut self.k_blocks);
+        let vals = concat_blocks(&mut self.v_blocks);
         self.k_blocks.clear();
         self.v_blocks.clear();
         let times = std::mem::take(&mut self.times);
