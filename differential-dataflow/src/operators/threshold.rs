@@ -147,7 +147,7 @@ where
                     let mut session = output.session(&capability);
 
                     let (mut batch_cursor, batch_storage) = crate::trace::cursor::cursor_list(batch_storage);
-                    let (mut trace_cursor, trace_storage) = trace.cursor_through(lower_limit.borrow()).unwrap();
+                    let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(trace.batches_through(lower_limit.borrow()).unwrap());
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
                         let mut count: Option<BatchDiff<Tr>> = None;

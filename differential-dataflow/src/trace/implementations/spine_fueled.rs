@@ -177,7 +177,7 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
                 let include_upper = PartialOrder::less_equal(&batch.upper().borrow(), &upper);
 
                 if include_lower != include_upper && upper != batch.lower().borrow() {
-                    panic!("`cursor_through`: `upper` straddles batch");
+                    panic!("`batches_through`: `upper` straddles batch");
                 }
 
                 // include pending batches

@@ -22,7 +22,6 @@ use crate::logging::Logger;
 pub use self::cursor::Cursor;
 pub use self::cursor::Navigable;
 pub use self::cursor::{BatchCursor, BatchKey, BatchVal, BatchValOwn, BatchDiff, BatchDiffGat, BatchTimeGat};
-use self::cursor::CursorList;
 pub use self::description::Description;
 
 /// A type used to express how much effort a trace should exert even in the absence of updates.
@@ -50,34 +49,11 @@ pub trait TraceReader {
     /// Acquires the non-empty sequence of batches covering updates at times not greater or equal to an
     /// element of `upper`.
     ///
-    /// This is the sole primitive each `TraceReader` must implement to expose its contents: the
-    /// `cursor` and `cursor_through` methods assemble a [`CursorList`] over these batches' cursors,
-    /// for which the returned `Vec` serves as storage (the cursor borrows from it).
-    ///
     /// This method is expected to work if called with an `upper` that (i) was an observed bound in batches from
     /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
     /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the batches. This
-    /// should allow `upper` such as `&[]` as used by `self.cursor()`, though it is difficult to imagine other uses.
+    /// should allow `upper` such as `&[]`, used to acquire all batches, though it is difficult to imagine other uses.
     fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>>;
-
-    /// Provides a cursor over updates contained in the trace.
-    fn cursor(&mut self) -> (CursorList<<Self::Batch as Navigable>::Cursor>, Vec<Self::Batch>) where Self::Batch: Navigable {
-        if let Some(cursor) = self.cursor_through(Antichain::new().borrow()) {
-            cursor
-        }
-        else {
-            panic!("unable to acquire complete cursor for trace; is it closed?");
-        }
-    }
-
-    /// Acquires a cursor to the restriction of the collection's contents to updates at times not greater or
-    /// equal to an element of `upper`.
-    ///
-    /// The cursor is a [`CursorList`] that merges the cursors of the batches returned by
-    /// [`batches_through`](TraceReader::batches_through); see that method for the contract on `upper`.
-    fn cursor_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<(CursorList<<Self::Batch as Navigable>::Cursor>, Vec<Self::Batch>)> where Self::Batch: Navigable {
-        Some(self::cursor::cursor_list(self.batches_through(upper)?))
-    }
 
     /// Advances the frontier that constrains logical compaction.
     ///
@@ -123,16 +99,15 @@ pub trait TraceReader {
     /// Reports the physical compaction frontier.
     ///
     /// All batches containing updates beyond this frontier will not be merged with other batches. This allows
-    /// the caller to create a cursor through any frontier beyond the physical compaction frontier, with the
-    /// `cursor_through()` method. This functionality is primarily of interest to the `join` operator, and any
+    /// the caller to acquire the batches through any frontier beyond the physical compaction frontier, with the
+    /// `batches_through()` method. This functionality is primarily of interest to the `join` operator, and any
     /// other operators who need to take notice of the physical structure of update batches.
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Self::Time>;
 
     /// Maps logic across the non-empty sequence of batches in the trace.
     ///
     /// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
-    /// the stream of batches moving past the trace. It could also be a fine basis for a default implementation of the
-    /// cursor methods, as they (by default) just move through batches accumulating cursors into a cursor list.
+    /// the stream of batches moving past the trace.
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F);
 
     /// Reads the upper frontier of committed times.
@@ -165,11 +140,8 @@ pub trait TraceReader {
 
 /// An append-only collection of `(key, val, time, diff)` tuples.
 ///
-/// The trace must pretend to look like a collection of `(Key, Val, Time, isize)` tuples, but is permitted
-/// to introduce new types `KeyRef`, `ValRef`, and `TimeRef` which can be dereference to the types above.
-///
-/// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
-/// to return them.
+/// The trace itself is opinionated only about `Time`, which bounds its contents and drives its compaction.
+/// Key, value, and diff opinions live on the batches' cursors, and are reached through [`Navigable`].
 pub trait Trace : TraceReader<Batch: Batch> {
 
     /// Allocates a new empty trace.
@@ -215,9 +187,6 @@ pub trait Trace : TraceReader<Batch: Batch> {
 pub trait BatchReader : Sized {
 
     /// The timestamp type of the batch's updates.
-    ///
-    /// A batch carries only time; navigating its contents is the separate, optional [`Navigable`]
-    /// capability, which an operator requests with a `Self: Navigable` bound when it needs a cursor.
     type Time: Timestamp + Lattice;
 
     /// The number of updates in the batch.

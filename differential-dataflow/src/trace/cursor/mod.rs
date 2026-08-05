@@ -19,9 +19,7 @@ use crate::trace::implementations::containers::BatchContainer;
 /// This is the entry point for accessing batch data through cursors, and the place that opinions
 /// about keys and values are introduced (via the `Cursor` associated type). Cut-and-merge assembly
 /// is the trace's concern: [`TraceReader::batches_through`](crate::trace::TraceReader::batches_through)
-/// selects the batches and the defaulted
-/// [`TraceReader::cursor_through`](crate::trace::TraceReader::cursor_through) builds a [`CursorList`]
-/// over their per-batch cursors.
+/// selects the batches, and [`cursor_list()`] merges their cursors.
 pub trait Navigable {
 
     /// The cursor type.
@@ -53,8 +51,7 @@ pub type BatchTimeGat<'a, Tr> = <BatchCursor<Tr> as Cursor>::TimeGat<'a>;
 /// Assembles a merged cursor over a sequence of batches.
 ///
 /// The batches become the cursor's storage and are returned alongside the cursor; they must be kept
-/// alive and handed to the cursor's navigation methods. This is the shared assembly behind
-/// `TraceReader::cursor_through` and the per-round input cursors in `reduce` / `count` / `threshold`.
+/// alive and handed to the cursor's navigation methods.
 pub fn cursor_list<B: crate::trace::BatchReader + Navigable>(batches: Vec<B>) -> (CursorList<B::Cursor>, Vec<B>) {
     let cursors = batches.iter().map(|batch| batch.cursor()).collect::<Vec<_>>();
     let cursor = CursorList::new(cursors, &batches);

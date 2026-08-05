@@ -4,7 +4,7 @@ use timely::progress::{Antichain, frontier::AntichainRef};
 
 use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder, ValSpine};
 use differential_dataflow::trace::{Trace, TraceReader, Batcher, Builder};
-use differential_dataflow::trace::cursor::Cursor;
+use differential_dataflow::trace::cursor::{Cursor, cursor_list};
 
 type IntegerTrace = ValSpine<u64, u64, usize, i64>;
 type IntegerBuilder = ValBuilder<u64, u64, usize, i64>;
@@ -34,11 +34,11 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
 fn test_trace() {
     let mut trace = get_trace();
 
-    let (mut cursor1, storage1) = trace.cursor_through(AntichainRef::new(&[1])).unwrap();
+    let (mut cursor1, storage1) = cursor_list(trace.batches_through(AntichainRef::new(&[1])).unwrap());
     let vec_1 = cursor1.to_vec(&storage1, |k| k.clone(), |v| v.clone());
     assert_eq!(vec_1, vec![((1, 2), vec![(0, 1)])]);
 
-    let (mut cursor2, storage2) = trace.cursor_through(AntichainRef::new(&[2])).unwrap();
+    let (mut cursor2, storage2) = cursor_list(trace.batches_through(AntichainRef::new(&[2])).unwrap());
     let vec_2 = cursor2.to_vec(&storage2, |k| k.clone(), |v| v.clone());
     println!("--> {:?}", vec_2);
     assert_eq!(vec_2, vec![
@@ -46,14 +46,15 @@ fn test_trace() {
                ((2, 3), vec![(1, 1)]),
     ]);
 
-    let (mut cursor3, storage3) = trace.cursor_through(AntichainRef::new(&[3])).unwrap();
+    let (mut cursor3, storage3) = cursor_list(trace.batches_through(AntichainRef::new(&[3])).unwrap());
     let vec_3 = cursor3.to_vec(&storage3, |k| k.clone(), |v| v.clone());
     assert_eq!(vec_3, vec![
                ((1, 2), vec![(0, 1)]),
                ((2, 3), vec![(1, 1), (2, -1)]),
     ]);
 
-    let (mut cursor4, storage4) = trace.cursor();
+    let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
+    let (mut cursor4, storage4) = cursor_list(batches);
     let vec_4 = cursor4.to_vec(&storage4, |k| k.clone(), |v| v.clone());
     assert_eq!(vec_4, vec_3);
 }
