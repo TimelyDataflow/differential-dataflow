@@ -1,4 +1,4 @@
-//! Property test: a three-atom worst-case-optimal delta join, against the same oracle.
+//! Property test: a three-atom prefix-extension delta join, against the same oracle.
 //!
 //! Where `delta_join_property` checks two atoms joined by `half_join`, this checks three atoms
 //! joined by the `count` / `propose` / `validate` trio — the machinery that sizes each atom,
@@ -96,7 +96,7 @@ fn step_back(time: &Time, antichain: &mut Antichain<Time>) {
     antichain.insert(Product::new(time.outer.saturating_sub(1), time.inner.saturating_sub(1)));
 }
 
-/// The three-rule worst-case-optimal triangle join.
+/// The three-rule triangle join, via the `count` / `propose` / `validate` path.
 fn wcoj_triangle(workers: usize, r: Vec<Edge>, s: Vec<Edge>, t: Vec<Edge>) -> Vec<Triangle> {
     let captured = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&captured);

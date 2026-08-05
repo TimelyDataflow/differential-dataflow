@@ -40,7 +40,7 @@ use crate::operators::lookup::{Cut, lookup};
 /// The request is skipped only when the cut admits *nothing* — never on the admitted diffs
 /// summing to zero. That distinction is load-bearing: admitted updates can carry different
 /// join times, so a sum across them is not the count at any one of them, and skipping on it
-/// removes the request from the collection outright. In a worst-case-optimal join that means
+/// removes the request from the collection outright. In a prefix-extension join that means
 /// no atom proposes the prefix and the extension is lost, where a merely inaccurate count
 /// would only have chosen a worse proposer.
 ///

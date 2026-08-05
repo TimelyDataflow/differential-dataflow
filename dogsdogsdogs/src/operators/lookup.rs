@@ -1,8 +1,13 @@
 //! Streamed requests looked up against an arrangement, gated on total-order completeness.
 //!
-//! This is the single primitive under `half_join`, `lookup_map`, and the worst-case optimal
-//! join trio (`count`, `propose`, `validate`). Each of those is this operator with a different
+//! This is the single primitive under `half_join`, `lookup_map`, and the prefix-extension
+//! trio (`count`, `propose`, `validate`). Each of those is this operator with a different
 //! output function; none of them differ in how they reason about time.
+//!
+//! The trio implements the *shape* of a worst-case-optimal join — size each atom, extend from
+//! the smallest, semijoin against the rest — but the bound that name refers to is not
+//! established in this setting, and nothing here should be read as claiming it. See
+//! [`crate::operators::count()`] for what is and is not known.
 //!
 //! # What the operator does
 //!

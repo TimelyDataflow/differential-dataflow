@@ -2,7 +2,7 @@
 //!
 //! `lookup_map` stages the probe key into a capacity-1 `KeyContainer`, pushes one
 //! element (valid index 0), and (before the fix) reads it back at index 1 — out of
-//! bounds, panicking on *every* probe. This test drives a triangle worst-case-optimal
+//! bounds, panicking on *every* probe. This test drives a triangle prefix-extension
 //! join (`extend` -> `propose`/`count`/`validate` -> `lookup_map`) over a single
 //! in-memory triangle: before the fix it panics; after the fix it finds (0, 1, 2).
 

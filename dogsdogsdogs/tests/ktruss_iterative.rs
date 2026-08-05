@@ -1,9 +1,9 @@
-//! A worst-case-optimal join inside a recursive scope: incrementally maintained k-truss.
+//! A multiway prefix-extension join inside a recursive scope: incrementally maintained k-truss.
 //!
 //! The k-truss of a graph is the maximal subgraph in which every edge takes part in at least
 //! `k-2` triangles. It is computed by peeling: count triangles per edge, drop the edges below
 //! the threshold, repeat until nothing changes. That makes it a genuine use of a multiway join
-//! *inside a loop* rather than a synthetic one — the triangle count is the WCOJ, and the loop
+//! *inside a loop* rather than a synthetic one — the triangle count is the multiway join, and
 //! is what the delta rules have to survive.
 //!
 //! # Why this is the test that matters

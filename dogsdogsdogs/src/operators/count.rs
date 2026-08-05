@@ -7,6 +7,27 @@ use crate::operators::lookup::Cut;
 
 /// Reports a number of extensions to a stream of prefixes.
 ///
+/// # On "worst-case optimal"
+///
+/// This is the sizing step of a Generic-Join-shaped plan, and that plan is worst-case optimal
+/// for *static, set-valued* relations. Three things weaken the connection here, and none is
+/// resolved:
+///
+/// * `validate` is not a semijoin. In the static algorithm each non-proposing atom is a
+///   membership test, strictly non-increasing, and that incremental pruning is how the bound
+///   is attained. Here it multiplies over `[(time, diff)]` lists, so an intermediate can grow
+///   before consolidation shrinks it again.
+/// * Output consolidates. The bound counts combinations of updates; what a consumer sees is
+///   combinations *after cancellation*, which can be far fewer. The bound still limits the
+///   enumeration, but it is not tight against the achievable output, and an algorithm that
+///   skipped combinations destined to cancel would beat this one.
+/// * The number reported below is not the bound's quantity. The bound is over updates in the
+///   admitted interval; this reports distinct values accumulated at a point, which can be
+///   zero while the interval holds real output.
+///
+/// What is true: enumeration is bounded, and the proposer is chosen by a cardinality proxy.
+/// Read the name as identifying the plan shape, not as asserting the bound.
+///
 /// This method takes as input a stream of `(prefix, count, index)` triples.
 /// For each triple, it extracts a key using `key_selector`, and finds the
 /// associated count in `arrangement`. If the found count is less than `count`,
