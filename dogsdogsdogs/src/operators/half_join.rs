@@ -2,7 +2,7 @@
 //!
 //! The asymmetry is that the join only responds to streamed updates, not to changes in the
 //! arrangement. Streamed updates join only with matching arranged updates admitted by the
-//! update's [`Cut`] — see [`crate::operators::lookup`], which is the operator underneath and
+//! update's [`Cut`] — see [`crate::operators::lookup()`], which is the operator underneath and
 //! which carries the reasoning about why the cut is a total order.
 //!
 //! These are thin derivations: everything about time lives in `lookup`, and what remains here

@@ -1,6 +1,6 @@
 //! Accumulate a request's admitted arrangement updates into one diff, and emit once.
 //!
-//! This is the second layer over [`crate::operators::lookup`]: the shape is entirely that
+//! This is the second layer over [`crate::operators::lookup()`]: the shape is entirely that
 //! operator's, and what lives here is a single choice of behavior — sum the `(time, diff)`
 //! updates the cut admits into one accumulated diff, hand it to the caller, and emit the
 //! caller's output at the request's own time.
@@ -8,7 +8,7 @@
 //! Its one caller is `count`, whose output is a routing *decision* rather than a record: it
 //! names the atom offering fewest extensions and contributes nothing to any output tuple's
 //! time. `propose` and `validate` do contribute records, so they take the other behavior,
-//! [`lookup_join`](crate::operators::lookup_join), which visits admitted updates individually.
+//! [`lookup_join`](crate::operators::lookup_join()), which visits admitted updates individually.
 //!
 //! # Emitting at the request's time
 //!

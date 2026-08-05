@@ -1,7 +1,7 @@
 //! Join each admitted update's time into a time the request carries.
 //!
-//! The second of the two behaviors over [`crate::operators::lookup`], and the one that
-//! contributes records to a join. Where [`lookup_map`](crate::operators::lookup_map) sums the
+//! The second of the two behaviors over [`crate::operators::lookup()`], and the one that
+//! contributes records to a join. Where [`lookup_map`](crate::operators::lookup_map()) sums the
 //! admitted updates into a single diff and emits once, this one visits them *individually*:
 //! each admitted `(time, diff)` produces its own output, at its own lifted time.
 //!
@@ -16,7 +16,7 @@
 //! Collapsing is nonetheless correct when every admitted time is dominated by the request's
 //! own — then `carried ⊔ time` is the same value for all of them and the many outputs coincide
 //! with the one. That is precisely the totally ordered case, which is why
-//! [`lookup_map`](crate::operators::lookup_map) is sound for `count` and was sound for
+//! [`lookup_map`](crate::operators::lookup_map()) is sound for `count` and was sound for
 //! `propose` and `validate` as long as they were only ever used under a total order. It stops
 //! being true the moment a cut admits an update incomparable to the request, which is what
 //! happens inside a nested scope.
