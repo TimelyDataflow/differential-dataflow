@@ -105,7 +105,7 @@ where
         // initial work for the two traces, and before the operator is constructed.
 
         // Acknowledged frontier for each input.
-        // These two are used exclusively to track batch boundaries on which we may want/need to call `cursor_through`.
+        // These two are used exclusively to track batch boundaries on which we may want/need to call `batches_through`.
         // They will drive our physical compaction of each trace, and we want to maintain at all times that each is beyond
         // the physical compaction frontier of their corresponding trace.
         // Should we ever *drop* a trace, these are 1. much harder to maintain correctly, but 2. no longer used.

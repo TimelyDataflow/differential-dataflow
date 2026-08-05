@@ -34,6 +34,7 @@ use differential_dataflow::difference::{Monoid, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchTimeGat, BatchVal, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::trace::implementations::BatchContainer;
 
@@ -263,7 +264,8 @@ where
 
                     let mut builders = (0..blob.caps.len()).map(|_| CB::default()).collect::<Vec<_>>();
 
-                    let (mut cursor, storage) = trace.cursor();
+                    let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
+                    let (mut cursor, storage) = cursor_list(batches);
                     let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
                     let mut removals: ChangeBatch<Tr::Time> = ChangeBatch::new();
 

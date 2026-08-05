@@ -9,6 +9,7 @@ use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable}
 use differential_dataflow::difference::{IsZero, Semigroup, Monoid};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchDiffGat, BatchVal, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::trace::implementations::BatchContainer;
 
 /// Proposes extensions to a stream of prefixes.
@@ -88,7 +89,8 @@ where
                         key1.cmp(&key2)
                     });
 
-                    let (mut cursor, storage) = trace.cursor();
+                    let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
+                    let (mut cursor, storage) = cursor_list(batches);
                     // Key container to stage keys for comparison.
                     let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
                     for &mut (ref prefix, ref time, ref mut diff) in prefixes.iter_mut() {

@@ -34,11 +34,11 @@
 use std::collections::BTreeMap;
 
 use timely::dataflow::operators::probe::Handle;
-use timely::progress::frontier::AntichainRef;
+use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::dataflow::operators::Probe;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::trace::cursor::Cursor;
+use differential_dataflow::trace::cursor::{Cursor, cursor_list};
 use differential_dataflow::trace::TraceReader;
 
 type Node = u32;
@@ -93,7 +93,8 @@ fn main() {
         }
 
         /* Return trace content after the last round. */
-        let (mut cursor, storage) = graph_trace.cursor();
+        let batches = graph_trace.batches_through(Antichain::new().borrow()).unwrap();
+        let (mut cursor, storage) = cursor_list(batches);
         cursor.to_vec(&storage, |k| k.clone(), |v| v.clone())
     })
     .unwrap().join();

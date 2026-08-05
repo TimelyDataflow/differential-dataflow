@@ -3,11 +3,12 @@ use std::io::BufRead;
 use timely::dataflow::ProbeHandle;
 use timely::dataflow::operators::vec::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Probe;
-use timely::progress::frontier::AntichainRef;
+use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::PartialOrder;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::cursor::cursor_list;
 
 use pair::Pair;
 
@@ -98,7 +99,8 @@ fn main() {
                             else {
                                 println!("Report at {:?}", query_time);
                                 // enumerate the contents of `trace` at `query_time`.
-                                let (mut cursor, storage) = trace.cursor();
+                                let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
+                                let (mut cursor, storage) = cursor_list(batches);
                                 while let Some(key) = cursor.get_key(&storage) {
                                     while let Some(_val) = cursor.get_val(&storage) {
                                         let mut sum = 0;
