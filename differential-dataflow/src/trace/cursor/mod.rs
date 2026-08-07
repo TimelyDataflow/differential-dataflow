@@ -6,6 +6,7 @@
 //! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
 pub mod cursor_list;
+pub mod wrappers;
 
 pub use self::cursor_list::CursorList;
 
