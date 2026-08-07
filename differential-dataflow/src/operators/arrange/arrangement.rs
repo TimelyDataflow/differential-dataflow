@@ -30,11 +30,9 @@ use timely::dataflow::operators::Capability;
 use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{self, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchTimeGat, BatchVal, BatchValOwn};
+use crate::trace::{self, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
 
 use trace::wrappers::enter::{TraceEnter, BatchEnter,};
-use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
-use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 
 use super::TraceAgent;
 
@@ -89,26 +87,6 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
         Arranged {
             stream: self.stream.enter(child),
             trace: self.trace,
-        }
-    }
-
-    /// Brings an arranged collection into a nested scope.
-    ///
-    /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
-    /// have all been extended with an additional coordinate with the default value. The resulting collection does
-    /// not vary with the new timestamp coordinate.
-    pub fn enter_at<'inner, TInner, F, P>(self, child: Scope<'inner, TInner>, logic: F, prior: P) -> Arranged<'inner, TraceEnterAt<Tr, TInner, F, P>>
-    where
-        Tr::Batch: Navigable,
-        TInner: Refines<Tr::Time>+Lattice+'static,
-        F: FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>, BatchTimeGat<'_, Tr>)->TInner+Clone+'static,
-        P: FnMut(&TInner)->Tr::Time+Clone+'static,
-    {
-        let logic1 = logic.clone();
-        let logic2 = logic.clone();
-        Arranged {
-            trace: TraceEnterAt::make_from(self.trace, logic1, prior),
-            stream: self.stream.enter(child).map(move |bw| BatchEnterAt::make_from(bw, logic2.clone())),
         }
     }
 
