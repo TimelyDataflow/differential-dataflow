@@ -91,11 +91,18 @@ impl<'scope, T: Timestamp, R: Monoid+Multiply<Output = R>, P, E> ValidateExtensi
 }
 
 // These are all defined here so that users can be assured a common layout.
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::{KeySpine, ValSpine};
 type TraceValHandle<K,V,T,R> = TraceAgent<ValSpine<K,V,T,R>>;
 type TraceKeyHandle<K,T,R> = TraceAgent<KeySpine<K,T,R>>;
 
-pub struct CollectionIndex<K, V, T, R>
+/// The three arrangements a relation must present to extend prefixes.
+///
+/// The arrangements are scope-bound rather than exported traces, so that the operators
+/// reading them observe timely's own progress tracking. An imported trace instead reports
+/// its frontier in-band, and in a cycle those statements circulate without ever settling.
+#[derive(Clone)]
+pub struct CollectionIndex<'scope, K, V, T, R>
 where
     K: ExchangeData,
     V: ExchangeData,
@@ -103,40 +110,23 @@ where
     R: Monoid+Multiply<Output = R>+ExchangeData,
 {
     /// A trace of type (K, ()), used to count extensions for each prefix.
-    count_trace: TraceKeyHandle<K, T, isize>,
+    count_trace: Arranged<'scope, TraceKeyHandle<K, T, isize>>,
 
     /// A trace of type (K, V), used to propose extensions for each prefix.
-    propose_trace: TraceValHandle<K, V, T, R>,
+    propose_trace: Arranged<'scope, TraceValHandle<K, V, T, R>>,
 
     /// A trace of type ((K, V), ()), used to validate proposed extensions.
-    validate_trace: TraceKeyHandle<(K, V), T, R>,
+    validate_trace: Arranged<'scope, TraceKeyHandle<(K, V), T, R>>,
 }
 
-impl<K, V, T, R> Clone for CollectionIndex<K, V, T, R>
+impl<'scope, K, V, T, R> CollectionIndex<'scope, K, V, T, R>
 where
     K: ExchangeData+Hash,
     V: ExchangeData+Hash,
     T: Lattice+ExchangeData+Timestamp,
     R: Monoid+Multiply<Output = R>+ExchangeData,
 {
-    fn clone(&self) -> Self {
-        CollectionIndex {
-            count_trace: self.count_trace.clone(),
-            propose_trace: self.propose_trace.clone(),
-            validate_trace: self.validate_trace.clone(),
-        }
-    }
-}
-
-impl<K, V, T, R> CollectionIndex<K, V, T, R>
-where
-    K: ExchangeData+Hash,
-    V: ExchangeData+Hash,
-    T: Lattice+ExchangeData+Timestamp,
-    R: Monoid+Multiply<Output = R>+ExchangeData,
-{
-
-    pub fn index<'scope>(collection: VecCollection<'scope, T, (K, V), R>) -> Self {
+    pub fn index(collection: VecCollection<'scope, T, (K, V), R>) -> Self {
         // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
         // counts and validate can share the base arrangement
         let arranged = collection.clone().arrange_by_self();
@@ -146,10 +136,9 @@ where
             .as_collection(|k,_v| k.clone())
             .distinct()
             .map(|(k, _v)| k)
-            .arrange_by_self()
-            .trace;
-        let propose = collection.arrange_by_key().trace;
-        let validate = arranged.trace;
+            .arrange_by_self();
+        let propose = collection.arrange_by_key();
+        let validate = arranged;
 
         CollectionIndex {
             count_trace: counts,
@@ -157,7 +146,7 @@ where
             validate_trace: validate,
         }
     }
-    pub fn extend_using<P, F: Fn(&P)->K+Clone>(&self, logic: F) -> CollectionExtender<K, V, T, R, P, F> {
+    pub fn extend_using<P, F: Fn(&P)->K+Clone>(&self, logic: F) -> CollectionExtender<'scope, K, V, T, R, P, F> {
         CollectionExtender {
             phantom: std::marker::PhantomData,
             indices: self.clone(),
@@ -166,7 +155,7 @@ where
     }
 }
 
-pub struct CollectionExtender<K, V, T, R, P, F>
+pub struct CollectionExtender<'scope, K, V, T, R, P, F>
 where
     K: ExchangeData,
     V: ExchangeData,
@@ -175,11 +164,11 @@ where
     F: Fn(&P)->K+Clone,
 {
     phantom: std::marker::PhantomData<P>,
-    indices: CollectionIndex<K, V, T, R>,
+    indices: CollectionIndex<'scope, K, V, T, R>,
     key_selector: F,
 }
 
-impl<'scope, T, K, V, R, P, F> PrefixExtender<'scope, T, R> for CollectionExtender<K, V, T, R, P, F>
+impl<'scope, T, K, V, R, P, F> PrefixExtender<'scope, T, R> for CollectionExtender<'scope, K, V, T, R, P, F>
 where
     T: Timestamp + Lattice + ExchangeData + Hash,
     K: ExchangeData+Hash+Default,
@@ -192,17 +181,14 @@ where
     type Extension = V;
 
     fn count(&mut self, prefixes: VecCollection<'scope, T, (P, usize, usize), R>, index: usize) -> VecCollection<'scope, T, (P, usize, usize), R> {
-        let counts = self.indices.count_trace.import(prefixes.scope());
-        operators::count::count(prefixes, counts, self.key_selector.clone(), index)
+        operators::count::count(prefixes, self.indices.count_trace.clone(), self.key_selector.clone(), index)
     }
 
     fn propose(&mut self, prefixes: VecCollection<'scope, T, P, R>) -> VecCollection<'scope, T, (P, V), R> {
-        let propose = self.indices.propose_trace.import(prefixes.scope());
-        operators::propose::propose(prefixes, propose, self.key_selector.clone())
+        operators::propose::propose(prefixes, self.indices.propose_trace.clone(), self.key_selector.clone())
     }
 
     fn validate(&mut self, extensions: VecCollection<'scope, T, (P, V), R>) -> VecCollection<'scope, T, (P, V), R> {
-        let validate = self.indices.validate_trace.import(extensions.scope());
-        operators::validate::validate(extensions, validate, self.key_selector.clone())
+        operators::validate::validate(extensions, self.indices.validate_trace.clone(), self.key_selector.clone())
     }
 }

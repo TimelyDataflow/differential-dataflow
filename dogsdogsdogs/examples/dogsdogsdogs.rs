@@ -31,16 +31,16 @@ fn main() {
 
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
-        let index = worker.dataflow::<usize,_,_>(|scope| {
-            CollectionIndex::index(Collection::new(edges.to_stream(scope)))
-        });
-
-        let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x);
-        let mut index_yz = index.extend_using(|&(ref _x, ref y)| *y);
-
         let mut probe = Handle::new();
 
+        // The index and its readers must share a dataflow: the extenders hold scope-bound
+        // arrangements rather than exported traces.
         let mut edges = worker.dataflow::<usize,_,_>(|scope| {
+
+            let index = CollectionIndex::index(Collection::new(edges.to_stream(scope)));
+
+            let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x);
+            let mut index_yz = index.extend_using(|&(ref _x, ref y)| *y);
 
             let (edges_input, edges) = scope.new_collection();
 
