@@ -1,4 +1,6 @@
 use timely::dataflow::operators::probe::Handle;
+use timely::dataflow::operators::vec::Map;
+use differential_dataflow::AsCollection;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
@@ -73,23 +75,37 @@ fn main() {
                 use differential_dogs3::operators::propose;
                 use differential_dogs3::operators::validate;
 
+                // Hold compaction back one base-time step, so the alt/neu distinction survives,
+                // and compare in the total order on `AltNeu` (lexicographic on `(time, neu)`).
+                let frontier_func = |time: &AltNeu<usize>, antichain: &mut timely::progress::Antichain<AltNeu<usize>>| {
+                    antichain.insert(AltNeu::alt(time.time.saturating_sub(1)));
+                };
+                let comparison = |t1: &AltNeu<usize>, t2: &AltNeu<usize>| t1 <= t2;
+
+                // Stash each delta's own time as its payload, to be advanced by the times of
+                // the records it matches, and delayed to once we leave the delta region.
+                let deltas = changes.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
+
                 // Prior technology
                 //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 = propose(changes.clone(), forward_key_neu.clone(), key2.clone());
-                let changes1 = validate(changes1, forward_self_neu.clone(), key1.clone());
-                let changes1 = changes1.map(|((a,b),c)| (a,b,c));
+                let changes1 = propose(deltas.clone(), forward_key_neu.clone(), key2.clone(), frontier_func, comparison);
+                let changes1 = validate(changes1, forward_self_neu.clone(), key1.clone(), frontier_func, comparison);
+                let changes1 = changes1.map(|(((a,b),c), payload)| ((a,b,c), payload));
 
                 //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 = propose(changes.clone(), reverse_key_alt.clone(), key1.clone());
-                let changes2 = validate(changes2, reverse_self_neu.clone(), key2.clone());
-                let changes2 = changes2.map(|((b,c),a)| (a,b,c));
+                let changes2 = propose(deltas.clone(), reverse_key_alt.clone(), key1.clone(), frontier_func, comparison);
+                let changes2 = validate(changes2, reverse_self_neu.clone(), key2.clone(), frontier_func, comparison);
+                let changes2 = changes2.map(|(((b,c),a), payload)| ((a,b,c), payload));
 
                 //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = propose(changes, forward_key_alt.clone(), key1.clone());
-                let changes3 = validate(changes3, reverse_self_alt.clone(), key2.clone());
-                let changes3 = changes3.map(|((a,c),b)| (a,b,c));
+                let changes3 = propose(deltas, forward_key_alt.clone(), key1.clone(), frontier_func, comparison);
+                let changes3 = validate(changes3, reverse_self_alt.clone(), key2.clone(), frontier_func, comparison);
+                let changes3 = changes3.map(|(((a,c),b), payload)| ((a,b,c), payload));
 
-                let prev_changes = changes1.concat(changes2).concat(changes3).leave(scope);
+                // Delay updates to the payload time worked out while extending.
+                let prev_changes = changes1.concat(changes2).concat(changes3)
+                    .inner.map(|((d, payload), _time, r)| (d, payload, r)).as_collection()
+                    .leave(scope);
 
                 // New ideas
                 let d_edges = edges.differentiate(inner);
