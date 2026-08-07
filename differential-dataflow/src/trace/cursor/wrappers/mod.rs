@@ -7,3 +7,4 @@
 //! would supply its own module here, and reuse the same time rules.
 
 pub mod enter;
+pub mod frontier;

@@ -8,8 +8,7 @@
 
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use crate::trace::{BatchReader, Description, Navigable, TraceReader};
-use crate::trace::cursor::Cursor;
+use crate::trace::{BatchReader, Description, TraceReader};
 use crate::lattice::Lattice;
 
 /// Wrapper to provide trace to nested scope.
@@ -76,19 +75,6 @@ pub struct BatchFrontier<B: BatchReader> {
     until: Antichain<B::Time>,
 }
 
-impl<B> Navigable for BatchFrontier<B>
-where
-    B: BatchReader + Navigable,
-    B::Cursor: Cursor<Time = B::Time>,
-{
-
-    type Cursor = BatchCursorFrontier<B::Cursor>;
-
-    fn cursor(&self) -> Self::Cursor {
-        BatchCursorFrontier::new(self.batch.cursor(), self.since.borrow(), self.until.borrow())
-    }
-}
-
 impl<B: BatchReader> BatchReader for BatchFrontier<B> {
     type Time = B::Time;
     fn len(&self) -> usize { self.batch.len() }
@@ -106,70 +92,21 @@ impl<B: BatchReader> BatchFrontier<B> {
     }
 }
 
-use crate::trace::implementations::BatchContainer;
+impl<B: BatchReader> BatchFrontier<B> {
+    /// The wrapped batch, whose times are neither advanced nor suppressed.
+    ///
+    /// Its times must be presented through [`BatchFrontier::advance_time`], which is the whole of
+    /// the wrapper's read-side semantics.
+    pub fn inner(&self) -> &B { &self.batch }
 
-/// Wrapper to provide cursor to nested scope.
-pub struct BatchCursorFrontier<C: Cursor> {
-    cursor: C,
-    since: Antichain<C::Time>,
-    until: Antichain<C::Time>,
-}
-
-impl<C: Cursor> BatchCursorFrontier<C> {
-    fn new(cursor: C, since: AntichainRef<C::Time>, until: AntichainRef<C::Time>) -> Self {
-        BatchCursorFrontier {
-            cursor,
-            since: since.to_owned(),
-            until: until.to_owned(),
-        }
+    /// Applies the wrapper's time semantics to a time of the wrapped batch.
+    ///
+    /// The time is advanced by `since`, which accumulates the updates at or before `since` rather
+    /// than presenting them partially accumulated. The method returns whether the advanced time
+    /// should be presented at all: times at or after `until` are suppressed, even when they are
+    /// part of a batch that spans `until`.
+    pub fn advance_time(&self, time: &mut B::Time) -> bool {
+        time.advance_by(self.since.borrow());
+        !self.until.less_equal(time)
     }
-}
-
-impl<C: Cursor<Storage: BatchReader>> Cursor for BatchCursorFrontier<C> {
-
-    type Storage = BatchFrontier<C::Storage>;
-
-    type Key<'a> = C::Key<'a>;
-    type ValOwn = C::ValOwn;
-    type Val<'a> = C::Val<'a>;
-    type KeyContainer = C::KeyContainer;
-    type ValContainer = C::ValContainer;
-    type DiffContainer = C::DiffContainer;
-    type Diff = C::Diff;
-    type DiffGat<'a> = C::DiffGat<'a>;
-    type TimeContainer = Vec<C::Time>;
-    type Time = <Vec<C::Time> as BatchContainer>::Owned;
-    type TimeGat<'a> = <Vec<C::Time> as BatchContainer>::ReadItem<'a>;
-
-    #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(&storage.batch) }
-    #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(&storage.batch) }
-
-    #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(&storage.batch) }
-    #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(&storage.batch) }
-
-    #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { self.cursor.get_key(&storage.batch) }
-    #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { self.cursor.get_val(&storage.batch) }
-
-    #[inline]
-    fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        let since = self.since.borrow();
-        let until = self.until.borrow();
-        let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
-        self.cursor.map_times(&storage.batch, |time, diff| {
-            C::clone_time_onto(time, &mut temp);
-            temp.advance_by(since);
-            if !until.less_equal(&temp) {
-                logic(&temp, diff);
-            }
-        })
-    }
-
-    #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(&storage.batch) }
-    #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(&storage.batch, key) }
-
-    #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(&storage.batch) }
-    #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(&storage.batch, val) }
-
-    #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(&storage.batch) }
-    #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(&storage.batch) }
 }
