@@ -21,7 +21,7 @@ pub fn validate<'scope, K, V, Tr, F, FF, P>(
     key_selector: F,
 ) -> VecCollection<'scope, Tr::Time, ((P, V), Tr::Time), BatchDiff<Tr>>
 where
-    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash + ExchangeData>+Clone+'static,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Time = Tr::Time,
         Diff : Semigroup<BatchDiffGat<'a, Tr>>+Monoid+Multiply<Output = BatchDiff<Tr>>+ExchangeData,

@@ -72,7 +72,7 @@ pub fn lookup_join<'scope, P, K, R, Tr, F, FF, DOut, ROut, S>(
     mut output_func: S,
 ) -> VecCollection<'scope, Tr::Time, (DOut, Tr::Time), ROut>
 where
-    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash + ExchangeData>+Clone+'static,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Time = Tr::Time,
         Diff : Semigroup<BatchDiffGat<'a, Tr>>+Monoid+ExchangeData,

@@ -41,7 +41,7 @@ pub fn count<'scope, Tr, K, R, F, FF, P>(
     index: usize,
 ) -> VecCollection<'scope, Tr::Time, ((P, usize, usize), Tr::Time), R>
 where
-    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash + differential_dataflow::ExchangeData>+Clone+'static,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
     BatchCursor<Tr>: Cursor<Time = Tr::Time, Diff=isize>,
     <BatchCursor<Tr> as Cursor>::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
     for<'a> BatchDiff<Tr> : Semigroup<BatchDiffGat<'a, Tr>>,
