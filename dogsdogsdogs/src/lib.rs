@@ -39,8 +39,6 @@ use differential_dataflow::{ExchangeData, VecCollection, AsCollection};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::TraceAgent;
 
-pub mod altneu;
-pub mod calculus;
 pub mod operators;
 
 /// Holds back logical compaction so that total-order time comparisons stay meaningful.
