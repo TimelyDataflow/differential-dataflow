@@ -12,19 +12,19 @@ use differential_dataflow::trace::implementations::BatchContainer;
 ///
 /// This operator matches streamed updates with arranged updates, and pairs the streamed updates
 /// with arranged updates whose times are less or equal under the *total order* on timestamps.
-/// This inequality is allowed to either be strict or non-strict, as determined by `comparison`.
+/// This inequality is allowed to either be strict or non-strict, as determined by `strict`.
 /// The total order allows the caller to ensure that each pair of updates match exactly once.
 /// The streamed updates also carry a time as data, and that time is advanced (by lattice join)
 /// by the time of the arranged update. The time of the streamed update cannot be advanced, as
 /// it needs to stay put to ensure the total order math works out.
 ///
 /// The arrangement is expected to hold a *set*: see the note on set semantics in [`crate`].
-pub fn propose<'scope, Tr, K, F, P, V, R, FF, CF>(
+pub fn propose<'scope, Tr, K, F, P, V, R, FF>(
     prefixes: VecCollection<'scope, Tr::Time, (P, Tr::Time), R>,
     arrangement: Arranged<'scope, Tr>,
     key_selector: F,
     frontier_func: FF,
-    comparison: CF,
+    strict: bool,
 ) -> VecCollection<'scope, Tr::Time, ((P, V), Tr::Time), <R as Mul<BatchDiff<Tr>>>::Output>
 where
     Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
@@ -36,14 +36,17 @@ where
     P: ExchangeData,
     V: Clone + 'static,
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
-    CF: Fn(BatchTimeGat<'_, Tr>, &Tr::Time) -> bool + 'static,
+    for<'a, 'b> BatchTimeGat<'a, Tr>: PartialOrd<&'b Tr::Time>,
 {
     let requests = prefixes.map(move |(prefix, payload)| (key_selector(&prefix), prefix, payload));
-    crate::operators::half_join(
-        requests,
-        arrangement,
-        frontier_func,
-        comparison,
-        |_key, prefix, value| (prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)),
-    )
+    // Branch once here, so that each comparison monomorphizes rather than testing `strict` at
+    // every timestamp. The cost is instantiating `half_join` twice.
+    if strict {
+        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 < t2,
+            |_key, prefix, value| (prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)))
+    }
+    else {
+        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 <= t2,
+            |_key, prefix, value| (prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)))
+    }
 }

@@ -4,7 +4,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
 
-use differential_dogs3::{CollectionIndex, altneu::AltNeu};
+use differential_dogs3::CollectionIndex;
 use differential_dogs3::{ProposeExtensionMethod};
 
 fn main() {
@@ -31,75 +31,65 @@ fn main() {
             let forward = edges.clone();
             let reverse = edges.map(|(x,y)| (y,x));
 
+
             // Q(a,b,c) :=  E1(a,b),  E2(b,c),  E3(a,c)
-            let triangles = scope.scoped::<AltNeu<usize>,_,_>("DeltaQuery (Triangles)", |inner| {
 
-                // Each relation we'll need.
-                let forward = forward.enter(inner);
-                let reverse = reverse.enter(inner);
+            // Hold compaction back one step, so that we do not lose the distinction between
+            // "strictly before" and "at the same time".
+            let frontier_func = |time: &usize, antichain: &mut timely::progress::Antichain<usize>| {
+                antichain.insert(time.saturating_sub(1));
+            };
 
-                // Hold compaction back one base-time step, so that the alt/neu distinction
-                // survives, and compare in the total order on `AltNeu` (lexicographic on
-                // `(time, neu)`). Delta streams enter at `alt`, so an `alt` arrangement is
-                // seen at the delta's own time and a `neu` one only strictly after it: the
-                // tag is what makes the comparison strict or not.
-                let frontier_func = |time: &AltNeu<usize>, antichain: &mut timely::progress::Antichain<AltNeu<usize>>| {
-                    antichain.insert(AltNeu::alt(time.time.saturating_sub(1)));
-                };
-                let comparison = |t1: &AltNeu<usize>, t2: &AltNeu<usize>| t1 <= t2;
+            // One index per orientation. The "old" and "new" copies these replace differed
+            // only in whether a lookup could see updates at the delta's own time, which each
+            // `extend_using` below now states for itself.
+            let index_forward = CollectionIndex::index(forward.clone(), frontier_func);
+            let index_reverse = CollectionIndex::index(reverse.clone(), frontier_func);
 
-                // Without using wrappers yet, maintain an "old" and a "new" copy of edges.
-                let alt_forward = CollectionIndex::index(forward.clone(), frontier_func, comparison);
-                let alt_reverse = CollectionIndex::index(reverse.clone(), frontier_func, comparison);
-                let neu_forward = CollectionIndex::index(forward.clone().delay(|time| AltNeu::neu(time.time.clone())), frontier_func, comparison);
-                let neu_reverse = CollectionIndex::index(reverse.clone().delay(|time| AltNeu::neu(time.time.clone())), frontier_func, comparison);
+            // Stash each delta's own time as its payload, to be advanced by the times of the
+            // records it matches, and delayed to once we are done extending.
+            let deltas = forward.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
 
-                // Stash each delta's own time as its payload, to be advanced by the times of
-                // the records it matches, and delayed to once we leave the delta region.
-                let deltas = forward.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
+            // For each relation, we form a delta query driven by changes to that relation.
+            //
+            // The sequence of joined relations are such that we only introduce relations
+            // which share some bound attributes with the current stream of deltas.
+            // Each lookup is strict exactly when it reaches a relation later in the sequence
+            // than the delta stream, which is what stops a pair of updates matching twice.
+            // Each joined relation is directed { forward, reverse } by whether the
+            // bound variable occurs in the first or second position.
 
-                // For each relation, we form a delta query driven by changes to that relation.
-                //
-                // The sequence of joined relations are such that we only introduce relations
-                // which share some bound attributes with the current stream of deltas.
-                // Each joined relation is delayed { alt -> neu } if its position in the
-                // sequence is greater than the delta stream.
-                // Each joined relation is directed { forward, reverse } by whether the
-                // bound variable occurs in the first or second position.
+            //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
+            let changes1 =
+            deltas
+                .clone()
+                .extend(&mut [
+                    &mut index_forward.extend_using(|(_a,b)| *b, true),
+                    &mut index_forward.extend_using(|(a,_b)| *a, true),
+                ])
+                .map(|(((a,b),c), payload)| ((a,b,c), payload));
 
-                //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 =
-                deltas
-                    .clone()
-                    .extend(&mut [
-                        &mut neu_forward.extend_using(|(_a,b)| *b),
-                        &mut neu_forward.extend_using(|(a,_b)| *a),
-                    ])
-                    .map(|(((a,b),c), payload)| ((a,b,c), payload));
+            //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
+            let changes2 =
+            deltas
+                .clone()
+                .extend(&mut [
+                    &mut index_reverse.extend_using(|(b,_c)| *b, false),
+                    &mut index_reverse.extend_using(|(_b,c)| *c, true),
+                ])
+                .map(|(((b,c),a), payload)| ((a,b,c), payload));
 
-                //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 =
-                deltas
-                    .clone()
-                    .extend(&mut [
-                        &mut alt_reverse.extend_using(|(b,_c)| *b),
-                        &mut neu_reverse.extend_using(|(_b,c)| *c),
-                    ])
-                    .map(|(((b,c),a), payload)| ((a,b,c), payload));
+            //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
+            let changes3 = deltas
+                .extend(&mut [
+                    &mut index_forward.extend_using(|(a,_c)| *a, false),
+                    &mut index_reverse.extend_using(|(_a,c)| *c, false),
+                ])
+                .map(|(((a,c),b), payload)| ((a,b,c), payload));
 
-                //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = deltas
-                    .extend(&mut [
-                        &mut alt_forward.extend_using(|(a,_c)| *a),
-                        &mut alt_reverse.extend_using(|(_a,c)| *c),
-                    ])
-                    .map(|(((a,c),b), payload)| ((a,b,c), payload));
-
-                // Delay updates to the payload time worked out while extending.
-                changes1.concat(changes2).concat(changes3)
-                    .inner.map(|((d, payload), _time, r)| (d, payload, r)).as_collection()
-                    .leave(scope)
-            });
+            // Delay updates to the payload time worked out while extending.
+            let triangles = changes1.concat(changes2).concat(changes3)
+                .inner.map(|((d, payload), _time, r)| (d, payload, r)).as_collection();
 
             triangles
                 .filter(move |_| inspect)

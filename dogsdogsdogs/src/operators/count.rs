@@ -16,13 +16,13 @@ use differential_dataflow::trace::implementations::BatchContainer;
 ///
 /// A prefix is dropped only when its key is absent from `arrangement` entirely, which is only
 /// expected to happen when there have never been counts (they are meant to be non-negative).
-pub fn count<'scope, Tr, K, F, P, R, FF, CF>(
+pub fn count<'scope, Tr, K, F, P, R, FF>(
     prefixes: VecCollection<'scope, Tr::Time, ((P, usize, usize), Tr::Time), R>,
     arrangement: Arranged<'scope, Tr>,
     key_selector: F,
     index: usize,
     frontier_func: FF,
-    comparison: CF,
+    strict: bool,
 ) -> VecCollection<'scope, Tr::Time, ((P, usize, usize), Tr::Time), R>
 where
     Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
@@ -33,7 +33,7 @@ where
     F: Fn(&P)->K+'static,
     P: ExchangeData,
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
-    CF: Fn(BatchTimeGat<'_, Tr>, &Tr::Time) -> bool + 'static,
+    for<'a, 'b> BatchTimeGat<'a, Tr>: PartialOrd<&'b Tr::Time>,
 {
     // The payload time is carried in the record as well as in the half-join's own payload
     // slot, because the output closure is handed the joined times rather than the payload.
@@ -63,13 +63,16 @@ where
         builder.push_into(((triple, payload.clone()), initial.clone(), diff1.clone()));
     };
 
-    crate::operators::half_join::half_join_internal_unsafe::<_, _, _, _, _, _, _, _, Output<P, Tr::Time, R>>(
-        requests,
-        arrangement,
-        frontier_func,
-        comparison,
-        |_timer, _count| false,
-        output_func,
-    )
+    use crate::operators::half_join::half_join_internal_unsafe as half_join_unsafe;
+    // Branch once here, so that each comparison monomorphizes rather than testing `strict` at
+    // every timestamp. The cost is instantiating `half_join` twice.
+    if strict {
+        half_join_unsafe::<_, _, _, _, _, _, _, _, Output<P, Tr::Time, R>>(
+            requests, arrangement, frontier_func, |t1, t2| t1 < t2, |_timer, _count| false, output_func)
+    }
+    else {
+        half_join_unsafe::<_, _, _, _, _, _, _, _, Output<P, Tr::Time, R>>(
+            requests, arrangement, frontier_func, |t1, t2| t1 <= t2, |_timer, _count| false, output_func)
+    }
     .as_collection()
 }

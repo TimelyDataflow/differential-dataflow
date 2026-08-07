@@ -14,7 +14,7 @@ use timely::progress::Antichain;
 use differential_dataflow::AsCollection;
 use differential_dataflow::input::Input;
 
-use differential_dogs3::{CollectionIndex, altneu::AltNeu, ProposeExtensionMethod};
+use differential_dogs3::{CollectionIndex, ProposeExtensionMethod};
 
 /// Runs `Q(a,b,c) := E(a,b), E(b,c), E(a,c)` over `deltas`, and returns the output updates.
 ///
@@ -35,53 +35,44 @@ fn triangles(deltas: &[((u32, u32), usize, isize)], rounds: usize) -> Vec<((u32,
             let forward = edges.clone();
             let reverse = edges.map(|(x, y)| (y, x));
 
-            let triangles = scope.scoped::<AltNeu<usize>, _, _>("Triangles", |inner| {
-                let forward = forward.enter(inner);
-                let reverse = reverse.enter(inner);
+            // Hold compaction back one step, so that we do not lose the distinction between
+            // "strictly before" and "at the same time".
+            let frontier_func = |time: &usize, antichain: &mut Antichain<usize>| {
+                antichain.insert(time.saturating_sub(1));
+            };
 
-                // Hold compaction back one base-time step so the alt/neu distinction survives,
-                // and compare in the total order on `AltNeu` (lexicographic on `(time, neu)`).
-                let frontier_func = |time: &AltNeu<usize>, antichain: &mut Antichain<AltNeu<usize>>| {
-                    antichain.insert(AltNeu::alt(time.time.saturating_sub(1)));
-                };
-                let comparison = |t1: &AltNeu<usize>, t2: &AltNeu<usize>| t1 <= t2;
+            let index_forward = CollectionIndex::index(forward.clone(), frontier_func);
+            let index_reverse = CollectionIndex::index(reverse.clone(), frontier_func);
 
-                let alt_forward = CollectionIndex::index(forward.clone(), frontier_func, comparison);
-                let alt_reverse = CollectionIndex::index(reverse.clone(), frontier_func, comparison);
-                let neu_forward = CollectionIndex::index(forward.clone().delay(|t| AltNeu::neu(t.time.clone())), frontier_func, comparison);
-                let neu_reverse = CollectionIndex::index(reverse.clone().delay(|t| AltNeu::neu(t.time.clone())), frontier_func, comparison);
+            let deltas = forward.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
 
-                let deltas = forward.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
+            //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
+            let changes1 = deltas.clone()
+                .extend(&mut [
+                    &mut index_forward.extend_using(|(_a, b)| *b, true),
+                    &mut index_forward.extend_using(|(a, _b)| *a, true),
+                ])
+                .map(|(((a, b), c), payload)| ((a, b, c), payload));
 
-                //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                let changes1 = deltas.clone()
-                    .extend(&mut [
-                        &mut neu_forward.extend_using(|(_a, b)| *b),
-                        &mut neu_forward.extend_using(|(a, _b)| *a),
-                    ])
-                    .map(|(((a, b), c), payload)| ((a, b, c), payload));
+            //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
+            let changes2 = deltas.clone()
+                .extend(&mut [
+                    &mut index_reverse.extend_using(|(b, _c)| *b, false),
+                    &mut index_reverse.extend_using(|(_b, c)| *c, true),
+                ])
+                .map(|(((b, c), a), payload)| ((a, b, c), payload));
 
-                //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                let changes2 = deltas.clone()
-                    .extend(&mut [
-                        &mut alt_reverse.extend_using(|(b, _c)| *b),
-                        &mut neu_reverse.extend_using(|(_b, c)| *c),
-                    ])
-                    .map(|(((b, c), a), payload)| ((a, b, c), payload));
+            //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
+            let changes3 = deltas
+                .extend(&mut [
+                    &mut index_forward.extend_using(|(a, _c)| *a, false),
+                    &mut index_reverse.extend_using(|(_a, c)| *c, false),
+                ])
+                .map(|(((a, c), b), payload)| ((a, b, c), payload));
 
-                //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                let changes3 = deltas
-                    .extend(&mut [
-                        &mut alt_forward.extend_using(|(a, _c)| *a),
-                        &mut alt_reverse.extend_using(|(_a, c)| *c),
-                    ])
-                    .map(|(((a, c), b), payload)| ((a, b, c), payload));
-
-                // Delay updates to the payload time worked out while extending.
-                changes1.concat(changes2).concat(changes3)
-                    .inner.map(|((d, payload), _time, r)| (d, payload, r)).as_collection()
-                    .leave(scope)
-            });
+            // Delay updates to the payload time worked out while extending.
+            let triangles = changes1.concat(changes2).concat(changes3)
+                .inner.map(|((d, payload), _time, r)| (d, payload, r)).as_collection();
 
             triangles
                 .inspect_batch(move |_t, xs| {

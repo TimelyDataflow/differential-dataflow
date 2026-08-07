@@ -1,6 +1,6 @@
 //! The worst-case-optimal `extend` path over a *partially ordered* time.
 //!
-//! This is the case the payload time exists for. `comparison` orders times totally, so a prefix
+//! This is the case the payload time exists for. Times are compared totally, so a prefix
 //! at `initial` matches records at times incomparable to it, and `lub(t2, payload)` then differs
 //! from match to match. Two updates to the same extension therefore land at two *different*
 //! output times rather than collapsing onto one, and no longer cancel.
@@ -18,7 +18,7 @@ use timely::progress::Antichain;
 use differential_dataflow::AsCollection;
 use differential_dataflow::lattice::Lattice;
 
-use differential_dogs3::{CollectionIndex, altneu::AltNeu, ProposeExtensionMethod};
+use differential_dogs3::{CollectionIndex, ProposeExtensionMethod};
 
 type Time = Product<usize, usize>;
 
@@ -42,54 +42,45 @@ fn triangles(deltas: &[((u32, u32), Time, isize)]) -> Vec<((u32, u32, u32), Time
                 let forward = edges.clone();
                 let reverse = edges.map(|(x, y)| (y, x));
 
-                let triangles = outer.scoped::<AltNeu<Time>, _, _>("Triangles", |inner| {
-                    let forward = forward.enter(inner);
-                    let reverse = reverse.enter(inner);
+                // Hold compaction back one step in each coordinate, so that total-order
+                // comparisons are not misled. Times compare in the total order on `Product`,
+                // which is lexicographic and therefore a linear extension of the lattice.
+                let frontier_func = |time: &Time, antichain: &mut Antichain<Time>| {
+                    antichain.insert(Product::new(time.outer.saturating_sub(1), time.inner.saturating_sub(1)));
+                };
 
-                    // Hold compaction back one step in each coordinate, so that total-order
-                    // comparisons are not misled, and compare in the total order on `AltNeu`
-                    // (lexicographic on `(time, neu)`, and `time` lexicographic on `Product`).
-                    let frontier_func = |time: &AltNeu<Time>, antichain: &mut Antichain<AltNeu<Time>>| {
-                        antichain.insert(AltNeu::alt(Product::new(time.time.outer.saturating_sub(1), time.time.inner.saturating_sub(1))));
-                    };
-                    let comparison = |t1: &AltNeu<Time>, t2: &AltNeu<Time>| t1 <= t2;
+                let index_forward = CollectionIndex::index(forward.clone(), frontier_func);
+                let index_reverse = CollectionIndex::index(reverse.clone(), frontier_func);
 
-                    let alt_forward = CollectionIndex::index(forward.clone(), frontier_func, comparison);
-                    let alt_reverse = CollectionIndex::index(reverse.clone(), frontier_func, comparison);
-                    let neu_forward = CollectionIndex::index(forward.clone().delay(|t| AltNeu::neu(t.time.clone())), frontier_func, comparison);
-                    let neu_reverse = CollectionIndex::index(reverse.clone().delay(|t| AltNeu::neu(t.time.clone())), frontier_func, comparison);
+                let deltas = forward.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
 
-                    let deltas = forward.inner.map(|(d, t, r)| ((d, t.clone()), t, r)).as_collection();
+                //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
+                let changes1 = deltas.clone()
+                    .extend(&mut [
+                        &mut index_forward.extend_using(|(_a, b)| *b, true),
+                        &mut index_forward.extend_using(|(a, _b)| *a, true),
+                    ])
+                    .map(|(((a, b), c), payload)| ((a, b, c), payload));
 
-                    //   dQ/dE1 := dE1(a,b), E2(b,c), E3(a,c)
-                    let changes1 = deltas.clone()
-                        .extend(&mut [
-                            &mut neu_forward.extend_using(|(_a, b)| *b),
-                            &mut neu_forward.extend_using(|(a, _b)| *a),
-                        ])
-                        .map(|(((a, b), c), payload)| ((a, b, c), payload));
+                //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
+                let changes2 = deltas.clone()
+                    .extend(&mut [
+                        &mut index_reverse.extend_using(|(b, _c)| *b, false),
+                        &mut index_reverse.extend_using(|(_b, c)| *c, true),
+                    ])
+                    .map(|(((b, c), a), payload)| ((a, b, c), payload));
 
-                    //   dQ/dE2 := dE2(b,c), E1(a,b), E3(a,c)
-                    let changes2 = deltas.clone()
-                        .extend(&mut [
-                            &mut alt_reverse.extend_using(|(b, _c)| *b),
-                            &mut neu_reverse.extend_using(|(_b, c)| *c),
-                        ])
-                        .map(|(((b, c), a), payload)| ((a, b, c), payload));
+                //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
+                let changes3 = deltas
+                    .extend(&mut [
+                        &mut index_forward.extend_using(|(a, _c)| *a, false),
+                        &mut index_reverse.extend_using(|(_a, c)| *c, false),
+                    ])
+                    .map(|(((a, c), b), payload)| ((a, b, c), payload));
 
-                    //   dQ/dE3 := dE3(a,c), E1(a,b), E2(b,c)
-                    let changes3 = deltas
-                        .extend(&mut [
-                            &mut alt_forward.extend_using(|(a, _c)| *a),
-                            &mut alt_reverse.extend_using(|(_a, c)| *c),
-                        ])
-                        .map(|(((a, c), b), payload)| ((a, b, c), payload));
-
-                    // Delay updates to the payload time worked out while extending.
-                    changes1.concat(changes2).concat(changes3)
-                        .inner.map(|((d, payload), _time, r)| (d, payload, r)).as_collection()
-                        .leave(outer)
-                });
+                // Delay updates to the payload time worked out while extending.
+                let triangles = changes1.concat(changes2).concat(changes3)
+                    .inner.map(|((d, payload), _time, r)| (d, payload, r)).as_collection();
 
                 let left = triangles
                     .inspect_batch(move |_t, xs| {

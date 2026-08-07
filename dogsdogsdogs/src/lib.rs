@@ -50,12 +50,6 @@ pub mod operators;
 /// rests on. See [`crate::operators::half_join`].
 pub type FrontierFunc<T> = Rc<dyn Fn(&T, &mut Antichain<T>)>;
 
-/// Compares an arranged record's time against a prefix's own time, in the *total order*.
-///
-/// The two useful choices are strictly-less and less-or-equal, which is how a delta query
-/// decides whether a stage sees updates concurrent with the delta it is responding to.
-pub type Comparison<T> = Rc<dyn Fn(&T, &T) -> bool>;
-
 /// A type capable of extending a stream of prefixes.
 ///
 /**
@@ -167,9 +161,6 @@ where
 
     /// Holds back compaction; see [`FrontierFunc`].
     frontier_func: FrontierFunc<T>,
-
-    /// Decides which arranged times a prefix sees; see [`Comparison`].
-    comparison: Comparison<T>,
 }
 
 impl<'scope, K, V, T> Clone for CollectionIndex<'scope, K, V, T>
@@ -184,7 +175,6 @@ where
             propose_trace: self.propose_trace.clone(),
             validate_trace: self.validate_trace.clone(),
             frontier_func: Rc::clone(&self.frontier_func),
-            comparison: Rc::clone(&self.comparison),
         }
     }
 }
@@ -196,10 +186,9 @@ where
     T: Lattice+ExchangeData+Timestamp,
 {
 
-    pub fn index<FF, CF>(collection: VecCollection<'scope, T, (K, V), isize>, frontier_func: FF, comparison: CF) -> Self
+    pub fn index<FF>(collection: VecCollection<'scope, T, (K, V), isize>, frontier_func: FF) -> Self
     where
         FF: Fn(&T, &mut Antichain<T>) + 'static,
-        CF: Fn(&T, &T) -> bool + 'static,
     {
         // We need to count the number of (k, v) pairs and not rely on the given Monoid R and its binary addition operation.
         // counts and validate can share the base arrangement
@@ -219,14 +208,20 @@ where
             propose_trace: propose,
             validate_trace: validate,
             frontier_func: Rc::new(frontier_func),
-            comparison: Rc::new(comparison),
         }
     }
-    pub fn extend_using<P, F: Fn(&P)->K+Clone>(&self, logic: F) -> CollectionExtender<'scope, K, V, T, P, F> {
+    /// Prepares to extend prefixes by this relation, using `logic` to find the key.
+    ///
+    /// For a delta query, `strict` follows from the positions of the two relations: a relation
+    /// looking up in a *later* one is strict, and cannot see updates concurrent with the delta
+    /// it is responding to; looking up in an *earlier* one is non-strict, and can. A relation
+    /// never looks up in itself.
+    pub fn extend_using<P, F: Fn(&P)->K+Clone>(&self, logic: F, strict: bool) -> CollectionExtender<'scope, K, V, T, P, F> {
         CollectionExtender {
             phantom: std::marker::PhantomData,
             indices: self.clone(),
             key_selector: logic,
+            strict,
         }
     }
 }
@@ -241,6 +236,7 @@ where
     phantom: std::marker::PhantomData<P>,
     indices: CollectionIndex<'scope, K, V, T>,
     key_selector: F,
+    strict: bool,
 }
 
 impl<'scope, K, V, T, P, F> CollectionExtender<'scope, K, V, T, P, F>
@@ -250,11 +246,10 @@ where
     T: Lattice+ExchangeData+Timestamp,
     F: Fn(&P)->K+Clone,
 {
-    /// The index's time closures, as plain callables the operators can accept.
-    fn time_logic(&self) -> (impl Fn(&T, &mut Antichain<T>) + 'static, impl Fn(&T, &T) -> bool + 'static) {
+    /// The index's compaction closure, as a plain callable the operators can accept.
+    fn frontier_func(&self) -> impl Fn(&T, &mut Antichain<T>) + 'static {
         let frontier_func = Rc::clone(&self.indices.frontier_func);
-        let comparison = Rc::clone(&self.indices.comparison);
-        (move |t: &T, a: &mut Antichain<T>| frontier_func(t, a), move |t1: &T, t2: &T| comparison(t1, t2))
+        move |t: &T, a: &mut Antichain<T>| frontier_func(t, a)
     }
 }
 
@@ -270,18 +265,14 @@ where
     type Extension = V;
 
     fn count(&mut self, prefixes: VecCollection<'scope, T, ((P, usize, usize), T), isize>, index: usize) -> VecCollection<'scope, T, ((P, usize, usize), T), isize> {
-        let (frontier_func, comparison) = self.time_logic();
-        operators::count::count(prefixes, self.indices.count_trace.clone(), self.key_selector.clone(), index, frontier_func, comparison)
+        operators::count::count(prefixes, self.indices.count_trace.clone(), self.key_selector.clone(), index, self.frontier_func(), self.strict)
     }
 
     fn propose(&mut self, prefixes: VecCollection<'scope, T, (P, T), isize>) -> VecCollection<'scope, T, ((P, V), T), isize> {
-        let (frontier_func, comparison) = self.time_logic();
-        operators::propose::propose(prefixes, self.indices.propose_trace.clone(), self.key_selector.clone(), frontier_func, comparison)
+        operators::propose::propose(prefixes, self.indices.propose_trace.clone(), self.key_selector.clone(), self.frontier_func(), self.strict)
     }
 
     fn validate(&mut self, extensions: VecCollection<'scope, T, ((P, V), T), isize>) -> VecCollection<'scope, T, ((P, V), T), isize> {
-        let (frontier_func, comparison) = self.time_logic();
-        let key_selector = self.key_selector.clone();
-        operators::validate::validate(extensions, self.indices.validate_trace.clone(), key_selector, frontier_func, comparison)
+        operators::validate::validate(extensions, self.indices.validate_trace.clone(), self.key_selector.clone(), self.frontier_func(), self.strict)
     }
 }

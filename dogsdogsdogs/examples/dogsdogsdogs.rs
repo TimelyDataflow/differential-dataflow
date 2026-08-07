@@ -42,12 +42,11 @@ fn main() {
             let frontier_func = |time: &usize, antichain: &mut timely::progress::Antichain<usize>| {
                 antichain.insert(time.saturating_sub(1));
             };
-            let comparison = |t1: &usize, t2: &usize| t1 <= t2;
 
-            let index = CollectionIndex::index(Collection::new(edges.to_stream(scope)), frontier_func, comparison);
+            let index = CollectionIndex::index(Collection::new(edges.to_stream(scope)), frontier_func);
 
-            let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x);
-            let mut index_yz = index.extend_using(|&(ref _x, ref y)| *y);
+            let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x, false);
+            let mut index_yz = index.extend_using(|&(ref _x, ref y)| *y, false);
 
             let (edges_input, edges) = scope.new_collection();
 
