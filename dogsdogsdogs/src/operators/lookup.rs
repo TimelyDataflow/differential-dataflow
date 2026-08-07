@@ -1,41 +1,12 @@
-//! Streamed requests looked up against an arrangement, gated on total-order completeness.
+//! Streamed requests looked up against an arrangement, based on timestamp total-order.
 //!
-//! This is the single primitive under `half_join`, `lookup_map`, and the prefix-extension
-//! trio (`count`, `propose`, `validate`). Each of those is this operator with a different
-//! output function; none of them differ in how they reason about time.
+//! The operator takes two inputs, a stream of *requests* and an arrangement of *state*.
+//! Each request is matched with the state updates at times that are less or equal to the
+//! time of the request, optionally strictly, under the *total order* on timestamps.
 //!
-//! The trio implements the *shape* of a worst-case-optimal join — size each atom, extend from
-//! the smallest, semijoin against the rest — but the bound that name refers to is not
-//! established in this setting, and nothing here should be read as claiming it. See
-//! [`crate::operators::count()`] for what is and is not known.
-//!
-//! # What the operator does
-//!
-//! It accepts a stream of *requests* `(payload, initial, diff)` and holds an arrangement. A
-//! request is released only once the arrangement can no longer receive an update that its
-//! [`Cut`] would admit — that is, once the arrangement is *complete* for the cut this request
-//! takes. It then seeks the request's key, and for each matching value hands the caller the
-//! consolidated arrangement updates admitted by the cut:
-//!
-//! > For each (request, matching value): here is the consolidated `[(time, diff)]` of
-//! > arrangement updates satisfying `cut.admits(t, initial)`. Do what you like with it.
-//!
-//! Everything the derived operators differ in lives in that last sentence. `half_join` joins
-//! each admitted time with a time it carried in its payload and emits per pair; `lookup_map`
-//! sums the diffs and emits once at `initial`; `count` sums, buckets, and takes an argmin;
-//! `propose` multiplies; `validate` filters.
-//!
-//! # Why the cut is a total order
-//!
-//! A delta-query decomposition asks each pair of matching updates — one from the request
-//! stream, one from the arrangement — to be accounted exactly once across the rules. Under
-//! the *partial* order, two updates at incomparable times satisfy neither `t_a ⪯ t_b` nor
-//! `t_b ≺ t_a`, so no rule fires and the pair is lost. A total order extending the partial
-//! order always has a unique maximum, so exactly one rule fires. See [`Cut`].
-//!
-//! The total order is used *only* to select which arrangement updates a request sees. Output
-//! times remain partial-order joins, which is why a request carries the time it compares
-//! against (`initial`) separately from whatever time it accumulates into its payload.
+//! The total ordering is used to ensure that each pair of updates between the stream and
+//! the arrangement can be matched exactly once; the corresponding state updates can stream
+//! against the rolled up form of the stream, using the alternate strictness.
 
 use std::collections::VecDeque;
 
@@ -55,21 +26,7 @@ use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchVal, Cursor, Nav
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::trace::implementations::BatchContainer;
 
-/// Which side of the cut concurrent updates fall on.
-///
-/// The cut is taken with respect to `Ord` on the timestamp. Timestamps are required to order
-/// `Ord`-consistently with `PartialOrder`, so `Ord` is always a total order extending the
-/// partial order — which is exactly what the exactly-once argument needs, and it is the only
-/// such order the operator will use. There are just the two ways to place updates concurrent
-/// with the request, and a delta rule picks one per atom by that atom's position relative to
-/// the rule's seed: atoms before the seed take [`Cut::AtOrBefore`], atoms after it take
-/// [`Cut::Before`] (or the mirror convention, applied consistently).
-///
-/// This is a value rather than a type parameter deliberately. Every call site knows statically
-/// which one it wants, so a type parameter would buy no dispatch and cost a monomorphization;
-/// and the intended next step is an order that is *not* statically known — imposed at runtime
-/// by a supervisor observing input frontier advances — which a value can grow to carry and a
-/// type parameter could not, without touching every signature.
+/// The strictness of the total order inequality comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cut {
     /// `t < initial`: strictly before, ignoring updates concurrent with the request.
@@ -88,32 +45,10 @@ impl Cut {
         }
     }
 
-    /// The cut at which a delta rule seeded by atom `seed` must read atom `atom`.
+    /// A helper method that provides a strictness for two positions: a seed and an atom.
     ///
-    /// A multiway join over atoms numbered `0 .. k` is evaluated as `k` delta rules, one seeded
-    /// by each atom. For the assembled rules to account each combination of updates *exactly
-    /// once*, rule `seed` must claim a combination `(r_0 .. r_k)` with times `(t_0 .. t_k)`
-    /// precisely when
-    ///
-    /// * `t_atom <= t_seed` for `atom < seed`, and
-    /// * `t_atom <  t_seed` for `atom > seed`
-    ///
-    /// — that is, when `seed` is the *largest* index achieving the `Ord`-maximum of the times.
-    /// Such an index always exists and is unique, so exactly one rule claims each combination.
-    /// Ordering by `Ord` rather than by `PartialOrder` is what makes the maximum exist at all:
-    /// under the partial order two incomparable times have no maximum, no rule claims the pair,
-    /// and the match is lost.
-    ///
-    /// Deriving the cut here rather than accepting one from the caller is deliberate. The cut is
-    /// a function of the two positions and nothing else, so every value a caller could pass is
-    /// either this one or a bug — one that double counts (two lax rules both claim a tie) or
-    /// drops matches (two strict rules claim neither). Taking positions also forces the atom
-    /// numbering to be *global*: the rules must agree on one ordering, and disagreement between
-    /// independently written rules is the easiest way to break the argument above.
-    ///
-    /// This says nothing about *where* a claimed combination is emitted; that is the other half
-    /// of the obligation, and it is the join of all `k` times — including atoms that only
-    /// validated.
+    /// Atoms before the seed use non-strict inequalities, atoms after the seed use strict
+    /// inequalities, and it is an error to use the same identifier as the seed and atom.
     pub fn for_positions(seed: usize, atom: usize) -> Cut {
         assert_ne!(seed, atom, "an atom does not read itself; rule {seed} is seeded by it");
         if atom < seed { Cut::AtOrBefore } else { Cut::Before }
@@ -144,13 +79,10 @@ pub fn identity_frontier<T: Clone + PartialOrder>(time: &T, antichain: &mut Anti
 /// # Caller obligations
 ///
 /// * **`frontier_func` must hold back logical compaction far enough to preserve the cut.**
-///   Given a time the operator still holds, it inserts into the antichain a bound below which
-///   the arrangement may compact. Conventional compaction advances update times *to* the
-///   frontier, which can push an update that was admitted by a cut up to or past the request's
-///   `initial` and silently drop the match; the bound must therefore lie strictly below every
-///   `initial` the operator may still compare against. (This is why callers today write
-///   `t.saturating_sub(1)` and `Product::new(outer-1, inner-1)`.) The operator cannot derive
-///   this: it needs a strict predecessor, which the lattice does not supply.
+///   Specifically, when the cut is *strict*, the logical compaction needs to preserve the
+///   difference between a time that may still arrive and times strictly before it. Usually,
+///   this means "subtracting one" from each time that might still arrive, and taking these
+///   times as a compaction frontier.
 /// * **Exactly-once is not checked here.** This operator implements one atom at one cut. That
 ///   the cuts across a rule's atoms compose into an exactly-once decomposition is the caller's
 ///   construction, and is not observable from inside a single operator.
@@ -161,6 +93,7 @@ pub fn identity_frontier<T: Clone + PartialOrder>(time: &T, antichain: &mut Anti
 pub fn lookup<'scope, D, K, R, Tr, F, FF, Y, S, CB>(
     requests: VecCollection<'scope, Tr::Time, D, R>,
     mut arrangement: Arranged<'scope, Tr>,
+    name: &str,
     cut: Cut,
     frontier_func: FF,
     key_selector: F,
@@ -205,7 +138,7 @@ where
     let mut blobs: Vec<Blob<D, Tr::Time, R>> = Vec::new();
 
     let scope = requests.scope();
-    requests.inner.binary_frontier(arrangement_stream, exchange, Pipeline, "Lookup", move |_,info| {
+    requests.inner.binary_frontier(arrangement_stream, exchange, Pipeline, name, move |_,info| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         let activator = scope.activator_for(info.address);

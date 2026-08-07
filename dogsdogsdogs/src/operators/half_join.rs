@@ -139,6 +139,7 @@ where
     lookup(
         stream,
         arrangement,
+        "HalfJoin",
         cut,
         frontier_func,
         |request: &(K, V, Tr::Time), key: &mut K| { key.clone_from(&request.0); },
