@@ -90,31 +90,13 @@ impl<B: BatchReader> BatchFrontier<B> {
             until: until.to_owned(),
         }
     }
-}
 
-impl<B: BatchReader> BatchFrontier<B> {
     /// The wrapped batch, whose times are neither advanced nor suppressed.
     ///
-    /// Its times must be presented through [`Advance`], which is the whole of the wrapper's
-    /// read-side semantics.
+    /// Its times must be presented through [`BatchFrontier::advance_time`], which is the whole of
+    /// the wrapper's read-side semantics.
     pub fn inner(&self) -> &B { &self.batch }
 
-    /// Borrows the wrapper's frontiers, to apply to many times.
-    ///
-    /// A reader acquires this once and applies it to each time it produces, rather than borrow
-    /// the frontiers per time.
-    pub fn advance(&self) -> Advance<'_, B::Time> {
-        Advance { since: self.since.borrow(), until: self.until.borrow() }
-    }
-}
-
-/// The time semantics of a frontiered batch, borrowed from it.
-pub struct Advance<'a, T> {
-    since: AntichainRef<'a, T>,
-    until: AntichainRef<'a, T>,
-}
-
-impl<T: Lattice> Advance<'_, T> {
     /// Applies the wrapper's time semantics to a time of the wrapped batch.
     ///
     /// The time is advanced by `since`, which accumulates the updates at or before `since` rather
@@ -122,8 +104,8 @@ impl<T: Lattice> Advance<'_, T> {
     /// should be presented at all: times at or after `until` are suppressed, even when they are
     /// part of a batch that spans `until`.
     #[inline]
-    pub fn apply(&self, time: &mut T) -> bool {
-        time.advance_by(self.since);
+    pub fn advance_time(&self, time: &mut B::Time) -> bool {
+        time.advance_by(self.since.borrow());
         !self.until.less_equal(time)
     }
 }

@@ -19,8 +19,8 @@ where
 
 /// Wrapper to provide cursor to nested scope.
 ///
-/// The wrapper's `since` and `until` frontiers stay with the batch, which lends them through
-/// [`BatchFrontier::advance`]; the cursor holds only the cursor it forwards to.
+/// The wrapper's `since` and `until` frontiers stay with the batch, which applies them through
+/// [`BatchFrontier::advance_time`]; the cursor holds only the cursor it forwards to.
 pub struct BatchCursorFrontier<C> {
     cursor: C,
 }
@@ -55,10 +55,9 @@ where
     #[inline]
     fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, mut logic: L) {
         let mut temp: C::Time = <C::Time as timely::progress::Timestamp>::minimum();
-        let advance = storage.advance();
         self.cursor.map_times(storage.inner(), |time, diff| {
             C::clone_time_onto(time, &mut temp);
-            if advance.apply(&mut temp) {
+            if storage.advance_time(&mut temp) {
                 logic(&temp, diff);
             }
         })
