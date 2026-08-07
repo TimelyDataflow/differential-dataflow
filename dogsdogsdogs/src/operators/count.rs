@@ -1,41 +1,78 @@
-use differential_dataflow::{ExchangeData, VecCollection, Hashable};
-use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
-use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchDiffGat, Cursor, Navigable, TraceReader};
+use timely::container::CapacityContainerBuilder;
+use timely::container::PushInto;
+use timely::progress::Antichain;
 
-/// Reports a number of extensions to a stream of prefixes.
+use differential_dataflow::{AsCollection, ExchangeData, VecCollection, Hashable};
+use differential_dataflow::difference::Monoid;
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::{BatchCursor, BatchTimeGat, BatchVal, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::implementations::BatchContainer;
+
+/// Updates a stream of prefix routing judgements based on approximate counts.
 ///
-/// This method takes as input a stream of `(prefix, count, index)` triples.
-/// For each triple, it extracts a key using `key_selector`, and finds the
-/// associated count in `arrangement`. If the found count is less than `count`,
-/// the `count` and `index` fields are overwritten with their new values.
-pub fn count<'scope, Tr, K, R, F, P>(
-    prefixes: VecCollection<'scope, Tr::Time, (P, usize, usize), R>,
+/// Each prefix observes the changes in distinct values over time, and treats this as a lower
+/// bound on the count that will be experienced. When the lower bound improves on the routing
+/// judgement's current count, it is overwritten and the `index` argument is substituted in.
+///
+/// A prefix is dropped only when its key is absent from `arrangement` entirely, which is only
+/// expected to happen when there have never been counts (they are meant to be non-negative).
+pub fn count<'scope, Tr, K, F, P, R, FF>(
+    prefixes: VecCollection<'scope, Tr::Time, ((P, usize, usize), Tr::Time), R>,
     arrangement: Arranged<'scope, Tr>,
     key_selector: F,
     index: usize,
-) -> VecCollection<'scope, Tr::Time, (P, usize, usize), R>
+    frontier_func: FF,
+    strict: bool,
+) -> VecCollection<'scope, Tr::Time, ((P, usize, usize), Tr::Time), R>
 where
     Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
-    BatchCursor<Tr>: Cursor<Time = Tr::Time, Diff=isize>,
-    <BatchCursor<Tr> as Cursor>::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
-    for<'a> BatchDiff<Tr> : Semigroup<BatchDiffGat<'a, Tr>>,
-    K: Hashable + Ord + Default + 'static,
-    R: Monoid+Multiply<Output = R>+ExchangeData,
-    F: Fn(&P)->K+Clone+'static,
+    BatchCursor<Tr>: Cursor<Time = Tr::Time, Diff = isize>,
+    <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
+    K: Hashable + ExchangeData,
+    R: ExchangeData + Monoid,
+    F: Fn(&P)->K+'static,
     P: ExchangeData,
+    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
+    for<'a, 'b> BatchTimeGat<'a, Tr>: PartialOrd<&'b Tr::Time>,
 {
-    crate::operators::lookup_map(
-        prefixes,
-        arrangement,
-        move |p: &(P,usize,usize), k: &mut K| { *k = key_selector(&p.0); },
-        move |(p,c,i), r, _, s| {
-            let s = *s as usize;
-            if *c < s { ((p.clone(), *c, *i), r.clone()) }
-            else      { ((p.clone(), s, index), r.clone()) }
-        },
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    )
+    // The payload time is carried in the record as well as in the half-join's own payload
+    // slot, because the output closure is handed the joined times rather than the payload.
+    let requests = prefixes.map(move |(triple, payload)| {
+        (key_selector(&triple.0), (triple, payload.clone()), payload)
+    });
+
+    type Output<P, T, R> = CapacityContainerBuilder<Vec<(((P, usize, usize), T), T, R)>>;
+
+    let output_func = move |
+        builder: &mut Output<P, Tr::Time, R>,
+        _key: &K,
+        val1: &((P, usize, usize), Tr::Time),
+        _val2: BatchVal<'_, Tr>,
+        initial: &Tr::Time,
+        diff1: &R,
+        output: &mut Vec<(Tr::Time, isize)>,
+    | {
+        // Each diff is a number of distinct values in/out, so sum the absolute values.
+        // A zero count does not mean no changes; it could mean swaps of values, so we
+        // do not drop prefixes with zero sums. We may inappropriately favor them, but
+        // it is a performance issue not a correctness issue.
+        let found: usize = output.iter().map(|(_,diff)| diff.abs()).sum::<isize>() as usize;
+        let ((prefix, count, best), payload) = val1;
+        let triple = if *count < found { (prefix.clone(), *count, *best) }
+                     else              { (prefix.clone(), found, index) };
+        builder.push_into(((triple, payload.clone()), initial.clone(), diff1.clone()));
+    };
+
+    use crate::operators::half_join::half_join_internal_unsafe as half_join_unsafe;
+    // Branch once here, so that each comparison monomorphizes rather than testing `strict` at
+    // every timestamp. The cost is instantiating `half_join` twice.
+    if strict {
+        half_join_unsafe::<_, _, _, _, _, _, _, _, Output<P, Tr::Time, R>>(
+            requests, arrangement, frontier_func, |t1, t2| t1 < t2, |_timer, _count| false, output_func)
+    }
+    else {
+        half_join_unsafe::<_, _, _, _, _, _, _, _, Output<P, Tr::Time, R>>(
+            requests, arrangement, frontier_func, |t1, t2| t1 <= t2, |_timer, _count| false, output_func)
+    }
+    .as_collection()
 }

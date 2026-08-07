@@ -1,75 +1,52 @@
+use std::ops::Mul;
+
+use timely::progress::Antichain;
+
 use differential_dataflow::{ExchangeData, VecCollection, Hashable};
-use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
+use differential_dataflow::difference::{Monoid, Semigroup};
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchDiffGat, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchTimeGat, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::implementations::BatchContainer;
 
 /// Proposes extensions to a prefix stream.
 ///
-/// This method takes a collection `prefixes` and an arrangement `arrangement` and for each
-/// update in the collection joins with the accumulated arranged records at a time less or
-/// equal to that of the update. Note that this is not a join by itself, but can be used to
-/// create a join if the `prefixes` collection is also arranged and responds to changes that
-/// `arrangement` undergoes. More complicated patterns are also appropriate, as in the case
-/// of delta queries.
-pub fn propose<'scope, Tr, K, F, P, V>(
-    prefixes: VecCollection<'scope, Tr::Time, P, BatchDiff<Tr>>,
-    arrangement: Arranged<'scope, Tr>,
-    key_selector: F,
-) -> VecCollection<'scope, Tr::Time, (P, V), BatchDiff<Tr>>
-where
-    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
-    for<'a> BatchCursor<Tr>: Cursor<
-        Time = Tr::Time,
-        ValOwn = V,
-        Diff: Monoid+Multiply<Output = BatchDiff<Tr>>+ExchangeData+Semigroup<BatchDiffGat<'a, Tr>>,
-    >,
-    <BatchCursor<Tr> as Cursor>::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
-    K: Hashable + Default + Ord + 'static,
-    F: Fn(&P)->K+Clone+'static,
-    P: ExchangeData,
-    V: Clone + 'static,
-{
-    crate::operators::lookup_map(
-        prefixes,
-        arrangement,
-        move |p: &P, k: &mut K | { *k = key_selector(p); },
-        move |prefix, diff, value, sum| ((prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)), diff.clone().multiply(sum)),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    )
-}
-
-/// Proposes distinct extensions to a prefix stream.
+/// This operator matches streamed updates with arranged updates, and pairs the streamed updates
+/// with arranged updates whose times are less or equal under the *total order* on timestamps.
+/// This inequality is allowed to either be strict or non-strict, as determined by `strict`.
+/// The total order allows the caller to ensure that each pair of updates match exactly once.
+/// The streamed updates also carry a time as data, and that time is advanced (by lattice join)
+/// by the time of the arranged update. The time of the streamed update cannot be advanced, as
+/// it needs to stay put to ensure the total order math works out.
 ///
-/// Unlike `propose`, this method does not scale the multiplicity of matched
-/// prefixes by the number of matches in `arrangement`. This can be useful to
-/// avoid the need to prepare an arrangement of distinct extensions.
-pub fn propose_distinct<'scope, Tr, K, F, P, V>(
-    prefixes: VecCollection<'scope, Tr::Time, P, BatchDiff<Tr>>,
+/// The arrangement is expected to hold a *set*: see the note on set semantics in [`crate`].
+pub fn propose<'scope, Tr, K, F, P, V, R, FF>(
+    prefixes: VecCollection<'scope, Tr::Time, (P, Tr::Time), R>,
     arrangement: Arranged<'scope, Tr>,
     key_selector: F,
-) -> VecCollection<'scope, Tr::Time, (P, V), BatchDiff<Tr>>
+    frontier_func: FF,
+    strict: bool,
+) -> VecCollection<'scope, Tr::Time, ((P, V), Tr::Time), <R as Mul<BatchDiff<Tr>>>::Output>
 where
     Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
-    for<'a> BatchCursor<Tr>: Cursor<
-        Time = Tr::Time,
-        ValOwn = V,
-        Diff : Semigroup<BatchDiffGat<'a, Tr>>+Monoid+Multiply<Output = BatchDiff<Tr>>+ExchangeData,
-    >,
-    <BatchCursor<Tr> as Cursor>::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=K>,
-    K: Hashable + Default + Ord + 'static,
-    F: Fn(&P)->K+Clone+'static,
+    BatchCursor<Tr>: Cursor<Time = Tr::Time, ValOwn = V>,
+    <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
+    K: Hashable + ExchangeData,
+    R: ExchangeData + Monoid + Mul<BatchDiff<Tr>, Output: Semigroup>,
+    F: Fn(&P)->K+'static,
     P: ExchangeData,
     V: Clone + 'static,
+    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
+    for<'a, 'b> BatchTimeGat<'a, Tr>: PartialOrd<&'b Tr::Time>,
 {
-    crate::operators::lookup_map(
-        prefixes,
-        arrangement,
-        move |p: &P, k: &mut K| { *k = key_selector(p); },
-        move |prefix, diff, value, _sum| ((prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)), diff.clone()),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    )
+    let requests = prefixes.map(move |(prefix, payload)| (key_selector(&prefix), prefix, payload));
+    // Branch once here, so that each comparison monomorphizes rather than testing `strict` at
+    // every timestamp. The cost is instantiating `half_join` twice.
+    if strict {
+        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 < t2,
+            |_key, prefix, value| (prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)))
+    }
+    else {
+        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 <= t2,
+            |_key, prefix, value| (prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)))
+    }
 }

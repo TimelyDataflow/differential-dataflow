@@ -1,39 +1,54 @@
-use std::hash::Hash;
+use std::ops::Mul;
+
+use timely::progress::Antichain;
 
 use differential_dataflow::{ExchangeData, VecCollection};
-use differential_dataflow::difference::{Semigroup, Monoid, Multiply};
+use differential_dataflow::difference::{Monoid, Semigroup};
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchDiffGat, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchTimeGat, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::implementations::BatchContainer;
 
-/// Proposes extensions to a stream of prefixes.
+/// Restricts proposed extensions to those the arrangement would also have proposed.
 ///
-/// This method takes a stream of prefixes and for each determines a
-/// key with `key_selector` and then proposes all pair af the prefix
-/// and values associated with the key in `arrangement`.
-pub fn validate<'scope, K, V, Tr, F, P>(
-    extensions: VecCollection<'scope, Tr::Time, (P, V), BatchDiff<Tr>>,
+/// This operator matches streamed updates with arranged updates, and pairs the streamed updates
+/// with arranged updates whose times are less or equal under the *total order* on timestamps.
+/// This inequality is allowed to either be strict or non-strict, as determined by `strict`.
+/// The total order allows the caller to ensure that each pair of updates match exactly once.
+/// The streamed updates also carry a time as data, and that time is advanced (by lattice join)
+/// by the time of the arranged update. The time of the streamed update cannot be advanced, as
+/// it needs to stay put to ensure the total order math works out.
+///
+/// The arrangement is expected to hold a *set*: see the note on set semantics in [`crate`].
+pub fn validate<'scope, Tr, K, V, F, P, R, FF>(
+    extensions: VecCollection<'scope, Tr::Time, ((P, V), Tr::Time), R>,
     arrangement: Arranged<'scope, Tr>,
     key_selector: F,
-) -> VecCollection<'scope, Tr::Time, (P, V), BatchDiff<Tr>>
+    frontier_func: FF,
+    strict: bool,
+) -> VecCollection<'scope, Tr::Time, ((P, V), Tr::Time), <R as Mul<BatchDiff<Tr>>>::Output>
 where
     Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
-    for<'a> BatchCursor<Tr>: Cursor<
-        Time = Tr::Time,
-        Diff : Semigroup<BatchDiffGat<'a, Tr>>+Monoid+Multiply<Output = BatchDiff<Tr>>+ExchangeData,
-    >,
-    <BatchCursor<Tr> as Cursor>::KeyContainer: differential_dataflow::trace::implementations::BatchContainer<Owned=(K,V)>,
-    K: Ord+Hash+Clone+Default + 'static,
-    V: ExchangeData+Hash+Default,
-    F: Fn(&P)->K+Clone+'static,
+    BatchCursor<Tr>: Cursor<Time = Tr::Time>,
+    <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=(K,V)>,
+    K: ExchangeData + std::hash::Hash,
+    V: ExchangeData + std::hash::Hash,
+    R: ExchangeData + Monoid + Mul<BatchDiff<Tr>, Output: Semigroup>,
+    F: Fn(&P)->K+'static,
     P: ExchangeData,
+    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
+    for<'a, 'b> BatchTimeGat<'a, Tr>: PartialOrd<&'b Tr::Time>,
 {
-    crate::operators::lookup_map(
-        extensions,
-        arrangement,
-        move |(pre,val),key| { *key = (key_selector(pre), val.clone()); },
-        |(pre,val),r,_,_| ((pre.clone(), val.clone()), r.clone()),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    )
+    let requests = extensions.map(move |((prefix, extension), payload)| {
+        ((key_selector(&prefix), extension.clone()), (prefix, extension), payload)
+    });
+    // Branch once here, so that each comparison monomorphizes rather than testing `strict` at
+    // every timestamp. The cost is instantiating `half_join` twice.
+    if strict {
+        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 < t2,
+            |_key, extended, _value| extended.clone())
+    }
+    else {
+        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 <= t2,
+            |_key, extended, _value| extended.clone())
+    }
 }

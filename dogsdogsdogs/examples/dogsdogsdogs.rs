@@ -1,4 +1,4 @@
-use timely::dataflow::operators::{ToStream, vec::{Partition, count::Accumulate}, Inspect, Probe};
+use timely::dataflow::operators::{ToStream, vec::{Map, Partition, count::Accumulate}, Inspect, Probe};
 use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::input::Input;
@@ -31,26 +31,36 @@ fn main() {
 
         println!("loaded {} nodes, {} edges", nodes, edges.len());
 
-        let index = worker.dataflow::<usize,_,_>(|scope| {
-            CollectionIndex::index(Collection::new(edges.to_stream(scope)))
-        });
-
-        let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x);
-        let mut index_yz = index.extend_using(|&(ref _x, ref y)| *y);
-
         let mut probe = Handle::new();
 
+        // The index and its readers must share a dataflow: the extenders hold scope-bound
+        // arrangements rather than exported traces.
         let mut edges = worker.dataflow::<usize,_,_>(|scope| {
+
+            // Hold compaction back one step, and let a prefix see arranged updates at its own
+            // time and earlier. The index is static here, so every prefix sees all of it.
+            let frontier_func = |time: &usize, antichain: &mut timely::progress::Antichain<usize>| {
+                antichain.insert(time.saturating_sub(1));
+            };
+
+            let index = CollectionIndex::index(Collection::new(edges.to_stream(scope)), frontier_func);
+
+            let mut index_xz = index.extend_using(|&(ref x, ref _y)| *x, false);
+            let mut index_yz = index.extend_using(|&(ref _x, ref y)| *y, false);
 
             let (edges_input, edges) = scope.new_collection();
 
+            // Stash each prefix's own time as its payload, to be advanced by the times of the
+            // records it matches, and delayed to once we are done extending.
+            let prefixes = edges.inner.map(|(p, t, r): ((u32, u32), usize, isize)| ((p, t.clone()), t, r)).as_collection();
+
             // determine stream of (prefix, count, index) indicating relation with fewest extensions.
-            let counts  = edges.map(|p| (p, usize::MAX, usize::MAX));
+            let counts  = prefixes.map(|(p, payload)| ((p, usize::MAX, usize::MAX), payload));
             let counts0 = index_xz.count(counts,  0);
             let counts1 = index_yz.count(counts0, 1);
 
             // partition by index.
-            let parts = counts1.inner.partition(2, |((p, _c, i),t,d)| (i as u64,(p,t,d)));
+            let parts = counts1.inner.partition(2, |(((p, _c, i), payload),t,d)| (i as u64,((p, payload),t,d)));
 
             // propose extensions using relation based on index.
             let propose0 = index_xz.propose(parts[0].clone().as_collection());
@@ -62,7 +72,8 @@ fn main() {
 
             validate0
                 .concat(validate1)
-                .inner
+                // Delay updates to the payload time worked out while extending.
+                .inner.map(|((extended, payload), _time, r)| (extended, payload, r))
                 .count()
                 .inspect(move |x| println!("{:?}", x))
                 // .inspect(move |x| println!("{:?}:\t{:?}", timer.elapsed(), x))
