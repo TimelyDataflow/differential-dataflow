@@ -1,48 +1,33 @@
-//! Dataflow operator for delta joins over partially ordered timestamps.
-//!
-//! Given multiple streams of updates `(data, time, diff)` that are each
-//! defined over the same partially ordered `time`, we want to form the
-//! full cross-join of all relations (we will *later* apply some filters
-//! and instead equijoin on keys).
-//!
-//! The "correct" output is the outer join of these triples, where
-//!   1. The `data` entries are just tuple'd up together,
-//!   2. The `time` entries are subjected to the lattice `join` operator,
-//!   3. The `diff` entries are multiplied.
-//!
-//! One way to produce the correct output is to form independent dataflow
-//! fragments for each input stream, such that each intended output is then
-//! produced by exactly one of these input streams.
-//!
-//! There are several incorrect ways one might do this, but here is one way
-//! that I hope is not incorrect:
-//!
-//! Each input stream of updates is joined with each other input collection,
-//! where each input update is matched against each other input update that
-//! has a `time` that is less-than the input update's `time`, *UNDER A TOTAL
-//! ORDER ON `time`*. The output are the `(data, time, diff)` entries that
-//! follow the rules above, except that we additionally preserve the input's
-//! initial `time` as well, for use in subsequent joins with the other input
-//! collections.
-//!
-//! There are some caveats about ties, and we should treat each `time` for
-//! each input as occurring at distinct times, one after the other (so that
-//! ties are resolved by the index of the input). There is also the matter
-//! of logical compaction, which should not be done in a way that prevents
-//! the correct determination of the total order comparison.
+/// Streaming asymmetric join between updates (K,V1) and an arrangement on (K,V2).
+///
+/// The asymmetry is that the join only responds to streamed updates, not to changes in the arrangement.
+/// Streamed updates join only with matching arranged updates at lesser times *in the total order*, and
+/// subject to a predicate supplied by the user (roughly: strictly less, or not).
+///
+/// This behavior can ensure that any pair of matching updates interact exactly once.
+///
+/// There are various forms of this operator with tangled closures about how to emit the outputs and
+/// wrangle the logical compaction frontier in order to preserve the distinctions around times that are
+/// strictly less (conventional compaction logic would collapse unequal times to the frontier, and lose
+/// the distiction).
+///
+/// The methods also carry an auxiliary time next to the value, which is used to advance the joined times.
+/// This is .. a byproduct of wanting to allow advancing times a la `join_function`, without breaking the
+/// coupling by total order on "initial time".
+///
+/// The doccomments for individual methods are a bit of a mess. Sorry.
 
-use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ops::Mul;
-use std::time::Instant;
 
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::{Pipeline, Exchange};
-use timely::dataflow::operators::{Capability, Operator, generic::Session};
+use timely::dataflow::operators::Operator;
 use timely::PartialOrder;
-use timely::progress::Antichain;
-use timely::progress::frontier::AntichainRef;
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::progress::frontier::MutableAntichain;
 
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
 use differential_dataflow::difference::{Monoid, Semigroup};
@@ -52,6 +37,8 @@ use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchTimeGat, BatchVa
 use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::trace::implementations::BatchContainer;
+
+use timely::dataflow::operators::CapabilitySet;
 
 /// A binary equijoin that responds to updates on only its first input.
 ///
@@ -95,26 +82,17 @@ where
     DOut: Clone+'static,
     S: FnMut(&K, &V, BatchVal<'_, Tr>)->DOut+'static,
 {
-    let output_func = move |session: &mut SessionFor<Tr::Time, _>, k: &K, v1: &V, v2: BatchVal<'_, Tr>, initial: &Tr::Time, diff1: &R, output: &mut Vec<(Tr::Time, BatchDiff<Tr>)>| {
+    let output_func = move |builder: &mut CapacityContainerBuilder<Vec<_>>, k: &K, v1: &V, v2: BatchVal<'_, Tr>, initial: &Tr::Time, diff1: &R, output: &mut Vec<(Tr::Time, BatchDiff<Tr>)>| {
         for (time, diff2) in output.drain(..) {
             let diff = diff1.clone() * diff2.clone();
             let dout = (output_func(k, v1, v2), time.clone());
-            session.give((dout, initial.clone(), diff));
+            use timely::container::PushInto;
+            builder.push_into((dout, initial.clone(), diff));
         }
     };
     half_join_internal_unsafe::<_, _, _, _, _, _,_,_, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, comparison, |_timer, _count| false, output_func)
         .as_collection()
 }
-
-/// A session with lifetime `'a` over timestamp `T` with a container builder `CB`.
-///
-/// This is a shorthand primarily for the reson of readability.
-type SessionFor<'a, 'b, T, CB> =
-    Session<'a, 'b,
-        T,
-        CB,
-        Capability<T>,
-    >;
 
 /// An unsafe variant of `half_join` where the `output_func` closure takes
 /// additional arguments a vector of `time` and `diff` tuples as input and
@@ -159,7 +137,7 @@ where
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
     CF: Fn(BatchTimeGat<'_, Tr>, &Tr::Time) -> bool + 'static,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<Tr::Time, CB>, &K, &V, BatchVal<'_, Tr>, &Tr::Time, &R, &mut Vec<(Tr::Time, BatchDiff<Tr>)>) + 'static,
+    S: FnMut(&mut CB, &K, &V, BatchVal<'_, Tr>, &Tr::Time, &R, &mut Vec<(Tr::Time, BatchDiff<Tr>)>) + 'static,
     CB: ContainerBuilder,
 {
     // No need to block physical merging for this operator.
@@ -167,12 +145,15 @@ where
     let mut arrangement_trace = Some(arrangement.trace);
     let arrangement_stream = arrangement.stream;
 
-    let mut stash = HashMap::new();
-
     let exchange = Exchange::new(move |update: &((K, V, Tr::Time),Tr::Time,R)| (update.0).0.hashed().into());
 
     // Stash for (time, diff) accumulation.
     let mut output_buffer = Vec::new();
+
+    // Unified blobs: each blob holds data in (T, D, R) order, with a stuck_count
+    // tracking how many elements at the back are not yet eligible for processing.
+    // The ready prefix is sorted by (D, T, R) for cursor traversal.
+    let mut blobs: Vec<Blob<(K, V, Tr::Time), Tr::Time, R>> = Vec::new();
 
     let scope = stream.scope();
     stream.inner.binary_frontier(arrangement_stream, exchange, Pipeline, "HalfJoin", move |_,info| {
@@ -182,11 +163,12 @@ where
 
         move |(input1, frontier1), (input2, frontier2), output| {
 
-            // drain the first input, stashing requests.
+            // Drain all input into a single buffer.
+            let mut arriving: Vec<(Tr::Time, (K, V, Tr::Time), R)> = Vec::new();
+            let mut caps = CapabilitySet::new();
             input1.for_each(|capability, data| {
-                stash.entry(capability.retain(0))
-                    .or_insert(Vec::new())
-                    .append(data)
+                caps.insert(capability.retain(0));
+                arriving.extend(data.drain(..).map(|(d, t, r)| (t, d, r)));
             });
 
             // Drain input batches; although we do not observe them, we want access to the input
@@ -194,180 +176,193 @@ where
             input2.for_each(|_, _| { });
 
             // Local variables to track if and when we should exit early.
-            // The rough logic is that we fully process inputs and set their differences to zero,
-            // stopping at any point. We clean up all of the zeros in buffers that did any work,
-            // and reactivate at the end if the yield function still says so.
             let mut yielded = false;
             let timer = std::time::Instant::now();
             let mut work = 0;
 
-            // New entries to introduce to the stash after processing.
-            let mut stash_additions = HashMap::new();
-
             if let Some(ref mut trace) = arrangement_trace {
 
-                for (capability, proposals) in stash.iter_mut() {
+                let frontier = frontier2.frontier();
 
-                    // Avoid computation if we should already yield.
-                    // TODO: Verify this is correct for TOTAL ORDER.
-                    yielded = yielded || yield_function(timer, work);
-                    if !yielded && !frontier2.less_equal(capability.time()) {
+                // Determine the total-order minimum of the arrangement frontier,
+                // used to partition arrivals into immediately-eligible vs stuck.
+                let mut time_con = <BatchCursor<Tr> as Cursor>::TimeContainer::with_capacity(1);
+                if let Some(min_time) = frontier.iter().min() {
+                    time_con.push_own(min_time);
+                }
+                let eligible = |initial: &Tr::Time| -> bool {
+                    !(0..time_con.len()).any(|i| comparison(time_con.index(i), initial))
+                };
 
-                        let frontier = frontier2.frontier();
+                // Form a new blob from arrivals.
+                // consolidate_updates sorts by (T, D, R) — the stuck order.
+                consolidate_updates(&mut arriving);
 
-                        // Update yielded: We can only go from false to {false, true} as
-                        // we're checking that `!yielded` holds before entering this block.
-                        yielded = process_proposals::<_, _, _, _, _, _, _, _>(
-                            &comparison,
-                            &yield_function,
-                            &mut output_func,
-                            &mut output_buffer,
-                            timer,
-                            &mut work,
-                            trace,
-                            proposals,
-                            output.session_with_builder(capability),
-                            frontier
-                        );
+                if !arriving.is_empty() {
+                    let mut lower = MutableAntichain::new();
+                    lower.update_iter(arriving.iter().map(|(t, _, _)| (t.clone(), 1)));
+                    let mut blob_caps = CapabilitySet::new();
+                    for time in lower.frontier().iter() {
+                        blob_caps.insert(caps.delayed(time));
+                    }
 
-                        proposals.retain(|ptd| !ptd.2.is_zero());
+                    // Determine how many records are stuck (ineligible).
+                    // Data is sorted by (T, D, R) and eligibility is monotone in T,
+                    // so stuck records form a suffix.
+                    let stuck_count = arriving.iter().rev()
+                        .take_while(|(t, _, _)| !eligible(t))
+                        .count();
 
-                        // Determine the lower bound of remaining update times.
-                        let mut antichain = Antichain::new();
-                        for (_, initial, _) in proposals.iter() {
-                            antichain.insert(initial.clone());
-                        }
-                        // Fast path: there is only one element in the antichain.
-                        // All times in `proposals` must be greater or equal to it.
-                        if antichain.len() == 1 && !antichain.less_equal(capability.time()) {
-                            stash_additions
-                                .entry(capability.delayed(&antichain[0]))
-                                .or_insert(Vec::new())
-                                .append(proposals);
-                        }
-                        else if antichain.len() > 1 {
-                            // Any remaining times should peel off elements from `proposals`.
-                            let mut additions = vec![Vec::new(); antichain.len()];
-                            for (data, initial, diff) in proposals.drain(..) {
-                                let position = antichain.iter().position(|t| t.less_equal(&initial)).unwrap();
-                                additions[position].push((data, initial, diff));
-                            }
-                            for (time, addition) in antichain.into_iter().zip(additions) {
-                                stash_additions
-                                    .entry(capability.delayed(&time))
-                                    .or_insert(Vec::new())
-                                    .extend(addition);
-                            }
-                        }
+                    let mut data: VecDeque<_> = arriving.into();
+
+                    // Sort the ready prefix by (D, T, R) for cursor traversal.
+                    let ready_len = data.len() - stuck_count;
+                    if ready_len > 0 {
+                        // VecDeque slices: make_contiguous then sort the prefix.
+                        let slice = data.make_contiguous();
+                        slice[..ready_len].sort_by(|(t1, d1, r1), (t2, d2, r2)| {
+                            (d1, t1, r1).cmp(&(d2, t2, r2))
+                        });
+                    }
+
+                    blobs.push(Blob {
+                        caps: blob_caps,
+                        lower,
+                        data,
+                        stuck_count,
+                    });
+                }
+
+                // Nibble: only when all ready elements have been drained (stuck_count == len),
+                // check if stuck records have become eligible and promote them.
+                for blob in blobs.iter_mut().filter(|b| b.stuck_count == b.data.len()) {
+
+                    // Count how many stuck records (from the front, which has the
+                    // lowest initial times) are now eligible.
+                    let newly_ready = blob.data.iter().take_while(|(t, _, _)| eligible(t)).count();
+
+                    if newly_ready > 0 {
+                        blob.stuck_count -= newly_ready;
+
+                        // Sort the newly-ready prefix by (D, T, R) for cursor traversal.
+                        let slice = blob.data.make_contiguous();
+                        slice[..newly_ready].sort_by(|(t1, d1, r1), (t2, d2, r2)| {
+                            (d1, t1, r1).cmp(&(d2, t2, r2))
+                        });
+
+                        // Downgrade capabilities.
+                        let mut new_lower = MutableAntichain::new();
+                        new_lower.update_iter(blob.data.iter().map(|(t, _, _)| (t.clone(), 1)));
+                        blob.lower = new_lower;
+                        blob.caps.downgrade(&blob.lower.frontier());
                     }
                 }
+
+                // Process ready elements from blobs.
+                for blob in blobs.iter_mut().filter(|b| b.data.len() > b.stuck_count) {
+                    if yielded { break; }
+
+                    let mut builders = (0..blob.caps.len()).map(|_| CB::default()).collect::<Vec<_>>();
+
+                    let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
+                    let (mut cursor, storage) = cursor_list(batches);
+                    let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
+                    let mut removals: ChangeBatch<Tr::Time> = ChangeBatch::new();
+
+                    // Process ready elements from the front.
+                    while blob.data.len() > blob.stuck_count {
+                        yielded = yielded || yield_function(timer, work);
+                        if yielded { break; }
+
+                        // Peek at the front element. It's in (T, D, R) storage order,
+                        // but the ready prefix has been sorted by (D, T, R).
+                        let (ref initial, (ref key, ref val1, ref time), ref diff1) = blob.data[0];
+
+                        let builder_idx = blob.caps.iter().position(|c| c.time().less_equal(initial)).unwrap();
+
+                        key_con.clear(); key_con.push_own(&key);
+                        cursor.seek_key(&storage, key_con.index(0));
+                        if cursor.get_key(&storage) == key_con.get(0) {
+                            while let Some(val2) = cursor.get_val(&storage) {
+                                cursor.map_times(&storage, |t, d| {
+                                    if comparison(t, initial) {
+                                        let mut t = <BatchCursor<Tr> as Cursor>::owned_time(t);
+                                        t.join_assign(time);
+                                        output_buffer.push((t, <BatchCursor<Tr> as Cursor>::owned_diff(d)))
+                                    }
+                                });
+                                consolidate(&mut output_buffer);
+                                work += output_buffer.len();
+                                output_func(&mut builders[builder_idx], key, val1, val2, initial, diff1, &mut output_buffer);
+                                output_buffer.clear();
+                                cursor.step_val(&storage);
+                            }
+                            cursor.rewind_vals(&storage);
+                        }
+
+                        while let Some(container) = builders[builder_idx].extract() {
+                            output.session(&blob.caps[builder_idx]).give_container(container);
+                        }
+
+                        let (initial, _, _) = blob.data.pop_front().unwrap();
+                        removals.update(initial, -1);
+                    }
+
+                    for builder_idx in 0 .. blob.caps.len() {
+                        while let Some(container) = builders[builder_idx].finish() {
+                            output.session(&blob.caps[builder_idx]).give_container(container);
+                        }
+                    }
+
+                    // Apply all removals in bulk and downgrade once.
+                    if blob.data.is_empty() {
+                        // Eagerly release the blob's resources.
+                        blob.lower = MutableAntichain::new();
+                        blob.caps = CapabilitySet::new();
+                        blob.data = VecDeque::default();
+                    } else  {
+                        blob.lower.update_iter(removals.drain());
+                        blob.caps.downgrade(&blob.lower.frontier());
+                    }
+                }
+
+                // Remove fully-consumed blobs.
+                blobs.retain(|blob| !blob.data.is_empty());
             }
 
-            // If we yielded, re-activate the operator.
-            if yielded {
+            // Re-activate if we have blobs with ready elements to process.
+            if blobs.iter().any(|b| b.data.len() > b.stuck_count) {
                 activator.activate();
             }
 
-            // drop fully processed capabilities.
-            stash.retain(|_,proposals| !proposals.is_empty());
-
-            for (capability, proposals) in stash_additions.into_iter() {
-                stash.entry(capability).or_insert(Vec::new()).extend(proposals);
-            }
-
-            // The logical merging frontier depends on both input1 and stash.
-            let mut frontier = timely::progress::frontier::Antichain::new();
+            // The logical merging frontier depends on input1 and all blobs.
+            let mut frontier = Antichain::new();
             for time in frontier1.frontier().iter() {
                 frontier_func(time, &mut frontier);
             }
-            for time in stash.keys() {
-                frontier_func(time, &mut frontier);
+            for blob in blobs.iter() {
+                for cap in blob.caps.iter() {
+                    frontier_func(cap.time(), &mut frontier);
+                }
             }
             arrangement_trace.as_mut().map(|trace| trace.set_logical_compaction(frontier.borrow()));
 
-            if frontier1.is_empty() && stash.is_empty() {
+            if frontier1.is_empty() && blobs.is_empty() {
                 arrangement_trace = None;
             }
         }
     })
 }
 
-/// Outlined inner loop for `half_join_internal_unsafe` for reasons of performance.
-///
-/// Gives Rust/LLVM the opportunity to inline the loop body instead of inlining the loop and
-/// leaving all calls in the loop body outlined.
-///
-/// Consumes proposals until the yield function returns `true` or all proposals are processed.
-/// Leaves a zero diff in place for all proposals that were processed.
-///
-/// Returns `true` if the operator should yield.
-fn process_proposals<Tr, CF, Y, S, CB, K, V, R>(
-    comparison: &CF,
-    yield_function: &Y,
-    output_func: &mut S,
-    mut output_buffer: &mut Vec<(Tr::Time, BatchDiff<Tr>)>,
-    timer: Instant,
-    work: &mut usize,
-    trace: &mut Tr,
-    proposals: &mut Vec<((K, V, Tr::Time), Tr::Time, R)>,
-    mut session: SessionFor<Tr::Time, CB>,
-    frontier: AntichainRef<Tr::Time>
-) -> bool
-where
-    Tr: TraceReader<Batch: Navigable>,
-    BatchCursor<Tr>: Cursor<Time = Tr::Time>,
-    <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
-    CF: Fn(BatchTimeGat<'_, Tr>, &Tr::Time) -> bool + 'static,
-    Y: Fn(Instant, usize) -> bool + 'static,
-    S: FnMut(&mut SessionFor<Tr::Time, CB>, &K, &V, BatchVal<'_, Tr>, &Tr::Time, &R, &mut Vec<(Tr::Time, BatchDiff<Tr>)>) + 'static,
-    CB: ContainerBuilder,
-    K: Ord,
-    V: Ord,
-    R: Monoid,
-{
-    // Sort requests by key for in-order cursor traversal.
-    consolidate_updates(proposals);
-
-    let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
-    let (mut cursor, storage) = cursor_list(batches);
-    let mut yielded = false;
-
-    let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
-    let mut time_con = <BatchCursor<Tr> as Cursor>::TimeContainer::with_capacity(1);
-    for time in frontier.iter() {
-        time_con.push_own(time);
-    }
-
-    // Process proposals one at a time, stopping if we should yield.
-    for ((ref key, ref val1, ref time), ref initial, ref mut diff1) in proposals.iter_mut() {
-        // Use TOTAL ORDER to allow the release of `time`.
-        yielded = yielded || yield_function(timer, *work);
-
-        if !yielded && !(0 .. time_con.len()).any(|i| comparison(time_con.index(i), initial)) {
-            key_con.clear(); key_con.push_own(&key);
-            cursor.seek_key(&storage, key_con.index(0));
-            if cursor.get_key(&storage) == key_con.get(0) {
-                while let Some(val2) = cursor.get_val(&storage) {
-                    cursor.map_times(&storage, |t, d| {
-                        if comparison(t, initial) {
-                            let mut t = <BatchCursor<Tr> as Cursor>::owned_time(t);
-                            t.join_assign(time);
-                            output_buffer.push((t, <BatchCursor<Tr> as Cursor>::owned_diff(d)))
-                        }
-                    });
-                    consolidate(&mut output_buffer);
-                    *work += output_buffer.len();
-                    output_func(&mut session, key, val1, val2, initial, diff1, &mut output_buffer);
-                    // Defensive clear; we'd expect `output_func` to clear the buffer.
-                    // TODO: Should we assert it is empty?
-                    output_buffer.clear();
-                    cursor.step_val(&storage);
-                }
-                cursor.rewind_vals(&storage);
-            }
-            *diff1 = R::zero();
-        }
-    }
-
-    yielded
+/// A unified blob of updates. Data is stored as `(T, D, R)` tuples in a VecDeque.
+/// The last `stuck_count` elements are stuck (not yet eligible for processing),
+/// sorted by `(T, D, R)` from consolidation. The ready prefix (everything before
+/// the stuck tail) is sorted by `(D, T, R)` for efficient cursor traversal.
+/// Ready elements are consumed from the front via `pop_front`.
+struct Blob<D, T: Timestamp, R> {
+    caps: CapabilitySet<T>,
+    lower: MutableAntichain<T>,
+    data: VecDeque<(T, D, R)>,
+    /// Number of stuck (ineligible) elements at the back of `data`.
+    stuck_count: usize,
 }
