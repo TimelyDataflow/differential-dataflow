@@ -287,17 +287,38 @@ where
         let mut current: Vec<(W, R)> = Vec::new();
         for i in 0..keys.len() {
             let (ie, oe) = (in_ends[i], out_ends[i]);
-            // No-collision fast path: if the bracket's endpoints agree on the real key, the whole
-            // bracket is one key (ids resolve in key-sorted order) and the per-key grouping below
-            // can be skipped. The general path re-groups by real key, which is what makes a 64-bit
-            // hash collision an inefficiency rather than an error.
-            let ik0 = (is < ie).then(|| &self.in_pool[input[is].0 as usize].0);
-            let ikn = (is < ie).then(|| &self.in_pool[input[ie - 1].0 as usize].0);
-            let ok0 = (os < oe).then(|| &self.out_pool[output[os].0 as usize].0);
-            let okn = (os < oe).then(|| &self.out_pool[output[oe - 1].0 as usize].0);
-            let single = ik0 == ikn && ok0 == okn && (ik0.is_none() || ok0.is_none() || ik0 == ok0);
-            if single && (ik0.is_some() || ok0.is_some()) {
-                let key: K = ik0.or(ok0).expect("bracket has an endpoint").clone();
+            // No-collision fast path: when the whole bracket is one real key, the per-key grouping
+            // below can be skipped. Testing only the bracket's ENDPOINTS would be wrong: neither id
+            // space is key-ordered across a bracket. Input ids are ordinals minted history-run
+            // first and then novel, so the order is `history by key, then novel by key`; output ids
+            // are interned, with corrections appended after the presentation. Either can read
+            // `[A, B, A]`, whose endpoints agree while its interior does not. So resolve every id
+            // and require them all to agree — a linear pass over data the fast path is about to
+            // clone anyway, against the general path's per-key maps.
+            let single_key: Option<K> = {
+                let mut only: Option<&K> = None;
+                let mut agree = true;
+                for (vid, _) in &input[is..ie] {
+                    let k = &self.in_pool[*vid as usize].0;
+                    match only {
+                        None => only = Some(k),
+                        Some(prev) if prev == k => {}
+                        Some(_) => { agree = false; break }
+                    }
+                }
+                if agree {
+                    for (vid, _) in &output[os..oe] {
+                        let k = &self.out_pool[*vid as usize].0;
+                        match only {
+                            None => only = Some(k),
+                            Some(prev) if prev == k => {}
+                            Some(_) => { agree = false; break }
+                        }
+                    }
+                }
+                if agree { only.cloned() } else { None }
+            };
+            if let Some(key) = single_key {
                 input_vals.clear();
                 input_vals.extend(input[is..ie].iter().map(|(vid, d)| (self.in_pool[*vid as usize].1.clone(), d.clone())));
                 consolidate(&mut input_vals);
