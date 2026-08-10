@@ -323,3 +323,19 @@ fn reduce_collision_fastpath_endpoints() {
     assert_eq!(out1, vec![((Collide(1), 5u64), 1u64, -1i64), ((Collide(1), 6), 1, 1)],
                "C2's value must not enter C1's reduction");
 }
+
+#[test]
+fn reduce_cancelling_keys_matches_mainline() {
+    // Every key's input cancels completely by time 2, so from then on it has no records in any of
+    // the three presentations while still being a key the retire must consider — its stale output
+    // has to be retracted. With one key per window this is also the case where a window's key list
+    // and the `changed` set disagree.
+    let mut updates = Vec::new();
+    for k in 0..16u64 {
+        updates.push(((k, 10 + k), 0u64, 1i64));
+        updates.push(((k, 20 + k), 1, 1));
+        updates.push(((k, 10 + k), 2, -1));
+        updates.push(((k, 20 + k), 2, -1));
+    }
+    proxy_matches_mainline(updates, 1);
+}
