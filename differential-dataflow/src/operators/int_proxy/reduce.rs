@@ -32,14 +32,11 @@ pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>>
 
 /// One window of the key space: the presentations a bounded, hash-contiguous snip needs.
 ///
-/// The three runs mirror the three cursors of the conventional reduce, and are held apart for the
-/// same reason it holds them apart: `novel` is the *seed* of interesting times, and consolidating it
-/// into `history` would lose which records were novel. A novel record that nets to zero against a
-/// history record compaction has advanced onto its time would vanish, and its interesting time with
-/// it. The runs are combined only at the accumulation, never as presentations.
+/// The two input runs are held apart because the novel and prior data have different roles:
+/// the novel data seed interesting times, and the prior data may benefit from historical rollup.
+/// Their updates are combined after we are able to see the distinction between the two.
 ///
-/// Owned by the harness and refilled by [`ProxyReduceBackend::next_window`], so the allocations
-/// survive the window loop.
+/// Owned by the harness and refilled by [`ProxyReduceBackend::next_window`].
 pub struct ReduceWindow<T, RIn, ROut> {
     /// Accumulated input preceding the retire's interval, sorted & consolidated by
     /// `((key_hash, value_id), time)`.
@@ -56,7 +53,7 @@ impl<T, RIn, ROut> Default for ReduceWindow<T, RIn, ROut> {
 }
 
 impl<T, RIn, ROut> ReduceWindow<T, RIn, ROut> {
-    /// Empty the runs, keeping their allocations.
+    /// Clear the three proxy bridges.
     pub fn clear(&mut self) {
         self.history.clear();
         self.novel.clear();
@@ -84,10 +81,9 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
 
     /// Present the next window of the key space, and advance `from` past it.
     ///
-    /// On entry `*from` is the inclusive lower bound on key hashes still to be covered. The backend
+    /// On entry `from` is the inclusive lower bound on key hashes still to be covered. The backend
     /// chooses the window's exclusive upper bound and writes it back, or writes `None` to report the
-    /// key space exhausted — matching [`ProxyJoinBackend::advance`](super::ProxyJoinBackend::advance).
-    /// A call that leaves `*from` unchanged does not terminate, so it is a contract violation.
+    /// key space exhausted. An implementor must advance `from`, as it is guaranteed to be non-`None`.
     ///
     /// The window must present, for every key hash in `[from_before, from_after)` that either
     /// carries an update in the instance's novel batches or appears in `changed`, that key's novel
@@ -170,11 +166,9 @@ where
             lower: lower.borrow(),
         };
 
-        // Split the carried interesting times against `upper`. A time below it is DUE: its key must
-        // be re-evaluated this retire, so the key is `changed`. A time at or beyond it is carried
-        // forward untouched, seeding `new_pending` — and this is the only thing that carries it,
-        // because a key whose times are all beyond `upper` is not `changed`, is never presented in a
-        // window, and would otherwise be silently forgotten.
+        // Split the carried interesting times against `upper`.
+        // A time below it is DUE: its key must be re-evaluated this retire, so the key is `changed`.
+        // A time at or beyond it is carried forward untouched, seeding `new_pending`.
         let mut due: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
         let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
         for (key, times) in self.pending.iter() {
@@ -210,10 +204,7 @@ where
         // Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
         // once the backend reports the space covered.
         let mut from = Some(0u64);
-        // Monotone cursor into `changed`, consumed as the windows pass over it.
-        let mut cs = 0usize;
         let mut window: ReduceWindow<B1::Time, Bk::RIn, Bk::ROut> = ReduceWindow::default();
-        let mut window_keys: Vec<u64> = Vec::new();
 
         // Retire-wide reusable scratch (cleared per window/round/moment, not reallocated). See the
         // profiling note on `DiscoverScratch`: fresh per-key/per-round `Vec`s were the dominant cost.
@@ -256,25 +247,6 @@ where
                 "next_window must report a key hash entirely within the window that first mentions it",
             );
 
-            // The window's keys: those its novel updates touch, merged with the `changed` keys it
-            // covers. A `changed` key can appear in no presentation at all — a due interesting time
-            // is reason enough to re-evaluate it — so the key list cannot be read off the bridges.
-            window_keys.clear();
-            let mut nk = 0usize;
-            loop {
-                let from_novel = p_nv.get(nk).map(|r| r.0.0);
-                let from_changed = changed.get(cs).copied().filter(|k| from.is_none_or(|f| *k < f));
-                let key = match (from_novel, from_changed) {
-                    (Some(a), Some(b)) => std::cmp::min(a, b),
-                    (Some(a), None) => a,
-                    (None, Some(b)) => b,
-                    (None, None) => break,
-                };
-                while nk < p_nv.len() && p_nv[nk].0.0 == key { nk += 1; }
-                if changed.get(cs) == Some(&key) { cs += 1; }
-                window_keys.push(key);
-            }
-
             for deltas in tile_deltas.iter_mut() { deltas.clear(); }
 
             // Phase 1 (determination): for every key in the window, discover its interesting times
@@ -283,18 +255,28 @@ where
             // `states` is a long-lived buffer reloaded slot-by-slot (not cleared/rebuilt): a slot's
             // `Vec`s and replays are allocated once and reused, so keys cost no per-key alloc/free.
             // `n_states` is the live prefix this window; higher slots persist (retaining capacity).
+            // The window's keys are the hashes its presentations mention: the least of the three
+            // heads, each iteration, until all three are drained. A `changed` key that appears in
+            // none of them has no records at all, so its reduction has nothing to read and nothing
+            // to retract — the moment its due time would raise reaches the evaluation gate with an
+            // empty input and an empty output, and produces nothing. Skipping it is exactly what
+            // visiting it would do. (`changed` is still the backend's instruction about which keys
+            // to present; it is just not a source of keys here.)
             let mut n_states = 0usize;
             let (mut is, mut ns, mut os) = (0usize, 0usize, 0usize);
-            for &key in &window_keys {
-                while is < p_in.len() && p_in[is].0.0 < key { is += 1; }
+            loop {
+                // Mapped to hashes before the min: the three runs differ in their diff type.
+                let Some(key) = [
+                    p_in.get(is).map(|record| record.0.0),
+                    p_nv.get(ns).map(|record| record.0.0),
+                    p_out.get(os).map(|record| record.0.0),
+                ].into_iter().flatten().min() else { break };
                 let i0 = is;
                 while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
                 let i1 = is;
-                while ns < p_nv.len() && p_nv[ns].0.0 < key { ns += 1; }
                 let n0 = ns;
                 while ns < p_nv.len() && p_nv[ns].0.0 == key { ns += 1; }
                 let n1 = ns;
-                while os < p_out.len() && p_out[os].0.0 < key { os += 1; }
                 let o0 = os;
                 while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
                 let o1 = os;
