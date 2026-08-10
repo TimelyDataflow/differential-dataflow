@@ -37,6 +37,11 @@ const TARGET: usize = 8192;
 /// A sorted, consolidated run of `((key, val), time, diff)`, shared via `Rc`.
 pub struct VecChunk<K, V, T, R>(Rc<Vec<((K, V), T, R)>>);
 
+impl<K, V, T, R> VecChunk<K, V, T, R> {
+    /// The chunk's records as a sorted, consolidated slice.
+    pub fn as_slice(&self) -> &[((K, V), T, R)] { &self.0 }
+}
+
 impl<K, V, T, R> Clone for VecChunk<K, V, T, R> {
     fn clone(&self) -> Self { VecChunk(Rc::clone(&self.0)) }
 }
