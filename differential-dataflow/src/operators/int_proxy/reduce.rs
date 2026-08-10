@@ -186,6 +186,21 @@ where
         // touch, which it discovers while reading them; neither side scans the whole key space.
         let changed: Vec<u64> = due.keys().copied().collect();
 
+        // Nothing due and nothing novel: no time in the interval can be interesting, so there is no
+        // work and no output. Return the frontier bounding the times still withheld — NOT an empty
+        // one. This is exactly where a due-only `changed` differs from the whole pending set: times
+        // beyond `upper` can remain when nothing is due, and releasing their capabilities would
+        // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
+        if changed.is_empty() && instance.input_batches.iter().all(|b| b.is_empty()) {
+            let mut frontier = Antichain::new();
+            for times in self.pending.values() {
+                for time in times {
+                    frontier.insert_ref(time);
+                }
+            }
+            return (Vec::new(), frontier);
+        }
+
         // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
         // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
         let held_elems: Vec<B1::Time> = held.elements().to_vec();
