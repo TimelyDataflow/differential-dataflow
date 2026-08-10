@@ -179,9 +179,10 @@ pub fn tile_descriptions<T: Timestamp + Lattice>(
     (tile_descs, tile_held, tile_of)
 }
 
-/// A one-key view into an input presentation: the read-only arguments [`discover_times`] needs
-/// about a single key — its slice `[i0, i1)` of the merged `(id, time, diff)` run `p_in` and
-/// the carried `pending` times.
+/// A one-key view into the ACCUMULATED input presentation: the read-only arguments
+/// [`discover_times`] needs about a single key — its slice `[i0, i1)` of the `(id, time, diff)` run
+/// `p_in` and the carried `pending` times. The novel run is not here; it arrives as `seed_times`,
+/// and the two are deliberately never merged (see the note on `seed_times` below).
 pub struct KeyView<'a, T, RIn> {
     /// The presented `((key_hash, value_id), time, diff)` run the key's records live in.
     pub p_in: &'a [((u64, u64), T, RIn)],
@@ -236,15 +237,18 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone> Default for DiscoverScratch
 
 /// Determines the times in `[lower, upper)` at which a key's reduction must be re-evaluated
 /// (`moments`), and the times at or beyond `upper` to carry into the next invocation
-/// (`pended`). Replays the key's `seed_times` and `pending` times in ascending order, marking
+/// (`pended`). Replays the key's `seed_times` (the novel run) and `pending` times in ascending
+/// order, marking
 /// those that carry updates and closing the set under joins with the input and output
 /// histories' times and with each other. No input collection is materialized, so peak memory
 /// is O(times); buffers are advanced by the meet of the times still to come, keeping a key
 /// with many distinct times linear rather than quadratic.
 ///
-/// `seed_times` must be the novel batch's own time support for this key. Seeding from a
-/// consolidated view is unsound: compaction may advance a history record onto a novel time,
-/// where consolidation cancels the novel update and its interesting time is missed.
+/// `seed_times` must be the novel batch's own time support for this key, and `key.p_in` the
+/// accumulated input WITHOUT it. Seeding from a view of the two consolidated together is unsound:
+/// compaction may advance a history record onto a novel time, where consolidation cancels the novel
+/// update and its interesting time is missed. This is why the caller keeps the two runs apart and
+/// combines them only when accumulating.
 #[allow(clippy::too_many_arguments)]
 pub fn discover_times<T, RIn>(
     key: KeyView<'_, T, RIn>,

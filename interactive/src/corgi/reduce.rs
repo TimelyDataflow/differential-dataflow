@@ -288,6 +288,33 @@ impl<T> CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
 {
+    /// Present one input run — the accumulated history or the novel delta — restricted to `keys`.
+    ///
+    /// Fills `bridge`, registers the run's representative keys, and extends the shared value pool
+    /// (`blocks`/`len`, concatenated into `in_vals`) with its values, so `in_index` resolves a value
+    /// id from EITHER run to a row. The two runs stay apart as presentations and meet only in the
+    /// tactic's accumulation; the pool is shared because a value id means the same thing in both.
+    fn present_input(
+        &mut self,
+        chunks: &[&CorgiChunk<T, Diff>],
+        keys: &[u64],
+        blocks: &mut Vec<CValue>,
+        len: &mut usize,
+        bridge: &mut ProxyBridge<T, Diff>,
+    ) {
+        let (p_keys, p_vals, khs, times, diffs) = collect_present(chunks, keys);
+        if khs.is_empty() {
+            return;
+        }
+        let vids = ids(&p_vals);
+        for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
+        *len += p_vals.len();
+        blocks.push(p_vals);
+        self.register_keys(p_keys, &khs);
+        bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
+        consolidate_updates(bridge);
+    }
+
     /// The one value crossing for a retire: every `(key, time)` bracket at once. Builds the output
     /// value COLUMN directly per reducer, registers it (id → row) into the val pool, and returns the
     /// proxy `(value_id, diff)` deltas with per-bracket ends. `input[k] = (rep index into the input
@@ -430,22 +457,6 @@ where
     type RIn = Diff;
     type ROut = Diff;
 
-    fn seed_times(&self, instance: &ReduceInstance<'_, CBatch<T>, CBatch<T>>) -> Vec<(u64, T)> {
-        // The batch's raw (key_hash, time) support — hash the novel KEY columns only, one entry per
-        // record, sorted by key_hash. Seeds may over-derive (a non-changing seed yields a zero delta),
-        // so this superset of b.support suffices; `instance.lower` is not applied (see ReduceInstance).
-        let mut out: Vec<(u64, T)> = Vec::new();
-        for ch in chunks_of(instance.input_batches) {
-            let kh = ids(ch.keys());
-            let times = ch.times();
-            for (i, h) in kh.into_iter().enumerate() {
-                out.push((h, times.get(i)));
-            }
-        }
-        out.sort_by_key(|(k, _)| *k);
-        out
-    }
-
     fn begin(&mut self, tiles: &[Description<T>]) {
         // Open a tiled output session for this retire; reset the per-retire resolution pools.
         self.reset_pools();
@@ -453,57 +464,70 @@ where
         self.tile_rows = (0..tiles.len()).map(|_| (Vec::new(), Vec::new(), Vec::new(), Vec::new())).collect();
     }
 
-    fn next_window(&mut self, instance: &ReduceInstance<'_, CBatch<T>, CBatch<T>>, changed: &[u64], cursor: &mut usize) -> Option<ReduceWindow<T, Diff, Diff>> {
-        // Single window: present ALL remaining changed keys at once. This is NOT a deferred
-        // refinement — bounded windows were measured and rejected: at WINDOW = 1<<14, scc
+    fn next_window(&mut self, instance: &ReduceInstance<'_, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
+        // Single window: present the WHOLE key space at once, and report it covered. This is NOT a
+        // deferred refinement — bounded windows were measured and rejected: at WINDOW = 1<<14, scc
         // (100 rounds x batch 100) cost 84.4s against 63.7s, a 33% regression, while peak RSS
         // fell only 356MB -> 340MB. Two reasons: the per-window, per-chunk seek setup is a
         // fixed cost that multiplies by the window count, and the presentation is not the
-        // memory peak in the first place (the trace is). `changed` is ascending, so
-        // `binary_search` is the changed-key filter.
-        if *cursor >= changed.len() {
-            return None;
+        // memory peak in the first place (the trace is).
+        if from.is_none() {
+            return;
         }
-        let keys: Vec<u64> = changed[*cursor..].to_vec();
-        *cursor = changed.len();
-        let present = |chunks: &[&CorgiChunk<T, Diff>]| collect_present(chunks, &keys);
+        *from = None;
 
-        // Input presentation: accumulated history ∪ novel delta, restricted to the window's keys.
-        // value_id = content hash of the value (equal values share an id → the tactic nets them);
-        // `in_index` resolves an id back to a representative in_vals row for `reduce_corrections`.
-        let mut in_chunks = chunks_of(instance.input_batches);
-        in_chunks.extend(chunks_of(instance.source_batches));
-        let (in_keys, in_vals, in_khs, in_times, in_diffs) = present(&in_chunks);
-        self.in_index = IdMap::default();
-        let input: ProxyBridge<T, Diff> = if in_khs.is_empty() {
+        // The window's keys: the hashes the novel batches touch, merged with the `changed` set the
+        // harness supplies. The novel hashes come from the scan the presentation needs anyway — the
+        // separate seeding pass this replaced read the delta a second time to derive them.
+        let novel_chunks = chunks_of(instance.input_batches);
+        let mut keys: Vec<u64> = Vec::new();
+        for ch in novel_chunks.iter() {
+            keys.extend(ids(ch.keys()));
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        if !changed.is_empty() {
+            // Both sides ascend, so this is a merge.
+            let mut merged: Vec<u64> = Vec::with_capacity(keys.len() + changed.len());
+            let (mut a, mut b) = (0usize, 0usize);
+            while a < keys.len() || b < changed.len() {
+                let key = match (keys.get(a), changed.get(b)) {
+                    (Some(x), Some(y)) => *x.min(y),
+                    (Some(x), None) => *x,
+                    (None, Some(y)) => *y,
+                    (None, None) => unreachable!("loop condition ensures one is present"),
+                };
+                if keys.get(a) == Some(&key) { a += 1; }
+                if changed.get(b) == Some(&key) { b += 1; }
+                merged.push(key);
+            }
+            keys = merged;
+        }
+        if keys.is_empty() {
             self.in_vals = CValue::Unit(0);
-            Vec::new()
-        } else {
-            let vids = ids(&in_vals);
-            for (r, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(r); }
-            self.in_vals = in_vals;
-            self.register_keys(in_keys, &in_khs);
-            let mut b: ProxyBridge<T, Diff> =
-                (0..in_khs.len()).map(|i| ((in_khs[i], vids[i]), in_times[i].clone(), in_diffs[i])).collect();
-            consolidate_updates(&mut b);
-            b
-        };
+            self.in_index = IdMap::default();
+            return;
+        }
+
+        // The two input presentations, held apart: `history` is the accumulated input and `novel`
+        // the delta whose times seed the interesting times. `in_index` resolves a value id back to a
+        // representative row of `in_vals`, which spans BOTH runs, for `reduce_corrections`.
+        self.in_index = IdMap::default();
+        let mut in_blocks: Vec<CValue> = Vec::new();
+        let mut in_len = 0usize;
+        self.present_input(&chunks_of(instance.source_batches), &keys, &mut in_blocks, &mut in_len, &mut window.history);
+        self.present_input(&novel_chunks, &keys, &mut in_blocks, &mut in_len, &mut window.novel);
+        self.in_vals = concat_columns(&in_blocks);
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
-        let (o_keys, o_vals, o_khs, o_times, o_diffs) = present(&chunks_of(instance.output_batches));
-        let output: ProxyBridge<T, Diff> = if o_khs.is_empty() {
-            Vec::new()
-        } else {
+        let (o_keys, o_vals, o_khs, o_times, o_diffs) = collect_present(&chunks_of(instance.output_batches), &keys);
+        if !o_khs.is_empty() {
             let vids = ids(&o_vals);
             self.register_keys(o_keys, &o_khs);
             self.register_vals(o_vals, &vids);
-            let mut b: ProxyBridge<T, Diff> =
-                (0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])).collect();
-            consolidate_updates(&mut b);
-            b
-        };
-
-        Some(ReduceWindow { keys, input, output })
+            window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
+            consolidate_updates(&mut window.output);
+        }
     }
 
     fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
