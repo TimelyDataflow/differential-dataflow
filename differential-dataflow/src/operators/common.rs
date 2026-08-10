@@ -410,8 +410,10 @@ pub struct Sweep<T, RIn, ROut> {
     due_pos: usize,
     /// Synthesized times not yet visited, sorted DESCENDING so `last()` is the least.
     synth: Vec<T>,
-    /// Seeds stepped in so far, compacted by the running meet: the `∃ nu ∈ novel, nu ≤ x` witnesses.
-    times_current: Vec<T>,
+    /// The seed times reached so far, compacted by the running meet. They are the witnesses the
+    /// absorption test looks for, and the partners a close joins against; keeping them collapsed is
+    /// what stops a key with many reached times rescanning all of them.
+    reached: Vec<T>,
     /// Scratch for one step's synthesized times.
     temporary: Vec<T>,
     /// Corrections emitted so far this sweep, meet-collapsed; both a join partner and part of the
@@ -423,13 +425,25 @@ pub struct Sweep<T, RIn, ROut> {
     suspended: bool,
 }
 
+/// What one [`tick`](Sweep::tick) decided about the time it visited.
+enum Tick<T> {
+    /// No seed reaches this time; the sweep moved past it.
+    Passed,
+    /// Reached, but at or beyond `upper`: carried to a later round rather than evaluated.
+    Pended,
+    /// Reached and in the interval. The caller must evaluate here before the sweep goes on.
+    Crossing(T),
+    /// Every source is drained.
+    Done,
+}
+
 impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sweep<T, RIn, ROut> {
     /// An empty sweep, to be `load`ed. Reuse one per key rather than allocating per key.
     pub fn new() -> Self {
         Sweep {
             novel: ValueHistory::new(), input: ValueHistory::new(), output: ValueHistory::new(),
             due: Vec::new(), due_meets: Vec::new(), due_pos: 0,
-            synth: Vec::new(), times_current: Vec::new(), temporary: Vec::new(),
+            synth: Vec::new(), reached: Vec::new(), temporary: Vec::new(),
             produced: Vec::new(), meet: None, suspended: false,
         }
     }
@@ -456,7 +470,7 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
         }
         self.due_pos = 0;
         self.synth.clear();
-        self.times_current.clear();
+        self.reached.clear();
         self.temporary.clear();
         self.produced.clear();
         self.suspended = false;
@@ -478,81 +492,130 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     /// to carry into a later round.
     pub fn next_crossing(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Option<T> {
         loop {
+            // A crossing leaves its step half-finished, because `settle` must see the corrections
+            // the caller commits. Finishing it is the first thing the next call does.
             if self.suspended {
                 self.suspended = false;
                 self.settle();
             }
-            let next_time = [
-                self.novel.time(), self.due.get(self.due_pos), self.input.time(),
-                self.output.time(), self.synth.last(),
-            ].into_iter().flatten().min().cloned()?;
-
-            self.input.step_while_time_is(&next_time);
-            self.output.step_while_time_is(&next_time);
-
-            // CLAUSE TWO of `round_coverage`, first half: a time is reached only via a seed — a
-            // novel update, a due time, or a synthetic join of earlier reached times.
-            let mut interesting = self.novel.step_while_time_is(&next_time);
-            if interesting {
-                if let Some(meet) = self.meet.as_ref() { self.novel.advance_buffer_by(meet); }
-            }
-            while self.synth.last() == Some(&next_time) {
-                self.times_current.push(self.synth.pop().expect("nonempty"));
-                interesting = true;
-            }
-            while self.due.get(self.due_pos) == Some(&next_time) {
-                self.times_current.push(next_time.clone());
-                self.due_pos += 1;
-                interesting = true;
-            }
-            // CLAUSE TWO, second half: absorption. A time at or above a seed already stepped in is
-            // itself reached, because joining that seed with it yields it back.
-            interesting = interesting
-                || self.novel.buffer().iter().any(|((_, t), _)| t.less_equal(&next_time))
-                || self.times_current.iter().any(|t| t.less_equal(&next_time));
-
-            if !upper.less_equal(&next_time) {
-                // CLAUSE ONE: close under joins. Against the NOVEL times unconditionally — even an
-                // unreached time joined with a novel time lands above a novel time, so it is on the
-                // schedule. Against the PRIOR times only when this time is itself reached, since it
-                // then carries the novel witness; a join of two prior times carries none and is
-                // deliberately never produced.
-                self.temporary.extend(self.novel.buffer().iter().map(|((_, t), _)| t)
-                    .filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
-                self.temporary.extend(self.times_current.iter()
-                    .filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
-                if interesting {
-                    if let Some(meet) = self.meet.as_ref() {
-                        self.input.advance_buffer_by(meet);
-                        self.output.advance_buffer_by(meet);
-                    }
-                    self.temporary.extend(self.input.buffer().iter().map(|((_, t), _)| t)
-                        .filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
-                    self.temporary.extend(self.output.buffer().iter().map(|((_, t), _)| t)
-                        .filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
-                    self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
-                        .filter(|t| !t.less_equal(&next_time)).map(|t| t.join(&next_time)));
-                }
-                sort_dedup(&mut self.temporary);
-                let synth_len = self.synth.len();
-                for time in self.temporary.drain(..) {
-                    if upper.less_equal(&time) { pended.push(time); } else { self.synth.push(time); }
-                }
-                if self.synth.len() > synth_len {
-                    self.synth.sort_by(|x, y| y.cmp(x));
-                    self.synth.dedup();
-                }
-
-                if interesting {
-                    // The suspension point: exactly where the conventional operator calls logic.
+            match self.tick(upper, pended) {
+                Tick::Done => return None,
+                Tick::Crossing(at) => {
                     self.suspended = true;
-                    return Some(next_time);
+                    return Some(at);
                 }
+                Tick::Passed | Tick::Pended => {}
             }
-            else if interesting {
-                pended.push(next_time.clone());
-            }
+        }
+    }
+
+    /// Visit one time: find it, decide whether it is reached, close it forward, and report.
+    fn tick(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Tick<T> {
+        let Some(at) = self.frontier() else { return Tick::Done };
+        let reached = self.absorb(&at);
+        if upper.less_equal(&at) {
+            // Out of the interval: nothing can be emitted here, so there is nothing to close
+            // against either — a join with `at` is at or beyond `at`, hence also out of interval,
+            // and will be rediscovered from `at` in the round that admits it.
             self.settle();
+            if reached { pended.push(at); return Tick::Pended; }
+            return Tick::Passed;
+        }
+        self.close(&at, reached, upper, pended);
+        if reached { return Tick::Crossing(at); }
+        self.settle();
+        Tick::Passed
+    }
+
+    /// The sweep's position: the least time any source still offers.
+    ///
+    /// The TOTAL order, not the partial one. Every time `close` produces is strictly greater than
+    /// the position that produced it, so new work only ever lands ahead of here and the sweep never
+    /// revisits.
+    fn frontier(&self) -> Option<T> {
+        [
+            self.novel.time(), self.due.get(self.due_pos), self.input.time(),
+            self.output.time(), self.synth.last(),
+        ].into_iter().flatten().min().cloned()
+    }
+
+    /// Step every source sitting at `at`, and decide whether `at` is REACHED.
+    ///
+    /// Reached is clause two of `round_coverage` — `∃ nu ∈ novel, nu ≤ at` — evaluated
+    /// incrementally: either a seed lands exactly here, or one already stepped in lies below.
+    ///
+    /// Input and output are stepped whether or not `at` is reached, and that is forced rather than
+    /// eager: they are sources of the frontier, so leaving them would stall the sweep, and their
+    /// edits must reach the buffers or they are lost to every later accumulation. Stepping only
+    /// moves an edit across; it consolidates nothing. The expensive part — `advance_buffer_by`,
+    /// which joins every buffered time and re-consolidates — is deferred to `close`, and happens
+    /// only where the buffers are actually read.
+    fn absorb(&mut self, at: &T) -> bool {
+        self.input.step_while_time_is(at);
+        self.output.step_while_time_is(at);
+
+        // A novel update here is a seed.
+        let mut reached = self.novel.step_while_time_is(at);
+        if reached {
+            if let Some(meet) = self.meet.as_ref() { self.novel.advance_buffer_by(meet); }
+        }
+        // So is a synthetic join scheduled for here, or a due time carried in. Both move into the
+        // reached set, where they become witnesses and join partners for later times.
+        while self.synth.last() == Some(at) {
+            self.reached.push(self.synth.pop().expect("nonempty"));
+            reached = true;
+        }
+        while self.due.get(self.due_pos) == Some(at) {
+            self.reached.push(at.clone());
+            self.due_pos += 1;
+            reached = true;
+        }
+        // Absorption: a time at or above a seed already stepped in is itself reached, because
+        // joining that seed with it yields it back. Checked against the stepped prefixes only.
+        reached
+            || self.novel.buffer().iter().any(|((_, t), _)| t.less_equal(at))
+            || self.reached.iter().any(|t| t.less_equal(at))
+    }
+
+    /// Close `at` forward under joins — clause one of `round_coverage`, the join-closure.
+    ///
+    /// Against the NOVEL times always, reached or not: an unreached time joined with a novel time
+    /// lands at or above that novel time, so it carries a witness and is on the schedule.
+    ///
+    /// Against the PRIOR times only when `at` is itself reached, because the join then inherits
+    /// `at`'s witness. A join of two prior times carries none and is deliberately never produced —
+    /// that asymmetry is the whole of why an incremental operator does less work than the closure
+    /// of everything.
+    ///
+    /// `produced` counts as prior. A correction emitted at `p` changes the accumulated output at
+    /// every time at or above `p`, so `p ∨ at` has to be visited; nothing else covers it, since
+    /// this round's corrections are not in the output history and `at` was not yet stepped in when
+    /// the sweep passed `p`.
+    fn close(&mut self, at: &T, reached: bool, upper: &Antichain<T>, pended: &mut Vec<T>) {
+        self.temporary.extend(self.novel.buffer().iter().map(|((_, t), _)| t)
+            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        self.temporary.extend(self.reached.iter()
+            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        if reached {
+            if let Some(meet) = self.meet.as_ref() {
+                self.input.advance_buffer_by(meet);
+                self.output.advance_buffer_by(meet);
+            }
+            self.temporary.extend(self.input.buffer().iter().map(|((_, t), _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+            self.temporary.extend(self.output.buffer().iter().map(|((_, t), _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+            self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        }
+        sort_dedup(&mut self.temporary);
+        let before = self.synth.len();
+        for time in self.temporary.drain(..) {
+            if upper.less_equal(&time) { pended.push(time); } else { self.synth.push(time); }
+        }
+        if self.synth.len() > before {
+            self.synth.sort_by(|x, y| y.cmp(x));
+            self.synth.dedup();
         }
     }
 
@@ -584,8 +647,8 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
         }
     }
 
-    /// Close a step: recompute the meet of everything still to come, and compact the reached seeds
-    /// by it. This is what keeps a key with a long history linear rather than quadratic.
+    /// Close a step: recompute the meet of everything still to come, and compact the reached set by
+    /// it. This is what keeps a key with a long history linear rather than quadratic.
     fn settle(&mut self) {
         let mut meet: Option<T> = None;
         update_meet(&mut meet, self.novel.meet());
@@ -594,9 +657,9 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
         for time in self.synth.iter() { update_meet(&mut meet, Some(time)); }
         update_meet(&mut meet, self.due_meets.get(self.due_pos));
         if let Some(m) = meet.as_ref() {
-            for time in self.times_current.iter_mut() { *time = time.join(m); }
+            for time in self.reached.iter_mut() { *time = time.join(m); }
         }
-        sort_dedup(&mut self.times_current);
+        sort_dedup(&mut self.reached);
         self.meet = meet;
     }
 }
