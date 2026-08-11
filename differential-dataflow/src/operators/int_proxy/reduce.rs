@@ -3,8 +3,6 @@
 //! A conventional differential reduce against `(u64, u64)`, where the backend supplies the
 //! implementation of the interpretation of the integers.
 
-use std::collections::BTreeMap;
-
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::AntichainRef;
@@ -125,17 +123,75 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     fn finish(&mut self) -> Vec<B2>;
 }
 
+/// Interesting times deferred to a later retire, flat and ordered by `(key_hash, time)`.
+///
+/// One entry per `(key, time)` pair across two parallel runs, which is what the conventional reduce
+/// keeps (`pending_keys` / `pending_time`). The point is locality rather than asymptotics: a
+/// `BTreeMap<u64, Vec<T>>` is a node per few keys plus a separate allocation per key, so walking it
+/// in key order touches memory in whatever order the allocator handed it out, and drifts further
+/// from key order the longer it lives. That costs nothing on a benchmark that fits in cache and a
+/// fault per key once it does not.
+///
+/// Appends land in `staging` in any order and `seal` orders them, so a retire can push a key's
+/// pended times when it reaches that key rather than having to visit keys in order.
+struct Pending<T> {
+    keys: Vec<u64>,
+    times: Vec<T>,
+    staging: Vec<(u64, T)>,
+}
+
+impl<T: Ord + Clone> Pending<T> {
+    fn new() -> Self { Pending { keys: Vec::new(), times: Vec::new(), staging: Vec::new() } }
+
+    fn clear(&mut self) {
+        self.keys.clear();
+        self.times.clear();
+        self.staging.clear();
+    }
+
+    /// The `(key, time)` pairs, in order.
+    fn iter(&self) -> impl Iterator<Item = (u64, &T)> {
+        self.keys.iter().copied().zip(self.times.iter())
+    }
+
+    /// Defer `time` for `key`. Order is `seal`'s problem.
+    fn push(&mut self, key: u64, time: T) { self.staging.push((key, time)); }
+
+    /// Order and deduplicate what was pushed, replacing the contents.
+    fn seal(&mut self) {
+        self.keys.clear();
+        self.times.clear();
+        self.staging.sort_unstable();
+        self.staging.dedup();
+        for (key, time) in self.staging.drain(..) {
+            self.keys.push(key);
+            self.times.push(time);
+        }
+    }
+
+    /// `key`'s deferred times, found by advancing `cursor`. Keys must be requested in order.
+    fn times_at(&self, cursor: &mut usize, key: u64) -> &[T] {
+        while *cursor < self.keys.len() && self.keys[*cursor] < key { *cursor += 1; }
+        let lower = *cursor;
+        let mut upper = lower;
+        while upper < self.keys.len() && self.keys[upper] == key { upper += 1; }
+        &self.times[lower..upper]
+    }
+}
+
 /// A proxy-space [`ReduceTactic`]: matches input and output records by `key_hash`.
 pub struct ProxyReduceTactic<T, Bk> {
     backend: Bk,
     /// Pending interesting times beyond the upper frontier, keyed by key hash.
-    pending: BTreeMap<u64, Vec<T>>,
+    pending: Pending<T>,
+    /// The store under construction for the next retire; swapped in to keep its capacity.
+    next_pending: Pending<T>,
 }
 
-impl<T, Bk> ProxyReduceTactic<T, Bk> {
+impl<T: Ord + Clone, Bk> ProxyReduceTactic<T, Bk> {
     /// A tactic deferring all value semantics to `backend`.
     pub fn new(backend: Bk) -> Self {
-        ProxyReduceTactic { backend, pending: BTreeMap::new() }
+        ProxyReduceTactic { backend, pending: Pending::new(), next_pending: Pending::new() }
     }
 }
 
@@ -168,16 +224,17 @@ where
         // Split the carried interesting times against `upper`.
         // A time below it is DUE: its key must be re-evaluated this retire, so the key is `changed`.
         // A time at or beyond it is carried forward untouched, seeding `new_pending`.
-        let mut due: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
-        let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
-        for (key, times) in self.pending.iter() {
-            let (carried, ready): (Vec<_>, Vec<_>) = times.iter().cloned().partition(|t| upper.less_equal(t));
-            if !ready.is_empty() { due.insert(*key, ready); }
-            if !carried.is_empty() { new_pending.insert(*key, carried); }
+        let mut due: Pending<B1::Time> = Pending::new();
+        self.next_pending.clear();
+        for (key, time) in self.pending.iter() {
+            if upper.less_equal(time) { self.next_pending.push(key, time.clone()); }
+            else { due.push(key, time.clone()); }
         }
+        due.seal();
         // The keys the harness knows must be revisited. The backend adds those its novel batches
         // touch, which it discovers while reading them; neither side scans the whole key space.
-        let changed: Vec<u64> = due.keys().copied().collect();
+        let mut changed: Vec<u64> = due.keys.clone();
+        changed.dedup();
 
         // Nothing due and nothing novel: no time in the interval can be interesting, so there is no
         // work and no output. Return the frontier bounding the times still withheld — NOT an empty
@@ -186,10 +243,8 @@ where
         // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
         if changed.is_empty() && instance.input_batches.iter().all(|b| b.is_empty()) {
             let mut frontier = Antichain::new();
-            for times in self.pending.values() {
-                for time in times {
-                    frontier.insert_ref(time);
-                }
+            for time in self.pending.times.iter() {
+                frontier.insert_ref(time);
             }
             return (Vec::new(), frontier);
         }
@@ -204,6 +259,11 @@ where
         // once the backend reports the space covered.
         let mut from = Some(0u64);
         let mut window: ReduceWindow<B1::Time, Bk::RIn, Bk::ROut> = ReduceWindow::default();
+        // Monotone cursor into `due`: the key loops ascend, and the windows partition the key space
+        // in order, so a key's deferred times are found by advancing rather than by probing.
+        let mut due_cursor = 0usize;
+        // Staging for times pended mid-wave, drained into `next_pending` once the borrows end.
+        let mut pend_next: Vec<(u64, B1::Time)> = Vec::new();
 
         // Retire-wide reusable scratch: cleared per window or wave, never reallocated. Fresh
         // per-key/per-wave `Vec`s were once the dominant cost here, which is why the slots and the
@@ -292,7 +352,7 @@ where
                 slots[n_slots].key = key;
                 slots[n_slots].pended.clear();
                 // Only the DUE times seed the sweep; the carried ones are already in `new_pending`.
-                let owed = due.get(&key).map(|p| &p[..]).unwrap_or(&[]);
+                let owed = due.times_at(&mut due_cursor, key);
 
                 // The novel run goes in unadvanced — it is the seed, and the schedule is stated
                 // over its own times. Only then is the meet known, and the join partners advanced.
@@ -315,8 +375,9 @@ where
                 let slot = &mut slots[si];
                 slot.at = slot.sweep.next_crossing(&mut runs, upper, &mut slot.pended);
                 if slot.at.is_some() { live.push(si); }
-                else if !slot.pended.is_empty() {
-                    new_pending.entry(slot.key).or_default().append(&mut slot.pended);
+                else {
+                    let key = slot.key;
+                    for time in slot.pended.drain(..) { self.next_pending.push(key, time); }
                 }
             }
 
@@ -369,14 +430,15 @@ where
                     let si = live[si];
                     let slot = &mut slots[si];
                     slot.at = slot.sweep.next_crossing(&mut runs, upper, &mut slot.pended);
-                    if slot.at.is_none() && !slot.pended.is_empty() {
-                        let entry = new_pending.entry(slot.key).or_default();
-                        entry.append(&mut slot.pended);
-                        crate::operators::reduce::sort_dedup(entry);
+                    if slot.at.is_none() {
+                        let key = slot.key;
+                        for time in slot.pended.drain(..) { pend_next.push((key, time)); }
                     }
                 }
                 live.retain(|&si| slots[si].at.is_some());
             }
+
+            for (key, time) in pend_next.drain(..) { self.next_pending.push(key, time); }
 
             for (held_index, deltas) in tile_deltas.iter_mut().enumerate() {
                 if deltas.is_empty() {
@@ -389,13 +451,12 @@ where
             }
         }
 
-        self.pending = new_pending;
+        self.next_pending.seal();
+        std::mem::swap(&mut self.pending, &mut self.next_pending);
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
         let mut frontier = Antichain::new();
-        for times in self.pending.values() {
-            for t in times {
-                frontier.insert_ref(t);
-            }
+        for time in self.pending.times.iter() {
+            frontier.insert_ref(time);
         }
         (produced, frontier)
     }
