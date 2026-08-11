@@ -601,7 +601,7 @@ impl<T: Timestamp + Lattice, ROut: Semigroup + Clone> Sweep<T, ROut> {
     /// the sweep passed `p`.
     fn close<RIn: Semigroup>(&mut self, runs: &mut Runs<'_, T, RIn, ROut>, at: &T, reached: bool, upper: &Antichain<T>, pended: &mut Vec<T>) {
         self.temporary.extend(runs.novel.active(self.slot).map(|(_, t, _)| t)
-            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)).collect::<Vec<_>>());
+            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
         self.temporary.extend(self.reached.iter()
             .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
         if reached {
@@ -610,9 +610,9 @@ impl<T: Timestamp + Lattice, ROut: Semigroup + Clone> Sweep<T, ROut> {
                 runs.output.advance_active(self.slot, meet);
             }
             self.temporary.extend(runs.input.active(self.slot).map(|(_, t, _)| t)
-                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)).collect::<Vec<_>>());
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
             self.temporary.extend(runs.output.active(self.slot).map(|(_, t, _)| t)
-                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)).collect::<Vec<_>>());
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
             self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
                 .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
         }
