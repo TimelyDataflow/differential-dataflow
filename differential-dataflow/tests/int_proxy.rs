@@ -104,9 +104,11 @@ fn reduce_one_retire() {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 struct Collide(u64);
-impl Hashable for Collide {
-    type Output = u64;
-    fn hashed(&self) -> u64 { 0 }
+/// Every `Collide` hashes alike, so they share a `key_hash` and exercise the collision paths.
+/// Written as `Hash` rather than `Hashable` because the latter has a blanket impl for `T: Hash`,
+/// and the backend's id interning needs `Hash` too.
+impl std::hash::Hash for Collide {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) { state.write_u64(0); }
 }
 
 #[test]

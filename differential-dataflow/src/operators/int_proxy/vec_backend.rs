@@ -27,7 +27,7 @@
 //! Time handling remains zero lines: the tactic owns all lattice logic, and this backend only ever
 //! clones times through.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use timely::container::PushInto;
@@ -167,7 +167,7 @@ pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// corrections mint ids that later windows' presentations and `emit` must agree on.
     out_pool: Vec<(K, W)>,
     /// Interns `(key, out)` rows to their output id.
-    out_ids: BTreeMap<(K, W), u64>,
+    out_ids: HashMap<(K, W), u64>,
     /// The retire's output tile descriptions, and the rows accumulated for each.
     tiles: Vec<Description<T>>,
     tile_rows: Vec<Vec<((u64, (K, W)), T, R)>>,
@@ -189,7 +189,7 @@ impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
             keys_cache: Vec::new(),
             in_pool: Vec::new(),
             out_pool: Vec::new(),
-            out_ids: BTreeMap::new(),
+            out_ids: HashMap::new(),
             tiles: Vec::new(),
             tile_rows: Vec::new(),
         }
@@ -199,9 +199,9 @@ impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
 impl<K, V, W, T, R, L> ProxyReduceBackend<VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>
     for VecReduceBackend<K, V, W, T, R, L>
 where
-    K: Ord + Clone + 'static,
+    K: Ord + Clone + std::hash::Hash + 'static,
     V: Ord + Clone + 'static,
-    W: Ord + Clone + 'static,
+    W: Ord + Clone + std::hash::Hash + 'static,
     T: Lattice + Timestamp,
     R: Semigroup + Ord + Clone + 'static,
     L: FnMut(&K, &[(V, R)], &mut Vec<(W, R)>, &mut Vec<(W, R)>),
