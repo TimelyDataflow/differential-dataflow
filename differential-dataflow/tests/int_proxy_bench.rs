@@ -115,6 +115,105 @@ macro_rules! proxy_reduce {
     };
 }
 
+/// A `String`-valued churn: the same shape as `churn`, but every value clone allocates. The
+/// `u64` workloads cannot show what the proxy boundary costs to marshal owned data, because
+/// cloning a `u64` is free.
+fn wide_keys() -> u64 { sized("WIDE_KEYS", 20_000) }
+fn wide_len() -> usize { sized("WIDE_LEN", 48) as usize }
+
+fn wide_value(k: u64, t: u64, len: usize) -> String {
+    let mut s = String::with_capacity(len);
+    s.push_str(&format!("{k:016x}{t:016x}"));
+    while s.len() < len { s.push('x'); }
+    s
+}
+
+fn run_wide(mode: Mode) -> f64 {
+    let keys = wide_keys();
+    let len = wide_len();
+    timely::execute_directly(move |worker| {
+        let mut input: InputSession<u64, (u64, String), isize> = InputSession::new();
+        let probe = worker.dataflow::<u64, _, _>(|scope| {
+            let coll = input.to_collection(scope);
+            let mut ph = ProbeHandle::new();
+            match mode {
+                Mode::Mainline => {
+                    coll.reduce(|_k, i: &[(&String, isize)], o: &mut Vec<(String, isize)>| {
+                        if let Some(m) = i.iter().filter(|(_, d)| *d > 0).map(|(v, _)| (*v).clone()).max() {
+                            o.push((m, 1));
+                        }
+                    }).inner.probe_with(&mut ph);
+                }
+                Mode::CursorSame => {
+                    let hashed = coll.map(|(k, v)| (k.hashed(), (k, v)));
+                    let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
+                        ContainerChunker<VecChunk<u64, (u64, String), u64, isize>>,
+                        VChunkBatcher<u64, (u64, String), u64, isize>,
+                        VChunkBuilder<u64, (u64, String), u64, isize>,
+                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW");
+                    arr.reduce_core::<_, VChunkBuilder<u64, (u64, String), u64, isize>,
+                        VChunkSpine<u64, (u64, String), u64, isize>,
+                        <VecChunkCursor<u64, (u64, String), u64, isize> as Cursor>::KeyContainer, _>(
+                        "CursorWide",
+                        |_h, input, current, updates| {
+                            if let Some(kv) = input.iter().filter(|(_, d)| *d > 0).map(|(kv, _)| (*kv).clone()).max_by(|a, b| a.1.cmp(&b.1)) {
+                                updates.push((kv, 1));
+                            }
+                            for (w, d) in current.iter() { updates.push((w.clone(), -*d)); }
+                        },
+                        |chunk, key, list| {
+                            use timely::container::PushInto;
+                            *chunk = Default::default();
+                            for (v, t, d) in list.drain(..) { chunk.push_into(((*key, v), t, d)); }
+                        },
+                    ).stream.probe_with(&mut ph);
+                }
+                Mode::Proxy => {
+                    let hashed = coll.map(|(k, v)| (k.hashed(), (k, v)));
+                    let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
+                        ContainerChunker<VecChunk<u64, (u64, String), u64, isize>>,
+                        VChunkBatcher<u64, (u64, String), u64, isize>,
+                        VChunkBuilder<u64, (u64, String), u64, isize>,
+                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW");
+                    reduce_with_tactic::<_, VChunkSpine<u64, (u64, String), u64, isize>, _>(
+                        arr, "ProxyWide",
+                        ProxyReduceTactic::new(VecReduceBackend::new(
+                            |_k: &u64, input: &[(String, isize)], current: &mut Vec<(String, isize)>, updates: &mut Vec<(String, isize)>| {
+                                if let Some(m) = input.iter().filter(|(_, d)| *d > 0).map(|(v, _)| v.clone()).max() {
+                                    updates.push((m, 1));
+                                }
+                                for (w, d) in current.iter() { updates.push((w.clone(), -*d)); }
+                            },
+                        )),
+                    ).stream.probe_with(&mut ph);
+                }
+            }
+            ph
+        });
+        input.advance_to(0);
+        for k in 0..keys { input.insert((k, wide_value(k, 0, len))); }
+        input.advance_to(1);
+        input.flush();
+        while probe.less_than(&1) { worker.step(); }
+        let mut times = Vec::new();
+        let warm = warmup();
+        for r in 0..rounds() {
+            let t = 1 + r;
+            input.advance_to(t);
+            for k in 0..keys {
+                if t > 1 { input.remove((k, wide_value(k, t - 1, len))); }
+                input.insert((k, wide_value(k, t, len)));
+            }
+            input.advance_to(t + 1);
+            input.flush();
+            let start = Instant::now();
+            while probe.less_than(&(t + 1)) { worker.step(); }
+            if r >= warm { times.push(start.elapsed().as_micros()); }
+        }
+        times.iter().sum::<u128>() as f64 / times.len() as f64
+    })
+}
+
 fn max_fold(iter: impl Iterator<Item = (u64, u64)>) -> Option<(u64, u64)> {
     iter.max_by_key(|kv| kv.1)
 }
@@ -338,6 +437,7 @@ fn bench_reduce_tactics() {
             "churn" => run_churn(mode),
             "multimoment" => run_multimoment(mode),
             "propagate" => run_propagate(mode).0,
+            "wide" => run_wide(mode),
             other => panic!("unknown PROG {other:?}"),
         };
         eprintln!("  {prog} {:?}: {us:.0}us/round", mode);
