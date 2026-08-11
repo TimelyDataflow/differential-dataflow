@@ -262,13 +262,12 @@ where
             let mut n_slots = 0usize;
             let (mut is, mut ns, mut os) = (0usize, 0usize, 0usize);
             live.clear();
-            loop {
-                // Mapped to hashes before the min: the three runs differ in their diff type.
-                let Some(key) = [
-                    p_in.get(is).map(|record| record.0.0),
-                    p_nv.get(ns).map(|record| record.0.0),
-                    p_out.get(os).map(|record| record.0.0),
-                ].into_iter().flatten().min() else { break };
+            // Mapped to hashes before the min: the three runs differ in their diff type.
+            while let Some(key) = [
+                p_in.get(is).map(|record| record.0.0),
+                p_nv.get(ns).map(|record| record.0.0),
+                p_out.get(os).map(|record| record.0.0),
+            ].into_iter().flatten().min() {
                 let i0 = is;
                 while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
                 let i1 = is;
@@ -344,8 +343,7 @@ where
                 }
 
                 // Step every live key past the time it was suspended at, and retire the spent ones.
-                for si in 0..live.len() {
-                    let si = live[si];
+                for &si in live.iter() {
                     let slot = &mut slots[si];
                     slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
                     if slot.at.is_none() && !slot.pended.is_empty() {
