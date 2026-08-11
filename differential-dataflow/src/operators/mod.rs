@@ -9,7 +9,6 @@ pub use self::count::CountTotal;
 pub use self::threshold::ThresholdTotal;
 
 pub mod arrange;
-pub mod common;
 pub mod int_proxy;
 pub mod reduce;
 pub mod iterate;
@@ -90,8 +89,8 @@ impl<V: Copy, T: Ord + Lattice, D: crate::difference::Semigroup> EditList<V, T, 
 }
 
 /// A loaded, time-ordered replay of one key's `(value, time, diff)` edits, with meet-advanced
-/// buffer collapse — the shared machinery under the cursor reduce, the `int_proxy` tactics, and
-/// the [`common`](crate::operators::common) helpers. Its local contract: after
+/// buffer collapse — the shared machinery under the cursor reduce and the `int_proxy` tactics.
+/// Its local contract: after
 /// `advance_buffer_by(meet)` with the meet of the un-replayed times, the buffer is consolidated
 /// and replay cost stays linear in edits rather than quadratic.
 pub struct ValueHistory<V, T, D> {
