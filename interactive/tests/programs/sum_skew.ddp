@@ -1,0 +1,18 @@
+-- Two collections that commit DIFFERENT variant arms, concatenated into one arrangement.
+-- Neither side's shape names the whole variant universe: one infers `Sum([Some(_)])`
+-- (tag 0 only), the other `Sum([None, Some(_)])` (tag 1 only) — two arities for one DDIR
+-- type. corgi reads a differing Sum arity as a type error, so the two must be reconciled
+-- with uncommitted (⊥) lanes before anything compares or gathers them.
+--
+-- This is the ROW-WISE FALLBACK case: `hash` is a term corgi does not lower, so the shapes
+-- here come from `infer_shape_cols` scanning the data. See `sum_skew_compiled.ddp` for the
+-- same defect on the compiled path — both under-approximate, just from different sources.
+con Rare(1)   = 0;
+con Common(1) = 1;
+
+let pairs = input 0 | key($0[0] ; $0[1]);
+
+let onlyRare   = pairs | map( $0[0] ; Rare(hash(1000000, $1[0])) );
+let onlyCommon = pairs | map( $0[0] ; Common(hash(1000000, $1[0])) );
+
+export "result" = (onlyRare + onlyCommon) | arrange | inspect(total);
