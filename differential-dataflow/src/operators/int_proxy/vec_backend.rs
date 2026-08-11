@@ -95,16 +95,43 @@ fn merged_run<D, T, R>(
         if ki >= keys.len() {
             break;
         }
-        let want = keys[ki] == h;
+        if keys[ki] != h {
+            // `h` is not wanted. Seeking every batch to the next key that IS wanted costs a binary
+            // search per batch and lands at or above it, so at most one unwanted hash is visited
+            // per wanted key. Walking `h`'s records instead would make the whole pass linear in the
+            // accumulated history rather than in what is asked for — which on an iterative
+            // computation, where a retire asks for a handful of scattered keys, is the difference
+            // between presenting the window and re-reading the trace. When the key set is dense
+            // this branch is simply never taken, so there is no threshold to tune.
+            let next = keys[ki];
+            for b in 0..n {
+                loop {
+                    let Some(chunk) = batches[b].chunks.get(ci[b]) else { cur[b] = &[]; break };
+                    let slice = chunk.as_slice();
+                    if slice.last().is_some_and(|r| r.0.0 < next) {
+                        ci[b] += 1;
+                        oi[b] = 0;
+                        continue;
+                    }
+                    cur[b] = slice;
+                    oi[b] += slice[oi[b]..].partition_point(|r| r.0.0 < next);
+                    if oi[b] >= slice.len() {
+                        ci[b] += 1;
+                        oi[b] = 0;
+                        continue;
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
         scratch.clear();
         for b in 0..n {
             while let Some(r) = cur[b].get(oi[b]) {
                 if r.0.0 != h {
                     break;
                 }
-                if want {
-                    scratch.push((&r.0.1, &r.1, &r.2));
-                }
+                scratch.push((&r.0.1, &r.1, &r.2));
                 oi[b] += 1;
                 if oi[b] >= cur[b].len() {
                     ci[b] += 1;
@@ -113,7 +140,7 @@ fn merged_run<D, T, R>(
                 }
             }
         }
-        if want {
+        {
             scratch.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
             for (d, t, r) in scratch.drain(..) {
                 sink(h, d, t, r);
