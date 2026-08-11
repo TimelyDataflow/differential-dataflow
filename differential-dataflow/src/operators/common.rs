@@ -378,3 +378,371 @@ pub fn discover_times<T, RIn>(
     }
     sort_dedup(pended);
 }
+
+/// A resumable, fused determination-and-evaluation sweep over one key's times.
+///
+/// [`discover_times`] enumerates a key's interesting times up front, and the caller then walks them
+/// again to evaluate. The conventional reduce does not: it runs ONE ascending pass and evaluates as
+/// it discovers. It can, because discovery never looks backwards — every synthesized time is
+/// `next_time.join(t)` for some `t` NOT at or below `next_time`, so it is strictly greater, and new
+/// work only ever lands ahead of the sweep.
+///
+/// This is that pass, cut at the point where the conventional operator would call user logic. Each
+/// [`next_crossing`](Self::next_crossing) returns the next in-interval time that needs evaluating,
+/// with the buffers positioned to read the accumulations; the caller evaluates and hands the
+/// corrections back through [`commit`](Self::commit); the next call resumes. Many keys can be run
+/// to their next crossing and evaluated together, which is what a batched backend wants, without
+/// any of them enumerating their times first.
+///
+/// The schedule is `formal/Differential/RoundCoverage.lean`'s `round_coverage`: a time carrying an
+/// output change lies in the join-closure of `prior ∪ novel` AND is at or above some novel time.
+/// The two clauses appear here as the `interesting` test and the split synthesis — see the comments
+/// at each.
+pub struct Sweep<T, RIn, ROut> {
+    /// The novel run: the only source that SEEDS interest, replayed unadvanced.
+    novel: ValueHistory<u64, T, RIn>,
+    /// The accumulated input and output: join partners, and the accumulations to evaluate over.
+    input: ValueHistory<u64, T, RIn>,
+    output: ValueHistory<u64, T, ROut>,
+    /// The key's due interesting times, ascending, with their suffix meets; `due_pos` consumes them.
+    due: Vec<T>,
+    due_meets: Vec<T>,
+    due_pos: usize,
+    /// Synthesized times not yet visited, sorted DESCENDING so `last()` is the least.
+    synth: Vec<T>,
+    /// The seed times reached so far, compacted by the running meet. They are the witnesses the
+    /// absorption test looks for, and the partners a close joins against; keeping them collapsed is
+    /// what stops a key with many reached times rescanning all of them.
+    reached: Vec<T>,
+    /// Scratch for one step's synthesized times.
+    temporary: Vec<T>,
+    /// Corrections emitted so far this sweep, meet-collapsed; both a join partner and part of the
+    /// output accumulation.
+    produced: Vec<((u64, T), ROut)>,
+    /// The meet of every time still to come.
+    meet: Option<T>,
+    /// Whether the last `next_crossing` returned a time whose step is not yet settled.
+    suspended: bool,
+}
+
+/// What one [`tick`](Sweep::tick) decided about the time it visited.
+enum Tick<T> {
+    /// No seed reaches this time; the sweep moved past it.
+    Passed,
+    /// Reached, but at or beyond `upper`: carried to a later round rather than evaluated.
+    Pended,
+    /// Reached and in the interval. The caller must evaluate here before the sweep goes on.
+    Crossing(T),
+    /// Every source is drained.
+    Done,
+}
+
+impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sweep<T, RIn, ROut> {
+    /// An empty sweep, to be `load`ed. Reuse one per key rather than allocating per key.
+    pub fn new() -> Self {
+        Sweep {
+            novel: ValueHistory::new(), input: ValueHistory::new(), output: ValueHistory::new(),
+            due: Vec::new(), due_meets: Vec::new(), due_pos: 0,
+            synth: Vec::new(), reached: Vec::new(), temporary: Vec::new(),
+            produced: Vec::new(), meet: None, suspended: false,
+        }
+    }
+
+    /// Position the sweep at the start of one key.
+    ///
+    /// `novel` must be the batch's own `(id, time, diff)` support for the key and `input` the
+    /// accumulated input WITHOUT it: the two are never merged, because consolidating them can cancel
+    /// a novel update against a compacted history record and lose its interesting time.
+    pub fn load(
+        &mut self,
+        novel: impl Iterator<Item = (u64, T, RIn)>,
+        input: impl Iterator<Item = (u64, T, RIn)>,
+        output: impl Iterator<Item = (u64, T, ROut)>,
+        due: &[T],
+    ) {
+        self.due.clear();
+        self.due.extend(due.iter().cloned());
+        self.due_meets.clear();
+        self.due_meets.extend(due.iter().cloned());
+        for i in (1..self.due_meets.len()).rev() {
+            let (init, tail) = self.due_meets.split_at_mut(i);
+            init[i - 1].meet_assign(&tail[0]);
+        }
+        self.due_pos = 0;
+        self.synth.clear();
+        self.reached.clear();
+        self.temporary.clear();
+        self.produced.clear();
+        self.suspended = false;
+
+        // The novel run is loaded UNADVANCED: it is the seed, and its own times are what the
+        // schedule is stated over. Only then is the meet known, and the join partners advanced by it.
+        self.novel.load_iter(novel, None);
+        let mut meet: Option<T> = None;
+        update_meet(&mut meet, self.due_meets.first());
+        update_meet(&mut meet, self.novel.meet());
+        self.input.load_iter(input, meet.as_ref());
+        self.output.load_iter(output, meet.as_ref());
+        self.meet = meet;
+    }
+
+    /// Advance to the next in-interval time that needs evaluating, or `None` once the key is spent.
+    ///
+    /// Times at or beyond `upper` that the schedule reaches are appended to `pended` for the caller
+    /// to carry into a later round.
+    pub fn next_crossing(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Option<T> {
+        loop {
+            // A crossing leaves its step half-finished, because `settle` must see the corrections
+            // the caller commits. Finishing it is the first thing the next call does.
+            if self.suspended {
+                self.suspended = false;
+                self.settle();
+            }
+            match self.tick(upper, pended) {
+                Tick::Done => return None,
+                Tick::Crossing(at) => {
+                    self.suspended = true;
+                    return Some(at);
+                }
+                Tick::Passed | Tick::Pended => {}
+            }
+        }
+    }
+
+    /// Visit one time: find it, decide whether it is reached, close it forward, and report.
+    fn tick(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Tick<T> {
+        let Some(at) = self.frontier() else { return Tick::Done };
+        let reached = self.absorb(&at);
+        if upper.less_equal(&at) {
+            // Out of the interval: nothing can be emitted here, so there is nothing to close
+            // against either — a join with `at` is at or beyond `at`, hence also out of interval,
+            // and will be rediscovered from `at` in the round that admits it.
+            self.settle();
+            if reached { pended.push(at); return Tick::Pended; }
+            return Tick::Passed;
+        }
+        self.close(&at, reached, upper, pended);
+        if reached { return Tick::Crossing(at); }
+        self.settle();
+        Tick::Passed
+    }
+
+    /// The sweep's position: the least time any source still offers.
+    ///
+    /// The TOTAL order, not the partial one. Every time `close` produces is strictly greater than
+    /// the position that produced it, so new work only ever lands ahead of here and the sweep never
+    /// revisits.
+    fn frontier(&self) -> Option<T> {
+        [
+            self.novel.time(), self.due.get(self.due_pos), self.input.time(),
+            self.output.time(), self.synth.last(),
+        ].into_iter().flatten().min().cloned()
+    }
+
+    /// Step every source sitting at `at`, and decide whether `at` is REACHED.
+    ///
+    /// Reached is clause two of `round_coverage` — `∃ nu ∈ novel, nu ≤ at` — evaluated
+    /// incrementally: either a seed lands exactly here, or one already stepped in lies below.
+    ///
+    /// Input and output are stepped whether or not `at` is reached, and that is forced rather than
+    /// eager: they are sources of the frontier, so leaving them would stall the sweep, and their
+    /// edits must reach the buffers or they are lost to every later accumulation. Stepping only
+    /// moves an edit across; it consolidates nothing. The expensive part — `advance_buffer_by`,
+    /// which joins every buffered time and re-consolidates — is deferred to `close`, and happens
+    /// only where the buffers are actually read.
+    fn absorb(&mut self, at: &T) -> bool {
+        self.input.step_while_time_is(at);
+        self.output.step_while_time_is(at);
+
+        // A novel update here is a seed.
+        let mut reached = self.novel.step_while_time_is(at);
+        if reached {
+            if let Some(meet) = self.meet.as_ref() { self.novel.advance_buffer_by(meet); }
+        }
+        // So is a synthetic join scheduled for here, or a due time carried in. Both move into the
+        // reached set, where they become witnesses and join partners for later times.
+        while self.synth.last() == Some(at) {
+            self.reached.push(self.synth.pop().expect("nonempty"));
+            reached = true;
+        }
+        while self.due.get(self.due_pos) == Some(at) {
+            self.reached.push(at.clone());
+            self.due_pos += 1;
+            reached = true;
+        }
+        // Absorption: a time at or above a seed already stepped in is itself reached, because
+        // joining that seed with it yields it back. Checked against the stepped prefixes only.
+        reached
+            || self.novel.buffer().iter().any(|((_, t), _)| t.less_equal(at))
+            || self.reached.iter().any(|t| t.less_equal(at))
+    }
+
+    /// Close `at` forward under joins — clause one of `round_coverage`, the join-closure.
+    ///
+    /// Against the NOVEL times always, reached or not: an unreached time joined with a novel time
+    /// lands at or above that novel time, so it carries a witness and is on the schedule.
+    ///
+    /// Against the PRIOR times only when `at` is itself reached, because the join then inherits
+    /// `at`'s witness. A join of two prior times carries none and is deliberately never produced —
+    /// that asymmetry is the whole of why an incremental operator does less work than the closure
+    /// of everything.
+    ///
+    /// `produced` counts as prior. A correction emitted at `p` changes the accumulated output at
+    /// every time at or above `p`, so `p ∨ at` has to be visited; nothing else covers it, since
+    /// this round's corrections are not in the output history and `at` was not yet stepped in when
+    /// the sweep passed `p`.
+    fn close(&mut self, at: &T, reached: bool, upper: &Antichain<T>, pended: &mut Vec<T>) {
+        self.temporary.extend(self.novel.buffer().iter().map(|((_, t), _)| t)
+            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        self.temporary.extend(self.reached.iter()
+            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        if reached {
+            if let Some(meet) = self.meet.as_ref() {
+                self.input.advance_buffer_by(meet);
+                self.output.advance_buffer_by(meet);
+            }
+            self.temporary.extend(self.input.buffer().iter().map(|((_, t), _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+            self.temporary.extend(self.output.buffer().iter().map(|((_, t), _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+            self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+        }
+        sort_dedup(&mut self.temporary);
+        let before = self.synth.len();
+        for time in self.temporary.drain(..) {
+            if upper.less_equal(&time) { pended.push(time); } else { self.synth.push(time); }
+        }
+        if self.synth.len() > before {
+            self.synth.sort_by(|x, y| y.cmp(x));
+            self.synth.dedup();
+        }
+    }
+
+    /// The input accumulation at the suspended time: both input runs, meeting only here.
+    pub fn input_at(&self, at: &T, into: &mut Vec<(u64, RIn)>) {
+        for ((id, time), diff) in self.input.buffer().iter().chain(self.novel.buffer().iter()) {
+            if time.less_equal(at) { into.push((*id, diff.clone())); }
+        }
+        crate::consolidation::consolidate(into);
+    }
+
+    /// The tentative output accumulation at the suspended time, including this sweep's corrections.
+    pub fn output_at(&self, at: &T, into: &mut Vec<(u64, ROut)>) {
+        for ((id, time), diff) in self.output.buffer().iter().chain(self.produced.iter()) {
+            if time.less_equal(at) { into.push((*id, diff.clone())); }
+        }
+        crate::consolidation::consolidate(into);
+    }
+
+    /// Record the corrections evaluated at the suspended time, and collapse them by the meet.
+    pub fn commit(&mut self, at: &T, corrections: impl Iterator<Item = (u64, ROut)>) {
+        let before = self.produced.len();
+        for (id, diff) in corrections { self.produced.push(((id, at.clone()), diff)); }
+        if self.produced.len() > before {
+            if let Some(meet) = self.meet.as_ref() {
+                for entry in self.produced.iter_mut() { (entry.0).1.join_assign(meet); }
+            }
+            crate::consolidation::consolidate(&mut self.produced);
+        }
+    }
+
+    /// Close a step: recompute the meet of everything still to come, and compact the reached set by
+    /// it. This is what keeps a key with a long history linear rather than quadratic.
+    fn settle(&mut self) {
+        let mut meet: Option<T> = None;
+        update_meet(&mut meet, self.novel.meet());
+        update_meet(&mut meet, self.input.meet());
+        update_meet(&mut meet, self.output.meet());
+        for time in self.synth.iter() { update_meet(&mut meet, Some(time)); }
+        update_meet(&mut meet, self.due_meets.get(self.due_pos));
+        if let Some(m) = meet.as_ref() {
+            for time in self.reached.iter_mut() { *time = time.join(m); }
+        }
+        sort_dedup(&mut self.reached);
+        self.meet = meet;
+    }
+}
+
+#[cfg(test)]
+mod sweep_tests {
+
+    use timely::order::Product;
+    use timely::progress::Antichain;
+
+    use super::{discover_times, DiscoverScratch, KeyView, Sweep};
+
+    type Time = Product<u64, u64>;
+
+    /// A deterministic LCG: enough variety without a dependency.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self, bound: u64) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (self.0 >> 33) % bound
+        }
+    }
+
+    fn time(r: &mut Rng, span: u64) -> Time { Product::new(r.next(span), r.next(span)) }
+
+    /// `Sweep` must never reach a time `discover_times` does not: determination is the schedule,
+    /// and a crossing outside it would be work the coverage argument does not cover.
+    ///
+    /// The converse is NOT asserted, and must not be. The fused pass may legitimately explore FEWER
+    /// times, because it reaches each one carrying live accumulations: a time whose updates have
+    /// consolidated away by the time the sweep arrives needs no evaluation, where determination —
+    /// which reads times only — has no way to know that. Pinning equality here would forbid the
+    /// pruning that fusing the two passes exists to enable. Output equality against the conventional
+    /// reduce is the real check, and lives in the dataflow tests.
+    ///
+    /// As it happens the two coincide today, since both consolidate their buffers identically and
+    /// nothing is committed here; the containment is what is guaranteed.
+    #[test]
+    fn sweep_within_discover_times() {
+        for seed in 0..400u64 {
+            let mut rng = Rng(seed.wrapping_mul(2654435761).wrapping_add(12345));
+            let span = 2 + rng.next(4);
+
+            let novel: Vec<(u64, Time, i64)> =
+                (0..rng.next(6)).map(|_| (rng.next(3), time(&mut rng, span), 1i64)).collect();
+            let input: Vec<(u64, Time, i64)> =
+                (0..rng.next(6)).map(|_| (rng.next(3), time(&mut rng, span), 1i64)).collect();
+            let output: Vec<(u64, Time, i64)> =
+                (0..rng.next(4)).map(|_| (rng.next(3), time(&mut rng, span), 1i64)).collect();
+            let mut due: Vec<Time> = (0..rng.next(3)).map(|_| time(&mut rng, span)).collect();
+            due.sort();
+            due.dedup();
+            let upper = Antichain::from_elem(Product::new(span, span));
+
+            // Determination: `p_in` is the accumulated input, the seeds are the novel times.
+            let p_in: Vec<((u64, u64), Time, i64)> =
+                input.iter().map(|(v, t, d)| ((0u64, *v), *t, *d)).collect();
+            let mut scratch: DiscoverScratch<Time, i64> = DiscoverScratch::new();
+            let (mut moments, mut pended) = (Vec::new(), Vec::new());
+            discover_times(
+                KeyView { p_in: &p_in[..], i0: 0, i1: p_in.len(), pending: &due[..] },
+                novel.iter().map(|(_, t, _)| *t),
+                output.iter().map(|(_, t, _)| *t),
+                &upper,
+                &mut scratch,
+                &mut moments,
+                &mut pended,
+            );
+
+            // The fused sweep, committing nothing.
+            let mut sweep: Sweep<Time, i64, i64> = Sweep::new();
+            sweep.load(novel.iter().cloned(), input.iter().cloned(), output.iter().cloned(), &due[..]);
+            let (mut crossings, mut sweep_pended) = (Vec::new(), Vec::new());
+            while let Some(at) = sweep.next_crossing(&upper, &mut sweep_pended) {
+                crossings.push(at);
+            }
+            crate::operators::reduce::sort_dedup(&mut sweep_pended);
+
+            assert!(crossings.iter().all(|t| moments.contains(t)),
+                    "seed {seed}: sweep reached a time outside the schedule: {crossings:?} vs {moments:?}");
+            assert!(crossings.windows(2).all(|w| w[0] <= w[1]), "seed {seed}: crossings must ascend");
+            assert!(sweep_pended.iter().all(|t| pended.contains(t)),
+                    "seed {seed}: sweep pended a time outside the schedule");
+        }
+    }
+}
