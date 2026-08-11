@@ -56,11 +56,10 @@ pub struct VecReduceBackend<K, V, W, T, R, L> {
 
     /// Resolves an input value id (a per-window ordinal) to its `(key, val)` row.
     in_pool: Vec<(K, V)>,
-    /// Resolves an output value id to its `(key, out)` row; spans the whole retire, because
-    /// corrections mint ids that later windows' presentations and `emit` must agree on.
+    /// Resolves an output value id to its `(key, out)` row, for the current window only.
     out_pool: Vec<(K, W)>,
-    /// Interns `(key, out)` rows to their output id. Lookup-only: the map's iteration order is
-    /// never observed, so the hasher cannot affect what the operator produces.
+    /// Interns `(key, out)` rows to their output id, for the current window only.
+    /// Lookup-only: the non-determinism of the map's iteration order is never observed.
     out_ids: HashMap<(K, W), u64>,
 
     /// The retire's output tile descriptions, and the rows accumulated for each.
@@ -103,8 +102,6 @@ where
 
     fn begin(&mut self, tiles: &[Description<T>]) {
         self.keys_stale = true;
-        self.out_pool.clear();
-        self.out_ids.clear();
         self.tiles = tiles.to_vec();
         self.tile_rows = (0..tiles.len()).map(|_| Vec::new()).collect();
     }
@@ -182,6 +179,8 @@ where
         });
 
         // The output history, interned into the id namespace corrections mint into.
+        self.out_ids.clear();
+        self.out_pool.clear();
         let (out_pool, out_ids) = (&mut self.out_pool, &mut self.out_ids);
         merged_run(instance.output_batches, keys, |hash, data, time, diff| {
             let id = *out_ids.entry(data.clone()).or_insert_with(|| {
@@ -309,6 +308,9 @@ where
 
     #[inline(never)]
     fn finish(&mut self) -> Vec<VBatch<(K, W), T, R>> {
+        self.in_pool.clear();
+        self.out_pool.clear();
+        self.out_ids.clear();
         let tiles = std::mem::take(&mut self.tiles);
         let tile_rows = std::mem::take(&mut self.tile_rows);
         tiles
