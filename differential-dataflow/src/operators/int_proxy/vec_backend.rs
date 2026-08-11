@@ -33,7 +33,7 @@ use std::rc::Rc;
 use timely::container::PushInto;
 use timely::progress::Timestamp;
 
-use crate::consolidation::{consolidate, consolidate_updates};
+use crate::consolidation::{consolidate, consolidate_updates, consolidate_updates_from};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::chunk::ChunkBatch;
@@ -417,10 +417,21 @@ where
     }
 
     fn emit(&mut self, tile: usize, records: &[((u64, u64), T, R)]) {
+        // A call carries the whole of every key hash it mentions, and calls arrive in ascending
+        // hash order, so the tile stays hash-ordered and only the run just appended can need
+        // reordering — by the real `(key, out)` value, since interned ids are in first-seen order
+        // rather than value order. Consolidating here rather than over the whole tile at `finish`
+        // is the difference between a sort per emit and one sort of everything the retire produced.
+        let mark = self.tile_rows[tile].len();
+        debug_assert!(
+            self.tile_rows[tile].last().is_none_or(|last| records.first().is_none_or(|r| last.0.0 <= r.0.0)),
+            "emit must arrive in ascending key-hash order",
+        );
         for ((h, vid), t, d) in records {
             let row = self.out_pool[*vid as usize].clone();
             self.tile_rows[tile].push(((*h, row), t.clone(), d.clone()));
         }
+        consolidate_updates_from(&mut self.tile_rows[tile], mark);
     }
 
     fn finish(&mut self) -> Vec<VBatch<(K, W), T, R>> {
@@ -429,8 +440,8 @@ where
         tiles
             .into_iter()
             .zip(tile_rows)
-            .map(|(desc, mut rows)| {
-                consolidate_updates(&mut rows);
+            .map(|(desc, rows)| {
+                // Already ordered and consolidated: `emit` did it a run at a time.
                 let chunks: Vec<VecChunk<u64, (K, W), T, R>> = rows
                     .chunks(<VecChunk<u64, (K, W), T, R> as crate::trace::chunk::Chunk>::TARGET)
                     .map(|piece| {
