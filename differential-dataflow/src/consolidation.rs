@@ -15,6 +15,47 @@ use timely::container::{ContainerBuilder, PushInto};
 use crate::Data;
 use crate::difference::Semigroup;
 
+/// Sorts and consolidates a slice into its SUFFIX, returning the index the survivors start at.
+///
+/// The mirror of [`consolidate_slice`], which compacts to the front. Compacting to the back suits a
+/// run that is consumed from the left and extended from the right: an accumulation held as
+/// `[active_start, unreplayed_start)` of a longer run, where stepping one more record in is
+/// `unreplayed_start += 1` and the record is already adjacent to the active region. Consolidating to
+/// the front would leave the freed space *between* the survivors and the next record, so stepping
+/// would have to move it; consolidating to the back leaves the free space ahead of the survivors,
+/// where the caller wants it, and stepping stays an index bump.
+#[inline]
+pub fn consolidate_slice_suffix<T: Ord, R: Semigroup>(slice: &mut [(T, R)]) -> usize {
+    if slice.is_empty() { return 0; }
+    slice.sort_by(|x, y| x.0.cmp(&y.0));
+
+    // Walks groups right to left, emitting each survivor at a descending write cursor. The cursor
+    // never overtakes the group being emitted: every group already emitted lay strictly to its
+    // right and consumed one slot, so `write` is always at or above that group's own index.
+    let mut write = slice.len();
+    let last = slice.len() - 1;
+    let mut accum = slice[last].1.clone();
+    for index in (0..last).rev() {
+        if slice[index].0 == slice[index + 1].0 {
+            accum.plus_equals(&slice[index].1);
+        }
+        else {
+            if !accum.is_zero() {
+                write -= 1;
+                slice.swap(write, index + 1);
+                slice[write].1.clone_from(&accum);
+            }
+            accum.clone_from(&slice[index].1);
+        }
+    }
+    if !accum.is_zero() {
+        write -= 1;
+        slice.swap(write, 0);
+        slice[write].1 = accum;
+    }
+    write
+}
+
 /// Sorts and consolidates `vec`.
 ///
 /// This method will sort `vec` and then consolidate runs of more than one entry with
@@ -405,5 +446,45 @@ mod tests {
             duration += start.elapsed();
         }
         println!("elapsed vec {duration:?}");
+    }
+}
+
+#[cfg(test)]
+mod suffix_tests {
+    use super::{consolidate_slice, consolidate_slice_suffix};
+
+    /// A deterministic LCG, to avoid a dependency here.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self, bound: u64) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (self.0 >> 33) % bound
+        }
+    }
+
+    /// Compacting to the back must produce the same consolidation as compacting to the front, only
+    /// positioned at the other end: same surviving records, same order, same count.
+    #[test]
+    fn suffix_matches_prefix() {
+        let mut rng = Rng(0x5eed);
+        for case in 0..2000u64 {
+            let len = (case % 9) as usize;
+            let data: Vec<(u64, i64)> = (0..len)
+                .map(|_| (rng.next(4), rng.next(5) as i64 - 2))
+                .collect();
+
+            let mut front = data.clone();
+            let kept = consolidate_slice(&mut front);
+            let expect = &front[..kept];
+
+            let mut back = data.clone();
+            let start = consolidate_slice_suffix(&mut back);
+            let got = &back[start..];
+
+            assert_eq!(got, expect, "case {case}: {data:?}");
+            assert_eq!(back.len() - start, kept, "case {case}: survivor count");
+            assert!(got.iter().all(|(_, d)| *d != 0), "case {case}: zeros must be dropped");
+            assert!(got.windows(2).all(|w| w[0].0 < w[1].0), "case {case}: keys must ascend, deduped");
+        }
     }
 }
