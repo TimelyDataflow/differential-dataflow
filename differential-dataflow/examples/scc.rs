@@ -9,10 +9,6 @@
 //! backend against this example is then a same-input, same-algorithm comparison; the earlier
 //! form of this example ran the unprioritized default, which is several times slower and not
 //! what the interpreted programs compute.
-//!
-//! Run single-worker for benchmarking: prioritized propagation inside SCC's nested scopes has
-//! been observed to trip a timely progress defect under >= 3 workers with CPU contention (see
-//! `strongly_connected_at`).
 
 use timely::dataflow::operators::probe::Handle;
 
