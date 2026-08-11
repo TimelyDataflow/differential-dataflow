@@ -123,20 +123,25 @@ fn min_fold(iter: impl Iterator<Item = (u64, u64)>) -> Option<(u64, u64)> {
     iter.min_by_key(|kv| kv.1)
 }
 
-const CHURN_KEYS: u64 = 50_000;
-const MM_KEYS: u64 = 10_000;
-const MM_SUB: u64 = 4;
-const ROUNDS: u64 = 16;
-const WARMUP: u64 = 6;
+/// Workload sizes, overridable so the suite can be run at a scale where costs that are invisible
+/// at a few megabytes show up. `churn_keys()=4000000 ROUNDS=6 WARMUP=2` moves gigabytes per round.
+fn sized(var: &str, default: u64) -> u64 {
+    std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+fn churn_keys() -> u64 { sized("CHURN_KEYS", 50_000) }
+fn mm_keys() -> u64 { sized("MM_KEYS", 10_000) }
+fn mm_sub() -> u64 { sized("MM_SUB", 4) }
+fn rounds() -> u64 { sized("ROUNDS", 16) }
+fn warmup() -> u64 { sized("WARMUP", 6) }
 
 /// Bounded churn, one distinct time per flush; returns averaged microseconds per round.
 fn run_churn(mode: Mode) -> f64 {
-    run_flat(mode, CHURN_KEYS, 1)
+    run_flat(mode, churn_keys(), 1)
 }
 
-/// Bounded churn, `MM_SUB` distinct times per flush.
+/// Bounded churn, `mm_sub()` distinct times per flush.
 fn run_multimoment(mode: Mode) -> f64 {
-    run_flat(mode, MM_KEYS, MM_SUB)
+    run_flat(mode, mm_keys(), mm_sub())
 }
 
 fn run_flat(mode: Mode, keys: u64, sub: u64) -> f64 {
@@ -177,7 +182,7 @@ fn run_flat(mode: Mode, keys: u64, sub: u64) -> f64 {
             worker.step();
         }
         let mut times = Vec::new();
-        for r in 0..ROUNDS {
+        for r in 0..rounds() {
             let base = 1 + r * sub;
             for s in 0..sub {
                 let t = base + s;
@@ -195,7 +200,7 @@ fn run_flat(mode: Mode, keys: u64, sub: u64) -> f64 {
             while probe.less_than(&(base + sub)) {
                 worker.step();
             }
-            if r >= WARMUP {
+            if r >= warmup() {
                 times.push(start.elapsed().as_micros());
             }
         }
@@ -322,11 +327,27 @@ fn report(name: &str, mainline: f64, cursor: f64, proxy: f64) {
 #[ignore]
 fn bench_reduce_tactics() {
     eprintln!();
+    // `PROG=churn MODE=proxy` runs one cell of the matrix, which is what a large run wants.
+    if let (Some(prog), Some(mode)) = (std::env::var("PROG").ok(), match std::env::var("MODE").ok().as_deref() {
+        Some("proxy") => Some(Mode::Proxy),
+        Some("cursor") => Some(Mode::CursorSame),
+        Some("mainline") => Some(Mode::Mainline),
+        _ => None,
+    }) {
+        let us = match prog.as_str() {
+            "churn" => run_churn(mode),
+            "multimoment" => run_multimoment(mode),
+            "propagate" => run_propagate(mode).0,
+            other => panic!("unknown PROG {other:?}"),
+        };
+        eprintln!("  {prog} {:?}: {us:.0}us/round", mode);
+        return;
+    }
     for (name, run) in [
-        ("churn (50k keys, 1 time/flush)", run_churn as fn(Mode) -> f64),
-        ("multimoment (10k keys, 4 times/flush)", run_multimoment),
+        (format!("churn ({} keys, 1 time/flush)", churn_keys()), run_churn as fn(Mode) -> f64),
+        (format!("multimoment ({} keys, {} times/flush)", mm_keys(), mm_sub()), run_multimoment),
     ] {
-        report(name, run(Mode::Mainline), run(Mode::CursorSame), run(Mode::Proxy));
+        report(&name, run(Mode::Mainline), run(Mode::CursorSame), run(Mode::Proxy));
     }
     let (mainline, sum_m) = run_propagate(Mode::Mainline);
     let (cursor, sum_c) = run_propagate(Mode::CursorSame);
