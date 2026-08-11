@@ -38,7 +38,6 @@ use differential_dataflow::trace::chunk::vec::{
 };
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::implementations::ContainerChunker;
-use differential_dataflow::AsCollection;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Mode {
