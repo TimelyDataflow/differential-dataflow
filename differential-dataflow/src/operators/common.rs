@@ -398,12 +398,9 @@ pub fn discover_times<T, RIn>(
 /// output change lies in the join-closure of `prior ∪ novel` AND is at or above some novel time.
 /// The two clauses appear here as the `interesting` test and the split synthesis — see the comments
 /// at each.
-pub struct Sweep<T, RIn, ROut> {
-    /// The novel run: the only source that SEEDS interest, replayed unadvanced.
-    novel: ValueHistory<u64, T, RIn>,
-    /// The accumulated input and output: join partners, and the accumulations to evaluate over.
-    input: ValueHistory<u64, T, RIn>,
-    output: ValueHistory<u64, T, ROut>,
+pub struct Sweep<T, ROut> {
+    /// Which key of the shared presentations this sweep walks.
+    slot: usize,
     /// The key's due interesting times, ascending, with their suffix meets; `due_pos` consumes them.
     due: Vec<T>,
     due_meets: Vec<T>,
@@ -425,6 +422,18 @@ pub struct Sweep<T, RIn, ROut> {
     suspended: bool,
 }
 
+/// The three presentations a [`Sweep`] walks, borrowed for the duration of a call.
+///
+/// They are shared across every key in the window; a sweep touches only its own `slot`.
+pub struct Runs<'a, T, RIn, ROut> {
+    /// The novel run: the only source that SEEDS interest, loaded unadvanced.
+    pub novel: &'a mut Replay<T, RIn>,
+    /// The accumulated input: a join partner, and half of the accumulation to evaluate over.
+    pub input: &'a mut Replay<T, RIn>,
+    /// The accumulated output: a join partner, and the tentative output to correct.
+    pub output: &'a mut Replay<T, ROut>,
+}
+
 /// What one [`tick`](Sweep::tick) decided about the time it visited.
 enum Tick<T> {
     /// No seed reaches this time; the sweep moved past it.
@@ -437,29 +446,33 @@ enum Tick<T> {
     Done,
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sweep<T, RIn, ROut> {
+impl<T: Timestamp + Lattice, ROut: Semigroup + Clone> Sweep<T, ROut> {
     /// An empty sweep, to be `load`ed. Reuse one per key rather than allocating per key.
     pub fn new() -> Self {
         Sweep {
-            novel: ValueHistory::new(), input: ValueHistory::new(), output: ValueHistory::new(),
+            slot: 0,
             due: Vec::new(), due_meets: Vec::new(), due_pos: 0,
             synth: Vec::new(), reached: Vec::new(), temporary: Vec::new(),
             produced: Vec::new(), meet: None, suspended: false,
         }
     }
 
-    /// Position the sweep at the start of one key.
+    /// Position the sweep on key `slot` of the shared presentations.
     ///
-    /// `novel` must be the batch's own `(id, time, diff)` support for the key and `input` the
-    /// accumulated input WITHOUT it: the two are never merged, because consolidating them can cancel
-    /// a novel update against a compacted history record and lose its interesting time.
-    pub fn load(
+    /// The caller loads the three [`Replay`]s; the sweep only walks them. The novel run must be the
+    /// batch's own support for the key and the input run the accumulated input WITHOUT it, since
+    /// consolidating the two can cancel a novel update against a compacted history record and lose
+    /// its interesting time.
+    ///
+    /// The meet the presentations were advanced by must be the meet of `due` and the novel run's
+    /// times, which is what the caller computes to load them.
+    pub fn begin<RIn: Semigroup>(
         &mut self,
-        novel: impl Iterator<Item = (u64, T, RIn)>,
-        input: impl Iterator<Item = (u64, T, RIn)>,
-        output: impl Iterator<Item = (u64, T, ROut)>,
+        slot: usize,
+        novel: &Replay<T, RIn>,
         due: &[T],
     ) {
+        self.slot = slot;
         self.due.clear();
         self.due.extend(due.iter().cloned());
         self.due_meets.clear();
@@ -475,14 +488,9 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
         self.produced.clear();
         self.suspended = false;
 
-        // The novel run is loaded UNADVANCED: it is the seed, and its own times are what the
-        // schedule is stated over. Only then is the meet known, and the join partners advanced by it.
-        self.novel.load_iter(novel, None);
         let mut meet: Option<T> = None;
         update_meet(&mut meet, self.due_meets.first());
-        update_meet(&mut meet, self.novel.meet());
-        self.input.load_iter(input, meet.as_ref());
-        self.output.load_iter(output, meet.as_ref());
+        update_meet(&mut meet, novel.meet(slot));
         self.meet = meet;
     }
 
@@ -490,15 +498,15 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     ///
     /// Times at or beyond `upper` that the schedule reaches are appended to `pended` for the caller
     /// to carry into a later round.
-    pub fn next_crossing(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Option<T> {
+    pub fn next_crossing<RIn: Semigroup>(&mut self, runs: &mut Runs<'_, T, RIn, ROut>, upper: &Antichain<T>, pended: &mut Vec<T>) -> Option<T> {
         loop {
             // A crossing leaves its step half-finished, because `settle` must see the corrections
             // the caller commits. Finishing it is the first thing the next call does.
             if self.suspended {
                 self.suspended = false;
-                self.settle();
+                self.settle(runs);
             }
-            match self.tick(upper, pended) {
+            match self.tick(runs, upper, pended) {
                 Tick::Done => return None,
                 Tick::Crossing(at) => {
                     self.suspended = true;
@@ -510,20 +518,20 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     }
 
     /// Visit one time: find it, decide whether it is reached, close it forward, and report.
-    fn tick(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Tick<T> {
-        let Some(at) = self.frontier() else { return Tick::Done };
-        let reached = self.absorb(&at);
+    fn tick<RIn: Semigroup>(&mut self, runs: &mut Runs<'_, T, RIn, ROut>, upper: &Antichain<T>, pended: &mut Vec<T>) -> Tick<T> {
+        let Some(at) = self.frontier(runs) else { return Tick::Done };
+        let reached = self.absorb(runs, &at);
         if upper.less_equal(&at) {
             // Out of the interval: nothing can be emitted here, so there is nothing to close
             // against either — a join with `at` is at or beyond `at`, hence also out of interval,
             // and will be rediscovered from `at` in the round that admits it.
-            self.settle();
+            self.settle(runs);
             if reached { pended.push(at); return Tick::Pended; }
             return Tick::Passed;
         }
-        self.close(&at, reached, upper, pended);
+        self.close(runs, &at, reached, upper, pended);
         if reached { return Tick::Crossing(at); }
-        self.settle();
+        self.settle(runs);
         Tick::Passed
     }
 
@@ -532,10 +540,10 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     /// The TOTAL order, not the partial one. Every time `close` produces is strictly greater than
     /// the position that produced it, so new work only ever lands ahead of here and the sweep never
     /// revisits.
-    fn frontier(&self) -> Option<T> {
+    fn frontier<RIn: Semigroup>(&self, runs: &Runs<'_, T, RIn, ROut>) -> Option<T> {
         [
-            self.novel.time(), self.due.get(self.due_pos), self.input.time(),
-            self.output.time(), self.synth.last(),
+            runs.novel.time(self.slot), self.due.get(self.due_pos), runs.input.time(self.slot),
+            runs.output.time(self.slot), self.synth.last(),
         ].into_iter().flatten().min().cloned()
     }
 
@@ -550,14 +558,14 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     /// moves an edit across; it consolidates nothing. The expensive part — `advance_buffer_by`,
     /// which joins every buffered time and re-consolidates — is deferred to `close`, and happens
     /// only where the buffers are actually read.
-    fn absorb(&mut self, at: &T) -> bool {
-        self.input.step_while_time_is(at);
-        self.output.step_while_time_is(at);
+    fn absorb<RIn: Semigroup>(&mut self, runs: &mut Runs<'_, T, RIn, ROut>, at: &T) -> bool {
+        runs.input.step_while_time_is(self.slot, at);
+        runs.output.step_while_time_is(self.slot, at);
 
         // A novel update here is a seed.
-        let mut reached = self.novel.step_while_time_is(at);
+        let mut reached = runs.novel.step_while_time_is(self.slot, at);
         if reached {
-            if let Some(meet) = self.meet.as_ref() { self.novel.advance_buffer_by(meet); }
+            if let Some(meet) = self.meet.as_ref() { runs.novel.advance_active(self.slot, meet); }
         }
         // So is a synthetic join scheduled for here, or a due time carried in. Both move into the
         // reached set, where they become witnesses and join partners for later times.
@@ -573,7 +581,7 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
         // Absorption: a time at or above a seed already stepped in is itself reached, because
         // joining that seed with it yields it back. Checked against the stepped prefixes only.
         reached
-            || self.novel.buffer().iter().any(|((_, t), _)| t.less_equal(at))
+            || runs.novel.active(self.slot).any(|(_, t, _)| t.less_equal(at))
             || self.reached.iter().any(|t| t.less_equal(at))
     }
 
@@ -591,20 +599,20 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     /// every time at or above `p`, so `p ∨ at` has to be visited; nothing else covers it, since
     /// this round's corrections are not in the output history and `at` was not yet stepped in when
     /// the sweep passed `p`.
-    fn close(&mut self, at: &T, reached: bool, upper: &Antichain<T>, pended: &mut Vec<T>) {
-        self.temporary.extend(self.novel.buffer().iter().map(|((_, t), _)| t)
-            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+    fn close<RIn: Semigroup>(&mut self, runs: &mut Runs<'_, T, RIn, ROut>, at: &T, reached: bool, upper: &Antichain<T>, pended: &mut Vec<T>) {
+        self.temporary.extend(runs.novel.active(self.slot).map(|(_, t, _)| t)
+            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)).collect::<Vec<_>>());
         self.temporary.extend(self.reached.iter()
             .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
         if reached {
             if let Some(meet) = self.meet.as_ref() {
-                self.input.advance_buffer_by(meet);
-                self.output.advance_buffer_by(meet);
+                runs.input.advance_active(self.slot, meet);
+                runs.output.advance_active(self.slot, meet);
             }
-            self.temporary.extend(self.input.buffer().iter().map(|((_, t), _)| t)
-                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
-            self.temporary.extend(self.output.buffer().iter().map(|((_, t), _)| t)
-                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+            self.temporary.extend(runs.input.active(self.slot).map(|(_, t, _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)).collect::<Vec<_>>());
+            self.temporary.extend(runs.output.active(self.slot).map(|(_, t, _)| t)
+                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)).collect::<Vec<_>>());
             self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
                 .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
         }
@@ -620,16 +628,19 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     }
 
     /// The input accumulation at the suspended time: both input runs, meeting only here.
-    pub fn input_at(&self, at: &T, into: &mut Vec<(u64, RIn)>) {
-        for ((id, time), diff) in self.input.buffer().iter().chain(self.novel.buffer().iter()) {
-            if time.less_equal(at) { into.push((*id, diff.clone())); }
+    pub fn input_at<RIn: Semigroup>(&self, runs: &Runs<'_, T, RIn, ROut>, at: &T, into: &mut Vec<(u64, RIn)>) {
+        for (id, time, diff) in runs.input.active(self.slot).chain(runs.novel.active(self.slot)) {
+            if time.less_equal(at) { into.push((id, diff.clone())); }
         }
         crate::consolidation::consolidate(into);
     }
 
     /// The tentative output accumulation at the suspended time, including this sweep's corrections.
-    pub fn output_at(&self, at: &T, into: &mut Vec<(u64, ROut)>) {
-        for ((id, time), diff) in self.output.buffer().iter().chain(self.produced.iter()) {
+    pub fn output_at<RIn: Semigroup>(&self, runs: &Runs<'_, T, RIn, ROut>, at: &T, into: &mut Vec<(u64, ROut)>) {
+        for (id, time, diff) in runs.output.active(self.slot) {
+            if time.less_equal(at) { into.push((id, diff.clone())); }
+        }
+        for ((id, time), diff) in self.produced.iter() {
             if time.less_equal(at) { into.push((*id, diff.clone())); }
         }
         crate::consolidation::consolidate(into);
@@ -649,11 +660,11 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
 
     /// Close a step: recompute the meet of everything still to come, and compact the reached set by
     /// it. This is what keeps a key with a long history linear rather than quadratic.
-    fn settle(&mut self) {
+    fn settle<RIn: Semigroup>(&mut self, runs: &Runs<'_, T, RIn, ROut>) {
         let mut meet: Option<T> = None;
-        update_meet(&mut meet, self.novel.meet());
-        update_meet(&mut meet, self.input.meet());
-        update_meet(&mut meet, self.output.meet());
+        update_meet(&mut meet, runs.novel.meet(self.slot));
+        update_meet(&mut meet, runs.input.meet(self.slot));
+        update_meet(&mut meet, runs.output.meet(self.slot));
         for time in self.synth.iter() { update_meet(&mut meet, Some(time)); }
         update_meet(&mut meet, self.due_meets.get(self.due_pos));
         if let Some(m) = meet.as_ref() {
@@ -670,7 +681,9 @@ mod sweep_tests {
     use timely::order::Product;
     use timely::progress::Antichain;
 
-    use super::{discover_times, DiscoverScratch, KeyView, Sweep};
+    use crate::lattice::Lattice;
+
+    use super::{discover_times, DiscoverScratch, KeyView, Replay, Runs, Sweep};
 
     type Time = Product<u64, u64>;
 
@@ -729,11 +742,21 @@ mod sweep_tests {
                 &mut pended,
             );
 
-            // The fused sweep, committing nothing.
-            let mut sweep: Sweep<Time, i64, i64> = Sweep::new();
-            sweep.load(novel.iter().cloned(), input.iter().cloned(), output.iter().cloned(), &due[..]);
+            // The fused sweep over the flat presentations, committing nothing.
+            let mut nv: Replay<Time, i64> = Replay::new();
+            let (mut inp, mut outp): (Replay<Time, i64>, Replay<Time, i64>) = (Replay::new(), Replay::new());
+            nv.push_key(novel.iter().cloned(), None);
+            let mut meet: Option<Time> = None;
+            for t in due.iter().chain(nv.meet(0)) {
+                match meet.as_mut() { Some(m) => m.meet_assign(t), None => meet = Some(*t) }
+            }
+            inp.push_key(input.iter().cloned(), meet.as_ref());
+            outp.push_key(output.iter().cloned(), meet.as_ref());
+            let mut sweep: Sweep<Time, i64> = Sweep::new();
+            sweep.begin(0, &nv, &due[..]);
+            let mut runs = Runs { novel: &mut nv, input: &mut inp, output: &mut outp };
             let (mut crossings, mut sweep_pended) = (Vec::new(), Vec::new());
-            while let Some(at) = sweep.next_crossing(&upper, &mut sweep_pended) {
+            while let Some(at) = sweep.next_crossing(&mut runs, &upper, &mut sweep_pended) {
                 crossings.push(at);
             }
             crate::operators::reduce::sort_dedup(&mut sweep_pended);

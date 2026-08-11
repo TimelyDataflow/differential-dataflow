@@ -15,7 +15,7 @@ use crate::trace::{BatchReader, Description};
 use super::ProxyBridge;
 use crate::operators::reduce::ReduceTactic;
 
-use crate::operators::common::{tile_descriptions, Sweep};
+use crate::operators::common::{tile_descriptions, Replay, Runs, Sweep};
 
 /// A unit of proxied reduce work, presented to the backend.
 pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
@@ -208,7 +208,12 @@ where
         // Retire-wide reusable scratch: cleared per window or wave, never reallocated. Fresh
         // per-key/per-wave `Vec`s were once the dominant cost here, which is why the slots and the
         // staging buffers are held across the whole retire rather than built where they are used.
-        let mut slots: Vec<KeySweep<B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
+        let mut slots: Vec<KeySweep<B1::Time, Bk::ROut>> = Vec::new();
+        // The window's three presentations, flat and shared by every key: a sweep walks its own
+        // slot of them and owns no records of its own.
+        let mut nv_runs: Replay<B1::Time, Bk::RIn> = Replay::new();
+        let mut in_runs: Replay<B1::Time, Bk::RIn> = Replay::new();
+        let mut out_runs: Replay<B1::Time, Bk::ROut> = Replay::new();
         let mut live: Vec<usize> = Vec::new();
         let mut tile_deltas: Vec<Vec<((u64, u64), B1::Time, Bk::ROut)>> = (0..held_elems.len()).map(|_| Vec::new()).collect();
         let mut batch_keys: Vec<u64> = Vec::new();
@@ -263,6 +268,9 @@ where
             let mut n_slots = 0usize;
             let (mut is, mut ns, mut os) = (0usize, 0usize, 0usize);
             live.clear();
+            nv_runs.clear();
+            in_runs.clear();
+            out_runs.clear();
             loop {
                 // Mapped to hashes before the min: the three runs differ in their diff type.
                 let Some(key) = [
@@ -281,23 +289,35 @@ where
                 let o1 = os;
 
                 if n_slots == slots.len() { slots.push(KeySweep::empty()); }
-                let slot = &mut slots[n_slots];
-                slot.key = key;
-                slot.pended.clear();
+                slots[n_slots].key = key;
+                slots[n_slots].pended.clear();
                 // Only the DUE times seed the sweep; the carried ones are already in `new_pending`.
                 let owed = due.get(&key).map(|p| &p[..]).unwrap_or(&[]);
-                slot.sweep.load(
-                    (n0..n1).map(|n| (p_nv[n].0.1, p_nv[n].1.clone(), p_nv[n].2.clone())),
-                    (i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())),
-                    (o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())),
-                    owed,
-                );
-                slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
-                if slot.at.is_some() { live.push(n_slots); }
-                else if !slot.pended.is_empty() {
-                    new_pending.entry(key).or_default().append(&mut slot.pended);
+
+                // The novel run goes in unadvanced — it is the seed, and the schedule is stated
+                // over its own times. Only then is the meet known, and the join partners advanced.
+                nv_runs.push_key((n0..n1).map(|n| (p_nv[n].0.1, p_nv[n].1.clone(), p_nv[n].2.clone())), None);
+                let mut meet: Option<B1::Time> = None;
+                for time in owed.iter().chain(nv_runs.meet(n_slots)) {
+                    match meet.as_mut() {
+                        Some(m) => m.meet_assign(time),
+                        None => meet = Some(time.clone()),
+                    }
                 }
+                in_runs.push_key((i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())), meet.as_ref());
+                out_runs.push_key((o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())), meet.as_ref());
+                slots[n_slots].sweep.begin(n_slots, &nv_runs, owed);
                 n_slots += 1;
+            }
+
+            let mut runs = Runs { novel: &mut nv_runs, input: &mut in_runs, output: &mut out_runs };
+            for si in 0..n_slots {
+                let slot = &mut slots[si];
+                slot.at = slot.sweep.next_crossing(&mut runs, upper, &mut slot.pended);
+                if slot.at.is_some() { live.push(si); }
+                else if !slot.pended.is_empty() {
+                    new_pending.entry(slot.key).or_default().append(&mut slot.pended);
+                }
             }
 
             // Each wave: read every suspended key's accumulations, cross the non-empty ones in one
@@ -315,8 +335,8 @@ where
                     let at = slots[si].at.clone().expect("live slots are suspended at a time");
                     in_accum.clear();
                     cur_out.clear();
-                    slots[si].sweep.input_at(&at, &mut in_accum);
-                    slots[si].sweep.output_at(&at, &mut cur_out);
+                    slots[si].sweep.input_at(&runs, &at, &mut in_accum);
+                    slots[si].sweep.output_at(&runs, &at, &mut cur_out);
                     // An interesting time can still reach the gate with nothing to read; the
                     // conventional reduce skips user logic there and so do we.
                     if in_accum.is_empty() && cur_out.is_empty() { continue; }
@@ -348,7 +368,7 @@ where
                 for si in 0..live.len() {
                     let si = live[si];
                     let slot = &mut slots[si];
-                    slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
+                    slot.at = slot.sweep.next_crossing(&mut runs, upper, &mut slot.pended);
                     if slot.at.is_none() && !slot.pended.is_empty() {
                         let entry = new_pending.entry(slot.key).or_default();
                         entry.append(&mut slot.pended);
@@ -384,16 +404,16 @@ where
 /// One key's slot in a window: its [`Sweep`], the time it is suspended at, and the times it has
 /// pended so far. Slots are reused across windows, so a key costs no allocation of its own beyond
 /// the first window wide enough to need it.
-struct KeySweep<T, RIn, ROut> {
+struct KeySweep<T, ROut> {
     key: u64,
-    sweep: Sweep<T, RIn, ROut>,
+    sweep: Sweep<T, ROut>,
     /// Times at or beyond `upper` the sweep has reached; carried forward when the slot retires.
     pended: Vec<T>,
     /// The time the sweep last suspended at, or `None` once it is spent.
     at: Option<T>,
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> KeySweep<T, RIn, ROut> {
+impl<T: Timestamp + Lattice, ROut: Semigroup + Clone> KeySweep<T, ROut> {
     fn empty() -> Self {
         KeySweep { key: 0, sweep: Sweep::new(), pended: Vec::new(), at: None }
     }
