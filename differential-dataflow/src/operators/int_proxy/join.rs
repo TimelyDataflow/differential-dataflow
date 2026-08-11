@@ -14,6 +14,7 @@ use crate::trace::BatchReader;
 use super::ProxyBridge;
 use crate::operators::join::{Fresh, JoinTactic};
 
+use crate::operators::ValueHistory;
 use super::history::IdHistory;
 
 /// A type that can interpret and retire pairs of lists of batches, joined by key hashes.
@@ -263,10 +264,64 @@ fn join_key<T, R0, R1, RO>(
     else {
         h0.load_iter(r0.map(|i| (p0[i].0.1, p0[i].1.clone(), p0[i].2.clone())), None);
         h1.load_iter(r1.map(|i| (p1[i].0.1, p1[i].1.clone(), p1[i].2.clone())), None);
-        crate::operators::common::bilinear_wave(h0, h1, |v0, v1, t, d| {
+        bilinear_wave(h0, h1, |v0, v1, t, d| {
             matches.ids.push((kh, (v0, v1)));
             matches.times.push(t);
             matches.diffs.push(d);
         });
+    }
+}
+
+/// Produces the join of two histories: every pair of edits, diffs multiplied and times
+/// joined, visited in time order. Repeatedly steps the history with the earlier un-replayed
+/// edit and multiplies it against the other's buffer, which is consolidated under the meet of
+/// its remaining times as the wave advances — so work is bounded by the netted accumulation
+/// sizes rather than the raw history lengths.
+///
+/// `emit` receives every produced `(id0, id1, joined time, multiplied diff)`. Both histories
+/// must be pre-loaded (`load`/`load_iter`) and are fully drained. For small histories a plain
+/// cross product is cheaper; callers should gate on size.
+pub fn bilinear_wave<V, T, R0, R1, RO>(
+    h0: &mut ValueHistory<V, T, R0>,
+    h1: &mut ValueHistory<V, T, R1>,
+    mut emit: impl FnMut(V, V, T, RO),
+) where
+    V: Copy + Ord,
+    T: Ord + Clone + Lattice,
+    R0: Semigroup + Multiply<R1, Output = RO> + Clone,
+    R1: Semigroup + Clone,
+{
+    while h0.time().is_some() && h1.time().is_some() {
+        if h0.time().unwrap() < h1.time().unwrap() {
+            h1.advance_buffer_by(h0.meet().unwrap());
+            let (v0, t0, d0) = h0.edit().unwrap();
+            for ((v1, t1), d1) in h1.buffer() {
+                emit(v0, *v1, t0.join(t1), d0.clone().multiply(d1));
+            }
+            h0.step();
+        } else {
+            h0.advance_buffer_by(h1.meet().unwrap());
+            let (v1, t1, d1) = h1.edit().unwrap();
+            for ((v0, t0), d0) in h0.buffer() {
+                emit(*v0, v1, t0.join(t1), d0.clone().multiply(d1));
+            }
+            h1.step();
+        }
+    }
+    while h0.time().is_some() {
+        h1.advance_buffer_by(h0.meet().unwrap());
+        let (v0, t0, d0) = h0.edit().unwrap();
+        for ((v1, t1), d1) in h1.buffer() {
+            emit(v0, *v1, t0.join(t1), d0.clone().multiply(d1));
+        }
+        h0.step();
+    }
+    while h1.time().is_some() {
+        h0.advance_buffer_by(h1.meet().unwrap());
+        let (v1, t1, d1) = h1.edit().unwrap();
+        for ((v0, t0), d0) in h0.buffer() {
+            emit(*v0, v1, t0.join(t1), d0.clone().multiply(d1));
+        }
+        h1.step();
     }
 }
