@@ -2,32 +2,44 @@
 //!
 //! Usage: scc [timely args] [nodes [edges [batch [rounds]]]]
 //!
-//! Mirrors `diagnostics/examples/scc-bench.rs` minus the logging dataflow,
-//! for a clean baseline to compare against `interactive/examples/ddir_col`.
-
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
+//! The COMPILED counterpart of `interactive/examples/ddir`'s `scc.ddp`: the edge stream is
+//! byte-identical to ddir's synthetic generator (`interactive::gen_row` with arity 2, seed 0),
+//! and label introduction is staged by `priority_round(label)` — the same log-bucket scheme the
+//! interpreted backends give `enter_at($1[0])`, so rounds match exactly. Comparing either interpreted
+//! backend against this example is then a same-input, same-algorithm comparison; the earlier
+//! form of this example ran the unprioritized default, which is several times slower and not
+//! what the interpreted programs compute.
+//!
+//! Run single-worker for benchmarking: prioritized propagation inside SCC's nested scopes has
+//! been observed to trip a timely progress defect under >= 3 workers with CPU contention (see
+//! `strongly_connected_at`).
 
 use timely::dataflow::operators::probe::Handle;
 
 use differential_dataflow::input::Input;
-use differential_dataflow::algorithms::graphs::scc::strongly_connected;
+use differential_dataflow::algorithms::graphs::propagate::priority_round;
+use differential_dataflow::algorithms::graphs::scc::strongly_connected_at;
 
 use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-fn hash_to_u64<T: Hash>(value: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
+/// `interactive`'s row hash (splitmix-style), replicated so the edge stream is byte-identical
+/// to `ddir`'s `gen_row(edge_index, nodes, 2)` without a dependency on that crate.
+fn hash_u64(index: u64) -> u64 {
+    let mut x = index.wrapping_mul(0x9e3779b97f4a7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
 }
 
 fn edge_for(index: usize, nodes: usize) -> (usize, usize) {
-    let h1 = hash_to_u64(&index);
-    let h2 = hash_to_u64(&h1);
-    ((h1 as usize) % nodes, (h2 as usize) % nodes)
+    let base = (index as u64).wrapping_mul(31);
+    (
+        (hash_u64(base) % nodes as u64) as usize,
+        (hash_u64(base.wrapping_add(1)) % nodes as u64) as usize,
+    )
 }
 
 fn main() {
@@ -52,7 +64,7 @@ fn main() {
         let mut probe = Handle::new();
         let mut input = worker.dataflow(|scope| {
             let (input, graph) = scope.new_collection::<(usize, usize), isize>();
-            let _scc = strongly_connected(graph).probe_with(&mut probe);
+            let _scc = strongly_connected_at(graph, |n| priority_round(*n as u64)).probe_with(&mut probe);
             input
         });
 

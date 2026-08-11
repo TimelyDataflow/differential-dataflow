@@ -8,6 +8,17 @@ use crate::{VecCollection, ExchangeData};
 use crate::lattice::Lattice;
 use crate::difference::{Abelian, Multiply};
 
+/// The staging round for a label priority: a log-bucket of the priority's bit length.
+///
+/// Bucketing bounds the occupied inner rounds by ~64 regardless of the priority range. Introducing
+/// labels at their exact priority instead creates up to one occupied round per distinct value, and
+/// the per-round scheduling cost swamps the work saved (measured ~5x slower on SCC benchmarks).
+/// The 256 spacing between buckets is inessential — empty rounds are skipped — and is kept for
+/// continuity with existing renderings of `enter_at` staging.
+pub fn priority_round(priority: u64) -> u64 {
+    256 * (64 - priority.leading_zeros() as u64)
+}
+
 /// Propagates labels forward, retaining the minimum label.
 ///
 /// This algorithm naively propagates all labels at once, much like standard label propagation.
@@ -27,9 +38,9 @@ where
 
 /// Propagates labels forward, retaining the minimum label.
 ///
-/// This algorithm naively propagates all labels at once, much like standard label propagation.
-/// To more carefully control the label propagation, consider `propagate_core` which supports a
-/// method to limit the introduction of labels.
+/// This variant introduces each label at the inner-iteration round `logic(&label)`, letting
+/// small labels complete their propagation before larger labels are introduced. Prefer round
+/// schemes with few occupied rounds, e.g. `|l| priority_round(l.into())` — see [`priority_round`].
 pub fn propagate_at<'scope, T, N, L, F, R>(edges: VecCollection<'scope, T, (N,N), R>, nodes: VecCollection<'scope, T,(N,L),R>, logic: F) -> VecCollection<'scope, T,(N,L),R>
 where
     T: Timestamp + Lattice + Hash,
@@ -49,8 +60,11 @@ use crate::operators::arrange::arrangement::Arranged;
 /// Propagates labels forward, retaining the minimum label.
 ///
 /// This variant takes a pre-arranged edge collection, to facilitate re-use, and allows
-/// a method `logic` to specify the rounds in which we introduce various labels. The output
-/// of `logic should be a number in the interval \[0,64\],
+/// a method `logic` to specify the round of the inner iteration at which each label is
+/// introduced: a label enters at exactly `logic(&label)`. Small rounds propagate to fixpoint
+/// before later rounds introduce larger labels, which can substantially reduce total work —
+/// e.g. `|label| label` for integer labels introduces them in value order. `|_| 0` introduces
+/// everything at once (plain label propagation).
 pub fn propagate_core<'scope, N, L, Tr, F, R>(edges: Arranged<'scope, Tr>, nodes: VecCollection<'scope, Tr::Time,(N,L),R>, logic: F) -> VecCollection<'scope, Tr::Time,(N,L),R>
 where
     N: ExchangeData+Hash,
@@ -71,7 +85,7 @@ where
     // nodes.filter(|_| false)
     //      .iterate(|scope, inner| {
     //          let edges = edges.enter(scope);
-    //          let nodes = nodes.enter_at(scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as u64));
+    //          let nodes = nodes.enter_at(scope, move |r| logic(&r.1) as u64);
     //          inner.join_map(edges, |_k,l,d| (d.clone(),l.clone()))
     //               .concat(nodes)
     //               .reduce(|_, s, t| t.push((s[0].0.clone(), 1)))
@@ -87,7 +101,7 @@ where
         use timely::order::Product;
 
         let edges = edges.enter(scope);
-        let nodes = nodes.enter_at(scope, move |r| 256 * (64 - (logic(&r.1)).leading_zeros() as usize));
+        let nodes = nodes.enter_at(scope, move |r| logic(&r.1) as usize);
 
         let (proposals_bind, proposals) = Variable::new(scope, Product::new(Default::default(), 1usize));
 

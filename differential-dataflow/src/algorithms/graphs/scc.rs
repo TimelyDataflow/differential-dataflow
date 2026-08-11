@@ -12,6 +12,11 @@ use crate::difference::{Abelian, Multiply};
 use super::propagate::propagate_at;
 
 /// Returns the subset of edges in the same strongly connected component.
+///
+/// This uses UNPRIORITIZED label propagation (every label introduced at once): simple, but it can
+/// perform substantially more work than [`strongly_connected_at`] with a real priority, which
+/// introduces small labels first. Prefer the `_at` variant with `|label| label`-style logic when
+/// the label type admits it; see its note on multi-worker use.
 pub fn strongly_connected<'scope, T, N, R>(graph: VecCollection<'scope, T, (N,N), R>) -> VecCollection<'scope, T, (N,N), R>
 where
     T: Timestamp + Lattice + Hash,
@@ -25,9 +30,14 @@ where
 
 /// Returns the subset of edges in the same strongly connected component.
 ///
-/// This variant introduces node labels in rounds indicated by `logic`, as in `propagate_at`:
-/// small labels can complete their propagation before larger labels are introduced, which can
-/// substantially reduce the total work performed.
+/// This variant introduces each node label at the inner round `logic(&label)`, as in
+/// `propagate_at`: small labels complete their propagation before larger labels are introduced,
+/// which can substantially reduce the total work performed.
+///
+/// Note: nonzero staging inside SCC's doubly-nested scopes has been observed to trip a timely
+/// progress-tracking defect under multiple (>= 3) workers with CPU contention (livelock or a
+/// prematurely completed round). Until that is resolved upstream, prefer single-worker execution
+/// when using a nonzero `logic` here.
 pub fn strongly_connected_at<'scope, T, N, R, F>(graph: VecCollection<'scope, T, (N,N), R>, logic: F) -> VecCollection<'scope, T, (N,N), R>
 where
     T: Timestamp + Lattice + Hash,

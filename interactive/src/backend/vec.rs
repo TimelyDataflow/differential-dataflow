@@ -72,7 +72,7 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
                         let delay = {
                             let mut env = vec![k.clone(), v.clone()];
                             let raw = eval(field, &mut env).as_int() as u64;
-                            256 * (64 - raw.leading_zeros() as u64)
+                            differential_dataflow::algorithms::graphs::propagate::priority_round(raw)
                         };
                         let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
                         for _ in 0..level.saturating_sub(1) { coords.push(0); }
