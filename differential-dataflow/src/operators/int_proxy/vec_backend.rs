@@ -115,6 +115,12 @@ fn merged_run<D, T, R>(
                     }
                     cur[b] = slice;
                     oi[b] += slice[oi[b]..].partition_point(|r| r.0.0 < next);
+                    // Chunks are non-empty (`ChunkBatch::new` asserts it) and the guard above
+                    // skipped any whose last key is below `next`, so this chunk holds a record at
+                    // or above `next` and the search cannot land at the end. The branch below is
+                    // unreachable; it is kept so a violated invariant degrades to a slower walk
+                    // rather than to a batch that silently reads as drained.
+                    debug_assert!(oi[b] < slice.len(), "a chunk kept by the skip guard must hold a record at or above the sought key");
                     if oi[b] >= slice.len() {
                         ci[b] += 1;
                         oi[b] = 0;
@@ -159,14 +165,19 @@ pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// Keys per window: bounds the live presentation, and exercises the multi-window path.
     window_size: usize,
     /// The retire's relevant keys — those the novel batches touch, merged with `changed` — built
-    /// on the retire's first window and consumed by hash range from there.
+    /// once per retire and consumed by hash range from there.
     keys_cache: Vec<u64>,
+    /// Whether `keys_cache` is still the previous retire's. Set by `begin`, which runs once per
+    /// retire before any window, so the rebuild does not depend on the value the harness opens
+    /// `from` with.
+    keys_stale: bool,
     /// Resolves an input value id (a per-window ordinal) to its `(key, val)` row.
     in_pool: Vec<(K, V)>,
     /// Resolves an output value id to its `(key, out)` row; spans the whole retire, because
     /// corrections mint ids that later windows' presentations and `emit` must agree on.
     out_pool: Vec<(K, W)>,
-    /// Interns `(key, out)` rows to their output id.
+    /// Interns `(key, out)` rows to their output id. Lookup-only: the map's iteration order is
+    /// never observed, so the hasher cannot affect what the operator produces.
     out_ids: HashMap<(K, W), u64>,
     /// The retire's output tile descriptions, and the rows accumulated for each.
     tiles: Vec<Description<T>>,
@@ -187,6 +198,7 @@ impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
             logic,
             window_size: window_size.max(1),
             keys_cache: Vec::new(),
+            keys_stale: true,
             in_pool: Vec::new(),
             out_pool: Vec::new(),
             out_ids: HashMap::new(),
@@ -210,6 +222,7 @@ where
     type ROut = R;
 
     fn begin(&mut self, tiles: &[Description<T>]) {
+        self.keys_stale = true;
         self.out_pool.clear();
         self.out_ids.clear();
         self.tiles = tiles.to_vec();
@@ -228,7 +241,8 @@ where
         // First window of the retire: gather the relevant keys — those the novel batches touch,
         // merged with the `changed` keys the harness supplies. Discovered in the scan the
         // presentation needs anyway; later windows slice this by hash range.
-        if start == 0 {
+        if self.keys_stale {
+            self.keys_stale = false;
             self.keys_cache.clear();
             for batch in instance.input_batches.iter() {
                 for chunk in batch.chunks.iter() {
