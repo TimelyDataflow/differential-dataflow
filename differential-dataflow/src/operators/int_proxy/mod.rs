@@ -46,6 +46,7 @@ mod history;
 
 pub mod join;
 pub mod reduce;
+pub mod vec_backend;
 
 /// Integer-only exchange medium: a consolidated collection of `[((hash, id), time, diff)]`.
 ///
