@@ -746,3 +746,189 @@ mod sweep_tests {
         }
     }
 }
+
+/// One side's presentation for a whole window, flat, with per-key windows into it.
+///
+/// The records live in `((time, value_id), diff)` order per key, which is the order a sweep
+/// consumes them, so the presentation IS the replay: there is no `EditList`, no permutation from
+/// value order into time order, and no second copy of every time.
+///
+/// Each key owns a contiguous slice, split by two cursors:
+///
+/// ```text
+///   [start ...... free) [free ...... head) [head ...... end)
+///        reclaimed          accumulation        unreplayed
+/// ```
+///
+/// Stepping a record in is `head += 1` — the record is already adjacent to the accumulation, so
+/// nothing moves. Advancing the accumulation joins its times by the meet and consolidates it into
+/// its own SUFFIX (`consolidate_slice_suffix`), which can only shrink it, so `free` moves forward
+/// and `head` stays put. That is why the consolidation compacts backwards: compacting forwards
+/// would leave the freed space between the survivors and the next record to step in.
+///
+/// `meets[i]` is the meet of the times at or after `i` within the key. It is read only at `head`,
+/// on the unreplayed side, which is never reordered — so consolidating the accumulation is free to
+/// scramble the meets it passes over.
+pub struct Replay<T, R> {
+    runs: Vec<((T, u64), R)>,
+    meets: Vec<T>,
+    free: Vec<usize>,
+    head: Vec<usize>,
+    end: Vec<usize>,
+}
+
+impl<T: Timestamp + Lattice, R: Semigroup> Replay<T, R> {
+    /// An empty presentation, to be filled a key at a time.
+    pub fn new() -> Self {
+        Replay { runs: Vec::new(), meets: Vec::new(), free: Vec::new(), head: Vec::new(), end: Vec::new() }
+    }
+
+    /// Discard every key, keeping the allocations.
+    pub fn clear(&mut self) {
+        self.runs.clear();
+        self.meets.clear();
+        self.free.clear();
+        self.head.clear();
+        self.end.clear();
+    }
+
+    /// The number of keys loaded.
+    pub fn keys(&self) -> usize { self.end.len() }
+
+    /// Append one key's records, advancing each time by `advance_by` if supplied.
+    ///
+    /// The records are put into `(time, value_id)` order and netted; advancing can make distinct
+    /// times coincide, so the netting is not redundant even on an already-consolidated presentation.
+    /// The suffix meets are then a single backward pass.
+    pub fn push_key(&mut self, records: impl Iterator<Item = (u64, T, R)>, advance_by: Option<&T>) {
+        let start = self.runs.len();
+        for (vid, mut time, diff) in records {
+            if let Some(m) = advance_by { time.join_assign(m); }
+            self.runs.push(((time, vid), diff));
+        }
+        let kept = crate::consolidation::consolidate_slice(&mut self.runs[start..]);
+        self.runs.truncate(start + kept);
+
+        self.meets.resize_with(self.runs.len(), || T::minimum());
+        for i in start..self.runs.len() {
+            self.meets[i].clone_from(&self.runs[i].0.0);
+        }
+        for i in (start + 1..self.runs.len()).rev() {
+            let (init, tail) = self.meets.split_at_mut(i);
+            init[i - 1].meet_assign(&tail[0]);
+        }
+
+        self.free.push(start);
+        self.head.push(start);
+        self.end.push(self.runs.len());
+    }
+
+    /// The next unreplayed time for key `k`, or `None` once it is drained.
+    pub fn time(&self, k: usize) -> Option<&T> {
+        (self.head[k] < self.end[k]).then(|| &self.runs[self.head[k]].0.0)
+    }
+
+    /// The meet of every unreplayed time for key `k`.
+    pub fn meet(&self, k: usize) -> Option<&T> {
+        (self.head[k] < self.end[k]).then(|| &self.meets[self.head[k]])
+    }
+
+    /// Step key `k`'s records while the next time equals `at`; true iff any did.
+    ///
+    /// Purely an index bump: the records are already where the accumulation wants them.
+    pub fn step_while_time_is(&mut self, k: usize, at: &T) -> bool {
+        let before = self.head[k];
+        while self.head[k] < self.end[k] && &self.runs[self.head[k]].0.0 == at {
+            self.head[k] += 1;
+        }
+        self.head[k] > before
+    }
+
+    /// Advance key `k`'s accumulation by `meet` and consolidate it, reclaiming what cancels.
+    pub fn advance_active(&mut self, k: usize, meet: &T) {
+        let (free, head) = (self.free[k], self.head[k]);
+        if free == head { return; }
+        for record in self.runs[free..head].iter_mut() { record.0.0.join_assign(meet); }
+        let kept = crate::consolidation::consolidate_slice_suffix(&mut self.runs[free..head]);
+        self.free[k] = free + kept;
+    }
+
+    /// Key `k`'s accumulation, as `(value_id, time, diff)`.
+    pub fn active(&self, k: usize) -> impl Iterator<Item = (u64, &T, &R)> {
+        self.runs[self.free[k]..self.head[k]].iter().map(|((t, v), d)| (*v, t, d))
+    }
+}
+
+#[cfg(test)]
+mod replay_tests {
+
+    use timely::order::Product;
+
+    use super::{Replay, ValueHistory};
+
+    type Time = Product<u64, u64>;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self, bound: u64) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (self.0 >> 33) % bound
+        }
+    }
+
+    /// `Replay` must behave as `ValueHistory` does, which is the implementation it replaces: the
+    /// same replay times and meets, and after each advance the same accumulation. Compared as
+    /// multisets, since the two hold their accumulations in different orders — `Replay` by
+    /// `(time, id)`, `ValueHistory` by `(id, time)` — and neither order is observable to a caller
+    /// that consolidates what it reads.
+    #[test]
+    fn replay_matches_value_history() {
+        let mut rng = Rng(0xfeed);
+        for case in 0..500u64 {
+            let span = 2 + rng.next(4);
+            // As the bridge contract delivers it: consolidated, and grouped by value id. Feeding
+            // unsorted records instead exposes a real difference — `Replay` nets the whole key,
+            // while `load_iter` only nets within CONSECUTIVE value groups, so it retains records
+            // `Replay` cancels away and reports replay times for them. `Replay` is the more compact
+            // of the two there, but the two are only comparable on input both consolidate alike.
+            let mut records: Vec<((u64, Time), i64)> = (0..rng.next(9))
+                .map(|_| ((rng.next(3), Product::new(rng.next(span), rng.next(span))), rng.next(5) as i64 - 2))
+                .collect();
+            crate::consolidation::consolidate(&mut records);
+            let records: Vec<(u64, Time, i64)> =
+                records.into_iter().map(|((v, t), d)| (v, t, d)).collect();
+            let meet = Product::new(rng.next(2), rng.next(2));
+
+            let mut flat: Replay<Time, i64> = Replay::new();
+            flat.push_key(records.iter().cloned(), Some(&meet));
+            let mut history: ValueHistory<u64, Time, i64> = ValueHistory::new();
+            history.load_iter(records.iter().cloned(), Some(&meet));
+
+            let mut steps = 0;
+            loop {
+                let (a, b) = (flat.time(0).cloned(), history.time().cloned());
+                assert_eq!(a, b, "case {case} step {steps}: next time");
+                assert_eq!(flat.meet(0).cloned(), history.meet().cloned(), "case {case} step {steps}: meet");
+                let Some(at) = a else { break };
+
+                assert_eq!(
+                    flat.step_while_time_is(0, &at),
+                    history.step_while_time_is(&at),
+                    "case {case} step {steps}: stepped",
+                );
+                let collapse = Product::new(rng.next(span), rng.next(span));
+                flat.advance_active(0, &collapse);
+                history.advance_buffer_by(&collapse);
+
+                let mut got: Vec<(u64, Time, i64)> =
+                    flat.active(0).map(|(v, t, d)| (v, *t, *d)).collect();
+                let mut want: Vec<(u64, Time, i64)> =
+                    history.buffer().iter().map(|((v, t), d)| (*v, *t, *d)).collect();
+                got.sort();
+                want.sort();
+                assert_eq!(got, want, "case {case} step {steps}: accumulation");
+                steps += 1;
+            }
+        }
+    }
+}
