@@ -28,7 +28,7 @@ use std::rc::Rc;
 use timely::container::PushInto;
 use timely::progress::Timestamp;
 
-use crate::consolidation::{consolidate, consolidate_updates_from};
+use crate::consolidation::{consolidate, consolidate_updates};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::chunk::ChunkBatch;
@@ -62,9 +62,11 @@ pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// Lookup-only: the non-determinism of the map's iteration order is never observed.
     out_ids: HashMap<(K, W), u64>,
 
-    /// The retire's output tile descriptions, and the rows accumulated for each.
+    /// The retire's output tile descriptions, and the chunks accumulated for each.
     tiles: Vec<Description<T>>,
-    tile_rows: Vec<Vec<((u64, (K, W)), T, R)>>,
+    tile_chunks: Vec<Vec<VecChunk<u64, (K, W), T, R>>>,
+    /// Scratch to re-order one `emit`'s output by types, rather than transient identifiers.
+    stage: Vec<((u64, (K, W)), T, R)>,
 }
 
 impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
@@ -82,7 +84,8 @@ impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
             out_pool: Vec::new(),
             out_ids: HashMap::new(),
             tiles: Vec::new(),
-            tile_rows: Vec::new(),
+            tile_chunks: Vec::new(),
+            stage: Vec::new(),
         }
     }
 }
@@ -103,7 +106,7 @@ where
     fn begin(&mut self, tiles: &[Description<T>]) {
         self.keys_stale = true;
         self.tiles = tiles.to_vec();
-        self.tile_rows = (0..tiles.len()).map(|_| Vec::new()).collect();
+        self.tile_chunks = (0..tiles.len()).map(|_| Vec::new()).collect();
     }
 
     #[inline(never)]
@@ -298,12 +301,20 @@ where
 
     #[inline(never)]
     fn emit(&mut self, tile: usize, records: &[((u64, u64), T, R)]) {
-        let mark = self.tile_rows[tile].len();
+        self.stage.clear();
         for ((h, vid), t, d) in records {
             let row = self.out_pool[*vid as usize].clone();
-            self.tile_rows[tile].push(((*h, row), t.clone(), d.clone()));
+            self.stage.push(((*h, row), t.clone(), d.clone()));
         }
-        consolidate_updates_from(&mut self.tile_rows[tile], mark);
+        // TODO: could consolidate only within a hash key, rather than the whole chunk.
+        consolidate_updates(&mut self.stage);
+        let chunks = &mut self.tile_chunks[tile];
+        for update in self.stage.drain(..) {
+            if chunks.last().is_none_or(|c| c.as_slice().len() >= <VecChunk<u64, (K, W), T, R> as crate::trace::chunk::Chunk>::TARGET) {
+                chunks.push(VecChunk::default());
+            }
+            chunks.last_mut().expect("pushed above if absent").push_into(update);
+        }
     }
 
     #[inline(never)]
@@ -312,38 +323,25 @@ where
         self.out_pool.clear();
         self.out_ids.clear();
         let tiles = std::mem::take(&mut self.tiles);
-        let tile_rows = std::mem::take(&mut self.tile_rows);
+        let tile_chunks = std::mem::take(&mut self.tile_chunks);
         tiles
             .into_iter()
-            .zip(tile_rows)
-            .map(|(desc, rows)| {
-                let mut chunks: Vec<VecChunk<u64, (K, W), T, R>> = Vec::default();
-                let mut iter = rows.into_iter();
-                while iter.len() > 0 {
-                    let mut chunk = VecChunk::default();
-                    for update in (&mut iter).take(<VecChunk<u64, (K, W), T, R> as crate::trace::chunk::Chunk>::TARGET) {
-                        chunk.push_into(update);
-                    }
-                    chunks.push(chunk);
-                }
-                Rc::new(ChunkBatch::new(chunks, desc))
-            })
+            .zip(tile_chunks)
+            .map(|(desc, chunks)| Rc::new(ChunkBatch::new(chunks, desc)))
             .collect()
     }
 }
 
-/// Walks `batches` restricted to the ascending `keys`, emitting each record as
-/// `(hash, &payload, &time, &diff)` in `(hash, payload, time)` order.
+/// Merge-walks `batches`, restricted to `keys`, invoking `logic` on each consolidated non-zero update.
 ///
-/// Per hash bracket, the batches' contiguous runs are gathered and sorted by `(payload, time)`, so
-/// equal payloads meet across batches and each payload's times arrive in order (batch intervals
-/// are disjoint, so cross-batch times need ordering but never summing). The walk seeks to the
-/// first requested key and stops after the last, so a bounded window pays for its own range.
+/// The merge-walk is in order of `(hash, data, time)`.
+///
+/// TODO: Not actually correct at the moment, in that the consolidation does not yet occur.
 #[inline(never)]
 fn merged_run<D, T, R>(
     batches: &[VBatch<D, T, R>],
     keys: &[u64],
-    mut sink: impl FnMut(u64, &D, &T, &R),
+    mut logic: impl FnMut(u64, &D, &T, &R),
 ) where
     D: Ord + Clone + 'static,
     T: Lattice + Timestamp,
@@ -436,7 +434,7 @@ fn merged_run<D, T, R>(
         {
             scratch.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
             for (d, t, r) in scratch.drain(..) {
-                sink(h, d, t, r);
+                logic(h, d, t, r);
             }
         }
     }
