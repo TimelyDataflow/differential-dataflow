@@ -62,16 +62,10 @@ pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// Lookup-only: the non-determinism of the map's iteration order is never observed.
     out_ids: HashMap<(K, W), u64>,
 
-    /// The retire's output tile descriptions, and the chunks accumulated for each: sealed chunks
-    /// plus the open tail the next `emit` appends to. Emits arrive in ascending key ranges (the
-    /// windows partition the key space), so chunks fill in batch order and seal for good at
-    /// `TARGET` — the retire's output never sits staged as rows. (Measured before this change,
-    /// at 4M keys the row staging was the backend's entire memory spike: a 336MB high-water
-    /// against a 2.6MB windowed presentation.)
+    /// The retire's output tile descriptions, and the chunks accumulated for each.
     tiles: Vec<Description<T>>,
     tile_chunks: Vec<Vec<VecChunk<u64, (K, W), T, R>>>,
-    /// Scratch for one `emit`'s resolved rows: consolidation restores row order within a hash
-    /// (vid order need not be row order) before the rows stream into the open chunk.
+    /// Scratch to re-order one `emit`'s output by types, rather than transient identifiers.
     stage: Vec<((u64, (K, W)), T, R)>,
 }
 
@@ -312,6 +306,7 @@ where
             let row = self.out_pool[*vid as usize].clone();
             self.stage.push(((*h, row), t.clone(), d.clone()));
         }
+        // TODO: could consolidate only within a hash key, rather than the whole chunk.
         consolidate_updates(&mut self.stage);
         let chunks = &mut self.tile_chunks[tile];
         for update in self.stage.drain(..) {
@@ -337,23 +332,16 @@ where
     }
 }
 
-/// Walks `batches` restricted to the ascending `keys`, emitting each record as
-/// `(hash, &payload, &time, &diff)` in `(hash, payload, time)` order.
+/// Merge-walks `batches`, restricted to `keys`, invoking `logic` on each consolidated non-zero update.
 ///
-/// Per hash bracket, the batches' contiguous runs are gathered and sorted by `(payload, time)`, so
-/// equal payloads meet across batches and each payload's times arrive in order (batch intervals
-/// are disjoint, so cross-batch times need ordering but never summing). The merge is load-bearing
-/// for the ordinal id scheme, not for the record order (the harness re-sorts each key's records
-/// for its own sweep): grouping equal payloads across batches is what lets them share one id, and
-/// hence net in the id-keyed accumulations — presented unmerged, each un-netted id pays a value
-/// resolution in every correction. (Measured: an unmerged walk cost churn ~25% overall.) The walk
-/// seeks to the first requested key and stops after the last, so a bounded window pays for its
-/// own range.
+/// The merge-walk is in order of `(hash, data, time)`.
+///
+/// TODO: Not actually correct at the moment, in that the consolidation does not yet occur.
 #[inline(never)]
 fn merged_run<D, T, R>(
     batches: &[VBatch<D, T, R>],
     keys: &[u64],
-    mut sink: impl FnMut(u64, &D, &T, &R),
+    mut logic: impl FnMut(u64, &D, &T, &R),
 ) where
     D: Ord + Clone + 'static,
     T: Lattice + Timestamp,
@@ -446,7 +434,7 @@ fn merged_run<D, T, R>(
         {
             scratch.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
             for (d, t, r) in scratch.drain(..) {
-                sink(h, d, t, r);
+                logic(h, d, t, r);
             }
         }
     }
