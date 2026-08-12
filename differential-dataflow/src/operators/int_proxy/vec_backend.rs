@@ -55,6 +55,14 @@ pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// The current window's active keys, in ascending order: the input pass records them, and the
     /// output pass replays them as its own active set.
     keys_cache: Vec<u64>,
+    /// The current window's hashes carrying more than one real key, ascending. Ideally empty, and
+    /// the emptiness is the fast path: a hash absent from here has one real key, so a bracket over
+    /// it needs no per-key grouping and the key can be read off any one of its identifiers.
+    collisions: Vec<u64>,
+    /// Per entry of `keys_cache`, the identifier of that key's first input value, if it had one.
+    /// The output pass needs it: a hash whose input mentions only `A` and whose output mentions only
+    /// `B` collides, and neither pass can see that alone.
+    reps: Vec<Option<u64>>,
 
     /// Resolves an input value id (a per-window ordinal) to its `(key, val)` row.
     in_pool: Vec<(K, V)>,
@@ -81,6 +89,8 @@ impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
             logic,
             window_size: window_size.max(1),
             keys_cache: Vec::new(),
+            collisions: Vec::new(),
+            reps: Vec::new(),
             in_pool: Vec::new(),
             out_pool: Vec::new(),
             out_ids: HashMap::new(),
@@ -130,6 +140,8 @@ where
         // `((hash, id), time)` with nothing left to sort.
         self.in_pool.clear();
         self.keys_cache.clear();
+        self.collisions.clear();
+        self.reps.clear();
         let mut walk = MergedWalk::new(
             instance.input_batches,
             instance.source_batches,
@@ -155,9 +167,19 @@ where
             // Consolidation has already dropped the cancelling records, so a change of value is a
             // new identifier and no lookahead is needed to find one. The value is borrowed from the
             // batch rather than from `drawn`, so it outlives the drain that yields it.
+            //
+            // The walk is also where a hash collision is cheapest to notice: the branch below fires
+            // once per distinct value, so testing the real keys for agreement there costs one
+            // comparison per value, against resolving every record of every bracket in every wave.
+            let rep = self.in_pool.len() as u64;
+            let (mut single, mut collides): (Option<&K>, bool) = (None, false);
             let mut last: Option<&(K, V)> = None;
             for ((data, novel, time), diff) in drawn.drain(..) {
                 if last != Some(data) {
+                    match single {
+                        None => single = Some(&data.0),
+                        Some(only) => collides |= *only != data.0,
+                    }
                     self.in_pool.push(data.clone());
                     last = Some(data);
                 }
@@ -165,6 +187,8 @@ where
                 let bridge = if novel { &mut window.novel } else { &mut window.history };
                 bridge.push(((key, id), time, diff));
             }
+            self.reps.push(single.map(|_| rep));
+            if collides { self.collisions.push(key); }
             if budget == 0 { break; }
         }
         *from = walk.due();
@@ -182,10 +206,17 @@ where
             instance.lower,
         );
         let mut odrawn: Vec<Drawn<(K, W), T, R>> = Vec::new();
+        let mut index = 0;
         while let Some(key) = owalk.advance(&mut odrawn) {
+            debug_assert_eq!(self.keys_cache.get(index), Some(&key), "the output pass replays the input pass's keys");
+            let (mut single, mut collides): (Option<&K>, bool) = (None, false);
             let mut last: Option<&(K, W)> = None;
             for ((data, _, time), diff) in odrawn.drain(..) {
                 if last != Some(data) {
+                    match single {
+                        None => single = Some(&data.0),
+                        Some(only) => collides |= *only != data.0,
+                    }
                     self.out_ids.insert(data.clone(), self.out_pool.len() as u64);
                     self.out_pool.push(data.clone());
                     last = Some(data);
@@ -193,7 +224,17 @@ where
                 let id = (self.out_pool.len() - 1) as u64;
                 window.output.push(((key, id), time, diff));
             }
+            // The two passes agree or the hash collides. Neither can see this alone: a hash whose
+            // input has fully cancelled for one real key still carries that key's stale output.
+            if let (Some(out_key), Some(rep)) = (single, self.reps.get(index).copied().flatten()) {
+                collides |= self.in_pool[rep as usize].0 != *out_key;
+            }
+            if collides { self.collisions.push(key); }
+            index += 1;
         }
+        // The two passes each contribute in ascending order, but one after the other.
+        self.collisions.sort_unstable();
+        self.collisions.dedup();
     }
 
     #[inline(never)]
@@ -214,35 +255,18 @@ where
         for i in 0..keys.len() {
             let (ie, oe) = (in_ends[i], out_ends[i]);
             // No-collision fast path: when the whole bracket is one real key, the per-key grouping
-            // below can be skipped. Testing only the bracket's ENDPOINTS would be wrong: neither id
-            // space is key-ordered across a bracket. Input ids are ordinals minted history-run
-            // first and then novel, so the order is `history by key, then novel by key`; output ids
-            // are interned, with corrections appended after the presentation. Either can read
-            // `[A, B, A]`, whose endpoints agree while its interior does not. So resolve every id
-            // and require them all to agree — a linear pass over data the fast path is about to
-            // clone anyway, against the general path's per-key maps.
-            let single_key: Option<K> = {
-                let mut only: Option<&K> = None;
-                let mut agree = true;
-                for (vid, _) in &input[is..ie] {
-                    let k = &self.in_pool[*vid as usize].0;
-                    match only {
-                        None => only = Some(k),
-                        Some(prev) if prev == k => {}
-                        Some(_) => { agree = false; break }
-                    }
-                }
-                if agree {
-                    for (vid, _) in &output[os..oe] {
-                        let k = &self.out_pool[*vid as usize].0;
-                        match only {
-                            None => only = Some(k),
-                            Some(prev) if prev == k => {}
-                            Some(_) => { agree = false; break }
-                        }
-                    }
-                }
-                if agree { only.cloned() } else { None }
+            // below can be skipped. Which hashes carry more than one real key was settled while the
+            // window was formed, where each value is seen once, rather than rediscovered here, where
+            // every record of every bracket would be resolved again on every wave. Corrections
+            // cannot change the answer: they mint rows under a key the presentation already showed.
+            //
+            // Reading the key off the bracket's first identifier is then sound. Doing so WITHOUT the
+            // collision set would not be: neither id space is key-ordered across a bracket, so both
+            // can read `[A, B, A]`, whose ends agree while its interior does not.
+            let collides = !self.collisions.is_empty() && self.collisions.binary_search(&keys[i]).is_ok();
+            let single_key: Option<K> = if collides { None } else {
+                input[is..ie].first().map(|(vid, _)| self.in_pool[*vid as usize].0.clone())
+                    .or_else(|| output[os..oe].first().map(|(vid, _)| self.out_pool[*vid as usize].0.clone()))
             };
             if let Some(key) = single_key {
                 input_vals.clear();

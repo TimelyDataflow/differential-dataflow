@@ -289,6 +289,83 @@ fn reduce_collision_across_retires() {
     assert_eq!(out1, vec![((Collide(1), 5u64), 1u64, -1i64), ((Collide(1), 9), 1, 1)], "retire 2 must not disturb C2");
 }
 
+/// Colliding hashes inside an `iterate`, where a correction can be deferred past the retire's
+/// upper bound and applied in a later one.
+///
+/// The hash is `k % 2` rather than a real hash, so every bucket holds several real keys throughout.
+/// A round's reduction retracts the values it replaces, so a real key's input can cancel in one
+/// retire while the output it no longer justifies is corrected in another — the window where a
+/// hash's input mentions one real key and its output another. Under `Product` times a synthesized
+/// time can land at or beyond `upper`, which is what defers the correction to produce that window.
+#[test]
+fn reduce_collision_inside_iterate() {
+    let out = Arc::new(Mutex::new(Vec::<((u64, u64), u64, i64)>::new()));
+    let os = out.clone();
+    // Key `k` holds `{10k, 10k + 7, 10k + 3}`, so its maximum is `10k + 7`; a key borrowing from
+    // the neighbour it shares a bucket with would land on a different, visibly wrong maximum.
+    let updates: Vec<((u64, u64), u64, i64)> = (0..6u64)
+        .flat_map(|k| [((k, 10 * k), 0u64, 1i64), ((k, 10 * k + 7), 0, 1), ((k, 10 * k + 3), 0, 1)])
+        .collect();
+
+    timely::execute_directly(move |worker| {
+        worker.dataflow::<u64, _, _>(|scope| {
+            let input = updates.clone().to_stream(scope).as_collection();
+            let result = input.iterate(|_scope, inner| {
+                let hashed = inner.map(|(k, v)| (k % 2, (k, v)));
+                let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), Product<u64, u64>, i64)>, ContainerChunker<VecChunk<u64, (u64, u64), Product<u64, u64>, i64>>, VChunkBatcher<u64, (u64, u64), Product<u64, u64>, i64>, VChunkBuilder<u64, (u64, u64), Product<u64, u64>, i64>, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>>(hashed.inner, Pipeline, "ArrCollide");
+                reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "CollideReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, 1)))
+                    .as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
+            });
+            result.inspect(move |(d, t, r)| os.lock().unwrap().push((*d, *t, *r)));
+        });
+    });
+
+    let mut got = out.lock().unwrap().clone();
+    got.sort();
+    let want: Vec<_> = (0..6u64).map(|k| ((k, 10 * k + 7), 0u64, 1i64)).collect();
+    assert_eq!(got, want, "each real key reaches its own maximum");
+}
+
+/// A key landing in one of two hash buckets, so several real keys share each hash and several
+/// hashes share a window. `Collide` puts everything in one bucket, which cannot show that the
+/// backend rebuilds its collision bookkeeping per window rather than carrying it between them.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+struct Bucket(u64);
+impl std::hash::Hash for Bucket {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) { state.write_u64(self.0 % 2) }
+}
+
+/// Two colliding hashes, each holding several real keys, presented across several windows.
+///
+/// The window budget of one record forces a window per hash, so the collision set is built, used
+/// and discarded twice within the retire. A set that leaked between windows, or a representative
+/// misaligned with the window's key list, merges two real keys' values into one reduction — which
+/// shows up here as a key taking a neighbour's maximum.
+#[test]
+fn reduce_collision_multiwindow() {
+    let logic = |_k: &Bucket, input: &[(u64, i64)], current: &mut Vec<(u64, i64)>, updates: &mut Vec<(u64, i64)>| {
+        if let Some(m) = input.iter().filter(|(_, d)| *d > 0).map(|(v, _)| *v).max() {
+            updates.push((m, 1));
+        }
+        for (w, d) in current.iter() { updates.push((*w, -*d)); }
+    };
+    let mut tactic = ProxyReduceTactic::new(VecReduceBackend::with_window(logic, 1));
+    // Key `k` carries values `10k` and `10k + 1`, so its maximum is `10k + 1` and borrowing from a
+    // neighbour would be visible. Keys 0, 2, 4 share one hash; keys 1, 3 share the other.
+    let rows: Vec<((Bucket, u64), u64, i64)> = (0..5u64)
+        .flat_map(|k| [((Bucket(k), 10 * k), 0u64, 1i64), ((Bucket(k), 10 * k + 1), 0, 1)])
+        .collect();
+    let input = hbatch::<Bucket, u64, u64, i64>(rows, 0, 1);
+    let (produced, _f) = tactic.retire(
+        vec![], vec![], vec![input],
+        &Antichain::from_elem(0u64), &Antichain::from_elem(1u64), &Antichain::from_elem(0u64),
+    );
+    let mut out: Vec<_> = produced.into_iter().flat_map(|(_t, b)| hread(&[b])).collect();
+    out.sort();
+    let want: Vec<_> = (0..5u64).map(|k| ((Bucket(k), 10 * k + 1), 0u64, 1i64)).collect();
+    assert_eq!(out, want, "each real key keeps its own maximum");
+}
+
 /// A reduction that emits only for `Collide(1)`, so `Collide(2)` has input but never any output.
 fn only_first(k: &Collide, input: &[(u64, i64)], current: &mut Vec<(u64, i64)>, updates: &mut Vec<(u64, i64)>) {
     if k.0 == 1 {
