@@ -310,7 +310,7 @@ fn run_flat(mode: Mode, keys: u64, sub: u64) -> f64 {
 const PROP_NODES: u64 = 2_000;
 const PROP_EDGES: usize = 4_000;
 const PROP_CHURN: usize = 50;
-const PROP_ROUNDS: u64 = 40;
+fn prop_rounds() -> u64 { sized("PROP_ROUNDS", 40) }
 const PROP_WARMUP: u64 = 5;
 
 fn edge(i: usize) -> (u64, u64) {
@@ -379,7 +379,7 @@ fn run_propagate(mode: Mode) -> (f64, i64) {
             worker.step();
         }
         let mut times = Vec::new();
-        for r in 0..PROP_ROUNDS {
+        for r in 0..prop_rounds() {
             let t = r + 1;
             // Perturb a low-numbered label each round: low labels spread widely under `min`, so
             // withdrawing one forces its reach to relabel — real iterate work, with interesting

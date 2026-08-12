@@ -15,7 +15,8 @@ use super::ProxyBridge;
 use crate::operators::join::{Fresh, JoinTactic};
 use crate::operators::ValueHistory;
 
-use super::history::IdHistory;
+/// A value history suitable for integer proxy values.
+type IdHistory<T, R> = ValueHistory<u64, T, R>;
 
 /// A type that can interpret and retire pairs of lists of batches, joined by key hashes.
 ///

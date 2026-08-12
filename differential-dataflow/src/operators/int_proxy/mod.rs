@@ -42,7 +42,6 @@
 //! Both are welcome to efficiently notice that there have been no collisions and optimize,
 //! or to ignore the risk entirely and live dangerously.
 
-mod history;
 
 pub mod join;
 pub mod reduce;
