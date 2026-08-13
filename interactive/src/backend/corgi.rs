@@ -29,7 +29,7 @@ use crate::corgi::container::CorgiContainer;
 use crate::corgi::join::CorgiJoinBackend;
 use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
-use crate::corgi::logic::{compilable, compile_flatmap, compile_predicate, compile_projection};
+use crate::corgi::logic::{compilable, compile_flatmap, compile_predicate, compile_projection, compile_scalar};
 use crate::ir::{Diff, LinearOp, Time, Value as DValue};
 use crate::parse::{Projection, Reducer};
 use crate::scope_ir as st;
@@ -84,10 +84,9 @@ fn rebase_join_term(t: &crate::parse::Term) -> crate::parse::Term {
 /// Project = corgi `eval_graph`; Filter = corgi mask + `gather`; FlatMap = `eval_graph` to a list
 /// column + a structural explode; Negate = Rust. Each falls back to rows when the term has no
 /// lowering with this container's shapes, so capability never depends on the compiler's coverage.
-/// The time-shaping ops (EnterAt/LiftIter) are still row-wise throughout (untranscode → vec-style
-/// transform → `from_updates`), matching `backend::vec` exactly; their columnar forms touch only
-/// times, so they are coverage rather than speed. `level` is the scope depth (locates the
-/// iteration coordinate).
+/// EnterAt reads its delay field columnar and joins it into `times` in place. `LiftIter` is the
+/// one op still row-wise throughout (untranscode → vec-style transform → `from_updates`), matching
+/// `backend::vec` exactly. `level` is the scope depth (locates the iteration coordinate).
 fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
     use timely::order::Product;
     use differential_dataflow::lattice::Lattice;
@@ -142,23 +141,46 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
                 }
                 c
             }
-            // Row-wise ops (parity with `backend::vec::render_linear`).
             LinearOp::EnterAt(field) => {
-                let mut out: Vec<Upd> = Vec::new();
-                for ((k, v), t, d) in c.into_updates() {
-                    let delay = {
-                        let mut env = vec![k.clone(), v.clone()];
-                        let raw = crate::ir::eval(field, &mut env).as_int() as u64;
-                        256 * (64 - raw.leading_zeros() as u64)
-                    };
-                    let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
-                    for _ in 0..level.saturating_sub(1) { coords.push(0); }
-                    coords.push(delay);
-                    let delta = Product::new(0u64, PointStamp::new(coords));
-                    out.push(((k, v), t.join(&delta), d));
+                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
+                if let Some(g) = compile_scalar(field, &kshape, &vshape) {
+                    // The key and val columns are IDENTITY here — only times change. Evaluate the
+                    // delay field to a `U64` column and join it into each time in place. Joining
+                    // `Product(0, PointStamp([0,..,0, delay]))` is, coordinate-wise, `max` at index
+                    // `level-1` and identity everywhere else (u64's minimum is 0), so the delta
+                    // never has to be built. `PointStamp::new` re-strips the trailing minimums the
+                    // resize may add, keeping the representation canonical for a zero delay.
+                    let raw = corgi::eval_graph(&g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
+                        .into_u64("enter_at delay");
+                    let idx = level.saturating_sub(1);
+                    for (t, &r) in c.times.iter_mut().zip(raw.iter()) {
+                        let delay = 256 * (64 - r.leading_zeros() as u64);
+                        let mut coords = std::mem::take(&mut t.inner).into_inner();
+                        if coords.len() <= idx {
+                            coords.resize(idx + 1, 0);
+                        }
+                        coords[idx] = coords[idx].max(delay);
+                        t.inner = PointStamp::new(coords);
+                    }
+                    c
+                } else {
+                    let mut out: Vec<Upd> = Vec::new();
+                    for ((k, v), t, d) in c.into_updates() {
+                        let delay = {
+                            let mut env = vec![k.clone(), v.clone()];
+                            let raw = crate::ir::eval(field, &mut env).as_int() as u64;
+                            256 * (64 - raw.leading_zeros() as u64)
+                        };
+                        let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
+                        for _ in 0..level.saturating_sub(1) { coords.push(0); }
+                        coords.push(delay);
+                        let delta = Product::new(0u64, PointStamp::new(coords));
+                        out.push(((k, v), t.join(&delta), d));
+                    }
+                    CorgiContainer::from_updates(out)
                 }
-                CorgiContainer::from_updates(out)
             }
+            // Row-wise ops (parity with `backend::vec::render_linear`).
             LinearOp::LiftIter => {
                 let mut out: Vec<Upd> = Vec::new();
                 for ((k, v), t, d) in c.into_updates() {

@@ -605,33 +605,39 @@ fn compile_fold_body(step: &Term, init_shape: &Shape, elem_shape: &Shape) -> Opt
     Some(bb.finish(out))
 }
 
-/// Compile a `FlatMap`'s list term over `Var(0)=key` (shape `kshape`), `Var(1)=val` (`vshape`) →
-/// a corgi `List` column, one list per input row. `None` when the term has no lowering with these
-/// shapes, or when it is not list-shaped — the backend explodes the column structurally and needs
-/// real list bounds to do it, where `ir::eval` would take any `List` value it happened to produce.
-/// The caller falls back to rows in both cases.
-pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
-    let shapes = [kshape.clone(), vshape.clone()];
-    if !matches!(infer_term_shape(list_term, &shapes), Shape::List(_)) {
-        return None;
-    }
+/// Compile a term in the row environment `Var(0)=key` (shape `kshape`), `Var(1)=val` (`vshape`) —
+/// the environment every `LinearOp` reads. The graph's input is `Prod([key, val])`. `None` when
+/// the term has no lowering with these shapes; every caller falls back to rows there.
+fn compile_over_kv(term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
     let mut b = Builder::<NumOp>::default();
     let input = b.input();
     let var_k = b.add(Op::Field(0), vec![input]);
     let var_v = b.add(Op::Field(1), vec![input]);
-    let out = compile(list_term, &mut b, &[var_k, var_v], &shapes, input)?;
+    let out = compile(term, &mut b, &[var_k, var_v], &[kshape.clone(), vshape.clone()], input)?;
     Some(b.finish(out))
 }
 
-/// Compile a `Filter` predicate over `Var(0)=key` (shape `kshape`), `Var(1)=val` (`vshape`) → mask.
-/// `None` when the term (with these shapes) has no lowering; the caller falls back to rows.
+/// Compile a `FlatMap`'s list term → a corgi `List` column, one list per input row. Declines when
+/// the term is not list-shaped: the backend explodes the column structurally and needs real list
+/// bounds to do it, where `ir::eval` would take any `List` value it happened to produce.
+pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+    matches!(infer_term_shape(list_term, &[kshape.clone(), vshape.clone()]), Shape::List(_))
+        .then(|| compile_over_kv(list_term, kshape, vshape))
+        .flatten()
+}
+
+/// Compile a scalar term (`EnterAt`'s delay field) → a `U64` column. Declines when the term is not
+/// `Prim`-shaped: the delay is read as one integer per row, which a `Prod`/`List`/`Sum` column has
+/// no reading of.
+pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+    matches!(infer_term_shape(term, &[kshape.clone(), vshape.clone()]), Shape::Prim(_))
+        .then(|| compile_over_kv(term, kshape, vshape))
+        .flatten()
+}
+
+/// Compile a `Filter` predicate → a mask column (nonzero keeps the row).
 pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
-    let mut b = Builder::<NumOp>::default();
-    let input = b.input();
-    let var_k = b.add(Op::Field(0), vec![input]);
-    let var_v = b.add(Op::Field(1), vec![input]);
-    let out = compile(cond, &mut b, &[var_k, var_v], &[kshape.clone(), vshape.clone()], input)?;
-    Some(b.finish(out))
+    compile_over_kv(cond, kshape, vshape)
 }
 
 /// Compile a join projection: key/val Terms over `Var(0)=key`, `Var(1)=val0`, `Var(2)=val1` (with
