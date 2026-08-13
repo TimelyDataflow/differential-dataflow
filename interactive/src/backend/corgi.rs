@@ -84,9 +84,9 @@ fn rebase_join_term(t: &crate::parse::Term) -> crate::parse::Term {
 /// Project = corgi `eval_graph`; Filter = corgi mask + `gather`; FlatMap = `eval_graph` to a list
 /// column + a structural explode; Negate = Rust. Each falls back to rows when the term has no
 /// lowering with this container's shapes, so capability never depends on the compiler's coverage.
-/// EnterAt reads its delay field columnar and joins it into `times` in place. `LiftIter` is the
-/// one op still row-wise throughout (untranscode → vec-style transform → `from_updates`), matching
-/// `backend::vec` exactly. `level` is the scope depth (locates the iteration coordinate).
+/// The two data<->time ops are columnar and total: EnterAt reads its delay field as a column and
+/// joins it into `times` in place; LiftIter reads the iteration coordinate out of `times` and
+/// appends it to `vals`. `level` is the scope depth (it locates that coordinate).
 fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
     use timely::order::Product;
     use differential_dataflow::lattice::Lattice;
@@ -180,18 +180,30 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
                     CorgiContainer::from_updates(out)
                 }
             }
-            // Row-wise ops (parity with `backend::vec::render_linear`).
+            // The inverse of `EnterAt`: a value read OUT of each row's time. Vals gain one
+            // integer field; keys, times and diffs are untouched, and no term is compiled, so
+            // this path is total — there is no fallback to fall back to.
+            //
+            // It mirrors [`append_iter`] shape for shape, and the empty product is where the two
+            // representations part company: DDIR unit IS `Tuple([])`, which `append_iter` extends
+            // to `Tuple([iter])`, but columnar it arrives as `CValue::Unit`, not an empty `Prod`.
+            // So `Unit` must become `Prod([iter])` — `Prod([Unit, iter])` would be a silent
+            // one-field-too-many divergence from `backend::vec`.
             LinearOp::LiftIter => {
-                let mut out: Vec<Upd> = Vec::new();
-                for ((k, v), t, d) in c.into_updates() {
-                    let iter = level
-                        .checked_sub(1)
-                        .and_then(|idx| t.inner.get(idx).copied())
-                        .unwrap_or(0) as i64;
-                    out.push(((k, append_iter(v, iter)), t, d));
-                }
-                CorgiContainer::from_updates(out)
+                let iters: Vec<u64> = c
+                    .times
+                    .iter()
+                    .map(|t| level.checked_sub(1).and_then(|idx| t.inner.get(idx).copied()).unwrap_or(0))
+                    .collect();
+                let lane = CValue::u64(iters);
+                let vals = match c.vals {
+                    CValue::Prod(mut fields) => { fields.push(lane); CValue::Prod(fields) }
+                    CValue::Unit(_) => CValue::Prod(vec![lane]),
+                    other => CValue::Prod(vec![other, lane]),
+                };
+                CorgiContainer { keys: c.keys, vals, times: c.times, diffs: c.diffs }
             }
+            // Row-wise ops (parity with `backend::vec::render_linear`).
             LinearOp::FlatMap(list_term) => {
                 let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
                 if let Some(g) = compile_flatmap(list_term, &kshape, &vshape) {
@@ -248,15 +260,6 @@ fn apply_flatmap_rows(c: CC, list_term: &crate::parse::Term) -> CC {
         }
     }
     CorgiContainer::from_updates(out)
-}
-
-/// Append the user-iter coordinate to a value (mirrors `backend::vec::append_iter`): extend a `Tuple`,
-/// or wrap any other value as `(value, iter)`.
-fn append_iter(val: DValue, iter: i64) -> DValue {
-    match val {
-        DValue::Tuple(mut xs) => { xs.push(DValue::Int(iter)); DValue::Tuple(xs) }
-        other => DValue::Tuple(vec![other, DValue::Int(iter)]),
-    }
 }
 
 
