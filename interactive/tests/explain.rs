@@ -1,5 +1,8 @@
 //! End-to-end semantic tests for the explanation rewrite, built on
-//! `backend::vec::evaluate` (explicit inputs in, every export out).
+//! `backend::vec::evaluate` (explicit inputs in, every export out). The
+//! sufficiency properties are checked against `vec`, the correctness reference;
+//! a final section cross-checks that the rewritten programs render identically
+//! on the corgi backend.
 //!
 //! The central property is *sufficiency*: for a query against a program's
 //! output, the original inputs *restricted to* the demand-sets the rewritten
@@ -10,6 +13,7 @@
 
 use std::collections::BTreeSet;
 
+use interactive::backend::corgi::evaluate as corgi_evaluate;
 use interactive::backend::vec::{evaluate, Row};
 use interactive::ir::Value;
 use interactive::scope_ir::Program;
@@ -118,6 +122,21 @@ fn optimized(src: &str) -> Program {
     p
 }
 
+/// The query input's rows: each query is the flat demand envelope
+/// `(K ; Tuple([V…, chain…, q]))` — V's fields, then the chain (empty, since the
+/// first export is at depth 0), then the query id.
+fn query_rows(queries: &[(Row, Row)]) -> Vec<(Row, Row)> {
+    queries
+        .iter()
+        .enumerate()
+        .map(|(q, (k, v))| {
+            let mut fields = match v { Value::Tuple(xs) => xs.clone(), other => vec![other.clone()] };
+            fields.push(Value::Int(q as i64));
+            (k.clone(), Value::Tuple(fields))
+        })
+        .collect()
+}
+
 /// The per-input demand-sets for a batch of query rows (q ids assigned in
 /// order) against `src`'s first export, with `src` run on `inputs`.
 fn demand_for_queries(
@@ -129,20 +148,8 @@ fn demand_for_queries(
     let tree = lowered(src);
     let mut ex = explain::explain(&tree, shapes);
     ex.optimize();
-    // A query row is the flat demand envelope `(K ; Tuple([V…, chain…, q]))`:
-    // V's fields, then the chain (empty — the first export is at depth 0), then
-    // the query id.
-    let query_rows: Vec<(Row, Row)> = queries
-        .iter()
-        .enumerate()
-        .map(|(q, (k, v))| {
-            let mut fields = match v { Value::Tuple(xs) => xs.clone(), other => vec![other.clone()] };
-            fields.push(Value::Int(q as i64));
-            (k.clone(), Value::Tuple(fields))
-        })
-        .collect();
     let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
-    ex_inputs.push(query_rows);
+    ex_inputs.push(query_rows(queries));
     let exports = evaluate(&ex, &ex_inputs);
     (0..inputs.len())
         .map(|i| {
@@ -463,4 +470,204 @@ const COLLECT_SHAPES: &[(usize, usize)] = &[(2, 0)];
 fn collect_explanations_sufficient_small() {
     let sizes = assert_all_rows_sufficient(COLLECT_ROW, COLLECT_SHAPES, &[gen_edges(20, 22)]);
     assert!(!sizes.is_empty(), "expected some collected lists to explain");
+}
+
+// ---------------------------------------------------------------------------
+// The corgi cross-check.
+//
+// `LinearOp::LiftIter` is SYNTHESIZED by the rewrite — every `$host:` export is
+// a LiftIter Linear, and it panics if it appears in a user program — so an
+// explained program is the only thing that exercises it. The rest of this file
+// runs on `vec` alone, which left the whole explain surface unexercised on the
+// columnar backend. These tests render the SAME rewritten dataflow on both and
+// require every export to agree.
+//
+// Two of them are `#[ignore]`d against a divergence that PREDATES this coverage
+// (reproduced at 78d75b05): on an explained program whose iterative feedback is
+// NEGATED, corgi reports a strict subset of vec's `demand:input0`. The trigger
+// is isolated below to the negation alone — `explained_scc_one_scope_negated`
+// and `corgi_agrees_on_explained_scc_one_scope` differ in exactly that one line,
+// and only the negated one fails. Ruled out along the way: `enter_at` (a depth-1
+// reach with a delay agrees, and forcing the row-wise enter_at path changes
+// nothing), `min` (a depth-1 min/join loop agrees), and depth-2 nesting on its
+// own (the negation-free two-scope program agrees).
+// ---------------------------------------------------------------------------
+
+/// Run `src`'s explanation program on `inputs` + `queries` under both backends
+/// and require identical exports.
+fn assert_explained_backends_agree(
+    src: &str,
+    shapes: &[(usize, usize)],
+    inputs: &[Vec<(Row, Row)>],
+    queries: &[(Row, Row)],
+) {
+    let tree = lowered(src);
+    let mut ex = explain::explain(&tree, shapes);
+    ex.optimize();
+    let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
+    ex_inputs.push(query_rows(queries));
+
+    let by_vec = evaluate(&ex, &ex_inputs);
+    let by_corgi = corgi_evaluate(&ex, &ex_inputs);
+    assert_eq!(
+        by_vec.keys().collect::<Vec<_>>(),
+        by_corgi.keys().collect::<Vec<_>>(),
+        "backends disagree on the export names"
+    );
+    for (name, rows) in &by_vec {
+        assert_eq!(rows, &by_corgi[name], "export {name:?} differs between backends");
+    }
+}
+
+/// The first output row of `src` on `inputs` — a query that makes the
+/// explanation dataflow do real work.
+fn first_output_row(src: &str, inputs: &[Vec<(Row, Row)>]) -> (Row, Row) {
+    let p = optimized(src);
+    export_rows(&p, inputs, "result").into_iter().next().expect("a row to query")
+}
+
+/// Two inputs (edges and roots), so the rewrite reports two demand exports.
+#[test]
+fn corgi_agrees_on_reach_explanation() {
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
+    let q = first_output_row(REACH_ROW, &inputs);
+    assert_explained_backends_agree(REACH_ROW, REACH_SHAPES, &inputs, &[q]);
+}
+
+/// Transitive closure: iteration with `distinct` rather than `min`.
+#[test]
+fn corgi_agrees_on_tc_explanation() {
+    let inputs = vec![gen_edges(20, 22)];
+    let q = first_output_row(TC_ROW, &inputs);
+    assert_explained_backends_agree(TC_ROW, TC_SHAPES, &inputs, &[q]);
+}
+
+/// The list ops through the rewrite: `flatmap`'s reverse rule (intro + explode)
+/// and `collect`'s (a List-valued reducer output).
+#[test]
+fn corgi_agrees_on_flatmap_explanation() {
+    let inputs = vec![gen_edges(20, 22)];
+    let q = first_output_row(FLATMAP_ROW, &inputs);
+    assert_explained_backends_agree(FLATMAP_ROW, FLATMAP_SHAPES, &inputs, &[q]);
+}
+
+#[test]
+fn corgi_agrees_on_collect_explanation() {
+    let inputs = vec![gen_edges(20, 22)];
+    let q = first_output_row(COLLECT_ROW, &inputs);
+    assert_explained_backends_agree(COLLECT_ROW, COLLECT_SHAPES, &inputs, &[q]);
+}
+
+/// `enter_at` through the rewrite, at depth 1 so the negation trigger is absent.
+const REACH_ENTER_AT: &str = r#"
+    let edges = input 0 | key($0[0] ; $0[1]);
+    let roots = input 1 | key($0[0] ;);
+    reach: {
+        let seeds = roots | enter_at($0[0]);
+        let proposals = reach | join(edges, ($2 ;));
+        var reach = seeds + proposals | distinct;
+    }
+    export "result" = reach::reach;
+"#;
+
+#[test]
+fn corgi_agrees_on_enter_at_explanation() {
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
+    let q = first_output_row(REACH_ENTER_AT, &inputs);
+    assert_explained_backends_agree(REACH_ENTER_AT, REACH_SHAPES, &inputs, &[q]);
+}
+
+/// A `min` reducer in an iterative loop, at depth 1.
+const MIN_LOOP: &str = r#"
+    let edges = input 0 | key($0[0] ; $0[1]);
+    outer: {
+        let nodes = edges | key($1 ; $1);
+        let labels = proposals + nodes | min;
+        var proposals = labels | join(edges, ($2 ; $1));
+    }
+    export "result" = outer::labels;
+"#;
+
+#[test]
+fn corgi_agrees_on_min_loop_explanation() {
+    let inputs = vec![gen_edges(50, 55)];
+    let q = first_output_row(MIN_LOOP, &inputs);
+    assert_explained_backends_agree(MIN_LOOP, SCC_SHAPES, &inputs, &[q]);
+}
+
+/// SCC's shape — depth-2 nesting, `min`, three joins, a filtered feedback — with
+/// the feedback NOT negated. Agrees; the twin below differs only in that line.
+const SCC_ONE_SCOPE: &str = r#"
+    let edges = input 0 | key($0[0] ; $0[1]);
+    outer: {
+        let scc = edges + trim;
+        fwd: {
+            let nodes = edges | key($1 ; $1);
+            let labels = proposals + nodes | min;
+            var proposals = labels | join(scc, ($2 ; $1));
+        }
+        let trim_fwd = edges
+            | join(fwd::labels, ($1 ; $0, $2))
+            | join(fwd::labels, ($0 ; $1, $2))
+            | filter($1[1] == $1[2])
+            | key($0 ; $1[0]);
+        var trim = trim_fwd | filter($0[0] > 1000000);
+    }
+    export "result" = outer::scc;
+"#;
+
+/// The same program with `var trim = trim_fwd - edges` — the one-line minimal
+/// reproducer for the demand divergence.
+const SCC_ONE_SCOPE_NEGATED: &str = r#"
+    let edges = input 0 | key($0[0] ; $0[1]);
+    outer: {
+        let scc = edges + trim;
+        fwd: {
+            let nodes = edges | key($1 ; $1);
+            let labels = proposals + nodes | min;
+            var proposals = labels | join(scc, ($2 ; $1));
+        }
+        let trim_fwd = edges
+            | join(fwd::labels, ($1 ; $0, $2))
+            | join(fwd::labels, ($0 ; $1, $2))
+            | filter($1[1] == $1[2])
+            | key($0 ; $1[0]);
+        var trim = trim_fwd - edges;
+    }
+    export "result" = outer::scc;
+"#;
+
+#[test]
+fn corgi_agrees_on_explained_scc_one_scope() {
+    let inputs = vec![gen_edges(50, 55)];
+    let q = first_output_row(SCC_ONE_SCOPE, &inputs);
+    assert_explained_backends_agree(SCC_ONE_SCOPE, SCC_SHAPES, &inputs, &[q]);
+}
+
+#[test]
+#[ignore = "known: corgi under-reports explain demand when the feedback is negated (pre-existing at 78d75b05)"]
+fn explained_scc_one_scope_negated() {
+    let inputs = vec![gen_edges(50, 55)];
+    let q = first_output_row(SCC_ONE_SCOPE_NEGATED, &inputs);
+    assert_explained_backends_agree(SCC_ONE_SCOPE_NEGATED, SCC_SHAPES, &inputs, &[q]);
+}
+
+/// Iterative + `enter_at` + negated feedback: the real SCC.
+#[test]
+#[ignore = "known: corgi under-reports explain demand when the feedback is negated (pre-existing at 78d75b05)"]
+fn corgi_agrees_on_scc_explanation() {
+    let inputs = vec![gen_edges(50, 55)];
+    let q = first_output_row(SCC_ROW, &inputs);
+    assert_explained_backends_agree(SCC_ROW, SCC_SHAPES, &inputs, &[q]);
+}
+
+/// Two queries at once, so the query input carries more than one envelope.
+#[test]
+#[ignore = "known: corgi under-reports explain demand when the feedback is negated (pre-existing at 78d75b05)"]
+fn corgi_agrees_on_two_query_explanation() {
+    let inputs = vec![gen_edges(50, 55)];
+    let p = optimized(SCC_ROW);
+    let qs: Vec<(Row, Row)> = export_rows(&p, &inputs, "result").into_iter().take(2).collect();
+    assert_eq!(qs.len(), 2, "expected at least two scc edges to query");
+    assert_explained_backends_agree(SCC_ROW, SCC_SHAPES, &inputs, &qs);
 }
