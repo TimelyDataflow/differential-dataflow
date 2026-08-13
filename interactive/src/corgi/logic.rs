@@ -605,6 +605,24 @@ fn compile_fold_body(step: &Term, init_shape: &Shape, elem_shape: &Shape) -> Opt
     Some(bb.finish(out))
 }
 
+/// Compile a `FlatMap`'s list term over `Var(0)=key` (shape `kshape`), `Var(1)=val` (`vshape`) →
+/// a corgi `List` column, one list per input row. `None` when the term has no lowering with these
+/// shapes, or when it is not list-shaped — the backend explodes the column structurally and needs
+/// real list bounds to do it, where `ir::eval` would take any `List` value it happened to produce.
+/// The caller falls back to rows in both cases.
+pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+    let shapes = [kshape.clone(), vshape.clone()];
+    if !matches!(infer_term_shape(list_term, &shapes), Shape::List(_)) {
+        return None;
+    }
+    let mut b = Builder::<NumOp>::default();
+    let input = b.input();
+    let var_k = b.add(Op::Field(0), vec![input]);
+    let var_v = b.add(Op::Field(1), vec![input]);
+    let out = compile(list_term, &mut b, &[var_k, var_v], &shapes, input)?;
+    Some(b.finish(out))
+}
+
 /// Compile a `Filter` predicate over `Var(0)=key` (shape `kshape`), `Var(1)=val` (`vshape`) → mask.
 /// `None` when the term (with these shapes) has no lowering; the caller falls back to rows.
 pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
