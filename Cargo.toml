@@ -97,4 +97,5 @@ debug = true
 rpath = false
 lto = true
 debug-assertions = false
-codegen-units = 4
+# One unit, so that A/B benchmarking is maximally accurate.
+codegen-units = 1

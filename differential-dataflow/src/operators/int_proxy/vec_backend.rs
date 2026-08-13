@@ -12,13 +12,11 @@
 //! the `u64` key hash and whose value is the full `(key, val)` pair.
 //!
 //! Per window, the backend presents three proxy bridges — novel input, prior input, and prior output.
-//! The identifiers chosen are based on ordinal position. Unfortunately, they are chosen independently
-//! for the novel and prior inputs, meaning that empty input collections may be supplied to the logic
-//! for evaluation, where the logic should be ignored and zero -> zero enforced. This could be fixed
-//! with a more attentive identifier selection.
+//! Identifiers are ordinal positions minted by a single [`MergedWalk`] over the novel batches and the
+//! prior ones together, so a value carries ONE identifier whichever run it appears in and a novel
+//! retraction cancels against its own history. They are minted after the walk consolidates, so a value
+//! whose records all cancel never reaches the tactic and never spends an identifier.
 //!
-//! The backend crawls all keys at once, rather than respecting the window setting.
-//! This is a defect that should be fixed, but the backend shouldn't be used at scale.
 //! The backend clones keys and values like it is being paid to waste cycles.
 //! Generally, this is not a high-performance backend, but shouldn't be abysmal.
 
@@ -27,6 +25,7 @@ use std::rc::Rc;
 
 use timely::container::PushInto;
 use timely::progress::Timestamp;
+use timely::progress::frontier::AntichainRef;
 
 use crate::consolidation::{consolidate, consolidate_updates};
 use crate::difference::Semigroup;
@@ -45,14 +44,16 @@ type VBatch<D, T, R> = Rc<ChunkBatch<VecChunk<u64, D, T, R>>>;
 pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// User supplied reduce closure.
     logic: L,
-    /// Configuration: keys per window, to size the steps the backend performs.
+    /// Configuration: records per window, bounding what the three presentations cost at once.
     window_size: usize,
 
-    /// All active keys, either novel input or supplied as externally changed.
-    /// This is *not* windowed, which is a defect to fix.
+    /// The current window's active keys, in ascending order: the input pass records them, and the
+    /// output pass replays them as its own active set.
     keys_cache: Vec<u64>,
-    /// A state bit indicating that the keys cache should be rebuild (each begin).
-    keys_stale: bool,
+    /// The current window's hashes carrying more than one real key, ascending.
+    collisions: Vec<u64>,
+    /// Per entry of `keys_cache`, the identifier of that key's first input value, if it had one.
+    reps: Vec<Option<u64>>,
 
     /// Resolves an input value id (a per-window ordinal) to its `(key, val)` row.
     in_pool: Vec<(K, V)>,
@@ -73,13 +74,14 @@ impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
     /// A backend deferring value semantics to `logic`, covering the key space in windows.
     pub fn new(logic: L) -> Self { Self::with_window(logic, 1 << 12) }
 
-    /// A backend with an explicit window size, in keys.
+    /// A backend with an explicit window budget, in presented records.
     pub fn with_window(logic: L, window_size: usize) -> Self {
         VecReduceBackend {
             logic,
             window_size: window_size.max(1),
             keys_cache: Vec::new(),
-            keys_stale: true,
+            collisions: Vec::new(),
+            reps: Vec::new(),
             in_pool: Vec::new(),
             out_pool: Vec::new(),
             out_ids: HashMap::new(),
@@ -104,7 +106,6 @@ where
     type ROut = R;
 
     fn begin(&mut self, tiles: &[Description<T>]) {
-        self.keys_stale = true;
         self.tiles = tiles.to_vec();
         self.tile_chunks = (0..tiles.len()).map(|_| Vec::new()).collect();
     }
@@ -119,79 +120,85 @@ where
     ) {
         let Some(start) = *from else { return };
 
-        // If the first window: form a list of all active keys, novel or changed.
-        // TODO: this is wasteful; the in-order chunk keys could be merged instead.
-        if self.keys_stale {
-            self.keys_stale = false;
-            self.keys_cache.clear();
-            for batch in instance.input_batches.iter() {
-                for chunk in batch.chunks.iter() {
-                    self.keys_cache.extend(chunk.as_slice().iter().map(|r| r.0.0));
-                }
-            }
-            self.keys_cache.sort_unstable();
-            self.keys_cache.dedup();
-            if !changed.is_empty() {
-                let mut merged = Vec::with_capacity(self.keys_cache.len() + changed.len());
-                let (mut a, mut b) = (0usize, 0usize);
-                while a < self.keys_cache.len() || b < changed.len() {
-                    let key = match (self.keys_cache.get(a), changed.get(b)) {
-                        (Some(x), Some(y)) => *x.min(y),
-                        (Some(x), None) => *x,
-                        (None, Some(y)) => *y,
-                        (None, None) => unreachable!("loop condition ensures one is present"),
-                    };
-                    if self.keys_cache.get(a) == Some(&key) { a += 1; }
-                    if changed.get(b) == Some(&key) { b += 1; }
-                    merged.push(key);
-                }
-                self.keys_cache = merged;
-            }
-        }
-
-        // Determine the range of active keys to process in this window.
-        let lo = self.keys_cache.partition_point(|k| *k < start);
-        if lo == self.keys_cache.len() {
-            *from = None;
-            return;
-        }
-        let hi = (lo + self.window_size).min(self.keys_cache.len());
-        *from = if hi == self.keys_cache.len() { None } else { Some(self.keys_cache[hi]) };
-        let keys = &self.keys_cache[lo..hi];
-
-        // The two input runs, presented apart on ordinal ids from a shared pool. Ids ascend with
-        // the walk, so each bridge emerges sorted by `((hash, id), time)` with nothing to sort or
-        // consolidate; a value in both runs gets two ids, reconciled by value in the corrections.
+        // Populating the novel and prior input bridges.
         self.in_pool.clear();
-        let pool = &mut self.in_pool;
-        let mut last: Option<u64> = None;
-        merged_run(instance.source_batches, keys, |hash, data, time, diff| {
-            if last != Some(hash) || pool.last() != Some(data) {
-                pool.push(data.clone());
-                last = Some(hash);
+        self.keys_cache.clear();
+        self.collisions.clear();
+        self.reps.clear();
+        let mut walk = MergedWalk::new(
+            instance.input_batches,
+            instance.source_batches,
+            changed,
+            start,
+            instance.lower,
+        );
+        let mut drawn: Vec<Drawn<(K, V), T, R>> = Vec::new();
+        let mut budget = self.window_size;
+        while let Some(key) = walk.advance(&mut drawn) {
+            self.keys_cache.push(key);
+            budget = budget.saturating_sub(drawn.len());
+            let rep = self.in_pool.len() as u64;
+            let (mut single, mut collides): (Option<&K>, bool) = (None, false);
+            let mut last: Option<&(K, V)> = None;
+            for ((data, novel, time), diff) in drawn.drain(..) {
+                if last != Some(data) {
+                    match single {
+                        None => single = Some(&data.0),
+                        Some(only) => collides |= *only != data.0,
+                    }
+                    self.in_pool.push(data.clone());
+                    last = Some(data);
+                }
+                let id = (self.in_pool.len() - 1) as u64;
+                let bridge = if novel { &mut window.novel } else { &mut window.history };
+                bridge.push(((key, id), time, diff));
             }
-            window.history.push(((hash, (pool.len() - 1) as u64), time.clone(), diff.clone()));
-        });
-        let mut last: Option<u64> = None;
-        merged_run(instance.input_batches, keys, |hash, data, time, diff| {
-            if last != Some(hash) || pool.last() != Some(data) {
-                pool.push(data.clone());
-                last = Some(hash);
-            }
-            window.novel.push(((hash, (pool.len() - 1) as u64), time.clone(), diff.clone()));
-        });
+            self.reps.push(single.map(|_| rep));
+            if collides { self.collisions.push(key); }
+            if budget == 0 { break; }
+        }
+        *from = walk.due();
 
-        // The output history, interned into the id namespace corrections mint into.
+        // Populating the output bridge.
         self.out_ids.clear();
         self.out_pool.clear();
-        let (out_pool, out_ids) = (&mut self.out_pool, &mut self.out_ids);
-        merged_run(instance.output_batches, keys, |hash, data, time, diff| {
-            let id = *out_ids.entry(data.clone()).or_insert_with(|| {
-                out_pool.push(data.clone());
-                (out_pool.len() - 1) as u64
-            });
-            window.output.push(((hash, id), time.clone(), diff.clone()));
-        });
+        let mut owalk = MergedWalk::new(
+            &[],
+            instance.output_batches,
+            &self.keys_cache,
+            start,
+            instance.lower,
+        );
+        let mut odrawn: Vec<Drawn<(K, W), T, R>> = Vec::new();
+        let mut index = 0;
+        while let Some(key) = owalk.advance(&mut odrawn) {
+            debug_assert_eq!(self.keys_cache.get(index), Some(&key), "the output pass replays the input pass's keys");
+            let (mut single, mut collides): (Option<&K>, bool) = (None, false);
+            let mut last: Option<&(K, W)> = None;
+            for ((data, _, time), diff) in odrawn.drain(..) {
+                if last != Some(data) {
+                    match single {
+                        None => single = Some(&data.0),
+                        Some(only) => collides |= *only != data.0,
+                    }
+                    self.out_ids.insert(data.clone(), self.out_pool.len() as u64);
+                    self.out_pool.push(data.clone());
+                    last = Some(data);
+                }
+                let id = (self.out_pool.len() - 1) as u64;
+                window.output.push(((key, id), time, diff));
+            }
+            // The two passes agree or the hash collides. Neither can see this alone: a hash whose
+            // input has fully cancelled for one real key still carries that key's stale output.
+            if let (Some(out_key), Some(rep)) = (single, self.reps.get(index).copied().flatten()) {
+                collides |= self.in_pool[rep as usize].0 != *out_key;
+            }
+            if collides { self.collisions.push(key); }
+            index += 1;
+        }
+        // The two passes each contribute in ascending order, but one after the other.
+        self.collisions.sort_unstable();
+        self.collisions.dedup();
     }
 
     #[inline(never)]
@@ -211,36 +218,11 @@ where
         let mut current: Vec<(W, R)> = Vec::new();
         for i in 0..keys.len() {
             let (ie, oe) = (in_ends[i], out_ends[i]);
-            // No-collision fast path: when the whole bracket is one real key, the per-key grouping
-            // below can be skipped. Testing only the bracket's ENDPOINTS would be wrong: neither id
-            // space is key-ordered across a bracket. Input ids are ordinals minted history-run
-            // first and then novel, so the order is `history by key, then novel by key`; output ids
-            // are interned, with corrections appended after the presentation. Either can read
-            // `[A, B, A]`, whose endpoints agree while its interior does not. So resolve every id
-            // and require them all to agree — a linear pass over data the fast path is about to
-            // clone anyway, against the general path's per-key maps.
-            let single_key: Option<K> = {
-                let mut only: Option<&K> = None;
-                let mut agree = true;
-                for (vid, _) in &input[is..ie] {
-                    let k = &self.in_pool[*vid as usize].0;
-                    match only {
-                        None => only = Some(k),
-                        Some(prev) if prev == k => {}
-                        Some(_) => { agree = false; break }
-                    }
-                }
-                if agree {
-                    for (vid, _) in &output[os..oe] {
-                        let k = &self.out_pool[*vid as usize].0;
-                        match only {
-                            None => only = Some(k),
-                            Some(prev) if prev == k => {}
-                            Some(_) => { agree = false; break }
-                        }
-                    }
-                }
-                if agree { only.cloned() } else { None }
+            // No hash collision fast path, expected to be the most common case.
+            let collides = !self.collisions.is_empty() && self.collisions.binary_search(&keys[i]).is_ok();
+            let single_key: Option<K> = if collides { None } else {
+                input[is..ie].first().map(|(vid, _)| self.in_pool[*vid as usize].0.clone())
+                    .or_else(|| output[os..oe].first().map(|(vid, _)| self.out_pool[*vid as usize].0.clone()))
             };
             if let Some(key) = single_key {
                 input_vals.clear();
@@ -332,110 +314,188 @@ where
     }
 }
 
-/// Merge-walks `batches`, restricted to `keys`, invoking `logic` on each consolidated non-zero update.
+/// One record drawn by [`MergedWalk::advance`], keyed for consolidation.
 ///
-/// The merge-walk is in order of `(hash, data, time)`.
+/// The key is `(data, novel, time)`: grouping by data is what mints one identifier per distinct
+/// value, and the `novel` flag separates the two roles *within* a value so that consolidation
+/// never cancels a novel update against a prior one. The data is borrowed from the batch — it is
+/// cloned once per surviving value, when its identifier is minted, and never per record.
+type Drawn<'a, D, T, R> = ((&'a D, bool, T), R);
+
+/// The length of `slice`'s prefix of records whose hash is `key`, which must be non-empty.
 ///
-/// TODO: Not actually correct at the moment, in that the consolidation does not yet occur.
-#[inline(never)]
-fn merged_run<D, T, R>(
-    batches: &[VBatch<D, T, R>],
-    keys: &[u64],
-    mut logic: impl FnMut(u64, &D, &T, &R),
-) where
+/// Found by doubling rather than by bisecting the whole slice: a key's run within one chunk is
+/// usually a handful of records, and a binary search over the thousands that follow it would cost
+/// several times the run it is measuring.
+fn run_len<D, T, R>(slice: &[((u64, D), T, R)], key: u64) -> usize {
+    debug_assert!(slice.first().is_some_and(|r| r.0.0 == key), "the run must start at `key`");
+    let mut step = 1;
+    while step < slice.len() && slice[step].0.0 == key { step <<= 1; }
+    let lower = step >> 1;
+    let upper = step.min(slice.len());
+    lower + slice[lower..upper].partition_point(|r| r.0.0 <= key)
+}
+
+/// A resumable merge-walk over a list of batches, delivering one key at a time in `(hash, data,
+/// time)` order.
+///
+/// The list is logically one, with batches `[0, novel)` the retire's novel input and the rest its
+/// prior history. Only the novel batches and `changed` make a key ACTIVE. The prior batches are
+/// seeked to whatever key the active set names and are never walked in search of one, which is what
+/// keeps a window proportional to the work asked for rather than to the accumulated trace: on an
+/// iterative computation, where a retire asks for a scattered handful of keys, the difference is
+/// between presenting a window and re-reading the whole trace.
+///
+/// The state is a `(chunk, offset)` cursor per batch, an index into `changed`, and the next active
+/// hash. Nothing is materialized ahead of the walk, so a caller can stop at any key boundary and
+/// resume from the hash left in [`due`](Self::due) — which is exactly the windowing the backend owes
+/// [`ProxyReduceBackend::next_window`].
+struct MergedWalk<'a, D: Ord + Clone + 'static, T: Lattice + Timestamp, R: Semigroup + Ord + Clone + 'static> {
+    /// The novel batches, then the prior ones; [`batch`](Self::batch) reads the pair as one list.
+    novel: &'a [VBatch<D, T, R>],
+    prior: &'a [VBatch<D, T, R>],
+    /// Externally flagged keys, ascending: active whatever the batches hold.
+    changed: &'a [u64],
+    /// Cursor into `changed`.
+    ci: usize,
+    /// Per-batch `(chunk, offset)` cursor, in `batch` order.
+    pos: Vec<(usize, usize)>,
+    /// The least active hash at or above the cursors, or `None` once the key space is spent.
+    due: Option<u64>,
+    /// The compaction frontier prior records are advanced to as they are drawn. Advancing before
+    /// the sort is what lets the consolidation that follows collapse a long-but-quiet history to one
+    /// record per value: advancement is only useful because something merges the collisions it
+    /// creates. An empty frontier advances nothing.
+    frontier: AntichainRef<'a, T>,
+}
+
+impl<'a, D, T, R> MergedWalk<'a, D, T, R>
+where
     D: Ord + Clone + 'static,
     T: Lattice + Timestamp,
     R: Semigroup + Ord + Clone + 'static,
 {
-    if keys.is_empty() {
-        return;
+    /// A walk over `novel ++ prior`, positioned at the first active key at or above `from`.
+    fn new(
+        novel: &'a [VBatch<D, T, R>],
+        prior: &'a [VBatch<D, T, R>],
+        changed: &'a [u64],
+        from: u64,
+        frontier: AntichainRef<'a, T>,
+    ) -> Self {
+        let count = novel.len() + prior.len();
+        let mut walk = MergedWalk {
+            novel,
+            prior,
+            changed,
+            ci: changed.partition_point(|k| *k < from),
+            pos: vec![(0, 0); count],
+            due: None,
+            frontier,
+        };
+        for b in 0..count {
+            walk.seek_to(b, from);
+        }
+        walk.refresh();
+        walk
     }
-    let n = batches.len();
-    let (mut ci, mut oi) = (vec![0usize; n], vec![0usize; n]);
-    let mut cur: Vec<&[((u64, D), T, R)]> = vec![&[]; n];
-    // Seek each batch to the first record with hash at or above the window's first key.
-    let k0 = keys[0];
-    for b in 0..n {
-        let chunks = &batches[b].chunks;
-        ci[b] = chunks.partition_point(|c| c.as_slice().last().is_some_and(|r| r.0.0 < k0));
-        cur[b] = chunks.get(ci[b]).map(|c| c.as_slice()).unwrap_or(&[]);
-        oi[b] = cur[b].partition_point(|r| r.0.0 < k0);
+
+    /// The number of batches, novel and prior together.
+    fn count(&self) -> usize { self.novel.len() + self.prior.len() }
+
+    /// The `b`-th batch of the logical list.
+    fn batch(&self, b: usize) -> &'a ChunkBatch<VecChunk<u64, D, T, R>> {
+        if b < self.novel.len() { &self.novel[b] } else { &self.prior[b - self.novel.len()] }
     }
-    let mut scratch: Vec<(&D, &T, &R)> = Vec::new();
-    let mut ki = 0usize;
-    loop {
-        // Least hash among the batch heads.
-        let mut minh: Option<u64> = None;
-        for b in 0..n {
-            if let Some(r) = cur[b].get(oi[b]) {
-                if minh.is_none_or(|m| r.0.0 < m) {
-                    minh = Some(r.0.0);
-                }
+
+    /// The hash the `b`-th batch's cursor sits on, or `None` if it is drained.
+    fn head(&self, b: usize) -> Option<u64> {
+        let (chunk, offset) = self.pos[b];
+        self.batch(b).chunks.get(chunk).and_then(|c| c.as_slice().get(offset)).map(|r| r.0.0)
+    }
+
+    /// The least active hash at or above the cursors, or `None` once the key space is spent.
+    ///
+    /// A key is active if a novel batch holds a record for it or it appears in `changed`. Prior
+    /// history alone never activates a key: with no novel update and nothing due, its reduction has
+    /// the same input and the same output as it did last round, so there is nothing to reconcile.
+    fn due(&self) -> Option<u64> { self.due }
+
+    /// Recompute the next active hash from the novel heads and the `changed` cursor.
+    fn refresh(&mut self) {
+        let from_novel = (0..self.novel.len()).filter_map(|b| self.head(b)).min();
+        let from_changed = self.changed.get(self.ci).copied();
+        self.due = [from_novel, from_changed].into_iter().flatten().min();
+    }
+
+    /// Seek the `b`-th batch's cursor to the first record with hash at or above `key`.
+    ///
+    /// Both steps are binary searches: over the chunk last-keys, which ascend across a batch and so
+    /// form a sparse index that never touches a record, and then over the landed chunk's records.
+    fn seek_to(&mut self, b: usize, key: u64) {
+        // Already positioned, or drained. Keys are drawn in ascending order, so a cursor sitting at
+        // or above `key` is already at the FIRST record at or above it: everything it passed was at
+        // or below the previous key. This is the dense case — most keys, most batches — and paying
+        // two binary searches per batch per key there costs more than the whole walk.
+        if self.head(b).is_none_or(|h| h >= key) { return; }
+        let chunks = &self.batch(b).chunks;
+        let (mut chunk, mut offset) = self.pos[b];
+        let skip = chunks[chunk.min(chunks.len())..]
+            .partition_point(|c| c.as_slice().last().is_some_and(|r| r.0.0 < key));
+        if skip > 0 {
+            chunk += skip;
+            offset = 0;
+        }
+        if let Some(slice) = chunks.get(chunk).map(|c| c.as_slice()) {
+            offset += slice[offset..].partition_point(|r| r.0.0 < key);
+        }
+        self.pos[b] = (chunk, offset);
+    }
+
+    /// Draw the `b`-th batch's run of records for `key` into `into`, advancing its cursor past them.
+    ///
+    /// A key's run can straddle chunks, so this walks chunks until one ends the run; within each it
+    /// takes the whole run at once rather than a record at a time.
+    fn take_run(&mut self, b: usize, key: u64, into: &mut Vec<Drawn<'a, D, T, R>>) {
+        let novel = b < self.novel.len();
+        let chunks = &self.batch(b).chunks;
+        while let Some(slice) = chunks.get(self.pos[b].0).map(|c| c.as_slice()) {
+            let start = self.pos[b].1;
+            // The cursor is at or above `key`; if it is above, this batch holds nothing for it.
+            // Most batches hold nothing for most keys, so this is the common exit and it must cost
+            // one comparison rather than a search.
+            if slice.get(start).is_none_or(|r| r.0.0 != key) { return; }
+            let end = start + run_len(&slice[start..], key);
+            into.extend(slice[start..end].iter().map(|record| {
+                let mut time = record.1.clone();
+                // Novel times are the interesting-time seeds the tactic's schedule is stated over,
+                // so they are drawn unadvanced; only the prior history is lifted.
+                if !novel { time.advance_by(self.frontier); }
+                ((&record.0.1, novel, time), record.2.clone())
+            }));
+            if end < slice.len() {
+                self.pos[b].1 = end;
+                return;
             }
+            self.pos[b] = (self.pos[b].0 + 1, 0);
         }
-        let Some(h) = minh else { break };
-        while ki < keys.len() && keys[ki] < h {
-            ki += 1;
+    }
+
+    /// Draw every record of the next active key, and advance to the one after it.
+    ///
+    /// Returns the key drawn, or `None` once the key space is spent. `into` is left sorted by
+    /// `(data, novel, time)` and consolidated, so a value whose records all cancel is gone before
+    /// the caller ever sees it — and so never spends an identifier.
+    fn advance(&mut self, into: &mut Vec<Drawn<'a, D, T, R>>) -> Option<u64> {
+        let key = self.due?;
+        into.clear();
+        for b in 0..self.count() {
+            self.seek_to(b, key);
+            self.take_run(b, key, into);
         }
-        if ki >= keys.len() {
-            break;
-        }
-        if keys[ki] != h {
-            // `h` is not wanted. Seeking every batch to the next key that IS wanted costs a binary
-            // search per batch and lands at or above it, so at most one unwanted hash is visited
-            // per wanted key. Walking `h`'s records instead would make the whole pass linear in the
-            // accumulated history rather than in what is asked for — which on an iterative
-            // computation, where a retire asks for a handful of scattered keys, is the difference
-            // between presenting the window and re-reading the trace. When the key set is dense
-            // this branch is simply never taken, so there is no threshold to tune.
-            let next = keys[ki];
-            for b in 0..n {
-                loop {
-                    let Some(chunk) = batches[b].chunks.get(ci[b]) else { cur[b] = &[]; break };
-                    let slice = chunk.as_slice();
-                    if slice.last().is_some_and(|r| r.0.0 < next) {
-                        ci[b] += 1;
-                        oi[b] = 0;
-                        continue;
-                    }
-                    cur[b] = slice;
-                    oi[b] += slice[oi[b]..].partition_point(|r| r.0.0 < next);
-                    // Chunks are non-empty (`ChunkBatch::new` asserts it) and the guard above
-                    // skipped any whose last key is below `next`, so this chunk holds a record at
-                    // or above `next` and the search cannot land at the end. The branch below is
-                    // unreachable; it is kept so a violated invariant degrades to a slower walk
-                    // rather than to a batch that silently reads as drained.
-                    debug_assert!(oi[b] < slice.len(), "a chunk kept by the skip guard must hold a record at or above the sought key");
-                    if oi[b] >= slice.len() {
-                        ci[b] += 1;
-                        oi[b] = 0;
-                        continue;
-                    }
-                    break;
-                }
-            }
-            continue;
-        }
-        scratch.clear();
-        for b in 0..n {
-            while let Some(r) = cur[b].get(oi[b]) {
-                if r.0.0 != h {
-                    break;
-                }
-                scratch.push((&r.0.1, &r.1, &r.2));
-                oi[b] += 1;
-                if oi[b] >= cur[b].len() {
-                    ci[b] += 1;
-                    oi[b] = 0;
-                    cur[b] = batches[b].chunks.get(ci[b]).map(|c| c.as_slice()).unwrap_or(&[]);
-                }
-            }
-        }
-        {
-            scratch.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-            for (d, t, r) in scratch.drain(..) {
-                logic(h, d, t, r);
-            }
-        }
+        consolidate(into);
+        if self.changed.get(self.ci) == Some(&key) { self.ci += 1; }
+        self.refresh();
+        Some(key)
     }
 }
