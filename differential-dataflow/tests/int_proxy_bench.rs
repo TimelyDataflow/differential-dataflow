@@ -307,14 +307,14 @@ fn run_flat(mode: Mode, keys: u64, sub: u64) -> f64 {
     })
 }
 
-const PROP_NODES: u64 = 2_000;
-const PROP_EDGES: usize = 4_000;
-const PROP_CHURN: usize = 50;
-const PROP_ROUNDS: u64 = 40;
-const PROP_WARMUP: u64 = 5;
+fn prop_nodes() -> u64 { sized("PROP_NODES", 2_000) }
+fn prop_edges() -> usize { sized("PROP_EDGES", 4_000) as usize }
+fn prop_churn() -> usize { sized("PROP_CHURN", 50) as usize }
+fn prop_rounds() -> u64 { sized("PROP_ROUNDS", 40) }
+fn prop_warmup() -> u64 { sized("PROP_WARMUP", 5) }
 
 fn edge(i: usize) -> (u64, u64) {
-    let n = PROP_NODES;
+    let n = prop_nodes();
     ((i as u64).wrapping_mul(2654435761) % n, (i as u64).wrapping_mul(40503).wrapping_add(7) % n)
 }
 
@@ -322,6 +322,10 @@ fn edge(i: usize) -> (u64, u64) {
 /// carried-interesting-times shape. Returns averaged microseconds per round and a checksum of the
 /// produced label updates, which must agree across modes.
 fn run_propagate(mode: Mode) -> (f64, i64) {
+    assert!(
+        prop_rounds() as usize * prop_churn() <= prop_edges(),
+        "the churn retracts edge `r * PROP_CHURN + c`, which must be one of the PROP_EDGES inserted",
+    );
     let check = Arc::new(Mutex::new(0i64));
     let sum = check.clone();
     let avg = timely::execute_directly(move |worker| {
@@ -364,10 +368,10 @@ fn run_propagate(mode: Mode) -> (f64, i64) {
         });
         nodes.advance_to(0);
         edges.advance_to(0);
-        for k in 0..PROP_NODES {
+        for k in 0..prop_nodes() {
             nodes.insert((k, k));
         }
-        for i in 0..PROP_EDGES {
+        for i in 0..prop_edges() {
             let (s, d) = edge(i);
             edges.insert((s, d));
         }
@@ -379,7 +383,7 @@ fn run_propagate(mode: Mode) -> (f64, i64) {
             worker.step();
         }
         let mut times = Vec::new();
-        for r in 0..PROP_ROUNDS {
+        for r in 0..prop_rounds() {
             let t = r + 1;
             // Perturb a low-numbered label each round: low labels spread widely under `min`, so
             // withdrawing one forces its reach to relabel — real iterate work, with interesting
@@ -390,11 +394,11 @@ fn run_propagate(mode: Mode) -> (f64, i64) {
                 nodes.insert((p, p));
             }
             nodes.remove((m, m));
-            for c in 0..PROP_CHURN {
-                let dead = (r as usize) * PROP_CHURN + c;
+            for c in 0..prop_churn() {
+                let dead = (r as usize) * prop_churn() + c;
                 let (s, d) = edge(dead);
                 edges.remove((s, d));
-                let (s, d) = edge(PROP_EDGES + dead);
+                let (s, d) = edge(prop_edges() + dead);
                 edges.insert((s, d));
             }
             nodes.advance_to(t + 1);
@@ -405,7 +409,7 @@ fn run_propagate(mode: Mode) -> (f64, i64) {
             while probe.less_than(&(t + 1)) {
                 worker.step();
             }
-            if r >= PROP_WARMUP {
+            if r >= prop_warmup() {
                 times.push(start.elapsed().as_micros());
             }
         }
