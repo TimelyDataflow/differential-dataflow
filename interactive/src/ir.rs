@@ -52,6 +52,49 @@ pub enum LinearOp {
     FlatMap(Term),
 }
 
+// DDIR's `hash` IS corgi's structural hash, evaluated a row at a time here and a column at a
+// time in the corgi backend. The two must agree bit for bit — they are the same program value,
+// and the backends are checked against each other — so this is a transcription of
+// `corgi::hash`'s fold, not an independent design. `roundtrip_hash_matches_corgi` pins it.
+//
+// The values are DDIR's; the shapes they transcode to are corgi's, and the fold follows those:
+// `Int` is a `Prim` leaf, the empty `Tuple` is `Unit` (NOT a fieldless `Prod`), a `Tuple` is a
+// `Prod`, a `List` folds its length then its elements, and a `Variant` folds its tag then its
+// payload. The salts and multipliers are corgi's constants; changing one re-ids everything.
+//
+// No cross-run or cross-implementation stability is promised, exactly as Rust's own `Hash` makes
+// no such promise: nothing may test a literal hash value or an order derived from one.
+const HASH_PROD: u64 = 0x243f_6a88_85a3_08d3;
+const HASH_SUM: u64 = 0x1319_8a2e_0370_7344;
+const HASH_LIST: u64 = 0xa409_3822_299f_31d0;
+const HASH_UNIT: u64 = 0x082e_fa98_ec4e_6c89;
+
+/// splitmix64's finalizer — the one bit-mixing primitive, as in `corgi::hash::mix64`.
+fn mix64(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// Fold one child hash into an accumulator — order-sensitive, so field order, element order and
+/// tag position all matter.
+fn hash_combine(acc: u64, x: u64) -> u64 {
+    (acc ^ mix64(x)).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+}
+
+/// The stable structural hash of one DDIR value. Row-wise twin of `corgi::hash`.
+pub fn structural_hash(v: &Value) -> u64 {
+    match v {
+        Value::Int(x) => mix64(*x as u64),
+        Value::Tuple(fs) if fs.is_empty() => HASH_UNIT,
+        Value::Tuple(fs) => fs.iter().fold(HASH_PROD, |a, f| hash_combine(a, structural_hash(f))),
+        Value::List(xs) => xs
+            .iter()
+            .fold(hash_combine(HASH_LIST, xs.len() as u64), |a, x| hash_combine(a, structural_hash(x))),
+        Value::Variant(t, p) => hash_combine(hash_combine(HASH_SUM, *t as u64), structural_hash(p)),
+    }
+}
+
 /// Evaluate a scalar `Term` against an environment of `Value`s.
 ///
 /// `env` holds the operator's input rows at the bottom (`Var(i)` indexes it
@@ -123,15 +166,10 @@ pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
             if eval(cond, env).truthy() { eval(then, env) } else { eval(els, env) }
         }
         Term::Hash(args) => {
-            // args[0] is the (exclusive) bound; the rest are mixed into a
-            // deterministic non-negative draw via splitmix64.
+            // args[0] is the (exclusive) bound; the rest are hashed as one tuple.
             let bound = eval(&args[0], env).as_int();
-            let mut acc: u64 = 0xcbf29ce484222325;
-            for a in &args[1..] {
-                acc ^= eval(a, env).as_int() as u64;
-                acc = crate::hash_u64(acc);
-            }
-            let h = (acc >> 1) as i64; // non-negative
+            let payload = Value::Tuple(args[1..].iter().map(|a| eval(a, env)).collect());
+            let h = (structural_hash(&payload) >> 1) as i64; // non-negative
             Value::Int(if bound > 0 { h % bound } else { h })
         }
         Term::Unary(op, t) => eval_unary(*op, eval(t, env)),

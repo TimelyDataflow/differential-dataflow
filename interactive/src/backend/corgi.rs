@@ -97,9 +97,8 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
             LinearOp::Project(p) => {
                 let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
                 // The shape-aware gate: attempt the lowering with this container's shapes and
-                // fall back to rows only when it declines (`Case` with conflicting arms, list
-                // intro, `hash`...). Corgi models sums and lists; `hash` is the one kernel gap
-                // (splitmix parity needs lane-wise xor and integer rem).
+                // fall back to rows only when it declines — a heterogeneous list literal, a
+                // `Case` whose arms disagree, a data-driven tag.
                 if let Some(g) = compile_projection(&p.key, &p.val, &kshape, &vshape) {
                     let mut cols = corgi::eval_graph(&g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project");
                     let vals = cols.pop().unwrap();

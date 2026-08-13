@@ -6,9 +6,9 @@
 //! sum intro (`List`/`Inject`), sum elimination (`Case`), and the Neg/Not/Len/IsTag unaries.
 //! Ordered compares are signed-correct (`ToSigned`); the residual non-negative-int assumption is
 //! confined to order-SENSITIVE contexts (the `Min` reducer and structural sort order compare raw
-//! `u64` bits). `Hash` is the one term with no lowering, and shape-dependent cases decline
-//! (heterogeneous lists, conflicting `Case` arms, data-driven tags); those fall back to row-wise
-//! `ir::eval` in the backend. The transcode layer is total over `Shape` (Prim/Unit/Prod/List/Sum), so a
+//! `u64` bits). `hash` is corgi's structural `Op::Hash`, the same function `ir::eval` folds row-wise.
+//! Only shape-dependent cases decline (heterogeneous lists, conflicting `Case` arms, data-driven
+//! tags); those fall back to row-wise `ir::eval` in the backend. The transcode layer is total over `Shape` (Prim/Unit/Prod/List/Sum), so a
 //! `Variant` column round-trips via corgi `Sum` (see `infer_shape_cols` for the all-rows arm scan).
 
 use crate::ir::Value as DValue;
@@ -327,8 +327,9 @@ fn shape_join(a: &Shape, b: &Shape) -> Option<Shape> {
 /// `Inject`) answers false here and is compiled by the linear stage the join defers it to, which
 /// does have shapes. Capability never depends on this; only where the work happens.
 ///
-/// `Hash` is the one term with no lowering anywhere: exact splitmix64 parity with `ir::eval`
-/// needs lane-wise xor and integer rem, which corgi's arithmetic does not yet have.
+/// The only term with no lowering at all is a data-driven `Inject` tag, which has no static lane
+/// count — and no surface syntax either, so nothing a program can write reaches the row-wise
+/// fallback on shape-free grounds.
 pub fn compilable(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::Bound(_) | Term::Int(_) => true,
@@ -341,11 +342,14 @@ pub fn compilable(t: &Term) -> bool {
         // Literal-tag sum intro lowers (`Op::Inject`); a data-driven tag has no static lane
         // count, so it stays row-wise.
         Term::Inject(tag, payload) => matches!(&**tag, Term::Int(_)) && compilable(payload),
+        // `Op::Hash` is shape-generic (it folds whatever structure it is handed), so `hash`
+        // needs no shapes to lower and can answer true here.
+        Term::Hash(args) => args.iter().all(compilable),
         // `List` and `Case` deliberately stay false HERE even though `compile` lowers both:
         // each needs shapes to decide homogeneity (a list's elements, a case's arms), and this
         // check runs without them. The join defers such projections to a linear stage, whose
         // shape-aware `compile` lowers them there.
-        _ => false, // List intro, Case (here), data-driven Inject, Hash — see `compile`.
+        _ => false, // List intro, Case (here), data-driven Inject — see `compile`.
     }
 }
 
@@ -590,7 +594,31 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
             };
             Some(b.add(Op::MapList(Box::new(unwrap_body)), vec![woven]))
         }
-        _ => None, // Hash: see `compilable`'s accounting
+        // DDIR's `hash` IS corgi's `Op::Hash` (`ir::structural_hash` is the row-wise twin): hash
+        // the arguments as one tuple, shift out the sign bit, reduce by the bound.
+        //
+        // The bound guard is pure arithmetic — no `Select`. `Rem`'s total `x % 0 = x` gives
+        // `bound == 0` the identity, and a NEGATIVE bound reads as a `u64` at or above 2^63,
+        // which is larger than the shifted hash, so it reduces to the identity too. Both are
+        // exactly what `ir::eval`'s `if bound > 0` produces.
+        Term::Hash(args) => {
+            let (bound, rest) = args.split_first()?;
+            let bid = compile(bound, b, env, env_shapes, anchor)?;
+            let payload = if rest.is_empty() {
+                b.add(Op::Unit, vec![anchor])
+            } else {
+                let mut ids = Vec::with_capacity(rest.len());
+                for a in rest {
+                    ids.push(compile(a, b, env, env_shapes, anchor)?);
+                }
+                b.tuple(ids)
+            };
+            let h = b.add(Op::Hash, vec![payload]);
+            let shifted = b.add(ArithOp::Shr(1), vec![h]);
+            let pair = b.tuple(vec![shifted, bid]);
+            Some(b.add(ArithOp::Bin(CBinOp::Rem, Kind::U, 64), vec![pair]))
+        }
+        _ => None,
     }
 }
 
@@ -677,6 +705,60 @@ pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape
 mod tests {
     use super::*;
     use crate::ir::Value as V;
+
+    /// The pin on DDIR's `hash`: `ir::structural_hash` is a row-at-a-time transcription of
+    /// `corgi::hash`, and the two backends compute the SAME program value, so they must agree
+    /// bit for bit on every shape the transcode layer covers. If corgi's salts or fold change,
+    /// this is what fails.
+    fn hash_agrees(rows: Vec<V>) {
+        let shape = infer_shape_cols(&rows);
+        let col = transcode(&rows, &shape);
+        let columnar = corgi::hash(&col).into_u64("hash");
+        let row_wise: Vec<u64> = rows.iter().map(crate::ir::structural_hash).collect();
+        assert_eq!(columnar, row_wise, "hash disagrees (shape {shape:?})");
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_scalars() {
+        hash_agrees(vec![V::Int(0), V::Int(1), V::Int(-1), V::Int(i64::MIN), V::Int(i64::MAX)]);
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_tuples_and_units() {
+        hash_agrees(vec![V::Tuple(vec![V::Int(1), V::Int(2)]), V::Tuple(vec![V::Int(2), V::Int(1)])]);
+        hash_agrees(vec![V::unit(), V::unit()]);
+        // A 1-tuple must not collapse onto its scalar, nor a unit onto an empty anything.
+        assert_ne!(
+            crate::ir::structural_hash(&V::Tuple(vec![V::Int(7)])),
+            crate::ir::structural_hash(&V::Int(7))
+        );
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_lists() {
+        hash_agrees(vec![
+            V::List(vec![V::Int(1), V::Int(2), V::Int(3)]),
+            V::List(vec![]),
+            V::List(vec![V::Int(3), V::Int(2), V::Int(1)]),
+        ]);
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_variants() {
+        hash_agrees(vec![
+            V::Variant(0, Box::new(V::Int(5))),
+            V::Variant(1, Box::new(V::Int(5))),
+            V::Variant(0, Box::new(V::Int(6))),
+        ]);
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_nesting() {
+        hash_agrees(vec![
+            V::Tuple(vec![V::List(vec![V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(3)])))]),
+            V::Tuple(vec![V::List(vec![V::Int(1), V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(4)])))]),
+        ]);
+    }
 
     /// Round-trip a column of rows through infer_shape_cols → transcode → untranscode.
     fn roundtrip(rows: Vec<V>) {
