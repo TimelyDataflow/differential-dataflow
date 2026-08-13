@@ -294,16 +294,6 @@ fn infer_term_shape(t: &Term, env_shapes: &[Shape]) -> Shape {
     }
 }
 
-/// Whether a shape contains a `Sum` anywhere (see the `If` lowering's engine caveat).
-fn shape_has_sum(s: &Shape) -> bool {
-    match s {
-        Shape::Sum(_) => true,
-        Shape::Prod(fs) => fs.iter().any(shape_has_sum),
-        Shape::List(e) => shape_has_sum(e),
-        _ => false,
-    }
-}
-
 /// The ⊥-tolerant join of two shapes: `Sum` lanes unify lane-wise with an uncommitted (`None`)
 /// lane adopting its sibling; `None` (the function's) means the shapes genuinely conflict.
 /// Local until corgi exports its `shape::join`.
@@ -435,13 +425,10 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
         Term::If { cond, then, els } => {
             // `Select` blends per row and is shape-generic, but the branches must agree up to
             // ⊥ lanes; genuinely conflicting branch shapes (dynamic typing) defer to rows.
-            // Sum-shaped results also defer for now: merging sum columns that commit different
-            // lanes trips an offset bug in the pinned engine's lane merge (engine.rs
-            // `sum_from_prim` path) — revisit at the next corgi pin bump.
-            let joined = shape_join(&infer_term_shape(then, env_shapes), &infer_term_shape(els, env_shapes))?;
-            if shape_has_sum(&joined) {
-                return None;
-            }
+            // Sum-shaped results included: `Select` gathers lanes, and the branches commit
+            // different ones (`if(c, Fwd(x), Bwd(y))` is the shape of every conditional
+            // constructor), which is what the pin bumped for in #817.
+            shape_join(&infer_term_shape(then, env_shapes), &infer_term_shape(els, env_shapes))?;
             let c = compile(cond, b, env, env_shapes, anchor)?;
             let t = compile(then, b, env, env_shapes, anchor)?;
             let e = compile(els, b, env, env_shapes, anchor)?;
