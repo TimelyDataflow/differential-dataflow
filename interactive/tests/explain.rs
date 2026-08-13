@@ -645,7 +645,6 @@ fn corgi_agrees_on_explained_scc_one_scope() {
 }
 
 #[test]
-#[ignore = "known: corgi under-reports explain demand when the feedback is negated (pre-existing at 78d75b05)"]
 fn explained_scc_one_scope_negated() {
     let inputs = vec![gen_edges(50, 55)];
     let q = first_output_row(SCC_ONE_SCOPE_NEGATED, &inputs);
@@ -654,7 +653,6 @@ fn explained_scc_one_scope_negated() {
 
 /// Iterative + `enter_at` + negated feedback: the real SCC.
 #[test]
-#[ignore = "known: corgi under-reports explain demand when the feedback is negated (pre-existing at 78d75b05)"]
 fn corgi_agrees_on_scc_explanation() {
     let inputs = vec![gen_edges(50, 55)];
     let q = first_output_row(SCC_ROW, &inputs);
@@ -663,7 +661,6 @@ fn corgi_agrees_on_scc_explanation() {
 
 /// Two queries at once, so the query input carries more than one envelope.
 #[test]
-#[ignore = "known: corgi under-reports explain demand when the feedback is negated (pre-existing at 78d75b05)"]
 fn corgi_agrees_on_two_query_explanation() {
     let inputs = vec![gen_edges(50, 55)];
     let p = optimized(SCC_ROW);
@@ -671,3 +668,4 @@ fn corgi_agrees_on_two_query_explanation() {
     assert_eq!(qs.len(), 2, "expected at least two scc edges to query");
     assert_explained_backends_agree(SCC_ROW, SCC_SHAPES, &inputs, &qs);
 }
+

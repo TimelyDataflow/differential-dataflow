@@ -346,11 +346,15 @@ where
                 self.register_vals(col, &out_ids);
             }
             Reducer::Distinct => {
-                // Present iff any value has positive net; output value is unit (a `Unit` column).
+                // Present iff any value has NON-ZERO net -- the sign does not matter. DD's `reduce`
+                // presents every value whose accumulation is non-zero, negatives included, and
+                // `backend::vec`'s Distinct then emits `1` without looking at the diffs at all. A
+                // `> 0` test here silently drops a key whose values all accumulate negative, which
+                // is exactly what a negated collection produces. Output value is unit (a `Unit` column).
                 let mut present = 0usize;
                 let mut start = 0;
                 for &end in ends {
-                    if input[start..end].iter().any(|&(_, d)| d > 0) {
+                    if input[start..end].iter().any(|&(_, d)| d != 0) {
                         present += 1;
                         out_diffs.push(1);
                     }
@@ -365,9 +369,13 @@ where
                 self.register_vals(col, &out_ids);
             }
             Reducer::Min => {
-                // The DDIR `min` over the positive-diff values, in corgi's structural order (== DDIR
-                // `Ord` for the non-negative scalar/tuple values these reductions see; see module doc).
-                // Gather all positive-diff candidates across brackets into one column, segment by
+                // The DDIR `min` over the values with NON-ZERO net, in corgi's structural order
+                // (== DDIR `Ord` for the non-negative scalar/tuple values these reductions see; see
+                // module doc). The sign does not select candidates: `backend::vec` takes `min` over
+                // every value DD presents, and DD presents every non-zero accumulation. Filtering to
+                // `> 0` here both dropped all-negative keys and could pick a different minimum when a
+                // bracket mixed signs.
+                // Gather all candidates across brackets into one column, segment by
                 // bracket, and one corgi `sort_blocks` gives every bracket's argmin at once
                 // (`perm[block_start]`). The winning ROW is taken columnar and reuses its input value id.
                 let mut cand_reps: Vec<usize> = Vec::new(); // input presentation rep index per candidate
@@ -378,7 +386,7 @@ where
                     let lo = cand_reps.len();
                     let seg = block_starts.len() as u64;
                     for k in start..end {
-                        if input[k].1 > 0 {
+                        if input[k].1 != 0 {
                             cand_reps.push(input[k].0);
                             labels.push(seg);
                         }
