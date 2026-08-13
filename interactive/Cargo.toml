@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 columnar = { workspace = true }
 # The columnar kernels for the interpreted backend, pinned by git rev.
-corgi = { path = "/Users/mcsherry/Projects/WIP/corgi" }  # TEMPORARY local pin for validation
+corgi = { git = "https://github.com/frankmcsherry/wip", rev = "222157885ef424674163aeaf3f97775c9f160293" }
 differential-dataflow = { workspace = true }
 mimalloc = "0.1.48"
 serde = { version = "1.0", features = ["derive"] }
