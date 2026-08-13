@@ -25,13 +25,6 @@ pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>>
     /// The accumulated output history.
     pub output_batches: &'a [B2],
     /// The compaction frontier for loading (the retire's lower bound).
-    ///
-    /// A backend may advance the accumulated input and output to this frontier as it loads them, and
-    /// should: the tactic evaluates only at times at or above it (see [`ReduceTactic::retire`]), so
-    /// the advancement changes no accumulation it reads. Advancing without then consolidating buys
-    /// nothing — it rewrites times and removes no records — so the two go together or not at all.
-    /// The novel input is exempt: its times are the interesting-time seeds, and advancing them moves
-    /// the schedule.
     pub lower: AntichainRef<'a, B1::Time>,
 }
 

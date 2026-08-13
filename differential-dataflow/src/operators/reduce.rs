@@ -47,12 +47,6 @@ pub trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
     /// reasons only about times, returning the output batches to ship — each tagged with the time at
     /// which to ship it — and the new frontier of interesting times for the operator to hold.
     ///
-    /// The interval bounds where the tactic acts. Every time it evaluates at lies in `[lower, upper)`:
-    /// a time at or beyond `upper` is deferred to a later call rather than evaluated, and a time below
-    /// `lower` was evaluated by an earlier one. A tactic may therefore advance the accumulated input
-    /// and output to `lower` as it loads them, which changes no accumulation it goes on to read — the
-    /// advancement only reorders times below a frontier that no surviving comparison sees.
-    ///
     /// # Contract
     ///
     /// The driver ([`reduce_with_tactic`]) relies on the following; the first two are cheap to check

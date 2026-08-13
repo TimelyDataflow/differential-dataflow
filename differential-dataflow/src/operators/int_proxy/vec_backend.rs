@@ -17,11 +17,6 @@
 //! retraction cancels against its own history. They are minted after the walk consolidates, so a value
 //! whose records all cancel never reaches the tactic and never spends an identifier.
 //!
-//! Windows are cut by a record budget rather than a key count, because records are what the three
-//! presentations cost and what the harness holds live at once. The budget is checked at key
-//! boundaries, so a key is always presented whole. Nothing is enumerated ahead of the walk: the active
-//! keys are the merge of the novel batch heads with `changed`, taken lazily.
-//!
 //! The backend clones keys and values like it is being paid to waste cycles.
 //! Generally, this is not a high-performance backend, but shouldn't be abysmal.
 
@@ -55,13 +50,9 @@ pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// The current window's active keys, in ascending order: the input pass records them, and the
     /// output pass replays them as its own active set.
     keys_cache: Vec<u64>,
-    /// The current window's hashes carrying more than one real key, ascending. Ideally empty, and
-    /// the emptiness is the fast path: a hash absent from here has one real key, so a bracket over
-    /// it needs no per-key grouping and the key can be read off any one of its identifiers.
+    /// The current window's hashes carrying more than one real key, ascending.
     collisions: Vec<u64>,
     /// Per entry of `keys_cache`, the identifier of that key's first input value, if it had one.
-    /// The output pass needs it: a hash whose input mentions only `A` and whose output mentions only
-    /// `B` collides, and neither pass can see that alone.
     reps: Vec<Option<u64>>,
 
     /// Resolves an input value id (a per-window ordinal) to its `(key, val)` row.
@@ -129,15 +120,7 @@ where
     ) {
         let Some(start) = *from else { return };
 
-        // The input presentation: ONE walk over the novel batches followed by the prior ones, so a
-        // value gets ONE identifier whichever run it appears in. With separate namespaces a value
-        // retracted by the novel batch could not cancel against its own history, and the tactic
-        // would schedule a crossing whose input consolidates to nothing.
-        //
-        // The walk hands back a key at a time, already advanced to the compaction frontier and
-        // consolidated, so a value whose records all cancel never reaches here and never spends an
-        // identifier. Identifiers ascend with the walk, so both bridges emerge sorted by
-        // `((hash, id), time)` with nothing left to sort.
+        // Populating the novel and prior input bridges.
         self.in_pool.clear();
         self.keys_cache.clear();
         self.collisions.clear();
@@ -153,24 +136,7 @@ where
         let mut budget = self.window_size;
         while let Some(key) = walk.advance(&mut drawn) {
             self.keys_cache.push(key);
-            // The budget is spent in records rather than keys, because records are what the three
-            // presentations cost and what the harness must hold live at once. Checking it at a key
-            // boundary keeps every key whole, which the tactic requires: splitting one across
-            // windows drops the interaction between the halves.
             budget = budget.saturating_sub(drawn.len());
-            // `drawn` is dead once the key is presented, so its times and diffs MOVE into the
-            // bridges rather than being cloned into them: one owned time per presented record,
-            // which is the floor, since a prior record's advanced time has to be materialized and
-            // the bridge has to own it. A record that cancelled never arrives here and so never
-            // pays for a time at all.
-            //
-            // Consolidation has already dropped the cancelling records, so a change of value is a
-            // new identifier and no lookahead is needed to find one. The value is borrowed from the
-            // batch rather than from `drawn`, so it outlives the drain that yields it.
-            //
-            // The walk is also where a hash collision is cheapest to notice: the branch below fires
-            // once per distinct value, so testing the real keys for agreement there costs one
-            // comparison per value, against resolving every record of every bracket in every wave.
             let rep = self.in_pool.len() as u64;
             let (mut single, mut collides): (Option<&K>, bool) = (None, false);
             let mut last: Option<&(K, V)> = None;
@@ -193,9 +159,7 @@ where
         }
         *from = walk.due();
 
-        // The output presentation, over the keys the input pass settled on. Output history alone
-        // never activates a key, so there are no novel batches here and the key list IS the active
-        // set — which is why the same walk serves, with an empty novel prefix.
+        // Populating the output bridge.
         self.out_ids.clear();
         self.out_pool.clear();
         let mut owalk = MergedWalk::new(
@@ -254,15 +218,7 @@ where
         let mut current: Vec<(W, R)> = Vec::new();
         for i in 0..keys.len() {
             let (ie, oe) = (in_ends[i], out_ends[i]);
-            // No-collision fast path: when the whole bracket is one real key, the per-key grouping
-            // below can be skipped. Which hashes carry more than one real key was settled while the
-            // window was formed, where each value is seen once, rather than rediscovered here, where
-            // every record of every bracket would be resolved again on every wave. Corrections
-            // cannot change the answer: they mint rows under a key the presentation already showed.
-            //
-            // Reading the key off the bracket's first identifier is then sound. Doing so WITHOUT the
-            // collision set would not be: neither id space is key-ordered across a bracket, so both
-            // can read `[A, B, A]`, whose ends agree while its interior does not.
+            // No hash collision fast path, expected to be the most common case.
             let collides = !self.collisions.is_empty() && self.collisions.binary_search(&keys[i]).is_ok();
             let single_key: Option<K> = if collides { None } else {
                 input[is..ie].first().map(|(vid, _)| self.in_pool[*vid as usize].0.clone())

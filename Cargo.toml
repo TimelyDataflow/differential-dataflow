@@ -97,9 +97,5 @@ debug = true
 rpath = false
 lto = true
 debug-assertions = false
-# One unit, so that A/B benchmarking measures the change rather than the partitioning. Rustc splits
-# codegen units along module boundaries, and fat LTO does not undo the choices each unit made on its
-# own: rewriting one module's contents has been measured swinging a benchmark 19%, in the direction
-# of whichever side happened to partition badly. The other tactics in the same binary move only a
-# few percent when that happens, so an in-binary control does not catch it.
+# One unit, so that A/B benchmarking is maximally accurate.
 codegen-units = 1
