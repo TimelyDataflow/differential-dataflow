@@ -133,6 +133,7 @@ where
             instance.lower,
         );
         let mut drawn: Vec<Drawn<(K, V), T, R>> = Vec::new();
+        let mut seed_scratch: Vec<T> = Vec::new();
         let mut budget = self.window_size;
         while let Some(key) = walk.advance(&mut drawn) {
             self.keys_cache.push(key);
@@ -140,6 +141,7 @@ where
             let rep = self.in_pool.len() as u64;
             let (mut single, mut collides): (Option<&K>, bool) = (None, false);
             let mut last: Option<&(K, V)> = None;
+            seed_scratch.clear();
             for ((data, novel, time), diff) in drawn.drain(..) {
                 if last != Some(data) {
                     match single {
@@ -150,9 +152,29 @@ where
                     last = Some(data);
                 }
                 let id = (self.in_pool.len() - 1) as u64;
-                let bridge = if novel { &mut window.novel } else { &mut window.history };
-                bridge.push(((key, id), time, diff));
+                // The novel time support seeds interest, recorded RAW before any netting: a record
+                // that cancels below must still seed. (Novel records are drawn unadvanced; only
+                // prior records are advanced to the compaction frontier.)
+                if novel {
+                    seed_scratch.push(time.clone());
+                }
+                // Novel and prior share the id space and arrive (id, time)-adjacent, so an exactly
+                // cancelling pair meets here and nets away; its time survives in the seeds.
+                if let Some(((k2, i2), t2, d2)) = window.input.last_mut() {
+                    if *k2 == key && *i2 == id && *t2 == time {
+                        d2.plus_equals(&diff);
+                        if d2.is_zero() {
+                            window.input.pop();
+                        }
+                        continue;
+                    }
+                }
+                window.input.push(((key, id), time, diff));
             }
+            // Per key, seeds arrive in (value, time) order; the contract wants (key, time) order.
+            seed_scratch.sort();
+            seed_scratch.dedup();
+            window.seeds.extend(seed_scratch.drain(..).map(|t| (key, t)));
             self.reps.push(single.map(|_| rep));
             if collides { self.collisions.push(key); }
             if budget == 0 { break; }

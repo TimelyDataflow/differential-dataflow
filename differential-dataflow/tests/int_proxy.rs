@@ -418,3 +418,36 @@ fn reduce_cancelling_keys_matches_mainline() {
     }
     proxy_matches_mainline(updates, 1);
 }
+
+/// The cancellation case that forces seeds to travel apart from records: retire 2's novel update
+/// exactly cancels the compaction-advanced prior record, so the merged input presentation for the
+/// key is EMPTY — yet its time must still seed, because the key's stale output has to be
+/// retracted. Deriving seeds from the merged view would lose the time and keep the stale output.
+#[test]
+fn reduce_seed_survives_cancellation() {
+    let mut tactic = ProxyReduceTactic::new(VecReduceBackend::new(max_logic));
+
+    // Retire 1: key 7 gets value 3; the output history records max = 3.
+    let b0 = hbatch::<u64, u64, u64, i64>(vec![((7, 3), 0, 1)], 0, 1);
+    let (p0, _f) = tactic.retire(
+        vec![], vec![], vec![b0.clone()],
+        &Antichain::from_elem(0u64), &Antichain::from_elem(1u64), &Antichain::from_elem(0u64),
+    );
+    let outs: Vec<_> = p0.into_iter().map(|(_t, b)| b).collect();
+    assert_eq!(
+        outs.iter().flat_map(|b| hread(std::slice::from_ref(b))).collect::<Vec<_>>(),
+        vec![((7u64, 3u64), 0u64, 1i64)],
+        "retire 1 establishes the output",
+    );
+
+    // Retire 2: the novel batch retracts (7, 3) at time 1. The prior record is advanced to the
+    // compaction frontier (lower = 1) as it is drawn, so it lands at time 1 too, and the pair nets
+    // to zero: the merged input presents NOTHING for the key. Only the seed carries time 1.
+    let b1 = hbatch::<u64, u64, u64, i64>(vec![((7, 3), 1, -1)], 1, 2);
+    let (p1, _f) = tactic.retire(
+        vec![b0], outs, vec![b1],
+        &Antichain::from_elem(1u64), &Antichain::from_elem(2u64), &Antichain::from_elem(1u64),
+    );
+    let out1: Vec<_> = p1.into_iter().flat_map(|(_t, b)| hread(&[b])).collect();
+    assert_eq!(out1, vec![((7u64, 3u64), 1u64, -1i64)], "the stale output must be retracted");
+}
