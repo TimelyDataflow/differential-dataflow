@@ -472,6 +472,60 @@ impl<T: Columnar, R> Default for CorgiChunker<T, R> {
     }
 }
 
+/// An arrangement's key column, in the form every consumer of a `CorgiChunk` can rely on:
+/// **it leads with an integer, and the chunk is sorted by that integer.**
+///
+/// A key that is already a primitive integer (a bare 64-bit `Prim`, or the 1-field `Prod` that
+/// [`corgi::arrange::leaf_slice`] also reads through) is used as it stands — the value IS the
+/// identifier, injectively, and a hash lane would cost 8 bytes a row to say the same thing.
+/// Any other key shape — multi-field `Prod`, `List`, `Sum`, `Unit` — is hashed and the hash is
+/// PREPENDED, so the key becomes `Prod([hash, key])`. `CorgiChunk::from_columns` then sorts
+/// lexicographically over lanes, which is hash order with the real key as tie-break.
+///
+/// The original key stays in the column, which is what makes the hash safe: colliding keys land
+/// adjacent and sub-sorted, so they are told apart by comparison rather than by luck, and reads
+/// recover the real key by [`recover_key`]. The two forms are distinguishable after the fact
+/// (`leaf_slice` succeeds on exactly the un-prepended one) because no compound key reaches an
+/// arrangement un-prepended.
+///
+/// The hash is computed ONCE here, at ingest, and thereafter moves as data: `merge`, `advance`
+/// and `settle` permute key columns with `gather_lanes`, so no transducer recomputes it.
+pub fn present_key(keys: CValue) -> CValue {
+    if corgi::arrange::leaf_slice(&keys).is_some() {
+        return keys;
+    }
+    let hashes = corgi::hash(&keys).into_u64("present_key");
+    CValue::Prod(vec![CValue::u64(hashes), keys])
+}
+
+/// The integer identifier of each row of a [`present_key`] column: the key's own values when it is
+/// a primitive integer, and the prepended hash lane otherwise. Never re-hashes.
+pub fn key_ids(keys: &CValue) -> Vec<u64> {
+    if let Some(sl) = corgi::arrange::leaf_slice(keys) {
+        return sl.to_vec();
+    }
+    corgi::arrange::leaf_slice(key_lane(keys)).expect("a prepended hash lane is a u64 leaf").to_vec()
+}
+
+/// The single column an arrangement is sorted by, for seeking: the key itself when it is a
+/// primitive integer, else the prepended hash lane. Always a u64 leaf, so `find_ranges` over it
+/// takes corgi's u64 fast path whatever the underlying key shape.
+pub fn key_lane(keys: &CValue) -> &CValue {
+    match keys {
+        CValue::Prod(cols) if corgi::arrange::leaf_slice(keys).is_none() => &cols[0],
+        _ => keys,
+    }
+}
+
+/// Undo [`present_key`]: the key as the rest of the system knows it. A corgi clone is an `Arc`
+/// bump, so dropping the hash lane costs nothing.
+pub fn recover_key(keys: &CValue) -> CValue {
+    match keys {
+        CValue::Prod(cols) if corgi::arrange::leaf_slice(keys).is_none() => cols[1].clone(),
+        _ => keys.clone(),
+    }
+}
+
 /// Concatenate column blocks into one column (multi-source `gather_lanes`, no sort).
 fn concat_blocks(blocks: &[CValue]) -> CValue {
     if blocks.len() == 1 {
@@ -495,7 +549,7 @@ where
         if self.times.is_empty() {
             return;
         }
-        let keys = concat_blocks(&self.k_blocks);
+        let keys = present_key(concat_blocks(&self.k_blocks));
         let vals = concat_blocks(&self.v_blocks);
         self.k_blocks.clear();
         self.v_blocks.clear();

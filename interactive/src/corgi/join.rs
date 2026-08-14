@@ -40,7 +40,7 @@ use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes};
 use corgi::{shape_of_value, Shape, Value as CValue};
 
-use crate::corgi::chunk::CorgiChunk;
+use crate::corgi::chunk::{recover_key, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_join_projection;
@@ -119,7 +119,10 @@ impl<T: ColTime> ProxyJoinBackend<CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> 
                 tag1.push((c1 >> COORD_BITS) as usize);
                 off1.push((c1 & ((1 << COORD_BITS) - 1)) as usize);
             }
-            let kc = gather_lanes(&keys0, &tag0, &off0);
+            // The join's projection is written against the key the program declared, so drop
+            // the arrangement's leading identifier lane before evaluating it. The output goes to
+            // an arrange, which re-derives the identifier for the new key.
+            let kc = recover_key(&gather_lanes(&keys0, &tag0, &off0));
             let v0 = gather_lanes(&vals0, &tag0, &off0);
             let v1 = gather_lanes(&vals1, &tag1, &off1);
             let proj = compile_join_projection(&self.key, &self.val, &shape_of_value(&kc), &shape_of_value(&v0), &shape_of_value(&v1));
