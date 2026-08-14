@@ -21,7 +21,9 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         // stable: edges (l_node, l_pref, r_node, r_pref)
         "stable" => vec![rows(&[&[1, 1, 10, 1], &[1, 2, 11, 1], &[2, 1, 10, 2], &[2, 2, 11, 2]])],
         "unnest" => vec![rows(&[&[1, 2], &[3, 4]])],
-        "adt" => vec![edges],
+        "adt" => vec![edges.clone()],
+        // ast: pairs; small and non-negative, per the program's stated input contract.
+        "ast" => vec![edges],
         "binders" => vec![rows(&[&[1, 2], &[3, 4]])],
         // join_fallback: two keyed relations with overlapping keys (incl. a key with fanout).
         "join_fallback" => vec![
@@ -74,6 +76,7 @@ fn assert_backends_agree(prog: &str) {
 #[test] fn stable() { assert_backends_agree("stable"); }
 #[test] fn unnest() { assert_backends_agree("unnest"); }
 #[test] fn adt() { assert_backends_agree("adt"); }
+#[test] fn ast() { assert_backends_agree("ast"); }
 #[test] fn binders() { assert_backends_agree("binders"); }
 #[test] fn join_fallback() { assert_backends_agree("join_fallback"); }
 #[test] fn scalar_ops() { assert_backends_agree("scalar_ops"); }
