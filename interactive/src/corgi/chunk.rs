@@ -29,7 +29,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 use differential_dataflow::trace::Description;
 
-use corgi::arrange::{compare_at, compare_idx, gather, gather_lanes, group_bounds, sort_perm};
+use corgi::arrange::{compare_idx, gather, gather_lanes, group_bounds, sort_perm, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
 use columnar::Columnar;
@@ -154,18 +154,31 @@ where
 
     fn len(&self) -> usize { self.0.times.len() }
 
-    /// Two-pointer merge of the two front chunks through their shared horizon, FULLY consolidating
-    /// equal `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
-    /// contract). NB a `survey`-based merge cannot be substituted as-is: survey aligns only
-    /// `(key, val)` (corgi owns no time), so its positional `Both` under-consolidates cross-side
-    /// times, and consuming both chunks with no push-back un-grades the chain; it would need a
-    /// group-RANGE `Both` (both sides' full equal-`(key,val)` group) to time-merge correctly.
+    /// Merge the two front chunks through their shared horizon, FULLY consolidating equal
+    /// `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
+    /// contract).
     ///
-    /// TODO: newer corgi revs export exactly that (`survey_groups` -> `GroupRun::{A, B, Both}`,
-    /// with `Both` carrying both sides' group ranges). Once the pin moves past it, rewrite this
-    /// merge batched: bulk-copy `A`/`B` runs (range gather + `push_range` + `extend_from_slice`),
-    /// row-merge times only within `Both` classes. This row-at-a-time loop is the largest
-    /// `compare_at`-in-a-hot-path residue in the backend (the ingest batcher's merge).
+    /// The interleaving comes from corgi in RANGES, not row pairs: `survey_groups` zig-zag gallops
+    /// the two `(key, val)` columns and reports maximal runs exclusive to one side plus, for a
+    /// match, the maximal equal class on BOTH sides. Exclusive runs are bulk-copied (a `resize` of
+    /// tags, an `offs` range, `push_range` of times, `extend_from_slice` of diffs); only inside a
+    /// `Both` class is there a per-row step, and there only over times — which corgi does not own,
+    /// so nobody else can do it. So the corgi boundary is crossed once per RANGE, and the row-wise
+    /// residue is bounded by the number of rows in equal `(key, val)` classes rather than by the
+    /// chunk length.
+    ///
+    /// The group-range `Both` is what makes this substitution legal. The pairwise `survey`'s
+    /// `Both(ia, ib)` is a single positional pair, so a class present 3 times on one side and 2 on
+    /// the other leaks its excess into exclusive runs, splitting the class across reports and
+    /// under-consolidating cross-side times. `GroupRun::Both(alo, ahi, blo, bhi)` hands over both
+    /// full ranges, so the class is time-merged in one place.
+    ///
+    /// Horizon: runs are consumed until either side is exhausted; the remaining run (at most one,
+    /// since `survey_groups`' loop ends when a side ends) is the survivor's suffix and is pushed
+    /// back rather than emitted, which is what keeps the chain graded. A `Both` class straddling
+    /// the horizon is consumed whole from both sides — more consolidation than the old row-wise
+    /// loop managed, and still leaves everything pushed back strictly greater than everything
+    /// emitted.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         let c1 = in1.pop_front().unwrap();
         let c2 = in2.pop_front().unwrap();
@@ -174,20 +187,72 @@ where
         let (t1, d1) = (c1.times(), c1.diffs());
         let (t2, d2) = (c2.times(), c2.diffs());
 
-        let (mut tags, mut offs) = (Vec::new(), Vec::new());
-        let (mut times, mut diffs) = (ColTimes::new(), Vec::new());
+        let cap = n1 + n2;
+        let (mut tags, mut offs) = (Vec::with_capacity(cap), Vec::with_capacity(cap));
+        let (mut times, mut diffs) = (ColTimes::new(), Vec::with_capacity(cap));
         let (mut p1, mut p2) = (0usize, 0usize);
-        while p1 < n1 && p2 < n2 {
-            // `(key, val)` structurally, then `time` in place via the columnar `Ref: Ord`.
-            let ord = compare_at(&kv1, p1, &kv2, p2).then_with(|| t1.cmp_cross(p1, t2, p2));
-            match ord {
-                Ordering::Less => { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d1[p1].clone()); p1 += 1; }
-                Ordering::Greater => { tags.push(1); offs.push(p2); times.push_ref(t2, p2); diffs.push(d2[p2].clone()); p2 += 1; }
-                Ordering::Equal => {
-                    let mut d = d1[p1].clone();
-                    d.plus_equals(&d2[p2]);
-                    if !d.is_zero() { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d); }
-                    p1 += 1; p2 += 1;
+
+        for run in survey_groups(&kv1, &kv2) {
+            // A side is exhausted: this run and any after it are the survivor's suffix (pushed
+            // back below), which is where the old loop's `while p1 < n1 && p2 < n2` stopped.
+            if p1 == n1 || p2 == n2 {
+                break;
+            }
+            match run {
+                GroupRun::A(lo, hi) => {
+                    tags.resize(tags.len() + (hi - lo), 0);
+                    offs.extend(lo..hi);
+                    times.push_range(t1, lo, hi);
+                    diffs.extend_from_slice(&d1[lo..hi]);
+                    p1 = hi;
+                }
+                GroupRun::B(lo, hi) => {
+                    tags.resize(tags.len() + (hi - lo), 1);
+                    offs.extend(lo..hi);
+                    times.push_range(t2, lo, hi);
+                    diffs.extend_from_slice(&d2[lo..hi]);
+                    p2 = hi;
+                }
+                GroupRun::Both(alo, ahi, blo, bhi) => {
+                    // One equal-`(key, val)` class. Chunks are sorted AND consolidated, so each
+                    // side's times within the class strictly ascend: a two-way merge of the two
+                    // time runs, summing diffs on equal times and dropping the zeros. The `(key,
+                    // val)` payload is identical across the class, so an equal pair may be tagged
+                    // to either side; side 0 keeps the old loop's choice.
+                    let (mut a, mut b) = (alo, blo);
+                    while a < ahi && b < bhi {
+                        match t1.cmp_cross(a, t2, b) {
+                            Ordering::Less => {
+                                tags.push(0); offs.push(a); times.push_ref(t1, a); diffs.push(d1[a].clone()); a += 1;
+                            }
+                            Ordering::Greater => {
+                                tags.push(1); offs.push(b); times.push_ref(t2, b); diffs.push(d2[b].clone()); b += 1;
+                            }
+                            Ordering::Equal => {
+                                let mut d = d1[a].clone();
+                                d.plus_equals(&d2[b]);
+                                if !d.is_zero() {
+                                    tags.push(0); offs.push(a); times.push_ref(t1, a); diffs.push(d);
+                                }
+                                a += 1; b += 1;
+                            }
+                        }
+                    }
+                    // At most one side has class rows left, and they are bulk-copyable.
+                    if a < ahi {
+                        tags.resize(tags.len() + (ahi - a), 0);
+                        offs.extend(a..ahi);
+                        times.push_range(t1, a, ahi);
+                        diffs.extend_from_slice(&d1[a..ahi]);
+                    }
+                    if b < bhi {
+                        tags.resize(tags.len() + (bhi - b), 1);
+                        offs.extend(b..bhi);
+                        times.push_range(t2, b, bhi);
+                        diffs.extend_from_slice(&d2[b..bhi]);
+                    }
+                    p1 = ahi;
+                    p2 = bhi;
                 }
             }
         }
@@ -596,22 +661,23 @@ mod test {
         ChunkBatch::new(chunks, desc)
     }
 
-    #[test]
-    fn batch_merger_resumable_matches_reference() {
-        let mut seed = 0x9E3779B97F4A7C15u64;
-        for _ in 0..200 {
+    /// Merge two batches through the fueled merger and check the result against the reference.
+    /// `keys`/`vals`/`stamps` bound the generated key space and time space, which is how a caller
+    /// chooses between many small equal-`(key, val)` classes and few large ones.
+    fn check_merger(seed: &mut u64, rounds: usize, n_max: u64, keys: u64, vals: u64, stamps: u64) {
+        for _ in 0..rounds {
             let gen = |seed: &mut u64| -> Vec<((u64, u64), u64, i64)> {
-                let n = (xorshift(seed) % 40) as usize + 1;
+                let n = (xorshift(seed) % n_max) as usize + 1;
                 (0..n).map(|_| {
-                    let k = xorshift(seed) % 10; let v = xorshift(seed) % 3; let t = xorshift(seed) % 6;
+                    let k = xorshift(seed) % keys; let v = xorshift(seed) % vals; let t = xorshift(seed) % stamps;
                     let d = if xorshift(seed) % 4 == 0 { -1 } else { 1 };
                     ((k, v), t, d)
                 }).collect()
             };
-            let u1 = gen(&mut seed);
-            let u2 = gen(&mut seed);
-            let sz = (xorshift(&mut seed) % 4) as usize + 1;
-            let f = xorshift(&mut seed) % 6;
+            let u1 = gen(seed);
+            let u2 = gen(seed);
+            let sz = (xorshift(seed) % 4) as usize + 1;
+            let f = xorshift(seed) % stamps.max(1);
             let (s1, s2) = (batch(&u1, sz), batch(&u2, sz));
             let frontier = Antichain::from_elem(f);
 
@@ -625,5 +691,22 @@ mod test {
             assert!(is_graded(&result.chunks), "ungraded: {:?}", result.chunks.iter().map(Chunk::len).collect::<Vec<_>>());
             assert_eq!(read_batch(&result), reference(&u1, &u2, f), "u1={u1:?}\nu2={u2:?}\nf={f}");
         }
+    }
+
+    #[test]
+    fn batch_merger_resumable_matches_reference() {
+        // Wide key space: mostly exclusive runs, equal classes small.
+        check_merger(&mut 0x9E3779B97F4A7C15u64, 200, 40, 10, 3, 6);
+    }
+
+    #[test]
+    fn batch_merger_large_equal_classes() {
+        // Two `(key, val)` classes and a wide time space, so nearly every row lands in a large
+        // equal class with UNEQUAL per-side counts — `survey_groups`' `gallop_eq` and the merge's
+        // in-class time walk, including classes that straddle both chunk boundaries and the
+        // merge horizon (the push-back path). One class, one key, to pin the degenerate case
+        // where a single `Both` covers whole chunks.
+        check_merger(&mut 0x243F6A8885A308D3u64, 200, 60, 2, 1, 30);
+        check_merger(&mut 0x13198A2E03707344u64, 100, 60, 1, 1, 40);
     }
 }
