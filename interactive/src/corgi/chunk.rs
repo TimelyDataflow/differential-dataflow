@@ -508,13 +508,24 @@ pub fn key_ids(keys: &CValue) -> Vec<u64> {
 }
 
 /// The single column an arrangement is sorted by, for seeking: the key itself when it is a
-/// primitive integer, else the prepended hash lane. Always a u64 leaf, so `find_ranges` over it
-/// takes corgi's u64 fast path whatever the underlying key shape.
+/// primitive integer, else the prepended hash lane. Always a bare `u64` leaf, so `find_ranges`
+/// over it takes corgi's `u64` fast path whatever the underlying key shape.
+///
+/// One rule covers both forms, because [`present_key`] leaves exactly three possibilities: a bare
+/// `Prim`, the 1-field `Prod` that also counts as primitive, or a prepended `Prod([hash, key])`.
+/// The leading field is the identifier in all three.
 pub fn key_lane(keys: &CValue) -> &CValue {
     match keys {
-        CValue::Prod(cols) if corgi::arrange::leaf_slice(keys).is_none() => &cols[0],
+        CValue::Prod(cols) => &cols[0],
         _ => keys,
     }
+}
+
+/// Whether [`present_key`] prepended a hash to this key — i.e. whether rows sharing an identifier
+/// may hold DIFFERENT keys. False for primitive-integer keys, whose identifier is injective, so
+/// readers can skip the checks that guard against collisions entirely.
+pub fn key_is_hashed(keys: &CValue) -> bool {
+    corgi::arrange::leaf_slice(keys).is_none()
 }
 
 /// Undo [`present_key`]: the key as the rest of the system knows it. A corgi clone is an `Arc`
