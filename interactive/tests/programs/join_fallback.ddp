@@ -1,9 +1,17 @@
--- A join whose projection the corgi lowering cannot compile (`hash`, reading both
--- sides): exercises the identity-join + row-wise-Project fallback. The gate is
--- agreement with the vec backend.
+-- A join whose projection the SHAPE-FREE gate cannot admit: `compilable` runs before any
+-- container is in hand, so it declines every shape-dependent term — here a `case`, whose arm
+-- homogeneity is a fact about the data. The join therefore joins with the identity projection
+-- and applies the original terms as a rebased row-environment `Project`, which the shape-aware
+-- lowering then compiles columnar. The gate is agreement with the vec backend.
+--
+-- This is a PERMANENT path, not a gap: `compilable` will always be narrower than `compile`,
+-- because the join has no shapes to reason with. (It previously used `hash`, which stopped
+-- driving the fallback once `hash` became corgi's structural hash — a test keyed to a hole in
+-- the compiler rather than to a property of the design.)
+con L(1) = 0;
 
 let left = input 0 | key($0[0] ; $0[1]);
 let right = input 1 | key($0[0] ; $0[1]);
-let out = left | join(right, ($0 ; hash(0, $1[0], $2[0]), $2[0]));
+let out = left | join(right, ($0 ; case L($1[0] + $2[0]) { L(s) => s }, $2[0]));
 
 export "result" = out | arrange | inspect(total);

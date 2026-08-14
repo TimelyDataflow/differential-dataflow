@@ -1,18 +1,25 @@
 -- Two collections that commit DIFFERENT variant arms, concatenated into one arrangement.
--- Neither side's shape names the whole variant universe: one infers `Sum([Some(_)])`
--- (tag 0 only), the other `Sum([None, Some(_)])` (tag 1 only) — two arities for one DDIR
--- type. corgi reads a differing Sum arity as a type error, so the two must be reconciled
--- with uncommitted (⊥) lanes before anything compares or gathers them.
+-- Neither side's shape names the whole variant universe: one infers `Sum([Some(_)])` (tag 0
+-- only), the other `Sum([None, Some(_)])` (tag 1 only) — two arities for one DDIR type. corgi
+-- reads a differing Sum arity as a type error, so the two must be reconciled with uncommitted
+-- (⊥) lanes before anything compares or gathers them (corgi's `gather_lanes` fix, DDIR #817).
 --
--- This is the ROW-WISE FALLBACK case: `hash` is a term corgi does not lower, so the shapes
--- here come from `infer_shape_cols` scanning the data. See `sum_skew_compiled.ddp` for the
--- same defect on the compiled path — both under-approximate, just from different sources.
+-- Both derivations under-approximate, and neither is avoidable here. `infer_term_shape` gives
+-- `Inject(tag, _)` an arity of `tag + 1`, so `Rare(_)` compiles to one lane and `Common(_)` to
+-- two; `infer_shape_cols` scanning the data reaches the same place from the other side. A
+-- single term reconciles its own arms (`If` joins them), but two separate operators have
+-- nothing to reconcile them, and the declared universe (`con`) that would is discarded at parse.
+--
+-- (There used to be a second copy of this program whose maps wrapped `hash(..)`, on the
+-- premise that `hash` forced the row-wise path and so exercised the data-derived derivation
+-- separately. `hash` now lowers, the two copies became one program twice, and the surviving
+-- one is this.)
 con Rare(1)   = 0;
 con Common(1) = 1;
 
 let pairs = input 0 | key($0[0] ; $0[1]);
 
-let onlyRare   = pairs | map( $0[0] ; Rare(hash(1000000, $1[0])) );
-let onlyCommon = pairs | map( $0[0] ; Common(hash(1000000, $1[0])) );
+let onlyRare   = pairs | map( $0[0] ; Rare($1[0]) );
+let onlyCommon = pairs | map( $0[0] ; Common($1[0]) );
 
 export "result" = (onlyRare + onlyCommon) | arrange | inspect(total);

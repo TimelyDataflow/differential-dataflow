@@ -1,0 +1,40 @@
+-- AST-style compute: the wide per-row bookend. Build a list with arithmetic, explode it,
+-- tag each element as a variant, fold the payload, match it back out, and reduce. No joins
+-- and no recursion -- this is a compute program, where the columnar backend's scalar logic
+-- is the whole cost and the differential machinery is not.
+--
+-- Every lowering it needs landed together: `list` intro, columnar `flatmap`, `case` over an
+-- `if`-selected constructor, and `fold`. A `list(..)` subterm anywhere makes the WHOLE
+-- projection fall back to rows, so a regression in any one of them shows up here as the
+-- others going row-wise too.
+--
+-- Contract on the inputs: fields must be non-negative and small enough that
+-- `$0[0] - $1[0] + 32768` stays non-negative -- corgi's structural order is unsigned at the
+-- integer leaf, so signed values are out of contract for `min`.
+
+con Fwd(1) = 0;
+con Bwd(1) = 1;
+
+let rows = input 0 | key($0[0] ; $0[1]);
+
+-- eight derived values per row
+let lists = rows | map($0 ; list($0[0], $1[0], $0[0] + $1[0], $0[0] * $1[0], $0[0] - $1[0] + 32768, $1[0] * $1[0], $0[0] * $0[0], $0[0] + $1[0] * $1[0]));
+
+-- one row per element, carrying its position
+let exploded = lists | flatmap($1[0]);
+
+-- bucket by (position, magnitude); payload folds a four-element list, wrapped in a variant
+-- and matched straight back out (the tag is the point, not the payload).
+let tagged = exploded
+    | map( $1[0] + 8 * if($1[1] < 500000, 0, 1)
+         ; case if($1[1] < 250000,
+                   Fwd(fold(list($0[0], $1[1], $0[0] * $1[1], $1[1] * $1[1]), 0, ^0 + ^1)),
+                   Bwd(fold(list($0[0], $1[1], $0[0] * $1[1], $1[1] * $1[1]), 0, ^0 + ^1)))
+           {
+             Fwd(s) => s,
+             Bwd(s) => s,
+           } );
+
+let buckets = tagged | min;
+
+export "result" = buckets | arrange;

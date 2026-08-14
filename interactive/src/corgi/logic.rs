@@ -2,11 +2,13 @@
 //! transcode DDIR rows (`ir::Value`) to/from corgi columnar `Value`, directed by a `Shape`
 //! inferred from the data (the dynamic-typing primitive).
 //!
-//! The compiler (`compile`) covers Var/Bound/Int/Tuple(+Spread)/Proj/Binary/If/Fold and the
-//! Neg/Not/Len unaries. Ordered compares are signed-correct (`ToSigned`); the residual
-//! non-negative-int assumption is confined to order-SENSITIVE contexts (the `Min` reducer and
-//! structural sort order compare raw `u64` bits). Terms it can't lower (List, Case/Inject,
-//! IsTag, Hash — see `compilable`) fall back to row-wise `ir::eval` in the backend. The transcode layer is total over `Shape` (Prim/Unit/Prod/List/Sum), so a
+//! The compiler (`compile`) covers Var/Bound/Int/Tuple(+Spread)/Proj/Binary/If/Fold, list and
+//! sum intro (`List`/`Inject`), sum elimination (`Case`), and the Neg/Not/Len/IsTag unaries.
+//! Ordered compares are signed-correct (`ToSigned`); the residual non-negative-int assumption is
+//! confined to order-SENSITIVE contexts (the `Min` reducer and structural sort order compare raw
+//! `u64` bits). `hash` is corgi's structural `Op::Hash`, the same function `ir::eval` folds row-wise.
+//! Only shape-dependent cases decline (heterogeneous lists, conflicting `Case` arms, data-driven
+//! tags); those fall back to row-wise `ir::eval` in the backend. The transcode layer is total over `Shape` (Prim/Unit/Prod/List/Sum), so a
 //! `Variant` column round-trips via corgi `Sum` (see `infer_shape_cols` for the all-rows arm scan).
 
 use crate::ir::Value as DValue;
@@ -243,6 +245,17 @@ fn infer_term_shape(t: &Term, env_shapes: &[Shape]) -> Shape {
             }
             if fs.is_empty() { Shape::Unit } else { Shape::Prod(fs) }
         }
+        // A list literal is a `List` of its elements' joined shape. `Fold` reads this to find its
+        // element shape, so a literal folded in place (`fold(list(..), ..)`) depends on it; a
+        // heterogeneous literal keeps the first field's shape here and declines in `compile`.
+        Term::List(fields) => {
+            let elem = fields
+                .iter()
+                .map(|f| infer_term_shape(f, env_shapes))
+                .reduce(|acc, s| shape_join(&acc, &s).unwrap_or(acc))
+                .unwrap_or(Shape::Unit);
+            Shape::List(Box::new(elem))
+        }
         Term::Bound(k) => env_shapes.get(env_shapes.len().wrapping_sub(1 + *k)).cloned().unwrap_or(Shape::Prim(64)),
         Term::If { then, els, .. } => {
             // Join the branch shapes (⊥ sum lanes unify), so a downstream `Case` sees every
@@ -281,16 +294,6 @@ fn infer_term_shape(t: &Term, env_shapes: &[Shape]) -> Shape {
     }
 }
 
-/// Whether a shape contains a `Sum` anywhere (see the `If` lowering's engine caveat).
-fn shape_has_sum(s: &Shape) -> bool {
-    match s {
-        Shape::Sum(_) => true,
-        Shape::Prod(fs) => fs.iter().any(shape_has_sum),
-        Shape::List(e) => shape_has_sum(e),
-        _ => false,
-    }
-}
-
 /// The ⊥-tolerant join of two shapes: `Sum` lanes unify lane-wise with an uncommitted (`None`)
 /// lane adopting its sibling; `None` (the function's) means the shapes genuinely conflict.
 /// Local until corgi exports its `shape::join`.
@@ -318,12 +321,15 @@ fn shape_join(a: &Shape, b: &Shape) -> Option<Shape> {
     }
 }
 
-/// Whether [`compile`] can lower this term to a corgi graph. Terms whose lowering is not yet
-/// written — `Inject`/`Case` and `IsTag` (corgi has `Branch`/`MapSum`/`CapSum`/`Unwrap`),
-/// `List` (intro may need a kernel) — return false, and the backend falls back to row-wise
-/// `ir::eval` (parity with `backend::vec`); that gap is compiler debt here, not expressiveness
-/// in corgi. `Hash` is the one true kernel gap: exact splitmix64 parity with `ir::eval` needs
-/// lane-wise xor and integer rem, which corgi's arithmetic does not yet have.
+/// Whether [`compile`] can lower this term WITHOUT knowing its operands' shapes — the gate for
+/// join-INLINE projections, which are compiled before any container is in hand. It is therefore
+/// deliberately narrower than `compile`: every shape-dependent form (`List`, `Case`, data-driven
+/// `Inject`) answers false here and is compiled by the linear stage the join defers it to, which
+/// does have shapes. Capability never depends on this; only where the work happens.
+///
+/// The only term with no lowering at all is a data-driven `Inject` tag, which has no static lane
+/// count — and no surface syntax either, so nothing a program can write reaches the row-wise
+/// fallback on shape-free grounds.
 pub fn compilable(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::Bound(_) | Term::Int(_) => true,
@@ -336,10 +342,14 @@ pub fn compilable(t: &Term) -> bool {
         // Literal-tag sum intro lowers (`Op::Inject`); a data-driven tag has no static lane
         // count, so it stays row-wise.
         Term::Inject(tag, payload) => matches!(&**tag, Term::Int(_)) && compilable(payload),
-        // `Case` deliberately stays false HERE: this shape-free check gates join-INLINE
-        // projections only, and `Case` needs shapes (arm homogeneity). The join defers such
-        // projections to a linear stage, whose shape-aware `compile` lowers them there.
-        _ => false, // List intro, Case (here), data-driven Inject, Hash — see `compile`.
+        // `Op::Hash` is shape-generic (it folds whatever structure it is handed), so `hash`
+        // needs no shapes to lower and can answer true here.
+        Term::Hash(args) => args.iter().all(compilable),
+        // `List` and `Case` deliberately stay false HERE even though `compile` lowers both:
+        // each needs shapes to decide homogeneity (a list's elements, a case's arms), and this
+        // check runs without them. The join defers such projections to a linear stage, whose
+        // shape-aware `compile` lowers them there.
+        _ => false, // List intro, Case (here), data-driven Inject — see `compile`.
     }
 }
 
@@ -419,13 +429,10 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
         Term::If { cond, then, els } => {
             // `Select` blends per row and is shape-generic, but the branches must agree up to
             // ⊥ lanes; genuinely conflicting branch shapes (dynamic typing) defer to rows.
-            // Sum-shaped results also defer for now: merging sum columns that commit different
-            // lanes trips an offset bug in the pinned engine's lane merge (engine.rs
-            // `sum_from_prim` path) — revisit at the next corgi pin bump.
-            let joined = shape_join(&infer_term_shape(then, env_shapes), &infer_term_shape(els, env_shapes))?;
-            if shape_has_sum(&joined) {
-                return None;
-            }
+            // Sum-shaped results included: `Select` gathers lanes, and the branches commit
+            // different ones (`if(c, Fwd(x), Bwd(y))` is the shape of every conditional
+            // constructor), which is what the pin bumped for in #817.
+            shape_join(&infer_term_shape(then, env_shapes), &infer_term_shape(els, env_shapes))?;
             let c = compile(cond, b, env, env_shapes, anchor)?;
             let t = compile(then, b, env, env_shapes, anchor)?;
             let e = compile(els, b, env, env_shapes, anchor)?;
@@ -555,7 +562,63 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
                 },
             })
         }
-        _ => None, // List intro, Hash: see `compilable`'s accounting
+        // Homogeneous list literal: `k` element columns become a length-`k` list per row through
+        // the existing kernel matrix, with no per-row work and no new corgi op — `Enlist` each
+        // element (a length-1 lane per row), `Iota` a per-row `[0..k)` tag list, `Weave`
+        // interleaves the lanes in field order into `List<Sum{X x k}>`, and `MapList(Unwrap)`
+        // strips the now-homogeneous sum. A fused list-intro kernel is corgi's call if this
+        // composition ever profiles hot.
+        //
+        // Empty and heterogeneous literals decline: `Weave` needs at least one lane, and
+        // `Unwrap` needs the committed lanes to join. Rows handle both.
+        Term::List(fields) => {
+            let (first, rest) = fields.split_first()?;
+            rest.iter().try_fold(infer_term_shape(first, env_shapes), |acc, f| {
+                shape_join(&acc, &infer_term_shape(f, env_shapes))
+            })?;
+            let mut lanes = Vec::with_capacity(fields.len());
+            for f in fields {
+                let e = compile(f, b, env, env_shapes, anchor)?;
+                lanes.push(b.add(Op::Enlist, vec![e]));
+            }
+            let count = b.add(Op::Lit(CValue::u64(vec![fields.len() as u64])), vec![anchor]);
+            let mut weave_in = vec![b.add(Op::Iota, vec![count])];
+            weave_in.extend(lanes);
+            let woven_in = b.tuple(weave_in);
+            let woven = b.add(Op::Weave, vec![woven_in]);
+            let unwrap_body = {
+                let mut bb = Builder::<NumOp>::default();
+                let inp = bb.input();
+                let out = bb.add(Op::Unwrap, vec![inp]);
+                bb.finish(out)
+            };
+            Some(b.add(Op::MapList(Box::new(unwrap_body)), vec![woven]))
+        }
+        // DDIR's `hash` IS corgi's `Op::Hash` (`ir::structural_hash` is the row-wise twin): hash
+        // the arguments as one tuple, shift out the sign bit, reduce by the bound.
+        //
+        // The bound guard is pure arithmetic — no `Select`. `Rem`'s total `x % 0 = x` gives
+        // `bound == 0` the identity, and a NEGATIVE bound reads as a `u64` at or above 2^63,
+        // which is larger than the shifted hash, so it reduces to the identity too. Both are
+        // exactly what `ir::eval`'s `if bound > 0` produces.
+        Term::Hash(args) => {
+            let (bound, rest) = args.split_first()?;
+            let bid = compile(bound, b, env, env_shapes, anchor)?;
+            let payload = if rest.is_empty() {
+                b.add(Op::Unit, vec![anchor])
+            } else {
+                let mut ids = Vec::with_capacity(rest.len());
+                for a in rest {
+                    ids.push(compile(a, b, env, env_shapes, anchor)?);
+                }
+                b.tuple(ids)
+            };
+            let h = b.add(Op::Hash, vec![payload]);
+            let shifted = b.add(ArithOp::Shr(1), vec![h]);
+            let pair = b.tuple(vec![shifted, bid]);
+            Some(b.add(ArithOp::Bin(CBinOp::Rem, Kind::U, 64), vec![pair]))
+        }
+        _ => None,
     }
 }
 
@@ -570,15 +633,39 @@ fn compile_fold_body(step: &Term, init_shape: &Shape, elem_shape: &Shape) -> Opt
     Some(bb.finish(out))
 }
 
-/// Compile a `Filter` predicate over `Var(0)=key` (shape `kshape`), `Var(1)=val` (`vshape`) → mask.
-/// `None` when the term (with these shapes) has no lowering; the caller falls back to rows.
-pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+/// Compile a term in the row environment `Var(0)=key` (shape `kshape`), `Var(1)=val` (`vshape`) —
+/// the environment every `LinearOp` reads. The graph's input is `Prod([key, val])`. `None` when
+/// the term has no lowering with these shapes; every caller falls back to rows there.
+fn compile_over_kv(term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
     let mut b = Builder::<NumOp>::default();
     let input = b.input();
     let var_k = b.add(Op::Field(0), vec![input]);
     let var_v = b.add(Op::Field(1), vec![input]);
-    let out = compile(cond, &mut b, &[var_k, var_v], &[kshape.clone(), vshape.clone()], input)?;
+    let out = compile(term, &mut b, &[var_k, var_v], &[kshape.clone(), vshape.clone()], input)?;
     Some(b.finish(out))
+}
+
+/// Compile a `FlatMap`'s list term → a corgi `List` column, one list per input row. Declines when
+/// the term is not list-shaped: the backend explodes the column structurally and needs real list
+/// bounds to do it, where `ir::eval` would take any `List` value it happened to produce.
+pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+    matches!(infer_term_shape(list_term, &[kshape.clone(), vshape.clone()]), Shape::List(_))
+        .then(|| compile_over_kv(list_term, kshape, vshape))
+        .flatten()
+}
+
+/// Compile a scalar term (`EnterAt`'s delay field) → a `U64` column. Declines when the term is not
+/// `Prim`-shaped: the delay is read as one integer per row, which a `Prod`/`List`/`Sum` column has
+/// no reading of.
+pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+    matches!(infer_term_shape(term, &[kshape.clone(), vshape.clone()]), Shape::Prim(_))
+        .then(|| compile_over_kv(term, kshape, vshape))
+        .flatten()
+}
+
+/// Compile a `Filter` predicate → a mask column (nonzero keeps the row).
+pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+    compile_over_kv(cond, kshape, vshape)
 }
 
 /// Compile a join projection: key/val Terms over `Var(0)=key`, `Var(1)=val0`, `Var(2)=val1` (with
@@ -618,6 +705,60 @@ pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape
 mod tests {
     use super::*;
     use crate::ir::Value as V;
+
+    /// The pin on DDIR's `hash`: `ir::structural_hash` is a row-at-a-time transcription of
+    /// `corgi::hash`, and the two backends compute the SAME program value, so they must agree
+    /// bit for bit on every shape the transcode layer covers. If corgi's salts or fold change,
+    /// this is what fails.
+    fn hash_agrees(rows: Vec<V>) {
+        let shape = infer_shape_cols(&rows);
+        let col = transcode(&rows, &shape);
+        let columnar = corgi::hash(&col).into_u64("hash");
+        let row_wise: Vec<u64> = rows.iter().map(crate::ir::structural_hash).collect();
+        assert_eq!(columnar, row_wise, "hash disagrees (shape {shape:?})");
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_scalars() {
+        hash_agrees(vec![V::Int(0), V::Int(1), V::Int(-1), V::Int(i64::MIN), V::Int(i64::MAX)]);
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_tuples_and_units() {
+        hash_agrees(vec![V::Tuple(vec![V::Int(1), V::Int(2)]), V::Tuple(vec![V::Int(2), V::Int(1)])]);
+        hash_agrees(vec![V::unit(), V::unit()]);
+        // A 1-tuple must not collapse onto its scalar, nor a unit onto an empty anything.
+        assert_ne!(
+            crate::ir::structural_hash(&V::Tuple(vec![V::Int(7)])),
+            crate::ir::structural_hash(&V::Int(7))
+        );
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_lists() {
+        hash_agrees(vec![
+            V::List(vec![V::Int(1), V::Int(2), V::Int(3)]),
+            V::List(vec![]),
+            V::List(vec![V::Int(3), V::Int(2), V::Int(1)]),
+        ]);
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_variants() {
+        hash_agrees(vec![
+            V::Variant(0, Box::new(V::Int(5))),
+            V::Variant(1, Box::new(V::Int(5))),
+            V::Variant(0, Box::new(V::Int(6))),
+        ]);
+    }
+
+    #[test]
+    fn hash_matches_corgi_on_nesting() {
+        hash_agrees(vec![
+            V::Tuple(vec![V::List(vec![V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(3)])))]),
+            V::Tuple(vec![V::List(vec![V::Int(1), V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(4)])))]),
+        ]);
+    }
 
     /// Round-trip a column of rows through infer_shape_cols → transcode → untranscode.
     fn roundtrip(rows: Vec<V>) {

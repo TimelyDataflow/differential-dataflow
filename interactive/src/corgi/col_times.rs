@@ -147,3 +147,42 @@ impl<T: Columnar> FromIterator<T> for ColTimes<T> {
         ColTimes { store }
     }
 }
+
+#[cfg(test)]
+mod cmp_agreement_tests {
+    use super::*;
+    use differential_dataflow::dynamic::pointstamp::PointStamp;
+    use timely::order::Product;
+
+    type T = Product<u64, PointStamp<u64>>;
+
+    fn t(outer: u64, coords: &[u64]) -> T {
+        Product::new(outer, PointStamp::new(coords.iter().copied().collect()))
+    }
+
+    /// `ColTime::cmp_refs` (the derived `Ord` on the columnar `Ref`) must agree with the
+    /// timestamp's OWN `Ord` for every pair — the chunk layer sorts and merges by the former
+    /// and every other layer reasons with the latter.
+    #[test]
+    fn col_times_order_matches_owned_order() {
+        let times: Vec<T> = vec![
+            t(0, &[]), t(0, &[0]), t(0, &[1]), t(0, &[2]), t(0, &[3]),
+            t(0, &[1, 1]), t(0, &[1, 2]), t(0, &[2, 1]), t(0, &[3, 1]), t(0, &[3, 2]),
+            t(0, &[1, 1, 1]), t(0, &[3, 1, 2]), t(0, &[3, 2, 1]),
+            t(1, &[]), t(1, &[3]), t(1, &[3, 1]),
+        ];
+        let mut store = ColTimes::<T>::new();
+        for x in &times { store.push(x); }
+        for i in 0..times.len() {
+            for j in 0..times.len() {
+                let owned = times[i].cmp(&times[j]);
+                let col = store.cmp(i, j);
+                assert_eq!(
+                    owned, col,
+                    "order disagrees for {:?} vs {:?}: owned {:?}, columnar {:?}",
+                    times[i], times[j], owned, col
+                );
+            }
+        }
+    }
+}
