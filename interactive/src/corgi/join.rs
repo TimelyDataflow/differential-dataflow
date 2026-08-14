@@ -40,7 +40,7 @@ use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes};
 use corgi::{shape_of_value, Shape, Value as CValue};
 
-use crate::corgi::chunk::{recover_key, CorgiChunk};
+use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_join_projection;
@@ -87,8 +87,22 @@ impl<T: ColTime> ProxyJoinBackend<CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> 
             *from = None;
             return;
         }
+        // Every arrangement key leads with its identifier and is sorted by it, so the leaf walk
+        // applies to every key shape: it seeks and resumes `from` on that lane. It is the only
+        // regime that blocks — the other two stage the whole intersection in one call.
+        //
+        // Its one exposure is a hash collision, which would cross-product two distinct keys that
+        // share an identifier. `advance_leaf` checks for that per matched key and reports it rather
+        // than staging it, and the call is redone by the whole-key walks, which cannot be fooled
+        // (they compare the real key). Astronomically rare, and correct by reuse when it happens.
+        let entry = *from;
+        if advance_leaf(&chunks0, &chunks1, &instance.lower, from, bridge0, bridge1) {
+            return;
+        }
+        bridge0.clear();
+        bridge1.clear();
+        *from = entry;
         match (leaf_key_lanes(&chunks0), leaf_key_lanes(&chunks1)) {
-            (Some(1), Some(1)) => advance_leaf(&chunks0, &chunks1, &instance.lower, from, bridge0, bridge1),
             (Some(_), Some(_)) => advance_lanes(&chunks0, &chunks1, &instance.lower, from, bridge0, bridge1),
             _ => advance_structured(&chunks0, &chunks1, &instance.lower, from, bridge0, bridge1),
         }
@@ -186,16 +200,6 @@ fn leaf_key_lanes<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> Option<usize> 
 /// Whether every nonempty chunk's val column flattens to `u64` leaf lanes.
 fn leaf_valued<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
     chunks.iter().filter(|c| c.len() > 0).all(|c| leaf_lanes(c.vals()).is_some())
-}
-
-/// A needle column of `keys`, shaped like `col` (a single-leaf-lane key column).
-fn needle_like(col: &CValue, keys: &[u64]) -> CValue {
-    match col {
-        CValue::Prim(_) => CValue::u64(keys.to_vec()),
-        CValue::Prod(fields) => CValue::Prod(fields.iter().map(|f| needle_like(f, keys)).collect()),
-        CValue::Unit(_) => CValue::Unit(keys.len()),
-        _ => unreachable!("needle_like: single-leaf key columns only"),
-    }
 }
 
 /// Pull rows `idx` of the column's leaf lanes as `u64` buffers.
@@ -431,8 +435,8 @@ impl<'a, T: ColTime> LeafView<'a, T> {
         let e = (s + more).min(self.chunk.len());
         if s == e { return; }
         let idx: Vec<usize> = (s..e).collect();
-        let key_lane = leaf_lanes(self.chunk.keys()).expect("single-lane keys")[0];
-        self.keys.extend(gather(key_lane, &idx).into_u64("corgi join key pull"));
+        let lane = key_lane(self.chunk.keys());
+        self.keys.extend(gather(lane, &idx).into_u64("corgi join key pull"));
         if let Some(vals) = self.vals.as_mut() {
             let pulled = pull_lanes(self.chunk.vals(), &idx);
             if vals.is_empty() {
@@ -480,7 +484,7 @@ struct Probe<'a, T: ColTime> {
 
 impl<'a, T: ColTime> Probe<'a, T> {
     fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &CValue, leaf_vals: bool) -> Self {
-        let (lo, hi) = find_ranges(needles, chunk.keys());
+        let (lo, hi) = find_ranges(needles, key_lane(chunk.keys()));
         let mut off = Vec::with_capacity(lo.len() + 1);
         let mut idx: Vec<usize> = Vec::new();
         off.push(0);
@@ -509,6 +513,23 @@ impl<'a, T: ColTime> Probe<'a, T> {
     }
 }
 
+/// Whether every row covered by `refs` carries the same KEY, not merely the same identifier.
+///
+/// The identifier is injective for a primitive-integer key, but a hashed key can in principle put
+/// two distinct keys under one identifier, and the leaf path would then cross-product them. Runs
+/// are contiguous and sub-sorted by the real key ([`present_key`](crate::corgi::chunk::present_key)
+/// keeps the key in the column, after the hash), so a run holds one key exactly when its first and
+/// last rows agree — a handful of `compare_at` per matched key, never per row. `refs` spans both
+/// sides, so one pass also confirms the two sides matched on the key and not just the hash.
+fn one_key<T: ColTime>(a: &[RunRef<'_, T>], b: &[RunRef<'_, T>]) -> bool {
+    let Some(first) = a.first().or_else(|| b.first()) else { return true };
+    let (rk, ri) = (first.chunk.keys(), first.s);
+    a.iter().chain(b).all(|r| {
+        compare_at(r.chunk.keys(), r.s, rk, ri) == Ordering::Equal
+            && compare_at(r.chunk.keys(), r.e - 1, rk, ri) == Ordering::Equal
+    })
+}
+
 /// Blockwise `advance` for leaf-keyed inputs: group token = the key's own `u64` (chunk order
 /// IS `u64` order), so blocks resume by seeking `from` and end at key boundaries.
 ///
@@ -524,10 +545,12 @@ fn advance_leaf<T: ColTime>(
     from: &mut Option<u64>,
     bridge0: &mut ProxyBridge<T, Diff>,
     bridge1: &mut ProxyBridge<T, Diff>,
-) {
+) -> bool {
     let start = from.expect("advance called on an exhausted unit");
+    let hashed = chunks0.iter().chain(chunks1).find(|c| c.len() > 0).is_some_and(|c| key_is_hashed(c.keys()));
     let seek = |chunks: &[&CorgiChunk<T, Diff>]| -> Vec<usize> {
-        chunks.iter().map(|c| if c.len() == 0 { 0 } else { find_ranges(&needle_like(c.keys(), &[start]), c.keys()).0[0] }).collect()
+        let needle = CValue::u64(vec![start]);
+        chunks.iter().map(|c| if c.len() == 0 { 0 } else { find_ranges(&needle, key_lane(c.keys())).0[0] }).collect()
     };
     let start0 = seek(chunks0);
     let start1 = seek(chunks1);
@@ -546,9 +569,9 @@ fn advance_leaf<T: ColTime>(
         let drive0 = r0 <= r1;
         let (dviews, pchunks) = if drive0 { (views(chunks0, &start0), chunks1) } else { (views(chunks1, &start1), chunks0) };
         let (bd, bp) = if drive0 { (bridge0, bridge1) } else { (bridge1, bridge0) };
-        leaf_probe(dviews, pchunks, lower, start, from, bd, bp);
+        leaf_probe(dviews, pchunks, lower, start, from, bd, bp, hashed)
     } else {
-        leaf_merge(views(chunks0, &start0), views(chunks1, &start1), lower, start, from, bridge0, bridge1);
+        leaf_merge(views(chunks0, &start0), views(chunks1, &start1), lower, start, from, bridge0, bridge1, hashed)
     }
 }
 
@@ -581,7 +604,8 @@ fn leaf_probe<'a, T: ColTime>(
     from: &mut Option<u64>,
     bridge_d: &mut ProxyBridge<T, Diff>,
     bridge_p: &mut ProxyBridge<T, Diff>,
-) {
+    hashed: bool,
+) -> bool {
     let h = pull_horizon(&mut dviews, &mut [], start);
 
     // Merge the driver block's keys (strictly below the horizon) into the distinct key
@@ -602,14 +626,14 @@ fn leaf_probe<'a, T: ColTime>(
     if keyset.is_empty() {
         // Nothing below the horizon: the driver is spent (or the block was empty).
         *from = h;
-        return;
+        return true;
     }
 
     // One batched probe of every probee chunk at the driver's keys.
     let pvleaf = leaf_valued(pchunks);
     let probes: Vec<Probe<T>> = pchunks.iter().enumerate()
         .filter(|(_, c)| c.len() > 0)
-        .map(|(cid, c)| Probe::new(c, cid, &needle_like(c.keys(), &keyset), pvleaf))
+        .map(|(cid, c)| Probe::new(c, cid, &CValue::u64(keyset.clone()), pvleaf))
         .collect();
 
     // Walk the keys in order, staging both sides and emitting the survivors.
@@ -628,6 +652,9 @@ fn leaf_probe<'a, T: ColTime>(
         if refs.len() == dref_count {
             continue; // key absent from the probee: no matches
         }
+        if hashed && !one_key(&refs, &[]) {
+            return false;
+        }
         let (drefs, prefs) = refs.split_at(dref_count);
         sd.stage_runs(drefs, lower);
         sp.stage_runs(prefs, lower);
@@ -640,6 +667,7 @@ fn leaf_probe<'a, T: ColTime>(
     // The block ran to the horizon; resume there (`None` = the driver is exhausted, and
     // with it the intersection).
     *from = h;
+    true
 }
 
 /// Comparable-sides regime: both sides pulled and merged symmetrically on the `u64`
@@ -652,7 +680,8 @@ fn leaf_merge<'a, T: ColTime>(
     from: &mut Option<u64>,
     bridge0: &mut ProxyBridge<T, Diff>,
     bridge1: &mut ProxyBridge<T, Diff>,
-) {
+    hashed: bool,
+) -> bool {
     let h = pull_horizon(&mut views0, &mut views1, start);
     let (mut s0, mut s1) = (SideScratch::new(), SideScratch::new());
     let (mut refs0, mut refs1): (Vec<(usize, usize, usize)>, Vec<(usize, usize, usize)>) = (Vec::new(), Vec::new());
@@ -660,7 +689,7 @@ fn leaf_merge<'a, T: ColTime>(
         let k = views0.iter().chain(&views1).filter_map(LeafView::cur_key).min();
         let Some(k) = k.filter(|k| h.map_or(true, |h| *k < h)) else {
             *from = h;
-            return;
+            return true;
         };
         refs0.clear();
         refs0.extend(views0.iter_mut().enumerate().filter_map(|(vi, v)| v.take_run(k).map(|(s, e)| (vi, s, e))));
@@ -671,6 +700,9 @@ fn leaf_merge<'a, T: ColTime>(
         }
         let r0: Vec<RunRef<T>> = refs0.iter().map(|&(vi, s, e)| views0[vi].run_ref(s, e)).collect();
         let r1: Vec<RunRef<T>> = refs1.iter().map(|&(vi, s, e)| views1[vi].run_ref(s, e)).collect();
+        if hashed && !one_key(&r0, &r1) {
+            return false;
+        }
         s0.stage_runs(&r0, lower);
         s1.stage_runs(&r1, lower);
         if s0.entries.is_empty() || s1.entries.is_empty() {
