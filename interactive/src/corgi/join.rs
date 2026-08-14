@@ -399,54 +399,71 @@ fn min_key<'a, T: ColTime>(
     best
 }
 
-/// Pulled-buffer view over one leaf-keyed chunk of the DRIVER side: the block's key rows
-/// extracted once per `advance` call as `u64` buffers, so the key merge runs on slices.
+/// The identifier column of a chunk's keys, as a sorted `u64` slice. Every arrangement key
+/// leads with its identifier ([`present_key`](crate::corgi::chunk::present_key)), so this is
+/// always available and always ordered — no gather, no copy.
+fn ident<'a, T: ColTime>(chunk: &'a CorgiChunk<T, Diff>) -> &'a [u64] {
+    corgi::arrange::leaf_slice(key_lane(chunk.keys())).expect("the identifier lane is a u64 leaf")
+}
+
+/// The block's exclusive identifier bound, chosen so that no chunk contributes more than
+/// `budget` rows: for each chunk with more than `budget` rows left, the identifier `budget`
+/// rows in (bumped past its own run, so a key is never split); the least of those. `None`
+/// when no chunk is over budget — the block runs to the end and the walk is exhausted.
+///
+/// This is the whole point of a totally ordered identifier: the block's extent is decided by
+/// reading ONE value per chunk, before anything is read in bulk, so each chunk can then be
+/// read exactly once over exactly the rows the block needs. Deciding it the other way round —
+/// read a fixed number of rows, then discover how far the block can reach — leaves whatever
+/// was read past the bound to be discarded and read again next block, and the further apart
+/// the chunks' key densities are, the more that is.
+fn block_horizon<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], starts: &[usize], budget: usize) -> Option<u64> {
+    let mut horizon: Option<u64> = None;
+    for (c, &s) in chunks.iter().zip(starts) {
+        let lane = ident(c);
+        if lane.len() - s <= budget {
+            continue;
+        }
+        // Past the whole run of the identifier at the budget, so the block ends at a key
+        // boundary. `None` on overflow means nothing can exceed it: run to the end.
+        let Some(bound) = lane[s + budget].checked_add(1) else { continue };
+        horizon = Some(horizon.map_or(bound, |h: u64| h.min(bound)));
+    }
+    horizon
+}
+
+/// Where each chunk's block ends: the first row at or past `horizon`, or its end.
+fn block_ends<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], horizon: Option<u64>) -> Vec<usize> {
+    chunks.iter().map(|c| match horizon {
+        Some(h) => ident(c).partition_point(|&x| x < h),
+        None => c.len(),
+    }).collect()
+}
+
+/// View over one leaf-keyed chunk's rows for THIS block, `[base, end)`. The identifiers are
+/// borrowed from the chunk's own lane — the block reads them, it does not copy them — and the
+/// vals are gathered once, over exactly those rows.
 struct LeafView<'a, T: ColTime> {
     chunk: &'a CorgiChunk<T, Diff>,
     cid: usize,
     /// Absolute row of `keys[0]`.
     base: usize,
-    keys: Vec<u64>,
+    keys: &'a [u64],
     /// Leaf-laned vals over the same rows; `None` when vals are structured.
     vals: Option<Vec<Vec<u64>>>,
     /// Cursor within `keys`.
     cur: usize,
 }
 
-/// Rows pulled per driver chunk per `advance` call. Unprocessed pulled rows are re-pulled
-/// by the next call (bounded per-call waste, in exchange for pull-once simplicity).
+/// Rows per chunk per block. Bounds the block's working set; nothing outside it is read.
 const PULL: usize = 1 << 14;
 
 impl<'a, T: ColTime> LeafView<'a, T> {
-    fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, start: usize, leaf_vals: bool) -> Self {
-        let mut view = LeafView { chunk, cid, base: start, keys: Vec::new(), vals: if leaf_vals { Some(Vec::new()) } else { None }, cur: 0 };
-        view.extend_pull(PULL);
-        view
+    fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, start: usize, end: usize, leaf_vals: bool) -> Self {
+        let vals = (leaf_vals && end > start).then(|| pull_lanes(chunk.vals(), &(start..end).collect::<Vec<_>>()));
+        LeafView { chunk, cid, base: start, keys: &ident(chunk)[start..end], vals, cur: 0 }
     }
-    fn abs_end(&self) -> usize {
-        self.base + self.keys.len()
-    }
-    fn fully_pulled(&self) -> bool {
-        self.abs_end() == self.chunk.len()
-    }
-    /// Append up to `more` further rows to the buffers.
-    fn extend_pull(&mut self, more: usize) {
-        let s = self.abs_end();
-        let e = (s + more).min(self.chunk.len());
-        if s == e { return; }
-        let idx: Vec<usize> = (s..e).collect();
-        let lane = key_lane(self.chunk.keys());
-        self.keys.extend(gather(lane, &idx).into_u64("corgi join key pull"));
-        if let Some(vals) = self.vals.as_mut() {
-            let pulled = pull_lanes(self.chunk.vals(), &idx);
-            if vals.is_empty() {
-                *vals = pulled;
-            } else {
-                for (lane, more) in vals.iter_mut().zip(pulled) { lane.extend(more); }
-            }
-        }
-    }
-    /// The key under the cursor, if any remains in the buffer.
+    /// The key under the cursor, if any remains in this block.
     fn cur_key(&self) -> Option<u64> {
         self.keys.get(self.cur).copied()
     }
@@ -548,9 +565,10 @@ fn advance_leaf<T: ColTime>(
 ) -> bool {
     let start = from.expect("advance called on an exhausted unit");
     let hashed = chunks0.iter().chain(chunks1).find(|c| c.len() > 0).is_some_and(|c| key_is_hashed(c.keys()));
+    // Resume: the first row of each chunk at or past `start`, by binary search on its identifier
+    // lane. The lane is a sorted `u64` slice, so this is a slice operation, not a column probe.
     let seek = |chunks: &[&CorgiChunk<T, Diff>]| -> Vec<usize> {
-        let needle = CValue::u64(vec![start]);
-        chunks.iter().map(|c| if c.len() == 0 { 0 } else { find_ranges(&needle, key_lane(c.keys())).0[0] }).collect()
+        chunks.iter().map(|c| ident(c).partition_point(|&x| x < start)).collect()
     };
     let start0 = seek(chunks0);
     let start1 = seek(chunks1);
@@ -558,40 +576,30 @@ fn advance_leaf<T: ColTime>(
         chunks.iter().zip(starts).map(|(c, &s)| c.len() - s).sum()
     };
     let (r0, r1) = (remaining(chunks0, &start0), remaining(chunks1, &start1));
-    fn views<'a, T: ColTime>(chunks: &[&'a CorgiChunk<T, Diff>], starts: &[usize]) -> Vec<LeafView<'a, T>> {
+    fn views<'a, T: ColTime>(chunks: &[&'a CorgiChunk<T, Diff>], starts: &[usize], ends: &[usize]) -> Vec<LeafView<'a, T>> {
         let leaf_vals = leaf_valued(chunks);
         chunks.iter().enumerate()
-            .filter(|(_, c)| c.len() > 0)
-            .map(|(cid, c)| LeafView::new(c, cid, starts[cid], leaf_vals))
+            .filter(|(cid, _)| ends[*cid] > starts[*cid])
+            .map(|(cid, c)| LeafView::new(c, cid, starts[cid], ends[cid], leaf_vals))
             .collect()
     }
     if r0.max(r1) >= 2 * r0.min(r1) {
+        // Lopsided: only the driver is read in bulk, so only the driver bounds the block.
         let drive0 = r0 <= r1;
-        let (dviews, pchunks) = if drive0 { (views(chunks0, &start0), chunks1) } else { (views(chunks1, &start1), chunks0) };
+        let (dchunks, dstarts, pchunks) = if drive0 { (chunks0, &start0, chunks1) } else { (chunks1, &start1, chunks0) };
+        let h = block_horizon(dchunks, dstarts, PULL);
+        let dviews = views(dchunks, dstarts, &block_ends(dchunks, h));
         let (bd, bp) = if drive0 { (bridge0, bridge1) } else { (bridge1, bridge0) };
-        leaf_probe(dviews, pchunks, lower, start, from, bd, bp, hashed)
+        leaf_probe(dviews, pchunks, lower, h, from, bd, bp, hashed)
     } else {
-        leaf_merge(views(chunks0, &start0), views(chunks1, &start1), lower, start, from, bridge0, bridge1, hashed)
+        // Symmetric: both sides are read, so both bound the block.
+        let h = block_horizon(chunks0, &start0, PULL).into_iter()
+            .chain(block_horizon(chunks1, &start1, PULL))
+            .min();
+        let views0 = views(chunks0, &start0, &block_ends(chunks0, h));
+        let views1 = views(chunks1, &start1, &block_ends(chunks1, h));
+        leaf_merge(views0, views1, lower, h, from, bridge0, bridge1, hashed)
     }
-}
-
-/// The pull horizon: keys at or beyond the least last-pulled key of a partially-pulled
-/// view may have rows outside its buffer, so the block stops there. Extended pulls push
-/// it out when it would deny all progress (a run longer than the pull).
-fn pull_horizon<'a, T: ColTime>(views0: &mut [LeafView<'a, T>], views1: &mut [LeafView<'a, T>], start: u64) -> Option<u64> {
-    let horizon = |a: &[LeafView<'a, T>], b: &[LeafView<'a, T>]| -> Option<u64> {
-        a.iter().chain(b).filter(|v| !v.fully_pulled()).map(|v| *v.keys.last().unwrap()).min()
-    };
-    let mut h = horizon(views0, views1);
-    while h == Some(start) {
-        for v in views0.iter_mut().chain(views1.iter_mut()) {
-            if !v.fully_pulled() && *v.keys.last().unwrap() == start {
-                v.extend_pull(v.keys.len());
-            }
-        }
-        h = horizon(views0, views1);
-    }
-    h
 }
 
 /// Lopsided regime: the driver views are walked; the probee is presented only at the
@@ -600,14 +608,12 @@ fn leaf_probe<'a, T: ColTime>(
     mut dviews: Vec<LeafView<'a, T>>,
     pchunks: &[&CorgiChunk<T, Diff>],
     lower: &T,
-    start: u64,
+    h: Option<u64>,
     from: &mut Option<u64>,
     bridge_d: &mut ProxyBridge<T, Diff>,
     bridge_p: &mut ProxyBridge<T, Diff>,
     hashed: bool,
 ) -> bool {
-    let h = pull_horizon(&mut dviews, &mut [], start);
-
     // Merge the driver block's keys (strictly below the horizon) into the distinct key
     // list and each key's runs.
     let mut keyset: Vec<u64> = Vec::new();
@@ -676,13 +682,12 @@ fn leaf_merge<'a, T: ColTime>(
     mut views0: Vec<LeafView<'a, T>>,
     mut views1: Vec<LeafView<'a, T>>,
     lower: &T,
-    start: u64,
+    h: Option<u64>,
     from: &mut Option<u64>,
     bridge0: &mut ProxyBridge<T, Diff>,
     bridge1: &mut ProxyBridge<T, Diff>,
     hashed: bool,
 ) -> bool {
-    let h = pull_horizon(&mut views0, &mut views1, start);
     let (mut s0, mut s1) = (SideScratch::new(), SideScratch::new());
     let (mut refs0, mut refs1): (Vec<(usize, usize, usize)>, Vec<(usize, usize, usize)>) = (Vec::new(), Vec::new());
     loop {
