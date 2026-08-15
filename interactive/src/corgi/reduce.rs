@@ -26,10 +26,14 @@
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
 //! (a columnar semijoin — matching the row-wise tactic's read).
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
-
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::Description;
@@ -46,6 +50,73 @@ use crate::ir::Diff;
 use crate::parse::Reducer;
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
+
+/// One opt-in `CorgiReduceBackend` phase measurement. `work` is the phase's natural row count;
+/// it is diagnostic context, not a quantity comparable across differently named phases.
+#[derive(Clone, Debug)]
+pub struct ReducePhaseStat {
+    pub phase: &'static str,
+    pub calls: u64,
+    pub work: u64,
+    pub elapsed: Duration,
+}
+
+#[derive(Default)]
+struct ReducePhaseAccum {
+    calls: u64,
+    work: u64,
+    elapsed: Duration,
+}
+
+thread_local! {
+    static REDUCE_PROFILE: RefCell<BTreeMap<&'static str, ReducePhaseAccum>> = RefCell::new(BTreeMap::new());
+}
+
+fn reduce_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("CORGI_REDUCE_PROFILE").is_ok_and(|x| x != "0"))
+}
+
+#[inline]
+fn phase_start() -> Option<Instant> {
+    reduce_profile_enabled().then(Instant::now)
+}
+
+#[inline]
+fn phase_finish(phase: &'static str, start: Option<Instant>, work: usize) {
+    if let Some(start) = start {
+        REDUCE_PROFILE.with(|profile| {
+            let mut profile = profile.borrow_mut();
+            let stat = profile.entry(phase).or_default();
+            stat.calls += 1;
+            stat.work += work as u64;
+            stat.elapsed += start.elapsed();
+        });
+    }
+}
+
+/// Clear phase counters for the current worker thread.
+pub fn reset_phase_profile() {
+    REDUCE_PROFILE.with(|profile| profile.borrow_mut().clear());
+}
+
+/// Snapshot the current worker thread's phase counters, slowest phase first.
+pub fn phase_profile() -> Vec<ReducePhaseStat> {
+    REDUCE_PROFILE.with(|profile| {
+        let mut stats: Vec<_> = profile
+            .borrow()
+            .iter()
+            .map(|(&phase, stat)| ReducePhaseStat {
+                phase,
+                calls: stat.calls,
+                work: stat.work,
+                elapsed: stat.elapsed,
+            })
+            .collect();
+        stats.sort_unstable_by_key(|stat| std::cmp::Reverse(stat.elapsed));
+        stats
+    })
+}
 
 /// An identity `Hasher` for the id-index maps: their keys are already well-distributed 64-bit
 /// content hashes (`hash_rows`), so passing the id straight through avoids re-hashing it (siphash
@@ -206,7 +277,7 @@ fn seek_needles(sample: &CValue, changed: &[u64]) -> Option<CValue> {
 /// TODO: the scan's per-row work can still batch: `ids` re-derives (and copies) each chunk's
 /// key hashes every retire (memoize per chunk, or a stored hash column), and each hit
 /// materializes an owned time (`times().get`); kept RANGES could move via `push_range`.
-fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>)
+fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>, Vec<usize>)
 where
     T: ColTime,
 {
@@ -215,22 +286,30 @@ where
     /// (~log(rows) compares, each far costlier than the scan's flat membership test), so
     /// marginal seeks LOSE to the scan — measured, not modeled; 16 regressed load-shaped
     /// retires before this was widened.
-    const SEEK_ADVANTAGE: usize = 64;
+    fn seek_advantage() -> usize {
+        static ADVANTAGE: OnceLock<usize> = OnceLock::new();
+        *ADVANTAGE.get_or_init(|| {
+            std::env::var("CORGI_SEEK_ADVANTAGE").ok().and_then(|x| x.parse().ok()).unwrap_or(64)
+        })
+    }
 
     let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
     let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
     let (mut tags, mut offs) = (Vec::new(), Vec::new());
     let (mut khs, mut times, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
+    let mut run_ends = Vec::new();
     let total: usize = chunks.iter().map(|c| c.diffs().len()).sum();
-    let needles = if changed.len().saturating_mul(SEEK_ADVANTAGE) < total {
+    let needles = if changed.len().saturating_mul(seek_advantage()) < total {
         chunks.iter().find(|c| c.diffs().len() > 0).and_then(|c| seek_needles(c.keys(), changed))
     } else {
         None
     };
     if let Some(needles) = needles {
+        let phase = phase_start();
         // Narrow changed set over seekable keys: gallop each chunk once per changed key.
         // Chunks are key-ordered and `changed` ascends, so emission order matches the scan's.
         for (ci, ch) in chunks.iter().enumerate() {
+            let before = khs.len();
             if ch.diffs().is_empty() {
                 continue;
             }
@@ -244,9 +323,13 @@ where
                     diffs.push(ch.diffs()[i]);
                 }
             }
+            if khs.len() > before { run_ends.push(khs.len()); }
         }
+        phase_finish("present.seek_chunks", phase, total);
     } else {
+        let phase = phase_start();
         for (ci, ch) in chunks.iter().enumerate() {
+            let before = khs.len();
             // Borrow the key leaf when there is one (`ids`' value-as-id fast paths); only
             // structural keys need the hash, and only they pay a materialization. A shared
             // column's `Arc` cannot be unwrapped, so `ids` would copy the whole key column
@@ -266,14 +349,66 @@ where
                     diffs.push(ch.diffs()[i]);
                 }
             }
+            if khs.len() > before { run_ends.push(khs.len()); }
         }
+        phase_finish("present.scan_chunks", phase, total);
     }
     if tags.is_empty() {
-        return (CValue::Unit(0), CValue::Unit(0), khs, times, diffs);
+        return (CValue::Unit(0), CValue::Unit(0), khs, times, diffs, run_ends);
     }
+    let phase = phase_start();
     let keys_col = gather_lanes(&key_srcs, &tags, &offs);
     let vals_col = gather_lanes(&val_srcs, &tags, &offs);
-    (keys_col, vals_col, khs, times, diffs)
+    phase_finish("present.gather_columns", phase, tags.len());
+    (keys_col, vals_col, khs, times, diffs, run_ends)
+}
+
+fn merge_present_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("CORGI_MERGE_PRESENT").map_or(true, |x| x != "0"))
+}
+
+/// Merge already-ordered selected chunk runs directly into a consolidated proxy bridge. Returns
+/// false when a run's structural value order does not agree with its proxy-id order.
+fn merge_present<T: Ord + Clone>(
+    khs: &[u64], vids: &[u64], times: &[T], diffs: &[Diff], run_ends: &[usize],
+    bridge: &mut ProxyBridge<T, Diff>,
+) -> bool {
+    let mut start = 0usize;
+    for &end in run_ends {
+        if (start + 1..end).any(|i| (khs[i - 1], vids[i - 1], &times[i - 1]) > (khs[i], vids[i], &times[i])) {
+            return false;
+        }
+        start = end;
+    }
+
+    bridge.clear();
+    let mut heap: BinaryHeap<Reverse<((u64, u64), T, usize, usize)>> = BinaryHeap::new();
+    let mut lo = 0usize;
+    for (run, &hi) in run_ends.iter().enumerate() {
+        heap.push(Reverse(((khs[lo], vids[lo]), times[lo].clone(), run, lo)));
+        lo = hi;
+    }
+    let mut current: Option<((u64, u64), T, Diff)> = None;
+    while let Some(Reverse((kv, time, run, index))) = heap.pop() {
+        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == &time) {
+            current.as_mut().unwrap().2 += diffs[index];
+        } else {
+            if let Some(record) = current.take() {
+                if record.2 != 0 { bridge.push(record); }
+            }
+            current = Some((kv, time, diffs[index]));
+        }
+        let end = run_ends[run];
+        if index + 1 < end {
+            let next = index + 1;
+            heap.push(Reverse(((khs[next], vids[next]), times[next].clone(), run, next)));
+        }
+    }
+    if let Some(record) = current {
+        if record.2 != 0 { bridge.push(record); }
+    }
+    true
 }
 
 /// All chunks of a batch list, flattened (empty chunks included — `hash_rows` yields nothing for them).
@@ -302,17 +437,27 @@ where
         len: &mut usize,
         bridge: &mut ProxyBridge<T, Diff>,
     ) {
-        let (p_keys, p_vals, khs, times, diffs) = collect_present(chunks, keys);
+        let (p_keys, p_vals, khs, times, diffs, run_ends) = collect_present(chunks, keys);
         if khs.is_empty() {
             return;
         }
+        let phase = phase_start();
         let vids = ids(&p_vals);
         for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
         *len += p_vals.len();
         blocks.push(p_vals);
         self.register_keys(p_keys, &khs);
-        bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
-        consolidate_updates(bridge);
+        phase_finish("present.register_input", phase, khs.len());
+        let phase = phase_start();
+        if merge_present_enabled() && merge_present(&khs, &vids, &times, &diffs, &run_ends, bridge) {
+            phase_finish("present.merge_input", phase, khs.len());
+        } else {
+            bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
+            phase_finish("present.build_input_bridge", phase, khs.len());
+            let phase = phase_start();
+            consolidate_updates(bridge);
+            phase_finish("present.consolidate_input", phase, bridge.len());
+        }
     }
 
     /// The one value crossing for a retire: every `(key, time)` bracket at once. Builds the output
@@ -492,6 +637,7 @@ where
         // The seeds are the novel batches' RAW (key_hash, time) support, recorded here — before the
         // merged presentation below, whose consolidation may net a novel record away entirely. The
         // key hashes come from the scan the key list needs anyway.
+        let phase = phase_start();
         let mut seeds: Vec<(u64, T)> = Vec::new();
         for ch in novel_chunks.iter() {
             let khs = ids(ch.keys());
@@ -523,6 +669,7 @@ where
             }
             keys = merged;
         }
+        phase_finish("window.seed_and_keys", phase, novel_chunks.iter().map(|c| c.diffs().len()).sum::<usize>() + changed.len());
         if keys.is_empty() {
             self.in_vals = CValue::Unit(0);
             self.in_index = IdMap::default();
@@ -538,28 +685,50 @@ where
         let mut in_len = 0usize;
         let mut in_chunks = chunks_of(instance.source_batches);
         in_chunks.extend(novel_chunks.iter().copied());
+        let phase = phase_start();
         self.present_input(&in_chunks, &keys, &mut in_blocks, &mut in_len, &mut window.input);
+        phase_finish("window.present_input", phase, in_chunks.iter().map(|c| c.diffs().len()).sum());
+        let phase = phase_start();
         self.in_vals = concat_columns(&in_blocks);
+        phase_finish("window.concat_input", phase, in_len);
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
-        let (o_keys, o_vals, o_khs, o_times, o_diffs) = collect_present(&chunks_of(instance.output_batches), &keys);
+        let output_chunks = chunks_of(instance.output_batches);
+        let phase = phase_start();
+        let (o_keys, o_vals, o_khs, o_times, o_diffs, o_run_ends) = collect_present(&output_chunks, &keys);
         if !o_khs.is_empty() {
+            let subphase = phase_start();
             let vids = ids(&o_vals);
             self.register_keys(o_keys, &o_khs);
             self.register_vals(o_vals, &vids);
-            window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
-            consolidate_updates(&mut window.output);
+            phase_finish("present.register_output", subphase, o_khs.len());
+            let subphase = phase_start();
+            if merge_present_enabled() && merge_present(&o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output) {
+                phase_finish("present.merge_output", subphase, o_khs.len());
+            } else {
+                window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
+                phase_finish("present.build_output_bridge", subphase, o_khs.len());
+                let subphase = phase_start();
+                consolidate_updates(&mut window.output);
+                phase_finish("present.consolidate_output", subphase, window.output.len());
+            }
         }
+        phase_finish("window.present_output", phase, output_chunks.iter().map(|c| c.diffs().len()).sum());
     }
 
     fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
         // Resolve input value_ids to `in_vals` rows, reduce (desired output), then difference the
         // desired against the presented current output per key: correction = desired − current.
+        let phase = phase_start();
         let in_rows: Vec<(usize, Diff)> = input.iter()
             .map(|&(vid, d)| (*self.in_index.get(&vid).expect("input value_id presented this window"), d))
             .collect();
+        phase_finish("corrections.resolve_input", phase, input.len());
+        let phase = phase_start();
         let (desired, desired_ends) = self.reduce_brackets(in_ends, &in_rows);
+        phase_finish("corrections.reduce_brackets", phase, in_rows.len());
 
+        let phase = phase_start();
         let mut corr: Vec<(u64, Diff)> = Vec::new();
         let mut corr_ends: Vec<usize> = Vec::with_capacity(keys.len());
         let (mut ds, mut os) = (0usize, 0usize);
@@ -582,11 +751,13 @@ where
             ds = de;
             os = oe;
         }
+        phase_finish("corrections.diff_output", phase, desired.len() + output.len());
         (corr, corr_ends)
     }
 
     fn emit(&mut self, tile: usize, records: &[((u64, u64), T, Diff)]) {
         // Resolve each correction's key/value proxies to pool rows and accumulate into the tile.
+        let phase = phase_start();
         for rec in records {
             let ((kh, vid), t, d) = (rec.0, &rec.1, rec.2);
             let kr = *self.key_index.get(&kh).expect("key resolvable this retire");
@@ -597,18 +768,25 @@ where
             times.push(t.clone());
             diffs.push(d);
         }
+        phase_finish("emit.resolve_and_buffer", phase, records.len());
     }
 
     fn finish(&mut self) -> Vec<CBatch<T>> {
         // Seal each tile: gather its accumulated (key, val) pool rows into columns, one CorgiChunk batch.
+        let phase = phase_start();
         let key_pool = concat_columns(&self.key_blocks);
         let val_pool = concat_columns(&self.val_blocks);
+        phase_finish("finish.concat_pools", phase, self.key_len + self.val_len);
         let tiles = std::mem::take(&mut self.tiles);
         let tile_rows = std::mem::take(&mut self.tile_rows);
-        tiles.into_iter().zip(tile_rows).map(|(desc, (krows, vrows, times, diffs))| {
+        let output_rows: usize = tile_rows.iter().map(|rows| rows.0.len()).sum();
+        let phase = phase_start();
+        let result = tiles.into_iter().zip(tile_rows).map(|(desc, (krows, vrows, times, diffs))| {
             let keys = gather(&key_pool, &krows);
             let vals = gather(&val_pool, &vrows);
             Rc::new(columns_to_batch(keys, vals, times, diffs, desc))
-        }).collect()
+        }).collect();
+        phase_finish("finish.gather_and_seal", phase, output_rows);
+        result
     }
 }
