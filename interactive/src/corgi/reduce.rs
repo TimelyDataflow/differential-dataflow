@@ -288,7 +288,7 @@ impl<T> CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
 {
-    /// Present one input run — the accumulated history or the novel delta — restricted to `keys`.
+    /// Present the merged input run — novel and prior chunks together — restricted to `keys`.
     ///
     /// Fills `bridge`, registers the run's representative keys, and extends the shared value pool
     /// (`blocks`/`len`, concatenated into `in_vals`) with its values, so `in_index` resolves a value
@@ -489,9 +489,21 @@ where
         // separate seeding pass this replaced read the delta a second time to derive them.
         let novel_chunks = chunks_of(instance.input_batches);
         let mut keys: Vec<u64> = Vec::new();
+        // The seeds are the novel batches' RAW (key_hash, time) support, recorded here — before the
+        // merged presentation below, whose consolidation may net a novel record away entirely. The
+        // key hashes come from the scan the key list needs anyway.
+        let mut seeds: Vec<(u64, T)> = Vec::new();
         for ch in novel_chunks.iter() {
-            keys.extend(ids(ch.keys()));
+            let khs = ids(ch.keys());
+            let times = ch.times();
+            for (i, kh) in khs.iter().enumerate() {
+                seeds.push((*kh, times.get(i)));
+            }
+            keys.extend(khs);
         }
+        seeds.sort_unstable_by(|a, b| a.cmp(b));
+        seeds.dedup();
+        window.seeds = seeds;
         keys.sort_unstable();
         keys.dedup();
         if !changed.is_empty() {
@@ -517,14 +529,16 @@ where
             return;
         }
 
-        // The two input presentations, held apart: `history` is the accumulated input and `novel`
-        // the delta whose times seed the interesting times. `in_index` resolves a value id back to a
-        // representative row of `in_vals`, which spans BOTH runs, for `reduce_corrections`.
+        // ONE merged input presentation: novel and prior together, netted by the consolidation —
+        // equal values share a content-hash id, so an exactly cancelling pair vanishes here, and
+        // its time survives in `window.seeds` above. `in_index` resolves a value id back to a
+        // representative row of `in_vals` for `reduce_corrections`.
         self.in_index = IdMap::default();
         let mut in_blocks: Vec<CValue> = Vec::new();
         let mut in_len = 0usize;
-        self.present_input(&chunks_of(instance.source_batches), &keys, &mut in_blocks, &mut in_len, &mut window.history);
-        self.present_input(&novel_chunks, &keys, &mut in_blocks, &mut in_len, &mut window.novel);
+        let mut in_chunks = chunks_of(instance.source_batches);
+        in_chunks.extend(novel_chunks.iter().copied());
+        self.present_input(&in_chunks, &keys, &mut in_blocks, &mut in_len, &mut window.input);
         self.in_vals = concat_columns(&in_blocks);
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
