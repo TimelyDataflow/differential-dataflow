@@ -3,7 +3,10 @@
 //! A conventional differential reduce against `(u64, u64)`, where the backend supplies the
 //! implementation of the interpretation of the integers.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -15,6 +18,72 @@ use crate::trace::{BatchReader, Description};
 use super::ProxyBridge;
 use crate::operators::reduce::{sort_dedup, ReduceTactic};
 use crate::operators::ValueHistory;
+
+/// One opt-in phase measurement from the generic proxy-reduce driver.
+#[derive(Clone, Debug)]
+pub struct ProxyReducePhaseStat {
+    /// Stable phase label.
+    pub phase: &'static str,
+    /// Number of timed invocations.
+    pub calls: u64,
+    /// Phase-specific row or slot count, useful only within the named phase.
+    pub work: u64,
+    /// Total wall-clock time spent in the phase.
+    pub elapsed: Duration,
+}
+
+#[derive(Default)]
+struct ProxyReducePhaseAccum {
+    calls: u64,
+    work: u64,
+    elapsed: Duration,
+}
+
+thread_local! {
+    static PROXY_REDUCE_PROFILE: RefCell<BTreeMap<&'static str, ProxyReducePhaseAccum>> = RefCell::new(BTreeMap::new());
+}
+
+fn proxy_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("PROXY_REDUCE_PROFILE").is_ok_and(|x| x != "0"))
+}
+
+#[inline]
+fn phase_start() -> Option<Instant> {
+    proxy_profile_enabled().then(Instant::now)
+}
+
+#[inline]
+fn phase_finish(phase: &'static str, start: Option<Instant>, work: usize) {
+    if let Some(start) = start {
+        PROXY_REDUCE_PROFILE.with(|profile| {
+            let mut profile = profile.borrow_mut();
+            let stat = profile.entry(phase).or_default();
+            stat.calls += 1;
+            stat.work += work as u64;
+            stat.elapsed += start.elapsed();
+        });
+    }
+}
+
+/// Clear proxy-reduce phase counters for the current worker thread.
+pub fn reset_phase_profile() {
+    PROXY_REDUCE_PROFILE.with(|profile| profile.borrow_mut().clear());
+}
+
+/// Snapshot current-thread proxy-reduce phase counters, slowest phase first.
+pub fn phase_profile() -> Vec<ProxyReducePhaseStat> {
+    PROXY_REDUCE_PROFILE.with(|profile| {
+        let mut stats: Vec<_> = profile.borrow().iter().map(|(&phase, stat)| ProxyReducePhaseStat {
+            phase,
+            calls: stat.calls,
+            work: stat.work,
+            elapsed: stat.elapsed,
+        }).collect();
+        stats.sort_unstable_by_key(|stat| std::cmp::Reverse(stat.elapsed));
+        stats
+    })
+}
 
 /// A unit of proxied reduce work, presented to the backend.
 pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
@@ -162,7 +231,9 @@ where
         upper: &Antichain<B1::Time>,
         held: &Antichain<B1::Time>,
     ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>) {
+        let retire_phase = phase_start();
         if held.elements().iter().all(|t| upper.less_equal(t)) {
+            phase_finish("retire.total_inclusive", retire_phase, 0);
             return (Vec::new(), held.clone());
         }
 
@@ -175,14 +246,24 @@ where
 
         // Split the carried interesting times against `upper`.
         // A time below it is DUE: its key must be re-evaluated this retire, so the key is `changed`.
-        // A time at or beyond it is carried forward untouched, seeding `new_pending`.
+        // A time at or beyond it remains carried in `self.pending`. Partition in place: rebuilding
+        // the whole map cloned every carried timestamp on every retire, even though only the small
+        // due subset changes.
         let mut due: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
-        let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
-        for (key, times) in self.pending.iter() {
-            let (carried, ready): (Vec<_>, Vec<_>) = times.iter().cloned().partition(|t| upper.less_equal(t));
-            if !ready.is_empty() { due.insert(*key, ready); }
-            if !carried.is_empty() { new_pending.insert(*key, carried); }
+        let mut pending_frontier = Antichain::new();
+        let phase = phase_start();
+        for (&key, times) in self.pending.iter_mut() {
+            let mut ready = Vec::new();
+            times.retain(|time| {
+                let carried = upper.less_equal(time);
+                if carried { pending_frontier.insert_ref(time); }
+                else { ready.push(time.clone()); }
+                carried
+            });
+            if !ready.is_empty() { due.insert(key, ready); }
         }
+        self.pending.retain(|_, times| !times.is_empty());
+        phase_finish("retire.partition_pending", phase, self.pending.len());
         // The keys the harness knows must be revisited. The backend adds those its novel batches
         // touch, which it discovers while reading them; neither side scans the whole key space.
         let changed: Vec<u64> = due.keys().copied().collect();
@@ -193,20 +274,17 @@ where
         // beyond `upper` can remain when nothing is due, and releasing their capabilities would
         // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
         if changed.is_empty() && instance.input_batches.iter().all(|b| b.is_empty()) {
-            let mut frontier = Antichain::new();
-            for times in self.pending.values() {
-                for time in times {
-                    frontier.insert_ref(time);
-                }
-            }
-            return (Vec::new(), frontier);
+            phase_finish("retire.total_inclusive", retire_phase, 0);
+            return (Vec::new(), pending_frontier);
         }
 
         // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
         // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
         let held_elems: Vec<B1::Time> = held.elements().to_vec();
+        let phase = phase_start();
         let (tile_descs, tile_held, tile_of) = tile_descriptions(lower, upper, &held_elems);
         self.backend.begin(&tile_descs);
+        phase_finish("retire.describe_and_begin", phase, tile_descs.len());
 
         // Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
         // once the backend reports the space covered.
@@ -216,6 +294,7 @@ where
         // Retire-wide reusable scratch: cleared per window or wave, never reallocated. Fresh
         // per-key/per-wave `Vec`s were once the dominant cost here, which is why the slots and the
         // staging buffers are held across the whole retire rather than built where they are used.
+        let phase = phase_start();
         let mut slots: Vec<KeySweep<B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
         let mut live: Vec<usize> = Vec::new();
         let mut tile_deltas: Vec<Vec<((u64, u64), B1::Time, Bk::ROut)>> = (0..held_elems.len()).map(|_| Vec::new()).collect();
@@ -227,11 +306,14 @@ where
         let mut active: Vec<(usize, B1::Time)> = Vec::new();
         let mut in_accum: Vec<(u64, Bk::RIn)> = Vec::new();
         let mut cur_out: Vec<(u64, Bk::ROut)> = Vec::new();
+        phase_finish("retire.allocate_scratch", phase, held_elems.len());
 
         while from.is_some() {
             let before = from;
             window.clear();
+            let phase = phase_start();
             self.backend.next_window(&instance, &changed, &mut from, &mut window);
+            phase_finish("window.backend_present", phase, window.input.len() + window.output.len() + window.seeds.len());
             let p_in = &window.input;
             let seeds = &window.seeds;
             let p_out = &window.output;
@@ -274,6 +356,7 @@ where
             let mut n_slots = 0usize;
             let (mut is, mut ns, mut os) = (0usize, 0usize, 0usize);
             live.clear();
+            let phase = phase_start();
             // Mapped to hashes before the min: the sources differ in shape.
             while let Some(key) = [
                 p_in.get(is).map(|record| record.0.0),
@@ -294,7 +377,7 @@ where
                 let slot = &mut slots[n_slots];
                 slot.key = key;
                 slot.pended.clear();
-                // Only the DUE times seed the sweep; the carried ones are already in `new_pending`.
+                // Only the DUE times seed the sweep; the carried ones remain in `self.pending`.
                 let owed = due.get(&key).map(|p| &p[..]).unwrap_or(&[]);
                 slot.sweep.load(
                     owed,
@@ -305,10 +388,12 @@ where
                 slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
                 if slot.at.is_some() { live.push(n_slots); }
                 else if !slot.pended.is_empty() {
-                    new_pending.entry(key).or_default().append(&mut slot.pended);
+                    for time in &slot.pended { pending_frontier.insert_ref(time); }
+                    self.pending.entry(key).or_default().append(&mut slot.pended);
                 }
                 n_slots += 1;
             }
+            phase_finish("window.initialize_sweeps", phase, p_in.len() + seeds.len() + p_out.len());
 
             // Each wave: read every suspended key's accumulations, cross the non-empty ones in one
             // call, hand the corrections back, and step every live key on. A key retires when its
@@ -321,6 +406,7 @@ where
                 out_all.clear();
                 active.clear();
 
+                let phase = phase_start();
                 for &si in live.iter() {
                     let at = slots[si].at.clone().expect("live slots are suspended at a time");
                     in_accum.clear();
@@ -337,9 +423,13 @@ where
                     out_ends.push(out_all.len());
                     active.push((si, at));
                 }
+                phase_finish("wave.accumulate", phase, live.len());
 
                 if !batch_keys.is_empty() {
+                    let phase = phase_start();
                     let (corr, corr_ends) = self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all);
+                    phase_finish("wave.backend_corrections", phase, in_all.len() + out_all.len());
+                    let phase = phase_start();
                     let mut cstart = 0usize;
                     for (bi, (si, at)) in active.iter().enumerate() {
                         let cend = corr_ends[bi];
@@ -352,41 +442,45 @@ where
                         }
                         cstart = cend;
                     }
+                    phase_finish("wave.commit_corrections", phase, corr.len());
                 }
 
                 // Step every live key past the time it was suspended at, and retire the spent ones.
+                let phase = phase_start();
                 for &si in live.iter() {
                     let slot = &mut slots[si];
                     slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
                     if slot.at.is_none() && !slot.pended.is_empty() {
-                        let entry = new_pending.entry(slot.key).or_default();
+                        for time in &slot.pended { pending_frontier.insert_ref(time); }
+                        let entry = self.pending.entry(slot.key).or_default();
                         entry.append(&mut slot.pended);
                         crate::operators::reduce::sort_dedup(entry);
                     }
                 }
                 live.retain(|&si| slots[si].at.is_some());
+                phase_finish("wave.advance_sweeps", phase, live.len());
             }
 
+            let phase = phase_start();
+            let mut emit_work = 0usize;
             for (held_index, deltas) in tile_deltas.iter_mut().enumerate() {
                 if deltas.is_empty() {
                     continue;
                 }
                 if let Some(tile) = tile_of[held_index] {
+                    emit_work += deltas.len();
                     crate::consolidation::consolidate_updates(deltas);
                     self.backend.emit(tile, &deltas[..]);
                 }
             }
+            phase_finish("window.consolidate_and_emit", phase, emit_work);
         }
 
-        self.pending = new_pending;
+        let phase = phase_start();
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
-        let mut frontier = Antichain::new();
-        for times in self.pending.values() {
-            for t in times {
-                frontier.insert_ref(t);
-            }
-        }
-        (produced, frontier)
+        phase_finish("retire.backend_finish", phase, produced.len());
+        phase_finish("retire.total_inclusive", retire_phase, produced.len());
+        (produced, pending_frontier)
     }
 }
 
