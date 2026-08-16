@@ -416,6 +416,10 @@ where
     /// ingest — no transcode).
     pub fn from_columns(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> Self {
         let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
+        debug_assert!({
+            let lane = corgi::arrange::leaf_slice(key_lane(&keys));
+            lane.is_some_and(|ids| ids.windows(2).all(|pair| pair[0] <= pair[1]))
+        }, "arrangement key must lead with a sorted u64 identifier lane");
         Self::from_parts(keys, vals, ColTimes::from_iter(times), diffs)
     }
 
