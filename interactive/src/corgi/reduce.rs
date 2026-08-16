@@ -26,10 +26,11 @@
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
 //! (a columnar semijoin — matching the row-wise tactic's read).
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
-
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::Description;
@@ -164,8 +165,10 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
 /// width-blind and consistent-with-equality) — not the branch-local `arrange::hash_rows`; DDIR
 /// transcodes every leaf to `u64`, so width-blindness is a no-op for us and there is no cross-path
 /// hash comparison (value-as-id and native hash are never used for the same value: shape is uniform
-/// per column). The id is used ONLY as an identity for netting/dedup — its numeric order is never
-/// relied upon — so the raw two's-complement `u64` is correct even for negative ints (no swizzle).
+/// per column). Compound ids are used only for identity, but the leaf fast path additionally relies
+/// on raw-id order matching corgi's unsigned leaf order: `seek_needles` searches in that order and
+/// `merge_present` merges chunk runs in it. Raw two's-complement `u64` therefore remains correct for
+/// negative ints (no swizzle); changing the leaf encoding must also revisit those ordered paths.
 /// Applied CONSISTENTLY at every id site (both value presentations AND the freshly-produced
 /// `reduce_brackets` outputs), else `desired − current` nets across mismatched ids for the same value.
 fn ids(col: &CValue) -> Vec<u64> {
@@ -206,7 +209,7 @@ fn seek_needles(sample: &CValue, changed: &[u64]) -> Option<CValue> {
 /// TODO: the scan's per-row work can still batch: `ids` re-derives (and copies) each chunk's
 /// key hashes every retire (memoize per chunk, or a stored hash column), and each hit
 /// materializes an owned time (`times().get`); kept RANGES could move via `push_range`.
-fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>)
+fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>, Vec<usize>)
 where
     T: ColTime,
 {
@@ -221,6 +224,7 @@ where
     let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
     let (mut tags, mut offs) = (Vec::new(), Vec::new());
     let (mut khs, mut times, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
+    let mut run_ends = Vec::new();
     let total: usize = chunks.iter().map(|c| c.diffs().len()).sum();
     let needles = if changed.len().saturating_mul(SEEK_ADVANTAGE) < total {
         chunks.iter().find(|c| c.diffs().len() > 0).and_then(|c| seek_needles(c.keys(), changed))
@@ -231,6 +235,7 @@ where
         // Narrow changed set over seekable keys: gallop each chunk once per changed key.
         // Chunks are key-ordered and `changed` ascends, so emission order matches the scan's.
         for (ci, ch) in chunks.iter().enumerate() {
+            let before = khs.len();
             if ch.diffs().is_empty() {
                 continue;
             }
@@ -244,9 +249,11 @@ where
                     diffs.push(ch.diffs()[i]);
                 }
             }
+            if khs.len() > before { run_ends.push(khs.len()); }
         }
     } else {
         for (ci, ch) in chunks.iter().enumerate() {
+            let before = khs.len();
             // Borrow the key leaf when there is one (`ids`' value-as-id fast paths); only
             // structural keys need the hash, and only they pay a materialization. A shared
             // column's `Arc` cannot be unwrapped, so `ids` would copy the whole key column
@@ -266,14 +273,87 @@ where
                     diffs.push(ch.diffs()[i]);
                 }
             }
+            if khs.len() > before { run_ends.push(khs.len()); }
         }
     }
     if tags.is_empty() {
-        return (CValue::Unit(0), CValue::Unit(0), khs, times, diffs);
+        return (CValue::Unit(0), CValue::Unit(0), khs, times, diffs, run_ends);
     }
     let keys_col = gather_lanes(&key_srcs, &tags, &offs);
     let vals_col = gather_lanes(&val_srcs, &tags, &offs);
-    (keys_col, vals_col, khs, times, diffs)
+    (keys_col, vals_col, khs, times, diffs, run_ends)
+}
+
+/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Identity-id leaf
+/// columns preserve the chunks' structural order; a debug assertion audits the resulting
+/// `(key_id, value_id, time)` order against that inference. Returns false for structural columns or
+/// a nonempty bridge, so the caller can append and consolidate the whole bridge normally.
+fn merge_present<T: Ord + Clone>(
+    keys_col: &CValue, vals_col: &CValue,
+    khs: &[u64], vids: &[u64], times: &[T], diffs: &[Diff], run_ends: &[usize],
+    bridge: &mut ProxyBridge<T, Diff>,
+) -> bool {
+    let ordered_ids = corgi::arrange::leaf_slice(keys_col).is_some()
+        && corgi::arrange::leaf_slice(vals_col).is_some();
+    if !ordered_ids || !bridge.is_empty() {
+        return false;
+    }
+
+    debug_assert!({
+        let mut start = 0usize;
+        let sorted = run_ends.iter().all(|&end| {
+            let sorted = (start + 1..end).all(|i| {
+                (khs[i - 1], vids[i - 1], &times[i - 1])
+                    <= (khs[i], vids[i], &times[i])
+            });
+            start = end;
+            sorted
+        });
+        sorted && start == khs.len()
+    }, "identity ids do not preserve selected chunk order");
+
+    let mut current: Option<((u64, u64), T, Diff)> = None;
+    let mut accumulate = |kv, time: &T, diff| {
+        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == time) {
+            current.as_mut().unwrap().2 += diff;
+        } else {
+            if let Some(record) = current.take() {
+                if record.2 != 0 { bridge.push(record); }
+            }
+            current = Some((kv, time.clone(), diff));
+        }
+    };
+
+    if run_ends.len() == 1 {
+        for index in 0..run_ends[0] {
+            accumulate((khs[index], vids[index]), &times[index], diffs[index]);
+        }
+        drop(accumulate);
+        if let Some(record) = current {
+            if record.2 != 0 { bridge.push(record); }
+        }
+        return true;
+    }
+
+    let mut heap: BinaryHeap<Reverse<((u64, u64), &T, usize, usize)>> = BinaryHeap::new();
+    let mut lo = 0usize;
+    for (run, &hi) in run_ends.iter().enumerate() {
+        heap.push(Reverse(((khs[lo], vids[lo]), &times[lo], run, lo)));
+        lo = hi;
+    }
+    while let Some(Reverse((kv, time, run, index))) = heap.pop() {
+        accumulate(kv, time, diffs[index]);
+        let end = run_ends[run];
+        if index + 1 < end {
+            let next = index + 1;
+            heap.push(Reverse(((khs[next], vids[next]), &times[next], run, next)));
+        }
+    }
+    drop(accumulate);
+    if let Some(record) = current {
+        if record.2 != 0 { bridge.push(record); }
+    }
+    true
 }
 
 /// All chunks of a batch list, flattened (empty chunks included — `hash_rows` yields nothing for them).
@@ -302,17 +382,20 @@ where
         len: &mut usize,
         bridge: &mut ProxyBridge<T, Diff>,
     ) {
-        let (p_keys, p_vals, khs, times, diffs) = collect_present(chunks, keys);
+        let (p_keys, p_vals, khs, times, diffs, run_ends) = collect_present(chunks, keys);
         if khs.is_empty() {
             return;
         }
         let vids = ids(&p_vals);
+        let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &times, &diffs, &run_ends, bridge);
         for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
         *len += p_vals.len();
         blocks.push(p_vals);
         self.register_keys(p_keys, &khs);
-        bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
-        consolidate_updates(bridge);
+        if !merged {
+            bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
+            consolidate_updates(bridge);
+        }
     }
 
     /// The one value crossing for a retire: every `(key, time)` bracket at once. Builds the output
@@ -542,13 +625,16 @@ where
         self.in_vals = concat_columns(&in_blocks);
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
-        let (o_keys, o_vals, o_khs, o_times, o_diffs) = collect_present(&chunks_of(instance.output_batches), &keys);
+        let (o_keys, o_vals, o_khs, o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
         if !o_khs.is_empty() {
             let vids = ids(&o_vals);
+            let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output);
             self.register_keys(o_keys, &o_khs);
             self.register_vals(o_vals, &vids);
-            window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
-            consolidate_updates(&mut window.output);
+            if !merged {
+                window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
+                consolidate_updates(&mut window.output);
+            }
         }
     }
 
