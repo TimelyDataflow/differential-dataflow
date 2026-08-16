@@ -188,10 +188,10 @@ where
         let mut pending_frontier = Antichain::new();
         for (&key, times) in self.pending.iter_mut() {
             let mut ready = Vec::new();
-            times.retain(|time| {
+            times.retain_mut(|time| {
                 let carried = upper.less_equal(time);
                 if carried { pending_frontier.insert_ref(time); }
-                else { ready.push(time.clone()); }
+                else { ready.push(std::mem::replace(time, B1::Time::minimum())); }
                 carried
             });
             if !ready.is_empty() { due.insert(key, ready); }
