@@ -22,6 +22,7 @@ pub struct ValDistributor<U: Update, H> {
     marker: std::marker::PhantomData<U>,
     hashfunc: H,
     pre_lens: Vec<usize>,
+    worker: usize,
 }
 
 impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<RecordedUpdates<U>> for ValDistributor<U, H> {
@@ -68,6 +69,21 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
         // Distribute the input's record count across non-empty outputs.
         let total_records = container.records;
         let non_empty: usize = outputs.iter().filter(|o| !o.keys.values.is_empty()).count();
+        // N.B. An input whose updates all consolidated away needs to emit a message
+        // carrying a `records` count for timely's bookkeeping.
+        if non_empty == 0 && total_records > 0 {
+            let mut recorded = RecordedUpdates::<U> {
+                updates: Default::default(),
+                records: total_records,
+                consolidated: true,
+            };
+            // Push the empty update to the worker that produced the original
+            // values so the send stays local. Not needed for correctness, but
+            // a reasonable choice.
+            Message::push_at(&mut recorded, time.clone(), &mut pushers[self.worker % pushers.len()]);
+            return;
+        }
+
         let mut first_records = total_records.saturating_sub(non_empty.saturating_sub(1));
         for (pusher, output) in pushers.iter_mut().zip(outputs) {
             if !output.keys.values.is_empty() {
@@ -108,6 +124,7 @@ where
             marker: std::marker::PhantomData,
             hashfunc: self.hashfunc,
             pre_lens: Vec::new(),
+            worker: worker.index(),
         };
         (Exchange::new(senders, distributor), LogPuller::new(receiver, worker.index(), identifier, logging.clone()))
     }
