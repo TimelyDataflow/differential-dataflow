@@ -165,8 +165,10 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
 /// width-blind and consistent-with-equality) — not the branch-local `arrange::hash_rows`; DDIR
 /// transcodes every leaf to `u64`, so width-blindness is a no-op for us and there is no cross-path
 /// hash comparison (value-as-id and native hash are never used for the same value: shape is uniform
-/// per column). The id is used ONLY as an identity for netting/dedup — its numeric order is never
-/// relied upon — so the raw two's-complement `u64` is correct even for negative ints (no swizzle).
+/// per column). Compound ids are used only for identity, but the leaf fast path additionally relies
+/// on raw-id order matching corgi's unsigned leaf order: `seek_needles` searches in that order and
+/// `merge_present` merges chunk runs in it. Raw two's-complement `u64` therefore remains correct for
+/// negative ints (no swizzle); changing the leaf encoding must also revisit those ordered paths.
 /// Applied CONSISTENTLY at every id site (both value presentations AND the freshly-produced
 /// `reduce_brackets` outputs), else `desired − current` nets across mismatched ids for the same value.
 fn ids(col: &CValue) -> Vec<u64> {
@@ -282,32 +284,51 @@ where
     (keys_col, vals_col, khs, times, diffs, run_ends)
 }
 
-/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Returns false
-/// when proxy ids do not preserve the chunks' structural order, or when the bridge already holds
-/// records; the caller can then append the records and consolidate the whole bridge normally.
+/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Identity-id leaf
+/// columns preserve the chunks' structural order; a debug assertion audits the resulting
+/// `(key_id, value_id, time)` order against that inference. Returns false for structural columns or
+/// a nonempty bridge, so the caller can append and consolidate the whole bridge normally.
 fn merge_present<T: Ord + Clone>(
-    ordered_ids: bool,
+    keys_col: &CValue, vals_col: &CValue,
     khs: &[u64], vids: &[u64], times: &[T], diffs: &[Diff], run_ends: &[usize],
     bridge: &mut ProxyBridge<T, Diff>,
 ) -> bool {
+    let ordered_ids = corgi::arrange::leaf_slice(keys_col).is_some()
+        && corgi::arrange::leaf_slice(vals_col).is_some();
     if !ordered_ids || !bridge.is_empty() {
         return false;
     }
 
-    if run_ends.len() == 1 {
-        let mut current: Option<((u64, u64), T, Diff)> = None;
-        for index in 0..run_ends[0] {
-            let kv = (khs[index], vids[index]);
-            let time = &times[index];
-            if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == time) {
-                current.as_mut().unwrap().2 += diffs[index];
-            } else {
-                if let Some(record) = current.take() {
-                    if record.2 != 0 { bridge.push(record); }
-                }
-                current = Some((kv, time.clone(), diffs[index]));
+    debug_assert!({
+        let mut start = 0usize;
+        let sorted = run_ends.iter().all(|&end| {
+            let sorted = (start + 1..end).all(|i| {
+                (khs[i - 1], vids[i - 1], &times[i - 1])
+                    <= (khs[i], vids[i], &times[i])
+            });
+            start = end;
+            sorted
+        });
+        sorted && start == khs.len()
+    }, "identity ids do not preserve selected chunk order");
+
+    let mut current: Option<((u64, u64), T, Diff)> = None;
+    let mut accumulate = |kv, time: &T, diff| {
+        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == time) {
+            current.as_mut().unwrap().2 += diff;
+        } else {
+            if let Some(record) = current.take() {
+                if record.2 != 0 { bridge.push(record); }
             }
+            current = Some((kv, time.clone(), diff));
         }
+    };
+
+    if run_ends.len() == 1 {
+        for index in 0..run_ends[0] {
+            accumulate((khs[index], vids[index]), &times[index], diffs[index]);
+        }
+        drop(accumulate);
         if let Some(record) = current {
             if record.2 != 0 { bridge.push(record); }
         }
@@ -320,22 +341,15 @@ fn merge_present<T: Ord + Clone>(
         heap.push(Reverse(((khs[lo], vids[lo]), &times[lo], run, lo)));
         lo = hi;
     }
-    let mut current: Option<((u64, u64), T, Diff)> = None;
     while let Some(Reverse((kv, time, run, index))) = heap.pop() {
-        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == time) {
-            current.as_mut().unwrap().2 += diffs[index];
-        } else {
-            if let Some(record) = current.take() {
-                if record.2 != 0 { bridge.push(record); }
-            }
-            current = Some((kv, time.clone(), diffs[index]));
-        }
+        accumulate(kv, time, diffs[index]);
         let end = run_ends[run];
         if index + 1 < end {
             let next = index + 1;
             heap.push(Reverse(((khs[next], vids[next]), &times[next], run, next)));
         }
     }
+    drop(accumulate);
     if let Some(record) = current {
         if record.2 != 0 { bridge.push(record); }
     }
@@ -372,14 +386,13 @@ where
         if khs.is_empty() {
             return;
         }
-        let ordered_ids = corgi::arrange::leaf_slice(&p_keys).is_some()
-            && corgi::arrange::leaf_slice(&p_vals).is_some();
         let vids = ids(&p_vals);
+        let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &times, &diffs, &run_ends, bridge);
         for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
         *len += p_vals.len();
         blocks.push(p_vals);
         self.register_keys(p_keys, &khs);
-        if !merge_present(ordered_ids, &khs, &vids, &times, &diffs, &run_ends, bridge) {
+        if !merged {
             bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
             consolidate_updates(bridge);
         }
@@ -614,12 +627,11 @@ where
         // Output-history presentation, same keys (register keys + values for correction resolution).
         let (o_keys, o_vals, o_khs, o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
         if !o_khs.is_empty() {
-            let ordered_ids = corgi::arrange::leaf_slice(&o_keys).is_some()
-                && corgi::arrange::leaf_slice(&o_vals).is_some();
             let vids = ids(&o_vals);
+            let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output);
             self.register_keys(o_keys, &o_khs);
             self.register_vals(o_vals, &vids);
-            if !merge_present(ordered_ids, &o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output) {
+            if !merged {
                 window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
                 consolidate_updates(&mut window.output);
             }

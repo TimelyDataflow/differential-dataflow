@@ -147,10 +147,13 @@ impl<T, Bk> ProxyReduceTactic<T, Bk> {
     }
 }
 
-fn frontier_of_pending<T: PartialOrder + Clone>(pending: &BTreeMap<u64, Vec<T>>) -> Antichain<T> {
-    let mut frontier = Antichain::new();
-    for time in pending.values().flatten() { frontier.insert_ref(time); }
-    frontier
+fn assert_pending_frontier<T: PartialOrder + Clone>(pending: &BTreeMap<u64, Vec<T>>, maintained: &Antichain<T>) {
+    debug_assert!({
+        let mut expected = Antichain::new();
+        for time in pending.values().flatten() { expected.insert_ref(time); }
+        expected.elements().iter().all(|t| maintained.less_equal(t))
+            && maintained.elements().iter().all(|t| expected.less_equal(t))
+    }, "maintained pending frontier differs from pending times");
 }
 
 impl<B1, B2, Bk> ReduceTactic<B1, B2> for ProxyReduceTactic<B1::Time, Bk>
@@ -169,6 +172,10 @@ where
         held: &Antichain<B1::Time>,
     ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>) {
         if held.elements().iter().all(|t| upper.less_equal(t)) {
+            debug_assert!(
+                self.pending.values().flatten().all(|time| held.less_equal(time)),
+                "held capabilities do not cover pending times",
+            );
             return (Vec::new(), held.clone());
         }
 
@@ -207,11 +214,7 @@ where
         // beyond `upper` can remain when nothing is due, and releasing their capabilities would
         // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
         if changed.is_empty() && instance.input_batches.iter().all(|b| b.is_empty()) {
-            debug_assert!({
-                let expected = frontier_of_pending(&self.pending);
-                expected.elements().iter().all(|t| pending_frontier.less_equal(t))
-                    && pending_frontier.elements().iter().all(|t| expected.less_equal(t))
-            }, "maintained pending frontier differs from pending times");
+            assert_pending_frontier(&self.pending, &pending_frontier);
             return (Vec::new(), pending_frontier);
         }
 
@@ -394,11 +397,7 @@ where
         }
 
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
-        debug_assert!({
-            let expected = frontier_of_pending(&self.pending);
-            expected.elements().iter().all(|t| pending_frontier.less_equal(t))
-                && pending_frontier.elements().iter().all(|t| expected.less_equal(t))
-        }, "maintained pending frontier differs from pending times");
+        assert_pending_frontier(&self.pending, &pending_frontier);
         (produced, pending_frontier)
     }
 }
