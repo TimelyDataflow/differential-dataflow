@@ -8,13 +8,11 @@
 //!
 //! # Tokens
 //!
-//! *   The **group token** is the key's own `u64` when the key column is a leaf (DDIR `Int`
-//!     keys transcode to a `U64` leaf, and chunk order IS `u64` order), which makes `from`
-//!     seekable (`find_ranges` with a one-row needle) and blocks resumable. Structured keys
-//!     have no order-preserving `u64` embedding, so they take a fallback: the whole
-//!     intersection in ONE block, tokens an ordinal counter (block-scoped, both sides
-//!     assigned by the same walk). Containers are still cut at `TARGET_OUT` either way —
-//!     the fallback forgoes only the bounded-bridge property, not bounded output.
+//! *   The **group token** is the arrangement's leading `u64` identifier: the key itself for
+//!     primitive integer keys, or the carried content hash for structured keys. Chunk order is
+//!     identifier order, which makes `from` seekable and every key shape resumably blockable.
+//!     A hash collision remains under that token through proxy matching; only then does `cross`
+//!     compare the recorded real-key coordinates and discard unequal pairs.
 //!
 //! *   The **value token** is a *canonical coordinate*: `(chunk << 48) | row` of the value's
 //!     first occurrence among its side's chunks. Coordinates redeem against the instance
@@ -59,8 +57,9 @@ const COORD_BITS: u32 = 48;
 pub struct CorgiJoinBackend<T: ColTime> {
     key: Term,
     val: Term,
-    /// Identifier tokens in the current block that cover more than one real key.
-    /// Only matches under these astronomically rare tokens need a real-key comparison.
+    /// Identifier tokens in the current block that cover more than one real key. `advance` writes
+    /// this and the immediately following `cross` reads it before the next `advance`; only matches
+    /// under these astronomically rare tokens need a real-key comparison.
     colliding: Vec<u64>,
     _t: PhantomData<T>,
 }
@@ -135,25 +134,37 @@ impl<T: ColTime> ProxyJoinBackend<CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> 
         while start < n {
             let end = (start + TARGET_OUT).min(n);
             tag0.clear(); off0.clear(); tag1.clear(); off1.clear();
-            let mut kept = Vec::with_capacity(end - start);
-            for (index, (token, (c0, c1))) in matches.ids[start..end].iter().enumerate() {
-                let c0_chunk = (c0 >> COORD_BITS) as usize;
-                let c0_row = (c0 & ((1 << COORD_BITS) - 1)) as usize;
-                let c1_chunk = (c1 >> COORD_BITS) as usize;
-                let c1_row = (c1 & ((1 << COORD_BITS) - 1)) as usize;
-                if self.colliding.binary_search(token).is_ok()
-                    && compare_at(chunks0[c0_chunk].keys(), c0_row, chunks1[c1_chunk].keys(), c1_row)
-                        != Ordering::Equal
-                {
-                    continue;
+            let kept = if self.colliding.is_empty() {
+                // The universal hot path: preserve the old allocation-free slice copies.
+                for (_, (c0, c1)) in &matches.ids[start..end] {
+                    tag0.push((c0 >> COORD_BITS) as usize);
+                    off0.push((c0 & ((1 << COORD_BITS) - 1)) as usize);
+                    tag1.push((c1 >> COORD_BITS) as usize);
+                    off1.push((c1 & ((1 << COORD_BITS) - 1)) as usize);
                 }
-                kept.push(start + index);
-                tag0.push((c0 >> COORD_BITS) as usize);
-                off0.push((c0 & ((1 << COORD_BITS) - 1)) as usize);
-                tag1.push((c1 >> COORD_BITS) as usize);
-                off1.push((c1 & ((1 << COORD_BITS) - 1)) as usize);
-            }
-            if kept.is_empty() {
+                None
+            } else {
+                let mut kept = Vec::with_capacity(end - start);
+                for (index, (token, (c0, c1))) in matches.ids[start..end].iter().enumerate() {
+                    let c0_chunk = (c0 >> COORD_BITS) as usize;
+                    let c0_row = (c0 & ((1 << COORD_BITS) - 1)) as usize;
+                    let c1_chunk = (c1 >> COORD_BITS) as usize;
+                    let c1_row = (c1 & ((1 << COORD_BITS) - 1)) as usize;
+                    if self.colliding.binary_search(token).is_ok()
+                        && compare_at(chunks0[c0_chunk].keys(), c0_row, chunks1[c1_chunk].keys(), c1_row)
+                            != Ordering::Equal
+                    {
+                        continue;
+                    }
+                    kept.push(start + index);
+                    tag0.push(c0_chunk);
+                    off0.push(c0_row);
+                    tag1.push(c1_chunk);
+                    off1.push(c1_row);
+                }
+                Some(kept)
+            };
+            if kept.as_ref().is_some_and(Vec::is_empty) {
                 start = end;
                 continue;
             }
@@ -171,8 +182,14 @@ impl<T: ColTime> ProxyJoinBackend<CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> 
             output.push(CorgiContainer {
                 keys: nk,
                 vals: nv,
-                times: kept.iter().map(|&index| matches.times[index].clone()).collect(),
-                diffs: kept.iter().map(|&index| matches.diffs[index]).collect(),
+                times: kept.as_ref().map_or_else(
+                    || matches.times[start..end].to_vec(),
+                    |kept| kept.iter().map(|&index| matches.times[index].clone()).collect(),
+                ),
+                diffs: kept.as_ref().map_or_else(
+                    || matches.diffs[start..end].to_vec(),
+                    |kept| kept.iter().map(|&index| matches.diffs[index]).collect(),
+                ),
             });
             start = end;
         }
@@ -552,8 +569,9 @@ fn stage_collision<T: ColTime>(
     bridge.extend(staged);
 }
 
-/// Blockwise `advance` for leaf-keyed inputs: group token = the key's own `u64` (chunk order
-/// IS `u64` order), so blocks resume by seeking `from` and end at key boundaries.
+/// Blockwise `advance` over every arrangement key shape: group token = the leading identifier
+/// lane (the key itself or its carried hash), so blocks resume by seeking `from` and end at
+/// identifier boundaries.
 ///
 /// Two regimes: when one side is much smaller (the fresh delta against an accumulated
 /// trace), the small side DRIVES and the large side is presented only at the driver's keys
@@ -570,7 +588,7 @@ fn advance_leaf<T: ColTime>(
     colliding: &mut Vec<u64>,
 ) {
     let start = from.expect("advance called on an exhausted unit");
-    let hashed = chunks0.iter().chain(chunks1).find(|c| c.len() > 0).is_some_and(|c| key_is_hashed(c.keys()));
+    let hashed = key_is_hashed(chunks0[0].keys());
     // Resume: the first row of each chunk at or past `start`, by binary search on its identifier
     // lane. The lane is a sorted `u64` slice, so this is a slice operation, not a column probe.
     let seek = |chunks: &[&CorgiChunk<T, Diff>]| -> Vec<usize> {

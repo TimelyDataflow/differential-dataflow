@@ -147,7 +147,7 @@ impl<T, Bk> ProxyReduceTactic<T, Bk> {
     }
 }
 
-fn assert_pending_frontier<T: PartialOrder + Clone>(pending: &BTreeMap<u64, Vec<T>>, maintained: &Antichain<T>) {
+fn debug_assert_pending_frontier<T: PartialOrder + Clone>(pending: &BTreeMap<u64, Vec<T>>, maintained: &Antichain<T>) {
     debug_assert!({
         let mut expected = Antichain::new();
         for time in pending.values().flatten() { expected.insert_ref(time); }
@@ -214,7 +214,7 @@ where
         // beyond `upper` can remain when nothing is due, and releasing their capabilities would
         // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
         if changed.is_empty() && instance.input_batches.iter().all(|b| b.is_empty()) {
-            assert_pending_frontier(&self.pending, &pending_frontier);
+            debug_assert_pending_frontier(&self.pending, &pending_frontier);
             return (Vec::new(), pending_frontier);
         }
 
@@ -397,7 +397,7 @@ where
         }
 
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
-        assert_pending_frontier(&self.pending, &pending_frontier);
+        debug_assert_pending_frontier(&self.pending, &pending_frontier);
         (produced, pending_frontier)
     }
 }

@@ -38,7 +38,7 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{find_ranges, gather, gather_lanes, sort_blocks};
+use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes, sort_blocks};
 use corgi::{Bounds, Value as CValue};
 
 use crate::corgi::col_times::ColTime;
@@ -256,17 +256,29 @@ where
     (keys_col, vals_col, khs, times, diffs, run_ends)
 }
 
-/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Identity-id leaf
-/// columns preserve the chunks' structural order; a debug assertion audits the resulting
-/// `(key_id, value_id, time)` order against that inference. Returns false for structural columns or
-/// a nonempty bridge, so the caller can append and consolidate the whole bridge normally.
+/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Leaf values
+/// preserve value-id order. Keys may either be identity-id leaves or carried-hash columns, provided
+/// no one chunk run contains two real keys under the same hash; in the latter case the real-key
+/// tie-break would interrupt proxy `(key_id, value_id, time)` order, so we fall back to ordinary
+/// consolidation. A debug assertion audits the inferred order. Returns false when the inference
+/// does not hold or the bridge is nonempty.
 fn merge_present<T: Ord + Clone>(
     keys_col: &CValue, vals_col: &CValue,
     khs: &[u64], vids: &[u64], times: &[T], diffs: &[Diff], run_ends: &[usize],
     bridge: &mut ProxyBridge<T, Diff>,
 ) -> bool {
-    let ordered_ids = corgi::arrange::leaf_slice(keys_col).is_some()
-        && corgi::arrange::leaf_slice(vals_col).is_some();
+    let ordered_keys = corgi::arrange::leaf_slice(keys_col).is_some() || {
+        let mut start = 0usize;
+        run_ends.iter().all(|&end| {
+            let one_real_key_per_id = (start + 1..end).all(|index| {
+                khs[index - 1] != khs[index]
+                    || compare_at(keys_col, index - 1, keys_col, index) == std::cmp::Ordering::Equal
+            });
+            start = end;
+            one_real_key_per_id
+        }) && start == khs.len()
+    };
+    let ordered_ids = ordered_keys && corgi::arrange::leaf_slice(vals_col).is_some();
     if !ordered_ids || !bridge.is_empty() {
         return false;
     }
@@ -668,5 +680,41 @@ where
             let vals = gather(&val_pool, &vrows);
             Rc::new(columns_to_batch(keys, vals, times, diffs, desc))
         }).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compound_keys(hashes: Vec<u64>, real: Vec<u64>) -> CValue {
+        CValue::Prod(vec![CValue::u64(hashes), CValue::Prod(vec![CValue::u64(real), CValue::u64(vec![0, 0])])])
+    }
+
+    #[test]
+    fn merge_present_accepts_ordered_compound_keys() {
+        let keys = compound_keys(vec![1, 2], vec![7, 8]);
+        let vals = CValue::u64(vec![10, 20]);
+        let mut bridge = Vec::new();
+        assert!(merge_present(
+            &keys, &vals, &[1, 2], &[10, 20], &[0u64, 0], &[1, 1], &[2], &mut bridge,
+        ));
+        assert_eq!(bridge.len(), 2);
+    }
+
+    #[test]
+    fn merge_present_rejects_a_compound_hash_collision_within_a_run() {
+        let keys = compound_keys(vec![1, 1], vec![7, 8]);
+        let vals = CValue::u64(vec![10, 20]);
+        assert!(!merge_present(
+            &keys,
+            &vals,
+            &[1, 1],
+            &[10, 20],
+            &[0u64, 0],
+            &[1, 1],
+            &[2],
+            &mut Vec::new(),
+        ));
     }
 }

@@ -45,7 +45,10 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
         bridge1: &mut ProxyBridge<B0::Time, Self::R1>,
     );
 
-    /// Interpret a list of matching identifiers, translate them to outputs, and place them in `output`.
+    /// Interpret matches derived from the immediately preceding [`Self::advance`] call and place
+    /// them in `output`. The iterator calls `cross` before another `advance`, so a backend may keep
+    /// block-local interpretation state between the two calls. `cross` may be skipped when the
+    /// block produced no matches, in which case the next `advance` may overwrite that state.
     fn cross(
         &mut self,
         instance: &JoinInstance<B0, B1>,
