@@ -282,41 +282,58 @@ where
     (keys_col, vals_col, khs, times, diffs, run_ends)
 }
 
-/// Merge already-ordered selected chunk runs directly into a consolidated proxy bridge. Returns
-/// false when a run's structural value order does not agree with its proxy-id order.
+/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Returns false
+/// when proxy ids do not preserve the chunks' structural order, or when the bridge already holds
+/// records; the caller can then append the records and consolidate the whole bridge normally.
 fn merge_present<T: Ord + Clone>(
+    ordered_ids: bool,
     khs: &[u64], vids: &[u64], times: &[T], diffs: &[Diff], run_ends: &[usize],
     bridge: &mut ProxyBridge<T, Diff>,
 ) -> bool {
-    let mut start = 0usize;
-    for &end in run_ends {
-        if (start + 1..end).any(|i| (khs[i - 1], vids[i - 1], &times[i - 1]) > (khs[i], vids[i], &times[i])) {
-            return false;
-        }
-        start = end;
+    if !ordered_ids || !bridge.is_empty() {
+        return false;
     }
 
-    bridge.clear();
-    let mut heap: BinaryHeap<Reverse<((u64, u64), T, usize, usize)>> = BinaryHeap::new();
+    if run_ends.len() == 1 {
+        let mut current: Option<((u64, u64), T, Diff)> = None;
+        for index in 0..run_ends[0] {
+            let kv = (khs[index], vids[index]);
+            let time = &times[index];
+            if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == time) {
+                current.as_mut().unwrap().2 += diffs[index];
+            } else {
+                if let Some(record) = current.take() {
+                    if record.2 != 0 { bridge.push(record); }
+                }
+                current = Some((kv, time.clone(), diffs[index]));
+            }
+        }
+        if let Some(record) = current {
+            if record.2 != 0 { bridge.push(record); }
+        }
+        return true;
+    }
+
+    let mut heap: BinaryHeap<Reverse<((u64, u64), &T, usize, usize)>> = BinaryHeap::new();
     let mut lo = 0usize;
     for (run, &hi) in run_ends.iter().enumerate() {
-        heap.push(Reverse(((khs[lo], vids[lo]), times[lo].clone(), run, lo)));
+        heap.push(Reverse(((khs[lo], vids[lo]), &times[lo], run, lo)));
         lo = hi;
     }
     let mut current: Option<((u64, u64), T, Diff)> = None;
     while let Some(Reverse((kv, time, run, index))) = heap.pop() {
-        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == &time) {
+        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == time) {
             current.as_mut().unwrap().2 += diffs[index];
         } else {
             if let Some(record) = current.take() {
                 if record.2 != 0 { bridge.push(record); }
             }
-            current = Some((kv, time, diffs[index]));
+            current = Some((kv, time.clone(), diffs[index]));
         }
         let end = run_ends[run];
         if index + 1 < end {
             let next = index + 1;
-            heap.push(Reverse(((khs[next], vids[next]), times[next].clone(), run, next)));
+            heap.push(Reverse(((khs[next], vids[next]), &times[next], run, next)));
         }
     }
     if let Some(record) = current {
@@ -355,12 +372,14 @@ where
         if khs.is_empty() {
             return;
         }
+        let ordered_ids = corgi::arrange::leaf_slice(&p_keys).is_some()
+            && corgi::arrange::leaf_slice(&p_vals).is_some();
         let vids = ids(&p_vals);
         for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
         *len += p_vals.len();
         blocks.push(p_vals);
         self.register_keys(p_keys, &khs);
-        if !merge_present(&khs, &vids, &times, &diffs, &run_ends, bridge) {
+        if !merge_present(ordered_ids, &khs, &vids, &times, &diffs, &run_ends, bridge) {
             bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
             consolidate_updates(bridge);
         }
@@ -595,10 +614,12 @@ where
         // Output-history presentation, same keys (register keys + values for correction resolution).
         let (o_keys, o_vals, o_khs, o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
         if !o_khs.is_empty() {
+            let ordered_ids = corgi::arrange::leaf_slice(&o_keys).is_some()
+                && corgi::arrange::leaf_slice(&o_vals).is_some();
             let vids = ids(&o_vals);
             self.register_keys(o_keys, &o_khs);
             self.register_vals(o_vals, &vids);
-            if !merge_present(&o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output) {
+            if !merge_present(ordered_ids, &o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output) {
                 window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
                 consolidate_updates(&mut window.output);
             }
