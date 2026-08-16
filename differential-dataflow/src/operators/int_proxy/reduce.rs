@@ -147,6 +147,15 @@ impl<T, Bk> ProxyReduceTactic<T, Bk> {
     }
 }
 
+fn assert_pending_frontier<T: PartialOrder + Clone>(pending: &BTreeMap<u64, Vec<T>>, maintained: &Antichain<T>) {
+    debug_assert!({
+        let mut expected = Antichain::new();
+        for time in pending.values().flatten() { expected.insert_ref(time); }
+        expected.elements().iter().all(|t| maintained.less_equal(t))
+            && maintained.elements().iter().all(|t| expected.less_equal(t))
+    }, "maintained pending frontier differs from pending times");
+}
+
 impl<B1, B2, Bk> ReduceTactic<B1, B2> for ProxyReduceTactic<B1::Time, Bk>
 where
     B1: BatchReader,
@@ -163,6 +172,10 @@ where
         held: &Antichain<B1::Time>,
     ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>) {
         if held.elements().iter().all(|t| upper.less_equal(t)) {
+            debug_assert!(
+                self.pending.values().flatten().all(|time| held.less_equal(time)),
+                "held capabilities do not cover pending times",
+            );
             return (Vec::new(), held.clone());
         }
 
@@ -175,14 +188,22 @@ where
 
         // Split the carried interesting times against `upper`.
         // A time below it is DUE: its key must be re-evaluated this retire, so the key is `changed`.
-        // A time at or beyond it is carried forward untouched, seeding `new_pending`.
+        // A time at or beyond it remains carried in `self.pending`. Partition in place: rebuilding
+        // the whole map cloned every carried timestamp on every retire, even though only the small
+        // due subset changes.
         let mut due: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
-        let mut new_pending: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
-        for (key, times) in self.pending.iter() {
-            let (carried, ready): (Vec<_>, Vec<_>) = times.iter().cloned().partition(|t| upper.less_equal(t));
-            if !ready.is_empty() { due.insert(*key, ready); }
-            if !carried.is_empty() { new_pending.insert(*key, carried); }
+        let mut pending_frontier = Antichain::new();
+        for (&key, times) in self.pending.iter_mut() {
+            let mut ready = Vec::new();
+            times.retain_mut(|time| {
+                let carried = upper.less_equal(time);
+                if carried { pending_frontier.insert_ref(time); }
+                else { ready.push(std::mem::replace(time, B1::Time::minimum())); }
+                carried
+            });
+            if !ready.is_empty() { due.insert(key, ready); }
         }
+        self.pending.retain(|_, times| !times.is_empty());
         // The keys the harness knows must be revisited. The backend adds those its novel batches
         // touch, which it discovers while reading them; neither side scans the whole key space.
         let changed: Vec<u64> = due.keys().copied().collect();
@@ -193,13 +214,8 @@ where
         // beyond `upper` can remain when nothing is due, and releasing their capabilities would
         // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
         if changed.is_empty() && instance.input_batches.iter().all(|b| b.is_empty()) {
-            let mut frontier = Antichain::new();
-            for times in self.pending.values() {
-                for time in times {
-                    frontier.insert_ref(time);
-                }
-            }
-            return (Vec::new(), frontier);
+            assert_pending_frontier(&self.pending, &pending_frontier);
+            return (Vec::new(), pending_frontier);
         }
 
         // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
@@ -294,7 +310,7 @@ where
                 let slot = &mut slots[n_slots];
                 slot.key = key;
                 slot.pended.clear();
-                // Only the DUE times seed the sweep; the carried ones are already in `new_pending`.
+                // Only the DUE times seed the sweep; the carried ones remain in `self.pending`.
                 let owed = due.get(&key).map(|p| &p[..]).unwrap_or(&[]);
                 slot.sweep.load(
                     owed,
@@ -305,7 +321,8 @@ where
                 slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
                 if slot.at.is_some() { live.push(n_slots); }
                 else if !slot.pended.is_empty() {
-                    new_pending.entry(key).or_default().append(&mut slot.pended);
+                    for time in &slot.pended { pending_frontier.insert_ref(time); }
+                    self.pending.entry(key).or_default().append(&mut slot.pended);
                 }
                 n_slots += 1;
             }
@@ -359,7 +376,8 @@ where
                     let slot = &mut slots[si];
                     slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
                     if slot.at.is_none() && !slot.pended.is_empty() {
-                        let entry = new_pending.entry(slot.key).or_default();
+                        for time in &slot.pended { pending_frontier.insert_ref(time); }
+                        let entry = self.pending.entry(slot.key).or_default();
                         entry.append(&mut slot.pended);
                         crate::operators::reduce::sort_dedup(entry);
                     }
@@ -378,15 +396,9 @@ where
             }
         }
 
-        self.pending = new_pending;
         let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
-        let mut frontier = Antichain::new();
-        for times in self.pending.values() {
-            for t in times {
-                frontier.insert_ref(t);
-            }
-        }
-        (produced, frontier)
+        assert_pending_frontier(&self.pending, &pending_frontier);
+        (produced, pending_frontier)
     }
 }
 
