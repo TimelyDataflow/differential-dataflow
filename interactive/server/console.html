@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ddir_server console</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel2: #1f232c;
+    --line: #2a2f3a;
+    --text: #d8dee9;
+    --dim: #8a93a4;
+    --accent: #6cc4f5;
+    --ok: #8ed29a;
+    --err: #f08a8a;
+    --warn: #e3c87a;
+    --mono: "JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  body {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: 1fr;
+    height: 100vh;
+  }
+  body > header {
+    padding: 8px 16px;
+    background: var(--panel2);
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 12px;
+  }
+  body > header .title { font-weight: 600; color: var(--accent); }
+  body > header input.url {
+    width: 260px; padding: 4px 8px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px;
+    font-family: var(--mono); font-size: 12px;
+  }
+  body > header .status {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 6px;
+    color: var(--dim); font-size: 12px;
+  }
+  body > header .status .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--dim);
+  }
+  body > header .status.connected .dot { background: var(--ok); }
+  body > header .status.error .dot { background: var(--err); }
+  button {
+    padding: 4px 10px;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px;
+    font: inherit; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--line); }
+  button.primary { background: var(--accent); color: #0f1115; border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { filter: brightness(1.1); }
+  button.danger { color: var(--err); border-color: var(--err); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  input, textarea {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 4px 8px;
+    font: 12px/1.4 var(--mono);
+  }
+  input:focus, textarea:focus { outline: 1px solid var(--accent); }
+  /* Layout: a 300px sidebar (Dataflows + Traces) on the left and a
+     workspace on the right (Load above, Tails in the middle, Log
+     below). Sidebar items size to content; workspace items have a
+     designated grower (Tails) that absorbs the rest of the height. */
+  main {
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 1px;
+    background: var(--line);
+  }
+  #sidebar {
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+  #workspace {
+    background: var(--bg);
+    display: grid;
+    /* Load editor takes the rest of the height; log is sized to its
+       content (which has a fixed inner height). */
+    grid-template-rows: 1fr auto;
+    gap: 1px;
+    overflow: hidden;
+    min-height: 0;
+  }
+  section.panel {
+    background: var(--panel);
+    padding: 10px 12px;
+    overflow: auto;
+    min-height: 0;
+    display: flex; flex-direction: column;
+  }
+  #sidebar > section.panel + section.panel { border-top: 1px solid var(--line); }
+  /* Sidebar panels: each takes half the sidebar by default but each
+     becomes scrollable when its list overflows. */
+  #sidebar > section.panel { flex: 1 1 0; }
+  /* Make the load editor's textarea grow with the workspace. */
+  #load-panel .editor-grid { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  #load-panel textarea { flex: 1; min-height: 200px; }
+  section.panel h2 {
+    margin: 0 0 8px 0; font-size: 11px; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--dim);
+    display: flex; align-items: center; gap: 8px;
+  }
+  section.panel h2 .count {
+    background: var(--line); color: var(--text);
+    padding: 0 6px; border-radius: 8px; font-size: 10px;
+  }
+  section.panel h2 .actions { margin-left: auto; display: flex; gap: 6px; }
+  /* Lists */
+  .row {
+    padding: 6px 8px;
+    background: var(--panel2);
+    border-radius: 4px;
+    margin-bottom: 4px;
+    display: grid; grid-template-columns: 1fr auto; gap: 8px;
+    align-items: center;
+  }
+  .row .meta { font-family: var(--mono); font-size: 12px; }
+  .row .meta .name { color: var(--accent); font-weight: 600; }
+  .row .meta .dim { color: var(--dim); }
+  .row .actions { display: flex; gap: 4px; }
+  .row .actions button { padding: 2px 8px; font-size: 11px; }
+  /* Load editor */
+  .editor-grid { display: grid; gap: 6px; }
+  .editor-grid label { font-size: 11px; color: var(--dim); }
+  .editor-grid input { width: 100%; }
+  .editor-grid textarea {
+    width: 100%; height: 180px; resize: vertical;
+    font-family: var(--mono); font-size: 12px;
+  }
+  .editor-row { display: flex; gap: 8px; align-items: center; }
+  .editor-row label { font-size: 11px; }
+  /* Tails */
+  #tails { gap: 0; padding: 0; background: var(--panel); }
+  #tails .tail-pane {
+    border-bottom: 1px solid var(--line);
+    padding: 8px 12px;
+    display: flex; flex-direction: column;
+    max-height: 240px;
+  }
+  #tails .tail-pane header.tail-hdr {
+    background: transparent;
+    border: none; padding: 0; margin-bottom: 4px;
+    font-family: var(--mono); font-size: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #tails .tail-pane .name { color: var(--accent); }
+  #tails .tail-pane .stream {
+    flex: 1; overflow: auto;
+    font-family: var(--mono); font-size: 11px;
+    background: var(--bg); padding: 4px 6px; border-radius: 4px;
+    border: 1px solid var(--line);
+    white-space: pre;
+  }
+  #tails .tail-pane .stream .add { color: var(--ok); }
+  #tails .tail-pane .stream .del { color: var(--err); }
+  footer {
+    background: var(--panel2);
+    border-top: 1px solid var(--line);
+    padding: 6px 12px;
+    display: flex; align-items: center; gap: 8px;
+    height: 38px;
+  }
+  footer input.cmd {
+    flex: 1; font-family: var(--mono); font-size: 12px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 4px 8px;
+  }
+  #log {
+    /* Fixed-height drawer at the bottom of the workspace so its
+       contents stay readable while the rest of the workspace grows. */
+    height: 200px;
+  }
+  #log pre {
+    margin: 0;
+    font-family: var(--mono); font-size: 11px;
+    white-space: pre-wrap; word-break: break-all;
+    color: var(--dim);
+  }
+  #log pre .ok { color: var(--ok); }
+  #log pre .err { color: var(--err); }
+  #log pre .data { color: var(--text); }
+  #log pre .out { color: var(--accent); opacity: 0.7; }
+  .empty { color: var(--dim); font-style: italic; font-size: 12px; padding: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="title">ddir_server console</span>
+  <input class="url" id="ws-url" value="ws://localhost:7778" spellcheck="false">
+  <button id="connect-btn">Connect</button>
+  <div class="status" id="status"><div class="dot"></div><span class="text">disconnected</span></div>
+</header>
+
+<main>
+
+  <aside id="sidebar">
+    <section class="panel" id="dataflows-panel">
+      <h2>Dataflows <span class="count" id="df-count">0</span>
+        <span class="actions"><button id="refresh-btn">Refresh</button></span></h2>
+      <div id="dataflows"></div>
+    </section>
+
+    <section class="panel" id="traces-panel">
+      <h2>Traces <span class="count" id="trace-count">0</span></h2>
+      <div id="traces"></div>
+    </section>
+  </aside>
+
+  <div id="workspace">
+    <section class="panel" id="load-panel">
+      <h2>Load a dataflow</h2>
+      <div class="editor-grid">
+        <div class="editor-row">
+          <label>Name</label>
+          <input id="load-name" placeholder="gen" style="flex: 1;">
+          <button class="link-button" id="advanced-toggle" type="button"
+            style="margin-left:auto;background:transparent;border:none;color:var(--dim);cursor:pointer;text-decoration:underline;">advanced</button>
+        </div>
+        <div id="advanced-bindings" style="display:none;">
+          <label>Bindings <span class="dim">(optional override; space-separated <code>name=target</code>. Each <code>name</code> matches an <code>import "name"</code> in the program; <code>target</code> is a registered trace name or a <code>random(...)</code> spec. If omitted, each <code>import</code>'s name is resolved against the registry — and recognized as a <code>random(...)</code> spec if it looks like one.)</span></label>
+          <input id="load-bindings" placeholder="edges=edges/v1">
+        </div>
+        <label>Program (DDIR pipe syntax)</label>
+        <textarea id="load-program" spellcheck="false">let edges = import "random:nodes=100,edges=200,arity=2,seed=1,churn=1";
+export "edges/v1" = edges;</textarea>
+        <div class="editor-row">
+          <button class="primary" id="load-btn">Load</button>
+          <span id="load-status" class="dim"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="log">
+      <h2>Protocol log <span class="actions"><button id="clear-log-btn">Clear</button></span></h2>
+      <pre id="log-text"></pre>
+    </section>
+  </div>
+
+</main>
+
+<footer>
+  <input class="cmd" id="cmd-input" placeholder="raw command, e.g. tick 5 — Enter to send" spellcheck="false">
+  <button id="send-btn">Send</button>
+</footer>
+
+<script>
+(() => {
+  // ---------------------------------------------------------------
+  // Dual mode: full console vs. single-tail popup. A popup carries
+  // ?ws=...&tail=<name> in its URL; the page renders a minimal stream
+  // view and opens its own WebSocket to the server. When the popup
+  // closes, the WS closes, and the server's auto-stop tears down the
+  // tail's dataflow + reader hold.
+  // ---------------------------------------------------------------
+  const params = new URLSearchParams(location.search);
+  const tailMode = params.get("tail");
+  if (tailMode) {
+    runTailPopup(tailMode, params.get("ws") || "ws://localhost:7778");
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // Protocol client: one WebSocket; reqid -> handler routing.
+  // ---------------------------------------------------------------
+  let ws = null;
+  let connected = false;
+  let nextReqid = 1;
+  const pending = new Map();   // reqid -> { onData, onEnd, onErr }
+  const tails   = new Map();   // reqid -> { name, paneEl, streamEl }
+  // Reqids whose traffic should not appear in the protocol log. Used
+  // for the background auto-refresh `list` so it doesn't drown out
+  // the user's own commands.
+  const silentReqids = new Set();
+
+  const log = (line, kind = "data") => {
+    const span = document.createElement("span");
+    span.className = kind;
+    span.textContent = line + "\n";
+    const logEl = document.getElementById("log-text");
+    logEl.appendChild(span);
+    // Cap log size.
+    while (logEl.childElementCount > 500) logEl.removeChild(logEl.firstChild);
+    logEl.parentElement.scrollTop = logEl.parentElement.scrollHeight;
+  };
+
+  const setStatus = (state, text) => {
+    const el = document.getElementById("status");
+    el.className = "status " + state;
+    el.querySelector(".text").textContent = text;
+  };
+
+  const allocReqid = () => "c" + (nextReqid++);
+
+  const send = (line, silent = false) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      log("(not connected) " + line, "err");
+      return;
+    }
+    if (!silent) log("> " + line, "out");
+    ws.send(line);
+  };
+
+  // One-shot command: returns a promise of accumulated `data` rows and the
+  // final `ok ...` line. When `silent` is true the traffic is hidden
+  // from the protocol log (used for background polling).
+  const cmd = (text, { silent = false } = {}) => new Promise((resolve, reject) => {
+    const reqid = allocReqid();
+    if (silent) silentReqids.add(reqid);
+    const dataLines = [];
+    const cleanup = () => { silentReqids.delete(reqid); };
+    pending.set(reqid, {
+      onData: (rest) => dataLines.push(rest),
+      onEnd:  () => { cleanup(); resolve({ data: dataLines, ok: "" }); },
+      onOk:   (rest) => { cleanup(); resolve({ data: dataLines, ok: rest }); },
+      onErr:  (rest) => { cleanup(); reject(new Error(rest)); },
+    });
+    send(reqid + " " + text, silent);
+  });
+
+  // Streaming command (tail): registers a handler indefinitely until
+  // `end` arrives.
+  const tail = (name, onUpdate) => {
+    const reqid = "t" + allocReqid();
+    pending.set(reqid, {
+      onData: (rest) => onUpdate(rest),
+      onEnd:  () => { pending.delete(reqid); tails.delete(reqid); renderTails(); },
+      onOk:   () => {},      // initial "ok tailing ..." line: just ack
+      onErr:  (rest) => { onUpdate("ERR " + rest); pending.delete(reqid); },
+    });
+    send(reqid + " tail " + name);
+    return reqid;
+  };
+
+  const handleLine = (line) => {
+    const m = line.match(/^(\S+)\s+(\S+)(?:\s+(.*))?$/);
+    if (!m) { log(line); return; }
+    const [, reqid, kind, rest] = m;
+    if (!silentReqids.has(reqid)) {
+      log(line, kind === "err" ? "err" : kind === "ok" ? "ok" : "data");
+    }
+    const h = pending.get(reqid);
+    if (!h) return;
+    switch (kind) {
+      case "data": h.onData(rest || ""); break;
+      case "end":  h.onEnd(); pending.delete(reqid); break;
+      case "ok":   h.onOk(rest || ""); pending.delete(reqid); break;
+      case "err":  h.onErr(rest || ""); pending.delete(reqid); break;
+    }
+  };
+
+  const connect = () => {
+    const url = document.getElementById("ws-url").value;
+    setStatus("", "connecting…");
+    try { ws = new WebSocket(url); }
+    catch (e) { setStatus("error", "bad url"); return; }
+    ws.onopen = () => {
+      connected = true;
+      setStatus("connected", "connected to " + url);
+      document.getElementById("connect-btn").textContent = "Disconnect";
+      refresh();
+      // Auto-refresh every 2s.
+      if (window._refreshTimer) clearInterval(window._refreshTimer);
+      window._refreshTimer = setInterval(() => { if (connected) refresh(); }, 2000);
+    };
+    ws.onclose = () => {
+      connected = false;
+      setStatus("", "disconnected");
+      document.getElementById("connect-btn").textContent = "Connect";
+      if (window._refreshTimer) clearInterval(window._refreshTimer);
+      // Reject all pending handlers.
+      for (const h of pending.values()) h.onErr && h.onErr("connection lost");
+      pending.clear();
+      tails.clear();
+      renderTails();
+    };
+    ws.onerror = (e) => { setStatus("error", "ws error"); };
+    ws.onmessage = (ev) => {
+      for (const line of String(ev.data).split("\n")) {
+        if (line.trim()) handleLine(line);
+      }
+    };
+  };
+
+  document.getElementById("connect-btn").onclick = () => {
+    if (connected) ws.close();
+    else connect();
+  };
+
+  // ---------------------------------------------------------------
+  // Parsing helpers — server emits human-readable `key=value` lines.
+  // ---------------------------------------------------------------
+  const re = {
+    name:       /\bname="([^"]*)"/,
+    origin:     /\borigin=(\w+)/,
+    imports:    /\bimports=(\[[^\]]*\])/,
+    exports:    /\bexports=(\[[^\]]*\])/,
+    k:          /\bk=(\d+)\b/,
+    v:          /\bv=(\d+)\b/,
+    producer:   /\bproducer="([^"]*)"/,
+    importers:  /\bimporters=(\d+)\b/,
+    readers:    /\breaders=(\d+)\b/,
+  };
+  const grab = (s, r) => { const m = s.match(r); return m ? m[1] : null; };
+
+  // ---------------------------------------------------------------
+  // Refresh: ask the server `list`, parse, render. Marked silent so
+  // background polling doesn't drown out the user's commands in the
+  // protocol log; manual refresh from the Refresh button is silent
+  // too (the result is reflected in the sidebar).
+  // ---------------------------------------------------------------
+  const refresh = async () => {
+    try {
+      const { data } = await cmd("list", { silent: true });
+      const dfs = [], traces = [];
+      for (const line of data) {
+        if (line.startsWith("program ")) {
+          dfs.push({
+            name:     grab(line, re.name),
+            origin:   grab(line, re.origin),
+            imports:  grab(line, re.imports),
+            exports:  grab(line, re.exports),
+          });
+        } else if (line.startsWith("trace ")) {
+          traces.push({
+            name:      grab(line, re.name),
+            importers: grab(line, re.importers),
+          });
+        }
+      }
+      renderDataflows(dfs);
+      renderTraces(traces);
+    } catch (e) { /* server may be busy; skip this refresh */ }
+  };
+
+  document.getElementById("refresh-btn").onclick = refresh;
+
+  // ---------------------------------------------------------------
+  // Renderers
+  // ---------------------------------------------------------------
+  const renderDataflows = (dfs) => {
+    const root = document.getElementById("dataflows");
+    document.getElementById("df-count").textContent = dfs.length;
+    root.innerHTML = "";
+    if (!dfs.length) { root.innerHTML = '<div class="empty">No dataflows installed.</div>'; return; }
+    for (const df of dfs) {
+      const row = document.createElement("div");
+      row.className = "row";
+      const expHint = df.exports && df.exports !== "[]" ? ` <span class="dim">→ ${df.exports}</span>` : "";
+      row.innerHTML =
+        `<div class="meta">
+           <span class="name">${df.name}</span>
+           <span class="dim">${df.origin}</span>${expHint}
+         </div>
+         <div class="actions">
+           <button class="drop">drop</button>
+         </div>`;
+      row.querySelector(".drop").onclick = async () => {
+        try { await cmd("drop " + df.name); refresh(); }
+        catch (e) { alert("drop failed: " + e.message); }
+      };
+      root.appendChild(row);
+    }
+  };
+
+  const renderTraces = (ts) => {
+    const root = document.getElementById("traces");
+    document.getElementById("trace-count").textContent = ts.length;
+    root.innerHTML = "";
+    if (!ts.length) { root.innerHTML = '<div class="empty">No traces registered.</div>'; return; }
+    for (const t of ts) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML =
+        `<div class="meta">
+           <span class="name">${t.name}</span>
+           <span class="dim">importers=${t.importers}</span>
+         </div>
+         <div class="actions">
+           <button class="peek">peek</button>
+           <button class="tail">tail</button>
+         </div>`;
+      row.querySelector(".peek").onclick = () => doPeek(t.name);
+      row.querySelector(".tail").onclick = () => doTail(t.name);
+      root.appendChild(row);
+    }
+  };
+
+  // Each tail is a self-managed popup window; we keep an internal
+  // map only so that re-clicking `tail` on the same trace focuses the
+  // existing window instead of opening a duplicate.
+  const renderTails = () => {};
+
+  // ---------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------
+  const doPeek = async (name) => {
+    try {
+      const { data } = await cmd("peek " + name);
+      const sample = data.slice(0, 10).join("\n");
+      alert(`peek ${name} — ${data.length} row(s)\n\n${sample}${data.length > 10 ? "\n…" : ""}`);
+    } catch (e) { alert("peek failed: " + e.message); }
+  };
+
+  // Open a popup window that runs the tail-mode UI. Each popup has its
+  // own WebSocket — when the user closes the window, the server's
+  // auto-stop-on-disconnect tears down the subscription.
+  const doTail = (name) => {
+    // If we already have a live popup for this trace, just focus it.
+    const existing = tails.get(name);
+    if (existing && !existing.popup.closed) { try { existing.popup.focus(); } catch (e) {} return; }
+    const wsUrl = document.getElementById("ws-url").value;
+    const qp = new URLSearchParams({ ws: wsUrl, tail: name });
+    const popup = window.open(
+      location.pathname + "?" + qp.toString(),
+      "tail:" + name,
+      "width=560,height=420,menubar=no,toolbar=no,location=no,status=no",
+    );
+    if (!popup) {
+      alert("Popup blocked — allow popups for this origin, then try again.");
+      return;
+    }
+    tails.set(name, { name, popup });
+    renderTails();
+  };
+
+  // Poll once a second to detect closed popups and clean up the list.
+  setInterval(() => {
+    let any = false;
+    for (const [name, t] of tails) {
+      if (t.popup.closed) { tails.delete(name); any = true; }
+    }
+    if (any) renderTails();
+  }, 1000);
+
+  document.getElementById("advanced-toggle").onclick = () => {
+    const adv = document.getElementById("advanced-bindings");
+    adv.style.display = adv.style.display === "none" ? "" : "none";
+  };
+
+  document.getElementById("load-btn").onclick = async () => {
+    const name = document.getElementById("load-name").value.trim();
+    const bindings = document.getElementById("load-bindings").value.trim();
+    const program = document.getElementById("load-program").value;
+    if (!name) { alert("name required"); return; }
+    const reqid = allocReqid();
+    const flagPart = "";
+    // Bindings are passed through verbatim; the server splits on
+    // whitespace. Splitting here would break `random(seed=1,arity=2,...)`
+    // since those specs contain commas inside parens.
+    const bindingPart = bindings ? bindings.trim() + " " : "";
+    const header = `${reqid} load ${name} ${flagPart}${bindingPart}begin`;
+    const body = program.split("\n").join("\n");
+    const terminator = `${name} end-load`;
+    const status = document.getElementById("load-status");
+    status.textContent = "loading…";
+    pending.set(reqid, {
+      onData: () => {},
+      onEnd:  () => {},
+      onOk:   (rest) => { status.textContent = "ok — " + rest; refresh(); },
+      onErr:  (rest) => { status.textContent = "err — " + rest; },
+    });
+    // Send as a single message; server splits on \n internally.
+    send(header + "\n" + body + (body.endsWith("\n") ? "" : "\n") + terminator);
+  };
+
+  document.getElementById("clear-log-btn").onclick = () => {
+    document.getElementById("log-text").innerHTML = "";
+  };
+
+  document.getElementById("send-btn").onclick = () => sendRaw();
+  document.getElementById("cmd-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendRaw();
+  });
+  const sendRaw = () => {
+    const input = document.getElementById("cmd-input");
+    const text = input.value.trim();
+    if (!text) return;
+    send(text);
+    input.value = "";
+    setTimeout(refresh, 200);
+  };
+
+  // Initialize the empty-state UI.
+  renderDataflows([]);
+  renderTraces([]);
+  renderTails();
+
+  // ---------------------------------------------------------------
+  // Popup tail-mode runner. Opens its own WebSocket and renders a
+  // single-trace stream. Closing the window auto-stops the subscription
+  // on the server via the disconnect path.
+  // ---------------------------------------------------------------
+  function runTailPopup(name, wsUrl) {
+    document.title = "tail " + name;
+    document.body.innerHTML = "";
+    document.body.style.cssText =
+      "display: flex; flex-direction: column; height: 100vh; margin: 0;" +
+      "background: var(--bg); color: var(--text); font-family: -apple-system,sans-serif;";
+    const hdr = document.createElement("header");
+    hdr.style.cssText =
+      "padding: 8px 12px; background: var(--panel2); border-bottom: 1px solid var(--line);" +
+      "display: flex; align-items: center; gap: 8px; font-size: 12px;";
+    hdr.innerHTML =
+      `<span style="font-weight:600;color:var(--accent);">tail</span>` +
+      `<span style="font-family:var(--mono);color:var(--accent);">${name}</span>` +
+      `<span class="status" style="margin-left:auto;color:var(--dim);">connecting…</span>` +
+      `<button id="clear" style="font-size:11px;">clear</button>`;
+    document.body.appendChild(hdr);
+    const stream = document.createElement("div");
+    stream.style.cssText =
+      "flex: 1; overflow: auto; padding: 6px 12px;" +
+      "font-family: var(--mono); font-size: 11px; white-space: pre;";
+    document.body.appendChild(stream);
+    const status = hdr.querySelector(".status");
+    document.getElementById("clear").onclick = () => { stream.innerHTML = ""; };
+
+    const sock = new WebSocket(wsUrl);
+    sock.onopen = () => {
+      status.textContent = "subscribed";
+      sock.send("t0 tail " + name);
+    };
+    // Best-effort explicit stop before the WS implicitly tears down.
+    // (Server's auto-stop-on-disconnect handles the fallback path.)
+    window.addEventListener("beforeunload", () => {
+      try { sock.send("stop t0"); } catch (e) {}
+      try { sock.close(); } catch (e) {}
+    });
+    sock.onerror = () => { status.textContent = "ws error"; };
+    sock.onclose = () => { status.textContent = "disconnected"; };
+    sock.onmessage = (ev) => {
+      for (const line of String(ev.data).split("\n")) {
+        if (!line.trim()) continue;
+        const m = line.match(/^(\S+)\s+(\S+)(?:\s+(.*))?$/);
+        if (!m) continue;
+        const [, , kind, rest] = m;
+        const row = document.createElement("div");
+        if (kind === "data" && rest) {
+          const dm = rest.match(/^(\d+)\s+(-?\d+)\s+(.*)$/);
+          if (dm) {
+            const sign = dm[2].startsWith("-") ? "del" : "add";
+            const color = sign === "add" ? "var(--ok)" : "var(--err)";
+            row.innerHTML =
+              `<span style="color:${color};font-weight:600;">${dm[2] === "1" ? "+" : dm[2]}</span>` +
+              `  <span style="color:var(--dim);">t=${dm[1].padStart(5, " ")}</span>  ${dm[3]}`;
+          } else {
+            row.textContent = rest;
+          }
+        } else if (kind === "ok") {
+          row.style.color = "var(--ok)";
+          row.textContent = "ok " + (rest || "");
+        } else if (kind === "err") {
+          row.style.color = "var(--err)";
+          row.textContent = "err " + (rest || "");
+        } else if (kind === "end") {
+          row.style.color = "var(--dim)";
+          row.textContent = "(end)";
+        }
+        stream.appendChild(row);
+        while (stream.childElementCount > 500) stream.removeChild(stream.firstChild);
+        stream.scrollTop = stream.scrollHeight;
+      }
+    };
+  }
+})();
+</script>
+
+</body>
+</html>

@@ -5,6 +5,7 @@ members = [
     "dogsdogsdogs",
     "experiments",
     "interactive",
+    "interactive/server",
     #"tpchlike",
     #"doop",
     "mdbook",
