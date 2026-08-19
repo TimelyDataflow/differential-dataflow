@@ -71,7 +71,7 @@ This first benchmark is a single-worker, single-batch measurement.
 
 It does not yet measure update streams, scale-out, peak memory, or allocation counts.
 
-The [preliminary SCC report](reports/2026-08-17-scc.md) shows the initial report format and results.
+The [SCC report](reports/2026-08-19-scc.md) shows the report format and current results.
 
 ## Operator scorecard
 
@@ -104,7 +104,7 @@ implementations are executed there rather than assumed to agree: `compiled-ddir`
 renders at a coarser timestamp lattice, which selects different code paths inside the
 reduce and join operators. The capture operators exist only in the validation run.
 
-The [preliminary operator report](reports/2026-08-17-operators.md) records the first results.
+The [operator report](reports/2026-08-19-operators.md) records the current results, including the embedding ratio.
 
 The `arrange_updates` binary measures a second batch after a populated arrangement reaches time one.
 
