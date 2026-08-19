@@ -72,7 +72,7 @@ impl ClientInput {
     pub fn connect(&mut self, client_id: usize, elapsed: Duration) {
         let _ = self
             .sender
-            .send(Event::Messages(self.time, vec![(client_id, elapsed, 1)]));
+            .send(Event::Messages(timely::progress::Stamp::from_elem(self.time), vec![(client_id, elapsed, 1)]));
         self.advance(elapsed);
     }
 
@@ -80,7 +80,7 @@ impl ClientInput {
     pub fn disconnect(&mut self, client_id: usize, elapsed: Duration) {
         let _ = self
             .sender
-            .send(Event::Messages(self.time, vec![(client_id, elapsed, -1)]));
+            .send(Event::Messages(timely::progress::Stamp::from_elem(self.time), vec![(client_id, elapsed, -1)]));
         self.advance(elapsed);
     }
 

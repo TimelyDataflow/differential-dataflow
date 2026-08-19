@@ -30,7 +30,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
     // so the per-group pre_lens snapshot and seal check costs O(keys × workers). Should
     // either batch keys by destination first, or detect stride-1 outer bounds and use a
     // simpler single-pass partitioning that seals once at the end.
-    fn partition<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, container: &mut RecordedUpdates<U>, time: &T, pushers: &mut [P]) {
+    fn partition<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, container: &mut RecordedUpdates<U>, stamp: &timely::progress::Stamp<T>, pushers: &mut [P]) {
         use crate::columnar::updates::child_range;
 
         let view = container.updates.view();
@@ -80,7 +80,7 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
             // Push the empty update to the worker that produced the original
             // values so the send stays local. Not needed for correctness, but
             // a reasonable choice.
-            Message::push_at(&mut recorded, time.clone(), &mut pushers[self.worker % pushers.len()]);
+            Message::push_at(&mut recorded, stamp.clone(), &mut pushers[self.worker % pushers.len()]);
             return;
         }
 
@@ -90,11 +90,11 @@ impl<U: Update, H: for<'a> FnMut(columnar::Ref<'a, U::Key>)->u64> Distributor<Re
                 let recorded = RecordedUpdates { updates: output.into(), records: first_records, consolidated: container.consolidated };
                 first_records = 1;
                 let mut recorded = recorded;
-                Message::push_at(&mut recorded, time.clone(), pusher);
+                Message::push_at(&mut recorded, stamp.clone(), pusher);
             }
         }
     }
-    fn flush<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, _time: &T, _pushers: &mut [P]) { }
+    fn flush<T: Clone, P: timely::communication::Push<Message<T, RecordedUpdates<U>>>>(&mut self, _stamp: &timely::progress::Stamp<T>, _pushers: &mut [P]) { }
     fn relax(&mut self) { }
 }
 
