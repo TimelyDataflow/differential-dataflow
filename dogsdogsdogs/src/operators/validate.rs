@@ -41,14 +41,8 @@ where
     let requests = extensions.map(move |((prefix, extension), payload)| {
         ((key_selector(&prefix), extension.clone()), (prefix, extension), payload)
     });
-    // Branch once here, so that each comparison monomorphizes rather than testing `strict` at
-    // every timestamp. The cost is instantiating `half_join` twice.
-    if strict {
-        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 < t2,
-            |_key, extended, _value| extended.clone())
-    }
-    else {
-        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 <= t2,
-            |_key, extended, _value| extended.clone())
-    }
+    // `strict` now reaches the join as a value rather than as a comparison closure, so there is
+    // nothing left to monomorphize by branching here; the test is made per arrangement time.
+    crate::operators::half_join(requests, arrangement, frontier_func, strict,
+        |_key, extended, _value| extended.clone())
 }

@@ -64,15 +64,9 @@ where
     };
 
     use crate::operators::half_join::half_join_internal_unsafe as half_join_unsafe;
-    // Branch once here, so that each comparison monomorphizes rather than testing `strict` at
-    // every timestamp. The cost is instantiating `half_join` twice.
-    if strict {
-        half_join_unsafe::<_, _, _, _, _, _, _, _, Output<P, Tr::Time, R>>(
-            requests, arrangement, frontier_func, |t1, t2| t1 < t2, |_timer, _count| false, output_func)
-    }
-    else {
-        half_join_unsafe::<_, _, _, _, _, _, _, _, Output<P, Tr::Time, R>>(
-            requests, arrangement, frontier_func, |t1, t2| t1 <= t2, |_timer, _count| false, output_func)
-    }
+    // `strict` now reaches the join as a value rather than as a comparison closure, so there is
+    // nothing left to monomorphize by branching here; the test is made per arrangement time.
+    half_join_unsafe::<_, _, _, _, _, _, _, Output<P, Tr::Time, R>>(
+        requests, arrangement, frontier_func, strict, |_timer, _count| false, output_func)
     .as_collection()
 }

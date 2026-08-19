@@ -39,14 +39,8 @@ where
     for<'a, 'b> BatchTimeGat<'a, Tr>: PartialOrd<&'b Tr::Time>,
 {
     let requests = prefixes.map(move |(prefix, payload)| (key_selector(&prefix), prefix, payload));
-    // Branch once here, so that each comparison monomorphizes rather than testing `strict` at
-    // every timestamp. The cost is instantiating `half_join` twice.
-    if strict {
-        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 < t2,
-            |_key, prefix, value| (prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)))
-    }
-    else {
-        crate::operators::half_join(requests, arrangement, frontier_func, |t1, t2| t1 <= t2,
-            |_key, prefix, value| (prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)))
-    }
+    // `strict` now reaches the join as a value rather than as a comparison closure, so there is
+    // nothing left to monomorphize by branching here; the test is made per arrangement time.
+    crate::operators::half_join(requests, arrangement, frontier_func, strict,
+        |_key, prefix, value| (prefix.clone(), <BatchCursor<Tr> as Cursor>::owned_val(value)))
 }
