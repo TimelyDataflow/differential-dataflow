@@ -1,11 +1,11 @@
-//! Three-way scorecard for steady-state arrangement maintenance.
+//! Four-way scorecard for steady-state arrangement maintenance.
 
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
-use benchmarks::revision;
+use benchmarks::{check_rotation, source};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
@@ -33,13 +33,15 @@ type Canonical = Vec<(i64, i64, i64)>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Implementation {
     Compiled,
+    CompiledDdir,
     Vec,
     Corgi,
 }
 
 impl Implementation {
-    const ALL: [Implementation; 3] = [
+    const ALL: [Implementation; 4] = [
         Implementation::Compiled,
+        Implementation::CompiledDdir,
         Implementation::Vec,
         Implementation::Corgi,
     ];
@@ -47,6 +49,7 @@ impl Implementation {
     fn name(self) -> &'static str {
         match self {
             Implementation::Compiled => "compiled",
+            Implementation::CompiledDdir => "compiled-ddir",
             Implementation::Vec => "ddir-vec",
             Implementation::Corgi => "ddir-corgi",
         }
@@ -67,8 +70,8 @@ impl Config {
         let mut rows = 100_000;
         let mut update_rows = 1_000;
         let mut seed = 0xc0ff_ee42;
-        let mut warmup = 1;
-        let mut runs = 5;
+        let mut warmup = 2;
+        let mut runs = Implementation::ALL.len() * 2;
         let mut arguments = std::env::args().skip(1);
         while let Some(argument) = arguments.next() {
             let value = |name: &str, values: &mut std::iter::Skip<std::env::Args>| {
@@ -101,6 +104,7 @@ impl Config {
         if rows > (i64::MAX as usize) / 2 {
             return Err("--rows must not exceed i64::MAX / 2".to_owned());
         }
+        check_rotation(runs, Implementation::ALL.len())?;
         Ok(Config {
             rows,
             update_rows,
@@ -146,6 +150,7 @@ struct Record<'a> {
     case: &'static str,
     implementation: &'static str,
     revision: &'a str,
+    dirty: bool,
     run: usize,
     rows: usize,
     update_rows: usize,
@@ -157,7 +162,7 @@ struct Record<'a> {
     update_ingest_ns: u128,
     update_stabilize_ns: u128,
     measured_ns: u128,
-    correct: bool,
+    checked_against: &'static str,
 }
 
 struct Dataset {
@@ -246,17 +251,6 @@ fn scalar(value: &Value) -> i64 {
     }
 }
 
-fn collect_native(receiver: Receiver<Event<u64, Vec<((i64, i64), u64, isize)>>>) -> Canonical {
-    consolidate(receiver.into_iter().flat_map(|event| {
-        match event {
-            Event::Messages(_, data) => data
-                .into_iter()
-                .map(|((key, value), _, diff)| (key, value, i64::try_from(diff).unwrap()))
-                .collect(),
-            Event::Progress(_) => Vec::new(),
-        }
-    }))
-}
 
 fn collect_ddir(receiver: Receiver<Event<u64, Vec<((Row, Row), u64, Diff)>>>) -> Canonical {
     consolidate(receiver.into_iter().flat_map(|event| {
@@ -270,13 +264,19 @@ fn collect_ddir(receiver: Receiver<Event<u64, Vec<((Row, Row), u64, Diff)>>>) ->
     }))
 }
 
+/// Check all four implementations against a hand-written oracle, untimed.
+///
+/// `compiled-ddir` renders the same plan at a coarser timestamp lattice, so its
+/// agreement is tested here rather than assumed.
 fn validate(data: &Dataset) -> Result<(), String> {
     let expected = data.expected();
-    let compiled = validate_compiled(data);
+    let compiled = validate_compiled(data, false);
+    let compiled_ddir = validate_compiled(data, true);
     let vec = validate_ddir(data, false);
     let corgi = validate_ddir(data, true);
     for (name, actual) in [
         ("compiled", compiled),
+        ("compiled-ddir", compiled_ddir),
         ("ddir-vec", vec),
         ("ddir-corgi", corgi),
     ] {
@@ -291,24 +291,22 @@ fn validate(data: &Dataset) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_compiled(data: &Dataset) -> Canonical {
-    type NativeEvent = Event<u64, Vec<((i64, i64), u64, isize)>>;
-
+fn validate_compiled(data: &Dataset, scoped: bool) -> Canonical {
     let base = data.base.clone();
     let removes = data.removes.clone();
     let inserts = data.inserts.clone();
-    let (send, receive) = channel::<NativeEvent>();
+    let (root_send, root_receive) = channel::<Event<u64, Vec<((i64, i64), u64, isize)>>>();
+    let (scoped_send, scoped_receive) = channel::<Event<Time, Vec<((i64, i64), Time, isize)>>>();
     timely::execute_directly(move |worker| {
-        let probe = timely::dataflow::ProbeHandle::new();
         let mut input = worker.dataflow::<u64, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<NativeRow, isize>();
-            collection
-                .map(|row| (row[0], row[1]))
-                .arrange_by_key()
-                .as_collection(|key, value| (*key, *value))
-                .inner
-                .probe_with(&probe)
-                .capture_into(send);
+            if scoped {
+                scope.iterative::<PointStamp<u64>, _, _>(|inner| {
+                    capture_arrangement(collection.enter(inner), scoped_send);
+                });
+            } else {
+                capture_arrangement(collection, root_send);
+            }
             input
         });
         for row in base {
@@ -316,9 +314,6 @@ fn validate_compiled(data: &Dataset) -> Canonical {
         }
         input.advance_to(1);
         input.flush();
-        while probe.less_than(&1) {
-            worker.step();
-        }
         for row in removes {
             input.remove(row);
         }
@@ -327,11 +322,42 @@ fn validate_compiled(data: &Dataset) -> Canonical {
         }
         input.advance_to(2);
         input.flush();
-        while probe.less_than(&2) {
-            worker.step();
-        }
+        drop(input);
+        while worker.step() {}
     });
-    collect_native(receive)
+    if scoped {
+        collect_pairs(scoped_receive)
+    } else {
+        collect_pairs(root_receive)
+    }
+}
+
+/// The validation-only tail of the arrangement plan: the same plan as
+/// [`render_compiled`], captured rather than probed.
+fn capture_arrangement<'scope, T>(
+    collection: differential_dataflow::VecCollection<'scope, T, NativeRow, isize>,
+    send: std::sync::mpsc::Sender<Event<T, Vec<((i64, i64), T, isize)>>>,
+) where
+    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + Send,
+{
+    collection
+        .map(|row| (row[0], row[1]))
+        .arrange_by_key()
+        .as_collection(|key, value| (*key, *value))
+        .inner
+        .capture_into(send);
+}
+
+fn collect_pairs<T: timely::progress::Timestamp>(
+    receiver: Receiver<Event<T, Vec<((i64, i64), T, isize)>>>,
+) -> Canonical {
+    consolidate(receiver.into_iter().flat_map(|event| match event {
+        Event::Messages(_, data) => data
+            .into_iter()
+            .map(|((key, value), _, diff)| (key, value, i64::try_from(diff).unwrap()))
+            .collect(),
+        Event::Progress(_) => Vec::new(),
+    }))
 }
 
 fn validate_ddir(data: &Dataset, use_corgi: bool) -> Canonical {
@@ -397,27 +423,49 @@ fn validate_ddir(data: &Dataset, use_corgi: bool) -> Canonical {
 
 fn run(implementation: Implementation, data: &Dataset) -> Timings {
     match implementation {
-        Implementation::Compiled => run_compiled(data),
+        Implementation::Compiled => run_compiled(data, false),
+        Implementation::CompiledDdir => run_compiled(data, true),
         Implementation::Vec => run_ddir(data, false),
         Implementation::Corgi => run_ddir(data, true),
     }
 }
 
-fn run_compiled(data: &Dataset) -> Timings {
+/// The typed arrangement plan.
+///
+/// `scoped` renders it inside the iterative scope at [`interactive::ir::Time`], where
+/// DDIR is obliged to render, which separates the cost of DDIR's runtime embedding
+/// from the cost of interpreting the plan.
+fn render_compiled<'scope, T>(
+    collection: differential_dataflow::VecCollection<'scope, T, NativeRow, isize>,
+    probe: &timely::dataflow::ProbeHandle<T>,
+) where
+    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice,
+{
+    collection
+        .map(|row| (row[0], row[1]))
+        .arrange_by_key()
+        .as_collection(|key, value| (*key, *value))
+        .inner
+        .probe_with(probe);
+}
+
+fn run_compiled(data: &Dataset, scoped: bool) -> Timings {
     let base = data.base.clone();
     let removes = data.removes.clone();
     let inserts = data.inserts.clone();
     timely::execute_directly(move |worker| {
-        let probe = timely::dataflow::ProbeHandle::new();
+        let root_probe = timely::dataflow::ProbeHandle::<u64>::new();
+        let scoped_probe = timely::dataflow::ProbeHandle::<Time>::new();
         let build_started = Instant::now();
         let mut input = worker.dataflow::<u64, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<NativeRow, isize>();
-            collection
-                .map(|row| (row[0], row[1]))
-                .arrange_by_key()
-                .as_collection(|key, value| (*key, *value))
-                .inner
-                .probe_with(&probe);
+            if scoped {
+                scope.iterative::<PointStamp<u64>, _, _>(|inner| {
+                    render_compiled(collection.enter(inner), &scoped_probe);
+                });
+            } else {
+                render_compiled(collection, &root_probe);
+            }
             input
         });
         let build = build_started.elapsed();
@@ -430,8 +478,15 @@ fn run_compiled(data: &Dataset) -> Timings {
         input.flush();
         let initial_ingest = initial_ingest_started.elapsed();
         let initial_stabilize_started = Instant::now();
-        while probe.less_than(&1) {
-            worker.step();
+        if scoped {
+            let target = Product::new(1, PointStamp::default());
+            while scoped_probe.less_than(&target) {
+                worker.step();
+            }
+        } else {
+            while root_probe.less_than(&1) {
+                worker.step();
+            }
         }
         let initial_stabilize = initial_stabilize_started.elapsed();
 
@@ -446,8 +501,15 @@ fn run_compiled(data: &Dataset) -> Timings {
         input.flush();
         let update_ingest = update_ingest_started.elapsed();
         let update_stabilize_started = Instant::now();
-        while probe.less_than(&2) {
-            worker.step();
+        if scoped {
+            let target = Product::new(2, PointStamp::default());
+            while scoped_probe.less_than(&target) {
+                worker.step();
+            }
+        } else {
+            while root_probe.less_than(&2) {
+                worker.step();
+            }
         }
         let update_stabilize = update_stabilize_started.elapsed();
         Timings {
@@ -573,7 +635,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let data = Dataset::new(&config);
     validate(&data)?;
-    let revision = revision();
+    let source = source();
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
 
@@ -589,11 +651,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             times.push((implementation, timings));
             if measured {
                 let record = Record {
-                    schema: 1,
+                    schema: benchmarks::SCHEMA,
                     benchmark: "operators",
                     case: "arrange-update",
                     implementation: implementation.name(),
-                    revision: &revision,
+                    revision: &source.revision,
+                    dirty: source.dirty,
                     run: run_number,
                     rows: config.rows,
                     update_rows: config.update_rows,
@@ -605,7 +668,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     update_ingest_ns: timings.update_ingest.as_nanos(),
                     update_stabilize_ns: timings.update_stabilize.as_nanos(),
                     measured_ns: timings.measured().as_nanos(),
-                    correct: true,
+                    checked_against: "expected",
                 };
                 serde_json::to_writer(&mut stdout, &record)?;
                 writeln!(&mut stdout)?;
@@ -622,13 +685,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .as_secs_f64()
             };
             let compiled = find(Implementation::Compiled);
+            let scoped = find(Implementation::CompiledDdir);
             let vec = find(Implementation::Vec);
             let corgi = find(Implementation::Corgi);
             eprintln!(
-                "arrange-update run {run_number}: compiled={compiled:.6}s vec={vec:.6}s ({:.2}x) corgi={corgi:.6}s ({:.2}x compiled, {:.2}x vec)",
-                vec / compiled,
-                corgi / compiled,
+                "arrange-update run {run_number}: compiled={compiled:.6}s compiled-ddir={scoped:.6}s ({:.2}x) vec={vec:.6}s ({:.2}x) corgi={corgi:.6}s ({:.2}x vec, {:.2}x compiled-ddir)",
+                scoped / compiled,
+                vec / scoped,
                 corgi / vec,
+                corgi / scoped,
             );
         }
     }

@@ -9,7 +9,9 @@ use std::io::Write;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Instant;
 
-use benchmarks::{consolidate, graph, revision, Context, EdgeResult, Record, Run, Timings};
+use benchmarks::{
+    check_rotation, consolidate, graph, source, Context, EdgeResult, Record, Run, Timings,
+};
 use differential_dataflow::algorithms::graphs::scc::strongly_connected_at;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::input::Input;
@@ -106,8 +108,8 @@ impl Config {
         let mut nodes = 1_000;
         let mut edges = None;
         let mut seed = 0xc0ff_ee42;
-        let mut warmup = 0;
-        let mut runs = 1;
+        let mut warmup = 2;
+        let mut runs = Implementation::ALL.len();
         let mut arguments = std::env::args().skip(1);
 
         while let Some(arg) = arguments.next() {
@@ -143,6 +145,7 @@ impl Config {
         if runs == 0 {
             return Err("--runs must be positive".to_owned());
         }
+        check_rotation(runs, Implementation::ALL.len())?;
         let edges = match edges {
             Some(edges) => edges,
             None => nodes
@@ -468,7 +471,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let edges = graph(config.nodes, config.edges, config.seed);
-    let revision = revision();
+    let source = source();
 
     eprintln!(
         "scc: nodes={} edges={} seed={} warmup={} runs={}",
@@ -485,14 +488,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runs = run_set(&edges, config.warmup + run_number)?;
         let context = Context {
             benchmark: "scc",
-            revision: &revision,
+            source: &source,
             run: run_number,
             nodes: config.nodes,
             edges: config.edges,
             seed: config.seed,
         };
         for run in runs.values() {
-            let record = Record::from_run(context, run, true);
+            // `check` holds every implementation against `compiled-ddir`, which is in
+            // turn cross-checked by the independent `strongly_connected_at` variant.
+            let record = Record::from_run(context, run, "compiled-ddir");
             serde_json::to_writer(&mut stdout, &record)?;
             writeln!(&mut stdout)?;
         }

@@ -1,13 +1,19 @@
-//! Three-way scorecard for atomic DDIR operators.
+//! Four-way scorecard for atomic DDIR operators.
 //!
-//! Atomic cases have one typed plan because the optimized and DDIR-matched
-//! compiled plans coincide.
+//! Atomic cases have one typed operator plan: there is no reformulation DDIR forces
+//! on a map or a join. The two compiled implementations therefore render the same
+//! plan and differ only in where they render it. `compiled` uses the root scope at a
+//! `u64` timestamp, which is what a typed program would write. `compiled-ddir` uses
+//! the iterative scope at [`interactive::ir::Time`], which is where DDIR must render
+//! everything it runs. The gap between them is the cost of DDIR's runtime embedding,
+//! and holding it apart is what lets the remaining ratios mean interpretation.
 
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use benchmarks::revision;
+use benchmarks::{check_rotation, source};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::input::Input;
 use differential_dataflow::AsCollection;
@@ -19,6 +25,7 @@ use interactive::{lower, parse, scope_ir};
 use mimalloc::MiMalloc;
 use serde::Serialize;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::capture::{Capture, Event};
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::operators::Probe;
 use timely::order::Product;
@@ -153,13 +160,15 @@ impl Case {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Implementation {
     Compiled,
+    CompiledDdir,
     Vec,
     Corgi,
 }
 
 impl Implementation {
-    const ALL: [Implementation; 3] = [
+    const ALL: [Implementation; 4] = [
         Implementation::Compiled,
+        Implementation::CompiledDdir,
         Implementation::Vec,
         Implementation::Corgi,
     ];
@@ -167,6 +176,7 @@ impl Implementation {
     fn name(self) -> &'static str {
         match self {
             Implementation::Compiled => "compiled",
+            Implementation::CompiledDdir => "compiled-ddir",
             Implementation::Vec => "ddir-vec",
             Implementation::Corgi => "ddir-corgi",
         }
@@ -191,8 +201,8 @@ impl Config {
         let mut keys = 1_000;
         let mut fanout = 4;
         let mut seed = 0xc0ff_ee42;
-        let mut warmup = 1;
-        let mut runs = 5;
+        let mut warmup = 2;
+        let mut runs = Implementation::ALL.len() * 2;
         let mut arguments = std::env::args().skip(1);
         while let Some(argument) = arguments.next() {
             let value = |name: &str, values: &mut std::iter::Skip<std::env::Args>| {
@@ -228,6 +238,7 @@ impl Config {
         if rows > (i64::MAX as usize) / 2 {
             return Err("--rows must not exceed i64::MAX / 2".to_owned());
         }
+        check_rotation(runs, Implementation::ALL.len())?;
         keys = keys.min(rows);
         Ok(Config {
             case,
@@ -272,6 +283,7 @@ struct Record<'a> {
     case: &'static str,
     implementation: &'static str,
     revision: &'a str,
+    dirty: bool,
     run: usize,
     rows: usize,
     keys: usize,
@@ -282,7 +294,7 @@ struct Record<'a> {
     ingest_ns: u128,
     stabilize_ns: u128,
     measured_ns: u128,
-    correct: bool,
+    checked_against: &'static str,
 }
 
 struct Dataset {
@@ -390,24 +402,83 @@ fn program(case: Case) -> scope_ir::Program {
     program
 }
 
+/// Check all four implementations against a hand-written oracle, untimed.
+///
+/// Both compiled implementations are executed here, not merely assumed to agree.
+/// `compiled-ddir` renders the same plan at a coarser timestamp lattice, which
+/// selects different code paths inside the reduce and join operators, so its
+/// agreement is a claim that has to be tested rather than asserted.
 fn validate(case: Case, data: &Dataset) -> Result<(), String> {
+    let expected = expected(case, &data.native);
+    let disagree = |name: &str, actual: Canonical| {
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(format!(
+                "{}: {name} disagrees with the expected output: lengths {} and {}",
+                case.name(),
+                actual.len(),
+                expected.len(),
+            ))
+        }
+    };
+
+    disagree("compiled", validate_compiled(case, &data.native, false))?;
+    disagree("compiled-ddir", validate_compiled(case, &data.native, true))?;
+
     let program = program(case);
     let vec = vec::evaluate(&program, &data.dynamic);
     let corgi = corgi::evaluate(&program, &data.dynamic);
     if vec != corgi {
         return Err(format!("{}: Vec and Corgi outputs disagree", case.name()));
     }
-    let actual = canonical(&vec["result"]);
-    let expected = expected(case, &data.native);
-    if actual != expected {
-        return Err(format!(
-            "{}: compiled and DDIR outputs disagree: lengths {} and {}",
-            case.name(),
-            expected.len(),
-            actual.len()
-        ));
-    }
+    disagree("ddir-vec", canonical(&vec["result"]))?;
+    disagree("ddir-corgi", canonical(&corgi["result"]))?;
     Ok(())
+}
+
+/// Run a compiled implementation once, untimed, capturing its canonical output.
+fn validate_compiled(case: Case, inputs: &[Vec<NativeRow>], scoped: bool) -> Canonical {
+    let inputs = inputs.to_vec();
+    let (root_send, root_receive) = channel::<CompiledCapture<u64>>();
+    let (scoped_send, scoped_receive) = channel::<CompiledCapture<Time>>();
+    timely::execute_directly(move |worker| {
+        let root_probe = timely::dataflow::ProbeHandle::<u64>::new();
+        let scoped_probe = timely::dataflow::ProbeHandle::<Time>::new();
+        let mut handles = worker.dataflow::<u64, _, _>(|scope| {
+            let (left_handle, left) = scope.new_collection::<NativeRow, isize>();
+            let (right_handle, right) = scope.new_collection::<NativeRow, isize>();
+            if scoped {
+                scope.iterative::<PointStamp<u64>, _, _>(|inner| {
+                    let (left, right) = (left.enter(inner), right.enter(inner));
+                    render_compiled(case, left, right, &scoped_probe, Some(&scoped_send));
+                });
+            } else {
+                render_compiled(case, left, right, &root_probe, Some(&root_send));
+            }
+            vec![left_handle, right_handle]
+        });
+        ingest_native(&mut handles, inputs);
+        drop(handles);
+        while worker.step() {}
+    });
+    if scoped {
+        collect_compiled(scoped_receive)
+    } else {
+        collect_compiled(root_receive)
+    }
+}
+
+fn collect_compiled<T: timely::progress::Timestamp>(
+    receiver: Receiver<CompiledCapture<T>>,
+) -> Canonical {
+    consolidate(receiver.into_iter().flat_map(|event| match event {
+        Event::Messages(_, data) => data
+            .into_iter()
+            .map(|((key, value), _, diff)| (key, value, i64::try_from(diff).unwrap()))
+            .collect(),
+        Event::Progress(_) => Vec::new(),
+    }))
 }
 
 fn expected(case: Case, inputs: &[Vec<NativeRow>]) -> Canonical {
@@ -541,11 +612,14 @@ fn map_value(value: [i64; 6]) -> [i64; 6] {
 fn run(implementation: Implementation, case: Case, data: &Dataset) -> Timings {
     match implementation {
         Implementation::Compiled => run_compiled(case, &data.native),
+        Implementation::CompiledDdir => run_compiled_ddir(case, &data.native),
         Implementation::Vec => run_ddir(case, &data.dynamic, false),
         Implementation::Corgi => run_ddir(case, &data.dynamic, true),
     }
 }
 
+/// The optimized typed plan, rendered where a typed program would put it: the root
+/// scope, at the root timestamp.
 fn run_compiled(case: Case, inputs: &[Vec<NativeRow>]) -> Timings {
     let inputs = inputs.to_vec();
     timely::execute_directly(move |worker| {
@@ -554,21 +628,11 @@ fn run_compiled(case: Case, inputs: &[Vec<NativeRow>]) -> Timings {
         let mut handles = worker.dataflow::<u64, _, _>(|scope| {
             let (left_handle, left) = scope.new_collection::<NativeRow, isize>();
             let (right_handle, right) = scope.new_collection::<NativeRow, isize>();
-            render_compiled(case, left, right, &probe);
+            render_compiled(case, left, right, &probe, None);
             vec![left_handle, right_handle]
         });
         let build = build_started.elapsed();
-        let ingest_started = Instant::now();
-        for (handle, rows) in handles.iter_mut().zip(&inputs) {
-            for row in rows {
-                handle.insert(*row);
-            }
-        }
-        for handle in &mut handles {
-            handle.advance_to(1);
-            handle.flush();
-        }
-        let ingest = ingest_started.elapsed();
+        let ingest = ingest_native(&mut handles, inputs);
         let stabilize_started = Instant::now();
         while probe.less_than(&1) {
             worker.step();
@@ -582,23 +646,101 @@ fn run_compiled(case: Case, inputs: &[Vec<NativeRow>]) -> Timings {
     })
 }
 
-fn render_compiled<'scope>(
-    case: Case,
-    left: differential_dataflow::VecCollection<'scope, u64, NativeRow, isize>,
-    right: differential_dataflow::VecCollection<'scope, u64, NativeRow, isize>,
-    probe: &timely::dataflow::ProbeHandle<u64>,
-) {
-    match case {
-        Case::Identity => {
-            left.inner.probe_with(probe);
+/// The same typed plan, rendered where DDIR must put it.
+///
+/// DDIR renders every program inside an iterative scope, so its operators run at
+/// [`interactive::ir::Time`] rather than at `u64`: larger timestamps, vector-valued
+/// lattice operations, and an `enter` per input. That cost belongs to DDIR's runtime
+/// embedding rather than to interpretation, and this implementation is what separates
+/// the two. The operator plan is identical to [`run_compiled`]'s.
+fn run_compiled_ddir(case: Case, inputs: &[Vec<NativeRow>]) -> Timings {
+    let inputs = inputs.to_vec();
+    timely::execute_directly(move |worker| {
+        let probe = timely::dataflow::ProbeHandle::<Time>::new();
+        let build_started = Instant::now();
+        let mut handles = worker.dataflow::<u64, _, _>(|scope| {
+            let (left_handle, left) = scope.new_collection::<NativeRow, isize>();
+            let (right_handle, right) = scope.new_collection::<NativeRow, isize>();
+            scope.iterative::<PointStamp<u64>, _, _>(|inner| {
+                render_compiled(case, left.enter(inner), right.enter(inner), &probe, None);
+            });
+            vec![left_handle, right_handle]
+        });
+        let build = build_started.elapsed();
+        let ingest = ingest_native(&mut handles, inputs);
+        let stabilize_started = Instant::now();
+        let target = Product::new(1, PointStamp::default());
+        while probe.less_than(&target) {
+            worker.step();
         }
+        Timings {
+            prepare: Duration::ZERO,
+            build,
+            ingest,
+            stabilize: stabilize_started.elapsed(),
+        }
+    })
+}
+
+/// Submit typed rows and seal the batch, consuming the rows as the DDIR path does.
+fn ingest_native(
+    handles: &mut [differential_dataflow::input::InputSession<u64, NativeRow, isize>],
+    inputs: Vec<Vec<NativeRow>>,
+) -> Duration {
+    let ingest_started = Instant::now();
+    for (handle, rows) in handles.iter_mut().zip(inputs) {
+        for row in rows {
+            handle.insert(row);
+        }
+    }
+    for handle in handles.iter_mut() {
+        handle.advance_to(1);
+        handle.flush();
+    }
+    ingest_started.elapsed()
+}
+
+/// A captured compiled output, in the same canonical shape as [`expected`].
+type CompiledCapture<T> = Event<T, Vec<((Vec<i64>, Vec<i64>), T, isize)>>;
+
+/// Render the typed plan for `case`, probing its native output.
+///
+/// `capture` is `None` in every timed run. When it is `Some`, each arm additionally
+/// maps its output into the canonical shape and captures it, so that the compiled
+/// implementations can be checked against [`expected`] rather than merely assumed
+/// to agree with it. The extra operators exist only when capturing, so the timed
+/// dataflow is exactly the plan and nothing else.
+fn render_compiled<'scope, T>(
+    case: Case,
+    left: differential_dataflow::VecCollection<'scope, T, NativeRow, isize>,
+    right: differential_dataflow::VecCollection<'scope, T, NativeRow, isize>,
+    probe: &timely::dataflow::ProbeHandle<T>,
+    capture: Option<&Sender<CompiledCapture<T>>>,
+) where
+    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + Send,
+{
+    /// Probe the plan's own output, then optionally capture a canonical copy.
+    macro_rules! finish {
+        ($output:expr, $canonical:expr) => {{
+            let output = $output;
+            if let Some(send) = capture {
+                output.clone().map($canonical).inner.capture_into(send.clone());
+            }
+            output.inner.probe_with(probe);
+        }};
+    }
+    match case {
+        Case::Identity => finish!(left, |row: NativeRow| (row.to_vec(), Vec::new())),
         Case::Map1 | Case::Map8 => {
             let rounds = if case == Case::Map1 { 1 } else { 8 };
             let mut output = left.map(start_map);
             for _ in 0..rounds {
                 output = output.map(|(key, value)| (key, map_value(value)));
             }
-            output.inner.probe_with(probe);
+            finish!(output, |(key, value): (i64, [i64; 6])| (
+                vec![key],
+                value.to_vec()
+            ))
         }
         Case::FilterNone | Case::FilterHalf | Case::FilterAll => {
             let limit = match case {
@@ -607,38 +749,38 @@ fn render_compiled<'scope>(
                 Case::FilterAll => 1_000,
                 _ => unreachable!(),
             };
-            left.map(|row| (row[0], [row[1], row[2], row[3], row[4], row[5]]))
-                .filter(move |(_, value)| value[0] < limit)
-                .inner
-                .probe_with(probe);
+            finish!(
+                left.map(|row| (row[0], [row[1], row[2], row[3], row[4], row[5]]))
+                    .filter(move |(_, value)| value[0] < limit),
+                |(key, value): (i64, [i64; 5])| (vec![key], value.to_vec())
+            )
         }
-        Case::ArrangeSorted | Case::ArrangeRandom | Case::ArrangeDuplicates => {
+        Case::ArrangeSorted | Case::ArrangeRandom | Case::ArrangeDuplicates => finish!(
             left.map(|row| (row[0], row[1]))
                 .arrange_by_key()
-                .as_collection(|key, value| (*key, *value))
-                .inner
-                .probe_with(probe);
-        }
-        Case::JoinOne | Case::JoinMiss | Case::JoinFanout => {
+                .as_collection(|key, value| (*key, *value)),
+            |(key, value): (i64, i64)| (vec![key], vec![value])
+        ),
+        Case::JoinOne | Case::JoinMiss | Case::JoinFanout => finish!(
             left.map(|row| (row[0], row[1]))
                 .join_map(right.map(|row| (row[0], row[1])), |_, left, right| {
                     (*left, *right)
-                })
-                .inner
-                .probe_with(probe);
-        }
-        Case::Distinct => {
-            left.map(|row| row[0]).distinct().inner.probe_with(probe);
-        }
-        Case::Count => {
-            left.map(|row| row[0]).count().inner.probe_with(probe);
-        }
-        Case::Min => {
+                }),
+            |(left, right): (i64, i64)| (vec![left], vec![right])
+        ),
+        Case::Distinct => finish!(left.map(|row| row[0]).distinct(), |key: i64| (
+            vec![key],
+            Vec::new()
+        )),
+        Case::Count => finish!(left.map(|row| row[0]).count(), |(key, count): (i64, isize)| (
+            vec![key],
+            vec![count as i64]
+        )),
+        Case::Min => finish!(
             left.map(|row| (row[0], row[1]))
-                .reduce(|_, values, output| output.push((*values[0].0, 1)))
-                .inner
-                .probe_with(probe);
-        }
+                .reduce(|_, values, output| output.push((*values[0].0, 1))),
+            |(key, value): (i64, i64)| (vec![key], vec![value])
+        ),
     };
 }
 
@@ -712,10 +854,12 @@ fn run_ddir(case: Case, inputs: &[Vec<(Row, Row)>], use_corgi: bool) -> Timings 
             handles
         });
         let build = build_started.elapsed();
+        // Consume the prepared rows. Cloning them here would charge DDIR a deep copy
+        // of every `Value` that the typed path, whose rows are `Copy`, never pays.
         let ingest_started = Instant::now();
-        for (handle, rows) in handles.iter_mut().zip(&inputs) {
+        for (handle, rows) in handles.iter_mut().zip(inputs) {
             for row in rows {
-                handle.update(row.clone(), 1);
+                handle.update(row, 1);
             }
         }
         for handle in &mut handles {
@@ -746,7 +890,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err(error.into());
         }
     };
-    let revision = revision();
+    let source = source();
     let cases: Vec<_> = config
         .case
         .map_or_else(|| Case::ALL.to_vec(), |case| vec![case]);
@@ -768,11 +912,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 times.push((implementation, timings));
                 if measured {
                     let record = Record {
-                        schema: 1,
+                        schema: benchmarks::SCHEMA,
                         benchmark: "operators",
                         case: case.name(),
                         implementation: implementation.name(),
-                        revision: &revision,
+                        revision: &source.revision,
+                        dirty: source.dirty,
                         run: run_number,
                         rows: config.rows,
                         keys: config.keys,
@@ -783,7 +928,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ingest_ns: timings.ingest.as_nanos(),
                         stabilize_ns: timings.stabilize.as_nanos(),
                         measured_ns: timings.measured().as_nanos(),
-                        correct: true,
+                        checked_against: "expected",
                     };
                     serde_json::to_writer(&mut stdout, &record)?;
                     writeln!(&mut stdout)?;
@@ -800,11 +945,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .as_secs_f64()
                 };
                 let compiled = find(Implementation::Compiled);
+                let scoped = find(Implementation::CompiledDdir);
                 let vec = find(Implementation::Vec);
                 let corgi = find(Implementation::Corgi);
                 eprintln!(
-                    "{} run {}: compiled={:.6}s vec={:.6}s ({:.2}x) corgi={:.6}s ({:.2}x compiled, {:.2}x vec)",
-                    case.name(), run_number, compiled, vec, vec / compiled, corgi, corgi / compiled, corgi / vec,
+                    "{} run {}: compiled={compiled:.6}s compiled-ddir={scoped:.6}s ({:.2}x) vec={vec:.6}s ({:.2}x) corgi={corgi:.6}s ({:.2}x vec, {:.2}x compiled-ddir)",
+                    case.name(), run_number,
+                    scoped / compiled, vec / scoped, corgi / vec, corgi / scoped,
                 );
             }
         }

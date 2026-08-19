@@ -34,6 +34,9 @@ pub struct Run {
     pub output: EdgeResult,
 }
 
+/// The version of the record schema written by every benchmark in this project.
+pub const SCHEMA: u32 = 2;
+
 /// One machine-readable result row.
 #[derive(Debug, Serialize)]
 pub struct Record<'a> {
@@ -41,6 +44,7 @@ pub struct Record<'a> {
     pub benchmark: &'a str,
     pub implementation: &'a str,
     pub revision: &'a str,
+    pub dirty: bool,
     pub run: usize,
     pub nodes: u64,
     pub edges: u64,
@@ -53,14 +57,14 @@ pub struct Record<'a> {
     pub output_records: usize,
     pub output_weight: i64,
     pub output_digest: String,
-    pub correct: bool,
+    pub checked_against: &'a str,
 }
 
 /// Parameters shared by the four records in one benchmark run.
 #[derive(Clone, Copy, Debug)]
 pub struct Context<'a> {
     pub benchmark: &'a str,
-    pub revision: &'a str,
+    pub source: &'a Source,
     pub run: usize,
     pub nodes: u64,
     pub edges: u64,
@@ -68,12 +72,13 @@ pub struct Context<'a> {
 }
 
 impl<'a> Record<'a> {
-    pub fn from_run(context: Context<'a>, run: &'a Run, correct: bool) -> Self {
+    pub fn from_run(context: Context<'a>, run: &'a Run, checked_against: &'a str) -> Self {
         Record {
-            schema: 1,
+            schema: SCHEMA,
             benchmark: context.benchmark,
             implementation: run.implementation,
-            revision: context.revision,
+            revision: &context.source.revision,
+            dirty: context.source.dirty,
             run: context.run,
             nodes: context.nodes,
             edges: context.edges,
@@ -86,8 +91,24 @@ impl<'a> Record<'a> {
             output_records: run.output.len(),
             output_weight: run.output.iter().map(|(_, diff)| *diff).sum(),
             output_digest: digest(&run.output),
-            correct,
+            checked_against,
         }
+    }
+}
+
+/// Require that every implementation leads the rotation the same number of times.
+///
+/// The implementations of one benchmark share a process, and therefore an allocator
+/// heap, so the order in which they run within a repetition is not neutral. Rotating
+/// the order only removes that bias if the rotation completes a whole number of times.
+pub fn check_rotation(runs: usize, implementations: usize) -> Result<(), String> {
+    if runs % implementations == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "--runs must be a multiple of {implementations} (the implementation count) \
+             so that each implementation leads the rotation equally often; got {runs}"
+        ))
     }
 }
 
@@ -130,17 +151,37 @@ pub fn digest(result: &EdgeResult) -> String {
     format!("{hash:016x}")
 }
 
-/// Resolve the current revision without making it part of a timed region.
-pub fn revision() -> String {
+/// The source under measurement.
+///
+/// A revision alone does not identify what ran: if the working tree carries
+/// uncommitted changes then the measurement belongs to no commit at all. A
+/// longitudinal series must be able to discard those points, so record both.
+#[derive(Clone, Debug)]
+pub struct Source {
+    pub revision: String,
+    pub dirty: bool,
+}
+
+/// Resolve the source under measurement without making it part of a timed region.
+pub fn source() -> Source {
+    Source {
+        revision: git(&["rev-parse", "--verify", "HEAD"])
+            .filter(|revision| !revision.is_empty())
+            .unwrap_or_else(|| "unknown".to_owned()),
+        // An unreadable tree is reported as dirty: the pessimistic answer is the
+        // one that keeps a doubtful point out of a longitudinal series.
+        dirty: git(&["status", "--porcelain"]).is_none_or(|status| !status.is_empty()),
+    }
+}
+
+fn git(arguments: &[&str]) -> Option<String> {
     std::process::Command::new("git")
-        .args(["rev-parse", "--verify", "HEAD"])
+        .args(arguments)
         .output()
         .ok()
         .filter(|output| output.status.success())
         .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|revision| revision.trim().to_owned())
-        .filter(|revision| !revision.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
+        .map(|output| output.trim().to_owned())
 }
 
 fn xorshift(state: &mut u64) -> u64 {
