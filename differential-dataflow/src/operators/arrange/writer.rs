@@ -52,7 +52,7 @@ impl<Tr: Trace> TraceWriter<Tr> {
     /// The `hint` argument is either `None` in the case of an empty batch,
     /// or is `Some(time)` for a time less or equal to all updates in the
     /// batch and which is suitable for use as a capability.
-    pub fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) {
+    pub fn insert(&mut self, batch: Tr::Batch, hint: timely::progress::Stamp<Tr::Time>) {
 
         // Something is wrong if not a sequence.
         if !(&self.upper == batch.lower()) {
@@ -84,7 +84,7 @@ impl<Tr: Trace> TraceWriter<Tr> {
     /// Inserts an empty batch up to `upper`.
     pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
         if self.upper != upper {
-            self.insert(Tr::Batch::empty(self.upper.clone(), upper), None);
+            self.insert(Tr::Batch::empty(self.upper.clone(), upper), timely::progress::Stamp::new());
         }
     }
 }

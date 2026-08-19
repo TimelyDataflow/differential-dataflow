@@ -172,7 +172,9 @@ where
 
                 // Drain input batches in order, capturing capabilities and the last upper.
                 input.for_each(|capability, batches| {
-                    capabilities.insert(capability.retain(0));
+                    for capability in capability.retain_stamp(0).iter() {
+                        capabilities.insert(capability.clone());
+                    }
                     for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());
                         batch_storage.push(batch);
@@ -226,7 +228,7 @@ where
                     for (time, batch) in produced {
                         let capability = capabilities.delayed(&time);
                         output.session(&capability).give(batch.clone());
-                        output_writer.insert(batch, Some(time));
+                        output_writer.insert(batch, timely::progress::Stamp::from_elem(time));
                     }
 
                     // Downgrade to the frontier the tactic handed back (a no-op when it found no work).

@@ -118,7 +118,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
             .borrow_mut()
             .trace
             .map_batches(|batch| {
-                new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), Some(Tr::Time::minimum())));
+                new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), timely::progress::Stamp::from_elem(Tr::Time::minimum())));
                 upper = Some(batch.upper().clone());
             });
 
@@ -300,11 +300,9 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
                                     capabilities.downgrade(&frontier.borrow()[..]);
                                 },
                                 TraceReplayInstruction::Batch(batch, hint) => {
-                                    if let Some(time) = hint {
-                                        if !batch.is_empty() {
-                                            let delayed = capabilities.delayed(&time);
-                                            output.session(&delayed).give(batch);
-                                        }
+                                    if !hint.is_empty() && !batch.is_empty() {
+                                        let delayed = capabilities.delayed_stamp(&hint);
+                                        output.session(&delayed).give(batch);
                                     }
                                 }
                             }
@@ -441,11 +439,9 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
                                         }
                                     },
                                     TraceReplayInstruction::Batch(batch, hint) => {
-                                        if let Some(time) = hint {
-                                            if !batch.is_empty() {
-                                                let delayed = capabilities.delayed(&time);
-                                                output.session(&delayed).give(BatchFrontier::make_from(batch, since.borrow(), until.borrow()));
-                                            }
+                                        if !hint.is_empty() && !batch.is_empty() {
+                                            let delayed = capabilities.delayed_stamp(&hint);
+                                            output.session(&delayed).give(BatchFrontier::make_from(batch, since.borrow(), until.borrow()));
                                         }
                                     }
                                 }

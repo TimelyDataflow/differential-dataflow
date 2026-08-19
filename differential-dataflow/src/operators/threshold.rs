@@ -131,10 +131,10 @@ where
                 lower_limit.clear();
                 lower_limit.extend(upper_limit.borrow().iter().cloned());
 
-                let mut cap = None;
+                let mut caps = timely::dataflow::operators::CapabilitySet::new();
                 input.for_each(|capability, batches| {
-                    if cap.is_none() {                          // NB: Assumes batches are in-order
-                        cap = Some(capability.retain(0));
+                    for capability in capability.retain_stamp(0).iter() {
+                        caps.insert(capability.clone());
                     }
                     for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());  // NB: Assumes batches are in-order
@@ -142,9 +142,9 @@ where
                     }
                 });
 
-                if let Some(capability) = cap {
+                if !caps.is_empty() {
 
-                    let mut session = output.session(&capability);
+                    let mut session = output.session(&caps);
 
                     let (mut batch_cursor, batch_storage) = crate::trace::cursor::cursor_list(batch_storage);
                     let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(trace.batches_through(lower_limit.borrow()).unwrap());

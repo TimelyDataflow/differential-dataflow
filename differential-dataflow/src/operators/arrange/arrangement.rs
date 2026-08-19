@@ -25,7 +25,8 @@ use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::progress::Timestamp;
 use timely::progress::Antichain;
 use timely::container::{ContainerBuilder, PushInto};
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::progress::Stamp;
 
 use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
@@ -392,7 +393,9 @@ where
             // when we realize that time intervals are complete.
 
             input.for_each(|cap, data| {
-                capabilities.insert(cap.retain(0));
+                for capability in cap.retain_stamp(0).iter() {
+                    capabilities.insert(capability.clone());
+                }
                 chunker.push_into(data);
                 while let Some(chunk) = chunker.extract() {
                     batcher.push_into(std::mem::take(chunk));
@@ -422,8 +425,7 @@ where
                 //
                 // 1. If any held capabilities are not in advance of the new input frontier,
                 //    we must carve out updates now in advance of the new input frontier and
-                //    transmit them as batches, which requires appropriate *single* capabilities;
-                //    Until timely dataflow supports multiple capabilities on messages, at least.
+                //    transmit them as a batch, stamped with the capabilities they retire.
                 //
                 // 2. If there are no held capabilities in advance of the new input frontier,
                 //    then there are no updates not in advance of the new input frontier and
@@ -433,37 +435,30 @@ where
                 // If there is at least one capability not in advance of the input frontier ...
                 if capabilities.elements().iter().any(|c| !frontier.less_equal(c.time())) {
 
-                    let mut upper = Antichain::new();   // re-used allocation for sealing batches.
+                    // The capabilities to retire: those not in advance of the input frontier.
+                    // Each update sealed below is greater or equal to one of them, as updates
+                    // supported only by the remaining capabilities are in advance of the input
+                    // frontier and remain in the batcher.
+                    let retired = capabilities
+                        .elements()
+                        .iter()
+                        .filter(|c| !frontier.less_equal(c.time()))
+                        .cloned()
+                        .collect::<CapabilitySet<_>>();
 
-                    // For each capability not in advance of the input frontier ...
-                    for (index, capability) in capabilities.elements().iter().enumerate() {
+                    // Extract all updates not in advance of the input frontier, as one batch.
+                    let (mut chain, description) = batcher.seal(frontier.frontier().to_owned());
+                    let batch = Bu::seal(&mut chain, description);
 
-                        if !frontier.less_equal(capability.time()) {
+                    let stamp = retired.iter().map(|c| c.time().clone()).collect::<Stamp<_>>();
+                    writer.insert(batch.clone(), stamp);
 
-                            // Assemble the upper bound on times we can commit with this capabilities.
-                            // We must respect the input frontier, and *subsequent* capabilities, as
-                            // we are pretending to retire the capability changes one by one.
-                            upper.clear();
-                            for time in frontier.frontier().iter() {
-                                upper.insert(time.clone());
-                            }
-                            for other_capability in &capabilities.elements()[(index + 1) .. ] {
-                                upper.insert(other_capability.time().clone());
-                            }
+                    // send the batch to downstream consumers, empty or not.
+                    output.session(&retired).give(batch);
 
-                            // Extract updates not in advance of `upper`.
-                            let (mut chain, description) = batcher.seal(upper.clone());
-                            let batch = Bu::seal(&mut chain, description);
-
-                            writer.insert(batch.clone(), Some(capability.time().clone()));
-
-                            // send the batch to downstream consumers, empty or not.
-                            output.session(&capabilities.elements()[index]).give(batch);
-                        }
-                    }
-
-                    // Having extracted and sent batches between each capability and the input frontier,
-                    // we should downgrade all capabilities to match the batcher's lower update frontier.
+                    // Having extracted and sent the batch of updates not in advance of the input
+                    // frontier, we should downgrade all capabilities to match the batcher's lower
+                    // update frontier.
                     // This may involve discarding capabilities, which is fine as any new updates arrive
                     // in messages with new capabilities.
 

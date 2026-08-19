@@ -51,8 +51,10 @@ use crate::trace::TraceReader;
 pub enum TraceReplayInstruction<Tr: TraceReader> {
     /// Describes a frontier advance.
     Frontier(Antichain<Tr::Time>),
-    /// Describes a batch of data and a capability hint.
-    Batch(Tr::Batch, Option<Tr::Time>),
+    /// Describes a batch of data and the stamp justifying its contents.
+    ///
+    /// The stamp is empty exactly when the batch is empty.
+    Batch(Tr::Batch, timely::progress::Stamp<Tr::Time>),
 }
 
 // Short names for strongly and weakly owned activators and shared queues.
