@@ -29,7 +29,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::progress::frontier::MutableAntichain;
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
 
 use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable};
 use differential_dataflow::difference::Semigroup;
@@ -150,10 +150,10 @@ where
     CB: ContainerBuilder,
 {
     // Updates are staged in a `BlobList` and joined by a cursor walk; the driver owns progress.
-    let batcher = BlobList::<(K, V, Tr::Time), Tr::Time, R>::default();
+    let batcher = BlobList::<(K, V, Tr::Time), Tr::Time, R>::new(strict);
     let tactic = cursors::CursorTactic::<K, V, R, Tr::Batch, S, CB>::new(output_func, strict);
     let route = |update: &((K, V, Tr::Time), Tr::Time, R)| (update.0).0.hashed().into();
-    half_join_with_tactic(stream.inner, arrangement, route, frontier_func, strict, yield_function, batcher, tactic)
+    half_join_with_tactic(stream.inner, arrangement, route, frontier_func, yield_function, batcher, tactic)
 }
 
 pub trait HalfJoinTactic<B: BatchReader, C0, C1> {
@@ -171,29 +171,30 @@ pub trait HalfJoinTactic<B: BatchReader, C0, C1> {
 pub trait BatcherAlt<C, T: Timestamp> {
     /// Moves responsibility for `container` into the implementor.
     fn insert(&mut self, container: C);
-    /// Extracts containers on the basis of `bound`, and the lower bounds of the times retained.
+    /// Extracts the containers `frontier` unblocks, and the lower bounds of the times retained.
+    ///
+    /// What `frontier` unblocks is the implementor's to decide. It is handed the frontier itself
+    /// rather than a bound derived from it, so that a rule other than the antichain partial order
+    /// (`half_join` releases by a total order on times) remains expressible.
     ///
     /// The returned bound is reported at the one moment it is well defined: an implementor is not
     /// required to account for inserted updates until it is asked to extract, so this is the only
     /// bound a caller can safely downgrade capabilities to.
-    fn extract(&mut self, bound: Eligibility<T>) -> (Vec<C>, &MutableAntichain<T>);
-}
-
-pub enum Eligibility<T> {
-    All,
-    Le(T),
-    Lt(T),
+    fn extract(&mut self, frontier: AntichainRef<'_, T>) -> (Vec<C>, &MutableAntichain<T>);
 }
 
 struct BlobList<D, T: Timestamp, R> {
     stage: Vec<(T, D, R)>,
     blobs: Vec<VecDeque<(T, D, R)>>,
     lower: MutableAntichain<T>,
+    /// Whether an arrangement time equal to an update's time still blocks it.
+    strict: bool,
 }
 
-impl<D, T: Timestamp, R> Default for BlobList<D, T, R> {
-    fn default() -> Self {
-        BlobList { stage: Vec::new(), blobs: Vec::new(), lower: MutableAntichain::new() }
+impl<D, T: Timestamp, R> BlobList<D, T, R> {
+    /// Allocates an empty list that releases updates under the `strict` comparison.
+    fn new(strict: bool) -> Self {
+        BlobList { stage: Vec::new(), blobs: Vec::new(), lower: MutableAntichain::new(), strict }
     }
 }
 
@@ -201,7 +202,7 @@ impl<D: Ord, T: Timestamp, R: Semigroup> BatcherAlt<Vec<(D, T, R)>, T> for BlobL
     fn insert(&mut self, container: Vec<(D, T, R)>) {
         self.stage.extend(container.into_iter().map(|(d,t,r)| (t,d,r)));
     }
-    fn extract(&mut self, bound: Eligibility<T>) -> (Vec<Vec<(D, T, R)>>, &MutableAntichain<T>) {
+    fn extract(&mut self, frontier: AntichainRef<'_, T>) -> (Vec<Vec<(D, T, R)>>, &MutableAntichain<T>) {
         // Handle any staged updates first.
         consolidate_updates(&mut self.stage);
         if !self.stage.is_empty() {
@@ -210,25 +211,25 @@ impl<D: Ord, T: Timestamp, R: Semigroup> BatcherAlt<Vec<(D, T, R)>, T> for BlobL
             self.blobs.push(blob);
         }
 
+        // An update is unblocked once no arrangement time can still precede it. The times the
+        // frontier may yet produce are bounded below in the total order by its minimum, and
+        // `strict` says whether a time equal to an update's own still counts as preceding. An
+        // empty frontier will produce no times at all, and unblocks everything.
+        let bound = frontier.iter().min();
+        let strict = self.strict;
+        let eligible = |time: &T| match bound {
+            None => true,
+            Some(bound) => if strict { time.le(bound) } else { time.lt(bound) },
+        };
+
+        // Blobs are stored in time order, and eligibility is monotone in time, so what each
+        // releases is a prefix.
         let mut result = Vec::new();
         for blob in self.blobs.iter_mut() {
             let mut list = Vec::new();
-            match &bound {
-                Eligibility::Le(bound) => {
-                    while blob.front().map(|(t,_,_)| t.le(bound)).unwrap_or(false) {
-                        let (time, data, diff) = blob.pop_front().unwrap();
-                        list.push((data, time, diff));
-                    }
-                }
-                Eligibility::Lt(bound) => {
-                    while blob.front().map(|(t,_,_)| t.lt(bound)).unwrap_or(false) {
-                        let (time, data, diff) = blob.pop_front().unwrap();
-                        list.push((data, time, diff));
-                    }
-                }
-                Eligibility::All => {
-                    list.extend(blob.drain(..).map(|(t,d,r)| (d,t,r)));
-                }
+            while blob.front().map(|(t,_,_)| eligible(t)).unwrap_or(false) {
+                let (time, data, diff) = blob.pop_front().unwrap();
+                list.push((data, time, diff));
             }
             if !list.is_empty() { result.push(list); }
         }
@@ -248,16 +249,15 @@ impl<D: Ord, T: Timestamp, R: Semigroup> BatcherAlt<Vec<(D, T, R)>, T> for BlobL
 /// work paired with the capabilities required to ship its output. It holds no cursor, and has no
 /// opinion on how the join is performed.
 ///
-/// The `strict` argument plays the role of the `comparison` closure: an update is unblocked once
-/// no arrangement time can still precede its initial time under the total order, and `strict` says
-/// whether an equal time counts as preceding. It reaches the join itself through `tactic`, which
-/// must be built with the same value.
+/// The driver holds no opinion on when an update is unblocked: it hands `batcher` the arrangement
+/// frontier and ships whatever `batcher` releases. The rule that decides this — in particular
+/// whether an arrangement time equal to an update's initial time still blocks it — is shared
+/// between `batcher` and `tactic`, which must be built to agree.
 pub fn half_join_with_tactic<'scope, Tr, FF, RF, Y, Bat, Tac, CIn, C>(
     stream: Stream<'scope, Tr::Time, CIn>,
     mut arrangement: Arranged<'scope, Tr>,
     route: RF,
     frontier_func: FF,
-    strict: bool,
     yield_function: Y,
     mut batcher: Bat,
     mut tactic: Tac,
@@ -313,22 +313,13 @@ where
 
             if let Some(ref mut trace) = arrangement_trace {
 
-                // An update is unblocked once no arrangement time can still precede its initial
-                // time. The arrangement frontier's total-order minimum bounds those times, and
-                // `strict` says whether an equal time still counts as preceding.
-                let eligibility = match frontier2.frontier().iter().min() {
-                    None => Eligibility::All,
-                    Some(bound) if strict => Eligibility::Le(bound.clone()),
-                    Some(bound) => Eligibility::Lt(bound.clone()),
-                };
-
                 // `caps` covers everything `batcher` holds: capabilities retained for arriving
                 // updates, downgraded after each extraction to what was left behind. It therefore
                 // lower bounds whatever the extraction below releases, and can both mint the
                 // capabilities that work will ship under and bound the times it will contain.
                 let lower: Antichain<Tr::Time> = caps.iter().map(|c| c.time().clone()).collect();
 
-                let (chunks, retained) = batcher.extract(eligibility);
+                let (chunks, retained) = batcher.extract(frontier2.frontier());
                 if !chunks.is_empty() {
                     // The batches are handed to the tactic, which holds them for as long as the
                     // work item lives; what it joins against cannot change underneath it.
