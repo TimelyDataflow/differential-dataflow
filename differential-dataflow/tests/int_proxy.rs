@@ -97,7 +97,7 @@ fn reduce_one_retire() {
         &Antichain::from_elem(0u64), &Antichain::from_elem(1u64), &Antichain::from_elem(0u64),
     );
     assert!(frontier.is_empty());
-    let out: Vec<_> = produced.into_iter().flat_map(|(_t, b)| hread(&[b])).collect();
+    let out: Vec<_> = produced.into_iter().flat_map(|b| hread(&[b])).collect();
     // Output values are `(key, max)`: (7,5) and (9,2).
     assert_eq!(out, vec![((7u64, 5u64), 0u64, 1i64), ((9, 2), 0, 1)]);
 }
@@ -126,7 +126,7 @@ fn reduce_collision_correct() {
         vec![], vec![], vec![input],
         &Antichain::from_elem(0u64), &Antichain::from_elem(1u64), &Antichain::from_elem(0u64),
     );
-    let out: Vec<_> = produced.into_iter().flat_map(|(_t, b)| hread(&[b])).collect();
+    let out: Vec<_> = produced.into_iter().flat_map(|b| hread(&[b])).collect();
     assert_eq!(out, vec![((Collide(1), 9u64), 0u64, 1i64), ((Collide(2), 9), 0, 1)], "collision must not merge keys");
 }
 
@@ -269,7 +269,7 @@ fn reduce_collision_across_retires() {
         vec![], vec![], vec![b0.clone()],
         &Antichain::from_elem(0u64), &Antichain::from_elem(1u64), &Antichain::from_elem(0u64),
     );
-    let out0: Vec<_> = p0.into_iter().flat_map(|(_t, b)| hread(&[b])).collect();
+    let out0: Vec<_> = p0.into_iter().flat_map(|b| hread(&[b])).collect();
     assert_eq!(out0, vec![((Collide(1), 5u64), 0u64, 1i64), ((Collide(2), 7), 0, 1)], "retire 1");
 
     // Retire 2: a novel update to the LOWER key only, so the id order is [C1(hist), C2(hist), C1(novel)].
@@ -277,14 +277,14 @@ fn reduce_collision_across_retires() {
         let mut t2 = ProxyReduceTactic::new(VecReduceBackend::new(logic));
         let b = hbatch::<Collide, u64, u64, i64>(vec![((Collide(1), 5), 0, 1), ((Collide(2), 7), 0, 1)], 0, 1);
         let (p, _) = t2.retire(vec![], vec![], vec![b], &Antichain::from_elem(0u64), &Antichain::from_elem(1u64), &Antichain::from_elem(0u64));
-        p.into_iter().map(|(_t, b)| b).collect()
+        p.into_iter().collect()
     };
     let b1 = hbatch::<Collide, u64, u64, i64>(vec![((Collide(1), 9), 1, 1)], 1, 2);
     let (p1, _f) = tactic.retire(
         vec![b0], out_batches, vec![b1],
         &Antichain::from_elem(1u64), &Antichain::from_elem(2u64), &Antichain::from_elem(1u64),
     );
-    let out1: Vec<_> = p1.into_iter().flat_map(|(_t, b)| hread(&[b])).collect();
+    let out1: Vec<_> = p1.into_iter().flat_map(|b| hread(&[b])).collect();
     // C1's max rises 5 -> 9; C2 is untouched and must NOT be disturbed.
     assert_eq!(out1, vec![((Collide(1), 5u64), 1u64, -1i64), ((Collide(1), 9), 1, 1)], "retire 2 must not disturb C2");
 }
@@ -360,7 +360,7 @@ fn reduce_collision_multiwindow() {
         vec![], vec![], vec![input],
         &Antichain::from_elem(0u64), &Antichain::from_elem(1u64), &Antichain::from_elem(0u64),
     );
-    let mut out: Vec<_> = produced.into_iter().flat_map(|(_t, b)| hread(&[b])).collect();
+    let mut out: Vec<_> = produced.into_iter().flat_map(|b| hread(&[b])).collect();
     out.sort();
     let want: Vec<_> = (0..5u64).map(|k| ((Bucket(k), 10 * k + 1), 0u64, 1i64)).collect();
     assert_eq!(out, want, "each real key keeps its own maximum");
@@ -388,7 +388,7 @@ fn reduce_collision_fastpath_endpoints() {
         vec![], vec![], vec![b0.clone()],
         &Antichain::from_elem(0u64), &Antichain::from_elem(1u64), &Antichain::from_elem(0u64),
     );
-    let outs: Vec<_> = p0.into_iter().map(|(_t, b)| b).collect();
+    let outs: Vec<_> = p0.into_iter().collect();
     assert_eq!(outs.iter().flat_map(|b| hread(std::slice::from_ref(b))).collect::<Vec<_>>(),
                vec![((Collide(1), 5u64), 0u64, 1i64)], "retire 1: only C1 emits");
 
@@ -397,7 +397,7 @@ fn reduce_collision_fastpath_endpoints() {
         vec![b0], outs, vec![b1],
         &Antichain::from_elem(1u64), &Antichain::from_elem(2u64), &Antichain::from_elem(1u64),
     );
-    let out1: Vec<_> = p1.into_iter().flat_map(|(_t, b)| hread(&[b])).collect();
+    let out1: Vec<_> = p1.into_iter().flat_map(|b| hread(&[b])).collect();
     // C1's values are {5, 6}: the max becomes 6. C2's 900 belongs to a different real key.
     assert_eq!(out1, vec![((Collide(1), 5u64), 1u64, -1i64), ((Collide(1), 6), 1, 1)],
                "C2's value must not enter C1's reduction");
@@ -433,7 +433,7 @@ fn reduce_seed_survives_cancellation() {
         vec![], vec![], vec![b0.clone()],
         &Antichain::from_elem(0u64), &Antichain::from_elem(1u64), &Antichain::from_elem(0u64),
     );
-    let outs: Vec<_> = p0.into_iter().map(|(_t, b)| b).collect();
+    let outs: Vec<_> = p0.into_iter().collect();
     assert_eq!(
         outs.iter().flat_map(|b| hread(std::slice::from_ref(b))).collect::<Vec<_>>(),
         vec![((7u64, 3u64), 0u64, 1i64)],
@@ -448,6 +448,6 @@ fn reduce_seed_survives_cancellation() {
         vec![b0], outs, vec![b1],
         &Antichain::from_elem(1u64), &Antichain::from_elem(2u64), &Antichain::from_elem(1u64),
     );
-    let out1: Vec<_> = p1.into_iter().flat_map(|(_t, b)| hread(&[b])).collect();
+    let out1: Vec<_> = p1.into_iter().flat_map(|b| hread(&[b])).collect();
     assert_eq!(out1, vec![((7u64, 3u64), 1u64, -1i64)], "the stale output must be retracted");
 }

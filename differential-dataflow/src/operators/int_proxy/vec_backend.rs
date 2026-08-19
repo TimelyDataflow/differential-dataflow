@@ -63,9 +63,9 @@ pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// Lookup-only: the non-determinism of the map's iteration order is never observed.
     out_ids: HashMap<(K, W), u64>,
 
-    /// The retire's output tile descriptions, and the chunks accumulated for each.
-    tiles: Vec<Description<T>>,
-    tile_chunks: Vec<Vec<VecChunk<u64, (K, W), T, R>>>,
+    /// The retire's output batch description, and the chunks accumulated for it.
+    description: Option<Description<T>>,
+    chunks: Vec<VecChunk<u64, (K, W), T, R>>,
     /// Scratch to re-order one `emit`'s output by types, rather than transient identifiers.
     stage: Vec<((u64, (K, W)), T, R)>,
 }
@@ -85,8 +85,8 @@ impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
             in_pool: Vec::new(),
             out_pool: Vec::new(),
             out_ids: HashMap::new(),
-            tiles: Vec::new(),
-            tile_chunks: Vec::new(),
+            description: None,
+            chunks: Vec::new(),
             stage: Vec::new(),
         }
     }
@@ -105,9 +105,9 @@ where
     type RIn = R;
     type ROut = R;
 
-    fn begin(&mut self, tiles: &[Description<T>]) {
-        self.tiles = tiles.to_vec();
-        self.tile_chunks = (0..tiles.len()).map(|_| Vec::new()).collect();
+    fn begin(&mut self, description: Description<T>) {
+        self.description = Some(description);
+        self.chunks.clear();
     }
 
     #[inline(never)]
@@ -304,7 +304,7 @@ where
     }
 
     #[inline(never)]
-    fn emit(&mut self, tile: usize, records: &[((u64, u64), T, R)]) {
+    fn emit(&mut self, records: &[((u64, u64), T, R)]) {
         self.stage.clear();
         for ((h, vid), t, d) in records {
             let row = self.out_pool[*vid as usize].clone();
@@ -312,7 +312,7 @@ where
         }
         // TODO: could consolidate only within a hash key, rather than the whole chunk.
         consolidate_updates(&mut self.stage);
-        let chunks = &mut self.tile_chunks[tile];
+        let chunks = &mut self.chunks;
         for update in self.stage.drain(..) {
             if chunks.last().is_none_or(|c| c.as_slice().len() >= <VecChunk<u64, (K, W), T, R> as crate::trace::chunk::Chunk>::TARGET) {
                 chunks.push(VecChunk::default());
@@ -322,17 +322,13 @@ where
     }
 
     #[inline(never)]
-    fn finish(&mut self) -> Vec<VBatch<(K, W), T, R>> {
+    fn finish(&mut self) -> VBatch<(K, W), T, R> {
         self.in_pool.clear();
         self.out_pool.clear();
         self.out_ids.clear();
-        let tiles = std::mem::take(&mut self.tiles);
-        let tile_chunks = std::mem::take(&mut self.tile_chunks);
-        tiles
-            .into_iter()
-            .zip(tile_chunks)
-            .map(|(desc, chunks)| Rc::new(ChunkBatch::new(chunks, desc)))
-            .collect()
+        let description = self.description.take().expect("finish without begin");
+        let chunks = std::mem::take(&mut self.chunks);
+        Rc::new(ChunkBatch::new(chunks, description))
     }
 }
 
