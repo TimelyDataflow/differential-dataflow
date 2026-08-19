@@ -73,10 +73,10 @@ pub struct CorgiReduceBackend<T> {
     /// Input `value_id → row` in `in_vals` for the current window (reduce-time resolution; first row
     /// wins, so equal values — which share a content-hash `value_id` — resolve to one representative).
     in_index: IdMap,
-    /// Output tiling for `begin`/`emit`/`finish`: the tile descriptions, and per-tile accumulated
+    /// Output batch for `begin`/`emit`/`finish`: the batch description, and the accumulated
     /// output rows `(key row, value row, time, diff)` (pool indices, gathered into columns at `finish`).
-    tiles: Vec<Description<T>>,
-    tile_rows: Vec<(Vec<usize>, Vec<usize>, Vec<T>, Vec<Diff>)>,
+    description: Option<Description<T>>,
+    rows: (Vec<usize>, Vec<usize>, Vec<T>, Vec<Diff>),
     /// Key-resolution pool for the current retire: `key_hash → row index` into the concatenation of
     /// `key_blocks` (representative keys from the input + output presentations).
     key_index: IdMap,
@@ -96,8 +96,8 @@ impl<T> CorgiReduceBackend<T> {
             reducer,
             in_vals: CValue::Unit(0),
             in_index: IdMap::default(),
-            tiles: Vec::new(),
-            tile_rows: Vec::new(),
+            description: None,
+            rows: (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             key_index: IdMap::default(),
             key_blocks: Vec::new(),
             key_len: 0,
@@ -532,11 +532,11 @@ where
     type RIn = Diff;
     type ROut = Diff;
 
-    fn begin(&mut self, tiles: &[Description<T>]) {
-        // Open a tiled output session for this retire; reset the per-retire resolution pools.
+    fn begin(&mut self, description: Description<T>) {
+        // Open the output session for this retire; reset the per-retire resolution pools.
         self.reset_pools();
-        self.tiles = tiles.to_vec();
-        self.tile_rows = (0..tiles.len()).map(|_| (Vec::new(), Vec::new(), Vec::new(), Vec::new())).collect();
+        self.description = Some(description);
+        self.rows = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     }
 
     fn next_window(&mut self, instance: &ReduceInstance<'_, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
@@ -655,13 +655,13 @@ where
         (corr, corr_ends)
     }
 
-    fn emit(&mut self, tile: usize, records: &[((u64, u64), T, Diff)]) {
-        // Resolve each correction's key/value proxies to pool rows and accumulate into the tile.
+    fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
+        // Resolve each correction's key/value proxies to pool rows and accumulate.
         for rec in records {
             let ((kh, vid), t, d) = (rec.0, &rec.1, rec.2);
             let kr = *self.key_index.get(&kh).expect("key resolvable this retire");
             let vr = *self.val_index.get(&vid).expect("value resolvable this retire");
-            let (krows, vrows, times, diffs) = &mut self.tile_rows[tile];
+            let (krows, vrows, times, diffs) = &mut self.rows;
             krows.push(kr);
             vrows.push(vr);
             times.push(t.clone());
@@ -669,17 +669,15 @@ where
         }
     }
 
-    fn finish(&mut self) -> Vec<CBatch<T>> {
-        // Seal each tile: gather its accumulated (key, val) pool rows into columns, one CorgiChunk batch.
+    fn finish(&mut self) -> CBatch<T> {
+        // Seal the batch: gather the accumulated (key, val) pool rows into columns, one CorgiChunk batch.
         let key_pool = concat_columns(&self.key_blocks);
         let val_pool = concat_columns(&self.val_blocks);
-        let tiles = std::mem::take(&mut self.tiles);
-        let tile_rows = std::mem::take(&mut self.tile_rows);
-        tiles.into_iter().zip(tile_rows).map(|(desc, (krows, vrows, times, diffs))| {
-            let keys = gather(&key_pool, &krows);
-            let vals = gather(&val_pool, &vrows);
-            Rc::new(columns_to_batch(keys, vals, times, diffs, desc))
-        }).collect()
+        let desc = self.description.take().expect("finish without begin");
+        let (krows, vrows, times, diffs) = std::mem::take(&mut self.rows);
+        let keys = gather(&key_pool, &krows);
+        let vals = gather(&val_pool, &vrows);
+        Rc::new(columns_to_batch(keys, vals, times, diffs, desc))
     }
 }
 

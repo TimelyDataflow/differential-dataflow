@@ -40,26 +40,22 @@ pub(crate) fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
 /// `retire` runs the whole `[lower, upper)` interval to completion rather than yielding under a fuel
 /// budget.
 pub trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
-    /// Retire the interval `[lower, upper)`, producing the output batches it informs.
+    /// Retire the interval `[lower, upper)`, producing the output batch it informs.
     ///
     /// It is presented with the pre-existing input batches and output batches (those before `lower`),
     /// the new input batches, and `held`: the times the operator currently holds capabilities for. It
-    /// reasons only about times, returning the output batches to ship — each tagged with the time at
-    /// which to ship it — and the new frontier of interesting times for the operator to hold.
+    /// reasons only about times, returning the output batch to ship — `None` when the interval holds
+    /// no work at all — and the new frontier of interesting times for the operator to hold.
     ///
     /// # Contract
     ///
-    /// The driver ([`reduce_with_tactic`]) relies on the following; the first two are cheap to check
-    /// and are `debug_assert!`ed there.
+    /// The driver ([`reduce_with_tactic`]) relies on the following; the first is cheap to check
+    /// and is `debug_assert!`ed there.
     ///
-    /// * **Ordered, tiling output.** The returned `(time, batch)` pairs are in ascending order and
-    ///   their descriptions *tile* `[lower, upper)`: the first batch's lower is `lower`, each batch's
-    ///   upper is the next batch's lower, and the last batch's upper is `upper` — no gaps, no overlaps.
-    ///   Sub-intervals with no updates are skipped; the next batch's lower simply picks up where the
-    ///   last left off. Producing *in order* is a requirement, not a convenience — it is what lets the
-    ///   driver check the tiling with a single linear scan.
-    /// * **Shipped at a held time.** Each batch's `time` tag is an element of `held`; the driver mints
-    ///   a capability at it, which is only valid for a held time.
+    /// * **Spanning output.** The returned batch's description is exactly `[lower, upper)`. The
+    ///   driver ships it stamped with the held times not in advance of `upper`, which justify its
+    ///   contents: every update time lies at or beyond one of them (a time at or beyond only the
+    ///   remaining held times would be in advance of `upper`, and so outside the interval).
     /// * **Frontier bounds withheld work, and collapses to empty when there is none.** The returned
     ///   frontier must be at-or-below every time the tactic defers, so the driver knows what is safe to
     ///   release. In particular, with no work to defer it must be the *empty* antichain. Derive it from
@@ -74,7 +70,7 @@ pub trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
         lower: &Antichain<B1::Time>,
         upper: &Antichain<B1::Time>,
         held: &Antichain<B1::Time>,
-    ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>);
+    ) -> (Option<B2>, Antichain<B1::Time>);
 }
 
 /// A key-wise reduction of values in an input trace.
@@ -172,7 +168,9 @@ where
 
                 // Drain input batches in order, capturing capabilities and the last upper.
                 input.for_each(|capability, batches| {
-                    capabilities.insert(capability.retain(0));
+                    for capability in capability.retain_stamp(0).iter() {
+                        capabilities.insert(capability.clone());
+                    }
                     for batch in batches.drain(..) {
                         upper_limit.clone_from(batch.upper());
                         batch_storage.push(batch);
@@ -197,36 +195,28 @@ where
                     // The times the operator currently holds capabilities for, as an antichain.
                     let held: Antichain<Tr1::Time> = capabilities.iter().map(|c| c.time().clone()).collect();
 
-                    // Retire the interval. The tactic reasons only about times: it returns output batches
-                    // each tagged with the time to ship it at, and the new frontier of interesting times.
+                    // Retire the interval. The tactic reasons only about times: it returns the output
+                    // batch to ship, if any, and the new frontier of interesting times.
                     let (produced, new_frontier) = tactic.retire(source_batches, output_batches, batch_storage, &lower_limit, &upper_limit, &held);
 
-                    // Contract checks (see `ReduceTactic::retire`). Cheap, debug-only.
+                    // Contract check (see `ReduceTactic::retire`). Cheap, debug-only.
                     debug_assert!(
-                        produced.iter().all(|(time, _)| held.elements().contains(time)),
-                        "ReduceTactic::retire shipped a batch at a time not held as a capability",
-                    );
-                    debug_assert!(
-                        {
-                            // Ordered output makes tiling a single linear scan: each description's lower
-                            // must meet the previous upper (starting at `lower_limit`), ending at `upper_limit`.
-                            let mut edge = lower_limit.clone();
-                            let abutting = produced.iter().all(|(_, batch)| {
-                                let matches = batch.description().lower() == &edge;
-                                edge.clone_from(batch.description().upper());
-                                matches
-                            });
-                            abutting && (produced.is_empty() || edge == upper_limit)
-                        },
-                        "ReduceTactic::retire output must be ordered and tile [lower, upper)",
+                        produced.as_ref().is_none_or(|batch| batch.description().lower() == &lower_limit && batch.description().upper() == &upper_limit),
+                        "ReduceTactic::retire output must span [lower, upper)",
                     );
 
-                    // Ship each batch at a capability minted from the set at its time, and commit it to the
-                    // output trace. The times are elements of `held`, so they stay valid until we downgrade.
-                    for (time, batch) in produced {
-                        let capability = capabilities.delayed(&time);
-                        output.session(&capability).give(batch.clone());
-                        output_writer.insert(batch, Some(time));
+                    // Ship the batch stamped with the capabilities it retires — those not in advance of
+                    // the upper limit — and commit it to the output trace. The times are elements of
+                    // `held`, so they stay valid until we downgrade.
+                    if let Some(batch) = produced {
+                        let retiring = capabilities
+                            .iter()
+                            .filter(|c| !upper_limit.less_equal(c.time()))
+                            .cloned()
+                            .collect::<CapabilitySet<_>>();
+                        output.session(&retiring).give(batch.clone());
+                        let stamp = retiring.iter().map(|c| c.time().clone()).collect::<timely::progress::Stamp<_>>();
+                        output_writer.insert(batch, stamp);
                     }
 
                     // Downgrade to the frontier the tactic handed back (a no-op when it found no work).
@@ -284,8 +274,6 @@ mod cursors {
         interesting_times: Vec<B1::Time>,
         new_interesting_times: Vec<B1::Time>,
         // Output batches may need to be built piecemeal, and these temp storage help there.
-        output_upper: Antichain<B1::Time>,
-        output_lower: Antichain<B1::Time>,
         _marker: PhantomData<(B2, Bu)>,
     }
 
@@ -307,8 +295,6 @@ mod cursors {
                 next_pending_time: <B1::Cursor as Cursor>::TimeContainer::with_capacity(0),
                 interesting_times: Vec::new(),
                 new_interesting_times: Vec::new(),
-                output_upper: Antichain::from_elem(<B1::Time as Timestamp>::minimum()),
-                output_lower: Antichain::from_elem(<B1::Time as Timestamp>::minimum()),
                 _marker: PhantomData,
             }
         }
@@ -332,9 +318,9 @@ mod cursors {
             lower: &Antichain<B1::Time>,
             upper: &Antichain<B1::Time>,
             held: &Antichain<B1::Time>,
-        ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>)
+        ) -> (Option<B2>, Antichain<B1::Time>)
         {
-            let mut produced = Vec::new();
+            let mut produced = None;
 
             // We have compute needs only if we hold a time in the interval [lower, upper); otherwise we
             // could not transmit outputs even if they were (incorrectly) non-zero, and we leave the held
@@ -346,15 +332,10 @@ mod cursors {
                 let (mut output_cursor, ref output_storage) = cursor_list(output_batches);
                 let (mut batch_cursor, ref batch_storage) = cursor_list(input_batches);
 
-                // Prepare an output buffer and builder for each held time.
-                // TODO: It would be better if all updates went into one batch, but timely dataflow prevents
-                //       this as long as it requires that there is only one capability for each message.
-                let mut buffers = Vec::<(B1::Time, Vec<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>)>::new();
-                let mut builders = Vec::new();
-                for time in held.elements().iter() {
-                    buffers.push((time.clone(), Vec::new()));
-                    builders.push(Bu::new());
-                }
+                // Prepare one output buffer and builder: the batch spans [lower, upper) and
+                // ships stamped with the held times that justify its contents.
+                let mut output_updates = Vec::<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>::new();
+                let mut builder = Bu::new();
                 // Temporary staging for output building.
                 let mut buffer = Bu::Input::default();
 
@@ -401,7 +382,8 @@ mod cursors {
                             &self.interesting_times,
                             &mut self.logic,
                             upper,
-                            &mut buffers[..],
+                            &mut output_updates,
+                            held.elements(),
                             &mut self.new_interesting_times,
                         );
 
@@ -420,17 +402,14 @@ mod cursors {
                             self.next_pending_time.push_own(&time);
                         }
 
-                        // Sort each buffer by value and move into the corresponding builder.
+                        // Sort the buffer by value and move into the builder.
                         // TODO: This makes assumptions about at least one of (i) the stability of `sort_by`,
-                        //       (ii) that the buffers are time-ordered, and (iii) that the builders accept
+                        //       (ii) that the buffer is time-ordered, and (iii) that the builders accept
                         //       arbitrarily ordered times.
-                        for index in 0 .. buffers.len() {
-                            buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
-                            (self.push)(&mut buffer, key, &mut buffers[index].1);
-                            buffers[index].1.clear();
-                            builders[index].push(&mut buffer);
-
-                        }
+                        output_updates.sort_by(|x,y| x.0.cmp(&y.0));
+                        (self.push)(&mut buffer, key, &mut output_updates);
+                        output_updates.clear();
+                        builder.push(&mut buffer);
                     }
                     else {
                         // copy over the pending key and times.
@@ -443,38 +422,10 @@ mod cursors {
                 // Drop to avoid lifetime issues that would lock `pending_{keys, time}`.
                 drop(thinker);
 
-                // We start sealing output batches from the lower limit (previous upper limit).
-                // In principle, we could update `lower` itself, and it should arrive at `upper` by the
-                // end of the process.
-                self.output_lower.clear();
-                self.output_lower.extend(lower.borrow().iter().cloned());
-
-                // build each batch (because only one capability per message).
-                for (index, builder) in builders.drain(..).enumerate() {
-
-                    // Form the upper limit of the next batch, which includes all times greater
-                    // than the input batch, or the held times from i + 1 onward.
-                    self.output_upper.clear();
-                    self.output_upper.extend(upper.borrow().iter().cloned());
-                    for time in &held.elements()[index + 1 ..] {
-                        self.output_upper.insert_ref(time);
-                    }
-
-                    if self.output_upper.borrow() != self.output_lower.borrow() {
-
-                        let description = Description::new(self.output_lower.clone(), self.output_upper.clone(), Antichain::from_elem(<B1::Time as Timestamp>::minimum()));
-                        let batch = builder.done(description);
-
-                        // hand the batch back to the driver to ship and commit, tagged with its time.
-                        produced.push((held.elements()[index].clone(), batch));
-
-                        self.output_lower.clear();
-                        self.output_lower.extend(self.output_upper.borrow().iter().cloned());
-                    }
-                }
-                // This should be true, as the final iteration introduces no held times, and
-                // uses exactly `upper` to determine the upper bound. Good to check though.
-                assert!(self.output_upper.borrow() == upper.borrow());
+                // Build the batch spanning the interval, and hand it back to the driver
+                // to ship and commit.
+                let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<B1::Time as Timestamp>::minimum()));
+                produced = Some(builder.done(description));
 
                 // Refresh pending keys and times.
                 self.pending_keys.clear(); std::mem::swap(&mut self.next_pending_keys, &mut self.pending_keys);
@@ -559,7 +510,8 @@ mod cursors {
                 times: &Vec<T>,
                 logic: &mut L,
                 upper_limit: &Antichain<T>,
-                outputs: &mut [(T, Vec<(V, T, D2)>)],
+                outputs: &mut Vec<(V, T, D2)>,
+                held: &[T],
                 new_interesting: &mut Vec<T>)
             where
                 C1: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
@@ -702,7 +654,7 @@ mod cursors {
                         for time in self.temporary.drain(..) {
                             // We can either service `join` now, or must delay for the future.
                             if upper_limit.less_equal(&time) {
-                                debug_assert!(outputs.iter().any(|(t,_)| t.less_equal(&time)));
+                                debug_assert!(held.iter().any(|t| t.less_equal(&time)));
                                 new_interesting.push(time);
                             }
                             else {
@@ -760,11 +712,10 @@ mod cursors {
                                     // We *should* be able to find a capability for `next_time`. Any thing else would
                                     // indicate a logical error somewhere along the way; either we release a capability
                                     // we should have kept, or we have computed the output incorrectly (or both!)
-                                    let idx = outputs.iter().rev().position(|(time, _)| time.less_equal(&next_time));
-                                    let idx = outputs.len() - idx.expect("failed to find index") - 1;
+                                    assert!(held.iter().any(|time| time.less_equal(&next_time)), "failed to find capability");
                                     for (val, diff) in self.update_buffer.drain(..) {
                                         self.output_produced.push(((val.clone(), next_time.clone()), diff.clone()));
-                                        outputs[idx].1.push((val, next_time.clone(), diff));
+                                        outputs.push((val, next_time.clone(), diff));
                                     }
 
                                     // Advance times in `self.output_produced` and consolidate the representation.
@@ -784,7 +735,7 @@ mod cursors {
                         // as initial interesting times are filtered to be in interval, and synthetic times are also
                         // filtered before introducing them to `self.synth_times`.
                         new_interesting.push(next_time.clone());
-                        debug_assert!(outputs.iter().any(|(t,_)| t.less_equal(&next_time)))
+                        debug_assert!(held.iter().any(|t| t.less_equal(&next_time)))
                     }
 
                     // Update `meet` to track the meet of each source of times.
@@ -880,8 +831,6 @@ pub(crate) mod reference {
         next_pending_time: <B1::Cursor as Cursor>::TimeContainer,
         interesting_times: Vec<B1::Time>,
         new_interesting_times: Vec<B1::Time>,
-        output_upper: Antichain<B1::Time>,
-        output_lower: Antichain<B1::Time>,
         _marker: PhantomData<(B2, Bu)>,
     }
 
@@ -903,8 +852,6 @@ pub(crate) mod reference {
                 next_pending_time: <B1::Cursor as Cursor>::TimeContainer::with_capacity(0),
                 interesting_times: Vec::new(),
                 new_interesting_times: Vec::new(),
-                output_upper: Antichain::from_elem(<B1::Time as Timestamp>::minimum()),
-                output_lower: Antichain::from_elem(<B1::Time as Timestamp>::minimum()),
                 _marker: PhantomData,
             }
         }
@@ -928,9 +875,9 @@ pub(crate) mod reference {
             lower: &Antichain<B1::Time>,
             upper: &Antichain<B1::Time>,
             held: &Antichain<B1::Time>,
-        ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>)
+        ) -> (Option<B2>, Antichain<B1::Time>)
         {
-            let mut produced = Vec::new();
+            let mut produced = None;
 
             if held.elements().iter().any(|time| !upper.less_equal(time)) {
 
@@ -938,12 +885,8 @@ pub(crate) mod reference {
                 let (mut output_cursor, ref output_storage) = cursor_list(output_batches);
                 let (mut batch_cursor, ref batch_storage) = cursor_list(input_batches);
 
-                let mut buffers = Vec::<(B1::Time, Vec<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>)>::new();
-                let mut builders = Vec::new();
-                for time in held.elements().iter() {
-                    buffers.push((time.clone(), Vec::new()));
-                    builders.push(Bu::new());
-                }
+                let mut output_updates = Vec::<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>::new();
+                let mut builder = Bu::new();
                 let mut buffer = Bu::Input::default();
 
                 // Reuseable state for performing the computation.
@@ -981,7 +924,8 @@ pub(crate) mod reference {
                             &self.interesting_times,
                             &mut self.logic,
                             upper,
-                            &mut buffers[..],
+                            &mut output_updates,
+                            held.elements(),
                             &mut self.new_interesting_times,
                         );
 
@@ -997,13 +941,10 @@ pub(crate) mod reference {
                             self.next_pending_time.push_own(&time);
                         }
 
-                        for index in 0 .. buffers.len() {
-                            buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
-                            (self.push)(&mut buffer, key, &mut buffers[index].1);
-                            buffers[index].1.clear();
-                            builders[index].push(&mut buffer);
-
-                        }
+                        output_updates.sort_by(|x,y| x.0.cmp(&y.0));
+                        (self.push)(&mut buffer, key, &mut output_updates);
+                        output_updates.clear();
+                        builder.push(&mut buffer);
                     }
                     else {
                         for pos in prior_pos .. pending_pos {
@@ -1014,29 +955,8 @@ pub(crate) mod reference {
                 }
                 drop(thinker);
 
-                self.output_lower.clear();
-                self.output_lower.extend(lower.borrow().iter().cloned());
-
-                for (index, builder) in builders.drain(..).enumerate() {
-
-                    self.output_upper.clear();
-                    self.output_upper.extend(upper.borrow().iter().cloned());
-                    for time in &held.elements()[index + 1 ..] {
-                        self.output_upper.insert_ref(time);
-                    }
-
-                    if self.output_upper.borrow() != self.output_lower.borrow() {
-
-                        let description = Description::new(self.output_lower.clone(), self.output_upper.clone(), Antichain::from_elem(<B1::Time as Timestamp>::minimum()));
-                        let batch = builder.done(description);
-
-                        produced.push((held.elements()[index].clone(), batch));
-
-                        self.output_lower.clear();
-                        self.output_lower.extend(self.output_upper.borrow().iter().cloned());
-                    }
-                }
-                assert!(self.output_upper.borrow() == upper.borrow());
+                let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<B1::Time as Timestamp>::minimum()));
+                produced = Some(builder.done(description));
 
                 self.pending_keys.clear(); std::mem::swap(&mut self.next_pending_keys, &mut self.pending_keys);
                 self.pending_time.clear(); std::mem::swap(&mut self.next_pending_time, &mut self.pending_time);
@@ -1123,7 +1043,8 @@ pub(crate) mod reference {
             times: &Vec<T>,
             logic: &mut L,
             upper_limit: &Antichain<T>,
-            outputs: &mut [(T, Vec<(V, T, D2)>)],
+            outputs: &mut Vec<(V, T, D2)>,
+                held: &[T],
             new_interesting: &mut Vec<T>)
         where
             C1: Cursor<Key<'a> = K, Val<'a> = V1, Time = T, Diff = D1>,
@@ -1304,11 +1225,10 @@ pub(crate) mod reference {
                         crate::consolidation::consolidate(&mut self.update_buffer);
                         if !self.update_buffer.is_empty() {
 
-                            let idx = outputs.iter().rev().position(|(time, _)| time.less_equal(&next_time));
-                            let idx = outputs.len() - idx.expect("failed to find index") - 1;
+                            assert!(held.iter().any(|time| time.less_equal(&next_time)), "failed to find capability");
                             for (val, diff) in self.update_buffer.drain(..) {
                                 self.output_produced.push(((val.clone(), next_time.clone()), diff.clone()));
-                                outputs[idx].1.push((val, next_time.clone(), diff));
+                                outputs.push((val, next_time.clone(), diff));
                             }
 
                             for entry in &mut self.output_produced { (entry.0).1.join_assign(&meet); }

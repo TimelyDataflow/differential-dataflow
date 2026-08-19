@@ -282,7 +282,7 @@ where
                                 prev_frontier.clone_from(&upper);
 
                                 // Communicate `batch` to the arrangement and the stream.
-                                writer.insert(batch.clone(), Some(capability.time().clone()));
+                                writer.insert(batch.clone(), timely::progress::Stamp::from_elem(capability.time().clone()));
                                 output.session(&capabilities.elements()[index]).give(batch);
                             }
                         }

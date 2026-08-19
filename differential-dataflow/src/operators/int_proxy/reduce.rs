@@ -79,7 +79,7 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// It is the backend's job to prepare output batches for each of these descriptions.
     /// The computation proceeds in windows of keys, where only the backend maintains this
     /// work in progress, until `finish()` is called.
-    fn begin(&mut self, tiles: &[Description<B1::Time>]);
+    fn begin(&mut self, description: Description<B1::Time>);
 
     /// Present the next window of the key space, and advance `from` past it.
     ///
@@ -123,14 +123,11 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
         output: &[(u64, Self::ROut)],
     ) -> (Vec<(u64, Self::ROut)>, Vec<usize>);
 
-    /// Commit to a collection of updates at a specific batch in progress.
-    ///
-    /// The `tile: usize` indexes the list of descriptions provided to `begin()`, and these updates
-    /// are aimed at that batch in progress.
-    fn emit(&mut self, tile: usize, records: &[((u64, u64), B1::Time, Self::ROut)]);
+    /// Commit a collection of updates to the batch in progress.
+    fn emit(&mut self, records: &[((u64, u64), B1::Time, Self::ROut)]);
 
-    /// Complete the session matching `begin`. The outputs correspond to the descriptions it was provided.
-    fn finish(&mut self) -> Vec<B2>;
+    /// Complete the session matching `begin`, yielding the batch it described.
+    fn finish(&mut self) -> B2;
 }
 
 /// A proxy-space [`ReduceTactic`]: matches input and output records by `key_hash`.
@@ -170,13 +167,13 @@ where
         lower: &Antichain<B1::Time>,
         upper: &Antichain<B1::Time>,
         held: &Antichain<B1::Time>,
-    ) -> (Vec<(B1::Time, B2)>, Antichain<B1::Time>) {
+    ) -> (Option<B2>, Antichain<B1::Time>) {
         if held.elements().iter().all(|t| upper.less_equal(t)) {
             debug_assert!(
                 self.pending.values().flatten().all(|time| held.less_equal(time)),
                 "held capabilities do not cover pending times",
             );
-            return (Vec::new(), held.clone());
+            return (None, held.clone());
         }
 
         let instance = ReduceInstance {
@@ -215,14 +212,12 @@ where
         // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
         if changed.is_empty() && instance.input_batches.iter().all(|b| b.is_empty()) {
             debug_assert_pending_frontier(&self.pending, &pending_frontier);
-            return (Vec::new(), pending_frontier);
+            return (None, pending_frontier);
         }
 
-        // The output tiling (identical to the Abelian tactic): one tile per held time, keeping
-        // non-degenerate intervals; `tile_of[i]` maps held time `i` to its tile.
-        let held_elems: Vec<B1::Time> = held.elements().to_vec();
-        let (tile_descs, tile_held, tile_of) = tile_descriptions(lower, upper, &held_elems);
-        self.backend.begin(&tile_descs);
+        // The single output batch spans the retired interval.
+        let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(B1::Time::minimum()));
+        self.backend.begin(description);
 
         // Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
         // once the backend reports the space covered.
@@ -234,7 +229,7 @@ where
         // staging buffers are held across the whole retire rather than built where they are used.
         let mut slots: Vec<KeySweep<B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
         let mut live: Vec<usize> = Vec::new();
-        let mut tile_deltas: Vec<Vec<((u64, u64), B1::Time, Bk::ROut)>> = (0..held_elems.len()).map(|_| Vec::new()).collect();
+        let mut deltas: Vec<((u64, u64), B1::Time, Bk::ROut)> = Vec::new();
         let mut batch_keys: Vec<u64> = Vec::new();
         let mut in_ends: Vec<usize> = Vec::new();
         let mut in_all: Vec<(u64, Bk::RIn)> = Vec::new();
@@ -272,7 +267,7 @@ where
                 "next_window must report a key hash entirely within the window that first mentions it",
             );
 
-            for deltas in tile_deltas.iter_mut() { deltas.clear(); }
+            deltas.clear();
 
             // The window's keys are the hashes its presentations mention: the least of the three
             // heads, each iteration, until all three are drained. A `changed` key that appears in
@@ -361,9 +356,9 @@ where
                     for (bi, (si, at)) in active.iter().enumerate() {
                         let cend = corr_ends[bi];
                         if cstart != cend {
-                            let idx = held_elems.iter().rposition(|h| h.less_equal(at)).expect("no held capability <= active time");
+                            debug_assert!(held.elements().iter().any(|h| h.less_equal(at)), "no held capability <= active time");
                             for (vid, d) in &corr[cstart..cend] {
-                                tile_deltas[idx].push(((slots[*si].key, *vid), at.clone(), d.clone()));
+                                deltas.push(((slots[*si].key, *vid), at.clone(), d.clone()));
                             }
                             slots[*si].sweep.commit(at, corr[cstart..cend].iter().cloned());
                         }
@@ -385,18 +380,13 @@ where
                 live.retain(|&si| slots[si].at.is_some());
             }
 
-            for (held_index, deltas) in tile_deltas.iter_mut().enumerate() {
-                if deltas.is_empty() {
-                    continue;
-                }
-                if let Some(tile) = tile_of[held_index] {
-                    crate::consolidation::consolidate_updates(deltas);
-                    self.backend.emit(tile, &deltas[..]);
-                }
+            if !deltas.is_empty() {
+                crate::consolidation::consolidate_updates(&mut deltas);
+                self.backend.emit(&deltas[..]);
             }
         }
 
-        let produced: Vec<(B1::Time, B2)> = tile_held.into_iter().zip(self.backend.finish()).collect();
+        let produced = Some(self.backend.finish());
         debug_assert_pending_frontier(&self.pending, &pending_frontier);
         (produced, pending_frontier)
     }
@@ -418,37 +408,6 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Ke
     fn empty() -> Self {
         KeySweep { key: 0, sweep: Sweep::new(), pended: Vec::new(), at: None }
     }
-}
-
-/// Cuts the interval `[lower, upper)` into consecutive batch descriptions along `held`, which
-/// must be sorted: the `i`-th cut point is the frontier formed by inserting `held[i+1..]` into
-/// `upper`, so description `i` covers the part of the interval not greater-or-equal any held
-/// time after `held[i]` (and not covered by an earlier description). Descriptions whose
-/// interval is empty are skipped. Returns the descriptions, the held time associated with
-/// each, and, per held index, the index of its description (`None` if skipped). A batch built
-/// to description `i` can be committed at the capability `held[i]`.
-fn tile_descriptions<T: Timestamp + Lattice>(
-    lower: &Antichain<T>,
-    upper: &Antichain<T>,
-    held: &[T],
-) -> (Vec<Description<T>>, Vec<T>, Vec<Option<usize>>) {
-    let mut tile_descs: Vec<Description<T>> = Vec::new();
-    let mut tile_held: Vec<T> = Vec::new();
-    let mut tile_of: Vec<Option<usize>> = vec![None; held.len()];
-    let mut out_lower = lower.clone();
-    for index in 0..held.len() {
-        let mut out_upper = upper.clone();
-        for t in &held[index + 1..] {
-            out_upper.insert(t.clone());
-        }
-        if out_upper != out_lower {
-            tile_of[index] = Some(tile_descs.len());
-            tile_descs.push(Description::new(out_lower.clone(), out_upper.clone(), Antichain::from_elem(T::minimum())));
-            tile_held.push(held[index].clone());
-            out_lower = out_upper;
-        }
-    }
-    (tile_descs, tile_held, tile_of)
 }
 
 /// Updates an optional meet by an optional time.

@@ -13,7 +13,7 @@ use timely::progress::Timestamp;
 use timely::dataflow::Stream;
 use timely::dataflow::operators::generic::{Operator, OutputBuilderSession};
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 
 use crate::lattice::Lattice;
 use crate::operators::arrange::Arranged;
@@ -117,8 +117,8 @@ where
         // batch (so a burst on one input cannot starve the other). The driver owns the capabilities and
         // the fuel budget; each iterator, prepared by the tactic, yields the output containers to ship
         // under its paired capability, and is dropped once it goes dry.
-        let mut todo0: VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
-        let mut todo1: VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
+        let mut todo0: VecDeque<(CapabilitySet<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
+        let mut todo1: VecDeque<(CapabilitySet<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
 
         // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
         trace1.map_batches(|batch1| {
@@ -168,7 +168,7 @@ where
             // in `batch2.upper()`. Only necessary for non-empty batches, as empty batches may not have
             // that property.
             let work = tactic.prep(trace1_storage, vec![batch2], Fresh::Input1, capability.time().clone());
-            todo1.push_back((capability.clone(), work));
+            todo1.push_back((CapabilitySet::from_elem(capability.clone()), work));
         }
 
         // Droppable handles to shared trace data structures.
@@ -194,7 +194,10 @@ where
             input1.for_each(|capability, data| {
                 // This test *should* always pass, as we only drop a trace in response to the other input emptying.
                 if let Some(ref mut trace2) = trace2_option {
-                    let capability = capability.retain(0);
+                    let capability = capability.retain_stamp(0);
+                    // The lattice meet of the stamp's elements lower bounds all output
+                    // times this batch can produce.
+                    let meet = capability.iter().map(|c| c.time().clone()).reduce(|a, b| a.meet(&b));
                     for batch1 in data.drain(..) {
                         // An arriving batch must lie wholly on one side of the preload boundary,
                         // and wholly on one side of `acknowledged1`: both frontiers are drawn from
@@ -223,7 +226,7 @@ where
                                 // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
                                 let trace2_storage = trace2.batches_through(acknowledged2.borrow()).unwrap();
-                                let work = tactic.prep(vec![batch1.clone()], trace2_storage, Fresh::Input0, capability.time().clone());
+                                let work = tactic.prep(vec![batch1.clone()], trace2_storage, Fresh::Input0, meet.clone().expect("non-empty stamp"));
                                 todo0.push_back((capability.clone(), work));
                             }
 
@@ -245,7 +248,10 @@ where
             input2.for_each(|capability, data| {
                 // This test *should* always pass, as we only drop a trace in response to the other input emptying.
                 if let Some(ref mut trace1) = trace1_option {
-                    let capability = capability.retain(0);
+                    let capability = capability.retain_stamp(0);
+                    // The lattice meet of the stamp's elements lower bounds all output
+                    // times this batch can produce.
+                    let meet = capability.iter().map(|c| c.time().clone()).reduce(|a, b| a.meet(&b));
                     for batch2 in data.drain(..) {
                         // An arriving batch must lie wholly on one side of the preload boundary,
                         // and wholly on one side of `acknowledged2`: both frontiers are drawn from
@@ -274,7 +280,7 @@ where
                                 // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
                                 let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap();
-                                let work = tactic.prep(trace1_storage, vec![batch2.clone()], Fresh::Input1, capability.time().clone());
+                                let work = tactic.prep(trace1_storage, vec![batch2.clone()], Fresh::Input1, meet.clone().expect("non-empty stamp"));
                                 todo1.push_back((capability.clone(), work));
                             }
 
@@ -319,7 +325,7 @@ where
             // pins the operator output to `NoopBuilder<C>` — the builder for exactly this "containers ready
             // to go" case, which is a `ContainerBuilder` for any `C` without further bounds.
             let output: &mut OutputBuilderSession<'_, Tr1::Time, NoopBuilder<C>> = output;
-            let mut drain = |queue: &mut VecDeque<(Capability<Tr1::Time>, Box<dyn Iterator<Item = C>>)>, mut fuel: isize| {
+            let mut drain = |queue: &mut VecDeque<(CapabilitySet<Tr1::Time>, Box<dyn Iterator<Item = C>>)>, mut fuel: isize| {
                 while fuel >= 0 {
                     let Some((capability, work)) = queue.front_mut() else { break };
                     match work.next() {
