@@ -1,30 +1,28 @@
-/// Streaming asymmetric join between updates (K,V1) and an arrangement on (K,V2).
+/// Streaming asymmetric join between an update stream and a maintained arrangement.
 ///
 /// The asymmetry is that the join only responds to streamed updates, not to changes in the arrangement.
-/// Streamed updates join only with matching arranged updates at lesser times *in the total order*,
-/// where a `strict` flag says whether an equal time counts as lesser.
+/// The operator is the basis of several multi-way join implementations, which use networks of stateless
+/// operators rather than sequences of stateful operators.
 ///
-/// This behavior can ensure that any pair of matching updates interact exactly once.
+/// The standard recipe for a multi-way join among collections A, B, .. Z is to create a dataflow path for
+/// each collection, which responds to changes in the collection. Each path uses a sequence of half join
+/// operators to prompt the response to each streamed input change when joined with "prior" updates from
+/// the other collections. A total order on update times, often just the `Ord` implementation, can then be
+/// extended to all relations to impose a total order on updates to any of the collections, which can then
+/// ensure that each tuple of updates is processed exactly once (usually at the time of the "last" update).
 ///
-/// There are various forms of this operator with tangled closures about how to emit the outputs and
-/// wrangle the logical compaction frontier in order to preserve the distinctions around times that are
-/// strictly less (conventional compaction logic would collapse unequal times to the frontier, and lose
-/// the distiction).
-///
-/// The methods also carry an auxiliary time next to the value, which is used to advance the joined times.
-/// This is .. a byproduct of wanting to allow advancing times a la `join_function`, without breaking the
-/// coupling by total order on "initial time".
-///
-/// The doccomments for individual methods are a bit of a mess. Sorry.
+/// The operator design is foremost as a "tactic", which allows an implementor to supply the understanding
+/// of the streamed update containers and the maintained trace batches, without complicating the operator.
+/// The implementation requires an explanation of how to mark updates as "eligible", via the `Batcher` trait,
+/// and then what to do with the eligible updates and existing batches, through the `HalfJoinTactic` trait.
 
 use std::collections::VecDeque;
 use std::ops::Mul;
 
 use timely::{Container, ContainerBuilder};
-use timely::container::{CapacityContainerBuilder, DrainContainer, NoopBuilder, PushInto, SizableContainer};
+use timely::container::{CapacityContainerBuilder, NoopBuilder};
 use timely::dataflow::Stream;
-use timely::dataflow::channels::ContainerBytes;
-use timely::dataflow::channels::pact::{Pipeline, ExchangeCore};
+use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::PartialOrder;
@@ -42,120 +40,9 @@ use differential_dataflow::trace::implementations::BatchContainer;
 
 use timely::dataflow::operators::CapabilitySet;
 
-/// A binary equijoin that responds to updates on only its first input.
+/// An implementation suitable to define half-join behavior among its referenced types.
 ///
-/// This operator responds to inputs of the form
-///
-/// ```ignore
-/// ((key, val1, time1), initial_time, diff1)
-/// ```
-///
-/// where `initial_time` is less or equal to `time1`, and produces as output
-///
-/// ```ignore
-/// ((output_func(key, val1, val2), lub(time1, time2)), initial_time, diff1 * diff2)
-/// ```
-///
-/// for each `((key, val2), time2, diff2)` present in `arrangement`, where
-/// `time2` is less than `initial_time` *UNDER THE TOTAL ORDER ON TIMES*.
-/// This last constraint is important to ensure that we correctly produce
-/// all pairs of output updates across multiple `half_join` operators.
-///
-/// The `strict` argument selects the comparison: `true` requires `time2` to be strictly less than
-/// `initial_time`, and `false` also admits `time2` equal to it. A delta query pairs a strict operator
-/// with a non-strict one, which is what makes each pair of matching updates interact exactly once.
-///
-/// Notice that the time is hoisted up into data. The expectation is that
-/// once out of the "delta flow region", the updates will be `delay`d to the
-/// times specified in the payloads.
-pub fn half_join<'scope, K, V, R, Tr, FF, DOut, S>(
-    stream: VecCollection<'scope, Tr::Time, (K, V, Tr::Time), R>,
-    arrangement: Arranged<'scope, Tr>,
-    frontier_func: FF,
-    strict: bool,
-    mut output_func: S,
-) -> VecCollection<'scope, Tr::Time, (DOut, Tr::Time), <R as Mul<BatchDiff<Tr>>>::Output>
-where
-    K: Hashable + ExchangeData,
-    V: ExchangeData,
-    R: ExchangeData + Semigroup,
-    Tr: TraceReader<Batch: Navigable>+Clone+'static,
-    BatchCursor<Tr>: Cursor<Time = Tr::Time>,
-    <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
-    R: Mul<BatchDiff<Tr>, Output: Semigroup>,
-    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
-    DOut: Clone+'static,
-    S: FnMut(&K, &V, BatchVal<'_, Tr>)->DOut+'static,
-{
-    let output_func = move |builder: &mut CapacityContainerBuilder<Vec<_>>, k: &K, v1: &V, v2: BatchVal<'_, Tr>, initial: &Tr::Time, diff1: &R, output: &mut Vec<(Tr::Time, BatchDiff<Tr>)>| {
-        for (time, diff2) in output.drain(..) {
-            let diff = diff1.clone() * diff2.clone();
-            let dout = (output_func(k, v1, v2), time.clone());
-            use timely::container::PushInto;
-            builder.push_into((dout, initial.clone(), diff));
-        }
-    };
-    half_join_internal_unsafe::<_, _, _, _, _, _, _, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, strict, |_timer, _count| false, output_func)
-        .as_collection()
-}
-
-/// An unsafe variant of `half_join` where the `output_func` closure takes
-/// additional arguments a vector of `time` and `diff` tuples as input and
-/// writes its outputs at a container builder. The container builder
-/// can, but isn't required to, accept `(data, time, diff)` triplets.
-/// This allows for more flexibility, but is more error-prone.
-///
-/// This operator responds to inputs of the form
-///
-/// ```ignore
-/// ((key, val1, time1), initial_time, diff1)
-/// ```
-///
-/// where `initial_time` is less or equal to `time1`, and produces as output
-///
-/// ```ignore
-/// output_func(session, key, val1, val2, initial_time, diff1, &[lub(time1, time2), diff2])
-/// ```
-///
-/// for each `((key, val2), time2, diff2)` present in `arrangement`, where
-/// `time2` is less than `initial_time` *UNDER THE TOTAL ORDER ON TIMES*.
-///
-/// The `strict` argument selects the comparison: `true` requires `time2` to be strictly less than
-/// `initial_time`, and `false` also admits `time2` equal to it. A delta query pairs a strict operator
-/// with a non-strict one, which is what makes each pair of matching updates interact exactly once.
-///
-/// The `yield_function` allows the caller to indicate when the operator should
-/// yield control, as a function of the elapsed time and the number of records in
-/// the output containers shipped so far. Joined work is suspended at container
-/// boundaries, so the count advances a container at a time rather than a record
-/// at a time.
-pub fn half_join_internal_unsafe<'scope, K, V, R, Tr, FF, Y, S, CB>(
-    stream: VecCollection<'scope, Tr::Time, (K, V, Tr::Time), R>,
-    arrangement: Arranged<'scope, Tr>,
-    frontier_func: FF,
-    strict: bool,
-    yield_function: Y,
-    output_func: S,
-) -> Stream<'scope, Tr::Time, CB::Container>
-where
-    K: Hashable + ExchangeData,
-    V: ExchangeData,
-    R: ExchangeData + Semigroup,
-    Tr: TraceReader<Batch: Navigable>+Clone+'static,
-    BatchCursor<Tr>: Cursor<Time = Tr::Time>,
-    <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
-    FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
-    Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    S: FnMut(&mut CB, &K, &V, BatchVal<'_, Tr>, &Tr::Time, &R, &mut Vec<(Tr::Time, BatchDiff<Tr>)>) + 'static,
-    CB: ContainerBuilder,
-{
-    // Updates are staged in a `BlobList` and joined by a cursor walk; the driver owns progress.
-    let batcher = BlobList::<(K, V, Tr::Time), Tr::Time, R>::new(strict);
-    let tactic = cursors::CursorTactic::<K, V, R, Tr::Batch, S, CB>::new(output_func, strict);
-    let route = |update: &((K, V, Tr::Time), Tr::Time, R)| (update.0).0.hashed().into();
-    half_join_with_tactic(stream.inner, arrangement, route, frontier_func, yield_function, batcher, tactic)
-}
-
+/// The implementor can half-join streams of `C0` with batches `B`, producing output streams of `C1`.
 pub trait HalfJoinTactic<B: BatchReader, C0, C1> {
     /// Converts a list of chunks and a list of batches to a list of outputs, each with a time suitable as a capability.
     ///
@@ -168,95 +55,36 @@ pub trait HalfJoinTactic<B: BatchReader, C0, C1> {
 ///
 /// The implementor is able to determine the meaning of extraction by a frontier;
 /// it is not required to be by antichain partial order.
-pub trait BatcherAlt<C, T: Timestamp> {
+pub trait Batcher<C, T: Timestamp> {
     /// Moves responsibility for `container` into the implementor.
     fn insert(&mut self, container: C);
-    /// Extracts the containers `frontier` unblocks, and the lower bounds of the times retained.
+    /// Extracts updates `frontier` unblocks, and lower bounds the time of retained updates.
     ///
-    /// What `frontier` unblocks is the implementor's to decide. It is handed the frontier itself
-    /// rather than a bound derived from it, so that a rule other than the antichain partial order
-    /// (`half_join` releases by a total order on times) remains expressible.
+    /// What `frontier` unblocks is the implementor's to decide. It can be based on the antichain up set,
+    /// or it can be based on the total order of times (as used in delta join constructions).
     ///
-    /// The returned bound is reported at the one moment it is well defined: an implementor is not
-    /// required to account for inserted updates until it is asked to extract, so this is the only
-    /// bound a caller can safely downgrade capabilities to.
+    /// The reported lower bound antichain should accurately reflect the times of all accepted updates
+    /// that have not been extracted. Over approximation can result in stalling dataflows, and under
+    /// approximation is simply incorrect.
     fn extract(&mut self, frontier: AntichainRef<'_, T>) -> (Vec<C>, &MutableAntichain<T>);
 }
 
-struct BlobList<D, T: Timestamp, R> {
-    stage: Vec<(T, D, R)>,
-    blobs: Vec<VecDeque<(T, D, R)>>,
-    lower: MutableAntichain<T>,
-    /// Whether an arrangement time equal to an update's time still blocks it.
-    strict: bool,
-}
-
-impl<D, T: Timestamp, R> BlobList<D, T, R> {
-    /// Allocates an empty list that releases updates under the `strict` comparison.
-    fn new(strict: bool) -> Self {
-        BlobList { stage: Vec::new(), blobs: Vec::new(), lower: MutableAntichain::new(), strict }
-    }
-}
-
-impl<D: Ord, T: Timestamp, R: Semigroup> BatcherAlt<Vec<(D, T, R)>, T> for BlobList<D, T, R> {
-    fn insert(&mut self, container: Vec<(D, T, R)>) {
-        self.stage.extend(container.into_iter().map(|(d,t,r)| (t,d,r)));
-    }
-    fn extract(&mut self, frontier: AntichainRef<'_, T>) -> (Vec<Vec<(D, T, R)>>, &MutableAntichain<T>) {
-        // Handle any staged updates first.
-        consolidate_updates(&mut self.stage);
-        if !self.stage.is_empty() {
-            let blob: VecDeque<_> = std::mem::take(&mut self.stage).into();
-            self.lower.update_iter(blob.iter().map(|x| (x.0.clone(), 1)));
-            self.blobs.push(blob);
-        }
-
-        // An update is unblocked once no arrangement time can still precede it. The times the
-        // frontier may yet produce are bounded below in the total order by its minimum, and
-        // `strict` says whether a time equal to an update's own still counts as preceding. An
-        // empty frontier will produce no times at all, and unblocks everything.
-        let bound = frontier.iter().min();
-        let strict = self.strict;
-        let eligible = |time: &T| match bound {
-            None => true,
-            Some(bound) => if strict { time.le(bound) } else { time.lt(bound) },
-        };
-
-        // Blobs are stored in time order, and eligibility is monotone in time, so what each
-        // releases is a prefix.
-        let mut result = Vec::new();
-        for blob in self.blobs.iter_mut() {
-            let mut list = Vec::new();
-            while blob.front().map(|(t,_,_)| eligible(t)).unwrap_or(false) {
-                let (time, data, diff) = blob.pop_front().unwrap();
-                list.push((data, time, diff));
-            }
-            if !list.is_empty() { result.push(list); }
-        }
-
-        self.blobs.retain(|b| !b.is_empty());
-
-        self.lower.update_iter(result.iter().flat_map(|l| l.iter().map(|x| (x.1.clone(), -1))));
-        (result, &self.lower)
-    }
-}
-
-/// A `half_join` driven by a [`BatcherAlt`] and a [`HalfJoinTactic`].
+/// A `half_join` driven by a [`Batcher`] and a [`HalfJoinTactic`].
 ///
-/// This is the analogue of [`half_join_internal_unsafe`], with the join itself lifted out. The
-/// driver owns progress and nothing else: it stages arriving updates in `batcher`, releases those
-/// the arrangement frontier has unblocked, and hands each release to `tactic` as a unit of deferred
-/// work paired with the capabilities required to ship its output. It holds no cursor, and has no
-/// opinion on how the join is performed.
+/// The operator introduces all streamed updates to the `batcher`, and then extracts all updates
+/// unlocked by the trace frontier. The `tactic` converts unlocked updates into output containers,
+/// which are produced lazily as the operator's yield logic permits.
 ///
 /// The driver holds no opinion on when an update is unblocked: it hands `batcher` the arrangement
-/// frontier and ships whatever `batcher` releases. The rule that decides this — in particular
-/// whether an arrangement time equal to an update's initial time still blocks it — is shared
-/// between `batcher` and `tactic`, which must be built to agree.
-pub fn half_join_with_tactic<'scope, Tr, FF, RF, Y, Bat, Tac, CIn, C>(
+/// frontier and ships whatever `batcher` releases to `tactic`. The pair of `batcher` and `tactic`
+/// should agree with each other for meaningful outcomes.
+///
+/// The `pact` distributes the streamed updates, which should land each at the appropriate worker.
+/// A likely implementation is an exchange by a hash of a common key.
+pub fn half_join_with_tactic<'scope, Tr, FF, P, Y, Bat, Tac, CIn, C>(
     stream: Stream<'scope, Tr::Time, CIn>,
     mut arrangement: Arranged<'scope, Tr>,
-    route: RF,
+    pact: P,
     frontier_func: FF,
     yield_function: Y,
     mut batcher: Bat,
@@ -265,12 +93,11 @@ pub fn half_join_with_tactic<'scope, Tr, FF, RF, Y, Bat, Tac, CIn, C>(
 where
     Tr: TraceReader + Clone + 'static,
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
-    for<'a> RF: FnMut(&CIn::Item<'a>) -> u64 + 'static,
+    P: ParallelizationContract<Tr::Time, CIn>,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    Bat: BatcherAlt<CIn, Tr::Time> + 'static,
+    Bat: Batcher<CIn, Tr::Time> + 'static,
     Tac: HalfJoinTactic<Tr::Batch, CIn, C> + 'static,
-    CIn: Container + SizableContainer + DrainContainer + ContainerBytes + Send,
-    for<'a> CIn: PushInto<<CIn as DrainContainer>::Item<'a>>,
+    CIn: Container,
     C: Container + 'static,
 {
     // No need to block physical merging for this operator.
@@ -278,10 +105,8 @@ where
     let mut arrangement_trace = Some(arrangement.trace);
     let arrangement_stream = arrangement.stream;
 
-    let exchange = ExchangeCore::<CapacityContainerBuilder<CIn>, _>::new(route);
-
     let scope = stream.scope();
-    stream.binary_frontier(arrangement_stream, exchange, Pipeline, "HalfJoin", move |_, info| {
+    stream.binary_frontier(arrangement_stream, pact, Pipeline, "HalfJoin", move |_, info| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         let activator = scope.activator_for(info.address);
@@ -292,53 +117,43 @@ where
 
         // Deferred work, as `(capabilities, iterator)` pairs. Each iterator, prepared by the
         // tactic, yields output containers and the time at which each may be shipped; the paired
-        // capability set covers those times. An iterator is dropped once it goes dry.
+        // capability set covers those times.
         let mut todo: VecDeque<(CapabilitySet<Tr::Time>, Box<dyn Iterator<Item = (C, Tr::Time)>>)> = VecDeque::new();
 
         move |(input1, frontier1), (input2, frontier2), output| {
 
-            // The driver only ships finished containers (`give_container`), never pushing records,
-            // so it pins the operator output to `NoopBuilder<C>`.
+            // The driver ships only finished containers, so it pins the operator output to `NoopBuilder<C>`.
             let output: &mut OutputBuilderSession<'_, Tr::Time, NoopBuilder<C>> = output;
 
             // Stage all arriving updates, retaining capabilities that cover them.
+            // TODO: Tolerate multi-capability inputs.
             input1.for_each(|capability, data| {
                 caps.insert(capability.retain(0));
                 batcher.insert(std::mem::take(data));
             });
 
-            // Drain input batches; although we do not observe them, we want access to the input
-            // to observe the frontier and to drive scheduling.
+            // Drain input batches. We do not capture the batches, but we do use the frontier.
             input2.for_each(|_, _| { });
 
             if let Some(ref mut trace) = arrangement_trace {
 
-                // `caps` covers everything `batcher` holds: capabilities retained for arriving
-                // updates, downgraded after each extraction to what was left behind. It therefore
-                // lower bounds whatever the extraction below releases, and can both mint the
-                // capabilities that work will ship under and bound the times it will contain.
-                let lower: Antichain<Tr::Time> = caps.iter().map(|c| c.time().clone()).collect();
-
+                // Look for updates that are newly eligible against the current frontier.
                 let (chunks, retained) = batcher.extract(frontier2.frontier());
                 if !chunks.is_empty() {
                     // The batches are handed to the tactic, which holds them for as long as the
                     // work item lives; what it joins against cannot change underneath it.
                     let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
+                    let lower: Antichain<Tr::Time> = caps.iter().map(|c| c.time().clone()).collect();
                     let work = tactic.prep(chunks, batches, lower);
                     todo.push_back((caps.clone(), work));
                 }
 
-                // Release capabilities for everything `batcher` no longer holds. The bound comes
-                // from the extraction itself, as an implementor need not account for inserted
-                // updates until it is asked to extract, and a bound read before that could discard
-                // a capability the extraction then needs.
+                // Downgrade capabilities to those held by `batcher`.
                 caps.downgrade(retained.frontier().iter());
             }
 
             // Perform some amount of outstanding work, shipping each container at a capability
-            // covering the time the tactic reports for it. Work is measured in output records,
-            // matching `half_join_internal_unsafe`, whose counter is also read after the join's
-            // time filter and consolidation.
+            // covering the time the tactic reports for it. Work is measured in output records.
             let timer = std::time::Instant::now();
             let mut work = 0;
             while !yield_function(timer, work) {
@@ -357,33 +172,143 @@ where
             // The logical merging frontier depends on input1, on staged updates, and on the
             // deferred work that has already been released to the tactic.
             let mut frontier = Antichain::new();
-            for time in frontier1.frontier().iter() {
-                frontier_func(time, &mut frontier);
-            }
-            for cap in caps.iter() {
-                frontier_func(cap.time(), &mut frontier);
-            }
-            for (caps, _) in todo.iter() {
-                for cap in caps.iter() {
-                    frontier_func(cap.time(), &mut frontier);
-                }
-            }
+            for time in frontier1.frontier().iter() { frontier_func(time, &mut frontier); }
+            for cap in caps.iter() { frontier_func(cap.time(), &mut frontier); }
+            for (caps, _) in todo.iter() { for cap in caps.iter() { frontier_func(cap.time(), &mut frontier); } }
             arrangement_trace.as_mut().map(|trace| trace.set_logical_compaction(frontier.borrow()));
 
-            if frontier1.is_empty() && caps.is_empty() && todo.is_empty() {
-                arrangement_trace = None;
-            }
+            // If no updates incoming, no updates held in `batcher`, and no work in `todo`, we can drop the trace.
+            if frontier1.is_empty() && caps.is_empty() && todo.is_empty() { arrangement_trace = None; }
         }
     })
 }
 
-/// Cursor-based half join: the conventional [`HalfJoinTactic`] implementation and its worker.
-mod cursors {
+/// Cursor-based half join: the conventional [`HalfJoinTactic`] implementation, its worker, and the
+/// `half_join` entry points built on them.
+pub mod cursors {
 
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use timely::dataflow::channels::pact::Exchange;
+
     use super::*;
+
+    /// A binary equijoin that responds to updates on only its first input.
+    ///
+    /// This operator responds to inputs of the form
+    ///
+    /// ```ignore
+    /// ((key, val1, time1), initial_time, diff1)
+    /// ```
+    ///
+    /// where `initial_time` is less or equal to `time1`, and produces as output
+    ///
+    /// ```ignore
+    /// ((output_func(key, val1, val2), lub(time1, time2)), initial_time, diff1 * diff2)
+    /// ```
+    ///
+    /// for each `((key, val2), time2, diff2)` present in `arrangement`, where
+    /// `time2` is less than `initial_time` *UNDER THE TOTAL ORDER ON TIMES*.
+    /// This last constraint is important to ensure that we correctly produce
+    /// all pairs of output updates across multiple `half_join` operators.
+    ///
+    /// The `strict` argument selects the comparison: `true` requires `time2` to be strictly less than
+    /// `initial_time`, and `false` also admits `time2` equal to it. A delta query pairs a strict operator
+    /// with a non-strict one, which is what makes each pair of matching updates interact exactly once.
+    ///
+    /// Notice that the time is hoisted up into data. The expectation is that
+    /// once out of the "delta flow region", the updates will be `delay`d to the
+    /// times specified in the payloads.
+    pub fn half_join<'scope, K, V, R, Tr, FF, DOut, S>(
+        stream: VecCollection<'scope, Tr::Time, (K, V, Tr::Time), R>,
+        arrangement: Arranged<'scope, Tr>,
+        frontier_func: FF,
+        strict: bool,
+        mut output_func: S,
+    ) -> VecCollection<'scope, Tr::Time, (DOut, Tr::Time), <R as Mul<BatchDiff<Tr>>>::Output>
+    where
+        K: Hashable + ExchangeData,
+        V: ExchangeData,
+        R: ExchangeData + Semigroup,
+        Tr: TraceReader<Batch: Navigable>+Clone+'static,
+        BatchCursor<Tr>: Cursor<Time = Tr::Time>,
+        <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
+        R: Mul<BatchDiff<Tr>, Output: Semigroup>,
+        FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
+        DOut: Clone+'static,
+        S: FnMut(&K, &V, BatchVal<'_, Tr>)->DOut+'static,
+    {
+        let output_func = move |builder: &mut CapacityContainerBuilder<Vec<_>>, k: &K, v1: &V, v2: BatchVal<'_, Tr>, initial: &Tr::Time, diff1: &R, output: &mut Vec<(Tr::Time, BatchDiff<Tr>)>| {
+            for (time, diff2) in output.drain(..) {
+                let diff = diff1.clone() * diff2.clone();
+                let dout = (output_func(k, v1, v2), time.clone());
+                use timely::container::PushInto;
+                builder.push_into((dout, initial.clone(), diff));
+            }
+        };
+        half_join_internal_unsafe::<_, _, _, _, _, _, _, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, strict, |_timer, _count| false, output_func)
+            .as_collection()
+    }
+
+    /// An unsafe variant of `half_join` where the `output_func` closure takes
+    /// additional arguments a vector of `time` and `diff` tuples as input and
+    /// writes its outputs at a container builder. The container builder
+    /// can, but isn't required to, accept `(data, time, diff)` triplets.
+    /// This allows for more flexibility, but is more error-prone.
+    ///
+    /// This operator responds to inputs of the form
+    ///
+    /// ```ignore
+    /// ((key, val1, time1), initial_time, diff1)
+    /// ```
+    ///
+    /// where `initial_time` is less or equal to `time1`, and produces as output
+    ///
+    /// ```ignore
+    /// output_func(session, key, val1, val2, initial_time, diff1, &[lub(time1, time2), diff2])
+    /// ```
+    ///
+    /// for each `((key, val2), time2, diff2)` present in `arrangement`, where
+    /// `time2` is less than `initial_time` *UNDER THE TOTAL ORDER ON TIMES*.
+    ///
+    /// The `strict` argument selects the comparison: `true` requires `time2` to be strictly less than
+    /// `initial_time`, and `false` also admits `time2` equal to it. A delta query pairs a strict operator
+    /// with a non-strict one, which is what makes each pair of matching updates interact exactly once.
+    ///
+    /// The `yield_function` allows the caller to indicate when the operator should
+    /// yield control, as a function of the elapsed time and the number of records in
+    /// the output containers shipped so far. Joined work is suspended at container
+    /// boundaries, so the count advances a container at a time rather than a record
+    /// at a time.
+    pub fn half_join_internal_unsafe<'scope, K, V, R, Tr, FF, Y, S, CB>(
+        stream: VecCollection<'scope, Tr::Time, (K, V, Tr::Time), R>,
+        arrangement: Arranged<'scope, Tr>,
+        frontier_func: FF,
+        strict: bool,
+        yield_function: Y,
+        output_func: S,
+    ) -> Stream<'scope, Tr::Time, CB::Container>
+    where
+        K: Hashable + ExchangeData,
+        V: ExchangeData,
+        R: ExchangeData + Semigroup,
+        Tr: TraceReader<Batch: Navigable>+Clone+'static,
+        BatchCursor<Tr>: Cursor<Time = Tr::Time>,
+        <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
+        FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
+        Y: Fn(std::time::Instant, usize) -> bool + 'static,
+        S: FnMut(&mut CB, &K, &V, BatchVal<'_, Tr>, &Tr::Time, &R, &mut Vec<(Tr::Time, BatchDiff<Tr>)>) + 'static,
+        CB: ContainerBuilder,
+    {
+        // Updates are staged in a `BlobList` and joined by a cursor walk; the driver owns progress.
+        let batcher = BlobList::<(K, V, Tr::Time), Tr::Time, R>::new(strict);
+        let tactic = CursorTactic::<K, V, R, Tr::Batch, S, CB>::new(output_func, strict);
+        // Updates are routed by key hash, matching how `arrangement` itself is distributed.
+        let route = |update: &((K, V, Tr::Time), Tr::Time, R)| (update.0).0.hashed().into();
+        let pact = Exchange::new(route);
+        half_join_with_tactic(stream.inner, arrangement, pact, frontier_func, yield_function, batcher, tactic)
+    }
 
     /// The cursor of a batch.
     type BCursor<B> = <B as Navigable>::Cursor;
@@ -560,4 +485,63 @@ mod cursors {
             self.ready.pop_front()
         }
     }
+
+    struct BlobList<D, T: Timestamp, R> {
+        stage: Vec<(T, D, R)>,
+        blobs: Vec<VecDeque<(T, D, R)>>,
+        lower: MutableAntichain<T>,
+        /// Whether an arrangement time equal to an update's time still blocks it.
+        strict: bool,
+    }
+
+    impl<D, T: Timestamp, R> BlobList<D, T, R> {
+        /// Allocates an empty list that releases updates under the `strict` comparison.
+        fn new(strict: bool) -> Self {
+            BlobList { stage: Vec::new(), blobs: Vec::new(), lower: MutableAntichain::new(), strict }
+        }
+    }
+
+    impl<D: Ord, T: Timestamp, R: Semigroup> Batcher<Vec<(D, T, R)>, T> for BlobList<D, T, R> {
+        fn insert(&mut self, container: Vec<(D, T, R)>) {
+            self.stage.extend(container.into_iter().map(|(d,t,r)| (t,d,r)));
+        }
+        fn extract(&mut self, frontier: AntichainRef<'_, T>) -> (Vec<Vec<(D, T, R)>>, &MutableAntichain<T>) {
+            // Handle any staged updates first.
+            consolidate_updates(&mut self.stage);
+            if !self.stage.is_empty() {
+                let blob: VecDeque<_> = std::mem::take(&mut self.stage).into();
+                self.lower.update_iter(blob.iter().map(|x| (x.0.clone(), 1)));
+                self.blobs.push(blob);
+            }
+
+            // An update is unblocked once no arrangement time can still precede it. The times the
+            // frontier may yet produce are bounded below in the total order by its minimum, and
+            // `strict` says whether a time equal to an update's own still counts as preceding. An
+            // empty frontier will produce no times at all, and unblocks everything.
+            let bound = frontier.iter().min();
+            let strict = self.strict;
+            let eligible = |time: &T| match bound {
+                None => true,
+                Some(bound) => if strict { time.le(bound) } else { time.lt(bound) },
+            };
+
+            // Blobs are stored in time order, and eligibility is monotone in time, so what each
+            // releases is a prefix.
+            let mut result = Vec::new();
+            for blob in self.blobs.iter_mut() {
+                let mut list = Vec::new();
+                while blob.front().map(|(t,_,_)| eligible(t)).unwrap_or(false) {
+                    let (time, data, diff) = blob.pop_front().unwrap();
+                    list.push((data, time, diff));
+                }
+                if !list.is_empty() { result.push(list); }
+            }
+
+            self.blobs.retain(|b| !b.is_empty());
+
+            self.lower.update_iter(result.iter().flat_map(|l| l.iter().map(|x| (x.1.clone(), -1))));
+            (result, &self.lower)
+        }
+    }
+
 }

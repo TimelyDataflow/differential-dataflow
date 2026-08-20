@@ -63,7 +63,7 @@ where
         builder.push_into(((triple, payload.clone()), initial.clone(), diff1.clone()));
     };
 
-    use crate::operators::half_join::half_join_internal_unsafe as half_join_unsafe;
+    use crate::operators::half_join::cursors::half_join_internal_unsafe as half_join_unsafe;
     // `strict` now reaches the join as a value rather than as a comparison closure, so there is
     // nothing left to monomorphize by branching here; the test is made per arrangement time.
     half_join_unsafe::<_, _, _, _, _, _, _, Output<P, Tr::Time, R>>(
