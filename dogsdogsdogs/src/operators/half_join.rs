@@ -55,9 +55,13 @@ pub trait HalfJoinTactic<B: BatchReader, C0, C1> {
 ///
 /// The implementor is able to determine the meaning of extraction by a frontier;
 /// it is not required to be by antichain partial order.
-pub trait Batcher<C, T: Timestamp> {
+///
+/// Updates are accepted as `C0`, the containers that arrive on the dataflow edge, and released as
+/// `C1`, whatever a [`HalfJoinTactic`] would rather consume. The two need not agree: an implementor
+/// staging updates in a form of its own can release that form directly.
+pub trait Batcher<T: Timestamp, C0, C1> {
     /// Moves responsibility for `container` into the implementor.
-    fn insert(&mut self, container: C);
+    fn insert(&mut self, container: C0);
     /// Extracts updates `frontier` unblocks, and lower bounds the time of retained updates.
     ///
     /// What `frontier` unblocks is the implementor's to decide. It can be based on the antichain up set,
@@ -66,7 +70,7 @@ pub trait Batcher<C, T: Timestamp> {
     /// The reported lower bound antichain should accurately reflect the times of all accepted updates
     /// that have not been extracted. Over approximation can result in stalling dataflows, and under
     /// approximation is simply incorrect.
-    fn extract(&mut self, frontier: AntichainRef<'_, T>) -> (Vec<C>, &MutableAntichain<T>);
+    fn extract(&mut self, frontier: AntichainRef<'_, T>) -> (Vec<C1>, &MutableAntichain<T>);
 }
 
 /// A `half_join` driven by a [`Batcher`] and a [`HalfJoinTactic`].
@@ -81,7 +85,7 @@ pub trait Batcher<C, T: Timestamp> {
 ///
 /// The `pact` distributes the streamed updates, which should land each at the appropriate worker.
 /// A likely implementation is an exchange by a hash of a common key.
-pub fn half_join_with_tactic<'scope, Tr, FF, P, Y, Bat, Tac, CIn, C>(
+pub fn half_join_with_tactic<'scope, Tr, FF, P, Y, Bat, Tac, CIn, CMid, C>(
     stream: Stream<'scope, Tr::Time, CIn>,
     mut arrangement: Arranged<'scope, Tr>,
     pact: P,
@@ -95,8 +99,8 @@ where
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
     P: ParallelizationContract<Tr::Time, CIn>,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    Bat: Batcher<CIn, Tr::Time> + 'static,
-    Tac: HalfJoinTactic<Tr::Batch, CIn, C> + 'static,
+    Bat: Batcher<Tr::Time, CIn, CMid> + 'static,
+    Tac: HalfJoinTactic<Tr::Batch, CMid, C> + 'static,
     CIn: Container,
     C: Container + 'static,
 {
@@ -501,7 +505,7 @@ pub mod cursors {
         }
     }
 
-    impl<D: Ord, T: Timestamp, R: Semigroup> Batcher<Vec<(D, T, R)>, T> for BlobList<D, T, R> {
+    impl<D: Ord, T: Timestamp, R: Semigroup> Batcher<T, Vec<(D, T, R)>, Vec<(D, T, R)>> for BlobList<D, T, R> {
         fn insert(&mut self, container: Vec<(D, T, R)>) {
             self.stage.extend(container.into_iter().map(|(d,t,r)| (t,d,r)));
         }
