@@ -17,10 +17,14 @@
 //! A [`ColChunk`] is either [`Resident`](ColChunk::Resident) (the trie in memory)
 //! or [`Paged`](ColChunk::Paged) (resident bounds + a byte handle). [`Chunk::settle`]
 //! is the spill point: it pages committed chunks out via
-//! [`spill`](self::spill) when a worker has installed a spiller. Reads
-//! fetch a paged chunk's trie back, caching it in a [`OnceCell`] so repeated
-//! cursor access pays the fetch once; [`len`](Chunk::len) and [`bounds`](Chunk::bounds)
-//! read the resident metadata and never fetch.
+//! [`spill`](self::spill) when a worker has installed a spiller.
+//! [`len`](Chunk::len) and [`bounds`](crate::trace::chunk::NavigableChunk::bounds) read the resident metadata and
+//! never fetch. The two read paths treat a paged body differently: *cursor* access
+//! fetches the trie back and caches it in a [`OnceCell`] — repeated access pays the
+//! fetch once, and the body stays resident thereafter — while *extraction* (the
+//! [`UnloadChunk`](crate::trace::chunk::UnloadChunk) path) reads a zero-copy view
+//! over the fetched bytes for the scope of one call and leaves the cache empty, so
+//! probing a paged trace does not accrete it back into memory.
 //!
 //! [`Chunk::advance`] is trie-native: it melds its input in place and rewrites
 //! only the time column (keys/vals/diffs stay columnar refs), then re-consolidates
@@ -32,7 +36,7 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use columnar::{Borrow, Columnar, Container, ContainerOf, Index, Len, Push};
+use columnar::{Borrow, BorrowedOf, Columnar, Container, ContainerOf, Index, Len, Push};
 use timely::Accountable;
 use timely::container::{PushInto, SizableContainer};
 use timely::progress::Antichain;
@@ -45,7 +49,7 @@ use crate::trace::cursor::Cursor;
 use crate::trace::implementations::{BatchContainer, Layout, WithLayout};
 
 use crate::columnar::layout::{ColumnarLayout, ColumnarUpdate, Coltainer};
-use crate::columnar::updates::{child_range, UpdatesBuilder, UpdatesTyped};
+use crate::columnar::updates::{child_range, UpdatesBuilder, UpdatesTyped, UpdatesView};
 use crate::columnar::trie_merger;
 
 use super::spill::{self, BytesSource};
@@ -59,7 +63,7 @@ use crate::trace::chunk::Chunk;
 const TARGET: usize = 8192;
 
 /// Resident bounds for a paged chunk: the first and last `(key, val, time)` as
-/// single-element columnar containers (so [`Chunk::bounds`] returns refs without
+/// single-element columnar containers (so [`bounds`](crate::trace::chunk::NavigableChunk::bounds) returns refs without
 /// fetching), plus the record count.
 pub struct ChunkMeta<U: ColumnarUpdate> {
     fk: ContainerOf<U::Key>, fv: ContainerOf<U::Val>, ft: ContainerOf<U::Time>,
@@ -325,6 +329,142 @@ where U::Time: 'static {
     }
 }
 
+/// Narrow a columnar ref to a shorter lifetime, so refs from different borrows —
+/// a probe column and a chunk's own columns, say — can be compared (the refs are
+/// lifetime-invariant).
+fn rr<'b, 'a: 'b, C: Columnar>(item: columnar::Ref<'a, C>) -> columnar::Ref<'b, C> {
+    columnar::ContainerOf::<C>::reborrow_ref(item)
+}
+
+/// Locate probe hits in a trie view, per the
+/// [`UnloadChunk`](crate::trace::chunk::UnloadChunk) consume-index protocol: consume
+/// probes strictly below the view's last key — emitting hit runs, passing over misses —
+/// and extract-but-don't-consume a probe equal to it (its group may continue in the
+/// next chunk). Each maximal run of consecutive probe-hit keys is reported once, as a
+/// key-index range, for the caller to materialize.
+///
+/// The view may sit over typed columns (a resident trie, a filled cache) or directly
+/// over loaded bytes (a paged chunk, fetched for the scope of one call).
+fn extract_view<U: ColumnarUpdate>(
+    view: UpdatesView<'_, U>,
+    probes: BorrowedOf<'_, U::Key>,
+    probe_index: &mut usize,
+    mut emit_run: impl FnMut(std::ops::Range<usize>),
+) {
+    let keys = view.keys.values;
+    debug_assert!(keys.len() > 0, "extract_view requires a non-empty chunk");
+    let count = probes.len();
+    let last = keys.len() - 1;
+    let mut key_pos = 0;
+    while *probe_index < count {
+        let probe = probes.get(*probe_index);
+        // Past this chunk's span: the probe (and everything after) is the next chunk's.
+        if rr::<U::Key>(probe) > rr::<U::Key>(keys.get(last)) { return; }
+        // First key `>= probe`; in range, since the probe is at most the last key.
+        trie_merger::gallop(keys, &mut key_pos, last + 1, |x| rr::<U::Key>(x) < rr::<U::Key>(probe));
+        // Grow a run of consecutive probe-hit keys, then emit it as one range.
+        let run_start = key_pos;
+        while *probe_index < count && rr::<U::Key>(probes.get(*probe_index)) == rr::<U::Key>(keys.get(key_pos)) {
+            key_pos += 1;
+            if key_pos > last {
+                // Hit on the last key: extract the run, but leave the probe
+                // unconsumed — its group may continue in the next chunk.
+                emit_run(run_start..key_pos);
+                return;
+            }
+            *probe_index += 1;
+        }
+        if key_pos > run_start {
+            emit_run(run_start..key_pos);
+        } else {
+            // A miss, strictly below the last key: consumed silently.
+            *probe_index += 1;
+        }
+    }
+}
+
+impl<U: ColumnarUpdate> crate::trace::chunk::UnloadChunk for ColChunk<U>
+where U::Time: 'static {
+    type Staging = crate::trace::chunk::ChunkBatchBuilder<Self>;
+    type Probes<'a> = BorrowedOf<'a, U::Key>;
+
+    fn probe_count(probes: Self::Probes<'_>) -> usize { probes.len() }
+
+    fn locate(&self, probes: Self::Probes<'_>, probe_index: usize) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        let probe = probes.get(probe_index);
+        let span = |first, last| {
+            if rr::<U::Key>(probe) < rr::<U::Key>(first) { Ordering::Less }
+            else if rr::<U::Key>(probe) > rr::<U::Key>(last) { Ordering::Greater }
+            else { Ordering::Equal }
+        };
+        match self {
+            ColChunk::Resident(rc) => {
+                let keys = rc.view().keys.values;
+                span(keys.get(0), keys.get(keys.len() - 1))
+            }
+            // Resident metadata only — no fetch.
+            ColChunk::Paged(p) => span(p.meta.fk.borrow().get(0), p.meta.lk.borrow().get(0)),
+        }
+    }
+
+    fn extract_into(&self, probes: Self::Probes<'_>, probe_index: &mut usize, staging: &mut Self::Staging) {
+        use crate::trace::Builder;
+        // Stage this chunk's hits as one resident chunk: hit runs meld into a per-call
+        // carry (bulk range copies), pushed once for the staging builder to settle. A
+        // run covering this whole (resident) chunk pushes the handle instead: a
+        // refcount bump, no copy.
+        let mut stage = |view: UpdatesView<'_, U>, whole: Option<&Self>| {
+            let num_keys = view.keys.values.len();
+            let mut carry: Option<UpdatesBuilder<U>> = None;
+            extract_view(view, probes, probe_index, |run| {
+                match whole {
+                    // A whole-chunk run is necessarily the call's only run.
+                    Some(chunk) if run == (0..num_keys) => staging.push(&mut chunk.clone()),
+                    _ => carry.get_or_insert_with(UpdatesBuilder::default).meld_keys(view, run),
+                }
+            });
+            if let Some(builder) = carry {
+                let trie = builder.done();
+                if trie.len() > 0 {
+                    staging.push(&mut ColChunk::Resident(Rc::new(trie)));
+                }
+            }
+        };
+        match self {
+            ColChunk::Resident(rc) => stage(rc.view(), Some(self)),
+            ColChunk::Paged(p) => match p.cache.get() {
+                // Already materialized (a cursor pinned it): read the cache.
+                Some(rc) => stage(rc.view(), None),
+                // Fetch scoped to this call: view the loaded bytes directly — no
+                // trie rebuild — and drop them on return. The cache stays empty.
+                None => {
+                    spill::note_fetched();
+                    let updates = spill::read::<U>(&*p.source);
+                    stage(updates.view(), None);
+                }
+            },
+        }
+    }
+
+    fn fetch_into(&self, staging: &mut Self::Staging) {
+        use crate::trace::Builder;
+        // Staged chunks are resident by contract: a resident chunk goes in by handle
+        // (a refcount bump); a paged one is fetched, scoped to this call.
+        let mut chunk = match self {
+            ColChunk::Resident(_) => self.clone(),
+            ColChunk::Paged(p) => match p.cache.get() {
+                Some(rc) => ColChunk::Resident(Rc::clone(rc)),
+                None => {
+                    spill::note_fetched();
+                    ColChunk::Resident(Rc::new(spill::read::<U>(&*p.source).into_typed()))
+                }
+            },
+        };
+        staging.push(&mut chunk);
+    }
+}
+
 impl<U: ColumnarUpdate> Chunk for ColChunk<U>
 where U::Time: 'static {
     type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
@@ -546,14 +686,30 @@ fn advance_trie<U: ColumnarUpdate>(
 
 #[cfg(test)]
 mod test {
+    use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::rc::Rc;
     use columnar::Push;
-    use super::{ColChunk, Chunk};
+    use super::{seal_chunk, spill, ColChunk, Chunk};
+    use super::spill::{BytesSource, BytesStore};
     use crate::columnar::updates::UpdatesTyped;
     use crate::trace::chunk::merge_chains;
     use crate::trace::Navigable;
 
     type Upd = (u64, u64, u64, i64);
+
+    /// In-memory backing store: an arena of byte blobs.
+    struct MemStore(Rc<RefCell<Vec<Vec<u8>>>>);
+    struct MemSource(Rc<RefCell<Vec<Vec<u8>>>>, usize);
+    impl BytesStore for MemStore {
+        fn store(&mut self, bytes: &[u8]) -> Box<dyn BytesSource> {
+            let mut arena = self.0.borrow_mut();
+            let id = arena.len();
+            arena.push(bytes.to_vec());
+            Box::new(MemSource(self.0.clone(), id))
+        }
+    }
+    impl BytesSource for MemSource { fn load(&self) -> Vec<u8> { self.0.borrow()[self.1].clone() } }
 
     // A sorted, consolidated columnar chunk from raw updates.
     fn chunk(updates: Vec<Upd>) -> ColChunk<Upd> {
@@ -752,24 +908,9 @@ mod test {
     // exact contents (exercises the trie byte codec + the OnceCell materialization).
     #[test]
     fn settle_pages_and_round_trips() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
         use std::sync::Arc;
         use std::sync::atomic::Ordering::Relaxed;
-        use crate::columnar::trace::spill::{self, BytesSource, BytesStore, SpillStats};
-
-        // In-memory backing store: an arena of byte blobs.
-        struct MemStore(Rc<RefCell<Vec<Vec<u8>>>>);
-        struct MemSource(Rc<RefCell<Vec<Vec<u8>>>>, usize);
-        impl BytesStore for MemStore {
-            fn store(&mut self, bytes: &[u8]) -> Box<dyn BytesSource> {
-                let mut a = self.0.borrow_mut();
-                let id = a.len();
-                a.push(bytes.to_vec());
-                Box::new(MemSource(self.0.clone(), id))
-            }
-        }
-        impl BytesSource for MemSource { fn load(&self) -> Vec<u8> { self.0.borrow()[self.1].clone() } }
+        use crate::columnar::trace::spill::SpillStats;
 
         let arena = Rc::new(RefCell::new(Vec::new()));
         let stats = Arc::new(SpillStats::default());
@@ -788,6 +929,166 @@ mod test {
         let want: Vec<Upd> = (0..n).map(|k| (k, 0, 0, 1)).collect();
         assert_eq!(got, want);
         assert!(stats.fetched_chunks.load(Relaxed) > 0, "nothing was fetched back");
+
+        spill::uninstall();
+    }
+
+    // A sorted, deduplicated probe column from raw keys.
+    fn probe_col(keys: &[u64]) -> columnar::ContainerOf<u64> {
+        let mut col = columnar::ContainerOf::<u64>::default();
+        for k in keys { col.push(*k); }
+        col
+    }
+
+    // Cut a consolidated update set into a `ChunkBatch` of `sz`-row chunks.
+    fn extract_batch(updates: &[Upd], sz: usize) -> crate::trace::chunk::ChunkBatch<ColChunk<Upd>> {
+        use crate::trace::Description;
+        use timely::progress::Antichain;
+        let chunks: Vec<_> = updates.chunks(sz).map(|c| chunk(c.to_vec())).collect();
+        let desc = Description::new(
+            Antichain::from_elem(0u64), Antichain::from_elem(10u64), Antichain::from_elem(0u64));
+        crate::trace::chunk::ChunkBatch::new(chunks, desc)
+    }
+
+    // Finish an extraction staging builder and flatten its chunks to updates.
+    fn drain(staging: crate::trace::chunk::ChunkBatchBuilder<ColChunk<Upd>>) -> Vec<Upd> {
+        use crate::trace::{Builder, Description};
+        use timely::progress::Antichain;
+        let desc = Description::new(
+            Antichain::from_elem(0u64), Antichain::new(), Antichain::from_elem(0u64));
+        flat(staging.done(desc).chunks)
+    }
+
+    // Property test: `ChunkBatch::extract_into` over random chains and random probe
+    // sets equals the analytic filter of the raw updates by probe membership — for
+    // resident chunks and for the same chunks paged out (extraction then reads a
+    // zero-copy view over the spilled bytes). Tiny chunks force keys, with several
+    // vals and times, to straddle boundaries, exercising the meld-stitch re-offer.
+    #[test]
+    fn extract_matches_filter() {
+        use columnar::Borrow;
+        use crate::consolidation::consolidate_updates;
+
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+
+        for paged in [false, true] {
+            if paged {
+                // Budget 0: `seal_chunk` pages everything.
+                let arena = Rc::new(RefCell::new(Vec::new()));
+                spill::install(0, Box::new(MemStore(arena)), std::sync::Arc::new(spill::SpillStats::default()));
+            }
+            for _ in 0..300 {
+                let n = rng() as usize % 60 + 1;
+                let mut rows: Vec<((u64, u64), u64, i64)> = (0..n).map(|_| {
+                    let k = rng() % 20; let v = rng() % 3; let t = rng() % 6;
+                    let d = if rng() % 4 == 0 { -1 } else { 1 };
+                    ((k, v), t, d)
+                }).collect();
+                consolidate_updates(&mut rows);
+                if rows.is_empty() { continue; }
+                let rows: Vec<Upd> = rows.into_iter().map(|((k, v), t, d)| (k, v, t, d)).collect();
+                let sz = rng() as usize % 5 + 1;
+                let mut batch = extract_batch(&rows, sz);
+                if paged {
+                    for c in batch.chunks.iter_mut() { *c = seal_chunk(std::mem::take(c)); }
+                    assert!(batch.chunks.iter().all(|c| matches!(c, ColChunk::Paged(_))));
+                }
+
+                let mut probes: Vec<u64> = (0..(rng() % 30)).map(|_| rng() % 25).collect();
+                probes.sort();
+                probes.dedup();
+                let col = probe_col(&probes);
+
+                let mut staging = Default::default();
+                batch.extract_into(col.borrow(), &mut staging);
+                let got = drain(staging);
+
+                let want: Vec<Upd> = rows.iter().filter(|u| probes.binary_search(&u.0).is_ok()).cloned().collect();
+                assert_eq!(got, want, "paged={paged} chunk size {sz}\n  rows={rows:?}");
+                if paged {
+                    // Extraction viewed the spilled bytes; nothing was materialized.
+                    for c in &batch.chunks {
+                        let ColChunk::Paged(p) = c else { unreachable!() };
+                        assert!(p.cache.get().is_none(), "extraction populated a chunk cache");
+                    }
+                }
+            }
+            if paged { spill::uninstall(); }
+        }
+    }
+
+    // The extract/re-offer protocol reconstructs straddling groups: a key — and a
+    // `(key, val)`'s times — spanning a chunk boundary arrives in staging stitched,
+    // exactly as the flat filter reference has it.
+    #[test]
+    fn extract_handles_straddle() {
+        use columnar::Borrow;
+        let rows: Vec<Upd> = vec![
+            (0, 0, 0, 1), (1, 0, 0, 1), (1, 1, 0, 1),
+            (1, 1, 1, 1), (1, 2, 0, 1),
+            (2, 0, 0, 1),
+        ];
+        let batch = extract_batch(&rows, 3);
+        for probes in [vec![1u64], vec![0, 2], vec![0, 1, 2], vec![0, 1, 2, 3]] {
+            let col = probe_col(&probes);
+            let mut staging = Default::default();
+            batch.extract_into(col.borrow(), &mut staging);
+            let want: Vec<Upd> = rows.iter().filter(|u| probes.contains(&u.0)).cloned().collect();
+            assert_eq!(drain(staging), want, "probes={probes:?}");
+        }
+    }
+
+    // Reading paged chunks through the unload path — probe extraction and the
+    // fetch_into scan — reproduces exact contents while leaving every chunk's
+    // cache unpopulated: reads view the spilled bytes for the scope of one call
+    // and drop them. This is the no-pin property, versus the cursor path's
+    // fetch-and-cache-forever OnceCell.
+    #[test]
+    fn extract_paged_without_pinning() {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering::Relaxed;
+        use columnar::Borrow;
+        use crate::columnar::trace::spill::SpillStats;
+        use crate::trace::Description;
+        use timely::progress::Antichain;
+
+        let arena = Rc::new(RefCell::new(Vec::new()));
+        let stats = Arc::new(SpillStats::default());
+        spill::install(1, Box::new(MemStore(arena)), stats.clone()); // budget 1 record: page everything
+
+        // Settle many single-update chunks into full paged chunks, then batch them.
+        let n = 3 * super::TARGET as u64;
+        let mut input: VecDeque<_> = (0..n).map(|k| chunk(vec![(k, 0, k % 5, 1)])).collect();
+        let mut out = VecDeque::new();
+        ColChunk::settle(&mut input, true, &mut out);
+        assert!(out.iter().any(|c| matches!(c, ColChunk::Paged(_))), "nothing was paged");
+        let desc = Description::new(
+            Antichain::from_elem(0u64), Antichain::from_elem(5u64), Antichain::from_elem(0u64));
+        let batch = crate::trace::chunk::ChunkBatch::new(out.into(), desc);
+        let unpinned = |batch: &crate::trace::chunk::ChunkBatch<ColChunk<Upd>>| {
+            batch.chunks.iter().all(|c| match c {
+                ColChunk::Paged(p) => p.cache.get().is_none(),
+                ColChunk::Resident(_) => true,
+            })
+        };
+
+        // Sparse probes (some misses past the key space), through the batch driver.
+        let probes: Vec<u64> = (0..=n + 10).step_by(97).collect();
+        let col = probe_col(&probes);
+        let mut staging = Default::default();
+        batch.extract_into(col.borrow(), &mut staging);
+        let want: Vec<Upd> = probes.iter().filter(|&&k| k < n).map(|&k| (k, 0, k % 5, 1)).collect();
+        assert_eq!(drain(staging), want);
+        assert!(stats.fetched_chunks.load(Relaxed) > 0, "nothing was fetched");
+        assert!(unpinned(&batch), "extraction populated a chunk cache");
+
+        // The scan path: full contents, still nothing pinned.
+        let mut staging = Default::default();
+        batch.fetch_into(&mut staging);
+        let want: Vec<Upd> = (0..n).map(|k| (k, 0, k % 5, 1)).collect();
+        assert_eq!(drain(staging), want);
+        assert!(unpinned(&batch), "fetch_into populated a chunk cache");
 
         spill::uninstall();
     }

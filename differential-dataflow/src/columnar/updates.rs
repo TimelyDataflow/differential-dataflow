@@ -599,6 +599,10 @@ pub struct UpdatesBuilder<U: Update> {
     updates: UpdatesTyped<U>,
 }
 
+impl<U: Update> Default for UpdatesBuilder<U> {
+    fn default() -> Self { Self { updates: UpdatesTyped::default() } }
+}
+
 impl<U: Update> UpdatesBuilder<U> {
     /// Construct a new builder from consolidated, sealed updates.
     ///
@@ -622,38 +626,56 @@ impl<U: Update> UpdatesBuilder<U> {
     /// (continue the current group), but times must be strictly increasing
     /// within the same `(key, val)`.
     pub fn meld(&mut self, chunk: &UpdatesTyped<U>) {
+        use columnar::Len;
+        self.meld_keys(chunk.view(), 0..Len::len(&chunk.keys.values));
+    }
+
+    /// Meld `view[key_range]` — the keys in the range with their complete val, time,
+    /// and diff subtrees — into this builder, by bulk column-range copies.
+    ///
+    /// The same precondition as [`meld`](Self::meld), applied to the range: its first
+    /// `(key, val, time)` must be strictly greater than the builder's last. The key
+    /// and val may equal the builder's open key/val (continuing that group), as long
+    /// as the time is strictly greater. `meld` is this over a chunk's full key range;
+    /// extraction melds the probe-hit ranges of a chunk it never fully copies.
+    pub fn meld_keys(&mut self, view: UpdatesView<'_, U>, key_range: std::ops::Range<usize>) {
         use columnar::{Borrow, Index, Len};
 
-        if chunk.len() == 0 { return; }
+        // Narrow both sides of a key/val/time comparison to a common lifetime
+        // (columnar refs are invariant).
+        fn rr<'b, 'a: 'b, C: Columnar>(item: columnar::Ref<'a, C>) -> columnar::Ref<'b, C> {
+            columnar::ContainerOf::<C>::reborrow_ref(item)
+        }
 
-        // Empty builder: clone the chunk and unseal it.
+        if key_range.is_empty() { return; }
+        let val_range = view.vals_bounds(key_range.clone());
+        let time_range = view.times_bounds(val_range.clone());
+
+        // Empty builder: bulk-copy the range, leaving the trailing groups open.
         if Len::len(&self.updates.keys.values) == 0 {
-            self.updates = chunk.clone();
-            self.updates.keys.bounds.pop();
+            self.updates.keys.values.extend_from_self(view.keys.values, key_range.clone());
+            self.updates.vals.extend_from_self(view.vals, key_range);
             self.updates.vals.bounds.pop();
+            self.updates.times.extend_from_self(view.times, val_range.clone());
             self.updates.times.bounds.pop();
+            self.updates.diffs.extend_from_self(view.diffs, time_range);
             return;
         }
 
         // Pre-compute boundary comparisons before mutating.
         let keys_match = {
             let skb = self.updates.keys.values.borrow();
-            let ckb = chunk.keys.values.borrow();
-            skb.get(Len::len(&skb) - 1) == ckb.get(0)
+            rr::<U::Key>(skb.get(Len::len(&skb) - 1)) == rr::<U::Key>(view.keys.values.get(key_range.start))
         };
+
+        // Child ranges for the first element at each level of the range.
+        let first_key_vals = child_range(view.vals.bounds, key_range.start);
+        let first_val_times = child_range(view.times.bounds, first_key_vals.start);
+
         let vals_match = keys_match && {
             let svb = self.updates.vals.values.borrow();
-            let cvb = chunk.vals.values.borrow();
-            svb.get(Len::len(&svb) - 1) == cvb.get(0)
+            rr::<U::Val>(svb.get(Len::len(&svb) - 1)) == rr::<U::Val>(view.vals.values.get(first_key_vals.start))
         };
-
-        let chunk_num_keys = Len::len(&chunk.keys.values);
-        let chunk_num_vals = Len::len(&chunk.vals.values);
-        let chunk_num_times = Len::len(&chunk.times.values);
-
-        // Child ranges for the first element at each level of the chunk.
-        let first_key_vals = child_range(chunk.vals.borrow().bounds, 0);
-        let first_val_times = child_range(chunk.times.borrow().bounds, 0);
 
         // There is a first position where coordinates disagree.
         // Strictly beyond that position: seal bounds, extend lists, re-open the last bound.
@@ -663,12 +685,12 @@ impl<U: Update> UpdatesBuilder<U> {
         // --- Keys ---
         if keys_match {
             // Skip the duplicate first key; add remaining keys.
-            if chunk_num_keys > 1 {
-                self.updates.keys.values.extend_from_self(chunk.keys.values.borrow(), 1..chunk_num_keys);
+            if key_range.len() > 1 {
+                self.updates.keys.values.extend_from_self(view.keys.values, (key_range.start + 1)..key_range.end);
             }
         } else {
             // All keys are new.
-            self.updates.keys.values.extend_from_self(chunk.keys.values.borrow(), 0..chunk_num_keys);
+            self.updates.keys.values.extend_from_self(view.keys.values, key_range.clone());
             differ = true;
         }
 
@@ -676,7 +698,7 @@ impl<U: Update> UpdatesBuilder<U> {
         if differ {
             // Keys differed: seal open val group, extend all val lists, unseal last.
             self.updates.vals.bounds.push(Len::len(&self.updates.vals.values) as u64);
-            self.updates.vals.extend_from_self(chunk.vals.borrow(), 0..chunk_num_keys);
+            self.updates.vals.extend_from_self(view.vals, key_range.clone());
             self.updates.vals.bounds.pop();
         } else {
             // Keys matched: meld vals for the shared key.
@@ -684,22 +706,19 @@ impl<U: Update> UpdatesBuilder<U> {
                 // Skip the duplicate first val; add remaining vals from the first key's list.
                 if first_key_vals.len() > 1 {
                     self.updates.vals.values.extend_from_self(
-                        chunk.vals.values.borrow(),
+                        view.vals.values,
                         (first_key_vals.start + 1)..first_key_vals.end,
                     );
                 }
             } else {
                 // First val differs: add all vals from the first key's list.
-                self.updates.vals.values.extend_from_self(
-                    chunk.vals.values.borrow(),
-                    first_key_vals.clone(),
-                );
+                self.updates.vals.values.extend_from_self(view.vals.values, first_key_vals.clone());
                 differ = true;
             }
             // Seal the matched key's val group, extend remaining keys' val lists, unseal.
-            if chunk_num_keys > 1 {
+            if key_range.len() > 1 {
                 self.updates.vals.bounds.push(Len::len(&self.updates.vals.values) as u64);
-                self.updates.vals.extend_from_self(chunk.vals.borrow(), 1..chunk_num_keys);
+                self.updates.vals.extend_from_self(view.vals, (key_range.start + 1)..key_range.end);
                 self.updates.vals.bounds.pop();
             }
         }
@@ -708,26 +727,22 @@ impl<U: Update> UpdatesBuilder<U> {
         if differ {
             // Seal open time group, extend all time lists, unseal last.
             self.updates.times.bounds.push(Len::len(&self.updates.times.values) as u64);
-            self.updates.times.extend_from_self(chunk.times.borrow(), 0..chunk_num_vals);
+            self.updates.times.extend_from_self(view.times, val_range.clone());
             self.updates.times.bounds.pop();
         } else {
             // Keys and vals matched. Times must be strictly greater (precondition),
             // so we always set differ = true here.
             debug_assert!({
                 let stb = self.updates.times.values.borrow();
-                let ctb = chunk.times.values.borrow();
-                stb.get(Len::len(&stb) - 1) != ctb.get(0)
+                rr::<U::Time>(stb.get(Len::len(&stb) - 1)) != rr::<U::Time>(view.times.values.get(first_val_times.start))
             }, "meld: duplicate time within same (key, val)");
             // Add times from the first val's time list into the open group.
-            self.updates.times.values.extend_from_self(
-                chunk.times.values.borrow(),
-                first_val_times.clone(),
-            );
+            self.updates.times.values.extend_from_self(view.times.values, first_val_times.clone());
             differ = true;
             // Seal the matched val's time group, extend remaining vals' time lists, unseal.
-            if chunk_num_vals > 1 {
+            if val_range.len() > 1 {
                 self.updates.times.bounds.push(Len::len(&self.updates.times.values) as u64);
-                self.updates.times.extend_from_self(chunk.times.borrow(), 1..chunk_num_vals);
+                self.updates.times.extend_from_self(view.times, (val_range.start + 1)..val_range.end);
                 self.updates.times.bounds.pop();
             }
         }
@@ -737,7 +752,7 @@ impl<U: Update> UpdatesBuilder<U> {
         // times are strictly increasing for the same (key, val), differ is
         // always true by this point — just extend all diff lists.
         debug_assert!(differ);
-        self.updates.diffs.extend_from_self(chunk.diffs.borrow(), 0..chunk_num_times);
+        self.updates.diffs.extend_from_self(view.diffs, time_range);
     }
 
     /// Seal all open bounds and return the completed `UpdatesTyped`.
@@ -853,6 +868,51 @@ mod tests {
         updates.push((&1, &10, &100, &-1));
         updates.push((&1, &20, &100, &5));
         assert_eq!(collect(&updates.consolidate()), vec![(1, 20, 100, 5)]);
+    }
+
+    // Property test: melding arbitrary (sorted, disjoint) key-index ranges of a
+    // consolidated trie must equal forming the trie of just those keys' updates.
+    // Covers empty-builder starts, key-adjacent ranges (continuing groups), and
+    // gaps — the shapes extraction produces.
+    #[test]
+    fn meld_keys_matches_filtered_form() {
+        use columnar::Len;
+
+        let mut seed = 0x9E3779B97F4A7C15u64;
+        let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+
+        for _ in 0..300 {
+            // A consolidated trie over a small space, so keys carry several vals and times.
+            let n = rng() as usize % 60 + 1;
+            let mut source = UpdatesTyped::<TestUpdate>::default();
+            for _ in 0..n {
+                let (k, v, t) = (rng() % 8, rng() % 3, rng() % 4);
+                let d: i64 = if rng() % 4 == 0 { -1 } else { 1 };
+                source.push((&k, &v, &t, &d));
+            }
+            let source = source.consolidate();
+            let num_keys = Len::len(&source.keys.values);
+            if num_keys == 0 { continue; }
+
+            // A random subset of key indices, grouped into maximal consecutive ranges.
+            let selected: Vec<usize> = (0..num_keys).filter(|_| rng() % 2 == 0).collect();
+            let mut builder = UpdatesBuilder::<TestUpdate>::default();
+            let mut i = 0;
+            while i < selected.len() {
+                let start = selected[i];
+                let mut end = start + 1;
+                while i + 1 < selected.len() && selected[i + 1] == end { end += 1; i += 1; }
+                builder.meld_keys(source.view(), start..end);
+                i += 1;
+            }
+
+            // Reference: the trie formed from the selected keys' updates alone.
+            let keys: Vec<u64> = selected.iter()
+                .map(|&i| *columnar::Index::get(&columnar::Borrow::borrow(&source.keys.values), i))
+                .collect();
+            let want: Vec<_> = collect(&source).into_iter().filter(|u| keys.contains(&u.0)).collect();
+            assert_eq!(collect(&builder.done()), want, "selected key indices: {selected:?}");
+        }
     }
 
     #[test]

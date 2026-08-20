@@ -24,6 +24,8 @@
 //! [`ContainerChunker<C>`](crate::trace::implementations::chunker::ContainerChunker).
 //! Trace *maintenance* needs only [`Chunk`]; cursor-driven *consumption* of the
 //! arrangement additionally asks `C` for the [`NavigableChunk`] capability.
+//! Bulk consumption — copying probe hits into owned, resident staging rather than
+//! navigating in place — asks for [`UnloadChunk`] instead.
 //! Everything else here ([`ChunkBatch`], [`ChunkMerger`], [`ChunkBatchMerger`],
 //! [`ChunkBatchCursor`], [`ChunkBatchBuilder`]) is machinery those aliases expand to and is
 //! not named directly. The [`vec`](mod@vec) module is a worked `Chunk`
@@ -167,6 +169,80 @@ pub trait NavigableChunk: Chunk + Navigable<Cursor: Cursor<Time = <Self as Chunk
     );
 }
 
+/// Look up a sorted set of keys in a chunk, copying the matching updates out into
+/// caller-owned staging.
+///
+/// This is the second way to read a chunk, alongside [`NavigableChunk`]. A cursor
+/// navigates a chunk in place and hands out references into it, so the chunk's body
+/// must stay readable for as long as the caller holds the storage; extraction instead
+/// copies the requested records out and is finished with the body when the call
+/// returns. For resident chunks the two are interchangeable, with extraction the
+/// faster choice for batched lookups (it moves column ranges rather than walking
+/// records). For chunks whose bodies are paged out, extraction is the read that does
+/// not force them resident: an implementor fetches inside one method call and can let
+/// the fetch go afterwards, where a cursor would need the body kept around.
+///
+/// Callers usually read whole batches, not single chunks:
+/// [`extract_into`](ChunkBatch::extract_into) on [`ChunkBatch`] looks up a probe set
+/// across the batch's chunk sequence, and [`fetch_into`](ChunkBatch::fetch_into)
+/// stages its full contents (the scan path). Results land in a
+/// [`Staging`](UnloadChunk::Staging) the caller owns and consumes at leisure. Staged
+/// times are copied verbatim — advancement by a compaction frontier stays with the
+/// consumer, exactly as on the cursor path.
+///
+/// Like [`Chunk`] itself, the trait has no key, val, time, or diff opinions:
+/// `Staging` and `Probes` are opaque types the implementing family chooses, and the
+/// one key comparison the batch driver needs is delegated to the chunk via
+/// [`locate`](UnloadChunk::locate) — which, like [`len`](Chunk::len), must be
+/// answerable from resident metadata even when the body is paged out.
+///
+/// # The consume-index protocol (implementors)
+///
+/// A batch's chunks are one globally-sorted sequence cut at arbitrary points, so a
+/// key's updates may straddle consecutive chunks. [`extract_into`](UnloadChunk::extract_into)
+/// carries that invariant as a protocol: a chunk consumes (advances `*probe_index` past)
+/// every probe strictly below its last key — extracting hits, silently passing over
+/// misses — and *extracts but does not consume* a probe equal to its last key, so the
+/// driver re-offers that probe to the next chunk, whose continuation lands in staging
+/// as a legal straddle. Consumers detect misses as keys absent from staging.
+pub trait UnloadChunk: Chunk {
+    /// Where extracted updates land: an owned accumulation of resident data, chosen
+    /// by the implementing family.
+    ///
+    /// The in-tree families use [`ChunkBatchBuilder<Self>`]: extraction emits its hit
+    /// runs as resident chunks, and the builder settles them as it goes — so staging is
+    /// graded, coalesced, and (when a spiller is installed) paged under the same
+    /// bounded-footprint discipline as any other chunk sequence, and its output is
+    /// consumable by everything chunk-shaped. Appends arrive in global
+    /// `(key, val, time)` order; a group continuing across appends may remain split,
+    /// exactly as chunk sequences elsewhere carry the straddle invariant.
+    type Staging: Default;
+
+    /// A sorted, deduplicated key column, borrowed from the same family — another
+    /// chunk's key column, or a synthesized probe set.
+    type Probes<'a>: Copy;
+
+    /// The number of probe keys.
+    fn probe_count(probes: Self::Probes<'_>) -> usize;
+
+    /// Where `probes[probe_index]` falls relative to this chunk's key span: `Less` before
+    /// the first key, `Equal` within `[first, last]`, `Greater` past the last key.
+    ///
+    /// Resident metadata only — must never fetch a paged body.
+    fn locate(&self, probes: Self::Probes<'_>, probe_index: usize) -> std::cmp::Ordering;
+
+    /// Append this chunk's updates for probes at and after `*probe_index` into `staging`,
+    /// advancing `*probe_index` past every probe strictly below this chunk's last key.
+    ///
+    /// A probe *equal* to the last key is extracted but not consumed: its group may
+    /// continue in the next chunk (see the protocol above). Any fetch of a paged
+    /// body is scoped to this call.
+    fn extract_into(&self, probes: Self::Probes<'_>, probe_index: &mut usize, staging: &mut Self::Staging);
+
+    /// Append the whole chunk into `staging` (the scan path).
+    fn fetch_into(&self, staging: &mut Self::Staging);
+}
+
 /// Maximal-packing driver an implementor's [`Chunk::settle`] may delegate to.
 ///
 /// Holds a `carry` chunk under construction, grown by `combine` until it reaches
@@ -252,6 +328,45 @@ impl<C: Chunk> ChunkBatch<C> {
             assert!(chunk.len() > 0, "ChunkBatch chunks must be non-empty");
         }
         ChunkBatch { chunks, description }
+    }
+}
+
+impl<C: UnloadChunk> ChunkBatch<C> {
+    /// Extract every probe hit in this batch into `staging`.
+    ///
+    /// Gallops the chunk list by [`locate`](UnloadChunk::locate) — resident metadata
+    /// only — and opens (via [`extract_into`](UnloadChunk::extract_into)) only the
+    /// chunks a probe touches. A probe left unconsumed at a chunk's last key is
+    /// re-offered to the next chunk, whose continuation follows in staging.
+    pub fn extract_into(&self, probes: C::Probes<'_>, staging: &mut C::Staging) {
+        use std::cmp::Ordering;
+        let count = C::probe_count(probes);
+        let chunks = &self.chunks[..];
+        let (mut probe_index, mut chunk) = (0usize, 0usize);
+        while probe_index < count && chunk < chunks.len() {
+            // Whether chunk `c` lies entirely below `probes[probe_index]` (its last
+            // key is smaller), read from resident metadata.
+            let below = |c: usize| chunks[c].locate(probes, probe_index) == Ordering::Greater;
+            // Gallop to the first chunk not below the probe: exponential search from
+            // the current chunk, then binary within the final bracket.
+            if below(chunk) {
+                let (mut prev, mut step) = (chunk, 1usize);
+                while prev + step < chunks.len() && below(prev + step) { prev += step; step <<= 1; }
+                let (mut a, mut b) = (prev + 1, (prev + step).min(chunks.len()));
+                while a < b { let m = a + (b - a) / 2; if below(m) { a = m + 1; } else { b = m; } }
+                chunk = a;
+            }
+            if chunk >= chunks.len() { return; }
+            chunks[chunk].extract_into(probes, &mut probe_index, staging);
+            // Everything strictly below this chunk's last key is consumed; a probe
+            // equal to it was extracted but left for the next chunk (the straddle).
+            chunk += 1;
+        }
+    }
+
+    /// Materialize the batch's full contents into `staging` (the scan path).
+    pub fn fetch_into(&self, staging: &mut C::Staging) {
+        for chunk in &self.chunks { chunk.fetch_into(staging); }
     }
 }
 
@@ -668,11 +783,21 @@ where
 }
 
 /// A [`Builder`](crate::trace::Builder) that collects a chunk sequence into a [`ChunkBatch`].
+///
+/// Also the in-tree families' [`UnloadChunk::Staging`]: extraction pushes its hit runs
+/// here as resident chunks, and the builder settles as it goes, so staged data is graded
+/// and — with a spiller installed — pages under the ordinary bounded-footprint discipline.
 pub struct ChunkBatchBuilder<C: Chunk> {
     /// Pushed chunks awaiting settling; holds settle's sub-`TARGET` carry at the front.
     input: VecDeque<C>,
     /// The graded chunks emitted so far.
     output: VecDeque<C>,
+}
+
+impl<C: Chunk> Default for ChunkBatchBuilder<C> {
+    fn default() -> Self {
+        Self { input: VecDeque::new(), output: VecDeque::new() }
+    }
 }
 
 impl<C> crate::trace::Builder for ChunkBatchBuilder<C>

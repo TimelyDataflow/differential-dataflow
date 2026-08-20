@@ -187,6 +187,197 @@ fn main() {
         let b: Vec<_> = u.iter().filter(|(_, t, _)| *t >= half / pairs).cloned().collect();
         bench_valbearing("D: few (k,v), many times, time-disjoint merge (LSM append)", u, a, b);
     }
+
+    // Shape X: read-side unloading — probe extraction vs cursor navigation.
+    extraction::run(n);
+}
+
+/// Probe-extraction (`UnloadChunk`) vs cursor navigation over a `ChunkBatch` of
+/// columnar chunks: both consume the probed updates into owned staging — the
+/// cursor by per-probe seeks and owned copies, extraction by bulk column-range
+/// melds. Resident and paged (cold spilled bytes) variants.
+mod extraction {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+    use std::time::Instant;
+
+    use columnar::{Borrow, Columnar, ContainerOf, Index, Len, Push};
+    use timely::progress::Antichain;
+
+    use differential_dataflow::columnar::layout::{ColumnarUpdate, Coltainer};
+    use differential_dataflow::columnar::trace::ColChunk;
+    use differential_dataflow::columnar::trace::spill::{self, BytesSource, BytesStore, SpillStats};
+    use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
+    use differential_dataflow::trace::cursor::Cursor;
+    use differential_dataflow::trace::implementations::BatchContainer;
+    use differential_dataflow::trace::{Description, Navigable};
+
+    use super::{build_chain, ms};
+
+    /// In-memory backing store: an arena of byte blobs.
+    struct MemStore(Rc<RefCell<Vec<Vec<u8>>>>);
+    struct MemSource(Rc<RefCell<Vec<Vec<u8>>>>, usize);
+    impl BytesStore for MemStore {
+        fn store(&mut self, bytes: &[u8]) -> Box<dyn BytesSource> {
+            let mut arena = self.0.borrow_mut();
+            let id = arena.len();
+            arena.push(bytes.to_vec());
+            Box::new(MemSource(self.0.clone(), id))
+        }
+    }
+    impl BytesSource for MemSource { fn load(&self) -> Vec<u8> { self.0.borrow()[self.1].clone() } }
+
+    fn batch_of<U: ColumnarUpdate<Time = u64>>(chunks: Vec<ColChunk<U>>) -> ChunkBatch<ColChunk<U>> {
+        let desc = Description::new(
+            Antichain::from_elem(0u64), Antichain::from_elem(1u64), Antichain::from_elem(0u64));
+        ChunkBatch::new(chunks, desc)
+    }
+
+    /// Page every chunk of `chain` out through `settle` (budget 0), leaving the
+    /// spiller installed so reads count fetches.
+    fn page_out<U: ColumnarUpdate<Time = u64>>(chain: Vec<ColChunk<U>>) -> Vec<ColChunk<U>> {
+        let arena = Rc::new(RefCell::new(Vec::new()));
+        spill::install(0, Box::new(MemStore(arena)), std::sync::Arc::new(SpillStats::default()));
+        let mut input: VecDeque<_> = chain.into();
+        let mut out = VecDeque::new();
+        ColChunk::settle(&mut input, true, &mut out);
+        out.into()
+    }
+
+    /// The cursor path: per-probe `seek_key` on the straddle cursor, copying the
+    /// hit's key, vals, times, and diffs out as owned values. Returns updates staged.
+    fn probe_cursor<U: ColumnarUpdate<Time = u64>>(batch: &ChunkBatch<ColChunk<U>>, probes: &ContainerOf<U::Key>) -> usize {
+        let mut cursor = batch.cursor();
+        let mut staged: Vec<(U::Key, U::Val, U::Time, U::Diff)> = Vec::new();
+        let pb = probes.borrow();
+        for i in 0..pb.len() {
+            let probe = pb.get(i);
+            cursor.seek_key(batch, probe);
+            let Some(key) = cursor.get_key(batch) else { continue };
+            if <Coltainer<U::Key> as BatchContainer>::reborrow(key)
+                != <Coltainer<U::Key> as BatchContainer>::reborrow(probe) { continue; }
+            let key = <U::Key as Columnar>::into_owned(key);
+            while let Some(val) = cursor.get_val(batch) {
+                let val = <U::Val as Columnar>::into_owned(val);
+                let k = key.clone();
+                cursor.map_times(batch, |t, d| staged.push((
+                    k.clone(), val.clone(),
+                    <U::Time as Columnar>::into_owned(t),
+                    <U::Diff as Columnar>::into_owned(d),
+                )));
+                cursor.step_val(batch);
+            }
+        }
+        staged.len()
+    }
+
+    /// The extraction path: one `extract_into` over the batch into chunk staging.
+    fn probe_extract<U: ColumnarUpdate<Time = u64>>(batch: &ChunkBatch<ColChunk<U>>, probes: &ContainerOf<U::Key>) -> usize {
+        use differential_dataflow::trace::Builder;
+        let mut staging = differential_dataflow::trace::chunk::ChunkBatchBuilder::<ColChunk<U>>::default();
+        batch.extract_into(probes.borrow(), &mut staging);
+        let desc = Description::new(
+            Antichain::from_elem(0u64), Antichain::new(), Antichain::from_elem(0u64));
+        staging.done(desc).chunks.iter().map(Chunk::len).sum()
+    }
+
+    /// Best-of-`reps` wall clock; returns (ms, result) and asserts result stability.
+    fn best(reps: usize, mut f: impl FnMut() -> usize) -> (f64, usize) {
+        let (mut best, mut out) = (f64::MAX, 0);
+        for r in 0..reps {
+            let t = Instant::now();
+            let got = std::hint::black_box(f());
+            best = best.min(ms(t));
+            if r > 0 { assert_eq!(got, out); }
+            out = got;
+        }
+        (best, out)
+    }
+
+    fn row(label: &str, hits: usize, cursor_ms: f64, extract_ms: f64) {
+        println!("  {label:<38} {hits:>9} {cursor_ms:>10.1} {extract_ms:>11.1} {:>10.2}x", cursor_ms / extract_ms);
+    }
+
+    /// One shape: resident best-of-3 both paths, then (optionally) a paged batch
+    /// measured cold — a single pass each, on separately paged batches, since the
+    /// cursor path materializes chunk caches as it reads (extraction does not).
+    fn shape<U: ColumnarUpdate<Time = u64>>(label: &str, updates: Vec<((U::Key, U::Val), u64, i64)>, probes: &ContainerOf<U::Key>, paged: bool)
+    where
+        U: ColumnarUpdate<Diff = i64>,
+        ColChunk<U>: timely::container::SizableContainer
+            + differential_dataflow::consolidation::Consolidate
+            + timely::container::PushInto<((U::Key, U::Val), u64, i64)>,
+        U::Key: Clone, U::Val: Clone,
+    {
+        let chain = build_chain::<ColChunk<U>, _>(updates.clone());
+        let batch = batch_of(chain);
+        let (cursor_ms, cursor_hits) = best(3, || probe_cursor(&batch, probes));
+        let (extract_ms, extract_hits) = best(3, || probe_extract(&batch, probes));
+        assert_eq!(cursor_hits, extract_hits, "paths disagree on {label}");
+        row(label, extract_hits, cursor_ms, extract_ms);
+
+        if paged {
+            // Cold cursor pass: first touch decodes and caches every chunk it opens.
+            let batch = batch_of(page_out(build_chain::<ColChunk<U>, _>(updates.clone())));
+            let t = Instant::now();
+            let cursor_hits = std::hint::black_box(probe_cursor(&batch, probes));
+            let cursor_ms = ms(t);
+            spill::uninstall();
+            // Extraction never populates caches, so every pass is cold; best-of-3.
+            let batch = batch_of(page_out(build_chain::<ColChunk<U>, _>(updates)));
+            let (extract_ms, extract_hits) = best(3, || probe_extract(&batch, probes));
+            spill::uninstall();
+            assert_eq!(cursor_hits, extract_hits, "paged paths disagree on {label}");
+            row(&format!("{label}, paged (cold)"), extract_hits, cursor_ms, extract_ms);
+        }
+    }
+
+    pub fn run(n: usize) {
+        println!("\n== probe extraction (UnloadChunk) vs cursor navigation, col trie ==");
+        println!("  {:<38} {:>9} {:>10} {:>11} {:>11}", "shape", "hits", "cursor ms", "extract ms", "cur/ext");
+
+        // Dense String keys: every key probed — the design doc's headline case.
+        {
+            let key = |k: usize| format!("key-{k:012}");
+            let updates: Vec<((String, ()), u64, i64)> = (0..n).map(|k| ((key(k), ()), 0, 1)).collect();
+            let mut probes = ContainerOf::<String>::default();
+            for k in 0..n { probes.push(&key(k)); }
+            shape::<(String, (), u64, i64)>("dense probes, String keys", updates, &probes, true);
+        }
+
+        // Sparse (1%) u64 probes: navigation's best case — extraction wants parity.
+        {
+            let updates: Vec<((u64, ()), u64, i64)> = (0..n as u64).map(|k| ((k, ()), 0, 1)).collect();
+            let mut probes = ContainerOf::<u64>::default();
+            for k in (0..n as u64).step_by(100) { probes.push(k); }
+            shape::<(u64, (), u64, i64)>("sparse probes (1%), u64 keys", updates, &probes, true);
+        }
+
+        // Dense u64 probes: the pure navigate-vs-copy comparison, no string compares.
+        {
+            let updates: Vec<((u64, ()), u64, i64)> = (0..n as u64).map(|k| ((k, ()), 0, 1)).collect();
+            let mut probes = ContainerOf::<u64>::default();
+            for k in 0..n as u64 { probes.push(k); }
+            shape::<(u64, (), u64, i64)>("dense probes, u64 keys", updates, &probes, false);
+        }
+
+        // Fat values: 4 x 256B string vals per key, every key probed — value copies
+        // dominate, and staging should run at memory bandwidth.
+        {
+            let keys = (n / 16).max(1) as u64;
+            let fat = |k: u64, v: u64| {
+                let mut s = format!("val-{k:012}-{v:02}-");
+                s.push_str(&"x".repeat(256 - s.len()));
+                s
+            };
+            let updates: Vec<((u64, String), u64, i64)> =
+                (0..keys).flat_map(|k| (0..4).map(move |v| ((k, fat(k, v)), 0, 1))).collect();
+            let mut probes = ContainerOf::<u64>::default();
+            for k in 0..keys { probes.push(k); }
+            shape::<(u64, String, u64, i64)>("dense probes, fat vals (4 x 256B)", updates, &probes, false);
+        }
+    }
 }
 
 /// Shape B/D need a `u64` val type (not `()`), so they get their own dispatch,

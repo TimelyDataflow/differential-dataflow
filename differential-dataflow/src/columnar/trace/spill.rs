@@ -126,9 +126,16 @@ pub(crate) fn note_fetched() {
     });
 }
 
+/// Read the bytes a [`BytesSource`] produced back as an [`Updates`] whose columns
+/// view the loaded bytes directly (zero-copy). Callers that only read — extraction,
+/// say — should use this and drop it; [`decode`] adds the copy into typed columns.
+pub(crate) fn read<U: Update>(source: &dyn BytesSource) -> Updates<U> {
+    let bytes = timely::bytes::arc::BytesMut::from(source.load()).freeze();
+    Updates::<U>::read_from(bytes)
+}
+
 /// Reconstruct a trie from bytes a [`BytesSource`] produced (the inverse of
 /// `try_page`'s serialization).
 pub(crate) fn decode<U: Update>(source: &dyn BytesSource) -> UpdatesTyped<U> {
-    let bytes = timely::bytes::arc::BytesMut::from(source.load()).freeze();
-    Updates::<U>::read_from(bytes).into_typed()
+    read::<U>(source).into_typed()
 }
