@@ -50,6 +50,31 @@ pub fn no_compaction(_time: &Time, antichain: &mut Antichain<Time>) {
     antichain.insert(Time::minimum());
 }
 
+/// Build the probe key and the value-binding closure for one delta-join stage.
+///
+/// Shared by both backends' `delta_stage`: what a stage probes with, and what it
+/// does with a match, is a property of the plan, not of the substrate.
+pub fn stage_probe(kind: &st::StageKind) -> (impl Fn(&Prefix) -> Value + Clone + 'static, Option<usize>) {
+    let kind = *kind;
+    let probe = move |prefix: &Prefix| match kind {
+        // Probe by the bound attribute; the matched value binds another.
+        st::StageKind::Propose { key, .. } => prefix[key].clone(),
+        // Both attributes are bound: probe the pair, keep the binding. The
+        // matched multiplicity still multiplies in, which is what makes this the
+        // multiset join rather than an existence test.
+        st::StageKind::Validate { key, val } => Value::Tuple(vec![prefix[key].clone(), prefix[val].clone()]),
+    };
+    let bind = match kind { st::StageKind::Propose { bind, .. } => Some(bind), st::StageKind::Validate { .. } => None };
+    (probe, bind)
+}
+
+/// Extend a prefix with a matched value, for a `Propose`; a `Validate` leaves it.
+pub fn stage_extend(prefix: &Prefix, bind: Option<usize>, val: &Value) -> Prefix {
+    let mut prefix = prefix.clone();
+    if let Some(bind) = bind { prefix[bind] = val.clone(); }
+    prefix
+}
+
 /// A rendering substrate: a differential container plus the leaf operators over
 /// it. Collections are the plain container-generic `Collection<'s, Time, C>`;
 /// only the arrangement type (`Arr`) is substrate-specific, and the walk only

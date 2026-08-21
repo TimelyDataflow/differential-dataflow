@@ -162,7 +162,7 @@ impl ScopeLower {
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
             Expr::Concat(es)    => { let rs: Vec<st::Ref> = es.iter().map(|e| self.lower_expr(e)).collect(); self.push(st::Node::Concat(rs)) },
-            Expr::DeltaJoin { atoms, attrs, projection } => {
+            Expr::DeltaJoin { atoms, projection } => {
                 let inputs: Vec<st::Ref> = atoms.iter().map(|a| self.lower_expr(&a.input)).collect();
                 let body: Vec<st::Atom> = atoms.iter().zip(&inputs)
                     .map(|(a, r)| st::Atom { input: r.clone(), key: a.key, val: a.val })
@@ -171,8 +171,7 @@ impl ScopeLower {
                 let join = self.push(st::Node::DeltaJoin { atoms: body, paths });
                 // The node emits `(Tuple(attributes), ())`; the head runs as an
                 // ordinary projection over it, so every backend's existing
-                // projection machinery applies. `attrs` is implied by the body.
-                let _ = attrs;
+                // projection machinery applies.
                 self.push(st::Node::Linear { input: join, ops: vec![LinearOp::Project(projection.clone())] })
             },
         }

@@ -17,7 +17,7 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use smallvec::SmallVec;
 use smallvec::smallvec as svec;
 
-use crate::backend::{no_compaction, Backend, Prefix};
+use crate::backend::{no_compaction, stage_extend, stage_probe, Backend, Prefix};
 use crate::parse::{Projection, Reducer};
 use crate::scope_ir as st;
 use crate::ir::{LinearOp, Diff, Time, Value, eval};
@@ -102,31 +102,6 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
         }
         results.into_iter().map(move |((k, v), t_delta, d)| ((k, v), t_in.join(&t_delta), d_in * d))
     }).as_collection()
-}
-
-/// Build the probe key and the value-binding closure for one delta-join stage.
-///
-/// Shared by both backends' `delta_stage`: what a stage probes with, and what it
-/// does with a match, is a property of the plan, not of the substrate.
-pub(crate) fn stage_probe(kind: &st::StageKind) -> (impl Fn(&Prefix) -> Row + Clone + 'static, Option<usize>) {
-    let kind = *kind;
-    let probe = move |prefix: &Prefix| match kind {
-        // Probe by the bound attribute; the matched value binds another.
-        st::StageKind::Propose { key, .. } => prefix[key].clone(),
-        // Both attributes are bound: probe the pair, keep the binding. The
-        // matched multiplicity still multiplies in, which is what makes this the
-        // multiset join rather than an existence test.
-        st::StageKind::Validate { key, val } => Value::Tuple(vec![prefix[key].clone(), prefix[val].clone()]),
-    };
-    let bind = match kind { st::StageKind::Propose { bind, .. } => Some(bind), st::StageKind::Validate { .. } => None };
-    (probe, bind)
-}
-
-/// Extend a prefix with a matched value, for a `Propose`; a `Validate` leaves it.
-pub(crate) fn stage_extend(prefix: &Prefix, bind: Option<usize>, val: &Row) -> Prefix {
-    let mut prefix = prefix.clone();
-    if let Some(bind) = bind { prefix[bind] = val.clone(); }
-    prefix
 }
 
 /// The vec rendering substrate.

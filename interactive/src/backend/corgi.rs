@@ -23,7 +23,7 @@ use differential_dataflow::trace::chunk::{Chunk, ChunkBatcher, ChunkBuilder};
 use corgi::arrange::gather;
 use corgi::Value as CValue;
 
-use crate::backend::{no_compaction, Backend, Prefix};
+use crate::backend::{no_compaction, stage_extend, stage_probe, Backend, Prefix};
 use crate::corgi::chunk::{recover_key, CorgiChunk, CorgiChunker};
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::join::CorgiJoinBackend;
@@ -390,7 +390,6 @@ impl Backend for CorgiBackend {
     ) -> differential_dataflow::VecCollection<'s, Time, (Prefix, Time), Diff> {
         use differential_dogs3::operators::half_join::{cursors::BlobList, half_join_with_tactic};
         use crate::corgi::half_join::CorgiHalfJoinTactic;
-        use crate::backend::vec::{stage_extend, stage_probe};
 
         let (probe, bind) = stage_probe(kind);
         let requests = stream.map(move |(prefix, payload)| (probe(&prefix), prefix, payload));

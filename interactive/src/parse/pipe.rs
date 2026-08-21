@@ -290,7 +290,7 @@ impl Parser {
         );
         let projection = self.parse_projection();
         self.attrs = saved;
-        Expr::DeltaJoin { atoms, attrs: names.len(), projection }
+        Expr::DeltaJoin { atoms, projection }
     }
 
     fn parse_join_arg(&mut self) -> Expr {

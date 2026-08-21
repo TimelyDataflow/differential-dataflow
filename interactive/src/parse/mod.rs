@@ -138,11 +138,10 @@ pub enum Expr {
     /// A multiway equijoin over a rule body, evaluated as a delta query.
     ///
     /// `atoms` name the relations and the attributes they bind; two atoms
-    /// binding the same attribute must agree on its value. `attrs` is how many
-    /// distinct attributes the body mentions. `projection` is the head: it is
-    /// applied to a row whose key is `Tuple(attribute values)`, so an attribute
-    /// name in the head resolves to `$0[i]`.
-    DeltaJoin { atoms: Vec<DeltaAtom>, attrs: usize, projection: Projection },
+    /// binding the same attribute must agree on its value. `projection` is the
+    /// head: it is applied to a row whose key is `Tuple(attribute values)`, so
+    /// an attribute name in the head resolves to `$0[i]`.
+    DeltaJoin { atoms: Vec<DeltaAtom>, projection: Projection },
 }
 
 #[derive(Debug)]
