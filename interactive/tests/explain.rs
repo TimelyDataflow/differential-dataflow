@@ -669,3 +669,81 @@ fn corgi_agrees_on_two_query_explanation() {
     assert_explained_backends_agree(SCC_ROW, SCC_SHAPES, &inputs, &qs);
 }
 
+
+// ===== Delta joins =====
+//
+// A delta join's provenance rule is not the binary join's. Its output row is
+// the complete binding, so each atom's contributing row is a *projection* of
+// the output rather than something a forward pair table has to rebuild. What a
+// projection cannot recover is the atom row's own iteration chain, which is
+// where these tests bite: the second program puts rule bodies inside an
+// iterating scope, so an atom may have been produced rounds before the output
+// that names it.
+
+/// A triangle at the root scope: three atoms over one relation, three delta
+/// paths, no iteration.
+const TRIANGLE_DELTA_ROW: &str = r#"
+    let edges = input 0 | key($0[0] ; $0[1]);
+    export "result" = delta_join {
+        edges(a, b),
+        edges(b, c),
+        edges(a, c),
+    } => (a ; b, c);
+"#;
+
+/// `SCC_ROW` with both trim steps as rule bodies — the same query, and the same
+/// output, reached through delta paths inside the iterating `outer` scope.
+const SCC_DELTA_ROW: &str = r#"
+    let edges = input 0 | key($0[0] ; $0[1]);
+    let trans = edges | key($1 ; $0);
+    outer: {
+        let scc = edges + trim;
+        fwd: {
+            let nodes = edges | key($1 ; $1) | enter_at($1[0]);
+            let labels = proposals + nodes | min;
+            var proposals = labels | join(scc, ($2 ; $1));
+        }
+        let trim_fwd = delta_join {
+            edges(s, d),
+            fwd::labels(s, l),
+            fwd::labels(d, l),
+        } => (d ; s);
+        bwd: {
+            let nodes = trans | key($1 ; $1) | enter_at($1[0]);
+            let labels = proposals + nodes | min;
+            var proposals = labels | join(trim_fwd, ($2 ; $1));
+        }
+        let trim_bwd = delta_join {
+            trans(s, d),
+            bwd::labels(s, l),
+            bwd::labels(d, l),
+        } => (d ; s);
+        var trim = trim_bwd - edges;
+    }
+    export "result" = outer::scc;
+"#;
+
+/// The delta spelling of SCC computes the same thing as the binary one, so a
+/// difference in the explanations is a difference in the rule, not the program.
+#[test]
+fn scc_delta_row_matches_scc_row() {
+    let inputs = vec![gen_edges(50, 55)];
+    assert_eq!(
+        export_rows(&optimized(SCC_DELTA_ROW), &inputs, "result"),
+        export_rows(&optimized(SCC_ROW), &inputs, "result"),
+    );
+}
+
+/// Every triangle is explained by a demand-set that regenerates it.
+#[test]
+fn delta_triangle_explanations_sufficient() {
+    let sizes = assert_all_rows_sufficient(TRIANGLE_DELTA_ROW, SCC_SHAPES, &[gen_edges(20, 40)]);
+    assert!(!sizes.is_empty(), "the fixture should contain triangles");
+}
+
+/// Every scc edge is explained, with the trims as rule bodies inside the loop.
+#[test]
+fn scc_delta_row_explanations_sufficient_small() {
+    let sizes = assert_all_rows_sufficient(SCC_DELTA_ROW, SCC_SHAPES, &[gen_edges(50, 55)]);
+    assert_eq!(sizes.len(), 12, "the same 12 scc edges as the binary spelling");
+}

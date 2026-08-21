@@ -1049,12 +1049,52 @@ impl<'a> Reverse<'a> {
                 self.contribs.entry(lt).or_default().push(lc);
                 self.contribs.entry(rt).or_default().push(rc);
             }
-            // The rendezvous a delta join expresses is an n-ary equijoin, so its
-            // provenance rule is `emit_lookup_join` generalized past two sides —
-            // derivable from `atoms` alone, since the plan is only how the join
-            // is evaluated, not what it means. Not yet written.
-            Node::DeltaIndex { .. } | Node::DeltaJoin { .. } => {
-                unimplemented!("explain does not yet cover delta joins")
+            // An index is `arrange` of a re-keying, so it explains as that
+            // re-keying does. No demand normally reaches one — a delta join
+            // attributes to its atoms, and the indexes are derived from the
+            // same atoms, so charging both would count them twice — but the
+            // rule is here rather than a panic, because being dead is a
+            // property of the current plan and not of the node.
+            Node::DeltaIndex { input, orient } => {
+                let ops = orient.ops();
+                match ops.as_slice() {
+                    [] => self.push(ex, path, input, dep_this, out_user_len),
+                    [LinearOp::Project(proj)] => {
+                        let target = resolve(self.orig, path, input);
+                        let side = self.side(&target);
+                        let contrib = ex.emit_lookup_lossy(dep_this, &side, out_shape, out_user_len, proj);
+                        self.contribs.entry(target).or_default().push(contrib);
+                    }
+                    _ => unreachable!("an orientation is at most one projection"),
+                }
+            }
+            // A delta join's output row is the *complete binding*, so each
+            // atom's contributing row is a projection of it. That is why this
+            // needs no forward pair table where `Node::Join` does: a binary
+            // join's output carries the projection of both sides, not the sides
+            // themselves, so the rule there has to rebuild the pairing.
+            //
+            // What a projection cannot recover is the atom row's own iteration
+            // chain — the binding carries values, not times, and an atom may
+            // have been produced rounds before the output. So each projected
+            // row is looked up against the atom's own host form, which supplies
+            // that chain and enforces that it precedes the output's.
+            //
+            // The rule reads `atoms`, never `paths`: the plan is how the join
+            // is evaluated, and provenance is a question about what it means.
+            Node::DeltaJoin { atoms, .. } => {
+                for atom in atoms {
+                    let target = resolve(self.orig, path, &atom.input);
+                    let side = self.side(&target);
+                    let (_, v_in) = side.shape;
+                    // (attribute `key` ; attribute `val`'s fields ++ chain ++ q)
+                    let mut val: Vec<Term> = (0..v_in).map(|c| fld(f(0, atom.val), c)).collect();
+                    val.extend(fidx(1, 0, out_user_len + 1));
+                    let row = Projection { key: f(0, atom.key), val: tup(val) };
+                    let projected = ex.project(dep_this.clone(), row);
+                    let contrib = ex.emit_lookup_shape_preserving(projected, &side, out_user_len);
+                    self.contribs.entry(target).or_default().push(contrib);
+                }
             }
         }
     }
