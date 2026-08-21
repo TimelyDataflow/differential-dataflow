@@ -17,9 +17,11 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
     let edges = rows(&[&[1, 2], &[2, 3], &[3, 4], &[5, 6], &[4, 2]]);
     match prog {
         "reach" => vec![edges, rows(&[&[1]])],
-        "scc" => vec![edges],
+        "scc" | "scc_delta" => vec![edges],
         // stable: edges (l_node, l_pref, r_node, r_pref)
         "stable" => vec![rows(&[&[1, 1, 10, 1], &[1, 2, 11, 1], &[2, 1, 10, 2], &[2, 2, 11, 2]])],
+        // delta_triangle: a graph with triangles, a chord, a self-loop and a dangling edge.
+        "delta_triangle" => vec![rows(&[&[1, 2], &[2, 3], &[1, 3], &[3, 4], &[1, 4], &[2, 4], &[5, 5], &[6, 7]])],
         "unnest" => vec![rows(&[&[1, 2], &[3, 4]])],
         "adt" => vec![edges.clone()],
         // ast: pairs; small and non-negative, per the program's stated input contract.
@@ -73,6 +75,8 @@ fn assert_backends_agree(prog: &str) {
 
 #[test] fn reach() { assert_backends_agree("reach"); }
 #[test] fn scc() { assert_backends_agree("scc"); }
+#[test] fn scc_delta() { assert_backends_agree("scc_delta"); }
+#[test] fn delta_triangle() { assert_backends_agree("delta_triangle"); }
 #[test] fn stable() { assert_backends_agree("stable"); }
 #[test] fn unnest() { assert_backends_agree("unnest"); }
 #[test] fn adt() { assert_backends_agree("adt"); }

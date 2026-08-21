@@ -172,7 +172,7 @@ impl Order {
 }
 
 /// What one stage of a delta path does with the atom it probes.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum StageKind {
     /// Extend the binding: probe by `key`, which is already bound, and bind
     /// `bind` from the matched value.

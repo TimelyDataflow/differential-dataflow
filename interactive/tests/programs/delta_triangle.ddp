@@ -1,0 +1,13 @@
+-- Pins the `delta_join` lowering: a triangle over one relation, which needs all
+-- three index orientations (forward, reverse, and the pair index) and one delta
+-- path per atom. Two atoms are the same relation, so the paths must be told
+-- apart by position rather than by identity.
+-- input 0: edges (src, dst ;)
+
+let edges = input 0 | key($0[0] ; $0[1]);
+
+export "result" = delta_join {
+    edges(a, b),
+    edges(b, c),
+    edges(a, c),
+} => (a ; b, c);

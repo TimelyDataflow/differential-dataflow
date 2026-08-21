@@ -16,16 +16,39 @@ pub mod corgi;
 use timely::Container;
 use timely::order::Product;
 use timely::dataflow::Scope;
-use timely::progress::Timestamp;
-use differential_dataflow::Collection;
+use timely::progress::{Antichain, Timestamp};
+use differential_dataflow::{Collection, VecCollection};
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::dynamic::pointstamp::PointStampSummary;
 use differential_dataflow::dynamic::feedback_summary;
 use differential_dataflow::collection::containers::{Enter, Leave, ResultsIn};
 
-use crate::ir::{Time, LinearOp};
+use crate::ir::{Diff, Time, LinearOp, Value};
 use crate::parse::{Projection, Reducer};
 use crate::scope_ir as st;
+
+/// A partial binding of a delta join's attributes: one `Value` per attribute,
+/// `unit` where nothing is bound yet. It travels beside a *payload* time and is
+/// internal to the join — it never reaches a dataflow edge as a DDIR row.
+pub type Prefix = Vec<Value>;
+
+/// A delta join's indexes must not compact logically: the construction rests on
+/// telling "strictly before" from "at the same time" in the total order on
+/// times, and compaction advances times to a frontier, which is exactly what
+/// erases that distinction.
+///
+/// Holding the frontier at the minimum is the always-correct answer for any
+/// timestamp. A tighter one would name the largest time strictly below the
+/// operator's own frontier, but [`Time`] is `Product<u64, PointStamp<u64>>` and
+/// has no predecessor: decrementing a coordinate is unsound, because a lattice
+/// join against the decremented frontier can carry an update from before the
+/// boundary to after it. (Take `d = (0, [3, 5])`, `f = (0, [3, 4])` and an
+/// update at `(0, [2, 9])`, which is below `d`; advanced by `f` it becomes
+/// `(0, [3, 9])`, which is above.) So: correct first, and this retention is the
+/// cost the construction should be measured on.
+pub fn no_compaction(_time: &Time, antichain: &mut Antichain<Time>) {
+    antichain.insert(Time::minimum());
+}
 
 /// A rendering substrate: a differential container plus the leaf operators over
 /// it. Collections are the plain container-generic `Collection<'s, Time, C>`;
@@ -56,6 +79,32 @@ pub trait Backend {
         if ops.is_empty() { Self::arrange(c) } else { Self::arrange(Self::linear(c, ops, 0)) }
     }
 
+    /// Row egress and ingress at the delta join's boundary.
+    ///
+    /// A delta join's intermediate value is a *partial binding*, which is not a
+    /// DDIR row and has no columnar form until the join completes — so the
+    /// prefix stream is rows in every backend, and each one says here how its
+    /// container converts. Everything between the two conversions is the same
+    /// walk for all backends; only [`Self::delta_stage`] differs.
+    fn to_rows<'s>(c: Collection<'s, Time, Self::Container>) -> VecCollection<'s, Time, (Value, Value), Diff>;
+    /// The inverse of [`Self::to_rows`].
+    fn from_rows<'s>(c: VecCollection<'s, Time, (Value, Value), Diff>) -> Collection<'s, Time, Self::Container>;
+
+    /// One stage of a delta path: a single `half_join` of the prefix stream
+    /// against `index`.
+    ///
+    /// Each prefix travels with a *payload* time, and the collection's own time
+    /// stays at the delta's. The stage keeps updates whose arrangement time
+    /// precedes the delta's own time in the total order (`strict` decides
+    /// whether equality counts), advances the payload by the lattice join of
+    /// the two, and — for a `Propose` — binds the matched value.
+    fn delta_stage<'s>(
+        stream: VecCollection<'s, Time, (Prefix, Time), Diff>,
+        index: Self::Arr<'s>,
+        kind: &st::StageKind,
+        strict: bool,
+    ) -> VecCollection<'s, Time, (Prefix, Time), Diff>;
+
     /// Render a delta join: one path per atom, concatenated.
     ///
     /// `atoms[i]` is atom `i`'s collection — the deltas that drive path `i`.
@@ -66,7 +115,43 @@ pub trait Backend {
         body: &[st::Atom],
         paths: &[Vec<st::Stage>],
         indexes: Vec<Vec<Self::Arr<'s>>>,
-    ) -> Collection<'s, Time, Self::Container>;
+    ) -> Collection<'s, Time, Self::Container> {
+        use differential_dataflow::AsCollection;
+        use timely::dataflow::operators::core::Map;
+        use timely::dataflow::operators::Concatenate;
+
+        let n = st::attr_count(body);
+        let scope = atoms[0].inner.scope();
+        let mut fragments = Vec::with_capacity(paths.len());
+
+        for (i, path) in paths.iter().enumerate() {
+            // The delta's own row is the binding it makes, and the payload
+            // starts at the delta's own time — which is also the update's.
+            let (akey, aval) = (body[i].key, body[i].val);
+            let mut cur: VecCollection<'s, Time, (Prefix, Time), Diff> = Self::to_rows(atoms[i].clone())
+                .inner
+                .map(move |((k, v), t, d)| {
+                    let mut prefix = vec![Value::unit(); n];
+                    prefix[akey] = k;
+                    prefix[aval] = v;
+                    ((prefix, t.clone()), t, d)
+                })
+                .as_collection();
+
+            for (stage, index) in path.iter().zip(&indexes[i]) {
+                cur = Self::delta_stage(cur, index.clone(), &stage.kind, stage.order.strict());
+            }
+
+            // Leave the delta region: the payload is the moment the match takes
+            // effect, and it is at or beyond the update's own time in the
+            // lattice order, so the capability held already covers it.
+            fragments.push(cur.inner.map(|((prefix, payload), _time, diff)| {
+                ((Value::Tuple(prefix), Value::unit()), payload, diff)
+            }));
+        }
+
+        Self::from_rows(scope.concatenate(fragments).as_collection())
+    }
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
 }

@@ -23,7 +23,7 @@ use differential_dataflow::trace::chunk::{Chunk, ChunkBatcher, ChunkBuilder};
 use corgi::arrange::gather;
 use corgi::Value as CValue;
 
-use crate::backend::Backend;
+use crate::backend::{no_compaction, Backend, Prefix};
 use crate::corgi::chunk::{recover_key, CorgiChunk, CorgiChunker};
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::join::CorgiJoinBackend;
@@ -355,16 +355,57 @@ impl Backend for CorgiBackend {
         }
     }
 
-    fn delta_join<'s>(
-        _atoms: Vec<Collection<'s, Time, CC>>,
-        _body: &[st::Atom],
-        _paths: &[Vec<st::Stage>],
-        _indexes: Vec<Vec<Self::Arr<'s>>>,
-    ) -> Collection<'s, Time, CC> {
-        // `half_join`'s cursor path requires `Tr::Batch: Navigable`, and `CorgiChunk` is
-        // deliberately not one. The corgi delta join is a `HalfJoinTactic` over the columnar
-        // chunks, the same shape as `CorgiJoinBackend` and `CorgiReduceBackend`.
-        unimplemented!("the corgi backend does not yet render delta joins; use --backend=vec")
+    /// Rows leave and re-enter corgi columns at the delta join's boundary, because a partial
+    /// binding has no columnar form; `CorgiContainer`'s own transcode is that boundary.
+    fn to_rows<'s>(c: Collection<'s, Time, CC>) -> differential_dataflow::VecCollection<'s, Time, (Row, Row), Diff> {
+        c.inner
+            .unary(Pipeline, "CorgiDeltaRows", |_, _| {
+                |input, output| {
+                    input.for_each(|cap, data| {
+                        output.session(&cap).give_container(&mut std::mem::take(data).into_updates());
+                    });
+                }
+            })
+            .as_collection()
+    }
+
+    fn from_rows<'s>(c: differential_dataflow::VecCollection<'s, Time, (Row, Row), Diff>) -> Collection<'s, Time, CC> {
+        c.inner
+            .unary(Pipeline, "CorgiDeltaColumns", |_, _| {
+                |input, output| {
+                    input.for_each(|cap, data| {
+                        let mut cc = CorgiContainer::from_updates(std::mem::take(data));
+                        output.session(&cap).give_container(&mut cc);
+                    });
+                }
+            })
+            .as_collection()
+    }
+
+    fn delta_stage<'s>(
+        stream: differential_dataflow::VecCollection<'s, Time, (Prefix, Time), Diff>,
+        index: Self::Arr<'s>,
+        kind: &st::StageKind,
+        strict: bool,
+    ) -> differential_dataflow::VecCollection<'s, Time, (Prefix, Time), Diff> {
+        use differential_dogs3::operators::half_join::{cursors::BlobList, half_join_with_tactic};
+        use crate::corgi::half_join::CorgiHalfJoinTactic;
+        use crate::backend::vec::{stage_extend, stage_probe};
+
+        let (probe, bind) = stage_probe(kind);
+        let requests = stream.map(move |(prefix, payload)| (probe(&prefix), prefix, payload));
+        // `Pipeline`: the corgi backend is single-worker and its arrange does not exchange, so
+        // the deltas are already where the arrangement they probe is.
+        half_join_with_tactic(
+            requests.inner,
+            index,
+            Pipeline,
+            no_compaction,
+            |_timer, _count| false,
+            BlobList::new(strict),
+            CorgiHalfJoinTactic::new(move |_k: &Row, prefix: &Prefix, val: &Row| stage_extend(prefix, bind, val), strict),
+        )
+        .as_collection()
     }
 
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {

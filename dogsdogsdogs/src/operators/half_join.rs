@@ -491,7 +491,13 @@ pub mod cursors {
         }
     }
 
-    struct BlobList<D, T: Timestamp, R> {
+    /// The reference [`Batcher`]: stages updates and releases those the arrangement frontier
+    /// unblocks under the *total order* on times.
+    ///
+    /// Public because the release rule, not the cursor walk, is the subtle half of a half join,
+    /// and any [`HalfJoinTactic`] over row updates wants exactly this rule rather than its own
+    /// transcription of it.
+    pub struct BlobList<D, T: Timestamp, R> {
         stage: Vec<(T, D, R)>,
         blobs: Vec<VecDeque<(T, D, R)>>,
         lower: MutableAntichain<T>,
@@ -501,7 +507,7 @@ pub mod cursors {
 
     impl<D, T: Timestamp, R> BlobList<D, T, R> {
         /// Allocates an empty list that releases updates under the `strict` comparison.
-        fn new(strict: bool) -> Self {
+        pub fn new(strict: bool) -> Self {
             BlobList { stage: Vec::new(), blobs: Vec::new(), lower: MutableAntichain::new(), strict }
         }
     }
