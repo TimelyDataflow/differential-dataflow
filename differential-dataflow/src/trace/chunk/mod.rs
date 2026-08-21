@@ -58,6 +58,7 @@ use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 use crate::lattice::Lattice;
 use crate::trace::{Batch, BatchReader, Description, Navigable};
+use crate::trace::implementations::spine_fueled::SpineBatch;
 use crate::trace::cursor::Cursor;
 use crate::trace::implementations::BatchContainer;
 
@@ -268,12 +269,17 @@ impl<C: Chunk> BatchReader for ChunkBatch<C> {
     fn description(&self) -> &Description<Self::Time> { &self.description }
 }
 
-impl<C: Chunk + Default + 'static> Batch for ChunkBatch<C>
+impl<C: Chunk + Default + 'static> SpineBatch for ChunkBatch<C>
 where
     C::Time: timely::progress::Timestamp + Lattice + Ord,
 {
     type Merger = ChunkBatchMerger<C>;
+}
 
+impl<C: Chunk + Default + 'static> Batch for ChunkBatch<C>
+where
+    C::Time: timely::progress::Timestamp + Lattice + Ord,
+{
     fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
         use timely::progress::Timestamp;
         let since = Antichain::from_elem(Self::Time::minimum());
@@ -560,7 +566,7 @@ where
     fn len(chunk: &C) -> usize { chunk.len() }
 }
 
-/// The resumable [`Batch::Merger`] for [`ChunkBatch`]: merges two batches and advances
+/// The resumable [`SpineBatch::Merger`] for [`ChunkBatch`]: merges two batches and advances
 /// their times to the compaction frontier, a fuel-bounded step at a time.
 ///
 /// Each step pipelines [`merge`](Chunk::merge) → [`advance`](Chunk::advance) →
@@ -591,7 +597,7 @@ pub struct ChunkBatchMerger<C: Chunk> {
     complete: bool,
 }
 
-impl<C> crate::trace::Merger<ChunkBatch<C>> for ChunkBatchMerger<C>
+impl<C> crate::trace::implementations::spine_fueled::Merger<ChunkBatch<C>> for ChunkBatchMerger<C>
 where
     C: Chunk + Default + 'static,
     C::Time: timely::progress::Timestamp + Lattice + Ord + 'static,

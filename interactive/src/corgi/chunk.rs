@@ -618,7 +618,8 @@ where
 mod test {
     use super::*;
     use differential_dataflow::trace::chunk::{ChunkBatchMerger, is_graded};
-    use differential_dataflow::trace::{Description, Merger};
+    use differential_dataflow::trace::Description;
+    use differential_dataflow::trace::implementations::spine_fueled::Merger;
     use std::collections::BTreeMap;
 
     fn xorshift(s: &mut u64) -> u64 { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; *s }

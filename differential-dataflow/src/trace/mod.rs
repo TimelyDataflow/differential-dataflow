@@ -203,19 +203,12 @@ pub trait BatchReader : Sized {
 }
 
 /// An immutable collection of updates.
+///
+/// This trait asks only that batches can be minted empty over an indicated interval,
+/// which trace maintenance uses to pad out otherwise empty intervals of time. Opinions
+/// about how batches merge belong to individual trace implementations (for example
+/// [`SpineBatch`](crate::trace::implementations::spine_fueled::SpineBatch)).
 pub trait Batch : BatchReader + Sized {
-    /// A type used to progressively merge batches.
-    type Merger: Merger<Self>;
-
-    /// Initiates the merging of consecutive batches.
-    ///
-    /// The result of this method can be exercised to eventually produce the same result
-    /// that a call to `self.merge(other)` would produce, but it can be done in a measured
-    /// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<Self::Time>) -> Self::Merger {
-        Self::Merger::new(self, other, compaction_frontier)
-    }
-
     /// Produce an empty batch over the indicated interval.
     fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self;
 }
@@ -274,32 +267,13 @@ pub trait Builder: Sized {
     fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output;
 }
 
-/// Represents a merge in progress.
-pub trait Merger<Output: Batch> {
-    /// Creates a new merger to merge the supplied batches, optionally compacting
-    /// up to the supplied frontier.
-    fn new(source1: &Output, source2: &Output, compaction_frontier: AntichainRef<Output::Time>) -> Self;
-    /// Perform some amount of work, decrementing `fuel`.
-    ///
-    /// If `fuel` is non-zero after the call, the merging is complete and
-    /// one should call `done` to extract the merged results.
-    fn work(&mut self, source1: &Output, source2: &Output, fuel: &mut isize);
-    /// Extracts merged results.
-    ///
-    /// This method should only be called after `work` has been called and
-    /// has not brought `fuel` to zero. Otherwise, the merge is still in
-    /// progress.
-    fn done(self) -> Output;
-}
-
-
 /// Blanket implementations for reference counted batches.
 pub mod rc_blanket_impls {
 
     use std::rc::Rc;
 
-    use timely::progress::{Antichain, frontier::AntichainRef};
-    use super::{Batch, BatchReader, Builder, Merger, Navigable, Cursor, Description};
+    use timely::progress::Antichain;
+    use super::{Batch, BatchReader, Builder, Navigable, Cursor, Description};
 
     impl<B: BatchReader + Navigable> Navigable for Rc<B> {
         /// The type used to enumerate the batch's contents.
@@ -374,7 +348,6 @@ pub mod rc_blanket_impls {
 
     /// An immutable collection of updates.
     impl<B: Batch> Batch for Rc<B> {
-        type Merger = RcMerger<B>;
         fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
             Rc::new(B::empty(lower, upper))
         }
@@ -396,13 +369,4 @@ pub mod rc_blanket_impls {
         }
     }
 
-    /// Wrapper type for merging reference counted batches.
-    pub struct RcMerger<B:Batch> { merger: B::Merger }
-
-    /// Represents a merge in progress.
-    impl<B:Batch> Merger<Rc<B>> for RcMerger<B> {
-        fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
-        fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
-        fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
-    }
 }

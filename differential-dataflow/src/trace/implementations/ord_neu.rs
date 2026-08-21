@@ -248,7 +248,8 @@ pub mod val_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
+    use crate::trace::{Batch, BatchReader, Builder, Cursor, Description};
+    use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
 
@@ -323,13 +324,15 @@ pub mod val_batch {
         fn description(&self) -> &Description<layout::Time<L>> { &self.description }
     }
 
-    impl<L: Layout> Batch for OrdValBatch<L> {
+    impl<L: Layout> SpineBatch for OrdValBatch<L> {
         type Merger = OrdValMerger<L>;
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
             OrdValMerger::new(self, other, compaction_frontier)
         }
+    }
 
+    impl<L: Layout> Batch for OrdValBatch<L> {
         fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
             use timely::progress::Timestamp;
             Self {
@@ -740,7 +743,8 @@ pub mod key_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
+    use crate::trace::{Batch, BatchReader, Builder, Cursor, Description};
+    use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
 
@@ -824,13 +828,15 @@ pub mod key_batch {
         fn description(&self) -> &Description<layout::Time<L>> { &self.description }
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Batch for OrdKeyBatch<L> {
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> SpineBatch for OrdKeyBatch<L> {
         type Merger = OrdKeyMerger<L>;
 
         fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
             OrdKeyMerger::new(self, other, compaction_frontier)
         }
+    }
 
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Batch for OrdKeyBatch<L> {
         fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
             use timely::progress::Timestamp;
             Self {
