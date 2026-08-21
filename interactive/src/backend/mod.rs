@@ -46,6 +46,27 @@ pub trait Backend {
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container>;
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, Self::Container>;
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s>;
+
+    /// Arrange a relation for delta-join probes. The three orientations are
+    /// re-keyings, so this is `arrange` composed with a projection and every
+    /// backend gets it for free; see [`st::Node::DeltaIndex`] for why these are
+    /// separate arrangements rather than shared with `arrange`.
+    fn delta_index<'s>(c: Collection<'s, Time, Self::Container>, orient: st::Orient) -> Self::Arr<'s> {
+        let ops = orient.ops();
+        if ops.is_empty() { Self::arrange(c) } else { Self::arrange(Self::linear(c, ops, 0)) }
+    }
+
+    /// Render a delta join: one path per atom, concatenated.
+    ///
+    /// `atoms[i]` is atom `i`'s collection — the deltas that drive path `i`.
+    /// `indexes[i][j]` is the arrangement `paths[i][j]` probes, resolved.
+    /// Output rows are `(Tuple(attribute values), ())`.
+    fn delta_join<'s>(
+        atoms: Vec<Collection<'s, Time, Self::Container>>,
+        body: &[st::Atom],
+        paths: &[Vec<st::Stage>],
+        indexes: Vec<Vec<Self::Arr<'s>>>,
+    ) -> Collection<'s, Time, Self::Container>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
 }
@@ -145,6 +166,19 @@ pub fn render_tree<'s, B: Backend>(
                     st::Node::Inspect { input, label } => {
                         let c = resolve(&items, &imports, &var_cols, input).collection();
                         Rendered::Collection(B::inspect(c, label.clone()))
+                    },
+                    st::Node::DeltaIndex { input, orient } => {
+                        let c = resolve(&items, &imports, &var_cols, input).collection();
+                        Rendered::Arrangement(B::delta_index(c, *orient))
+                    },
+                    st::Node::DeltaJoin { atoms, paths } => {
+                        let cols = atoms.iter()
+                            .map(|a| resolve(&items, &imports, &var_cols, &a.input).collection())
+                            .collect();
+                        let indexes = paths.iter()
+                            .map(|p| p.iter().map(|s| resolve(&items, &imports, &var_cols, &s.index).arrange()).collect())
+                            .collect();
+                        Rendered::Collection(B::delta_join(cols, atoms, paths, indexes))
                     },
                 };
                 items.push(RItem::Op(rendered));

@@ -53,6 +53,7 @@ fn expr_free_names<'a>(expr: &'a Expr, out: &mut BTreeSet<&'a str>) {
             | Expr::Inspect(e, _) | Expr::Arrange(e) => expr_free_names(e, out),
         Expr::Join(l, r, _) => { expr_free_names(l, out); expr_free_names(r, out); },
         Expr::Concat(es) => { for e in es { expr_free_names(e, out); } },
+        Expr::DeltaJoin { atoms, .. } => { for a in atoms { expr_free_names(&a.input, out); } },
     }
 }
 
@@ -161,7 +162,61 @@ impl ScopeLower {
             },
             Expr::Inspect(e, l) => { let r = self.lower_expr(e); self.push(st::Node::Inspect { input: r, label: l.clone() }) },
             Expr::Concat(es)    => { let rs: Vec<st::Ref> = es.iter().map(|e| self.lower_expr(e)).collect(); self.push(st::Node::Concat(rs)) },
+            Expr::DeltaJoin { atoms, attrs, projection } => {
+                let inputs: Vec<st::Ref> = atoms.iter().map(|a| self.lower_expr(&a.input)).collect();
+                let body: Vec<st::Atom> = atoms.iter().zip(&inputs)
+                    .map(|(a, r)| st::Atom { input: r.clone(), key: a.key, val: a.val })
+                    .collect();
+                let paths = (0..body.len()).map(|i| self.delta_path(&body, i)).collect();
+                let join = self.push(st::Node::DeltaJoin { atoms: body, paths });
+                // The node emits `(Tuple(attributes), ())`; the head runs as an
+                // ordinary projection over it, so every backend's existing
+                // projection machinery applies. `attrs` is implied by the body.
+                let _ = attrs;
+                self.push(st::Node::Linear { input: join, ops: vec![LinearOp::Project(projection.clone())] })
+            },
         }
+    }
+
+    /// The delta path driven by changes to `body[driver]`: visit every other
+    /// atom once, each time probing an index whose key is already bound.
+    ///
+    /// Two choices, both forced. *Which* atom comes next: any whose key or
+    /// value attribute is bound (an atom with neither would be a cartesian
+    /// product, which this construct does not express); among those, one with
+    /// *both* bound goes first, because testing a binding is cheaper than
+    /// extending it. *How* it is probed: both bound is a `Validate` against the
+    /// pair index, otherwise a `Propose` against whichever orientation the bound
+    /// attribute keys.
+    fn delta_path(&mut self, body: &[st::Atom], driver: usize) -> Vec<st::Stage> {
+        let mut bound = vec![false; body.iter().map(|a| a.key.max(a.val) + 1).max().unwrap_or(0)];
+        bound[body[driver].key] = true;
+        bound[body[driver].val] = true;
+
+        let mut todo: Vec<usize> = (0..body.len()).filter(|&j| j != driver).collect();
+        let mut stages = Vec::with_capacity(todo.len());
+        while !todo.is_empty() {
+            // Prefer an atom that only tests; fall back to one that extends.
+            let pick = todo.iter().position(|&j| bound[body[j].key] && bound[body[j].val])
+                .or_else(|| todo.iter().position(|&j| bound[body[j].key] || bound[body[j].val]))
+                .unwrap_or_else(|| panic!(
+                    "delta_join body is disconnected: no remaining atom shares an attribute with {:?}",
+                    todo.iter().map(|&j| (body[j].key, body[j].val)).collect::<Vec<_>>()));
+            let j = todo.remove(pick);
+            let (key, val) = (body[j].key, body[j].val);
+            let (orient, kind) = match (bound[key], bound[val]) {
+                (true, true)  => (st::Orient::Pair,    st::StageKind::Validate { key, val }),
+                (true, false) => (st::Orient::Forward, st::StageKind::Propose { key, bind: val }),
+                (false, true) => (st::Orient::Reverse, st::StageKind::Propose { key: val, bind: key }),
+                (false, false) => unreachable!("pick guarantees one attribute is bound"),
+            };
+            bound[key] = true;
+            bound[val] = true;
+            let index = self.push(st::Node::DeltaIndex { input: body[j].input.clone(), orient });
+            let order = if j > driver { st::Order::Later } else { st::Order::Earlier };
+            stages.push(st::Stage { atom: j, index, kind, order });
+        }
+        stages
     }
 }
 
@@ -305,6 +360,7 @@ fn collect_qualified(e: &Expr, scope: &str, out: &mut Vec<String>) {
         | Expr::LiftIter(e) | Expr::Reduce(e, _) | Expr::Inspect(e, _) | Expr::Arrange(e) => collect_qualified(e, scope, out),
         Expr::Join(l, r, _) => { collect_qualified(l, scope, out); collect_qualified(r, scope, out); },
         Expr::Concat(es) => for e in es { collect_qualified(e, scope, out); },
+        Expr::DeltaJoin { atoms, .. } => for a in atoms { collect_qualified(&a.input, scope, out); },
         Expr::Input(_) | Expr::Import(_) | Expr::Name(_) => {}
     }
 }

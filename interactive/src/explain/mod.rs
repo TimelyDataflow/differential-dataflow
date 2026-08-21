@@ -23,7 +23,7 @@
 //! will sit.
 
 use crate::ir::LinearOp;
-use crate::scope_ir::{Bind, Export, Import, Item, Node, Program, Ref, Scope, Source, Var};
+use crate::scope_ir::{Atom, Bind, Export, Import, Item, Node, Program, Ref, Scope, Source, Stage, Var};
 
 /// A value-producing site in an original tree: the `path` of `Sub` item
 /// indices from the root, then the site within that scope. Sites are ops and
@@ -81,6 +81,13 @@ fn clone_node(node: &Node, m: impl Fn(&Ref) -> Ref) -> Node {
         Node::Join { left, right, projection } => Node::Join { left: m(left), right: m(right), projection: projection.clone() },
         Node::Reduce { input, reducer } => Node::Reduce { input: m(input), reducer: reducer.clone() },
         Node::Inspect { input, label } => Node::Inspect { input: m(input), label: label.clone() },
+        Node::DeltaIndex { input, orient } => Node::DeltaIndex { input: m(input), orient: *orient },
+        Node::DeltaJoin { atoms, paths } => Node::DeltaJoin {
+            atoms: atoms.iter().map(|a| Atom { input: m(&a.input), key: a.key, val: a.val }).collect(),
+            paths: paths.iter()
+                .map(|p| p.iter().map(|s| Stage { index: m(&s.index), ..s.clone() }).collect())
+                .collect(),
+        },
     }
 }
 
@@ -339,6 +346,10 @@ fn walk_shapes(
                         Reducer::Count => (k, 1),
                         Reducer::Collect => (k, 1),
                     }),
+                    // An index is `arrange` of a re-keying, so its shape is the
+                    // re-keying's; a delta join emits the attribute tuple.
+                    Node::DeltaIndex { input, orient } => of(input).map(|s| apply_ops_arity(s, &orient.ops())),
+                    Node::DeltaJoin { atoms, .. } => Some((crate::scope_ir::attr_count(atoms), 0)),
                 };
                 if let Some(sh) = sh { shapes.insert(addr(Site::Op(i)), sh); }
             }
@@ -1037,6 +1048,13 @@ impl<'a> Reverse<'a> {
                 let (lc, rc) = ex.emit_lookup_join(dep_this, &ls, &rs, out_shape, out_user_len, projection);
                 self.contribs.entry(lt).or_default().push(lc);
                 self.contribs.entry(rt).or_default().push(rc);
+            }
+            // The rendezvous a delta join expresses is an n-ary equijoin, so its
+            // provenance rule is `emit_lookup_join` generalized past two sides —
+            // derivable from `atoms` alone, since the plan is only how the join
+            // is evaluated, not what it means. Not yet written.
+            Node::DeltaIndex { .. } | Node::DeltaJoin { .. } => {
+                unimplemented!("explain does not yet cover delta joins")
             }
         }
     }

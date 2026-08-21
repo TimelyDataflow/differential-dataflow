@@ -101,6 +101,100 @@ pub struct Bind {
     pub value: Ref,
 }
 
+/// An index into a delta join's attribute space. Attributes are the join
+/// variables of the rule body: two atoms binding the same attribute must agree.
+pub type Attr = usize;
+
+/// One atom of a delta-join body: a relation, and the two attributes its row
+/// binds. A DDIR row is a `(key, val)` pair, so an atom binds exactly two
+/// attributes; expose different columns by re-keying the relation first.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Atom {
+    /// The relation, as a collection. Changes to it drive one delta path.
+    pub input: Ref,
+    /// The attribute bound by the row's key.
+    pub key: Attr,
+    /// The attribute bound by the row's value.
+    pub val: Attr,
+}
+
+/// How many attributes a delta-join body mentions. Attribute indices are dense
+/// from zero, so this is one past the largest one any atom binds.
+pub fn attr_count(atoms: &[Atom]) -> usize {
+    atoms.iter().map(|a| a.key.max(a.val) + 1).max().unwrap_or(0)
+}
+
+/// How a relation is indexed for a delta-join probe. See [`Node::DeltaIndex`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Orient {
+    /// `key -> val`, the relation as it stands.
+    Forward,
+    /// `val -> key`, the relation reversed.
+    Reverse,
+    /// `(key, val) -> ()`, for an existence test.
+    Pair,
+}
+
+impl Orient {
+    /// The re-keying this orientation applies, as a `Linear` op chain — so an
+    /// index is `arrange` of a projection, and every consumer (renderers, the
+    /// shape pass) derives it from one place. `Forward` needs none.
+    pub fn ops(self) -> Vec<LinearOp> {
+        use crate::parse::Term;
+        let project = |key, val| vec![LinearOp::Project(Projection { key, val })];
+        match self {
+            Orient::Forward => Vec::new(),
+            Orient::Reverse => project(Term::Var(1), Term::Var(0)),
+            Orient::Pair => project(Term::Tuple(vec![Term::Var(0), Term::Var(1)]), Term::Tuple(Vec::new())),
+        }
+    }
+}
+
+/// Where a probed atom sits relative to the atom driving the path.
+///
+/// This is the delta discipline's exactly-once rule. Every pair of matching
+/// updates is seen by two paths — one from each side — and the two must
+/// disagree about whether updates *concurrent* with the delta count, or the
+/// pair is produced twice (or never). Position in `DeltaJoin::atoms` breaks
+/// the tie; an atom never probes itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Order {
+    /// The probed atom precedes the driving atom: concurrent updates are visible.
+    Earlier,
+    /// The probed atom follows the driving atom: concurrent updates are excluded.
+    Later,
+}
+
+impl Order {
+    /// The `strict` flag `half_join` takes: exclude arrangement times equal to
+    /// the delta's own time.
+    pub fn strict(self) -> bool { matches!(self, Order::Later) }
+}
+
+/// What one stage of a delta path does with the atom it probes.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum StageKind {
+    /// Extend the binding: probe by `key`, which is already bound, and bind
+    /// `bind` from the matched value.
+    Propose { key: Attr, bind: Attr },
+    /// Test the binding: both attributes are bound, so probe the `(key, val)`
+    /// pair and keep the prefix unchanged.
+    Validate { key: Attr, val: Attr },
+}
+
+/// One stage of one delta path: a single `half_join` against one index.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Stage {
+    /// The atom consulted, as an index into `DeltaJoin::atoms`.
+    pub atom: usize,
+    /// The arrangement to probe — a `DeltaIndex` item in this scope.
+    pub index: Ref,
+    /// Whether this stage extends the binding or tests it.
+    pub kind: StageKind,
+    /// Where `atom` sits relative to the atom driving this path.
+    pub order: Order,
+}
+
 /// A pure operator. Sources (`Input`/`Import`) are imports; structure
 /// (`Scope`/`Variable`/`Leave`/`Bind`) is the scope itself — neither is a node.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -111,6 +205,27 @@ pub enum Node {
     Join { left: Ref, right: Ref, projection: Projection },
     Reduce { input: Ref, reducer: Reducer },
     Inspect { input: Ref, label: String },
+    /// An arrangement built for delta-join probes, in one of three orientations.
+    ///
+    /// Distinct from `Arrange` on purpose. A `half_join` distinguishes "strictly
+    /// before" from "at the same time" by comparing timestamps, so it must hold
+    /// logical compaction back on what it reads; an ordinary join distinguishes
+    /// the two structurally and compacts freely. Sharing one arrangement between
+    /// the two would impose the delta join's retention on the ordinary join, so
+    /// the two node kinds never deduplicate into each other.
+    DeltaIndex { input: Ref, orient: Orient },
+    /// A multiway equijoin evaluated as a delta query.
+    ///
+    /// `atoms` is the rule body, stated declaratively: which relations meet, and
+    /// over which attributes. `paths` is the plan `lower` derived from it —
+    /// `paths[i]` responds to changes in `atoms[i]` and probes every other atom
+    /// once, in an order that keeps each probe's key bound. Concatenating the
+    /// paths gives the whole join's change stream.
+    ///
+    /// Output rows are `(Tuple(attributes), ())`: the node emits the raw binding
+    /// and a following `Linear` shapes it, so the projection runs on whatever
+    /// machinery the backend already has.
+    DeltaJoin { atoms: Vec<Atom>, paths: Vec<Vec<Stage>> },
 }
 
 /// An item in a scope's body: a pure operator or a nested child scope. The
@@ -201,9 +316,14 @@ impl Scope {
             match item {
                 Item::Op(node) => match node {
                     Node::Linear { input, .. } | Node::Arrange(input)
-                    | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
+                    | Node::Reduce { input, .. } | Node::Inspect { input, .. }
+                    | Node::DeltaIndex { input, .. } => f(input),
                     Node::Join { left, right, .. } => { f(left); f(right); },
                     Node::Concat(refs) => for r in refs { f(r); },
+                    Node::DeltaJoin { atoms, paths } => {
+                        for a in atoms { f(&mut a.input); }
+                        for p in paths { for s in p { f(&mut s.index); } }
+                    },
                 },
                 Item::Sub(child) => for imp in child.imports.iter_mut() {
                     if let Source::Parent(r) = &mut imp.from { f(r); }
@@ -232,9 +352,14 @@ impl Scope {
             match item {
                 Item::Op(node) => match node {
                     Node::Linear { input, .. } | Node::Arrange(input)
-                    | Node::Reduce { input, .. } | Node::Inspect { input, .. } => tally(input),
+                    | Node::Reduce { input, .. } | Node::Inspect { input, .. }
+                    | Node::DeltaIndex { input, .. } => tally(input),
                     Node::Join { left, right, .. } => { tally(left); tally(right); },
                     Node::Concat(refs) => for r in refs { tally(r); },
+                    Node::DeltaJoin { atoms, paths } => {
+                        for a in atoms { tally(&a.input); }
+                        for p in paths { for s in p { tally(&s.index); } }
+                    },
                 },
                 Item::Sub(child) => for imp in &child.imports {
                     if let Source::Parent(r) = &imp.from { tally(r); }
@@ -383,6 +508,24 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
                     Node::Reduce { input, reducer } => format!("{} | {:?}", fmt_ref(input), reducer),
                     Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
+                    Node::DeltaIndex { input, orient } => format!("{} | index({:?})", fmt_ref(input), orient),
+                    Node::DeltaJoin { atoms, paths } => {
+                        let body: Vec<String> = atoms.iter()
+                            .map(|a| format!("{}(@{}, @{})", fmt_ref(&a.input), a.key, a.val))
+                            .collect();
+                        let plan: Vec<String> = paths.iter().enumerate().map(|(i, p)| {
+                            let stages: Vec<String> = p.iter().map(|s| match &s.kind {
+                                StageKind::Propose { key, bind } =>
+                                    format!("propose {} @{}->@{}{}", fmt_ref(&s.index), key, bind,
+                                        if s.order.strict() { " strict" } else { "" }),
+                                StageKind::Validate { key, val } =>
+                                    format!("validate {} (@{}, @{}){}", fmt_ref(&s.index), key, val,
+                                        if s.order.strict() { " strict" } else { "" }),
+                            }).collect();
+                            format!("d{}: {}", i, stages.join(" -> "))
+                        }).collect();
+                        format!("delta_join {{ {} }} [{}]", body.join(", "), plan.join(" | "))
+                    },
                 };
                 println!("{}n{} = {};", pad2, i, desc);
             }

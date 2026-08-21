@@ -96,6 +96,15 @@ pub enum Reducer {
     Collect,
 }
 
+/// One atom of a `delta_join` body: a relation and the two attributes its
+/// `(key, val)` row binds, as indices assigned in first-occurrence order.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeltaAtom {
+    pub input: Box<Expr>,
+    pub key: usize,
+    pub val: usize,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Input(usize),
@@ -126,6 +135,14 @@ pub enum Expr {
     Inspect(Box<Expr>, String),
     Concat(Vec<Expr>),
     Arrange(Box<Expr>),
+    /// A multiway equijoin over a rule body, evaluated as a delta query.
+    ///
+    /// `atoms` name the relations and the attributes they bind; two atoms
+    /// binding the same attribute must agree on its value. `attrs` is how many
+    /// distinct attributes the body mentions. `projection` is the head: it is
+    /// applied to a row whose key is `Tuple(attribute values)`, so an attribute
+    /// name in the head resolves to `$0[i]`.
+    DeltaJoin { atoms: Vec<DeltaAtom>, attrs: usize, projection: Projection },
 }
 
 #[derive(Debug)]

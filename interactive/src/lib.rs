@@ -45,6 +45,7 @@ fn walk_expr(expr: &Expr, positional: &mut usize, imports: &mut BTreeSet<String>
             | Expr::Reduce(e, _) | Expr::Inspect(e, _) => walk_expr(e, positional, imports),
         Expr::Join(l, r, _) => { walk_expr(l, positional, imports); walk_expr(r, positional, imports); },
         Expr::Concat(es) => { for e in es { walk_expr(e, positional, imports); } },
+        Expr::DeltaJoin { atoms, .. } => { for a in atoms { walk_expr(&a.input, positional, imports); } },
         Expr::Name(_) | Expr::Qualified(_, _) => {},
     }
 }

@@ -13,6 +13,14 @@
 //!
 //! - `| key(k… ; v…)` — reshape to `(key ; val)`; `map` is an alias.
 //! - `| join(other, (k… ; v…))` — equijoin on the key.
+//! - `delta_join { rel(a, b), rel(b, c), … } => (k… ; v…)` — a multiway
+//!   equijoin, written as a rule body and evaluated as a delta query. This is
+//!   a *source*, not a pipe operator: it names its relations rather than
+//!   extending one. Each atom applies a named relation to two attribute names,
+//!   binding its row's key and value; attributes shared between atoms are the
+//!   join condition. The head sees the completed binding, so it refers to
+//!   attributes by name. Unlike a chain of `join`s it builds no intermediate
+//!   collection and no arrangement of one.
 //! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `collect` is
 //!   NEST (gather a key's values into a `List`).
 //! - `| filter(term)` — keep rows where `term` is truthy (a nonzero `Int`).
@@ -57,7 +65,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Let, Var, Export, Con, Case, Fold,
-    Input, Import, Key, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, EnterAt, LiftIter, FlatMap, Inspect,
+    Input, Import, Key, Map, Join, DeltaJoin, Min, Distinct, Count, Collect, Arrange, Negate, Filter, EnterAt, LiftIter, FlatMap, Inspect,
     Ident(String), Int(i64), Str(String),
     Dollar, Caret, LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Semi, Colon, ColonColon, Eq, EqEq, NotEq, Lt, LtEq, Gt, GtEq, AndAnd, FatArrow,
@@ -119,7 +127,8 @@ fn tokenize(input: &str) -> Vec<Token> {
                     "con" => Token::Con, "case" => Token::Case, "fold" => Token::Fold,
                     "input" => Token::Input, "import" => Token::Import,
                     "key" => Token::Key, "map" => Token::Map,
-                    "join" => Token::Join, "min" => Token::Min, "distinct" => Token::Distinct,
+                    "join" => Token::Join, "delta_join" => Token::DeltaJoin,
+                    "min" => Token::Min, "distinct" => Token::Distinct,
                     "count" => Token::Count, "collect" => Token::Collect,
                     "flatmap" => Token::FlatMap,
                     "arrange" => Token::Arrange, "negate" => Token::Negate,
@@ -147,11 +156,15 @@ struct Parser {
     binders: Vec<(String, usize, usize)>,
     /// Number of `case`/`fold` binders currently in scope.
     depth: usize,
+    /// Attribute names in scope while parsing a `delta_join` head, mapped to
+    /// their attribute index. A bare name resolves to `$0[i]`, since the head
+    /// sees a row whose key is the tuple of attribute values.
+    attrs: std::collections::HashMap<String, usize>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, cons: std::collections::HashMap::new(), binders: Vec::new(), depth: 0 }
+        Parser { tokens, pos: 0, cons: std::collections::HashMap::new(), binders: Vec::new(), depth: 0, attrs: std::collections::HashMap::new() }
     }
     fn peek(&self) -> &Token { &self.tokens[self.pos] }
     fn next(&mut self) -> Token { let t = self.tokens[self.pos].clone(); self.pos += 1; t }
@@ -178,11 +191,12 @@ impl Parser {
         stmts
     }
 
-    /// Resolve a bare name to a pattern binder, if any.
+    /// Resolve a bare name to a pattern binder or a `delta_join` attribute.
+    /// Pattern binders win: they are the innermost thing a name can mean.
     fn resolve_binder(&self, name: &str) -> Option<Term> {
-        self.binders.iter().rev().find(|(n, _, _)| n == name).map(|&(_, level, field)| {
-            Term::Proj(Box::new(Term::Bound(self.depth - level)), field)
-        })
+        self.binders.iter().rev().find(|(n, _, _)| n == name)
+            .map(|&(_, level, field)| Term::Proj(Box::new(Term::Bound(self.depth - level)), field))
+            .or_else(|| self.attrs.get(name).map(|&i| Term::Proj(Box::new(Term::Var(0)), i)))
     }
 
     fn parse_stmt(&mut self) -> Stmt {
@@ -238,8 +252,45 @@ impl Parser {
             Token::Import => { self.next(); match self.next() { Token::Str(s) => Expr::Import(s), o => panic!("Expected string literal after `import`, got {:?}", o) } },
             Token::Ident(_) => { let n = self.parse_ident(); if *self.peek() == Token::ColonColon { self.next(); let f = self.parse_ident(); Expr::Qualified(n, f) } else { Expr::Name(n) } },
             Token::LParen => { self.next(); let e = self.parse_pipe_expr(); self.expect(&Token::RParen); e },
+            Token::DeltaJoin => self.parse_delta_join(),
             other => panic!("Unexpected token in atom: {:?}", other),
         }
+    }
+
+    /// `delta_join { rel(a, b), rel(b, c), … } => (k… ; v…)`
+    ///
+    /// Each atom is a *named* relation applied to two attribute names, which
+    /// bind its row's key and value. Attributes shared between atoms are the
+    /// join condition. The head projection sees the completed binding as `$0`,
+    /// so an attribute name in it reads back the value bound to that name.
+    fn parse_delta_join(&mut self) -> Expr {
+        self.expect(&Token::DeltaJoin);
+        self.expect(&Token::LBrace);
+        let mut names: Vec<String> = Vec::new(); // attribute index -> name, first occurrence
+        let mut atoms: Vec<DeltaAtom> = Vec::new();
+        while *self.peek() != Token::RBrace {
+            let input = self.parse_atom();
+            self.expect(&Token::LParen);
+            let k = self.parse_ident();
+            self.expect(&Token::Comma);
+            let v = self.parse_ident();
+            self.expect(&Token::RParen);
+            let key = intern(&mut names, k);
+            let val = intern(&mut names, v);
+            atoms.push(DeltaAtom { input: Box::new(input), key, val });
+            if *self.peek() == Token::Comma { self.next(); }
+        }
+        self.expect(&Token::RBrace);
+        assert!(atoms.len() >= 2, "delta_join needs at least two atoms; use `join` for one relation");
+        self.expect(&Token::FatArrow);
+        // Attribute names are in scope only for the head.
+        let saved = std::mem::replace(
+            &mut self.attrs,
+            names.iter().enumerate().map(|(i, n)| (n.clone(), i)).collect(),
+        );
+        let projection = self.parse_projection();
+        self.attrs = saved;
+        Expr::DeltaJoin { atoms, attrs: names.len(), projection }
     }
 
     fn parse_join_arg(&mut self) -> Expr {
@@ -298,8 +349,20 @@ impl Parser {
         fields
     }
 
-    /// A single projection field. A bare `$n` (no index) splices.
+    /// A single projection field. A bare `$n` (no index) splices — and so does
+    /// a bare `delta_join` attribute name, for the same reason: both name a
+    /// whole row component, and a projection field wants that component's
+    /// fields, not a tuple wrapping it. Select from one with `a[i]`.
     fn parse_proj_field(&mut self) -> Term {
+        if let Token::Ident(name) = self.peek().clone() {
+            let next = self.tokens.get(self.pos + 1);
+            if next != Some(&Token::LBracket) && next != Some(&Token::LParen) {
+                if let Some(&i) = self.attrs.get(&name) {
+                    self.next();
+                    return Term::Spread(Box::new(Term::Proj(Box::new(Term::Var(0)), i)));
+                }
+            }
+        }
         if *self.peek() == Token::Dollar
             && matches!(self.tokens.get(self.pos + 1), Some(Token::Int(_)))
             && self.tokens.get(self.pos + 2) != Some(&Token::LBracket)
@@ -492,6 +555,15 @@ impl Parser {
     fn parse_builtin(&mut self, name: &str) -> Term {
         let mut args = self.parse_args();
         super::build_builtin(name, &mut args)
+    }
+}
+
+/// Index of `name` in `names`, appending it if new. Attribute indices are
+/// assigned in first-occurrence order across the whole body.
+fn intern(names: &mut Vec<String>, name: String) -> usize {
+    match names.iter().position(|x| *x == name) {
+        Some(i) => i,
+        None => { names.push(name); names.len() - 1 }
     }
 }
 

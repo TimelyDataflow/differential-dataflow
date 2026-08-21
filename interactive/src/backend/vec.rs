@@ -104,6 +104,101 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
     }).as_collection()
 }
 
+/// A partial binding of a delta join's attributes: one `Value` per attribute,
+/// `unit` where nothing is bound yet. It travels beside a *payload* time and is
+/// internal to the node — it never reaches a dataflow edge as a DDIR row.
+type Prefix = Vec<Row>;
+
+/// A delta join's indexes must not compact logically: the whole construction
+/// rests on telling "strictly before" from "at the same time" in the total
+/// order on times, and compaction advances times to a frontier, which is
+/// exactly what erases that distinction.
+///
+/// Holding the frontier at the minimum is the always-correct answer for any
+/// timestamp. A tighter one would name the largest time strictly below the
+/// operator's own frontier, but `Time` is `Product<u64, PointStamp<u64>>` and
+/// has no predecessor: decrementing a coordinate is unsound, because a lattice
+/// join against the decremented frontier can carry an update from before the
+/// boundary to after it. (Take `d = (0, [3, 5])`, `f = (0, [3, 4])` and an
+/// update at `(0, [2, 9])`, which is below `d`; advanced by `f` it becomes
+/// `(0, [3, 9])`, which is above.) So: correct first, and this is the retention
+/// cost the construction is measured on.
+fn no_compaction(_time: &Time, antichain: &mut timely::progress::Antichain<Time>) {
+    use timely::progress::Timestamp;
+    antichain.insert(Time::minimum());
+}
+
+/// Render a delta join as one `half_join` chain per atom, concatenated.
+///
+/// Each path responds to changes in its own atom and probes the others against
+/// their maintained indexes. Two times travel with each prefix: the update
+/// keeps the delta's own time, which anchors the total-order comparison that
+/// makes each tuple of updates match exactly once; and a *payload* time rides
+/// in the data, starting at the delta's time and accumulating (by lattice join)
+/// the time of every record matched along the way. On leaving the delta region
+/// the payload becomes the update's time — the moment the match takes effect.
+fn render_delta_join<'s>(
+    atoms: Vec<Col<'s>>,
+    body: &[st::Atom],
+    paths: &[Vec<st::Stage>],
+    indexes: Vec<Vec<Arr<'s>>>,
+) -> Col<'s> {
+    use differential_dataflow::AsCollection;
+    use differential_dogs3::operators::half_join;
+    use timely::dataflow::operators::core::Map;
+    use timely::dataflow::operators::Concatenate;
+
+    let n = st::attr_count(body);
+    let scope = atoms[0].inner.scope();
+    let mut fragments = Vec::with_capacity(paths.len());
+
+    for (i, path) in paths.iter().enumerate() {
+        // The delta's own row is the binding it makes; the payload starts at
+        // the delta's own time, which is also the update's time.
+        let (akey, aval) = (body[i].key, body[i].val);
+        let mut cur: VecCollection<'s, Time, (Prefix, Time), Diff> = atoms[i].clone().inner
+            .map(move |((k, v), t, d)| {
+                let mut prefix = vec![Value::unit(); n];
+                prefix[akey] = k;
+                prefix[aval] = v;
+                ((prefix, t.clone()), t, d)
+            })
+            .as_collection();
+
+        for (stage, index) in path.iter().zip(&indexes[i]) {
+            let strict = stage.order.strict();
+            cur = match stage.kind {
+                // Probe by the bound attribute; the matched value binds another.
+                st::StageKind::Propose { key, bind } => {
+                    let requests = cur.map(move |(prefix, payload)| (prefix[key].clone(), prefix, payload));
+                    half_join(requests, index.clone(), no_compaction, strict, move |_k, prefix, val| {
+                        let mut prefix = prefix.clone();
+                        prefix[bind] = val.clone();
+                        prefix
+                    })
+                }
+                // Both attributes are bound: probe the pair, keep the binding.
+                // The matched multiplicity still multiplies in, which is what
+                // makes this the multiset join rather than an existence test.
+                st::StageKind::Validate { key, val } => {
+                    let requests = cur.map(move |(prefix, payload)| {
+                        (Value::Tuple(vec![prefix[key].clone(), prefix[val].clone()]), prefix, payload)
+                    });
+                    half_join(requests, index.clone(), no_compaction, strict, move |_k, prefix, _| prefix.clone())
+                }
+            };
+        }
+
+        // Leave the delta region. The payload is at or beyond the update's own
+        // time in the lattice order, so the capability already covers it.
+        fragments.push(cur.inner.map(|((prefix, payload), _time, diff)| {
+            ((Value::Tuple(prefix), Value::unit()), payload, diff)
+        }));
+    }
+
+    scope.concatenate(fragments).as_collection()
+}
+
 /// The vec rendering substrate.
 pub enum VecBackend {}
 
@@ -152,6 +247,15 @@ impl Backend for VecBackend {
             |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v, t, r)| ((key.clone(), v), t, r))); },
         )
     }
+    fn delta_join<'s>(
+        atoms: Vec<Collection<'s, Time, Self::Container>>,
+        body: &[st::Atom],
+        paths: &[Vec<st::Stage>],
+        indexes: Vec<Vec<Self::Arr<'s>>>,
+    ) -> Collection<'s, Time, Self::Container> {
+        render_delta_join(atoms, body, paths, indexes)
+    }
+
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container> {
         c.inspect(move |x| eprintln!("  [{}] {:?}", label, x.clone()))
     }

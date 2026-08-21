@@ -355,6 +355,18 @@ impl Backend for CorgiBackend {
         }
     }
 
+    fn delta_join<'s>(
+        _atoms: Vec<Collection<'s, Time, CC>>,
+        _body: &[st::Atom],
+        _paths: &[Vec<st::Stage>],
+        _indexes: Vec<Vec<Self::Arr<'s>>>,
+    ) -> Collection<'s, Time, CC> {
+        // `half_join`'s cursor path requires `Tr::Batch: Navigable`, and `CorgiChunk` is
+        // deliberately not one. The corgi delta join is a `HalfJoinTactic` over the columnar
+        // chunks, the same shape as `CorgiJoinBackend` and `CorgiReduceBackend`.
+        unimplemented!("the corgi backend does not yet render delta joins; use --backend=vec")
+    }
+
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
         reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone())))
     }
