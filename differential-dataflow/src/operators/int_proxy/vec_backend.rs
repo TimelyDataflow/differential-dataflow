@@ -63,8 +63,7 @@ pub struct VecReduceBackend<K, V, W, T, R, L> {
     /// Lookup-only: the non-determinism of the map's iteration order is never observed.
     out_ids: HashMap<(K, W), u64>,
 
-    /// The retire's output batch description, and the chunks accumulated for it.
-    description: Option<Description<T>>,
+    /// The chunks accumulated for the retire's output batch.
     chunks: Vec<VecChunk<u64, (K, W), T, R>>,
     /// Scratch to re-order one `emit`'s output by types, rather than transient identifiers.
     stage: Vec<((u64, (K, W)), T, R)>,
@@ -85,14 +84,13 @@ impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
             in_pool: Vec::new(),
             out_pool: Vec::new(),
             out_ids: HashMap::new(),
-            description: None,
             chunks: Vec::new(),
             stage: Vec::new(),
         }
     }
 }
 
-impl<K, V, W, T, R, L> ProxyReduceBackend<VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>
+impl<K, V, W, T, R, L> ProxyReduceBackend<T, VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>
     for VecReduceBackend<K, V, W, T, R, L>
 where
     K: Ord + Clone + std::hash::Hash + 'static,
@@ -105,15 +103,14 @@ where
     type RIn = R;
     type ROut = R;
 
-    fn begin(&mut self, description: Description<T>) {
-        self.description = Some(description);
+    fn begin(&mut self, _description: Description<T>) {
         self.chunks.clear();
     }
 
     #[inline(never)]
     fn next_window(
         &mut self,
-        instance: &ReduceInstance<'_, VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>,
+        instance: &ReduceInstance<'_, T, VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>,
         changed: &[u64],
         from: &mut Option<u64>,
         window: &mut ReduceWindow<T, R, R>,
@@ -322,13 +319,12 @@ where
     }
 
     #[inline(never)]
-    fn finish(&mut self) -> VBatch<(K, W), T, R> {
+    fn finish(&mut self) -> Option<VBatch<(K, W), T, R>> {
         self.in_pool.clear();
         self.out_pool.clear();
         self.out_ids.clear();
-        let description = self.description.take().expect("finish without begin");
         let chunks = std::mem::take(&mut self.chunks);
-        Rc::new(ChunkBatch::new(chunks, description))
+        if chunks.is_empty() { None } else { Some(Rc::new(ChunkBatch::new(chunks))) }
     }
 }
 

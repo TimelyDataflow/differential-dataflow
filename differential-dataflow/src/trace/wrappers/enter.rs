@@ -1,11 +1,12 @@
 //! Wrappers to provide trace access to nested scopes.
 
-// use timely::progress::nested::product::Product;
+use std::marker::PhantomData;
+
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use crate::lattice::Lattice;
-use crate::trace::{BatchReader, Description, TraceReader};
+use crate::trace::{Batch, Description, TraceReader};
 
 /// Wrapper to provide trace to nested scope.
 pub struct TraceEnter<Tr: TraceReader, TInner> {
@@ -24,17 +25,31 @@ impl<Tr: TraceReader + Clone, TInner> Clone for TraceEnter<Tr, TInner> {
     }
 }
 
+/// Converts a description of outer times to one of inner times.
+pub fn enter_description<T: timely::progress::Timestamp, TInner: Refines<T>+Lattice>(desc: &Description<T>) -> Description<TInner> {
+    let lower: Vec<_> = desc.lower().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
+    let upper: Vec<_> = desc.upper().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
+    let since: Vec<_> = desc.since().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
+    Description::new(Antichain::from(lower), Antichain::from(upper), Antichain::from(since))
+}
+
+/// Converts an outer batch to an inner batch: the description enters the scope, and the
+/// payload is wrapped for its readers to do the same.
+pub fn enter_batch<T: timely::progress::Timestamp, TInner: Refines<T>+Lattice, P>(batch: Batch<T, P>) -> Batch<TInner, BatchEnter<P, TInner>> {
+    Batch::new(enter_description(&batch.desc), batch.inner.map(BatchEnter::make_from))
+}
+
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
     TInner: Refines<Tr::Time>+Lattice,
 {
-    type Batch = BatchEnter<Tr::Batch, TInner>;
     type Time = TInner;
+    type Payload = BatchEnter<Tr::Payload, TInner>;
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
+    fn map_batches<F: FnMut(&Batch<TInner, Self::Payload>)>(&self, mut f: F) {
         self.trace.map_batches(|batch| {
-            f(&Self::Batch::make_from(batch.clone()));
+            f(&enter_batch(batch.clone()));
         })
     }
 
@@ -68,13 +83,13 @@ where
         self.stash2.borrow()
     }
 
-    fn batches_through(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Self::Batch>> {
+    fn batches_through(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Batch<TInner, Self::Payload>>> {
         self.stash1.clear();
         for time in upper.iter() {
             self.stash1.insert(time.clone().to_outer());
         }
         let storage = self.trace.batches_through(self.stash1.borrow())?;
-        Some(storage.into_iter().map(|batch| BatchEnter::make_from(batch)).collect())
+        Some(storage.into_iter().map(enter_batch).collect())
     }
 }
 
@@ -94,46 +109,23 @@ where
 }
 
 
-/// Wrapper to provide batch to nested scope.
+/// Wrapper to provide a batch payload to a nested scope.
 #[derive(Clone)]
 pub struct BatchEnter<B, TInner> {
     batch: B,
-    description: Description<TInner>,
-}
-
-impl<B, TInner> BatchReader for BatchEnter<B, TInner>
-where
-    B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
-{
-    type Time = TInner;
-    fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<TInner> { &self.description }
+    phantom: PhantomData<TInner>,
 }
 
 impl<B, TInner> BatchEnter<B, TInner> {
-    /// The wrapped batch, whose times are those of the containing scope.
+    /// The wrapped payload, whose times are those of the containing scope.
     ///
     /// Each of its times enters the nested scope as `TInner::to_inner(time)`; that rule is the
-    /// whole of the wrapper's read-side semantics, and any reader of the wrapped batch must
+    /// whole of the wrapper's read-side semantics, and any reader of the wrapped payload must
     /// apply it.
     pub fn inner(&self) -> &B { &self.batch }
-}
 
-impl<B, TInner> BatchEnter<B, TInner>
-where
-    B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
-{
-    /// Makes a new batch wrapper
+    /// Makes a new payload wrapper
     pub fn make_from(batch: B) -> Self {
-        let lower: Vec<_> = batch.description().lower().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
-        let upper: Vec<_> = batch.description().upper().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
-        let since: Vec<_> = batch.description().since().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
-
-        BatchEnter {
-            batch,
-            description: Description::new(Antichain::from(lower), Antichain::from(upper), Antichain::from(since))
-        }
+        BatchEnter { batch, phantom: PhantomData }
     }
 }

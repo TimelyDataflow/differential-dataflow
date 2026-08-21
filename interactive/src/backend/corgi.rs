@@ -313,7 +313,8 @@ impl Backend for CorgiBackend {
                     input.for_each(|cap, data| {
                         let mut session = output.session(&cap);
                         for batch in data.iter() {
-                            for ch in batch.chunks.iter().filter(|c| c.len() > 0) {
+                            let Some(payload) = batch.inner.as_ref() else { continue };
+                            for ch in payload.chunks.iter().filter(|c| c.len() > 0) {
                                 let mut c = CorgiContainer {
                                     // Drop the arrangement's leading identifier lane: edges carry
                                     // the key the program wrote, so `$0` indexes what it always did.

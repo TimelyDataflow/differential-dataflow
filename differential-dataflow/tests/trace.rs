@@ -34,11 +34,11 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
 fn test_trace() {
     let mut trace = get_trace();
 
-    let (mut cursor1, storage1) = cursor_list(trace.batches_through(AntichainRef::new(&[1])).unwrap());
+    let (mut cursor1, storage1) = cursor_list(trace.batches_through(AntichainRef::new(&[1])).unwrap().into_iter().filter_map(|b| b.inner).collect());
     let vec_1 = cursor1.to_vec(&storage1, |k| k.clone(), |v| v.clone());
     assert_eq!(vec_1, vec![((1, 2), vec![(0, 1)])]);
 
-    let (mut cursor2, storage2) = cursor_list(trace.batches_through(AntichainRef::new(&[2])).unwrap());
+    let (mut cursor2, storage2) = cursor_list(trace.batches_through(AntichainRef::new(&[2])).unwrap().into_iter().filter_map(|b| b.inner).collect());
     let vec_2 = cursor2.to_vec(&storage2, |k| k.clone(), |v| v.clone());
     println!("--> {:?}", vec_2);
     assert_eq!(vec_2, vec![
@@ -46,7 +46,7 @@ fn test_trace() {
                ((2, 3), vec![(1, 1)]),
     ]);
 
-    let (mut cursor3, storage3) = cursor_list(trace.batches_through(AntichainRef::new(&[3])).unwrap());
+    let (mut cursor3, storage3) = cursor_list(trace.batches_through(AntichainRef::new(&[3])).unwrap().into_iter().filter_map(|b| b.inner).collect());
     let vec_3 = cursor3.to_vec(&storage3, |k| k.clone(), |v| v.clone());
     assert_eq!(vec_3, vec![
                ((1, 2), vec![(0, 1)]),
@@ -54,7 +54,7 @@ fn test_trace() {
     ]);
 
     let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
-    let (mut cursor4, storage4) = cursor_list(batches);
+    let (mut cursor4, storage4) = cursor_list(batches.into_iter().filter_map(|b| b.inner).collect());
     let vec_4 = cursor4.to_vec(&storage4, |k| k.clone(), |v| v.clone());
     assert_eq!(vec_4, vec_3);
 }

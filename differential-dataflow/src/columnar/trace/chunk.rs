@@ -546,6 +546,7 @@ fn advance_trie<U: ColumnarUpdate>(
 
 #[cfg(test)]
 mod test {
+    use timely::progress::Antichain;
     use std::collections::VecDeque;
     use columnar::Push;
     use super::{ColChunk, Chunk};
@@ -647,18 +648,14 @@ mod test {
     #[test]
     fn cursor_handles_straddle() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::Description;
         use crate::trace::chunk::ChunkBatch;
-        use timely::progress::Antichain;
 
         let chunks = vec![
             chunk(vec![(0, 0, 0, 1), (1, 0, 0, 1), (1, 1, 0, 1)]),
             chunk(vec![(1, 1, 1, 1), (1, 2, 0, 1)]),
             chunk(vec![(2, 0, 0, 1)]),
         ];
-        let desc = Description::new(
-            Antichain::from_elem(0u64), Antichain::from_elem(2u64), Antichain::from_elem(0u64));
-        let batch = ChunkBatch::new(chunks, desc);
+        let batch = ChunkBatch::new(chunks);
 
         let mut cursor = batch.cursor();
         let got = cursor.to_vec(&batch, |k| *k, |v| *v);
@@ -678,12 +675,10 @@ mod test {
     // resumable merge -> advance -> settle pipeline end to end.
     #[test]
     fn batch_merger_resumable_matches_reference() {
-        use crate::trace::Description;
         use crate::trace::implementations::spine_fueled::Merger;
         use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
         use crate::trace::cursor::Cursor;
         use crate::consolidation::consolidate_updates;
-        use timely::progress::Antichain;
 
         let mut seed = 0x9E3779B97F4A7C15u64;
         let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
@@ -700,9 +695,7 @@ mod test {
         }
         fn batch(updates: &[Upd], sz: usize) -> ChunkBatch<ColChunk<Upd>> {
             let chunks: Vec<_> = updates.chunks(sz).map(|c| chunk(c.to_vec())).collect();
-            let desc = Description::new(
-                Antichain::from_elem(0u64), Antichain::from_elem(10u64), Antichain::from_elem(0u64));
-            ChunkBatch::new(chunks, desc)
+            ChunkBatch::new(chunks)
         }
         fn read(b: &ChunkBatch<ColChunk<Upd>>) -> Vec<Upd> {
             let mut out = Vec::new();
@@ -798,7 +791,6 @@ mod test {
     // the right advanced-and-consolidated result.
     #[test]
     fn advance_single_key_spanning_pushes() {
-        use timely::progress::Antichain;
         let frontier = Antichain::from_elem(100u64);
         let n = 50u64;
         let mut q = VecDeque::new();
@@ -815,7 +807,6 @@ mod test {
     // withholding the (possibly-growing) last group as the carry when not `done`.
     #[test]
     fn advance_emits_complete_groups_eagerly() {
-        use timely::progress::Antichain;
         let frontier = Antichain::from_elem(5u64);
         // Group (0,0) is complete within this chunk; group (1,0) might still grow.
         let mut q = VecDeque::from([chunk(vec![(0, 0, 0, 1), (0, 0, 1, 1), (1, 0, 0, 1)])]);
@@ -833,7 +824,6 @@ mod test {
     // group boundaries.
     #[test]
     fn advance_resumable_matches_oneshot() {
-        use timely::progress::Antichain;
         let frontier = Antichain::from_elem(3u64);
         // Groups span chunk boundaries and carry several times each.
         let input = || vec![
@@ -865,7 +855,6 @@ mod test {
     // boundaries, exercising the meld / withhold / split path.
     #[test]
     fn advance_matches_row_reference() {
-        use timely::progress::Antichain;
         use crate::consolidation::consolidate_updates;
 
         let mut seed = 0x2545F4914F6CDD1Du64;

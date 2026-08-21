@@ -10,7 +10,6 @@ use timely::progress::Timestamp;
 
 use crate::difference::{Multiply, Semigroup};
 use crate::lattice::Lattice;
-use crate::trace::BatchReader;
 use super::ProxyBridge;
 use crate::operators::join::{Fresh, JoinTactic};
 use crate::operators::ValueHistory;
@@ -21,7 +20,7 @@ use super::history::IdHistory;
 ///
 /// The harness repeatedly invokes [`advance`](Self::advance) to draw a block of the proxy collection,
 /// then [`cross`](Self::cross) to turn that block's matches into output containers, until `advance` reports the key space exhausted.
-pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
+pub trait ProxyJoinBackend<T, B0, B1> {
     /// Diff type of the first input.
     type R0: Semigroup + Multiply<Self::R1, Output = Self::ROut>;
     /// Diff type of the second input.
@@ -39,10 +38,10 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// which are greater or equal to the initial `from`, and not greater or equal to its value when returned.
     fn advance(
         &mut self,
-        instance: &JoinInstance<B0, B1>,
+        instance: &JoinInstance<T, B0, B1>,
         from: &mut Option<u64>,
-        bridge0: &mut ProxyBridge<B0::Time, Self::R0>,
-        bridge1: &mut ProxyBridge<B0::Time, Self::R1>,
+        bridge0: &mut ProxyBridge<T, Self::R0>,
+        bridge1: &mut ProxyBridge<T, Self::R1>,
     );
 
     /// Interpret matches derived from the immediately preceding [`Self::advance`] call and place
@@ -51,14 +50,14 @@ pub trait ProxyJoinBackend<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// block produced no matches, in which case the next `advance` may overwrite that state.
     fn cross(
         &mut self,
-        instance: &JoinInstance<B0, B1>,
-        matches: &mut JoinMatches<B0::Time, Self::ROut>,
+        instance: &JoinInstance<T, B0, B1>,
+        matches: &mut JoinMatches<T, Self::ROut>,
         output: &mut Vec<Self::Output>,
     );
 }
 
 /// A unit of proxied join work, for presentation to the backend.
-pub struct JoinInstance<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
+pub struct JoinInstance<T, B0, B1> {
     /// The first input's batches.
     pub batches0: Vec<B0>,
     /// The second input's batches.
@@ -66,7 +65,7 @@ pub struct JoinInstance<B0: BatchReader, B1: BatchReader<Time = B0::Time>> {
     /// A lower bound on the meet of pairs of update times.
     ///
     /// This can be applied when loading updates to consolidate on load.
-    pub lower: B0::Time,
+    pub lower: T,
 }
 
 /// Presentation of discovered join matches.
@@ -98,14 +97,15 @@ impl<B0, B1, Bk> ProxyJoinTactic<B0, B1, Bk> {
     }
 }
 
-impl<B0, B1, Bk> JoinTactic<B0, B1, Bk::Output> for ProxyJoinTactic<B0, B1, Bk>
+impl<T, B0, B1, Bk> JoinTactic<T, B0, B1, Bk::Output> for ProxyJoinTactic<B0, B1, Bk>
 where
-    B0: BatchReader + 'static,
-    B1: BatchReader<Time = B0::Time> + 'static,
-    Bk: ProxyJoinBackend<B0, B1> + 'static,
+    T: Timestamp + Lattice + 'static,
+    B0: 'static,
+    B1: 'static,
+    Bk: ProxyJoinBackend<T, B0, B1> + 'static,
     Bk::Output: 'static,
 {
-    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, _fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = Bk::Output>> {
+    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, _fresh: Fresh, meet: T) -> Box<dyn Iterator<Item = Bk::Output>> {
         Box::new(ProxyJoinIter {
             backend: Rc::clone(&self.backend),
             instance: JoinInstance { batches0: input0, batches1: input1, lower: meet },
@@ -125,36 +125,33 @@ where
 /// The iterator draws the proxy collection from the back-end a block at a time (`Bk::advance`).
 /// Each block is then translated to output updates with joined times and multiplied differences,
 /// which are provided to the back-end to translate into output containers, which are then returned.
-struct ProxyJoinIter<B0, B1, Bk>
+struct ProxyJoinIter<T, B0, B1, Bk>
 where
-    B0: BatchReader,
-    B1: BatchReader<Time = B0::Time>,
-    Bk: ProxyJoinBackend<B0, B1>,
+    Bk: ProxyJoinBackend<T, B0, B1>,
 {
     /// The backend, shared across all outstanding iterators.
     backend: Rc<RefCell<Bk>>,
     /// The iterator's inputs, and the time at which they can consolidate as they load.
-    instance: JoinInstance<B0, B1>,
+    instance: JoinInstance<T, B0, B1>,
     /// Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
     /// once the backend reports the iteration is complete.
     from: Option<u64>,
     /// The current block: the two runs `advance` last drew, which one `next` consumes entirely.
-    p0: ProxyBridge<B0::Time, Bk::R0>,
-    p1: ProxyBridge<B0::Time, Bk::R1>,
+    p0: ProxyBridge<T, Bk::R0>,
+    p1: ProxyBridge<T, Bk::R1>,
     /// Per-key replay histories, held across the iterator and reloaded per key when needed.
-    h0: IdHistory<B0::Time, Bk::R0>,
-    h1: IdHistory<B0::Time, Bk::R1>,
+    h0: IdHistory<T, Bk::R0>,
+    h1: IdHistory<T, Bk::R1>,
     /// The block's matched records, held across blocks to keep their allocations.
-    matches: JoinMatches<B0::Time, Bk::ROut>,
+    matches: JoinMatches<T, Bk::ROut>,
     /// The last block's containers, in reverse, served from the back one `next` at a time.
     ready: Vec<Bk::Output>,
 }
 
-impl<B0, B1, Bk> Iterator for ProxyJoinIter<B0, B1, Bk>
+impl<T, B0, B1, Bk> Iterator for ProxyJoinIter<T, B0, B1, Bk>
 where
-    B0: BatchReader,
-    B1: BatchReader<Time = B0::Time>,
-    Bk: ProxyJoinBackend<B0, B1>,
+    T: Timestamp + Lattice,
+    Bk: ProxyJoinBackend<T, B0, B1>,
 {
     type Item = Bk::Output;
 
@@ -169,11 +166,10 @@ where
     }
 }
 
-impl<B0, B1, Bk> ProxyJoinIter<B0, B1, Bk>
+impl<T, B0, B1, Bk> ProxyJoinIter<T, B0, B1, Bk>
 where
-    B0: BatchReader,
-    B1: BatchReader<Time = B0::Time>,
-    Bk: ProxyJoinBackend<B0, B1>,
+    T: Timestamp + Lattice,
+    Bk: ProxyJoinBackend<T, B0, B1>,
 {
     /// Draw the next block from the backend.
     fn refill(&mut self) {

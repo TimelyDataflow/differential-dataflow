@@ -17,7 +17,7 @@ use timely::dataflow::operators::CapabilitySet;
 
 use crate::lattice::Lattice;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchCursor, BatchDiff, BatchReader, BatchVal, Cursor, Navigable, TraceReader};
+use crate::trace::{BatchCursor, BatchDiff, BatchVal, Cursor, Navigable, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 use crate::operators::ValueHistory;
@@ -27,12 +27,14 @@ use crate::operators::ValueHistory;
 /// The trait is parameterized by the output container `C`, not by the builder that assembles it: a tactic
 /// yields finished containers, and how it produces them (pushing records into a [`ContainerBuilder`], or
 /// otherwise) is its own concern.
-pub trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C> {
-    /// Prepare the join of two lists of batches into an iterator of output containers.
+pub trait JoinTactic<T, B0, B1, C> {
+    /// Prepare the join of two lists of batch payloads into an iterator of output containers.
     ///
-    /// The supplied `fresh` and `meet` indicate respectively which input is "novel", and should drive the
-    /// join, as well as a lower bound on that input's times, so that the other input can be loaded compacted.
-    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = C>>;
+    /// The inputs are payloads only: empty batches have nothing to join, and the caller retains their
+    /// descriptions for its own frontier accounting. The supplied `fresh` and `meet` indicate respectively
+    /// which input is "novel", and should drive the join, as well as a lower bound on that input's times,
+    /// so that the other input can be loaded compacted.
+    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: T) -> Box<dyn Iterator<Item = C>>;
 }
 
 /// Which input contributed the freshly-arrived batch of a deferred join unit.
@@ -62,8 +64,8 @@ pub enum Fresh {
 /// [`AsCollection`]: crate::collection::AsCollection
 pub fn join_traces<'scope, Tr1, Tr2, KC, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, name: &str, result: L) -> Stream<'scope, Tr1::Time, CB::Container>
 where
-    Tr1: TraceReader<Batch: Navigable>+'static,
-    Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time>+'static,
+    Tr1: TraceReader<Payload: Navigable>+'static,
+    Tr2: TraceReader<Payload: Navigable, Time = Tr1::Time>+'static,
     KC: BatchContainer,
     BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
@@ -71,7 +73,7 @@ where
     L: FnMut(KC::ReadItem<'_>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut CB)+'static,
     CB: ContainerBuilder<Container: Default> + 'static,
 {
-    join_with_tactic(arranged1, arranged2, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, _, CB>::new(result))
+    join_with_tactic(arranged1, arranged2, name, cursors::CursorTactic::<Tr1::Payload, Tr2::Payload, _, CB>::new(result))
 }
 
 /// Drives an equijoin of two traces using a supplied [`JoinTactic`].
@@ -84,7 +86,7 @@ pub fn join_with_tactic<'scope, Tr1, Tr2, T, C>(arranged1: Arranged<'scope, Tr1>
 where
     Tr1: TraceReader+'static,
     Tr2: TraceReader<Time = Tr1::Time>+'static,
-    T: JoinTactic<Tr1::Batch, Tr2::Batch, C>+'static,
+    T: JoinTactic<Tr1::Time, Tr1::Payload, Tr2::Payload, C>+'static,
     C: Container + 'static,
 {
     // Rename traces for symmetry from here on out.
@@ -161,13 +163,15 @@ where
 
         // Load up deferred work joining each captured `trace2` batch against `trace1`.
         for batch2 in batch2_list.into_iter() {
+            // Empty batches carry no payload, and have nothing to join.
+            let Some(payload2) = batch2.inner else { continue };
             // It is safe to ask for `ack1` because we have confirmed it to be in advance of `distinguish_since`.
-            let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap();
+            let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap().into_iter().filter_map(|b| b.inner).collect();
             // We could downgrade the capability here, but doing so is a bit complicated mathematically.
             // TODO: downgrade the capability by searching out the one time in `batch2.lower()` and not
             // in `batch2.upper()`. Only necessary for non-empty batches, as empty batches may not have
             // that property.
-            let work = tactic.prep(trace1_storage, vec![batch2], Fresh::Input1, capability.time().clone());
+            let work = tactic.prep(trace1_storage, vec![payload2], Fresh::Input1, capability.time().clone());
             todo1.push_back((CapabilitySet::from_elem(capability.clone()), work));
         }
 
@@ -222,11 +226,11 @@ where
                         // still be joined (its updates remain real at times finer than the trace's
                         // compaction frontier, and no other work item has accounted for them).
                         if !PartialOrder::less_equal(batch1.upper(), &preload_upper1) {
-                            if !batch1.is_empty() {
+                            if let Some(payload1) = batch1.inner.clone() {
                                 // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let trace2_storage = trace2.batches_through(acknowledged2.borrow()).unwrap();
-                                let work = tactic.prep(vec![batch1.clone()], trace2_storage, Fresh::Input0, meet.clone().expect("non-empty stamp"));
+                                let trace2_storage = trace2.batches_through(acknowledged2.borrow()).unwrap().into_iter().filter_map(|b| b.inner).collect();
+                                let work = tactic.prep(vec![payload1], trace2_storage, Fresh::Input0, meet.clone().expect("non-empty stamp"));
                                 todo0.push_back((capability.clone(), work));
                             }
 
@@ -276,11 +280,11 @@ where
                         // still be joined (its updates remain real at times finer than the trace's
                         // compaction frontier, and no other work item has accounted for them).
                         if !PartialOrder::less_equal(batch2.upper(), &preload_upper2) {
-                            if !batch2.is_empty() {
+                            if let Some(payload2) = batch2.inner.clone() {
                                 // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap();
-                                let work = tactic.prep(trace1_storage, vec![batch2.clone()], Fresh::Input1, meet.clone().expect("non-empty stamp"));
+                                let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap().into_iter().filter_map(|b| b.inner).collect();
+                                let work = tactic.prep(trace1_storage, vec![payload2], Fresh::Input1, meet.clone().expect("non-empty stamp"));
                                 todo1.push_back((capability.clone(), work));
                             }
 
@@ -407,10 +411,9 @@ mod cursors {
     /// implements is over the container `CB` yields (`CB::Container`).
     pub struct CursorTactic<B0, B1, L, CB>
     where
-        B0: BatchReader + Navigable,
-        B1: BatchReader<Time = B0::Time> + Navigable,
-        B0::Cursor: Cursor<Time = B0::Time>,
-        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
+        B0: Navigable,
+        B1: Navigable,
+        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = <B0::Cursor as Cursor>::Time>,
     {
         logic: Rc<RefCell<L>>,
         _marker: std::marker::PhantomData<(B0, B1, CB)>,
@@ -418,10 +421,9 @@ mod cursors {
 
     impl<B0, B1, L, CB> CursorTactic<B0, B1, L, CB>
     where
-        B0: BatchReader + Navigable,
-        B1: BatchReader<Time = B0::Time> + Navigable,
-        B0::Cursor: Cursor<Time = B0::Time>,
-        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
+        B0: Navigable,
+        B1: Navigable,
+        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = <B0::Cursor as Cursor>::Time>,
     {
         /// Construct a tactic that applies `logic` to each matched `(key, val0, val1)`.
         pub fn new(logic: L) -> Self {
@@ -429,16 +431,15 @@ mod cursors {
         }
     }
 
-    impl<B0, B1, L, CB> JoinTactic<B0, B1, CB::Container> for CursorTactic<B0, B1, L, CB>
+    impl<B0, B1, L, CB> JoinTactic<<B0::Cursor as Cursor>::Time, B0, B1, CB::Container> for CursorTactic<B0, B1, L, CB>
     where
-        B0: BatchReader + Navigable + 'static,
-        B1: BatchReader<Time = B0::Time> + Navigable + 'static,
-        B0::Cursor: Cursor<Time = B0::Time>,
-        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
+        B0: Navigable + 'static,
+        B1: Navigable + 'static,
+        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = <B0::Cursor as Cursor>::Time>,
         CB: ContainerBuilder<Container: Default> + 'static,
-        L: for<'a> FnMut(<B0::Cursor as Cursor>::Key<'a>, <B0::Cursor as Cursor>::Val<'a>, <B1::Cursor as Cursor>::Val<'a>, B0::Time, &<B0::Cursor as Cursor>::Diff, &<B1::Cursor as Cursor>::Diff, &mut CB) + 'static,
+        L: for<'a> FnMut(<B0::Cursor as Cursor>::Key<'a>, <B0::Cursor as Cursor>::Val<'a>, <B1::Cursor as Cursor>::Val<'a>, <B0::Cursor as Cursor>::Time, &<B0::Cursor as Cursor>::Diff, &<B1::Cursor as Cursor>::Diff, &mut CB) + 'static,
     {
-        fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = CB::Container>> {
+        fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: <B0::Cursor as Cursor>::Time) -> Box<dyn Iterator<Item = CB::Container>> {
             // The accumulated side's history is advanced by `meet` to consolidate it before the
             // cross-product; the fresh side is left, as its times already lie at or beyond `meet`. `fresh`
             // fixes which side is which. The advance is output-neutral either way (the fresh side's times are

@@ -94,7 +94,7 @@ fn main() {
 
         /* Return trace content after the last round. */
         let batches = graph_trace.batches_through(Antichain::new().borrow()).unwrap();
-        let (mut cursor, storage) = cursor_list(batches);
+        let (mut cursor, storage) = cursor_list(batches.into_iter().filter_map(|b| b.inner).collect());
         cursor.to_vec(&storage, |k| k.clone(), |v| v.clone())
     })
     .unwrap().join();

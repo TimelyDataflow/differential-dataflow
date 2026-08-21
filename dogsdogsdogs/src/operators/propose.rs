@@ -27,7 +27,7 @@ pub fn propose<'scope, Tr, K, F, P, V, R, FF>(
     strict: bool,
 ) -> VecCollection<'scope, Tr::Time, ((P, V), Tr::Time), <R as Mul<BatchDiff<Tr>>>::Output>
 where
-    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Payload: Navigable, Time: std::hash::Hash>+Clone+'static,
     BatchCursor<Tr>: Cursor<Time = Tr::Time, ValOwn = V>,
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
     K: Hashable + ExchangeData,

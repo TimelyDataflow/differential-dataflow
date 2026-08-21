@@ -25,7 +25,7 @@ use crate::operators::arrange::Arranged;
 pub fn bfs_arranged<'scope, N, Tr>(edges: Arranged<'scope, Tr>, roots: VecCollection<'scope, Tr::Time, N>) -> VecCollection<'scope, Tr::Time, (N, u32)>
 where
     N: ExchangeData+Hash,
-    Tr: TraceReader<Batch: Navigable>+Clone+'static,
+    Tr: TraceReader<Payload: Navigable>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Time=Tr::Time, Diff=isize>,
 {
     // initialize roots as reaching themselves at distance 0

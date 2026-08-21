@@ -14,7 +14,7 @@ use crate::difference::{Semigroup, Abelian};
 use crate::hashable::Hashable;
 use crate::collection::AsCollection;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchCursor, BatchDiff, BatchDiffGat, BatchKey, BatchReader, Cursor, Navigable, TraceReader};
+use crate::trace::{BatchCursor, BatchDiff, BatchDiffGat, BatchKey, Cursor, Navigable, TraceReader};
 
 /// Extension trait for the `distinct` differential dataflow method.
 pub trait ThresholdTotal<'scope, T: Timestamp + TotalOrder + Lattice, K: ExchangeData, R: ExchangeData+Semigroup> : Sized {
@@ -100,7 +100,7 @@ where
 
 impl<'scope, K, Tr> ThresholdTotal<'scope, Tr::Time, K, BatchDiff<Tr>> for Arranged<'scope, Tr>
 where
-    Tr: TraceReader<Batch: Navigable, Time: TotalOrder> + Clone + 'static,
+    Tr: TraceReader<Payload: Navigable, Time: TotalOrder> + Clone + 'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Key<'a>=&'a K,
         Val<'a>=&'a (),
@@ -146,8 +146,8 @@ where
 
                     let mut session = output.session(&caps);
 
-                    let (mut batch_cursor, batch_storage) = crate::trace::cursor::cursor_list(batch_storage);
-                    let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(trace.batches_through(lower_limit.borrow()).unwrap());
+                    let (mut batch_cursor, batch_storage) = crate::trace::cursor::cursor_list(batch_storage.into_iter().filter_map(|b| b.inner).collect());
+                    let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(trace.batches_through(lower_limit.borrow()).unwrap().into_iter().filter_map(|b| b.inner).collect());
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
                         let mut count: Option<BatchDiff<Tr>> = None;

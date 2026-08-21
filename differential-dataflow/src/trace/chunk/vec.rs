@@ -392,6 +392,7 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
 
 #[cfg(test)]
 mod test {
+    use timely::progress::Antichain;
     use std::collections::VecDeque;
     use super::{Chunk, VecChunk};
     use crate::trace::chunk::merge_chains;
@@ -413,7 +414,6 @@ mod test {
     fn extract_partitions_and_grades() {
         use super::TARGET;
         use crate::trace::chunk::{is_graded, settle_all};
-        use timely::progress::Antichain;
 
         // 4·TARGET updates spread over many input chunks; even times ship
         // (< frontier), odd times keep (>= frontier), so both sides straddle.
@@ -442,7 +442,6 @@ mod test {
     // pushing the (possibly-growing) last group back as the carry when not `done`.
     #[test]
     fn advance_emits_complete_groups_eagerly() {
-        use timely::progress::Antichain;
 
         let frontier = Antichain::from_elem(5u64);
         // Group (0,0) is complete within this chunk; group (1,0) might still grow.
@@ -463,7 +462,6 @@ mod test {
     // at group boundaries.
     #[test]
     fn advance_resumable_matches_oneshot() {
-        use timely::progress::Antichain;
 
         let frontier = Antichain::from_elem(3u64);
         // Groups span chunk boundaries and carry several times each.
@@ -497,7 +495,6 @@ mod test {
     // It must still produce the right advanced+consolidated result at the end.
     #[test]
     fn advance_single_key_spanning_pushes() {
-        use timely::progress::Antichain;
 
         let frontier = Antichain::from_elem(100u64);
         let n = 50u64;
@@ -601,12 +598,10 @@ mod test {
     // resumable merge→advance→settle pipeline and the grade-at-yield invariant.
     #[test]
     fn batch_merger_resumable_matches_reference() {
-        use crate::trace::Description;
         use crate::trace::implementations::spine_fueled::Merger;
         use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
         use crate::trace::cursor::Cursor;
         use crate::consolidation::consolidate_updates;
-        use timely::progress::Antichain;
 
         let mut seed = 0x9E3779B97F4A7C15u64;
         let mut rng = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
@@ -626,9 +621,7 @@ mod test {
         // Cut a consolidated set into a batch of small chunks, so groups straddle.
         fn batch(updates: &[((u64, u64), u64, i64)], sz: usize) -> ChunkBatch<VecChunk<u64, u64, u64, i64>> {
             let chunks: Vec<_> = updates.chunks(sz).map(|c| VecChunk(Rc::new(c.to_vec()))).collect();
-            let desc = Description::new(
-                Antichain::from_elem(0u64), Antichain::from_elem(10u64), Antichain::from_elem(0u64));
-            ChunkBatch::new(chunks, desc)
+            ChunkBatch::new(chunks)
         }
         // Flatten a batch through its straddle-aware cursor, then consolidate.
         fn read(b: &ChunkBatch<VecChunk<u64, u64, u64, i64>>) -> Vec<((u64, u64), u64, i64)> {
@@ -714,21 +707,14 @@ mod test {
     #[test]
     fn cursor_handles_straddle() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::Description;
         use crate::trace::chunk::ChunkBatch;
-        use timely::progress::Antichain;
 
         let chunks = vec![
             chunk(vec![((0, 0), 0, 1), ((1, 0), 0, 1), ((1, 1), 0, 1)]),
             chunk(vec![((1, 1), 1, 1), ((1, 2), 0, 1)]),
             chunk(vec![((2, 0), 0, 1)]),
         ];
-        let desc = Description::new(
-            Antichain::from_elem(0u64),
-            Antichain::from_elem(2u64),
-            Antichain::from_elem(0u64),
-        );
-        let batch = ChunkBatch::new(chunks, desc);
+        let batch = ChunkBatch::new(chunks);
 
         let mut cursor = batch.cursor();
         let got = cursor.to_vec(&batch, |k| *k, |v| *v);
@@ -781,15 +767,11 @@ mod test {
     #[test]
     fn seek_key_hint_is_direction_independent() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::Description;
         use crate::trace::chunk::ChunkBatch;
-        use timely::progress::Antichain;
 
         // One key per chunk (even keys 0, 2, .., 38) so seeks cross boundaries both ways.
         let chunks: Vec<_> = (0..20u64).map(|k| chunk(vec![((2 * k, 0u64), 0u64, 1i64)])).collect();
-        let desc = Description::new(
-            Antichain::from_elem(0u64), Antichain::from_elem(1u64), Antichain::from_elem(0u64));
-        let batch = ChunkBatch::new(chunks, desc);
+        let batch = ChunkBatch::new(chunks);
 
         // First key `>= tgt`: the next even at or above `tgt`, or absent past the last (38).
         let oracle = |tgt: u64| { let e = tgt + (tgt & 1); (e <= 38).then_some(e) };

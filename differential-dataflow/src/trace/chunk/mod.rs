@@ -57,8 +57,8 @@ use std::collections::VecDeque;
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 use crate::lattice::Lattice;
-use crate::trace::{Batch, BatchReader, Description, Navigable};
-use crate::trace::implementations::spine_fueled::SpineBatch;
+use crate::trace::{Batch, Description, Navigable};
+use crate::trace::implementations::spine_fueled::SpinePayload;
 use crate::trace::cursor::Cursor;
 use crate::trace::implementations::BatchContainer;
 
@@ -238,21 +238,22 @@ where
 type KeyCon<C> = <<C as Navigable>::Cursor as Cursor>::KeyContainer;
 type ValCon<C> = <<C as Navigable>::Cursor as Cursor>::ValContainer;
 
-/// A batch is a [`Chunk`] sequence plus a [`Description`].
+/// A batch payload: an ordered [`Chunk`] sequence whose concatenation is the batch.
+///
+/// This is pure payload; the description of the times it covers travels alongside it,
+/// in the [`Batch`] that wraps it.
 pub struct ChunkBatch<C: Chunk> {
     /// Ordered, consolidated chunks; their concatenation is the batch.
     pub chunks: Vec<C>,
-    /// The lower, upper, and since frontiers of the batch.
-    pub description: Description<C::Time>,
 }
 
 impl<C: Chunk> ChunkBatch<C> {
-    /// Assemble a batch from ordered chunks.
-    pub fn new(chunks: Vec<C>, description: Description<C::Time>) -> Self {
+    /// Assemble a batch payload from ordered chunks.
+    pub fn new(chunks: Vec<C>) -> Self {
         for chunk in &chunks {
             assert!(chunk.len() > 0, "ChunkBatch chunks must be non-empty");
         }
-        ChunkBatch { chunks, description }
+        ChunkBatch { chunks }
     }
 }
 
@@ -263,28 +264,13 @@ impl<C: NavigableChunk> crate::trace::Navigable for ChunkBatch<C> {
     }
 }
 
-impl<C: Chunk> BatchReader for ChunkBatch<C> {
+impl<C: Chunk + Default + 'static> SpinePayload for ChunkBatch<C>
+where
+    C::Time: timely::progress::Timestamp + Lattice + Ord,
+{
     type Time = C::Time;
-    fn len(&self) -> usize { self.chunks.iter().map(C::len).sum() }
-    fn description(&self) -> &Description<Self::Time> { &self.description }
-}
-
-impl<C: Chunk + Default + 'static> SpineBatch for ChunkBatch<C>
-where
-    C::Time: timely::progress::Timestamp + Lattice + Ord,
-{
     type Merger = ChunkBatchMerger<C>;
-}
-
-impl<C: Chunk + Default + 'static> Batch for ChunkBatch<C>
-where
-    C::Time: timely::progress::Timestamp + Lattice + Ord,
-{
-    fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
-        use timely::progress::Timestamp;
-        let since = Antichain::from_elem(Self::Time::minimum());
-        ChunkBatch::new(Vec::new(), Description::new(lower, upper, since))
-    }
+    fn len(&self) -> usize { self.chunks.iter().map(C::len).sum() }
 }
 
 /// A merge-batcher [`Merger`](crate::trace::implementations::merge_batcher::Merger)
@@ -299,8 +285,8 @@ pub type ChunkBatcher<C> = crate::trace::implementations::merge_batcher::MergeBa
 /// A spine of `Rc`-shared [`ChunkBatch`]es of type `C`: the trace type for `arrange`.
 pub type ChunkSpine<C> = crate::trace::implementations::spine_fueled::Spine<std::rc::Rc<ChunkBatch<C>>>;
 
-/// A reference-counted [`ChunkBatch`] builder over chunks of type `C`.
-pub type ChunkBuilder<C> = crate::trace::rc_blanket_impls::RcBuilder<ChunkBatchBuilder<C>>;
+/// A [`ChunkBatch`] builder over chunks of type `C`, emitting `Rc`-shared payloads.
+pub type ChunkBuilder<C> = ChunkBatchBuilder<C>;
 
 /// A cursor over a [`ChunkBatch`], merging the per-chunk cursors.
 ///
@@ -576,9 +562,6 @@ where
 pub struct ChunkBatchMerger<C: Chunk> {
     /// Compaction frontier supplied at construction.
     frontier: Antichain<C::Time>,
-    /// Result frontiers, retained for the output description.
-    lower: Antichain<C::Time>,
-    upper: Antichain<C::Time>,
     /// Input deques, refilled from the sources (clones) head-of-list at a time.
     in1: VecDeque<C>,
     in2: VecDeque<C>,
@@ -602,13 +585,9 @@ where
     C: Chunk + Default + 'static,
     C::Time: timely::progress::Timestamp + Lattice + Ord + 'static,
 {
-    fn new(source1: &ChunkBatch<C>, source2: &ChunkBatch<C>, frontier: AntichainRef<C::Time>) -> Self {
-        let lower = source1.description.lower().meet(source2.description.lower());
-        let upper = source1.description.upper().join(source2.description.upper());
+    fn new(_source1: &ChunkBatch<C>, _source2: &ChunkBatch<C>, frontier: AntichainRef<C::Time>) -> Self {
         Self {
             frontier: frontier.to_owned(),
-            lower,
-            upper,
             in1: VecDeque::new(),
             in2: VecDeque::new(),
             idx1: 0,
@@ -668,8 +647,7 @@ where
 
     fn done(self) -> ChunkBatch<C> {
         debug_assert!(self.merged.is_empty() && self.advanced.is_empty());
-        let description = Description::new(self.lower, self.upper, self.frontier);
-        ChunkBatch::new(self.settled.into(), description)
+        ChunkBatch::new(self.settled.into())
     }
 }
 
@@ -688,7 +666,7 @@ where
 {
     type Input = C;
     type Time = C::Time;
-    type Output = ChunkBatch<C>;
+    type Output = Batch<C::Time, std::rc::Rc<ChunkBatch<C>>>;
 
     fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
         Self { input: VecDeque::new(), output: VecDeque::new() }
@@ -702,17 +680,24 @@ where
         }
     }
 
-    fn done(self, description: Description<C::Time>) -> ChunkBatch<C> {
+    fn done(self, description: Description<C::Time>) -> Self::Output {
         let ChunkBatchBuilder { mut input, mut output } = self;
         C::settle(&mut input, true, &mut output);
-        ChunkBatch::new(output.into(), description)
+        let chunks: Vec<C> = output.into();
+        wrap(chunks, description)
     }
 
-    fn seal(chain: &mut Vec<C>, description: Description<C::Time>) -> ChunkBatch<C> {
+    fn seal(chain: &mut Vec<C>, description: Description<C::Time>) -> Self::Output {
         // We settle the chain because we are not guaranteed to received pre-settled data.
         // This should be efficient on pre-settled data.
-        ChunkBatch::new(settle_all(std::mem::take(chain)), description)
+        wrap(settle_all(std::mem::take(chain)), description)
     }
+}
+
+/// Wraps settled chunks and a description as a batch, with an absent payload when empty.
+fn wrap<C: Chunk>(chunks: Vec<C>, description: Description<C::Time>) -> Batch<C::Time, std::rc::Rc<ChunkBatch<C>>> {
+    let inner = if chunks.is_empty() { None } else { Some(std::rc::Rc::new(ChunkBatch::new(chunks))) };
+    Batch::new(description, inner)
 }
 
 /// Whether `chunks` satisfy the [`Chunk::TARGET`] grading invariant: every chunk

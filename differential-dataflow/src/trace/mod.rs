@@ -27,6 +27,52 @@ pub use self::description::Description;
 /// A type used to express how much effort a trace should exert even in the absence of updates.
 pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize)])->Option<usize>+Send+Sync>;
 
+/// An immutable collection of updates: a description of the times it covers, and an
+/// optional payload of updates themselves.
+///
+/// The description records the lower and upper bounds of contained update times, and a
+/// frontier `since` through which the times may have been advanced. The payload holds
+/// the updates, and is absent exactly when there are none: an "empty batch" is pure
+/// description, and anyone can construct one (see [`Batch::empty`]) — no capability of
+/// the payload type is involved.
+///
+/// The payload type is unconstrained here. Reading its contents is the [`Navigable`]
+/// capability; anything else (merging, sizing) is the business of whichever trace
+/// implementation holds it (for example the fueled spine's
+/// [`SpinePayload`](crate::trace::implementations::spine_fueled::SpinePayload)).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Batch<T, B> {
+    /// The lower and upper bounds of contained update times, and the compaction frontier.
+    pub desc: Description<T>,
+    /// The updates themselves; absent exactly when there are none.
+    pub inner: Option<B>,
+}
+
+impl<T, B> Batch<T, B> {
+    /// A batch from a description and an optional payload.
+    pub fn new(desc: Description<T>, inner: Option<B>) -> Self { Self { desc, inner } }
+    /// Describes the times of the updates in the batch.
+    pub fn description(&self) -> &Description<T> { &self.desc }
+    /// All times in the batch are greater or equal to an element of `lower`.
+    pub fn lower(&self) -> &Antichain<T> { self.desc.lower() }
+    /// All times in the batch are not greater or equal to any element of `upper`.
+    pub fn upper(&self) -> &Antichain<T> { self.desc.upper() }
+    /// Times in the batch may have been advanced through this frontier.
+    pub fn since(&self) -> &Antichain<T> { self.desc.since() }
+    /// True if the batch contains no updates.
+    pub fn is_empty(&self) -> bool { self.inner.is_none() }
+}
+
+impl<T: Timestamp, B> Batch<T, B> {
+    /// An empty batch over the indicated interval: a description with no payload.
+    pub fn empty(lower: Antichain<T>, upper: Antichain<T>) -> Self {
+        Self { desc: Description::new(lower, upper, Antichain::from_elem(T::minimum())), inner: None }
+    }
+}
+
+/// The batch type of a trace: [`Batch`] instantiated at the trace's time and payload.
+pub type BatchOf<Tr> = Batch<<Tr as TraceReader>::Time, <Tr as TraceReader>::Payload>;
+
 /// A trace whose contents may be read.
 ///
 /// This is a restricted interface to the more general `Trace` trait, which extends this trait with further methods
@@ -40,11 +86,13 @@ pub trait TraceReader {
     /// bound its contents and to drive compaction.
     type Time: Timestamp + Lattice;
 
-    /// The type of an immutable collection of updates.
-    type Batch:
-        'static +
-        Clone +
-        BatchReader<Time = Self::Time>;
+    /// The payload type of the trace's batches.
+    ///
+    /// This is the storage for a batch's updates; batches themselves are
+    /// [`Batch<Self::Time, Self::Payload>`](Batch), pairing an optional payload
+    /// with a description. Reading a payload's contents is the optional
+    /// [`Navigable`] capability, required only where cursors are taken.
+    type Payload: 'static + Clone;
 
     /// Acquires the non-empty sequence of batches covering updates at times not greater or equal to an
     /// element of `upper`.
@@ -53,7 +101,7 @@ pub trait TraceReader {
     /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
     /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the batches. This
     /// should allow `upper` such as `&[]`, used to acquire all batches, though it is difficult to imagine other uses.
-    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>>;
+    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Batch<Self::Time, Self::Payload>>>;
 
     /// Advances the frontier that constrains logical compaction.
     ///
@@ -108,7 +156,7 @@ pub trait TraceReader {
     ///
     /// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
     /// the stream of batches moving past the trace.
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F);
+    fn map_batches<F: FnMut(&Batch<Self::Time, Self::Payload>)>(&self, f: F);
 
     /// Reads the upper frontier of committed times.
     ///
@@ -142,7 +190,7 @@ pub trait TraceReader {
 ///
 /// The trace itself is opinionated only about `Time`, which bounds its contents and drives its compaction.
 /// Key, value, and diff opinions live on the batches' cursors, and are reached through [`Navigable`].
-pub trait Trace : TraceReader<Batch: Batch> {
+pub trait Trace : TraceReader {
 
     /// Allocates a new empty trace.
     fn new(
@@ -169,48 +217,13 @@ pub trait Trace : TraceReader<Batch: Batch> {
     ///
     /// This restriction could be relaxed, especially if we discover ways in which batch interval order could
     /// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
-    fn insert(&mut self, batch: Self::Batch);
+    fn insert(&mut self, batch: Batch<Self::Time, Self::Payload>);
 
     /// Introduces an empty batch concluding the trace.
     ///
     /// This method should be logically equivalent to introducing an empty batch whose lower frontier equals
     /// the upper frontier of the most recently introduced batch, and whose upper frontier is empty.
     fn close(&mut self);
-}
-
-/// A batch of updates whose contents may be read.
-///
-/// This is a restricted interface to batches of updates, which support the reading of the batch's contents,
-/// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
-/// especially useful for views derived from other sources in ways that prevent the construction of batches
-/// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader : Sized {
-
-    /// The timestamp type of the batch's updates.
-    type Time: Timestamp + Lattice;
-
-    /// The number of updates in the batch.
-    fn len(&self) -> usize;
-    /// True if the batch is empty.
-    fn is_empty(&self) -> bool { self.len() == 0 }
-    /// Describes the times of the updates in the batch.
-    fn description(&self) -> &Description<Self::Time>;
-
-    /// All times in the batch are greater or equal to an element of `lower`.
-    fn lower(&self) -> &Antichain<Self::Time> { self.description().lower() }
-    /// All times in the batch are not greater or equal to any element of `upper`.
-    fn upper(&self) -> &Antichain<Self::Time> { self.description().upper() }
-}
-
-/// An immutable collection of updates.
-///
-/// This trait asks only that batches can be minted empty over an indicated interval,
-/// which trace maintenance uses to pad out otherwise empty intervals of time. Opinions
-/// about how batches merge belong to individual trace implementations (for example
-/// [`SpineBatch`](crate::trace::implementations::spine_fueled::SpineBatch)).
-pub trait Batch : BatchReader + Sized {
-    /// Produce an empty batch over the indicated interval.
-    fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self;
 }
 
 /// Functionality for collecting and batching updates.
@@ -272,25 +285,15 @@ pub mod rc_blanket_impls {
 
     use std::rc::Rc;
 
-    use timely::progress::Antichain;
-    use super::{Batch, BatchReader, Builder, Navigable, Cursor, Description};
+    use super::{Navigable, Cursor};
 
-    impl<B: BatchReader + Navigable> Navigable for Rc<B> {
+    impl<B: Navigable> Navigable for Rc<B> {
         /// The type used to enumerate the batch's contents.
         type Cursor = RcBatchCursor<B::Cursor>;
         /// Acquires a cursor to the batch's contents.
         fn cursor(&self) -> Self::Cursor {
             RcBatchCursor::new((**self).cursor())
         }
-    }
-
-    impl<B: BatchReader> BatchReader for Rc<B> {
-
-        type Time = B::Time;
-        /// The number of updates in the batch.
-        fn len(&self) -> usize { (**self).len() }
-        /// Describes the times of the updates in the batch.
-        fn description(&self) -> &Description<Self::Time> { (**self).description() }
     }
 
     /// Wrapper to provide cursor to nested scope.
@@ -344,29 +347,6 @@ pub mod rc_blanket_impls {
 
         #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
         #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
-    }
-
-    /// An immutable collection of updates.
-    impl<B: Batch> Batch for Rc<B> {
-        fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
-            Rc::new(B::empty(lower, upper))
-        }
-    }
-
-    /// Wrapper type for building reference counted batches.
-    pub struct RcBuilder<B: Builder> { builder: B }
-
-    /// Functionality for building batches from ordered update sequences.
-    impl<B: Builder> Builder for RcBuilder<B> {
-        type Input = B::Input;
-        type Time = B::Time;
-        type Output = Rc<B::Output>;
-        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { RcBuilder { builder: B::with_capacity(keys, vals, upds) } }
-        fn push(&mut self, input: &mut Self::Input) { self.builder.push(input) }
-        fn done(self, description: Description<Self::Time>) -> Rc<B::Output> { Rc::new(self.builder.done(description)) }
-        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
-            Rc::new(B::seal(chain, description))
-        }
     }
 
 }

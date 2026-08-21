@@ -100,7 +100,7 @@ fn main() {
                                 println!("Report at {:?}", query_time);
                                 // enumerate the contents of `trace` at `query_time`.
                                 let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
-                                let (mut cursor, storage) = cursor_list(batches);
+                                let (mut cursor, storage) = cursor_list(batches.into_iter().filter_map(|b| b.inner).collect());
                                 while let Some(key) = cursor.get_key(&storage) {
                                     while let Some(_val) = cursor.get_val(&storage) {
                                         let mut sum = 0;

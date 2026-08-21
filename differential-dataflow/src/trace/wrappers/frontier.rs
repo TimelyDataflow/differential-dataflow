@@ -8,7 +8,7 @@
 
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use crate::trace::{BatchReader, Description, TraceReader};
+use crate::trace::{Batch, TraceReader};
 use crate::lattice::Lattice;
 
 /// Wrapper to provide trace to nested scope.
@@ -33,12 +33,18 @@ impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
 impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
 
     type Time = Tr::Time;
-    type Batch = BatchFrontier<Tr::Batch>;
+    type Payload = BatchFrontier<Tr::Payload, Tr::Time>;
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
+    fn map_batches<F: FnMut(&Batch<Tr::Time, Self::Payload>)>(&self, mut f: F) {
         let since = self.since.borrow();
         let until = self.until.borrow();
-        self.trace.map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), since, until)))
+        self.trace.map_batches(|batch| {
+            let wrapped = Batch::new(
+                batch.desc.clone(),
+                batch.inner.clone().map(|p| BatchFrontier::make_from(p, since, until)),
+            );
+            f(&wrapped)
+        })
     }
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_logical_compaction(frontier) }
@@ -47,11 +53,13 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_physical_compaction(frontier) }
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.trace.get_physical_compaction() }
 
-    fn batches_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Self::Batch>> {
+    fn batches_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Batch<Tr::Time, Self::Payload>>> {
         let storage = self.trace.batches_through(upper)?;
         let since = self.since.borrow();
         let until = self.until.borrow();
-        Some(storage.into_iter().map(|batch| BatchFrontier::make_from(batch, since, until)).collect())
+        Some(storage.into_iter().map(|batch| {
+            Batch::new(batch.desc, batch.inner.map(|p| BatchFrontier::make_from(p, since, until)))
+        }).collect())
     }
 }
 
@@ -67,23 +75,19 @@ impl<Tr: TraceReader> TraceFrontier<Tr> {
 }
 
 
-/// Wrapper to provide batch to nested scope.
+/// Wrapper to provide a batch payload to a nested scope.
 #[derive(Clone)]
-pub struct BatchFrontier<B: BatchReader> {
+pub struct BatchFrontier<B, T> {
     batch: B,
-    since: Antichain<B::Time>,
-    until: Antichain<B::Time>,
+    since: Antichain<T>,
+    until: Antichain<T>,
 }
 
-impl<B: BatchReader> BatchReader for BatchFrontier<B> {
-    type Time = B::Time;
-    fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<B::Time> { self.batch.description() }
-}
-
-impl<B: BatchReader> BatchFrontier<B> {
-    /// Makes a new batch wrapper
-    pub fn make_from(batch: B, since: AntichainRef<B::Time>, until: AntichainRef<B::Time>) -> Self {
+impl<B, T> BatchFrontier<B, T> {
+    /// Makes a new payload wrapper
+    pub fn make_from(batch: B, since: AntichainRef<T>, until: AntichainRef<T>) -> Self
+    where T: Clone,
+    {
         BatchFrontier {
             batch,
             since: since.to_owned(),
@@ -91,20 +95,22 @@ impl<B: BatchReader> BatchFrontier<B> {
         }
     }
 
-    /// The wrapped batch, whose times are neither advanced nor suppressed.
+    /// The wrapped payload, whose times are neither advanced nor suppressed.
     ///
     /// Its times must be presented through [`BatchFrontier::advance_time`], which is the whole of
     /// the wrapper's read-side semantics.
     pub fn inner(&self) -> &B { &self.batch }
 
-    /// Applies the wrapper's time semantics to a time of the wrapped batch.
+    /// Applies the wrapper's time semantics to a time of the wrapped payload.
     ///
     /// The time is advanced by `since`, which accumulates the updates at or before `since` rather
     /// than presenting them partially accumulated. The method returns whether the advanced time
     /// should be presented at all: times at or after `until` are suppressed, even when they are
     /// part of a batch that spans `until`.
     #[inline]
-    pub fn advance_time(&self, time: &mut B::Time) -> bool {
+    pub fn advance_time(&self, time: &mut T) -> bool
+    where T: Lattice + timely::progress::Timestamp,
+    {
         time.advance_by(self.since.borrow());
         !self.until.less_equal(time)
     }
