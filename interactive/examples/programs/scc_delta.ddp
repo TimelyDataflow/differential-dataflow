@@ -1,0 +1,47 @@
+-- Strongly Connected Components, with the trim steps as delta joins.
+-- input 0: edges (src, dst ;)
+--
+-- The only difference from `scc.ddp` is how `trim_fwd` and `trim_bwd` are
+-- written. Each is a triangle: an edge, and the label of each of its endpoints,
+-- kept when the two labels agree. `scc.ddp` says that as two binary joins plus
+-- a filter, which builds an intermediate collection and arranges it; here it is
+-- one rule body, where the agreement is a shared attribute rather than a test.
+--
+-- Both trims sit inside `outer`, which iterates: the delta paths run under a
+-- `Product<u64, PointStamp<u64>>` time whose iteration coordinate advances
+-- beneath them.
+
+let edges = input 0 | key($0[0] ; $0[1]);
+let trans = edges | key($1 ; $0);
+
+outer: {
+    let scc = edges + trim;
+
+    fwd: {
+        let nodes = edges | key($1 ; $1) | enter_at($1[0]);
+        let labels = proposals + nodes | min;
+        var proposals = labels | join(scc, ($2 ; $1));
+    }
+
+    let trim_fwd = delta_join {
+        edges(s, d),
+        fwd::labels(s, l),
+        fwd::labels(d, l),
+    } => (d ; s);
+
+    bwd: {
+        let nodes = trans | key($1 ; $1) | enter_at($1[0]);
+        let labels = proposals + nodes | min;
+        var proposals = labels | join(trim_fwd, ($2 ; $1));
+    }
+
+    let trim_bwd = delta_join {
+        trans(s, d),
+        bwd::labels(s, l),
+        bwd::labels(d, l),
+    } => (d ; s);
+
+    var trim = trim_bwd - edges;
+}
+
+export "result" = outer::scc | map(;) | arrange | inspect(total);

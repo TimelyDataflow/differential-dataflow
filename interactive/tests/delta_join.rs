@@ -163,3 +163,26 @@ fn delta_indexes_do_not_merge_with_ordinary_arrangements() {
     assert_eq!(arranges, 1, "the ordinary join keeps its own arrangement of `edges`");
     assert_eq!(indexes, 3, "the delta join keeps its own three indexes");
 }
+
+/// `scc.ddp` and `scc_delta.ddp` differ only in how the two trim steps are
+/// written. The delta version puts a three-atom rule body *inside an iterating
+/// scope*, so the paths run under a time whose iteration coordinate advances
+/// beneath them — the configuration DDIR programs actually live in.
+#[test]
+fn scc_trim_as_a_delta_join_matches_scc() {
+    let dir = format!("{}/examples/programs", env!("CARGO_MANIFEST_DIR"));
+    let load = |name: &str| std::fs::read_to_string(format!("{dir}/{name}.ddp")).unwrap();
+    // A graph whose components are non-trivial: two cycles joined by a bridge,
+    // plus a tail that trims away.
+    let edges = [
+        (1, 2), (2, 3), (3, 1),
+        (3, 4),
+        (4, 5), (5, 6), (6, 4),
+        (6, 7),
+        (8, 8),
+    ];
+    let binary = run(&load("scc"), &edges);
+    let delta = run(&load("scc_delta"), &edges);
+    assert!(!binary.is_empty(), "the fixture should have a non-empty condensation");
+    assert_eq!(delta, binary);
+}
