@@ -187,6 +187,20 @@ where
     })
 }
 
+/// The default yield policy: return control after a millisecond of work.
+///
+/// Without one, a single activation drains every outstanding work item, so one large epoch
+/// monopolizes the worker and nothing downstream of the operator runs until it is done. This
+/// does not change what the operator produces — [`half_join_with_tactic`] reschedules itself
+/// while `todo` is non-empty — only when it produces it.
+///
+/// The `work > 0` clause is load-bearing rather than a tie-break. The driver tests this
+/// *before* pulling from a work item, so a policy that can fire at zero work would yield, be
+/// rescheduled, yield again, and never advance.
+pub fn yield_after_a_millisecond(start: std::time::Instant, work: usize) -> bool {
+    work > 0 && start.elapsed() > std::time::Duration::from_millis(1)
+}
+
 /// Cursor-based half join: the conventional [`HalfJoinTactic`] implementation, its worker, and the
 /// `half_join` entry points built on them.
 pub mod cursors {
@@ -251,7 +265,7 @@ pub mod cursors {
                 builder.push_into((dout, initial.clone(), diff));
             }
         };
-        half_join_internal_unsafe::<_, _, _, _, _, _, _, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, strict, |_timer, _count| false, output_func)
+        half_join_internal_unsafe::<_, _, _, _, _, _, _, CapacityContainerBuilder<Vec<_>>>(stream, arrangement, frontier_func, strict, super::yield_after_a_millisecond, output_func)
             .as_collection()
     }
 

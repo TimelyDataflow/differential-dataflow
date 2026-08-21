@@ -388,7 +388,7 @@ impl Backend for CorgiBackend {
         kind: &st::StageKind,
         strict: bool,
     ) -> differential_dataflow::VecCollection<'s, Time, (Prefix, Time), Diff> {
-        use differential_dogs3::operators::half_join::{cursors::BlobList, half_join_with_tactic};
+        use differential_dogs3::operators::half_join::{cursors::BlobList, half_join_with_tactic, yield_after_a_millisecond};
         use crate::corgi::half_join::CorgiHalfJoinTactic;
 
         let (probe, bind) = stage_probe(kind);
@@ -400,7 +400,7 @@ impl Backend for CorgiBackend {
             index,
             Pipeline,
             no_compaction,
-            |_timer, _count| false,
+            yield_after_a_millisecond,
             BlobList::new(strict),
             CorgiHalfJoinTactic::new(move |_k: &Row, prefix: &Prefix, val: &Row| stage_extend(prefix, bind, val), strict),
         )
