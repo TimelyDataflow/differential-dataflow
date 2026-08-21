@@ -153,13 +153,21 @@ pub trait Backend {
             // The delta's own row is the binding it makes, and the payload
             // starts at the delta's own time — which is also the update's.
             let (akey, aval) = (body[i].key, body[i].val);
+            // A path with any strict stage cannot produce anything at the minimum time:
+            // a strict lookup needs an arrangement time strictly below the delta's own,
+            // and nothing precedes the minimum. Every path but the last probes at least
+            // one later atom, so only the last path survives a snapshot. Dropping those
+            // deltas at the source is what stops the doomed paths from materializing an
+            // intermediate they will then discard.
+            let doomed_at_minimum = i + 1 < paths.len();
             let mut cur: VecCollection<'s, Time, (Prefix, Time), Diff> = Self::to_rows(atoms[i].clone())
                 .inner
-                .map(move |((k, v), t, d)| {
+                .flat_map(move |((k, v), t, d)| {
+                    if doomed_at_minimum && t == Time::minimum() { return None; }
                     let mut prefix = vec![Value::unit(); n];
                     prefix[akey] = k;
                     prefix[aval] = v;
-                    ((prefix, t.clone()), t, d)
+                    Some(((prefix, t.clone()), t, d))
                 })
                 .as_collection();
 
