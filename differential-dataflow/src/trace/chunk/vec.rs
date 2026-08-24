@@ -601,7 +601,8 @@ mod test {
     // resumable merge→advance→settle pipeline and the grade-at-yield invariant.
     #[test]
     fn batch_merger_resumable_matches_reference() {
-        use crate::trace::{Description, Merger};
+        use crate::trace::Description;
+        use crate::trace::implementations::spine_fueled::Merger;
         use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
         use crate::trace::cursor::Cursor;
         use crate::consolidation::consolidate_updates;
