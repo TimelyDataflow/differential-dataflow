@@ -785,7 +785,7 @@ pub mod vec {
         where
             T2: Trace<Payload: Navigable, Time=T>+'static,
             for<'a> BatchCursor<T2>: Cursor<Key<'a>= &'a K, ValOwn = V, Time = T2::Time, Diff: Abelian>,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output = crate::trace::BatchOf<T2>> + 'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output: Into<T2::Payload>> + 'static,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, BatchDiff<T2>)>)+'static,
         {
             self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
@@ -805,7 +805,7 @@ pub mod vec {
             V: Clone+'static,
             T2: Trace<Payload: Navigable, Time=T>+'static,
             for<'a> BatchCursor<T2>: Cursor<Key<'a>=&'a K, ValOwn = V, Time = T2::Time>,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output = crate::trace::BatchOf<T2>> + 'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output: Into<T2::Payload>> + 'static,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,BatchDiff<T2>)>, &mut Vec<(V, BatchDiff<T2>)>)+'static,
         {
             self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -968,7 +968,7 @@ pub mod vec {
             Ba: crate::trace::Batcher<Output=Vec<((D, ()), T, R)>, Time=T> + 'static,
             Tr: crate::trace::Trace<Payload: Navigable, Time=T>+'static,
             for<'a> BatchCursor<Tr>: Cursor<Time=Tr::Time, Diff=R>,
-            Bu: crate::trace::Builder<Time=Tr::Time, Input=Vec<((D, ()), T, R)>, Output=crate::trace::BatchOf<Tr>>,
+            Bu: crate::trace::Builder<Time=Tr::Time, Input=Vec<((D, ()), T, R)>, Output: Into<Tr::Payload>>,
             F: Fn(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> D + 'static,
         {
             use crate::operators::arrange::arrangement::Arrange;
@@ -1036,7 +1036,7 @@ pub mod vec {
         fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
         where
             Ba: crate::trace::Batcher<Output=Vec<((K, V), T, R)>, Time=T> + 'static,
-            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, V), T, R)>, Output = crate::trace::BatchOf<Tr>>,
+            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, V), T, R)>, Output: Into<Tr::Payload>>,
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),T,R)| (update.0).0.hashed().into());
@@ -1051,7 +1051,7 @@ pub mod vec {
         fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
         where
             Ba: crate::trace::Batcher<Output=Vec<((K, ()), T, R)>, Time=T> + 'static,
-            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, ()), T, R)>, Output = crate::trace::BatchOf<Tr>>,
+            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, ()), T, R)>, Output: Into<Tr::Payload>>,
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,()),T,R)| (update.0).0.hashed().into());

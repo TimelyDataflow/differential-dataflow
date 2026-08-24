@@ -57,7 +57,7 @@ use std::collections::VecDeque;
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 use crate::lattice::Lattice;
-use crate::trace::{Batch, Description, Navigable};
+use crate::trace::Navigable;
 use crate::trace::implementations::spine_fueled::SpinePayload;
 use crate::trace::cursor::Cursor;
 use crate::trace::implementations::BatchContainer;
@@ -666,7 +666,7 @@ where
 {
     type Input = C;
     type Time = C::Time;
-    type Output = Batch<C::Time, std::rc::Rc<ChunkBatch<C>>>;
+    type Output = ChunkBatch<C>;
 
     fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
         Self { input: VecDeque::new(), output: VecDeque::new() }
@@ -680,24 +680,23 @@ where
         }
     }
 
-    fn done(self, description: Description<C::Time>) -> Self::Output {
+    fn done(self) -> Option<Self::Output> {
         let ChunkBatchBuilder { mut input, mut output } = self;
         C::settle(&mut input, true, &mut output);
         let chunks: Vec<C> = output.into();
-        wrap(chunks, description)
+        wrap(chunks)
     }
 
-    fn seal(chain: &mut Vec<C>, description: Description<C::Time>) -> Self::Output {
+    fn seal(chain: &mut Vec<C>) -> Option<Self::Output> {
         // We settle the chain because we are not guaranteed to received pre-settled data.
         // This should be efficient on pre-settled data.
-        wrap(settle_all(std::mem::take(chain)), description)
+        wrap(settle_all(std::mem::take(chain)))
     }
 }
 
-/// Wraps settled chunks and a description as a batch, with an absent payload when empty.
-fn wrap<C: Chunk>(chunks: Vec<C>, description: Description<C::Time>) -> Batch<C::Time, std::rc::Rc<ChunkBatch<C>>> {
-    let inner = if chunks.is_empty() { None } else { Some(std::rc::Rc::new(ChunkBatch::new(chunks))) };
-    Batch::new(description, inner)
+/// Wraps settled chunks as a payload, absent when there are no chunks.
+fn wrap<C: Chunk>(chunks: Vec<C>) -> Option<ChunkBatch<C>> {
+    (!chunks.is_empty()).then(|| ChunkBatch::new(chunks))
 }
 
 /// Whether `chunks` satisfy the [`Chunk::TARGET`] grading invariant: every chunk

@@ -24,8 +24,6 @@ pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher using ordered lists.
 pub type OrdValBatcher<K, V, T, R> = MergeBatcher<VecMerger<(K, V), T, R>>;
 /// A builder using ordered lists.
-///
-/// The builder emits `Rc`-shared payloads directly; there is no separate wrapping layer.
 pub type RcOrdValBuilder<K, V, T, R> = OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>;
 
 /// A trace implementation using a spine of ordered lists.
@@ -33,8 +31,6 @@ pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 /// A batcher for ordered lists.
 pub type OrdKeyBatcher<K, T, R> = MergeBatcher<VecMerger<(K, ()), T, R>>;
 /// A builder for ordered lists.
-///
-/// The builder emits `Rc`-shared payloads directly; there is no separate wrapping layer.
 pub type RcOrdKeyBuilder<K, T, R> = OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>;
 
 pub use layers::{Vals, Upds};
@@ -247,12 +243,11 @@ pub mod layers {
 pub mod val_batch {
 
     use std::marker::PhantomData;
-    use std::rc::Rc;
     use serde::{Deserialize, Serialize};
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Batch, Builder, Cursor, Description};
+    use crate::trace::{Builder, Cursor};
     use crate::trace::implementations::spine_fueled::{SpinePayload, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
@@ -633,7 +628,7 @@ pub mod val_batch {
 
         type Input = CI;
         type Time = layout::Time<L>;
-        type Output = Batch<layout::Time<L>, Rc<OrdValBatch<L>>>;
+        type Output = OrdValBatch<L>;
 
         fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
             Self {
@@ -681,25 +676,21 @@ pub mod val_batch {
         }
 
         #[inline(never)]
-        fn done(mut self, description: Description<Self::Time>) -> Self::Output {
+        fn done(mut self) -> Option<Self::Output> {
             self.staging.seal(&mut self.result.upds);
             self.result.vals.offs.push_ref(self.result.vals.vals.len());
             let updates = self.staging.total();
-            let payload = OrdValBatch {
-                updates,
-                storage: self.result,
-            };
-            Batch::new(description, if updates > 0 { Some(Rc::new(payload)) } else { None })
+            (updates > 0).then(|| OrdValBatch { updates, storage: self.result })
         }
 
-        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
+        fn seal(chain: &mut Vec<Self::Input>) -> Option<Self::Output> {
             let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
             }
 
-            builder.done(description)
+            builder.done()
         }
     }
 }
@@ -708,12 +699,11 @@ pub mod val_batch {
 pub mod key_batch {
 
     use std::marker::PhantomData;
-    use std::rc::Rc;
     use serde::{Deserialize, Serialize};
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Batch, Builder, Cursor, Description};
+    use crate::trace::{Builder, Cursor};
     use crate::trace::implementations::spine_fueled::{SpinePayload, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
@@ -1016,7 +1006,7 @@ pub mod key_batch {
 
         type Input = CI;
         type Time = layout::Time<L>;
-        type Output = Batch<layout::Time<L>, Rc<OrdKeyBatch<L>>>;
+        type Output = OrdKeyBatch<L>;
 
         fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
             Self {
@@ -1049,25 +1039,24 @@ pub mod key_batch {
         }
 
         #[inline(never)]
-        fn done(mut self, description: Description<Self::Time>) -> Self::Output {
+        fn done(mut self) -> Option<Self::Output> {
             self.staging.seal(&mut self.result.upds);
             let updates = self.staging.total();
-            let payload = OrdKeyBatch {
+            (updates > 0).then(|| OrdKeyBatch {
                 updates,
                 storage: self.result,
                 value: OrdKeyBatch::<L>::create_value(),
-            };
-            Batch::new(description, if updates > 0 { Some(Rc::new(payload)) } else { None })
+            })
         }
 
-        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
+        fn seal(chain: &mut Vec<Self::Input>) -> Option<Self::Output> {
             let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
             }
 
-            builder.done(description)
+            builder.done()
         }
     }
 

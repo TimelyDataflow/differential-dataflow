@@ -247,13 +247,17 @@ pub trait Batcher: PushInto<Self::Output> {
     fn frontier(&mut self) -> AntichainRef<'_, Self::Time>;
 }
 
-/// Functionality for building batches from ordered update sequences.
+/// Functionality for building batch payloads from ordered update sequences.
+///
+/// A builder produces a payload, not a [`Batch`]: the description of the times a batch
+/// covers is the caller's, who knows the interval it asked the builder to fill. A builder
+/// that received no updates produces no payload, which is how empty batches arise.
 pub trait Builder: Sized {
     /// Input item type.
     type Input;
     /// Timestamp type.
     type Time: Timestamp;
-    /// Output batch type.
+    /// Output payload type.
     type Output;
 
     /// Allocates an empty builder.
@@ -269,15 +273,15 @@ pub trait Builder: Sized {
     ///
     /// Adds all elements from `chunk` to the builder and leaves `chunk` in an undefined state.
     fn push(&mut self, chunk: &mut Self::Input);
-    /// Completes building and returns the batch.
-    fn done(self, description: Description<Self::Time>) -> Self::Output;
+    /// Completes building and returns the payload, absent if no updates were pushed.
+    fn done(self) -> Option<Self::Output>;
 
-    /// Builds a batch from a chain of updates corresponding to the indicated lower and upper bounds.
+    /// Builds a payload from a chain of updates.
     ///
     /// This method relies on the chain only containing updates greater or equal to the lower frontier,
-    /// and not greater or equal to the upper frontier, as encoded in the description. Chains must also
-    /// be sorted and consolidated.
-    fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output;
+    /// and not greater or equal to the upper frontier, of the interval the caller means to describe.
+    /// Chains must also be sorted and consolidated.
+    fn seal(chain: &mut Vec<Self::Input>) -> Option<Self::Output>;
 }
 
 /// Blanket implementations for reference counted batches.

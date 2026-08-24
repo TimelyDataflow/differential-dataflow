@@ -20,7 +20,7 @@ use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::operators::arrange::{Arranged, TraceAgent};
-use crate::trace::{Batch, BatchCursor, BatchDiff, BatchKey, BatchOf, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
+use crate::trace::{Batch, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 
@@ -97,7 +97,7 @@ where
     BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
-    Bu: Builder<Time=Tr2::Time, Output = BatchOf<Tr2>, Input: Default> + 'static,
+    Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Payload>, Input: Default> + 'static,
     L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
     P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
 {
@@ -306,7 +306,7 @@ mod cursors {
         B1: Navigable,
         B2: Navigable,
         for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = TimeOf<B1>>,
-        Bu: Builder<Time = TimeOf<B1>, Output = Batch<TimeOf<B1>, B2>, Input: Default>,
+        Bu: Builder<Time = TimeOf<B1>, Output: Into<B2>, Input: Default>,
         L: FnMut(<B1::Cursor as Cursor>::Key<'_>, &[(<B1::Cursor as Cursor>::Val<'_>, <B1::Cursor as Cursor>::Diff)], &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>),
         P: FnMut(&mut Bu::Input, <B1::Cursor as Cursor>::Key<'_>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, TimeOf<B1>, <B2::Cursor as Cursor>::Diff)>),
     {
@@ -425,7 +425,7 @@ mod cursors {
                 // Build the batch spanning the interval, and hand it back to the driver
                 // to ship and commit.
                 let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<TimeOf<B1> as Timestamp>::minimum()));
-                produced = Some(builder.done(description));
+                produced = Some(Batch::new(description, builder.done().map(Into::into)));
 
                 // Refresh pending keys and times.
                 self.pending_keys.clear(); std::mem::swap(&mut self.next_pending_keys, &mut self.pending_keys);
@@ -798,7 +798,7 @@ pub(crate) mod reference {
         Tr2: Trace<Payload: Navigable, Time = Tr1::Time> + 'static,
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, ValOwn: Data, Time = Tr2::Time>,
-        Bu: Builder<Time=Tr2::Time, Output = BatchOf<Tr2>, Input: Default> + 'static,
+        Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Payload>, Input: Default> + 'static,
         L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -860,7 +860,7 @@ pub(crate) mod reference {
         B1: Navigable,
         B2: Navigable,
         for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = TimeOf<B1>>,
-        Bu: Builder<Time = TimeOf<B1>, Output = Batch<TimeOf<B1>, B2>, Input: Default>,
+        Bu: Builder<Time = TimeOf<B1>, Output: Into<B2>, Input: Default>,
         L: FnMut(<B1::Cursor as Cursor>::Key<'_>, &[(<B1::Cursor as Cursor>::Val<'_>, <B1::Cursor as Cursor>::Diff)], &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>),
         P: FnMut(&mut Bu::Input, <B1::Cursor as Cursor>::Key<'_>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, TimeOf<B1>, <B2::Cursor as Cursor>::Diff)>),
     {
@@ -953,7 +953,7 @@ pub(crate) mod reference {
                 drop(thinker);
 
                 let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<TimeOf<B1> as Timestamp>::minimum()));
-                produced = Some(builder.done(description));
+                produced = Some(Batch::new(description, builder.done().map(Into::into)));
 
                 self.pending_keys.clear(); std::mem::swap(&mut self.next_pending_keys, &mut self.pending_keys);
                 self.pending_time.clear(); std::mem::swap(&mut self.next_pending_time, &mut self.pending_time);

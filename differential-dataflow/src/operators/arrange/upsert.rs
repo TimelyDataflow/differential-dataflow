@@ -138,7 +138,7 @@ where
         Val<'a> = &'a V,
         Diff=isize,
     >,
-    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output = crate::trace::BatchOf<Tr>>,
+    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output: Into<Tr::Payload>>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -278,7 +278,7 @@ where
                                     builder.push(&mut updates);
                                 }
                                 let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(Tr::Time::minimum()));
-                                let batch = builder.done(description);
+                                let batch = crate::trace::Batch::new(description, builder.done().map(Into::into));
                                 prev_frontier.clone_from(&upper);
 
                                 // Communicate `batch` to the arrangement and the stream.

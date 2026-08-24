@@ -253,7 +253,7 @@ impl<'scope, Tr1: TraceReader<Payload: Navigable>+'static> Arranged<'scope, Tr1>
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time, Diff: Abelian>,
-        Bu: Builder<Time=Tr1::Time, Output = BatchOf<Tr2>, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Payload>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -274,7 +274,7 @@ impl<'scope, Tr1: TraceReader<Payload: Navigable>+'static> Arranged<'scope, Tr1>
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
-        Bu: Builder<Time=Tr1::Time, Output = BatchOf<Tr2>, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Payload>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -307,7 +307,7 @@ pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
     fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output = BatchOf<Tr>>,
+        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Payload>>,
         Tr: Trace<Time=T> + 'static,
     {
         self.arrange_named::<Ba, Bu, Tr>("Arrange")
@@ -319,7 +319,7 @@ pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
     fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output = BatchOf<Tr>>,
+        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Payload>>,
         Tr: Trace<Time=T> + 'static,
     ;
 }
@@ -335,7 +335,7 @@ where
     P: ParallelizationContract<Tr::Time, C>,
     Chu: ContainerBuilder<Container=Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
     Ba: Batcher<Time=Tr::Time> + 'static,
-    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = BatchOf<Tr>>,
+    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output: Into<Tr::Payload>>,
     Tr: Trace+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
@@ -448,7 +448,7 @@ where
 
                     // Extract all updates not in advance of the input frontier, as one batch.
                     let (mut chain, description) = batcher.seal(frontier.frontier().to_owned());
-                    let batch = Bu::seal(&mut chain, description);
+                    let batch = trace::Batch::new(description, Bu::seal(&mut chain).map(Into::into));
 
                     let stamp = retired.iter().map(|c| c.time().clone()).collect::<Stamp<_>>();
                     writer.insert(batch.clone(), stamp);
