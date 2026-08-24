@@ -87,18 +87,14 @@ use ::timely::order::PartialOrder;
 pub trait SpineBatch : Batch {
     /// A type used to progressively merge batches.
     type Merger: Merger<Self>;
-
-    /// Initiates the merging of consecutive batches.
-    ///
-    /// The result of this method can be exercised to eventually produce the same result
-    /// that a call to `self.merge(other)` would produce, but it can be done in a measured
-    /// fashion. This can help to avoid latency spikes where a large merge needs to happen.
-    fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<Self::Time>) -> Self::Merger {
-        Self::Merger::new(self, other, compaction_frontier)
-    }
 }
 
 /// Represents a merge in progress.
+///
+/// Constructing a merger begins the merge of two consecutive batches. Exercising it
+/// eventually produces the same result that merging the batches outright would, but
+/// does so in a measured fashion, which avoids latency spikes when a large merge needs
+/// to happen.
 pub trait Merger<Output: SpineBatch> {
     /// Creates a new merger to merge the supplied batches, optionally compacting
     /// up to the supplied frontier.
@@ -124,7 +120,7 @@ impl<B: SpineBatch> SpineBatch for Rc<B> {
 pub struct RcMerger<B: SpineBatch> { merger: B::Merger }
 
 impl<B: SpineBatch> Merger<Rc<B>> for RcMerger<B> {
-    fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
+    fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self { RcMerger { merger: B::Merger::new(source1, source2, compaction_frontier) } }
     fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
     fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }
 }
@@ -866,8 +862,8 @@ impl<B: SpineBatch<Time: Eq>> MergeState<B> {
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let begin_merge = <B as SpineBatch>::begin_merge(&batch1, &batch2, compaction_frontier);
-                MergeVariant::InProgress(batch1, batch2, begin_merge)
+                let merger = <B::Merger as Merger<B>>::new(&batch1, &batch2, compaction_frontier);
+                MergeVariant::InProgress(batch1, batch2, merger)
             }
             (None, Some(x)) => MergeVariant::Complete(Some((x, None))),
             (Some(x), None) => MergeVariant::Complete(Some((x, None))),

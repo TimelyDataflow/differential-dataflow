@@ -326,10 +326,6 @@ pub mod val_batch {
 
     impl<L: Layout> SpineBatch for OrdValBatch<L> {
         type Merger = OrdValMerger<L>;
-
-        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
-            OrdValMerger::new(self, other, compaction_frontier)
-        }
     }
 
     impl<L: Layout> Batch for OrdValBatch<L> {
@@ -830,10 +826,6 @@ pub mod key_batch {
 
     impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> SpineBatch for OrdKeyBatch<L> {
         type Merger = OrdKeyMerger<L>;
-
-        fn begin_merge(&self, other: &Self, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self::Merger {
-            OrdKeyMerger::new(self, other, compaction_frontier)
-        }
     }
 
     impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Batch for OrdKeyBatch<L> {
