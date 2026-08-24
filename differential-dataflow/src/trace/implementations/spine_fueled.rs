@@ -80,11 +80,9 @@ use ::timely::order::PartialOrder;
 
 /// The requirements this spine imposes on batch payloads.
 ///
-/// These are opinions of this spine, not properties of payloads in general: payloads
-/// must support progressive (fuel-limited) merging through a [`Merger`], and must report
-/// their size, which drives the spine's geometric layering and its logging. Descriptions
-/// are none of the payload's business: the spine computes the description of each merge
-/// result itself, from the descriptions of the inputs and the compaction frontier.
+/// These are opinions of this spine, not properties of payloads in general: payloads must
+/// support progressive (fuel-limited) merging through a [`Merger`], and must report their
+/// size, which drives the spine's geometric layering and its logging.
 pub trait SpinePayload : Sized {
     /// The timestamp type of the payload's updates.
     type Time: Timestamp + Lattice;
@@ -869,9 +867,7 @@ impl<P: SpinePayload> MergeState<P> {
     /// The upper frontier of the old batch should match the lower
     /// frontier of the new batch, with the resulting batch describing
     /// their composed interval, from the lower frontier of the old
-    /// batch to the upper frontier of the new batch. The spine composes
-    /// that description here, from the input descriptions and the
-    /// compaction frontier; the payload merger is description-free.
+    /// batch to the upper frontier of the new batch.
     ///
     /// Either batch may be `None` which corresponds to a structurally
     /// empty batch whose upper and lower frontiers are equal. This
@@ -882,9 +878,6 @@ impl<P: SpinePayload> MergeState<P> {
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                // The result's `since` joins the input sinces with the compaction frontier:
-                // the inputs' times may already be advanced through their own sinces, and
-                // the description must not claim more history than the payload retains.
                 let since = batch1.since().join(batch2.since()).join(&compaction_frontier.to_owned());
                 let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
                 match (&batch1.inner, &batch2.inner) {
@@ -892,11 +885,8 @@ impl<P: SpinePayload> MergeState<P> {
                         let merger = P::Merger::new(source1, source2, description.since().borrow());
                         MergeVariant::InProgress(batch1, batch2, description, merger)
                     }
-                    // At most one payload exists: the merge is just the union description
-                    // wrapped around whichever payload survives. Note that this forgoes the
-                    // opportunity to advance the surviving payload's times by the compaction
-                    // frontier, which a real merge would take; a one-sided "advance" could
-                    // recover it.
+                    // With at most one payload there is nothing to merge, and the surviving
+                    // payload's times are not advanced by the compaction frontier.
                     _ => {
                         let inner = batch1.inner.or(batch2.inner);
                         MergeVariant::Complete(Some((Batch::new(description, inner), None)))

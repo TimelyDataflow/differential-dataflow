@@ -30,10 +30,9 @@ use crate::operators::ValueHistory;
 pub trait JoinTactic<T, B0, B1, C> {
     /// Prepare the join of two lists of batch payloads into an iterator of output containers.
     ///
-    /// The inputs are payloads only: empty batches have nothing to join, and the caller retains their
-    /// descriptions for its own frontier accounting. The supplied `fresh` and `meet` indicate respectively
-    /// which input is "novel", and should drive the join, as well as a lower bound on that input's times,
-    /// so that the other input can be loaded compacted.
+    /// The supplied `fresh` and `meet` indicate respectively which input is "novel", and should drive the
+    /// join, as well as a lower bound on that input's times, so that the other input can be loaded
+    /// compacted.
     fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: T) -> Box<dyn Iterator<Item = C>>;
 }
 

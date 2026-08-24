@@ -28,19 +28,11 @@ pub use self::description::Description;
 pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize)])->Option<usize>+Send+Sync>;
 
 /// An immutable collection of updates: a description of the times it covers, and an
-/// optional payload of updates themselves.
+/// optional payload of the updates themselves.
 ///
-/// The description records the lower and upper bounds of contained update times, and a
-/// frontier `since` through which the times may have been advanced. The payload holds
-/// the updates, and is absent exactly when there are none: an "empty batch" is pure
-/// description, and anyone can construct one (see [`Batch::empty`]) — no capability of
-/// the payload type is involved.
-///
-/// The payload type is unconstrained here. Reading its contents is the [`Navigable`]
-/// capability; anything else (merging, sizing) is the business of whichever trace
-/// implementation holds it (for example the fueled spine's
-/// [`SpinePayload`](crate::trace::implementations::spine_fueled::SpinePayload)).
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// The payload is absent exactly when there are no updates. Reading its contents is the
+/// [`Navigable`] capability.
+#[derive(Clone, Debug)]
 pub struct Batch<T, B> {
     /// The lower and upper bounds of contained update times, and the compaction frontier.
     pub desc: Description<T>,
@@ -248,10 +240,6 @@ pub trait Batcher: PushInto<Self::Output> {
 }
 
 /// Functionality for building batch payloads from ordered update sequences.
-///
-/// A builder produces a payload, not a [`Batch`]: the description of the times a batch
-/// covers is the caller's, who knows the interval it asked the builder to fill. A builder
-/// that received no updates produces no payload, which is how empty batches arise.
 pub trait Builder: Sized {
     /// Input item type.
     type Input;

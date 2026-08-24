@@ -82,8 +82,6 @@ impl<Tr: Trace> TraceWriter<Tr> {
     }
 
     /// Inserts an empty batch up to `upper`.
-    ///
-    /// An empty batch is a description with no payload; anyone can construct one.
     pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
         if self.upper != upper {
             self.insert(Batch::empty(self.upper.clone(), upper), timely::progress::Stamp::new());

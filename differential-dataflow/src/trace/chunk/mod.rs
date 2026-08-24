@@ -239,9 +239,6 @@ type KeyCon<C> = <<C as Navigable>::Cursor as Cursor>::KeyContainer;
 type ValCon<C> = <<C as Navigable>::Cursor as Cursor>::ValContainer;
 
 /// A batch payload: an ordered [`Chunk`] sequence whose concatenation is the batch.
-///
-/// This is pure payload; the description of the times it covers travels alongside it,
-/// in the [`Batch`] that wraps it.
 pub struct ChunkBatch<C: Chunk> {
     /// Ordered, consolidated chunks; their concatenation is the batch.
     pub chunks: Vec<C>,
