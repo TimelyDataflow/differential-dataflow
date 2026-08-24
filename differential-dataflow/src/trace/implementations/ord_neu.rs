@@ -24,14 +24,20 @@ pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher using ordered lists.
 pub type OrdValBatcher<K, V, T, R> = MergeBatcher<VecMerger<(K, V), T, R>>;
 /// A builder using ordered lists.
-pub type RcOrdValBuilder<K, V, T, R> = OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>;
+///
+/// The builder produces a bare [`OrdValBatch`] payload. How that payload is shared is the
+/// trace's opinion, not the builder's: [`OrdValSpine`] asks for `Rc`, and the `Into` bound
+/// at the call site does the wrapping.
+pub type VecOrdValBuilder<K, V, T, R> = OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>;
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 /// A batcher for ordered lists.
 pub type OrdKeyBatcher<K, T, R> = MergeBatcher<VecMerger<(K, ()), T, R>>;
 /// A builder for ordered lists.
-pub type RcOrdKeyBuilder<K, T, R> = OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>;
+///
+/// As with [`VecOrdValBuilder`], the payload is bare and [`OrdKeySpine`] supplies the `Rc`.
+pub type VecOrdKeyBuilder<K, T, R> = OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>;
 
 pub use layers::{Vals, Upds};
 /// Layers are containers of lists of some type.
