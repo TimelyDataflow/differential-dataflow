@@ -8,8 +8,7 @@ use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::VecCollection;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::implementations::{ValSpine, KeySpine, ValBatcher, KeyBatcher, ValBuilder, KeyBuilder};
+use differential_dataflow::trace::implementations::{ValSpine, ValBatcher, ValBuilder};
 use differential_dataflow::difference::Present;
 
 type Node = u32;
@@ -85,7 +84,7 @@ fn unoptimized() {
 
                     let value_flow_next =
                     value_flow_next
-                        .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                        .arrange_by_self()
                         // .distinct_total_core::<Diff>()
                         .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                         ;
@@ -99,7 +98,7 @@ fn unoptimized() {
 
                     let memory_alias_next: VecCollection<_,_,Present>  =
                     memory_alias_next
-                        .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                        .arrange_by_self()
                         // .distinct_total_core::<Diff>()
                         .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                         ;
@@ -199,7 +198,7 @@ fn optimized() {
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                         .join_core(value_flow_arranged, |_,&a,&b| Some((a,b)))
                         .concat(nodes.map(|n| (n,n)))
-                        .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                        .arrange_by_self()
                         // .distinct_total_core::<Diff>()
                         .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                         ;
@@ -224,7 +223,7 @@ fn optimized() {
                         .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                         .join_core(value_flow_deref, |_y,&a,&b| Some((a,b)))
                         .concat(memory_alias_next)
-                        .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                        .arrange_by_self()
                         // .distinct_total_core::<Diff>()
                         .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                         ;

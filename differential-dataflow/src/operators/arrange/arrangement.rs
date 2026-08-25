@@ -297,33 +297,6 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     }
 }
 
-/// A type that can be arranged as if a collection of updates.
-pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
-    /// Arranges updates into a shared trace.
-    ///
-    /// The batcher's output container must equal the stream container `C`; the default
-    /// chunker only consolidates same-type containers. For chunker setups that convert
-    /// between container types (e.g. columnar layouts), call [`arrange_core`] directly.
-    fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceAgent<Tr>>
-    where
-        Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Batch>>,
-        Tr: Trace<Time=T> + 'static,
-    {
-        self.arrange_named::<Ba, Bu, Tr>("Arrange")
-    }
-
-    /// Arranges updates into a shared trace, with a supplied name.
-    ///
-    /// See [`Arrange::arrange`] for constraints on the batcher's output container.
-    fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
-    where
-        Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Batch>>,
-        Tr: Trace<Time=T> + 'static,
-    ;
-}
-
 /// Arranges a stream of updates by a key, configured with a name and a parallelization contract.
 ///
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.

@@ -4,10 +4,9 @@ use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 
-use differential_dataflow::trace::implementations::{ValSpine, KeySpine, KeyBatcher, KeyBuilder, ValBatcher, ValBuilder};
+use differential_dataflow::trace::implementations::{ValSpine, ValBatcher, ValBuilder};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::difference::Present;
@@ -97,7 +96,7 @@ fn tc<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Em
                 .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                 .join_core(edges.clone(), |_y,&x,&z| Some((x, z)))
                 .concat(edges.as_collection(|&k,&v| (k,v)))
-                .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                .arrange_by_self()
                 .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                 ;
 
@@ -127,7 +126,7 @@ fn sg<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Em
                 .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                 .join_core(edges, |_,&x,&z| Some((x, z)))
                 .concat(peers)
-                .arrange::<KeyBatcher<_,_,_>, KeyBuilder<_,_,_>, KeySpine<_,_,_>>()
+                .arrange_by_self()
                 .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None })
                 ;
 
