@@ -112,12 +112,12 @@ pub trait Merger<P: SpinePayload> {
     /// If `fuel` is non-zero after the call, the merging is complete and
     /// one should call `done` to extract the merged results.
     fn work(&mut self, source1: &P, source2: &P, fuel: &mut isize);
-    /// Extracts merged results.
+    /// Extracts merged results, absent if the merge cancelled to nothing.
     ///
     /// This method should only be called after `work` has been called and
     /// has not brought `fuel` to zero. Otherwise, the merge is still in
     /// progress.
-    fn done(self) -> P;
+    fn done(self) -> Option<P>;
 }
 
 impl<P: SpinePayload> SpinePayload for Rc<P> {
@@ -132,7 +132,7 @@ pub struct RcMerger<P: SpinePayload> { merger: P::Merger }
 impl<P: SpinePayload> Merger<Rc<P>> for RcMerger<P> {
     fn new(source1: &Rc<P>, source2: &Rc<P>, compaction_frontier: AntichainRef<P::Time>) -> Self { RcMerger { merger: P::Merger::new(source1, source2, compaction_frontier) } }
     fn work(&mut self, source1: &Rc<P>, source2: &Rc<P>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
-    fn done(self) -> Rc<P> { Rc::new(self.merger.done()) }
+    fn done(self) -> Option<Rc<P>> { self.merger.done().map(Rc::new) }
 }
 
 /// The number of updates in a batch: the payload's length, or zero when absent.
@@ -935,9 +935,7 @@ impl<P: SpinePayload> MergeVariant<P> {
         if let MergeVariant::InProgress(b1, b2, description, mut merge) = variant {
             merge.work(b1.inner.as_ref().unwrap(), b2.inner.as_ref().unwrap(), fuel);
             if *fuel > 0 {
-                // The merged payload may have cancelled entirely; absence records that.
-                let merged = merge.done();
-                let inner = if merged.len() > 0 { Some(merged) } else { None };
+                let inner = merge.done();
                 *self = MergeVariant::Complete(Some((Batch::new(description, inner), Some((b1, b2)))));
             }
             else {

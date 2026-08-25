@@ -642,9 +642,9 @@ where
         }
     }
 
-    fn done(self) -> ChunkBatch<C> {
+    fn done(self) -> Option<ChunkBatch<C>> {
         debug_assert!(self.merged.is_empty() && self.advanced.is_empty());
-        ChunkBatch::new(self.settled.into())
+        wrap(self.settled.into())
     }
 }
 

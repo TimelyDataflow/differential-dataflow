@@ -730,13 +730,16 @@ mod test {
             }
             let result = merger.done();
 
-            assert!(is_graded(&result.chunks), "ungraded result: {:?}",
-                result.chunks.iter().map(Chunk::len).collect::<Vec<_>>());
-            let got = read(&result);
+            let chunks: &[ColChunk<Upd>] = result.as_ref().map_or(&[], |b| &b.chunks[..]);
+            assert!(is_graded(chunks), "ungraded result: {:?}",
+                chunks.iter().map(Chunk::len).collect::<Vec<_>>());
+            let got = result.as_ref().map_or_else(Vec::new, read);
             let mut want: Vec<((u64, u64), u64, i64)> =
                 u1.iter().chain(u2.iter()).map(|&(k, v, t, d)| ((k, v), t.max(f), d)).collect();
             consolidate_updates(&mut want);
             let want: Vec<Upd> = want.into_iter().map(|((k, v), t, d)| (k, v, t, d)).collect();
+            // A merge that cancels to nothing reports an absent payload.
+            assert_eq!(result.is_none(), want.is_empty(), "absence must track emptiness\n  u1={u1:?}\n  u2={u2:?}\n  f={f}");
             assert_eq!(got, want, "fuel-driven merge mismatch\n  u1={u1:?}\n  u2={u2:?}\n  f={f}");
         }
     }

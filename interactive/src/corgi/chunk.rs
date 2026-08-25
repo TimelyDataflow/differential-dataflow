@@ -689,8 +689,12 @@ mod test {
                 if fuel > 0 { break; }
             }
             let result = merger.done();
-            assert!(is_graded(&result.chunks), "ungraded: {:?}", result.chunks.iter().map(Chunk::len).collect::<Vec<_>>());
-            assert_eq!(read_batch(&result), reference(&u1, &u2, f), "u1={u1:?}\nu2={u2:?}\nf={f}");
+            let chunks: &[CorgiChunk<u64, i64>] = result.as_ref().map_or(&[], |b| &b.chunks[..]);
+            assert!(is_graded(chunks), "ungraded: {:?}", chunks.iter().map(Chunk::len).collect::<Vec<_>>());
+            let want = reference(&u1, &u2, f);
+            // A merge that cancels to nothing reports an absent payload.
+            assert_eq!(result.is_none(), want.is_empty(), "absence must track emptiness\nu1={u1:?}\nu2={u2:?}\nf={f}");
+            assert_eq!(result.as_ref().map_or_else(BTreeMap::new, read_batch), want, "u1={u1:?}\nu2={u2:?}\nf={f}");
         }
     }
 }

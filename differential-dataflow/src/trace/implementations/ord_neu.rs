@@ -351,11 +351,9 @@ pub mod val_batch {
                 staging: UpdsBuilder::default(),
             }
         }
-        fn done(self) -> OrdValBatch<L> {
-            OrdValBatch {
-                updates: self.staging.total(),
-                storage: self.result,
-            }
+        fn done(self) -> Option<OrdValBatch<L>> {
+            let updates = self.staging.total();
+            (updates > 0).then(|| OrdValBatch { updates, storage: self.result })
         }
         fn work(&mut self, source1: &OrdValBatch<L>, source2: &OrdValBatch<L>, fuel: &mut isize) {
 
@@ -815,12 +813,13 @@ pub mod key_batch {
                 staging: UpdsBuilder::default(),
             }
         }
-        fn done(self) -> OrdKeyBatch<L> {
-            OrdKeyBatch {
-                updates: self.staging.total(),
+        fn done(self) -> Option<OrdKeyBatch<L>> {
+            let updates = self.staging.total();
+            (updates > 0).then(|| OrdKeyBatch {
+                updates,
                 storage: self.result,
                 value: OrdKeyBatch::<L>::create_value(),
-            }
+            })
         }
         fn work(&mut self, source1: &OrdKeyBatch<L>, source2: &OrdKeyBatch<L>, fuel: &mut isize) {
 
