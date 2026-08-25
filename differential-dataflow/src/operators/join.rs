@@ -28,7 +28,7 @@ use crate::operators::ValueHistory;
 /// yields finished containers, and how it produces them (pushing records into a [`ContainerBuilder`], or
 /// otherwise) is its own concern.
 pub trait JoinTactic<T, B0, B1, C> {
-    /// Prepare the join of two lists of batch updates into an iterator of output containers.
+    /// Prepare the join of two lists of batches into an iterator of output containers.
     ///
     /// The supplied `fresh` and `meet` indicate respectively which input is "novel", and should drive the
     /// join, as well as a lower bound on that input's times, so that the other input can be loaded

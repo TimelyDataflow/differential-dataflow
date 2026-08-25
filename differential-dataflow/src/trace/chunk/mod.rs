@@ -238,14 +238,14 @@ where
 type KeyCon<C> = <<C as Navigable>::Cursor as Cursor>::KeyContainer;
 type ValCon<C> = <<C as Navigable>::Cursor as Cursor>::ValContainer;
 
-/// A batch updates: an ordered [`Chunk`] sequence whose concatenation is the batch's updates.
+/// A batch: an ordered [`Chunk`] sequence whose concatenation is its updates.
 pub struct ChunkBatch<C: Chunk> {
     /// Ordered, consolidated chunks; their concatenation is the batch.
     pub chunks: Vec<C>,
 }
 
 impl<C: Chunk> ChunkBatch<C> {
-    /// Assemble a batch updates from ordered chunks.
+    /// Assemble a batch from ordered chunks.
     pub fn new(chunks: Vec<C>) -> Self {
         for chunk in &chunks {
             assert!(chunk.len() > 0, "ChunkBatch chunks must be non-empty");
@@ -691,7 +691,7 @@ where
     }
 }
 
-/// Wraps settled chunks as a batch's updates, absent when there are no chunks.
+/// Wraps settled chunks as a batch, absent when there are no chunks.
 fn wrap<C: Chunk>(chunks: Vec<C>) -> Option<ChunkBatch<C>> {
     (!chunks.is_empty()).then(|| ChunkBatch::new(chunks))
 }
