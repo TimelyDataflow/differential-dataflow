@@ -4,16 +4,15 @@
 //! hooks for manipulating sorted "chains" of chunks as needed by the merge batcher: merging
 //! chunks and also splitting them apart based on time.
 //!
-//! Callers feed already-chunked, sorted-and-consolidated input into the batcher via [`PushInto`].
+//! Callers feed already-chunked, sorted-and-consolidated input into the batcher via [`Batcher::insert`].
 //! Forming such chunks from raw data is the responsibility of the caller (typically a chunker
 //! living in the surrounding dataflow operator).
 
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
-use timely::container::PushInto;
 
 use crate::logging::{BatcherEvent, Logger};
-use crate::trace::{Batcher, Description};
+use crate::trace::Batcher;
 
 /// Creates batches from chunks of sorted, consolidated tuples.
 pub struct MergeBatcher<M: Merger> {
@@ -29,9 +28,7 @@ pub struct MergeBatcher<M: Merger> {
     stash: Vec<M::Chunk>,
     /// Merges consolidated chunks, and extracts the subset of an update chain that lies in an interval of time.
     merger: M,
-    /// Current lower frontier, we sealed up to here.
-    lower: Antichain<M::Time>,
-    /// The lower-bound frontier of the data, after the last call to seal.
+    /// The lower-bound frontier of the data, after the last call to extract.
     frontier: Antichain<M::Time>,
     /// Logger for size accounting.
     logger: Option<Logger>,
@@ -39,30 +36,19 @@ pub struct MergeBatcher<M: Merger> {
     operator_id: usize,
 }
 
-impl<M> Batcher for MergeBatcher<M>
+impl<M> Batcher<M::Time, M::Chunk, Vec<M::Chunk>> for MergeBatcher<M>
 where
     M: Merger<Time: Timestamp>,
 {
-    type Time = M::Time;
-    type Output = M::Chunk;
-
-    fn new(logger: Option<Logger>, operator_id: usize) -> Self {
-        Self {
-            logger,
-            operator_id,
-            merger: M::default(),
-            chains: Vec::new(),
-            stash: Vec::new(),
-            frontier: Antichain::new(),
-            lower: Antichain::from_elem(M::Time::minimum()),
-        }
+    fn insert(&mut self, chunk: &mut M::Chunk) {
+        self.insert_chain(vec![std::mem::take(chunk)]);
     }
 
-    // Sealing a batch means finding those updates with times not greater or equal to any time
-    // in `upper`. All updates must have time greater or equal to the previously used `upper`,
-    // which we call `lower`, by assumption that after sealing a batcher we receive no more
-    // updates with times not greater or equal to `upper`.
-    fn seal(&mut self, upper: Antichain<M::Time>) -> (Vec<Self::Output>, Description<M::Time>) {
+    // Extraction means finding those updates with times not greater or equal to any time in
+    // `upper`. All updates must have time greater or equal to the previously used `upper`, by
+    // assumption that after extracting from a batcher we receive no more updates with times not
+    // greater or equal to `upper`.
+    fn extract<'a>(&'a mut self, upper: AntichainRef<'_, M::Time>) -> (Option<Vec<M::Chunk>>, AntichainRef<'a, M::Time>) {
         // Merge all remaining chains into a single chain.
         while self.chains.len() > 1 {
             let list1 = self.chain_pop().unwrap();
@@ -77,7 +63,7 @@ where
         let mut readied = Vec::new();
         self.frontier.clear();
 
-        self.merger.extract(merged, upper.borrow(), &mut self.frontier, &mut readied, &mut kept, &mut self.stash);
+        self.merger.extract(merged, upper, &mut self.frontier, &mut readied, &mut kept, &mut self.stash);
 
         if !kept.is_empty() {
             self.chain_push(kept);
@@ -85,25 +71,27 @@ where
 
         self.stash.clear();
 
-        let description = Description::new(self.lower.clone(), upper.clone(), Antichain::from_elem(M::Time::minimum()));
-        self.lower = upper;
-        (readied, description)
-    }
-
-    /// The frontier of elements remaining after the most recent call to `self.seal`.
-    #[inline]
-    fn frontier(&mut self) -> AntichainRef<'_, M::Time> {
-        self.frontier.borrow()
-    }
-}
-
-impl<M: Merger> PushInto<M::Chunk> for MergeBatcher<M> {
-    fn push_into(&mut self, chunk: M::Chunk) {
-        self.insert_chain(vec![chunk]);
+        let readied = if readied.is_empty() { None } else { Some(readied) };
+        (readied, self.frontier.borrow())
     }
 }
 
 impl<M: Merger> MergeBatcher<M> {
+    /// Allocates a new empty batcher.
+    ///
+    /// The logger and operator identifier are used to report the batcher's memory footprint,
+    /// attributed to the operator that owns it.
+    pub fn new(logger: Option<Logger>, operator_id: usize) -> Self {
+        Self {
+            logger,
+            operator_id,
+            merger: M::default(),
+            chains: Vec::new(),
+            stash: Vec::new(),
+            frontier: Antichain::new(),
+        }
+    }
+
     /// Insert a chain and maintain chain properties: Chains are geometrically sized
     /// (by summed updates) and ordered by decreasing update weight.
     fn insert_chain(&mut self, chain: Vec<M::Chunk>) {
@@ -392,7 +380,7 @@ mod test {
 
     /// The sealed frontier must reflect the POST-CONSOLIDATION set of distinct kept times:
     /// two chains carry cancelling updates at a kept time (`t=5`), plus a survivor at a later
-    /// kept time (`t=7`). After `seal(upper=[3])` the frontier must be `{7}` — `(100, 5)` nets
+    /// kept time (`t=7`). After `extract(upper=[3])` the frontier must be `{7}` — `(100, 5)` nets
     /// to zero and needs no capability. (A per-chain extract that folds the frontier before
     /// consolidating would wrongly report `{5}`.)
     #[test]
@@ -400,8 +388,8 @@ mod test {
         let mut b = Bt::new(None, 0);
         b.chain_push(vec![vec![(100u64, 5u64, 1i64), (200u64, 7u64, 1i64)]]);
         b.chain_push(vec![vec![(100u64, 5u64, -1i64)]]);
-        let _ = b.seal(Antichain::from_elem(3));
-        let got: Vec<u64> = b.frontier().iter().cloned().collect();
+        let (_, retained) = b.extract(Antichain::from_elem(3).borrow());
+        let got: Vec<u64> = retained.iter().cloned().collect();
         assert_eq!(got, vec![7u64],
             "frontier held a capability at t=5, which consolidates to zero (got {got:?})");
     }
@@ -412,8 +400,8 @@ mod test {
         let mut b = Bt::new(None, 0);
         b.chain_push(vec![vec![(100u64, 5u64, 1i64)]]);
         b.chain_push(vec![vec![(200u64, 7u64, 1i64)]]);
-        let _ = b.seal(Antichain::from_elem(3));
-        let got: Vec<u64> = b.frontier().iter().cloned().collect();
+        let (_, retained) = b.extract(Antichain::from_elem(3).borrow());
+        let got: Vec<u64> = retained.iter().cloned().collect();
         assert_eq!(got, vec![5u64]);
     }
 }

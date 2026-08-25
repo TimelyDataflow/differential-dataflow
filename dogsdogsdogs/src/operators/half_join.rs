@@ -33,7 +33,7 @@ use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable}
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchVal, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchVal, Batcher, Cursor, Navigable, TraceReader};
 use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::trace::implementations::BatchContainer;
@@ -49,28 +49,6 @@ pub trait HalfJoinTactic<T, B, C0, C1> {
     /// The `lower` argument lower bounds the times in `chunks`, and may be used to load `batches`
     /// compacted, or to bound the arrangement times the join must consider.
     fn prep(&mut self, chunks: Vec<C0>, batches: Vec<B>, lower: Antichain<T>) -> Box<dyn Iterator<Item = (C1, T)>>;
-}
-
-/// A type capable of accepting containers of updates, and carving them out by time.
-///
-/// The implementor is able to determine the meaning of extraction by a frontier;
-/// it is not required to be by antichain partial order.
-///
-/// Updates are accepted as `C0`, the containers that arrive on the dataflow edge, and released as
-/// `C1`, whatever a [`HalfJoinTactic`] would rather consume. The two need not agree: an implementor
-/// staging updates in a form of its own can release that form directly.
-pub trait Batcher<T: Timestamp, C0, C1> {
-    /// Moves responsibility for `container` into the implementor.
-    fn insert(&mut self, container: C0);
-    /// Extracts updates `frontier` unblocks, and lower bounds the time of retained updates.
-    ///
-    /// What `frontier` unblocks is the implementor's to decide. It can be based on the antichain up set,
-    /// or it can be based on the total order of times (as used in delta join constructions).
-    ///
-    /// The reported lower bound antichain should accurately reflect the times of all accepted updates
-    /// that have not been extracted. Over approximation can result in stalling dataflows, and under
-    /// approximation is simply incorrect.
-    fn extract(&mut self, frontier: AntichainRef<'_, T>) -> (Vec<C1>, &MutableAntichain<T>);
 }
 
 /// A `half_join` driven by a [`Batcher`] and a [`HalfJoinTactic`].
@@ -99,7 +77,7 @@ where
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
     P: ParallelizationContract<Tr::Time, CIn>,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    Bat: Batcher<Tr::Time, CIn, CMid> + 'static,
+    Bat: Batcher<Tr::Time, CIn, Vec<CMid>> + 'static,
     Tac: HalfJoinTactic<Tr::Time, Tr::Batch, CMid, C> + 'static,
     CIn: Container,
     C: Container + 'static,
@@ -133,7 +111,7 @@ where
             // TODO: Tolerate multi-capability inputs.
             input1.for_each(|capability, data| {
                 caps.insert(capability.retain(0));
-                batcher.insert(std::mem::take(data));
+                batcher.insert(data);
             });
 
             // Drain input batches. We do not capture the batches, but we do use the frontier.
@@ -143,7 +121,7 @@ where
 
                 // Look for updates that are newly eligible against the current frontier.
                 let (chunks, retained) = batcher.extract(frontier2.frontier());
-                if !chunks.is_empty() {
+                if let Some(chunks) = chunks {
                     // The batches are handed to the tactic, which holds them for as long as the
                     // work item lives; what it joins against cannot change underneath it.
                     let batches = trace.batches_through(Antichain::new().borrow()).unwrap();
@@ -153,7 +131,7 @@ where
                 }
 
                 // Downgrade capabilities to those held by `batcher`.
-                caps.downgrade(retained.frontier().iter());
+                caps.downgrade(retained.iter());
             }
 
             // Perform some amount of outstanding work, shipping each container at a capability
@@ -506,11 +484,11 @@ pub mod cursors {
         }
     }
 
-    impl<D: Ord, T: Timestamp, R: Semigroup> Batcher<T, Vec<(D, T, R)>, Vec<(D, T, R)>> for BlobList<D, T, R> {
-        fn insert(&mut self, container: Vec<(D, T, R)>) {
-            self.stage.extend(container.into_iter().map(|(d,t,r)| (t,d,r)));
+    impl<D: Ord, T: Timestamp, R: Semigroup> Batcher<T, Vec<(D, T, R)>, Vec<Vec<(D, T, R)>>> for BlobList<D, T, R> {
+        fn insert(&mut self, container: &mut Vec<(D, T, R)>) {
+            self.stage.extend(container.drain(..).map(|(d,t,r)| (t,d,r)));
         }
-        fn extract(&mut self, frontier: AntichainRef<'_, T>) -> (Vec<Vec<(D, T, R)>>, &MutableAntichain<T>) {
+        fn extract<'a>(&'a mut self, frontier: AntichainRef<'_, T>) -> (Option<Vec<Vec<(D, T, R)>>>, AntichainRef<'a, T>) {
             // Handle any staged updates first.
             consolidate_updates(&mut self.stage);
             if !self.stage.is_empty() {
@@ -545,7 +523,8 @@ pub mod cursors {
             self.blobs.retain(|b| !b.is_empty());
 
             self.lower.update_iter(result.iter().flat_map(|l| l.iter().map(|x| (x.1.clone(), -1))));
-            (result, &self.lower)
+            let result = if result.is_empty() { None } else { Some(result) };
+            (result, self.lower.frontier())
         }
     }
 

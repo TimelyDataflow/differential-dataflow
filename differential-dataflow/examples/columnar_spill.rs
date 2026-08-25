@@ -239,10 +239,10 @@ fn run_timely_dataflow(times: u64, keys_per_time: u64, workers: usize, sample_se
             let arranged = arrange_core::<
                 _, _,
                 ValChunker<(u64, u64, u64, i64)>,
-                ValBatcher<u64, u64, u64, i64>,
+                _,
                 ValBuilder<u64, u64, u64, i64>,
                 ValSpine<u64, u64, u64, i64>,
-            >(stream, Pipeline, "ColumnarSpillArrange");
+            >(stream, Pipeline, "ColumnarSpillArrange", ValBatcher::new);
             arranged.stream.probe_with(&mut probe);
         });
 
