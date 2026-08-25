@@ -248,7 +248,7 @@ pub mod val_batch {
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Builder, Cursor};
-    use crate::trace::implementations::spine_fueled::{SpinePayload, Merger};
+    use crate::trace::implementations::spine_fueled::{SpineUpdates, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
 
@@ -272,7 +272,7 @@ pub mod val_batch {
         pub upds: Upds<L::OffsetContainer, L::TimeContainer, L::DiffContainer>,
     }
 
-    /// An immutable batch payload of update tuples.
+    /// The updates of a batch, as immutable update tuples.
     ///
     /// The `L` parameter captures how the updates should be laid out.
     #[derive(Serialize, Deserialize)]
@@ -309,7 +309,7 @@ pub mod val_batch {
         }
     }
 
-    impl<L: Layout> SpinePayload for OrdValBatch<L> {
+    impl<L: Layout> SpineUpdates for OrdValBatch<L> {
         type Time = layout::Time<L>;
         type Merger = OrdValMerger<L>;
         fn len(&self) -> usize {
@@ -700,7 +700,7 @@ pub mod key_batch {
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Builder, Cursor};
-    use crate::trace::implementations::spine_fueled::{SpinePayload, Merger};
+    use crate::trace::implementations::spine_fueled::{SpineUpdates, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
 
@@ -771,7 +771,7 @@ pub mod key_batch {
         }
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> SpinePayload for OrdKeyBatch<L> {
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> SpineUpdates for OrdKeyBatch<L> {
         type Time = layout::Time<L>;
         type Merger = OrdKeyMerger<L>;
         fn len(&self) -> usize {

@@ -30,15 +30,15 @@ use timely::progress::frontier::AntichainRef;
 use crate::consolidation::{consolidate, consolidate_updates};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::chunk::ChunkPayload;
+use crate::trace::chunk::ChunkUpdates;
 use crate::trace::chunk::vec::VecChunk;
 use crate::trace::Description;
 
 use super::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-/// The batch type of a hash-keyed [`ChunkSpine`](crate::trace::chunk::vec::ChunkSpine): payload
+/// The batch type of a hash-keyed [`ChunkSpine`](crate::trace::chunk::vec::ChunkSpine): updates
 /// `D` is `(K, V)` on the input side and `(K, W)` on the output side.
-type VBatch<D, T, R> = Rc<ChunkPayload<VecChunk<u64, D, T, R>>>;
+type VBatch<D, T, R> = Rc<ChunkUpdates<VecChunk<u64, D, T, R>>>;
 
 /// A reference [`ProxyReduceBackend`] over [`VBatch`] storage.
 pub struct VecReduceBackend<K, V, W, T, R, L> {
@@ -324,7 +324,7 @@ where
         self.out_pool.clear();
         self.out_ids.clear();
         let chunks = std::mem::take(&mut self.chunks);
-        if chunks.is_empty() { None } else { Some(Rc::new(ChunkPayload::new(chunks))) }
+        if chunks.is_empty() { None } else { Some(Rc::new(ChunkUpdates::new(chunks))) }
     }
 }
 
@@ -418,7 +418,7 @@ where
     fn count(&self) -> usize { self.novel.len() + self.prior.len() }
 
     /// The `b`-th batch of the logical list.
-    fn batch(&self, b: usize) -> &'a ChunkPayload<VecChunk<u64, D, T, R>> {
+    fn batch(&self, b: usize) -> &'a ChunkUpdates<VecChunk<u64, D, T, R>> {
         if b < self.novel.len() { &self.novel[b] } else { &self.prior[b - self.novel.len()] }
     }
 

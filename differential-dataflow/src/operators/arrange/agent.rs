@@ -38,7 +38,7 @@ pub struct TraceAgent<Tr: TraceReader> {
 impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
 
     type Time = Tr::Time;
-    type Payload = Tr::Payload;
+    type Updates = Tr::Updates;
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         // This method does not enforce that `frontier` is greater or equal to `self.logical_compaction`.
@@ -62,10 +62,10 @@ impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
         self.physical_compaction.borrow()
     }
-    fn batches_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<Vec<Batch<Tr::Time, Tr::Payload>>> {
+    fn batches_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<Vec<Batch<Tr::Time, Tr::Updates>>> {
         self.trace.borrow_mut().trace.batches_through(frontier)
     }
-    fn map_batches<F: FnMut(&Batch<Tr::Time, Tr::Payload>)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }
+    fn map_batches<F: FnMut(&Batch<Tr::Time, Tr::Updates>)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }
 }
 
 impl<Tr: TraceReader> TraceAgent<Tr> {

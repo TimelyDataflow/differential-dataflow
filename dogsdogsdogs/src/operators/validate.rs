@@ -27,7 +27,7 @@ pub fn validate<'scope, Tr, K, V, F, P, R, FF>(
     strict: bool,
 ) -> VecCollection<'scope, Tr::Time, ((P, V), Tr::Time), <R as Mul<BatchDiff<Tr>>>::Output>
 where
-    Tr: TraceReader<Payload: Navigable, Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Updates: Navigable, Time: std::hash::Hash>+Clone+'static,
     BatchCursor<Tr>: Cursor<Time = Tr::Time>,
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=(K,V)>,
     K: ExchangeData + std::hash::Hash,

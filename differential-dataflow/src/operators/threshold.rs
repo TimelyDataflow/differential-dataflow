@@ -100,7 +100,7 @@ where
 
 impl<'scope, K, Tr> ThresholdTotal<'scope, Tr::Time, K, BatchDiff<Tr>> for Arranged<'scope, Tr>
 where
-    Tr: TraceReader<Payload: Navigable, Time: TotalOrder> + Clone + 'static,
+    Tr: TraceReader<Updates: Navigable, Time: TotalOrder> + Clone + 'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Key<'a>=&'a K,
         Val<'a>=&'a (),
@@ -147,7 +147,7 @@ where
                     let mut session = output.session(&caps);
 
                     let (mut batch_cursor, batch_storage) = crate::trace::cursor::cursor_list(batch_storage.into_iter().filter_map(|b| b.inner).collect());
-                    let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(trace.payloads_through(lower_limit.borrow()).unwrap());
+                    let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(trace.updates_through(lower_limit.borrow()).unwrap());
 
                     while let Some(key) = batch_cursor.get_key(&batch_storage) {
                         let mut count: Option<BatchDiff<Tr>> = None;

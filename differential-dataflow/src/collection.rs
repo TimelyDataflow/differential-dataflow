@@ -783,9 +783,9 @@ pub mod vec {
         /// ```
         pub fn reduce_abelian<L, Bu, T2>(self, name: &str, mut logic: L) -> Arranged<'scope, TraceAgent<T2>>
         where
-            T2: Trace<Payload: Navigable, Time=T>+'static,
+            T2: Trace<Updates: Navigable, Time=T>+'static,
             for<'a> BatchCursor<T2>: Cursor<Key<'a>= &'a K, ValOwn = V, Time = T2::Time, Diff: Abelian>,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output: Into<T2::Payload>> + 'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output: Into<T2::Updates>> + 'static,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V, BatchDiff<T2>)>)+'static,
         {
             self.reduce_core::<_,Bu,T2>(name, move |key, input, output, change| {
@@ -803,9 +803,9 @@ pub mod vec {
         pub fn reduce_core<L, Bu, T2>(self, name: &str, logic: L) -> Arranged<'scope, TraceAgent<T2>>
         where
             V: Clone+'static,
-            T2: Trace<Payload: Navigable, Time=T>+'static,
+            T2: Trace<Updates: Navigable, Time=T>+'static,
             for<'a> BatchCursor<T2>: Cursor<Key<'a>=&'a K, ValOwn = V, Time = T2::Time>,
-            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output: Into<T2::Payload>> + 'static,
+            Bu: Builder<Time=T2::Time, Input = Vec<((K, V), T2::Time, BatchDiff<T2>)>, Output: Into<T2::Updates>> + 'static,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(V,BatchDiff<T2>)>, &mut Vec<(V, BatchDiff<T2>)>)+'static,
         {
             self.arrange_by_key_named(&format!("Arrange: {}", name))
@@ -966,9 +966,9 @@ pub mod vec {
         pub fn consolidate_named<Ba, Bu, Tr, F>(self, name: &str, reify: F) -> Self
         where
             Ba: crate::trace::Batcher<Output=Vec<((D, ()), T, R)>, Time=T> + 'static,
-            Tr: crate::trace::Trace<Payload: Navigable, Time=T>+'static,
+            Tr: crate::trace::Trace<Updates: Navigable, Time=T>+'static,
             for<'a> BatchCursor<Tr>: Cursor<Time=Tr::Time, Diff=R>,
-            Bu: crate::trace::Builder<Time=Tr::Time, Input=Vec<((D, ()), T, R)>, Output: Into<Tr::Payload>>,
+            Bu: crate::trace::Builder<Time=Tr::Time, Input=Vec<((D, ()), T, R)>, Output: Into<Tr::Updates>>,
             F: Fn(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> D + 'static,
         {
             use crate::operators::arrange::arrangement::Arrange;
@@ -1036,7 +1036,7 @@ pub mod vec {
         fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
         where
             Ba: crate::trace::Batcher<Output=Vec<((K, V), T, R)>, Time=T> + 'static,
-            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, V), T, R)>, Output: Into<Tr::Payload>>,
+            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, V), T, R)>, Output: Into<Tr::Updates>>,
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),T,R)| (update.0).0.hashed().into());
@@ -1051,7 +1051,7 @@ pub mod vec {
         fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
         where
             Ba: crate::trace::Batcher<Output=Vec<((K, ()), T, R)>, Time=T> + 'static,
-            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, ()), T, R)>, Output: Into<Tr::Payload>>,
+            Bu: crate::trace::Builder<Time=T, Input=Vec<((K, ()), T, R)>, Output: Into<Tr::Updates>>,
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,()),T,R)| (update.0).0.hashed().into());
@@ -1244,7 +1244,7 @@ pub mod vec {
         /// ```
         pub fn join_core<Tr2,I,L,R2> (self, stream2: Arranged<'scope, Tr2>, result: L) -> Collection<'scope, T,I::Item,<R as Multiply<R2>>::Output>
         where
-            Tr2: crate::trace::TraceReader<Payload: Navigable, Time=T>+Clone+'static,
+            Tr2: crate::trace::TraceReader<Updates: Navigable, Time=T>+Clone+'static,
             for<'a> BatchCursor<Tr2>: Cursor<Key<'a>=&'a K>,
             // Pin the cursor diff to a named param `R2`: a `Multiply` bound on a projection does not
             // connect to its use-site (the solver normalizes the use but not the bound's subject).

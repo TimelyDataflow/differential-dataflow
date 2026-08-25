@@ -126,7 +126,7 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     /// Commit a collection of updates to the batch in progress.
     fn emit(&mut self, records: &[((u64, u64), T, Self::ROut)]);
 
-    /// Complete the session matching `begin`, yielding the payload of the batch it described,
+    /// Complete the session matching `begin`, yielding the updates of the batch it described,
     /// or `None` when the batch carries no updates.
     fn finish(&mut self) -> Option<B2>;
 }

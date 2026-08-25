@@ -27,11 +27,10 @@ pub use self::description::Description;
 /// A type used to express how much effort a trace should exert even in the absence of updates.
 pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize)])->Option<usize>+Send+Sync>;
 
-/// An immutable collection of updates: a description of the times it covers, and an
-/// optional payload of the updates themselves.
+/// An immutable collection of updates: a description of the times it covers, and the
+/// updates themselves, absent exactly when there are none.
 ///
-/// The payload is absent exactly when there are no updates. Reading its contents is the
-/// [`Navigable`] capability.
+/// Reading the updates is the [`Navigable`] capability.
 #[derive(Clone, Debug)]
 pub struct Batch<T, B> {
     /// The lower and upper bounds of contained update times, and the compaction frontier.
@@ -41,7 +40,7 @@ pub struct Batch<T, B> {
 }
 
 impl<T, B> Batch<T, B> {
-    /// A batch from a description and an optional payload.
+    /// A batch from a description and its updates, absent when there are none.
     pub fn new(desc: Description<T>, inner: Option<B>) -> Self { Self { desc, inner } }
     /// All times in the batch are greater or equal to an element of `lower`.
     pub fn lower(&self) -> &Antichain<T> { self.desc.lower() }
@@ -52,14 +51,14 @@ impl<T, B> Batch<T, B> {
 }
 
 impl<T: Timestamp, B> Batch<T, B> {
-    /// An empty batch over the indicated interval: a description with no payload.
+    /// An empty batch over the indicated interval: a description with no updates.
     pub fn empty(lower: Antichain<T>, upper: Antichain<T>) -> Self {
         Self { desc: Description::new(lower, upper, Antichain::from_elem(T::minimum())), inner: None }
     }
 }
 
-/// The batch type of a trace: [`Batch`] instantiated at the trace's time and payload.
-pub type BatchOf<Tr> = Batch<<Tr as TraceReader>::Time, <Tr as TraceReader>::Payload>;
+/// The batch type of a trace: [`Batch`] instantiated at the trace's time and updates.
+pub type BatchOf<Tr> = Batch<<Tr as TraceReader>::Time, <Tr as TraceReader>::Updates>;
 
 /// A trace whose contents may be read.
 ///
@@ -74,13 +73,12 @@ pub trait TraceReader {
     /// bound its contents and to drive compaction.
     type Time: Timestamp + Lattice;
 
-    /// The payload type of the trace's batches.
+    /// The updates carried by the trace's batches.
     ///
-    /// This is the storage for a batch's updates; batches themselves are
-    /// [`Batch<Self::Time, Self::Payload>`](Batch), pairing an optional payload
-    /// with a description. Reading a payload's contents is the optional
-    /// [`Navigable`] capability, required only where cursors are taken.
-    type Payload: 'static + Clone;
+    /// A batch is [`Batch<Self::Time, Self::Updates>`](Batch), pairing a description
+    /// with these updates when it has any. Reading them is the optional [`Navigable`]
+    /// capability, required only where cursors are taken.
+    type Updates: 'static + Clone;
 
     /// Acquires the non-empty sequence of batches covering updates at times not greater or equal to an
     /// element of `upper`.
@@ -89,15 +87,15 @@ pub trait TraceReader {
     /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
     /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the batches. This
     /// should allow `upper` such as `&[]`, used to acquire all batches, though it is difficult to imagine other uses.
-    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Batch<Self::Time, Self::Payload>>>;
+    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Batch<Self::Time, Self::Updates>>>;
 
-    /// Acquires the payloads of the batches covering updates at times not greater or equal to an
-    /// element of `upper`.
+    /// Acquires the updates of the batches covering times not greater or equal to an element
+    /// of `upper`.
     ///
-    /// Empty batches have no payload and do not appear in the result, so this is what callers
-    /// taking cursors want; [`batches_through`](Self::batches_through) is for the drivers that
-    /// also need the batches' descriptions.
-    fn payloads_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Payload>> {
+    /// Empty batches contribute nothing, so this is what callers taking cursors want;
+    /// [`batches_through`](Self::batches_through) is for the drivers that also need the
+    /// batches' descriptions.
+    fn updates_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Updates>> {
         Some(self.batches_through(upper)?.into_iter().filter_map(|b| b.inner).collect())
     }
 
@@ -154,7 +152,7 @@ pub trait TraceReader {
     ///
     /// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
     /// the stream of batches moving past the trace.
-    fn map_batches<F: FnMut(&Batch<Self::Time, Self::Payload>)>(&self, f: F);
+    fn map_batches<F: FnMut(&Batch<Self::Time, Self::Updates>)>(&self, f: F);
 
     /// Reads the upper frontier of committed times.
     ///
@@ -215,7 +213,7 @@ pub trait Trace : TraceReader {
     ///
     /// This restriction could be relaxed, especially if we discover ways in which batch interval order could
     /// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
-    fn insert(&mut self, batch: Batch<Self::Time, Self::Payload>);
+    fn insert(&mut self, batch: Batch<Self::Time, Self::Updates>);
 
     /// Introduces an empty batch concluding the trace.
     ///
@@ -245,13 +243,13 @@ pub trait Batcher: PushInto<Self::Output> {
     fn frontier(&mut self) -> AntichainRef<'_, Self::Time>;
 }
 
-/// Functionality for building batch payloads from ordered update sequences.
+/// Functionality for building a batch's updates from ordered update sequences.
 pub trait Builder: Sized {
     /// Input item type.
     type Input;
     /// Timestamp type.
     type Time: Timestamp;
-    /// Output payload type.
+    /// The type of the updates it builds.
     type Output;
 
     /// Allocates an empty builder.
@@ -267,10 +265,10 @@ pub trait Builder: Sized {
     ///
     /// Adds all elements from `chunk` to the builder and leaves `chunk` in an undefined state.
     fn push(&mut self, chunk: &mut Self::Input);
-    /// Completes building and returns the payload, absent if no updates were pushed.
+    /// Completes building and returns the updates, absent if none were pushed.
     fn done(self) -> Option<Self::Output>;
 
-    /// Builds a payload from a chain of updates.
+    /// Builds a batch's updates from a chain of updates.
     ///
     /// This method relies on the chain only containing updates greater or equal to the lower frontier,
     /// and not greater or equal to the upper frontier, of the interval the caller means to describe.

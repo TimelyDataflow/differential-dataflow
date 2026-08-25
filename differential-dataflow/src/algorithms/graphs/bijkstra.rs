@@ -40,7 +40,7 @@ pub fn bidijkstra_arranged<'scope, N, Tr>(
 ) -> VecCollection<'scope, Tr::Time, ((N,N), u32)>
 where
     N: ExchangeData+Hash,
-    Tr: TraceReader<Payload: Navigable>+Clone+'static,
+    Tr: TraceReader<Updates: Navigable>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Time=Tr::Time, Diff=isize>,
 {
     let outer = forward.stream.scope();

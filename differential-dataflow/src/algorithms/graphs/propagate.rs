@@ -58,7 +58,7 @@ where
     R: Multiply<R, Output=R>,
     R: From<i8>,
     L: ExchangeData,
-    Tr: TraceReader<Payload: Navigable, Time: Hash>+Clone+'static,
+    Tr: TraceReader<Updates: Navigable, Time: Hash>+Clone+'static,
     for<'a> BatchCursor<Tr>: Cursor<Key<'a>=&'a N, Val<'a>=&'a N, Time=Tr::Time, Diff=R>,
     F: Fn(&L)->u64+Clone+'static,
 {

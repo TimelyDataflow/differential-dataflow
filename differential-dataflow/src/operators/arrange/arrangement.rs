@@ -120,7 +120,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<'scope, Tr::Time, D, BatchDiff<Tr>>
         where
-            Tr::Payload: Navigable,
+            Tr::Updates: Navigable,
             BatchCursor<Tr>: Cursor<Time = Tr::Time>,
             L: FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> D+'static,
     {
@@ -140,7 +140,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     where
         K: crate::ExchangeData,
         V: crate::ExchangeData,
-        Tr::Payload: Navigable,
+        Tr::Updates: Navigable,
         BatchCursor<Tr>: Cursor<Time = Tr::Time>,
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V>,
     {
@@ -153,7 +153,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// filtering or flat mapping as part of the extraction.
     pub fn flat_map_ref<I, L>(self, logic: L) -> VecCollection<'scope, Tr::Time, I::Item, BatchDiff<Tr>>
         where
-            Tr::Payload: Navigable,
+            Tr::Updates: Navigable,
             BatchCursor<Tr>: Cursor<Time = Tr::Time>,
             I: IntoIterator<Item: Data>,
             L: FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> I+'static,
@@ -170,7 +170,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
     pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<BatchOf<Tr>>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, BatchDiff<Tr>>
     where
-        Tr::Payload: Navigable,
+        Tr::Updates: Navigable,
         BatchCursor<Tr>: Cursor<Time = Tr::Time>,
         I: IntoIterator<Item: Data>,
         L: FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> I+'static,
@@ -202,13 +202,13 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 
 use crate::difference::Multiply;
 // Direct join implementations.
-impl<'scope, Tr1: TraceReader<Payload: Navigable>+'static> Arranged<'scope, Tr1> {
+impl<'scope, Tr1: TraceReader<Updates: Navigable>+'static> Arranged<'scope, Tr1> {
     /// A convenience method to join and produce `VecCollection` output.
     ///
     /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
     pub fn join_core<Tr2,I,L,R1,R2,KC>(self, other: Arranged<'scope, Tr2>, mut result: L) -> VecCollection<'scope, Tr1::Time,I::Item,<R1 as Multiply<R2>>::Output>
     where
-        Tr2: TraceReader<Payload: Navigable, Time=Tr1::Time>+Clone+'static,
+        Tr2: TraceReader<Updates: Navigable, Time=Tr1::Time>+Clone+'static,
         // Pin the cursor diffs to named params `R1`/`R2`: a `Multiply` bound on a projection
         // does not connect to its use-site (the solver normalizes the use but not the bound's
         // subject), so we constrain plain params instead.
@@ -244,16 +244,16 @@ impl<'scope, Tr1: TraceReader<Payload: Navigable>+'static> Arranged<'scope, Tr1>
 // Direct reduce implementations.
 use crate::difference::Abelian;
 use crate::trace::implementations::containers::BatchContainer;
-impl<'scope, Tr1: TraceReader<Payload: Navigable>+'static> Arranged<'scope, Tr1> {
+impl<'scope, Tr1: TraceReader<Updates: Navigable>+'static> Arranged<'scope, Tr1> {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
     pub fn reduce_abelian<L, Bu, Tr2, KC, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
-        Tr2: Trace<Payload: Navigable, Time=Tr1::Time>+'static,
+        Tr2: Trace<Updates: Navigable, Time=Tr1::Time>+'static,
         KC: BatchContainer,
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time, Diff: Abelian>,
-        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Payload>, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Updates>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -269,12 +269,12 @@ impl<'scope, Tr1: TraceReader<Payload: Navigable>+'static> Arranged<'scope, Tr1>
     /// A direct implementation of `ReduceCore::reduce_core`.
     pub fn reduce_core<L, Bu, Tr2, KC, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
-        Tr2: Trace<Payload: Navigable, Time=Tr1::Time>+'static,
+        Tr2: Trace<Updates: Navigable, Time=Tr1::Time>+'static,
         KC: BatchContainer,
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
-        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Payload>, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Updates>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -307,7 +307,7 @@ pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
     fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Payload>>,
+        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Updates>>,
         Tr: Trace<Time=T> + 'static,
     {
         self.arrange_named::<Ba, Bu, Tr>("Arrange")
@@ -319,7 +319,7 @@ pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
     fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Payload>>,
+        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Updates>>,
         Tr: Trace<Time=T> + 'static,
     ;
 }
@@ -335,7 +335,7 @@ where
     P: ParallelizationContract<Tr::Time, C>,
     Chu: ContainerBuilder<Container=Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
     Ba: Batcher<Time=Tr::Time> + 'static,
-    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output: Into<Tr::Payload>>,
+    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output: Into<Tr::Updates>>,
     Tr: Trace+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input

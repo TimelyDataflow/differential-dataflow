@@ -100,7 +100,7 @@ where
     P: ParallelizationContract<Tr::Time, CIn>,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
     Bat: Batcher<Tr::Time, CIn, CMid> + 'static,
-    Tac: HalfJoinTactic<Tr::Time, Tr::Payload, CMid, C> + 'static,
+    Tac: HalfJoinTactic<Tr::Time, Tr::Updates, CMid, C> + 'static,
     CIn: Container,
     C: Container + 'static,
 {
@@ -146,7 +146,7 @@ where
                 if !chunks.is_empty() {
                     // The batches are handed to the tactic, which holds them for as long as the
                     // work item lives; what it joins against cannot change underneath it.
-                    let batches = trace.payloads_through(Antichain::new().borrow()).unwrap();
+                    let batches = trace.updates_through(Antichain::new().borrow()).unwrap();
                     let lower: Antichain<Tr::Time> = caps.iter().map(|c| c.time().clone()).collect();
                     let work = tactic.prep(chunks, batches, lower);
                     todo.push_back((caps.clone(), work));
@@ -235,7 +235,7 @@ pub mod cursors {
         K: Hashable + ExchangeData,
         V: ExchangeData,
         R: ExchangeData + Semigroup,
-        Tr: TraceReader<Payload: Navigable>+Clone+'static,
+        Tr: TraceReader<Updates: Navigable>+Clone+'static,
         BatchCursor<Tr>: Cursor<Time = Tr::Time>,
         <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
         R: Mul<BatchDiff<Tr>, Output: Semigroup>,
@@ -297,7 +297,7 @@ pub mod cursors {
         K: Hashable + ExchangeData,
         V: ExchangeData,
         R: ExchangeData + Semigroup,
-        Tr: TraceReader<Payload: Navigable>+Clone+'static,
+        Tr: TraceReader<Updates: Navigable>+Clone+'static,
         BatchCursor<Tr>: Cursor<Time = Tr::Time>,
         <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
         FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
@@ -307,7 +307,7 @@ pub mod cursors {
     {
         // Updates are staged in a `BlobList` and joined by a cursor walk; the driver owns progress.
         let batcher = BlobList::<(K, V, Tr::Time), Tr::Time, R>::new(strict);
-        let tactic = CursorTactic::<K, V, R, Tr::Payload, S, CB>::new(output_func, strict);
+        let tactic = CursorTactic::<K, V, R, Tr::Updates, S, CB>::new(output_func, strict);
         // Updates are routed by key hash, matching how `arrangement` itself is distributed.
         let route = |update: &((K, V, Tr::Time), Tr::Time, R)| (update.0).0.hashed().into();
         let pact = Exchange::new(route);

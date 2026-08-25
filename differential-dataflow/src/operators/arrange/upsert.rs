@@ -132,13 +132,13 @@ pub fn arrange_from_upsert<'scope, Bu, Tr, K, V>(
 where
     K: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
-    Tr: Trace<Payload: Navigable, Time: TotalOrder+ExchangeData>+'static,
+    Tr: Trace<Updates: Navigable, Time: TotalOrder+ExchangeData>+'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Key<'a> = &'a K,
         Val<'a> = &'a V,
         Diff=isize,
     >,
-    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output: Into<Tr::Payload>>,
+    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output: Into<Tr::Updates>>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -231,7 +231,7 @@ where
 
                                 // Prepare a cursor to the existing arrangement, and a batch builder for
                                 // new stuff that we add.
-                                let batches = reader_local.payloads_through(Antichain::new().borrow()).unwrap();
+                                let batches = reader_local.updates_through(Antichain::new().borrow()).unwrap();
                                 let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(batches);
                                 let mut builder = Bu::new();
                                 let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);

@@ -1,8 +1,8 @@
 //! An append-only collection of update batches.
 //!
 //! The `Spine` is a general-purpose trace implementation based on collection and merging
-//! immutable batches of updates. It is generic with respect to the batch payload type, and
-//! can be instantiated for any implementor of [`SpinePayload`].
+//! immutable batches of updates. It is generic with respect to the type of a batch's updates, and
+//! can be instantiated for any implementor of [`SpineUpdates`].
 //!
 //! ## Design
 //!
@@ -78,35 +78,36 @@ use ::timely::dataflow::operators::generic::OperatorInfo;
 use ::timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
 use ::timely::order::PartialOrder;
 
-/// The requirements this spine imposes on batch payloads.
+/// The requirements this spine imposes on a batch's updates.
 ///
-/// These are opinions of this spine, not properties of payloads in general: payloads must
+/// These are opinions of this spine, not properties of updates in general: the updates must
 /// support progressive (fuel-limited) merging through a [`Merger`], and must report their
 /// size, which drives the spine's geometric layering and its logging.
-pub trait SpinePayload : Sized {
-    /// The timestamp type of the payload's updates.
+pub trait SpineUpdates : Sized {
+    /// The timestamp type of the updates.
     type Time: Timestamp + Lattice;
 
-    /// A type used to progressively merge payloads.
+    /// A type used to progressively merge updates.
     type Merger: Merger<Self>;
 
-    /// The number of updates in the payload.
+    /// How many updates there are.
     ///
-    /// A payload is meant to be absent rather than present and empty, so this should
-    /// be positive. The spine does not rely on that: it asks this method rather than
-    /// asking whether a payload is present, so a producer that hands it an empty
-    /// payload costs an extra merge rather than diverging from the absent case.
+    /// A batch with nothing in it is meant to hold no updates at all rather than an empty
+    /// collection of them, so this should be positive. The spine does not rely on that: it
+    /// asks this method rather than asking whether a batch has updates, so a producer that
+    /// hands it an empty collection costs an extra merge rather than behaving differently
+    /// from the absent case.
     fn len(&self) -> usize;
 }
 
 /// Represents a merge in progress.
 ///
-/// Constructing a merger begins the merge of two consecutive payloads. Exercising it
-/// eventually produces the same result that merging the payloads outright would, but
+/// Constructing a merger begins the merge of two consecutive batches' updates. Exercising
+/// it eventually produces the same result that merging them outright would, but
 /// does so in a measured fashion, which avoids latency spikes when a large merge needs
 /// to happen.
-pub trait Merger<P: SpinePayload> {
-    /// Creates a new merger to merge the supplied payloads, optionally compacting
+pub trait Merger<P: SpineUpdates> {
+    /// Creates a new merger to merge the supplied updates, optionally compacting
     /// up to the supplied frontier.
     fn new(source1: &P, source2: &P, compaction_frontier: AntichainRef<P::Time>) -> Self;
     /// Perform some amount of work, decrementing `fuel`.
@@ -122,28 +123,28 @@ pub trait Merger<P: SpinePayload> {
     fn done(self) -> Option<P>;
 }
 
-impl<P: SpinePayload> SpinePayload for Rc<P> {
+impl<P: SpineUpdates> SpineUpdates for Rc<P> {
     type Time = P::Time;
     type Merger = RcMerger<P>;
     fn len(&self) -> usize { (**self).len() }
 }
 
-/// Wrapper type for merging reference counted payloads.
-pub struct RcMerger<P: SpinePayload> { merger: P::Merger }
+/// Wrapper type for merging reference counted updates.
+pub struct RcMerger<P: SpineUpdates> { merger: P::Merger }
 
-impl<P: SpinePayload> Merger<Rc<P>> for RcMerger<P> {
+impl<P: SpineUpdates> Merger<Rc<P>> for RcMerger<P> {
     fn new(source1: &Rc<P>, source2: &Rc<P>, compaction_frontier: AntichainRef<P::Time>) -> Self { RcMerger { merger: P::Merger::new(source1, source2, compaction_frontier) } }
     fn work(&mut self, source1: &Rc<P>, source2: &Rc<P>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
     fn done(self) -> Option<Rc<P>> { self.merger.done().map(Rc::new) }
 }
 
-/// The number of updates in a batch: the payload's length, or zero when absent.
+/// The number of updates in a batch: their count, or zero when the batch has none.
 ///
-/// This is how the spine asks whether a batch has updates. `Batch::is_empty` answers
-/// the weaker question of whether a payload is *present*, which agrees with this only
-/// for producers that report absence when they built nothing; the spine can measure
-/// instead, and does.
-fn batch_len<P: SpinePayload>(batch: &Batch<P::Time, P>) -> usize {
+/// This is how the spine asks whether a batch has updates. `Batch::is_empty` answers the
+/// weaker question of whether the updates are *present*, which agrees with this only for
+/// producers that report absence when they built nothing; the spine can measure instead,
+/// and does.
+fn batch_len<P: SpineUpdates>(batch: &Batch<P::Time, P>) -> usize {
     batch.inner.as_ref().map(|p| p.len()).unwrap_or(0)
 }
 
@@ -152,7 +153,7 @@ fn batch_len<P: SpinePayload>(batch: &Batch<P::Time, P>) -> usize {
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections.
-pub struct Spine<P: SpinePayload> {
+pub struct Spine<P: SpineUpdates> {
     operator: OperatorInfo,
     logger: Option<Logger>,
     logical_frontier: Antichain<P::Time>,   // Times after which the trace must accumulate correctly.
@@ -168,10 +169,10 @@ pub struct Spine<P: SpinePayload> {
     exert_logic: Option<ExertionLogic>,
 }
 
-impl<P: SpinePayload+Clone+'static> TraceReader for Spine<P> {
+impl<P: SpineUpdates+Clone+'static> TraceReader for Spine<P> {
 
     type Time = P::Time;
-    type Payload = P;
+    type Updates = P;
 
     fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Batch<Self::Time, P>>> {
 
@@ -293,7 +294,7 @@ impl<P: SpinePayload+Clone+'static> TraceReader for Spine<P> {
     }
 }
 
-impl<P: SpinePayload+Clone+'static> Trace for Spine<P> {
+impl<P: SpineUpdates+Clone+'static> Trace for Spine<P> {
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
         logging: Option<crate::logging::Logger>,
@@ -362,14 +363,14 @@ impl<P: SpinePayload+Clone+'static> Trace for Spine<P> {
 }
 
 // Drop implementation allows us to log batch drops, to zero out maintained totals.
-impl<P: SpinePayload> Drop for Spine<P> {
+impl<P: SpineUpdates> Drop for Spine<P> {
     fn drop(&mut self) {
         self.drop_batches();
     }
 }
 
 
-impl<P: SpinePayload> Spine<P> {
+impl<P: SpineUpdates> Spine<P> {
     /// Drops and logs batches. Used in `set_logical_compaction` and drop.
     fn drop_batches(&mut self) {
         if let Some(logger) = &self.logger {
@@ -410,7 +411,7 @@ impl<P: SpinePayload> Spine<P> {
     }
 }
 
-impl<P: SpinePayload> Spine<P> {
+impl<P: SpineUpdates> Spine<P> {
     /// Determine the amount of effort we should exert in the absence of updates.
     ///
     /// This method prepares an iterator over batches, including the level, count, and length of each layer.
@@ -787,7 +788,7 @@ impl<P: SpinePayload> Spine<P> {
 /// absence, a stand-in for virtual updates with no description at all, used for
 /// fuel bookkeeping; a present batch whose `inner` is `None` is a *recorded* empty
 /// interval of time, with a real description.
-enum MergeState<P: SpinePayload> {
+enum MergeState<P: SpineUpdates> {
     /// An empty layer, containing no updates.
     Vacant,
     /// A layer containing a single batch.
@@ -799,7 +800,7 @@ enum MergeState<P: SpinePayload> {
     Double(MergeVariant<P>),
 }
 
-impl<P: SpinePayload> MergeState<P> {
+impl<P: SpineUpdates> MergeState<P> {
 
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
@@ -892,8 +893,8 @@ impl<P: SpinePayload> MergeState<P> {
                         let merger = P::Merger::new(source1, source2, description.since().borrow());
                         MergeVariant::InProgress(batch1, batch2, description, merger)
                     }
-                    // With at most one payload there is nothing to merge, and the surviving
-                    // payload's times are not advanced by the compaction frontier.
+                    // With at most one side carrying updates there is nothing to merge, and the
+                    // surviving updates' times are not advanced by the compaction frontier.
                     _ => {
                         let inner = batch1.inner.or(batch2.inner);
                         MergeVariant::Complete(Some((Batch::new(description, inner), None)))
@@ -909,18 +910,18 @@ impl<P: SpinePayload> MergeState<P> {
     }
 }
 
-enum MergeVariant<P: SpinePayload> {
+enum MergeVariant<P: SpineUpdates> {
     /// Describes an actual in-progress merge between two non-trivial batches.
     ///
     /// Beyond the two source batches, this records the description their merge
     /// will bear (their composed interval, with the compaction frontier as its
-    /// `since`) and the payload merger itself.
+    /// `since`) and the merger itself.
     InProgress(Batch<P::Time, P>, Batch<P::Time, P>, Description<P::Time>, P::Merger),
     /// A merge that requires no further work. May or may not represent a non-trivial batch.
     Complete(Option<(Batch<P::Time, P>, Option<(Batch<P::Time, P>, Batch<P::Time, P>)>)>),
 }
 
-impl<P: SpinePayload> MergeVariant<P> {
+impl<P: SpineUpdates> MergeVariant<P> {
 
     /// Completes and extracts the batch, unless structurally empty.
     ///

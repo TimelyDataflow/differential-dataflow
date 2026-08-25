@@ -33,8 +33,8 @@ pub trait Navigable {
     fn cursor(&self) -> Self::Cursor;
 }
 
-/// The cursor type for a trace's batch payloads.
-pub type BatchCursor<Tr> = <<Tr as crate::trace::TraceReader>::Payload as Navigable>::Cursor;
+/// The cursor type for the updates in a trace's batches.
+pub type BatchCursor<Tr> = <<Tr as crate::trace::TraceReader>::Updates as Navigable>::Cursor;
 
 /// The borrowed key type of a trace's batch cursor.
 pub type BatchKey<'a, Tr> = <BatchCursor<Tr> as Cursor>::Key<'a>;
@@ -49,14 +49,14 @@ pub type BatchDiff<Tr> = <BatchCursor<Tr> as Cursor>::Diff;
 /// The borrowed time type of a trace's batch cursor.
 pub type BatchTimeGat<'a, Tr> = <BatchCursor<Tr> as Cursor>::TimeGat<'a>;
 
-/// Assembles a merged cursor over a sequence of batch payloads.
+/// Assembles a merged cursor over several batches' updates.
 ///
-/// The payloads become the cursor's storage and are returned alongside the cursor; they must be
+/// The updates become the cursor's storage and are returned alongside the cursor; they must be
 /// kept alive and handed to the cursor's navigation methods.
-pub fn cursor_list<B: Navigable>(payloads: Vec<B>) -> (CursorList<B::Cursor>, Vec<B>) {
-    let cursors = payloads.iter().map(|payload| payload.cursor()).collect::<Vec<_>>();
-    let cursor = CursorList::new(cursors, &payloads);
-    (cursor, payloads)
+pub fn cursor_list<B: Navigable>(updates: Vec<B>) -> (CursorList<B::Cursor>, Vec<B>) {
+    let cursors = updates.iter().map(|u| u.cursor()).collect::<Vec<_>>();
+    let cursor = CursorList::new(cursors, &updates);
+    (cursor, updates)
 }
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.

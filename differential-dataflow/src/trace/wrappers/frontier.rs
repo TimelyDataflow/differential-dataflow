@@ -33,9 +33,9 @@ impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
 impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
 
     type Time = Tr::Time;
-    type Payload = BatchFrontier<Tr::Payload, Tr::Time>;
+    type Updates = BatchFrontier<Tr::Updates, Tr::Time>;
 
-    fn map_batches<F: FnMut(&Batch<Tr::Time, Self::Payload>)>(&self, mut f: F) {
+    fn map_batches<F: FnMut(&Batch<Tr::Time, Self::Updates>)>(&self, mut f: F) {
         let since = self.since.borrow();
         let until = self.until.borrow();
         self.trace.map_batches(|batch| {
@@ -53,7 +53,7 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_physical_compaction(frontier) }
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.trace.get_physical_compaction() }
 
-    fn batches_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Batch<Tr::Time, Self::Payload>>> {
+    fn batches_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Batch<Tr::Time, Self::Updates>>> {
         let storage = self.trace.batches_through(upper)?;
         let since = self.since.borrow();
         let until = self.until.borrow();
@@ -75,7 +75,7 @@ impl<Tr: TraceReader> TraceFrontier<Tr> {
 }
 
 
-/// Wrapper to provide a batch payload to a nested scope.
+/// Wrapper to provide a batch's updates to a nested scope.
 #[derive(Clone)]
 pub struct BatchFrontier<B, T> {
     batch: B,
@@ -84,7 +84,7 @@ pub struct BatchFrontier<B, T> {
 }
 
 impl<B, T> BatchFrontier<B, T> {
-    /// Makes a new payload wrapper
+    /// Makes a new wrapper
     pub fn make_from(batch: B, since: AntichainRef<T>, until: AntichainRef<T>) -> Self
     where T: Clone,
     {
@@ -95,13 +95,13 @@ impl<B, T> BatchFrontier<B, T> {
         }
     }
 
-    /// The wrapped payload, whose times are neither advanced nor suppressed.
+    /// The wrapped updates, whose times are neither advanced nor suppressed.
     ///
     /// Its times must be presented through [`BatchFrontier::advance_time`], which is the whole of
     /// the wrapper's read-side semantics.
     pub fn inner(&self) -> &B { &self.batch }
 
-    /// Applies the wrapper's time semantics to a time of the wrapped payload.
+    /// Applies the wrapper's time semantics to a time of the wrapped updates.
     ///
     /// The time is advanced by `since`, which accumulates the updates at or before `since` rather
     /// than presenting them partially accumulated. The method returns whether the advanced time

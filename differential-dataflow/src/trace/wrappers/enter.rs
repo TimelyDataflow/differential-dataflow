@@ -34,7 +34,7 @@ pub fn enter_description<T: timely::progress::Timestamp, TInner: Refines<T>+Latt
 }
 
 /// Converts an outer batch to an inner batch: the description enters the scope, and the
-/// payload is wrapped for its readers to do the same.
+/// updates is wrapped for its readers to do the same.
 pub fn enter_batch<T: timely::progress::Timestamp, TInner: Refines<T>+Lattice, P>(batch: Batch<T, P>) -> Batch<TInner, BatchEnter<P, TInner>> {
     Batch::new(enter_description(&batch.desc), batch.inner.map(BatchEnter::make_from))
 }
@@ -45,9 +45,9 @@ where
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Time = TInner;
-    type Payload = BatchEnter<Tr::Payload, TInner>;
+    type Updates = BatchEnter<Tr::Updates, TInner>;
 
-    fn map_batches<F: FnMut(&Batch<TInner, Self::Payload>)>(&self, mut f: F) {
+    fn map_batches<F: FnMut(&Batch<TInner, Self::Updates>)>(&self, mut f: F) {
         self.trace.map_batches(|batch| {
             f(&enter_batch(batch.clone()));
         })
@@ -83,7 +83,7 @@ where
         self.stash2.borrow()
     }
 
-    fn batches_through(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Batch<TInner, Self::Payload>>> {
+    fn batches_through(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Batch<TInner, Self::Updates>>> {
         self.stash1.clear();
         for time in upper.iter() {
             self.stash1.insert(time.clone().to_outer());
@@ -109,7 +109,7 @@ where
 }
 
 
-/// Wrapper to provide a batch payload to a nested scope.
+/// Wrapper to provide a batch updates to a nested scope.
 #[derive(Clone)]
 pub struct BatchEnter<B, TInner> {
     batch: B,
@@ -117,14 +117,14 @@ pub struct BatchEnter<B, TInner> {
 }
 
 impl<B, TInner> BatchEnter<B, TInner> {
-    /// The wrapped payload, whose times are those of the containing scope.
+    /// The wrapped updates, whose times are those of the containing scope.
     ///
     /// Each of its times enters the nested scope as `TInner::to_inner(time)`; that rule is the
-    /// whole of the wrapper's read-side semantics, and any reader of the wrapped payload must
+    /// whole of the wrapper's read-side semantics, and any reader of the wrapped updates must
     /// apply it.
     pub fn inner(&self) -> &B { &self.batch }
 
-    /// Makes a new payload wrapper
+    /// Makes a new wrapper
     pub fn make_from(batch: B) -> Self {
         BatchEnter { batch, phantom: PhantomData }
     }
