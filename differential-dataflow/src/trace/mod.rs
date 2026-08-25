@@ -31,7 +31,7 @@ pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize
 /// updates within it, absent exactly when there are none.
 ///
 /// The interval is never empty, but the batch may be missing; a span records that its times
-/// happened and brought no updates. Reading the batch is the [`Navigable`] capability.
+/// happened and brought no updates.
 #[derive(Clone, Debug)]
 pub struct Span<T, B> {
     /// The lower and upper bounds of contained update times, and the compaction frontier.
@@ -79,8 +79,9 @@ pub trait TraceReader {
     /// The batches of updates the trace's spans carry.
     ///
     /// A span is [`Span<Self::Time, Self::Batch>`](Span), pairing a description with a batch
-    /// when its interval brought any updates. Reading a batch is the optional [`Navigable`]
-    /// capability, required only where cursors are taken.
+    /// when its interval brought any updates. The trace has no opinion on how a batch is read:
+    /// operators that want cursors add a [`Navigable`] bound of their own, and operators that
+    /// read batches some other way add none.
     type Batch: 'static + Clone;
 
     /// Acquires the non-empty sequence of spans covering updates at times not greater or equal to an
@@ -188,7 +189,7 @@ pub trait TraceReader {
 /// An append-only collection of `(key, val, time, diff)` tuples.
 ///
 /// The trace itself is opinionated only about `Time`, which bounds its contents and drives its compaction.
-/// Key, value, and diff opinions live on the batches' cursors, and are reached through [`Navigable`].
+/// Key, value, and diff opinions live on the batches, which the trace does not constrain.
 pub trait Trace : TraceReader {
 
     /// Allocates a new empty trace.
