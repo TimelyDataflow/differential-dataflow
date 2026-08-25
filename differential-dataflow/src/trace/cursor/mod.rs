@@ -19,7 +19,7 @@ use crate::trace::implementations::containers::BatchContainer;
 ///
 /// This is the entry point for accessing batch data through cursors, and the place that opinions
 /// about keys and values are introduced (via the `Cursor` associated type). Cut-and-merge assembly
-/// is the trace's concern: [`TraceReader::batches_through`](crate::trace::TraceReader::batches_through)
+/// is the trace's concern: [`TraceReader::spans_through`](crate::trace::TraceReader::spans_through)
 /// selects the batches, and [`cursor_list()`] merges their cursors.
 pub trait Navigable {
 
@@ -33,7 +33,7 @@ pub trait Navigable {
     fn cursor(&self) -> Self::Cursor;
 }
 
-/// The cursor type for a trace's batches.
+/// The cursor type for the updates in a trace's batches.
 pub type BatchCursor<Tr> = <<Tr as crate::trace::TraceReader>::Batch as Navigable>::Cursor;
 
 /// The borrowed key type of a trace's batch cursor.
@@ -49,14 +49,14 @@ pub type BatchDiff<Tr> = <BatchCursor<Tr> as Cursor>::Diff;
 /// The borrowed time type of a trace's batch cursor.
 pub type BatchTimeGat<'a, Tr> = <BatchCursor<Tr> as Cursor>::TimeGat<'a>;
 
-/// Assembles a merged cursor over a sequence of batches.
+/// Assembles a merged cursor over several batches' updates.
 ///
-/// The batches become the cursor's storage and are returned alongside the cursor; they must be kept
-/// alive and handed to the cursor's navigation methods.
-pub fn cursor_list<B: crate::trace::BatchReader + Navigable>(batches: Vec<B>) -> (CursorList<B::Cursor>, Vec<B>) {
-    let cursors = batches.iter().map(|batch| batch.cursor()).collect::<Vec<_>>();
-    let cursor = CursorList::new(cursors, &batches);
-    (cursor, batches)
+/// The updates become the cursor's storage and are returned alongside the cursor; they must be
+/// kept alive and handed to the cursor's navigation methods.
+pub fn cursor_list<B: Navigable>(updates: Vec<B>) -> (CursorList<B::Cursor>, Vec<B>) {
+    let cursors = updates.iter().map(|u| u.cursor()).collect::<Vec<_>>();
+    let cursor = CursorList::new(cursors, &updates);
+    (cursor, updates)
 }
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.

@@ -5,14 +5,13 @@ use timely::progress::timestamp::Refines;
 use crate::lattice::Lattice;
 use crate::trace::implementations::BatchContainer;
 use crate::trace::wrappers::enter::BatchEnter;
-use crate::trace::{BatchReader, Navigable};
+use crate::trace::Navigable;
 use crate::trace::cursor::Cursor;
 
 impl<B, TInner> Navigable for BatchEnter<B, TInner>
 where
-    B: BatchReader + Navigable,
-    TInner: Refines<B::Time>+Lattice,
-    TInner: Refines<<B::Cursor as Cursor>::Time>,
+    B: Navigable,
+    TInner: Refines<<B::Cursor as Cursor>::Time>+Lattice,
 {
     type Cursor = BatchCursorEnter<B::Cursor, TInner>;
 

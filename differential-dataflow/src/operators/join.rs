@@ -17,7 +17,7 @@ use timely::dataflow::operators::CapabilitySet;
 
 use crate::lattice::Lattice;
 use crate::operators::arrange::Arranged;
-use crate::trace::{BatchCursor, BatchDiff, BatchReader, BatchVal, Cursor, Navigable, TraceReader};
+use crate::trace::{BatchCursor, BatchDiff, BatchVal, Cursor, Navigable, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 use crate::operators::ValueHistory;
@@ -27,12 +27,13 @@ use crate::operators::ValueHistory;
 /// The trait is parameterized by the output container `C`, not by the builder that assembles it: a tactic
 /// yields finished containers, and how it produces them (pushing records into a [`ContainerBuilder`], or
 /// otherwise) is its own concern.
-pub trait JoinTactic<B0: BatchReader, B1: BatchReader<Time = B0::Time>, C> {
+pub trait JoinTactic<T, B0, B1, C> {
     /// Prepare the join of two lists of batches into an iterator of output containers.
     ///
     /// The supplied `fresh` and `meet` indicate respectively which input is "novel", and should drive the
-    /// join, as well as a lower bound on that input's times, so that the other input can be loaded compacted.
-    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = C>>;
+    /// join, as well as a lower bound on that input's times, so that the other input can be loaded
+    /// compacted.
+    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: T) -> Box<dyn Iterator<Item = C>>;
 }
 
 /// Which input contributed the freshly-arrived batch of a deferred join unit.
@@ -78,13 +79,13 @@ where
 ///
 /// This is the general join operator: it does the dataflow plumbing (frontiers, capabilities, trace
 /// compaction) and routes the per-batch work through the tactic. It requires only `TraceReader` of its
-/// inputs, never `Navigable`: it extracts trace batches via `batches_through`, and building cursors over
+/// inputs, never `Navigable`: it extracts trace batches via `spans_through`, and building cursors over
 /// them (if that is how the join proceeds) is the tactic's concern.
 pub fn join_with_tactic<'scope, Tr1, Tr2, T, C>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, name: &str, mut tactic: T) -> Stream<'scope, Tr1::Time, C>
 where
     Tr1: TraceReader+'static,
     Tr2: TraceReader<Time = Tr1::Time>+'static,
-    T: JoinTactic<Tr1::Batch, Tr2::Batch, C>+'static,
+    T: JoinTactic<Tr1::Time, Tr1::Batch, Tr2::Batch, C>+'static,
     C: Container + 'static,
 {
     // Rename traces for symmetry from here on out.
@@ -105,7 +106,7 @@ where
         // initial work for the two traces, and before the operator is constructed.
 
         // Acknowledged frontier for each input.
-        // These two are used exclusively to track batch boundaries on which we may want/need to call `batches_through`.
+        // These two are used exclusively to track batch boundaries on which we may want/need to call `spans_through`.
         // They will drive our physical compaction of each trace, and we want to maintain at all times that each is beyond
         // the physical compaction frontier of their corresponding trace.
         // Should we ever *drop* a trace, these are 1. much harder to maintain correctly, but 2. no longer used.
@@ -121,7 +122,7 @@ where
         let mut todo1: VecDeque<(CapabilitySet<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
 
         // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
-        trace1.map_batches(|batch1| {
+        trace1.map_spans(|batch1| {
             acknowledged1.clone_from(batch1.upper());
             // No `todo1` work here, because we haven't accepted anything into `batches2` yet.
             // It is effectively "empty", because we choose to drain `trace1` before `trace2`.
@@ -138,7 +139,7 @@ where
         // We capture batch2's batches first and establish work second to avoid taking a `RefCell` lock
         // on both traces at the same time, as they could be the same trace and this would panic.
         let mut batch2_list = Vec::new();
-        trace2.map_batches(|batch2| {
+        trace2.map_spans(|batch2| {
             acknowledged2.clone_from(batch2.upper());
             batch2_list.push(batch2.clone());
         });
@@ -161,13 +162,15 @@ where
 
         // Load up deferred work joining each captured `trace2` batch against `trace1`.
         for batch2 in batch2_list.into_iter() {
+            // Empty batches carry no updates, and have nothing to join.
+            let Some(updates2) = batch2.inner else { continue };
             // It is safe to ask for `ack1` because we have confirmed it to be in advance of `distinguish_since`.
             let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap();
             // We could downgrade the capability here, but doing so is a bit complicated mathematically.
             // TODO: downgrade the capability by searching out the one time in `batch2.lower()` and not
             // in `batch2.upper()`. Only necessary for non-empty batches, as empty batches may not have
             // that property.
-            let work = tactic.prep(trace1_storage, vec![batch2], Fresh::Input1, capability.time().clone());
+            let work = tactic.prep(trace1_storage, vec![updates2], Fresh::Input1, capability.time().clone());
             todo1.push_back((CapabilitySet::from_elem(capability.clone()), work));
         }
 
@@ -222,11 +225,11 @@ where
                         // still be joined (its updates remain real at times finer than the trace's
                         // compaction frontier, and no other work item has accounted for them).
                         if !PartialOrder::less_equal(batch1.upper(), &preload_upper1) {
-                            if !batch1.is_empty() {
+                            if let Some(updates1) = batch1.inner.clone() {
                                 // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
                                 let trace2_storage = trace2.batches_through(acknowledged2.borrow()).unwrap();
-                                let work = tactic.prep(vec![batch1.clone()], trace2_storage, Fresh::Input0, meet.clone().expect("non-empty stamp"));
+                                let work = tactic.prep(vec![updates1], trace2_storage, Fresh::Input0, meet.clone().expect("non-empty stamp"));
                                 todo0.push_back((capability.clone(), work));
                             }
 
@@ -276,11 +279,11 @@ where
                         // still be joined (its updates remain real at times finer than the trace's
                         // compaction frontier, and no other work item has accounted for them).
                         if !PartialOrder::less_equal(batch2.upper(), &preload_upper2) {
-                            if !batch2.is_empty() {
+                            if let Some(updates2) = batch2.inner.clone() {
                                 // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
                                 let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap();
-                                let work = tactic.prep(trace1_storage, vec![batch2.clone()], Fresh::Input1, meet.clone().expect("non-empty stamp"));
+                                let work = tactic.prep(trace1_storage, vec![updates2], Fresh::Input1, meet.clone().expect("non-empty stamp"));
                                 todo1.push_back((capability.clone(), work));
                             }
 
@@ -407,10 +410,9 @@ mod cursors {
     /// implements is over the container `CB` yields (`CB::Container`).
     pub struct CursorTactic<B0, B1, L, CB>
     where
-        B0: BatchReader + Navigable,
-        B1: BatchReader<Time = B0::Time> + Navigable,
-        B0::Cursor: Cursor<Time = B0::Time>,
-        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
+        B0: Navigable,
+        B1: Navigable,
+        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = <B0::Cursor as Cursor>::Time>,
     {
         logic: Rc<RefCell<L>>,
         _marker: std::marker::PhantomData<(B0, B1, CB)>,
@@ -418,10 +420,9 @@ mod cursors {
 
     impl<B0, B1, L, CB> CursorTactic<B0, B1, L, CB>
     where
-        B0: BatchReader + Navigable,
-        B1: BatchReader<Time = B0::Time> + Navigable,
-        B0::Cursor: Cursor<Time = B0::Time>,
-        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
+        B0: Navigable,
+        B1: Navigable,
+        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = <B0::Cursor as Cursor>::Time>,
     {
         /// Construct a tactic that applies `logic` to each matched `(key, val0, val1)`.
         pub fn new(logic: L) -> Self {
@@ -429,16 +430,15 @@ mod cursors {
         }
     }
 
-    impl<B0, B1, L, CB> JoinTactic<B0, B1, CB::Container> for CursorTactic<B0, B1, L, CB>
+    impl<B0, B1, L, CB> JoinTactic<<B0::Cursor as Cursor>::Time, B0, B1, CB::Container> for CursorTactic<B0, B1, L, CB>
     where
-        B0: BatchReader + Navigable + 'static,
-        B1: BatchReader<Time = B0::Time> + Navigable + 'static,
-        B0::Cursor: Cursor<Time = B0::Time>,
-        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = B0::Time>,
+        B0: Navigable + 'static,
+        B1: Navigable + 'static,
+        B1::Cursor: for<'a> Cursor<Key<'a> = <B0::Cursor as Cursor>::Key<'a>, Time = <B0::Cursor as Cursor>::Time>,
         CB: ContainerBuilder<Container: Default> + 'static,
-        L: for<'a> FnMut(<B0::Cursor as Cursor>::Key<'a>, <B0::Cursor as Cursor>::Val<'a>, <B1::Cursor as Cursor>::Val<'a>, B0::Time, &<B0::Cursor as Cursor>::Diff, &<B1::Cursor as Cursor>::Diff, &mut CB) + 'static,
+        L: for<'a> FnMut(<B0::Cursor as Cursor>::Key<'a>, <B0::Cursor as Cursor>::Val<'a>, <B1::Cursor as Cursor>::Val<'a>, <B0::Cursor as Cursor>::Time, &<B0::Cursor as Cursor>::Diff, &<B1::Cursor as Cursor>::Diff, &mut CB) + 'static,
     {
-        fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: B0::Time) -> Box<dyn Iterator<Item = CB::Container>> {
+        fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: <B0::Cursor as Cursor>::Time) -> Box<dyn Iterator<Item = CB::Container>> {
             // The accumulated side's history is advanced by `meet` to consolidate it before the
             // cross-product; the fresh side is left, as its times already lie at or beyond `meet`. `fresh`
             // fixes which side is which. The advance is output-neutral either way (the fresh side's times are

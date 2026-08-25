@@ -8,7 +8,7 @@
 
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use crate::trace::{BatchReader, Description, TraceReader};
+use crate::trace::{Span, TraceReader};
 use crate::lattice::Lattice;
 
 /// Wrapper to provide trace to nested scope.
@@ -33,12 +33,18 @@ impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
 impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
 
     type Time = Tr::Time;
-    type Batch = BatchFrontier<Tr::Batch>;
+    type Batch = BatchFrontier<Tr::Batch, Tr::Time>;
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
+    fn map_spans<F: FnMut(&Span<Tr::Time, Self::Batch>)>(&self, mut f: F) {
         let since = self.since.borrow();
         let until = self.until.borrow();
-        self.trace.map_batches(|batch| f(&Self::Batch::make_from(batch.clone(), since, until)))
+        self.trace.map_spans(|span| {
+            let wrapped = Span::new(
+                span.desc.clone(),
+                span.inner.clone().map(|b| BatchFrontier::make_from(b, since, until)),
+            );
+            f(&wrapped)
+        })
     }
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_logical_compaction(frontier) }
@@ -47,11 +53,13 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_physical_compaction(frontier) }
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.trace.get_physical_compaction() }
 
-    fn batches_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Self::Batch>> {
-        let storage = self.trace.batches_through(upper)?;
+    fn spans_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Span<Tr::Time, Self::Batch>>> {
+        let storage = self.trace.spans_through(upper)?;
         let since = self.since.borrow();
         let until = self.until.borrow();
-        Some(storage.into_iter().map(|batch| BatchFrontier::make_from(batch, since, until)).collect())
+        Some(storage.into_iter().map(|span| {
+            Span::new(span.desc, span.inner.map(|b| BatchFrontier::make_from(b, since, until)))
+        }).collect())
     }
 }
 
@@ -67,23 +75,19 @@ impl<Tr: TraceReader> TraceFrontier<Tr> {
 }
 
 
-/// Wrapper to provide batch to nested scope.
+/// Wrapper to restrict a batch's times to a frontier range.
 #[derive(Clone)]
-pub struct BatchFrontier<B: BatchReader> {
+pub struct BatchFrontier<B, T> {
     batch: B,
-    since: Antichain<B::Time>,
-    until: Antichain<B::Time>,
+    since: Antichain<T>,
+    until: Antichain<T>,
 }
 
-impl<B: BatchReader> BatchReader for BatchFrontier<B> {
-    type Time = B::Time;
-    fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<B::Time> { self.batch.description() }
-}
-
-impl<B: BatchReader> BatchFrontier<B> {
-    /// Makes a new batch wrapper
-    pub fn make_from(batch: B, since: AntichainRef<B::Time>, until: AntichainRef<B::Time>) -> Self {
+impl<B, T> BatchFrontier<B, T> {
+    /// Makes a new wrapper
+    pub fn make_from(batch: B, since: AntichainRef<T>, until: AntichainRef<T>) -> Self
+    where T: Clone,
+    {
         BatchFrontier {
             batch,
             since: since.to_owned(),
@@ -104,7 +108,9 @@ impl<B: BatchReader> BatchFrontier<B> {
     /// should be presented at all: times at or after `until` are suppressed, even when they are
     /// part of a batch that spans `until`.
     #[inline]
-    pub fn advance_time(&self, time: &mut B::Time) -> bool {
+    pub fn advance_time(&self, time: &mut T) -> bool
+    where T: Lattice + timely::progress::Timestamp,
+    {
         time.advance_by(self.since.borrow());
         !self.until.less_equal(time)
     }

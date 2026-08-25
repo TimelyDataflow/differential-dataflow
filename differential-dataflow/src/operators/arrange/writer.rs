@@ -8,7 +8,7 @@ use std::cell::RefCell;
 
 use timely::progress::Antichain;
 
-use crate::trace::{Trace, Batch, BatchReader};
+use crate::trace::{Trace, Span, SpanOf};
 
 use super::TraceAgentQueueWriter;
 use super::TraceReplayInstruction;
@@ -47,28 +47,28 @@ impl<Tr: Trace> TraceWriter<Tr> {
         }
     }
 
-    /// Advances the trace by `batch`.
+    /// Advances the trace by `span`.
     ///
-    /// The `hint` argument is either `None` in the case of an empty batch,
-    /// or is `Some(time)` for a time less or equal to all updates in the
-    /// batch and which is suitable for use as a capability.
-    pub fn insert(&mut self, batch: Tr::Batch, hint: timely::progress::Stamp<Tr::Time>) {
+    /// The `hint` argument is either `None` when the span carries no updates,
+    /// or is `Some(time)` for a time less or equal to all updates in its batch
+    /// and which is suitable for use as a capability.
+    pub fn insert(&mut self, span: SpanOf<Tr>, hint: timely::progress::Stamp<Tr::Time>) {
 
         // Something is wrong if not a sequence.
-        if !(&self.upper == batch.lower()) {
-            println!("{:?} vs {:?}", self.upper, batch.lower());
+        if !(&self.upper == span.lower()) {
+            println!("{:?} vs {:?}", self.upper, span.lower());
         }
-        assert!(&self.upper == batch.lower());
-        assert!(batch.lower() != batch.upper());
+        assert!(&self.upper == span.lower());
+        assert!(span.lower() != span.upper());
 
-        self.upper.clone_from(batch.upper());
+        self.upper.clone_from(span.upper());
 
         // push information to each listener that still exists.
         let mut borrow = self.queues.borrow_mut();
         for queue in borrow.iter_mut() {
             if let Some(pair) = queue.upgrade() {
-                pair.1.borrow_mut().push_back(TraceReplayInstruction::Batch(batch.clone(), hint.clone()));
-                pair.1.borrow_mut().push_back(TraceReplayInstruction::Frontier(batch.upper().clone()));
+                pair.1.borrow_mut().push_back(TraceReplayInstruction::Span(span.clone(), hint.clone()));
+                pair.1.borrow_mut().push_back(TraceReplayInstruction::Frontier(span.upper().clone()));
                 pair.0.activate();
             }
         }
@@ -76,15 +76,15 @@ impl<Tr: Trace> TraceWriter<Tr> {
 
         // push data to the trace, if it still exists.
         if let Some(trace) = self.trace.upgrade() {
-            trace.borrow_mut().trace.insert(batch);
+            trace.borrow_mut().trace.insert(span);
         }
 
     }
 
-    /// Inserts an empty batch up to `upper`.
+    /// Inserts an update-free span up to `upper`.
     pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
         if self.upper != upper {
-            self.insert(Tr::Batch::empty(self.upper.clone(), upper), timely::progress::Stamp::new());
+            self.insert(Span::empty(self.upper.clone(), upper), timely::progress::Stamp::new());
         }
     }
 }

@@ -31,9 +31,9 @@ use timely::progress::Stamp;
 use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{self, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
+use crate::trace::{self, SpanOf, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
 
-use trace::wrappers::enter::{TraceEnter, BatchEnter,};
+use trace::wrappers::enter::{TraceEnter, enter_span};
 
 use super::TraceAgent;
 
@@ -47,7 +47,7 @@ pub struct Arranged<'scope, Tr: TraceReader> {
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
-    pub stream: Stream<'scope, Tr::Time, Vec<Tr::Batch>>,
+    pub stream: Stream<'scope, Tr::Time, Vec<SpanOf<Tr>>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Tr,
 }
@@ -75,7 +75,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
         TInner: Refines<Tr::Time>+Lattice,
     {
         Arranged {
-            stream: self.stream.enter(child).map(|bw| BatchEnter::make_from(bw)),
+            stream: self.stream.enter(child).map(enter_span),
             trace: TraceEnter::make_from(self.trace),
         }
     }
@@ -98,7 +98,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     pub fn as_container<I, L>(self, mut logic: L) -> crate::Collection<'scope, Tr::Time, I::Item>
     where
         I: IntoIterator<Item: Container>,
-        L: FnMut(Tr::Batch) -> I+'static,
+        L: FnMut(SpanOf<Tr>) -> I+'static,
     {
         self.stream.unary(Pipeline, "AsContainer", move |_,_| move |input, output| {
             input.for_each(|time, data| {
@@ -115,7 +115,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 
     /// Flattens the stream into a `VecCollection`.
     ///
-    /// The underlying `Stream<T, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
+    /// The underlying `Stream<T, Vec<SpanOf<T>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<'scope, Tr::Time, D, BatchDiff<Tr>>
@@ -129,7 +129,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 
     /// Flattens the stream into a `VecCollection`.
     ///
-    /// The underlying `Stream<T, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
+    /// The underlying `Stream<T, Vec<SpanOf<T>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
     ///
@@ -168,7 +168,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     ///
     /// This method exists for streams of batches without the corresponding arrangement.
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
-    pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<Tr::Batch>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, BatchDiff<Tr>>
+    pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<SpanOf<Tr>>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, BatchDiff<Tr>>
     where
         Tr::Batch: Navigable,
         BatchCursor<Tr>: Cursor<Time = Tr::Time>,
@@ -179,7 +179,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
             input.for_each(|time, data| {
                 let mut session = output.session(&time);
                 for wrapper in data.iter() {
-                    let batch = &wrapper;
+                    let Some(batch) = wrapper.inner.as_ref() else { continue };
                     let mut cursor = batch.cursor();
                     while let Some(key) = cursor.get_key(batch) {
                         while let Some(val) = cursor.get_val(batch) {
@@ -253,7 +253,7 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time, Diff: Abelian>,
-        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -274,7 +274,7 @@ impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
-        Bu: Builder<Time=Tr1::Time, Output = Tr2::Batch, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -307,7 +307,7 @@ pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
     fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
+        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Batch>>,
         Tr: Trace<Time=T> + 'static,
     {
         self.arrange_named::<Ba, Bu, Tr>("Arrange")
@@ -319,7 +319,7 @@ pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
     fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output = Tr::Batch>,
+        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Batch>>,
         Tr: Trace<Time=T> + 'static,
     ;
 }
@@ -335,7 +335,7 @@ where
     P: ParallelizationContract<Tr::Time, C>,
     Chu: ContainerBuilder<Container=Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
     Ba: Batcher<Time=Tr::Time> + 'static,
-    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
+    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output: Into<Tr::Batch>>,
     Tr: Trace+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
@@ -448,7 +448,7 @@ where
 
                     // Extract all updates not in advance of the input frontier, as one batch.
                     let (mut chain, description) = batcher.seal(frontier.frontier().to_owned());
-                    let batch = Bu::seal(&mut chain, description);
+                    let batch = trace::Span::new(description, Bu::seal(&mut chain).map(Into::into));
 
                     let stamp = retired.iter().map(|c| c.time().clone()).collect::<Stamp<_>>();
                     writer.insert(batch.clone(), stamp);

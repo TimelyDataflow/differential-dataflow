@@ -27,7 +27,6 @@ use timely::progress::frontier::AntichainRef;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
-use differential_dataflow::trace::Description;
 
 use corgi::arrange::{compare_at, compare_idx, gather, gather_lanes, group_bounds, sort_perm};
 use corgi::Value as CValue;
@@ -430,17 +429,17 @@ where
 /// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
 /// consolidate into one chunk, then `settle`. The column-native egress the reduce backend seals its
 /// output with (it resolves proxy ids to real columns by `gather` and hands them here).
-pub fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>, description: Description<T>) -> ChunkBatch<CorgiChunk<T, R>>
+pub fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> ChunkBatch<CorgiChunk<T, R>>
 where
     T: ColTime,
     R: Semigroup + Clone + 'static,
 {
     let chunk = CorgiChunk::from_columns(keys, vals, times, diffs);
-    settle_one(chunk, description)
+    settle_one(chunk)
 }
 
 /// Grade one chunk into a `ChunkBatch` (shared tail of `rows_to_batch`/`columns_to_batch`).
-fn settle_one<T, R>(chunk: CorgiChunk<T, R>, description: Description<T>) -> ChunkBatch<CorgiChunk<T, R>>
+fn settle_one<T, R>(chunk: CorgiChunk<T, R>) -> ChunkBatch<CorgiChunk<T, R>>
 where
     T: ColTime,
     R: Semigroup + Clone + 'static,
@@ -449,7 +448,7 @@ where
     if chunk.len_() > 0 { input.push_back(chunk); }
     let mut output = VecDeque::new();
     CorgiChunk::settle(&mut input, true, &mut output);
-    ChunkBatch::new(output.into(), description)
+    ChunkBatch::new(output.into())
 }
 
 /// A column-native arrange **chunker**: turns input `CorgiContainer`s into sorted+consolidated
@@ -618,8 +617,7 @@ where
 mod test {
     use super::*;
     use differential_dataflow::trace::chunk::{ChunkBatchMerger, is_graded};
-    use differential_dataflow::trace::Description;
-    use differential_dataflow::trace::implementations::spine_fueled::Merger;
+        use differential_dataflow::trace::implementations::spine_fueled::Merger;
     use std::collections::BTreeMap;
 
     fn xorshift(s: &mut u64) -> u64 { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; *s }
@@ -662,8 +660,7 @@ mod test {
         m.retain(|_, d| *d != 0);
         let all: Vec<((u64, u64), u64, i64)> = m.into_iter().map(|((kv, t), d)| (kv, t, d)).collect();
         let chunks: Vec<_> = all.chunks(sz.max(1)).map(chunk).collect();
-        let desc = Description::new(Antichain::from_elem(0u64), Antichain::from_elem(10u64), Antichain::from_elem(0u64));
-        ChunkBatch::new(chunks, desc)
+        ChunkBatch::new(chunks)
     }
 
     #[test]
@@ -692,8 +689,12 @@ mod test {
                 if fuel > 0 { break; }
             }
             let result = merger.done();
-            assert!(is_graded(&result.chunks), "ungraded: {:?}", result.chunks.iter().map(Chunk::len).collect::<Vec<_>>());
-            assert_eq!(read_batch(&result), reference(&u1, &u2, f), "u1={u1:?}\nu2={u2:?}\nf={f}");
+            let chunks: &[CorgiChunk<u64, i64>] = result.as_ref().map_or(&[], |b| &b.chunks[..]);
+            assert!(is_graded(chunks), "ungraded: {:?}", chunks.iter().map(Chunk::len).collect::<Vec<_>>());
+            let want = reference(&u1, &u2, f);
+            // A merge that cancels to nothing reports an absent payload.
+            assert_eq!(result.is_none(), want.is_empty(), "absence must track emptiness\nu1={u1:?}\nu2={u2:?}\nf={f}");
+            assert_eq!(result.as_ref().map_or_else(BTreeMap::new, read_batch), want, "u1={u1:?}\nu2={u2:?}\nf={f}");
         }
     }
 }

@@ -13,7 +13,6 @@ use std::rc::Rc;
 use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::implementations::merge_batcher::MergeBatcher;
 use crate::trace::implementations::merge_batcher::vec::VecMerger;
-use crate::trace::rc_blanket_impls::RcBuilder;
 
 use super::{Layout, Vector};
 
@@ -25,14 +24,14 @@ pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher using ordered lists.
 pub type OrdValBatcher<K, V, T, R> = MergeBatcher<VecMerger<(K, V), T, R>>;
 /// A builder using ordered lists.
-pub type RcOrdValBuilder<K, V, T, R> = RcBuilder<OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>>;
+pub type VecOrdValBuilder<K, V, T, R> = OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>;
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 /// A batcher for ordered lists.
 pub type OrdKeyBatcher<K, T, R> = MergeBatcher<VecMerger<(K, ()), T, R>>;
 /// A builder for ordered lists.
-pub type RcOrdKeyBuilder<K, T, R> = RcBuilder<OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>>;
+pub type VecOrdKeyBuilder<K, T, R> = OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>;
 
 pub use layers::{Vals, Upds};
 /// Layers are containers of lists of some type.
@@ -248,7 +247,7 @@ pub mod val_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Batch, BatchReader, Builder, Cursor, Description};
+    use crate::trace::{Builder, Cursor};
     use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
@@ -273,10 +272,9 @@ pub mod val_batch {
         pub upds: Upds<L::OffsetContainer, L::TimeContainer, L::DiffContainer>,
     }
 
-    /// An immutable collection of update tuples, from a contiguous interval of logical times.
+    /// The updates of a batch, as immutable update tuples.
     ///
-    /// The `L` parameter captures how the updates should be laid out, and `C` determines which
-    /// merge batcher to select.
+    /// The `L` parameter captures how the updates should be laid out.
     #[derive(Serialize, Deserialize)]
     #[serde(bound = "
         L::KeyContainer: Serialize + for<'a> Deserialize<'a>,
@@ -288,8 +286,6 @@ pub mod val_batch {
     pub struct OrdValBatch<L: Layout> {
         /// The updates themselves.
         pub storage: OrdValStorage<L>,
-        /// Description of the update times this layer represents.
-        pub description: Description<layout::Time<L>>,
         /// The number of updates reflected in the batch.
         ///
         /// We track this separately from `storage` because due to the singleton optimization,
@@ -313,33 +309,13 @@ pub mod val_batch {
         }
     }
 
-    impl<L: Layout> BatchReader for OrdValBatch<L> {
-
+    impl<L: Layout> SpineBatch for OrdValBatch<L> {
         type Time = layout::Time<L>;
+        type Merger = OrdValMerger<L>;
         fn len(&self) -> usize {
             // Normally this would be `self.updates.len()`, but we have a clever compact encoding.
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
             self.updates
-        }
-        fn description(&self) -> &Description<layout::Time<L>> { &self.description }
-    }
-
-    impl<L: Layout> SpineBatch for OrdValBatch<L> {
-        type Merger = OrdValMerger<L>;
-    }
-
-    impl<L: Layout> Batch for OrdValBatch<L> {
-        fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
-            use timely::progress::Timestamp;
-            Self {
-                storage: OrdValStorage {
-                    keys: L::KeyContainer::with_capacity(0),
-                    vals: Default::default(),
-                    upds: Default::default(),
-                },
-                description: Description::new(lower, upper, Antichain::from_elem(Self::Time::minimum())),
-                updates: 0,
-            }
         }
     }
 
@@ -351,24 +327,14 @@ pub mod val_batch {
         key_cursor2: usize,
         /// result that we are currently assembling.
         result: OrdValStorage<L>,
-        /// description
-        description: Description<layout::Time<L>>,
+        /// Frontier through which times should be advanced, from the result's description.
+        since: Antichain<layout::Time<L>>,
         /// Staging area to consolidate owned times and diffs, before sealing.
         staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
     }
 
-    impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L>
-    where
-        OrdValBatch<L>: Batch<Time=layout::Time<L>>,
-    {
+    impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L> {
         fn new(batch1: &OrdValBatch<L>, batch2: &OrdValBatch<L>, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self {
-
-            assert!(batch1.upper() == batch2.lower());
-            use crate::lattice::Lattice;
-            let mut since = batch1.description().since().join(batch2.description().since());
-            since = since.join(&compaction_frontier.to_owned());
-
-            let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
             let batch1 = &batch1.storage;
             let batch2 = &batch2.storage;
@@ -381,16 +347,13 @@ pub mod val_batch {
                     vals: Vals::merge_capacity(&batch1.vals, &batch2.vals),
                     upds: Upds::merge_capacity(&batch1.upds, &batch2.upds),
                 },
-                description,
+                since: compaction_frontier.to_owned(),
                 staging: UpdsBuilder::default(),
             }
         }
-        fn done(self) -> OrdValBatch<L> {
-            OrdValBatch {
-                updates: self.staging.total(),
-                storage: self.result,
-                description: self.description,
-            }
+        fn done(self) -> Option<OrdValBatch<L>> {
+            let updates = self.staging.total();
+            (updates > 0).then(|| OrdValBatch { updates, storage: self.result })
         }
         fn work(&mut self, source1: &OrdValBatch<L>, source2: &OrdValBatch<L>, fuel: &mut isize) {
 
@@ -554,7 +517,7 @@ pub mod val_batch {
                 let (time, diff) = source.upds.get_abs(i);
                 use crate::lattice::Lattice;
                 let mut new_time: layout::Time<L> = L::TimeContainer::into_owned(time);
-                new_time.advance_by(self.description.since().borrow());
+                new_time.advance_by(self.since.borrow());
                 self.staging.push(new_time, L::DiffContainer::into_owned(diff));
             }
         }
@@ -709,24 +672,21 @@ pub mod val_batch {
         }
 
         #[inline(never)]
-        fn done(mut self, description: Description<Self::Time>) -> OrdValBatch<L> {
+        fn done(mut self) -> Option<Self::Output> {
             self.staging.seal(&mut self.result.upds);
             self.result.vals.offs.push_ref(self.result.vals.vals.len());
-            OrdValBatch {
-                updates: self.staging.total(),
-                storage: self.result,
-                description,
-            }
+            let updates = self.staging.total();
+            (updates > 0).then(|| OrdValBatch { updates, storage: self.result })
         }
 
-        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
+        fn seal(chain: &mut Vec<Self::Input>) -> Option<Self::Output> {
             let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
             }
 
-            builder.done(description)
+            builder.done()
         }
     }
 }
@@ -739,7 +699,7 @@ pub mod key_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Batch, BatchReader, Builder, Cursor, Description};
+    use crate::trace::{Builder, Cursor};
     use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
@@ -776,8 +736,6 @@ pub mod key_batch {
     pub struct OrdKeyBatch<L: Layout> {
         /// The updates themselves.
         pub storage: OrdKeyStorage<L>,
-        /// Description of the update times this layer represents.
-        pub description: Description<layout::Time<L>>,
         /// The number of updates reflected in the batch.
         ///
         /// We track this separately from `storage` because due to the singleton optimization,
@@ -813,33 +771,13 @@ pub mod key_batch {
         }
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> BatchReader for OrdKeyBatch<L> {
-
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> SpineBatch for OrdKeyBatch<L> {
         type Time = layout::Time<L>;
+        type Merger = OrdKeyMerger<L>;
         fn len(&self) -> usize {
             // Normally this would be `self.updates.len()`, but we have a clever compact encoding.
             // Perhaps we should count such exceptions to the side, to provide a correct accounting.
             self.updates
-        }
-        fn description(&self) -> &Description<layout::Time<L>> { &self.description }
-    }
-
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> SpineBatch for OrdKeyBatch<L> {
-        type Merger = OrdKeyMerger<L>;
-    }
-
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Batch for OrdKeyBatch<L> {
-        fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
-            use timely::progress::Timestamp;
-            Self {
-                storage: OrdKeyStorage {
-                    keys: L::KeyContainer::with_capacity(0),
-                    upds: Upds::default(),
-                },
-                description: Description::new(lower, upper, Antichain::from_elem(Self::Time::minimum())),
-                updates: 0,
-                value: Self::create_value(),
-            }
         }
     }
 
@@ -851,25 +789,15 @@ pub mod key_batch {
         key_cursor2: usize,
         /// result that we are currently assembling.
         result: OrdKeyStorage<L>,
-        /// description
-        description: Description<layout::Time<L>>,
+        /// Frontier through which times should be advanced, from the result's description.
+        since: Antichain<layout::Time<L>>,
 
         /// Local stash of updates, to use for consolidation.
         staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L>
-    where
-        OrdKeyBatch<L>: Batch<Time=layout::Time<L>>,
-    {
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L> {
         fn new(batch1: &OrdKeyBatch<L>, batch2: &OrdKeyBatch<L>, compaction_frontier: AntichainRef<layout::Time<L>>) -> Self {
-
-            assert!(batch1.upper() == batch2.lower());
-            use crate::lattice::Lattice;
-            let mut since = batch1.description().since().join(batch2.description().since());
-            since = since.join(&compaction_frontier.to_owned());
-
-            let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
 
             let batch1 = &batch1.storage;
             let batch2 = &batch2.storage;
@@ -881,17 +809,17 @@ pub mod key_batch {
                     keys: L::KeyContainer::merge_capacity(&batch1.keys, &batch2.keys),
                     upds: Upds::merge_capacity(&batch1.upds, &batch2.upds),
                 },
-                description,
+                since: compaction_frontier.to_owned(),
                 staging: UpdsBuilder::default(),
             }
         }
-        fn done(self) -> OrdKeyBatch<L> {
-            OrdKeyBatch {
-                updates: self.staging.total(),
+        fn done(self) -> Option<OrdKeyBatch<L>> {
+            let updates = self.staging.total();
+            (updates > 0).then(|| OrdKeyBatch {
+                updates,
                 storage: self.result,
-                description: self.description,
                 value: OrdKeyBatch::<L>::create_value(),
-            }
+            })
         }
         fn work(&mut self, source1: &OrdKeyBatch<L>, source2: &OrdKeyBatch<L>, fuel: &mut isize) {
 
@@ -975,7 +903,7 @@ pub mod key_batch {
                 let (time, diff) = source.upds.get_abs(i);
                 use crate::lattice::Lattice;
                 let mut new_time = L::TimeContainer::into_owned(time);
-                new_time.advance_by(self.description.since().borrow());
+                new_time.advance_by(self.since.borrow());
                 self.staging.push(new_time, L::DiffContainer::into_owned(diff));
             }
         }
@@ -1108,24 +1036,24 @@ pub mod key_batch {
         }
 
         #[inline(never)]
-        fn done(mut self, description: Description<Self::Time>) -> OrdKeyBatch<L> {
+        fn done(mut self) -> Option<Self::Output> {
             self.staging.seal(&mut self.result.upds);
-            OrdKeyBatch {
-                updates: self.staging.total(),
+            let updates = self.staging.total();
+            (updates > 0).then(|| OrdKeyBatch {
+                updates,
                 storage: self.result,
-                description,
                 value: OrdKeyBatch::<L>::create_value(),
-            }
+            })
         }
 
-        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
+        fn seal(chain: &mut Vec<Self::Input>) -> Option<Self::Output> {
             let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
             }
 
-            builder.done(description)
+            builder.done()
         }
     }
 

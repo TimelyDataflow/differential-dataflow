@@ -20,9 +20,12 @@ use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::operators::arrange::{Arranged, TraceAgent};
-use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
+use crate::trace::{Span, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
+
+/// The time type of the updates' cursor: the time coordinate the tactics work in.
+type TimeOf<B> = <<B as Navigable>::Cursor as Cursor>::Time;
 
 /// Sort and deduplicate a list. Shared by the cursor and reference tactics (via their
 /// `use super::*`) and the proxy tactic (`crate::operators::reduce::sort_dedup`), which
@@ -39,7 +42,7 @@ pub(crate) fn sort_dedup<T: Ord>(list: &mut Vec<T>) {
 /// Unlike join, reduce does not suspend: its output is at most linear in its input, so a single
 /// `retire` runs the whole `[lower, upper)` interval to completion rather than yielding under a fuel
 /// budget.
-pub trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
+pub trait ReduceTactic<T, B1, B2> {
     /// Retire the interval `[lower, upper)`, producing the output batch it informs.
     ///
     /// It is presented with the pre-existing input batches and output batches (those before `lower`),
@@ -67,10 +70,10 @@ pub trait ReduceTactic<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
         source_batches: Vec<B1>,
         output_batches: Vec<B2>,
         input_batches: Vec<B1>,
-        lower: &Antichain<B1::Time>,
-        upper: &Antichain<B1::Time>,
-        held: &Antichain<B1::Time>,
-    ) -> (Option<B2>, Antichain<B1::Time>);
+        lower: &Antichain<T>,
+        upper: &Antichain<T>,
+        held: &Antichain<T>,
+    ) -> (Option<Span<T, B2>>, Antichain<T>);
 }
 
 /// A key-wise reduction of values in an input trace.
@@ -94,7 +97,7 @@ where
     BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
-    Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default> + 'static,
+    Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
     L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
     P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
 {
@@ -111,13 +114,13 @@ pub use reference::reduce_trace_reference;
 /// This is the general reduce operator: it does the dataflow plumbing (frontiers, capabilities, output
 /// trace maintenance) and routes the per-interval work through the tactic. It requires only
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
-/// `batches_through`, and building cursors over them (if that is how the reduce proceeds) is the
+/// `spans_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
 pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
-    T: ReduceTactic<Tr1::Batch, Tr2::Batch> + 'static,
+    T: ReduceTactic<Tr1::Time, Tr1::Batch, Tr2::Batch> + 'static,
 {
     let mut result_trace = None;
 
@@ -197,11 +200,11 @@ where
 
                     // Retire the interval. The tactic reasons only about times: it returns the output
                     // batch to ship, if any, and the new frontier of interesting times.
-                    let (produced, new_frontier) = tactic.retire(source_batches, output_batches, batch_storage, &lower_limit, &upper_limit, &held);
+                    let (produced, new_frontier) = tactic.retire(source_batches, output_batches, batch_storage.into_iter().filter_map(|b| b.inner).collect(), &lower_limit, &upper_limit, &held);
 
                     // Contract check (see `ReduceTactic::retire`). Cheap, debug-only.
                     debug_assert!(
-                        produced.as_ref().is_none_or(|batch| batch.description().lower() == &lower_limit && batch.description().upper() == &upper_limit),
+                        produced.as_ref().is_none_or(|batch| batch.lower() == &lower_limit && batch.upper() == &upper_limit),
                         "ReduceTactic::retire output must span [lower, upper)",
                     );
 
@@ -257,10 +260,9 @@ mod cursors {
     /// The conventional cursor-based [`ReduceTactic`].
     pub struct CursorTactic<B1, B2, Bu, L, P>
     where
-        B1: BatchReader + Navigable,
-        B2: BatchReader<Time = B1::Time> + Navigable,
-        B1::Cursor: Cursor<Time = B1::Time>,
-        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = B1::Time>,
+        B1: Navigable,
+        B2: Navigable,
+        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = TimeOf<B1>>,
     {
         logic: L,
         push: P,
@@ -271,18 +273,17 @@ mod cursors {
         next_pending_keys: <B1::Cursor as Cursor>::KeyContainer,
         next_pending_time: <B1::Cursor as Cursor>::TimeContainer,
         // Buffers reused across activations.
-        interesting_times: Vec<B1::Time>,
-        new_interesting_times: Vec<B1::Time>,
+        interesting_times: Vec<TimeOf<B1>>,
+        new_interesting_times: Vec<TimeOf<B1>>,
         // Output batches may need to be built piecemeal, and these temp storage help there.
         _marker: PhantomData<(B2, Bu)>,
     }
 
     impl<B1, B2, Bu, L, P> CursorTactic<B1, B2, Bu, L, P>
     where
-        B1: BatchReader + Navigable,
-        B2: BatchReader<Time = B1::Time> + Navigable,
-        B1::Cursor: Cursor<Time = B1::Time>,
-        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = B1::Time>,
+        B1: Navigable,
+        B2: Navigable,
+        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = TimeOf<B1>>,
     {
         /// Construct a tactic that applies `logic` to each key and shapes output with `push`.
         pub fn new(logic: L, push: P) -> Self {
@@ -300,25 +301,24 @@ mod cursors {
         }
     }
 
-    impl<B1, B2, Bu, L, P> ReduceTactic<B1, B2> for CursorTactic<B1, B2, Bu, L, P>
+    impl<B1, B2, Bu, L, P> ReduceTactic<TimeOf<B1>, B1, B2> for CursorTactic<B1, B2, Bu, L, P>
     where
-        B1: BatchReader + Navigable,
-        B2: BatchReader<Time = B1::Time> + Navigable,
-        B1::Cursor: Cursor<Time = B1::Time>,
-        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = B1::Time>,
-        Bu: Builder<Time = B1::Time, Output = B2, Input: Default>,
+        B1: Navigable,
+        B2: Navigable,
+        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = TimeOf<B1>>,
+        Bu: Builder<Time = TimeOf<B1>, Output: Into<B2>, Input: Default>,
         L: FnMut(<B1::Cursor as Cursor>::Key<'_>, &[(<B1::Cursor as Cursor>::Val<'_>, <B1::Cursor as Cursor>::Diff)], &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>),
-        P: FnMut(&mut Bu::Input, <B1::Cursor as Cursor>::Key<'_>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>),
+        P: FnMut(&mut Bu::Input, <B1::Cursor as Cursor>::Key<'_>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, TimeOf<B1>, <B2::Cursor as Cursor>::Diff)>),
     {
         fn retire(
             &mut self,
             source_batches: Vec<B1>,
             output_batches: Vec<B2>,
             input_batches: Vec<B1>,
-            lower: &Antichain<B1::Time>,
-            upper: &Antichain<B1::Time>,
-            held: &Antichain<B1::Time>,
-        ) -> (Option<B2>, Antichain<B1::Time>)
+            lower: &Antichain<TimeOf<B1>>,
+            upper: &Antichain<TimeOf<B1>>,
+            held: &Antichain<TimeOf<B1>>,
+        ) -> (Option<Span<TimeOf<B1>, B2>>, Antichain<TimeOf<B1>>)
         {
             let mut produced = None;
 
@@ -334,7 +334,7 @@ mod cursors {
 
                 // Prepare one output buffer and builder: the batch spans [lower, upper) and
                 // ships stamped with the held times that justify its contents.
-                let mut output_updates = Vec::<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>::new();
+                let mut output_updates = Vec::<(<B2::Cursor as Cursor>::ValOwn, TimeOf<B1>, <B2::Cursor as Cursor>::Diff)>::new();
                 let mut builder = Bu::new();
                 // Temporary staging for output building.
                 let mut buffer = Bu::Input::default();
@@ -424,16 +424,16 @@ mod cursors {
 
                 // Build the batch spanning the interval, and hand it back to the driver
                 // to ship and commit.
-                let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<B1::Time as Timestamp>::minimum()));
-                produced = Some(builder.done(description));
+                let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<TimeOf<B1> as Timestamp>::minimum()));
+                produced = Some(Span::new(description, builder.done().map(Into::into)));
 
                 // Refresh pending keys and times.
                 self.pending_keys.clear(); std::mem::swap(&mut self.next_pending_keys, &mut self.pending_keys);
                 self.pending_time.clear(); std::mem::swap(&mut self.next_pending_time, &mut self.pending_time);
 
                 // Compute the new frontier of interesting times for the operator to hold.
-                let mut frontier = Antichain::<B1::Time>::new();
-                let mut owned_time = <B1::Time as Timestamp>::minimum();
+                let mut frontier = Antichain::<TimeOf<B1>>::new();
+                let mut owned_time = <TimeOf<B1> as Timestamp>::minimum();
                 for pos in 0 .. self.pending_time.len() {
                     <B1::Cursor as Cursor>::clone_time_onto(self.pending_time.index(pos), &mut owned_time);
                     frontier.insert_ref(&owned_time);
@@ -798,7 +798,7 @@ pub(crate) mod reference {
         Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, ValOwn: Data, Time = Tr2::Time>,
-        Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default> + 'static,
+        Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
         L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -818,10 +818,9 @@ pub(crate) mod reference {
     /// per-key engine differs.
     pub struct ReferenceTactic<B1, B2, Bu, L, P>
     where
-        B1: BatchReader + Navigable,
-        B2: BatchReader<Time = B1::Time> + Navigable,
-        B1::Cursor: Cursor<Time = B1::Time>,
-        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = B1::Time>,
+        B1: Navigable,
+        B2: Navigable,
+        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = TimeOf<B1>>,
     {
         logic: L,
         push: P,
@@ -829,17 +828,16 @@ pub(crate) mod reference {
         pending_time: <B1::Cursor as Cursor>::TimeContainer,
         next_pending_keys: <B1::Cursor as Cursor>::KeyContainer,
         next_pending_time: <B1::Cursor as Cursor>::TimeContainer,
-        interesting_times: Vec<B1::Time>,
-        new_interesting_times: Vec<B1::Time>,
+        interesting_times: Vec<TimeOf<B1>>,
+        new_interesting_times: Vec<TimeOf<B1>>,
         _marker: PhantomData<(B2, Bu)>,
     }
 
     impl<B1, B2, Bu, L, P> ReferenceTactic<B1, B2, Bu, L, P>
     where
-        B1: BatchReader + Navigable,
-        B2: BatchReader<Time = B1::Time> + Navigable,
-        B1::Cursor: Cursor<Time = B1::Time>,
-        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = B1::Time>,
+        B1: Navigable,
+        B2: Navigable,
+        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = TimeOf<B1>>,
     {
         /// Construct a tactic that applies `logic` to each key and shapes output with `push`.
         pub fn new(logic: L, push: P) -> Self {
@@ -857,25 +855,24 @@ pub(crate) mod reference {
         }
     }
 
-    impl<B1, B2, Bu, L, P> ReduceTactic<B1, B2> for ReferenceTactic<B1, B2, Bu, L, P>
+    impl<B1, B2, Bu, L, P> ReduceTactic<TimeOf<B1>, B1, B2> for ReferenceTactic<B1, B2, Bu, L, P>
     where
-        B1: BatchReader + Navigable,
-        B2: BatchReader<Time = B1::Time> + Navigable,
-        B1::Cursor: Cursor<Time = B1::Time>,
-        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = B1::Time>,
-        Bu: Builder<Time = B1::Time, Output = B2, Input: Default>,
+        B1: Navigable,
+        B2: Navigable,
+        for<'a> B2::Cursor: Cursor<Key<'a> = <B1::Cursor as Cursor>::Key<'a>, ValOwn: Data, Time = TimeOf<B1>>,
+        Bu: Builder<Time = TimeOf<B1>, Output: Into<B2>, Input: Default>,
         L: FnMut(<B1::Cursor as Cursor>::Key<'_>, &[(<B1::Cursor as Cursor>::Val<'_>, <B1::Cursor as Cursor>::Diff)], &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, <B2::Cursor as Cursor>::Diff)>),
-        P: FnMut(&mut Bu::Input, <B1::Cursor as Cursor>::Key<'_>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>),
+        P: FnMut(&mut Bu::Input, <B1::Cursor as Cursor>::Key<'_>, &mut Vec<(<B2::Cursor as Cursor>::ValOwn, TimeOf<B1>, <B2::Cursor as Cursor>::Diff)>),
     {
         fn retire(
             &mut self,
             source_batches: Vec<B1>,
             output_batches: Vec<B2>,
             input_batches: Vec<B1>,
-            lower: &Antichain<B1::Time>,
-            upper: &Antichain<B1::Time>,
-            held: &Antichain<B1::Time>,
-        ) -> (Option<B2>, Antichain<B1::Time>)
+            lower: &Antichain<TimeOf<B1>>,
+            upper: &Antichain<TimeOf<B1>>,
+            held: &Antichain<TimeOf<B1>>,
+        ) -> (Option<Span<TimeOf<B1>, B2>>, Antichain<TimeOf<B1>>)
         {
             let mut produced = None;
 
@@ -885,7 +882,7 @@ pub(crate) mod reference {
                 let (mut output_cursor, ref output_storage) = cursor_list(output_batches);
                 let (mut batch_cursor, ref batch_storage) = cursor_list(input_batches);
 
-                let mut output_updates = Vec::<(<B2::Cursor as Cursor>::ValOwn, B1::Time, <B2::Cursor as Cursor>::Diff)>::new();
+                let mut output_updates = Vec::<(<B2::Cursor as Cursor>::ValOwn, TimeOf<B1>, <B2::Cursor as Cursor>::Diff)>::new();
                 let mut builder = Bu::new();
                 let mut buffer = Bu::Input::default();
 
@@ -955,14 +952,14 @@ pub(crate) mod reference {
                 }
                 drop(thinker);
 
-                let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<B1::Time as Timestamp>::minimum()));
-                produced = Some(builder.done(description));
+                let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<TimeOf<B1> as Timestamp>::minimum()));
+                produced = Some(Span::new(description, builder.done().map(Into::into)));
 
                 self.pending_keys.clear(); std::mem::swap(&mut self.next_pending_keys, &mut self.pending_keys);
                 self.pending_time.clear(); std::mem::swap(&mut self.next_pending_time, &mut self.pending_time);
 
-                let mut frontier = Antichain::<B1::Time>::new();
-                let mut owned_time = <B1::Time as Timestamp>::minimum();
+                let mut frontier = Antichain::<TimeOf<B1>>::new();
+                let mut owned_time = <TimeOf<B1> as Timestamp>::minimum();
                 for pos in 0 .. self.pending_time.len() {
                     <B1::Cursor as Cursor>::clone_time_onto(self.pending_time.index(pos), &mut owned_time);
                     frontier.insert_ref(&owned_time);

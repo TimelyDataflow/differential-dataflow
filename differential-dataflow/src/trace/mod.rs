@@ -27,6 +27,42 @@ pub use self::description::Description;
 /// A type used to express how much effort a trace should exert even in the absence of updates.
 pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize)])->Option<usize>+Send+Sync>;
 
+/// An interval of a trace's history: a description of the times it covers, and the batch of
+/// updates within it, absent exactly when there are none.
+///
+/// The interval is never empty, but the batch may be missing; a span records that its times
+/// happened and brought no updates.
+#[derive(Clone, Debug)]
+pub struct Span<T, B> {
+    /// The lower and upper bounds of contained update times, and the compaction frontier.
+    pub desc: Description<T>,
+    /// The updates within the interval; absent exactly when there are none.
+    pub inner: Option<B>,
+}
+
+impl<T, B> Span<T, B> {
+    /// A span from a description and the batch within it, absent when there are no updates.
+    pub fn new(desc: Description<T>, inner: Option<B>) -> Self { Self { desc, inner } }
+    /// All times in the span are greater or equal to an element of `lower`.
+    pub fn lower(&self) -> &Antichain<T> { self.desc.lower() }
+    /// All times in the span are not greater or equal to any element of `upper`.
+    pub fn upper(&self) -> &Antichain<T> { self.desc.upper() }
+    /// True if the span carries a batch of updates.
+    ///
+    /// This is about the updates, not the interval, which is never empty.
+    pub fn has_updates(&self) -> bool { self.inner.is_some() }
+}
+
+impl<T: Timestamp, B> Span<T, B> {
+    /// A span over the indicated interval carrying no updates.
+    pub fn empty(lower: Antichain<T>, upper: Antichain<T>) -> Self {
+        Self { desc: Description::new(lower, upper, Antichain::from_elem(T::minimum())), inner: None }
+    }
+}
+
+/// The span type of a trace: [`Span`] instantiated at the trace's time and batch.
+pub type SpanOf<Tr> = Span<<Tr as TraceReader>::Time, <Tr as TraceReader>::Batch>;
+
 /// A trace whose contents may be read.
 ///
 /// This is a restricted interface to the more general `Trace` trait, which extends this trait with further methods
@@ -40,20 +76,32 @@ pub trait TraceReader {
     /// bound its contents and to drive compaction.
     type Time: Timestamp + Lattice;
 
-    /// The type of an immutable collection of updates.
-    type Batch:
-        'static +
-        Clone +
-        BatchReader<Time = Self::Time>;
+    /// The batches of updates the trace's spans carry.
+    ///
+    /// A span is [`Span<Self::Time, Self::Batch>`](Span), pairing a description with a batch
+    /// when its interval brought any updates. The trace has no opinion on how a batch is read:
+    /// operators that want cursors add a [`Navigable`] bound of their own, and operators that
+    /// read batches some other way add none.
+    type Batch: 'static + Clone;
 
-    /// Acquires the non-empty sequence of batches covering updates at times not greater or equal to an
+    /// Acquires the non-empty sequence of spans covering updates at times not greater or equal to an
     /// element of `upper`.
     ///
-    /// This method is expected to work if called with an `upper` that (i) was an observed bound in batches from
+    /// This method is expected to work if called with an `upper` that (i) was an observed bound in spans from
     /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
-    /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the batches. This
-    /// should allow `upper` such as `&[]`, used to acquire all batches, though it is difficult to imagine other uses.
-    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>>;
+    /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the spans. This
+    /// should allow `upper` such as `&[]`, used to acquire all spans, though it is difficult to imagine other uses.
+    fn spans_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Span<Self::Time, Self::Batch>>>;
+
+    /// Acquires the batches of the spans covering times not greater or equal to an element
+    /// of `upper`.
+    ///
+    /// Spans with no updates contribute nothing, so this is what callers taking cursors want;
+    /// [`spans_through`](Self::spans_through) is for the drivers that also need the spans'
+    /// descriptions.
+    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
+        Some(self.spans_through(upper)?.into_iter().filter_map(|b| b.inner).collect())
+    }
 
     /// Advances the frontier that constrains logical compaction.
     ///
@@ -98,17 +146,17 @@ pub trait TraceReader {
 
     /// Reports the physical compaction frontier.
     ///
-    /// All batches containing updates beyond this frontier will not be merged with other batches. This allows
-    /// the caller to acquire the batches through any frontier beyond the physical compaction frontier, with the
-    /// `batches_through()` method. This functionality is primarily of interest to the `join` operator, and any
+    /// All spans containing updates beyond this frontier will not be merged with other spans. This allows
+    /// the caller to acquire the spans through any frontier beyond the physical compaction frontier, with the
+    /// `spans_through()` method. This functionality is primarily of interest to the `join` operator, and any
     /// other operators who need to take notice of the physical structure of update batches.
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Self::Time>;
 
-    /// Maps logic across the non-empty sequence of batches in the trace.
+    /// Maps logic across the non-empty sequence of spans in the trace.
     ///
     /// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
-    /// the stream of batches moving past the trace.
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F);
+    /// the stream of spans moving past the trace.
+    fn map_spans<F: FnMut(&Span<Self::Time, Self::Batch>)>(&self, f: F);
 
     /// Reads the upper frontier of committed times.
     ///
@@ -117,21 +165,21 @@ pub trait TraceReader {
     fn read_upper(&mut self, target: &mut Antichain<Self::Time>) {
         target.clear();
         target.insert(<Self::Time as timely::progress::Timestamp>::minimum());
-        self.map_batches(|batch| {
-            target.clone_from(batch.upper());
+        self.map_spans(|span| {
+            target.clone_from(span.upper());
         });
     }
 
-    /// Advances `upper` by any empty batches.
+    /// Advances `upper` across any spans with no updates.
     ///
-    /// An empty batch whose `batch.lower` bound equals the current
-    /// contents of `upper` will advance `upper` to `batch.upper`.
-    /// Taken across all batches, this should advance `upper` across
-    /// empty batch regions.
+    /// A span carrying no updates whose `lower` bound equals the current
+    /// contents of `upper` will advance `upper` to its `upper`.
+    /// Taken across all spans, this should advance `upper` across
+    /// update-free regions.
     fn advance_upper(&mut self, upper: &mut Antichain<Self::Time>) {
-        self.map_batches(|batch| {
-            if batch.is_empty() && batch.lower() == upper {
-                upper.clone_from(batch.upper());
+        self.map_spans(|span| {
+            if !span.has_updates() && span.lower() == upper {
+                upper.clone_from(span.upper());
             }
         });
     }
@@ -141,8 +189,8 @@ pub trait TraceReader {
 /// An append-only collection of `(key, val, time, diff)` tuples.
 ///
 /// The trace itself is opinionated only about `Time`, which bounds its contents and drives its compaction.
-/// Key, value, and diff opinions live on the batches' cursors, and are reached through [`Navigable`].
-pub trait Trace : TraceReader<Batch: Batch> {
+/// Key, value, and diff opinions live on the batches, which the trace does not constrain.
+pub trait Trace : TraceReader {
 
     /// Allocates a new empty trace.
     fn new(
@@ -161,56 +209,22 @@ pub trait Trace : TraceReader<Batch: Batch> {
     /// updates to perform, or `None` if no work is required.
     fn set_exert_logic(&mut self, logic: ExertionLogic);
 
-    /// Introduces a batch of updates to the trace.
+    /// Introduces a span of updates to the trace.
     ///
-    /// Batches describe the time intervals they contain, and they should be added to the trace in contiguous
-    /// intervals. If a batch arrives with a lower bound that does not equal the upper bound of the most recent
-    /// addition, the trace will add an empty batch. It is an error to then try to populate that region of time.
+    /// Spans describe the time intervals they contain, and they should be added to the trace in contiguous
+    /// intervals. If a span arrives with a lower bound that does not equal the upper bound of the most recent
+    /// addition, the trace will add a span with no updates. It is an error to then try to populate that region
+    /// of time.
     ///
-    /// This restriction could be relaxed, especially if we discover ways in which batch interval order could
+    /// This restriction could be relaxed, especially if we discover ways in which span interval order could
     /// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
-    fn insert(&mut self, batch: Self::Batch);
+    fn insert(&mut self, span: Span<Self::Time, Self::Batch>);
 
-    /// Introduces an empty batch concluding the trace.
+    /// Introduces an update-free span concluding the trace.
     ///
-    /// This method should be logically equivalent to introducing an empty batch whose lower frontier equals
-    /// the upper frontier of the most recently introduced batch, and whose upper frontier is empty.
+    /// This method should be logically equivalent to introducing a span with no updates whose lower frontier
+    /// equals the upper frontier of the most recently introduced span, and whose upper frontier is empty.
     fn close(&mut self);
-}
-
-/// A batch of updates whose contents may be read.
-///
-/// This is a restricted interface to batches of updates, which support the reading of the batch's contents,
-/// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
-/// especially useful for views derived from other sources in ways that prevent the construction of batches
-/// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader : Sized {
-
-    /// The timestamp type of the batch's updates.
-    type Time: Timestamp + Lattice;
-
-    /// The number of updates in the batch.
-    fn len(&self) -> usize;
-    /// True if the batch is empty.
-    fn is_empty(&self) -> bool { self.len() == 0 }
-    /// Describes the times of the updates in the batch.
-    fn description(&self) -> &Description<Self::Time>;
-
-    /// All times in the batch are greater or equal to an element of `lower`.
-    fn lower(&self) -> &Antichain<Self::Time> { self.description().lower() }
-    /// All times in the batch are not greater or equal to any element of `upper`.
-    fn upper(&self) -> &Antichain<Self::Time> { self.description().upper() }
-}
-
-/// An immutable collection of updates.
-///
-/// This trait asks only that batches can be minted empty over an indicated interval,
-/// which trace maintenance uses to pad out otherwise empty intervals of time. Opinions
-/// about how batches merge belong to individual trace implementations (for example
-/// [`SpineBatch`](crate::trace::implementations::spine_fueled::SpineBatch)).
-pub trait Batch : BatchReader + Sized {
-    /// Produce an empty batch over the indicated interval.
-    fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self;
 }
 
 /// Functionality for collecting and batching updates.
@@ -256,15 +270,15 @@ pub trait Builder: Sized {
     ///
     /// Adds all elements from `chunk` to the builder and leaves `chunk` in an undefined state.
     fn push(&mut self, chunk: &mut Self::Input);
-    /// Completes building and returns the batch.
-    fn done(self, description: Description<Self::Time>) -> Self::Output;
+    /// Completes building and returns the batch, absent if no updates were pushed.
+    fn done(self) -> Option<Self::Output>;
 
-    /// Builds a batch from a chain of updates corresponding to the indicated lower and upper bounds.
+    /// Builds a batch from a chain of updates.
     ///
     /// This method relies on the chain only containing updates greater or equal to the lower frontier,
-    /// and not greater or equal to the upper frontier, as encoded in the description. Chains must also
-    /// be sorted and consolidated.
-    fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output;
+    /// and not greater or equal to the upper frontier, of the interval the caller means to describe.
+    /// Chains must also be sorted and consolidated.
+    fn seal(chain: &mut Vec<Self::Input>) -> Option<Self::Output>;
 }
 
 /// Blanket implementations for reference counted batches.
@@ -272,25 +286,15 @@ pub mod rc_blanket_impls {
 
     use std::rc::Rc;
 
-    use timely::progress::Antichain;
-    use super::{Batch, BatchReader, Builder, Navigable, Cursor, Description};
+    use super::{Navigable, Cursor};
 
-    impl<B: BatchReader + Navigable> Navigable for Rc<B> {
+    impl<B: Navigable> Navigable for Rc<B> {
         /// The type used to enumerate the batch's contents.
         type Cursor = RcBatchCursor<B::Cursor>;
         /// Acquires a cursor to the batch's contents.
         fn cursor(&self) -> Self::Cursor {
             RcBatchCursor::new((**self).cursor())
         }
-    }
-
-    impl<B: BatchReader> BatchReader for Rc<B> {
-
-        type Time = B::Time;
-        /// The number of updates in the batch.
-        fn len(&self) -> usize { (**self).len() }
-        /// Describes the times of the updates in the batch.
-        fn description(&self) -> &Description<Self::Time> { (**self).description() }
     }
 
     /// Wrapper to provide cursor to nested scope.
@@ -344,29 +348,6 @@ pub mod rc_blanket_impls {
 
         #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
         #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
-    }
-
-    /// An immutable collection of updates.
-    impl<B: Batch> Batch for Rc<B> {
-        fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
-            Rc::new(B::empty(lower, upper))
-        }
-    }
-
-    /// Wrapper type for building reference counted batches.
-    pub struct RcBuilder<B: Builder> { builder: B }
-
-    /// Functionality for building batches from ordered update sequences.
-    impl<B: Builder> Builder for RcBuilder<B> {
-        type Input = B::Input;
-        type Time = B::Time;
-        type Output = Rc<B::Output>;
-        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self { RcBuilder { builder: B::with_capacity(keys, vals, upds) } }
-        fn push(&mut self, input: &mut Self::Input) { self.builder.push(input) }
-        fn done(self, description: Description<Self::Time>) -> Rc<B::Output> { Rc::new(self.builder.done(description)) }
-        fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
-            Rc::new(B::seal(chain, description))
-        }
     }
 
 }

@@ -169,6 +169,7 @@ where
                 input.for_each(|time, batches| {
                     let mut session = output.session_with_builder(&time);
                     for batch in batches.drain(..) {
+                        let Some(batch) = batch.inner else { continue };
                         let mut cursor = batch.cursor();
                         while cursor.key_valid(&batch) {
                             while cursor.val_valid(&batch) {

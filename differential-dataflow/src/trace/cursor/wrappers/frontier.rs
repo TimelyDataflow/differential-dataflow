@@ -2,13 +2,12 @@
 
 use crate::trace::implementations::BatchContainer;
 use crate::trace::wrappers::frontier::BatchFrontier;
-use crate::trace::{BatchReader, Navigable};
+use crate::trace::Navigable;
 use crate::trace::cursor::Cursor;
 
-impl<B> Navigable for BatchFrontier<B>
+impl<B> Navigable for BatchFrontier<B, <B::Cursor as Cursor>::Time>
 where
-    B: BatchReader + Navigable,
-    B::Cursor: Cursor<Time = B::Time>,
+    B: Navigable,
 {
     type Cursor = BatchCursorFrontier<B::Cursor>;
 
@@ -27,9 +26,9 @@ pub struct BatchCursorFrontier<C> {
 
 impl<C> Cursor for BatchCursorFrontier<C>
 where
-    C: Cursor<Storage: BatchReader<Time = C::Time>>,
+    C: Cursor,
 {
-    type Storage = BatchFrontier<C::Storage>;
+    type Storage = BatchFrontier<C::Storage, C::Time>;
 
     type Key<'a> = C::Key<'a>;
     type ValOwn = C::ValOwn;

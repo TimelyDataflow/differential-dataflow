@@ -73,9 +73,8 @@ pub struct CorgiReduceBackend<T> {
     /// Input `value_id → row` in `in_vals` for the current window (reduce-time resolution; first row
     /// wins, so equal values — which share a content-hash `value_id` — resolve to one representative).
     in_index: IdMap,
-    /// Output batch for `begin`/`emit`/`finish`: the batch description, and the accumulated
-    /// output rows `(key row, value row, time, diff)` (pool indices, gathered into columns at `finish`).
-    description: Option<Description<T>>,
+    /// Output rows for `begin`/`emit`/`finish`: the accumulated
+    /// `(key row, value row, time, diff)` (pool indices, gathered into columns at `finish`).
     rows: (Vec<usize>, Vec<usize>, Vec<T>, Vec<Diff>),
     /// Key-resolution pool for the current retire: `key_hash → row index` into the concatenation of
     /// `key_blocks` (representative keys from the input + output presentations).
@@ -96,7 +95,6 @@ impl<T> CorgiReduceBackend<T> {
             reducer,
             in_vals: CValue::Unit(0),
             in_index: IdMap::default(),
-            description: None,
             rows: (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             key_index: IdMap::default(),
             key_blocks: Vec::new(),
@@ -525,21 +523,20 @@ where
     }
 }
 
-impl<T> ProxyReduceBackend<CBatch<T>, CBatch<T>> for CorgiReduceBackend<T>
+impl<T> ProxyReduceBackend<T, CBatch<T>, CBatch<T>> for CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
 {
     type RIn = Diff;
     type ROut = Diff;
 
-    fn begin(&mut self, description: Description<T>) {
+    fn begin(&mut self, _description: Description<T>) {
         // Open the output session for this retire; reset the per-retire resolution pools.
         self.reset_pools();
-        self.description = Some(description);
         self.rows = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     }
 
-    fn next_window(&mut self, instance: &ReduceInstance<'_, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
+    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
         // Single window: present the WHOLE key space at once, and report it covered. This is NOT a
         // deferred refinement — bounded windows were measured and rejected: at WINDOW = 1<<14, scc
         // (100 rounds x batch 100) cost 84.4s against 63.7s, a 33% regression, while peak RSS
@@ -669,15 +666,15 @@ where
         }
     }
 
-    fn finish(&mut self) -> CBatch<T> {
+    fn finish(&mut self) -> Option<CBatch<T>> {
         // Seal the batch: gather the accumulated (key, val) pool rows into columns, one CorgiChunk batch.
         let key_pool = concat_columns(&self.key_blocks);
         let val_pool = concat_columns(&self.val_blocks);
-        let desc = self.description.take().expect("finish without begin");
         let (krows, vrows, times, diffs) = std::mem::take(&mut self.rows);
+        if times.is_empty() { return None; }
         let keys = gather(&key_pool, &krows);
         let vals = gather(&val_pool, &vrows);
-        Rc::new(columns_to_batch(keys, vals, times, diffs, desc))
+        Some(Rc::new(columns_to_batch(keys, vals, times, diffs)))
     }
 }
 

@@ -70,7 +70,7 @@ impl<T: ColTime> CorgiJoinBackend<T> {
     }
 }
 
-impl<T: ColTime> ProxyJoinBackend<CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> {
+impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> {
     type R0 = Diff;
     type R1 = Diff;
     type ROut = Diff;
@@ -78,7 +78,7 @@ impl<T: ColTime> ProxyJoinBackend<CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> 
 
     fn advance(
         &mut self,
-        instance: &JoinInstance<CBatch<T>, CBatch<T>>,
+        instance: &JoinInstance<T, CBatch<T>, CBatch<T>>,
         from: &mut Option<u64>,
         bridge0: &mut ProxyBridge<T, Diff>,
         bridge1: &mut ProxyBridge<T, Diff>,
@@ -117,7 +117,7 @@ impl<T: ColTime> ProxyJoinBackend<CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> 
 
     fn cross(
         &mut self,
-        instance: &JoinInstance<CBatch<T>, CBatch<T>>,
+        instance: &JoinInstance<T, CBatch<T>, CBatch<T>>,
         matches: &mut JoinMatches<T, Diff>,
         output: &mut Vec<CorgiContainer<T, Diff>>,
     ) {
@@ -768,8 +768,6 @@ fn leaf_merge<'a, T: ColTime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use differential_dataflow::trace::Description;
-    use timely::progress::Antichain;
 
     fn batch(rows: &[(u64, u64, u64)]) -> CBatch<u64> {
         let keys = CValue::Prod(vec![
@@ -783,14 +781,7 @@ mod tests {
         // these together before `cross` has a chance to compare their keys.
         let vals = CValue::u64(vec![0; rows.len()]);
         let chunk = CorgiChunk::from_columns(keys, vals, vec![0; rows.len()], vec![1; rows.len()]);
-        Rc::new(ChunkBatch::new(
-            vec![chunk],
-            Description::new(
-                Antichain::from_elem(0),
-                Antichain::from_elem(1),
-                Antichain::from_elem(0),
-            ),
-        ))
+        Rc::new(ChunkBatch::new(vec![chunk]))
     }
 
     fn backend() -> CorgiJoinBackend<u64> {
@@ -802,7 +793,7 @@ mod tests {
 
     fn cross_bridges(
         backend: &mut CorgiJoinBackend<u64>,
-        instance: &JoinInstance<CBatch<u64>, CBatch<u64>>,
+        instance: &JoinInstance<u64, CBatch<u64>, CBatch<u64>>,
         left: &ProxyBridge<u64, Diff>,
         right: &ProxyBridge<u64, Diff>,
     ) -> usize {

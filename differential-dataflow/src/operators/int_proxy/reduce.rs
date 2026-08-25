@@ -11,13 +11,13 @@ use timely::progress::frontier::AntichainRef;
 
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{BatchReader, Description};
+use crate::trace::{Span, Description};
 use super::ProxyBridge;
 use crate::operators::reduce::{sort_dedup, ReduceTactic};
 use crate::operators::ValueHistory;
 
 /// A unit of proxied reduce work, presented to the backend.
-pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
+pub struct ReduceInstance<'a, T, B1, B2> {
     /// The accumulated input history.
     pub source_batches: &'a [B1],
     /// The freshly arrived input delta.
@@ -25,7 +25,7 @@ pub struct ReduceInstance<'a, B1: BatchReader, B2: BatchReader<Time = B1::Time>>
     /// The accumulated output history.
     pub output_batches: &'a [B2],
     /// The compaction frontier for loading (the retire's lower bound).
-    pub lower: AntichainRef<'a, B1::Time>,
+    pub lower: AntichainRef<'a, T>,
 }
 
 /// One window of the key space: the presentations a bounded, hash-contiguous snip needs.
@@ -68,7 +68,7 @@ impl<T, RIn, ROut> ReduceWindow<T, RIn, ROut> {
 /// The protocol for each round of invocation is
 /// `begin [ next_window reduce_corrections* emit ]* finish`,
 /// where the window loop runs until `next_window` reports the key space exhausted.
-pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> {
+pub trait ProxyReduceBackend<T, B1, B2> {
     /// Diff type presented for the input.
     type RIn: Semigroup;
     /// Diff type of the output.
@@ -79,7 +79,7 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// It is the backend's job to prepare output batches for each of these descriptions.
     /// The computation proceeds in windows of keys, where only the backend maintains this
     /// work in progress, until `finish()` is called.
-    fn begin(&mut self, description: Description<B1::Time>);
+    fn begin(&mut self, description: Description<T>);
 
     /// Present the next window of the key space, and advance `from` past it.
     ///
@@ -103,10 +103,10 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     /// enough that the presentations are affordable, as all are live at once.
     fn next_window(
         &mut self,
-        instance: &ReduceInstance<'_, B1, B2>,
+        instance: &ReduceInstance<'_, T, B1, B2>,
         changed: &[u64],
         from: &mut Option<u64>,
-        window: &mut ReduceWindow<B1::Time, Self::RIn, Self::ROut>,
+        window: &mut ReduceWindow<T, Self::RIn, Self::ROut>,
     );
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
@@ -124,10 +124,11 @@ pub trait ProxyReduceBackend<B1: BatchReader, B2: BatchReader<Time = B1::Time>> 
     ) -> (Vec<(u64, Self::ROut)>, Vec<usize>);
 
     /// Commit a collection of updates to the batch in progress.
-    fn emit(&mut self, records: &[((u64, u64), B1::Time, Self::ROut)]);
+    fn emit(&mut self, records: &[((u64, u64), T, Self::ROut)]);
 
-    /// Complete the session matching `begin`, yielding the batch it described.
-    fn finish(&mut self) -> B2;
+    /// Complete the session matching `begin`, yielding the batch it described,
+    /// or `None` when the span it described carries no updates.
+    fn finish(&mut self) -> Option<B2>;
 }
 
 /// A proxy-space [`ReduceTactic`]: matches input and output records by `key_hash`.
@@ -153,21 +154,20 @@ fn debug_assert_pending_frontier<T: PartialOrder + Clone>(pending: &BTreeMap<u64
     }, "maintained pending frontier differs from pending times");
 }
 
-impl<B1, B2, Bk> ReduceTactic<B1, B2> for ProxyReduceTactic<B1::Time, Bk>
+impl<T, B1, B2, Bk> ReduceTactic<T, B1, B2> for ProxyReduceTactic<T, Bk>
 where
-    B1: BatchReader,
-    B2: BatchReader<Time = B1::Time>,
-    Bk: ProxyReduceBackend<B1, B2>,
+    T: Timestamp + Lattice,
+    Bk: ProxyReduceBackend<T, B1, B2>,
 {
     fn retire(
         &mut self,
         source_batches: Vec<B1>,
         output_batches: Vec<B2>,
         input_batches: Vec<B1>,
-        lower: &Antichain<B1::Time>,
-        upper: &Antichain<B1::Time>,
-        held: &Antichain<B1::Time>,
-    ) -> (Option<B2>, Antichain<B1::Time>) {
+        lower: &Antichain<T>,
+        upper: &Antichain<T>,
+        held: &Antichain<T>,
+    ) -> (Option<Span<T, B2>>, Antichain<T>) {
         if held.elements().iter().all(|t| upper.less_equal(t)) {
             debug_assert!(
                 self.pending.values().flatten().all(|time| held.less_equal(time)),
@@ -188,14 +188,14 @@ where
         // A time at or beyond it remains carried in `self.pending`. Partition in place: rebuilding
         // the whole map cloned every carried timestamp on every retire, even though only the small
         // due subset changes.
-        let mut due: BTreeMap<u64, Vec<B1::Time>> = BTreeMap::new();
+        let mut due: BTreeMap<u64, Vec<T>> = BTreeMap::new();
         let mut pending_frontier = Antichain::new();
         for (&key, times) in self.pending.iter_mut() {
             let mut ready = Vec::new();
             times.retain_mut(|time| {
                 let carried = upper.less_equal(time);
                 if carried { pending_frontier.insert_ref(time); }
-                else { ready.push(std::mem::replace(time, B1::Time::minimum())); }
+                else { ready.push(std::mem::replace(time, T::minimum())); }
                 carried
             });
             if !ready.is_empty() { due.insert(key, ready); }
@@ -210,32 +210,32 @@ where
         // one. This is exactly where a due-only `changed` differs from the whole pending set: times
         // beyond `upper` can remain when nothing is due, and releasing their capabilities would
         // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
-        if changed.is_empty() && instance.input_batches.iter().all(|b| b.is_empty()) {
+        if changed.is_empty() && instance.input_batches.is_empty() {
             debug_assert_pending_frontier(&self.pending, &pending_frontier);
             return (None, pending_frontier);
         }
 
         // The single output batch spans the retired interval.
-        let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(B1::Time::minimum()));
-        self.backend.begin(description);
+        let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
+        self.backend.begin(description.clone());
 
         // Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
         // once the backend reports the space covered.
         let mut from = Some(0u64);
-        let mut window: ReduceWindow<B1::Time, Bk::RIn, Bk::ROut> = ReduceWindow::default();
+        let mut window: ReduceWindow<T, Bk::RIn, Bk::ROut> = ReduceWindow::default();
 
         // Retire-wide reusable scratch: cleared per window or wave, never reallocated. Fresh
         // per-key/per-wave `Vec`s were once the dominant cost here, which is why the slots and the
         // staging buffers are held across the whole retire rather than built where they are used.
-        let mut slots: Vec<KeySweep<B1::Time, Bk::RIn, Bk::ROut>> = Vec::new();
+        let mut slots: Vec<KeySweep<T, Bk::RIn, Bk::ROut>> = Vec::new();
         let mut live: Vec<usize> = Vec::new();
-        let mut deltas: Vec<((u64, u64), B1::Time, Bk::ROut)> = Vec::new();
+        let mut deltas: Vec<((u64, u64), T, Bk::ROut)> = Vec::new();
         let mut batch_keys: Vec<u64> = Vec::new();
         let mut in_ends: Vec<usize> = Vec::new();
         let mut in_all: Vec<(u64, Bk::RIn)> = Vec::new();
         let mut out_ends: Vec<usize> = Vec::new();
         let mut out_all: Vec<(u64, Bk::ROut)> = Vec::new();
-        let mut active: Vec<(usize, B1::Time)> = Vec::new();
+        let mut active: Vec<(usize, T)> = Vec::new();
         let mut in_accum: Vec<(u64, Bk::RIn)> = Vec::new();
         let mut cur_out: Vec<(u64, Bk::ROut)> = Vec::new();
 
@@ -386,7 +386,7 @@ where
             }
         }
 
-        let produced = Some(self.backend.finish());
+        let produced = Some(Span::new(description, self.backend.finish()));
         debug_assert_pending_frontier(&self.pending, &pending_frontier);
         (produced, pending_frontier)
     }

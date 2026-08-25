@@ -1,11 +1,12 @@
 //! Wrappers to provide trace access to nested scopes.
 
-// use timely::progress::nested::product::Product;
+use std::marker::PhantomData;
+
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use crate::lattice::Lattice;
-use crate::trace::{BatchReader, Description, TraceReader};
+use crate::trace::{Span, Description, TraceReader};
 
 /// Wrapper to provide trace to nested scope.
 pub struct TraceEnter<Tr: TraceReader, TInner> {
@@ -24,17 +25,31 @@ impl<Tr: TraceReader + Clone, TInner> Clone for TraceEnter<Tr, TInner> {
     }
 }
 
+/// Converts a description of outer times to one of inner times.
+pub fn enter_description<T: timely::progress::Timestamp, TInner: Refines<T>+Lattice>(desc: &Description<T>) -> Description<TInner> {
+    let lower: Vec<_> = desc.lower().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
+    let upper: Vec<_> = desc.upper().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
+    let since: Vec<_> = desc.since().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
+    Description::new(Antichain::from(lower), Antichain::from(upper), Antichain::from(since))
+}
+
+/// Converts an outer span to an inner one: the description enters the scope, and the batch is
+/// wrapped so that its readers do the same.
+pub fn enter_span<T: timely::progress::Timestamp, TInner: Refines<T>+Lattice, B>(span: Span<T, B>) -> Span<TInner, BatchEnter<B, TInner>> {
+    Span::new(enter_description(&span.desc), span.inner.map(BatchEnter::make_from))
+}
+
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
 where
     Tr: TraceReader,
     TInner: Refines<Tr::Time>+Lattice,
 {
-    type Batch = BatchEnter<Tr::Batch, TInner>;
     type Time = TInner;
+    type Batch = BatchEnter<Tr::Batch, TInner>;
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
-        self.trace.map_batches(|batch| {
-            f(&Self::Batch::make_from(batch.clone()));
+    fn map_spans<F: FnMut(&Span<TInner, Self::Batch>)>(&self, mut f: F) {
+        self.trace.map_spans(|span| {
+            f(&enter_span(span.clone()));
         })
     }
 
@@ -68,13 +83,13 @@ where
         self.stash2.borrow()
     }
 
-    fn batches_through(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Self::Batch>> {
+    fn spans_through(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Span<TInner, Self::Batch>>> {
         self.stash1.clear();
         for time in upper.iter() {
             self.stash1.insert(time.clone().to_outer());
         }
-        let storage = self.trace.batches_through(self.stash1.borrow())?;
-        Some(storage.into_iter().map(|batch| BatchEnter::make_from(batch)).collect())
+        let storage = self.trace.spans_through(self.stash1.borrow())?;
+        Some(storage.into_iter().map(enter_span).collect())
     }
 }
 
@@ -94,21 +109,11 @@ where
 }
 
 
-/// Wrapper to provide batch to nested scope.
+/// Wrapper to provide a batch to a nested scope.
 #[derive(Clone)]
 pub struct BatchEnter<B, TInner> {
     batch: B,
-    description: Description<TInner>,
-}
-
-impl<B, TInner> BatchReader for BatchEnter<B, TInner>
-where
-    B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
-{
-    type Time = TInner;
-    fn len(&self) -> usize { self.batch.len() }
-    fn description(&self) -> &Description<TInner> { &self.description }
+    phantom: PhantomData<TInner>,
 }
 
 impl<B, TInner> BatchEnter<B, TInner> {
@@ -118,22 +123,9 @@ impl<B, TInner> BatchEnter<B, TInner> {
     /// whole of the wrapper's read-side semantics, and any reader of the wrapped batch must
     /// apply it.
     pub fn inner(&self) -> &B { &self.batch }
-}
 
-impl<B, TInner> BatchEnter<B, TInner>
-where
-    B: BatchReader,
-    TInner: Refines<B::Time>+Lattice,
-{
-    /// Makes a new batch wrapper
+    /// Makes a new wrapper
     pub fn make_from(batch: B) -> Self {
-        let lower: Vec<_> = batch.description().lower().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
-        let upper: Vec<_> = batch.description().upper().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
-        let since: Vec<_> = batch.description().since().elements().iter().map(|x| TInner::to_inner(x.clone())).collect();
-
-        BatchEnter {
-            batch,
-            description: Description::new(Antichain::from(lower), Antichain::from(upper), Antichain::from(since))
-        }
+        BatchEnter { batch, phantom: PhantomData }
     }
 }

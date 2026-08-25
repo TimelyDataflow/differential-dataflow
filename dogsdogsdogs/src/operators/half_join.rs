@@ -33,7 +33,7 @@ use differential_dataflow::{ExchangeData, VecCollection, AsCollection, Hashable}
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchReader, BatchCursor, BatchDiff, BatchVal, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::{BatchCursor, BatchDiff, BatchVal, Cursor, Navigable, TraceReader};
 use differential_dataflow::trace::cursor::cursor_list;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::trace::implementations::BatchContainer;
@@ -43,12 +43,12 @@ use timely::dataflow::operators::CapabilitySet;
 /// An implementation suitable to define half-join behavior among its referenced types.
 ///
 /// The implementor can half-join streams of `C0` with batches `B`, producing output streams of `C1`.
-pub trait HalfJoinTactic<B: BatchReader, C0, C1> {
-    /// Converts a list of chunks and a list of batches to a list of outputs, each with a time suitable as a capability.
+pub trait HalfJoinTactic<T, B, C0, C1> {
+    /// Converts a list of chunks and a list of batch payloads to a list of outputs, each with a time suitable as a capability.
     ///
     /// The `lower` argument lower bounds the times in `chunks`, and may be used to load `batches`
     /// compacted, or to bound the arrangement times the join must consider.
-    fn prep(&mut self, chunks: Vec<C0>, batches: Vec<B>, lower: Antichain<B::Time>) -> Box<dyn Iterator<Item = (C1, B::Time)>>;
+    fn prep(&mut self, chunks: Vec<C0>, batches: Vec<B>, lower: Antichain<T>) -> Box<dyn Iterator<Item = (C1, T)>>;
 }
 
 /// A type capable of accepting containers of updates, and carving them out by time.
@@ -100,7 +100,7 @@ where
     P: ParallelizationContract<Tr::Time, CIn>,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
     Bat: Batcher<Tr::Time, CIn, CMid> + 'static,
-    Tac: HalfJoinTactic<Tr::Batch, CMid, C> + 'static,
+    Tac: HalfJoinTactic<Tr::Time, Tr::Batch, CMid, C> + 'static,
     CIn: Container,
     C: Container + 'static,
 {
@@ -314,8 +314,10 @@ pub mod cursors {
         half_join_with_tactic(stream.inner, arrangement, pact, frontier_func, yield_function, batcher, tactic)
     }
 
-    /// The cursor of a batch.
+    /// The cursor of a batch payload.
     type BCursor<B> = <B as Navigable>::Cursor;
+    /// The time type of a batch payload's cursor.
+    type BTime<B> = <<B as Navigable>::Cursor as Cursor>::Time;
 
     /// The conventional cursor-based [`HalfJoinTactic`].
     ///
@@ -338,18 +340,17 @@ pub mod cursors {
         }
     }
 
-    impl<K, V, R, B, L, CB> HalfJoinTactic<B, Vec<((K, V, B::Time), B::Time, R)>, CB::Container> for CursorTactic<K, V, R, B, L, CB>
+    impl<K, V, R, B, L, CB> HalfJoinTactic<BTime<B>, B, Vec<((K, V, BTime<B>), BTime<B>, R)>, CB::Container> for CursorTactic<K, V, R, B, L, CB>
     where
-        B: BatchReader + Navigable + 'static,
-        BCursor<B>: Cursor<Time = B::Time>,
+        B: Navigable + 'static,
         <BCursor<B> as Cursor>::KeyContainer: BatchContainer<Owned = K>,
         K: Ord + 'static,
         V: Ord + 'static,
         R: 'static,
-        L: for<'a> FnMut(&mut CB, &K, &V, <BCursor<B> as Cursor>::Val<'a>, &B::Time, &R, &mut Vec<(B::Time, <BCursor<B> as Cursor>::Diff)>) + 'static,
+        L: for<'a> FnMut(&mut CB, &K, &V, <BCursor<B> as Cursor>::Val<'a>, &BTime<B>, &R, &mut Vec<(BTime<B>, <BCursor<B> as Cursor>::Diff)>) + 'static,
         CB: ContainerBuilder,
     {
-        fn prep(&mut self, chunks: Vec<Vec<((K, V, B::Time), B::Time, R)>>, batches: Vec<B>, lower: Antichain<B::Time>) -> Box<dyn Iterator<Item = (CB::Container, B::Time)>> {
+        fn prep(&mut self, chunks: Vec<Vec<((K, V, BTime<B>), BTime<B>, R)>>, batches: Vec<B>, lower: Antichain<BTime<B>>) -> Box<dyn Iterator<Item = (CB::Container, BTime<B>)>> {
             // The batcher releases updates in time order, but the cursor is walked in data order.
             let mut updates: Vec<_> = chunks.into_iter().flatten().collect();
             updates.sort_by(|(d1, t1, _), (d2, t2, _)| (d1, t1).cmp(&(d2, t2)));
