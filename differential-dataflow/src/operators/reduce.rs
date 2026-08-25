@@ -20,7 +20,7 @@ use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::operators::arrange::{Arranged, TraceAgent};
-use crate::trace::{Batch, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
+use crate::trace::{Span, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 
@@ -73,7 +73,7 @@ pub trait ReduceTactic<T, B1, B2> {
         lower: &Antichain<T>,
         upper: &Antichain<T>,
         held: &Antichain<T>,
-    ) -> (Option<Batch<T, B2>>, Antichain<T>);
+    ) -> (Option<Span<T, B2>>, Antichain<T>);
 }
 
 /// A key-wise reduction of values in an input trace.
@@ -91,17 +91,17 @@ pub trait ReduceTactic<T, B1, B2> {
 /// key's computation to another, and will likely introduce non-determinism.
 pub fn reduce_trace<'scope, Tr1, Bu, Tr2, KC, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
 where
-    Tr1: TraceReader<Updates: Navigable> + 'static,
-    Tr2: Trace<Updates: Navigable, Time = Tr1::Time> + 'static,
+    Tr1: TraceReader<Batch: Navigable> + 'static,
+    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
     KC: BatchContainer,
     BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
     for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
-    Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Updates>, Input: Default> + 'static,
+    Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
     L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
     P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
 {
-    reduce_with_tactic(trace, name, cursors::CursorTactic::<Tr1::Updates, Tr2::Updates, Bu, L, P>::new(logic, push))
+    reduce_with_tactic(trace, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
 }
 
 // The model-derived reference tactic and its entry point live in `mod reference`; re-exported here
@@ -114,13 +114,13 @@ pub use reference::reduce_trace_reference;
 /// This is the general reduce operator: it does the dataflow plumbing (frontiers, capabilities, output
 /// trace maintenance) and routes the per-interval work through the tactic. It requires only
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
-/// `batches_through`, and building cursors over them (if that is how the reduce proceeds) is the
+/// `spans_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
 pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
-    T: ReduceTactic<Tr1::Time, Tr1::Updates, Tr2::Updates> + 'static,
+    T: ReduceTactic<Tr1::Time, Tr1::Batch, Tr2::Batch> + 'static,
 {
     let mut result_trace = None;
 
@@ -192,8 +192,8 @@ where
 
                     // Acquire the pre-existing input and output batches preceding the interval. Batch handles
                     // are cheap to clone, so we fetch them whether or not the tactic finds work to do.
-                    let source_batches = source_trace.updates_through(lower_limit.borrow()).expect("failed to acquire source batches");
-                    let output_batches = output_reader.updates_through(lower_limit.borrow()).expect("failed to acquire output batches");
+                    let source_batches = source_trace.batches_through(lower_limit.borrow()).expect("failed to acquire source batches");
+                    let output_batches = output_reader.batches_through(lower_limit.borrow()).expect("failed to acquire output batches");
 
                     // The times the operator currently holds capabilities for, as an antichain.
                     let held: Antichain<Tr1::Time> = capabilities.iter().map(|c| c.time().clone()).collect();
@@ -318,7 +318,7 @@ mod cursors {
             lower: &Antichain<TimeOf<B1>>,
             upper: &Antichain<TimeOf<B1>>,
             held: &Antichain<TimeOf<B1>>,
-        ) -> (Option<Batch<TimeOf<B1>, B2>>, Antichain<TimeOf<B1>>)
+        ) -> (Option<Span<TimeOf<B1>, B2>>, Antichain<TimeOf<B1>>)
         {
             let mut produced = None;
 
@@ -425,7 +425,7 @@ mod cursors {
                 // Build the batch spanning the interval, and hand it back to the driver
                 // to ship and commit.
                 let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<TimeOf<B1> as Timestamp>::minimum()));
-                produced = Some(Batch::new(description, builder.done().map(Into::into)));
+                produced = Some(Span::new(description, builder.done().map(Into::into)));
 
                 // Refresh pending keys and times.
                 self.pending_keys.clear(); std::mem::swap(&mut self.next_pending_keys, &mut self.pending_keys);
@@ -794,15 +794,15 @@ pub(crate) mod reference {
     /// point to build on.
     pub fn reduce_trace_reference<'scope, Tr1, Bu, Tr2, L, P>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
-        Tr1: TraceReader<Updates: Navigable> + 'static,
-        Tr2: Trace<Updates: Navigable, Time = Tr1::Time> + 'static,
+        Tr1: TraceReader<Batch: Navigable> + 'static,
+        Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, ValOwn: Data, Time = Tr2::Time>,
-        Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Updates>, Input: Default> + 'static,
+        Bu: Builder<Time=Tr2::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
         L: FnMut(BatchKey<'_, Tr1>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, BatchKey<'_, Tr1>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
-        reduce_with_tactic(trace, name, ReferenceTactic::<Tr1::Updates, Tr2::Updates, Bu, L, P>::new(logic, push))
+        reduce_with_tactic(trace, name, ReferenceTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
     }
 
 
@@ -872,7 +872,7 @@ pub(crate) mod reference {
             lower: &Antichain<TimeOf<B1>>,
             upper: &Antichain<TimeOf<B1>>,
             held: &Antichain<TimeOf<B1>>,
-        ) -> (Option<Batch<TimeOf<B1>, B2>>, Antichain<TimeOf<B1>>)
+        ) -> (Option<Span<TimeOf<B1>, B2>>, Antichain<TimeOf<B1>>)
         {
             let mut produced = None;
 
@@ -953,7 +953,7 @@ pub(crate) mod reference {
                 drop(thinker);
 
                 let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(<TimeOf<B1> as Timestamp>::minimum()));
-                produced = Some(Batch::new(description, builder.done().map(Into::into)));
+                produced = Some(Span::new(description, builder.done().map(Into::into)));
 
                 self.pending_keys.clear(); std::mem::swap(&mut self.next_pending_keys, &mut self.pending_keys);
                 self.pending_time.clear(); std::mem::swap(&mut self.next_pending_time, &mut self.pending_time);

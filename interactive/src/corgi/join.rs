@@ -33,7 +33,7 @@ use std::rc::Rc;
 
 use differential_dataflow::operators::int_proxy::{JoinInstance, ProxyBridge, ProxyJoinBackend};
 use differential_dataflow::operators::int_proxy::join::JoinMatches;
-use differential_dataflow::trace::chunk::{Chunk, ChunkUpdates};
+use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes};
 use corgi::{shape_of_value, Shape, Value as CValue};
@@ -45,7 +45,7 @@ use crate::corgi::logic::compile_join_projection;
 use crate::ir::Diff;
 use crate::parse::Term;
 
-type CBatch<T> = Rc<ChunkUpdates<CorgiChunk<T, Diff>>>;
+type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 
 /// Matches per output container cut by `cross` (mirrors the chunk grading `TARGET`).
 const TARGET_OUT: usize = 1 << 18;
@@ -781,7 +781,7 @@ mod tests {
         // these together before `cross` has a chance to compare their keys.
         let vals = CValue::u64(vec![0; rows.len()]);
         let chunk = CorgiChunk::from_columns(keys, vals, vec![0; rows.len()], vec![1; rows.len()]);
-        Rc::new(ChunkUpdates::new(vec![chunk]))
+        Rc::new(ChunkBatch::new(vec![chunk]))
     }
 
     fn backend() -> CorgiJoinBackend<u64> {

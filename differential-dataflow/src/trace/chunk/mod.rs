@@ -24,8 +24,8 @@
 //! [`ContainerChunker<C>`](crate::trace::implementations::chunker::ContainerChunker).
 //! Trace *maintenance* needs only [`Chunk`]; cursor-driven *consumption* of the
 //! arrangement additionally asks `C` for the [`NavigableChunk`] capability.
-//! Everything else here ([`ChunkUpdates`], [`ChunkMerger`], [`ChunkUpdatesMerger`],
-//! [`ChunkUpdatesCursor`], [`ChunkUpdatesBuilder`]) is machinery those aliases expand to and is
+//! Everything else here ([`ChunkBatch`], [`ChunkMerger`], [`ChunkBatchMerger`],
+//! [`ChunkBatchCursor`], [`ChunkBatchBuilder`]) is machinery those aliases expand to and is
 //! not named directly. The [`vec`](mod@vec) module is a worked `Chunk`
 //! that re-exports the three aliases specialized to its layout, and the `chunks` example
 //! stands one up.
@@ -58,7 +58,7 @@ use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 use crate::lattice::Lattice;
 use crate::trace::Navigable;
-use crate::trace::implementations::spine_fueled::SpineUpdates;
+use crate::trace::implementations::spine_fueled::SpineBatch;
 use crate::trace::cursor::Cursor;
 use crate::trace::implementations::BatchContainer;
 
@@ -152,8 +152,8 @@ pub trait Chunk: Sized + Clone {
 /// The navigation capability: a [`Chunk`] whose contents can be read by cursor.
 ///
 /// This is optional. Batch formation and trace maintenance need only [`Chunk`];
-/// implementing this trait additionally lets [`ChunkUpdates`] offer the straddle
-/// cursor ([`ChunkUpdatesCursor`]), which is how cursor-driven operator paths read
+/// implementing this trait additionally lets [`ChunkBatch`] offer the straddle
+/// cursor ([`ChunkBatchCursor`]), which is how cursor-driven operator paths read
 /// an arrangement. Chunks consumed only by whole-chunk logic (tactics) can skip it.
 ///
 /// `bounds` must stay cheap even when a chunk's body is paged out: the straddle
@@ -239,34 +239,34 @@ type KeyCon<C> = <<C as Navigable>::Cursor as Cursor>::KeyContainer;
 type ValCon<C> = <<C as Navigable>::Cursor as Cursor>::ValContainer;
 
 /// A batch updates: an ordered [`Chunk`] sequence whose concatenation is the batch's updates.
-pub struct ChunkUpdates<C: Chunk> {
+pub struct ChunkBatch<C: Chunk> {
     /// Ordered, consolidated chunks; their concatenation is the batch.
     pub chunks: Vec<C>,
 }
 
-impl<C: Chunk> ChunkUpdates<C> {
+impl<C: Chunk> ChunkBatch<C> {
     /// Assemble a batch updates from ordered chunks.
     pub fn new(chunks: Vec<C>) -> Self {
         for chunk in &chunks {
-            assert!(chunk.len() > 0, "ChunkUpdates chunks must be non-empty");
+            assert!(chunk.len() > 0, "ChunkBatch chunks must be non-empty");
         }
-        ChunkUpdates { chunks }
+        ChunkBatch { chunks }
     }
 }
 
-impl<C: NavigableChunk> crate::trace::Navigable for ChunkUpdates<C> {
-    type Cursor = ChunkUpdatesCursor<C>;
+impl<C: NavigableChunk> crate::trace::Navigable for ChunkBatch<C> {
+    type Cursor = ChunkBatchCursor<C>;
     fn cursor(&self) -> Self::Cursor {
-        ChunkUpdatesCursor { key_chunk: 0, chunk: 0, inner: self.chunks.first().map(C::cursor) }
+        ChunkBatchCursor { key_chunk: 0, chunk: 0, inner: self.chunks.first().map(C::cursor) }
     }
 }
 
-impl<C: Chunk + Default + 'static> SpineUpdates for ChunkUpdates<C>
+impl<C: Chunk + Default + 'static> SpineBatch for ChunkBatch<C>
 where
     C::Time: timely::progress::Timestamp + Lattice + Ord,
 {
     type Time = C::Time;
-    type Merger = ChunkUpdatesMerger<C>;
+    type Merger = ChunkBatchMerger<C>;
     fn len(&self) -> usize { self.chunks.iter().map(C::len).sum() }
 }
 
@@ -279,13 +279,13 @@ where
 /// the trace. Both settle their output, since the batcher's chains want to be graded.
 pub type ChunkBatcher<C> = crate::trace::implementations::merge_batcher::MergeBatcher<ChunkMerger<C>>;
 
-/// A spine of `Rc`-shared [`ChunkUpdates`]s of type `C`: the trace type for `arrange`.
-pub type ChunkSpine<C> = crate::trace::implementations::spine_fueled::Spine<std::rc::Rc<ChunkUpdates<C>>>;
+/// A spine of `Rc`-shared [`ChunkBatch`]s of type `C`: the trace type for `arrange`.
+pub type ChunkSpine<C> = crate::trace::implementations::spine_fueled::Spine<std::rc::Rc<ChunkBatch<C>>>;
 
-/// A [`ChunkUpdates`] builder over chunks of type `C`, emitting `Rc`-shared updates.
-pub type ChunkBuilder<C> = ChunkUpdatesBuilder<C>;
+/// A [`ChunkBatch`] builder over chunks of type `C`, emitting `Rc`-shared updates.
+pub type ChunkBuilder<C> = ChunkBatchBuilder<C>;
 
-/// A cursor over a [`ChunkUpdates`], merging the per-chunk cursors.
+/// A cursor over a [`ChunkBatch`], merging the per-chunk cursors.
 ///
 /// Chunk breakpoints are unconstrained, so a single key — or `(key, val)` — may
 /// straddle consecutive chunks. But the chunks are one globally-sorted sequence
@@ -299,7 +299,7 @@ pub type ChunkBuilder<C> = ChunkUpdatesBuilder<C>;
 /// spills forward, without touching chunk contents. No state is materialized up front:
 /// a monotone seek sweep costs `O(log Δ)` bounds reads per seek and a sequential pass two
 /// per boundary, so cursor construction is free.
-pub struct ChunkUpdatesCursor<C: NavigableChunk> {
+pub struct ChunkBatchCursor<C: NavigableChunk> {
     /// First chunk of the current key's run; where `rewind_vals` returns to.
     key_chunk: usize,
     /// Chunk currently being read; `>= key_chunk`, within the current key's span.
@@ -308,9 +308,9 @@ pub struct ChunkUpdatesCursor<C: NavigableChunk> {
     inner: Option<C::Cursor>,
 }
 
-impl<C: NavigableChunk> ChunkUpdatesCursor<C> {
+impl<C: NavigableChunk> ChunkBatchCursor<C> {
     /// Move the active chunk to `c`, opening a fresh inner cursor at its start.
-    fn goto(&mut self, c: usize, storage: &ChunkUpdates<C>) {
+    fn goto(&mut self, c: usize, storage: &ChunkBatch<C>) {
         self.chunk = c;
         self.inner = storage.chunks.get(c).map(C::cursor);
     }
@@ -320,13 +320,13 @@ impl<C: NavigableChunk> ChunkUpdatesCursor<C> {
     ///
     /// Two resident [`bounds`](NavigableChunk::bounds) reads; the `reborrow`s
     /// unify the (invariant) item lifetimes with `k`'s.
-    fn key_spills(s: &ChunkUpdates<C>, c: usize, k: <C::Cursor as Cursor>::Key<'_>) -> bool {
+    fn key_spills(s: &ChunkBatch<C>, c: usize, k: <C::Cursor as Cursor>::Key<'_>) -> bool {
         <KeyCon<C> as BatchContainer>::reborrow(s.chunks[c].bounds().1.0) == <KeyCon<C> as BatchContainer>::reborrow(k)
             && <KeyCon<C> as BatchContainer>::reborrow(s.chunks[c + 1].bounds().0.0) == <KeyCon<C> as BatchContainer>::reborrow(k)
     }
 
     /// Does `(k, v)` span the boundary between chunks `c` and `c + 1`?
-    fn val_spills(s: &ChunkUpdates<C>, c: usize, k: <C::Cursor as Cursor>::Key<'_>, v: <C::Cursor as Cursor>::Val<'_>) -> bool {
+    fn val_spills(s: &ChunkBatch<C>, c: usize, k: <C::Cursor as Cursor>::Key<'_>, v: <C::Cursor as Cursor>::Val<'_>) -> bool {
         Self::key_spills(s, c, k)
             && <ValCon<C> as BatchContainer>::reborrow(s.chunks[c].bounds().1.1) == <ValCon<C> as BatchContainer>::reborrow(v)
             && <ValCon<C> as BatchContainer>::reborrow(s.chunks[c + 1].bounds().0.1) == <ValCon<C> as BatchContainer>::reborrow(v)
@@ -337,7 +337,7 @@ impl<C: NavigableChunk> ChunkUpdatesCursor<C> {
     /// for a forward seek; a backward seek is detected and served by a full search from the
     /// front. Galloping keeps a monotone seek sweep at `O(log Δ)` bounds reads per seek rather
     /// than `O(log chunks)`; only resident [`bounds`](NavigableChunk::bounds) are read.
-    fn locate_key(s: &ChunkUpdates<C>, hint: usize, key: <C::Cursor as Cursor>::Key<'_>) -> usize {
+    fn locate_key(s: &ChunkBatch<C>, hint: usize, key: <C::Cursor as Cursor>::Key<'_>) -> usize {
         let n = s.chunks.len();
         // `last_key(i) < key`, from chunk `i`'s resident bounds.
         let lt = |i: usize| <KeyCon<C> as BatchContainer>::reborrow(s.chunks[i].bounds().1.0)
@@ -355,8 +355,8 @@ impl<C: NavigableChunk> ChunkUpdatesCursor<C> {
     }
 }
 
-impl<C: NavigableChunk> Cursor for ChunkUpdatesCursor<C> {
-    type Storage = ChunkUpdates<C>;
+impl<C: NavigableChunk> Cursor for ChunkBatchCursor<C> {
+    type Storage = ChunkBatch<C>;
 
     type KeyContainer = <C::Cursor as Cursor>::KeyContainer;
     type Key<'a> = <C::Cursor as Cursor>::Key<'a>;
@@ -549,14 +549,14 @@ where
     fn len(chunk: &C) -> usize { chunk.len() }
 }
 
-/// The resumable [`SpineUpdates::Merger`] for [`ChunkUpdates`]: merges two updates and advances
+/// The resumable [`SpineBatch::Merger`] for [`ChunkBatch`]: merges two updates and advances
 /// their times to the compaction frontier, a fuel-bounded step at a time.
 ///
 /// Each step pipelines [`merge`](Chunk::merge) → [`advance`](Chunk::advance) →
 /// [`settle`](Chunk::settle) and settles its output, so a suspended merge holds only
 /// graded chunks. The sources are read by cloning (a cheap refcount bump) and must be
 /// supplied unchanged on every call.
-pub struct ChunkUpdatesMerger<C: Chunk> {
+pub struct ChunkBatchMerger<C: Chunk> {
     /// Compaction frontier supplied at construction.
     frontier: Antichain<C::Time>,
     /// Input deques, refilled from the sources (clones) head-of-list at a time.
@@ -577,12 +577,12 @@ pub struct ChunkUpdatesMerger<C: Chunk> {
     complete: bool,
 }
 
-impl<C> crate::trace::implementations::spine_fueled::Merger<ChunkUpdates<C>> for ChunkUpdatesMerger<C>
+impl<C> crate::trace::implementations::spine_fueled::Merger<ChunkBatch<C>> for ChunkBatchMerger<C>
 where
     C: Chunk + Default + 'static,
     C::Time: timely::progress::Timestamp + Lattice + Ord + 'static,
 {
-    fn new(_source1: &ChunkUpdates<C>, _source2: &ChunkUpdates<C>, frontier: AntichainRef<C::Time>) -> Self {
+    fn new(_source1: &ChunkBatch<C>, _source2: &ChunkBatch<C>, frontier: AntichainRef<C::Time>) -> Self {
         Self {
             frontier: frontier.to_owned(),
             in1: VecDeque::new(),
@@ -596,7 +596,7 @@ where
         }
     }
 
-    fn work(&mut self, source1: &ChunkUpdates<C>, source2: &ChunkUpdates<C>, fuel: &mut isize) {
+    fn work(&mut self, source1: &ChunkBatch<C>, source2: &ChunkBatch<C>, fuel: &mut isize) {
 
         // TODO: The logic is a bit tortured here, and should be improved.
 
@@ -642,28 +642,28 @@ where
         }
     }
 
-    fn done(self) -> Option<ChunkUpdates<C>> {
+    fn done(self) -> Option<ChunkBatch<C>> {
         debug_assert!(self.merged.is_empty() && self.advanced.is_empty());
         wrap(self.settled.into())
     }
 }
 
-/// A [`Builder`](crate::trace::Builder) that collects a chunk sequence into a [`ChunkUpdates`].
-pub struct ChunkUpdatesBuilder<C: Chunk> {
+/// A [`Builder`](crate::trace::Builder) that collects a chunk sequence into a [`ChunkBatch`].
+pub struct ChunkBatchBuilder<C: Chunk> {
     /// Pushed chunks awaiting settling; holds settle's sub-`TARGET` carry at the front.
     input: VecDeque<C>,
     /// The graded chunks emitted so far.
     output: VecDeque<C>,
 }
 
-impl<C> crate::trace::Builder for ChunkUpdatesBuilder<C>
+impl<C> crate::trace::Builder for ChunkBatchBuilder<C>
 where
     C: Chunk + Default + 'static,
     C::Time: timely::progress::Timestamp,
 {
     type Input = C;
     type Time = C::Time;
-    type Output = ChunkUpdates<C>;
+    type Output = ChunkBatch<C>;
 
     fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
         Self { input: VecDeque::new(), output: VecDeque::new() }
@@ -678,7 +678,7 @@ where
     }
 
     fn done(self) -> Option<Self::Output> {
-        let ChunkUpdatesBuilder { mut input, mut output } = self;
+        let ChunkBatchBuilder { mut input, mut output } = self;
         C::settle(&mut input, true, &mut output);
         let chunks: Vec<C> = output.into();
         wrap(chunks)
@@ -692,8 +692,8 @@ where
 }
 
 /// Wraps settled chunks as a batch's updates, absent when there are no chunks.
-fn wrap<C: Chunk>(chunks: Vec<C>) -> Option<ChunkUpdates<C>> {
-    (!chunks.is_empty()).then(|| ChunkUpdates::new(chunks))
+fn wrap<C: Chunk>(chunks: Vec<C>) -> Option<ChunkBatch<C>> {
+    (!chunks.is_empty()).then(|| ChunkBatch::new(chunks))
 }
 
 /// Whether `chunks` satisfy the [`Chunk::TARGET`] grading invariant: every chunk

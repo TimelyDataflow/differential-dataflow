@@ -19,7 +19,7 @@ use crate::trace::implementations::containers::BatchContainer;
 ///
 /// This is the entry point for accessing batch data through cursors, and the place that opinions
 /// about keys and values are introduced (via the `Cursor` associated type). Cut-and-merge assembly
-/// is the trace's concern: [`TraceReader::batches_through`](crate::trace::TraceReader::batches_through)
+/// is the trace's concern: [`TraceReader::spans_through`](crate::trace::TraceReader::spans_through)
 /// selects the batches, and [`cursor_list()`] merges their cursors.
 pub trait Navigable {
 
@@ -34,7 +34,7 @@ pub trait Navigable {
 }
 
 /// The cursor type for the updates in a trace's batches.
-pub type BatchCursor<Tr> = <<Tr as crate::trace::TraceReader>::Updates as Navigable>::Cursor;
+pub type BatchCursor<Tr> = <<Tr as crate::trace::TraceReader>::Batch as Navigable>::Cursor;
 
 /// The borrowed key type of a trace's batch cursor.
 pub type BatchKey<'a, Tr> = <BatchCursor<Tr> as Cursor>::Key<'a>;

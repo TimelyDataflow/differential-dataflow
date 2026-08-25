@@ -10,7 +10,7 @@ use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
 
-use crate::trace::{Batch, Trace, TraceReader};
+use crate::trace::{Span, Trace, TraceReader};
 
 use timely::scheduling::Activator;
 
@@ -38,7 +38,7 @@ pub struct TraceAgent<Tr: TraceReader> {
 impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
 
     type Time = Tr::Time;
-    type Updates = Tr::Updates;
+    type Batch = Tr::Batch;
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
         // This method does not enforce that `frontier` is greater or equal to `self.logical_compaction`.
@@ -62,10 +62,10 @@ impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
         self.physical_compaction.borrow()
     }
-    fn batches_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<Vec<Batch<Tr::Time, Tr::Updates>>> {
-        self.trace.borrow_mut().trace.batches_through(frontier)
+    fn spans_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<Vec<Span<Tr::Time, Tr::Batch>>> {
+        self.trace.borrow_mut().trace.spans_through(frontier)
     }
-    fn map_batches<F: FnMut(&Batch<Tr::Time, Tr::Updates>)>(&self, f: F) { self.trace.borrow().trace.map_batches(f) }
+    fn map_spans<F: FnMut(&Span<Tr::Time, Tr::Batch>)>(&self, f: F) { self.trace.borrow().trace.map_spans(f) }
 }
 
 impl<Tr: TraceReader> TraceAgent<Tr> {
@@ -117,8 +117,8 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         self.trace
             .borrow_mut()
             .trace
-            .map_batches(|batch| {
-                new_queue.push_back(TraceReplayInstruction::Batch(batch.clone(), timely::progress::Stamp::from_elem(Tr::Time::minimum())));
+            .map_spans(|batch| {
+                new_queue.push_back(TraceReplayInstruction::Span(batch.clone(), timely::progress::Stamp::from_elem(Tr::Time::minimum())));
                 upper = Some(batch.upper().clone());
             });
 
@@ -299,8 +299,8 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
                                 TraceReplayInstruction::Frontier(frontier) => {
                                     capabilities.downgrade(&frontier.borrow()[..]);
                                 },
-                                TraceReplayInstruction::Batch(batch, hint) => {
-                                    if !hint.is_empty() && !batch.is_empty() {
+                                TraceReplayInstruction::Span(batch, hint) => {
+                                    if !hint.is_empty() && batch.has_updates() {
                                         let delayed = capabilities.delayed_stamp(&hint);
                                         output.session(&delayed).give(batch);
                                     }
@@ -438,10 +438,10 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
                                             capabilities.downgrade(&frontier.borrow()[..]);
                                         }
                                     },
-                                    TraceReplayInstruction::Batch(batch, hint) => {
-                                        if !hint.is_empty() && !batch.is_empty() {
+                                    TraceReplayInstruction::Span(batch, hint) => {
+                                        if !hint.is_empty() && batch.has_updates() {
                                             let delayed = capabilities.delayed_stamp(&hint);
-                                            let wrapped = Batch::new(
+                                            let wrapped = Span::new(
                                                 batch.desc,
                                                 batch.inner.map(|p| BatchFrontier::make_from(p, since.borrow(), until.borrow())),
                                             );

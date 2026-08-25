@@ -11,7 +11,7 @@ use timely::progress::frontier::AntichainRef;
 
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{Batch, Description};
+use crate::trace::{Span, Description};
 use super::ProxyBridge;
 use crate::operators::reduce::{sort_dedup, ReduceTactic};
 use crate::operators::ValueHistory;
@@ -167,7 +167,7 @@ where
         lower: &Antichain<T>,
         upper: &Antichain<T>,
         held: &Antichain<T>,
-    ) -> (Option<Batch<T, B2>>, Antichain<T>) {
+    ) -> (Option<Span<T, B2>>, Antichain<T>) {
         if held.elements().iter().all(|t| upper.less_equal(t)) {
             debug_assert!(
                 self.pending.values().flatten().all(|time| held.less_equal(time)),
@@ -386,7 +386,7 @@ where
             }
         }
 
-        let produced = Some(Batch::new(description, self.backend.finish()));
+        let produced = Some(Span::new(description, self.backend.finish()));
         debug_assert_pending_frontier(&self.pending, &pending_frontier);
         (produced, pending_frontier)
     }

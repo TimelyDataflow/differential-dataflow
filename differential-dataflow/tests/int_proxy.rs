@@ -26,16 +26,16 @@ use differential_dataflow::operators::reduce::{reduce_with_tactic, ReduceTactic}
 use differential_dataflow::trace::chunk::vec::{
     ChunkBatcher as VChunkBatcher, ChunkBuilder as VChunkBuilder, ChunkSpine as VChunkSpine, VecChunk,
 };
-use differential_dataflow::trace::chunk::ChunkUpdates;
+use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::implementations::ContainerChunker;
 use differential_dataflow::trace::{Navigable};
 use differential_dataflow::AsCollection;
 
-type Batch<K, V, T, R> = Rc<ChunkUpdates<VecChunk<K, V, T, R>>>;
+type Span<K, V, T, R> = Rc<ChunkBatch<VecChunk<K, V, T, R>>>;
 
 /// Read a `u64`-keyed batch, dropping the hash key; returns `(value, time, diff)`.
-fn hread<KV, T, R>(batches: &[Batch<u64, KV, T, R>]) -> Vec<(KV, T, R)>
+fn hread<KV, T, R>(batches: &[Span<u64, KV, T, R>]) -> Vec<(KV, T, R)>
 where
     KV: Ord + Clone + 'static,
     T: Lattice + Timestamp,
@@ -60,7 +60,7 @@ where
 }
 
 /// Build a HASH-KEYED input batch from `((K, V), T, R)` rows: `((hash(K), (K, V)), T, R)`.
-fn hbatch<K, V, T, R>(rows: Vec<((K, V), T, R)>, _lower: T, _upper: T) -> Batch<u64, (K, V), T, R>
+fn hbatch<K, V, T, R>(rows: Vec<((K, V), T, R)>, _lower: T, _upper: T) -> Span<u64, (K, V), T, R>
 where
     K: Hashable + Ord + Clone + 'static,
     K::Output: Into<u64>,
@@ -75,7 +75,7 @@ where
     for u in hrows {
         chunk.push_into(u);
     }
-    Rc::new(ChunkUpdates::new(vec![chunk]))
+    Rc::new(ChunkBatch::new(vec![chunk]))
 }
 
 fn max_logic(_k: &u64, input: &[(u64, i64)], current: &mut Vec<(u64, i64)>, updates: &mut Vec<(u64, i64)>) {

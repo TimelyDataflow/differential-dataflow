@@ -31,7 +31,7 @@ use timely::progress::Stamp;
 use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{self, BatchOf, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
+use crate::trace::{self, SpanOf, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
 
 use trace::wrappers::enter::{TraceEnter, enter_batch};
 
@@ -47,7 +47,7 @@ pub struct Arranged<'scope, Tr: TraceReader> {
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
-    pub stream: Stream<'scope, Tr::Time, Vec<BatchOf<Tr>>>,
+    pub stream: Stream<'scope, Tr::Time, Vec<SpanOf<Tr>>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Tr,
 }
@@ -98,7 +98,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     pub fn as_container<I, L>(self, mut logic: L) -> crate::Collection<'scope, Tr::Time, I::Item>
     where
         I: IntoIterator<Item: Container>,
-        L: FnMut(BatchOf<Tr>) -> I+'static,
+        L: FnMut(SpanOf<Tr>) -> I+'static,
     {
         self.stream.unary(Pipeline, "AsContainer", move |_,_| move |input, output| {
             input.for_each(|time, data| {
@@ -115,12 +115,12 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 
     /// Flattens the stream into a `VecCollection`.
     ///
-    /// The underlying `Stream<T, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
+    /// The underlying `Stream<T, Vec<SpanOf<T>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
     pub fn as_collection<D: Data, L>(self, mut logic: L) -> VecCollection<'scope, Tr::Time, D, BatchDiff<Tr>>
         where
-            Tr::Updates: Navigable,
+            Tr::Batch: Navigable,
             BatchCursor<Tr>: Cursor<Time = Tr::Time>,
             L: FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> D+'static,
     {
@@ -129,7 +129,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 
     /// Flattens the stream into a `VecCollection`.
     ///
-    /// The underlying `Stream<T, Vec<BatchWrapper<T::Batch>>>` is a much more efficient way to access the data,
+    /// The underlying `Stream<T, Vec<SpanOf<T>>>` is a much more efficient way to access the data,
     /// and this method should only be used when the data need to be transformed or exchanged, rather than
     /// supplied as arguments to an operator using the same key-value structure.
     ///
@@ -140,7 +140,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     where
         K: crate::ExchangeData,
         V: crate::ExchangeData,
-        Tr::Updates: Navigable,
+        Tr::Batch: Navigable,
         BatchCursor<Tr>: Cursor<Time = Tr::Time>,
         for<'a> BatchCursor<Tr>: Cursor<Key<'a> = &'a K, Val<'a> = &'a V>,
     {
@@ -153,7 +153,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     /// filtering or flat mapping as part of the extraction.
     pub fn flat_map_ref<I, L>(self, logic: L) -> VecCollection<'scope, Tr::Time, I::Item, BatchDiff<Tr>>
         where
-            Tr::Updates: Navigable,
+            Tr::Batch: Navigable,
             BatchCursor<Tr>: Cursor<Time = Tr::Time>,
             I: IntoIterator<Item: Data>,
             L: FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> I+'static,
@@ -168,9 +168,9 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     ///
     /// This method exists for streams of batches without the corresponding arrangement.
     /// If you have the arrangement, its `flat_map_ref` method is equivalent to this.
-    pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<BatchOf<Tr>>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, BatchDiff<Tr>>
+    pub fn flat_map_batches<I, L>(stream: Stream<'scope, Tr::Time, Vec<SpanOf<Tr>>>, mut logic: L) -> VecCollection<'scope, Tr::Time, I::Item, BatchDiff<Tr>>
     where
-        Tr::Updates: Navigable,
+        Tr::Batch: Navigable,
         BatchCursor<Tr>: Cursor<Time = Tr::Time>,
         I: IntoIterator<Item: Data>,
         L: FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> I+'static,
@@ -202,13 +202,13 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 
 use crate::difference::Multiply;
 // Direct join implementations.
-impl<'scope, Tr1: TraceReader<Updates: Navigable>+'static> Arranged<'scope, Tr1> {
+impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
     /// A convenience method to join and produce `VecCollection` output.
     ///
     /// Avoid this method, as it is likely to evolve into one without the `VecCollection` opinion.
     pub fn join_core<Tr2,I,L,R1,R2,KC>(self, other: Arranged<'scope, Tr2>, mut result: L) -> VecCollection<'scope, Tr1::Time,I::Item,<R1 as Multiply<R2>>::Output>
     where
-        Tr2: TraceReader<Updates: Navigable, Time=Tr1::Time>+Clone+'static,
+        Tr2: TraceReader<Batch: Navigable, Time=Tr1::Time>+Clone+'static,
         // Pin the cursor diffs to named params `R1`/`R2`: a `Multiply` bound on a projection
         // does not connect to its use-site (the solver normalizes the use but not the bound's
         // subject), so we constrain plain params instead.
@@ -244,16 +244,16 @@ impl<'scope, Tr1: TraceReader<Updates: Navigable>+'static> Arranged<'scope, Tr1>
 // Direct reduce implementations.
 use crate::difference::Abelian;
 use crate::trace::implementations::containers::BatchContainer;
-impl<'scope, Tr1: TraceReader<Updates: Navigable>+'static> Arranged<'scope, Tr1> {
+impl<'scope, Tr1: TraceReader<Batch: Navigable>+'static> Arranged<'scope, Tr1> {
     /// A direct implementation of `ReduceCore::reduce_abelian`.
     pub fn reduce_abelian<L, Bu, Tr2, KC, P>(self, name: &str, mut logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
-        Tr2: Trace<Updates: Navigable, Time=Tr1::Time>+'static,
+        Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
         KC: BatchContainer,
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time, Diff: Abelian>,
-        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Updates>, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -269,12 +269,12 @@ impl<'scope, Tr1: TraceReader<Updates: Navigable>+'static> Arranged<'scope, Tr1>
     /// A direct implementation of `ReduceCore::reduce_core`.
     pub fn reduce_core<L, Bu, Tr2, KC, P>(self, name: &str, logic: L, push: P) -> Arranged<'scope, TraceAgent<Tr2>>
     where
-        Tr2: Trace<Updates: Navigable, Time=Tr1::Time>+'static,
+        Tr2: Trace<Batch: Navigable, Time=Tr1::Time>+'static,
         KC: BatchContainer,
         BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
         for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
         for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
-        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Updates>, Input: Default> + 'static,
+        Bu: Builder<Time=Tr1::Time, Output: Into<Tr2::Batch>, Input: Default> + 'static,
         L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
         P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
     {
@@ -307,7 +307,7 @@ pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
     fn arrange<Ba, Bu, Tr>(self) -> Arranged<'scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Updates>>,
+        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Batch>>,
         Tr: Trace<Time=T> + 'static,
     {
         self.arrange_named::<Ba, Bu, Tr>("Arrange")
@@ -319,7 +319,7 @@ pub trait Arrange<'scope, T: Timestamp+Lattice, C> : Sized {
     fn arrange_named<Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
         Ba: Batcher<Output=C, Time=T> + 'static,
-        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Updates>>,
+        Bu: Builder<Time=T, Input=Ba::Output, Output: Into<Tr::Batch>>,
         Tr: Trace<Time=T> + 'static,
     ;
 }
@@ -335,7 +335,7 @@ where
     P: ParallelizationContract<Tr::Time, C>,
     Chu: ContainerBuilder<Container=Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
     Ba: Batcher<Time=Tr::Time> + 'static,
-    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output: Into<Tr::Updates>>,
+    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output: Into<Tr::Batch>>,
     Tr: Trace+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
@@ -448,7 +448,7 @@ where
 
                     // Extract all updates not in advance of the input frontier, as one batch.
                     let (mut chain, description) = batcher.seal(frontier.frontier().to_owned());
-                    let batch = trace::Batch::new(description, Bu::seal(&mut chain).map(Into::into));
+                    let batch = trace::Span::new(description, Bu::seal(&mut chain).map(Into::into));
 
                     let stamp = retired.iter().map(|c| c.time().clone()).collect::<Stamp<_>>();
                     writer.insert(batch.clone(), stamp);

@@ -25,7 +25,7 @@ pub fn count<'scope, Tr, K, F, P, R, FF>(
     strict: bool,
 ) -> VecCollection<'scope, Tr::Time, ((P, usize, usize), Tr::Time), R>
 where
-    Tr: TraceReader<Updates: Navigable, Time: std::hash::Hash>+Clone+'static,
+    Tr: TraceReader<Batch: Navigable, Time: std::hash::Hash>+Clone+'static,
     BatchCursor<Tr>: Cursor<Time = Tr::Time, Diff = isize>,
     <BatchCursor<Tr> as Cursor>::KeyContainer: BatchContainer<Owned=K>,
     K: Hashable + ExchangeData,

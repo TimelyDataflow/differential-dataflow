@@ -248,7 +248,7 @@ pub mod val_batch {
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Builder, Cursor};
-    use crate::trace::implementations::spine_fueled::{SpineUpdates, Merger};
+    use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
 
@@ -309,7 +309,7 @@ pub mod val_batch {
         }
     }
 
-    impl<L: Layout> SpineUpdates for OrdValBatch<L> {
+    impl<L: Layout> SpineBatch for OrdValBatch<L> {
         type Time = layout::Time<L>;
         type Merger = OrdValMerger<L>;
         fn len(&self) -> usize {
@@ -700,7 +700,7 @@ pub mod key_batch {
     use timely::progress::{Antichain, frontier::AntichainRef};
 
     use crate::trace::{Builder, Cursor};
-    use crate::trace::implementations::spine_fueled::{SpineUpdates, Merger};
+    use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
 
@@ -771,7 +771,7 @@ pub mod key_batch {
         }
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> SpineUpdates for OrdKeyBatch<L> {
+    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> SpineBatch for OrdKeyBatch<L> {
         type Time = layout::Time<L>;
         type Merger = OrdKeyMerger<L>;
         fn len(&self) -> usize {

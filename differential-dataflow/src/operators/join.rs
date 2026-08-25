@@ -63,8 +63,8 @@ pub enum Fresh {
 /// [`AsCollection`]: crate::collection::AsCollection
 pub fn join_traces<'scope, Tr1, Tr2, KC, L, CB>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, name: &str, result: L) -> Stream<'scope, Tr1::Time, CB::Container>
 where
-    Tr1: TraceReader<Updates: Navigable>+'static,
-    Tr2: TraceReader<Updates: Navigable, Time = Tr1::Time>+'static,
+    Tr1: TraceReader<Batch: Navigable>+'static,
+    Tr2: TraceReader<Batch: Navigable, Time = Tr1::Time>+'static,
     KC: BatchContainer,
     BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
@@ -72,20 +72,20 @@ where
     L: FnMut(KC::ReadItem<'_>,BatchVal<'_, Tr1>,BatchVal<'_, Tr2>,Tr1::Time,&BatchDiff<Tr1>,&BatchDiff<Tr2>,&mut CB)+'static,
     CB: ContainerBuilder<Container: Default> + 'static,
 {
-    join_with_tactic(arranged1, arranged2, name, cursors::CursorTactic::<Tr1::Updates, Tr2::Updates, _, CB>::new(result))
+    join_with_tactic(arranged1, arranged2, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, _, CB>::new(result))
 }
 
 /// Drives an equijoin of two traces using a supplied [`JoinTactic`].
 ///
 /// This is the general join operator: it does the dataflow plumbing (frontiers, capabilities, trace
 /// compaction) and routes the per-batch work through the tactic. It requires only `TraceReader` of its
-/// inputs, never `Navigable`: it extracts trace batches via `batches_through`, and building cursors over
+/// inputs, never `Navigable`: it extracts trace batches via `spans_through`, and building cursors over
 /// them (if that is how the join proceeds) is the tactic's concern.
 pub fn join_with_tactic<'scope, Tr1, Tr2, T, C>(arranged1: Arranged<'scope, Tr1>, arranged2: Arranged<'scope, Tr2>, name: &str, mut tactic: T) -> Stream<'scope, Tr1::Time, C>
 where
     Tr1: TraceReader+'static,
     Tr2: TraceReader<Time = Tr1::Time>+'static,
-    T: JoinTactic<Tr1::Time, Tr1::Updates, Tr2::Updates, C>+'static,
+    T: JoinTactic<Tr1::Time, Tr1::Batch, Tr2::Batch, C>+'static,
     C: Container + 'static,
 {
     // Rename traces for symmetry from here on out.
@@ -106,7 +106,7 @@ where
         // initial work for the two traces, and before the operator is constructed.
 
         // Acknowledged frontier for each input.
-        // These two are used exclusively to track batch boundaries on which we may want/need to call `batches_through`.
+        // These two are used exclusively to track batch boundaries on which we may want/need to call `spans_through`.
         // They will drive our physical compaction of each trace, and we want to maintain at all times that each is beyond
         // the physical compaction frontier of their corresponding trace.
         // Should we ever *drop* a trace, these are 1. much harder to maintain correctly, but 2. no longer used.
@@ -122,7 +122,7 @@ where
         let mut todo1: VecDeque<(CapabilitySet<Tr1::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
 
         // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
-        trace1.map_batches(|batch1| {
+        trace1.map_spans(|batch1| {
             acknowledged1.clone_from(batch1.upper());
             // No `todo1` work here, because we haven't accepted anything into `batches2` yet.
             // It is effectively "empty", because we choose to drain `trace1` before `trace2`.
@@ -139,7 +139,7 @@ where
         // We capture batch2's batches first and establish work second to avoid taking a `RefCell` lock
         // on both traces at the same time, as they could be the same trace and this would panic.
         let mut batch2_list = Vec::new();
-        trace2.map_batches(|batch2| {
+        trace2.map_spans(|batch2| {
             acknowledged2.clone_from(batch2.upper());
             batch2_list.push(batch2.clone());
         });
@@ -165,7 +165,7 @@ where
             // Empty batches carry no updates, and have nothing to join.
             let Some(updates2) = batch2.inner else { continue };
             // It is safe to ask for `ack1` because we have confirmed it to be in advance of `distinguish_since`.
-            let trace1_storage = trace1.updates_through(acknowledged1.borrow()).unwrap();
+            let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap();
             // We could downgrade the capability here, but doing so is a bit complicated mathematically.
             // TODO: downgrade the capability by searching out the one time in `batch2.lower()` and not
             // in `batch2.upper()`. Only necessary for non-empty batches, as empty batches may not have
@@ -228,7 +228,7 @@ where
                             if let Some(updates1) = batch1.inner.clone() {
                                 // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let trace2_storage = trace2.updates_through(acknowledged2.borrow()).unwrap();
+                                let trace2_storage = trace2.batches_through(acknowledged2.borrow()).unwrap();
                                 let work = tactic.prep(vec![updates1], trace2_storage, Fresh::Input0, meet.clone().expect("non-empty stamp"));
                                 todo0.push_back((capability.clone(), work));
                             }
@@ -282,7 +282,7 @@ where
                             if let Some(updates2) = batch2.inner.clone() {
                                 // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let trace1_storage = trace1.updates_through(acknowledged1.borrow()).unwrap();
+                                let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap();
                                 let work = tactic.prep(trace1_storage, vec![updates2], Fresh::Input1, meet.clone().expect("non-empty stamp"));
                                 todo1.push_back((capability.clone(), work));
                             }

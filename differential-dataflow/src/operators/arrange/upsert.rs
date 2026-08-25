@@ -132,13 +132,13 @@ pub fn arrange_from_upsert<'scope, Bu, Tr, K, V>(
 where
     K: ExchangeData+Hashable+std::hash::Hash,
     V: ExchangeData,
-    Tr: Trace<Updates: Navigable, Time: TotalOrder+ExchangeData>+'static,
+    Tr: Trace<Batch: Navigable, Time: TotalOrder+ExchangeData>+'static,
     for<'a> BatchCursor<Tr>: Cursor<
         Key<'a> = &'a K,
         Val<'a> = &'a V,
         Diff=isize,
     >,
-    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output: Into<Tr::Updates>>,
+    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output: Into<Tr::Batch>>,
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
@@ -231,7 +231,7 @@ where
 
                                 // Prepare a cursor to the existing arrangement, and a batch builder for
                                 // new stuff that we add.
-                                let batches = reader_local.updates_through(Antichain::new().borrow()).unwrap();
+                                let batches = reader_local.batches_through(Antichain::new().borrow()).unwrap();
                                 let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(batches);
                                 let mut builder = Bu::new();
                                 let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
@@ -278,7 +278,7 @@ where
                                     builder.push(&mut updates);
                                 }
                                 let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(Tr::Time::minimum()));
-                                let batch = crate::trace::Batch::new(description, builder.done().map(Into::into));
+                                let batch = crate::trace::Span::new(description, builder.done().map(Into::into));
                                 prev_frontier.clone_from(&upper);
 
                                 // Communicate `batch` to the arrangement and the stream.

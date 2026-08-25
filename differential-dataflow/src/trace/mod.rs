@@ -27,38 +27,41 @@ pub use self::description::Description;
 /// A type used to express how much effort a trace should exert even in the absence of updates.
 pub type ExertionLogic = std::sync::Arc<dyn for<'a> Fn(&'a [(usize, usize, usize)])->Option<usize>+Send+Sync>;
 
-/// An immutable collection of updates: a description of the times it covers, and the
-/// updates themselves, absent exactly when there are none.
+/// An interval of a trace's history: a description of the times it covers, and the batch of
+/// updates within it, absent exactly when there are none.
 ///
-/// Reading the updates is the [`Navigable`] capability.
+/// The interval is never empty, but the batch may be missing; a span records that its times
+/// happened and brought no updates. Reading the batch is the [`Navigable`] capability.
 #[derive(Clone, Debug)]
-pub struct Batch<T, B> {
+pub struct Span<T, B> {
     /// The lower and upper bounds of contained update times, and the compaction frontier.
     pub desc: Description<T>,
-    /// The updates themselves; absent exactly when there are none.
+    /// The updates within the interval; absent exactly when there are none.
     pub inner: Option<B>,
 }
 
-impl<T, B> Batch<T, B> {
-    /// A batch from a description and its updates, absent when there are none.
+impl<T, B> Span<T, B> {
+    /// A span from a description and the batch within it, absent when there are no updates.
     pub fn new(desc: Description<T>, inner: Option<B>) -> Self { Self { desc, inner } }
-    /// All times in the batch are greater or equal to an element of `lower`.
+    /// All times in the span are greater or equal to an element of `lower`.
     pub fn lower(&self) -> &Antichain<T> { self.desc.lower() }
-    /// All times in the batch are not greater or equal to any element of `upper`.
+    /// All times in the span are not greater or equal to any element of `upper`.
     pub fn upper(&self) -> &Antichain<T> { self.desc.upper() }
-    /// True if the batch contains no updates.
-    pub fn is_empty(&self) -> bool { self.inner.is_none() }
+    /// True if the span carries a batch of updates.
+    ///
+    /// This is about the updates, not the interval, which is never empty.
+    pub fn has_updates(&self) -> bool { self.inner.is_some() }
 }
 
-impl<T: Timestamp, B> Batch<T, B> {
-    /// An empty batch over the indicated interval: a description with no updates.
+impl<T: Timestamp, B> Span<T, B> {
+    /// A span over the indicated interval carrying no updates.
     pub fn empty(lower: Antichain<T>, upper: Antichain<T>) -> Self {
         Self { desc: Description::new(lower, upper, Antichain::from_elem(T::minimum())), inner: None }
     }
 }
 
-/// The batch type of a trace: [`Batch`] instantiated at the trace's time and updates.
-pub type BatchOf<Tr> = Batch<<Tr as TraceReader>::Time, <Tr as TraceReader>::Updates>;
+/// The span type of a trace: [`Span`] instantiated at the trace's time and batch.
+pub type SpanOf<Tr> = Span<<Tr as TraceReader>::Time, <Tr as TraceReader>::Batch>;
 
 /// A trace whose contents may be read.
 ///
@@ -73,30 +76,30 @@ pub trait TraceReader {
     /// bound its contents and to drive compaction.
     type Time: Timestamp + Lattice;
 
-    /// The updates carried by the trace's batches.
+    /// The batches of updates the trace's spans carry.
     ///
-    /// A batch is [`Batch<Self::Time, Self::Updates>`](Batch), pairing a description
-    /// with these updates when it has any. Reading them is the optional [`Navigable`]
+    /// A span is [`Span<Self::Time, Self::Batch>`](Span), pairing a description with a batch
+    /// when its interval brought any updates. Reading a batch is the optional [`Navigable`]
     /// capability, required only where cursors are taken.
-    type Updates: 'static + Clone;
+    type Batch: 'static + Clone;
 
-    /// Acquires the non-empty sequence of batches covering updates at times not greater or equal to an
+    /// Acquires the non-empty sequence of spans covering updates at times not greater or equal to an
     /// element of `upper`.
     ///
-    /// This method is expected to work if called with an `upper` that (i) was an observed bound in batches from
+    /// This method is expected to work if called with an `upper` that (i) was an observed bound in spans from
     /// the trace, and (ii) the trace has not been advanced beyond `upper`. Practically, the implementation should
-    /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the batches. This
-    /// should allow `upper` such as `&[]`, used to acquire all batches, though it is difficult to imagine other uses.
-    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Batch<Self::Time, Self::Updates>>>;
+    /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the spans. This
+    /// should allow `upper` such as `&[]`, used to acquire all spans, though it is difficult to imagine other uses.
+    fn spans_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Span<Self::Time, Self::Batch>>>;
 
-    /// Acquires the updates of the batches covering times not greater or equal to an element
+    /// Acquires the batches of the spans covering times not greater or equal to an element
     /// of `upper`.
     ///
-    /// Empty batches contribute nothing, so this is what callers taking cursors want;
-    /// [`batches_through`](Self::batches_through) is for the drivers that also need the
-    /// batches' descriptions.
-    fn updates_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Updates>> {
-        Some(self.batches_through(upper)?.into_iter().filter_map(|b| b.inner).collect())
+    /// Spans with no updates contribute nothing, so this is what callers taking cursors want;
+    /// [`spans_through`](Self::spans_through) is for the drivers that also need the spans'
+    /// descriptions.
+    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
+        Some(self.spans_through(upper)?.into_iter().filter_map(|b| b.inner).collect())
     }
 
     /// Advances the frontier that constrains logical compaction.
@@ -142,17 +145,17 @@ pub trait TraceReader {
 
     /// Reports the physical compaction frontier.
     ///
-    /// All batches containing updates beyond this frontier will not be merged with other batches. This allows
-    /// the caller to acquire the batches through any frontier beyond the physical compaction frontier, with the
-    /// `batches_through()` method. This functionality is primarily of interest to the `join` operator, and any
+    /// All spans containing updates beyond this frontier will not be merged with other spans. This allows
+    /// the caller to acquire the spans through any frontier beyond the physical compaction frontier, with the
+    /// `spans_through()` method. This functionality is primarily of interest to the `join` operator, and any
     /// other operators who need to take notice of the physical structure of update batches.
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Self::Time>;
 
-    /// Maps logic across the non-empty sequence of batches in the trace.
+    /// Maps logic across the non-empty sequence of spans in the trace.
     ///
     /// This is currently used only to extract historical data to prime late-starting operators who want to reproduce
-    /// the stream of batches moving past the trace.
-    fn map_batches<F: FnMut(&Batch<Self::Time, Self::Updates>)>(&self, f: F);
+    /// the stream of spans moving past the trace.
+    fn map_spans<F: FnMut(&Span<Self::Time, Self::Batch>)>(&self, f: F);
 
     /// Reads the upper frontier of committed times.
     ///
@@ -161,21 +164,21 @@ pub trait TraceReader {
     fn read_upper(&mut self, target: &mut Antichain<Self::Time>) {
         target.clear();
         target.insert(<Self::Time as timely::progress::Timestamp>::minimum());
-        self.map_batches(|batch| {
-            target.clone_from(batch.upper());
+        self.map_spans(|span| {
+            target.clone_from(span.upper());
         });
     }
 
-    /// Advances `upper` by any empty batches.
+    /// Advances `upper` across any spans with no updates.
     ///
-    /// An empty batch whose `batch.lower` bound equals the current
-    /// contents of `upper` will advance `upper` to `batch.upper`.
-    /// Taken across all batches, this should advance `upper` across
-    /// empty batch regions.
+    /// A span carrying no updates whose `lower` bound equals the current
+    /// contents of `upper` will advance `upper` to its `upper`.
+    /// Taken across all spans, this should advance `upper` across
+    /// update-free regions.
     fn advance_upper(&mut self, upper: &mut Antichain<Self::Time>) {
-        self.map_batches(|batch| {
-            if batch.is_empty() && batch.lower() == upper {
-                upper.clone_from(batch.upper());
+        self.map_spans(|span| {
+            if !span.has_updates() && span.lower() == upper {
+                upper.clone_from(span.upper());
             }
         });
     }
@@ -205,20 +208,21 @@ pub trait Trace : TraceReader {
     /// updates to perform, or `None` if no work is required.
     fn set_exert_logic(&mut self, logic: ExertionLogic);
 
-    /// Introduces a batch of updates to the trace.
+    /// Introduces a span of updates to the trace.
     ///
-    /// Batches describe the time intervals they contain, and they should be added to the trace in contiguous
-    /// intervals. If a batch arrives with a lower bound that does not equal the upper bound of the most recent
-    /// addition, the trace will add an empty batch. It is an error to then try to populate that region of time.
+    /// Spans describe the time intervals they contain, and they should be added to the trace in contiguous
+    /// intervals. If a span arrives with a lower bound that does not equal the upper bound of the most recent
+    /// addition, the trace will add a span with no updates. It is an error to then try to populate that region
+    /// of time.
     ///
-    /// This restriction could be relaxed, especially if we discover ways in which batch interval order could
+    /// This restriction could be relaxed, especially if we discover ways in which span interval order could
     /// commute. For now, the trace should complain, to the extent that it cares about contiguous intervals.
-    fn insert(&mut self, batch: Batch<Self::Time, Self::Updates>);
+    fn insert(&mut self, span: Span<Self::Time, Self::Batch>);
 
-    /// Introduces an empty batch concluding the trace.
+    /// Introduces an update-free span concluding the trace.
     ///
-    /// This method should be logically equivalent to introducing an empty batch whose lower frontier equals
-    /// the upper frontier of the most recently introduced batch, and whose upper frontier is empty.
+    /// This method should be logically equivalent to introducing a span with no updates whose lower frontier
+    /// equals the upper frontier of the most recently introduced span, and whose upper frontier is empty.
     fn close(&mut self);
 }
 
@@ -243,13 +247,13 @@ pub trait Batcher: PushInto<Self::Output> {
     fn frontier(&mut self) -> AntichainRef<'_, Self::Time>;
 }
 
-/// Functionality for building a batch's updates from ordered update sequences.
+/// Functionality for building batches from ordered update sequences.
 pub trait Builder: Sized {
     /// Input item type.
     type Input;
     /// Timestamp type.
     type Time: Timestamp;
-    /// The type of the updates it builds.
+    /// Output batch type.
     type Output;
 
     /// Allocates an empty builder.
@@ -265,10 +269,10 @@ pub trait Builder: Sized {
     ///
     /// Adds all elements from `chunk` to the builder and leaves `chunk` in an undefined state.
     fn push(&mut self, chunk: &mut Self::Input);
-    /// Completes building and returns the updates, absent if none were pushed.
+    /// Completes building and returns the batch, absent if no updates were pushed.
     fn done(self) -> Option<Self::Output>;
 
-    /// Builds a batch's updates from a chain of updates.
+    /// Builds a batch from a chain of updates.
     ///
     /// This method relies on the chain only containing updates greater or equal to the lower frontier,
     /// and not greater or equal to the upper frontier, of the interval the caller means to describe.

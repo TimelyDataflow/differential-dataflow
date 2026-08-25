@@ -8,7 +8,7 @@ use std::cell::RefCell;
 
 use timely::progress::Antichain;
 
-use crate::trace::{Trace, Batch, BatchOf};
+use crate::trace::{Trace, Span, SpanOf};
 
 use super::TraceAgentQueueWriter;
 use super::TraceReplayInstruction;
@@ -52,7 +52,7 @@ impl<Tr: Trace> TraceWriter<Tr> {
     /// The `hint` argument is either `None` in the case of an empty batch,
     /// or is `Some(time)` for a time less or equal to all updates in the
     /// batch and which is suitable for use as a capability.
-    pub fn insert(&mut self, batch: BatchOf<Tr>, hint: timely::progress::Stamp<Tr::Time>) {
+    pub fn insert(&mut self, batch: SpanOf<Tr>, hint: timely::progress::Stamp<Tr::Time>) {
 
         // Something is wrong if not a sequence.
         if !(&self.upper == batch.lower()) {
@@ -67,7 +67,7 @@ impl<Tr: Trace> TraceWriter<Tr> {
         let mut borrow = self.queues.borrow_mut();
         for queue in borrow.iter_mut() {
             if let Some(pair) = queue.upgrade() {
-                pair.1.borrow_mut().push_back(TraceReplayInstruction::Batch(batch.clone(), hint.clone()));
+                pair.1.borrow_mut().push_back(TraceReplayInstruction::Span(batch.clone(), hint.clone()));
                 pair.1.borrow_mut().push_back(TraceReplayInstruction::Frontier(batch.upper().clone()));
                 pair.0.activate();
             }
@@ -84,7 +84,7 @@ impl<Tr: Trace> TraceWriter<Tr> {
     /// Inserts an empty batch up to `upper`.
     pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
         if self.upper != upper {
-            self.insert(Batch::empty(self.upper.clone(), upper), timely::progress::Stamp::new());
+            self.insert(Span::empty(self.upper.clone(), upper), timely::progress::Stamp::new());
         }
     }
 }

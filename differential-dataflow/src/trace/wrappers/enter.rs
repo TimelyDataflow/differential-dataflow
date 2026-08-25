@@ -6,7 +6,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use crate::lattice::Lattice;
-use crate::trace::{Batch, Description, TraceReader};
+use crate::trace::{Span, Description, TraceReader};
 
 /// Wrapper to provide trace to nested scope.
 pub struct TraceEnter<Tr: TraceReader, TInner> {
@@ -35,8 +35,8 @@ pub fn enter_description<T: timely::progress::Timestamp, TInner: Refines<T>+Latt
 
 /// Converts an outer batch to an inner batch: the description enters the scope, and the
 /// updates is wrapped for its readers to do the same.
-pub fn enter_batch<T: timely::progress::Timestamp, TInner: Refines<T>+Lattice, P>(batch: Batch<T, P>) -> Batch<TInner, BatchEnter<P, TInner>> {
-    Batch::new(enter_description(&batch.desc), batch.inner.map(BatchEnter::make_from))
+pub fn enter_batch<T: timely::progress::Timestamp, TInner: Refines<T>+Lattice, P>(batch: Span<T, P>) -> Span<TInner, BatchEnter<P, TInner>> {
+    Span::new(enter_description(&batch.desc), batch.inner.map(BatchEnter::make_from))
 }
 
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
@@ -45,10 +45,10 @@ where
     TInner: Refines<Tr::Time>+Lattice,
 {
     type Time = TInner;
-    type Updates = BatchEnter<Tr::Updates, TInner>;
+    type Batch = BatchEnter<Tr::Batch, TInner>;
 
-    fn map_batches<F: FnMut(&Batch<TInner, Self::Updates>)>(&self, mut f: F) {
-        self.trace.map_batches(|batch| {
+    fn map_spans<F: FnMut(&Span<TInner, Self::Batch>)>(&self, mut f: F) {
+        self.trace.map_spans(|batch| {
             f(&enter_batch(batch.clone()));
         })
     }
@@ -83,12 +83,12 @@ where
         self.stash2.borrow()
     }
 
-    fn batches_through(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Batch<TInner, Self::Updates>>> {
+    fn spans_through(&mut self, upper: AntichainRef<TInner>) -> Option<Vec<Span<TInner, Self::Batch>>> {
         self.stash1.clear();
         for time in upper.iter() {
             self.stash1.insert(time.clone().to_outer());
         }
-        let storage = self.trace.batches_through(self.stash1.borrow())?;
+        let storage = self.trace.spans_through(self.stash1.borrow())?;
         Some(storage.into_iter().map(enter_batch).collect())
     }
 }

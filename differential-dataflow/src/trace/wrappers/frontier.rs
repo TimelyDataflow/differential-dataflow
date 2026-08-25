@@ -8,7 +8,7 @@
 
 use timely::progress::{Antichain, frontier::AntichainRef};
 
-use crate::trace::{Batch, TraceReader};
+use crate::trace::{Span, TraceReader};
 use crate::lattice::Lattice;
 
 /// Wrapper to provide trace to nested scope.
@@ -33,13 +33,13 @@ impl<Tr: TraceReader + Clone> Clone for TraceFrontier<Tr> {
 impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
 
     type Time = Tr::Time;
-    type Updates = BatchFrontier<Tr::Updates, Tr::Time>;
+    type Batch = BatchFrontier<Tr::Batch, Tr::Time>;
 
-    fn map_batches<F: FnMut(&Batch<Tr::Time, Self::Updates>)>(&self, mut f: F) {
+    fn map_spans<F: FnMut(&Span<Tr::Time, Self::Batch>)>(&self, mut f: F) {
         let since = self.since.borrow();
         let until = self.until.borrow();
-        self.trace.map_batches(|batch| {
-            let wrapped = Batch::new(
+        self.trace.map_spans(|batch| {
+            let wrapped = Span::new(
                 batch.desc.clone(),
                 batch.inner.clone().map(|p| BatchFrontier::make_from(p, since, until)),
             );
@@ -53,12 +53,12 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) { self.trace.set_physical_compaction(frontier) }
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> { self.trace.get_physical_compaction() }
 
-    fn batches_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Batch<Tr::Time, Self::Updates>>> {
-        let storage = self.trace.batches_through(upper)?;
+    fn spans_through(&mut self, upper: AntichainRef<'_, Tr::Time>) -> Option<Vec<Span<Tr::Time, Self::Batch>>> {
+        let storage = self.trace.spans_through(upper)?;
         let since = self.since.borrow();
         let until = self.until.borrow();
         Some(storage.into_iter().map(|batch| {
-            Batch::new(batch.desc, batch.inner.map(|p| BatchFrontier::make_from(p, since, until)))
+            Span::new(batch.desc, batch.inner.map(|p| BatchFrontier::make_from(p, since, until)))
         }).collect())
     }
 }
