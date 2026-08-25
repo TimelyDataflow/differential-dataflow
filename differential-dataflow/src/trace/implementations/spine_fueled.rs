@@ -92,8 +92,10 @@ pub trait SpinePayload : Sized {
 
     /// The number of updates in the payload.
     ///
-    /// Absent payloads stand in for zero updates, so implementors should expect this
-    /// to be positive; the spine does not require it.
+    /// A payload is meant to be absent rather than present and empty, so this should
+    /// be positive. The spine does not rely on that: it asks this method rather than
+    /// asking whether a payload is present, so a producer that hands it an empty
+    /// payload costs an extra merge rather than diverging from the absent case.
     fn len(&self) -> usize;
 }
 
@@ -136,6 +138,11 @@ impl<P: SpinePayload> Merger<Rc<P>> for RcMerger<P> {
 }
 
 /// The number of updates in a batch: the payload's length, or zero when absent.
+///
+/// This is how the spine asks whether a batch has updates. `Batch::is_empty` answers
+/// the weaker question of whether a payload is *present*, which agrees with this only
+/// for producers that report absence when they built nothing; the spine can measure
+/// instead, and does.
 fn batch_len<P: SpinePayload>(batch: &Batch<P::Time, P>) -> usize {
     batch.inner.as_ref().map(|p| p.len()).unwrap_or(0)
 }
@@ -199,15 +206,15 @@ impl<P: SpinePayload+Clone+'static> TraceReader for Spine<P> {
                 MergeState::Double(variant) => {
                     match variant {
                         MergeVariant::InProgress(batch1, batch2, _, _) => {
-                            if !batch1.is_empty() {
+                            if batch_len(batch1) > 0 {
                                 storage.push(batch1.clone());
                             }
-                            if !batch2.is_empty() {
+                            if batch_len(batch2) > 0 {
                                 storage.push(batch2.clone());
                             }
                         },
                         MergeVariant::Complete(Some((batch, _))) => {
-                            if !batch.is_empty() {
+                            if batch_len(batch) > 0 {
                                 storage.push(batch.clone());
                             }
                         }
@@ -215,7 +222,7 @@ impl<P: SpinePayload+Clone+'static> TraceReader for Spine<P> {
                     }
                 },
                 MergeState::Single(Some(batch)) => {
-                    if !batch.is_empty() {
+                    if batch_len(batch) > 0 {
                         storage.push(batch.clone());
                     }
                 },
@@ -226,7 +233,7 @@ impl<P: SpinePayload+Clone+'static> TraceReader for Spine<P> {
 
         for batch in self.pending.iter() {
 
-            if !batch.is_empty() {
+            if batch_len(batch) > 0 {
 
                 // For a non-empty `batch`, it is a catastrophic error if `upper`
                 // requires some-but-not-all of the updates in the batch. We can
@@ -471,7 +478,7 @@ impl<P: SpinePayload> Spine<P> {
             // If `batch` and the most recently inserted batch are both empty, we can just fuse them.
             // We can also replace a structurally empty batch with this empty batch, preserving the
             // apparent record count but now with non-trivial lower and upper bounds.
-            if batch.as_ref().unwrap().is_empty() {
+            if batch_len(batch.as_ref().unwrap()) == 0 {
                 if let Some(position) = self.merging.iter().position(|m| !m.is_vacant()) {
                     if self.merging[position].is_single() && self.merging[position].len() == 0 {
                         self.insert_at(batch.take(), position);
