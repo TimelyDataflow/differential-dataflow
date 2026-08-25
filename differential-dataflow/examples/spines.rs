@@ -52,15 +52,14 @@ fn main() {
         let mut probe = Handle::new();
         let mut workload: Workload = worker.dataflow(|scope| {
 
-            use differential_dataflow::operators::arrange::Arrange;
 
             match mode.as_str() {
                 "key" => {
                     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatcher, VecOrdKeyBuilder, OrdKeySpine};
                     let (data_input, data) = scope.new_collection::<String, isize>();
                     let (keys_input, keys) = scope.new_collection::<String, isize>();
-                    let data = data.arrange::<OrdKeyBatcher<String,_,isize>, VecOrdKeyBuilder<String,_,isize>, OrdKeySpine<String,_,isize>>();
-                    let keys = keys.arrange::<OrdKeyBatcher<String,_,isize>, VecOrdKeyBuilder<String,_,isize>, OrdKeySpine<String,_,isize>>();
+                    let data = data.map(|k| (k, ())).arrange::<OrdKeyBatcher<String,_,isize>, VecOrdKeyBuilder<String,_,isize>, OrdKeySpine<String,_,isize>>();
+                    let keys = keys.map(|k| (k, ())).arrange::<OrdKeyBatcher<String,_,isize>, VecOrdKeyBuilder<String,_,isize>, OrdKeySpine<String,_,isize>>();
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                     Workload { data_input, keys_input }

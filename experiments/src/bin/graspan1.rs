@@ -7,7 +7,6 @@ use differential_dataflow::difference::Present;
 use differential_dataflow::input::Input;
 use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder, ValSpine};
 use differential_dataflow::operators::*;
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::iterate::Variable;
 
 type Node = u32;
@@ -46,6 +45,7 @@ fn main() {
                 let next =
                 labels_collection.join_core(edges, |_b, a, c| Some((*c, *a)))
                       .concat(nodes)
+                      .map(|k| (k, ()))
                       .arrange::<ValBatcher<_,_,_,_>, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>()
                     //   .distinct_total_core::<Diff>();
                       .threshold_semigroup(|_,_,x: Option<&Present>| if x.is_none() { Some(Present) } else { None });
