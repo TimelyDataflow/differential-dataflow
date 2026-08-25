@@ -33,7 +33,7 @@ use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{self, SpanOf, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
 
-use trace::wrappers::enter::{TraceEnter, enter_batch};
+use trace::wrappers::enter::{TraceEnter, enter_span};
 
 use super::TraceAgent;
 
@@ -75,7 +75,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
         TInner: Refines<Tr::Time>+Lattice,
     {
         Arranged {
-            stream: self.stream.enter(child).map(|bw| enter_batch(bw)),
+            stream: self.stream.enter(child).map(enter_span),
             trace: TraceEnter::make_from(self.trace),
         }
     }

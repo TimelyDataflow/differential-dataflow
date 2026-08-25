@@ -117,9 +117,9 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         self.trace
             .borrow_mut()
             .trace
-            .map_spans(|batch| {
-                new_queue.push_back(TraceReplayInstruction::Span(batch.clone(), timely::progress::Stamp::from_elem(Tr::Time::minimum())));
-                upper = Some(batch.upper().clone());
+            .map_spans(|span| {
+                new_queue.push_back(TraceReplayInstruction::Span(span.clone(), timely::progress::Stamp::from_elem(Tr::Time::minimum())));
+                upper = Some(span.upper().clone());
             });
 
         if let Some(upper) = upper {

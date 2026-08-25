@@ -38,10 +38,10 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
     fn map_spans<F: FnMut(&Span<Tr::Time, Self::Batch>)>(&self, mut f: F) {
         let since = self.since.borrow();
         let until = self.until.borrow();
-        self.trace.map_spans(|batch| {
+        self.trace.map_spans(|span| {
             let wrapped = Span::new(
-                batch.desc.clone(),
-                batch.inner.clone().map(|p| BatchFrontier::make_from(p, since, until)),
+                span.desc.clone(),
+                span.inner.clone().map(|b| BatchFrontier::make_from(b, since, until)),
             );
             f(&wrapped)
         })
@@ -57,8 +57,8 @@ impl<Tr: TraceReader> TraceReader for TraceFrontier<Tr> {
         let storage = self.trace.spans_through(upper)?;
         let since = self.since.borrow();
         let until = self.until.borrow();
-        Some(storage.into_iter().map(|batch| {
-            Span::new(batch.desc, batch.inner.map(|p| BatchFrontier::make_from(p, since, until)))
+        Some(storage.into_iter().map(|span| {
+            Span::new(span.desc, span.inner.map(|b| BatchFrontier::make_from(b, since, until)))
         }).collect())
     }
 }
@@ -75,7 +75,7 @@ impl<Tr: TraceReader> TraceFrontier<Tr> {
 }
 
 
-/// Wrapper to provide a batch's updates to a nested scope.
+/// Wrapper to restrict a batch's times to a frontier range.
 #[derive(Clone)]
 pub struct BatchFrontier<B, T> {
     batch: B,
@@ -95,13 +95,13 @@ impl<B, T> BatchFrontier<B, T> {
         }
     }
 
-    /// The wrapped updates, whose times are neither advanced nor suppressed.
+    /// The wrapped batch, whose times are neither advanced nor suppressed.
     ///
     /// Its times must be presented through [`BatchFrontier::advance_time`], which is the whole of
     /// the wrapper's read-side semantics.
     pub fn inner(&self) -> &B { &self.batch }
 
-    /// Applies the wrapper's time semantics to a time of the wrapped updates.
+    /// Applies the wrapper's time semantics to a time of the wrapped batch.
     ///
     /// The time is advanced by `since`, which accumulates the updates at or before `since` rather
     /// than presenting them partially accumulated. The method returns whether the advanced time

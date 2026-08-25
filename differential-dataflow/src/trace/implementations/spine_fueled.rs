@@ -333,24 +333,24 @@ impl<P: SpineBatch+Clone+'static> Trace for Spine<P> {
         self.exert_logic = Some(logic);
     }
 
-    // Ideally, this method acts as insertion of `batch`, even if we are not yet able to begin
-    // merging the batch. This means it is a good time to perform amortized work proportional
-    // to the size of batch.
-    fn insert(&mut self, batch: Span<Self::Time, P>) {
+    // Ideally, this method acts as insertion of `span`, even if we are not yet able to begin
+    // merging its batch. This means it is a good time to perform amortized work proportional
+    // to the size of that batch.
+    fn insert(&mut self, span: Span<Self::Time, P>) {
 
         // Log the introduction of a batch.
         self.logger.as_ref().map(|l| l.log(crate::logging::BatchEvent {
             operator: self.operator.global_id,
-            length: span_len(&batch)
+            length: span_len(&span)
         }));
 
-        assert!(batch.lower() != batch.upper());
-        assert_eq!(batch.lower(), &self.upper);
+        assert!(span.lower() != span.upper());
+        assert_eq!(span.lower(), &self.upper);
 
-        self.upper.clone_from(batch.upper());
+        self.upper.clone_from(span.upper());
 
-        // TODO: Consolidate or discard empty batches.
-        self.pending.push(batch);
+        // TODO: Consolidate or discard spans with no updates.
+        self.pending.push(span);
         self.consider_merges();
     }
 

@@ -33,10 +33,10 @@ pub fn enter_description<T: timely::progress::Timestamp, TInner: Refines<T>+Latt
     Description::new(Antichain::from(lower), Antichain::from(upper), Antichain::from(since))
 }
 
-/// Converts an outer batch to an inner batch: the description enters the scope, and the
-/// updates is wrapped for its readers to do the same.
-pub fn enter_batch<T: timely::progress::Timestamp, TInner: Refines<T>+Lattice, P>(batch: Span<T, P>) -> Span<TInner, BatchEnter<P, TInner>> {
-    Span::new(enter_description(&batch.desc), batch.inner.map(BatchEnter::make_from))
+/// Converts an outer span to an inner one: the description enters the scope, and the batch is
+/// wrapped so that its readers do the same.
+pub fn enter_span<T: timely::progress::Timestamp, TInner: Refines<T>+Lattice, B>(span: Span<T, B>) -> Span<TInner, BatchEnter<B, TInner>> {
+    Span::new(enter_description(&span.desc), span.inner.map(BatchEnter::make_from))
 }
 
 impl<Tr, TInner> TraceReader for TraceEnter<Tr, TInner>
@@ -48,8 +48,8 @@ where
     type Batch = BatchEnter<Tr::Batch, TInner>;
 
     fn map_spans<F: FnMut(&Span<TInner, Self::Batch>)>(&self, mut f: F) {
-        self.trace.map_spans(|batch| {
-            f(&enter_batch(batch.clone()));
+        self.trace.map_spans(|span| {
+            f(&enter_span(span.clone()));
         })
     }
 
@@ -89,7 +89,7 @@ where
             self.stash1.insert(time.clone().to_outer());
         }
         let storage = self.trace.spans_through(self.stash1.borrow())?;
-        Some(storage.into_iter().map(enter_batch).collect())
+        Some(storage.into_iter().map(enter_span).collect())
     }
 }
 
@@ -109,7 +109,7 @@ where
 }
 
 
-/// Wrapper to provide a batch updates to a nested scope.
+/// Wrapper to provide a batch to a nested scope.
 #[derive(Clone)]
 pub struct BatchEnter<B, TInner> {
     batch: B,
@@ -117,10 +117,10 @@ pub struct BatchEnter<B, TInner> {
 }
 
 impl<B, TInner> BatchEnter<B, TInner> {
-    /// The wrapped updates, whose times are those of the containing scope.
+    /// The wrapped batch, whose times are those of the containing scope.
     ///
     /// Each of its times enters the nested scope as `TInner::to_inner(time)`; that rule is the
-    /// whole of the wrapper's read-side semantics, and any reader of the wrapped updates must
+    /// whole of the wrapper's read-side semantics, and any reader of the wrapped batch must
     /// apply it.
     pub fn inner(&self) -> &B { &self.batch }
 
