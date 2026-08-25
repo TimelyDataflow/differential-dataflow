@@ -34,7 +34,7 @@ use std::rc::Rc;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::Description;
-use differential_dataflow::trace::chunk::ChunkBatch;
+use differential_dataflow::trace::chunk::ChunkPayload;
 use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
@@ -46,7 +46,7 @@ use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
 use crate::ir::Diff;
 use crate::parse::Reducer;
 
-type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
+type CBatch<T> = Rc<ChunkPayload<CorgiChunk<T, Diff>>>;
 
 /// An identity `Hasher` for the id-index maps: their keys are already well-distributed 64-bit
 /// content hashes (`hash_rows`), so passing the id straight through avoids re-hashing it (siphash

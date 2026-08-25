@@ -10,7 +10,7 @@
 //! This is a faithful port of the reference [`VecChunk`](differential_dataflow::trace::chunk::vec):
 //! same resumable merge→advance→settle pipeline and grade-at-yield invariant, with the flat
 //! `Rc<Vec<row>>` swapped for corgi columns. Adopting the `Chunk` framework gives us the fueled,
-//! graded `ChunkBatchMerger` for free.
+//! graded `ChunkPayloadMerger` for free.
 //!
 //! Order: `(key, val)` by corgi structural order (`compare_at` over `Prod([keys, vals])`), then `time`
 //! by `Ord`. Any consistent total order is fine — correctness compares multisets, not DDIR's `Ord`.
@@ -26,7 +26,7 @@ use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
+use differential_dataflow::trace::chunk::{pack, Chunk, ChunkPayload};
 
 use corgi::arrange::{compare_at, compare_idx, gather, gather_lanes, group_bounds, sort_perm};
 use corgi::Value as CValue;
@@ -426,10 +426,10 @@ where
 
 /// Concatenate chunks' columns into flat `(keys, vals, times, diffs)` with **no transcode** — for
 /// reading an arrangement back column-natively (e.g. `Backend::as_collection` straight into a
-/// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
+/// Build a `ChunkPayload<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
 /// consolidate into one chunk, then `settle`. The column-native egress the reduce backend seals its
 /// output with (it resolves proxy ids to real columns by `gather` and hands them here).
-pub fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> ChunkBatch<CorgiChunk<T, R>>
+pub fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> ChunkPayload<CorgiChunk<T, R>>
 where
     T: ColTime,
     R: Semigroup + Clone + 'static,
@@ -438,8 +438,8 @@ where
     settle_one(chunk)
 }
 
-/// Grade one chunk into a `ChunkBatch` (shared tail of `rows_to_batch`/`columns_to_batch`).
-fn settle_one<T, R>(chunk: CorgiChunk<T, R>) -> ChunkBatch<CorgiChunk<T, R>>
+/// Grade one chunk into a `ChunkPayload` (shared tail of `rows_to_batch`/`columns_to_batch`).
+fn settle_one<T, R>(chunk: CorgiChunk<T, R>) -> ChunkPayload<CorgiChunk<T, R>>
 where
     T: ColTime,
     R: Semigroup + Clone + 'static,
@@ -448,7 +448,7 @@ where
     if chunk.len_() > 0 { input.push_back(chunk); }
     let mut output = VecDeque::new();
     CorgiChunk::settle(&mut input, true, &mut output);
-    ChunkBatch::new(output.into())
+    ChunkPayload::new(output.into())
 }
 
 /// A column-native arrange **chunker**: turns input `CorgiContainer`s into sorted+consolidated
@@ -616,7 +616,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use differential_dataflow::trace::chunk::{ChunkBatchMerger, is_graded};
+    use differential_dataflow::trace::chunk::{ChunkPayloadMerger, is_graded};
         use differential_dataflow::trace::implementations::spine_fueled::Merger;
     use std::collections::BTreeMap;
 
@@ -635,7 +635,7 @@ mod test {
         CorgiChunk::from_parts(keys, vals, times, diffs)
     }
 
-    fn read_batch(b: &ChunkBatch<CorgiChunk<u64, i64>>) -> BTreeMap<((u64, u64), u64), i64> {
+    fn read_batch(b: &ChunkPayload<CorgiChunk<u64, i64>>) -> BTreeMap<((u64, u64), u64), i64> {
         let mut m = BTreeMap::new();
         for ch in &b.chunks {
             let ks = ch.keys().clone().into_u64("k");
@@ -654,13 +654,13 @@ mod test {
     }
 
     /// Cut a consolidated set into a batch of small chunks (globally sorted; groups straddle).
-    fn batch(rows: &[((u64, u64), u64, i64)], sz: usize) -> ChunkBatch<CorgiChunk<u64, i64>> {
+    fn batch(rows: &[((u64, u64), u64, i64)], sz: usize) -> ChunkPayload<CorgiChunk<u64, i64>> {
         let mut m: BTreeMap<((u64, u64), u64), i64> = BTreeMap::new();
         for &(kv, t, d) in rows { *m.entry((kv, t)).or_insert(0) += d; }
         m.retain(|_, d| *d != 0);
         let all: Vec<((u64, u64), u64, i64)> = m.into_iter().map(|((kv, t), d)| (kv, t, d)).collect();
         let chunks: Vec<_> = all.chunks(sz.max(1)).map(chunk).collect();
-        ChunkBatch::new(chunks)
+        ChunkPayload::new(chunks)
     }
 
     #[test]
@@ -682,7 +682,7 @@ mod test {
             let (s1, s2) = (batch(&u1, sz), batch(&u2, sz));
             let frontier = Antichain::from_elem(f);
 
-            let mut merger = ChunkBatchMerger::new(&s1, &s2, frontier.borrow());
+            let mut merger = ChunkPayloadMerger::new(&s1, &s2, frontier.borrow());
             loop {
                 let mut fuel = 1isize; // tiny → many yields, each settling
                 merger.work(&s1, &s2, &mut fuel);

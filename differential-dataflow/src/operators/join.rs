@@ -165,7 +165,7 @@ where
             // Empty batches carry no payload, and have nothing to join.
             let Some(payload2) = batch2.inner else { continue };
             // It is safe to ask for `ack1` because we have confirmed it to be in advance of `distinguish_since`.
-            let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap().into_iter().filter_map(|b| b.inner).collect();
+            let trace1_storage = trace1.payloads_through(acknowledged1.borrow()).unwrap();
             // We could downgrade the capability here, but doing so is a bit complicated mathematically.
             // TODO: downgrade the capability by searching out the one time in `batch2.lower()` and not
             // in `batch2.upper()`. Only necessary for non-empty batches, as empty batches may not have
@@ -228,7 +228,7 @@ where
                             if let Some(payload1) = batch1.inner.clone() {
                                 // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let trace2_storage = trace2.batches_through(acknowledged2.borrow()).unwrap().into_iter().filter_map(|b| b.inner).collect();
+                                let trace2_storage = trace2.payloads_through(acknowledged2.borrow()).unwrap();
                                 let work = tactic.prep(vec![payload1], trace2_storage, Fresh::Input0, meet.clone().expect("non-empty stamp"));
                                 todo0.push_back((capability.clone(), work));
                             }
@@ -282,7 +282,7 @@ where
                             if let Some(payload2) = batch2.inner.clone() {
                                 // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let trace1_storage = trace1.batches_through(acknowledged1.borrow()).unwrap().into_iter().filter_map(|b| b.inner).collect();
+                                let trace1_storage = trace1.payloads_through(acknowledged1.borrow()).unwrap();
                                 let work = tactic.prep(trace1_storage, vec![payload2], Fresh::Input1, meet.clone().expect("non-empty stamp"));
                                 todo1.push_back((capability.clone(), work));
                             }

@@ -146,7 +146,7 @@ where
                 if !chunks.is_empty() {
                     // The batches are handed to the tactic, which holds them for as long as the
                     // work item lives; what it joins against cannot change underneath it.
-                    let batches = trace.batches_through(Antichain::new().borrow()).unwrap().into_iter().filter_map(|b| b.inner).collect();
+                    let batches = trace.payloads_through(Antichain::new().borrow()).unwrap();
                     let lower: Antichain<Tr::Time> = caps.iter().map(|c| c.time().clone()).collect();
                     let work = tactic.prep(chunks, batches, lower);
                     todo.push_back((caps.clone(), work));

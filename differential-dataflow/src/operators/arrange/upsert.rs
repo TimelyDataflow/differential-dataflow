@@ -231,7 +231,7 @@ where
 
                                 // Prepare a cursor to the existing arrangement, and a batch builder for
                                 // new stuff that we add.
-                                let batches = reader_local.batches_through(Antichain::new().borrow()).unwrap().into_iter().filter_map(|b| b.inner).collect();
+                                let batches = reader_local.payloads_through(Antichain::new().borrow()).unwrap();
                                 let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(batches);
                                 let mut builder = Bu::new();
                                 let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);

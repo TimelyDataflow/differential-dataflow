@@ -592,14 +592,14 @@ mod test {
         }
     }
 
-    // Driving `ChunkBatchMerger` to completion with tiny `fuel` — so it suspends and
+    // Driving `ChunkPayloadMerger` to completion with tiny `fuel` — so it suspends and
     // settles on nearly every tick — must yield the same advanced-and-consolidated
     // batch as a one-shot reference, and that batch must be graded. Exercises the
     // resumable merge→advance→settle pipeline and the grade-at-yield invariant.
     #[test]
     fn batch_merger_resumable_matches_reference() {
         use crate::trace::implementations::spine_fueled::Merger;
-        use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
+        use crate::trace::chunk::{ChunkPayload, ChunkPayloadMerger, is_graded};
         use crate::trace::cursor::Cursor;
         use crate::consolidation::consolidate_updates;
 
@@ -619,12 +619,12 @@ mod test {
             v
         }
         // Cut a consolidated set into a batch of small chunks, so groups straddle.
-        fn batch(updates: &[((u64, u64), u64, i64)], sz: usize) -> ChunkBatch<VecChunk<u64, u64, u64, i64>> {
+        fn batch(updates: &[((u64, u64), u64, i64)], sz: usize) -> ChunkPayload<VecChunk<u64, u64, u64, i64>> {
             let chunks: Vec<_> = updates.chunks(sz).map(|c| VecChunk(Rc::new(c.to_vec()))).collect();
-            ChunkBatch::new(chunks)
+            ChunkPayload::new(chunks)
         }
         // Flatten a batch through its straddle-aware cursor, then consolidate.
-        fn read(b: &ChunkBatch<VecChunk<u64, u64, u64, i64>>) -> Vec<((u64, u64), u64, i64)> {
+        fn read(b: &ChunkPayload<VecChunk<u64, u64, u64, i64>>) -> Vec<((u64, u64), u64, i64)> {
             let mut out = Vec::new();
             let mut c = b.cursor();
             while c.key_valid(b) {
@@ -649,7 +649,7 @@ mod test {
             let (s1, s2) = (batch(&u1, sz), batch(&u2, sz));
             let frontier = Antichain::from_elem(f);
 
-            let mut merger = ChunkBatchMerger::new(&s1, &s2, frontier.borrow());
+            let mut merger = ChunkPayloadMerger::new(&s1, &s2, frontier.borrow());
             loop {
                 let mut fuel = 1isize; // tiny → many yields, each settling
                 merger.work(&s1, &s2, &mut fuel);
@@ -710,14 +710,14 @@ mod test {
     #[test]
     fn cursor_handles_straddle() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::chunk::ChunkBatch;
+        use crate::trace::chunk::ChunkPayload;
 
         let chunks = vec![
             chunk(vec![((0, 0), 0, 1), ((1, 0), 0, 1), ((1, 1), 0, 1)]),
             chunk(vec![((1, 1), 1, 1), ((1, 2), 0, 1)]),
             chunk(vec![((2, 0), 0, 1)]),
         ];
-        let batch = ChunkBatch::new(chunks);
+        let batch = ChunkPayload::new(chunks);
 
         let mut cursor = batch.cursor();
         let got = cursor.to_vec(&batch, |k| *k, |v| *v);
@@ -770,11 +770,11 @@ mod test {
     #[test]
     fn seek_key_hint_is_direction_independent() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::chunk::ChunkBatch;
+        use crate::trace::chunk::ChunkPayload;
 
         // One key per chunk (even keys 0, 2, .., 38) so seeks cross boundaries both ways.
         let chunks: Vec<_> = (0..20u64).map(|k| chunk(vec![((2 * k, 0u64), 0u64, 1i64)])).collect();
-        let batch = ChunkBatch::new(chunks);
+        let batch = ChunkPayload::new(chunks);
 
         // First key `>= tgt`: the next even at or above `tgt`, or absent past the last (38).
         let oracle = |tgt: u64| { let e = tgt + (tgt & 1); (e <= 38).then_some(e) };

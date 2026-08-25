@@ -6,7 +6,7 @@
 //! *retargeting* of the columnar trace pile at the [`Chunk`] abstraction: the
 //! storage (`UpdatesTyped`) and the trie-native merge (`trie_merger`) are reused
 //! verbatim, and the four transducers delegate to them. The harness
-//! ([`ChunkBatch`](crate::trace::chunk::ChunkBatch), the straddle cursor, the batcher/builder/
+//! ([`ChunkPayload`](crate::trace::chunk::ChunkPayload), the straddle cursor, the batcher/builder/
 //! spine aliases) is shared with `vec`.
 //!
 //! This makes columnar trace merges trie-native (the old `OrdValBatch`-backed
@@ -642,20 +642,20 @@ mod test {
         assert!(got.windows(2).all(|w| w[0].0 < w[1].0));
     }
 
-    // The straddle-aware `ChunkBatch` cursor reconstructs the same grouped
+    // The straddle-aware `ChunkPayload` cursor reconstructs the same grouped
     // updates as a flat reference, even when a key — and a `(key, val)`'s times —
     // span a chunk boundary.
     #[test]
     fn cursor_handles_straddle() {
         use crate::trace::cursor::Cursor;
-        use crate::trace::chunk::ChunkBatch;
+        use crate::trace::chunk::ChunkPayload;
 
         let chunks = vec![
             chunk(vec![(0, 0, 0, 1), (1, 0, 0, 1), (1, 1, 0, 1)]),
             chunk(vec![(1, 1, 1, 1), (1, 2, 0, 1)]),
             chunk(vec![(2, 0, 0, 1)]),
         ];
-        let batch = ChunkBatch::new(chunks);
+        let batch = ChunkPayload::new(chunks);
 
         let mut cursor = batch.cursor();
         let got = cursor.to_vec(&batch, |k| *k, |v| *v);
@@ -669,14 +669,14 @@ mod test {
         assert_eq!(got, want);
     }
 
-    // Driving `ChunkBatchMerger` to completion with tiny `fuel` (so it suspends
+    // Driving `ChunkPayloadMerger` to completion with tiny `fuel` (so it suspends
     // and settles on nearly every tick) yields the same advanced-and-consolidated
     // batch as a one-shot reference, and that batch is graded. Exercises the
     // resumable merge -> advance -> settle pipeline end to end.
     #[test]
     fn batch_merger_resumable_matches_reference() {
         use crate::trace::implementations::spine_fueled::Merger;
-        use crate::trace::chunk::{ChunkBatch, ChunkBatchMerger, is_graded};
+        use crate::trace::chunk::{ChunkPayload, ChunkPayloadMerger, is_graded};
         use crate::trace::cursor::Cursor;
         use crate::consolidation::consolidate_updates;
 
@@ -693,11 +693,11 @@ mod test {
             consolidate_updates(&mut rows);
             rows.into_iter().map(|((k, v), t, d)| (k, v, t, d)).collect()
         }
-        fn batch(updates: &[Upd], sz: usize) -> ChunkBatch<ColChunk<Upd>> {
+        fn batch(updates: &[Upd], sz: usize) -> ChunkPayload<ColChunk<Upd>> {
             let chunks: Vec<_> = updates.chunks(sz).map(|c| chunk(c.to_vec())).collect();
-            ChunkBatch::new(chunks)
+            ChunkPayload::new(chunks)
         }
-        fn read(b: &ChunkBatch<ColChunk<Upd>>) -> Vec<Upd> {
+        fn read(b: &ChunkPayload<ColChunk<Upd>>) -> Vec<Upd> {
             let mut out = Vec::new();
             let mut c = b.cursor();
             while c.key_valid(b) {
@@ -722,7 +722,7 @@ mod test {
             let (s1, s2) = (batch(&u1, sz), batch(&u2, sz));
             let frontier = Antichain::from_elem(f);
 
-            let mut merger = ChunkBatchMerger::new(&s1, &s2, frontier.borrow());
+            let mut merger = ChunkPayloadMerger::new(&s1, &s2, frontier.borrow());
             loop {
                 let mut fuel = 1isize;
                 merger.work(&s1, &s2, &mut fuel);

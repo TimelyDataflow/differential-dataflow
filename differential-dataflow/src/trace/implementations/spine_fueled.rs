@@ -878,7 +878,7 @@ impl<P: SpinePayload> MergeState<P> {
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let since = batch1.since().join(batch2.since()).join(&compaction_frontier.to_owned());
+                let since = batch1.desc.since().join(batch2.desc.since()).join(&compaction_frontier.to_owned());
                 let description = Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
                 match (&batch1.inner, &batch2.inner) {
                     (Some(source1), Some(source2)) => {

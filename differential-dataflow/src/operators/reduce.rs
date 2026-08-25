@@ -192,8 +192,8 @@ where
 
                     // Acquire the pre-existing input and output batches preceding the interval. Batch handles
                     // are cheap to clone, so we fetch them whether or not the tactic finds work to do.
-                    let source_batches = source_trace.batches_through(lower_limit.borrow()).expect("failed to acquire source batches").into_iter().filter_map(|b| b.inner).collect();
-                    let output_batches = output_reader.batches_through(lower_limit.borrow()).expect("failed to acquire output batches").into_iter().filter_map(|b| b.inner).collect();
+                    let source_batches = source_trace.payloads_through(lower_limit.borrow()).expect("failed to acquire source batches");
+                    let output_batches = output_reader.payloads_through(lower_limit.borrow()).expect("failed to acquire output batches");
 
                     // The times the operator currently holds capabilities for, as an antichain.
                     let held: Antichain<Tr1::Time> = capabilities.iter().map(|c| c.time().clone()).collect();
@@ -204,7 +204,7 @@ where
 
                     // Contract check (see `ReduceTactic::retire`). Cheap, debug-only.
                     debug_assert!(
-                        produced.as_ref().is_none_or(|batch| batch.description().lower() == &lower_limit && batch.description().upper() == &upper_limit),
+                        produced.as_ref().is_none_or(|batch| batch.lower() == &lower_limit && batch.upper() == &upper_limit),
                         "ReduceTactic::retire output must span [lower, upper)",
                     );
 

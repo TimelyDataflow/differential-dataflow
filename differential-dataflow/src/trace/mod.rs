@@ -43,14 +43,10 @@ pub struct Batch<T, B> {
 impl<T, B> Batch<T, B> {
     /// A batch from a description and an optional payload.
     pub fn new(desc: Description<T>, inner: Option<B>) -> Self { Self { desc, inner } }
-    /// Describes the times of the updates in the batch.
-    pub fn description(&self) -> &Description<T> { &self.desc }
     /// All times in the batch are greater or equal to an element of `lower`.
     pub fn lower(&self) -> &Antichain<T> { self.desc.lower() }
     /// All times in the batch are not greater or equal to any element of `upper`.
     pub fn upper(&self) -> &Antichain<T> { self.desc.upper() }
-    /// Times in the batch may have been advanced through this frontier.
-    pub fn since(&self) -> &Antichain<T> { self.desc.since() }
     /// True if the batch contains no updates.
     pub fn is_empty(&self) -> bool { self.inner.is_none() }
 }
@@ -94,6 +90,16 @@ pub trait TraceReader {
     /// be expected to look for a "clean cut" using `upper`, and if it finds such a cut can return the batches. This
     /// should allow `upper` such as `&[]`, used to acquire all batches, though it is difficult to imagine other uses.
     fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Batch<Self::Time, Self::Payload>>>;
+
+    /// Acquires the payloads of the batches covering updates at times not greater or equal to an
+    /// element of `upper`.
+    ///
+    /// Empty batches have no payload and do not appear in the result, so this is what callers
+    /// taking cursors want; [`batches_through`](Self::batches_through) is for the drivers that
+    /// also need the batches' descriptions.
+    fn payloads_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Payload>> {
+        Some(self.batches_through(upper)?.into_iter().filter_map(|b| b.inner).collect())
+    }
 
     /// Advances the frontier that constrains logical compaction.
     ///
