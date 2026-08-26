@@ -69,8 +69,26 @@ impl<T: Columnar, R: Columnar> ContainerBytes for CorgiContainer<T, R> {
 
         let times: ColStash<T> = Stash::try_from_bytes(bytes.extract_to(tl)).expect("time column decode");
         let diffs: ColStash<R> = Stash::try_from_bytes(bytes.extract_to(dl)).expect("diff column decode");
+        let container = CorgiContainer { keys, vals, times: to_owned_vec(&times), diffs: to_owned_vec(&diffs) };
 
-        CorgiContainer { keys, vals, times: to_owned_vec(&times), diffs: to_owned_vec(&diffs) }
+        // The four columns are one table, so they must agree on how many rows it has. Checking
+        // that here is not ceremony — it is the only layer that knows the answer.
+        //
+        // `corgi::bytes` guarantees a structurally sound `Value`, but not a *small* one: the
+        // payload-free constructors declare rows without spending bytes, so a `Unit` can name a
+        // trillion rows in sixteen bytes and nothing inside corgi can call that wrong. The time
+        // column can. It is stored per row, so its length is the row count this message actually
+        // paid for, and every other column has to match it.
+        //
+        // What this does not reach is a claim nested *under a `List`*, where flattening
+        // legitimately multiplies and the row count no longer bounds the element count. That is
+        // the sender's honesty, which is the boundary a cluster-internal exchange accepts anyway;
+        // a caller that wants a hard ceiling has `corgi::bytes::declared_rows`.
+        let rows = container.times.len();
+        assert_eq!(container.diffs.len(), rows, "corgi container: {} diffs for {rows} times", container.diffs.len());
+        assert_eq!(container.keys.len(), rows, "corgi container: {} keys for {rows} times", container.keys.len());
+        assert_eq!(container.vals.len(), rows, "corgi container: {} vals for {rows} times", container.vals.len());
+        container
     }
 
     fn length_in_bytes(&self) -> usize {
