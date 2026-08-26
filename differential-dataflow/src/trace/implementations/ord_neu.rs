@@ -248,7 +248,7 @@ pub mod val_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Builder, Cursor};
+    use crate::trace::{Builder, Sealer, Cursor};
     use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
@@ -614,6 +614,26 @@ pub mod val_batch {
         _marker: PhantomData<CI>,
     }
 
+    impl<L, CI> OrdValBuilder<L, CI>
+    where
+        L: Layout,
+    {
+        /// Allocates a builder with capacity for the specified keys, values, and updates.
+        ///
+        /// They represent respectively the number of distinct `key`, `(key, val)`, and total updates.
+        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
+            Self {
+                result: OrdValStorage {
+                    keys: L::KeyContainer::with_capacity(keys),
+                    vals: Vals::with_capacity(keys + 1, vals),
+                    upds: Upds::with_capacity(vals + 1, upds),
+                },
+                staging: UpdsBuilder::default(),
+                _marker: PhantomData,
+            }
+        }
+    }
+
     impl<L, CI> Builder for OrdValBuilder<L, CI>
     where
         L: for<'a> Layout<
@@ -627,17 +647,7 @@ pub mod val_batch {
         type Time = layout::Time<L>;
         type Output = OrdValBatch<L>;
 
-        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-            Self {
-                result: OrdValStorage {
-                    keys: L::KeyContainer::with_capacity(keys),
-                    vals: Vals::with_capacity(keys + 1, vals),
-                    upds: Upds::with_capacity(vals + 1, upds),
-                },
-                staging: UpdsBuilder::default(),
-                _marker: PhantomData,
-            }
-        }
+        fn new() -> Self { Self::with_capacity(0, 0, 0) }
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {
@@ -680,8 +690,20 @@ pub mod val_batch {
             (updates > 0).then(|| OrdValBatch { updates, storage: self.result })
         }
 
-        fn seal(chain: &mut Vec<Self::Input>) -> Option<Self::Output> {
-            let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
+    }
+
+    impl<L, CI> Sealer<CI> for OrdValBuilder<L, CI>
+    where
+        L: for<'a> Layout<
+            KeyContainer: PushInto<CI::Key<'a>>,
+            ValContainer: PushInto<CI::Val<'a>>,
+        >,
+        CI: for<'a> BuilderInput<L::KeyContainer, L::ValContainer, Time=layout::Time<L>, Diff=layout::Diff<L>>,
+    {
+        type Output = OrdValBatch<L>;
+
+        fn seal(chain: &mut Vec<CI>) -> Option<Self::Output> {
+            let (keys, vals, upds) = CI::key_val_upd_counts(&chain[..]);
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);
@@ -700,7 +722,7 @@ pub mod key_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Builder, Cursor};
+    use crate::trace::{Builder, Sealer, Cursor};
     use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
@@ -995,6 +1017,22 @@ pub mod key_batch {
         _marker: PhantomData<CI>,
     }
 
+    impl<L: Layout, CI> OrdKeyBuilder<L, CI> {
+        /// Allocates a builder with capacity for the specified keys and updates.
+        ///
+        /// They represent respectively the number of distinct `key` and total updates.
+        fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
+            Self {
+                result: OrdKeyStorage {
+                    keys: L::KeyContainer::with_capacity(keys),
+                    upds: Upds::with_capacity(keys+1, upds),
+                },
+                staging: UpdsBuilder::default(),
+                _marker: PhantomData,
+            }
+        }
+    }
+
     impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
     where
         L: for<'a> Layout<KeyContainer: PushInto<CI::Key<'a>>>,
@@ -1006,16 +1044,7 @@ pub mod key_batch {
         type Time = layout::Time<L>;
         type Output = OrdKeyBatch<L>;
 
-        fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
-            Self {
-                result: OrdKeyStorage {
-                    keys: L::KeyContainer::with_capacity(keys),
-                    upds: Upds::with_capacity(keys+1, upds),
-                },
-                staging: UpdsBuilder::default(),
-                _marker: PhantomData,
-            }
-        }
+        fn new() -> Self { Self::with_capacity(0, 0, 0) }
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {
@@ -1047,8 +1076,18 @@ pub mod key_batch {
             })
         }
 
-        fn seal(chain: &mut Vec<Self::Input>) -> Option<Self::Output> {
-            let (keys, vals, upds) = Self::Input::key_val_upd_counts(&chain[..]);
+    }
+
+    impl<L: Layout, CI> Sealer<CI> for OrdKeyBuilder<L, CI>
+    where
+        L: for<'a> Layout<KeyContainer: PushInto<CI::Key<'a>>>,
+        L: Layout<ValContainer: BatchContainer<Owned: Default>>,
+        CI: BuilderInput<L::KeyContainer, L::ValContainer, Time=layout::Time<L>, Diff=layout::Diff<L>>,
+    {
+        type Output = OrdKeyBatch<L>;
+
+        fn seal(chain: &mut Vec<CI>) -> Option<Self::Output> {
+            let (keys, vals, upds) = CI::key_val_upd_counts(&chain[..]);
             let mut builder = Self::with_capacity(keys, vals, upds);
             for mut chunk in chain.drain(..) {
                 builder.push(&mut chunk);

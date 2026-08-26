@@ -13,11 +13,11 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 
 use crate::logging::{BatcherEvent, Logger};
-use crate::trace::{Batcher, Builder};
+use crate::trace::{Batcher, Sealer};
 
 /// Creates batches from chunks of sorted, consolidated tuples.
 ///
-/// Chunking input is `Chu`'s business, merging chunks is `M`'s, and building the extracted chain
+/// Chunking input is `Chu`'s business, merging chunks is `M`'s, and sealing the extracted chain
 /// into a batch is `Bu`'s; the batcher's own work is the geometric ladder of chains and the
 /// carve-by-frontier.
 pub struct MergeBatcher<Chu, M: Merger, Bu> {
@@ -42,14 +42,14 @@ pub struct MergeBatcher<Chu, M: Merger, Bu> {
     /// Timely operator ID.
     operator_id: usize,
     /// Seals each extracted chain into a batch.
-    builder: std::marker::PhantomData<Bu>,
+    sealer: std::marker::PhantomData<Bu>,
 }
 
 impl<C, Chu, M, Bu> Batcher<C> for MergeBatcher<Chu, M, Bu>
 where
     M: Merger<Time: Timestamp>,
     Chu: ContainerBuilder<Container = M::Chunk> + for<'a> PushInto<&'a mut C>,
-    Bu: Builder<Input = M::Chunk>,
+    Bu: Sealer<M::Chunk>,
 {
     type Time = M::Time;
     type Output = Bu::Output;
@@ -112,7 +112,7 @@ impl<Chu: Default, M: Merger, Bu> MergeBatcher<Chu, M, Bu> {
             chains: Vec::new(),
             stash: Vec::new(),
             frontier: Antichain::new(),
-            builder: std::marker::PhantomData,
+            sealer: std::marker::PhantomData,
         }
     }
 }
