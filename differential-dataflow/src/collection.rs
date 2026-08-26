@@ -1021,7 +1021,6 @@ pub mod vec {
 
     use crate::trace::implementations::{ValSpine, ValBatcher};
     use crate::trace::implementations::{KeySpine, KeyBatcher};
-    use crate::trace::implementations::ContainerChunker;
     impl<'scope, T, K, V, R> Collection<'scope, T, (K, V), R>
     where
         T: Timestamp + Lattice,
@@ -1050,7 +1049,7 @@ pub mod vec {
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),T,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_, _, ContainerChunker<Vec<((K, V), T, R)>>, Ba, _>(self.inner, exchange, name, batcher)
+            crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, _>(self.inner, exchange, name, batcher)
         }
     }
 

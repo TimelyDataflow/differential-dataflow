@@ -13,17 +13,18 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
     {
         let mut batcher = ValBatcher::<u64,u64,usize,i64>::new(None, 0);
 
-        batcher.insert(&mut vec![
+        let mut input: Vec<((u64, u64), usize, i64)> = vec![
             ((1, 2), 0, 1),
             ((2, 3), 1, 1),
             ((2, 3), 2, -1),
-        ]);
+        ];
+        batcher.insert(&mut input);
 
         let batch_ts = &[1, 2, 3];
         let mut lower = Antichain::from_elem(0);
         for i in batch_ts {
             let upper = Antichain::from_elem(*i);
-            let (batch, _retained) = batcher.extract(upper.borrow());
+            let (batch, _retained) = Batcher::<Vec<((u64, u64), usize, i64)>>::extract(&mut batcher, upper.borrow());
             let description = Description::new(lower, upper.clone(), Antichain::from_elem(0));
             trace.insert(Span::new(description, batch.map(Into::into)));
             lower = upper;

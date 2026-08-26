@@ -50,7 +50,7 @@ fn reset_stats() {
     BYTES_COMPRESSED.store(0, Ordering::Relaxed);
 }
 
-use differential_dataflow::columnar::trace::{Batcher as ValBatcher, Chunker as ValChunker, Spine as ValSpine};
+use differential_dataflow::columnar::trace::{Batcher as ValBatcher, Spine as ValSpine};
 use differential_dataflow::columnar::collection::Builder as ValColBuilder;
 use differential_dataflow::columnar::trace::spill::{self, BytesSource, BytesStore, SpillStats};
 use differential_dataflow::columnar::updates::{Updates, UpdatesTyped};
@@ -238,7 +238,6 @@ fn run_timely_dataflow(times: u64, keys_per_time: u64, workers: usize, sample_se
             let stream = scope.input_from(&mut input);
             let arranged = arrange_core::<
                 _, _,
-                ValChunker<(u64, u64, u64, i64)>,
                 _,
                 ValSpine<u64, u64, u64, i64>,
             >(stream, Pipeline, "ColumnarSpillArrange", ValBatcher::new);
