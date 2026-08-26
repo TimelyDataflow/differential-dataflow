@@ -57,10 +57,10 @@ macro_rules! harrange {
             Pipeline,
             Vec<((u64, (u64, u64)), $t, isize)>,
             ContainerChunker<VecChunk<u64, (u64, u64), $t, isize>>,
-            VChunkBatcher<u64, (u64, u64), $t, isize>,
+            _,
             VChunkBuilder<u64, (u64, u64), $t, isize>,
             VChunkSpine<u64, (u64, u64), $t, isize>,
-        >(hashed.inner, Pipeline, $name)
+        >(hashed.inner, Pipeline, $name, VChunkBatcher::new)
     }};
 }
 
@@ -148,9 +148,9 @@ fn run_wide(mode: Mode) -> f64 {
                     let hashed = coll.map(|(k, v)| (k.hashed(), (k, v)));
                     let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
                         ContainerChunker<VecChunk<u64, (u64, String), u64, isize>>,
-                        VChunkBatcher<u64, (u64, String), u64, isize>,
+                        _,
                         VChunkBuilder<u64, (u64, String), u64, isize>,
-                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW");
+                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", VChunkBatcher::new);
                     arr.reduce_core::<_, VChunkBuilder<u64, (u64, String), u64, isize>,
                         VChunkSpine<u64, (u64, String), u64, isize>,
                         <VecChunkCursor<u64, (u64, String), u64, isize> as Cursor>::KeyContainer, _>(
@@ -172,9 +172,9 @@ fn run_wide(mode: Mode) -> f64 {
                     let hashed = coll.map(|(k, v)| (k.hashed(), (k, v)));
                     let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
                         ContainerChunker<VecChunk<u64, (u64, String), u64, isize>>,
-                        VChunkBatcher<u64, (u64, String), u64, isize>,
+                        _,
                         VChunkBuilder<u64, (u64, String), u64, isize>,
-                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW");
+                        VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", VChunkBatcher::new);
                     reduce_with_tactic::<_, VChunkSpine<u64, (u64, String), u64, isize>, _>(
                         arr, "ProxyWide",
                         ProxyReduceTactic::new(VecReduceBackend::new(

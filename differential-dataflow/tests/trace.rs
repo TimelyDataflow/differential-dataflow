@@ -1,9 +1,8 @@
-use timely::container::PushInto;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::{Antichain, frontier::AntichainRef};
 
 use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder, ValSpine};
-use differential_dataflow::trace::{Span, Trace, TraceReader, Batcher, Builder};
+use differential_dataflow::trace::{Description, Span, Trace, TraceReader, Batcher, Builder};
 use differential_dataflow::trace::cursor::{Cursor, cursor_list};
 
 type IntegerTrace = ValSpine<u64, u64, usize, i64>;
@@ -15,16 +14,21 @@ fn get_trace() -> ValSpine<u64, u64, usize, i64> {
     {
         let mut batcher = ValBatcher::<u64,u64,usize,i64>::new(None, 0);
 
-        batcher.push_into(vec![
+        batcher.insert(&mut vec![
             ((1, 2), 0, 1),
             ((2, 3), 1, 1),
             ((2, 3), 2, -1),
         ]);
 
         let batch_ts = &[1, 2, 3];
+        let mut lower = Antichain::from_elem(0);
         for i in batch_ts {
-            let (mut chain, description) = batcher.seal(Antichain::from_elem(*i));
-            trace.insert(Span::new(description, IntegerBuilder::seal(&mut chain).map(Into::into)));
+            let upper = Antichain::from_elem(*i);
+            let (chain, _retained) = batcher.extract(upper.borrow());
+            let description = Description::new(lower, upper.clone(), Antichain::from_elem(0));
+            let batch = chain.and_then(|mut chain| IntegerBuilder::seal(&mut chain));
+            trace.insert(Span::new(description, batch.map(Into::into)));
+            lower = upper;
         }
     }
     trace

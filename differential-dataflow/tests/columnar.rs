@@ -30,10 +30,10 @@ fn arrange_reaches_one(config: Config, diffs: &'static [i64]) -> bool {
                 _,
                 _,
                 Chunker<Upd>,
-                Batcher<u64, (), u64, i64>,
+                _,
                 Builder<u64, (), u64, i64>,
                 Spine<u64, (), u64, i64>,
-            >(stream, pact, "Arrange")
+            >(stream, pact, "Arrange", Batcher::new)
             .stream
             .probe_with(&mut probe);
         });

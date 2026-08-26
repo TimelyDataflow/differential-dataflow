@@ -31,7 +31,8 @@ use timely::progress::Stamp;
 use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::{self, SpanOf, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
+use crate::logging::Logger;
+use crate::trace::{self, Description, SpanOf, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
 
 use trace::wrappers::enter::{TraceEnter, enter_span};
 
@@ -302,13 +303,18 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<'scope, P, C, Chu, Ba, Bu, Tr>(stream: Stream<'scope, Tr::Time, C>, pact: P, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+pub fn arrange_core<'scope, P, C, Chu, Ba, Bu, Tr>(
+    stream: Stream<'scope, Tr::Time, C>,
+    pact: P,
+    name: &str,
+    batcher: impl FnOnce(Option<Logger>, usize) -> Ba,
+) -> Arranged<'scope, TraceAgent<Tr>>
 where
     C: Container + Clone + 'static,
     P: ParallelizationContract<Tr::Time, C>,
-    Chu: ContainerBuilder<Container=Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
-    Ba: Batcher<Time=Tr::Time> + 'static,
-    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output: Into<Tr::Batch>>,
+    Chu: ContainerBuilder + for<'a> PushInto<&'a mut C> + 'static,
+    Ba: Batcher<Tr::Time, Chu::Container, Vec<Bu::Input>> + 'static,
+    Bu: Builder<Time=Tr::Time, Output: Into<Tr::Batch>>,
     Tr: Trace+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
@@ -338,7 +344,7 @@ where
         let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
         // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = Ba::new(logger.clone(), info.global_id);
+        let mut batcher = batcher(logger.clone(), info.global_id);
 
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
@@ -371,7 +377,7 @@ where
                 }
                 chunker.push_into(data);
                 while let Some(chunk) = chunker.extract() {
-                    batcher.push_into(std::mem::take(chunk));
+                    batcher.insert(chunk);
                 }
             });
 
@@ -391,7 +397,7 @@ where
                 // seal. The batcher only sees chunks the chunker has emitted; without this drain
                 // a partial final chunk would never reach the batcher.
                 while let Some(chunk) = chunker.finish() {
-                    batcher.push_into(std::mem::take(chunk));
+                    batcher.insert(chunk);
                 }
 
                 // There are two cases to handle with some care:
@@ -409,7 +415,7 @@ where
                 if capabilities.elements().iter().any(|c| !frontier.less_equal(c.time())) {
 
                     // The capabilities to retire: those not in advance of the input frontier.
-                    // Each update sealed below is greater or equal to one of them, as updates
+                    // Each update extracted below is greater or equal to one of them, as updates
                     // supported only by the remaining capabilities are in advance of the input
                     // frontier and remain in the batcher.
                     let retired = capabilities
@@ -420,8 +426,16 @@ where
                         .collect::<CapabilitySet<_>>();
 
                     // Extract all updates not in advance of the input frontier, as one batch.
-                    let (mut chain, description) = batcher.seal(frontier.frontier().to_owned());
-                    let batch = trace::Span::new(description, Bu::seal(&mut chain).map(Into::into));
+                    // The batch spans the interval from the previously reported frontier to the
+                    // current one, which is exactly the interval the batcher carves out.
+                    let description = Description::new(
+                        prev_frontier.clone(),
+                        frontier.frontier().to_owned(),
+                        Antichain::from_elem(Tr::Time::minimum()),
+                    );
+                    let (chain, retained) = batcher.extract(frontier.frontier());
+
+                    let batch = trace::Span::new(description, chain.and_then(|mut chain| Bu::seal(&mut chain)).map(Into::into));
 
                     let stamp = retired.iter().map(|c| c.time().clone()).collect::<Stamp<_>>();
                     writer.insert(batch.clone(), stamp);
@@ -436,7 +450,7 @@ where
                     // in messages with new capabilities.
 
                     let mut new_capabilities = Antichain::new();
-                    for time in batcher.frontier().iter() {
+                    for time in retained.iter() {
                         if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
                             new_capabilities.insert(capability.delayed(time));
                         }
@@ -448,10 +462,9 @@ where
                     capabilities = new_capabilities;
                 }
                 else {
-                    // Announce progress updates, even without data. We seal the batcher to
-                    // advance its lower bound and frontier, but discard the readied updates
-                    // rather than building a batch we would immediately drop.
-                    let _ = batcher.seal(frontier.frontier().to_owned());
+                    // Announce progress updates, even without data. No held capability precedes
+                    // the input frontier, so no update does either, and the batcher has nothing
+                    // to extract.
                     writer.seal(frontier.frontier().to_owned());
                 }
 

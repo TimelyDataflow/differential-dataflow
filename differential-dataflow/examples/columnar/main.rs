@@ -129,17 +129,17 @@ mod reachability {
 
             let edges_arr = arrange_core::<_, _,
                 ValChunker<(Node, Node, IterTime, Diff)>,
-                ValBatcher<Node, Node, IterTime, Diff>,
+                _,
                 ValBuilder<Node, Node, IterTime, Diff>,
                 ValSpine<Node, Node, IterTime, Diff>,
-            >(edges_inner.inner, edges_pact, "Edges");
+            >(edges_inner.inner, edges_pact, "Edges", ValBatcher::new);
 
             let reach_arr = arrange_core::<_, _,
                 ValChunker<(Node, (), IterTime, Diff)>,
-                ValBatcher<Node, (), IterTime, Diff>,
+                _,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
-            >(reach.inner, reach_pact, "Reach");
+            >(reach.inner, reach_pact, "Reach", ValBatcher::new);
 
             // join_traces with ValColBuilder: produces Stream<_, RecordedUpdates<...>>.
             let proposed =
@@ -162,10 +162,10 @@ mod reachability {
             let combined_pact = ValPact { hashfunc: |k: columnar::Ref<'_, Node>| *k as u64 };
             let combined_arr = arrange_core::<_, _,
                 ValChunker<(Node, (), IterTime, Diff)>,
-                ValBatcher<Node, (), IterTime, Diff>,
+                _,
                 ValBuilder<Node, (), IterTime, Diff>,
                 ValSpine<Node, (), IterTime, Diff>,
-            >(combined.inner, combined_pact, "Combined");
+            >(combined.inner, combined_pact, "Combined", ValBatcher::new);
 
             // reduce_abelian on the columnar arrangement.
             let result = combined_arr.reduce_abelian::<_,
