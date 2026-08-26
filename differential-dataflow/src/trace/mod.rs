@@ -277,25 +277,6 @@ pub trait Builder: Default {
     fn done(self) -> Option<Self::Output>;
 }
 
-/// Forms a batch from a whole chain of updates at once.
-///
-/// Named rather than a bare `fn(&mut Vec<C>) -> Option<B>` so that implementors can name the
-/// batch they produce. There is no receiver: the chain goes in and the batch comes out, leaving
-/// nowhere for an update to be retained.
-pub trait Sealer<C> {
-    /// Output batch type.
-    type Output;
-
-    /// Builds a batch from a chain of updates.
-    ///
-    /// This method relies on the chain only containing updates greater or equal to the lower frontier,
-    /// and not greater or equal to the upper frontier, of the interval the caller means to describe.
-    /// Chains must also be sorted and consolidated.
-    ///
-    /// Having the whole chain in hand, an implementor can size itself before it fills.
-    fn seal(chain: &mut Vec<C>) -> Option<Self::Output>;
-}
-
 /// Blanket implementations for reference counted batches.
 pub mod rc_blanket_impls {
 

@@ -248,7 +248,7 @@ pub mod val_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Builder, Sealer, Cursor};
+    use crate::trace::{Builder, Cursor};
     use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
@@ -694,7 +694,7 @@ pub mod val_batch {
 
     }
 
-    impl<L, CI> Sealer<CI> for OrdValBuilder<L, CI>
+    impl<L, CI> crate::trace::implementations::merge_batcher::Sealer<CI> for OrdValBuilder<L, CI>
     where
         L: for<'a> Layout<
             KeyContainer: PushInto<CI::Key<'a>>,
@@ -724,10 +724,11 @@ pub mod key_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Builder, Sealer, Cursor};
+    use crate::trace::{Builder, Cursor};
     use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::{BatchContainer, BuilderInput};
     use crate::trace::implementations::layout;
+    use crate::trace::implementations::merge_batcher::Sealer;
 
     use super::{Layout, Upds, layers::UpdsBuilder};
 

@@ -688,7 +688,7 @@ where
 
 }
 
-impl<C> crate::trace::Sealer<C> for ChunkBatchBuilder<C>
+impl<C> crate::trace::implementations::merge_batcher::Sealer<C> for ChunkBatchBuilder<C>
 where
     C: Chunk + Default + 'static,
     C::Time: timely::progress::Timestamp,
