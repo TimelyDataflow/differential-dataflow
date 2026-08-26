@@ -41,11 +41,14 @@ pub struct MergeBatcher<M: Merger, Bu> {
     builder: std::marker::PhantomData<Bu>,
 }
 
-impl<M, Bu> Batcher<M::Time, M::Chunk, Bu::Output> for MergeBatcher<M, Bu>
+impl<M, Bu> Batcher<M::Chunk> for MergeBatcher<M, Bu>
 where
     M: Merger<Time: Timestamp>,
     Bu: Builder<Input = M::Chunk>,
 {
+    type Time = M::Time;
+    type Output = Bu::Output;
+
     fn insert(&mut self, chunk: &mut M::Chunk) {
         self.insert_chain(vec![std::mem::take(chunk)]);
     }

@@ -303,7 +303,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<'scope, P, C, Chu, Ba, B, Tr>(
+pub fn arrange_core<'scope, P, C, Chu, Ba, Tr>(
     stream: Stream<'scope, Tr::Time, C>,
     pact: P,
     name: &str,
@@ -313,8 +313,7 @@ where
     C: Container + Clone + 'static,
     P: ParallelizationContract<Tr::Time, C>,
     Chu: ContainerBuilder + for<'a> PushInto<&'a mut C> + 'static,
-    Ba: Batcher<Tr::Time, Chu::Container, B> + 'static,
-    B: Into<Tr::Batch>,
+    Ba: Batcher<Chu::Container, Time = Tr::Time, Output: Into<Tr::Batch>> + 'static,
     Tr: Trace+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input

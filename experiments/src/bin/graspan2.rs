@@ -45,7 +45,7 @@ fn unoptimized() {
                 .flat_map(|(a,b)| vec![a,b])
                 .concat(dereference.clone().flat_map(|(a,b)| vec![a,b]));
 
-            let dereference = dereference.arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new);
+            let dereference = dereference.arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new);
 
             let (value_flow, memory_alias, value_alias) =
             scope
@@ -58,14 +58,14 @@ fn unoptimized() {
                     let (value_flow, value_flow_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
                     let (memory_alias, memory_alias_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
 
-                    let value_flow_arranged = value_flow_collection.arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new);
-                    let memory_alias_arranged = memory_alias_collection.arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new);
+                    let value_flow_arranged = value_flow_collection.arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new);
+                    let memory_alias_arranged = memory_alias_collection.arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new);
 
                     // VA(a,b) <- VF(x,a),VF(x,b)
                     // VA(a,b) <- VF(x,a),MA(x,y),VF(y,b)
                     let value_alias_next = value_flow_arranged.clone().join_core(value_flow_arranged.clone(), |_,&a,&b| Some((a,b)));
                     let value_alias_next = value_flow_arranged.clone().join_core(memory_alias_arranged.clone(), |_,&a,&b| Some((b,a)))
-                                                              .arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new)
+                                                              .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                                                               .join_core(value_flow_arranged.clone(), |_,&a,&b| Some((a,b)))
                                                               .concat(value_alias_next);
 
@@ -75,10 +75,10 @@ fn unoptimized() {
                     let value_flow_next =
                     assignment.clone()
                         .map(|(a,b)| (b,a))
-                        .arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new)
+                        .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                         .join_core(memory_alias_arranged, |_,&a,&b| Some((b,a)))
                         .concat(assignment.map(|(a,b)| (b,a)))
-                        .arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new)
+                        .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                         .join_core(value_flow_arranged, |_,&a,&b| Some((a,b)))
                         .concat(nodes.map(|n| (n,n)));
 
@@ -93,7 +93,7 @@ fn unoptimized() {
                     let memory_alias_next: VecCollection<_,_,Present> =
                     value_alias_next.clone()
                         .join_core(dereference.clone(), |_x,&y,&a| Some((y,a)))
-                        .arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new)
+                        .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                         .join_core(dereference, |_y,&a,&b| Some((a,b)));
 
                     let memory_alias_next: VecCollection<_,_,Present>  =
@@ -170,7 +170,7 @@ fn optimized() {
                 .flat_map(|(a,b)| vec![a,b])
                 .concat(dereference.clone().flat_map(|(a,b)| vec![a,b]));
 
-            let dereference = dereference.arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new);
+            let dereference = dereference.arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new);
 
             let (value_flow, memory_alias) =
             scope
@@ -183,8 +183,8 @@ fn optimized() {
                     let (value_flow, value_flow_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
                     let (memory_alias, memory_alias_collection) = Variable::new(inner_scope, Product::new(Default::default(), 1));
 
-                    let value_flow_arranged = value_flow_collection.clone().arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new);
-                    let memory_alias_arranged = memory_alias_collection.arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new);
+                    let value_flow_arranged = value_flow_collection.clone().arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new);
+                    let memory_alias_arranged = memory_alias_collection.arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new);
 
                     // VF(a,a) <-
                     // VF(a,b) <- A(a,x),VF(x,b)
@@ -192,10 +192,10 @@ fn optimized() {
                     let value_flow_next =
                     assignment.clone()
                         .map(|(a,b)| (b,a))
-                        .arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new)
+                        .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                         .join_core(memory_alias_arranged.clone(), |_,&a,&b| Some((b,a)))
                         .concat(assignment.map(|(a,b)| (b,a)))
-                        .arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new)
+                        .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                         .join_core(value_flow_arranged, |_,&a,&b| Some((a,b)))
                         .concat(nodes.map(|n| (n,n)))
                         .arrange_by_self()
@@ -207,9 +207,9 @@ fn optimized() {
                     let value_flow_deref =
                     value_flow_collection
                         .map(|(a,b)| (b,a))
-                        .arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new)
+                        .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                         .join_core(dereference, |_x,&a,&b| Some((a,b)))
-                        .arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new);
+                        .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new);
 
                     // MA(a,b) <- VFD(x,a),VFD(y,b)
                     // MA(a,b) <- VFD(x,a),MA(x,y),VFD(y,b)
@@ -220,7 +220,7 @@ fn optimized() {
                     let memory_alias_next =
                     memory_alias_arranged
                         .join_core(value_flow_deref.clone(), |_x,&y,&a| Some((y,a)))
-                        .arrange::<_, _, ValSpine<_,_,_,_>>(ValBatcher::new)
+                        .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                         .join_core(value_flow_deref, |_y,&a,&b| Some((a,b)))
                         .concat(memory_alias_next)
                         .arrange_by_self()

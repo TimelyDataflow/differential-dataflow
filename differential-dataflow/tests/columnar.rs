@@ -31,7 +31,6 @@ fn arrange_reaches_one(config: Config, diffs: &'static [i64]) -> bool {
                 _,
                 Chunker<Upd>,
                 _,
-                _,
                 Spine<u64, (), u64, i64>,
             >(stream, pact, "Arrange", Batcher::new)
             .stream

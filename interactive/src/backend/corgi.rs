@@ -295,7 +295,7 @@ impl Backend for CorgiBackend {
         // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
         // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
         // builder. No columns→rows→columns round-trip at the arrangement boundary.
-        arrange_core::<_, CC, CorgiChunker<Time, Diff>, _, _, CTrace>(
+        arrange_core::<_, CC, CorgiChunker<Time, Diff>, _, CTrace>(
             c.inner,
             Pipeline,
             "CorgiArrange",

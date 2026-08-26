@@ -58,7 +58,6 @@ macro_rules! harrange {
             Vec<((u64, (u64, u64)), $t, isize)>,
             ContainerChunker<VecChunk<u64, (u64, u64), $t, isize>>,
             _,
-            _,
             VChunkSpine<u64, (u64, u64), $t, isize>,
         >(hashed.inner, Pipeline, $name, VChunkBatcher::new)
     }};
@@ -149,7 +148,6 @@ fn run_wide(mode: Mode) -> f64 {
                     let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
                         ContainerChunker<VecChunk<u64, (u64, String), u64, isize>>,
                         _,
-                        _,
                         VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", VChunkBatcher::new);
                     arr.reduce_core::<_, VChunkBuilder<u64, (u64, String), u64, isize>,
                         VChunkSpine<u64, (u64, String), u64, isize>,
@@ -172,7 +170,6 @@ fn run_wide(mode: Mode) -> f64 {
                     let hashed = coll.map(|(k, v)| (k.hashed(), (k, v)));
                     let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, isize)>,
                         ContainerChunker<VecChunk<u64, (u64, String), u64, isize>>,
-                        _,
                         _,
                         VChunkSpine<u64, (u64, String), u64, isize>>(hashed.inner, Pipeline, "ArrW", VChunkBatcher::new);
                     reduce_with_tactic::<_, VChunkSpine<u64, (u64, String), u64, isize>, _>(
