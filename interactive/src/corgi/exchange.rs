@@ -47,20 +47,23 @@ use crate::corgi::container::CorgiContainer;
 
 /// Partitions a [`CorgiContainer`] across workers by the structural hash of each row's key.
 ///
-/// The scratch buffers are fields rather than locals because `partition` is called once per
-/// container for the life of the dataflow; a per-call allocation of three `Vec`s per batch is the
-/// kind of cost that shows up as a flat tax on every exchange.
+/// The index buffers are fields rather than locals because `partition` runs once per container for
+/// the life of the dataflow; allocating three `Vec`s per batch is the kind of cost that shows up as
+/// a flat tax on every exchange. (The one per-batch allocation left is the hash column itself,
+/// which `corgi::hash` returns owned.)
 pub struct CorgiDistributor<T, R> {
     marker: std::marker::PhantomData<(T, R)>,
     /// Row indices, grouped by destination: destination `p` owns `order[starts[p]..starts[p+1]]`.
     order: Vec<usize>,
     /// Running offsets into `order`, one per destination plus the total.
     starts: Vec<usize>,
+    /// Write position within each destination's run, while `order` is being filled.
+    cursor: Vec<usize>,
 }
 
 impl<T, R> Default for CorgiDistributor<T, R> {
     fn default() -> Self {
-        CorgiDistributor { marker: std::marker::PhantomData, order: Vec::new(), starts: Vec::new() }
+        CorgiDistributor { marker: std::marker::PhantomData, order: Vec::new(), starts: Vec::new(), cursor: Vec::new() }
     }
 }
 
@@ -85,11 +88,12 @@ impl<T: Clone + 'static, R: Clone + 'static> CorgiDistributor<T, R> {
         // `cursor` walks each destination's run as rows are placed; `starts` is left intact.
         self.order.clear();
         self.order.resize(ids.len(), 0);
-        let mut cursor = self.starts[..peers].to_vec();
+        self.cursor.clear();
+        self.cursor.extend_from_slice(&self.starts[..peers]);
         for (row, &h) in ids.iter().enumerate() {
             let p = dest(h);
-            self.order[cursor[p]] = row;
-            cursor[p] += 1;
+            self.order[self.cursor[p]] = row;
+            self.cursor[p] += 1;
         }
     }
 }
@@ -145,6 +149,7 @@ impl<T: Clone + 'static, R: Clone + 'static> Distributor<CorgiContainer<T, R>> f
     fn relax(&mut self) {
         self.order = Vec::new();
         self.starts = Vec::new();
+        self.cursor = Vec::new();
     }
 }
 
