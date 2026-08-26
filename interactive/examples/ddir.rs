@@ -13,7 +13,7 @@
 //! - `--debug-demand`: tap every demand collection with an Inspect.
 //! - `--diag`: serve timely/DD diagnostics on port 51371.
 //! - `--backend=vec|corgi`: rendering substrate (default `vec`). The corgi
-//!   backend is single-worker (its arrange does not exchange).
+//!   backend exchanges by key hash, so both take `-w`.
 //! - `--sync=K`: await completion only every K rounds (default 1), letting K
 //!   timestamps retire with whatever inter-timestamp concurrency the system
 //!   finds — the open(er)-loop regime DD adapts into under load.

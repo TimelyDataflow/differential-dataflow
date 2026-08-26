@@ -3,8 +3,10 @@
 //! the corgi backend; operators transform block→block via `eval_graph` with NO per-op transcode.
 //! Conversion to/from DDIR rows happens only at I/O boundaries (`from_updates`/`into_updates`).
 //!
-//! Minimal trait surface for a pipelined (single-worker) dataflow: `Accountable + Default + Clone`
-//! (= `timely::Container`). `Negate`/`Enter`/`Leave`/`ResultsIn` (iterative scopes) come with M3.
+//! Trait surface: `Accountable + Default + Clone` (= `timely::Container`) for dataflow edges,
+//! `Negate`/`Enter`/`Leave`/`ResultsIn` for iterative scopes, and `ContainerBytes` (in
+//! [`bytes`](crate::corgi::bytes)) for crossing a process boundary. Splitting one of these across
+//! workers is [`exchange`](crate::corgi::exchange)'s job.
 
 use timely::Accountable;
 use timely::progress::{PathSummary, Timestamp};

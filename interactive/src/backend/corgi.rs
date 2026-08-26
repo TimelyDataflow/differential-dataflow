@@ -26,6 +26,7 @@ use corgi::Value as CValue;
 use crate::backend::Backend;
 use crate::corgi::chunk::{recover_key, CorgiChunk, CorgiChunker};
 use crate::corgi::container::CorgiContainer;
+use crate::corgi::exchange::CorgiPact;
 use crate::corgi::join::CorgiJoinBackend;
 use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
@@ -288,16 +289,20 @@ impl Backend for CorgiBackend {
     }
 
     fn arrange<'s>(c: Collection<'s, Time, CC>) -> Self::Arr<'s> {
-        // Single-worker guard: this arrange is `Pipeline` (no key exchange), so multi-worker
-        // execution would MIS-PLACE keys — silently wrong, not slow. A columnar exchange
-        // (radix partition by key hash) lifts this; it pairs with the stored-hash-column work.
-        assert_eq!(c.inner.scope().peers(), 1, "the corgi backend is single-worker: arrange does not exchange keys");
+        // This is the backend's ONE inter-worker data movement. `CorgiPact` partitions each
+        // container by the structural hash of its key column and gathers each destination's rows
+        // into fresh contiguous columns, so every update for a key reaches one worker and both
+        // sides of a join agree which. Every other operator here is key-local given correctly
+        // placed arrangements, which is why substituting this for `Pipeline` is the whole of
+        // multi-worker support. At one worker timely's `Exchange` short-circuits to a direct
+        // push, so the single-worker path costs nothing.
+        //
         // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
         // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
         // builder. No columns→rows→columns round-trip at the arrangement boundary.
         arrange_core::<_, CC, _, CTrace>(
             c.inner,
-            Pipeline,
+            CorgiPact,
             "CorgiArrange",
             ChunkBatcher::<CorgiChunker<Time, Diff>, _>::new,
         )
@@ -475,8 +480,42 @@ pub fn evaluate(
     program: &st::Program,
     inputs: &[Vec<(Row, Row)>],
 ) -> std::collections::BTreeMap<String, Vec<((Row, Row), Diff)>> {
+    evaluate_with_workers(program, inputs, 1)
+}
+
+/// [`evaluate`] on `workers` worker threads in one process.
+///
+/// The answer must not depend on `workers`: the exchange places each key on one worker, every
+/// operator is key-local from there, and each worker's captured output is a disjoint share of the
+/// same collection, so summing the shares reproduces the single-worker result exactly. That
+/// invariant is the correctness statement for [`CorgiPact`], and the backend gate checks it by
+/// running each program at several worker counts.
+///
+/// Input rows are dealt round-robin across workers (`row index % peers`) so each row is introduced
+/// exactly once globally — where they enter is irrelevant, since `arrange` re-places them.
+pub fn evaluate_with_workers(
+    program: &st::Program,
+    inputs: &[Vec<(Row, Row)>],
+    workers: usize,
+) -> std::collections::BTreeMap<String, Vec<((Row, Row), Diff)>> {
+    evaluate_with_config(program, inputs, timely::Config::process(workers))
+}
+
+/// [`evaluate_with_workers`] with the timely configuration named outright.
+///
+/// The configuration decides which half of the exchange gets exercised.
+/// `Config::process(n)` hands containers between worker threads as typed values — the
+/// [`CorgiDistributor`](crate::corgi::exchange::CorgiDistributor)'s partition runs, but no bytes
+/// are produced. `CommunicationConfig::ProcessBinary(n)` puts the same threads behind serializing
+/// channels, so every container makes the round trip through
+/// [the wire format](crate::corgi::bytes) — the multi-*process* path, without the processes.
+pub fn evaluate_with_config(
+    program: &st::Program,
+    inputs: &[Vec<(Row, Row)>],
+    config: timely::Config,
+) -> std::collections::BTreeMap<String, Vec<((Row, Row), Diff)>> {
     use std::collections::BTreeMap;
-    use std::sync::mpsc::channel;
+    use std::sync::{Arc, Mutex, mpsc::channel};
     use timely::dataflow::operators::core::capture::{Capture, Event};
     use differential_dataflow::input::Input;
     use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -489,10 +528,16 @@ pub fn evaluate(
         txs.push(tx);
         rxs.push(rx);
     }
+    // Every worker captures into the same per-export channel. `Sender` is `Send` but not `Sync`,
+    // and timely's worker closure must be both, so the senders travel behind a mutex and each
+    // worker clones its own out of it once, at construction.
+    let txs = Arc::new(Mutex::new(txs));
 
     let program = program.clone();
     let inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
-    timely::execute_directly(move |worker| {
+    let guards = timely::execute(config, move |worker| {
+        let (index, peers) = (worker.index(), worker.peers());
+        let txs: Vec<_> = txs.lock().expect("capture senders").iter().cloned().collect();
         let mut handles = worker.dataflow::<u64, _, _>(|scope| {
             let mut handles = Vec::new();
             let mut collections = Vec::new();
@@ -525,11 +570,15 @@ pub fn evaluate(
             handles
         });
         for (i, rows) in inputs.iter().enumerate() {
-            for r in rows {
+            for r in rows.iter().skip(index).step_by(peers) {
                 handles[i].update(r.clone(), 1);
             }
         }
-    });
+    })
+    .expect("corgi evaluate: worker startup");
+    // Join the workers before draining, so every capture has been sent and every cloned sender
+    // dropped; otherwise the receive loop below would block on a channel that is still open.
+    guards.join();
 
     names
         .into_iter()

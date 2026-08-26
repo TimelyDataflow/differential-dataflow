@@ -64,11 +64,34 @@ fn assert_backends_agree(prog: &str) {
     let mut tree = lower::lower_tree(parse::pipe::parse(&src));
     tree.optimize();
     let inputs = inputs_for(prog);
+    let want = vec::evaluate(&tree, &inputs);
+    // At every worker count: the exchange places each key on one worker and every operator is
+    // key-local from there, so the answer must not depend on how many workers ran it. 3 is in the
+    // list on purpose — it is not a power of two, so it takes the modulus path rather than the
+    // mask, and it cannot divide these inputs evenly.
+    for workers in [1, 2, 3, 4] {
+        assert_eq!(
+            corgi::evaluate_with_workers(&tree, &inputs, workers),
+            want,
+            "corgi backend at {workers} worker(s) disagrees with the vec backend on {prog}",
+        );
+    }
+    // The same programs again with serializing channels, so every exchanged container makes the
+    // round trip through the wire format. This is the multi-process path: `Config::process` above
+    // hands containers between threads as typed values and never encodes a byte.
     assert_eq!(
-        corgi::evaluate(&tree, &inputs),
-        vec::evaluate(&tree, &inputs),
-        "corgi backend disagrees with the vec backend on {prog}",
+        corgi::evaluate_with_config(&tree, &inputs, serializing(3)),
+        want,
+        "corgi backend over serializing channels disagrees with the vec backend on {prog}",
     );
+}
+
+/// `n` worker threads whose exchange channels serialize — the wire format in the loop.
+fn serializing(n: usize) -> timely::Config {
+    timely::Config {
+        communication: timely::CommunicationConfig::ProcessBinary(n),
+        worker: timely::WorkerConfig::default(),
+    }
 }
 
 #[test] fn reach() { assert_backends_agree("reach"); }
