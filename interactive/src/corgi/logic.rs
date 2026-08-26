@@ -218,6 +218,22 @@ pub fn shape_of_place(t: &Term, env_shapes: &[Shape]) -> Shape {
     }
 }
 
+/// TOTAL best-effort shape of a `Proj` operand: resolve the `Var`/`Bound`/`Proj` spine
+/// through KNOWN shapes only; `None` means "can't tell" (never a panic), and the caller
+/// keeps the old lowering. The non-panicking cousin of [`shape_of_place`].
+fn place_shape_opt(t: &Term, env_shapes: &[Shape]) -> Option<Shape> {
+    match t {
+        Term::Var(i) => env_shapes.get(*i).cloned(),
+        Term::Bound(k) => env_shapes.get(env_shapes.len().checked_sub(1 + *k)?).cloned(),
+        Term::Proj(inner, i) => match place_shape_opt(inner, env_shapes)? {
+            Shape::Prod(fs) => fs.get(*i).cloned(),
+            Shape::List(e) => Some(*e),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Best-effort structural `Shape` of a (non-place) compiled `Term`, used to decide cross-shape
 /// `Eq`/`Ne`: DDIR compares `Value`s structurally, so e.g. `Tuple != Int` is *always* true (the
 /// variants differ) — but corgi's `CmpOp::Rel` requires matching shapes. When the operand shapes
@@ -392,6 +408,14 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
             }
         }
         Term::Proj(t, i) => {
+            // Shape-directed: `Op::Field` is PRODUCT elimination only. On a `List` operand,
+            // DDIR's Proj means indexing (`ir::eval` ir.rs:112), which has no columnar
+            // lowering here yet (corgi's Get tier) — decline, and rows handle it. The check
+            // is the TOTAL place resolver (never panics); an unresolved operand compiles as
+            // before (`Field`, with corgi's runtime shape check behind it).
+            if matches!(place_shape_opt(t, env_shapes), Some(Shape::List(_))) {
+                return None;
+            }
             let id = compile(t, b, env, env_shapes, anchor)?;
             Some(b.add(Op::Field(*i), vec![id]))
         }
