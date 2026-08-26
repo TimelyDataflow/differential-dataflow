@@ -258,7 +258,10 @@ pub trait Batcher<C0> {
 }
 
 /// Functionality for building batches from ordered update sequences.
-pub trait Builder: Sized {
+///
+/// `Default` is the empty builder; a builder discovers its output as it is pushed, and so has
+/// no opportunity to size itself in advance.
+pub trait Builder: Default {
     /// Input item type.
     type Input;
     /// Timestamp type.
@@ -266,28 +269,31 @@ pub trait Builder: Sized {
     /// Output batch type.
     type Output;
 
-    /// Allocates an empty builder.
-    ///
-    /// Ideally we deprecate this and insist all non-trivial building happens via `with_capacity()`.
-    // #[deprecated]
-    fn new() -> Self { Self::with_capacity(0, 0, 0) }
-    /// Allocates an empty builder with capacity for the specified keys, values, and updates.
-    ///
-    /// They represent respectively the number of distinct `key`, `(key, val)`, and total updates.
-    fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self;
     /// Adds a chunk of elements to the batch.
     ///
     /// Adds all elements from `chunk` to the builder and leaves `chunk` in an undefined state.
     fn push(&mut self, chunk: &mut Self::Input);
     /// Completes building and returns the batch, absent if no updates were pushed.
     fn done(self) -> Option<Self::Output>;
+}
+
+/// Forms a batch from a whole chain of updates at once.
+///
+/// Named rather than a bare `fn(&mut Vec<C>) -> Option<B>` so that implementors can name the
+/// batch they produce. There is no receiver: the chain goes in and the batch comes out, leaving
+/// nowhere for an update to be retained.
+pub trait Sealer<C> {
+    /// Output batch type.
+    type Output;
 
     /// Builds a batch from a chain of updates.
     ///
     /// This method relies on the chain only containing updates greater or equal to the lower frontier,
     /// and not greater or equal to the upper frontier, of the interval the caller means to describe.
     /// Chains must also be sorted and consolidated.
-    fn seal(chain: &mut Vec<Self::Input>) -> Option<Self::Output>;
+    ///
+    /// Having the whole chain in hand, an implementor can size itself before it fills.
+    fn seal(chain: &mut Vec<C>) -> Option<Self::Output>;
 }
 
 /// Blanket implementations for reference counted batches.

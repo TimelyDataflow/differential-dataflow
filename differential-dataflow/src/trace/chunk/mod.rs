@@ -656,6 +656,12 @@ pub struct ChunkBatchBuilder<C: Chunk> {
     output: VecDeque<C>,
 }
 
+impl<C: Chunk> Default for ChunkBatchBuilder<C> {
+    fn default() -> Self {
+        Self { input: VecDeque::new(), output: VecDeque::new() }
+    }
+}
+
 impl<C> crate::trace::Builder for ChunkBatchBuilder<C>
 where
     C: Chunk + Default + 'static,
@@ -664,10 +670,6 @@ where
     type Input = C;
     type Time = C::Time;
     type Output = ChunkBatch<C>;
-
-    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        Self { input: VecDeque::new(), output: VecDeque::new() }
-    }
 
     fn push(&mut self, chunk: &mut C) {
         let chunk = std::mem::take(chunk);
@@ -683,6 +685,15 @@ where
         let chunks: Vec<C> = output.into();
         wrap(chunks)
     }
+
+}
+
+impl<C> crate::trace::Sealer<C> for ChunkBatchBuilder<C>
+where
+    C: Chunk + Default + 'static,
+    C::Time: timely::progress::Timestamp,
+{
+    type Output = ChunkBatch<C>;
 
     fn seal(chain: &mut Vec<C>) -> Option<Self::Output> {
         // We settle the chain because we are not guaranteed to received pre-settled data.

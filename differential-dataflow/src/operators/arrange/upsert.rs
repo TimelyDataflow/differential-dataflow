@@ -233,7 +233,7 @@ where
                                 // new stuff that we add.
                                 let batches = reader_local.batches_through(Antichain::new().borrow()).unwrap();
                                 let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(batches);
-                                let mut builder = Bu::new();
+                                let mut builder = Bu::default();
                                 let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
                                 for (key, mut list) in to_process {
 

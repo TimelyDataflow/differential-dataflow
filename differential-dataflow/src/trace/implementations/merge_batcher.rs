@@ -13,14 +13,14 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 
 use crate::logging::{BatcherEvent, Logger};
-use crate::trace::{Batcher, Builder};
+use crate::trace::{Batcher, Sealer};
 
 /// Creates batches from chunks of sorted, consolidated tuples.
 ///
-/// Chunking input is `Chu`'s business, merging chunks is `M`'s, and building the extracted chain
-/// into a batch is `Bu`'s; the batcher's own work is the geometric ladder of chains and the
+/// Chunking input is `Chu`'s business, merging chunks is `M`'s, and sealing the extracted chain
+/// into a batch is `S`'s; the batcher's own work is the geometric ladder of chains and the
 /// carve-by-frontier.
-pub struct MergeBatcher<Chu, M: Merger, Bu> {
+pub struct MergeBatcher<Chu, M: Merger, S> {
     /// Melds input containers into sorted, consolidated chunks.
     chunker: Chu,
     /// Sorted, consolidated chains, each paired with its cached summed update count.
@@ -42,17 +42,17 @@ pub struct MergeBatcher<Chu, M: Merger, Bu> {
     /// Timely operator ID.
     operator_id: usize,
     /// Seals each extracted chain into a batch.
-    builder: std::marker::PhantomData<Bu>,
+    sealer: std::marker::PhantomData<S>,
 }
 
-impl<C, Chu, M, Bu> Batcher<C> for MergeBatcher<Chu, M, Bu>
+impl<C, Chu, M, S> Batcher<C> for MergeBatcher<Chu, M, S>
 where
     M: Merger<Time: Timestamp>,
     Chu: ContainerBuilder<Container = M::Chunk> + for<'a> PushInto<&'a mut C>,
-    Bu: Builder<Input = M::Chunk>,
+    S: Sealer<M::Chunk>,
 {
     type Time = M::Time;
-    type Output = Bu::Output;
+    type Output = S::Output;
 
     fn insert(&mut self, container: &mut C) {
         self.chunker.push_into(container);
@@ -65,7 +65,7 @@ where
     // `upper`. All updates must have time greater or equal to the previously used `upper`, by
     // assumption that after extracting from a batcher we receive no more updates with times not
     // greater or equal to `upper`.
-    fn extract<'a>(&'a mut self, upper: AntichainRef<'_, M::Time>) -> (Option<Bu::Output>, AntichainRef<'a, M::Time>) {
+    fn extract<'a>(&'a mut self, upper: AntichainRef<'_, M::Time>) -> (Option<S::Output>, AntichainRef<'a, M::Time>) {
         // Flush whatever the chunker is still accumulating: a partial final chunk would
         // otherwise never reach the merge ladder.
         while let Some(chunk) = self.chunker.finish().map(std::mem::take) {
@@ -94,11 +94,11 @@ where
 
         self.stash.clear();
 
-        (Bu::seal(&mut readied), self.frontier.borrow())
+        (S::seal(&mut readied), self.frontier.borrow())
     }
 }
 
-impl<Chu: Default, M: Merger, Bu> MergeBatcher<Chu, M, Bu> {
+impl<Chu: Default, M: Merger, S> MergeBatcher<Chu, M, S> {
     /// Allocates a new empty batcher.
     ///
     /// The logger and operator identifier are used to report the batcher's memory footprint,
@@ -112,12 +112,12 @@ impl<Chu: Default, M: Merger, Bu> MergeBatcher<Chu, M, Bu> {
             chains: Vec::new(),
             stash: Vec::new(),
             frontier: Antichain::new(),
-            builder: std::marker::PhantomData,
+            sealer: std::marker::PhantomData,
         }
     }
 }
 
-impl<Chu, M: Merger, Bu> MergeBatcher<Chu, M, Bu> {
+impl<Chu, M: Merger, S> MergeBatcher<Chu, M, S> {
     /// Insert a chain and maintain chain properties: Chains are geometrically sized
     /// (by summed updates) and ordered by decreasing update weight.
     fn insert_chain(&mut self, chain: Vec<M::Chunk>) {
@@ -192,7 +192,7 @@ impl<Chu, M: Merger, Bu> MergeBatcher<Chu, M, Bu> {
     }
 }
 
-impl<Chu, M: Merger, Bu> Drop for MergeBatcher<Chu, M, Bu> {
+impl<Chu, M: Merger, S> Drop for MergeBatcher<Chu, M, S> {
     fn drop(&mut self) {
         // Cleanup chain to retract accounting information.
         while self.chain_pop().is_some() {}
