@@ -1,0 +1,21 @@
+-- AoC 2023 day 5 part 1: chain each seed through 7 remapping stages; min.
+-- input 0: tagged rows -- (0, seed) | (1, stage, dst, src, len)
+
+let seeds   = input 0 | filter($0[0] == 0) | key(0, $0[1] ;);
+let entries = input 0 | filter($0[0] == 1) | key($0[1] ; $0[2], $0[3], $0[4]);
+-- (stage ; dst, src, len)
+
+chain: {
+    let cur = active | filter($0[0] <= 6);
+    let cands = cur | map($0[0] ; $0[1])
+        | join(entries, ($0[0], $1[0], $2[0], $2[1], $2[2] ;))
+        | filter($0[3] <= $0[1] && $0[1] < $0[3] + $0[4]);
+    -- key (stage, idx, dst, src, len)
+    let mapped  = cands | map($0[0] + 1, $0[1] + $0[2] - $0[3] ;);
+    let covered = cands | map($0[0], $0[1] ;) | distinct;
+    let unmapped = (cur - covered) | map($0[0] + 1, $0[1] ;);
+    var active = seeds + mapped + unmapped | distinct;
+}
+
+export "result" = chain::active | filter($0[0] == 7)
+    | key(; $0[1]) | min | arrange | inspect(part1);

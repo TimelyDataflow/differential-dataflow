@@ -1,0 +1,35 @@
+-- AoC 2023 day 11: sum of L1 distances between galaxies after gap
+-- expansion (factor 999999). '#' = 35.
+-- input 0: (row, col, code), 1-indexed
+
+let cells = input 0 | key($0[0], $0[1] ; $0[2]);
+let g = cells | filter($1[0] == 35) | map($0 ;);
+
+let all_rows = cells | map($0[0] ;) | distinct;
+let rows_with = g | map($0[0] ;) | distinct;
+let row_gaps = all_rows - rows_with;
+let all_cols = cells | map($0[1] ;) | distinct;
+let cols_with = g | map($0[1] ;) | distinct;
+let col_gaps = all_cols - cols_with;
+
+let gk = g | key(; $0[0], $0[1]);
+let rgk = row_gaps | key(; $0[0]);
+let cgk = col_gaps | key(; $0[0]);
+
+let rcnt = gk | join(rgk, ($1[0], $1[1] ; $2[0])) | filter($1[0] < $0[0]) | map($0 ;) | count;
+let radj = (rcnt | map($0 ; 999999 * $1[0])) + ((g - (g | join(rcnt, ($0 ;)))) | map($0 ; 0));
+let ccnt = gk | join(cgk, ($1[0], $1[1] ; $2[0])) | filter($1[0] < $0[1]) | map($0 ;) | count;
+let cadj = (ccnt | map($0 ; 999999 * $1[0])) + ((g - (g | join(ccnt, ($0 ;)))) | map($0 ; 0));
+
+let gal = radj | join(cadj, ($0[0] + $1[0], $0[1] + $2[0] ;));
+let gs = gal | key(; $0[0], $0[1]);
+
+let contrib = gs | join(gs, (;
+    if(or($1[0] < $2[0], ($1[0] == $2[0]) && ($1[1] < $2[1])),
+       if($1[0] < $2[0], $2[0] - $1[0], $1[0] - $2[0])
+     + if($1[1] < $2[1], $2[1] - $1[1], $1[1] - $2[1]),
+       0)));
+
+export "result" = contrib
+    | collect | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part2);

@@ -1,0 +1,18 @@
+-- AoC 2023 day 1 part 1: per line, first digit * 10 + last digit; sum.
+-- input 0: (line, pos, charcode)
+
+let digits = input 0
+    | filter($0[2] >= 48 && $0[2] <= 57)
+    | key($0[0] ; $0[1], $0[2] - 48);
+-- (line ; pos, digit)
+
+let first = digits | min | map($0 ; $1[1]);
+let last  = digits | map($0 ; 0 - $1[0], $1[1]) | min | map($0 ; $1[1]);
+
+let calib = first | join(last, ($0 ; $1[0] * 10 + $2[0]));
+-- (line ; value)
+
+export "result" = calib
+    | key(; $1[0]) | collect
+    | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part1);

@@ -1,0 +1,5 @@
+Game 1: 1 red, 4 green, 4 blue; 3 red, 4 blue; 2 red, 1 green; 1 green, 1 red
+Game 2: 20 green, 1 red; 1 blue, 4 red; 1 green, 1 red, 1 blue; 1 green, 1 red, 1 blue
+Game 3: 8 red, 1 blue, 5 green; 9 red, 3 blue, 3 green; 3 green, 4 red
+Game 4: 0 blue, 8 red, 4 green; 7 green, 8 blue, 9 red; 2 green, 5 red, 1 blue
+Game 5: 20 red, 10 blue, 9 green; 2 blue, 3 red, 7 green; 1 green, 3 blue

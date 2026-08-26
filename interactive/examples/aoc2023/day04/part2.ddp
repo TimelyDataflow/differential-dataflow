@@ -1,0 +1,26 @@
+-- AoC 2023 day 4 part 2: cascading card copies; total card count.
+-- Copies are collection multiplicities; the cascade is a var fixpoint.
+-- input 0: (card, side, idx, value)
+
+let winners = input 0 | filter($0[1] == 0) | key($0[0], $0[3] ;);
+let ours    = input 0 | filter($0[1] == 1) | key($0[0], $0[3] ;);
+let matches = ours | join(winners, ($0 ;)) | map($0[0] ;) | count;
+-- (card ; m): number of matching (ours, winners) pairs
+
+let cards = input 0 | key($0[0] ;) | distinct;
+
+-- prize targets: key (card, target) for target in card+1 .. card+m
+wt: {
+    let step = t | map($0[0] ; $0[1]) | join(matches, ($0[0], $1[0] + 1, $2[0] ;))
+                 | filter($0[1] <= $0[0] + $0[2]) | map($0[0], $0[1] ;);
+    var t = (matches | filter($1[0] >= 1) | map($0[0], $0[0] + 1 ;)) + step | distinct;
+}
+let wtflat = wt::t | map($0[0] ; $0[1]);
+
+-- instances: multiplicity of (card ;) = copies of that card
+insts: {
+    let spawned = inst | join(wtflat, ($2[0] ;));
+    var inst = cards + spawned | arrange;
+}
+
+export "result" = insts::inst | key(;) | count | arrange | inspect(part2);

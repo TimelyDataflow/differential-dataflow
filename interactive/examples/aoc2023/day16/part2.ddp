@@ -1,0 +1,44 @@
+-- AoC 2023 day 16 part 2: best edge seed. Beams tagged by source (sd, si).
+-- Mirrors the slt exactly, including its 'u' seeds sitting at row=MAX(c).
+-- input 0: (row, col, code) 1-indexed
+
+let cells = input 0 | key($0[0], $0[1] ; $0[2]);
+
+let shift = cells | key(;) | distinct | flatmap(list(
+    tuple(0,46,0,1,0),  tuple(0,45,0,1,0),  tuple(0,124,1,0,3), tuple(0,124,-1,0,2),
+    tuple(0,47,-1,0,2), tuple(0,92,1,0,3),
+    tuple(1,46,0,-1,1), tuple(1,45,0,-1,1), tuple(1,124,1,0,3), tuple(1,124,-1,0,2),
+    tuple(1,47,1,0,3),  tuple(1,92,-1,0,2),
+    tuple(2,46,-1,0,2), tuple(2,45,0,1,0),  tuple(2,45,0,-1,1), tuple(2,124,-1,0,2),
+    tuple(2,47,0,1,0),  tuple(2,92,0,-1,1),
+    tuple(3,46,1,0,3),  tuple(3,45,0,1,0),  tuple(3,45,0,-1,1), tuple(3,124,1,0,3),
+    tuple(3,47,0,-1,1), tuple(3,92,0,1,0)))
+    | key($1[1][0], $1[1][1] ; $1[1][2], $1[1][3], $1[1][4]);
+
+let rows = cells | map($0[0] ;) | distinct;
+let cols = cells | map($0[1] ;) | distinct;
+let minc = cells | key(; $0[1]) | min;
+let maxc = cells | key(; 1000000 - $0[1]) | min | map(; 1000000 - $1[0]);
+let minr = cells | key(; $0[0]) | min;
+
+let seeds = (rows | key(; $0[0]) | join(minc, ($1[0], $2[0], 0, 0, $1[0] ;)))
+          + (rows | key(; $0[0]) | join(maxc, ($1[0], $2[0], 1, 1, $1[0] ;)))
+          + (cols | key(; $0[0]) | join(minr, ($2[0], $1[0], 3, 3, $1[0] ;)))
+          + (cols | key(; $0[0]) | join(maxc, ($2[0], $1[0], 2, 2, $1[0] ;)));
+-- key (r, c, dir, sd, si)
+
+beam: {
+    let onsym = l | map($0[0], $0[1] ; $0[2], $0[3], $0[4])
+        | join(cells, ($1[0], $2[0] ; $0[0], $0[1], $1[1], $1[2]));
+    -- (dir, sym ; r, c, sd, si)
+    let next = onsym | join(shift, ($1[0] + $2[0], $1[1] + $2[1], $2[2], $1[2], $1[3] ;));
+    var l = seeds + next | distinct;
+}
+
+let energized = beam::l | map($0[0], $0[1] ; $0[3], $0[4])
+    | join(cells, ($0[0], $0[1], $1[0], $1[1] ;)) | distinct
+    | map($0[2], $0[3] ;) | count;
+-- (sd, si ; n)
+
+export "result" = energized | key(; 1000000 - $1[0]) | min | map(; 1000000 - $1[0])
+    | arrange | inspect(part2);

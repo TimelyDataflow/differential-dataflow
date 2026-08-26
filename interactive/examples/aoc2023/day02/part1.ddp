@@ -1,0 +1,13 @@
+-- AoC 2023 day 2 part 1: sum of game ids where every set fits 13g/12r/14b.
+-- input 0: (game, set, green, red, blue)
+
+let games = input 0 | key($0[0] ;) | distinct;
+let bad   = input 0
+    | filter(not($0[2] <= 13 && $0[3] <= 12 && $0[4] <= 14))
+    | key($0[0] ;) | distinct;
+let good = games - bad;
+
+export "result" = good
+    | key(; $0[0]) | collect
+    | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part1);

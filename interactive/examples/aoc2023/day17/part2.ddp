@@ -1,0 +1,29 @@
+-- AoC 2023 day 17 part 2: ultra crucible; straight while steps<10, turns
+-- (and the goal) require steps>=4.
+-- input 0: (row, col, cost) 1-indexed
+
+let cells = input 0 | key($0[0], $0[1] ; $0[2]);
+let seeds = (cells | filter($0[0] == 1 && $0[1] == 1) | map(1, 1, 1, 0, 0 ; 0))
+          + (cells | filter($0[0] == 1 && $0[1] == 1) | map(1, 1, 0, 1, 0 ; 0));
+
+dijk: {
+    let straight = mc | filter($0[4] < 10)
+        | map($0[0] + $0[2], $0[1] + $0[3] ; $0[2], $0[3], $0[4], $1[0])
+        | join(cells, ($0[0], $0[1], $1[0], $1[1], $1[2] + 1 ; $1[3] + $2[0]));
+    let turna = mc | filter($0[4] >= 4)
+        | map($0[0] + $0[3], $0[1] + $0[2] ; $0[3], $0[2], $1[0])
+        | join(cells, ($0[0], $0[1], $1[0], $1[1], 1 ; $1[2] + $2[0]));
+    let turnb = mc | filter($0[4] >= 4)
+        | map($0[0] - $0[3], $0[1] - $0[2] ; 0 - $0[3], 0 - $0[2], $1[0])
+        | join(cells, ($0[0], $0[1], $1[0], $1[1], 1 ; $1[2] + $2[0]));
+    var mc = seeds + straight + turna + turnb | min;
+}
+
+let maxr = cells | key(; 1000000 - $0[0]) | min | map(; 1000000 - $1[0]);
+let maxc = cells | key(; 1000000 - $0[1]) | min | map(; 1000000 - $1[0]);
+let corner = maxr | join(maxc, (; $1[0], $2[0]));
+
+export "result" = dijk::mc | filter($0[4] >= 4) | key(; $0[0], $0[1], $1[0], $0[4])
+    | join(corner, (; $1[0] == $2[0], $1[1] == $2[1], $1[2], $1[3]))
+    | filter($1[0] && $1[1]) | key(; $1[2]) | min
+    | arrange | inspect(part2);

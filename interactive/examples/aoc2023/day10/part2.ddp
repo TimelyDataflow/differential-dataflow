@@ -1,0 +1,58 @@
+-- AoC 2023 day 10 part 2: cells enclosed by the loop. Diagonal parity walk:
+-- Enclosed(r+1,c+1) = Enclosed(r,c) toggled by loop pipes J - | F at (r,c).
+-- (The slt resolves S to '???', which never toggles; we mirror that.)
+-- input 0: (row, col, code), 1-indexed
+
+let symbols = input 0 | key($0[0], $0[1] ; $0[2]);
+let pipes = symbols | filter($1[0] != 46 && $1[0] != 83);
+
+let e1 = pipes | map($0[0], $0[1],
+    if($1[0] == 124, $0[0] - 1, if($1[0] == 70, $0[0] + 1, if($1[0] == 76, $0[0] - 1, $0[0]))),
+    if($1[0] == 45, $0[1] - 1, if($1[0] == 74, $0[1] - 1, if($1[0] == 55, $0[1] - 1, $0[1]))) ;);
+let e2 = pipes | map($0[0], $0[1],
+    if($1[0] == 124, $0[0] + 1, if($1[0] == 74, $0[0] - 1, if($1[0] == 55, $0[0] + 1, $0[0]))),
+    if($1[0] == 45, $0[1] + 1, if($1[0] == 70, $0[1] + 1, if($1[0] == 76, $0[1] + 1, $0[1]))) ;);
+let r1 = e1 | map($0[2], $0[3], $0[0], $0[1] ;);
+let r2 = e2 | map($0[2], $0[3], $0[0], $0[1] ;);
+let scell = symbols | filter($1[0] == 83);
+let s4 = (scell | map($0[0], $0[1], $0[0] + 1, $0[1] ;))
+       + (scell | map($0[0], $0[1], $0[0], $0[1] + 1 ;))
+       + (scell | map($0[0], $0[1], $0[0] - 1, $0[1] ;))
+       + (scell | map($0[0], $0[1], $0[0], $0[1] - 1 ;));
+
+let symm = e1 + e2 + r1 + r2 + s4 | count | filter($1[0] == 2)
+    | map($0[0], $0[1] ; $0[2], $0[3]);
+
+reach: {
+    let next = r | join(symm, ($2[0], $2[1] ;));
+    var r = (scell | map($0[0], $0[1] ;)) + next | distinct;
+}
+let loop = reach::r;
+-- key (r, c) of loop cells (incl. S)
+
+-- loop cells whose ORIGINAL symbol toggles parity (S resolves to '???': never)
+let toggles = loop | join(symbols, ($0 ; $2[0]))
+    | filter(or(or($1[0] == 74, $1[0] == 45), or($1[0] == 124, $1[0] == 70)))
+    | map($0 ;);
+
+status: {
+    let cur = st | map($0[0], $0[1] ; $0[2]) | join(symbols, ($0 ; $1[0]));
+    -- in-grid status cells (r, c ; e)
+    let tog = cur | join(toggles, ($0[0] + 1, $0[1] + 1, 1 - $1[0] ;));
+    let matched = cur | join(toggles, ($0 ; $1[0]));
+    let nontog = (cur - matched) | map($0[0] + 1, $0[1] + 1, $1[0] ;);
+    var st = (symbols | filter(or($0[0] == 1, $0[1] == 1)) | map($0[0], $0[1], 0 ;)) + tog + nontog | distinct;
+}
+
+let enclosed = status::st | filter($0[2] == 1) | map($0[0], $0[1] ;);
+
+-- pipe = reach minus S cells with no symm out-edge (slt keeps those countable)
+let ssrc = symm | map($0 ;) | distinct;
+let scellk = scell | map($0[0], $0[1] ;);
+let isoS = scellk - (scellk | join(ssrc, ($0 ;)));
+let pipe = loop - isoS;
+
+-- set-minus needs an anti-join: bare `-` is multiset subtraction and lets
+-- non-enclosed pipe cells cancel unrelated enclosed cells in the count.
+let enc_on_pipe = enclosed | join(pipe, ($0 ;));
+export "result" = (enclosed - enc_on_pipe) | key(;) | count | arrange | inspect(part2);

@@ -1,0 +1,34 @@
+-- AoC 2023 day 10 part 1: loop length / 2 from S through mutual pipe links.
+-- codes: '-'=45 '|'=124 'F'=70 'L'=76 'J'=74 '7'=55 '.'=46 'S'=83
+-- input 0: (row, col, code), 1-indexed
+
+let symbols = input 0 | key($0[0], $0[1] ; $0[2]);
+let pipes = symbols | filter($1[0] != 46 && $1[0] != 83);
+
+let e1 = pipes | map($0[0], $0[1],
+    if($1[0] == 124, $0[0] - 1, if($1[0] == 70, $0[0] + 1, if($1[0] == 76, $0[0] - 1, $0[0]))),
+    if($1[0] == 45, $0[1] - 1, if($1[0] == 74, $0[1] - 1, if($1[0] == 55, $0[1] - 1, $0[1]))) ;);
+let e2 = pipes | map($0[0], $0[1],
+    if($1[0] == 124, $0[0] + 1, if($1[0] == 74, $0[0] - 1, if($1[0] == 55, $0[0] + 1, $0[0]))),
+    if($1[0] == 45, $0[1] + 1, if($1[0] == 70, $0[1] + 1, if($1[0] == 76, $0[1] + 1, $0[1]))) ;);
+let r1 = e1 | map($0[2], $0[3], $0[0], $0[1] ;);
+let r2 = e2 | map($0[2], $0[3], $0[0], $0[1] ;);
+let scell = symbols | filter($1[0] == 83);
+let s4 = (scell | map($0[0], $0[1], $0[0] + 1, $0[1] ;))
+       + (scell | map($0[0], $0[1], $0[0], $0[1] + 1 ;))
+       + (scell | map($0[0], $0[1], $0[0] - 1, $0[1] ;))
+       + (scell | map($0[0], $0[1], $0[0], $0[1] - 1 ;));
+
+let symm = e1 + e2 + r1 + r2 + s4 | count | filter($1[0] == 2)
+    | map($0[0], $0[1] ; $0[2], $0[3]);
+-- (r1, c1 ; r2, c2), mutual links only
+
+reach: {
+    let next = r | join(symm, ($2[0], $2[1] ;));
+    var r = (scell | map($0[0], $0[1] ;)) + next | distinct;
+}
+
+export "result" = reach::r
+    | key(; 1) | collect
+    | map(; fold($1, tuple(0, 0), tuple(1 - ^1[0], ^1[1] + ^1[0]))[1])
+    | arrange | inspect(part1);

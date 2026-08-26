@@ -1,0 +1,47 @@
+-- AoC 2023 day 5 part 2: seed RANGES through the 7 stages; min location.
+-- Ranges split into mapped intersections and identity holes each stage.
+-- input 0: tagged rows -- (0, start, len) | (1, stage, dst, src, len)
+
+let seeds   = input 0 | filter($0[0] == 0) | key(0, $0[1], $0[1] + $0[2] ;);
+let entries = input 0 | filter($0[0] == 1) | key($0[1] ; $0[2], $0[3], $0[4]);
+
+ranges: {
+    let cur = active | filter($0[0] <= 6);
+    -- key (stage, s, e)
+
+    let isect = cur | map($0[0] ; $0[1], $0[2])
+        | join(entries, ($0[0], $1[0], $1[1], $2[0], $2[1], $2[2] ;))
+        | map($0[0], $0[1], $0[2],
+              if($0[1] > $0[4], $0[1], $0[4]),
+              if($0[2] < $0[4] + $0[5], $0[2], $0[4] + $0[5]),
+              $0[3], $0[4] ;)
+        | filter($0[3] < $0[4]);
+    -- key (stage, s, e, cs, ce, dst, src)
+
+    let mapped = isect | map($0[0] + 1, $0[3] + $0[5] - $0[6], $0[4] + $0[5] - $0[6] ;);
+
+    -- candidate hole starts per interval I=(stage,s,e): s and every ce
+    let cand = (cur | map($0[0], $0[1], $0[2], $0[1] ;))
+             + (isect | map($0[0], $0[1], $0[2], $0[4] ;)) | distinct;
+    -- key (stage, s, e, h)
+
+    let csets = isect | map($0[0], $0[1], $0[2] ; $0[3]);
+    -- (I ; cs)
+
+    let pairs = cand | map($0[0], $0[1], $0[2] ; $0[3])
+        | join(csets, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
+        | filter($1[0] >= $0[3]);
+    -- (I, h ; cs) for cs >= h
+
+    let hend = pairs | min;
+    let holes_bounded = hend | filter($0[3] < $1[0]) | map($0[0] + 1, $0[3], $1[0] ;);
+
+    let withcs = pairs | map($0 ;) | distinct;
+    let nocs = cand - withcs;
+    let holes_tail = nocs | filter($0[3] < $0[2]) | map($0[0] + 1, $0[3], $0[2] ;);
+
+    var active = seeds + mapped + holes_bounded + holes_tail | distinct;
+}
+
+export "result" = ranges::active | filter($0[0] == 7)
+    | key(; $0[1]) | min | arrange | inspect(part2);

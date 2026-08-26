@@ -1,0 +1,13 @@
+-- AoC 2023 day 4 part 1 (slt semantics): per card, numbers appearing >1
+-- time across all 35 slots; points = 2^(k-1); sum.
+-- input 0: (card, side, idx, value)
+
+let dups = input 0 | key($0[0], $0[3] ;) | count | filter($1[0] > 1);
+let points = dups
+    | map($0[0] ; $0[1]) | collect
+    | map($0 ; fold($1, 0, if(^1 == 0, 1, ^1 * 2)));
+
+export "result" = points
+    | key(; $1[0]) | collect
+    | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part1);

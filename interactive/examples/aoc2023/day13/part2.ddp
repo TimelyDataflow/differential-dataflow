@@ -1,0 +1,29 @@
+-- AoC 2023 day 13 part 2: axes with EXACTLY ONE mismatched mirrored cell
+-- pair. Sum 100*(a-1) for rows + (c-1) for cols.
+-- input 0: (block, row, col, code), 1-indexed
+
+let cells = input 0 | key($0[0], $0[1], $0[2] ; $0[3]);
+let cb = cells | map($0[0] ; $0[1], $0[2], $1[0]);      -- (b ; r, c, s)
+
+-- row axes
+let rcand = cells | map($0[0], $0[1] ;) | distinct;
+let u1 = rcand | map($0[0] ; $0[1])
+    | join(cb, ($0[0], 2 * $1[0] - 1 - $2[0], $2[1] ; $1[0], $2[0], $2[2]));
+-- (b, y, c ; a, x, s)
+let rmis = u1 | join(cells, ($0[0], $1[0] ; ($1[1] < $0[1]) && not($1[2] == $2[0])))
+    | filter($1[0] == 1) | map($0 ;) | count | filter($1[0] == 1);
+-- (b, a ; 1): exactly one smudge
+let rscore = rmis | key(; 100 * ($0[1] - 1));
+
+-- column axes
+let ccand = cells | map($0[0], $0[2] ;) | distinct;
+let v1 = ccand | map($0[0] ; $0[1])
+    | join(cb, ($0[0], $2[0], 2 * $1[0] - 1 - $2[1] ; $1[0], $2[1], $2[2]));
+-- (b, r, y ; a, x, s)
+let cmis = v1 | join(cells, ($0[0], $1[0] ; ($1[1] < $0[2]) && not($1[2] == $2[0])))
+    | filter($1[0] == 1) | map($0 ;) | count | filter($1[0] == 1);
+let cscore = cmis | key(; $0[1] - 1);
+
+export "result" = rscore + cscore
+    | collect | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part2);

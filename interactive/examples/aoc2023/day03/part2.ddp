@@ -1,0 +1,52 @@
+-- AoC 2023 day 3 part 2: gears = '*' adjacent to exactly two part numbers;
+-- sum of the two numbers' product per gear.
+-- input 0: (row, col, charcode)
+
+let cells    = input 0 | filter($0[2] != 46) | key($0[0], $0[1] ; $0[2]);
+let numerals = cells | filter($1[0] >= 48 && $1[0] <= 57) | map($0 ; $1[0] - 48);
+let gears    = cells | filter($1[0] == 42);
+
+let has_left = numerals | map($0[0], $0[1] + 1 ; $1[0]) | join(numerals, ($0 ; $2[0]));
+let starts = numerals - has_left;
+
+runs: {
+    let grow = run | map($0[0], $0[2] ; $0[1], $0[3])
+                   | join(numerals, ($0[0], $1[0], $0[1] + 1, $1[1] * 10 + $2[0] ;));
+    var run = (starts | map($0[0], $0[1], $0[1] + 1, $1[0] ;)) + grow | distinct;
+}
+let extendable = runs::run | map($0[0], $0[2] ; $0[1], $0[3])
+                           | join(numerals, ($0[0], $1[0], $0[1], $1[1] ;));
+let maximal = runs::run - extendable;
+let partvals = maximal | map($0[0], $0[1] ; $0[3]);
+-- (row, start ; value)
+
+labels: {
+    let ext = label | map($0[0], $0[1] + 1 ; $0[2]) | join(numerals, ($0[0], $0[1], $1[0] ;));
+    var label = (starts | map($0[0], $0[1], $0[1] ;)) + ext | distinct;
+}
+let labelcells = labels::label | map($0[0], $0[1] ; $0[2]);
+
+let gearnbrs = gears
+    | flatmap(list(tuple(-1,-1), tuple(-1,0), tuple(-1,1),
+                   tuple(0,-1),  tuple(0,0),  tuple(0,1),
+                   tuple(1,-1),  tuple(1,0),  tuple(1,1)))
+    | map($0[0] + $1[1][0], $0[1] + $1[1][1] ; $0[0], $0[1]);
+-- (nbr_cell ; gear)
+
+let pairs = gearnbrs
+    | join(labelcells, ($1[0], $1[1], $0[0], $2[0] ;))
+    | distinct;
+-- key (gear_r, gear_c, part_row, part_start)
+
+let gearvals = pairs
+    | map($0[2], $0[3] ; $0[0], $0[1])
+    | join(partvals, ($1[0], $1[1] ; $2[0]));
+-- (gear ; part value)
+
+export "result" = gearvals
+    | collect
+    | filter(len($1) == 2)
+    | map(; $1[0][0] * $1[1][0])
+    | key(; $1[0]) | collect
+    | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part2);
