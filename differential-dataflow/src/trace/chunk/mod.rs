@@ -277,7 +277,7 @@ where
 /// using [`Chunk::extract`]. The batcher consolidates equal `(data, time)` updates
 /// but does *not* advance times — time advancement is advance's job, handled later in
 /// the trace. Both settle their output, since the batcher's chains want to be graded.
-pub type ChunkBatcher<C> = crate::trace::implementations::merge_batcher::MergeBatcher<ChunkMerger<C>>;
+pub type ChunkBatcher<C> = crate::trace::implementations::merge_batcher::MergeBatcher<ChunkMerger<C>, ChunkBuilder<C>>;
 
 /// A spine of `Rc`-shared [`ChunkBatch`]s of type `C`: the trace type for `arrange`.
 pub type ChunkSpine<C> = crate::trace::implementations::spine_fueled::Spine<std::rc::Rc<ChunkBatch<C>>>;

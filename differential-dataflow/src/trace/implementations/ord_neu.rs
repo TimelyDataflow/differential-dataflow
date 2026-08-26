@@ -22,14 +22,14 @@ pub use self::key_batch::{OrdKeyBatch, OrdKeyBuilder};
 /// A trace implementation using a spine of ordered lists.
 pub type OrdValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<Vector<((K,V),T,R)>>>>;
 /// A batcher using ordered lists.
-pub type OrdValBatcher<K, V, T, R> = MergeBatcher<VecMerger<(K, V), T, R>>;
+pub type OrdValBatcher<K, V, T, R> = MergeBatcher<VecMerger<(K, V), T, R>, VecOrdValBuilder<K, V, T, R>>;
 /// A builder using ordered lists.
 pub type VecOrdValBuilder<K, V, T, R> = OrdValBuilder<Vector<((K,V),T,R)>, Vec<((K,V),T,R)>>;
 
 /// A trace implementation using a spine of ordered lists.
 pub type OrdKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<Vector<((K,()),T,R)>>>>;
 /// A batcher for ordered lists.
-pub type OrdKeyBatcher<K, T, R> = MergeBatcher<VecMerger<(K, ()), T, R>>;
+pub type OrdKeyBatcher<K, T, R> = MergeBatcher<VecMerger<(K, ()), T, R>, VecOrdKeyBuilder<K, T, R>>;
 /// A builder for ordered lists.
 pub type VecOrdKeyBuilder<K, T, R> = OrdKeyBuilder<Vector<((K,()),T,R)>, Vec<((K,()),T,R)>>;
 

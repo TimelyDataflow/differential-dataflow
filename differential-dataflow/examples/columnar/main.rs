@@ -130,14 +130,14 @@ mod reachability {
             let edges_arr = arrange_core::<_, _,
                 ValChunker<(Node, Node, IterTime, Diff)>,
                 _,
-                ValBuilder<Node, Node, IterTime, Diff>,
+                _,
                 ValSpine<Node, Node, IterTime, Diff>,
             >(edges_inner.inner, edges_pact, "Edges", ValBatcher::new);
 
             let reach_arr = arrange_core::<_, _,
                 ValChunker<(Node, (), IterTime, Diff)>,
                 _,
-                ValBuilder<Node, (), IterTime, Diff>,
+                _,
                 ValSpine<Node, (), IterTime, Diff>,
             >(reach.inner, reach_pact, "Reach", ValBatcher::new);
 
@@ -163,7 +163,7 @@ mod reachability {
             let combined_arr = arrange_core::<_, _,
                 ValChunker<(Node, (), IterTime, Diff)>,
                 _,
-                ValBuilder<Node, (), IterTime, Diff>,
+                _,
                 ValSpine<Node, (), IterTime, Diff>,
             >(combined.inner, combined_pact, "Combined", ValBatcher::new);
 

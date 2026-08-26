@@ -18,7 +18,7 @@ use differential_dataflow::operators::join::join_with_tactic;
 use differential_dataflow::operators::reduce::reduce_with_tactic;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::chunk::{Chunk, ChunkBatcher, ChunkBuilder};
+use differential_dataflow::trace::chunk::{Chunk, ChunkBatcher};
 
 use corgi::arrange::gather;
 use corgi::Value as CValue;
@@ -295,7 +295,7 @@ impl Backend for CorgiBackend {
         // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
         // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
         // builder. No columns→rows→columns round-trip at the arrangement boundary.
-        arrange_core::<_, CC, CorgiChunker<Time, Diff>, _, ChunkBuilder<CorgiChunk<Time, Diff>>, CTrace>(
+        arrange_core::<_, CC, CorgiChunker<Time, Diff>, _, _, CTrace>(
             c.inner,
             Pipeline,
             "CorgiArrange",

@@ -55,21 +55,21 @@ fn main() {
 
             match mode.as_str() {
                 "key" => {
-                    use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatcher, VecOrdKeyBuilder, OrdKeySpine};
+                    use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatcher, OrdKeySpine};
                     let (data_input, data) = scope.new_collection::<String, isize>();
                     let (keys_input, keys) = scope.new_collection::<String, isize>();
-                    let data = data.map(|k| (k, ())).arrange::<_, VecOrdKeyBuilder<String,_,isize>, OrdKeySpine<String,_,isize>>(OrdKeyBatcher::new);
-                    let keys = keys.map(|k| (k, ())).arrange::<_, VecOrdKeyBuilder<String,_,isize>, OrdKeySpine<String,_,isize>>(OrdKeyBatcher::new);
+                    let data = data.map(|k| (k, ())).arrange::<_, _, OrdKeySpine<String,_,isize>>(OrdKeyBatcher::new);
+                    let keys = keys.map(|k| (k, ())).arrange::<_, _, OrdKeySpine<String,_,isize>>(OrdKeyBatcher::new);
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                     Workload { data_input, keys_input }
                 },
                 "val" => {
-                    use differential_dataflow::trace::implementations::ord_neu::{OrdValBatcher, VecOrdValBuilder, OrdValSpine};
+                    use differential_dataflow::trace::implementations::ord_neu::{OrdValBatcher, OrdValSpine};
                     let (data_input, data) = scope.new_collection::<String, isize>();
                     let (keys_input, keys) = scope.new_collection::<String, isize>();
-                    let data = data.map(|x| (x, ())).arrange::<_, VecOrdValBuilder<String,(),_,isize>, OrdValSpine<String,(),_,isize>>(OrdValBatcher::new);
-                    let keys = keys.map(|x| (x, ())).arrange::<_, VecOrdValBuilder<String,(),_,isize>, OrdValSpine<String,(),_,isize>>(OrdValBatcher::new);
+                    let data = data.map(|x| (x, ())).arrange::<_, _, OrdValSpine<String,(),_,isize>>(OrdValBatcher::new);
+                    let keys = keys.map(|x| (x, ())).arrange::<_, _, OrdValSpine<String,(),_,isize>>(OrdValBatcher::new);
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                     Workload { data_input, keys_input }
@@ -79,7 +79,7 @@ fn main() {
                     // the same generic `Chunk` harness as `vec` via a
                     // `ContainerChunker<ColChunk>`.
                     use differential_dataflow::Hashable;
-                    use differential_dataflow::columnar::trace::{Batcher, Builder, Spine, ColChunk};
+                    use differential_dataflow::columnar::trace::{Batcher, Spine, ColChunk};
                     use differential_dataflow::trace::implementations::chunker::ContainerChunker;
                     use differential_dataflow::operators::arrange::arrangement::arrange_core;
                     use timely::dataflow::channels::pact::Exchange;
@@ -90,12 +90,11 @@ fn main() {
                     let keys = keys.map(|x| (x, ()));
 
                     type Ba = Batcher<String, (), u64, isize>;
-                    type Bu = Builder<String, (), u64, isize>;
                     type Sp = Spine<String, (), u64, isize>;
                     type Chu = ContainerChunker<ColChunk<(String, (), u64, isize)>>;
                     let exchange = || Exchange::new(|u: &((String, ()), u64, isize)| (u.0).0.hashed().into());
-                    let data = arrange_core::<_, _, Chu, Ba, Bu, Sp>(data.inner, exchange(), "DataArrange", Ba::new);
-                    let keys = arrange_core::<_, _, Chu, Ba, Bu, Sp>(keys.inner, exchange(), "KeysArrange", Ba::new);
+                    let data = arrange_core::<_, _, Chu, Ba, _, Sp>(data.inner, exchange(), "DataArrange", Ba::new);
+                    let keys = arrange_core::<_, _, Chu, Ba, _, Sp>(keys.inner, exchange(), "KeysArrange", Ba::new);
                     // `ColChunk`'s cursor yields `Val = columnar::Ref<()> = ()`, not `&()`.
                     keys.join_core(data, |_k, _, _| Option::<()>::None)
                         .probe_with(&mut probe);
@@ -106,7 +105,7 @@ fn main() {
                     // insert allocates a `String`) but arranged through the `Chunk`
                     // harness via a `ContainerChunker<VecChunk>`.
                     use differential_dataflow::Hashable;
-                    use differential_dataflow::trace::chunk::vec::{ChunkBatcher, ChunkBuilder, ChunkSpine, VecChunk};
+                    use differential_dataflow::trace::chunk::vec::{ChunkBatcher, ChunkSpine, VecChunk};
                     use differential_dataflow::trace::implementations::chunker::ContainerChunker;
                     use differential_dataflow::operators::arrange::arrangement::arrange_core;
                     use timely::dataflow::channels::pact::Exchange;
@@ -117,12 +116,11 @@ fn main() {
                     let keys = keys.map(|x| (x, ()));
 
                     type Ba = ChunkBatcher<String, (), u64, isize>;
-                    type Bu = ChunkBuilder<String, (), u64, isize>;
                     type Sp = ChunkSpine<String, (), u64, isize>;
                     type Chu = ContainerChunker<VecChunk<String, (), u64, isize>>;
                     let exchange = || Exchange::new(|u: &((String, ()), u64, isize)| (u.0).0.hashed().into());
-                    let data = arrange_core::<_, _, Chu, Ba, Bu, Sp>(data.inner, exchange(), "DataArrange", Ba::new);
-                    let keys = arrange_core::<_, _, Chu, Ba, Bu, Sp>(keys.inner, exchange(), "KeysArrange", Ba::new);
+                    let data = arrange_core::<_, _, Chu, Ba, _, Sp>(data.inner, exchange(), "DataArrange", Ba::new);
+                    let keys = arrange_core::<_, _, Chu, Ba, _, Sp>(keys.inner, exchange(), "KeysArrange", Ba::new);
                     keys.join_core(data, |_k, &(), &()| Option::<()>::None)
                         .probe_with(&mut probe);
                     Workload { data_input, keys_input }

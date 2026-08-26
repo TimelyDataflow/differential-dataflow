@@ -24,7 +24,7 @@ use differential_dataflow::operators::int_proxy::vec_backend::VecReduceBackend;
 use differential_dataflow::operators::iterate::Iterate;
 use differential_dataflow::operators::reduce::{reduce_with_tactic, ReduceTactic};
 use differential_dataflow::trace::chunk::vec::{
-    ChunkBatcher as VChunkBatcher, ChunkBuilder as VChunkBuilder, ChunkSpine as VChunkSpine, VecChunk,
+    ChunkBatcher as VChunkBatcher, ChunkSpine as VChunkSpine, VecChunk,
 };
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::trace::cursor::Cursor;
@@ -139,7 +139,7 @@ fn proxy_matches_mainline(updates: Vec<((u64, u64), u64, i64)>, window: usize) {
         worker.dataflow::<u64, _, _>(|scope| {
             let coll = updates.clone().to_stream(scope).as_collection();
             let hashed = coll.clone().map(|(k, v)| (k.hashed(), (k, v)));
-            let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), u64, i64)>, ContainerChunker<VecChunk<u64, (u64, u64), u64, i64>>, _, VChunkBuilder<u64, (u64, u64), u64, i64>, VChunkSpine<u64, (u64, u64), u64, i64>>(hashed.inner, Pipeline, "Arrange", VChunkBatcher::new);
+            let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), u64, i64)>, ContainerChunker<VecChunk<u64, (u64, u64), u64, i64>>, _, _, VChunkSpine<u64, (u64, u64), u64, i64>>(hashed.inner, Pipeline, "Arrange", VChunkBatcher::new);
             reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), u64, i64>, _>(arr, "VecReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, window)))
                 .as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
                 .inspect(move |(d, t, r)| ts.lock().unwrap().push((*d, *t, *r)));
@@ -202,7 +202,7 @@ fn reduce_string_values_matches_mainline() {
         worker.dataflow::<u64, _, _>(|scope| {
             let coll = updates.clone().to_stream(scope).as_collection();
             let hashed = coll.clone().map(|(k, v): (u64, String)| (k.hashed(), (k, v)));
-            let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, i64)>, ContainerChunker<VecChunk<u64, (u64, String), u64, i64>>, _, VChunkBuilder<u64, (u64, String), u64, i64>, VChunkSpine<u64, (u64, String), u64, i64>>(hashed.inner, Pipeline, "Arrange", VChunkBatcher::new);
+            let arr = arrange_core::<Pipeline, Vec<((u64, (u64, String)), u64, i64)>, ContainerChunker<VecChunk<u64, (u64, String), u64, i64>>, _, _, VChunkSpine<u64, (u64, String), u64, i64>>(hashed.inner, Pipeline, "Arrange", VChunkBatcher::new);
             reduce_with_tactic::<_, VChunkSpine<u64, (u64, String), u64, i64>, _>(arr, "VecReduceStr", ProxyReduceTactic::new(VecReduceBackend::with_window(
                 |_k: &u64, input: &[(String, i64)], current: &mut Vec<(String, i64)>, updates: &mut Vec<(String, i64)>| {
                     if let Some(m) = input.iter().filter(|(_, d)| *d > 0).map(|(v, _)| v.clone()).max() { updates.push((m, 1)); }
@@ -236,7 +236,7 @@ fn reduce_inside_iterate() {
             let input = updates.clone().to_stream(scope).as_collection();
             let result = input.iterate(|_scope, inner| {
                 let hashed = inner.map(|(k, v)| (k.hashed(), (k, v)));
-                let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), Product<u64, u64>, i64)>, ContainerChunker<VecChunk<u64, (u64, u64), Product<u64, u64>, i64>>, _, VChunkBuilder<u64, (u64, u64), Product<u64, u64>, i64>, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>>(hashed.inner, Pipeline, "ArrIter", VChunkBatcher::new);
+                let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), Product<u64, u64>, i64)>, ContainerChunker<VecChunk<u64, (u64, u64), Product<u64, u64>, i64>>, _, _, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>>(hashed.inner, Pipeline, "ArrIter", VChunkBatcher::new);
                 reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "IterReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, 1)))
                     .as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
             });
@@ -311,7 +311,7 @@ fn reduce_collision_inside_iterate() {
             let input = updates.clone().to_stream(scope).as_collection();
             let result = input.iterate(|_scope, inner| {
                 let hashed = inner.map(|(k, v)| (k % 2, (k, v)));
-                let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), Product<u64, u64>, i64)>, ContainerChunker<VecChunk<u64, (u64, u64), Product<u64, u64>, i64>>, _, VChunkBuilder<u64, (u64, u64), Product<u64, u64>, i64>, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>>(hashed.inner, Pipeline, "ArrCollide", VChunkBatcher::new);
+                let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), Product<u64, u64>, i64)>, ContainerChunker<VecChunk<u64, (u64, u64), Product<u64, u64>, i64>>, _, _, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>>(hashed.inner, Pipeline, "ArrCollide", VChunkBatcher::new);
                 reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "CollideReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, 1)))
                     .as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
             });
