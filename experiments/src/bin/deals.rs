@@ -4,7 +4,7 @@ use differential_dataflow::input::Input;
 use differential_dataflow::VecCollection;
 use differential_dataflow::operators::*;
 
-use differential_dataflow::trace::implementations::{ValSpine, ValBatcher, ValBuilder};
+use differential_dataflow::trace::implementations::{ValSpine, ValBatcher};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::iterate::Variable;
@@ -39,7 +39,7 @@ fn main() {
             let (input, graph) = scope.new_collection();
 
             // each edge should exist in both directions.
-            let graph = graph.arrange::<_, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>(ValBatcher::new);
+            let graph = graph.arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new);
 
             match program.as_str() {
                 "tc"    => tc(graph.clone()).filter(move |_| inspect).map(|_| ()).consolidate().inspect(|x| println!("tc count: {:?}", x)).probe(),
@@ -93,7 +93,7 @@ fn tc<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Em
             let result =
             inner_collection
                 .map(|(x,y)| (y,x))
-                .arrange::<_, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>(ValBatcher::new)
+                .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                 .join_core(edges.clone(), |_y,&x,&z| Some((x, z)))
                 .concat(edges.as_collection(|&k,&v| (k,v)))
                 .arrange_by_self()
@@ -121,9 +121,9 @@ fn sg<'s, T: timely::progress::Timestamp + Lattice + Default + timely::order::Em
 
             let result =
             inner_collection
-                .arrange::<_, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>(ValBatcher::new)
+                .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                 .join_core(edges.clone(), |_,&x,&z| Some((x, z)))
-                .arrange::<_, ValBuilder<_,_,_,_>, ValSpine<_,_,_,_>>(ValBatcher::new)
+                .arrange::<_, ValSpine<_,_,_,_>>(ValBatcher::new)
                 .join_core(edges, |_,&x,&z| Some((x, z)))
                 .concat(peers)
                 .arrange_by_self()

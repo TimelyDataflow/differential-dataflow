@@ -24,7 +24,7 @@ use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::progress::Timestamp;
 use timely::progress::Antichain;
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::PushInto;
 use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Stamp;
 
@@ -303,7 +303,7 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
 /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
 /// It uses the supplied parallelization contract to distribute the data, which does not need to
 /// be consistently by key (though this is the most common).
-pub fn arrange_core<'scope, P, C, Chu, Ba, Bu, Tr>(
+pub fn arrange_core<'scope, P, C, Ba, Tr>(
     stream: Stream<'scope, Tr::Time, C>,
     pact: P,
     name: &str,
@@ -312,9 +312,7 @@ pub fn arrange_core<'scope, P, C, Chu, Ba, Bu, Tr>(
 where
     C: Container + Clone + 'static,
     P: ParallelizationContract<Tr::Time, C>,
-    Chu: ContainerBuilder + for<'a> PushInto<&'a mut C> + 'static,
-    Ba: Batcher<Tr::Time, Chu::Container, Vec<Bu::Input>> + 'static,
-    Bu: Builder<Time=Tr::Time, Output: Into<Tr::Batch>>,
+    Ba: Batcher<C, Time = Tr::Time, Output: Into<Tr::Batch>> + 'static,
     Tr: Trace+'static,
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
@@ -363,8 +361,6 @@ where
         // Initialize to the minimal input frontier.
         let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
 
-        let mut chunker = Chu::default();
-
         move |(input, frontier), output| {
 
             // As we receive data, we need to (i) stash the data and (ii) keep *enough* capabilities.
@@ -375,10 +371,7 @@ where
                 for capability in cap.retain_stamp(0).iter() {
                     capabilities.insert(capability.clone());
                 }
-                chunker.push_into(data);
-                while let Some(chunk) = chunker.extract() {
-                    batcher.insert(chunk);
-                }
+                batcher.insert(data);
             });
 
             // The frontier may have advanced by multiple elements, which is an issue because
@@ -393,13 +386,6 @@ where
             // frontier isn't equal to the previous. It is only in this case that we have any
             // data processing to do.
             if prev_frontier.borrow() != frontier.frontier() {
-                // Flush any data the chunker is still accumulating into the batcher before we
-                // seal. The batcher only sees chunks the chunker has emitted; without this drain
-                // a partial final chunk would never reach the batcher.
-                while let Some(chunk) = chunker.finish() {
-                    batcher.insert(chunk);
-                }
-
                 // There are two cases to handle with some care:
                 //
                 // 1. If any held capabilities are not in advance of the new input frontier,
@@ -433,9 +419,9 @@ where
                         frontier.frontier().to_owned(),
                         Antichain::from_elem(Tr::Time::minimum()),
                     );
-                    let (chain, retained) = batcher.extract(frontier.frontier());
+                    let (extracted, retained) = batcher.extract(frontier.frontier());
 
-                    let batch = trace::Span::new(description, chain.and_then(|mut chain| Bu::seal(&mut chain)).map(Into::into));
+                    let batch = trace::Span::new(description, extracted.map(Into::into));
 
                     let stamp = retired.iter().map(|c| c.time().clone()).collect::<Stamp<_>>();
                     writer.insert(batch.clone(), stamp);
@@ -444,11 +430,10 @@ where
                     output.session(&retired).give(batch);
 
                     // Having extracted and sent the batch of updates not in advance of the input
-                    // frontier, we should downgrade all capabilities to match the batcher's lower
-                    // update frontier.
+                    // frontier, we downgrade all capabilities to match the batcher's lower update
+                    // frontier.
                     // This may involve discarding capabilities, which is fine as any new updates arrive
                     // in messages with new capabilities.
-
                     let mut new_capabilities = Antichain::new();
                     for time in retained.iter() {
                         if let Some(capability) = capabilities.elements().iter().find(|c| c.time().less_equal(time)) {
@@ -458,7 +443,6 @@ where
                             panic!("failed to find capability");
                         }
                     }
-
                     capabilities = new_capabilities;
                 }
                 else {

@@ -5,7 +5,7 @@ use timely::dataflow::{InputHandle, ProbeHandle};
 use timely::Config;
 
 use differential_dataflow::columnar::collection;
-use differential_dataflow::columnar::trace::{Batcher, Builder, Chunker, Spine};
+use differential_dataflow::columnar::trace::{Batcher, Spine};
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 
 type Upd = (u64, (), u64, i64);
@@ -29,9 +29,7 @@ fn arrange_reaches_one(config: Config, diffs: &'static [i64]) -> bool {
             arrange_core::<
                 _,
                 _,
-                Chunker<Upd>,
                 _,
-                Builder<u64, (), u64, i64>,
                 Spine<u64, (), u64, i64>,
             >(stream, pact, "Arrange", Batcher::new)
             .stream

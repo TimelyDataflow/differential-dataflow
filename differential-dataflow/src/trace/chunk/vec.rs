@@ -53,7 +53,7 @@ impl<K, V, T, R> Default for VecChunk<K, V, T, R> {
 pub type ChunkSpine<K, V, T, R> = super::ChunkSpine<VecChunk<K, V, T, R>>;
 /// Merge batcher over `VecChunk`s; a `ContainerChunker<VecChunk>` at the
 /// `arrange_core` callsite forms the chunks it merges (via the container traits below).
-pub type ChunkBatcher<K, V, T, R> = super::ChunkBatcher<VecChunk<K, V, T, R>>;
+pub type ChunkBatcher<K, V, T, R> = super::ChunkBatcher<crate::trace::implementations::ContainerChunker<VecChunk<K, V, T, R>>, VecChunk<K, V, T, R>>;
 /// Batch builder.
 pub type ChunkBuilder<K, V, T, R> = super::ChunkBuilder<VecChunk<K, V, T, R>>;
 

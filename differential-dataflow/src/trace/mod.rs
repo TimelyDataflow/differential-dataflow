@@ -228,13 +228,18 @@ pub trait Trace : TraceReader {
 /// A type capable of accepting containers of updates, and carving them out by time as batches.
 ///
 /// Updates are accepted as `C0`, the containers that arrive on the dataflow edge, and released as
-/// `C1`, whatever the consumer means by a batch. The two need not agree: an implementor staging
-/// updates in a form of its own can release that form directly. A consumer whose batch is a
-/// sequence of chunks names a sequence as `C1`.
+/// `Output`, whatever the implementor means by a batch. The two need not agree: an implementor
+/// staging updates in a form of its own can release that form directly, and one whose batch is a
+/// sequence of chunks names a sequence as its output.
 ///
 /// The implementor determines the meaning of extraction by a frontier; it is not required to be by
 /// antichain partial order.
-pub trait Batcher<T, C0, C1> {
+pub trait Batcher<C0> {
+    /// The timestamps by which updates are carved out.
+    type Time;
+    /// The batches released by extraction.
+    type Output;
+
     /// Takes the updates in `container`, leaving it in an undefined state.
     ///
     /// The implementor decides whether to claim the container's allocation or to drain it and
@@ -249,7 +254,7 @@ pub trait Batcher<T, C0, C1> {
     /// The reported lower bound should accurately reflect the times of all accepted updates that
     /// have not been extracted. Over approximation can result in stalling dataflows, and under
     /// approximation is simply incorrect.
-    fn extract<'a>(&'a mut self, upper: AntichainRef<'_, T>) -> (Option<C1>, AntichainRef<'a, T>);
+    fn extract<'a>(&'a mut self, upper: AntichainRef<'_, Self::Time>) -> (Option<Self::Output>, AntichainRef<'a, Self::Time>);
 }
 
 /// Functionality for building batches from ordered update sequences.

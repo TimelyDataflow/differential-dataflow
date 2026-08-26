@@ -957,22 +957,21 @@ pub mod vec {
         /// });
         /// ```
         pub fn consolidate(self) -> Self {
-            use crate::trace::implementations::{KeyBatcher, KeyBuilder, KeySpine};
-            self.consolidate_named::<_,KeyBuilder<_,_,_>, KeySpine<_,_,_>,_>("Consolidate", KeyBatcher::new, |key,&()| key.clone())
+            use crate::trace::implementations::{KeyBatcher, KeySpine};
+            self.consolidate_named::<_, KeySpine<_,_,_>,_>("Consolidate", KeyBatcher::new, |key,&()| key.clone())
         }
 
         /// As `consolidate` but with the ability to name the operator, specify the trace type,
         /// and provide the function `reify` to produce owned keys and values..
-        pub fn consolidate_named<Ba, Bu, Tr, F>(self, name: &str, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba, reify: F) -> Self
+        pub fn consolidate_named<Ba, Tr, F>(self, name: &str, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba, reify: F) -> Self
         where
-            Ba: crate::trace::Batcher<T, Vec<((D, ()), T, R)>, Vec<Vec<((D, ()), T, R)>>> + 'static,
+            Ba: crate::trace::Batcher<Vec<((D, ()), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
             Tr: crate::trace::Trace<Batch: Navigable, Time=T>+'static,
             for<'a> BatchCursor<Tr>: Cursor<Time=Tr::Time, Diff=R>,
-            Bu: crate::trace::Builder<Time=Tr::Time, Input=Vec<((D, ()), T, R)>, Output: Into<Tr::Batch>>,
             F: Fn(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> D + 'static,
         {
             self.map(|k| (k, ()))
-                .arrange_named::<Ba, Bu, Tr>(name, batcher)
+                .arrange_named::<Ba, Tr>(name, batcher)
                 .as_collection(reify)
         }
 
@@ -1020,9 +1019,8 @@ pub mod vec {
         }
     }
 
-    use crate::trace::implementations::{ValSpine, ValBatcher, ValBuilder};
-    use crate::trace::implementations::{KeySpine, KeyBatcher, KeyBuilder};
-    use crate::trace::implementations::ContainerChunker;
+    use crate::trace::implementations::{ValSpine, ValBatcher};
+    use crate::trace::implementations::{KeySpine, KeyBatcher};
     impl<'scope, T, K, V, R> Collection<'scope, T, (K, V), R>
     where
         T: Timestamp + Lattice,
@@ -1036,24 +1034,22 @@ pub mod vec {
         /// same-type containers. For chunker setups that convert between container types (e.g.
         /// columnar layouts), call [`arrange_core`](crate::operators::arrange::arrangement::arrange_core)
         /// directly.
-        pub fn arrange<Ba, Bu, Tr>(self, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, TraceAgent<Tr>>
+        pub fn arrange<Ba, Tr>(self, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, TraceAgent<Tr>>
         where
-            Ba: crate::trace::Batcher<T, Vec<((K, V), T, R)>, Vec<Bu::Input>> + 'static,
-            Bu: crate::trace::Builder<Time=T, Output: Into<Tr::Batch>>,
+            Ba: crate::trace::Batcher<Vec<((K, V), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
-            self.arrange_named::<Ba, Bu, Tr>("Arrange", batcher)
+            self.arrange_named::<Ba, Tr>("Arrange", batcher)
         }
 
         /// As [`Collection::arrange`] but with the ability to name the operator.
-        pub fn arrange_named<Ba, Bu, Tr>(self, name: &str, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, TraceAgent<Tr>>
+        pub fn arrange_named<Ba, Tr>(self, name: &str, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, TraceAgent<Tr>>
         where
-            Ba: crate::trace::Batcher<T, Vec<((K, V), T, R)>, Vec<Bu::Input>> + 'static,
-            Bu: crate::trace::Builder<Time=T, Output: Into<Tr::Batch>>,
+            Ba: crate::trace::Batcher<Vec<((K, V), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),T,R)| (update.0).0.hashed().into());
-            crate::operators::arrange::arrangement::arrange_core::<_, _, ContainerChunker<Vec<((K, V), T, R)>>, Ba, Bu, _>(self.inner, exchange, name, batcher)
+            crate::operators::arrange::arrangement::arrange_core::<_, _, Ba, _>(self.inner, exchange, name, batcher)
         }
     }
 
@@ -1072,7 +1068,7 @@ pub mod vec {
 
         /// As `arrange_by_key` but with the ability to name the arrangement.
         pub fn arrange_by_key_named(self, name: &str) -> Arranged<'scope, TraceAgent<ValSpine<K, V, T, R>>> {
-            self.arrange_named::<_,ValBuilder<_,_,_,_>,_>(name, ValBatcher::new)
+            self.arrange_named::<_,_>(name, ValBatcher::new)
         }
     }
 
@@ -1092,7 +1088,7 @@ pub mod vec {
         /// As `arrange_by_self` but with the ability to name the arrangement.
         pub fn arrange_by_self_named(self, name: &str) -> Arranged<'scope, TraceAgent<KeySpine<K, T, R>>> {
             self.map(|k| (k, ()))
-                .arrange_named::<_,KeyBuilder<_,_,_>,_>(name, KeyBatcher::new)
+                .arrange_named::<_,_>(name, KeyBatcher::new)
         }
     }
 

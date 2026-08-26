@@ -77,7 +77,7 @@ where
     FF: Fn(&Tr::Time, &mut Antichain<Tr::Time>) + 'static,
     P: ParallelizationContract<Tr::Time, CIn>,
     Y: Fn(std::time::Instant, usize) -> bool + 'static,
-    Bat: Batcher<Tr::Time, CIn, Vec<CMid>> + 'static,
+    Bat: Batcher<CIn, Time = Tr::Time, Output = Vec<CMid>> + 'static,
     Tac: HalfJoinTactic<Tr::Time, Tr::Batch, CMid, C> + 'static,
     CIn: Container,
     C: Container + 'static,
@@ -484,7 +484,10 @@ pub mod cursors {
         }
     }
 
-    impl<D: Ord, T: Timestamp, R: Semigroup> Batcher<T, Vec<(D, T, R)>, Vec<Vec<(D, T, R)>>> for BlobList<D, T, R> {
+    impl<D: Ord, T: Timestamp, R: Semigroup> Batcher<Vec<(D, T, R)>> for BlobList<D, T, R> {
+        type Time = T;
+        type Output = Vec<Vec<(D, T, R)>>;
+
         fn insert(&mut self, container: &mut Vec<(D, T, R)>) {
             self.stage.extend(container.drain(..).map(|(d,t,r)| (t,d,r)));
         }
