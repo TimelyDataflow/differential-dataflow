@@ -21,6 +21,7 @@ use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, Kind, NumOp, Op, Pr
 /// single sample can't reveal (it shows only one tag), so the scan is over every row, recursing
 /// column-wise to cover nested variants too.
 pub fn infer_shape_cols(rows: &[DValue]) -> Shape {
+    assert_uniform(rows);
     let Some(first) = rows.first() else { return Shape::Unit };
     match first {
         DValue::Int(_) => Shape::Prim(64),
@@ -77,6 +78,33 @@ pub fn infer_shape_cols(rows: &[DValue]) -> Shape {
                 .collect();
             Shape::Sum(lanes)
         }
+    }
+}
+
+/// The uniformity contract, enforced LOUDLY at the ingest boundary: corgi columns are SoA
+/// and carry ONE shape, while DDIR rows are dynamically typed. Without this check a mixed
+/// column either truncated silently (rows wider than row 0 lost their extra fields — silent
+/// wrong answers) or panicked with a bare `index out of bounds` — both worse than saying why.
+/// Nested levels are covered by `infer_shape_cols`' recursion (each recursive call re-checks).
+fn assert_uniform(rows: &[DValue]) {
+    let Some(first) = rows.first() else { return };
+    fn kind(r: &DValue) -> (&'static str, usize) {
+        match r {
+            DValue::Int(_) => ("Int", 0),
+            DValue::Tuple(xs) => ("Tuple", xs.len()),
+            DValue::List(_) => ("List", 0),
+            DValue::Variant(..) => ("Variant", 0),
+        }
+    }
+    let k0 = kind(first);
+    for (i, r) in rows.iter().enumerate().skip(1) {
+        let ki = kind(r);
+        assert!(
+            ki == k0,
+            "corgi transcode: heterogeneous column — row 0 is {}/{} but row {} is {}/{}: \
+             the corgi backend requires shape-uniform columns (pad rows to one arity, or use --backend=vec)",
+            k0.0, k0.1, i, ki.0, ki.1
+        );
     }
 }
 
