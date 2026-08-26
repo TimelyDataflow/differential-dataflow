@@ -656,6 +656,12 @@ pub struct ChunkBatchBuilder<C: Chunk> {
     output: VecDeque<C>,
 }
 
+impl<C: Chunk> Default for ChunkBatchBuilder<C> {
+    fn default() -> Self {
+        Self { input: VecDeque::new(), output: VecDeque::new() }
+    }
+}
+
 impl<C> crate::trace::Builder for ChunkBatchBuilder<C>
 where
     C: Chunk + Default + 'static,
@@ -664,10 +670,6 @@ where
     type Input = C;
     type Time = C::Time;
     type Output = ChunkBatch<C>;
-
-    fn new() -> Self {
-        Self { input: VecDeque::new(), output: VecDeque::new() }
-    }
 
     fn push(&mut self, chunk: &mut C) {
         let chunk = std::mem::take(chunk);

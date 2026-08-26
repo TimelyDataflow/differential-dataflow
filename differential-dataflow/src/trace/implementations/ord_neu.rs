@@ -634,6 +634,10 @@ pub mod val_batch {
         }
     }
 
+    impl<L: Layout, CI> Default for OrdValBuilder<L, CI> {
+        fn default() -> Self { Self::with_capacity(0, 0, 0) }
+    }
+
     impl<L, CI> Builder for OrdValBuilder<L, CI>
     where
         L: for<'a> Layout<
@@ -646,8 +650,6 @@ pub mod val_batch {
         type Input = CI;
         type Time = layout::Time<L>;
         type Output = OrdValBatch<L>;
-
-        fn new() -> Self { Self::with_capacity(0, 0, 0) }
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {
@@ -1033,6 +1035,10 @@ pub mod key_batch {
         }
     }
 
+    impl<L: Layout, CI> Default for OrdKeyBuilder<L, CI> {
+        fn default() -> Self { Self::with_capacity(0, 0, 0) }
+    }
+
     impl<L: Layout, CI> Builder for OrdKeyBuilder<L, CI>
     where
         L: for<'a> Layout<KeyContainer: PushInto<CI::Key<'a>>>,
@@ -1043,8 +1049,6 @@ pub mod key_batch {
         type Input = CI;
         type Time = layout::Time<L>;
         type Output = OrdKeyBatch<L>;
-
-        fn new() -> Self { Self::with_capacity(0, 0, 0) }
 
         #[inline]
         fn push(&mut self, chunk: &mut Self::Input) {

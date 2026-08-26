@@ -258,7 +258,10 @@ pub trait Batcher<C0> {
 }
 
 /// Functionality for building batches from ordered update sequences.
-pub trait Builder: Sized {
+///
+/// `Default` is the empty builder; a builder discovers its output as it is pushed, and so has
+/// no opportunity to size itself in advance.
+pub trait Builder: Default {
     /// Input item type.
     type Input;
     /// Timestamp type.
@@ -266,8 +269,6 @@ pub trait Builder: Sized {
     /// Output batch type.
     type Output;
 
-    /// Allocates an empty builder.
-    fn new() -> Self;
     /// Adds a chunk of elements to the batch.
     ///
     /// Adds all elements from `chunk` to the builder and leaves `chunk` in an undefined state.

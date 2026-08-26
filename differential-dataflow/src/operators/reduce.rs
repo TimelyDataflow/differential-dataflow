@@ -335,7 +335,7 @@ mod cursors {
                 // Prepare one output buffer and builder: the batch spans [lower, upper) and
                 // ships stamped with the held times that justify its contents.
                 let mut output_updates = Vec::<(<B2::Cursor as Cursor>::ValOwn, TimeOf<B1>, <B2::Cursor as Cursor>::Diff)>::new();
-                let mut builder = Bu::new();
+                let mut builder = Bu::default();
                 // Temporary staging for output building.
                 let mut buffer = Bu::Input::default();
 
@@ -883,7 +883,7 @@ pub(crate) mod reference {
                 let (mut batch_cursor, ref batch_storage) = cursor_list(input_batches);
 
                 let mut output_updates = Vec::<(<B2::Cursor as Cursor>::ValOwn, TimeOf<B1>, <B2::Cursor as Cursor>::Diff)>::new();
-                let mut builder = Bu::new();
+                let mut builder = Bu::default();
                 let mut buffer = Bu::Input::default();
 
                 // Reuseable state for performing the computation.
