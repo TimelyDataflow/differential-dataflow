@@ -11,9 +11,9 @@
 use std::rc::Rc;
 
 use crate::trace::implementations::spine_fueled::Spine;
-use crate::trace::implementations::merge_batcher::chunker::ContainerChunker;
-use crate::trace::implementations::merge_batcher::MergeBatcher;
-use crate::trace::implementations::merge_batcher::vec::VecMerger;
+use crate::batcher::merge::chunker::ContainerChunker;
+use crate::batcher::merge::MergeBatcher;
+use crate::batcher::merge::vec::VecMerger;
 
 use super::{Layout, Vector};
 
@@ -694,7 +694,7 @@ pub mod val_batch {
 
     }
 
-    impl<L, CI> crate::trace::implementations::merge_batcher::Sealer<CI> for OrdValBuilder<L, CI>
+    impl<L, CI> crate::batcher::merge::Sealer<CI> for OrdValBuilder<L, CI>
     where
         L: for<'a> Layout<
             KeyContainer: PushInto<CI::Key<'a>>,
@@ -728,7 +728,7 @@ pub mod key_batch {
     use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
     use crate::trace::implementations::BatchContainer;
     use crate::trace::implementations::layout;
-    use crate::trace::implementations::merge_batcher::Sealer;
+    use crate::batcher::merge::Sealer;
 
     use super::{Layout, Upds, layers::UpdsBuilder, BuilderInput};
 

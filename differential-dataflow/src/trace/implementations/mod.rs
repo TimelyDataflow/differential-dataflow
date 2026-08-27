@@ -44,7 +44,7 @@ pub mod merge_batcher;
 pub mod ord_neu;
 
 // Opinionated takes on default spines.
-pub use self::merge_batcher::chunker::ContainerChunker;
+pub use crate::batcher::merge::chunker::ContainerChunker;
 pub use self::ord_neu::OrdValSpine as ValSpine;
 pub use self::ord_neu::OrdValBatcher as ValBatcher;
 pub use self::ord_neu::VecOrdValBuilder as ValBuilder;

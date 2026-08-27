@@ -26,7 +26,7 @@ use differential_dataflow::trace::chunk::{merge_chains, Chunk, NavigableChunk};
 use differential_dataflow::trace::chunk::vec::VecChunk;
 use differential_dataflow::columnar::trace::ColChunk;
 use differential_dataflow::trace::cursor::Cursor;
-use differential_dataflow::trace::implementations::merge_batcher::chunker::ContainerChunker;
+use differential_dataflow::batcher::merge::chunker::ContainerChunker;
 
 /// A global allocator that tracks currently-resident bytes, so we can snapshot
 /// the heap footprint of a built chunk chain.
