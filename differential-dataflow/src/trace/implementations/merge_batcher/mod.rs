@@ -8,12 +8,14 @@
 //! its `Chu` before merging: forming sorted, consolidated chunks is the first stage of the
 //! batcher's own work rather than something a caller arranges.
 
+pub mod chunker;
+
 use timely::container::{ContainerBuilder, PushInto};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 
 use crate::logging::{BatcherEvent, Logger};
-use crate::trace::{Batcher, Sealer};
+use crate::trace::Batcher;
 
 /// Creates batches from chunks of sorted, consolidated tuples.
 ///
@@ -233,6 +235,25 @@ pub trait Merger: Default {
     fn allocation(_chunk: &Self::Chunk) -> (usize, usize, usize) { (0, 0, 0) }
 }
 
+/// Forms a batch from a whole chain of updates at once.
+///
+/// Named rather than a bare `fn(&mut Vec<C>) -> Option<B>` so that implementors can name the
+/// batch they produce. There is no receiver: the chain goes in and the batch comes out, leaving
+/// nowhere for an update to be retained.
+pub trait Sealer<C> {
+    /// Output batch type.
+    type Output;
+
+    /// Builds a batch from a chain of updates.
+    ///
+    /// This method relies on the chain only containing updates greater or equal to the lower frontier,
+    /// and not greater or equal to the upper frontier, of the interval the caller means to describe.
+    /// Chains must also be sorted and consolidated.
+    ///
+    /// Having the whole chain in hand, an implementor can size itself before it fills.
+    fn seal(chain: &mut Vec<C>) -> Option<Self::Output>;
+}
+
 /// A `Merger` implementation for vector update containers.
 pub mod vec {
 
@@ -402,7 +423,7 @@ mod test {
     use super::MergeBatcher;
     use super::vec::VecMerger;
     use crate::trace::implementations::ord_neu::VecOrdKeyBuilder;
-    use crate::trace::implementations::chunker::ContainerChunker;
+    use crate::trace::implementations::merge_batcher::chunker::ContainerChunker;
 
     type In = Vec<((u64, ()), u64, i64)>;
     type Bt = MergeBatcher<ContainerChunker<In>, VecMerger<(u64, ()), u64, i64>, VecOrdKeyBuilder<u64, u64, i64>>;

@@ -11,7 +11,7 @@
 use std::rc::Rc;
 
 use crate::trace::implementations::spine_fueled::Spine;
-use crate::trace::implementations::chunker::ContainerChunker;
+use crate::trace::implementations::merge_batcher::chunker::ContainerChunker;
 use crate::trace::implementations::merge_batcher::MergeBatcher;
 use crate::trace::implementations::merge_batcher::vec::VecMerger;
 
@@ -248,12 +248,12 @@ pub mod val_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Builder, Sealer, Cursor};
+    use crate::trace::{Builder, Cursor};
     use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
-    use crate::trace::implementations::{BatchContainer, BuilderInput};
+    use crate::trace::implementations::{BatchContainer};
     use crate::trace::implementations::layout;
 
-    use super::{Layout, Vals, Upds, layers::UpdsBuilder};
+    use super::{Layout, Vals, Upds, layers::UpdsBuilder, BuilderInput};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
     #[derive(Debug, Serialize, Deserialize)]
@@ -694,7 +694,7 @@ pub mod val_batch {
 
     }
 
-    impl<L, CI> Sealer<CI> for OrdValBuilder<L, CI>
+    impl<L, CI> crate::trace::implementations::merge_batcher::Sealer<CI> for OrdValBuilder<L, CI>
     where
         L: for<'a> Layout<
             KeyContainer: PushInto<CI::Key<'a>>,
@@ -724,12 +724,13 @@ pub mod key_batch {
     use timely::container::PushInto;
     use timely::progress::{Antichain, frontier::AntichainRef};
 
-    use crate::trace::{Builder, Sealer, Cursor};
+    use crate::trace::{Builder, Cursor};
     use crate::trace::implementations::spine_fueled::{SpineBatch, Merger};
-    use crate::trace::implementations::{BatchContainer, BuilderInput};
+    use crate::trace::implementations::BatchContainer;
     use crate::trace::implementations::layout;
+    use crate::trace::implementations::merge_batcher::Sealer;
 
-    use super::{Layout, Upds, layers::UpdsBuilder};
+    use super::{Layout, Upds, layers::UpdsBuilder, BuilderInput};
 
     /// An immutable collection of update tuples, from a contiguous interval of logical times.
     #[derive(Debug, Serialize, Deserialize)]
@@ -1101,4 +1102,86 @@ pub mod key_batch {
         }
     }
 
+}
+
+use timely::container::DrainContainer;
+use timely::progress::Timestamp;
+use crate::trace::Lattice;
+use crate::difference::Semigroup;
+use crate::trace::implementations::BatchContainer;
+
+/// Behavior to split an update into principal components.
+pub trait BuilderInput<K: BatchContainer, V: BatchContainer>: DrainContainer + Sized {
+    /// Key portion
+    type Key<'a>: Ord;
+    /// Value portion
+    type Val<'a>: Ord;
+    /// Time
+    type Time;
+    /// Diff
+    type Diff;
+
+    /// Split an item into separate parts.
+    fn into_parts<'a>(item: Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff);
+
+    /// Test that the key equals a key in the layout's key container.
+    fn key_eq(this: &Self::Key<'_>, other: K::ReadItem<'_>) -> bool;
+
+    /// Test that the value equals a key in the layout's value container.
+    fn val_eq(this: &Self::Val<'_>, other: V::ReadItem<'_>) -> bool;
+
+    /// Count the number of distinct keys, (key, val) pairs, and total updates.
+    fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize);
+}
+
+impl<K,KBC,V,VBC,T,R> BuilderInput<KBC, VBC> for Vec<((K, V), T, R)>
+where
+    K: Ord + Clone + 'static,
+    KBC: for<'a> BatchContainer<ReadItem<'a>: PartialEq<&'a K>>,
+    V: Ord + Clone + 'static,
+    VBC: for<'a> BatchContainer<ReadItem<'a>: PartialEq<&'a V>>,
+    T: Timestamp + Lattice + 'static,
+    R: Ord + Semigroup + 'static,
+{
+    type Key<'a> = K;
+    type Val<'a> = V;
+    type Time = T;
+    type Diff = R;
+
+    fn into_parts<'a>(((key, val), time, diff): Self::Item<'a>) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+        (key, val, time, diff)
+    }
+
+    fn key_eq(this: &K, other: KBC::ReadItem<'_>) -> bool {
+        KBC::reborrow(other) == this
+    }
+
+    fn val_eq(this: &V, other: VBC::ReadItem<'_>) -> bool {
+        VBC::reborrow(other) == this
+    }
+
+    fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
+        let mut keys = 0;
+        let mut vals = 0;
+        let mut upds = 0;
+        let mut prev_keyval = None;
+        for link in chain.iter() {
+            for ((key, val), _, _) in link.iter() {
+                if let Some((p_key, p_val)) = prev_keyval {
+                    if p_key != key {
+                        keys += 1;
+                        vals += 1;
+                    } else if p_val != val {
+                        vals += 1;
+                    }
+                } else {
+                    keys += 1;
+                    vals += 1;
+                }
+                upds += 1;
+                prev_keyval = Some((key, val));
+            }
+        }
+        (keys, vals, upds)
+    }
 }

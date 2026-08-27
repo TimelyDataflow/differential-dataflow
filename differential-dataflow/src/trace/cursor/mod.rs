@@ -181,3 +181,75 @@ pub trait Cursor {
         out
     }
 }
+
+
+/// Blanket implementations for reference counted batches.
+pub mod rc_blanket_impls {
+
+    use std::rc::Rc;
+
+    use super::{Navigable, Cursor};
+
+    impl<B: Navigable> Navigable for Rc<B> {
+        /// The type used to enumerate the batch's contents.
+        type Cursor = RcBatchCursor<B::Cursor>;
+        /// Acquires a cursor to the batch's contents.
+        fn cursor(&self) -> Self::Cursor {
+            RcBatchCursor::new((**self).cursor())
+        }
+    }
+
+    /// Wrapper to provide cursor to nested scope.
+    pub struct RcBatchCursor<C> {
+        cursor: C,
+    }
+
+    impl<C> RcBatchCursor<C> {
+        fn new(cursor: C) -> Self {
+            RcBatchCursor {
+                cursor,
+            }
+        }
+    }
+
+    impl<C: Cursor> Cursor for RcBatchCursor<C> {
+
+        type Storage = Rc<C::Storage>;
+
+        type Key<'a> = C::Key<'a>;
+        type ValOwn = C::ValOwn;
+        type Val<'a> = C::Val<'a>;
+        type Time = C::Time;
+        type TimeGat<'a> = C::TimeGat<'a>;
+        type Diff = C::Diff;
+        type DiffGat<'a> = C::DiffGat<'a>;
+        type KeyContainer = C::KeyContainer;
+        type ValContainer = C::ValContainer;
+        type TimeContainer = C::TimeContainer;
+        type DiffContainer = C::DiffContainer;
+
+        #[inline] fn key_valid(&self, storage: &Self::Storage) -> bool { self.cursor.key_valid(storage) }
+        #[inline] fn val_valid(&self, storage: &Self::Storage) -> bool { self.cursor.val_valid(storage) }
+
+        #[inline] fn key<'a>(&self, storage: &'a Self::Storage) -> Self::Key<'a> { self.cursor.key(storage) }
+        #[inline] fn val<'a>(&self, storage: &'a Self::Storage) -> Self::Val<'a> { self.cursor.val(storage) }
+
+        #[inline] fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Key<'a>> { self.cursor.get_key(storage) }
+        #[inline] fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<Self::Val<'a>> { self.cursor.get_val(storage) }
+
+        #[inline]
+        fn map_times<L: FnMut(Self::TimeGat<'_>, Self::DiffGat<'_>)>(&mut self, storage: &Self::Storage, logic: L) {
+            self.cursor.map_times(storage, logic)
+        }
+
+        #[inline] fn step_key(&mut self, storage: &Self::Storage) { self.cursor.step_key(storage) }
+        #[inline] fn seek_key(&mut self, storage: &Self::Storage, key: Self::Key<'_>) { self.cursor.seek_key(storage, key) }
+
+        #[inline] fn step_val(&mut self, storage: &Self::Storage) { self.cursor.step_val(storage) }
+        #[inline] fn seek_val(&mut self, storage: &Self::Storage, val: Self::Val<'_>) { self.cursor.seek_val(storage, val) }
+
+        #[inline] fn rewind_keys(&mut self, storage: &Self::Storage) { self.cursor.rewind_keys(storage) }
+        #[inline] fn rewind_vals(&mut self, storage: &Self::Storage) { self.cursor.rewind_vals(storage) }
+    }
+
+}
