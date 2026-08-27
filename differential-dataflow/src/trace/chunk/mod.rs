@@ -21,7 +21,7 @@
 //! These are the `Batcher` / `Builder` / `Spine` to hand to
 //! [`arrange_core`](crate::operators::arrange::arrangement::arrange_core), along with a
 //! chunker that forms `C` from the input stream — typically
-//! [`ContainerChunker<C>`](crate::trace::implementations::chunker::ContainerChunker).
+//! [`ContainerChunker<C>`](crate::trace::implementations::merge_batcher::chunker::ContainerChunker).
 //! Trace *maintenance* needs only [`Chunk`]; cursor-driven *consumption* of the
 //! arrangement additionally asks `C` for the [`NavigableChunk`] capability.
 //! Everything else here ([`ChunkBatch`], [`ChunkMerger`], [`ChunkBatchMerger`],

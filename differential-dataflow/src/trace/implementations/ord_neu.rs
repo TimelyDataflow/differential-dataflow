@@ -11,7 +11,7 @@
 use std::rc::Rc;
 
 use crate::trace::implementations::spine_fueled::Spine;
-use crate::trace::implementations::chunker::ContainerChunker;
+use crate::trace::implementations::merge_batcher::chunker::ContainerChunker;
 use crate::trace::implementations::merge_batcher::MergeBatcher;
 use crate::trace::implementations::merge_batcher::vec::VecMerger;
 

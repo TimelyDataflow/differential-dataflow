@@ -8,6 +8,8 @@
 //! its `Chu` before merging: forming sorted, consolidated chunks is the first stage of the
 //! batcher's own work rather than something a caller arranges.
 
+pub mod chunker;
+
 use timely::container::{ContainerBuilder, PushInto};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
@@ -421,7 +423,7 @@ mod test {
     use super::MergeBatcher;
     use super::vec::VecMerger;
     use crate::trace::implementations::ord_neu::VecOrdKeyBuilder;
-    use crate::trace::implementations::chunker::ContainerChunker;
+    use crate::trace::implementations::merge_batcher::chunker::ContainerChunker;
 
     type In = Vec<((u64, ()), u64, i64)>;
     type Bt = MergeBatcher<ContainerChunker<In>, VecMerger<(u64, ()), u64, i64>, VecOrdKeyBuilder<u64, u64, i64>>;

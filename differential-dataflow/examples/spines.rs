@@ -81,7 +81,7 @@ fn main() {
                     use differential_dataflow::Hashable;
                     use differential_dataflow::columnar::trace::{Spine, ColChunk};
                     use differential_dataflow::trace::chunk::ChunkBatcher;
-                    use differential_dataflow::trace::implementations::chunker::ContainerChunker;
+                    use differential_dataflow::trace::implementations::merge_batcher::chunker::ContainerChunker;
                     use differential_dataflow::operators::arrange::arrangement::arrange_core;
                     use timely::dataflow::channels::pact::Exchange;
 
