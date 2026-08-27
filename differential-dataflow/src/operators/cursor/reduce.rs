@@ -6,10 +6,13 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::Data;
 use crate::operators::arrange::{Arranged, TraceAgent};
-use crate::operators::reduce::{ReduceTactic, TimeOf, reduce_with_tactic, sort_dedup};
+use crate::operators::reduce::{ReduceTactic, reduce_with_tactic, sort_dedup};
 use crate::trace::{Span, BatchCursor, BatchDiff, BatchVal, BatchValOwn, Builder, Cursor, Description, Navigable, Trace, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
+
+/// The time type of the updates' cursor: the time coordinate the tactic works in.
+type TimeOf<B> = <<B as Navigable>::Cursor as Cursor>::Time;
 
 /// A key-wise reduction of values in an input trace.
 ///
