@@ -9,9 +9,10 @@ use timely::ContainerBuilder;
 use timely::dataflow::Stream;
 use timely::progress::Timestamp;
 
+use super::history::load_current;
 use crate::lattice::Lattice;
-use crate::operators::ValueHistory;
 use crate::operators::arrange::Arranged;
+use crate::operators::history::ValueHistory;
 use crate::operators::join::{Fresh, JoinTactic, join_with_tactic};
 use crate::trace::{BatchCursor, BatchDiff, BatchVal, Cursor, Navigable, TraceReader};
 use crate::trace::cursor::cursor_list;
@@ -196,8 +197,8 @@ where
                     Ordering::Greater => cursor2.seek_key(storage2, key1),
                     Ordering::Equal => {
 
-                        thinker.history1.edits.load(cursor1, storage1, meet1);
-                        thinker.history2.edits.load(cursor2, storage2, meet2);
+                        load_current(&mut thinker.history1, cursor1, storage1, meet1);
+                        load_current(&mut thinker.history2, cursor2, storage2, meet2);
 
                         thinker.think(|v1,v2,t,r1,r2| {
                             logic(key1, v1, v2, t, r1, r2, builder);
@@ -257,9 +258,9 @@ where
     fn think<F: FnMut(V1, V2, T, &D1, &D2)>(&mut self, mut results: F) {
 
         // for reasonably sized edits, do the dead-simple thing.
-        if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
-            self.history1.edits.map(|v1, t1, d1| {
-                self.history2.edits.map(|v2, t2, d2| {
+        if self.history1.edit_len() < 10 || self.history2.edit_len() < 10 {
+            self.history1.map_edits(|v1, t1, d1| {
+                self.history2.map_edits(|v2, t2, d2| {
                     results(v1, v2, t1.join(t2), d1, d2);
                 })
             })

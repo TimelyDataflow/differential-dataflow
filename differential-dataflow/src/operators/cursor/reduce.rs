@@ -246,8 +246,9 @@ mod history_replay {
     use timely::progress::Antichain;
 
     use crate::lattice::Lattice;
+    use crate::operators::cursor::history::replay_key;
+    use crate::operators::history::ValueHistory;
     use crate::trace::Cursor;
-    use crate::operators::ValueHistory;
 
     use crate::operators::reduce::sort_dedup;
 
@@ -321,7 +322,7 @@ mod history_replay {
             // loaded times by performing the lattice `join` with this value.
 
             // Load the batch contents.
-            let mut batch_replay = self.batch_history.replay_key(batch_cursor, batch_storage, key, None);
+            let mut batch_replay = replay_key(&mut self.batch_history, batch_cursor, batch_storage, key, None);
 
             // We determine the meet of times we must reconsider (those from `batch` and `times`). This meet
             // can be used to advance other historical times, which may consolidate their representation. As
@@ -345,9 +346,9 @@ mod history_replay {
 
             // Load the input and output histories.
             let mut input_replay =
-            self.input_history.replay_key(source_cursor, source_storage, key, meet.as_ref());
+            replay_key(&mut self.input_history, source_cursor, source_storage, key, meet.as_ref());
             let mut output_replay =
-            self.output_history.replay_key(output_cursor, output_storage, key, meet.as_ref());
+            replay_key(&mut self.output_history, output_cursor, output_storage, key, meet.as_ref());
 
             self.synth_times.clear();
             self.times_current.clear();

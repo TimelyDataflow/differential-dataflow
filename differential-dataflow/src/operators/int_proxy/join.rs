@@ -12,7 +12,7 @@ use crate::difference::{Multiply, Semigroup};
 use crate::lattice::Lattice;
 use super::ProxyBridge;
 use crate::operators::join::{Fresh, JoinTactic};
-use crate::operators::ValueHistory;
+use crate::operators::history::ValueHistory;
 
 use super::history::IdHistory;
 
