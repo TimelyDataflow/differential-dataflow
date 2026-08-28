@@ -14,7 +14,7 @@ use crate::lattice::Lattice;
 use crate::trace::{Span, Description};
 use super::ProxyBridge;
 use crate::operators::reduce::{sort_dedup, ReduceTactic};
-use crate::operators::ValueHistory;
+use crate::operators::history::ValueHistory;
 
 /// A unit of proxied reduce work, presented to the backend.
 pub struct ReduceInstance<'a, T, B1, B2> {

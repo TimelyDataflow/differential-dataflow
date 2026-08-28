@@ -21,7 +21,7 @@
 //! These are the `Batcher` / `Builder` / `Spine` to hand to
 //! [`arrange_core`](crate::operators::arrange::arrangement::arrange_core), along with a
 //! chunker that forms `C` from the input stream — typically
-//! [`ContainerChunker<C>`](crate::trace::implementations::merge_batcher::chunker::ContainerChunker).
+//! [`ContainerChunker<C>`](crate::batcher::merge::chunker::ContainerChunker).
 //! Trace *maintenance* needs only [`Chunk`]; cursor-driven *consumption* of the
 //! arrangement additionally asks `C` for the [`NavigableChunk`] capability.
 //! Everything else here ([`ChunkBatch`], [`ChunkMerger`], [`ChunkBatchMerger`],
@@ -270,14 +270,14 @@ where
     fn len(&self) -> usize { self.chunks.iter().map(C::len).sum() }
 }
 
-/// A merge-batcher [`Merger`](crate::trace::implementations::merge_batcher::Merger)
+/// A merge-batcher [`Merger`](crate::batcher::merge::Merger)
 /// over chains of [`Chunk`]s.
 ///
 /// `merge` runs the whole-chain binary merger; `extract` splits by the seal frontier
 /// using [`Chunk::extract`]. The batcher consolidates equal `(data, time)` updates
 /// but does *not* advance times — time advancement is advance's job, handled later in
 /// the trace. Both settle their output, since the batcher's chains want to be graded.
-pub type ChunkBatcher<Chu, C> = crate::trace::implementations::merge_batcher::MergeBatcher<Chu, ChunkMerger<C>, ChunkBuilder<C>>;
+pub type ChunkBatcher<Chu, C> = crate::batcher::merge::MergeBatcher<Chu, ChunkMerger<C>, ChunkBuilder<C>>;
 
 /// A spine of `Rc`-shared [`ChunkBatch`]s of type `C`: the trace type for `arrange`.
 pub type ChunkSpine<C> = crate::trace::implementations::spine_fueled::Spine<std::rc::Rc<ChunkBatch<C>>>;
@@ -470,7 +470,7 @@ impl<C: NavigableChunk> Cursor for ChunkBatchCursor<C> {
     }
 }
 
-/// A merge-batcher [`Merger`](crate::trace::implementations::merge_batcher::Merger)
+/// A merge-batcher [`Merger`](crate::batcher::merge::Merger)
 /// over chains of [`Chunk`]s.
 ///
 /// `merge` runs the whole-chain binary merger; `extract` splits by the seal frontier
@@ -485,7 +485,7 @@ impl<C> Default for ChunkMerger<C> {
     fn default() -> Self { Self { _marker: std::marker::PhantomData } }
 }
 
-impl<C> crate::trace::implementations::merge_batcher::Merger for ChunkMerger<C>
+impl<C> crate::batcher::merge::Merger for ChunkMerger<C>
 where
     C: Chunk + Default + 'static,
     C::Time: Clone + timely::PartialOrder + 'static,
@@ -688,7 +688,7 @@ where
 
 }
 
-impl<C> crate::trace::implementations::merge_batcher::Sealer<C> for ChunkBatchBuilder<C>
+impl<C> crate::batcher::merge::Sealer<C> for ChunkBatchBuilder<C>
 where
     C: Chunk + Default + 'static,
     C::Time: timely::progress::Timestamp,

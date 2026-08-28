@@ -1,4 +1,4 @@
-//! Organizes streams of data into sorted chunks for a merge batcher.
+//! Organizes streams of data into sorted chunks for a [`MergeBatcher`](super::MergeBatcher).
 
 use std::collections::VecDeque;
 

@@ -32,7 +32,8 @@ use crate::{Data, VecCollection, AsCollection};
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::logging::Logger;
-use crate::trace::{self, Description, SpanOf, Trace, TraceReader, Navigable, Batcher, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
+use crate::batcher::Batcher;
+use crate::trace::{self, Description, SpanOf, Trace, TraceReader, Navigable, Builder, Cursor, BatchCursor, BatchDiff, BatchKey, BatchVal, BatchValOwn};
 
 use trace::wrappers::enter::{TraceEnter, enter_span};
 

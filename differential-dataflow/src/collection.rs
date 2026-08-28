@@ -965,7 +965,7 @@ pub mod vec {
         /// and provide the function `reify` to produce owned keys and values..
         pub fn consolidate_named<Ba, Tr, F>(self, name: &str, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba, reify: F) -> Self
         where
-            Ba: crate::trace::Batcher<Vec<((D, ()), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
+            Ba: crate::batcher::Batcher<Vec<((D, ()), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
             Tr: crate::trace::Trace<Batch: Navigable, Time=T>+'static,
             for<'a> BatchCursor<Tr>: Cursor<Time=Tr::Time, Diff=R>,
             F: Fn(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> D + 'static,
@@ -1036,7 +1036,7 @@ pub mod vec {
         /// directly.
         pub fn arrange<Ba, Tr>(self, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, TraceAgent<Tr>>
         where
-            Ba: crate::trace::Batcher<Vec<((K, V), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
+            Ba: crate::batcher::Batcher<Vec<((K, V), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             self.arrange_named::<Ba, Tr>("Arrange", batcher)
@@ -1045,7 +1045,7 @@ pub mod vec {
         /// As [`Collection::arrange`] but with the ability to name the operator.
         pub fn arrange_named<Ba, Tr>(self, name: &str, batcher: impl FnOnce(Option<crate::logging::Logger>, usize) -> Ba) -> Arranged<'scope, TraceAgent<Tr>>
         where
-            Ba: crate::trace::Batcher<Vec<((K, V), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
+            Ba: crate::batcher::Batcher<Vec<((K, V), T, R)>, Time = T, Output: Into<Tr::Batch>> + 'static,
             Tr: crate::trace::Trace<Time=T> + 'static,
         {
             let exchange = timely::dataflow::channels::pact::Exchange::new(move |update: &((K,V),T,R)| (update.0).0.hashed().into());
