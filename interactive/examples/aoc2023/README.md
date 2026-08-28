@@ -60,5 +60,4 @@ only) cannot chase.
 
 The survey behind this suite also produced a ranked catalogue of 13
 recurring language gaps (integer division/modulo, `max`/`sum` reducers,
-value-preserving `distinct`, scalar lets, ...); it is deliberately not
-inlined here — the gaps are material for future language issues.
+value-preserving `distinct`, scalar lets, ...): see [GAPS.md](GAPS.md).
