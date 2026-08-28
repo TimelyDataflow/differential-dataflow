@@ -1,6 +1,6 @@
 //! Checks reduce against from-scratch accumulation at product-ordered times.
 //!
-//! The queries include all input and output times and their pairwise joins.
+//! The queries cover the full grid of times the input draws from.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +11,6 @@ use timely::dataflow::operators::capture::{Capture, Extract};
 use timely::dataflow::operators::vec::unordered_input::UnorderedInput;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::lattice::Lattice;
 
 use pair::Pair;
 type Time = Pair<u64, u64>;
@@ -73,15 +72,12 @@ fn oracle(seed: usize, logic: Logic) {
     let output: Vec<((u64, i64), Time, isize)> =
         recv.extract().into_iter().flat_map(|(_, batch)| batch).collect();
 
-    // Everything is finalized, so `acc(output, q) == f(acc(input, q))` must hold at every `q`. Check
-    // at a rich set: all input times, all output times, and their pairwise joins (where reduce's
-    // output can change).
-    let mut times: Vec<Time> = Vec::new();
-    times.extend(updates.iter().map(|(_, t, _)| t.clone()));
-    times.extend(output.iter().map(|(_, t, _)| t.clone()));
-    let base = times.clone();
-    for a in &base { for b in &base { times.push(a.join(b)); } }
-    times.sort(); times.dedup();
+    // Everything is finalized, so `acc(output, q) == f(acc(input, q))` must hold at every `q`. All
+    // times in play lie on the `span × span` grid, so query every grid point (plus one beyond, to
+    // catch updates the reduce should not have produced): a set closed under `join`, unlike e.g.
+    // the pairwise joins of the input and output times.
+    let times: Vec<Time> =
+        (0 .. span + 1).flat_map(|a| (0 .. span + 1).map(move |b| Pair::new(a, b))).collect();
 
     for q in &times {
         // expected: per key, f applied to the accumulated input at `q`.
@@ -111,7 +107,7 @@ fn oracle(seed: usize, logic: Logic) {
 }
 
 /// A minimal product-order (partially ordered) timestamp, so the harness exercises the synthetic
-/// interesting times determination is about. Copied from `examples/multitemporal.rs`.
+/// interesting-times determination. Copied from `examples/multitemporal.rs`.
 mod pair {
 
     #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
