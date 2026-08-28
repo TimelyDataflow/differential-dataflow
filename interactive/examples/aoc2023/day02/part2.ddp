@@ -1,0 +1,16 @@
+-- AoC 2023 day 2 part 2: per game, max needed of each color; sum of products.
+-- max via min of (BIG - x), avoiding negatives.
+-- input 0: (game, set, green, red, blue)
+
+let maxg = input 0 | key($0[0] ; 1000000 - $0[2]) | min | map($0 ; 1000000 - $1[0]);
+let maxr = input 0 | key($0[0] ; 1000000 - $0[3]) | min | map($0 ; 1000000 - $1[0]);
+let maxb = input 0 | key($0[0] ; 1000000 - $0[4]) | min | map($0 ; 1000000 - $1[0]);
+
+let power = maxg
+    | join(maxr, ($0 ; $1[0] * $2[0]))
+    | join(maxb, ($0 ; $1[0] * $2[0]));
+
+export "result" = power
+    | key(; $1[0]) | collect
+    | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part2);

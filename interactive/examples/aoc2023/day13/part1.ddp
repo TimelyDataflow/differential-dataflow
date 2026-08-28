@@ -1,0 +1,39 @@
+-- AoC 2023 day 13 part 1: mirror axes. Axis before row a is valid when no
+-- row pair (x, 2a-1-x) has differing lines. Lines/columns compared as
+-- collected list values (structural ==). Sum 100*(a-1) + (c-1).
+-- input 0: (block, row, col, code), 1-indexed
+
+let cells = input 0 | key($0[0], $0[1], $0[2] ; $0[3]);
+
+let rlines = cells | map($0[0], $0[1] ; $0[2], $1[0]) | collect;
+-- (b, r ; [(c, code)...])
+let clines = cells | map($0[0], $0[2] ; $0[1], $1[0]) | collect;
+-- (b, c ; [(r, code)...])
+
+-- row axes ------------------------------------------------------------
+let rcand = cells | map($0[0], $0[1] ;) | distinct;   -- (b, a)
+-- if(1, $1, 0) carries the collected List as ONE field (bare $1 would splice)
+let rlk = rlines | map($0[0] ; $0[1], if(1, $1, 0));  -- (b ; x, L)
+let t1 = rcand | map($0[0] ; $0[1]) | join(rlk, ($0[0], $1[0], $2[0] ; $2[1]));
+-- (b, a, x ; Lx)
+let t2 = t1 | map($0[0], 2 * $0[1] - 1 - $0[2] ; $0[1], $0[2], $1[0]);
+-- (b, y ; a, x, Lx)
+let rviol = t2 | join(rlines, ($0[0], $1[0] ; ($1[1] < $0[1]) && not($1[2] == $2)))
+    | filter($1[0] == 1) | map($0 ;) | distinct;
+-- (b, a) with a mismatched pair
+let rvalid = rcand - rviol;
+let rscore = rvalid | key(; 100 * ($0[1] - 1));
+
+-- column axes ---------------------------------------------------------
+let ccand = cells | map($0[0], $0[2] ;) | distinct;
+let clk = clines | map($0[0] ; $0[1], if(1, $1, 0));
+let s1 = ccand | map($0[0] ; $0[1]) | join(clk, ($0[0], $1[0], $2[0] ; $2[1]));
+let s2 = s1 | map($0[0], 2 * $0[1] - 1 - $0[2] ; $0[1], $0[2], $1[0]);
+let cviol = s2 | join(clines, ($0[0], $1[0] ; ($1[1] < $0[1]) && not($1[2] == $2)))
+    | filter($1[0] == 1) | map($0 ;) | distinct;
+let cvalid = ccand - cviol;
+let cscore = cvalid | key(; $0[1] - 1);
+
+export "result" = rscore + cscore
+    | collect | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part1);

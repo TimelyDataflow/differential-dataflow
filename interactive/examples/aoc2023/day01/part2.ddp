@@ -1,0 +1,43 @@
+-- AoC 2023 day 1 part 2: digits and spelled-out digit words count; sum of
+-- first*10+last per line. Words matched by charcode against windows built
+-- from k successive self-joins (no substring primitive, no string literals).
+-- input 0: (line, pos, charcode)
+
+let chars = input 0 | key($0[0], $0[1] ; $0[2]);
+-- (line, pos ; code)
+
+let s2 = chars | map($0[0], $0[1] + 1 ; $0[1], $1[0])
+               | join(chars, ($0[0], $1[0] ; $1[1], $2[0]));
+let s3 = s2    | map($0[0], $0[1] + 2 ; $0[1], $1[0], $1[1])
+               | join(chars, ($0[0], $1[0] ; $1[1], $1[2], $2[0]));
+let s4 = s3    | map($0[0], $0[1] + 3 ; $0[1], $1[0], $1[1], $1[2])
+               | join(chars, ($0[0], $1[0] ; $1[1], $1[2], $1[3], $2[0]));
+let s5 = s4    | map($0[0], $0[1] + 4 ; $0[1], $1[0], $1[1], $1[2], $1[3])
+               | join(chars, ($0[0], $1[0] ; $1[1], $1[2], $1[3], $1[4], $2[0]));
+-- sk: (line, pos ; c0..c{k-1})
+
+let digits = chars | filter($1[0] >= 48 && $1[0] <= 57)
+                   | map($0[0] ; $0[1], $1[0] - 48);
+
+let w_zero  = s4 | filter($1[0]==122 && $1[1]==101 && $1[2]==114 && $1[3]==111) | map($0[0] ; $0[1], 0);
+let w_one   = s3 | filter($1[0]==111 && $1[1]==110 && $1[2]==101)               | map($0[0] ; $0[1], 1);
+let w_two   = s3 | filter($1[0]==116 && $1[1]==119 && $1[2]==111)               | map($0[0] ; $0[1], 2);
+let w_three = s5 | filter($1[0]==116 && $1[1]==104 && $1[2]==114 && $1[3]==101 && $1[4]==101) | map($0[0] ; $0[1], 3);
+let w_four  = s4 | filter($1[0]==102 && $1[1]==111 && $1[2]==117 && $1[3]==114) | map($0[0] ; $0[1], 4);
+let w_five  = s4 | filter($1[0]==102 && $1[1]==105 && $1[2]==118 && $1[3]==101) | map($0[0] ; $0[1], 5);
+let w_six   = s3 | filter($1[0]==115 && $1[1]==105 && $1[2]==120)               | map($0[0] ; $0[1], 6);
+let w_seven = s5 | filter($1[0]==115 && $1[1]==101 && $1[2]==118 && $1[3]==101 && $1[4]==110) | map($0[0] ; $0[1], 7);
+let w_eight = s5 | filter($1[0]==101 && $1[1]==105 && $1[2]==103 && $1[3]==104 && $1[4]==116) | map($0[0] ; $0[1], 8);
+let w_nine  = s4 | filter($1[0]==110 && $1[1]==105 && $1[2]==110 && $1[3]==101) | map($0[0] ; $0[1], 9);
+
+let findings = digits + w_zero + w_one + w_two + w_three + w_four + w_five + w_six + w_seven + w_eight + w_nine;
+-- (line ; pos, digit)
+
+let first = findings | min | map($0 ; $1[1]);
+let last  = findings | map($0 ; 0 - $1[0], $1[1]) | min | map($0 ; $1[1]);
+let calib = first | join(last, ($0 ; $1[0] * 10 + $2[0]));
+
+export "result" = calib
+    | key(; $1[0]) | collect
+    | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part2);

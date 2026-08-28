@@ -1,0 +1,31 @@
+-- AoC 2023 day 14 part 1: roll rocks north; load = sum(1 + R - r).
+-- Closed form, no recursion: each 'O' lands at (nearest blocker above) +
+-- (its rank among rocks in the same blocker segment). Sentinel cubes at
+-- row 0 remove the no-blocker case; rank counts include self (no defaults).
+-- input 0: (row, col, code) 1-indexed; 'O'=79 '#'=35 '.'=46
+
+let cells = input 0 | key($0[0], $0[1] ; $0[2]);
+let os    = cells | filter($1[0] == 79) | map($0 ;);
+let cubes = cells | filter($1[0] == 35) | map($0 ;);
+
+let allcols = cells | map($0[1] ;) | distinct;
+let cubesN = cubes + (allcols | map(0, $0[0] ;));
+let cubcol = cubesN | map($0[1] ; $0[0]);          -- (c ; rc)
+
+-- nearest cube above each rock
+let b = os | map($0[1] ; $0[0])
+    | join(cubcol, ($0[0], $1[0] ; $2[0]))
+    | filter($1[0] < $0[1])
+    | map($0[1], $0[0] ; 1000000 - $1[0]) | min | map($0 ; 1000000 - $1[0]);
+-- (r, c ; b)
+
+let seg = b | map($0[1], $1[0] ; $0[0]);           -- (c, b ; r)
+let cnt = seg | join(seg, ($0[0], $0[1], $1[0] ; $2[0]))
+    | filter($1[0] <= $0[2]) | map($0 ;) | count;
+-- (c, b, r ; n): rank incl. self
+let rolled = cnt | map($0[1] + $1[0], $0[0] ;);    -- (newr, c)
+
+let maxr = cells | key(; 1000000 - $0[0]) | min | map(; 1000000 - $1[0]);
+export "result" = rolled | map(; $0[0]) | join(maxr, (; 1 + $2[0] - $1[0]))
+    | collect | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part1);

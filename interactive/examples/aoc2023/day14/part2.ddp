@@ -1,0 +1,82 @@
+-- AoC 2023 day 14 part 2: spin cycles (N,W,S,E) to the slt's recursion
+-- limit (the state converges well before). Rock sets tagged by round k;
+-- monotone accumulation, k capped at 141. Rolls are closed-form.
+-- input 0: (row, col, code) 1-indexed; 'O'=79 '#'=35 '.'=46
+
+let cells = input 0 | key($0[0], $0[1] ; $0[2]);
+let rocks0 = cells | filter($1[0] == 79) | map(0, $0[0], $0[1] ;);
+let cubes  = cells | filter($1[0] == 35) | map($0 ;);
+
+let allcols = cells | map($0[1] ;) | distinct;
+let allrows = cells | map($0[0] ;) | distinct;
+let maxr = cells | key(; 1000000 - $0[0]) | min | map(; 1000000 - $1[0]);
+let maxc = cells | key(; 1000000 - $0[1]) | min | map(; 1000000 - $1[0]);
+
+-- sentinel cubes on all four borders
+let cubesX = cubes
+    + (allcols | map(0, $0[0] ;))
+    + (allcols | key(; $0[0]) | join(maxr, ($2[0] + 1, $1[0] ;)))
+    + (allrows | map($0[0], 0 ;))
+    + (allrows | key(; $0[0]) | join(maxc, ($1[0], $2[0] + 1 ;)));
+
+let cubcol = cubesX | map($0[1] ; $0[0]);   -- (c ; rc)
+let cubrow = cubesX | map($0[0] ; $0[1]);   -- (r ; cc)
+
+spin: {
+    let cur = os | filter($0[0] <= 140);
+    -- (k, r, c)
+
+    -- roll north: blocker = nearest cube above; rank among segment peers
+    let bn = cur | map($0[2] ; $0[0], $0[1])
+        | join(cubcol, ($0[0], $1[0], $1[1] ; $2[0]))
+        | filter($1[0] < $0[2])
+        | map($0[1], $0[2], $0[0] ; 1000000 - $1[0]) | min | map($0 ; 1000000 - $1[0]);
+    -- (k, r, c ; b)
+    let segn = bn | map($0[0], $0[2], $1[0] ; $0[1]);   -- (k, c, b ; r)
+    let osn = segn | join(segn, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
+        | filter($1[0] <= $0[3]) | map($0 ;) | count
+        | map($0[0], $0[2] + $1[0], $0[1] ;);
+    -- (k, r', c)
+
+    -- roll west
+    let bw = osn | map($0[1] ; $0[0], $0[2])
+        | join(cubrow, ($0[0], $1[0], $1[1] ; $2[0]))
+        | filter($1[0] < $0[2])
+        | map($0[1], $0[0], $0[2] ; 1000000 - $1[0]) | min | map($0 ; 1000000 - $1[0]);
+    -- (k, r, c ; b)
+    let segw = bw | map($0[0], $0[1], $1[0] ; $0[2]);   -- (k, r, b ; c)
+    let osw = segw | join(segw, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
+        | filter($1[0] <= $0[3]) | map($0 ;) | count
+        | map($0[0], $0[1], $0[2] + $1[0] ;);
+    -- (k, r, c')
+
+    -- roll south: blocker = nearest cube below; rank counts peers >= r
+    let bs = osw | map($0[2] ; $0[0], $0[1])
+        | join(cubcol, ($0[0], $1[0], $1[1] ; $2[0]))
+        | filter($1[0] > $0[2])
+        | map($0[1], $0[2], $0[0] ; $1[0]) | min;
+    -- (k, r, c ; b)
+    let segs = bs | map($0[0], $0[2], $1[0] ; $0[1]);   -- (k, c, b ; r)
+    let oss = segs | join(segs, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
+        | filter($1[0] >= $0[3]) | map($0 ;) | count
+        | map($0[0], $0[2] - $1[0], $0[1] ;);
+
+    -- roll east
+    let be = oss | map($0[1] ; $0[0], $0[2])
+        | join(cubrow, ($0[0], $1[0], $1[1] ; $2[0]))
+        | filter($1[0] > $0[2])
+        | map($0[1], $0[0], $0[2] ; $1[0]) | min;
+    -- (k, r, c ; b)
+    let sege = be | map($0[0], $0[1], $1[0] ; $0[2]);   -- (k, r, b ; c)
+    let ose = sege | join(sege, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
+        | filter($1[0] >= $0[3]) | map($0 ;) | count
+        | map($0[0] + 1, $0[1], $0[2] - $1[0] ;);
+    -- (k+1, r, c'): next round
+
+    var os = rocks0 + ose | distinct;
+}
+
+let final = spin::os | filter($0[0] == 141);
+export "result" = final | map(; $0[1]) | join(maxr, (; 1 + $2[0] - $1[0]))
+    | collect | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part2);

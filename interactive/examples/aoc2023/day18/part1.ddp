@@ -1,0 +1,38 @@
+-- AoC 2023 day 18 part 1: lavaduct area via shoelace + perimeter/2 + 1.
+-- input 0: (line, dircode, steps, h1..h6); U=85 D=68 L=76 R=82
+
+let instr = input 0 | key($0[0] ;
+    if($0[1] == 85, -1, if($0[1] == 68, 1, 0)),
+    if($0[1] == 76, -1, if($0[1] == 82, 1, 0)),
+    $0[2]);
+-- (line ; dr, dc, steps)
+
+path: {
+    let step = p | map($0[0] ; $0[1], $0[2])
+        | join(instr, ($0[0] + 1, $1[0] + $2[0] * $2[2], $1[1] + $2[1] * $2[2] ;));
+    var p = (instr | filter($0[0] == 1) | map(1, 0, 0 ;)) + step | distinct;
+}
+
+let terms = path::p | map($0[0] + 1 ; $0[1], $0[2])
+    | join(path::p | map($0[0] ; $0[1], $0[2]),
+           (; ($1[0] + $2[0]) * ($1[1] - $2[1])));
+let s = terms | collect | map(; fold($1, 0, ^1 + ^0[0])) | map(; if($1[0] < 0, 0 - $1[0], $1[0]));
+let perim = instr | key(; $1[2]) | collect | map(; fold($1, 0, ^1 + ^0[0]));
+let n = s | join(perim, (; $1[0] + $2[0]));
+-- (; |S| + P), even; halve by binary decomposition (no division)
+
+let powtab = instr | key(;) | distinct
+    | flatmap(list(549755813888, 274877906944, 137438953472, 68719476736, 34359738368, 17179869184, 8589934592, 4294967296, 2147483648, 1073741824, 536870912, 268435456, 134217728, 67108864, 33554432, 16777216, 8388608, 4194304, 2097152, 1048576, 524288, 262144, 131072, 65536, 32768, 16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1))
+    | key($1[0] ; $1[1]);
+-- (i ; 2^(39-i))
+
+halve: {
+    let next = st | map($0[0] ; $0[1], $0[2])
+        | join(powtab, ($0[0] + 1,
+            if($1[0] >= 2 * $2[0], $1[0] - 2 * $2[0], $1[0]),
+            if($1[0] >= 2 * $2[0], $1[1] + $2[0], $1[1]) ;));
+    var st = (n | map(0, $1[0], 0 ;)) + next | distinct;
+}
+
+export "result" = halve::st | filter($0[0] == 40) | key(; $0[2] + 1)
+    | arrange | inspect(part1);

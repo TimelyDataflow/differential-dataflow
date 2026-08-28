@@ -1,0 +1,47 @@
+-- AoC 2023 day 3 part 1: sum of numbers adjacent (8-way) to a symbol.
+-- input 0: (row, col, charcode); '.' = 46, digits 48..57.
+-- NB: `distinct` erases values, so loop state is packed into keys.
+
+let cells    = input 0 | filter($0[2] != 46) | key($0[0], $0[1] ; $0[2]);
+let numerals = cells | filter($1[0] >= 48 && $1[0] <= 57) | map($0 ; $1[0] - 48);
+let symbols  = cells | filter(not($1[0] >= 48 && $1[0] <= 57));
+
+-- run starts: digit cells with no digit to the left
+let has_left = numerals | map($0[0], $0[1] + 1 ; $1[0]) | join(numerals, ($0 ; $2[0]));
+let starts = numerals - has_left;
+
+-- grow runs rightward: key (row, start, end_exclusive, value)
+runs: {
+    let grow = run | map($0[0], $0[2] ; $0[1], $0[3])
+                   | join(numerals, ($0[0], $1[0], $0[1] + 1, $1[1] * 10 + $2[0] ;));
+    var run = (starts | map($0[0], $0[1], $0[1] + 1, $1[0] ;)) + grow | distinct;
+}
+let extendable = runs::run | map($0[0], $0[2] ; $0[1], $0[3])
+                           | join(numerals, ($0[0], $1[0], $0[1], $1[1] ;));
+let maximal = runs::run - extendable;
+-- key (row, start, end, value)
+
+-- label each digit cell with its run start: key (row, col, start)
+labels: {
+    let ext = label | map($0[0], $0[1] + 1 ; $0[2]) | join(numerals, ($0[0], $0[1], $1[0] ;));
+    var label = (starts | map($0[0], $0[1], $0[1] ;)) + ext | distinct;
+}
+
+-- digit cells adjacent to a symbol
+let symnbrs = symbols
+    | flatmap(list(tuple(-1,-1), tuple(-1,0), tuple(-1,1),
+                   tuple(0,-1),  tuple(0,0),  tuple(0,1),
+                   tuple(1,-1),  tuple(1,0),  tuple(1,1)))
+    | map($0[0] + $1[1][0], $0[1] + $1[1][1] ;) | distinct;
+
+let active_runs = labels::label
+    | map($0[0], $0[1] ; $0[2]) | join(symnbrs, ($0[0], $1[0] ;)) | distinct;
+-- key (row, start) of runs adjacent to a symbol
+
+let part_numbers = maximal | map($0[0], $0[1] ; $0[3]) | join(active_runs, ($0 ; $1[0]));
+-- (row, start ; value)
+
+export "result" = part_numbers
+    | key(; $1[0]) | collect
+    | map(; fold($1, 0, ^1 + ^0[0]))
+    | arrange | inspect(part1);
