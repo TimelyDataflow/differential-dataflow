@@ -69,6 +69,19 @@ pub enum Cmd {
         time: Option<OuterTime>,
         diff: Diff,
     },
+    /// Bind a trace's changes into `prog`'s positional `input`, delivered at
+    /// each tick one epoch delayed — the write path for installed programs.
+    Bind {
+        trace: String,
+        prog: String,
+        input: usize,
+    },
+    /// Remove a binding installed by `bind`.
+    Unbind {
+        trace: String,
+        prog: String,
+        input: usize,
+    },
     /// Push a row into the query input of a `--explain` dataflow
     /// (reserved; unimplemented). Sign is `+1` for `add`, `-1` for `del`.
     #[allow(dead_code)]
@@ -129,7 +142,8 @@ pub struct LineParser {
 /// Tokens that introduce a command. If a line begins with one of these
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
-    "load", "drop", "list", "peek", "tail", "stop", "tick", "query", "exit", "feed",
+    "load", "drop", "list", "peek", "tail", "stop", "tick", "query", "exit", "feed", "bind",
+    "unbind",
 ];
 
 /// Program-size gate: a `load` body larger than this is rejected at intake,
@@ -479,6 +493,22 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                 diff,
             })
         }
+        "bind" | "unbind" => match args {
+            [trace, prog, input] => match input.parse::<usize>() {
+                Ok(input) => {
+                    let (trace, prog) = ((*trace).to_string(), (*prog).to_string());
+                    if cmd == "bind" {
+                        ParseOutcome::Cmd(Cmd::Bind { trace, prog, input })
+                    } else {
+                        ParseOutcome::Cmd(Cmd::Unbind { trace, prog, input })
+                    }
+                }
+                Err(_) => {
+                    ParseOutcome::Err(format!("{}: <in#> must be a number, got {:?}", cmd, input))
+                }
+            },
+            _ => ParseOutcome::Err(format!("{}: expected `<trace> <prog> <in#>`", cmd)),
+        },
         "drop" => match args {
             [tok] => {
                 let target = match tok.parse::<u64>() {
@@ -680,6 +710,22 @@ mod tests {
         assert!(got[3].1.is_err());
         assert!(got[4].1.is_err());
         assert!(got[5].1.is_err());
+    }
+
+    #[test]
+    fn bind_cmd() {
+        let mut p = LineParser::new();
+        let got = feed_all(
+            &mut p,
+            &["r0 bind next counter 1", "r1 unbind next counter 1", "r2 bind next counter one"],
+        );
+        assert_eq!(got.len(), 3);
+        assert!(matches!(
+            &got[0].1,
+            Ok(Cmd::Bind { trace, prog, input: 1 }) if trace == "next" && prog == "counter"
+        ));
+        assert!(matches!(&got[1].1, Ok(Cmd::Unbind { input: 1, .. })));
+        assert!(got[2].1.is_err());
     }
 
     #[test]

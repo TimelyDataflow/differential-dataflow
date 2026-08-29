@@ -132,6 +132,12 @@ fn dispatch(
         }) => server
             .feed(&prog, input, key, val, time, diff)
             .map(|()| format!("fed {:?} input {} at t={}", prog, input, server.epoch())),
+        Ok(Cmd::Bind { trace, prog, input }) => server
+            .bind(worker, &trace, &prog, input)
+            .map(|()| format!("bound {:?} -> {:?} input {}", trace, prog, input)),
+        Ok(Cmd::Unbind { trace, prog, input }) => server
+            .unbind(worker, &trace, &prog, input)
+            .map(|()| format!("unbound {:?} -> {:?} input {}", trace, prog, input)),
         Ok(Cmd::List) => {
             for program in server.program_info() {
                 send(
@@ -154,6 +160,14 @@ fn dispatch(
                     &reqid,
                     "data",
                     format!("trace name={:?} importers={}", name, importers),
+                );
+            }
+            for (source, target, input) in server.binding_info() {
+                send(
+                    &resp,
+                    &reqid,
+                    "data",
+                    format!("binding source={:?} target={:?} input={}", source, target, input),
                 );
             }
             Ok(format!("t={}", server.epoch()))

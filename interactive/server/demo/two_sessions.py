@@ -112,6 +112,14 @@ def main():
             str(owned),
         )
 
+        # Sessions are trusted: B may bind into (and later drop) A's program.
+        b.send("b1 bind owner world 0")
+        status, body, _ = b.expect("b1")
+        check("B binds into A's world (trusted sessions)", status == "ok", body)
+        b.send("b2 unbind owner world 0")
+        status, body, _ = b.expect("b2")
+        check("B unbinds it again", status == "ok", body)
+
         # The one gate: an oversized program body is swallowed, one error.
         big = "load big begin\n" + ("let x = input 0; -- pad\n" * 300) + "big end-load\n"
         a.send("s1 " + big)

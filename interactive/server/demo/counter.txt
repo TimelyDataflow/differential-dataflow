@@ -1,0 +1,22 @@
+# The feedback primitive: a counter that advances with no client in the
+# loop. `bind` mirrors the export "next" into input 1, one epoch per tick,
+# and the `f(state) + (seed | negate)` shape makes the recursion exact:
+# state(t) = seed + next(t-1) = f(state(t-1)).
+#
+#   cargo run -p ddir-server < interactive/server/demo/counter.txt
+
+load counter begin
+let seed = input 0;
+let feedback = input 1;
+let state = seed + feedback;
+export "count" = state;
+export "next" = (state | map($0[0] + 1 ;)) + (seed | negate);
+counter end-load
+
+feed counter 0 0
+bind next counter 1
+tick 5
+
+# The closed past shows state 4 after five ticks: (0) stepped once per tick.
+peek count
+exit

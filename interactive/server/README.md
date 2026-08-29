@@ -18,8 +18,9 @@ generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
 Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
-The useful commands are `load`, `drop`, `list`, `feed`, `peek`, `tail`,
-`stop`, `tick`, and `exit`. `load` accepts an inline pipe-syntax program:
+The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
+`peek`, `tail`, `stop`, `tick`, and `exit`. `load` accepts an inline
+pipe-syntax program:
 
     load graph begin
     let edges = import "random:nodes=8,edges=12,seed=1,churn=1";
@@ -61,6 +62,25 @@ every replay. Identity is convention, not enforcement: we are not defending
 against adversarial clients yet, and server-side attribution is deliberately
 deferred until a deployment needs it.
 
+## Feedback: `bind`
+
+    bind <trace> <prog> <in#>        unbind <trace> <prog> <in#>
+
+From then on, every `tick` delivers the trace's *changes* into that input at
+the next epoch, so the input mirrors the trace one epoch delayed. This is the
+write path for *programs*: an installed dataflow can act on the world — or on
+itself — with no client in the loop, one well-founded recursion step per tick.
+
+The state-machine idiom (see `demo/counter.txt` and the `server_bind` tests):
+give the program a seed input and a dedicated feedback input,
+
+    let state = seed + feedback;
+
+and bind the export `f(state) + (seed | negate)` to the feedback input; then
+`state(t) = f(state(t-1))`, while later seed feeds still inject as
+perturbations. A bound source cannot be dropped (it holds an importer), nor
+can the bound target (unbind first).
+
 ## One gate
 
 Loads are cheap to request and costly to render, so intake is bounded:
@@ -74,6 +94,7 @@ if a deployment ever needs one.
 
     cargo run -p ddir-server --release
     # then, or piped straight to stdin:
+    ./target/release/ddir_server < interactive/server/demo/counter.txt
     ./target/release/ddir_server < interactive/server/demo/claims.txt
     ./target/release/ddir_server < interactive/server/demo/txn.txt
     python3 interactive/server/demo/two_sessions.py   # races + size gate over TCP
