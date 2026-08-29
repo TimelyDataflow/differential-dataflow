@@ -122,6 +122,16 @@ fn dispatch(
                 }
             }
         },
+        Ok(Cmd::Feed {
+            prog,
+            input,
+            key,
+            val,
+            time,
+            diff,
+        }) => server
+            .feed(&prog, input, key, val, time, diff)
+            .map(|()| format!("fed {:?} input {} at t={}", prog, input, server.epoch())),
         Ok(Cmd::List) => {
             for program in server.program_info() {
                 send(

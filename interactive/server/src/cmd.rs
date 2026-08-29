@@ -12,6 +12,10 @@
 //! literal program text terminated by `<reqid> end-load`.
 
 use std::collections::BTreeMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use interactive::ir::{eval, Diff, Value};
+use interactive::server::OuterTime;
 
 pub type ReqId = String;
 
@@ -52,6 +56,19 @@ pub enum Cmd {
     Tail { name: String },
     /// Cancel a previous `tail` (matched by its reqid).
     Stop { tail_reqid: ReqId },
+    /// Update positional `input` of `prog`: add `(key, val)` with `diff` at
+    /// `time` (default the current epoch). Identity and ordering of writes
+    /// are convention, not enforcement: cooperating clients include their
+    /// session name and an ordering id in the data, and programs resolve
+    /// contention over those facts (see demo/claims.txt, demo/txn.txt).
+    Feed {
+        prog: String,
+        input: usize,
+        key: Value,
+        val: Value,
+        time: Option<OuterTime>,
+        diff: Diff,
+    },
     /// Push a row into the query input of a `--explain` dataflow
     /// (reserved; unimplemented). Sign is `+1` for `add`, `-1` for `del`.
     #[allow(dead_code)]
@@ -106,13 +123,25 @@ pub struct Request {
 pub struct LineParser {
     pending_load: Option<PendingLoad>,
     auto_reqid_counter: u64,
+    max_load_bytes: usize,
 }
 
 /// Tokens that introduce a command. If a line begins with one of these
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
-    "load", "drop", "list", "peek", "tail", "stop", "tick", "query", "exit",
+    "load", "drop", "list", "peek", "tail", "stop", "tick", "query", "exit", "feed",
 ];
+
+/// Program-size gate: a `load` body larger than this is rejected at intake,
+/// before parsing — installs are cheap to request and costly to render, so
+/// the cap is the first line of defense against installation as denial of
+/// service. Override with `DDIR_MAX_PROGRAM_BYTES`.
+fn max_program_bytes() -> usize {
+    std::env::var("DDIR_MAX_PROGRAM_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(65536)
+}
 
 struct PendingLoad {
     reqid: ReqId,
@@ -120,11 +149,27 @@ struct PendingLoad {
     bindings: BTreeMap<String, String>,
     explain: bool,
     body: String,
+    /// Set once the body exceeds the size gate; the rest of the body is
+    /// swallowed (not stored) and `end-load` reports this error, so an
+    /// oversized upload cannot make the parser misread body text as commands.
+    poisoned: Option<String>,
 }
 
 impl LineParser {
     pub fn new() -> Self {
-        Self::default()
+        LineParser {
+            max_load_bytes: max_program_bytes(),
+            ..Self::default()
+        }
+    }
+
+    /// Test hook: a parser with an explicit program-size cap.
+    #[cfg(test)]
+    fn with_cap(max_load_bytes: usize) -> Self {
+        LineParser {
+            max_load_bytes,
+            ..Self::default()
+        }
     }
 
     /// Feed one input line; return `Some((reqid, parsed))` if the line
@@ -144,6 +189,9 @@ impl LineParser {
             if let (Some(tok0), Some(tok1), None) = (parts.next(), parts.next(), parts.next()) {
                 if (tok0 == pl.reqid || tok0 == pl.id_hint) && tok1 == "end-load" {
                     let done = self.pending_load.take().unwrap();
+                    if let Some(err) = done.poisoned {
+                        return Some((done.reqid, Err(err)));
+                    }
                     return Some((
                         done.reqid,
                         Ok(Cmd::Load {
@@ -155,15 +203,23 @@ impl LineParser {
                     ));
                 }
             }
-            pl.body.push_str(trimmed);
-            pl.body.push('\n');
+            if pl.poisoned.is_none() {
+                pl.body.push_str(trimmed);
+                pl.body.push('\n');
+                if pl.body.len() > self.max_load_bytes {
+                    pl.poisoned = Some(format!(
+                        "load: program body exceeds {} bytes (DDIR_MAX_PROGRAM_BYTES)",
+                        self.max_load_bytes
+                    ));
+                    pl.body = String::new();
+                }
+            }
             return None;
         }
 
         let trimmed = line.trim();
         // Blank lines and `#` comments are skipped between commands (inside
-        // a load body every line is literal program text, handled above), so
-        // annotated command scripts can be piped straight to stdin.
+        // a load body every line is literal program text, handled above).
         if trimmed.is_empty() || trimmed.starts_with('#') {
             return None;
         }
@@ -199,6 +255,7 @@ impl LineParser {
                     bindings,
                     explain,
                     body: String::new(),
+                    poisoned: None,
                 });
                 None
             }
@@ -220,6 +277,41 @@ enum ParseOutcome {
         bindings: BTreeMap<String, String>,
         explain: bool,
     },
+}
+
+/// A `<value>` for `feed`: a comma-separated integer row → `Tuple`, `_` or
+/// empty → unit, else a closed scalar term (one whitespace-free token, e.g.
+/// `inject(2,tuple(3,4))`) evaluated to a constant. Term-parser panics are
+/// caught here on the session thread and become clean errors — malformed
+/// input never reaches the worker.
+fn parse_value(s: &str) -> Result<Value, String> {
+    let s = s.trim();
+    if s.is_empty() || s == "_" {
+        return Ok(Value::unit());
+    }
+    if s.chars()
+        .all(|c| c.is_ascii_digit() || c == ',' || c == '-')
+    {
+        if let Ok(ints) = s
+            .split(',')
+            .map(|t| t.trim().parse::<i64>())
+            .collect::<Result<Vec<_>, _>>()
+        {
+            return Ok(Value::Tuple(ints.into_iter().map(Value::Int).collect()));
+        }
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        eval(&interactive::parse::pipe::parse_term(s), &mut Vec::new())
+    }))
+    .map_err(|panic| {
+        if let Some(msg) = panic.downcast_ref::<&str>() {
+            (*msg).to_string()
+        } else if let Some(msg) = panic.downcast_ref::<String>() {
+            msg.clone()
+        } else {
+            format!("malformed value {:?}", s)
+        }
+    })
 }
 
 fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
@@ -319,6 +411,72 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                 kind,
                 key,
                 val,
+            })
+        }
+        "feed" => {
+            // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
+            // A `<v>`/`<key>` is a comma-separated integer row (`1,2` → tuple;
+            // `_`/empty → unit) or a closed scalar term written without
+            // spaces (`inject(2,tuple(3,4))`), as in the ddir_server example.
+            if args.len() < 3 {
+                return ParseOutcome::Err(
+                    "feed: expected `<prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`".into(),
+                );
+            }
+            let prog = args[0].to_string();
+            let input: usize = match args[1].parse() {
+                Ok(n) => n,
+                Err(_) => {
+                    return ParseOutcome::Err(format!(
+                        "feed: <in#> must be a number, got {:?}",
+                        args[1]
+                    ))
+                }
+            };
+            let key = match parse_value(args[2]) {
+                Ok(v) => v,
+                Err(e) => return ParseOutcome::Err(format!("feed key: {}", e)),
+            };
+            let mut val = Value::unit();
+            let mut time = None;
+            let mut diff: Diff = 1;
+            for tok in &args[3..] {
+                if let Some(v) = tok.strip_prefix("val=") {
+                    val = match parse_value(v) {
+                        Ok(v) => v,
+                        Err(e) => return ParseOutcome::Err(format!("feed val: {}", e)),
+                    };
+                } else if let Some(t) = tok.strip_prefix("time=") {
+                    time = match t.parse() {
+                        Ok(t) => Some(t),
+                        Err(_) => {
+                            return ParseOutcome::Err(format!(
+                                "feed: time= must be a number, got {:?}",
+                                t
+                            ))
+                        }
+                    };
+                } else if let Some(d) = tok.strip_prefix("diff=") {
+                    diff = match d.parse() {
+                        Ok(d) => d,
+                        Err(_) => {
+                            return ParseOutcome::Err(format!(
+                                "feed: diff= must be an integer, got {:?}",
+                                d
+                            ))
+                        }
+                    };
+                } else {
+                    return ParseOutcome::Err(format!("feed: unrecognized argument {:?}", tok));
+                }
+            }
+            ParseOutcome::Cmd(Cmd::Feed {
+                prog,
+                input,
+                key,
+                val,
+                time,
+                diff,
             })
         }
         "drop" => match args {
@@ -483,6 +641,61 @@ mod tests {
         assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name }) if name == "foo"));
         assert_eq!(got[3].0, "_3"); // exit
         assert!(matches!(got[3].1, Ok(Cmd::Exit)));
+    }
+
+    #[test]
+    fn feed_cmd() {
+        let mut p = LineParser::new();
+        let got = feed_all(
+            &mut p,
+            &[
+                "r0 feed world 0 1,2",
+                "r1 feed world 0 3,4 val=7,8 time=5 diff=-1",
+                "r2 feed world 0 _ val=inject(2,tuple(3,4))",
+                "r3 feed world zero 1,2",     // bad input index
+                "r4 feed world 0 1,2 wat=7",  // unknown argument
+                "r5 feed world 0 tuple(1,",   // malformed term -> caught, not a panic
+            ],
+        );
+        assert_eq!(got.len(), 6);
+        match &got[0].1 {
+            Ok(Cmd::Feed { prog, input, key, val, time, diff }) => {
+                assert_eq!(prog, "world");
+                assert_eq!(*input, 0);
+                assert_eq!(*key, Value::Tuple(vec![Value::Int(1), Value::Int(2)]));
+                assert_eq!(*val, Value::unit());
+                assert_eq!(*time, None);
+                assert_eq!(*diff, 1);
+            }
+            other => panic!("expected Feed, got {:?}", other),
+        }
+        match &got[1].1 {
+            Ok(Cmd::Feed { time, diff, .. }) => {
+                assert_eq!(*time, Some(5));
+                assert_eq!(*diff, -1);
+            }
+            other => panic!("expected Feed, got {:?}", other),
+        }
+        assert!(matches!(&got[2].1, Ok(Cmd::Feed { key, .. }) if *key == Value::unit()));
+        assert!(got[3].1.is_err());
+        assert!(got[4].1.is_err());
+        assert!(got[5].1.is_err());
+    }
+
+    #[test]
+    fn oversized_load_is_rejected_cleanly() {
+        let mut p = LineParser::with_cap(64);
+        assert!(p.feed("r0 load big begin").is_none());
+        // Push well past the cap; every body line is swallowed, none parse
+        // as commands, and the terminator reports one clean error.
+        for _ in 0..16 {
+            assert!(p.feed("let x = input 0; -- padding padding padding").is_none());
+        }
+        let got = p.feed("r0 end-load").expect("end-load completes the upload");
+        assert_eq!(got.0, "r0");
+        assert!(got.1.as_ref().is_err_and(|e| e.contains("exceeds 64 bytes")));
+        // The parser is usable again afterwards.
+        assert!(matches!(p.feed("r1 list"), Some((_, Ok(Cmd::List)))));
     }
 
     #[test]

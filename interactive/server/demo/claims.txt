@@ -1,0 +1,23 @@
+# First-claim-wins with identity by convention. Cooperating clients include
+# (their id, an ordering epoch) in the value; the program resolves races as
+# min over (epoch, id) — deterministic on every replay. The server enforces
+# nothing here: contention policy lives in the dataflow, and honest ids are
+# part of the client protocol (we are not defending against adversaries yet;
+# when we must, attribution hardening designs are on the shelf).
+#
+#   cargo run -p ddir-server < interactive/server/demo/claims.txt
+
+load world begin
+let claims = input 0;
+export "owner" = claims | map($0 ; $1[1], $1[0]) | min | map($0 ; $1[1]);
+world end-load
+
+# Client 1 and client 2 race for cell (1,1) in epoch 0: lower id wins.
+feed world 0 1,1 val=1,0
+feed world 0 1,1 val=2,0
+feed world 0 2,2 val=2,0
+tick
+
+# owner: (1,1) -> client 1 (won the race), (2,2) -> client 2 (uncontested).
+peek owner
+exit
