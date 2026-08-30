@@ -84,3 +84,40 @@ Also: the setup's Dijkstra feasibility (340) mispriced reality — it
 ignores grade for road-road steps and pointed at the spillway work zone,
 not the raise-at-village plan the rules actually allow. Feasibility
 metrics must price the same game the agents play.
+
+### Trial 2 (post-fix re-run): FAILURE — but the mechanism passed and the
+### calibration failed, provably
+
+Both agents opus, tight briefings. Coordination was exemplary: the
+roadwright steered the terraformer off the dead south spillway citing a
+prior run; a real deadlock (trench outside access-3 of a road tip ending
+at water) was diagnosed and resolved by a requested bridge at (92,31); and
+the headline emergent behavior — a CROSS-BUDGET TRADE: the roadwright's
+route hit a 15 m grade wall (3 over the limit), and rather than a second
+50-coin bridge it negotiated a 3-coin grade-shave from the terraformer's
+budget. Bridges-span-grade worked in anger. The roadwright landed on
+exactly 420/420.
+
+The failure: the terraformer loaded the real grid, ran the judge's own
+priority_flood, and PROVED the unique drainage channel (22 cells via the
+(96,28) saddle) costs 761 against its 650 budget — then halted with 396
+unspent because a partial channel drains nothing and further spend was
+provably waste. Root cause is mine: the role split halved digging
+capacity (earlier trials drained with TWO diggers spending ~1155) without
+resizing the dig. Terraformer budget now 1000.
+
+New mechanics discovered in the wild: DESTRUCTIVE INTERFERENCE — the
+terraformer's one mistaken over-dig at (94,29) flooded the cell and
+severed the roadwright's network tip (a terraform act drowning a road):
+realistic, punishing, and a strong argument for the what-if `plan` view.
+Also both agents flagged the |dh|<=2 intact-check as gameable by raising
+village cells 2 m — only actually exploitable combined with a partial
+drain (raise-to-1710 + drain-to-1710), which is... legitimate flood-
+proofing (houses on plinths). The narrative rule and coded check can
+stay as they are.
+
+Design-space judgment after two runs: NOT flat, NOT obvious — the
+tension produced negotiation, sequencing, cross-budget trades, and
+formal-methods-grade analysis from the participants. The scenario needs
+correct budgets more than new rules; verify feasibility with the same
+min-cut the terraformer used, not the Dijkstra heuristic.

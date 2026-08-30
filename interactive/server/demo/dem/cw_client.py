@@ -53,7 +53,11 @@ def main():
         x0, y0, r = int(args.cmd[1]), int(args.cmd[2]), int(args.cmd[3])
         t = terrain_cache()
         wet = {k: v[0] for k, v in parse_rows(c.cmd("peek water", collect=True)).items()}
-        print("terrain (rows are y, cols are x); [depth] where wet:")
+        try:
+            roads = parse_rows(c.cmd("peek roads", collect=True))
+        except RuntimeError:
+            roads = {}
+        print("terrain (rows are y, cols are x); [depth] wet, R road, B bridge:")
         for y in range(y0 - r, y0 + r + 1):
             row = []
             for x in range(x0 - r, x0 + r + 1):
@@ -62,7 +66,11 @@ def main():
                     row.append("  ----  ")
                 else:
                     d = wet.get((x, y), h) - h
-                    row.append(f"{h:>5}" + (f"[{d}]" if d > 0 else "   "))
+                    mark = ""
+                    if (x, y) in roads:
+                        mark = "B" if roads[(x, y)][1] == 1 else "R"
+                    tag = (f"[{d}]" if d > 0 else "") + mark
+                    row.append(f"{h:>5}" + f"{tag:<3}")
             print(f"y={y:>3} " + "".join(row))
     elif cmd == "water":
         t = terrain_cache()

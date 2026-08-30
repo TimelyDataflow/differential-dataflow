@@ -20,21 +20,25 @@ let water = import "water";
 
 let cells = terrain | map($0 ;);
 
--- Usable road cells with their terrain height: ((x,y) ; (h)).
+-- Usable road cells with terrain height and kind: ((x,y) ; (h, kind)).
 let rd = acts | join(terrain, ($0 ; $1[1], $2[0]))
               | join(water, ($0 ; $1[0], $1[1], $2[0]));
-let usable = rd | filter(or($1[0] == 1, $1[2] == $1[1])) | map($0 ; $1[1]);
+let usable = rd | filter(or($1[0] == 1, $1[2] == $1[1])) | map($0 ; $1[1], $1[0]);
 
--- Grade-limited edges between adjacent usable roads, both directions.
-let sx = usable | map($0[0] + 1, $0[1] ; $0[0], $0[1], $1[0]);
-let px = sx | join(usable, ($1[0], $1[1] ; $0[0], $0[1], $1[2], $2[0]));
-let mx = sx | join(usable, ($0[0], $0[1] ; $1[0], $1[1], $2[0], $1[2]));
-let sy = usable | map($0[0], $0[1] + 1 ; $0[0], $0[1], $1[0]);
-let py = sy | join(usable, ($1[0], $1[1] ; $0[0], $0[1], $1[2], $2[0]));
-let my = sy | join(usable, ($0[0], $0[1] ; $1[0], $1[1], $2[0], $1[2]));
-let pairs = px + mx + py + my;   -- ((c) ; (nx, ny, h_c, h_n))
+-- Edges between adjacent usable roads, both directions. The grade limit
+-- applies only between two PLAIN roads: a bridge's deck is level, so any
+-- edge touching a bridge connects regardless of the drowned terrain
+-- beneath it (trial 1's 200-coin lesson).
+let sx = usable | map($0[0] + 1, $0[1] ; $0[0], $0[1], $1[0], $1[1]);
+let px = sx | join(usable, ($1[0], $1[1] ; $0[0], $0[1], $1[2], $2[0], $1[3], $2[1]));
+let mx = sx | join(usable, ($0[0], $0[1] ; $1[0], $1[1], $2[0], $1[2], $2[1], $1[3]));
+let sy = usable | map($0[0], $0[1] + 1 ; $0[0], $0[1], $1[0], $1[1]);
+let py = sy | join(usable, ($1[0], $1[1] ; $0[0], $0[1], $1[2], $2[0], $1[3], $2[1]));
+let my = sy | join(usable, ($0[0], $0[1] ; $1[0], $1[1], $2[0], $1[2], $2[1], $1[3]));
+let pairs = px + mx + py + my;   -- ((c) ; (nx, ny, h_c, h_n, k_c, k_n))
 let edges = pairs
-    | filter(if($1[2] > $1[3], $1[2] - $1[3], $1[3] - $1[2]) < 13)
+    | filter(or($1[4] == 1, or($1[5] == 1,
+        if($1[2] > $1[3], $1[2] - $1[3], $1[3] - $1[2]) < 13)))
     | map($0 ; $1[0], $1[1]);
 
 -- The network: reach from the anchors over graded, usable edges.

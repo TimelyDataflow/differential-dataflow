@@ -41,6 +41,7 @@ def py_road_views(acts, anchors, terrain, water):
     """Ground truth for works.ddp: usable cells, graded edges, network, access."""
     usable = {c for c, (agent, kind) in acts.items()
               if kind == 1 or water.get(c, terrain[c]) == terrain[c]}
+    kind = {c: k for c, (_, k) in acts.items()}
     net = set()
     frontier = [a for a in anchors if a in usable or a in anchors]
     net.update(frontier)
@@ -48,7 +49,9 @@ def py_road_views(acts, anchors, terrain, water):
         nxt = []
         for c in frontier:
             for n in nbrs(c):
-                if n in usable and n not in net and abs(terrain[c] - terrain[n]) <= GRADE:
+                if (n in usable and n not in net
+                        and (kind.get(c) == 1 or kind.get(n) == 1
+                             or abs(terrain[c] - terrain[n]) <= GRADE)):
                     net.add(n)
                     nxt.append(n)
         frontier = nxt
@@ -75,12 +78,18 @@ def feasibility(terrain, water, depot):
         for n in nbrs(c):
             if n not in terrain:
                 continue
-            step = BRIDGE_COST if water.get(n, terrain[n]) > terrain[n] else ROAD_COST
-            extra = max(0, abs(terrain[c] - terrain[n]) - GRADE)
+            wet_c = water.get(c, terrain[c]) > terrain[c]
+            wet_n = water.get(n, terrain[n]) > terrain[n]
+            step = BRIDGE_COST if wet_n else ROAD_COST
+            # Bridges span grade; between two plain dry roads a violation
+            # is impassable (the terraformer would have to cut, priced 0
+            # here -- report only routes that need no assist).
+            if not wet_c and not wet_n and abs(terrain[c] - terrain[n]) > GRADE:
+                continue
             nd = d + step
             if nd < dist.get(n, 10**9):
                 dist[n] = nd
-                heapq.heappush(heap, (nd, assist + extra, n))
+                heapq.heappush(heap, (nd, assist, n))
     return best
 
 
@@ -155,12 +164,12 @@ def main():
         village = sorted((k for k in flooded if 80 <= k[0] <= 92 and k[1] <= 45),
                          key=lambda k: terrain[k])[:4]
         feas = feasibility(terrain, water, depot)
-        road_budget = 400
+        road_budget = int(feas[0] * 5 // 4 // 10 * 10)
         briefing = {
             "port": args.port,
             "roles": {"1": "ROADWRIGHT (road/bridge acts only)",
                       "2": "TERRAFORMER (terraform acts only)"},
-            "budgets": {"1": road_budget, "2": 650},
+            "budgets": {"1": road_budget, "2": 1000},
             "village": village,
             "locked": sorted(dam),
             "depot": dblk,
@@ -203,11 +212,14 @@ def main():
         usable, net_py, acc_py = py_road_views(acts, anchors, terrain_now, water)
         dry = {tuple(v): water[tuple(v)] == terrain_now[tuple(v)]
                for v in briefing["village"]}
+        intact = {tuple(v): abs(terrain_now[tuple(v)] - base[tuple(v)]) <= 2
+                  for v in briefing["village"]}
         role_ok = (all(a in (0, 1) for a, _ in acts.values())
                    and all(a in (0, 2) for a in terra_by_agent))
         access_ok = all(c in acc_py for c in terra_by_agent.get(2, []))
         checks = {
             "village dry": all(dry.values()),
+            "village intact (no burial; +-2 of original)": all(intact.values()),
             "audit terrain==base+ledger": declared == terrain_now,
             "ground truth net==server": net_py == net_srv,
             "ground truth access==server": acc_py == acc_srv,
