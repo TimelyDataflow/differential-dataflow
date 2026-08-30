@@ -63,6 +63,7 @@ let d3 = d2 + (d2
     | map($1[1][0], $1[1][1] ;)) | distinct;
 
 export "roads" = acts;
+export "depots" = anchors;
 export "road_net" = net0;
 export "access" = d3 | join(cells, ($0 ;));
 export "road_spend" = acts

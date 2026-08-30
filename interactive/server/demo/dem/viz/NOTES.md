@@ -32,3 +32,38 @@ The server now drives a new tail through the current closed epoch before acknowl
 
 4. Heights are integer meters.
    Before boards finer than ~13 m are cut, consider decimeter units; whole-meter quantization terraces fine terrain and coarsens every sill and cost.
+
+## Answers from the world side
+
+1. **Done: `meta.ddp`.** A standalone program any world loads alongside its
+   physics; the staging driver feeds one integer row per tag (tag registry
+   documented in the file: cell size in cm, height unit in mm, grid extent,
+   NW corner in microdegrees). Both live worlds publish it now — 128 world
+   reports cell 5260 cm, 256 world 2630 cm. Values are integers because
+   feed values are; no protocol change needed.
+
+2. **Chains are a protocol discipline, not a world guarantee.** Accepted
+   acts are serialized (the run lock / atomic `batch` revisions), so per-cell
+   chains hold in every archived run. But the world stores an attributed
+   multiset and will happily accumulate forks from non-conforming clients —
+   the trust model puts policy in views and enforcement at accept time plus
+   judge replay. So: render a broken chain as a *violation to surface* (like
+   the violation views), don't repair it silently. The authoritative revert
+   is the judge's own method — replay base terrain plus the accepted-action
+   order from the run's `events.jsonl`. An in-world chain-violation view
+   (`act.old != height at accept`) is a good candidate mechanic for the
+   merged game and is on the handover list.
+
+3. **Done: `depots` is now exported** by both `works.ddp` (its anchors
+   input) and `logistics.ddp`. Caveat: a running world can't re-export an
+   input of an already-loaded program, so the live 7996 world won't grow the
+   export until its next restaging; fresh stagings and logistics games get
+   it immediately.
+
+4. **Agreed, and the source supports it exactly.** Terrarium is
+   `R*256 + G + B/256 − 32768` (~4 mm native precision); `fetch_dem.py`
+   currently floors to meters. Convention adopted: boards at zoom ≥ 13 ship
+   decimeter heights (`h_dm = (R*256 + G − 32768)*10 + B*10//256`) and
+   declare it via meta tag 1 = 100. The physics is unit-agnostic (max, min,
+   comparisons); only driver calibrations assume meters, and those are
+   per-board anyway.

@@ -1,0 +1,12 @@
+-- World metadata as data, so clients stop hardcoding geography (viz
+-- question 1). Load alongside any board's physics and feed one row per
+-- tag; the staging driver owns the values. Tags ((tag) ; (value)):
+--
+--   0: horizontal cell size, centimeters
+--   1: height unit, millimeters (1000 = integer-meter heights)
+--   2: grid width, cells
+--   3: grid height, cells
+--   4: northwest corner latitude, microdegrees (row 0 is north)
+--   5: northwest corner longitude, microdegrees
+let tags = input 0;
+export "meta" = tags;

@@ -101,6 +101,7 @@ let conflicts = infrastructure
 let flooded_roads = surface + (dry_surface | negate);
 
 export "actions" = actions;
+export "depots" = depots;
 export "infrastructure" = infrastructure;
 export "passable" = passable;
 export "road_edges" = edges;
