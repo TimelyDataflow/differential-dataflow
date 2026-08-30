@@ -1,0 +1,26 @@
+-- A batch emptied by a columnar filter, then a projection that falls back to rows.
+--
+-- The corgi backend's linear ops are shape-directed, and a container with no rows has no shape.
+-- Two steps are needed to reach the hole, which is why it survived until the exchange landed:
+--
+--   1. an op that empties a batch while KEEPING its shape — the columnar filter path does this,
+--      since `gather` of an empty index list is still a typed zero-row column;
+--   2. an op whose term the lowering DECLINES, so it takes the row-wise path and rebuilds the
+--      container with `from_updates` — which, with no rows to scan, returns `Unit` keys and vals.
+--
+-- After that any op needing the shape lowers a `Field` against a `Unit`: legal to compile,
+-- impossible to evaluate. `$1[0][0] * $1[1][0]` over a collected list is a declining term, and
+-- the export's `$1[0]` is the op that then meets the erased shape.
+--
+-- Reaching it also takes a batch that arrives non-empty and leaves empty, which is why the gate
+-- runs every program at several worker counts: only key 1 has the two values the filter keeps, so
+-- at three or four workers at least one holds nothing but keys the filter rejects.
+--
+-- This is the shape of AoC 2023 day 3 part 2's export, which is where it was found.
+
+let vals    = input 0 | key($0[0] ; $0[1]);
+let grouped = vals | collect;
+let two     = grouped | filter(len($1) == 2);
+let prod    = two | map(; $1[0][0] * $1[1][0]);
+
+export "result" = prod | map($0 ; $1[0] * 2) | arrange | inspect(total);

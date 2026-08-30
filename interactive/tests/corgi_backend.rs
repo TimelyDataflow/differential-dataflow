@@ -33,6 +33,12 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         // scalar_ops: (key, a, b) triples; a values straddle the `> 2` and `= -5` tests.
         "scalar_ops" => vec![rows(&[&[1, 1, 9], &[1, 4, 8], &[2, 3, 7], &[3, -5, 6], &[3, 2, 5]])],
         "sum_ops" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21]])],
+        // empty_batch: only key 1 has the two values the filter keeps, so at several workers at
+        // least one gets a batch that arrives non-empty and leaves empty.
+        "empty_batch" => vec![rows(&[
+            &[1, 10], &[1, 20],
+            &[2, 1], &[3, 1], &[4, 1], &[5, 1], &[6, 1], &[7, 1], &[8, 1], &[9, 1],
+        ])],
         // sum_skew: any keyed pairs — the skew is in the program, not the data.
         "sum_skew" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21], &[3, 30]])],
         "case_ops" => vec![rows(&[&[1, 10], &[2, 20], &[3, 14], &[3, 30]])],
@@ -104,6 +110,7 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn join_fallback() { assert_backends_agree("join_fallback"); }
 #[test] fn scalar_ops() { assert_backends_agree("scalar_ops"); }
 #[test] fn sum_ops() { assert_backends_agree("sum_ops"); }
+#[test] fn empty_batch() { assert_backends_agree("empty_batch"); }
 #[test] fn sum_skew() { assert_backends_agree("sum_skew"); }
 #[test] fn case_ops() { assert_backends_agree("case_ops"); }
 #[test] fn tour() { assert_backends_agree("tour"); }

@@ -93,7 +93,32 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
     use differential_dataflow::lattice::Lattice;
     use differential_dataflow::dynamic::pointstamp::PointStamp;
 
+    // A container with no rows has no SHAPE either, and the ops below are shape-directed.
+    //
+    // Every path that rebuilds a container from rows (`from_updates`) infers its columns by
+    // scanning them, so with nothing to scan it returns the shape-erased default — `Unit` keys and
+    // `Unit` vals. Feed that to the next op and `compile_projection` cheerfully lowers `$1[0]`
+    // against a `Unit`, because a `Field` is legal in the abstract; `eval_graph` then meets a
+    // column that is not a product and panics. A filter that empties a batch mid-chain is enough
+    // to arrange this: `... | filter(len($1) == 2) | map(; $1[0][0] * $1[1][0])`.
+    //
+    // Skipping is not a shortcut, it is the whole answer: every `LinearOp` here maps zero rows to
+    // zero rows, so the only thing the ops could contribute is the output shape, and the input's
+    // shape is already gone. Nothing downstream reads it either — `CorgiChunker::push_into` drops
+    // empty containers before they reach `concat_blocks`, which is the one place shapes must
+    // agree.
+    //
+    // Latent since the backend was written; a single worker rarely empties a batch it was given,
+    // and the key-hash exchange makes it routine.
+    //
+    // The check belongs at the top of the LOOP, not before it. A chain empties itself: a filter
+    // takes the row-wise path, drops every row, and hands the erased container to the very next
+    // op in the same `ops` slice. Guarding only the entry catches the batch that arrives empty
+    // and misses the one that becomes empty, which is the common case.
     for op in ops {
+        if c.times.is_empty() {
+            break;
+        }
         c = match op {
             LinearOp::Project(p) => {
                 let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
