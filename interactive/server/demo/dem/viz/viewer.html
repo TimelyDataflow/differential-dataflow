@@ -1,0 +1,1540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engadine Viewer</title>
+<style>
+  :root {
+    --bg: #14171c; --panel: #1c2129; --panel2: #232a34; --line: #313a47;
+    --text: #d5dbe3; --dim: #8a94a3; --accent: #4da3ff; --ok: #58c586;
+    --warn: #e0a341; --err: #e06060;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+    display: flex; height: 100vh; overflow: hidden;
+  }
+  #sidebar {
+    width: 320px; min-width: 320px; background: var(--panel);
+    border-right: 1px solid var(--line); overflow-y: auto; padding: 10px;
+  }
+  #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  #canvas-wrap { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 8px; }
+  canvas { image-rendering: pixelated; cursor: crosshair; }
+  #map3d { cursor: grab; image-rendering: auto; }
+  #map3d.brushing { cursor: crosshair; }
+  #footer { border-top: 1px solid var(--line); background: var(--panel); padding: 6px 10px; }
+  h3 { margin: 12px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+  h3:first-child { margin-top: 0; }
+  section { border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 4px; }
+  input[type=text], input[type=number], textarea, select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 4px 6px; font: inherit; width: 100%;
+  }
+  input[type=number] { width: 70px; }
+  button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1d3a5f; border-color: var(--accent); }
+  button.active { background: #59331d; border-color: var(--warn); }
+  button:disabled { opacity: .4; cursor: default; }
+  label.layer { display: flex; align-items: center; gap: 6px; padding: 1px 0; cursor: pointer; }
+  label.layer .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  label.layer .cnt { margin-left: auto; color: var(--dim); font-size: 11px; }
+  label.layer.unavail { opacity: .35; }
+  .row { display: flex; gap: 6px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--err); display: inline-block; }
+  .status-dot.on { background: var(--ok); }
+  #hoverline { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #inspector { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow-y: auto; }
+  #agents table, #inspector table { border-collapse: collapse; width: 100%; }
+  #agents td, #agents th { padding: 1px 6px 1px 0; text-align: right; }
+  #agents th { color: var(--dim); font-weight: normal; }
+  #agents td:first-child, #agents th:first-child { text-align: left; }
+  .dim { color: var(--dim); }
+  .warn { color: var(--warn); }
+  .err { color: var(--err); }
+  .ok { color: var(--ok); }
+  #scrub { flex: 1; }
+  #plan-out { height: 90px; font-size: 11px; }
+  #log { font-size: 11px; color: var(--dim); max-height: 90px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+  .agent-chip { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <section>
+    <h3>Server</h3>
+    <div class="row">
+      <input type="text" id="ws-url" value="ws://127.0.0.1:7998" spellcheck="false">
+    </div>
+    <div class="row">
+      <button id="connect-btn" class="primary">Connect</button>
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text" class="dim">disconnected</span>
+    </div>
+    <div class="row">
+      <span>epoch <b id="epoch">?</b></span>
+      <button id="tick-btn" disabled title="Advances the SHARED world by one epoch">Tick</button>
+      <button id="tick5-btn" disabled title="Advances the SHARED world by five epochs">×5</button>
+    </div>
+    <div class="row dim" style="font-size:11px">ticking advances the shared world; viewing alone does not (tails with DDIR_TICK_MS=0)</div>
+  </section>
+
+  <section>
+    <h3>Layers</h3>
+    <div id="layers"></div>
+    <div class="row">
+      <button id="resync-btn" title="Stop and restart every enabled tail with fresh state — the cure for a stalled replay">Resync</button>
+    </div>
+  </section>
+
+  <section>
+    <h3>Marks <span class="dim" style="text-transform:none">(briefing.json)</span></h3>
+    <div class="row">
+      <input type="file" id="briefing-file" accept=".json" style="font-size:11px">
+    </div>
+    <div id="marks-legend" class="dim" style="font-size:11px"></div>
+  </section>
+
+  <section>
+    <h3>What-if <span class="dim" style="text-transform:none">(local flood, world untouched)</span></h3>
+    <div class="row">
+      <button id="whatif-btn">Brush off</button>
+      <select id="brush-mode" style="width:auto">
+        <option value="dig">dig by</option>
+        <option value="raise">raise by</option>
+        <option value="set">set h to</option>
+      </select>
+      <input type="number" id="brush-h" value="10">
+    </div>
+    <div class="row dim" style="font-size:11px">click/drag paints hypothetical terrain; right-click erases an edit</div>
+    <div id="whatif-stats" style="font-size:12px"></div>
+    <div class="row">
+      <button id="plan-btn" disabled>Plan → commands</button>
+      <button id="clear-edits-btn" disabled>Clear edits</button>
+      <span>agent <input type="number" id="plan-agent" value="1" style="width:50px"></span>
+    </div>
+    <div class="row">
+      <button id="revert-btn" title="Paint the ledger's original heights as what-if edits: the pre-works world">Revert all works (what-if)</button>
+      <button id="forecast-btn" disabled title="Spec-shaped forecast report for the painted plan: village levels, controlling spill, cost, lost access">Forecast</button>
+    </div>
+    <textarea id="plan-out" readonly placeholder="cw_client edit commands for the painted plan"></textarea>
+  </section>
+
+  <section id="agents-section" style="display:none">
+    <h3>Agents</h3>
+    <div id="agents"></div>
+  </section>
+
+  <section>
+    <h3>Cell</h3>
+    <div id="inspector" class="dim">hover the map; click to pin</div>
+  </section>
+
+  <section>
+    <h3>Log</h3>
+    <div id="log"></div>
+  </section>
+</div>
+
+<div id="main">
+  <div id="canvas-wrap"><canvas id="map"></canvas><canvas id="map3d" hidden></canvas></div>
+  <div id="footer">
+    <div class="row">
+      <button id="live-btn" class="primary" disabled>LIVE</button>
+      <input type="range" id="scrub" min="0" max="0" value="0" disabled>
+      <span id="scrub-label" class="dim">t=?</span>
+      <button id="view-btn" style="margin-left:auto">3D</button>
+      <span id="ctl-2d">zoom
+        <select id="zoom"><option>4</option><option selected>6</option><option>8</option><option>10</option></select>
+      </span>
+      <span id="ctl-3d" hidden>
+        relief <input type="range" id="exag" min="0.5" max="5" step="0.1" value="2" style="width:80px;vertical-align:middle">
+        water <input type="range" id="wopa" min="0.05" max="1" step="0.05" value="0.55" style="width:80px;vertical-align:middle">
+      </span>
+    </div>
+    <div id="hoverline">&nbsp;</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ================================================================
+// core: protocol-line and Value parsing, layer accumulation, flood.
+// (Kept dependency-free and DOM-free so it can be tested in node.)
+// ================================================================
+
+// Parse the Debug rendering of interactive::ir::Value.
+//   Int(3) | Tuple([...]) | List([...]) | Variant(2, <Value>)
+// Ints become numbers, Tuple/List arrays, Variant {tag, value}.
+function parseValue(s) {
+  let i = 0;
+  function ws() { while (s[i] === " " || s[i] === ",") i++; }
+  function value() {
+    ws();
+    if (s.startsWith("Int(", i)) {
+      i += 4;
+      const j = s.indexOf(")", i);
+      const n = Number(s.slice(i, j));
+      i = j + 1;
+      return n;
+    }
+    if (s.startsWith("Tuple([", i) || s.startsWith("List([", i)) {
+      i = s.indexOf("[", i) + 1;
+      const out = [];
+      ws();
+      while (s[i] !== "]") { out.push(value()); ws(); }
+      i++;            // ]
+      ws();
+      i++;            // )
+      return out;
+    }
+    if (s.startsWith("Variant(", i)) {
+      i += 8;
+      const j = s.indexOf(",", i);
+      const tag = Number(s.slice(i, j));
+      i = j + 1;
+      const inner = value();
+      ws();
+      i++;            // )
+      return { tag, value: inner };
+    }
+    throw new Error("bad value at " + i + " in " + s);
+  }
+  return value();
+}
+
+const XY_RE = /^Tuple\(\[Int\((-?\d+)\), Int\((-?\d+)\)\]\)$/;
+
+// Parse one `data` line body:
+//   peek: `diff=<d> key=<Value> val=<Value>`
+//   tail: `time=<t> diff=<d> key=<Value> val=<Value>`
+// A Value's Debug text never contains " val=", so the last occurrence
+// splits key from val.
+function parseDataLine(rest) {
+  let time = null;
+  if (rest.startsWith("time=")) {
+    const sp = rest.indexOf(" ");
+    time = Number(rest.slice(5, sp));
+    rest = rest.slice(sp + 1);
+  }
+  if (!rest.startsWith("diff=")) return null;
+  const sp = rest.indexOf(" ");
+  const diff = Number(rest.slice(5, sp));
+  rest = rest.slice(sp + 1);
+  if (!rest.startsWith("key=")) return null;
+  const iv = rest.lastIndexOf(" val=");
+  return { time, diff, key: rest.slice(4, iv), val: rest.slice(iv + 5) };
+}
+
+// One tailed collection. State is the sum of every delta the tail has
+// delivered (the replay of the trace's held history IS the snapshot),
+// so there is no peek/tail double-count to manage. The log keeps
+// (time, key, val, diff) for time-scrubbed views; diffs commute, so
+// scrubbing is a filtered re-sum and order never matters.
+class Layer {
+  constructor(name) {
+    this.name = name;
+    this.rows = new Map();   // keyStr -> Map(valStr -> {count, val})
+    this.log = [];           // {t, k, v, d, val}
+    this.maxTime = 0;
+  }
+  apply(time, keyStr, valStr, diff) {
+    // Grid keys normalize to "x,y"; anything else keeps its Debug text.
+    const m = XY_RE.exec(keyStr);
+    const k = m ? m[1] + "," + m[2] : keyStr;
+    this.log.push({ t: time ?? 0, k, v: valStr, d: diff });
+    this.bump(this.rows, k, valStr, diff);
+    if (time !== null && time > this.maxTime) this.maxTime = time;
+  }
+  bump(rows, k, valStr, diff) {
+    let vals = rows.get(k);
+    if (!vals) { vals = new Map(); rows.set(k, vals); }
+    const cur = vals.get(valStr);
+    const count = (cur ? cur.count : 0) + diff;
+    if (count === 0) {
+      vals.delete(valStr);
+      if (vals.size === 0) rows.delete(k);
+    } else {
+      vals.set(valStr, { count, val: cur ? cur.val : parseValue(valStr) });
+    }
+  }
+  // State as of time <= t (a fresh rows map; the live map is untouched).
+  rowsAt(t) {
+    const rows = new Map();
+    for (const e of this.log) if (e.t <= t) this.bump(rows, e.k, e.v, e.d);
+    return rows;
+  }
+  clear() { this.rows.clear(); this.log.length = 0; this.maxTime = 0; }
+}
+
+// The single positive-count value for a key (grid collections are
+// functional key -> val; conflicts simply return one of the values).
+function single(rows, k) {
+  const vals = rows.get(k);
+  if (!vals) return null;
+  for (const v of vals.values()) if (v.count > 0) return v.val;
+  return null;
+}
+
+// Priority-flood over a terrain map ("x,y" -> h). Boundary cells (any
+// cell missing a 4-neighbour in the domain) drain; the result is the
+// greatest fixed point of w = max(t, min over neighbours of w) — the
+// same equilibrium water.ddp maintains.
+function priorityFlood(terrain) {
+  const heap = [];  // binary min-heap of [level, key]
+  const push = (item) => {
+    heap.push(item);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p][0] <= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]]; i = p;
+    }
+  };
+  const pop = () => {
+    const top = heap[0], last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === i) break;
+        [heap[m], heap[i]] = [heap[i], heap[m]]; i = m;
+      }
+    }
+    return top;
+  };
+  const nbrs = (k) => {
+    const [x, y] = k.split(",").map(Number);
+    return [(x + 1) + "," + y, (x - 1) + "," + y, x + "," + (y + 1), x + "," + (y - 1)];
+  };
+  const water = new Map();
+  for (const [k, h] of terrain) {
+    if (nbrs(k).some((n) => !terrain.has(n))) push([h, k]);
+  }
+  while (heap.length) {
+    const [level, k] = pop();
+    if (water.has(k)) continue;
+    water.set(k, level);
+    for (const n of nbrs(k)) {
+      if (terrain.has(n) && !water.has(n)) push([Math.max(terrain.get(n), level), n]);
+    }
+  }
+  return water;
+}
+
+// Pool analysis over a flooded surface: group wet cells (water > terr)
+// into connected same-level regions and find each pool's sill — a
+// frontier cell whose terrain equals the pool level, i.e. the cell that
+// controls the spill. Returns pools sorted by size, largest first.
+function pools(water, terr) {
+  const wet = new Map();
+  for (const [k, t] of terr) {
+    const w = water.get(k);
+    if (w !== undefined && w > t) wet.set(k, w);
+  }
+  const nbrs = (k) => {
+    const [x, y] = k.split(",").map(Number);
+    return [(x + 1) + "," + y, (x - 1) + "," + y, x + "," + (y + 1), x + "," + (y - 1)];
+  };
+  const seen = new Set();
+  const out = [];
+  for (const [k0, level] of wet) {
+    if (seen.has(k0)) continue;
+    const cells = [];
+    const sills = new Set();   // every frontier cell at pool level co-controls
+    const stack = [k0];
+    seen.add(k0);
+    while (stack.length) {
+      const k = stack.pop();
+      cells.push(k);
+      for (const n of nbrs(k)) {
+        if (wet.get(n) === level && !seen.has(n)) { seen.add(n); stack.push(n); }
+        else if (!wet.has(n) && terr.get(n) === level) sills.add(n);
+      }
+    }
+    const sill = sills.size ? [...sills].sort()[0] : null;
+    out.push({ level, size: cells.length, cells, sill, sillCount: sills.size });
+  }
+  out.sort((a, b) => b.size - a.size);
+  return out;
+}
+
+// ================================================================
+// end core
+// ================================================================
+
+// ---------------- protocol client ----------------
+let ws = null, connected = false, nextReqid = 1;
+const pending = new Map();   // reqid -> {onData, onOk, onErr, onEnd}
+const logEl = document.getElementById("log");
+
+function log(msg, cls) {
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = msg;
+  logEl.appendChild(d);
+  while (logEl.childElementCount > 80) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Installed as early as possible so even a load-time script error shows
+// up in the LOG panel instead of silently killing the page.
+window.onerror = (msg, src, line) => { log("error: " + msg + " @" + line, "err"); };
+window.onunhandledrejection = (ev) => { log("error: " + (ev.reason && ev.reason.message || ev.reason), "err"); };
+
+function sendLine(line) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(line);
+}
+
+function cmd(text) {
+  return new Promise((resolve, reject) => {
+    const reqid = "c" + nextReqid++;
+    const data = [];
+    pending.set(reqid, {
+      onData: (rest) => data.push(rest),
+      onOk: (rest) => resolve({ data, ok: rest }),
+      onErr: (rest) => reject(new Error(text + ": " + rest)),
+      onEnd: () => resolve({ data, ok: "" }),
+    });
+    sendLine(reqid + " " + text);
+  });
+}
+
+function startTail(name, onData) {
+  const reqid = "t" + nextReqid++;
+  pending.set(reqid, {
+    onData,
+    onOk: (rest) => { const m = /t=(\d+)/.exec(rest); if (m) noteEpoch(Number(m[1])); },
+    onErr: (rest) => { log("tail " + name + ": " + rest, "err"); tailFailed(name); },
+    onEnd: () => pending.delete(reqid),
+  });
+  sendLine(reqid + " tail " + name);
+  return reqid;
+}
+
+function handleLine(line) {
+  const m = /^(\S+)\s+(\S+)(?:\s+([\s\S]*))?$/.exec(line);
+  if (!m) return;
+  const [, reqid, kind, rest] = m;
+  const h = pending.get(reqid);
+  if (!h) return;
+  switch (kind) {
+    case "data": h.onData(rest || ""); break;
+    case "ok": h.onOk(rest || ""); if (!reqid.startsWith("t")) pending.delete(reqid); break;
+    case "err": h.onErr(rest || ""); pending.delete(reqid); break;
+    case "end": h.onEnd(); pending.delete(reqid); break;
+  }
+}
+
+// ---------------- layer registry ----------------
+// Known layers, their roles, and defaults. Anything else the server
+// lists is offered generically (count in the sidebar, inspector rows).
+const LAYER_DEFS = {
+  terrain: { color: "#8a7a5c", on: true, desc: "heights" },
+  water: { color: "#4da3ff", on: true, desc: "fill level" },
+  accum: { color: "#274d70", on: true, desc: "drainage" },
+  flow: { color: "#3b6b93", on: false, desc: "routing" },
+  pile: { color: "#e8eef5", on: false, desc: "snow" },
+  odometer: { color: "#777", on: false, desc: "topples" },
+  infrastructure: { color: "#c9762b", on: true, desc: "roads+bridges" },
+  roads: { color: "#c9762b", on: true, desc: "roads+bridges" },
+  road_net: { color: "#58c586", on: true, desc: "depot-connected" },
+  flooded_roads: { color: "#e06060", on: true, desc: "impassable" },
+  passable: { color: "#58c586", on: false, desc: "" },
+  connected: { color: "#58c586", on: false, desc: "reachable" },
+  access: { color: "#9fd6b5", on: false, desc: "workable" },
+  ledger: { color: "#d5b5e0", on: true, desc: "terraform acts" },
+  road_edges: { color: "#c9762b", on: false, desc: "network edges" },
+  actions: { color: "#777", on: false, desc: "raw acts" },
+};
+// Two vocabularies for built things share one renderer:
+//   logistics `infrastructure`: val (kind, owner), bridge = kind 2
+//   works `roads`:              val (agent, kind), bridge = kind 1
+const INFRA_SHAPE = {
+  infrastructure: (v) => ({ owner: v[1], bridge: v[0] === 2 }),
+  roads: (v) => ({ owner: v[0], bridge: v[1] === 1 }),
+};
+// Non-grid, table-shaped exports handled by peek on refresh instead.
+const TABLE_TRACES = ["spend", "road_spend", "balance", "role_violations", "cost_violations", "infrastructure_conflicts"];
+
+const layers = new Map();   // name -> {layer, tailId, on, avail, def}
+let listedTraces = [];
+
+function layerState(name) {
+  let st = layers.get(name);
+  if (!st) {
+    st = { layer: new Layer(name), tailId: null, on: false, avail: false,
+           def: LAYER_DEFS[name] || { color: "#777", on: false, desc: "" } };
+    layers.set(name, st);
+  }
+  return st;
+}
+
+function tailFailed(name) {
+  const st = layerState(name);
+  st.tailId = null; st.on = false; st.avail = false;
+  renderLayerPanel();
+}
+
+function enableLayer(name) {
+  const st = layerState(name);
+  if (st.tailId || !connected) return;
+  st.layer.clear();          // fresh replay = fresh snapshot; never double-count
+  st.on = true;
+  st.tailId = startTail(name, (rest) => {
+    const u = parseDataLine(rest);
+    if (!u) return;
+    st.layer.apply(u.time, u.key, u.val, u.diff);
+    if (u.time !== null) noteMaxTime(u.time);
+    markDirty();
+  });
+  renderLayerPanel();
+}
+
+function disableLayer(name) {
+  const st = layerState(name);
+  if (st.tailId) { cmd("stop " + st.tailId).catch(() => {}); st.tailId = null; }
+  st.on = false;
+  renderLayerPanel();
+  markDirty();
+}
+
+// ---------------- connection ----------------
+const $ = (id) => document.getElementById(id);
+let epoch = 0, maxTime = 0, scrubT = null;   // scrubT === null -> live
+
+function noteEpoch(e) {
+  if (e > epoch) { epoch = e; $("epoch").textContent = e; updateScrubBounds(); }
+}
+function noteMaxTime(t) {
+  if (t > maxTime) { maxTime = t; updateScrubBounds(); }
+}
+function updateScrubBounds() {
+  const s = $("scrub");
+  s.max = Math.max(epoch, maxTime);
+  if (scrubT === null) s.value = s.max;
+  scrubLabel();
+}
+function scrubLabel() {
+  $("scrub-label").textContent = scrubT === null ? "t=" + Math.max(epoch, maxTime) + " (live)" : "t=" + scrubT;
+}
+
+function connect() {
+  const url = $("ws-url").value.trim();
+  try { ws = new WebSocket(url); } catch (e) { log("bad url", "err"); return; }
+  $("status-text").textContent = "connecting…";
+  ws.onopen = () => {
+    connected = true;
+    $("status-dot").classList.add("on");
+    $("status-text").textContent = url;
+    $("connect-btn").textContent = "Disconnect";
+    for (const b of ["tick-btn", "tick5-btn", "live-btn"]) $(b).disabled = false;
+    $("scrub").disabled = false;
+    try { localStorage.setItem("ddir-viewer-url", url); } catch (e) {}
+    refresh(true);
+    window._refresh = setInterval(() => refresh(false), 3000);
+  };
+  ws.onclose = () => {
+    connected = false;
+    $("status-dot").classList.remove("on");
+    $("status-text").textContent = "disconnected";
+    $("connect-btn").textContent = "Connect";
+    for (const b of ["tick-btn", "tick5-btn"]) $(b).disabled = true;
+    clearInterval(window._refresh);
+    for (const h of pending.values()) h.onErr && h.onErr("connection lost");
+    pending.clear();
+    for (const st of layers.values()) { st.tailId = null; st.avail = false; }
+    renderLayerPanel();
+  };
+  ws.onerror = () => { $("status-text").textContent = "ws error"; };
+  ws.onmessage = (ev) => {
+    for (const line of String(ev.data).split("\n")) if (line.trim()) handleLine(line);
+  };
+}
+
+$("connect-btn").onclick = () => { if (connected) ws.close(); else connect(); };
+
+async function refresh(first) {
+  if (!connected) return;
+  try {
+    const res = await cmd("list");
+    const m = /t=(\d+)/.exec(res.ok);
+    if (m) noteEpoch(Number(m[1]));
+    listedTraces = res.data
+      .filter((l) => l.startsWith("trace "))
+      .map((l) => /name="([^"]*)"/.exec(l))
+      .filter(Boolean).map((m) => m[1]);
+    for (const name of listedTraces) {
+      if (TABLE_TRACES.includes(name)) continue;
+      const st = layerState(name);
+      const fresh = !st.avail;
+      st.avail = true;
+      if (first || fresh) {
+        if (st.def.on && !st.tailId) enableLayer(name);
+      }
+    }
+    renderLayerPanel();
+    refreshTables();
+  } catch (e) { log(String(e.message || e), "err"); }
+}
+
+$("resync-btn").onclick = () => {
+  for (const [name, st] of layers) {
+    if (st.on) { disableLayer(name); enableLayer(name); }
+  }
+};
+$("tick-btn").onclick = () => cmd("tick").then((r) => { const m = /t=(\d+)/.exec(r.ok); if (m) noteEpoch(Number(m[1])); refreshTables(); }).catch((e) => log(e.message, "err"));
+$("tick5-btn").onclick = () => cmd("tick 5").then((r) => { const m = /t=(\d+)/.exec(r.ok); if (m) noteEpoch(Number(m[1])); refreshTables(); }).catch((e) => log(e.message, "err"));
+
+// ---------------- agent tables ----------------
+const AGENT_COLORS = ["#9aa4b0", "#4da3ff", "#e0a341", "#58c586", "#e06060", "#b58de0", "#5fd0c7", "#e08fc0"];
+const agentColor = (a) => AGENT_COLORS[((a % AGENT_COLORS.length) + AGENT_COLORS.length) % AGENT_COLORS.length];
+
+async function refreshTables() {
+  const present = TABLE_TRACES.filter((t) => listedTraces.includes(t));
+  if (!present.length) return;
+  $("agents-section").style.display = "";
+  const out = {};
+  for (const t of present) {
+    try {
+      const res = await cmd("peek " + t);
+      out[t] = res.data.map(parseDataLine).filter(Boolean)
+        .map((u) => ({ key: parseValue(u.key), val: parseValue(u.val), diff: u.diff }));
+    } catch (e) { /* trace may have raced away */ }
+  }
+  const el = $("agents");
+  let html = "";
+  const cols = ["spend", "road_spend", "balance"].filter((c) => (out[c] || []).length);
+  if (cols.length) {
+    const rows = new Map();
+    for (const c of cols) {
+      for (const r of out[c]) {
+        const k = String(r.key[0]);
+        rows.set(k, Object.assign(rows.get(k) || {}, { [c]: r.val[0] }));
+      }
+    }
+    html += "<table><tr><th>agent</th>" + cols.map((c) => `<th>${c}</th>`).join("") + "</tr>";
+    for (const [a, r] of [...rows.entries()].sort((x, y) => Number(x[0]) - Number(y[0]))) {
+      html += `<tr><td><span class="agent-chip" style="background:${agentColor(Number(a))}"></span>${a}</td>` +
+              cols.map((c) => `<td class="${c === "balance" && (r[c] ?? 0) < 0 ? "err" : ""}">${r[c] ?? ""}</td>`).join("") + "</tr>";
+    }
+    html += "</table>";
+  }
+  for (const t of ["role_violations", "cost_violations", "infrastructure_conflicts"]) {
+    const rows = out[t];
+    if (rows && rows.length) html += `<div class="err">${t}: ${rows.length}</div>`;
+    else if (rows) html += `<div class="dim">${t}: clean</div>`;
+  }
+  el.innerHTML = html;
+}
+
+// ---------------- layer panel ----------------
+function renderLayerPanel() {
+  const el = $("layers");
+  el.innerHTML = "";
+  const names = [...new Set([...Object.keys(LAYER_DEFS).filter((n) => layers.has(n) || listedTraces.includes(n)),
+                             ...listedTraces.filter((n) => !TABLE_TRACES.includes(n))])];
+  for (const name of names) {
+    const st = layerState(name);
+    st.avail = listedTraces.includes(name);
+    const lab = document.createElement("label");
+    lab.className = "layer" + (st.avail ? "" : " unavail");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = st.on;
+    cb.disabled = !st.avail || !connected;
+    cb.onchange = () => (cb.checked ? enableLayer(name) : disableLayer(name));
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.style.background = st.def.color;
+    const nm = document.createElement("span");
+    nm.textContent = name;
+    const cnt = document.createElement("span");
+    cnt.className = "cnt";
+    cnt.textContent = st.on ? st.layer.rows.size + (st.def.desc ? " · " + st.def.desc : "") : (st.def.desc || "");
+    lab.append(cb, sw, nm, cnt);
+    el.appendChild(lab);
+  }
+}
+
+// ---------------- marks (briefing.json) ----------------
+const MARK_COLORS = { village: "#58c586", locked: "#e0a341", protected: "#e0a341", depots: "#4da3ff" };
+let marks = [];   // {label, color, cells: Set("x,y")}
+$("briefing-file").onchange = (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  f.text().then((txt) => {
+    const b = JSON.parse(txt);
+    marks = [];
+    for (const [k, v] of Object.entries(b)) {
+      if (Array.isArray(v) && v.length && Array.isArray(v[0]) && v[0].length >= 2 && v[0].slice(0, 2).every(Number.isInteger)) {
+        marks.push({ label: k, color: MARK_COLORS[k] || "#b58de0",
+                     cells: new Set(v.map((c) => c[0] + "," + c[1])) });
+      }
+    }
+    $("marks-legend").innerHTML = marks.map((m) =>
+      `<span style="color:${m.color}">■</span> ${m.label} (${m.cells.size})`).join(" &nbsp; ");
+    markDirty();
+  }).catch((e) => log("briefing: " + e.message, "err"));
+};
+
+// ---------------- what-if ----------------
+let brushOn = false;
+const hypEdits = new Map();      // "x,y" -> newH
+let hypWater = null;             // Map "x,y" -> level, or null
+let hypStale = false;
+
+$("whatif-btn").onclick = () => {
+  brushOn = !brushOn;
+  $("whatif-btn").textContent = brushOn ? "Brush ON" : "Brush off";
+  $("whatif-btn").classList.toggle("active", brushOn);
+  $("map3d").classList.toggle("brushing", brushOn);
+};
+$("clear-edits-btn").onclick = () => { hypEdits.clear(); hypWater = null; updateWhatIf(); markDirty(); };
+// The pre-works world, as a what-if: for every ledgered cell, chain the
+// (old, new) acts back to the height no act produced — the pristine
+// terrain — and paint it as hypothetical. The usual flood then shows
+// the valley as it was before anyone (nature included) terraformed.
+$("revert-btn").onclick = () => {
+  const ledgerRows = layerState("ledger").layer.rows;
+  const terrRows = layerState("terrain").layer.rows;
+  for (const [k, vals] of ledgerRows) {
+    const acts = [...vals.values()].filter((v) => v.count > 0 && Array.isArray(v.val)).map((v) => v.val);
+    if (!acts.length) continue;
+    const news = new Set(acts.map((a) => a[2]));
+    const head = acts.find((a) => !news.has(a[1])) || acts[0];
+    const cur = single(terrRows, k);
+    if (cur && head[1] !== cur[0]) hypEdits.set(k, head[1]);
+  }
+  updateWhatIf();
+  markDirty();
+};
+$("plan-btn").onclick = () => {
+  const port = (() => { try { return new URL($("ws-url").value).port || "7998"; } catch (e) { return "7998"; } })();
+  const tcp = Math.max(0, Number(port) - 1);   // convention: WS = TCP port + 1
+  const agent = $("plan-agent").value;
+  const lines = [...hypEdits.entries()].map(([k, h]) => {
+    const [x, y] = k.split(",");
+    return `python3 cw_client.py --port ${tcp} --agent ${agent} edit ${x} ${y} ${h}`;
+  });
+  $("plan-out").value = lines.join("\n");
+};
+
+// The spec'd hypothetical-batch forecast (MECHANICS_RESPONSE.md §5),
+// computed locally: resulting village levels, controlling spill, total
+// cost, lost access. This is the reference output for the game's scarce
+// coordinator-run forecasts; the viewer enforces no scarcity — it is
+// the surveying instrument, not the accountant.
+$("forecast-btn").onclick = () => {
+  const fd = buildFrame();
+  if (!fd || !hypEdits.size) return;
+  if (!hypWater) updateWhatIf();
+  const eff = effectiveTerrain();
+  const terrRows = layerState("terrain").layer.rows;
+  let cost = 0;
+  for (const [k, h] of hypEdits) {
+    const v = single(terrRows, k);
+    if (v) cost += Math.abs(h - v[0]);
+  }
+  let wetNow = 0, wetHyp = 0;
+  for (const [k, t] of eff) {
+    const t0 = fd.terr.get(k);
+    const wv = fd.waterRows ? single(fd.waterRows, k) : null;
+    if (wv && wv[0] > t0) wetNow++;
+    if (hypWater.get(k) > t) wetHyp++;
+  }
+  const lines = [
+    "forecast (local what-if; not an official game forecast)",
+    `edits: ${hypEdits.size} cells; total cost ${cost} m·cells`,
+    `wet cells: ${wetNow} -> ${wetHyp}`,
+  ];
+  const ps = pools(hypWater, eff);
+  for (const p of ps.slice(0, 4)) {
+    const spill = p.sill
+      ? `(${p.sill})` + (p.sillCount > 1 ? ` [+${p.sillCount - 1} more at level]` : "")
+      : "none (closed basin)";
+    lines.push(`pool: level ${p.level}, ${p.size} cells, controlling spill ${spill}`);
+  }
+  for (const m of marks) {
+    let wet = 0, maxDepth = 0;
+    const levels = new Set();
+    for (const k of m.cells) {
+      const t = eff.get(k);
+      const lvl = hypWater.get(k);
+      if (t !== undefined && lvl !== undefined && lvl > t) {
+        wet++;
+        maxDepth = Math.max(maxDepth, lvl - t);
+        levels.add(lvl);
+      }
+    }
+    lines.push(`${m.label}: ${m.cells.size} cells; wet ${wet}` +
+               (wet ? `, levels {${[...levels].sort().join(", ")}}, max depth ${maxDepth}` : " — dry"));
+  }
+  let roadsWetNow = 0, roadsWetHyp = 0;
+  for (const [name, shape] of Object.entries(INFRA_SHAPE)) {
+    const rows = viewRows(name);
+    if (!rows) continue;
+    for (const k of rows.keys()) {
+      const v = single(rows, k);
+      if (!v || shape(v).bridge) continue;
+      const t0 = fd.terr.get(k);
+      const wv = fd.waterRows ? single(fd.waterRows, k) : null;
+      if (wv && t0 !== undefined && wv[0] > t0) roadsWetNow++;
+      if (hypWater.get(k) > (eff.get(k) ?? Infinity)) roadsWetHyp++;
+    }
+  }
+  if (roadsWetNow || roadsWetHyp) {
+    lines.push(`surface roads drowned: ${roadsWetNow} -> ${roadsWetHyp} (depot connectivity not recomputed: depots are not exported)`);
+  }
+  $("plan-out").value = lines.join("\n");
+};
+
+function effectiveTerrain() {
+  const st = layerState("terrain");
+  const terr = new Map();
+  for (const k of st.layer.rows.keys()) {
+    const v = single(st.layer.rows, k);
+    if (v) terr.set(k, hypEdits.has(k) ? hypEdits.get(k) : v[0]);
+  }
+  return terr;
+}
+
+function updateWhatIf() {
+  const n = hypEdits.size;
+  $("plan-btn").disabled = !n;
+  $("clear-edits-btn").disabled = !n;
+  $("forecast-btn").disabled = !n;
+  if (!n) { $("whatif-stats").textContent = ""; hypWater = null; return; }
+  const st = layerState("terrain");
+  let cost = 0;
+  for (const [k, h] of hypEdits) {
+    const v = single(st.layer.rows, k);
+    if (v) cost += Math.abs(h - v[0]);
+  }
+  const terr = effectiveTerrain();
+  hypWater = priorityFlood(terr);
+  let wetNow = 0, wetHyp = 0;
+  const wl = layerState("water");
+  for (const [k, t] of terr) {
+    const w = single(wl.layer.rows, k);
+    if (w && w[0] > (hypEdits.has(k) ? (single(st.layer.rows, k) || [t])[0] : t)) wetNow++;
+    if (hypWater.get(k) > t) wetHyp++;
+  }
+  $("whatif-stats").innerHTML =
+    `${n} edits, plan cost <b>${cost}</b> m·cells<br>` +
+    `wet cells: ${wetNow} now → <b>${wetHyp}</b> hypothetical`;
+}
+
+// ---------------- rendering ----------------
+const canvas = $("map");
+const ctx = canvas.getContext("2d");
+let SCALE = 6, dirty = true;
+let bounds = null;   // {x0, y0, w, h}
+
+function markDirty() { dirty = true; }
+$("zoom").onchange = () => { SCALE = Number($("zoom").value); markDirty(); };
+
+function computeBounds(terr) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const k of terr.keys()) {
+    const c = k.indexOf(",");
+    const x = Number(k.slice(0, c)), y = Number(k.slice(c + 1));
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return x1 < x0 ? null : { x0, y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+// Current rows for a layer, honouring the scrub position.
+function viewRows(name) {
+  const st = layerState(name);
+  if (!st.on) return null;
+  return scrubT === null ? st.layer.rows : st.layer.rowsAt(scrubT);
+}
+
+// Everything both renderers need for one frame: terrain heights,
+// bounds, and the layer row maps at the current scrub position.
+function buildFrame() {
+  const terrRows = viewRows("terrain");
+  if (!terrRows || !terrRows.size) return null;
+  const terr = new Map();
+  let hMin = Infinity, hMax = -Infinity;
+  for (const k of terrRows.keys()) {
+    const v = single(terrRows, k);
+    if (!v) continue;
+    terr.set(k, v[0]);
+    if (v[0] < hMin) hMin = v[0];
+    if (v[0] > hMax) hMax = v[0];
+  }
+  const b = computeBounds(terr);
+  if (!b) return null;
+  const fd = {
+    terr, bounds: b, hMin, hSpan: Math.max(1, hMax - hMin),
+    waterRows: viewRows("water"), accumRows: viewRows("accum"),
+    pileRows: viewRows("pile"), accumMax: 1,
+  };
+  if (fd.accumRows) for (const k of fd.accumRows.keys()) {
+    const v = single(fd.accumRows, k);
+    if (v && v[0] > fd.accumMax) fd.accumMax = v[0];
+  }
+  return fd;
+}
+
+// The terrain SURFACE color at cell k (absolute coords x,y): ramp,
+// hillshade, hyp-edit cast, rivers, plan-dries-out green, snow. Water
+// is deliberately not blended here — 2D blends it per pixel, 3D draws
+// it as a separate translucent mesh.
+function terrainRGB(fd, k, x, y) {
+  const t = fd.terr.get(k);
+  // hypsometric ramp + a light NW hillshade
+  const f = (t - fd.hMin) / fd.hSpan;
+  let r, g, b;
+  if (f < 0.5) { const u = f / 0.5; r = 62 + u * 76; g = 96 + u * 44; b = 54 + u * 26; }
+  else { const u = (f - 0.5) / 0.5; r = 138 + u * 100; g = 140 + u * 95; b = 80 + u * 145; }
+  const hw = fd.terr.get((x - 1) + "," + y) ?? t;
+  const hn = fd.terr.get(x + "," + (y - 1)) ?? t;
+  const shade = Math.max(-40, Math.min(40, ((hw - t) + (hn - t)) * 0.8));
+  r += shade; g += shade; b += shade;
+  // hypothetical terrain edits get a magenta cast on the base
+  if (hypEdits.has(k)) { r = 0.5 * r + 110; g = 0.5 * g; b = 0.5 * b + 90; }
+  // drainage accumulation: darken toward river-blue
+  if (fd.accumRows) {
+    const a = single(fd.accumRows, k);
+    if (a && a[0] > 2) {
+      const s = Math.log(1 + a[0]) / Math.log(1 + fd.accumMax);
+      r = r * (1 - s) + 30 * s; g = g * (1 - s) + 80 * s; b = b * (1 - s) + 140 * s;
+    }
+  }
+  // plan dries this cell out: green tint on the surface
+  if (hypWater && scrubT === null && fd.waterRows) {
+    const wv = single(fd.waterRows, k);
+    const eff = hypEdits.has(k) ? hypEdits.get(k) : t;
+    const hyp = hypWater.get(k);
+    if (wv && wv[0] > t && !(hyp !== undefined && hyp > eff)) {
+      r = 0.5 * r + 40; g = 0.5 * g + 120; b = 0.5 * b + 40;
+    }
+  }
+  // snow pile: whiten
+  if (fd.pileRows) {
+    const p = single(fd.pileRows, k);
+    if (p && p[0] > 0) {
+      const a = Math.min(0.8, 0.25 + p[0] / 8);
+      r = r * (1 - a) + 235 * a; g = g * (1 - a) + 240 * a; b = b * (1 - a) + 245 * a;
+    }
+  }
+  return [r, g, b];
+}
+
+// Water at cell k: the level to draw and whether it exists only in the
+// hypothetical plan (drawn magenta rather than blue). Null if dry both
+// ways. `eff` is the terrain the water sits on (hyp edits included).
+function waterInfo(fd, k) {
+  const t = fd.terr.get(k);
+  const eff = hypEdits.has(k) ? hypEdits.get(k) : t;
+  const wv = fd.waterRows ? single(fd.waterRows, k) : null;
+  const wetNow = wv && wv[0] > eff;
+  if (hypWater && scrubT === null) {
+    const hyp = hypWater.get(k);
+    const wetHyp = hyp !== undefined && hyp > eff;
+    if (wetHyp && !(wv && wv[0] > t)) return { level: hyp, eff, hypOnly: true };
+  }
+  if (wetNow) return { level: wv[0], eff, hypOnly: false };
+  return null;
+}
+
+function renderNow() {
+  if (viewMode === "3d") { render3D(); renderLayerPanel(); return; }
+  const fd = buildFrame();
+  if (!fd) {
+    canvas.width = 400; canvas.height = 60;
+    ctx.fillStyle = "#8a94a3"; ctx.font = "13px ui-monospace, monospace";
+    ctx.fillText(connected ? "waiting for terrain…" : "not connected", 16, 34);
+    renderLayerPanel();
+    return;
+  }
+  bounds = fd.bounds;
+  const { x0, y0, w, h } = bounds;
+
+  canvas.width = w * SCALE;
+  canvas.height = h * SCALE;
+  ctx.imageSmoothingEnabled = false;
+
+  // --- raster pass: one 1px-per-cell backing image, scaled up ---
+  const img = new OffscreenCanvas(w, h);
+  const ictx = img.getContext("2d");
+  const id = ictx.createImageData(w, h);
+  const px = id.data;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const k = (x + x0) + "," + (y + y0);
+      const o = (y * w + x) * 4;
+      if (!fd.terr.has(k)) { px[o + 3] = 0; continue; }
+      let [r, g, b] = terrainRGB(fd, k, x + x0, y + y0);
+      const wi = waterInfo(fd, k);
+      if (wi && !wi.hypOnly) {   // actual water: depth-scaled blue
+        const a = Math.min(0.88, 0.35 + (wi.level - wi.eff) / 60);
+        r = r * (1 - a) + 30 * a; g = g * (1 - a) + 110 * a; b = b * (1 - a) + 230 * a;
+      } else if (wi) {           // plan-only water: magenta
+        r = 0.4 * r + 140; g = 0.4 * g + 20; b = 0.4 * b + 120;
+      }
+      px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
+    }
+  }
+  ictx.putImageData(id, 0, 0);
+  ctx.drawImage(img, 0, 0, w * SCALE, h * SCALE);
+
+  // --- vector pass: infrastructure, flooded roads, ledger, marks ---
+  const cellRect = (k, inset) => {
+    const c = k.indexOf(",");
+    const x = Number(k.slice(0, c)) - x0, y = Number(k.slice(c + 1)) - y0;
+    return [x * SCALE + inset, y * SCALE + inset, SCALE - 2 * inset, SCALE - 2 * inset];
+  };
+  // Roads render honestly: a surface road under water is drowned (dim +
+  // red edge), a road absent from the depot-connected net is stranded
+  // (dim). Bridges stay passable over water (white outline).
+  const netRows = viewRows("road_net") || viewRows("connected");
+  for (const [name, shape] of Object.entries(INFRA_SHAPE)) {
+    const infraRows = viewRows(name);
+    if (!infraRows) continue;
+    for (const k of infraRows.keys()) {
+      const v = single(infraRows, k);
+      if (!v) continue;
+      const { owner, bridge } = shape(v);
+      const wi = waterInfo(fd, k);
+      const drowned = !bridge && wi && !wi.hypOnly;
+      const stranded = netRows && !netRows.has(k);
+      const [rx, ry, rw, rh] = cellRect(k, Math.max(1, SCALE / 6));
+      ctx.globalAlpha = drowned || stranded ? 0.4 : 1;
+      ctx.fillStyle = agentColor(owner ?? 0);
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.lineWidth = 1;
+      if (bridge) {          // bridge: white outline
+        ctx.strokeStyle = "#fff";
+        ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+      } else if (drowned) {  // drowned surface road: red edge
+        ctx.strokeStyle = "#e06060";
+        ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+  const floodedRows = viewRows("flooded_roads");
+  if (floodedRows) {
+    ctx.strokeStyle = "#e06060";
+    ctx.lineWidth = Math.max(1, SCALE / 5);
+    for (const k of floodedRows.keys()) {
+      const [rx, ry, rw, rh] = cellRect(k, 1);
+      ctx.beginPath();
+      ctx.moveTo(rx, ry); ctx.lineTo(rx + rw, ry + rh);
+      ctx.moveTo(rx + rw, ry); ctx.lineTo(rx, ry + rh);
+      ctx.stroke();
+    }
+  }
+  const ledgerRows = viewRows("ledger");
+  if (ledgerRows) {
+    for (const [k, vals] of ledgerRows) {
+      let agent = 0;
+      for (const v of vals.values()) if (v.count > 0 && Array.isArray(v.val)) agent = v.val[0];
+      ctx.fillStyle = agentColor(agent);
+      const c = k.indexOf(",");
+      const x = Number(k.slice(0, c)) - x0, y = Number(k.slice(c + 1)) - y0;
+      ctx.beginPath();
+      ctx.arc((x + 0.5) * SCALE, (y + 0.5) * SCALE, Math.max(1.5, SCALE / 4), 0, 7);
+      ctx.fill();
+    }
+  }
+  for (const grid of ["connected", "access", "passable"]) {
+    const rows = viewRows(grid);
+    if (!rows) continue;
+    ctx.strokeStyle = layerState(grid).def.color;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.6;
+    for (const k of rows.keys()) {
+      const [rx, ry, rw, rh] = cellRect(k, 0.5);
+      ctx.strokeRect(rx, ry, rw, rh);
+    }
+    ctx.globalAlpha = 1;
+  }
+  for (const m of marks) {
+    ctx.strokeStyle = m.color;
+    ctx.lineWidth = Math.max(1.5, SCALE / 4);
+    for (const k of m.cells) {
+      const [rx, ry, rw, rh] = cellRect(k, 0);
+      ctx.strokeRect(rx + 1, ry + 1, rw - 2, rh - 2);
+    }
+  }
+  if (pinnedCell) {
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1.5;
+    const [rx, ry, rw, rh] = cellRect(pinnedCell, 0);
+    ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+  }
+  renderLayerPanel();
+}
+// rAF when the tab is visible; an interval fallback keeps the map
+// current in hidden/background tabs where rAF is throttled to nothing.
+function frame() {
+  requestAnimationFrame(frame);
+  if (dirty) { dirty = false; renderNow(); }
+}
+requestAnimationFrame(frame);
+setInterval(() => { if (dirty) { dirty = false; renderNow(); } }, 250);
+
+// ---------------- 3D view ----------------
+// Same layer state, different viewport: two shared-vertex heightfield
+// meshes (terrain opaque, water translucent), colors baked per vertex
+// from the same terrainRGB the 2D raster uses, cell-aligned overlays
+// (roads, ledger, marks) baked as vertex tints. Raw WebGL, no deps.
+let viewMode = "2d";
+let glCap = false;   // set by ?glcap=1 (see render3D)
+const glCanvas = $("map3d");
+let gl3 = null;   // {gl, prog, loc, bufs, idxCount, w, h, x0, y0, heights, hMid}
+const cam = { yaw: 0.9, pitch: 0.75, dist: 170, tx: 0, tz: 0 };
+let CELL_M = 76;        // meters per cell, horizontal (heights are meters);
+                        // Engadine-window default, override with ?cellm=<m>
+const FOV = Math.PI / 4;
+
+function hexRgb(hex) {
+  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+}
+function mixC(c, i, t, s) { c[i] = c[i] * (1 - s) + t[0] * s; c[i + 1] = c[i + 1] * (1 - s) + t[1] * s; c[i + 2] = c[i + 2] * (1 - s) + t[2] * s; }
+
+function initGL() {
+  const gl = glCanvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: true });
+  if (!gl) { log("WebGL unavailable; staying in 2D", "err"); return null; }
+  const vsrc = `attribute vec3 aPos; attribute vec4 aCol; uniform mat4 uMVP; uniform float uEx; varying vec4 vCol;
+    void main() { vCol = aCol; gl_Position = uMVP * vec4(aPos.x, aPos.y * uEx, aPos.z, 1.0); }`;
+  const fsrc = `precision mediump float; varying vec4 vCol; uniform float uAlpha;
+    void main() { if (vCol.a < 0.01) discard; gl_FragColor = vec4(vCol.rgb, vCol.a * uAlpha); }`;
+  const sh = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vsrc));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fsrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const loc = {
+    aPos: gl.getAttribLocation(prog, "aPos"), aCol: gl.getAttribLocation(prog, "aCol"),
+    uMVP: gl.getUniformLocation(prog, "uMVP"), uEx: gl.getUniformLocation(prog, "uEx"),
+    uAlpha: gl.getUniformLocation(prog, "uAlpha"),
+  };
+  const bufs = { tPos: gl.createBuffer(), tCol: gl.createBuffer(),
+                 wPos: gl.createBuffer(), wCol: gl.createBuffer(), idx: gl.createBuffer() };
+  gl.enable(gl.DEPTH_TEST);
+  // 32-bit indices: a 256x256 grid already exceeds Uint16's index range.
+  const uint32 = !!gl.getExtension("OES_element_index_uint");
+  return { gl, prog, loc, bufs, idxCount: 0, uint32 };
+}
+
+function build3D(fd) {
+  const { x0, y0, w, h } = fd.bounds;
+  const n = w * h;
+  const tPos = new Float32Array(n * 3), wPos = new Float32Array(n * 3);
+  const tCol = new Uint8Array(n * 4), wCol = new Uint8Array(n * 4);
+  const heights = new Float32Array(n).fill(NaN);
+
+  // cell-aligned overlays baked as vertex tints
+  const infraLayers = [];
+  for (const [name, shape] of Object.entries(INFRA_SHAPE)) {
+    const rows = viewRows(name);
+    if (rows) infraLayers.push([rows, shape]);
+  }
+  const floodedRows = viewRows("flooded_roads");
+  const ledgerRows = viewRows("ledger");
+  const netRows3 = viewRows("road_net") || viewRows("connected");
+  const RED = hexRgb("#e06060"), WHITE = [245, 245, 245];
+
+  for (let gy = 0; gy < h; gy++) {
+    for (let gx = 0; gx < w; gx++) {
+      const i = gy * w + gx;
+      const k = (gx + x0) + "," + (gy + y0);
+      const t = fd.terr.get(k);
+      const px = gx - w / 2, pz = gy - h / 2;
+      if (t === undefined) { tPos.set([px, 0, pz], i * 3); wPos.set([px, 0, pz], i * 3); continue; }
+      const yc = (t - fd.hMin) / CELL_M;   // height in cell units
+      heights[i] = yc;
+      tPos.set([px, yc, pz], i * 3);
+      const c = terrainRGB(fd, k, gx + x0, gy + y0);
+      const o = i * 4;
+      tCol[o] = c[0]; tCol[o + 1] = c[1]; tCol[o + 2] = c[2]; tCol[o + 3] = 255;
+      for (const [rows, shape] of infraLayers) {
+        const v = single(rows, k);
+        if (v) {
+          const s = shape(v);
+          const wi3 = waterInfo(fd, k);
+          const drowned = !s.bridge && wi3 && !wi3.hypOnly;
+          const stranded = netRows3 && !netRows3.has(k);
+          mixC(tCol, o, hexRgb(agentColor(s.owner ?? 0)), drowned || stranded ? 0.3 : 0.7);
+          if (s.bridge) mixC(tCol, o, WHITE, 0.45);
+          if (drowned) mixC(tCol, o, RED, 0.3);
+        }
+      }
+      if (floodedRows && floodedRows.has(k)) mixC(tCol, o, RED, 0.55);
+      if (ledgerRows && ledgerRows.has(k)) {
+        let agent = 0;
+        for (const v of ledgerRows.get(k).values()) if (v.count > 0 && Array.isArray(v.val)) agent = v.val[0];
+        mixC(tCol, o, hexRgb(agentColor(agent)), 0.4);
+      }
+      for (const m of marks) if (m.cells.has(k)) mixC(tCol, o, hexRgb(m.color), 0.55);
+      if (pinnedCell === k) mixC(tCol, o, WHITE, 0.75);
+
+      const wi = waterInfo(fd, k);
+      const wo = i * 4;
+      if (wi) {
+        wPos.set([px, (wi.level - fd.hMin) / CELL_M + 0.04, pz], i * 3);
+        const a = Math.min(0.92, 0.5 + (wi.level - wi.eff) / 90) * 255;
+        if (wi.hypOnly) { wCol[wo] = 205; wCol[wo + 1] = 45; wCol[wo + 2] = 175; }
+        else { wCol[wo] = 40; wCol[wo + 1] = 120; wCol[wo + 2] = 235; }
+        wCol[wo + 3] = a;
+      } else {
+        wPos.set([px, yc - 0.05, pz], i * 3);   // parked under the surface, invisible
+      }
+    }
+  }
+  // indices: two triangles per quad whose four corners all exist
+  const idx = [];
+  for (let gy = 0; gy < h - 1; gy++) {
+    for (let gx = 0; gx < w - 1; gx++) {
+      const i00 = gy * w + gx, i10 = i00 + 1, i01 = i00 + w, i11 = i01 + 1;
+      if (isNaN(heights[i00]) || isNaN(heights[i10]) || isNaN(heights[i01]) || isNaN(heights[i11])) continue;
+      idx.push(i00, i01, i10, i10, i01, i11);
+    }
+  }
+  const { gl, bufs } = gl3;
+  const up = (buf, data) => { gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW); };
+  up(bufs.tPos, tPos); up(bufs.tCol, tCol); up(bufs.wPos, wPos); up(bufs.wCol, wCol);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufs.idx);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, gl3.uint32 ? new Uint32Array(idx) : new Uint16Array(idx), gl.DYNAMIC_DRAW);
+  Object.assign(gl3, { idxCount: idx.length, w, h, x0, y0, heights, hMid: fd.hSpan / CELL_M / 2 });
+}
+
+// column-major mat4 helpers
+function mPersp(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+function mLookAt(e, c, up) {
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const nrm = (v) => { const l = Math.hypot(...v); return [v[0] / l, v[1] / l, v[2] / l]; };
+  const crs = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const z = nrm(sub(e, c)), x = nrm(crs(up, z)), y = crs(z, x);
+  return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1];
+}
+function mMul(a, b) {
+  const o = new Array(16);
+  for (let col = 0; col < 4; col++) for (let row = 0; row < 4; row++) {
+    o[col * 4 + row] = a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] + a[8 + row] * b[col * 4 + 2] + a[12 + row] * b[col * 4 + 3];
+  }
+  return o;
+}
+
+function camVectors() {
+  const ex = Number($("exag").value) || 2;
+  const target = [cam.tx, (gl3 ? gl3.hMid : 8) * ex, cam.tz];
+  const eye = [target[0] + cam.dist * Math.cos(cam.pitch) * Math.cos(cam.yaw),
+               target[1] + cam.dist * Math.sin(cam.pitch),
+               target[2] + cam.dist * Math.cos(cam.pitch) * Math.sin(cam.yaw)];
+  return { eye, target, ex };
+}
+
+function draw3D() {
+  if (!gl3 || viewMode !== "3d") return;
+  const { gl, loc, bufs } = gl3;
+  const W = glCanvas.width, H = glCanvas.height;
+  gl.viewport(0, 0, W, H);
+  gl.clearColor(0.078, 0.09, 0.11, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  if (!gl3.idxCount) return;
+  const { eye, target, ex } = camVectors();
+  const mvp = mMul(mPersp(FOV, W / H, 1, 3000), mLookAt(eye, target, [0, 1, 0]));
+  gl.uniformMatrix4fv(loc.uMVP, false, mvp);
+  gl.uniform1f(loc.uEx, ex);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufs.idx);
+  const bind = (pb, cb) => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, pb);
+    gl.enableVertexAttribArray(loc.aPos);
+    gl.vertexAttribPointer(loc.aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+    gl.enableVertexAttribArray(loc.aCol);
+    gl.vertexAttribPointer(loc.aCol, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+  };
+  // terrain: opaque
+  gl.disable(gl.BLEND); gl.depthMask(true);
+  gl.uniform1f(loc.uAlpha, 1);
+  const idxType = gl3.uint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+  bind(bufs.tPos, bufs.tCol);
+  gl.drawElements(gl.TRIANGLES, gl3.idxCount, idxType, 0);
+  // water: translucent, drawn over without writing depth
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+  gl.uniform1f(loc.uAlpha, Number($("wopa").value) || 0.55);
+  bind(bufs.wPos, bufs.wCol);
+  gl.drawElements(gl.TRIANGLES, gl3.idxCount, idxType, 0);
+  gl.depthMask(true);
+}
+
+function render3D() {
+  if (!gl3) { try { gl3 = initGL(); } catch (e) { log("WebGL: " + e.message, "err"); gl3 = null; } }
+  if (!gl3) return;
+  const wrap = $("canvas-wrap");
+  const W = Math.max(300, wrap.clientWidth - 16), H = Math.max(300, wrap.clientHeight - 16);
+  if (glCanvas.width !== W || glCanvas.height !== H) { glCanvas.width = W; glCanvas.height = H; }
+  const fd = buildFrame();
+  if (!fd) { gl3.idxCount = 0; draw3D(); return; }
+  bounds = fd.bounds;
+  build3D(fd);
+  draw3D();
+  if (glCap) {
+    // ?glcap=1: mirror the GL frame into the 2D canvas — headless
+    // browser screenshots miss WebGL compositing, this makes automated
+    // screenshot tests see the 3D view.
+    canvas.hidden = false; glCanvas.hidden = true;
+    canvas.width = glCanvas.width; canvas.height = glCanvas.height;
+    ctx.drawImage(glCanvas, 0, 0);
+  }
+}
+
+// Cast a ray from the camera through the mouse and march it until it
+// dips under the (exaggerated) heightfield; the crossing cell is the pick.
+function cellAt3d(ev) {
+  if (!gl3 || !gl3.heights) return null;
+  const rect = glCanvas.getBoundingClientRect();
+  const ndcX = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  const ndcY = 1 - ((ev.clientY - rect.top) / rect.height) * 2;
+  const { eye, target, ex } = camVectors();
+  const nrm = (v) => { const l = Math.hypot(...v); return [v[0] / l, v[1] / l, v[2] / l]; };
+  const f = nrm([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
+  const r = nrm([-f[2], 0, f[0]]);
+  const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+  const tf = Math.tan(FOV / 2), aspect = glCanvas.width / glCanvas.height;
+  const d = nrm([f[0] + ndcX * tf * aspect * r[0] + ndcY * tf * u[0],
+                 f[1] + ndcX * tf * aspect * r[1] + ndcY * tf * u[1],
+                 f[2] + ndcX * tf * aspect * r[2] + ndcY * tf * u[2]]);
+  const { w, h, x0, y0, heights } = gl3;
+  for (let t = 1; t < cam.dist * 4; t += 0.3) {
+    const px = eye[0] + d[0] * t, py = eye[1] + d[1] * t, pz = eye[2] + d[2] * t;
+    const gx = Math.round(px + w / 2), gy = Math.round(pz + h / 2);
+    if (gx < 0 || gy < 0 || gx >= w || gy >= h) { if (t > cam.dist) break; continue; }
+    const hy = heights[gy * w + gx];
+    if (!isNaN(hy) && py <= hy * ex) return (gx + x0) + "," + (gy + y0);
+  }
+  return null;
+}
+
+// 3D mouse: left-drag orbits (or paints, when the brush is on), a still
+// click pins, shift-drag pans, wheel zooms, right-click erases an edit.
+let orbit = null, pan = null, downAt = null;
+glCanvas.onmousedown = (ev) => {
+  downAt = [ev.clientX, ev.clientY];
+  if (brushOn && ev.button === 0) { painting = true; const k = cellAt3d(ev); if (k) paint(k); return; }
+  if (brushOn && ev.button === 2) { const k = cellAt3d(ev); if (k) { hypEdits.delete(k); updateWhatIf(); markDirty(); } return; }
+  if (ev.shiftKey || ev.button === 2) pan = [ev.clientX, ev.clientY];
+  else if (ev.button === 0) orbit = [ev.clientX, ev.clientY];
+};
+glCanvas.onmousemove = (ev) => {
+  if (orbit) {
+    cam.yaw += (ev.clientX - orbit[0]) * 0.008;
+    cam.pitch = Math.min(1.5, Math.max(0.08, cam.pitch + (ev.clientY - orbit[1]) * 0.006));
+    orbit = [ev.clientX, ev.clientY];
+    draw3D();
+    return;
+  }
+  if (pan) {
+    // grab-the-world: screen-right on the ground is (sin yaw, -cos yaw),
+    // screen-down is toward the viewer (cos yaw, sin yaw)
+    const s = cam.dist * 0.0016;
+    const dx = (ev.clientX - pan[0]) * s, dz = (ev.clientY - pan[1]) * s;
+    cam.tx += -dx * Math.sin(cam.yaw) + dz * Math.cos(cam.yaw);
+    cam.tz += dx * Math.cos(cam.yaw) + dz * Math.sin(cam.yaw);
+    pan = [ev.clientX, ev.clientY];
+    draw3D();
+    return;
+  }
+  const k = cellAt3d(ev);
+  if (k) $("hoverline").textContent = describeCell(k);
+  if (painting && brushOn && k) paint(k);
+};
+glCanvas.onmouseup = (ev) => {
+  const still = downAt && Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]) < 4;
+  if (still && !brushOn && ev.button === 0) {
+    const k = cellAt3d(ev);
+    if (k) { pinnedCell = (pinnedCell === k) ? null : k; renderInspector(); markDirty(); }
+  }
+  orbit = pan = null; downAt = null;
+  if (painting) { painting = false; updateWhatIf(); markDirty(); }
+};
+glCanvas.onmouseleave = () => { orbit = pan = null; };
+glCanvas.oncontextmenu = (ev) => ev.preventDefault();
+glCanvas.onwheel = (ev) => {
+  ev.preventDefault();
+  cam.dist = Math.min(900, Math.max(15, cam.dist * Math.exp(ev.deltaY * 0.0012)));
+  draw3D();
+};
+
+function setView(mode) {
+  viewMode = mode;
+  canvas.hidden = mode === "3d";
+  glCanvas.hidden = mode !== "3d";
+  $("ctl-2d").hidden = mode === "3d";
+  $("ctl-3d").hidden = mode !== "3d";
+  $("view-btn").textContent = mode === "3d" ? "2D" : "3D";
+  try { localStorage.setItem("ddir-viewer-view", mode); } catch (e) {}
+  markDirty();
+}
+$("view-btn").onclick = () => setView(viewMode === "3d" ? "2d" : "3d");
+$("exag").oninput = () => draw3D();
+$("wopa").oninput = () => draw3D();
+
+// ---------------- mouse ----------------
+let pinnedCell = null, painting = false;
+
+function cellAt(ev) {
+  if (!bounds) return null;
+  const r = canvas.getBoundingClientRect();
+  const x = Math.floor((ev.clientX - r.left) / SCALE) + bounds.x0;
+  const y = Math.floor((ev.clientY - r.top) / SCALE) + bounds.y0;
+  return x + "," + y;
+}
+
+function describeCell(k) {
+  const parts = ["(" + k + ")"];
+  const terr = single(layerState("terrain").layer.rows, k);
+  if (terr) parts.push("h=" + terr[0]);
+  const wv = single(layerState("water").layer.rows, k);
+  if (terr && wv) parts.push(wv[0] > terr[0] ? "water=" + wv[0] + " depth=" + (wv[0] - terr[0]) : "dry");
+  if (hypEdits.has(k)) parts.push("hyp h=" + hypEdits.get(k));
+  if (hypWater && terr) {
+    const hyp = hypWater.get(k);
+    const eff = hypEdits.has(k) ? hypEdits.get(k) : terr[0];
+    if (hyp !== undefined) parts.push("hyp " + (hyp > eff ? "depth=" + (hyp - eff) : "dry"));
+  }
+  const acc = single(layerState("accum").layer.rows, k);
+  if (acc && acc[0] > 1) parts.push("accum=" + acc[0]);
+  for (const [name, shape] of Object.entries(INFRA_SHAPE)) {
+    const infra = single(layerState(name).layer.rows, k);
+    if (infra) {
+      const { owner, bridge } = shape(infra);
+      parts.push((bridge ? "bridge" : "road") + " agent=" + owner);
+    }
+  }
+  return parts.join("  ");
+}
+
+canvas.onmousemove = (ev) => {
+  const k = cellAt(ev);
+  if (!k) return;
+  $("hoverline").textContent = describeCell(k);
+  if (painting && brushOn) paint(k);
+};
+canvas.onmousedown = (ev) => {
+  const k = cellAt(ev);
+  if (!k) return;
+  if (brushOn) {
+    painting = true;
+    if (ev.button === 2) { hypEdits.delete(k); hypWater = hypEdits.size ? hypWater : null; }
+    else paint(k);
+    updateWhatIf(); markDirty();
+  } else {
+    pinnedCell = (pinnedCell === k) ? null : k;
+    renderInspector();
+    markDirty();
+  }
+};
+window.onmouseup = () => {
+  if (painting) { painting = false; updateWhatIf(); markDirty(); }
+};
+canvas.oncontextmenu = (ev) => {
+  if (!brushOn) return;
+  ev.preventDefault();
+  const k = cellAt(ev);
+  if (k) { hypEdits.delete(k); updateWhatIf(); markDirty(); }
+};
+
+function paint(k) {
+  const t = single(layerState("terrain").layer.rows, k);
+  if (!t) return;
+  // dig/raise are relative to the REAL terrain, not the current edit, so
+  // dragging over a cell twice doesn't stack.
+  const mode = $("brush-mode").value || "set";
+  const amt = Number($("brush-h").value) || 0;
+  hypEdits.set(k, mode === "set" ? amt : mode === "dig" ? t[0] - amt : t[0] + amt);
+  updateWhatIf();
+  markDirty();
+}
+
+function renderInspector() {
+  const el = $("inspector");
+  if (!pinnedCell) { el.textContent = "hover the map; click to pin"; el.className = "dim"; return; }
+  el.className = "";
+  const lines = ["cell (" + pinnedCell + ")"];
+  for (const [name, st] of layers) {
+    if (!st.on) continue;
+    const vals = st.layer.rows.get(pinnedCell);
+    if (!vals) continue;
+    for (const [vs, v] of vals) lines.push("  " + name + ": " + vs + " ×" + v.count);
+  }
+  if (hypEdits.has(pinnedCell)) lines.push("  what-if h: " + hypEdits.get(pinnedCell));
+  el.textContent = lines.join("\n");
+}
+
+// ---------------- scrubber ----------------
+$("scrub").oninput = () => {
+  scrubT = Number($("scrub").value);
+  $("live-btn").classList.remove("primary");
+  scrubLabel();
+  markDirty();
+};
+$("live-btn").onclick = () => {
+  scrubT = null;
+  $("live-btn").classList.add("primary");
+  updateScrubBounds();
+  markDirty();
+};
+
+// ---------------- boot ----------------
+try {
+  const saved = localStorage.getItem("ddir-viewer-url");
+  if (saved) $("ws-url").value = saved;
+} catch (e) {}
+window.onresize = () => { if (viewMode === "3d") markDirty(); };
+// `?ws=ws://host:port` pre-fills and auto-connects; `?view=3d` starts
+// in the 3D viewport (both bookmarkable).
+{
+  const q = new URLSearchParams(location.search);
+  glCap = q.get("glcap") === "1";
+  const cm = Number(q.get("cellm"));
+  if (cm > 0) CELL_M = cm;
+  let view = q.get("view");
+  try { view = view || localStorage.getItem("ddir-viewer-view"); } catch (e) {}
+  if (view === "3d") setView("3d");
+  const p = q.get("ws");
+  if (p) { $("ws-url").value = p; connect(); }
+}
+setInterval(() => { if (pinnedCell) renderInspector(); }, 1000);
+// dev hook: introspection for headless tests
+window._dbg = { layers, viewRows, single, computeBounds, hypEdits, updateWhatIf, paint,
+                buildFrame, setView, cam, cellAt3d, camVectors, marks, pools,
+                get gl3() { return gl3; }, get viewMode() { return viewMode; },
+                get bounds() { return bounds; }, get scrubT() { return scrubT; },
+                set scrubT(t) { scrubT = t; }, get hypWater() { return hypWater; },
+                get dirty() { return dirty; }, renderNow };
+</script>
+</body>
+</html>
