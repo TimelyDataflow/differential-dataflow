@@ -98,6 +98,7 @@ if a deployment ever needs one.
     ./target/release/ddir_server < interactive/server/demo/claims.txt
     ./target/release/ddir_server < interactive/server/demo/txn.txt
     python3 interactive/server/demo/two_sessions.py   # races + size gate over TCP
+    python3 interactive/server/demo/dem/run_dem.py    # equilibrium water on a real Swiss DEM
 
 `load --explain` and `query` are reserved but unimplemented: explanation
 support belongs on the scope-tree explanation machinery, and until that lands

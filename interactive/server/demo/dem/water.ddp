@@ -1,0 +1,44 @@
+-- Equilibrium water over a terrain grid: w(c) = max(t(c), min over the
+-- neighbours of w) — the greatest fixed point, iterated down from above.
+-- Depression filling ("priority flood"), incrementally maintained: edit the
+-- terrain and only the affected basin re-derives.
+--
+-- input 0: terrain ((x, y) ; (height)). Any set of cells; 4-adjacency is a
+-- coordinate equijoin, and cells with fewer than four neighbours are the
+-- window boundary — the rest of the world, which drains.
+
+let terrain = input 0;
+
+-- Both directions of each axis shift, restricted to cells present.
+let sx = terrain | map($0[0] + 1, $0[1] ; $0[0], $0[1]);
+let ax = sx | join(terrain, ($1[0], $1[1] ; $0[0], $0[1]));
+let bx = sx | join(terrain, ($0[0], $0[1] ; $1[0], $1[1]));
+let sy = terrain | map($0[0], $0[1] + 1 ; $0[0], $0[1]);
+let ay = sy | join(terrain, ($1[0], $1[1] ; $0[0], $0[1]));
+let by = sy | join(terrain, ($0[0], $0[1] ; $1[0], $1[1]));
+let adj = ax + bx + ay + by;
+
+-- Boundary cells (degree < 4) pin to their own terrain: water drains there.
+let deg = adj | map($0 ;) | count;
+let bound = terrain | join(deg, ($0 ; $1[0], $2[0])) | filter($1[1] < 4) | map($0 ; $1[0]);
+
+-- The descent starts at (global max height + 1) everywhere.
+let mx = terrain | map(; 0 - $1[0]) | min | map(; 1 - $1[0]);
+let cellsu = terrain | map(; $0[0], $0[1]);
+let top = cellsu | join(mx, ($1[0], $1[1] ; $2[0]));
+
+-- Neighbour relation keyed by the neighbour, to read its water level.
+let adjn = adj | map($1[0], $1[1] ; $0[0], $0[1]);
+
+w: {
+    -- lowest neighbouring level, clamped below by own terrain. A cell whose
+    -- neighbours have no level yet contributes no candidate at all — it
+    -- waits at its seed until the descent reaches it (the ratchet must not
+    -- fall to bare terrain before the pass information arrives).
+    let pass = adjn | join(w, ($1[0], $1[1] ; $2[0])) | min;
+    let cand = pass | join(terrain, ($0 ; if($1[0] > $2[0], $1[0], $2[0])));
+    -- ratchet down from the seeds; boundary stays pinned at terrain
+    var w = top + bound + cand | min;
+}
+
+export "water" = w::w;
