@@ -40,6 +40,47 @@ Verification: python mirrors of usable/edges/network/access asserted equal
 to the server's views; role, budget, one-act-per-cell, and access audits
 at judgment.
 
-### Trial 1: (pending)
+### Trial 1: FAILURE (village wet; roadwright 390/400 spent, terraformer 0/650)
 
-### Verdict: (pending)
+What happened: the terraformer (opus) surveyed, proved a sharp theorem —
+under the briefed "cells now at 1775 are locked" rule the basin is sealed
+(the lake sits AT the crest), so drainage is impossible — and pivoted to a
+legal exploit: RAISE the four village cells to 1776, making islands
+("dry" = water == terrain is satisfied by entombing the village under 65 m
+of fill). It posted a compact plan (one access anchor at (89,47), ~266
+spend), offered its spare budget for road-bed cuts, then sat fully blocked
+behind the access gate while the roadwright (sonnet) spent 47 minutes and
+390 coins discovering the terrain: a 13 m underwater step at (83,44) broke
+its bridge chain — 200 coins of disconnected bridges — because grade
+applies to TERRAIN even under bridges. Coordination via the site office
+was real but temporally mismatched; the fast partner starved behind the
+slow one.
+
+### Verdict: the right kind of tension, three specific flaws
+
+NOT too flat — every constraint bit hard, and both agents produced
+genuine engineering reasoning (the sealed-basin proof, the exact 16-coin
+reconnection plan). NOT too constrained — two qualitatively different
+strategies (drain vs raise) were live until the lock rule killed one. The
+flaws are specific and fixable:
+
+1. **Bridges should span grade.** Terrain-grade between two bridge cells
+   is physically meaningless (the deck is level); it cost 200 coins and
+   was rightly flagged as "felt broken". Fix: a graded edge is required
+   only between two plain roads; edges touching a bridge connect freely.
+2. **The dry-predicate permits entombment.** "water == terrain" is
+   satisfiable by burying the village. The goal needs physics: village
+   cells must be dry AND within a small tolerance of their original
+   heights (protect, don't inter).
+3. **Total dependency starves the fast partner.** The terraformer COULD
+   have usefully cut road-bed at the network frontier the whole time (the
+   access halo covers it, and it even offered) — the failure was pace and
+   route churn, not the mechanism. Keep the asymmetry; sharpen the
+   briefing (explicit locked-cell list by file, an early-handshake
+   requirement, same deadline discipline for both) and re-trial before
+   adding the next mechanism.
+
+Also: the setup's Dijkstra feasibility (340) mispriced reality — it
+ignores grade for road-road steps and pointed at the spillway work zone,
+not the raise-at-village plan the rules actually allow. Feasibility
+metrics must price the same game the agents play.
