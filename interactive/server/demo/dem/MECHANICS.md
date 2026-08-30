@@ -121,3 +121,53 @@ tension produced negotiation, sequencing, cross-budget trades, and
 formal-methods-grade analysis from the participants. The scenario needs
 correct budgets more than new rules; verify feasibility with the same
 min-cut the terraformer used, not the Dijkstra heuristic.
+
+### Trial 3 (calibrated) + operator verification: the mechanism demands
+### STAGED construction, and nobody — agents or operator — played it that way
+
+Trial 3 failed on a third distinct mode: a deadly embrace. The roadwright
+built a clean 400-coin route and reserved 20 for a two-road finish gated
+on a 3-coin grade-shave it requested repeatedly; the terraformer posted
+its plan, probed ONE access cell (the wrong end of its trench), concluded
+it was fully blocked, armed a poller, and went passive. It in fact had
+access to five trench cells the whole time. Lesson for trial harnesses:
+brief agents to never wait passively — act on what IS available, re-read
+the office every few actions, and probe the boundary empirically.
+
+Operator verification then mapped the truth. Completing the handoff
+(shave + two roads, 420/420 exactly) opened digs at (95,28..31), (96,28),
+(97,29) — and the access boundary cleanly refused (97,28), (98,31), and
+all of x=95 y>=32. Offline what-if (priority flood over staged terrain):
+
+- staged digs alone: lake stays 1775;
+- + the east gate (97,28): lake falls to 1750 and STOPS — the drained
+  lake strands off the trench mouth at a ~1750 sill (trial 2's trap,
+  now with a number);
+- the full drain needs the south climb (x=95, y=32..41) AND the east
+  tail (97,30..99,32) — every one of those cells is outside any access
+  the 420-coin network can reach, and most are underwater until the
+  first 25 m of drawdown dries the shelf they'd be roaded from.
+
+**The discovery: this mechanism's real game is DRAWDOWN CAMPAIGNS.**
+Drain 25 m with what you can reach; the lake edge recedes; roads advance
+onto the newly dry shelf; access follows; drain again. The interplay of
+water, roads, and access doesn't just constrain the solution — it forces
+construction to be SEQUENCED, exactly like real reservoir works. No
+agent (nor the operator, at 1:30 am) played the staged game, because
+every briefing framed a one-shot channel. That is the next scenario
+design: teach nothing, set road budget ~500, and see whether agents
+discover staging; the mechanism already contains it.
+
+### Evening design-space summary
+
+Three trials, three distinct failure modes (pace starvation + rule gap;
+provable budget infeasibility + rational halting; deadly embrace + wrong
+probe), one operator verification, zero flat or obvious moments. The
+asymmetry produced the intended behaviors: cross-budget trades, deadlock
+diagnosis, terrain findings exchanged through the site office, and
+formal analysis (an agent re-running the judge's own flood as a min-cut
+tool). Ground-truth equality held in every judgment. The binding design
+lesson, three times over: calibrate with the players' own analysis
+(coverage min-cuts, drained-state connectivity), not point-to-point
+heuristics — and the deepest mechanics are the ones that force plans to
+unfold in TIME, not just in space.
