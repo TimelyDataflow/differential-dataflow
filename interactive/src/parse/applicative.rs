@@ -7,7 +7,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Let, Var, Scope, Export,
-    Input, Import, Map, Join, Reduce, Concat, Arrange, Filter, Negate, EnterAt, LiftIter, FlatMap, Inspect,
+    Input, Import, Map, Join, Reduce, Concat, Arrange, Filter, Negate, Weigh, EnterAt, LiftIter, FlatMap, Inspect,
     Min, Distinct, Count, Collect,
     Ident(String), Int(i64), Str(String),
     Dollar, Caret, LParen, RParen, LBrace, RBrace, LBracket, RBracket,
@@ -70,7 +70,7 @@ fn tokenize(input: &str) -> Vec<Token> {
                     "INPUT" => Token::Input, "IMPORT" => Token::Import,
                     "MAP" => Token::Map, "JOIN" => Token::Join,
                     "REDUCE" => Token::Reduce, "CONCAT" => Token::Concat, "ARRANGE" => Token::Arrange,
-                    "FILTER" => Token::Filter, "NEGATE" => Token::Negate, "ENTER_AT" => Token::EnterAt, "INSPECT" => Token::Inspect,
+                    "FILTER" => Token::Filter, "NEGATE" => Token::Negate, "WEIGH" => Token::Weigh, "ENTER_AT" => Token::EnterAt, "INSPECT" => Token::Inspect,
                     "MIN" => Token::Min, "DISTINCT" => Token::Distinct, "COUNT" => Token::Count,
                     "COLLECT" => Token::Collect,
                     "LIFT_ITER" => Token::LiftIter, "FLATMAP" => Token::FlatMap,
@@ -133,6 +133,7 @@ impl Parser {
             Token::Reduce => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let r = self.parse_reducer(); self.expect(&Token::RParen); Expr::Reduce(Box::new(i), r) },
             Token::Filter => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let c = self.parse_term(); self.expect(&Token::RParen); Expr::Filter(Box::new(i), c) },
             Token::Negate => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::RParen); Expr::Negate(Box::new(i)) },
+            Token::Weigh => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let w = self.parse_term(); self.expect(&Token::RParen); Expr::Weigh(Box::new(i), w) },
             Token::EnterAt => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let f = self.parse_term(); self.expect(&Token::RParen); Expr::EnterAt(Box::new(i), f) },
             Token::LiftIter => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::RParen); Expr::LiftIter(Box::new(i)) },
             Token::FlatMap => { self.next(); self.expect(&Token::LParen); let i = self.parse_expr(); self.expect(&Token::Comma); let l = self.parse_term(); self.expect(&Token::RParen); Expr::FlatMap(Box::new(i), l) },

@@ -396,7 +396,10 @@ where
                 let mut start = 0;
                 for &end in ends {
                     let c: Diff = input[start..end].iter().map(|&(_, d)| d).sum();
-                    if c > 0 {
+                    // `!= 0`, matching vec: with `weigh`, count doubles as SUM
+                    // and negative totals must be reported, not vanish. The
+                    // `as u64` keeps the i64's bit pattern, as the column does.
+                    if c != 0 {
                         sums.push(c as u64);
                         out_diffs.push(1);
                     }

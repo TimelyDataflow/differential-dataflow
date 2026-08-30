@@ -48,7 +48,7 @@ fn expr_free_names<'a>(expr: &'a Expr, out: &mut BTreeSet<&'a str>) {
         Expr::Name(n) => { out.insert(n.as_str()); },
         Expr::Qualified(scope, _) => { out.insert(scope.as_str()); },
         Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
-            | Expr::Negate(e) | Expr::EnterAt(e, _) | Expr::LiftIter(e)
+            | Expr::Negate(e) | Expr::Weigh(e, _) | Expr::EnterAt(e, _) | Expr::LiftIter(e)
             | Expr::FlatMap(e, _)
             | Expr::Inspect(e, _) | Expr::Arrange(e) => expr_free_names(e, out),
         Expr::Join(l, r, _) => { expr_free_names(l, out); expr_free_names(r, out); },
@@ -143,6 +143,7 @@ impl ScopeLower {
             Expr::Map(e, p)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Project(p.clone())] }) },
             Expr::Filter(e, c)  => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Filter(c.clone())] }) },
             Expr::Negate(e)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Negate] }) },
+            Expr::Weigh(e, t)   => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Weigh(t.clone())] }) },
             Expr::EnterAt(e, f) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::EnterAt(f.clone())] }) },
             Expr::FlatMap(e, t) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::FlatMap(t.clone())] }) },
             Expr::LiftIter(e)   => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::LiftIter] }) },
@@ -300,7 +301,7 @@ fn qualified_fields(body: &[Stmt], scope: &str) -> Vec<String> {
 fn collect_qualified(e: &Expr, scope: &str, out: &mut Vec<String>) {
     match e {
         Expr::Qualified(s, f) => if s == scope && !out.contains(f) { out.push(f.clone()); },
-        Expr::Map(e, _) | Expr::Filter(e, _) | Expr::Negate(e) | Expr::EnterAt(e, _)
+        Expr::Map(e, _) | Expr::Filter(e, _) | Expr::Negate(e) | Expr::Weigh(e, _) | Expr::EnterAt(e, _)
         | Expr::FlatMap(e, _)
         | Expr::LiftIter(e) | Expr::Reduce(e, _) | Expr::Inspect(e, _) | Expr::Arrange(e) => collect_qualified(e, scope, out),
         Expr::Join(l, r, _) => { collect_qualified(l, scope, out); collect_qualified(r, scope, out); },

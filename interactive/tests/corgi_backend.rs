@@ -41,6 +41,12 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         ])],
         // sum_skew: any keyed pairs — the skew is in the program, not the data.
         "sum_skew" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21], &[3, 30]])],
+        // weigh_ops: (key, value) pairs; key 3's values sum NEGATIVE (the
+        // count guard must report it) and keys 5, 6 carry the value 1 the
+        // row-fallback weight selects.
+        "weigh_ops" => vec![rows(&[
+            &[1, 10], &[1, 20], &[2, 5], &[3, -7], &[3, 2], &[4, 3], &[5, 1], &[6, 1],
+        ])],
         "case_ops" => vec![rows(&[&[1, 10], &[2, 20], &[3, 14], &[3, 30]])],
         // pair_keys: composite keys with overlap, fanout, and one-sided keys on both sides.
         "pair_keys" => vec![
@@ -112,6 +118,7 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn sum_ops() { assert_backends_agree("sum_ops"); }
 #[test] fn empty_batch() { assert_backends_agree("empty_batch"); }
 #[test] fn sum_skew() { assert_backends_agree("sum_skew"); }
+#[test] fn weigh_ops() { assert_backends_agree("weigh_ops"); }
 #[test] fn case_ops() { assert_backends_agree("case_ops"); }
 #[test] fn tour() { assert_backends_agree("tour"); }
 #[test] fn pair_keys() { assert_backends_agree("pair_keys"); }

@@ -166,6 +166,28 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
                 }
                 c
             }
+            LinearOp::Weigh(term) => {
+                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
+                if let Some(g) = compile_scalar(term, &kshape, &vshape) {
+                    // The weight is an ordinary corgi `U64` column; it becomes
+                    // a diff only here at the container seam (the u64 bits ARE
+                    // the i64). Weight-zero rows are dropped: 0·[row] = 0.
+                    let w = corgi::eval_graph(&g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("weigh");
+                    let keep: Vec<usize> = (0..w.len()).filter(|&i| w[i] != 0).collect();
+                    let keys = gather(&c.keys, &keep);
+                    let vals = gather(&c.vals, &keep);
+                    let times = keep.iter().map(|&i| c.times[i].clone()).collect();
+                    let diffs = keep.iter().map(|&i| c.diffs[i] * (w[i] as i64)).collect();
+                    CorgiContainer { keys, vals, times, diffs }
+                } else {
+                    let mut out: Vec<Upd> = Vec::new();
+                    for ((k, v), t, d) in c.into_updates() {
+                        let w = { let mut env = vec![k.clone(), v.clone()]; crate::ir::eval(term, &mut env).as_int() };
+                        if w != 0 { out.push(((k, v), t, d * w)); }
+                    }
+                    CorgiContainer::from_updates(out)
+                }
+            }
             LinearOp::EnterAt(field) => {
                 let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
                 if let Some(g) = compile_scalar(field, &kshape, &vshape) {

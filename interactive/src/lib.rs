@@ -39,7 +39,7 @@ fn walk_expr(expr: &Expr, positional: &mut usize, imports: &mut BTreeSet<String>
     match expr {
         Expr::Input(n) => { *positional = (*positional).max(n + 1); },
         Expr::Import(name) => { imports.insert(name.clone()); },
-        Expr::Map(e, _) | Expr::Negate(e) | Expr::Arrange(e)
+        Expr::Map(e, _) | Expr::Negate(e) | Expr::Weigh(e, _) | Expr::Arrange(e)
             | Expr::EnterAt(e, _) | Expr::LiftIter(e) | Expr::Filter(e, _)
             | Expr::FlatMap(e, _)
             | Expr::Reduce(e, _) | Expr::Inspect(e, _) => walk_expr(e, positional, imports),

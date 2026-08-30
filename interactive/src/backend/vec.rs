@@ -46,10 +46,6 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
     use timely::dataflow::operators::core::Map;
     c.inner.flat_map(move |((key, val), t_in, d_in)| {
         use timely::progress::Timestamp;
-        let iter_at_level: i64 = level
-            .checked_sub(1)
-            .and_then(|idx| t_in.inner.get(idx).copied())
-            .unwrap_or(0) as i64;
         let mut results: smallvec::SmallVec<[((Row, Row), Time, Diff); 2]> = svec![((key, val), Time::minimum(), 1)];
         for op in &ops {
             let mut next = smallvec::SmallVec::new();
@@ -68,6 +64,12 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
                     LinearOp::Negate => {
                         next.push(((k, v), t, -d));
                     },
+                    // Multiply the diff by an Int-valued term; weight 0 elides
+                    // the row (0·[row] = 0 in the update algebra).
+                    LinearOp::Weigh(term) => {
+                        let w = { let mut env = vec![k.clone(), v.clone()]; eval(term, &mut env).as_int() };
+                        if w != 0 { next.push(((k, v), t, d * w)); }
+                    },
                     LinearOp::EnterAt(field) => {
                         let delay = {
                             let mut env = vec![k.clone(), v.clone()];
@@ -77,10 +79,25 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
                         let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
                         for _ in 0..level.saturating_sub(1) { coords.push(0); }
                         coords.push(delay);
-                        next.push(((k, v), Product::new(0u64, PointStamp::new(coords)), d));
+                        // JOIN the accumulated delta rather than overwrite it:
+                        // a fused `enter_at(a) | enter_at(b)` must agree with
+                        // its unfused form, where the second op's shift lands
+                        // on a timestamp already carrying the first.
+                        next.push(((k, v), t.join(&Product::new(0u64, PointStamp::new(coords))), d));
                     },
                     LinearOp::LiftIter => {
-                        next.push(((k, append_iter(v, iter_at_level)), t, d));
+                        // Read the iteration coordinate as of the row's
+                        // ACCUMULATED time — an earlier EnterAt in this chain
+                        // shifts what a later LiftIter observes, matching the
+                        // unfused rendering.
+                        let iter = {
+                            let joined = t_in.join(&t);
+                            level
+                                .checked_sub(1)
+                                .and_then(|idx| joined.inner.get(idx).copied())
+                                .unwrap_or(0) as i64
+                        };
+                        next.push(((k, append_iter(v, iter)), t, d));
                     },
                     LinearOp::FlatMap(list_term) => {
                         let elems = {
@@ -137,7 +154,10 @@ impl Backend for VecBackend {
             Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Value::unit(), 1)); }),
             // Count yields a one-field tuple `(count)`, keeping the convention
             // that a value is a tuple (so `$1[0]` and the explain envelope work).
-            Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count > 0 { output.push((Value::Tuple(vec![Value::Int(count)]), 1)); } }),
+            // The guard is `!= 0`, not `> 0`: with `weigh`, signed multiplicities
+            // are routine and `count` doubles as SUM — absence encodes exactly
+            // zero, and negative totals are reported rather than vanishing.
+            Reducer::Count => Arc::new(|_key, vals, output| { let count: Diff = vals.iter().map(|(_, d)| *d).sum(); if count != 0 { output.push((Value::Tuple(vec![Value::Int(count)]), 1)); } }),
             // NEST: collect the key's values into a List, in value order (DD
             // hands them sorted), each repeated per its multiplicity.
             Reducer::Collect => Arc::new(|_key, vals, output| {

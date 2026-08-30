@@ -1,0 +1,26 @@
+-- `weigh` on the corgi columnar path and its row fallback, checked against
+-- vec. The weight is a corgi U64 column that becomes a diff only at the
+-- container seam; `weigh(v) | count` is per-key SUM, including a key whose
+-- sum is negative (pinning the `!= 0` count guard on both backends).
+
+let pairs = input 0 | key($0[0] ; $0[1]);
+
+-- Per-key sum of values; key 3 sums to -5 (reported, not dropped).
+export "sums" = pairs | weigh($1[0]) | count;
+
+-- weigh(-1) is negate: summed against the original, everything cancels.
+let negd = pairs | weigh(0 - 1);
+let both = negd + pairs;
+export "cancel" = both | count;
+
+-- weigh(0) elides rows entirely: no group ever reaches the reduce.
+export "zeroed" = pairs | weigh(0) | count;
+
+-- The same sums by another route: NEST to a list, explode, each element
+-- weighing itself — weigh under flatmap, exercising position tuples.
+export "viaflat" = pairs | collect | flatmap($1) | weigh($1[1][0]) | map($0 ;) | count;
+
+-- A data-driven `variant` tag has no static lane count, so this weight
+-- declines the columnar lowering and takes the row fallback: weight 1
+-- exactly for rows whose value is 1.
+export "fallback" = pairs | weigh(istag(1, variant($1[0], 0))) | count;

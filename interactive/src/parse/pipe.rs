@@ -57,7 +57,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Let, Var, Export, Con, Case, Fold,
-    Input, Import, Key, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, EnterAt, LiftIter, FlatMap, Inspect,
+    Input, Import, Key, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Weigh, Filter, EnterAt, LiftIter, FlatMap, Inspect,
     Ident(String), Int(i64), Str(String),
     Dollar, Caret, LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Semi, Colon, ColonColon, Eq, EqEq, NotEq, Lt, LtEq, Gt, GtEq, AndAnd, FatArrow,
@@ -122,7 +122,7 @@ fn tokenize(input: &str) -> Vec<Token> {
                     "join" => Token::Join, "min" => Token::Min, "distinct" => Token::Distinct,
                     "count" => Token::Count, "collect" => Token::Collect,
                     "flatmap" => Token::FlatMap,
-                    "arrange" => Token::Arrange, "negate" => Token::Negate,
+                    "arrange" => Token::Arrange, "negate" => Token::Negate, "weigh" => Token::Weigh,
                     "filter" => Token::Filter, "enter_at" => Token::EnterAt, "inspect" => Token::Inspect,
                     "lift_iter" => Token::LiftIter,
                     _ => Token::Ident(ident),
@@ -260,6 +260,7 @@ impl Parser {
             Token::FlatMap => { self.next(); self.expect(&Token::LParen); let l = self.parse_term(); self.expect(&Token::RParen); Expr::FlatMap(Box::new(lhs), l) },
             Token::Arrange => { self.next(); Expr::Arrange(Box::new(lhs)) },
             Token::Negate => { self.next(); Expr::Negate(Box::new(lhs)) },
+            Token::Weigh => { self.next(); self.expect(&Token::LParen); let w = self.parse_term(); self.expect(&Token::RParen); Expr::Weigh(Box::new(lhs), w) },
             Token::Filter => { self.next(); self.expect(&Token::LParen); let c = self.parse_term(); self.expect(&Token::RParen); Expr::Filter(Box::new(lhs), c) },
             Token::EnterAt => { self.next(); self.expect(&Token::LParen); let f = self.parse_term(); self.expect(&Token::RParen); Expr::EnterAt(Box::new(lhs), f) },
             Token::LiftIter => { self.next(); Expr::LiftIter(Box::new(lhs)) },

@@ -373,7 +373,8 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Linear { input, ops } => {
                         let ops: Vec<&str> = ops.iter().map(|op| match op {
                             LinearOp::Project(_) => "project", LinearOp::Filter(_) => "filter",
-                            LinearOp::Negate => "negate", LinearOp::EnterAt(_) => "enter_at",
+                            LinearOp::Negate => "negate", LinearOp::Weigh(_) => "weigh",
+                            LinearOp::EnterAt(_) => "enter_at",
                             LinearOp::LiftIter => "lift_iter", LinearOp::FlatMap(_) => "flatmap",
                         }).collect();
                         format!("{} | {}", fmt_ref(input), ops.join(" | "))

@@ -109,6 +109,8 @@ pub enum Expr {
     Reduce(Box<Expr>, Reducer),
     Filter(Box<Expr>, Term),
     Negate(Box<Expr>),
+    /// Multiply each row's multiplicity by an `Int`-valued term.
+    Weigh(Box<Expr>, Term),
     EnterAt(Box<Expr>, Term),
     /// Append the current user-iter coord (at the operator's scope depth)
     /// to each row's value. Time itself is unchanged.

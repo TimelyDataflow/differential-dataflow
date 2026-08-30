@@ -267,7 +267,7 @@ fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, 
     for op in ops {
         match op {
             LinearOp::Project(p) => { let rows = [k, v]; k = proj_arity(&p.key, &rows); v = proj_arity(&p.val, &rows); }
-            LinearOp::Filter(_) | LinearOp::Negate | LinearOp::EnterAt(_) => {}
+            LinearOp::Filter(_) | LinearOp::Negate | LinearOp::Weigh(_) | LinearOp::EnterAt(_) => {}
             LinearOp::LiftIter => v += 1,
             LinearOp::FlatMap(_) => v = 2, // value becomes tuple(pos, element)
         }
@@ -997,10 +997,13 @@ impl<'a> Reverse<'a> {
                         let contrib = ex.filter(dep_this, cond.clone());
                         self.push(ex, path, input, contrib, out_user_len);
                     }
-                    LinearOp::Negate | LinearOp::EnterAt(_) => {
-                        // Negate: pure pass-through. EnterAt: sound but
-                        // over-broad pass-through (see the flat rule's note);
-                        // the routing adapter handles any depth difference.
+                    LinearOp::Negate | LinearOp::Weigh(_) | LinearOp::EnterAt(_) => {
+                        // Negate, Weigh: pure pass-through — re-weighting does
+                        // not change which input rows an output depends on
+                        // (weight-0 rows over-demand, which is sound). EnterAt:
+                        // sound but over-broad pass-through (see the flat
+                        // rule's note); the routing adapter handles any depth
+                        // difference.
                         self.push(ex, path, input, dep_this, out_user_len);
                     }
                     LinearOp::LiftIter => panic!("explain: LiftIter in user program"),

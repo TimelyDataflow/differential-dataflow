@@ -41,6 +41,12 @@ pub enum LinearOp {
     Filter(Term),
     /// Negate the diff.
     Negate,
+    /// Multiply the diff by an `Int`-valued `Term` (env: `$0` = key, `$1` =
+    /// val); weight 0 elides the row. The generator that completes the linear
+    /// algebra — `negate` is `weigh(-1)`, `filter(p)` is `weigh(if(p,1,0))`,
+    /// and a data-dependent weight is expressible no other way. Since `count`
+    /// sums diffs, `weigh(v) | count` is per-key SUM.
+    Weigh(Term),
     /// Shift the timestamp based on an `Int`-valued `Term`.
     EnterAt(Term),
     /// Append the current user-iter coord (at the row's scope depth) to
