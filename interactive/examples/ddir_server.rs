@@ -125,6 +125,16 @@ fn parse_command(line: &str) -> Result<Command, String> {
             Ok(Command::Feed { prog, input, key, val, time, diff })
         }
         "tick" => Ok(Command::Tick),
+        "bind" | "unbind" if toks.len() == 4 => {
+            let trace = toks[1].to_string();
+            let prog = toks[2].to_string();
+            let input: usize = toks[3].parse().map_err(|_| format!("{}: <in#> must be a number, got {:?}", toks[0], toks[3]))?;
+            if toks[0] == "bind" {
+                Ok(Command::Bind { trace, prog, input })
+            } else {
+                Ok(Command::Unbind { trace, prog, input })
+            }
+        }
         "drop" if toks.len() == 2 => Ok(Command::Drop { name: toks[1].to_string() }),
         "peek" if toks.len() == 2 || toks.len() == 3 => {
             let trace = toks[1].to_string();
@@ -146,6 +156,8 @@ fn print_help() {
     println!("  install <name> <file>");
     println!("  feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]");
     println!("  tick");
+    println!("  bind <trace> <prog> <in#>    (feed the trace's changes back in, each tick)");
+    println!("  unbind <trace> <prog> <in#>");
     println!("  drop <name>");
     println!("  peek <trace> [key]");
     println!("  list");
@@ -175,6 +187,16 @@ fn dispatch(cmd: &Command, server: &mut Server, worker: &mut Worker) -> bool {
         }
         Command::Drop { name } => match server.drop_program(worker, name) {
             Ok(()) => if w0 { println!("dropped {:?}", name); },
+            Err(e) => if w0 { println!("error: {}", e); },
+        },
+        // Collective: the tap dataflow is built on every worker (each sees
+        // its shard, so the union delivers the delta exactly once).
+        Command::Bind { trace, prog, input } => match server.bind(worker, trace, prog, *input) {
+            Ok(()) => if w0 { println!("bound {:?} -> {:?} input {}", trace, prog, input); },
+            Err(e) => if w0 { println!("error: {}", e); },
+        },
+        Command::Unbind { trace, prog, input } => match server.unbind(worker, trace, prog, *input) {
+            Ok(()) => if w0 { println!("unbound {:?} -> {:?} input {}", trace, prog, input); },
             Err(e) => if w0 { println!("error: {}", e); },
         },
         // Collective: every worker imports its shard; `peek` gathers to worker 0

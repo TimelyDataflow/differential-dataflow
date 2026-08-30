@@ -1,0 +1,113 @@
+# Transaction processing in the data plane, on the live server.
+# (After frankmcsherry/blog/posts/2025-04-27.md.)
+#
+# All writers do blind writes: a transaction is just rows appended to
+# `intents` — its writes, plus the reads under which those writes are valid
+# (the conditions under which they evaporate). A recursive view resolves
+# which transactions commit; committed state is a view; and the maintenance
+# deletions at the end are OUTPUT-INVARIANT, so any client may issue them at
+# any time (episodic, off the critical path) — compaction needs no authority
+# because it changes no outcome.
+#
+# Rows: key = (txn id, is_read, account), val = (value); accounts alice=1,
+# bob=2; "expect absent" reads use the sentinel -1. Ids order transactions;
+# the epoch seal (tick) is what makes resolved prefixes final.
+#
+#   cargo run -p ddir-server --release
+#   ./target/release/ddir_server < interactive/server/demo/txn.txt
+
+load bank begin
+let intents = input 0;
+
+-- ((rid, k) ; expected) and ((wid, k) ; v)
+let reads  = intents | filter($0[1] == 1) | map($0[0], $0[2] ; $1[0]);
+let wr_all = intents | filter($0[1] == 0) | map($0[0], $0[2] ; $1[0]);
+
+res: {
+    -- writes of transactions not (currently) rolled back: anti-join on id.
+    let wr_id  = wr_all | map($0[0] ; $0[1], $1[0]);
+    let wr_bad = wr_id | join(rollback, ($0 ; $1[0], $1[1]));
+    let writes = wr_id + (wr_bad | negate);
+
+    -- each read paired with every surviving prior write to its key ...
+    let wk = writes | map($1[0] ; $0[0], $1[1]);
+    let rk = reads  | map($0[1] ; $0[0], $1[0]);
+    let pairs = rk | join(wk, ($0, $1[0], $1[1] ; $2[0], $2[1]))
+              | filter($1[0] < $0[1]);
+    -- ... and the LATEST prior write wins: min over (-wid, v).
+    let best = pairs | map($0[0], $0[1], $0[2] ; 0 - $1[0], $1[1]) | min;
+
+    -- a read fails if the latest prior value mismatches ...
+    let bad_seen = best | filter($1[1] != $0[2]) | map($0[1] ;);
+
+    -- ... or if no prior write exists and it did not expect absence (-1).
+    let seen   = best | map($0[1], $0[0] ;);
+    let rkk    = reads | map($0 ;);
+    let unseen = rkk + (seen | negate);
+    let bad_absent = unseen | join(reads, ($0[0], $2[0] ;))
+                   | filter($0[1] != -1) | map($0[0] ;);
+
+    var rollback = (bad_seen + bad_absent) | distinct;
+}
+
+let rb = res::rollback;
+let wid  = wr_all | map($0[0] ; $0[1], $1[0]);
+let wbad = wid | join(rb, ($0 ; $1[0], $1[1]));
+let committed = wid + (wbad | negate);
+
+export "rollback" = rb;
+export "state" = committed | map($1[0] ; 0 - $0[0], $1[1]) | min | map($0 ; $1[1]);
+export "log" = intents;
+bank end-load
+
+# The five transactions from the post, all as blind appends:
+# T1: blind write alice=100.
+feed bank 0 1,0,1 val=100
+# T2: bob must be absent; write bob=50.
+feed bank 0 2,1,2 val=-1
+feed bank 0 2,0,2 val=50
+# T3: move 30 alice->bob, iff alice=100 and bob=50.
+feed bank 0 3,1,1 val=100
+feed bank 0 3,1,2 val=50
+feed bank 0 3,0,1 val=70
+feed bank 0 3,0,2 val=80
+# T4: move 40, against the SAME reads -- must roll back (T3 got there first).
+feed bank 0 4,1,1 val=100
+feed bank 0 4,1,2 val=50
+feed bank 0 4,0,1 val=60
+feed bank 0 4,0,2 val=90
+# T5: move 30 more, against T3's refreshed values -- commits.
+feed bank 0 5,1,1 val=70
+feed bank 0 5,1,2 val=80
+feed bank 0 5,0,1 val=50
+feed bank 0 5,0,2 val=100
+tick
+
+# Expect: rollback = {4}; state alice=50, bob=100.
+peek rollback
+peek state
+
+# --- Asynchronous maintenance (any client, any time; output-invariant) ---
+# Remove the failed transaction, the read sets of committed transactions,
+# and overwritten writes. The ids are sealed (their epoch has ticked), so
+# these deletions cannot change what committed.
+feed bank 0 4,1,1 val=100 diff=-1
+feed bank 0 4,1,2 val=50 diff=-1
+feed bank 0 4,0,1 val=60 diff=-1
+feed bank 0 4,0,2 val=90 diff=-1
+feed bank 0 2,1,2 val=-1 diff=-1
+feed bank 0 3,1,1 val=100 diff=-1
+feed bank 0 3,1,2 val=50 diff=-1
+feed bank 0 5,1,1 val=70 diff=-1
+feed bank 0 5,1,2 val=80 diff=-1
+feed bank 0 1,0,1 val=100 diff=-1
+feed bank 0 3,0,1 val=70 diff=-1
+feed bank 0 2,0,2 val=50 diff=-1
+feed bank 0 3,0,2 val=80 diff=-1
+tick
+
+# The log is now just the two live writes -- and state is UNCHANGED.
+peek log
+peek state
+peek rollback
+exit

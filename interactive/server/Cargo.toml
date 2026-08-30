@@ -1,0 +1,21 @@
+[package]
+name = "ddir-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Interactive differential dataflow server: hold named arrangements live across DDIR program installs and drops."
+publish = false
+
+[[bin]]
+name = "ddir_server"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+differential-dataflow = { workspace = true }
+timely = { workspace = true }
+interactive = { path = ".." }
+diagnostics = { path = "../../diagnostics" }
+tungstenite = "0.26"

@@ -2,10 +2,8 @@
 //!
 //! Hosts a long-running timely worker group into which interpreted DDIR
 //! programs are *installed* one at a time, and lets them share results by name.
-//! This is the interpreter-driven successor to the legacy `dd_server` crate,
-//! which hot-loaded compiled `.so`s via `libloading`; here "install" means
-//! parse → lower → render an [`crate::scope_ir::Program`] against a live
-//! registry — no machine code, no `dlopen`.
+//! An install parses, lowers, and renders a [`crate::scope_ir::Program`]
+//! against a live registry of shared traces.
 //!
 //! # Typed commands
 //!
@@ -45,19 +43,20 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use timely::worker::Worker;
+use differential_dataflow::dynamic::pointstamp::PointStamp;
+use differential_dataflow::input::{Input, InputSession};
+use differential_dataflow::operators::arrange::{ShutdownButton, TraceAgent};
+use differential_dataflow::trace::implementations::ValSpine;
+use differential_dataflow::trace::TraceReader;
+use differential_dataflow::VecCollection;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
-use differential_dataflow::VecCollection;
-use differential_dataflow::input::{Input, InputSession};
-use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::implementations::ValSpine;
-use differential_dataflow::dynamic::pointstamp::PointStamp;
+use timely::worker::Worker;
 
-use crate::ir::{Value, Diff};
-use crate::scope_ir as st;
 use crate::backend::vec::render_tree;
+use crate::ir::{Diff, Value};
+use crate::scope_ir as st;
 
 /// The host (outer) timestamp shared across all installed programs.
 pub type OuterTime = u64;
@@ -73,9 +72,16 @@ type ServerInput = InputSession<OuterTime, (Value, Value), Diff>;
 /// generator on demand, and two imports of the same recipe share one source.
 #[derive(Clone, Copy)]
 enum Recipe {
-    /// `random:nodes=N,edges=E[,arity=A][,seed=S]` — a deterministic random
-    /// graph: `E` rows of `A` fields each, every field in `0..N`.
-    Random { nodes: u64, edges: u64, arity: usize, seed: u64 },
+    /// `random:nodes=N,edges=E[,arity=A][,seed=S][,churn=C]` — a deterministic
+    /// random graph: a window of `E` rows of `A` fields, every field in `0..N`.
+    /// Each tick replaces `C` rows (default zero).
+    Random {
+        nodes: u64,
+        edges: u64,
+        arity: usize,
+        seed: u64,
+        churn: u64,
+    },
     /// `iota:N` — the rows `(0) .. (N-1)`, each a one-field `Tuple`. The minimal
     /// index source from which richer generators are derived in-language (with
     /// `hash`).
@@ -87,7 +93,8 @@ impl Recipe {
     /// trace lookup). Unknown keys, missing required keys, or non-numbers reject.
     fn parse(name: &str) -> Option<Recipe> {
         if let Some(params) = name.strip_prefix("random:") {
-            let (mut nodes, mut edges, mut arity, mut seed) = (None, None, 2usize, 0u64);
+            let (mut nodes, mut edges, mut arity, mut seed, mut churn) =
+                (None, None, 2usize, 0u64, 0u64);
             for kv in params.split(',') {
                 let (k, v) = kv.split_once('=')?;
                 match k.trim() {
@@ -95,12 +102,21 @@ impl Recipe {
                     "edges" => edges = Some(v.trim().parse().ok()?),
                     "arity" => arity = v.trim().parse().ok()?,
                     "seed" => seed = v.trim().parse().ok()?,
+                    "churn" => churn = v.trim().parse().ok()?,
                     _ => return None,
                 }
             }
-            Some(Recipe::Random { nodes: nodes?, edges: edges?, arity, seed })
+            Some(Recipe::Random {
+                nodes: nodes?,
+                edges: edges?,
+                arity,
+                seed,
+                churn,
+            })
         } else if let Some(n) = name.strip_prefix("iota:") {
-            Some(Recipe::Iota { n: n.trim().parse().ok()? })
+            Some(Recipe::Iota {
+                n: n.trim().parse().ok()?,
+            })
         } else {
             None
         }
@@ -110,21 +126,34 @@ impl Recipe {
     /// omitted defaults address the same source.
     fn canonical(&self) -> String {
         match self {
-            Recipe::Random { nodes, edges, arity, seed } =>
-                format!("random:nodes={},edges={},arity={},seed={}", nodes, edges, arity, seed),
+            Recipe::Random {
+                nodes,
+                edges,
+                arity,
+                seed,
+                churn,
+            } => format!(
+                "random:nodes={},edges={},arity={},seed={},churn={}",
+                nodes, edges, arity, seed, churn
+            ),
             Recipe::Iota { n } => format!("iota:{}", n),
         }
     }
 
     /// The number of rows the source contains.
     fn rows_len(&self) -> u64 {
-        match self { Recipe::Random { edges, .. } => *edges, Recipe::Iota { n } => *n }
+        match self {
+            Recipe::Random { edges, .. } => *edges,
+            Recipe::Iota { n } => *n,
+        }
     }
 
     /// The generated row at index `e`.
     fn row(&self, e: u64) -> (Value, Value) {
         match self {
-            Recipe::Random { nodes, arity, seed, .. } => crate::gen_row_seeded(*seed, e, *nodes, *arity),
+            Recipe::Random {
+                nodes, arity, seed, ..
+            } => crate::gen_row_seeded(*seed, e, *nodes, *arity),
             Recipe::Iota { .. } => (Value::Tuple(vec![Value::Int(e as i64)]), Value::unit()),
         }
     }
@@ -133,16 +162,24 @@ impl Recipe {
 /// Where an installed entry came from. Only `Program` is writable by `feed`;
 /// `Clock` additionally has its single row advanced each `tick`.
 #[derive(Clone, Copy, PartialEq)]
-enum Origin { Program, Generated, Clock }
+enum Origin {
+    Program,
+    Generated,
+    Clock,
+}
 
 /// The single `clock` row for epoch `t`: `(Tuple[t] ; ())`.
-fn clock_row(t: OuterTime) -> Value { Value::Tuple(vec![Value::Int(t as i64)]) }
+fn clock_row(t: OuterTime) -> Value {
+    Value::Tuple(vec![Value::Int(t as i64)])
+}
 
 /// Map a source name to its canonical form: a recipe canonicalizes, any other
 /// name is returned unchanged. Used everywhere a source is looked up, so
 /// generated sources are shared by content regardless of how they're spelled.
 fn canonical_source_name(name: &str) -> String {
-    Recipe::parse(name).map(|r| r.canonical()).unwrap_or_else(|| name.to_string())
+    Recipe::parse(name)
+        .map(|r| r.canonical())
+        .unwrap_or_else(|| name.to_string())
 }
 
 /// A unit of server work, already parsed/lowered/validated on the intake side.
@@ -155,13 +192,32 @@ pub enum Command {
     Install { name: String, program: st::Program },
     /// Update positional `input` of `prog`: add `(key, val)` with `diff` at
     /// `time` (default the current epoch when `None`).
-    Feed { prog: String, input: usize, key: Value, val: Value, time: Option<OuterTime>, diff: Diff },
+    Feed {
+        prog: String,
+        input: usize,
+        key: Value,
+        val: Value,
+        time: Option<OuterTime>,
+        diff: Diff,
+    },
     /// Close the current epoch and run to quiescence.
     Tick,
     /// Drop the named program.
     Drop { name: String },
     /// Snapshot a registered trace (optionally one key) and print it (worker 0).
     Peek { trace: String, key: Option<Value> },
+    /// Bind trace `trace`'s changes into input `input` of `prog` at each tick.
+    Bind {
+        trace: String,
+        prog: String,
+        input: usize,
+    },
+    /// Remove a binding installed by `Bind`.
+    Unbind {
+        trace: String,
+        prog: String,
+        input: usize,
+    },
     /// Print the registry (worker 0).
     List,
     /// Print the command help (worker 0).
@@ -188,6 +244,52 @@ struct Installed {
     /// [`Origin`]. Generated/clock entries advance and drop like any program but
     /// are not writable by `feed`.
     origin: Origin,
+    /// Generator recipe and next row to retract, for changing random sources.
+    generator: Option<(Recipe, u64)>,
+}
+
+/// A stable, transport-friendly description of one installed dataflow.
+#[derive(Clone, Debug)]
+pub struct ProgramInfo {
+    pub name: String,
+    pub inputs: Vec<usize>,
+    pub imports: Vec<String>,
+    pub exports: Vec<String>,
+    pub origin: &'static str,
+}
+
+/// A live export→input binding: a persistent tap on a published trace whose
+/// buffered changes are fed into a program's positional input at each tick.
+///
+/// This is the discrete-time feedback primitive: the target input receives
+/// the source's *changes*, one epoch delayed — and since changes telescope,
+/// the input's accumulation MIRRORS the source as of the previous epoch
+/// (plus whatever else was fed to it), with no client round-trip.
+///
+/// The state-machine idiom: give the program a seed input and a dedicated
+/// feedback input, `let state = seed + feedback;`, and bind the export
+/// `f(state) + (seed | negate)` to the feedback input. Then
+/// `state(t) = seed + f(state(t-1)) - seed = f(state(t-1))` — one step of
+/// the recursion per tick, entirely inside the server, while later seed
+/// changes still inject as perturbations.
+struct Binding {
+    /// Canonical name of the tapped trace.
+    source: String,
+    /// Target program name.
+    target: String,
+    /// Target positional input.
+    input: usize,
+    /// Changes captured since the last drain, times collapsed. Filled by the
+    /// tap dataflow's inspect as the worker steps; drained by `tick`.
+    buffer: Rc<RefCell<Vec<((Value, Value), Diff)>>>,
+    /// The tap dataflow's id, for teardown on `unbind`.
+    dataflow_id: usize,
+    /// The tap's probe: `tick` must wait on it so the buffer holds every
+    /// change through the just-closed epoch before draining.
+    probe: ProbeHandle<OuterTime>,
+    /// Keeps the tap's import alive; dropped (deactivating the operator)
+    /// together with the binding.
+    _shutdown: ShutdownButton<CapabilitySet<OuterTime>>,
 }
 
 /// A live registry of installed programs and the traces they publish.
@@ -197,7 +299,10 @@ pub struct Server {
     /// Installed program name -> its handles and lifecycle bookkeeping.
     programs: HashMap<String, Installed>,
     /// Trace name -> number of installed programs importing it (the drop gate).
+    /// Bindings count here too: a bound source cannot be dropped.
     importers: HashMap<String, usize>,
+    /// Live export→input bindings, drained by each `tick`.
+    bindings: Vec<Binding>,
     /// The current open epoch; inputs sit here until `tick` closes it.
     epoch: OuterTime,
 }
@@ -209,15 +314,60 @@ impl Server {
             traces: HashMap::new(),
             programs: HashMap::new(),
             importers: HashMap::new(),
+            bindings: Vec::new(),
             epoch: 0,
         }
     }
 
     /// The current epoch (the open host time).
-    pub fn epoch(&self) -> OuterTime { self.epoch }
+    pub fn epoch(&self) -> OuterTime {
+        self.epoch
+    }
 
     /// Whether a trace is registered under `name`.
-    pub fn has_trace(&self, name: &str) -> bool { self.traces.contains_key(name) }
+    pub fn has_trace(&self, name: &str) -> bool {
+        self.traces.contains_key(name)
+    }
+
+    /// Clone a trace reader for a transient peek or subscription dataflow.
+    pub fn trace(&self, name: &str) -> Option<ServerTrace> {
+        self.traces.get(&canonical_source_name(name)).cloned()
+    }
+
+    /// Return registry state without coupling a caller to stdout formatting.
+    pub fn program_info(&self) -> Vec<ProgramInfo> {
+        let mut result: Vec<_> = self
+            .programs
+            .iter()
+            .map(|(name, installed)| {
+                let mut inputs: Vec<_> = installed.inputs.keys().copied().collect();
+                inputs.sort();
+                ProgramInfo {
+                    name: name.clone(),
+                    inputs,
+                    imports: installed.imports.clone(),
+                    exports: installed.exports.clone(),
+                    origin: match installed.origin {
+                        Origin::Program => "program",
+                        Origin::Generated => "generated",
+                        Origin::Clock => "clock",
+                    },
+                }
+            })
+            .collect();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
+    }
+
+    pub fn trace_info(&self) -> Vec<(String, usize)> {
+        let mut result: Vec<_> = self
+            .traces
+            .keys()
+            .map(|name| (name.clone(), self.importers.get(name).copied().unwrap_or(0)))
+            .collect();
+        result.sort_by(|a, b| a.0.cmp(&b.0));
+        result
+    }
 
     /// Install `prog` under `name`: build its dataflow in `worker`, wiring each
     /// root `Source::Trace` to a registered trace and registering each export's
@@ -229,7 +379,12 @@ impl Server {
     /// so two importers of the same recipe share one source. Any other
     /// unregistered import errors (install its producer first). Also errors if
     /// the name is taken or it would republish an existing export name.
-    pub fn install(&mut self, worker: &mut Worker, name: &str, prog: &st::Program) -> Result<(), String> {
+    pub fn install(
+        &mut self,
+        worker: &mut Worker,
+        name: &str,
+        prog: &st::Program,
+    ) -> Result<(), String> {
         if self.programs.contains_key(name) {
             return Err(format!("a program named {:?} is already installed", name));
         }
@@ -245,7 +400,10 @@ impl Server {
                     } else if let Some(recipe) = Recipe::parse(&key) {
                         self.install_generated(worker, &key, recipe);
                     } else {
-                        return Err(format!("program {:?} imports unknown trace {:?}; install its producer first", name, t));
+                        return Err(format!(
+                            "program {:?} imports unknown trace {:?}; install its producer first",
+                            name, t
+                        ));
                     }
                 }
             }
@@ -256,8 +414,14 @@ impl Server {
             }
         }
 
-        let import_names: Vec<String> = prog.root.imports.iter()
-            .filter_map(|imp| match &imp.from { st::Source::Trace(t) => Some(canonical_source_name(t)), _ => None })
+        let import_names: Vec<String> = prog
+            .root
+            .imports
+            .iter()
+            .filter_map(|imp| match &imp.from {
+                st::Source::Trace(t) => Some(canonical_source_name(t)),
+                _ => None,
+            })
             .collect();
         let export_names: Vec<String> = prog.root.exports.iter().map(|e| e.name.clone()).collect();
 
@@ -273,8 +437,10 @@ impl Server {
                 let mut inputs: Vec<(usize, ServerInput)> = Vec::new();
 
                 // One outer (host-time) collection per root import.
-                let outer_cols: Vec<VecCollection<OuterTime, (Value, Value), Diff>> =
-                    root.imports.iter().map(|imp| match &imp.from {
+                let outer_cols: Vec<VecCollection<OuterTime, (Value, Value), Diff>> = root
+                    .imports
+                    .iter()
+                    .map(|imp| match &imp.from {
                         st::Source::Input(n) => {
                             let (handle, col) = outer.new_collection::<(Value, Value), Diff>();
                             inputs.push((*n, handle));
@@ -283,24 +449,40 @@ impl Server {
                         st::Source::Trace(t) => {
                             // The first binding point: resolve a named trace by importing it.
                             let key = canonical_source_name(t);
-                            let arranged = traces.get_mut(&key).expect("validated above").import(outer.clone());
+                            let arranged = traces
+                                .get_mut(&key)
+                                .expect("validated above")
+                                .import(outer.clone());
                             arranged.as_collection(|k, v| (k.clone(), v.clone()))
                         }
                         st::Source::Parent(_) => unreachable!("root import from a parent scope"),
-                    }).collect();
+                    })
+                    .collect();
 
                 // Render the program body in its own iterative scope, then bring
                 // every export back out to the host time (mirrors `vec::evaluate`).
-                let leaved: Vec<VecCollection<OuterTime, (Value, Value), Diff>> =
-                    outer.iterative::<PointStamp<OuterTime>, _, _>(|inner| {
-                        let entered: Vec<_> = outer_cols.iter().map(|c| c.clone().enter(inner)).collect();
+                let leaved: Vec<VecCollection<OuterTime, (Value, Value), Diff>> = outer
+                    .iterative::<PointStamp<OuterTime>, _, _>(|inner| {
+                        let entered: Vec<_> =
+                            outer_cols.iter().map(|c| c.clone().enter(inner)).collect();
                         let exports = render_tree(root, inner.clone(), 0, entered);
-                        exports.into_iter().map(|c| c.leave(outer)).collect::<Vec<_>>()
+                        exports
+                            .into_iter()
+                            .map(|c| c.leave(outer))
+                            .collect::<Vec<_>>()
                     });
 
                 // The second binding point: probe and publish each export's trace.
-                let published: Vec<(String, ServerTrace)> = root.exports.iter().zip(leaved)
-                    .map(|(e, col)| (e.name.clone(), col.probe_with(&probe).arrange_by_key().trace))
+                let published: Vec<(String, ServerTrace)> = root
+                    .exports
+                    .iter()
+                    .zip(leaved)
+                    .map(|(e, col)| {
+                        (
+                            e.name.clone(),
+                            col.probe_with(&probe).arrange_by_key().trace,
+                        )
+                    })
                     .collect();
 
                 (published, inputs)
@@ -318,14 +500,18 @@ impl Server {
             handle.flush();
             by_pos.insert(pos, handle);
         }
-        self.programs.insert(name.to_string(), Installed {
-            inputs: by_pos,
-            imports: import_names,
-            exports: export_names,
-            dataflow_id,
-            probe,
-            origin: Origin::Program,
-        });
+        self.programs.insert(
+            name.to_string(),
+            Installed {
+                inputs: by_pos,
+                imports: import_names,
+                exports: export_names,
+                dataflow_id,
+                probe,
+                origin: Origin::Program,
+                generator: None,
+            },
+        );
         Ok(())
     }
 
@@ -358,14 +544,18 @@ impl Server {
         self.traces.insert(name.to_string(), trace);
         let mut inputs = HashMap::new();
         inputs.insert(0usize, input);
-        self.programs.insert(name.to_string(), Installed {
-            inputs,
-            imports: Vec::new(),
-            exports: vec![name.to_string()],
-            dataflow_id,
-            probe,
-            origin: Origin::Generated,
-        });
+        self.programs.insert(
+            name.to_string(),
+            Installed {
+                inputs,
+                imports: Vec::new(),
+                exports: vec![name.to_string()],
+                dataflow_id,
+                probe,
+                origin: Origin::Generated,
+                generator: Some((recipe, 0)),
+            },
+        );
     }
 
     /// Install the `clock` source: a single row holding the current epoch, which
@@ -392,14 +582,18 @@ impl Server {
         self.traces.insert("clock".to_string(), trace);
         let mut inputs = HashMap::new();
         inputs.insert(0usize, input);
-        self.programs.insert("clock".to_string(), Installed {
-            inputs,
-            imports: Vec::new(),
-            exports: vec!["clock".to_string()],
-            dataflow_id,
-            probe,
-            origin: Origin::Clock,
-        });
+        self.programs.insert(
+            "clock".to_string(),
+            Installed {
+                inputs,
+                imports: Vec::new(),
+                exports: vec!["clock".to_string()],
+                dataflow_id,
+                probe,
+                origin: Origin::Clock,
+                generator: None,
+            },
+        );
     }
 
     /// Stage an update to positional input `input` of installed program `prog`:
@@ -407,20 +601,158 @@ impl Server {
     /// epoch). The time must be at or after the current epoch — you cannot
     /// insert into the closed past. Takes effect once `tick` advances the input
     /// frontier past `time`.
-    pub fn feed(&mut self, prog: &str, input: usize, key: Value, val: Value, time: Option<OuterTime>, diff: Diff) -> Result<(), String> {
+    pub fn feed(
+        &mut self,
+        prog: &str,
+        input: usize,
+        key: Value,
+        val: Value,
+        time: Option<OuterTime>,
+        diff: Diff,
+    ) -> Result<(), String> {
         let t = time.unwrap_or(self.epoch);
         if t < self.epoch {
-            return Err(format!("cannot feed at time {} < current epoch {}", t, self.epoch));
+            return Err(format!(
+                "cannot feed at time {} < current epoch {}",
+                t, self.epoch
+            ));
         }
         let prog = canonical_source_name(prog);
-        let installed = self.programs.get_mut(&prog).ok_or_else(|| format!("no program {:?}", prog))?;
+        let installed = self
+            .programs
+            .get_mut(&prog)
+            .ok_or_else(|| format!("no program {:?}", prog))?;
         if installed.origin != Origin::Program {
-            let kind = if installed.origin == Origin::Clock { "clock" } else { "generated" };
-            return Err(format!("{:?} is a {} source and is not writable", prog, kind));
+            let kind = if installed.origin == Origin::Clock {
+                "clock"
+            } else {
+                "generated"
+            };
+            return Err(format!(
+                "{:?} is a {} source and is not writable",
+                prog, kind
+            ));
         }
-        let handle = installed.inputs.get_mut(&input).ok_or_else(|| format!("program {:?} has no input {}", prog, input))?;
+        let handle = installed
+            .inputs
+            .get_mut(&input)
+            .ok_or_else(|| format!("program {:?} has no input {}", prog, input))?;
         handle.update_at((key, val), t, diff);
         Ok(())
+    }
+
+    /// Bind trace `trace` to positional `input` of program `prog`: from now
+    /// on, every tick delivers the trace's *changes* into that input at the
+    /// next epoch, so the input mirrors the trace one epoch delayed. The
+    /// write path for programs — an installed dataflow can now act on the
+    /// world (or on itself, see [`Binding`]) without any client in the loop.
+    ///
+    /// Sharding: each worker's tap sees its shard of the trace and feeds its
+    /// local input handle, so the union across workers delivers the full
+    /// delta exactly once; the input's exchange re-routes as usual.
+    ///
+    /// The bound source gains an importer (it cannot be dropped while
+    /// bound); the target cannot be dropped either (see `drop_program`).
+    /// Errors: unknown trace or program, non-writable target (generated or
+    /// clock), no such input, or the identical binding already exists.
+    pub fn bind(
+        &mut self,
+        worker: &mut Worker,
+        trace: &str,
+        prog: &str,
+        input: usize,
+    ) -> Result<(), String> {
+        let source = canonical_source_name(trace);
+        let target = prog.to_string();
+        if !self.traces.contains_key(&source) {
+            return Err(format!("no trace {:?}", source));
+        }
+        let installed = self
+            .programs
+            .get(&target)
+            .ok_or_else(|| format!("no program {:?}", target))?;
+        if installed.origin != Origin::Program {
+            return Err(format!("{:?} is not a writable program", target));
+        }
+        if !installed.inputs.contains_key(&input) {
+            return Err(format!("program {:?} has no input {}", target, input));
+        }
+        if self
+            .bindings
+            .iter()
+            .any(|b| b.source == source && b.target == target && b.input == input)
+        {
+            return Err(format!(
+                "trace {:?} is already bound to {:?} input {}",
+                source, target, input
+            ));
+        }
+
+        let buffer: Rc<RefCell<Vec<((Value, Value), Diff)>>> = Rc::new(RefCell::new(Vec::new()));
+        let buffer_in = buffer.clone();
+        let mut probe = ProbeHandle::new();
+        let dataflow_id = worker.next_dataflow_index();
+        let trace_handle = self.traces.get_mut(&source).expect("checked above");
+        let shutdown = worker.dataflow::<OuterTime, _, _>(|scope| {
+            let (arranged, shutdown) = trace_handle.import_core(scope.clone(), "BindImport");
+            arranged
+                .as_collection(|k, v| (k.clone(), v.clone()))
+                .inspect(move |((key, val), _time, diff)| {
+                    buffer_in
+                        .borrow_mut()
+                        .push(((key.clone(), val.clone()), *diff));
+                })
+                .probe_with(&mut probe);
+            shutdown
+        });
+
+        *self.importers.entry(source.clone()).or_insert(0) += 1;
+        self.bindings.push(Binding {
+            source,
+            target,
+            input,
+            buffer,
+            dataflow_id,
+            probe,
+            _shutdown: shutdown,
+        });
+        Ok(())
+    }
+
+    /// Remove the binding of `trace` into `prog`'s `input`, dropping its tap
+    /// dataflow and releasing the source's importer count.
+    pub fn unbind(
+        &mut self,
+        worker: &mut Worker,
+        trace: &str,
+        prog: &str,
+        input: usize,
+    ) -> Result<(), String> {
+        let source = canonical_source_name(trace);
+        let pos = self
+            .bindings
+            .iter()
+            .position(|b| b.source == source && b.target == prog && b.input == input)
+            .ok_or_else(|| {
+                format!(
+                    "no binding of {:?} to {:?} input {}",
+                    source, prog, input
+                )
+            })?;
+        let binding = self.bindings.remove(pos);
+        if let Some(count) = self.importers.get_mut(&binding.source) {
+            *count = count.saturating_sub(1);
+        }
+        worker.drop_dataflow(binding.dataflow_id);
+        Ok(())
+    }
+
+    /// The live bindings, as `(source-trace, target-program, input)`.
+    pub fn binding_info(&self) -> Vec<(String, String, usize)> {
+        self.bindings
+            .iter()
+            .map(|b| (b.source.clone(), b.target.clone(), b.input))
+            .collect()
     }
 
     /// Read a snapshot of a registered trace and print it (worker 0).
@@ -430,7 +762,12 @@ impl Server {
     /// multiplicities as of the current epoch — so the result is the complete,
     /// consolidated contents even when the trace is sharded across workers, not
     /// each worker's slice. The dataflow is dropped as soon as it has drained.
-    pub fn peek(&mut self, worker: &mut Worker, name: &str, key: Option<Value>) -> Result<(), String> {
+    pub fn peek(
+        &mut self,
+        worker: &mut Worker,
+        name: &str,
+        key: Option<Value>,
+    ) -> Result<(), String> {
         use timely::dataflow::operators::{Exchange, Inspect, Probe};
 
         let canon = canonical_source_name(name);
@@ -459,7 +796,10 @@ impl Server {
                 .inspect(move |((k, v), t, d)| {
                     // The snapshot as of `epoch`: the closed past (t < epoch).
                     if *t < epoch {
-                        *acc_in.borrow_mut().entry((k.clone(), v.clone())).or_insert(0) += *d;
+                        *acc_in
+                            .borrow_mut()
+                            .entry((k.clone(), v.clone()))
+                            .or_insert(0) += *d;
                     }
                 })
                 .probe_with(&mut peek_probe);
@@ -472,7 +812,8 @@ impl Server {
 
         if worker.index() == 0 {
             let acc = acc.borrow();
-            let mut rows: Vec<(&(Value, Value), &Diff)> = acc.iter().filter(|(_, d)| **d != 0).collect();
+            let mut rows: Vec<(&(Value, Value), &Diff)> =
+                acc.iter().filter(|(_, d)| **d != 0).collect();
             rows.sort_by(|a, b| a.0.cmp(b.0));
             match &key {
                 Some(k) => println!("peek {:?} key={:?} ({} rows):", name, k, rows.len()),
@@ -485,6 +826,54 @@ impl Server {
         Ok(())
     }
 
+    /// Return the consolidated closed-past contents of a trace on worker 0.
+    /// This is the structured counterpart to [`Server::peek`] for protocols.
+    pub fn snapshot(
+        &mut self,
+        worker: &mut Worker,
+        name: &str,
+    ) -> Result<Vec<(Value, Value, Diff)>, String> {
+        use timely::dataflow::operators::{Exchange, Inspect, Probe};
+
+        let name = canonical_source_name(name);
+        let epoch = self.epoch;
+        let mut trace = self
+            .trace(&name)
+            .ok_or_else(|| format!("no trace {:?}", name))?;
+        let acc: Rc<RefCell<HashMap<(Value, Value), Diff>>> = Rc::new(RefCell::new(HashMap::new()));
+        let acc_in = acc.clone();
+        let mut probe = ProbeHandle::new();
+        let id = worker.next_dataflow_index();
+        worker.dataflow::<OuterTime, _, _>(|scope| {
+            trace
+                .import(scope.clone())
+                .as_collection(|k, v| (k.clone(), v.clone()))
+                .inner
+                .exchange(|_| 0u64)
+                .inspect(move |((k, v), t, d)| {
+                    if *t < epoch {
+                        *acc_in
+                            .borrow_mut()
+                            .entry((k.clone(), v.clone()))
+                            .or_insert(0) += *d;
+                    }
+                })
+                .probe_with(&mut probe);
+        });
+        while probe.less_than(&epoch) {
+            worker.step();
+        }
+        worker.drop_dataflow(id);
+        let mut rows: Vec<_> = acc
+            .borrow()
+            .iter()
+            .filter(|(_, d)| **d != 0)
+            .map(|((k, v), d)| (k.clone(), v.clone(), *d))
+            .collect();
+        rows.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        Ok(rows)
+    }
+
     /// Drop installed program `name`, releasing its dataflow immediately.
     ///
     /// Refuses (changing nothing) if any trace the program publishes still has a
@@ -493,13 +882,25 @@ impl Server {
     /// `worker.drop_dataflow`, which removes the operators and frees their state
     /// at once. Safe because the gate guarantees no live dataflow still reads it.
     pub fn drop_program(&mut self, worker: &mut Worker, name: &str) -> Result<(), String> {
+        if let Some(binding) = self.bindings.iter().find(|b| b.target == name) {
+            return Err(format!(
+                "cannot drop {:?}: its input {} is bound from trace {:?}; unbind first",
+                name, binding.input, binding.source
+            ));
+        }
         let canon = canonical_source_name(name);
         let name = canon.as_str();
-        let installed = self.programs.get(name).ok_or_else(|| format!("no program {:?}", name))?;
+        let installed = self
+            .programs
+            .get(name)
+            .ok_or_else(|| format!("no program {:?}", name))?;
         for ex in &installed.exports {
             let live = self.importers.get(ex).copied().unwrap_or(0);
             if live > 0 {
-                return Err(format!("cannot drop {:?}: its trace {:?} has {} live importer(s); drop them first", name, ex, live));
+                return Err(format!(
+                    "cannot drop {:?}: its trace {:?} has {} live importer(s); drop them first",
+                    name, ex, live
+                ));
             }
         }
 
@@ -517,6 +918,20 @@ impl Server {
         // still exist), then remove the dataflow outright.
         drop(installed);
         worker.drop_dataflow(id);
+        // Generated sources are installed on demand and have no independent
+        // owner. Reclaim any whose last importing program was just removed.
+        let garbage: Vec<_> = self
+            .programs
+            .iter()
+            .filter(|(source, program)| {
+                program.origin != Origin::Program
+                    && self.importers.get(*source).copied().unwrap_or(0) == 0
+            })
+            .map(|(source, _)| source.clone())
+            .collect();
+        for source in garbage {
+            self.drop_program(worker, &source)?;
+        }
         Ok(())
     }
 
@@ -535,6 +950,26 @@ impl Server {
                     h.update_at((clock_row(next), Value::unit()), next, 1);
                 }
             }
+            // A random source denotes an infinite deterministic row stream.
+            // Each tick replaces `churn` members of its fixed-size window.
+            if let Some((recipe, cursor)) = &mut installed.generator {
+                let recipe = *recipe;
+                if let Recipe::Random { edges, churn, .. } = recipe {
+                    if let Some(h) = installed.inputs.get_mut(&0) {
+                        for _ in 0..churn {
+                            let old = *cursor;
+                            let new = edges + *cursor;
+                            if (old as usize) % worker.peers() == worker.index() {
+                                h.update(recipe.row(old), -1);
+                            }
+                            if (new as usize) % worker.peers() == worker.index() {
+                                h.update(recipe.row(new), 1);
+                            }
+                            *cursor += 1;
+                        }
+                    }
+                }
+            }
             for handle in installed.inputs.values_mut() {
                 handle.advance_to(next);
                 handle.flush();
@@ -543,10 +978,40 @@ impl Server {
         self.epoch = next;
 
         // Wait for every *live* program to catch up. Per-program probes mean a
-        // dropped program leaves nothing behind to wait on.
+        // dropped program leaves nothing behind to wait on. Binding taps are
+        // waited on too, so each buffer holds every change through the epoch
+        // just closed before it is drained below.
         let epoch = self.epoch;
-        while self.programs.values().any(|p| p.probe.less_than(&epoch)) {
+        while self.programs.values().any(|p| p.probe.less_than(&epoch))
+            || self.bindings.iter().any(|b| b.probe.less_than(&epoch))
+        {
             worker.step();
+        }
+
+        // Feedback: deliver each binding's buffered source changes into its
+        // target input at the (new, open) epoch — they become visible when
+        // the NEXT tick closes it. One-epoch delay is what makes the loop
+        // well-founded: each tick performs exactly one step of any
+        // program-to-program (or program-to-self) recursion.
+        let bindings = &self.bindings;
+        let programs = &mut self.programs;
+        for binding in bindings {
+            let mut buffer = binding.buffer.borrow_mut();
+            if buffer.is_empty() {
+                continue;
+            }
+            let handle = programs
+                .get_mut(&binding.target)
+                .and_then(|p| p.inputs.get_mut(&binding.input));
+            if let Some(handle) = handle {
+                for ((key, val), diff) in buffer.drain(..) {
+                    handle.update_at((key, val), epoch, diff);
+                }
+            } else {
+                // The target vanished; drop_program refuses while bound, so
+                // this is unreachable — but never let the buffer grow.
+                buffer.clear();
+            }
         }
 
         // Allow every published trace to compact up to the previous epoch. This
@@ -577,7 +1042,11 @@ impl Server {
         let mut names: Vec<&String> = self.traces.keys().collect();
         names.sort();
         for n in names {
-            println!("  {} (importers: {})", n, self.importers.get(n).copied().unwrap_or(0));
+            println!(
+                "  {} (importers: {})",
+                n,
+                self.importers.get(n).copied().unwrap_or(0)
+            );
         }
         println!("programs ({}):", self.programs.len());
         let mut progs: Vec<&String> = self.programs.keys().collect();
@@ -591,11 +1060,22 @@ impl Server {
                 Origin::Generated => " [generated]",
                 Origin::Clock => " [clock]",
             };
-            println!("  {}{} (inputs: {:?}, imports: {:?}, exports: {:?})", p, tag, ins, installed.imports, installed.exports);
+            println!(
+                "  {}{} (inputs: {:?}, imports: {:?}, exports: {:?})",
+                p, tag, ins, installed.imports, installed.exports
+            );
+        }
+        if !self.bindings.is_empty() {
+            println!("bindings ({}):", self.bindings.len());
+            for b in &self.bindings {
+                println!("  {} -> {} input {}", b.source, b.target, b.input);
+            }
         }
     }
 }
 
 impl Default for Server {
-    fn default() -> Self { Server::new() }
+    fn default() -> Self {
+        Server::new()
+    }
 }
