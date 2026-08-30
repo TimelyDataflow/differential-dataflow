@@ -33,6 +33,12 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         // scalar_ops: (key, a, b) triples; a values straddle the `> 2` and `= -5` tests.
         "scalar_ops" => vec![rows(&[&[1, 1, 9], &[1, 4, 8], &[2, 3, 7], &[3, -5, 6], &[3, 2, 5]])],
         "sum_ops" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21]])],
+        // empty_batch: only key 1 has the two values the filter keeps, so at several workers at
+        // least one gets a batch that arrives non-empty and leaves empty.
+        "empty_batch" => vec![rows(&[
+            &[1, 10], &[1, 20],
+            &[2, 1], &[3, 1], &[4, 1], &[5, 1], &[6, 1], &[7, 1], &[8, 1], &[9, 1],
+        ])],
         // sum_skew: any keyed pairs — the skew is in the program, not the data.
         "sum_skew" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21], &[3, 30]])],
         "case_ops" => vec![rows(&[&[1, 10], &[2, 20], &[3, 14], &[3, 30]])],
@@ -64,11 +70,34 @@ fn assert_backends_agree(prog: &str) {
     let mut tree = lower::lower_tree(parse::pipe::parse(&src));
     tree.optimize();
     let inputs = inputs_for(prog);
+    let want = vec::evaluate(&tree, &inputs);
+    // At every worker count: the exchange places each key on one worker and every operator is
+    // key-local from there, so the answer must not depend on how many workers ran it. 3 is in the
+    // list on purpose — it is not a power of two, so it takes the modulus path rather than the
+    // mask, and it cannot divide these inputs evenly.
+    for workers in [1, 2, 3, 4] {
+        assert_eq!(
+            corgi::evaluate_with_workers(&tree, &inputs, workers),
+            want,
+            "corgi backend at {workers} worker(s) disagrees with the vec backend on {prog}",
+        );
+    }
+    // The same programs again with serializing channels, so every exchanged container makes the
+    // round trip through the wire format. This is the multi-process path: `Config::process` above
+    // hands containers between threads as typed values and never encodes a byte.
     assert_eq!(
-        corgi::evaluate(&tree, &inputs),
-        vec::evaluate(&tree, &inputs),
-        "corgi backend disagrees with the vec backend on {prog}",
+        corgi::evaluate_with_config(&tree, &inputs, serializing(3)),
+        want,
+        "corgi backend over serializing channels disagrees with the vec backend on {prog}",
     );
+}
+
+/// `n` worker threads whose exchange channels serialize — the wire format in the loop.
+fn serializing(n: usize) -> timely::Config {
+    timely::Config {
+        communication: timely::CommunicationConfig::ProcessBinary(n),
+        worker: timely::WorkerConfig::default(),
+    }
 }
 
 #[test] fn reach() { assert_backends_agree("reach"); }
@@ -81,6 +110,7 @@ fn assert_backends_agree(prog: &str) {
 #[test] fn join_fallback() { assert_backends_agree("join_fallback"); }
 #[test] fn scalar_ops() { assert_backends_agree("scalar_ops"); }
 #[test] fn sum_ops() { assert_backends_agree("sum_ops"); }
+#[test] fn empty_batch() { assert_backends_agree("empty_batch"); }
 #[test] fn sum_skew() { assert_backends_agree("sum_skew"); }
 #[test] fn case_ops() { assert_backends_agree("case_ops"); }
 #[test] fn tour() { assert_backends_agree("tour"); }
