@@ -1,0 +1,13 @@
+-- The civil-works ledger: every terraform act, declared and attributed by
+-- convention (PROTOCOL.md). The auditor is a dataflow: "spend" prices each
+-- agent's earthmoving as the sum of |new - old| over its declared acts.
+--
+-- input 0: acts ((x, y) ; (agent, old_h, new_h)).
+
+let acts = input 0;
+
+export "ledger" = acts;
+export "spend" = acts
+    | map($1[0] ; if($1[2] > $1[1], $1[2] - $1[1], $1[1] - $1[2]))
+    | collect
+    | map($0 ; fold($1, 0, ^1 + ^0[0]));
