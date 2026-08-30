@@ -14,10 +14,10 @@ The what-if brush (dig/raise/set) paints hypothetical terrain and runs a local p
 The Forecast button emits the MECHANICS_RESPONSE.md §5 report for the painted plan: resulting mark levels, controlling spill (pool/sill decomposition, co-controlling cells counted), total cost, and drowned-road counts.
 It enforces no scarcity; it is meant as the reference implementation to cross-check the coordinator-run forecast against, exactly.
 
-## Stalled-replay data point (for the server-side investigation)
+## Stalled-replay data point (resolved server-side)
 
 The stall is per-connection: a tail that starts empty stays empty for that session, and restarting the tail on the same connection does not recover it, while a fresh connection replays clean every time (measured repeatedly against the 256 world; concurrent tails on one session stall independently — one can stream 55k rows while another sits at 0).
-The viewer's Resync therefore reconnects outright, and a watchdog reports any tail with zero rows after five seconds.
+The server now drives a new tail through the current closed epoch before acknowledging it, making `ok` the initial-snapshot boundary. The viewer's reconnecting Resync and five-second zero-row watchdog remain only as diagnostics/connection recovery for old or remote servers; reconnecting is not a replay-completeness guarantee.
 
 ## Questions for the world side
 

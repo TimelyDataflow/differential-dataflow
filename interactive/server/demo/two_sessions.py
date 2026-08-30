@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two-session smoke test over TCP: races, atomic feed batches, and size gate.
+"""Two-session smoke test over TCP: tails, races, atomic batches, and gates.
 
 Sessions are trusted (identity by convention, no ownership gates): two
 clients race stamped-by-convention claims on one cell and the program's
@@ -60,6 +60,19 @@ class Client:
             if toks[1] == "data":
                 data.append(toks[2])
 
+    def next_data(self, reqid):
+        """Return the next streamed data line for an acknowledged tail."""
+        while True:
+            while b"\n" not in self.buf:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    raise RuntimeError("connection closed while waiting")
+                self.buf += chunk
+            line, self.buf = self.buf.split(b"\n", 1)
+            toks = line.decode().split(" ", 2)
+            if toks[:2] == [reqid, "data"]:
+                return toks[2]
+
 
 def check(label, cond, detail=""):
     print(("PASS " if cond else "FAIL ") + label + (f"  [{detail}]" if detail and not cond else ""))
@@ -111,6 +124,40 @@ def main():
             owned.get("Tuple([Int(2), Int(2)])") == "Tuple([Int(2)])",
             str(owned),
         )
+
+        # `tail ... ok` is the initial-snapshot boundary: replay every row in
+        # the closed history before acknowledging the subscription. This must
+        # not depend on a later tick or incidental worker activity.
+        a.send("tail0 tail owner")
+        status, body, rows = a.expect("tail0")
+        check("tail starts successfully", status == "ok" and "from t=1" in body, body)
+        replayed = {
+            row.split("key=")[1].split(" val=")[0]
+            for row in rows
+        }
+        check(
+            "tail replays the complete current snapshot before ok",
+            replayed == {
+                "Tuple([Int(2), Int(2)])",
+                "Tuple([Int(5), Int(5)])",
+            },
+            str(rows),
+        )
+
+        # Once acknowledged, the same subscription streams later epochs.
+        b.send("c4 feed world 0 3,3 val=2,1")
+        b.expect("c4")
+        b.send("tstream tick")
+        b.expect("tstream")
+        streamed = a.next_data("tail0")
+        check(
+            "acknowledged tail streams later deltas",
+            "time=1" in streamed and "Tuple([Int(3), Int(3)])" in streamed,
+            streamed,
+        )
+        a.send("tailstop stop tail0")
+        status, body, _ = a.expect("tailstop")
+        check("tail stops cleanly", status == "ok", body)
 
         # A batch is one worker command and validates all targets before any
         # update is staged. Its valid first row must not survive a bad second

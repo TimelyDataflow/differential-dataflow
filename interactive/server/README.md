@@ -14,7 +14,9 @@ connected on `DDIR_DIAG_PORT` (default 51371).
 
 Every request can begin with an arbitrary request id. If omitted, the server
 generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
-`<id> err ...`. A `tail` remains active after its `ok` and ends when stopped.
+`<id> err ...`. For a `tail`, the `ok` is an initial-snapshot boundary: every
+row through the current closed epoch is sent first. The tail remains active
+after its `ok`, streaming later deltas until stopped.
 Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
@@ -122,7 +124,7 @@ ever needs one.
     ./target/release/ddir_server < interactive/server/demo/counter.txt
     ./target/release/ddir_server < interactive/server/demo/claims.txt
     ./target/release/ddir_server < interactive/server/demo/txn.txt
-    python3 interactive/server/demo/two_sessions.py   # races + batches + size gate over TCP
+    python3 interactive/server/demo/two_sessions.py   # tails, races, batches, and gates over TCP
     python3 interactive/server/demo/dem/run_dem.py    # equilibrium water on a real Swiss DEM
 
 `load --explain` and `query` are reserved but unimplemented: explanation

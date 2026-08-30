@@ -332,6 +332,16 @@ fn start_tail(
             .probe_with(&mut probe);
         shutdown
     });
+
+    // A tail's acknowledgement is its initial-snapshot boundary. Drive this
+    // newly installed import through the server's current closed epoch before
+    // returning so replay does not depend on a later tick (or incidental idle
+    // worker activity). The response channel is FIFO, therefore all replayed
+    // `data` messages are observed before dispatch sends the terminal `ok`.
+    let epoch = server.epoch();
+    while probe.less_than(&epoch) {
+        worker.step();
+    }
     tails.insert(
         key,
         Tail {
