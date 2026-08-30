@@ -2,3 +2,4 @@ briefing.json
 cw_cache_*.json
 civil_server.pid
 __pycache__/
+runs/

@@ -82,6 +82,28 @@ class Client:
             if toks[1] == "data" and collect:
                 data.append(toks[2])
 
+    def batch(self, feeds):
+        """Atomically stage current-epoch feed commands; caller ticks to publish."""
+        if not feeds:
+            raise ValueError("batch requires at least one feed")
+        if any(not line.startswith("feed ") for line in feeds):
+            raise ValueError("batch bodies may contain only bare feed commands")
+        self.n += 1
+        rid = f"r{self.n}"
+        self.send_lines(
+            [f"{rid} batch begin"] + list(feeds) + [f"{rid} end-batch"]
+        )
+        while True:
+            toks = self.read_line().split(" ", 2)
+            if toks[0] != rid:
+                continue
+            if toks[1] == "ok":
+                return toks[2] if len(toks) > 2 else ""
+            if toks[1] == "err":
+                raise RuntimeError(
+                    f"batch: {toks[2] if len(toks) > 2 else ''}"
+                )
+
     def drain_oks(self, count):
         seen = 0
         while seen < count:

@@ -7,15 +7,15 @@
 //!   - `data <fields...>` — one streamed body line (peek/tail batches)
 //!   - `end` — terminator after a stream of `data` lines
 //!
-//! Multi-line bodies (a DDIR program) come via a two-phase upload:
-//! `<reqid> load <id> <bindings...> begin` opens; subsequent lines are
-//! literal program text terminated by `<reqid> end-load`.
+//! Multi-line bodies use a two-phase upload. `load ... begin` accepts literal
+//! program text through `end-load`; `batch begin` accepts only `feed` lines
+//! through `end-batch` and becomes one non-interleavable worker command.
 
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use interactive::ir::{eval, Diff, Value};
-use interactive::server::OuterTime;
+use interactive::server::{InputUpdate, OuterTime};
 
 pub type ReqId = String;
 
@@ -69,6 +69,10 @@ pub enum Cmd {
         time: Option<OuterTime>,
         diff: Diff,
     },
+    /// Atomically stage a prevalidated group of feeds at the current epoch.
+    /// The batch does not tick; all updates become visible together when a
+    /// later tick closes that epoch.
+    Batch { updates: Vec<InputUpdate> },
     /// Bind a trace's changes into `prog`'s positional `input`, delivered at
     /// each tick one epoch delayed — the write path for installed programs.
     Bind {
@@ -135,15 +139,17 @@ pub struct Request {
 #[derive(Default)]
 pub struct LineParser {
     pending_load: Option<PendingLoad>,
+    pending_batch: Option<PendingBatch>,
     auto_reqid_counter: u64,
     max_load_bytes: usize,
+    max_batch_bytes: usize,
 }
 
 /// Tokens that introduce a command. If a line begins with one of these
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
-    "load", "drop", "list", "peek", "tail", "stop", "tick", "query", "exit", "feed", "bind",
-    "unbind",
+    "load", "batch", "drop", "list", "peek", "tail", "stop", "tick", "query", "exit", "feed",
+    "bind", "unbind",
 ];
 
 /// Program-size gate: a `load` body larger than this is rejected at intake,
@@ -152,6 +158,15 @@ const COMMAND_KEYWORDS: &[&str] = &[
 /// service. Override with `DDIR_MAX_PROGRAM_BYTES`.
 fn max_program_bytes() -> usize {
     std::env::var("DDIR_MAX_PROGRAM_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(65536)
+}
+
+/// Batch-size gate. A batch is cheap to apply after validation, but it is
+/// accumulated on an intake thread before being sent to the worker.
+fn max_batch_bytes() -> usize {
+    std::env::var("DDIR_MAX_BATCH_BYTES")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(65536)
@@ -169,10 +184,20 @@ struct PendingLoad {
     poisoned: Option<String>,
 }
 
+struct PendingBatch {
+    reqid: ReqId,
+    updates: Vec<InputUpdate>,
+    bytes: usize,
+    /// A malformed or oversized body is swallowed through `end-batch`, then
+    /// reported as one error; no partial command reaches the worker.
+    poisoned: Option<String>,
+}
+
 impl LineParser {
     pub fn new() -> Self {
         LineParser {
             max_load_bytes: max_program_bytes(),
+            max_batch_bytes: max_batch_bytes(),
             ..Self::default()
         }
     }
@@ -182,6 +207,7 @@ impl LineParser {
     fn with_cap(max_load_bytes: usize) -> Self {
         LineParser {
             max_load_bytes,
+            max_batch_bytes: max_load_bytes,
             ..Self::default()
         }
     }
@@ -192,6 +218,81 @@ impl LineParser {
     /// the result with a per-connection response sender to form a
     /// `Request`.
     pub fn feed(&mut self, line: &str) -> Option<(ReqId, Result<Cmd, String>)> {
+        // A batch body is parsed off-worker, but only as feed commands. It is
+        // returned as one Cmd::Batch at the terminator, so no other session's
+        // command can interleave between its members on the worker.
+        if let Some(ref mut batch) = self.pending_batch {
+            let trimmed = line.trim();
+            let mut parts = trimmed.split_whitespace();
+            let first = parts.next();
+            let second = parts.next();
+            let third = parts.next();
+            let explicit_end = first == Some(batch.reqid.as_str())
+                && second == Some("end-batch")
+                && third.is_none();
+            let bare_end = first == Some("end-batch") && second.is_none();
+            if explicit_end || bare_end {
+                let done = self.pending_batch.take().unwrap();
+                if let Some(err) = done.poisoned {
+                    return Some((done.reqid, Err(err)));
+                }
+                return Some((
+                    done.reqid,
+                    Ok(Cmd::Batch {
+                        updates: done.updates,
+                    }),
+                ));
+            }
+
+            // Blank and comment lines are furniture between the feed rows.
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return None;
+            }
+            batch.bytes = batch.bytes.saturating_add(line.len() + 1);
+            if batch.bytes > self.max_batch_bytes {
+                if batch.poisoned.is_none() {
+                    batch.poisoned = Some(format!(
+                        "batch: body exceeds {} bytes (DDIR_MAX_BATCH_BYTES)",
+                        self.max_batch_bytes
+                    ));
+                    batch.updates.clear();
+                }
+                return None;
+            }
+            if batch.poisoned.is_some() {
+                return None;
+            }
+
+            let Some("feed") = first else {
+                batch.poisoned =
+                    Some("batch: body accepts only bare `feed ...` commands".to_string());
+                batch.updates.clear();
+                return None;
+            };
+            let args: Vec<&str> = trimmed.split_whitespace().skip(1).collect();
+            match parse_feed(&args) {
+                Ok(feed) if feed.time.is_none() => batch.updates.push(InputUpdate {
+                    prog: feed.prog,
+                    input: feed.input,
+                    key: feed.key,
+                    val: feed.val,
+                    diff: feed.diff,
+                }),
+                Ok(_) => {
+                    batch.poisoned = Some(
+                        "batch: `time=` is not allowed; every feed uses the current epoch"
+                            .to_string(),
+                    );
+                    batch.updates.clear();
+                }
+                Err(err) => {
+                    batch.poisoned = Some(err);
+                    batch.updates.clear();
+                }
+            }
+            return None;
+        }
+
         // Inside a pending load body: every line is literal program text
         // until `<reqid> end-load` or `<id_hint> end-load`. The id_hint
         // form is the friendly default when the load was auto-reqid'd
@@ -273,13 +374,22 @@ impl LineParser {
                 });
                 None
             }
+            ParseOutcome::BeginBatch => {
+                self.pending_batch = Some(PendingBatch {
+                    reqid,
+                    updates: Vec::new(),
+                    bytes: 0,
+                    poisoned: None,
+                });
+                None
+            }
         }
     }
 
-    /// True if waiting for a `<reqid> end-load`. WS transport uses this
-    /// to forward blank-line program body content verbatim.
+    /// True if waiting for a multi-line body terminator. WS transport uses
+    /// this to forward blank body content verbatim.
     pub fn awaiting_body(&self) -> bool {
-        self.pending_load.is_some()
+        self.pending_load.is_some() || self.pending_batch.is_some()
     }
 }
 
@@ -291,6 +401,16 @@ enum ParseOutcome {
         bindings: BTreeMap<String, String>,
         explain: bool,
     },
+    BeginBatch,
+}
+
+struct ParsedFeed {
+    prog: String,
+    input: usize,
+    key: Value,
+    val: Value,
+    time: Option<OuterTime>,
+    diff: Diff,
 }
 
 /// A `<value>` for `feed`: a comma-separated integer row → `Tuple`, `_` or
@@ -325,6 +445,47 @@ fn parse_value(s: &str) -> Result<Value, String> {
         } else {
             format!("malformed value {:?}", s)
         }
+    })
+}
+
+fn parse_feed(args: &[&str]) -> Result<ParsedFeed, String> {
+    // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
+    // A `<v>`/`<key>` is a comma-separated integer row (`1,2` -> tuple;
+    // `_`/empty -> unit) or a closed scalar term written without spaces.
+    if args.len() < 3 {
+        return Err("feed: expected `<prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`".into());
+    }
+    let prog = args[0].to_string();
+    let input: usize = args[1]
+        .parse()
+        .map_err(|_| format!("feed: <in#> must be a number, got {:?}", args[1]))?;
+    let key = parse_value(args[2]).map_err(|e| format!("feed key: {}", e))?;
+    let mut val = Value::unit();
+    let mut time = None;
+    let mut diff: Diff = 1;
+    for tok in &args[3..] {
+        if let Some(v) = tok.strip_prefix("val=") {
+            val = parse_value(v).map_err(|e| format!("feed val: {}", e))?;
+        } else if let Some(t) = tok.strip_prefix("time=") {
+            time = Some(
+                t.parse()
+                    .map_err(|_| format!("feed: time= must be a number, got {:?}", t))?,
+            );
+        } else if let Some(d) = tok.strip_prefix("diff=") {
+            diff = d
+                .parse()
+                .map_err(|_| format!("feed: diff= must be an integer, got {:?}", d))?;
+        } else {
+            return Err(format!("feed: unrecognized argument {:?}", tok));
+        }
+    }
+    Ok(ParsedFeed {
+        prog,
+        input,
+        key,
+        val,
+        time,
+        diff,
     })
 }
 
@@ -370,6 +531,10 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                 explain,
             }
         }
+        "batch" => match args {
+            ["begin"] => ParseOutcome::BeginBatch,
+            _ => ParseOutcome::Err("batch: expected `begin`".into()),
+        },
         "query" => {
             // Syntax: `query <df-id-or-name> add|del <k-fields> ; <v-fields>`
             // Where k/v-fields are comma-separated i64. Empty side allowed
@@ -427,72 +592,24 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                 val,
             })
         }
-        "feed" => {
-            // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
-            // A `<v>`/`<key>` is a comma-separated integer row (`1,2` → tuple;
-            // `_`/empty → unit) or a closed scalar term written without
-            // spaces (`inject(2,tuple(3,4))`), as in the ddir_server example.
-            if args.len() < 3 {
-                return ParseOutcome::Err(
-                    "feed: expected `<prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`".into(),
-                );
-            }
-            let prog = args[0].to_string();
-            let input: usize = match args[1].parse() {
-                Ok(n) => n,
-                Err(_) => {
-                    return ParseOutcome::Err(format!(
-                        "feed: <in#> must be a number, got {:?}",
-                        args[1]
-                    ))
-                }
-            };
-            let key = match parse_value(args[2]) {
-                Ok(v) => v,
-                Err(e) => return ParseOutcome::Err(format!("feed key: {}", e)),
-            };
-            let mut val = Value::unit();
-            let mut time = None;
-            let mut diff: Diff = 1;
-            for tok in &args[3..] {
-                if let Some(v) = tok.strip_prefix("val=") {
-                    val = match parse_value(v) {
-                        Ok(v) => v,
-                        Err(e) => return ParseOutcome::Err(format!("feed val: {}", e)),
-                    };
-                } else if let Some(t) = tok.strip_prefix("time=") {
-                    time = match t.parse() {
-                        Ok(t) => Some(t),
-                        Err(_) => {
-                            return ParseOutcome::Err(format!(
-                                "feed: time= must be a number, got {:?}",
-                                t
-                            ))
-                        }
-                    };
-                } else if let Some(d) = tok.strip_prefix("diff=") {
-                    diff = match d.parse() {
-                        Ok(d) => d,
-                        Err(_) => {
-                            return ParseOutcome::Err(format!(
-                                "feed: diff= must be an integer, got {:?}",
-                                d
-                            ))
-                        }
-                    };
-                } else {
-                    return ParseOutcome::Err(format!("feed: unrecognized argument {:?}", tok));
-                }
-            }
-            ParseOutcome::Cmd(Cmd::Feed {
+        "feed" => match parse_feed(args) {
+            Ok(ParsedFeed {
                 prog,
                 input,
                 key,
                 val,
                 time,
                 diff,
-            })
-        }
+            }) => ParseOutcome::Cmd(Cmd::Feed {
+                prog,
+                input,
+                key,
+                val,
+                time,
+                diff,
+            }),
+            Err(err) => ParseOutcome::Err(err),
+        },
         "bind" | "unbind" => match args {
             [trace, prog, input] => match input.parse::<usize>() {
                 Ok(input) => {
@@ -710,6 +827,88 @@ mod tests {
         assert!(got[3].1.is_err());
         assert!(got[4].1.is_err());
         assert!(got[5].1.is_err());
+    }
+
+    #[test]
+    fn batch_collects_only_current_epoch_feeds() {
+        let mut p = LineParser::new();
+        let got = feed_all(
+            &mut p,
+            &[
+                "rB batch begin",
+                "# world update and audit declaration share one command",
+                "feed world 0 1,2 val=7 diff=-1",
+                "",
+                "feed ledger 0 9 val=1,2,7",
+                "rB end-batch",
+            ],
+        );
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "rB");
+        let Ok(Cmd::Batch { updates }) = &got[0].1 else {
+            panic!("expected Batch, got {:?}", got[0].1);
+        };
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].prog, "world");
+        assert_eq!(updates[0].input, 0);
+        assert_eq!(
+            updates[0].key,
+            Value::Tuple(vec![Value::Int(1), Value::Int(2)])
+        );
+        assert_eq!(updates[0].val, Value::Tuple(vec![Value::Int(7)]));
+        assert_eq!(updates[0].diff, -1);
+        assert_eq!(updates[1].prog, "ledger");
+    }
+
+    #[test]
+    fn bare_batch_has_a_bare_terminator() {
+        let mut p = LineParser::new();
+        let got = feed_all(&mut p, &["batch begin", "feed world 0 1", "end-batch"]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "_1");
+        assert!(matches!(&got[0].1, Ok(Cmd::Batch { updates }) if updates.len() == 1));
+    }
+
+    #[test]
+    fn malformed_batch_is_swallowed_and_rejected_as_one_command() {
+        let mut p = LineParser::new();
+        assert!(p.feed("rB batch begin").is_none());
+        assert!(p.feed("feed world 0 1").is_none());
+        assert!(p.feed("tick").is_none());
+        // Even syntactically valid feeds after the poison remain body lines.
+        assert!(p.feed("feed ledger 0 2").is_none());
+        let got = p.feed("rB end-batch").expect("terminator completes batch");
+        assert_eq!(got.0, "rB");
+        assert!(got
+            .1
+            .as_ref()
+            .is_err_and(|e| e.contains("only bare `feed ...`")));
+        assert!(matches!(p.feed("r1 list"), Some((_, Ok(Cmd::List)))));
+    }
+
+    #[test]
+    fn batch_rejects_explicit_times() {
+        let mut p = LineParser::new();
+        assert!(p.feed("rB batch begin").is_none());
+        assert!(p.feed("feed world 0 1 time=3").is_none());
+        let got = p.feed("rB end-batch").expect("terminator completes batch");
+        assert!(got.1.as_ref().is_err_and(|e| e.contains("current epoch")));
+    }
+
+    #[test]
+    fn oversized_batch_is_rejected_cleanly() {
+        let mut p = LineParser::with_cap(32);
+        assert!(p.feed("rB batch begin").is_none());
+        for _ in 0..8 {
+            assert!(p.feed("feed world 0 1,2 val=3,4").is_none());
+        }
+        let got = p.feed("rB end-batch").expect("terminator completes batch");
+        assert_eq!(got.0, "rB");
+        assert!(got
+            .1
+            .as_ref()
+            .is_err_and(|e| e.contains("exceeds 32 bytes")));
+        assert!(matches!(p.feed("r1 list"), Some((_, Ok(Cmd::List)))));
     }
 
     #[test]

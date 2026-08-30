@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two-session smoke test over TCP: convention-based races and the size gate.
+"""Two-session smoke test over TCP: races, atomic feed batches, and size gate.
 
 Sessions are trusted (identity by convention, no ownership gates): two
 clients race stamped-by-convention claims on one cell and the program's
@@ -110,6 +110,50 @@ def main():
             "uncontested (2,2) goes to client 2",
             owned.get("Tuple([Int(2), Int(2)])") == "Tuple([Int(2)])",
             str(owned),
+        )
+
+        # A batch is one worker command and validates all targets before any
+        # update is staged. Its valid first row must not survive a bad second
+        # row, even after another session closes the epoch.
+        a.send(
+            "bt0 batch begin\n"
+            "feed world 0 8,8 val=1,1\n"
+            "feed world 7 9,9 val=1,1\n"
+            "bt0 end-batch\n"
+        )
+        status, body, _ = a.expect("bt0")
+        check("invalid batch is rejected as a whole", status == "err" and "input 7" in body, body)
+        b.send("btick0 tick")
+        b.expect("btick0")
+        a.send("bp0 peek owner")
+        _, _, rows = a.expect("bp0")
+        check("rejected batch staged no prefix", not any("Int(8), Int(8)" in r for r in rows), str(rows))
+
+        # A valid batch is accepted without ticking: neither row is visible in
+        # the current closed-past snapshot, then both appear after one tick.
+        a.send(
+            "bt1 batch begin\n"
+            "feed world 0 8,8 val=1,2\n"
+            "feed world 0 9,9 val=2,2\n"
+            "bt1 end-batch\n"
+        )
+        status, body, _ = a.expect("bt1")
+        check("valid batch stages both feeds", status == "ok" and "staged 2" in body, body)
+        b.send("bp1 peek owner")
+        _, _, rows = b.expect("bp1")
+        check(
+            "accepted batch remains invisible before tick",
+            not any("Int(8), Int(8)" in r or "Int(9), Int(9)" in r for r in rows),
+            str(rows),
+        )
+        b.send("btick1 tick")
+        b.expect("btick1")
+        a.send("bp2 peek owner")
+        _, _, rows = a.expect("bp2")
+        check(
+            "one tick reveals the complete batch",
+            any("Int(8), Int(8)" in r for r in rows) and any("Int(9), Int(9)" in r for r in rows),
+            str(rows),
         )
 
         # Sessions are trusted: B may bind into (and later drop) A's program.
