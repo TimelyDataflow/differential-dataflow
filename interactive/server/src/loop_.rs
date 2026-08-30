@@ -132,6 +132,12 @@ fn dispatch(
         }) => server
             .feed(&prog, input, key, val, time, diff)
             .map(|()| format!("fed {:?} input {} at t={}", prog, input, server.epoch())),
+        Ok(Cmd::Batch { updates }) => {
+            let count = updates.len();
+            server
+                .feed_batch(updates)
+                .map(|()| format!("staged {} feeds at t={}", count, server.epoch()))
+        }
         Ok(Cmd::Bind { trace, prog, input }) => server
             .bind(worker, &trace, &prog, input)
             .map(|()| format!("bound {:?} -> {:?} input {}", trace, prog, input)),

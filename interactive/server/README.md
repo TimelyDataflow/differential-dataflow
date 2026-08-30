@@ -18,8 +18,8 @@ generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
 Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
-The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
-`peek`, `tail`, `stop`, `tick`, and `exit`. `load` accepts an inline
+The useful commands are `load`, `drop`, `list`, `feed`, `batch`, `bind`,
+`unbind`, `peek`, `tail`, `stop`, `tick`, and `exit`. `load` accepts an inline
 pipe-syntax program:
 
     load graph begin
@@ -52,6 +52,28 @@ pushes one update into a loaded program's positional input, exactly as in the
 `ddir_server` example (`1,2` → a tuple; `_` → unit; a closed scalar term such
 as `inject(2,tuple(3,4))` for ADT-shaped rows).
 
+Several coupled updates can be staged as one feed batch:
+
+    r7 batch begin
+    feed world 0 3,4 val=9
+    feed audit 0 42 val=3,4,9
+    r7 end-batch
+
+The body accepts only bare `feed` commands. `time=` is rejected: every member
+uses the current open epoch. The server parses the complete body off-worker,
+then the worker validates every program, input number, and write policy before
+changing any input handle. A validation error stages nothing. A successful
+batch is one worker command, so a command from another session — particularly
+`tick` — cannot interleave between its members.
+
+This is atomic staging, not a durable transaction or an implicit commit. The
+batch's rows remain invisible in closed-past snapshots until a later `tick`
+closes their common epoch; that tick may be issued by any session. A server
+failure before the tick loses ordinary in-memory inputs just as it does for a
+standalone `feed`. Other sessions may execute commands while the multi-line
+body is still being uploaded; the atomic boundary begins only once
+`end-batch` turns the body into a worker command.
+
 The stance on contention: **writes are open; policy lives in the dataflow**.
 The server does not decide who may write what. Cooperating clients follow a
 simple protocol — include your id and an ordering epoch in the data — and
@@ -81,14 +103,17 @@ and bind the export `f(state) + (seed | negate)` to the feedback input; then
 perturbations. A bound source cannot be dropped (it holds an importer), nor
 can the bound target (unbind first).
 
-## One gate
+## Intake gates
 
 Loads are cheap to request and costly to render, so intake is bounded:
 `DDIR_MAX_PROGRAM_BYTES` (default 65536) — a larger `load` body is swallowed
-and rejected with one error, before parsing. This is transport self-defense,
-not semantics. There are no ownership or quota gates: sessions are trusted,
-and admission policy (auth, quotas, rate limits) belongs in a fronting proxy
-if a deployment ever needs one.
+and rejected with one error, before parsing. `DDIR_MAX_BATCH_BYTES` (also
+default 65536) similarly bounds an accumulated `batch` body; an oversized or
+malformed body is swallowed through `end-batch` and produces one error, never
+a partial worker command. These are transport self-defense, not semantics.
+There are no ownership or quota gates: sessions are trusted, and admission
+policy (auth, quotas, rate limits) belongs in a fronting proxy if a deployment
+ever needs one.
 
 ## Demos
 
@@ -97,7 +122,7 @@ if a deployment ever needs one.
     ./target/release/ddir_server < interactive/server/demo/counter.txt
     ./target/release/ddir_server < interactive/server/demo/claims.txt
     ./target/release/ddir_server < interactive/server/demo/txn.txt
-    python3 interactive/server/demo/two_sessions.py   # races + size gate over TCP
+    python3 interactive/server/demo/two_sessions.py   # races + batches + size gate over TCP
     python3 interactive/server/demo/dem/run_dem.py    # equilibrium water on a real Swiss DEM
 
 `load --explain` and `query` are reserved but unimplemented: explanation

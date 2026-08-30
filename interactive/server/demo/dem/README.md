@@ -72,3 +72,42 @@ m-cells), corrected each other's mistakes through the site office, and
 dried the village at 580 and 575 of their 600 budgets — with the line
 "partial cuts do nothing, so we must BOTH finish" appearing in their own
 planning notes.
+
+## Civil logistics: asymmetric roads, bridges, and earthworks
+
+`LOGISTICS_PROTOCOL.md` adds a second scenario without changing the baseline
+game. A road engineer has scarce track material, a structures engineer owns a
+water-passing bridge deck, and an earthworks engineer alone may terraform.
+Earthworks require live depot-connected access; flooded surface roads retract
+from that access graph; and success requires both a dry, unchanged village and
+a short passable service road to town.
+
+[`DESIGN_REPORT.md`](DESIGN_REPORT.md) records two blind three-agent trials: an
+audit-clean 800-earth diagnostic failure, the 950-earth balance iteration, and
+an authoritative success at road 16/16, bridge 1/1, and earth 773/950. It also
+evaluates the design space and lays out the next town/quarry/material-delivery
+experiment.
+
+```text
+cargo build -p ddir-server --release
+python3 interactive/server/demo/dem/logistics_game.py setup \
+    --run-dir interactive/server/demo/dem/runs/trial-01 --port 8011
+
+# Give agents the generated briefing, LOGISTICS_PROTOCOL.md, their id, and
+# the run's site_office.md. Each acts through logistics_client.py.
+
+python3 interactive/server/demo/dem/logistics_game.py judge \
+    --run-dir interactive/server/demo/dem/runs/trial-01
+```
+
+The logistics client uses fresh snapshots and atomic server-side feed batches;
+one accepted command is one equilibrated revision. The judge independently
+replays every revision, priority-floods every terrain state, and cross-checks
+DDIR's road reachability, resources, and action audit. Pure rules and the known
+feasibility proof run with:
+
+```text
+python3 -m unittest \
+  interactive.server.demo.dem.test_logistics_rules \
+  interactive.server.demo.dem.test_logistics_scenario -v
+```

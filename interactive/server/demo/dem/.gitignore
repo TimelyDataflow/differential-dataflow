@@ -4,3 +4,4 @@ civil_server.pid
 __pycache__/
 briefing_roads.json
 civil_roads.pid
+runs/

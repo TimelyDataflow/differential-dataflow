@@ -1,0 +1,114 @@
+-- Incremental infrastructure and resource views for the civil-logistics game.
+--
+-- input 0: actions ((revision, item); (agent, kind, x, y, old_h, new_h, cost))
+--          kind 0 = terraform, 1 = surface road, 2 = bridge
+-- input 1: roles ((agent); (allowed_kind))
+-- input 2: grants ((agent, resource_kind); (units))
+-- input 3: initial infrastructure ((x, y); (kind, owner))
+-- input 4: depots ((x, y); ())
+--
+-- Roads and bridges are overlays.  A surface road is passable only while
+-- dry; a bridge remains passable without changing the terrain, so water can
+-- continue beneath it.  The Python coordinator validates historical access
+-- and serializes actions; these live views are the incremental auditor.
+
+let actions = input 0;
+let roles = input 1;
+let grants = input 2;
+let initial = input 3;
+let depots = input 4;
+
+let built = actions
+    | filter(or($1[1] == 1, $1[1] == 2))
+    | map($1[2], $1[3] ; $1[1], $1[0]);
+let infrastructure = initial + built;
+
+let surface = infrastructure
+    | filter($1[0] == 1)
+    | map($0 ;)
+    | distinct;
+let bridges = infrastructure
+    | filter($1[0] == 2)
+    | map($0 ;)
+    | distinct;
+
+let water = import "water";
+let terrain = import "terrain";
+let dry = water
+    | join(terrain, ($0 ; $1[0], $2[0]))
+    | filter($1[0] == $1[1])
+    | map($0 ;)
+    | distinct;
+let dry_surface = surface | join(dry, ($0 ;)) | map($0 ;) | distinct;
+let passable = dry_surface + bridges | distinct;
+let network = passable + depots | distinct;
+
+-- Directed four-neighbor edges between passable infrastructure/depot cells.
+let sxp = network | map($0[0] + 1, $0[1] ; $0[0], $0[1]);
+let exp = sxp | join(network, ($1[0], $1[1] ; $0[0], $0[1]));
+let sxm = network | map($0[0] - 1, $0[1] ; $0[0], $0[1]);
+let exm = sxm | join(network, ($1[0], $1[1] ; $0[0], $0[1]));
+let syp = network | map($0[0], $0[1] + 1 ; $0[0], $0[1]);
+let eyp = syp | join(network, ($1[0], $1[1] ; $0[0], $0[1]));
+let sym = network | map($0[0], $0[1] - 1 ; $0[0], $0[1]);
+let eym = sym | join(network, ($1[0], $1[1] ; $0[0], $0[1]));
+let edges = exp + exm + eyp + eym;
+
+r: {
+    let step = r | join(edges, ($2[0], $2[1] ;));
+    var r = depots + step | distinct;
+}
+let connected = r::r;
+
+-- A connected crew can work one cell off the live road/bridge network.
+let axp = connected | map($0[0] + 1, $0[1] ;);
+let axm = connected | map($0[0] - 1, $0[1] ;);
+let ayp = connected | map($0[0], $0[1] + 1 ;);
+let aym = connected | map($0[0], $0[1] - 1 ;);
+let access = (axp + axm + ayp + aym)
+    | join(terrain, ($0 ;))
+    | map($0 ;)
+    | distinct;
+
+-- Prices are derived, never trusted from the action declaration.
+let priced = actions | map($1[0], $1[1] ;
+    if($1[1] == 0,
+       if($1[5] > $1[4], $1[5] - $1[4], $1[4] - $1[5]),
+       1));
+let spend = priced
+    | collect
+    | map($0 ; fold($1, 0, ^1 + ^0[0]));
+let debits = priced | map($0 ; 0 - $1[0]);
+let balance = (grants + debits)
+    | collect
+    | map($0 ; fold($1, 0, ^1 + ^0[0]));
+
+let permissions = actions
+    | map($1[0] ; $0[0], $0[1], $1[1])
+    | join(roles, ($1[0], $1[1], $1[2] ; $2[0]));
+let role_violations = permissions
+    | filter($0[2] != $1[0]);
+let cost_violations = actions
+    | map($0 ; $1[0], $1[1], $1[6],
+        if($1[1] == 0,
+           if($1[5] > $1[4], $1[5] - $1[4], $1[4] - $1[5]),
+           1))
+    | filter($1[2] != $1[3]);
+let conflicts = infrastructure
+    | map($0 ;)
+    | count
+    | filter($1[0] > 1);
+let flooded_roads = surface + (dry_surface | negate);
+
+export "actions" = actions;
+export "infrastructure" = infrastructure;
+export "passable" = passable;
+export "road_edges" = edges;
+export "connected" = connected;
+export "access" = access;
+export "spend" = spend;
+export "balance" = balance;
+export "role_violations" = role_violations;
+export "cost_violations" = cost_violations;
+export "infrastructure_conflicts" = conflicts;
+export "flooded_roads" = flooded_roads;

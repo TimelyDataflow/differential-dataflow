@@ -68,6 +68,21 @@ pub type ServerTrace = TraceAgent<ValSpine<Value, Value, OuterTime, Diff>>;
 /// An input handle into an installed program's positional `input N`.
 type ServerInput = InputSession<OuterTime, (Value, Value), Diff>;
 
+/// One current-epoch input update in an atomic [`Server::feed_batch`].
+///
+/// Unlike [`Command::Feed`], a batch update has no caller-selected timestamp:
+/// every member is staged at the server's current open epoch. This is the
+/// useful atomicity boundary for compound logical acts such as updating a
+/// world input and its audit ledger together.
+#[derive(Clone, Debug)]
+pub struct InputUpdate {
+    pub prog: String,
+    pub input: usize,
+    pub key: Value,
+    pub val: Value,
+    pub diff: Diff,
+}
+
 /// A generated, content-addressed source. Importing such a name installs the
 /// generator on demand, and two imports of the same recipe share one source.
 #[derive(Clone, Copy)]
@@ -611,16 +626,51 @@ impl Server {
         diff: Diff,
     ) -> Result<(), String> {
         let t = time.unwrap_or(self.epoch);
-        if t < self.epoch {
+        self.validate_feed(prog, input, t)?;
+        self.apply_feed(prog, input, key, val, t, diff);
+        Ok(())
+    }
+
+    /// Atomically stage several updates at the current open epoch.
+    ///
+    /// Every target is validated before any input handle is changed. If one
+    /// update is invalid, none are staged. Once validation succeeds, applying
+    /// an update is infallible, and the worker executes this whole method as
+    /// one command, so another session cannot interleave a `tick`. The batch is
+    /// not durable and does not itself close the epoch: all members become
+    /// visible together only when a later `tick` advances the input frontiers.
+    pub fn feed_batch(&mut self, updates: Vec<InputUpdate>) -> Result<(), String> {
+        let time = self.epoch;
+        for update in &updates {
+            self.validate_feed(&update.prog, update.input, time)?;
+        }
+        for update in updates {
+            self.apply_feed(
+                &update.prog,
+                update.input,
+                update.key,
+                update.val,
+                time,
+                update.diff,
+            );
+        }
+        Ok(())
+    }
+
+    /// Check everything about a feed that can fail, without touching an input
+    /// handle. `feed_batch` performs this pass for every member before applying
+    /// any of them.
+    fn validate_feed(&self, prog: &str, input: usize, time: OuterTime) -> Result<(), String> {
+        if time < self.epoch {
             return Err(format!(
                 "cannot feed at time {} < current epoch {}",
-                t, self.epoch
+                time, self.epoch
             ));
         }
         let prog = canonical_source_name(prog);
         let installed = self
             .programs
-            .get_mut(&prog)
+            .get(&prog)
             .ok_or_else(|| format!("no program {:?}", prog))?;
         if installed.origin != Origin::Program {
             let kind = if installed.origin == Origin::Clock {
@@ -633,12 +683,31 @@ impl Server {
                 prog, kind
             ));
         }
-        let handle = installed
+        if !installed.inputs.contains_key(&input) {
+            return Err(format!("program {:?} has no input {}", prog, input));
+        }
+        Ok(())
+    }
+
+    /// Apply a feed already checked by `validate_feed`; no failure is possible.
+    fn apply_feed(
+        &mut self,
+        prog: &str,
+        input: usize,
+        key: Value,
+        val: Value,
+        time: OuterTime,
+        diff: Diff,
+    ) {
+        let prog = canonical_source_name(prog);
+        let handle = self
+            .programs
+            .get_mut(&prog)
+            .expect("feed target was prevalidated")
             .inputs
             .get_mut(&input)
-            .ok_or_else(|| format!("program {:?} has no input {}", prog, input))?;
-        handle.update_at((key, val), t, diff);
-        Ok(())
+            .expect("feed input was prevalidated");
+        handle.update_at((key, val), time, diff);
     }
 
     /// Bind trace `trace` to positional `input` of program `prog`: from now
