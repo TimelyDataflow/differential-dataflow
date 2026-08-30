@@ -35,7 +35,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 BIN = os.path.join(HERE, "..", "..", "..", "..", "target", "release", "ddir_server")
 
-DAM_X = 96        # gorge column (local coords), upstream of the top-edge contact
+DAM_X = 96        # dam column: a north-south wall across the Inn meadows west of Samedan
 DAM_CREST = 1775  # wall height
 NOTCH_H = 1710    # spillway height cut through the dam
 

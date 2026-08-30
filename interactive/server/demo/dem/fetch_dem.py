@@ -1,28 +1,53 @@
 #!/usr/bin/env python3
 """Fetch and window a real DEM for the water demo: the Upper Engadine around
-St. Moritz, from the AWS Open Data terrain tiles (Terrarium encoding, ~76 m
-per pixel at zoom 11 / lat 46.5).
+St. Moritz, from the AWS Open Data terrain tiles (Terrarium encoding).
 
-Writes engadin_128.txt: 128 rows of 128 integer heights (meters), the window
-x in [200, 328), y in [16, 144) of the 2x2 tile mosaic at zoom 11, tiles
-x in {1079, 1080}, y in {724, 725}. Contains Lej da San Murezzan (~1763 m),
-the Inn valley exiting northeast toward Celerina (~1694 m floor), and the
-Charnaduers gorge the run_dem.py driver dams.
+Two committed boards, selected by preset name (default engadin_128):
 
-The generated file is committed, so this script is only needed to regenerate
-or re-window. Pure stdlib: a minimal PNG decoder rather than a PIL/GDAL
-dependency.
+  engadin_128  zoom 11, ~53 m cells, 128x128. The calibrated game board:
+               Lej da San Murezzan (~1763 m) in the southwest, the Inn
+               meadows (~1694-1710 m) running northeast to Samedan, and
+               the dam line run_dem.py raises at column x=96 — a
+               north-south wall across the meadows just west of Samedan.
+               Celerina and Pontresina lie just past its east edge.
+  engadin_256  zoom 12, ~26 m cells, 256x256. The same reach at twice the
+               resolution, shifted 22 zoom-11 cells east and 6 south so
+               Celerina (~(185,172)) and Pontresina (~(238,245)) are in
+               frame. A separate board for looking closer; nothing that
+               plays on engadin_128 is calibrated for it. The dam column
+               x=96 of the game board is column x=148 here. See
+               GEOGRAPHY.md for verified landmarks and georeferencing.
+
+Row 0 is north. Cell size is 156543.03 * cos(latitude) / 2^zoom meters.
+The generated files are committed, so this script is only needed to
+regenerate or re-window. Pure stdlib: a minimal PNG decoder rather than a
+PIL/GDAL dependency.
 """
 
 import os
 import struct
+import sys
 import urllib.request
 import zlib
 
-TILES = [(1079, 724), (1079, 725), (1080, 724), (1080, 725)]
-ZOOM = 11
-X0, Y0, W, H = 200, 16, 128, 128
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "engadin_128.txt")
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# window = (x0, y0, w, h) in pixels of the tile mosaic, origin at the
+# northwest corner of the lowest-numbered tile.
+PRESETS = {
+    "engadin_128": dict(
+        zoom=11,
+        tiles=[(1079, 724), (1079, 725), (1080, 724), (1080, 725)],
+        window=(200, 16, 128, 128),
+        out="engadin_128.txt",
+    ),
+    "engadin_256": dict(
+        zoom=12,
+        tiles=[(2159, 1448), (2159, 1449), (2160, 1448), (2160, 1449)],
+        window=(188, 44, 256, 256),
+        out="engadin_256.txt",
+    ),
+}
 
 
 def decode_png(data):
@@ -81,20 +106,30 @@ def decode_png(data):
     return heights
 
 
-def main():
-    mosaic = [[0] * 512 for _ in range(512)]
-    for tx, ty in TILES:
-        url = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{ZOOM}/{tx}/{ty}.png"
+def main(preset):
+    zoom, tiles = preset["zoom"], preset["tiles"]
+    x0, y0, w, h = preset["window"]
+    tx0 = min(tx for tx, _ in tiles)
+    ty0 = min(ty for _, ty in tiles)
+    mw = (max(tx for tx, _ in tiles) - tx0 + 1) * 256
+    mh = (max(ty for _, ty in tiles) - ty0 + 1) * 256
+    mosaic = [[0] * mw for _ in range(mh)]
+    for tx, ty in tiles:
+        url = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{zoom}/{tx}/{ty}.png"
         print("fetching", url)
         tile = decode_png(urllib.request.urlopen(url).read())
-        ox, oy = (tx - 1079) * 256, (ty - 724) * 256
+        ox, oy = (tx - tx0) * 256, (ty - ty0) * 256
         for y in range(256):
             mosaic[oy + y][ox:ox + 256] = tile[y]
-    with open(OUT, "w") as f:
-        for y in range(Y0, Y0 + H):
-            f.write(" ".join(str(mosaic[y][x]) for x in range(X0, X0 + W)) + "\n")
-    print("wrote", OUT)
+    out = os.path.join(HERE, preset["out"])
+    with open(out, "w") as f:
+        for y in range(y0, y0 + h):
+            f.write(" ".join(str(mosaic[y][x]) for x in range(x0, x0 + w)) + "\n")
+    print("wrote", out)
 
 
 if __name__ == "__main__":
-    main()
+    name = sys.argv[1] if len(sys.argv) > 1 else "engadin_128"
+    if name not in PRESETS:
+        sys.exit(f"unknown preset {name!r}; one of {sorted(PRESETS)}")
+    main(PRESETS[name])

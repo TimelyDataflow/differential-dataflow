@@ -1,11 +1,17 @@
 # The Engadine: equilibrium physics on a real DEM, live on the DDIR server
 
 A shared world over real Swiss terrain (the Upper Engadine around St.
-Moritz; ~76 m cells from the AWS Open Data terrain tiles, window committed
+Moritz; ~53 m cells from the AWS Open Data terrain tiles, window committed
 as `engadin_128.txt`, regenerable by `fetch_dem.py`). Three physics
 programs maintain fixed points over it, edits re-derive only their
 consequences, and a civil-works protocol lets participants — human or
 agent — change the world together.
+
+`GEOGRAPHY.md` maps board coordinates to the real valley (verified
+landmarks, georeferenced corners, orientation). A second board,
+`engadin_256.txt` (~26 m cells, same reach with Celerina and Pontresina in
+frame; `fetch_dem.py engadin_256`), exists for looking closer — the game
+and its calibrations stay on `engadin_128.txt`.
 
 Every driver in this directory cross-checks the server against an
 independent Python implementation and asserts exact equality; "it looks
