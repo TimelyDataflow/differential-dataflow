@@ -1,0 +1,36 @@
+-- Snowfall as an abelian sandpile. Grains are MULTIPLICITIES of unit rows;
+-- a cell holding 4 or more topples, sending one grain to each of its four
+-- neighbours; grains leaving the domain drain. The abelian property — the
+-- final pile is independent of toppling order — is exactly the confluence
+-- that synchronous fixed-point iteration needs: this is the cellular
+-- automaton that wants to be differential.
+--
+-- The variable is the ODOMETER u (how many times each cell has toppled),
+-- also a multiplicity. Each round fires every currently-unstable cell
+-- once — parallel chip-firing, a legal schedule, so by the abelian theorem
+-- it converges to THE stable pile and THE odometer:
+--
+--   pile = drops - 4u + (sum of u over the four neighbours)
+--   u   += [pile >= 4]
+--
+-- input 0: grain drops ((x, y) ; ()), multiplicity = grains (feed diff=n).
+-- Imports "terrain" for the domain only.
+
+let cells = import "terrain" | map($0 ;);
+let drops = input 0;
+
+s: {
+    let out4 = u + u + u + u | negate;
+    let inn = u
+        | flatmap(list(tuple($0[0] + 1, $0[1]), tuple($0[0] - 1, $0[1]),
+                       tuple($0[0], $0[1] + 1), tuple($0[0], $0[1] - 1)))
+        | map($1[1][0], $1[1][1] ;)
+        | join(cells, ($0 ;));
+    let pile = drops + out4 + inn;
+    let cnt = pile | count;
+    let unstable = cnt | filter($1[0] > 3) | map($0 ;);
+    var u = u + unstable;
+}
+
+export "pile" = s::pile | count;
+export "odometer" = s::u | count;

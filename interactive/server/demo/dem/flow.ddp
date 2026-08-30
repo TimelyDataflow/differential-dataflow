@@ -1,0 +1,43 @@
+-- Flow routing and drainage accumulation over the FILLED surface — the
+-- first two links of the erosion chain (directions -> accumulation; the
+-- graded profile is the third). Rivers are where the counts concentrate.
+--
+-- Imports "water" (the filled surface: flow routes over lakes, not into
+-- pits) and composes with the water program by name on the live server.
+--
+-- Each cell drains to its minimal 4-neighbour under the lexicographic key
+-- (surface, x, y) — a strict total order, so the flow relation is acyclic
+-- by construction and flat lake surfaces drain deterministically (by
+-- coordinate: a stand-in until in-lake distance-to-spill is derived).
+--
+-- Accumulation is a MULTIPLICITY: every cell injects one unit of mass at
+-- itself; mass moves one hop downstream per round; the fixed point leaves
+-- each cell holding one unit per cell upstream of it (inclusive), i.e.
+-- the drainage area A(c), read off as the consolidated diff by `count`.
+
+let surface = import "water";
+
+-- Neighbour pairs, both directions per axis, each row carrying the far
+-- endpoint's surface and coords: ((c) ; (w_n, nx, ny, w_c)).
+let sx = surface | map($0[0] + 1, $0[1] ; $0[0], $0[1], $1[0]);
+let px = sx | join(surface, ($1[0], $1[1] ; $2[0], $0[0], $0[1], $1[2]));
+let mx = sx | join(surface, ($0[0], $0[1] ; $1[2], $1[0], $1[1], $2[0]));
+let sy = surface | map($0[0], $0[1] + 1 ; $0[0], $0[1], $1[0]);
+let py = sy | join(surface, ($1[0], $1[1] ; $2[0], $0[0], $0[1], $1[2]));
+let my = sy | join(surface, ($0[0], $0[1] ; $1[2], $1[0], $1[1], $2[0]));
+let pairs = px + mx + py + my;
+
+-- Keep only strictly-downhill edges under (w, x, y), then argmin per cell.
+let down = pairs | filter(or($1[0] < $1[3],
+    $1[0] == $1[3] && or($1[1] < $0[0], $1[1] == $0[0] && $1[2] < $0[1])));
+let flow = down | map($0 ; $1[0], $1[1], $1[2]) | min | map($0 ; $1[1], $1[2]);
+
+-- Mass: one unit per cell, advanced one hop per round to its fixed point.
+let seeds = surface | map($0 ;);
+m: {
+    let step = m | join(flow, ($2[0], $2[1] ;));
+    var m = seeds + step;
+}
+
+export "flow" = flow;
+export "accum" = m::m | count;

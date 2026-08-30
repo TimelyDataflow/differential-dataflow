@@ -42,3 +42,4 @@ w: {
 }
 
 export "water" = w::w;
+export "terrain" = terrain;
