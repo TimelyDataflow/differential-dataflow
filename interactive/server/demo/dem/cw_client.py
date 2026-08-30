@@ -8,6 +8,10 @@ Commands:
   around X Y R         print terrain (and water depth) in a (2R+1)^2 window
   water                lake summary: level histogram of wet cells, count
   edit X Y H           terraform: dual-writes terrain + ledger, updates cache
+                       (refused outside road ACCESS when works is loaded)
+  road X Y             build a road (cost 10; usable only while dry)
+  bridge X Y           build a bridge (cost 50; usable over water)
+  net                  road network summary: connectivity, access, road spend
   tick                 advance the world and let it equilibrate
   spend                per-agent expenditure, from the server's auditor view
 """
@@ -75,12 +79,36 @@ def main():
         t = terrain_cache()
         old = t.get(f"{x},{y}")
         assert old is not None, "no such cell"
+        try:
+            access = parse_rows(c.cmd("peek access", collect=True))
+        except RuntimeError:
+            access = None  # no works program loaded: access unconstrained
+        if access is not None and (x, y) not in access:
+            print(f"REFUSED: ({x},{y}) is outside road access "
+                  f"(network + 3 cells). Build roads toward it first.")
+            sys.exit(2)
         c.cmd(f"feed water 0 {x},{y} val={old} diff=-1")
         c.cmd(f"feed water 0 {x},{y} val={nh}")
         c.cmd(f"feed ledger 0 {x},{y} val={args.agent},{old},{nh}")
         t[f"{x},{y}"] = nh
         json.dump(t, open(cache_path, "w"))
         print(f"terraformed ({x},{y}) {old} -> {nh}; cost {abs(nh - old)}")
+    elif cmd == "road" or cmd == "bridge":
+        x, y = int(args.cmd[1]), int(args.cmd[2])
+        kind = 1 if cmd == "bridge" else 0
+        c.cmd(f"feed works 0 {x},{y} val={args.agent},{kind}")
+        print(f"{cmd} at ({x},{y}); cost {50 if kind else 10}")
+    elif cmd == "net":
+        roads = parse_rows(c.cmd("peek roads", collect=True))
+        net = parse_rows(c.cmd("peek road_net", collect=True))
+        acc = parse_rows(c.cmd("peek access", collect=True))
+        print(f"{len(roads)} road/bridge cells; {len(net)} connected to the depot; "
+              f"access covers {len(acc)} cells")
+        stranded = sorted(set(roads) - set(net))
+        if stranded:
+            print(f"NOT connected: {stranded[:12]}{'...' if len(stranded) > 12 else ''}")
+        for k, v in sorted(parse_rows(c.cmd("peek road_spend", collect=True)).items()):
+            print(f"agent {k[0]}: road spend {v[0]}")
     elif cmd == "tick":
         c.cmd("tick")
         print("ticked")

@@ -1,0 +1,67 @@
+-- Roads and bridges: the transport layer, and the access constraint that
+-- makes it load-bearing (PROTOCOL.md addendum in MECHANICS.md).
+--
+-- input 0: road acts ((x, y) ; (agent, kind)), kind 0 = road, 1 = bridge.
+--          One act per cell (audited). Roads cost 10, bridges 50.
+-- input 1: anchors ((x, y) ; ()) — the depot; the network must reach it.
+--
+-- A road cell is USABLE if it is dry (water == terrain) or a bridge.
+-- Adjacent usable roads are CONNECTED when their terrain heights differ by
+-- at most 12 (the grade limit): steep ground must be terraformed before a
+-- road can climb it. The NETWORK is the reachability fixed point from the
+-- anchors over those edges — so flooding a non-bridge road cell severs
+-- everything beyond it, live. ACCESS is the network dilated by 3 cells:
+-- the protocol requires every terraform act to land inside it.
+
+let acts = input 0;
+let anchors = input 1;
+let terrain = import "terrain";
+let water = import "water";
+
+let cells = terrain | map($0 ;);
+
+-- Usable road cells with their terrain height: ((x,y) ; (h)).
+let rd = acts | join(terrain, ($0 ; $1[1], $2[0]))
+              | join(water, ($0 ; $1[0], $1[1], $2[0]));
+let usable = rd | filter(or($1[0] == 1, $1[2] == $1[1])) | map($0 ; $1[1]);
+
+-- Grade-limited edges between adjacent usable roads, both directions.
+let sx = usable | map($0[0] + 1, $0[1] ; $0[0], $0[1], $1[0]);
+let px = sx | join(usable, ($1[0], $1[1] ; $0[0], $0[1], $1[2], $2[0]));
+let mx = sx | join(usable, ($0[0], $0[1] ; $1[0], $1[1], $2[0], $1[2]));
+let sy = usable | map($0[0], $0[1] + 1 ; $0[0], $0[1], $1[0]);
+let py = sy | join(usable, ($1[0], $1[1] ; $0[0], $0[1], $1[2], $2[0]));
+let my = sy | join(usable, ($0[0], $0[1] ; $1[0], $1[1], $2[0], $1[2]));
+let pairs = px + mx + py + my;   -- ((c) ; (nx, ny, h_c, h_n))
+let edges = pairs
+    | filter(if($1[2] > $1[3], $1[2] - $1[3], $1[3] - $1[2]) < 13)
+    | map($0 ; $1[0], $1[1]);
+
+-- The network: reach from the anchors over graded, usable edges.
+n: {
+    let step = net | join(edges, ($2[0], $2[1] ;));
+    var net = anchors + step | distinct;
+}
+
+-- Access: the network dilated by three cells (terraform must land here).
+let net0 = n::net;
+let d1 = net0 + (net0
+    | flatmap(list(tuple($0[0] + 1, $0[1]), tuple($0[0] - 1, $0[1]),
+                   tuple($0[0], $0[1] + 1), tuple($0[0], $0[1] - 1)))
+    | map($1[1][0], $1[1][1] ;)) | distinct;
+let d2 = d1 + (d1
+    | flatmap(list(tuple($0[0] + 1, $0[1]), tuple($0[0] - 1, $0[1]),
+                   tuple($0[0], $0[1] + 1), tuple($0[0], $0[1] - 1)))
+    | map($1[1][0], $1[1][1] ;)) | distinct;
+let d3 = d2 + (d2
+    | flatmap(list(tuple($0[0] + 1, $0[1]), tuple($0[0] - 1, $0[1]),
+                   tuple($0[0], $0[1] + 1), tuple($0[0], $0[1] - 1)))
+    | map($1[1][0], $1[1][1] ;)) | distinct;
+
+export "roads" = acts;
+export "road_net" = net0;
+export "access" = d3 | join(cells, ($0 ;));
+export "road_spend" = acts
+    | map($1[0] ; if($1[1] == 1, 50, 10))
+    | collect
+    | map($0 ; fold($1, 0, ^1 + ^0[0]));
