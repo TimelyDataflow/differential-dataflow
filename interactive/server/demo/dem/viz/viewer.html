@@ -499,6 +499,14 @@ function enableLayer(name) {
     if (u.time !== null) noteMaxTime(u.time);
     markDirty();
   });
+  // Stalled-replay watchdog: a tail that delivers nothing in its first
+  // seconds is stuck for this connection's lifetime — say so.
+  const id = st.tailId;
+  setTimeout(() => {
+    if (connected && st.on && st.tailId === id && st.layer.log.length === 0) {
+      log("tail " + name + ": 0 rows after 5s — stalled replay (server-side); press Resync to reconnect", "err");
+    }
+  }, 5000);
   renderLayerPanel();
 }
 
@@ -581,7 +589,8 @@ async function refresh(first) {
       const fresh = !st.avail;
       st.avail = true;
       if (first || fresh) {
-        if (st.def.on && !st.tailId) enableLayer(name);
+        // st.on survives a disconnect, so user-enabled layers re-tail too
+        if ((st.def.on || st.on) && !st.tailId) enableLayer(name);
       }
     }
     renderLayerPanel();
@@ -590,9 +599,12 @@ async function refresh(first) {
 }
 
 $("resync-btn").onclick = () => {
-  for (const [name, st] of layers) {
-    if (st.on) { disableLayer(name); enableLayer(name); }
-  }
+  // A stalled replay is per-connection (a restarted tail on the same
+  // session stays empty; a fresh session replays clean), so resync
+  // reconnects outright. Enabled layers re-tail on reconnect.
+  if (!connected) { connect(); return; }
+  ws.close();
+  setTimeout(() => { if (!connected) connect(); }, 400);
 };
 $("tick-btn").onclick = () => cmd("tick").then((r) => { const m = /t=(\d+)/.exec(r.ok); if (m) noteEpoch(Number(m[1])); refreshTables(); }).catch((e) => log(e.message, "err"));
 $("tick5-btn").onclick = () => cmd("tick 5").then((r) => { const m = /t=(\d+)/.exec(r.ok); if (m) noteEpoch(Number(m[1])); refreshTables(); }).catch((e) => log(e.message, "err"));
