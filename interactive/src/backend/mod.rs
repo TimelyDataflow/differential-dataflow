@@ -48,6 +48,17 @@ pub trait Backend {
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
+
+    /// Consolidate a variable's feedback. A `var` whose definition has no
+    /// reducer (e.g. an accumulating `var u = u + delta`) can converge in
+    /// VALUE while physically-nonzero, logically-zero update pairs circulate
+    /// in the loop forever, so the scope's frontier never drains and `tick`
+    /// never returns. Routing the feedback through an arrangement cancels
+    /// them (arrangement batches are consolidated by construction); vars
+    /// ending in a reducer paid this cost already.
+    fn consolidate_feedback<'s>(c: Collection<'s, Time, Self::Container>) -> Collection<'s, Time, Self::Container> {
+        Self::as_collection(Self::arrange(c))
+    }
 }
 
 /// A rendered item's value: a collection, or an arrangement.
@@ -170,7 +181,7 @@ pub fn render_tree<'s, B: Backend>(
 
     for bind in &s.binds {
         let c = resolve(&items, &imports, &var_cols, &bind.value).collection();
-        var_handles[bind.var].take().expect("bind: variable already bound").set(c);
+        var_handles[bind.var].take().expect("bind: variable already bound").set(B::consolidate_feedback(c));
     }
 
     s.exports.iter().map(|e| resolve(&items, &imports, &var_cols, &e.value).collection()).collect()
