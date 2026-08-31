@@ -29,9 +29,12 @@ right" is never the standard.
 ## The physics (`.ddp` programs)
 
 - **`water.ddp`** — equilibrium water: `w = max(t, min over neighbours of
-  w)`, the greatest fixed point, iterated down from above (priority-flood
-  depression filling). Boundary cells drain. Edits price at their basin:
-  dam a gorge and ~1,300 of 16,384 cells re-derive in ~0.5 s.
+  w)`, depression filling ("priority flood"), grown from the draining
+  boundary with the lowest drain released first. Edits price at their basin:
+  dam the meadows and ~1,300 of 16,384 cells re-derive in ~0.06 s.
+  `water_gpri.ddp` is the same answer scheduled for very large meshes —
+  faster to load, slower to edit. [`NOTES_PERF.md`](NOTES_PERF.md) measures
+  both, and what the release order is worth (5–7x time, 2–4x memory).
 - **`flow.ddp`** — flow routing over the filled surface (argmin neighbour
   under the strict total order `(surface, x, y)`, hence acyclic) and
   drainage accumulation as a *multiplicity* (one unit of mass per cell,

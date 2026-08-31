@@ -1,7 +1,12 @@
--- Equilibrium water, grown from the draining boundary instead of descending
--- from a global ceiling: w(c) = max(t(c), min over the neighbours of w). A
--- cell with no reached neighbour has no level yet, so it proposes nothing;
--- the first level to reach it is already correct for that wavefront.
+-- VARIANT of water.ddp for very large meshes: identical rules and answers,
+-- with the priority classes extended from the seeds to the proposals, so the
+-- whole wavefront advances in level order rather than at full speed.
+--
+-- Measured on engadin_512 (262,144 cells, ~13 m): cold fill 12.66s in 2.3 GB
+-- against water.ddp's 30.23s in 3.7 GB, but a dam edit costs 2.89s against
+-- 0.70s, because every later change must walk the class ladder. Prefer this
+-- for cold loads and large meshes; prefer water.ddp for live, edited worlds.
+-- See NOTES_PERF.md.
 -- Depression filling ("priority flood"), incrementally maintained: edit the
 -- terrain and only the affected basin re-derives.
 --
@@ -37,10 +42,8 @@ let seeds = boundu
 let adjn = adj | map($1[0], $1[1] ; $0[0], $0[1]);
 
 w: {
-    -- lowest neighbouring level, clamped below by own terrain. A cell whose
-    -- neighbours have no level yet contributes no candidate at all — it
-    -- waits at its seed until the descent reaches it (the ratchet must not
-    -- fall to bare terrain before the pass information arrives).
+    -- Lowest neighbouring level, clamped below by own terrain; a cell whose
+    -- neighbours have no level yet contributes no candidate at all.
     let pass = adjn | join(w, ($1[0], $1[1] ; $2[0])) | min;
     -- Same absolute-priority idea applied to propagation: a proposed level
     -- enters in the magnitude class of its height above the lowest terrain.

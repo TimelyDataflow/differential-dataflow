@@ -279,3 +279,28 @@ The trade-off has one shape: entering *propagation* in priority classes makes
 the first computation cheap and makes each later change walk the class ladder.
 Entering only the *seeds* leaves propagation at full speed, so edits stay
 cheap.
+
+## Iteration 5: consolidation
+
+`water_seed.ddp` was better than the original `water.ddp` on every board and in
+every phase measured — cold fill, edit latency, and peak memory alike — so
+there is no regime in which to prefer the original, and it has been promoted
+into `water.ddp` under the same name. Every driver loads the collection
+`water`, so nothing downstream changes; `run_dem.py` reports the same exact
+agreement with the priority flood, with its phases at 0.46s / 0.06s / 0.05s
+instead of 2.34s / 0.48s / 0.27s.
+
+Two water programs remain:
+
+- **`water.ddp`** — the default. Boundary seeds released in priority classes.
+- **`water_gpri.ddp`** — the same answer with propagation also in classes.
+  Prefer it when cold load dominates (12.66s and 2.3 GB against 30.23s and
+  3.7 GB on 262,144 cells); avoid it in live worlds (dam edit 2.89s against
+  0.70s).
+
+The six scaffolding variants — `water_nt`, `water_pri`, `water_hi`,
+`water_hi_prop`, `water_rand`, `water_sweep` — each answered one question and
+have been deleted. Their measurements are the tables above: dropping the
+ceiling alone is worth almost nothing, an increment is the wrong term for
+`enter_at`, descending order costs 10x against ascending, and a random or
+spatial release recovers only the staggering, not the ordering.

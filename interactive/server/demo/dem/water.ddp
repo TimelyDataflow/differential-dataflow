@@ -1,7 +1,18 @@
 -- Equilibrium water over a terrain grid: w(c) = max(t(c), min over the
--- neighbours of w) — the greatest fixed point, iterated down from above.
--- Depression filling ("priority flood"), incrementally maintained: edit the
--- terrain and only the affected basin re-derives.
+-- neighbours of w). A cell's level is the smallest, over escape routes to the
+-- boundary, of the highest terrain on the route — depression filling
+-- ("priority flood"), incrementally maintained, so editing the terrain
+-- re-derives only the affected basin.
+--
+-- The fixed point grows from the draining boundary rather than descending
+-- from a global ceiling: a cell with no reached neighbour has no level yet
+-- and proposes nothing, so the first level to arrive is already right for
+-- that wavefront. Boundary seeds are released in the priority class of their
+-- height above the lowest terrain (`enter_at` floors a record's iteration at
+-- 256 * bit-length of its term), which lets the lowest drain go first. That
+-- ordering is worth 5-7x in time and 2-4x in memory, and it is the ordering,
+-- not merely the staggering: see NOTES_PERF.md, which also measures
+-- water_gpri.ddp, the variant for very large meshes.
 --
 -- input 0: terrain ((x, y) ; (height)). Any set of cells; 4-adjacency is a
 -- coordinate equijoin, and cells with fewer than four neighbours are the
@@ -22,23 +33,28 @@ let adj = ax + bx + ay + by;
 let deg = adj | map($0 ;) | count;
 let bound = terrain | join(deg, ($0 ; $1[0], $2[0])) | filter($1[1] < 4) | map($0 ; $1[0]);
 
--- The descent starts at (global max height + 1) everywhere.
-let mx = terrain | map(; 0 - $1[0]) | min | map(; 1 - $1[0]);
-let cellsu = terrain | map(; $0[0], $0[1]);
-let top = cellsu | join(mx, ($1[0], $1[1] ; $2[0]));
+-- Release each boundary cell at its own height above the lowest terrain, so
+-- the lowest drain starts first. Subtracting the floor matters: raw Engadine
+-- heights all share two bit-lengths, heights above the floor span twelve.
+let lo = terrain | map(; $1[0]) | min;
+let boundu = bound | map(; $0[0], $0[1], $1[0]);
+let seeds = boundu
+    | join(lo, ($1[0], $1[1] ; $1[2], $2[0]))
+    | enter_at($1[0] - $1[1])
+    | map($0 ; $1[0]);
 
 -- Neighbour relation keyed by the neighbour, to read its water level.
 let adjn = adj | map($1[0], $1[1] ; $0[0], $0[1]);
 
 w: {
-    -- lowest neighbouring level, clamped below by own terrain. A cell whose
-    -- neighbours have no level yet contributes no candidate at all — it
-    -- waits at its seed until the descent reaches it (the ratchet must not
-    -- fall to bare terrain before the pass information arrives).
+    -- Lowest neighbouring level, clamped below by own terrain. A cell whose
+    -- neighbours have no level yet contributes no candidate at all: the
+    -- candidate must not fall to bare terrain before the pass information
+    -- arrives (join + if max, never concat + min).
     let pass = adjn | join(w, ($1[0], $1[1] ; $2[0])) | min;
     let cand = pass | join(terrain, ($0 ; if($1[0] > $2[0], $1[0], $2[0])));
-    -- ratchet down from the seeds; boundary stays pinned at terrain
-    var w = top + bound + cand | min;
+    -- grow from the draining boundary; boundary stays pinned at terrain
+    var w = seeds + cand | min;
 }
 
 export "water" = w::w;
