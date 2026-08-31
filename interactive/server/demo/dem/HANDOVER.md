@@ -12,10 +12,17 @@ world-side questions now answered in place).
 Both restaged 2026-08-30 evening on the binary that carries the tail fix,
 both publishing `meta`:
 
-| ports (TCP/WS) | board | programs | staged by |
+| ports (TCP/WS) | board | state | staged by |
 |---|---|---|---|
-| 7996 / 7997 | engadin_128, dam at 1775 | water, ledger, works, meta | `civil_roads.py setup --port 7996 --host 0.0.0.0` then `stage_board.py --board engadin_128 --port 7996 --meta-only` |
-| 7994 / 7995 | engadin_256, natural equilibrium | water, meta | `stage_board.py --board engadin_256 --port 7994 --host 0.0.0.0` |
+| 7996 / 7997 | engadin_128, dam at 1775 | **up** (water, ledger, works, meta) | `civil_roads.py setup --port 7996 --host 0.0.0.0` then `stage_board.py --board engadin_128 --port 7996 --meta-only` |
+| 7994 / 7995 | engadin_256, natural equilibrium | **stopped** — restage on demand (~30 s) | `stage_board.py --board engadin_256 --port 7994 --host 0.0.0.0` |
+
+Keep only what you are using: the 256 viewing world held **3.2 GB** RSS
+against the 128 game world's 585 MB, and it was stopped to keep this
+machine off swap. Water alone on 65,536 cells costs ~50 KB per cell, so a
+zoom-13 board over the same window (~262k cells) would want well over
+10 GB as the physics stands — memory, not solve time, is what bounds how
+fine a board can go today.
 
 Both are driver-owned time (`DDIR_TICK_MS=0`): whoever wants to see an
 edit land must `tick`. The 7996 world now exports `depots` (4 cells, the
