@@ -8,7 +8,7 @@ terraform only) can act there. Roads need grade <= 12 between neighbours
 (steep ground must be cut by the terraformer first) and drown unless
 bridged. Neither role is sufficient alone.
 
-  python3 civil_roads.py setup [--port 7999] [--ws-host 127.0.0.1]
+  python3 civil_roads.py setup [--port 7999] [--host 127.0.0.1] [--ws-host HOST]
   python3 civil_roads.py judge [--port 7999]
 """
 
@@ -98,9 +98,15 @@ def main():
     ap.add_argument("mode", choices=["setup", "judge"])
     ap.add_argument("--port", type=int, default=7999)
     ap.add_argument(
-        "--ws-host",
+        "--host",
         default="127.0.0.1",
-        help="WebSocket listen address (for example this host's Tailscale IP)",
+        help="TCP listen address (for example 0.0.0.0, for remote agents)",
+    )
+    ap.add_argument(
+        "--ws-host",
+        default=None,
+        help="WebSocket listen address (for example this host's Tailscale IP); "
+             "defaults to --host",
     )
     args = ap.parse_args()
     briefing_path = os.path.join(HERE, "briefing_roads.json")
@@ -111,8 +117,8 @@ def main():
             if f.startswith("cw_cache_"):
                 os.remove(os.path.join(HERE, f))
         env = dict(os.environ,
-                   DDIR_BIND=f"127.0.0.1:{args.port}",
-                   DDIR_WS_BIND=f"{args.ws_host}:{args.port + 1}",
+                   DDIR_BIND=f"{args.host}:{args.port}",
+                   DDIR_WS_BIND=f"{args.ws_host or args.host}:{args.port + 1}",
                    DDIR_DIAG_PORT=str(args.port + 2),
                    DDIR_TICK_MS="0")
         server = subprocess.Popen(
