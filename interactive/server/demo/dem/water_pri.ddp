@@ -1,0 +1,46 @@
+-- Prioritized equilibrium water: the same fixed point as water.ddp, but with
+-- the scope's inner clock used as priority-flood's priority queue.
+--
+-- A cell's level is the smallest, over paths to the boundary, of the highest
+-- terrain on the path. Derive each level at round (level - lowest terrain):
+-- a boundary cell enters at its own height, and a candidate that raises a
+-- neighbour's level L to max(t, L) waits the difference. Every cell is then
+-- first reached at its final level, so no cell ratchets down through wrong
+-- intermediate values, and the descent seed is unnecessary.
+--
+-- input 0: terrain ((x, y) ; (height)), as water.ddp.
+
+let terrain = input 0;
+
+let sx = terrain | map($0[0] + 1, $0[1] ; $0[0], $0[1]);
+let ax = sx | join(terrain, ($1[0], $1[1] ; $0[0], $0[1]));
+let bx = sx | join(terrain, ($0[0], $0[1] ; $1[0], $1[1]));
+let sy = terrain | map($0[0], $0[1] + 1 ; $0[0], $0[1]);
+let ay = sy | join(terrain, ($1[0], $1[1] ; $0[0], $0[1]));
+let by = sy | join(terrain, ($0[0], $0[1] ; $1[0], $1[1]));
+let adj = ax + bx + ay + by;
+
+let deg = adj | map($0 ;) | count;
+let bound = terrain | join(deg, ($0 ; $1[0], $2[0])) | filter($1[1] < 4) | map($0 ; $1[0]);
+
+-- Round 0 is the lowest terrain in the window, so the clock counts metres of
+-- water level rather than absolute elevation.
+let lo = terrain | map(; $1[0]) | min;
+let boundu = bound | map(; $0[0], $0[1], $1[0]);
+let seeds = boundu
+    | join(lo, ($1[0], $1[1] ; $1[2], $2[0]))
+    | enter_at($1[0] - $1[1])
+    | map($0 ; $1[0]);
+
+let adjn = adj | map($1[0], $1[1] ; $0[0], $0[1]);
+
+w: {
+    let pass = adjn | join(w, ($1[0], $1[1] ; $2[0])) | min;
+    -- (level to propose, level it was proposed from): the wait is the rise.
+    let cand = pass | join(terrain, ($0 ; if($1[0] > $2[0], $1[0], $2[0]), $1[0]));
+    let queued = cand | enter_at($1[0] - $1[1]) | map($0 ; $1[0]);
+    var w = seeds + queued | min;
+}
+
+export "water" = w::w;
+export "terrain" = terrain;
