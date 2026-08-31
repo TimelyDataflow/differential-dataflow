@@ -81,3 +81,46 @@ ablations are separable and both were measured: dropping the ceiling alone
 the ordering.
 
     python3 bench_water.py water_seed.ddp engadin_256.txt --dam-x 148
+
+## Iteration 1b: does "high first" check out? (fmcsherry's hypothesis)
+
+Proposal: delay each proposal by its depth below the maximum height, so high
+readings — which influence lower ones — are resolved first.
+
+Measured, engadin_128, both exact against the priority flood:
+
+| seed order | fill | peak RSS | proposals | retractions | busiest round |
+|---|---|---|---:|---:|---:|
+| ascending (`water_seed.ddp`) | **0.46s** | **147 MB** | 41,038 | 30.0% | 396 |
+| baseline ceiling descent (`water.ddp`) | 2.34s | 322 MB | 370,220 | 47.8% | 16,384 |
+| descending seeds (`water_hi.ddp`) | 4.65s | 539 MB | 582,538 | 48.6% | 3,582 |
+| descending seeds + per-proposal depth (`water_hi_prop.ddp`) | 5.22s | 582 MB | — | — | — |
+
+It does not check out, and the measurement says why: **the baseline already is
+the high-first schedule.** Settle iteration by final-level quintile, initial
+fill:
+
+| quintile | levels | baseline median settle | baseline updates/cell | ascending updates/cell |
+|---|---|---:|---:|---:|
+| Q5 (highest) | 2526–3171 | iter 18 | 12.1 | 3.1 |
+| Q3 | 1866–2203 | iter 24 | 12.8 | 1.4 |
+| Q1 (lowest) | 1694–1755 | iter 56 | **43.3** | **2.3** |
+
+Descending from a ceiling settles the peaks almost immediately and leaves the
+valley floor to thrash through 43 revisions per cell. Ordering the *other*
+way takes that to 2.3.
+
+The reason is where the information comes from. A cell's level is the smallest,
+over escape routes to the boundary, of the highest terrain on the route, so
+influence flows **inward from the drain**, not downward from the peaks, and
+levels are non-decreasing along an escape route. High terrain does set a lake's
+level — but only through the pass on its cheapest route, and which pass that is
+is unknown until the low wavefront arrives. Releasing high seeds first injects
+upper bounds that are all retracted later: 14x the proposals, 48.6% of them
+churn.
+
+There is also a structural obstacle. A proposal's value is `max(t, L_n) >= L_n`
+— never lower than the record it came from. Under a descending clock
+(time = peak − level) a proposal would have to arrive *before* its own source:
+a negative delay, which `enter_at` cannot express. Ascending order is the only
+direction relative delays can even represent here.
