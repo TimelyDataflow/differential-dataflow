@@ -189,11 +189,13 @@ python3 interactive/server/demo/dem/pathways_resume.py \
   --port 8091 --ws-host 127.0.0.1
 ```
 
-The viewer discovers `sites`, `route_path`, `path_use`, established paths, and
-the canonical `infrastructure` trace alongside terrain, water, drainage, and
-snow. The judge also replays historical route, porter, paving, and freight
-state rather than trusting final connectivity. Pure route/network/replay rules
-run with:
+The viewer discovers `sites`, `route_path`, `route_options`, `path_use`,
+established paths, and the canonical `infrastructure` trace alongside terrain,
+water, drainage, and snow. Live `route_options` use exact DDIR predecessors to
+draw several maximum-grade proposals as nested owner-coloured lines. The judge
+also replays historical route caps, routes, porter, paving, and freight state
+rather than trusting final connectivity. Pure route/network/replay rules run
+with:
 
 ```text
 python3 -m unittest interactive.server.demo.dem.test_pathways_rules -v

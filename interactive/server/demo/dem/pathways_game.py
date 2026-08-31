@@ -780,6 +780,72 @@ def prepare_route_join_upgrade(run_dir):
     )
 
 
+def prepare_grade_trials(run_dir):
+    """Seal the slope-aware route extension and stop its source world."""
+    run_dir = os.path.abspath(run_dir)
+    briefing_path = os.path.join(run_dir, "briefing.json")
+    with open(briefing_path) as source:
+        briefing = json.load(source)
+    if int(briefing.get("version", 1)) < 5:
+        raise RuntimeError("grade trials require the V5 trail world")
+    client = Client(int(briefing["port"]))
+    routes = unique_rows(
+        client.cmd("peek route_requests", collect=True), "route_requests"
+    )
+    if routes:
+        raise RuntimeError("retire every live route before the grade upgrade")
+    old_hashes = briefing.get("program_hashes", {})
+    new_hashes = program_hashes()
+    changed = {
+        name for name in set(old_hashes) | set(new_hashes)
+        if old_hashes.get(name) != new_hashes.get(name)
+    }
+    allowed = {
+        "pathways.ddp",
+        "pathways_game.py",
+        "pathways_rules.py",
+        "pathways_client.py",
+    }
+    if "pathways.ddp" not in changed or not changed <= allowed:
+        raise RuntimeError(
+            f"unexpected program changes at grade-trial boundary: {sorted(changed)}"
+        )
+    briefing["max_live_routes"] = 3
+    rules = [
+        rule for rule in briefing.get("rules", [])
+        if not (
+            rule.startswith("At most ")
+            and "route surveys remain live" in rule
+        )
+    ]
+    rules.extend([
+        "A survey may declare a positive maximum edge grade in permille; DDIR excludes steeper edges while finding the route.",
+        "At most 3 route surveys remain live during the controlled grade comparison.",
+    ])
+    briefing["rules"] = rules
+    briefing.setdefault("program_upgrades", []).append({
+        "name": "route-grade-cap-v1",
+        "changed_files": sorted(changed),
+        "old_hashes": {
+            name: old_hashes.get(name) for name in sorted(changed)
+        },
+        "new_hashes": {
+            name: new_hashes.get(name) for name in sorted(changed)
+        },
+        "claim": (
+            "semantic extension: optional per-route grade caps filter DDIR "
+            "edges; historical requests remain effectively unlimited"
+        ),
+    })
+    briefing["program_hashes"] = new_hashes
+    write_json(briefing_path, briefing)
+    stop_recorded_server(run_dir)
+    print(
+        "sealed slope-aware routing upgrade and stopped source server; "
+        f"changed {sorted(changed)}"
+    )
+
+
 def adopt_route_geometry_judge(run_dir):
     """Record a judge-only game-driver upgrade without restarting DDIR."""
     run_dir = os.path.abspath(run_dir)
@@ -843,6 +909,10 @@ def judge(run_dir):
         for key, value in unique_rows(client.cmd("peek accum", collect=True), "accum").items()
     }
     routes = unique_rows(client.cmd("peek route_requests", collect=True), "route_requests")
+    route_grade_caps = unique_rows(
+        client.cmd("peek route_grade_caps", collect=True),
+        "route_grade_caps",
+    )
     ddir_costs = {
         key[0]: value[0]
         for key, value in unique_rows(client.cmd("peek route_cost", collect=True), "route_cost").items()
@@ -878,6 +948,7 @@ def judge(run_dir):
             path_use if briefing.get("version", 1) >= 2 else None,
             infrastructure if briefing.get("version", 1) >= 2 else None,
             step_lengths,
+            route_grade_caps.get((route_id,), (None,))[0],
         )
         # Equal cost does not imply equal geometry: a grid carries many
         # equal-cost paths, and the reuse mechanism is a claim about which
@@ -966,6 +1037,9 @@ def judge(run_dir):
             )
             history_checks = {
                 "routes": replayed["route_requests"] == routes,
+                "route_grade_caps": (
+                    replayed["route_grade_caps"] == route_grade_caps
+                ),
                 "infrastructure": replayed["infrastructure"] == infrastructure,
                 "deliveries": replayed["deliveries"] == deliveries,
                 "traversals": replayed["traversals"] == traversals,
@@ -1194,6 +1268,7 @@ def main():
             "judge",
             "extend-trail",
             "prepare-route-join-upgrade",
+            "prepare-grade-trials",
             "adopt-route-geometry-judge",
         ),
     )
@@ -1231,6 +1306,8 @@ def main():
         extend_trail(args.run_dir)
     elif args.mode == "prepare-route-join-upgrade":
         prepare_route_join_upgrade(args.run_dir)
+    elif args.mode == "prepare-grade-trials":
+        prepare_grade_trials(args.run_dir)
     elif args.mode == "adopt-route-geometry-judge":
         adopt_route_geometry_judge(args.run_dir)
     elif not judge(args.run_dir):

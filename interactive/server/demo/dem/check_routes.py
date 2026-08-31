@@ -31,13 +31,14 @@ from pathways_rules import shortest_route
 N = 14
 STEPS = (26, 37)
 
-# (route_id, start, target, (distance, grade, water, runoff, reuse))
+# (route_id, start, target, (distance, grade, water, runoff, reuse), max grade)
 CASES = [
-    (1, (1, 1), (12, 12), (1, 0, 0, 0, 0)),
-    (2, (1, 1), (12, 12), (1, 4, 1000, 8, 0)),
-    (3, (1, 1), (12, 12), (1, 4, 1000, 8, 1)),
-    (4, (2, 10), (11, 2), (1, 4, 1000, 8, 3)),
-    (5, (0, 13), (13, 0), (1, 2, 500, 4, 1)),
+    (1, (1, 1), (12, 12), (1, 0, 0, 0, 0), None),
+    (2, (1, 1), (12, 12), (1, 4, 1000, 8, 0), None),
+    (3, (1, 1), (12, 12), (1, 4, 1000, 8, 1), None),
+    (4, (2, 10), (11, 2), (1, 4, 1000, 8, 3), None),
+    (5, (0, 13), (13, 0), (1, 2, 500, 4, 1), None),
+    (6, (1, 1), (12, 12), (1, 4, 1000, 8, 1), 450),
 ]
 
 
@@ -80,9 +81,11 @@ def main():
                 c.cmd(f"feed pathways 2 {trip},3,{y} val=1,900")
         for y in range(3, 10):
             c.cmd(f"feed pathways 3 9,{y} val=1,1")
-        for route_id, (sx, sy), (tx, ty), coefficients in CASES:
+        for route_id, (sx, sy), (tx, ty), coefficients, cap in CASES:
             c.cmd(f"feed pathways 1 {route_id} val=1,{sx},{sy},{tx},{ty},"
                   + ",".join(str(v) for v in coefficients))
+            if cap is not None:
+                c.cmd(f"feed pathways 8 {route_id} val={cap}")
         c.cmd("tick")
 
         def rows(name):
@@ -95,18 +98,22 @@ def main():
         costs = {k[0]: v[0] for k, v in rows("route_cost").items()}
         steps = rows("route_steps")
 
-        for route_id, start, target, coefficients in CASES:
+        for route_id, start, target, coefficients, cap in CASES:
             ddir_path = route_geometry(steps, route_id, start, target)
             expected_path, expected_cost = shortest_route(
                 terrain, water, accum, start, target, coefficients,
-                path_use, infrastructure, STEPS)
+                path_use, infrastructure, STEPS, cap)
             cost_ok = costs.get(route_id) == expected_cost
             path_ok = ddir_path == expected_path
             failures += not (cost_ok and path_ok)
+            ddir_cells = "unresolved" if ddir_path is None else len(ddir_path)
+            expected_cells = (
+                "unresolved" if expected_path is None else len(expected_path)
+            )
             print(("PASS " if cost_ok and path_ok else "FAIL ")
-                  + f"route {route_id} reuse={coefficients[4]}: "
+                  + f"route {route_id} reuse={coefficients[4]} cap={cap}: "
                   + f"cost {costs.get(route_id)} vs {expected_cost}, "
-                  + f"{len(ddir_path)} cells vs {len(expected_path)}")
+                  + f"{ddir_cells} cells vs {expected_cells}")
             if not path_ok:
                 print(f"       ddir {ddir_path}")
                 print(f"       true {expected_path}")

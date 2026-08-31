@@ -266,6 +266,7 @@ def show_status(client, briefing):
         )
 
     requests = rows(client, "route_requests")
+    route_caps = rows(client, "route_grade_caps")
     costs = rows(client, "route_cost")
     if requests:
         print("routes:")
@@ -280,24 +281,31 @@ def show_status(client, briefing):
             print(
                 f"  {route_id}: agent {request[0]} "
                 f"({request[1]},{request[2]}) -> ({request[3]},{request[4]}) "
-                f"coeff={tuple(request[5:])} cost={cost} cells={length}"
+                f"coeff={tuple(request[5:])} "
+                f"max_grade={route_caps.get((route_id,), ('unlimited',))[0]} "
+                f"cost={cost} cells={length}"
             )
 
 
 def survey(client, run_dir, briefing, agent, tokens):
     version = briefing.get("version", 1)
     expected = 8 if version >= 2 else 7
-    if len(tokens) != expected:
+    allowed = (expected, expected + 1) if version >= 2 else (expected,)
+    if len(tokens) not in allowed:
         suffix = " REUSE" if version >= 2 else ""
+        cap_suffix = " [MAX_GRADE_PERMILLE]" if version >= 2 else ""
         raise ValueError(
             "survey requires ROUTE FROM_SITE TO_SITE DIST GRADE WATER RUNOFF"
-            + suffix
+            + suffix + cap_suffix
         )
     values = list(map(int, tokens))
     route_id, from_id, to_id = values[:3]
-    coefficients = values[3:]
+    coefficients = values[3:expected]
+    max_grade_permille = values[expected] if len(values) > expected else None
     if min(coefficients) < 0 or coefficients[0] < 1:
         raise ValueError("route coefficients must be non-negative and DIST must be positive")
+    if max_grade_permille is not None and max_grade_permille <= 0:
+        raise ValueError("maximum grade must be positive")
     sites = site_map(briefing)
     if from_id not in sites or to_id not in sites:
         raise ValueError("unknown site id")
@@ -317,7 +325,12 @@ def survey(client, run_dir, briefing, agent, tokens):
         f"{agent},{start[0]},{start[1]},"
         f"{target[0]},{target[1]},{coefficient_text}"
     )
-    client.cmd(f"feed pathways 1 {route_id} val={request_text}")
+    feeds = [f"feed pathways 1 {route_id} val={request_text}"]
+    if max_grade_permille is not None:
+        feeds.append(
+            f"feed pathways 8 {route_id} val={max_grade_permille}"
+        )
+    client.batch(feeds)
     client.cmd("tick")
     try:
         request, path, ddir_cost = ordered_route(client, route_id)
@@ -339,7 +352,13 @@ def survey(client, run_dir, briefing, agent, tokens):
             path_use if version >= 2 else None,
             infrastructure if version >= 2 else None,
             board_step_lengths(briefing),
+            max_grade_permille,
         )
+        if expected_path is None:
+            raise RuntimeError(
+                f"route {route_id} is unresolved under maximum grade "
+                f"{max_grade_permille}"
+            )
         if path != expected_path or ddir_cost != expected_cost:
             raise RuntimeError("DDIR route disagrees with independent Dijkstra")
         metrics = route_metrics(
@@ -352,9 +371,15 @@ def survey(client, run_dir, briefing, agent, tokens):
         )
     except Exception as error:
         try:
-            client.cmd(
+            rollback = [
                 f"feed pathways 1 {route_id} val={request_text} diff=-1"
-            )
+            ]
+            if max_grade_permille is not None:
+                rollback.append(
+                    f"feed pathways 8 {route_id} "
+                    f"val={max_grade_permille} diff=-1"
+                )
+            client.batch(rollback)
             client.cmd("tick")
         except Exception as rollback_error:
             raise RuntimeError(
@@ -365,6 +390,7 @@ def survey(client, run_dir, briefing, agent, tokens):
     event(run_dir, agent, "survey " + " ".join(tokens), True, {
         "route": route_id,
         "cost": ddir_cost,
+        "max_grade_permille": max_grade_permille,
         "metrics": {key: value if not isinstance(value, list) else len(value)
                     for key, value in metrics.items()},
     })
@@ -381,7 +407,13 @@ def retire_route(client, run_dir, agent, route_id):
             f"route {route_id} belongs to agent {request[0]}, not agent {agent}"
         )
     values = ",".join(str(value) for value in request)
-    client.cmd(f"feed pathways 1 {route_id} val={values} diff=-1")
+    feeds = [f"feed pathways 1 {route_id} val={values} diff=-1"]
+    cap = rows(client, "route_grade_caps").get((route_id,))
+    if cap is not None:
+        feeds.append(
+            f"feed pathways 8 {route_id} val={cap[0]} diff=-1"
+        )
+    client.batch(feeds)
     client.cmd("tick")
     event(run_dir, agent, f"retire {route_id}", True, {"route": route_id})
     print(f"retired live survey {route_id}")
@@ -1112,7 +1144,7 @@ def main():
             else:
                 raise ValueError(
                     "commands: status | survey RID FROM TO DIST GRADE WATER RUNOFF "
-                    "REUSE | route RID | retire RID | overlap RID RID | "
+                    "REUSE [MAX_GRADE_PERMILLE] | route RID | retire RID | overlap RID RID | "
                     "scout RID | preview RID | build RID bridge|embankment | "
                     "build-until RID bridge|embankment [LIMIT] | "
                     "pave RID COUNT (V2) | "

@@ -1,5 +1,52 @@
 # Civil logistics design report
 
+## Slope-aware DDIR trail comparison (2026-08-31)
+
+The shelter trail exposed a mismatch between the routing vocabulary and its
+objective. The `grade` coefficient prices absolute elevation change, not
+normalized slope. On a nearly monotone 744 m climb, switchbacks retain almost
+the same elevation term and add distance, so the original route climbed
+directly and reached 792.5‰ under an 800‰ delivery-time limit.
+
+Routing now has an optional per-request maximum grade. The cap is maintained
+as DDIR input 8, joined to the request before edge expansion, and filters
+illegal edges inside the recursive shortest-path fixed point. The Python
+Dijkstra, semantic history replay, client rollback, and authoritative judge
+carry the same cap independently. Uncapped historical commands replay without
+schema changes. The live viewer receives `route_options` rows containing the
+owner, route, cap, exact predecessor, and accumulated cost.
+
+Three agents used the shared DDIR server—not offline substitute routes—to
+survey farm 11 to shelter 31 with fixed coefficients `(1,12,1000,0,1)`:
+
+| Cap | Cells | Distance | Variation | Maximum | High-runoff cells | Cost | Judgment |
+|---:|---:|---:|---:|---:|---:|---:|---|
+| 400‰ | 56 | 3,421 m | 746 m | 400.0‰ | 1 | 18,332 | economical, but mildly rasterized |
+| 300‰ | 80 | 4,737 m | 786 m | 293.3‰ | 17 | 22,888 | legible switchback; strong constraint |
+| 250‰ | 100 | 6,545 m | 822 m | 245.3‰ | 19 | 28,722 | artificial overshoot and sawtooth |
+
+All three were dry, had zero independently audited cap violations, and agreed
+cell-for-cell with the authoritative route judge. No player walked, delivered,
+built, or changed terrain, so the comparison did not create path-reuse
+feedback between treatments.
+
+This is a productive interaction rather than a one-dimensional calibration.
+The gentler routes found dry high-accumulation corridors because runoff weight
+was deliberately held at zero. A 300‰ cap therefore trades steepness for both
+distance and drainage exposure. The next controlled sweep should hold the cap
+at 300‰ and add a light runoff cost, while 400‰ is the better current candidate
+for ordinary loaded travel. Hard caps also reveal 53 m grid aliasing; a soft
+nonlinear steepness cost, turn cost, or finer/subcell trail graph may produce
+more natural contour paths.
+
+Operationally, this was also the first playtest in which the role agents used
+DDIR as a parameterized planning service and left simultaneous, inspectable
+proposals in the world. They still interpreted geometry privately, but the
+quantitative plans, cap enforcement, and audit are shared and replayable.
+With all three recursive alternatives live, one settled `ps` sample reported
+5,213,936 KiB RSS (about 5.0 GiB), close to the earlier one-world baseline;
+this is encouraging but is not a controlled peak-memory benchmark.
+
 ## Persistent pathways V4/V5: wide world, observatory, and alpine trail (2026-08-30)
 
 The persistent world now uses `engadin_wide.txt`, a 256×192 zoom-11 crop at

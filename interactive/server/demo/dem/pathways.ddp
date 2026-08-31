@@ -21,6 +21,8 @@
 --          ((0); (schema_version, max_grade_permille,
 --                  initial_aggregate, quarry_aggregate,
 --                  initial_rock, quarry_rock))
+-- input 8: optional route-specific maximum grades
+--          ((route_id); (max_grade_permille))
 --
 -- Route cost is paid on entry to each destination cell:
 --   distance_w * configured step length
@@ -39,6 +41,17 @@ let deliveries = input 4;
 let geometry = input 5;
 let build_actions = input 6;
 let policy = input 7;
+let route_grade_caps = input 8;
+
+-- A missing route cap means effectively unlimited. An explicit cap wins the
+-- `min`, keeping the original request schema and all historical surveys
+-- backward-compatible while allowing new movement modes to constrain edges.
+let default_route_caps = requests | map($0 ; 1000000);
+let effective_route_caps = default_route_caps + route_grade_caps | min;
+let capped_requests = requests
+    | join(effective_route_caps, ($0 ;
+        $1[0], $1[1], $1[2], $1[3], $1[4],
+        $1[5], $1[6], $1[7], $1[8], $1[9], $2[0]));
 
 -- Inputs 0--5 retain their V2 shapes. V3 construction is revisioned in input
 -- 6, but both generations feed one canonical public-infrastructure relation.
@@ -136,14 +149,17 @@ routes: {
     -- expanded relation inside the loop.
     let weighted_frontier = best
         | map($0[0] ; $0[1], $0[2], $1[0])
-        | join(requests, ($1[0], $1[1] ;
-            $0[0], $1[2], $2[5], $2[6], $2[7], $2[8], $2[9]));
-    let proposals = weighted_frontier
+        | join(capped_requests, ($1[0], $1[1] ;
+            $0[0], $1[2], $2[5], $2[6], $2[7], $2[8], $2[9], $2[10]));
+    let candidate_edges = weighted_frontier
         | join(edges, ($1[0], $2[0], $2[1] ;
             $1[1] + $1[2] * $2[2] + $1[3] * $2[3] +
                     $1[4] * $2[4] + $1[5] * $2[5] +
                     $2[2] * $1[6] * $2[6],
-            $0[0], $0[1]));
+            $0[0], $0[1], $1[7], $2[2], $2[3]));
+    let proposals = candidate_edges
+        | filter(1000 * $1[5] <= $1[3] * $1[4])
+        | map($0 ; $1[0], $1[1], $1[2]);
     var best = route_seeds + proposals | min;
 }
 let best = routes::best;
@@ -156,6 +172,15 @@ chosen: {
         | join(best, ($0[0], $2[1], $2[2] ;));
     var path = route_targets + prior | distinct;
 }
+
+-- Viewer-friendly candidate routes retain their owner and enforced cap. A
+-- cell may carry several alternatives simultaneously.
+let option_steps = chosen::path
+    | join(best, ($0[0] ;
+        $0[1], $0[2], $2[1], $2[2], $2[0]));
+let route_options = option_steps
+    | join(capped_requests, ($1[0], $1[1] ;
+        $2[0], $0[0], $2[10], $1[2], $1[3], $1[4]));
 
 -- Surface roads drown; bridges remain passable. Engineered roads are ordinary
 -- surface roads hydraulically, but participate in the V3 maximum-grade rule.
@@ -290,11 +315,14 @@ export "demand" = towns | map($0 ; 0, $1[1]);
 export "supply" = supplies;
 export "yards" = yards;
 export "route_requests" = requests;
+export "route_grade_caps" = route_grade_caps;
+export "route_limits" = effective_route_caps;
 export "route_cost" = route_targets
     | join(best, ($0[0] ; $2[0]));
 export "route_steps" = chosen::path
     | join(best, ($0 ; $2[0], $2[1], $2[2]));
 export "route_path" = chosen::path | map($0[1], $0[2] ; $0[0]);
+export "route_options" = route_options;
 export "traversals" = traversals;
 export "path_use" = path_use;
 export "established_paths" = established;

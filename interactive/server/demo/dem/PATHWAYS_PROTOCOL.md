@@ -186,6 +186,9 @@ python3 interactive/server/demo/dem/pathways_client.py \
 ... --agent 1 deliver 31 5 ROUTE
 ... --agent 1 deliver 31 5 ROUTE
 ... --agent 1 retire ROUTE
+
+# Optional slope-aware survey; maximum edge grade is in permille
+... --agent N survey ROUTE FROM TO DIST GRADE WATER RUNOFF REUSE MAX_GRADE
 ```
 
 V3 makes the handoffs explicit. Agent 1 alone activates the quarry and scouts
@@ -194,6 +197,13 @@ bridges and performs the final bulk-rock haul. Any agent may survey, and all
 paths and infrastructure are public. The bridge alignment therefore requires
 all three roles; the embankment alternative removes the bridge handoff but
 spends substantially more quarry rock and disturbs flow.
+
+A positive optional `MAX_GRADE` is stored separately from the five cost
+coefficients. DDIR joins it to the request and excludes any edge for which
+`1000 * abs(height change) > MAX_GRADE * step length`. Omitting it preserves
+the historical unlimited route search. `route_grade_caps` publishes explicit
+inputs, `route_limits` publishes effective limits, and `route_options`
+publishes live alternatives with owner, route, cap, predecessor, and cost.
 
 ## Authority, persistence, and limitations
 
@@ -208,6 +218,9 @@ On the wide board the recursive frontier joins its route request before
 fanning out over eight neighbour edges. This exact join reassociation removes
 an 8N intermediate arrangement; recovery over the same 62 commands reproduced
 all outputs and improved the 53-build sequence from 645.1 to 536.6 seconds.
+The later grade-cap extension retains that join order, applies legality inside
+the recursive relaxation, and is checked against the same independent
+Dijkstra during both survey acceptance and judgment.
 
 Event appends are flushed and synced, but the server mutation and filesystem
 append are not one atomic transaction. A crash in that narrow interval can

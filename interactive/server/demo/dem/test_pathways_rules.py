@@ -52,6 +52,35 @@ class PathwaysRulesTest(unittest.TestCase):
         self.assertNotIn((1, 1), gentle)
         self.assertEqual(gentle_cost, 89)
 
+    def test_route_grade_cap_excludes_steep_shortcut(self):
+        terrain = {(x, y): 0 for x in range(3) for y in range(3)}
+        terrain[(1, 1)] = 10
+        water = dict(terrain)
+        accum = {cell: 1 for cell in terrain}
+        direct, direct_cost = shortest_route(
+            terrain,
+            water,
+            accum,
+            (0, 1),
+            (2, 1),
+            (1, 0, 0, 0),
+            step_lengths=(10, 14),
+        )
+        capped, capped_cost = shortest_route(
+            terrain,
+            water,
+            accum,
+            (0, 1),
+            (2, 1),
+            (1, 0, 0, 0),
+            step_lengths=(10, 14),
+            max_grade_permille=100,
+        )
+        self.assertEqual(direct, [(0, 1), (1, 1), (2, 1)])
+        self.assertEqual(direct_cost, 20)
+        self.assertNotIn((1, 1), capped)
+        self.assertEqual(capped_cost, 28)
+
     def test_existing_path_and_road_attract_a_reuse_weighted_route(self):
         terrain = {(x, y): 0 for x in range(5) for y in range(3)}
         water = dict(terrain)

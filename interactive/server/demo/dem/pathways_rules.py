@@ -90,6 +90,7 @@ def shortest_route(
     path_use=None,
     infrastructure=None,
     step_lengths=(26, 37),
+    max_grade_permille=None,
 ):
     """Dijkstra with the same `(cost, predecessor)` lexicographic tie-break."""
     if start not in terrain or target not in terrain:
@@ -103,6 +104,17 @@ def shortest_route(
             continue
         for nxt in neighbors8(cell):
             if nxt not in terrain:
+                continue
+            if (
+                max_grade_permille is not None
+                and not edge_grade_ok(
+                    cell,
+                    nxt,
+                    terrain,
+                    max_grade_permille,
+                    step_lengths,
+                )
+            ):
                 continue
             candidate = (
                 cost
@@ -461,6 +473,7 @@ def replay_history(events, briefing, terrain, water, accum):
             path_use,
             infrastructure,
             step_lengths,
+            request.get("max_grade_permille"),
         )
         if path is None or cost is None:
             fail(index, f"route {route_id} is unresolved")
@@ -501,18 +514,23 @@ def replay_history(events, briefing, terrain, water, accum):
 
         command = tokens[0]
         if command == "survey":
-            if len(tokens) != 9:
-                fail(index, "survey requires eight integer arguments")
+            if len(tokens) not in (9, 10):
+                fail(index, "survey requires eight or nine integer arguments")
             try:
-                route_id, from_id, to_id, *coefficients = map(int, tokens[1:])
+                values = list(map(int, tokens[1:]))
             except ValueError as error:
                 fail(index, f"invalid survey integer: {error}")
+            route_id, from_id, to_id = values[:3]
+            coefficients = values[3:8]
+            max_grade_permille = values[8] if len(values) == 9 else None
             if route_id in routes:
                 fail(index, f"duplicate live route {route_id}")
             if from_id not in sites or to_id not in sites:
                 fail(index, "unknown survey endpoint")
             if min(coefficients) < 0 or coefficients[0] < 1:
                 fail(index, "invalid survey coefficients")
+            if max_grade_permille is not None and max_grade_permille <= 0:
+                fail(index, "invalid survey maximum grade")
             route_limit = briefing.get("max_live_routes")
             if route_limit is not None and len(routes) >= route_limit:
                 fail(index, "live route limit exceeded")
@@ -522,6 +540,7 @@ def replay_history(events, briefing, terrain, water, accum):
                 "start": tuple(sites[from_id]["cell"]),
                 "target": tuple(sites[to_id]["cell"]),
                 "coefficients": tuple(coefficients),
+                "max_grade_permille": max_grade_permille,
             }
             routes[route_id] = request
             live_path(route_id, index)
@@ -900,6 +919,7 @@ def replay_history(events, briefing, terrain, water, accum):
             fail(index, f"accepted non-semantic command {command!r}")
 
     request_rows = {}
+    route_grade_caps = {}
     for route_id, request in routes.items():
         request_rows[(route_id,)] = (
             request["agent"],
@@ -909,8 +929,13 @@ def replay_history(events, briefing, terrain, water, accum):
             request["target"][1],
             *request["coefficients"],
         )
+        if request.get("max_grade_permille") is not None:
+            route_grade_caps[(route_id,)] = (
+                request["max_grade_permille"],
+            )
     return {
         "route_requests": request_rows,
+        "route_grade_caps": route_grade_caps,
         "deliveries": deliveries,
         "traversals": traversals,
         "path_use": path_use,

@@ -463,6 +463,7 @@ const LAYER_DEFS = {
   demand: { color: "#e0a341", on: false, desc: "requested goods" },
   yards: { color: "#4da3ff", on: false, desc: "works yards" },
   route_path: { color: "#b58de0", on: false, desc: "live surveys" },
+  route_options: { color: "#f5e7b2", on: true, desc: "grade trials" },
   path_use: { color: "#a87948", on: true, desc: "foot traffic" },
   established_paths: { color: "#f1c27d", on: true, desc: "persistent trails" },
 };
@@ -1149,6 +1150,45 @@ function renderNow() {
       ctx.fill();
     }
   }
+  // Capped DDIR alternatives carry exact predecessors. Draw widest-to-
+  // narrowest by cap, producing nested coloured bands where routes overlap
+  // and cleanly separating them where a gentler profile contours away.
+  const optionRows = viewRows("route_options");
+  if (optionRows) {
+    const profiles = new Map();
+    for (const [k, vals] of optionRows) {
+      const comma = k.indexOf(",");
+      const x = Number(k.slice(0, comma)), y = Number(k.slice(comma + 1));
+      for (const entry of vals.values()) {
+        const v = entry.val;
+        if (entry.count <= 0 || !Array.isArray(v) || v.length < 6) continue;
+        const [agent, route, cap, px, py] = v;
+        let profile = profiles.get(route);
+        if (!profile) {
+          profile = { agent, cap, segments: [] };
+          profiles.set(route, profile);
+        }
+        if (x !== px || y !== py) profile.segments.push([x, y, px, py]);
+      }
+    }
+    const ordered = [...profiles.entries()].sort((a, b) => b[1].cap - a[1].cap);
+    for (let rank = 0; rank < ordered.length; rank++) {
+      const [_route, profile] = ordered[rank];
+      ctx.beginPath();
+      for (const [x, y, px, py] of profile.segments) {
+        ctx.moveTo((x - x0 + 0.5) * SCALE, (y - y0 + 0.5) * SCALE);
+        ctx.lineTo((px - x0 + 0.5) * SCALE, (py - y0 + 0.5) * SCALE);
+      }
+      ctx.strokeStyle = agentColor(profile.agent);
+      ctx.lineWidth = Math.max(2, SCALE * 0.24 + 2 * (ordered.length - rank - 1));
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.globalAlpha = 0.9;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
+  }
   // Keep the base site shapes compact; the separate towns, supply, and demand
   // layers add labels only when their toggles are enabled.
   const siteRows = viewRows("sites");
@@ -1337,6 +1377,7 @@ function build3D(fd) {
   const ledgerRows = viewRows("ledger");
   const pathUseRows = viewRows("path_use");
   const establishedRows3 = viewRows("established_paths");
+  const routeOptionsRows3 = viewRows("route_options");
   const siteRows3 = viewRows("sites");
   const townRows3 = viewRows("towns");
   const supplyRows3 = viewRows("supply");
@@ -1375,6 +1416,13 @@ function build3D(fd) {
         }
       }
       if (floodedRows && floodedRows.has(k)) mixC(tCol, o, RED, 0.55);
+      if (routeOptionsRows3 && routeOptionsRows3.has(k)) {
+        for (const entry of routeOptionsRows3.get(k).values()) {
+          if (entry.count > 0 && Array.isArray(entry.val)) {
+            mixC(tCol, o, hexRgb(agentColor(entry.val[0])), 0.62);
+          }
+        }
+      }
       if (siteRows3 && siteRows3.has(k)) {
         const site = single(siteRows3, k);
         if (site) mixC(tCol, o, hexRgb(siteColor(site[1])), 0.8);
