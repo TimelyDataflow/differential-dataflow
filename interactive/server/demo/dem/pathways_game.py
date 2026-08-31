@@ -427,6 +427,22 @@ def setup(
         server_log.close()
 
 
+def route_geometry(steps, route_id, start, target):
+    """Walk DDIR's predecessor chain back from a route's target."""
+    chain = {(key[1], key[2]): value for key, value in steps.items() if key[0] == route_id}
+    if target not in chain:
+        return None
+    path = [target]
+    while path[-1] != start:
+        value = chain[path[-1]]
+        prior = (value[1], value[2])
+        if prior == path[-1] or len(path) > len(chain) + 1:
+            return None
+        path.append(prior)
+    path.reverse()
+    return path
+
+
 def judge(run_dir):
     run_dir = os.path.abspath(run_dir)
     with open(os.path.join(run_dir, "briefing.json")) as source:
@@ -458,6 +474,7 @@ def judge(run_dir):
         key[0]: value[0]
         for key, value in unique_rows(client.cmd("peek route_cost", collect=True), "route_cost").items()
     }
+    ddir_steps = unique_rows(client.cmd("peek route_steps", collect=True), "route_steps")
     path_use = {
         key: value[0]
         for key, value in unique_rows(client.cmd("peek path_use", collect=True), "path_use").items()
@@ -478,7 +495,7 @@ def judge(run_dir):
         start = (request[1], request[2])
         target = (request[3], request[4])
         coefficients = tuple(request[5:])
-        _path, cost = shortest_route(
+        expected_path, cost = shortest_route(
             terrain,
             water,
             accum,
@@ -489,7 +506,14 @@ def judge(run_dir):
             infrastructure if briefing.get("version", 1) >= 2 else None,
             step_lengths,
         )
-        route_checks[route_id] = ddir_costs.get(route_id) == cost
+        # Equal cost does not imply equal geometry: a grid carries many
+        # equal-cost paths, and the reuse mechanism is a claim about which
+        # cells a route takes. Both settle the same lexicographic
+        # (cost, predecessor) pair, so the chains must agree exactly.
+        route_checks[route_id] = (
+            ddir_costs.get(route_id) == cost
+            and route_geometry(ddir_steps, route_id, start, target) == expected_path
+        )
     sources = {
         tuple(site["cell"])
         for site in briefing["sites"]
@@ -714,7 +738,7 @@ def judge(run_dir):
     print("== PERSISTENT PATHWAYS JUDGMENT ==")
     print(f"towns: {town_results}")
     print(f"construction spend: {dict(sorted(spend.items()))}")
-    print(f"route costs agree with independent Dijkstra: {route_checks}")
+    print(f"route costs and geometry agree with independent Dijkstra: {route_checks}")
     print(f"network agrees: {expected_connected == actual_connected}")
     print(f"grants/trails/bridges/deliveries: {grants_ok}/{trail_ok}/{bridge_ok}/{deliveries_ok}")
     if briefing.get("version", 1) >= 2:

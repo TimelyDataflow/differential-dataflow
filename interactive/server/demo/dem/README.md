@@ -147,6 +147,17 @@ python3 interactive/server/demo/dem/pathways_game.py judge \
   --run-dir interactive/server/demo/dem/runs/pathways-01
 ```
 
+DDIR's route fixed point is checked against `pathways_rules`' heap Dijkstra —
+cost *and* geometry, since a grid carries many equal-cost paths and the reuse
+mechanism is a claim about which cells a route takes. The judge compares both
+for every live route; `check_routes.py` pins the same property on a small
+synthetic board (water, drainage, an established path, a road, reuse weights
+0/1/3) in a few seconds:
+
+```text
+python3 interactive/server/demo/dem/check_routes.py
+```
+
 A stopped or crashed V2 world can be rebuilt from its saved briefing and
 accepted semantic event log. Recovery stages one replacement, verifies saved
 program hashes when present, and publishes the destination only after every
