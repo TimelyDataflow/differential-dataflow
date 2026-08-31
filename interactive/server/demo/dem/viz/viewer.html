@@ -458,7 +458,7 @@ const LAYER_DEFS = {
   road_edges: { color: "#c9762b", on: false, desc: "network edges" },
   actions: { color: "#777", on: false, desc: "raw acts" },
   sites: { color: "#f0cf65", on: true, desc: "towns+sources+hill projects" },
-  towns: { color: "#e0a341", on: false, desc: "town demand" },
+  towns: { color: "#e0a341", on: true, desc: "town emphasis" },
   supply: { color: "#58c586", on: false, desc: "source capacity" },
   demand: { color: "#e0a341", on: false, desc: "requested goods" },
   yards: { color: "#4da3ff", on: false, desc: "works yards" },
@@ -1149,22 +1149,88 @@ function renderNow() {
       ctx.fill();
     }
   }
+  // Keep the base site shapes compact; the separate towns, supply, and demand
+  // layers add labels only when their toggles are enabled.
   const siteRows = viewRows("sites");
   if (siteRows) {
     for (const k of siteRows.keys()) {
       const site = single(siteRows, k);
       if (!site) continue;
       const [rx, ry, rw, rh] = cellRect(k, Math.max(0.5, SCALE / 8));
+      const cx = rx + rw / 2, cy = ry + rh / 2;
       ctx.fillStyle = siteColor(site[1]);
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1;
       if (site[1] === 0) {
-        ctx.beginPath(); ctx.arc(rx + rw / 2, ry + rh / 2, Math.max(2, rw / 2), 0, 7); ctx.fill(); ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, Math.max(2, rw / 2), 0, 7);
+        ctx.fill();
+        ctx.stroke();
+      } else if (site[1] === 1) {
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
       } else {
-        ctx.fillRect(rx, ry, rw, rh); ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+        ctx.beginPath();
+        ctx.moveTo(cx, ry);
+        ctx.lineTo(rx + rw, cy);
+        ctx.lineTo(cx, ry + rh);
+        ctx.lineTo(rx, cy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
       }
     }
   }
+  const townRows = viewRows("towns");
+  if (townRows) {
+    ctx.font = Math.max(10, SCALE + 3) + "px ui-monospace, monospace";
+    ctx.textBaseline = "middle";
+    for (const k of townRows.keys()) {
+      const town = single(townRows, k);
+      if (!town) continue;
+      const [rx, ry, rw, rh] = cellRect(k, 0);
+      const cx = rx + rw / 2, cy = ry + rh / 2;
+      const radius = Math.max(5, SCALE * 0.9);
+      ctx.fillStyle = "rgba(224, 163, 65, 0.22)";
+      ctx.strokeStyle = "#f0cf65";
+      ctx.lineWidth = Math.max(2, SCALE / 3);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, 7);
+      ctx.fill();
+      ctx.stroke();
+      const label = "T" + town[0];
+      const x = cx + radius + 3;
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(20, 23, 28, 0.85)";
+      ctx.fillRect(x - 2, cy - 7, tw + 4, 14);
+      ctx.fillStyle = "#f0cf65";
+      ctx.fillText(label, x, cy);
+    }
+    ctx.textBaseline = "alphabetic";
+    ctx.lineWidth = 1;
+  }
+  const drawPointLabels = (name, color, text, dy) => {
+    const rows = viewRows(name);
+    if (!rows) return;
+    ctx.font = Math.max(9, SCALE + 2) + "px ui-monospace, monospace";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = 3;
+    for (const k of rows.keys()) {
+      const v = single(rows, k);
+      if (!v) continue;
+      const [rx, ry, rw, rh] = cellRect(k, 0);
+      const label = text(v);
+      const x = rx + rw + 2, y = ry + rh / 2 + dy;
+      ctx.strokeStyle = "#14171c";
+      ctx.strokeText(label, x, y);
+      ctx.fillStyle = color;
+      ctx.fillText(label, x, y);
+    }
+    ctx.textBaseline = "alphabetic";
+    ctx.lineWidth = 1;
+  };
+  drawPointLabels("supply", "#79d99f", (v) => "+" + v[1], -6);
+  drawPointLabels("demand", "#f0b454", (v) => "−" + v[1], 6);
   for (const grid of ["connected", "access", "passable"]) {
     const rows = viewRows(grid);
     if (!rows) continue;
@@ -1272,6 +1338,9 @@ function build3D(fd) {
   const pathUseRows = viewRows("path_use");
   const establishedRows3 = viewRows("established_paths");
   const siteRows3 = viewRows("sites");
+  const townRows3 = viewRows("towns");
+  const supplyRows3 = viewRows("supply");
+  const demandRows3 = viewRows("demand");
   const netRows3 = viewRows("road_net") || viewRows("connected");
   const RED = hexRgb("#e06060"), WHITE = [245, 245, 245];
 
@@ -1310,6 +1379,9 @@ function build3D(fd) {
         const site = single(siteRows3, k);
         if (site) mixC(tCol, o, hexRgb(siteColor(site[1])), 0.8);
       }
+      if (townRows3 && townRows3.has(k)) mixC(tCol, o, hexRgb("#ffe29a"), 0.85);
+      if (supplyRows3 && supplyRows3.has(k)) mixC(tCol, o, hexRgb("#79d99f"), 0.45);
+      if (demandRows3 && demandRows3.has(k)) mixC(tCol, o, hexRgb("#f0b454"), 0.45);
       if (ledgerRows && ledgerRows.has(k)) {
         let agent = 0;
         for (const v of ledgerRows.get(k).values()) if (v.count > 0 && Array.isArray(v.val)) agent = v.val[0];
@@ -1557,6 +1629,8 @@ function describeCell(k) {
   if (site) {
     parts.push(siteKind(site[1]) + " id=" + site[0]);
   }
+  const town = at("towns");
+  if (town) parts.push("town demand=" + town[1]);
   const supply = at("supply");
   if (supply) parts.push("source capacity=" + supply[1]);
   const demand = at("demand");
