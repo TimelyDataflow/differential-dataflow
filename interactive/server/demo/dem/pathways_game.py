@@ -780,6 +780,40 @@ def prepare_route_join_upgrade(run_dir):
     )
 
 
+def adopt_route_geometry_judge(run_dir):
+    """Record a judge-only game-driver upgrade without restarting DDIR."""
+    run_dir = os.path.abspath(run_dir)
+    briefing_path = os.path.join(run_dir, "briefing.json")
+    with open(briefing_path) as source:
+        briefing = json.load(source)
+    client = Client(int(briefing["port"]))
+    routes = unique_rows(
+        client.cmd("peek route_requests", collect=True), "route_requests"
+    )
+    if routes:
+        raise RuntimeError("retire every live route before adopting the judge")
+    old_hashes = briefing.get("program_hashes", {})
+    new_hashes = program_hashes()
+    changed = {
+        name for name in set(old_hashes) | set(new_hashes)
+        if old_hashes.get(name) != new_hashes.get(name)
+    }
+    if changed != {"pathways_game.py"}:
+        raise RuntimeError(
+            f"unexpected files at route-geometry judge boundary: {sorted(changed)}"
+        )
+    briefing.setdefault("program_upgrades", []).append({
+        "name": "route-cost-and-geometry-judge-v1",
+        "changed_files": ["pathways_game.py"],
+        "old_hashes": {"pathways_game.py": old_hashes["pathways_game.py"]},
+        "new_hashes": {"pathways_game.py": new_hashes["pathways_game.py"]},
+        "claim": "judge validation only; live and replay dataflow semantics unchanged",
+    })
+    briefing["program_hashes"] = new_hashes
+    write_json(briefing_path, briefing)
+    print("adopted route cost-and-geometry judge without restarting DDIR")
+
+
 def judge(run_dir):
     run_dir = os.path.abspath(run_dir)
     with open(os.path.join(run_dir, "briefing.json")) as source:
@@ -1156,7 +1190,11 @@ def main():
     parser.add_argument(
         "mode",
         choices=(
-            "setup", "judge", "extend-trail", "prepare-route-join-upgrade"
+            "setup",
+            "judge",
+            "extend-trail",
+            "prepare-route-join-upgrade",
+            "adopt-route-geometry-judge",
         ),
     )
     parser.add_argument("--run-dir", required=True)
@@ -1193,6 +1231,8 @@ def main():
         extend_trail(args.run_dir)
     elif args.mode == "prepare-route-join-upgrade":
         prepare_route_join_upgrade(args.run_dir)
+    elif args.mode == "adopt-route-geometry-judge":
+        adopt_route_geometry_judge(args.run_dir)
     elif not judge(args.run_dir):
         sys.exit(1)
 
