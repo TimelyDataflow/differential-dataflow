@@ -124,3 +124,70 @@ There is also a structural obstacle. A proposal's value is `max(t, L_n) >= L_n`
 (time = peak − level) a proposal would have to arrive *before* its own source:
 a negative delay, which `enter_at` cannot express. Ascending order is the only
 direction relative delays can even represent here.
+
+## Iteration 1c: is it the priority, or just the staggering?
+
+A control. `water_rand.ddp` releases boundary seeds in a pseudo-random order
+(`hash(span, x, y)`) over the same number of rounds; `water_sweep.ddp` releases
+them in a northwest-to-southeast spatial sweep of comparable span. Neither
+order knows anything about height. engadin_128, initial fill, all exact:
+
+| seed release | fill | peak RSS |
+|---|---|---|
+| ascending by height | **0.45s** | **148 MB** |
+| pseudo-random, same span | 1.65s | 253 MB |
+| baseline, no stagger (ceiling) | 2.34s | 322 MB |
+| descending by height | 4.65s | 539 MB |
+| spatial sweep | 5.80s | 555 MB |
+
+Staggering alone is worth about 1.4x (random beats the baseline). The
+remaining 3.7x is the *ordering*. And a stagger that fights the physics is
+worse than none at all: the spatial sweep is 2.5x slower than the baseline and
+13x slower than ascending, because it releases wavefronts in an order
+uncorrelated with level and then retracts them.
+
+So the schedule is not a tuning knob on the side of the rule. Same fixed point,
+same rules, a 13x spread between the best and worst release order.
+
+## Iteration 2 (2026-08-31): the route scope resists the same trick
+
+The pathways route scope is Dijkstra over an additive cost, so unlike water's
+bottleneck recursion a relative `enter_at` delay *does* compose into the right
+absolute order — waiting the step's own cost puts a proposal at the round equal
+to its accumulated cost. That is the textbook prioritized-iteration case, and
+it loses badly. Two surveys on engadin_128, all exact in cost and geometry:
+
+| route scope | routes tick | peak RSS |
+|---|---|---|
+| `pathways.ddp` (baseline) | **4.09s** | **1,247 MB** |
+| `pathways_pri.ddp` (wait the exact step cost) | 28.69s | 2,891 MB |
+| `pathways_bucket.ddp` (four coarse buckets) | 31.10s | 2,970 MB |
+
+There is plenty of churn to attack — the baseline issues 2,141,238 proposals
+for two 129-cell routes, 44.0% of them retractions, over 149 rounds — so the
+failure is not that the schedule is already perfect.
+
+The difference from water is *where* the delay is applied. Water's win delays
+**entry**: seeds cross into the scope at staggered times and propagation runs
+at full speed, so the loop's arrangements keep few distinct timestamps. Both
+route variants delay **every proposal inside the loop**, which multiplies the
+timestamp diversity of the loop's own arrangements — and memory more than
+doubles, which is the tell. Bucketing does not rescue it: four buckets cost
+slightly *more* than exact cost order, so the round count is not the dominant
+term either.
+
+Working rule from these five experiments: **prioritize entry, not
+propagation.** A delay on records crossing into a scope is close to free and
+can be worth 5-7x; a delay on records circulating within a scope is paid again
+in every arrangement the loop maintains.
+
+Route scopes have no seed to order (one source per route), so the next lever is
+not scheduling at all. Two candidates, in order of expected value:
+1. `min` reduces `(cost, predecessor_x, predecessor_y)` lexicographically, so a
+   cell churns when its *predecessor* improves at equal cost. Reducing on cost
+   alone and recovering predecessors once, outside the loop, should cut churn
+   that no schedule can reach.
+2. The scope relaxes the whole board from every source when only one target is
+   wanted. Goal-directed pruning (A*'s `g+h`) needs an admissible bound in the
+   term language, and as a delay it would run into the same
+   propagation-delay cost as above — so it wants a filter, not a schedule.
