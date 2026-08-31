@@ -192,6 +192,21 @@ adds live surveys one at a time while checking cost and geometry against
 Dijkstra. [`NOTES_PERF.md`](NOTES_PERF.md) records the 53/26/13 m results and
 the workload-dependent crossover between ordinary and priority-class routes.
 
+To leave the 13 m hydrology board live for the viewer, without installing the
+more expensive route fixed point, stage the large-mesh water implementation
+together with exact flow and accumulation:
+
+```text
+python3 interactive/server/demo/dem/stage_board.py \
+  --board engadin_512 --port 8051 --ws-host HOST \
+  --water-program water_gpri.ddp --with-flow
+```
+
+The staging command checks water against an independent priority flood and
+checks flow and accumulation against the Python oracle before publishing the
+endpoint. It exposes terrain, water, flow, accumulation, and board metadata;
+it deliberately does not install towns or routes.
+
 A stopped or crashed V2 world can be rebuilt from its saved briefing and
 accepted semantic event log. Recovery stages one replacement, verifies saved
 program hashes when present, and publishes the destination only after every
