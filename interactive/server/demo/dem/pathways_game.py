@@ -846,6 +846,81 @@ def prepare_grade_trials(run_dir):
     )
 
 
+def prepare_water_priority_upgrade(run_dir):
+    """Seal the exact boundary-seeded water schedule and stop the old world."""
+    run_dir = os.path.abspath(run_dir)
+    briefing_path = os.path.join(run_dir, "briefing.json")
+    with open(briefing_path) as source:
+        briefing = json.load(source)
+    if int(briefing.get("version", 1)) < 2:
+        raise RuntimeError("water scheduling upgrade requires a replayable world")
+
+    client = Client(int(briefing["port"]))
+    terrain = {
+        key: value[0]
+        for key, value in unique_rows(
+            client.cmd("peek terrain", collect=True), "terrain"
+        ).items()
+    }
+    water = {
+        key: value[0]
+        for key, value in unique_rows(
+            client.cmd("peek water", collect=True), "water"
+        ).items()
+    }
+    accum = {
+        key: value[0]
+        for key, value in unique_rows(
+            client.cmd("peek accum", collect=True), "accum"
+        ).items()
+    }
+    expected_water = priority_flood(terrain)
+    _expected_flow, expected_accum = py_flow_accum(expected_water)
+    if water != expected_water or accum != expected_accum:
+        raise RuntimeError(
+            "live hydrology must match the independent oracle before upgrade"
+        )
+
+    old_hashes = briefing.get("program_hashes", {})
+    new_hashes = program_hashes()
+    changed = {
+        name for name in set(old_hashes) | set(new_hashes)
+        if old_hashes.get(name) != new_hashes.get(name)
+    }
+    allowed = {"water.ddp", "pathways_game.py"}
+    if "water.ddp" not in changed or not changed <= allowed:
+        raise RuntimeError(
+            f"unexpected files at water-priority boundary: {sorted(changed)}"
+        )
+    briefing.setdefault("program_upgrades", []).append({
+        "name": "boundary-seeded-water-v1",
+        "changed_files": sorted(changed),
+        "old_hashes": {
+            name: old_hashes.get(name) for name in sorted(changed)
+        },
+        "new_hashes": {
+            name: new_hashes.get(name) for name in sorted(changed)
+        },
+        "claim": (
+            "exact scheduling change: boundary seeds grow the same priority-"
+            "flood fixed point in height classes instead of descending from "
+            "a global ceiling"
+        ),
+        "live_oracle": {
+            "terrain_cells": len(terrain),
+            "water_exact": True,
+            "accum_exact": True,
+        },
+    })
+    briefing["program_hashes"] = new_hashes
+    write_json(briefing_path, briefing)
+    stop_recorded_server(run_dir)
+    print(
+        "sealed exact water-scheduling upgrade and stopped source server; "
+        f"changed {sorted(changed)}"
+    )
+
+
 def adopt_route_geometry_judge(run_dir):
     """Record a judge-only game-driver upgrade without restarting DDIR."""
     run_dir = os.path.abspath(run_dir)
@@ -1269,6 +1344,7 @@ def main():
             "extend-trail",
             "prepare-route-join-upgrade",
             "prepare-grade-trials",
+            "prepare-water-priority-upgrade",
             "adopt-route-geometry-judge",
         ),
     )
@@ -1308,6 +1384,8 @@ def main():
         prepare_route_join_upgrade(args.run_dir)
     elif args.mode == "prepare-grade-trials":
         prepare_grade_trials(args.run_dir)
+    elif args.mode == "prepare-water-priority-upgrade":
+        prepare_water_priority_upgrade(args.run_dir)
     elif args.mode == "adopt-route-geometry-judge":
         adopt_route_geometry_judge(args.run_dir)
     elif not judge(args.run_dir):

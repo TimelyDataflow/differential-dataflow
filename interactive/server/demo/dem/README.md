@@ -186,6 +186,12 @@ synthetic board (water, drainage, an established path, a road, reuse weights
 python3 interactive/server/demo/dem/check_routes.py
 ```
 
+Scaling harnesses retain the same exactness boundary. `bench_hydrology.py`
+measures the composed `water → flow → accum` pipeline, and `bench_routing.py`
+adds live surveys one at a time while checking cost and geometry against
+Dijkstra. [`NOTES_PERF.md`](NOTES_PERF.md) records the 53/26/13 m results and
+the workload-dependent crossover between ordinary and priority-class routes.
+
 A stopped or crashed V2 world can be rebuilt from its saved briefing and
 accepted semantic event log. Recovery stages one replacement, verifies saved
 program hashes when present, and publishes the destination only after every
@@ -197,6 +203,13 @@ python3 interactive/server/demo/dem/pathways_resume.py \
   --run-dir interactive/server/demo/dem/runs/pathways-01-recovered \
   --port 8091 --ws-host 127.0.0.1
 ```
+
+An already-running world predating the boundary-seeded `water.ddp` must cross
+an explicit exact-semantics boundary before recovery with the new program.
+`prepare-water-priority-upgrade` checks its live water and accumulation against
+the independent oracles, records both program hashes, and stops the source;
+`pathways_resume.py` then performs the ordinary staged replay. Live routes do
+not need to be retired because water rows are unchanged.
 
 The viewer discovers `sites`, `route_path`, `route_options`, `path_use`,
 established paths, and the canonical `infrastructure` trace alongside terrain,

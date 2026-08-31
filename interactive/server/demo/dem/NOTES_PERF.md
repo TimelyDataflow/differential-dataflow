@@ -272,8 +272,10 @@ an `engadin_512` preset for it; the file itself is generated, not committed.
   still 7x better than the baseline.
 - **Cold loads and large meshes: `water_gpri.ddp`.** 2.4x faster to load and
   1.6x smaller at 262k cells, at the cost of slower edits.
-- **Routes: `pathways_gpri.ddp` unconditionally.** It is better on both axes,
-  and more so the more surveys are live.
+- **Routes: benchmark both route schedules on representative requests.** The
+  original long-route workload strongly favors `pathways_gpri.ddp`, but the
+  follow-up mixed-resolution sweep found real short-route regressions and a
+  hard-route crossover; see iteration 6.
 
 The trade-off has one shape: entering *propagation* in priority classes makes
 the first computation cheap and makes each later change walk the class ladder.
@@ -304,3 +306,73 @@ have been deleted. Their measurements are the tables above: dropping the
 ceiling alone is worth almost nothing, an increment is the wrong term for
 `enter_at`, descending order costs 10x against ascending, and a random or
 spatial release recovers only the staggering, not the ordering.
+
+## Iteration 6: composed scaling and the route crossover (2026-08-31)
+
+The promoted water result reproduces on a second run while the persistent
+three-route world remains live. `bench_hydrology.py` then installs `flow.ddp`
+over the settled water trace and verifies water, flow geometry, and
+accumulation against the independent Python implementations before and after
+the dam edit.
+
+| board / water | cells | water fill / RSS | add flow / composed RSS | composed edit |
+|---|---:|---:|---:|---:|
+| 53 m `engadin_128` / default | 16,384 | 0.46s / 148 MB | 0.20s / 211 MB | 0.12s |
+| 53 m `engadin_wide` / default | 49,152 | 2.42s / 487 MB | 0.66s / 643 MB | 0.14s |
+| 26 m `engadin_256` / default | 65,536 | 3.67s / 732 MB | 1.18s / 894 MB | 0.45s |
+| 13 m `engadin_512` / `water_gpri` | 262,144 | 12.54s / 2,350 MB | 7.44s / 3,672 MB | 4.58s |
+
+Every row and edit is exact. On the 13 m board the edit changed 20,773
+accumulation cells, so 4.58 seconds is a real composed update rather than a
+water-only number. Flow/accumulation becomes material at that scale, but it is
+still feasible under a 4.2 GB server guard.
+
+The standalone 13 m water comparison also reproduced the cold/edit trade-off:
+`water_gpri` filled in 12.68s at 2,326 MB and edited in 2.91s; default
+`water.ddp` filled in 30.37s at 3,654 MB and edited in 0.73s. Both states were
+exact priority floods.
+
+`bench_routing.py` stages exact hydrology plus a selectable pathways program,
+adds four diverse requests sequentially, and checks every live route's cost
+and predecessor geometry against heap Dijkstra. The requests include two
+farm-to-St.-Moritz profiles, a drainage-aware farm-to-Pontresina route, and a
+reuse-heavy quarry-to-Celerina route.
+
+On the 53 m board, where the first two routes contain 53 cells, priority-class
+overhead loses:
+
+| program | first route | second route | RSS after two |
+|---|---:|---:|---:|
+| `pathways.ddp` | **0.44s** | **0.64s** | **604 MB** |
+| `pathways_gpri.ddp` | 0.69s | 0.80s | 617 MB |
+
+On the 26 m board the crossover appears within one workload:
+
+| program | route 1 | route 2 | hard route 3 | route 4 | observed high RSS |
+|---|---:|---:|---:|---:|---:|
+| `pathways.ddp` | **1.83s** | **4.07s** | 20.41s | >4,600 MB guard | >4,600 MB |
+| `pathways_gpri.ddp` | 3.51s | 4.24s | **4.77s** | **4.86s** | **4,326 MB** |
+
+The baseline is better for the first easy route and about even for the second.
+Accumulated-cost priority is transformative for the expensive drainage-aware
+route and lets all four remain live under the same guard. The baseline's third
+route was exact at 4,339 MB; the fourth was deliberately killed when the
+server crossed 4,600 MB, before the host could swap.
+
+The conclusion is narrower than “prioritize routes unconditionally.” Absolute
+cost classes can remove large amounts of churn in a heterogeneous cost field,
+but impose overhead when an easy wavefront already settles cheaply. A
+per-request scheduling mode or a predictor based on observed frontier churn
+is more promising than globally replacing `pathways.ddp` today.
+
+This also locates the next scale boundary. On 26 m terrain, composed hydrology
+uses under 1 GB, while the pathways base plus three baseline routes reaches
+4.3 GB. A 13 m full pathways world was not attempted beside the existing live
+server: hydrology alone is 3.7 GB, and the 26 m route measurements already
+show that recursive route state, not water, needs the next optimization.
+
+The persistent server on port 8051 was loaded before `water.ddp` was promoted.
+It has the same exact rows but none of the new schedule's memory benefit yet.
+`prepare-water-priority-upgrade` now provides the required hash/audit boundary
+for a staged recovery; it was deliberately not invoked during benchmarking, so
+the one live shared world and its three route proposals remain available.
