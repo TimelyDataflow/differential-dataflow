@@ -13,24 +13,33 @@ factor: zoom 11 here is ~52.6 m per cell (not ~76), zoom 12 is ~26.3 m.
 |---|---|---|---|---|
 | `engadin_128.txt` | 11 | 128×128, ~53 m | 46.5513N 9.8053E | 46.4908N 9.8932E |
 | `engadin_256.txt` | 12 | 256×256, ~26 m | 46.5485N 9.8204E | 46.4880N 9.9083E |
+| `engadin_wide.txt` | 11 | 256×192, ~53 m | 46.5589N 9.7559E | 46.4681N 9.9316E |
 
 The 256 board is the same reach 2× finer, nudged ~1.2 km east and ~0.3 km
 south so Celerina and Pontresina make it into frame. It is a separate board
 for looking closer: nothing calibrated for the game (budgets, dam, village
 cells, road grants) transfers to it.
 
+The wide board is instead the persistent game's V4 continuation. It keeps the
+53 m scale and extends the calibrated board 72 cells west, 56 east, and 16
+north and south. Every old terrain cell is exactly preserved at
+`wide(x,y) = old(x+72,y+16)`. V4 freezes the completed V3 relations under that
+transform rather than rerunning old route choices on a newly enlarged graph.
+
 ## Landmarks, (x, y) = (column, row)
 
-| place | engadin_128 | engadin_256 | height |
-|---|---|---|---|
-| Lej da San Murezzan (St. Moritz lake) | (59, 121) | (75, 231) | 1763 (real 1768) |
-| St. Moritz Dorf (hillside above) | ~(44, 112) | ~(44, 212) | slope, 1820–1900 |
-| Champfèr/Suvretta flats | SW corner, 1822 flat | SW corner, 1823 flat | ~1822 |
-| Samedan | (99, 36) | (153, 60) | 1705 |
-| Celerina (valley floor by the Inn) | off-board (~5 cells E) | ~(185, 172) | 1727 |
-| Pontresina | off-board (~13 cells E) | (238, 245) | 1793 |
-| dam line (game) | column x=96, y 29–94 | column x=148, y 47–177 | crest 1775, river at 1704 |
-| natural Inn exit (toward Bever) | NE corner, east edge y≈14 | thread x≈180–199 to N/NE edge | ~1694 |
+| place | engadin_128 | engadin_256 | engadin_wide | height |
+|---|---|---|---|---|
+| Lej da San Murezzan (St. Moritz lake) | (59, 121) | (75, 231) | (131, 137) | 1763 (real 1768) |
+| St. Moritz Dorf (hillside above) | ~(44, 112) | ~(44, 212) | ~(116, 128) | slope, 1820–1900 |
+| Champfèr/Suvretta flats | SW corner, 1822 flat | SW corner, 1823 flat | ~(116, 136) | ~1822 |
+| Samedan | (99, 36) | (153, 60) | (171, 52) | 1705 |
+| Celerina (valley floor by the Inn) | off-board (~5 cells E) | ~(185, 172) | ~(150, 98) | 1722–1727 |
+| Pontresina | off-board (~13 cells E) | (238, 245) | ~(211, 134) | 1793–1807 |
+| Piz Nair summit | off-board west | off-board west | ~(45, 111) | 3016 |
+| Piz Nair ridge observatory (game) | off-board west | off-board west | (55, 110) | 2861 |
+| Muottas ridge shelter (game) | off-board east | off-board east | (213, 75) | ~2400 |
+| natural Inn exit (toward Bever) | NE corner, east edge y≈14 | thread x≈180–199 to N/NE edge | ~(200, 30) | ~1694 |
 
 Corrections to labels used earlier in this project's notes: the reservoir the
 game dams is **not** a gorge by St. Moritz — it is the **Inn meadows between

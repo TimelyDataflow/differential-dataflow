@@ -5,6 +5,7 @@ from .pathways_rules import (
     ENGINEERED_ROAD,
     ROAD,
     connected_cells,
+    edge_grade_ok,
     engineered_profile,
     replay_history,
     required_kind,
@@ -157,6 +158,23 @@ class PathwaysRulesTest(unittest.TestCase):
                 legacy, {(0, 0)}, terrain, water, **grade_options
             ),
             {(0, 0), (1, 0), (2, 0)},
+        )
+
+    def test_edge_grade_check_uses_orthogonal_and_diagonal_lengths(self):
+        terrain = {(0, 0): 0, (1, 0): 4, (1, 1): 5}
+        self.assertTrue(
+            edge_grade_ok((0, 0), (1, 0), terrain, 400, (10, 14))
+        )
+        self.assertTrue(
+            edge_grade_ok((0, 0), (1, 1), terrain, 400, (10, 14))
+        )
+        terrain[(1, 0)] = 5
+        terrain[(1, 1)] = 6
+        self.assertFalse(
+            edge_grade_ok((0, 0), (1, 0), terrain, 400, (10, 14))
+        )
+        self.assertFalse(
+            edge_grade_ok((0, 0), (1, 1), terrain, 400, (10, 14))
         )
 
     def test_engineered_profile_is_least_fill_and_rejects_fixed_boundary(self):
@@ -347,6 +365,221 @@ class PathwaysRulesTest(unittest.TestCase):
             replay_history(
                 history + [bad_detail], briefing, terrain, water, accum
             )
+
+    def test_v4_genesis_snapshot_and_observatory_foundation(self):
+        terrain = {(x, 0): 0 for x in range(3)}
+        water = dict(terrain)
+        accum = {cell: 1 for cell in terrain}
+        briefing = {
+            "version": 4,
+            "sites": [
+                {"id": 10, "label": "Source", "cell": [0, 0],
+                 "kind": 1, "amount": 5},
+                {"id": 20, "label": "Online quarry", "cell": [1, 0],
+                 "kind": 3, "amount": 5},
+                {"id": 30, "label": "Observatory", "cell": [2, 0],
+                 "kind": 5, "amount": 20},
+            ],
+            "agents": {
+                "1": {"road_grant": 0, "bridge_grant": 0,
+                      "build_kinds": []},
+                "3": {"road_grant": 0, "bridge_grant": 0,
+                      "build_kinds": [BRIDGE]},
+            },
+            "orthogonal_metres": 10,
+            "diagonal_metres": 14,
+            "road_grade_permille": 400,
+            "trail_use_required": 2,
+            "bridge_accum_threshold": 10,
+            "porter_trip_capacity": 5,
+            "porter_town_quota": 10,
+            "max_live_routes": 1,
+            "scout_agent": 1,
+            "scout_trip_limit": 2,
+            "worksite_haul_agent": 3,
+            "initial_aggregate": 0,
+            "initial_rock": 0,
+            "quarry_aggregate": 1,
+            "quarry_rock": 1,
+            "drainage_embankment_fill": 2,
+            "initial_infrastructure": [
+                [1, 0, ENGINEERED_ROAD, 2],
+                [2, 0, ENGINEERED_ROAD, 2],
+            ],
+            "initial_traversals": [
+                [1, 0, 0, 1, 90], [1, 1, 0, 1, 90],
+                [2, 0, 0, 1, 91], [2, 1, 0, 1, 91],
+            ],
+            "initial_deliveries": [[1, 1, 20, 5, 90, 0]],
+        }
+        events = [
+            {"accepted": True, "agent": 3,
+             "command": "survey 100 20 30 1 4 1000 1 1"},
+            {"accepted": True, "agent": 3,
+             "command": "deliver 30 20 100"},
+        ]
+        replayed = replay_history(
+            events, briefing, terrain, water, accum
+        )
+        self.assertEqual(replayed["delivered_by_target"], {20: 5, 30: 20})
+        self.assertEqual(replayed["deliveries"][(2,)][1:3], (30, 20))
+        self.assertEqual(
+            replayed["infrastructure"],
+            {(1, 0): (ENGINEERED_ROAD, 2),
+             (2, 0): (ENGINEERED_ROAD, 2)},
+        )
+
+    def test_v5_trail_outpost_replays_two_exact_courier_loads(self):
+        terrain = {(x, 0): 0 for x in range(3)}
+        water = dict(terrain)
+        accum = {cell: 1 for cell in terrain}
+        briefing = self._v5_outpost_briefing()
+        events = [
+            {"accepted": True, "agent": 1,
+             "command": "survey 500 10 60 1 12 1000 0 1"},
+            {"accepted": True, "agent": 1,
+             "command": "deliver 60 5 500"},
+            {"accepted": True, "agent": 1,
+             "command": "deliver 60 5 500"},
+        ]
+        replayed = replay_history(
+            events, briefing, terrain, water, accum
+        )
+        self.assertEqual(replayed["delivered_by_target"], {60: 10})
+        self.assertEqual(
+            [value[4] for value in replayed["deliveries"].values()],
+            [0, 0],
+        )
+        self.assertEqual(replayed["path_use"], {cell: 2 for cell in terrain})
+
+        supply_limited = self._v5_outpost_briefing()
+        supply_limited["sites"][0]["amount"] = 5
+        with self.assertRaisesRegex(ValueError, "pooled source supply exceeded"):
+            replay_history(
+                events, supply_limited, terrain, water, accum
+            )
+
+    def test_v5_trail_outpost_rejects_invalid_mode_and_route(self):
+        terrain = {(x, 0): 0 for x in range(3)}
+        water = dict(terrain)
+        accum = {cell: 1 for cell in terrain}
+        briefing = self._v5_outpost_briefing()
+        survey = {
+            "accepted": True,
+            "agent": 1,
+            "command": "survey 500 10 60 1 12 1000 0 1",
+        }
+
+        invalid_deliveries = (
+            ("courier", {"accepted": True, "agent": 2,
+                         "command": "deliver 60 5 500"}, briefing,
+             terrain, water, "only the mountain courier"),
+            ("exact load", {"accepted": True, "agent": 1,
+                            "command": "deliver 60 4 500"}, briefing,
+             terrain, water, "exactly porter capacity"),
+        )
+        for label, delivery, rules, ground, flood, message in invalid_deliveries:
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(ValueError, message):
+                    replay_history(
+                        [survey, delivery], rules, ground, flood, accum
+                    )
+
+        wet = dict(water)
+        wet[(1, 0)] = 1
+        with self.assertRaisesRegex(ValueError, "route must be dry"):
+            replay_history(
+                [survey, {"accepted": True, "agent": 1,
+                          "command": "deliver 60 5 500"}],
+                briefing, terrain, wet, accum,
+            )
+
+        steep = dict(terrain)
+        steep[(1, 0)] = 5
+        with self.assertRaisesRegex(ValueError, "foot-grade limit"):
+            replay_history(
+                [survey, {"accepted": True, "agent": 1,
+                          "command": "deliver 60 5 500"}],
+                briefing, steep, dict(steep), accum,
+            )
+
+        freight = self._v5_outpost_briefing()
+        freight["initial_infrastructure"] = [
+            [1, 0, ENGINEERED_ROAD, 2],
+            [2, 0, ENGINEERED_ROAD, 2],
+        ]
+        with self.assertRaisesRegex(ValueError, "may not use road freight"):
+            replay_history(
+                [survey, {"accepted": True, "agent": 1,
+                          "command": "deliver 60 5 500"}],
+                freight, terrain, water, accum,
+            )
+
+        non_source = dict(survey, command="survey 500 20 60 1 12 1000 0 1")
+        with self.assertRaisesRegex(ValueError, "start at a supply site"):
+            replay_history(
+                [non_source, {"accepted": True, "agent": 1,
+                              "command": "deliver 60 5 500"}],
+                briefing, terrain, water, accum,
+            )
+
+    def test_v5_trail_outpost_route_cannot_be_built_or_paved(self):
+        terrain = {(x, 0): 0 for x in range(3)}
+        water = dict(terrain)
+        accum = {cell: 1 for cell in terrain}
+        briefing = self._v5_outpost_briefing()
+        survey = {
+            "accepted": True,
+            "agent": 1,
+            "command": "survey 500 10 60 1 12 1000 0 1",
+        }
+        with self.assertRaisesRegex(ValueError, "may not be built"):
+            replay_history(
+                [survey, {"accepted": True, "agent": 2,
+                          "command": "build 500 bridge"}],
+                briefing, terrain, water, accum,
+            )
+        with self.assertRaisesRegex(ValueError, "may not be paved"):
+            replay_history(
+                [survey, {"accepted": True, "agent": 1,
+                          "command": "pave 500 1"}],
+                briefing, terrain, water, accum,
+            )
+
+    def _v5_outpost_briefing(self):
+        return {
+            "version": 5,
+            "sites": [
+                {"id": 10, "label": "Source", "cell": [0, 0],
+                 "kind": 1, "amount": 10},
+                {"id": 20, "label": "Valley yard", "cell": [1, 0],
+                 "kind": 2, "amount": 0},
+                {"id": 60, "label": "Trail outpost", "cell": [2, 0],
+                 "kind": 6, "amount": 10},
+            ],
+            "agents": {
+                "1": {"road_grant": 0, "bridge_grant": 0,
+                      "build_kinds": []},
+                "2": {"road_grant": 2, "bridge_grant": 0,
+                      "build_kinds": [ENGINEERED_ROAD]},
+            },
+            "orthogonal_metres": 10,
+            "diagonal_metres": 14,
+            "road_grade_permille": 400,
+            "foot_grade_permille": 400,
+            "trail_use_required": 2,
+            "bridge_accum_threshold": 10,
+            "porter_trip_capacity": 5,
+            "porter_town_quota": 10,
+            "max_live_routes": 1,
+            "scout_agent": 1,
+            "scout_trip_limit": 2,
+            "initial_aggregate": 2,
+            "initial_rock": 0,
+            "quarry_aggregate": 0,
+            "quarry_rock": 0,
+            "drainage_embankment_fill": 2,
+        }
 
     def test_history_replay_checks_path_before_paving_and_freight(self):
         terrain = {(x, 0): 0 for x in range(3)}

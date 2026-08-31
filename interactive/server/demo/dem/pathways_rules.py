@@ -189,10 +189,20 @@ def passable_infrastructure(infrastructure, terrain, water):
 
 
 def grade_limit(src, dst, grade_permille, step_lengths):
-    """Maximum integer height step for an orthogonal/diagonal road edge."""
+    """Maximum integer height step for an orthogonal/diagonal edge."""
     diagonal = src[0] != dst[0] and src[1] != dst[1]
     distance = step_lengths[1] if diagonal else step_lengths[0]
     return grade_permille * distance // 1000
+
+
+def edge_grade_ok(src, dst, terrain, grade_permille, step_lengths):
+    """Whether a terrain edge is within a mode's configured grade limit."""
+    if grade_permille is None:
+        return True
+    return (
+        abs(terrain[src] - terrain[dst])
+        <= grade_limit(src, dst, grade_permille, step_lengths)
+    )
 
 
 def graded_edge_ok(
@@ -217,9 +227,12 @@ def graded_edge_ok(
         return True
     if ENGINEERED_ROAD not in (src_kind, dst_kind):
         return True
-    return (
-        abs(terrain[src] - terrain[dst])
-        <= grade_limit(src, dst, grade_permille, step_lengths)
+    return edge_grade_ok(
+        src,
+        dst,
+        terrain,
+        grade_permille,
+        step_lengths,
     )
 
 
@@ -393,13 +406,34 @@ def replay_history(events, briefing, terrain, water, accum):
         briefing.get("diagonal_metres", 37),
     )
     routes = {}
-    deliveries = {}
-    traversals = {}
+    deliveries = {
+        (int(row[0]),): tuple(map(int, row[1:]))
+        for row in briefing.get("initial_deliveries", [])
+    }
+    traversals = {
+        (int(row[0]), int(row[1]), int(row[2])): (
+            int(row[3]), int(row[4])
+        )
+        for row in briefing.get("initial_traversals", [])
+    }
     path_use = {}
-    infrastructure = {}
+    for _trip, x, y in traversals:
+        path_use[(x, y)] = path_use.get((x, y), 0) + 1
+    infrastructure = {
+        (int(row[0]), int(row[1])): (int(row[2]), int(row[3]))
+        for row in briefing.get("initial_infrastructure", [])
+    }
     delivered = {}
     porter_delivered = {}
     total_delivered = 0
+    for value in deliveries.values():
+        _agent, target_id, units, _route, mode = value
+        delivered[target_id] = delivered.get(target_id, 0) + units
+        total_delivered += units
+        if mode == 0:
+            porter_delivered[target_id] = (
+                porter_delivered.get(target_id, 0) + units
+            )
     build_actions = {}
     build_revision = 0
     fill_spent = 0
@@ -484,6 +518,7 @@ def replay_history(events, briefing, terrain, water, accum):
                 fail(index, "live route limit exceeded")
             request = {
                 "agent": agent,
+                "target_id": to_id,
                 "start": tuple(sites[from_id]["cell"]),
                 "target": tuple(sites[to_id]["cell"]),
                 "coefficients": tuple(coefficients),
@@ -540,13 +575,21 @@ def replay_history(events, briefing, terrain, water, accum):
                 fail(index, f"invalid delivery integer: {error}")
             town = sites.get(town_id)
             target_kind = int(town["kind"]) if town is not None else -1
-            allowed_targets = (0, 3, 4) if version >= 3 else (0,)
+            allowed_targets = (
+                (0, 3, 4, 5, 6) if version >= 5 else
+                (0, 3, 4, 5) if version >= 4 else
+                (0, 3, 4) if version >= 3 else
+                (0,)
+            )
             if town is None or target_kind not in allowed_targets:
                 fail(index, f"site {town_id} is not a delivery target")
             if units < 1:
                 fail(index, "delivery units must be positive")
             path = live_path(route_id, index)
-            if target_kind in (0, 3):
+            general_target_kinds = (
+                (0, 3, 6) if version >= 5 else (0, 3)
+            )
+            if target_kind in general_target_kinds:
                 if path[0] not in sources:
                     fail(index, "delivery route does not start at a supply site")
             else:
@@ -560,7 +603,7 @@ def replay_history(events, briefing, terrain, water, accum):
                 fail(index, "delivery route does not end at its target")
             if delivered.get(town_id, 0) + units > int(town["amount"]):
                 fail(index, "delivery target demand exceeded")
-            if target_kind in (0, 3):
+            if target_kind in general_target_kinds:
                 supply = sum(
                     int(site["amount"])
                     for site in briefing["sites"]
@@ -569,7 +612,8 @@ def replay_history(events, briefing, terrain, water, accum):
                 general_used = sum(
                     units0
                     for target_id, units0 in delivered.items()
-                    if int(sites[target_id]["kind"]) in (0, 3)
+                    if int(sites[target_id]["kind"])
+                    in general_target_kinds
                 )
                 if general_used + units > supply:
                     fail(index, "pooled source supply exceeded")
@@ -577,13 +621,34 @@ def replay_history(events, briefing, terrain, water, accum):
                 briefing.get("quarry_activation_agent", agent)
             ):
                 fail(index, "only the courier may activate the quarry")
-            if target_kind == 4 and agent != int(
+            if target_kind in (4, 5) and agent != int(
                 briefing.get("worksite_haul_agent", agent)
             ):
                 fail(index, "only the works crew may haul bulk rock")
+            if target_kind == 6:
+                if agent != int(briefing.get("scout_agent", agent)):
+                    fail(index, "only the mountain courier may supply an outpost")
+                if units != int(briefing["porter_trip_capacity"]):
+                    fail(index, "outpost delivery must be exactly porter capacity")
+                if any(water[cell] > terrain[cell] for cell in path):
+                    fail(index, "outpost route must be dry")
+                foot_grade_permille = int(briefing["foot_grade_permille"])
+                if any(
+                    not edge_grade_ok(
+                        src,
+                        dst,
+                        terrain,
+                        foot_grade_permille,
+                        step_lengths,
+                    )
+                    for src, dst in zip(path, path[1:])
+                ):
+                    fail(index, "outpost route exceeds the foot-grade limit")
             connected = public_network()
             freight = all(cell in connected for cell in path)
-            if target_kind == 4 and not freight:
+            if target_kind == 6 and freight:
+                fail(index, "outpost delivery may not use road freight")
+            if target_kind in (4, 5) and not freight:
                 fail(index, "bulk rock requires a fully connected road route")
             if not freight:
                 if units > int(briefing["porter_trip_capacity"]):
@@ -597,7 +662,7 @@ def replay_history(events, briefing, terrain, water, accum):
                     porter_delivered.get(town_id, 0) + units
                 )
 
-            delivery_id = len(deliveries) + 1
+            delivery_id = max((key[0] for key in deliveries), default=0) + 1
             mode = 1 if freight else 0
             deliveries[(delivery_id,)] = (
                 agent,
@@ -619,16 +684,23 @@ def replay_history(events, briefing, terrain, water, accum):
             # Legacy V2 paving remains replayable after a world is upgraded.
             # The V3 client exposes `build` instead, so no new ungraded road can
             # be introduced through this compatibility branch.
-            if version >= 3 and index > int(
-                briefing.get("legacy_event_count", 0)
-            ):
-                fail(index, "legacy paving occurred after the upgrade boundary")
             if len(tokens) != 3:
                 fail(index, "pave requires route and cell count")
             try:
                 route_id, count = map(int, tokens[1:])
             except ValueError as error:
                 fail(index, f"invalid paving integer: {error}")
+            request = routes.get(route_id)
+            if (
+                version >= 5
+                and request is not None
+                and int(sites[request["target_id"]]["kind"]) == 6
+            ):
+                fail(index, "a trail-outpost route may not be paved")
+            if version >= 3 and index > int(
+                briefing.get("legacy_event_count", 0)
+            ):
+                fail(index, "legacy paving occurred after the upgrade boundary")
             if count < 1:
                 fail(index, "pave count must be positive")
             path = live_path(route_id, index)
@@ -699,6 +771,13 @@ def replay_history(events, briefing, terrain, water, accum):
                 route_id = int(tokens[1])
             except ValueError as error:
                 fail(index, f"invalid build route: {error}")
+            request = routes.get(route_id)
+            if (
+                version >= 5
+                and request is not None
+                and int(sites[request["target_id"]]["kind"]) == 6
+            ):
+                fail(index, "a trail-outpost route may not be built")
             alignment = tokens[2]
             prior_alignment = route_build_modes.get(route_id)
             if prior_alignment is not None and prior_alignment != alignment:
@@ -768,9 +847,16 @@ def replay_history(events, briefing, terrain, water, accum):
             if quarry_online_before:
                 aggregate_capacity += int(briefing["quarry_aggregate"])
                 rock_capacity += int(briefing["quarry_rock"])
-            aggregate_spent = sum(
-                built_kind == ENGINEERED_ROAD
-                for built_kind, _owner in infrastructure.values()
+            aggregate_spent = (
+                sum(
+                    value[4] == ENGINEERED_ROAD
+                    for value in build_actions.values()
+                )
+                if version >= 4 else
+                sum(
+                    built_kind == ENGINEERED_ROAD
+                    for built_kind, _owner in infrastructure.values()
+                )
             )
             if (
                 kind == ENGINEERED_ROAD

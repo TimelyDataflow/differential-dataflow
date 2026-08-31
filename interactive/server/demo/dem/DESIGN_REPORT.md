@@ -1,5 +1,91 @@
 # Civil logistics design report
 
+## Persistent pathways V4/V5: wide world, observatory, and alpine trail (2026-08-30)
+
+The persistent world now uses `engadin_wide.txt`, a 256×192 zoom-11 crop at
+the original approximately 53 m cell scale. It extends rather than refines the
+terrain: every old cell is identical at `wide(x,y)=old(x+72,y+16)`. The
+completed V3 world was first judged `SUCCESS`, then frozen into a genesis
+snapshot containing 161 infrastructure cells, 1,211 traversal cells, 15
+deliveries, and zero terrain edits. Parent events, relations, programs, and the
+new DEM are hashed. Historical routes were not rerun against the larger graph.
+
+V4 made the Piz Nair ridge observatory at `(55,110)`, elevation 2,861 m, a
+required project. The selected quarry-to-observatory survey used coefficients
+`(1,12,1000,1,1)` and produced a 164-cell, 10,179 m route with 1,346 m of total
+elevation variation. It reused 111 established road/bridge cells before a
+53-cell mountain spur. Two courier scouts established that spur; route cost
+fell from 33,650 to 30,577 without changing the geometry.
+
+The road role then built exactly 53 engineered cells. The calibrated fill-only
+profile used 32 height-cell units across nine cells, with a 7 m maximum, and
+needed no new bridge because all three high-runoff crossings were inherited
+bridges on the valley trunk. Construction left 12/65 aggregate and 28/60 fill
+rock. Agent 3 delivered the 20-unit foundation from the online quarry over the
+fully connected route, after which the observatory became operational. No
+protected site flooded. The chronological judge agreed on routes,
+infrastructure, deliveries, traversals, paths, build revisions, terrain,
+water, accumulation, connectivity, roles, materials, genesis hash, and DEM
+hash: `VERDICT: SUCCESS`.
+
+This was productive but exposed the cost of the global recursive route: the
+53 one-cell revisions took 645.1 s, or 12.41 s per cell. The cell-by-cell event
+boundary remains valuable for audit and hydraulic feedback, but a UI batch is
+not enough; DDIR route maintenance itself needs to become cheaper.
+
+V5 then added a deliberately different mountain endpoint: the Muottas ridge
+shelter at `(213,75)`. A road is not prohibited merely by narrative. Its
+counterfactual profile is naturally absurd—44 roads, one bridge, 4,074 fill
+units, and a 252-unit maximum lift—while a foot route from the valley farm is
+46 cells / 2,627 m, dry, and has a 792.5-permille maximum grade. The rules
+therefore give foot travel an 800-permille limit, forbid road freight and
+construction to the trail-only endpoint, and require exactly two five-unit
+courier loads. Those real cargo trips established 45 new path cells, consumed
+the last 10 units of the 200-unit lowland supply, and supplied the shelter
+10/10. The route was retired and V5 also judged `SUCCESS` with the observatory
+still operational.
+
+The contrast is the most useful design conclusion of the turn:
+
+- Piz Nair justifies a shared bulk-access project and three role handoffs.
+- Muottas justifies a steep, cheap, low-capacity trail precisely because a
+  road is physically and materially inappropriate.
+- The same terrain and route objective can therefore support transport modes
+  without arbitrary unlock trees. Demand size, slope tolerance, and material
+  feasibility choose the mode.
+
+The first exact routing optimization was then tested by recovery over the same
+62 semantic commands. Inside `pathways::routes`, the N-row recursive frontier
+now joins its singleton request before the eight-edge fan-out. This removes the
+widest 8N intermediate arrangement without changing inputs, outputs, costs, or
+tie-breaking. The recovered world reproduced both route costs and all 53 bed
+heights/hydraulic deltas exactly, and the final judge remained `SUCCESS`.
+Construction replay improved to 536.6 s / 10.32 s per cell, a 16.8% latency
+reduction. A fresh optimized server settled around 4.9 GB RSS; one live
+post-trail route accepted in 13.5 s and did not push the sampled RSS above that
+level. RSS samples are allocator/high-water observations, not a controlled
+peak benchmark.
+
+The next exact scaling candidate is incumbent-bound A* pruning. A valid route
+witness supplies an upper cost `U`; octile distance plus unavoidable endpoint
+height difference is an admissible `h`. Offline reconstruction retained only
+17,171 of 49,152 cells (34.9%) for the observatory request under `g+h<=U`.
+The hard part is lifecycle correctness: road/path reuse can lower the witness,
+while terrain and hydrology edits can raise it, so request and bound must be
+refreshed atomically on every relevant revision and independently replayed.
+`enter_at(g+h)` is also worth an A/B scheduling experiment, but its current
+backend buckets priorities by powers of two and it does not reduce final state.
+An explicit survey rectangle is useful later for discovered terrain, but it is
+a new route-domain mechanic, not an exact optimization, and must be recorded
+as such.
+
+Good next geography is Pontresina as a road hub followed by a southeast
+Bernina/next-valley contract. Weather, funiculars, and genuine fog should wait.
+Honest observatory revelation requires filtered server/viewer relations,
+monotone shared `known_cells`, routing restricted to knowledge available at
+that historical revision, and replay auditing; the present global WebSocket,
+DEM file, and shortest-path oracle make a visual fog mask cosmetic.
+
 ## Persistent pathways V3: quarry and watershed extension (2026-08-30)
 
 The newest iteration keeps one 128×128 Engadine world and extends the completed

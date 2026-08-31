@@ -3,13 +3,16 @@
 This experiment asks whether cargo travel, topographic route choice, desire
 paths, road investment, and coarse hydraulic engineering produce a useful
 shared-world loop. Version 3 retains the completed valley network and adds a
-mountain quarry plus a watershed worksite.
+mountain quarry plus a watershed worksite. Version 4 freezes that completed
+world into a wider board and makes a Piz Nair ridge observatory the next
+required project.
 
-The interactive default is the 128×128 `engadin_128.txt` terrain. Its cells are
-approximately 53 m orthogonally and 75 m diagonally. Four settlements demand
-cargo; a hillside quarry and valley farm supply it. The 256×256 board remains
-available for higher-resolution experiments, but it is substantially more
-expensive and is not the default game configuration.
+V4 uses the 256×192 `engadin_wide.txt` terrain at the same approximately 53 m
+orthogonal and 75 m diagonal cell scale. It extends the V3 crop rather than
+increasing resolution. All inherited cells translate by `(+72,+16)`; roads,
+frozen journeys, deliveries, and any terrain works are imported as a hashed
+genesis snapshot. The 256×256 `engadin_256.txt` board is a different,
+higher-resolution experiment and is not the persistent game.
 
 DDIR maintains equilibrium water, drainage area, weighted route surveys,
 frozen journeys, public roads and bridges, source reachability, and delivered
@@ -33,8 +36,8 @@ distance × configured step length
 + reuse  × step length × surface factor
 ```
 
-The configured step lengths are 53/75 m on the default 128 board and 26/37 m
-on the optional 256 board. Surface factor is 2 on raw ground, 1 on an
+The configured step lengths are 53/75 m on the 128 and wide boards and 26/37 m
+on the optional fine 256 board. Surface factor is 2 on raw ground, 1 on an
 established path, and 0 on a road or bridge. With distance 1, reuse values 0,
 1, and 3 make raw movement cost respectively 1×, 3×, and 7× distance while
 retaining 1× distance on infrastructure. Existing paths can therefore justify
@@ -92,9 +95,47 @@ is connected to a lowland source does its one-time stock of 24 aggregate and
 50 rock become available. Worksite 21 accepts 30 bulk-rock units only from the
 online quarry over a wholly connected route.
 
+## V4 wide-world observatory
+
+V4 preserves that finished valley and adds site 30, the Piz Nair ridge
+observatory at `(55,110)`, elevation 2861 m. The observatory does not seed
+connectivity. Agent 1 must establish its approach with two scout journeys,
+agent 2 owns every new engineered surface-road cell, and agent 3 owns required
+bridges and the final 20-unit rock-foundation haul from the online quarry.
+It is operational only when its pad is both fully supplied and connected to
+the public network. The judge makes this a required success condition.
+
+The initial material release is deliberately tighter than the geographic
+search space: the online quarry provides 65 new aggregate and 60 road-fill
+rock units. The calibrated contour approach reuses 111 inherited cells and
+needs 53 new road cells, 32 fill units, and no new bridge. A poor alignment can
+therefore consume the road or fill margin. Only one route survey may remain
+live on the wide board because recursive routes, rather than hydrology, are the
+dominant memory cost; alternatives must be compared serially and retired.
+
+The full terrain remains visible in V4. An observatory later revealing shared
+terrain is a good thematic payoff, but honest fog requires filtered server and
+viewer relations plus route solving restricted to already-known cells. A
+visual mask over today's global WebSocket and route oracle would only pretend
+that information was hidden.
+
+## V5 trail-only ridge shelter
+
+Once the observatory is operational, V5 adds site 31 at `(213,75)`. It consumes
+the final ten units of lowland supply as exactly two five-unit courier loads.
+Each journey must start at an ordinary source, remain dry, and keep every edge
+within the 800-permille foot-grade limit. Road freight is rejected, and a route
+whose target is the trail outpost may not be paved or engineered. The two cargo
+journeys themselves establish the desire path; free scouting is unnecessary.
+
+This modal distinction comes from the terrain. The accepted 2,627 m foot route
+has a 792.5-permille maximum grade. An engineered counterfactual needs 4,074
+fill units and a 252-unit single-cell lift, far outside the remaining stock.
+The trail rule recognizes a route humans could walk but should not road-build.
+
 ## Survey lifecycle and commands
 
-At most four route surveys may remain live. Live surveys are the expensive
+At most four route surveys may remain live in V2/V3, and one in V4. Live surveys are the expensive
 recursive state; frozen journeys and public infrastructure persist after a
 survey is retired. Only the survey owner may retire it, including after it has
 been used for deliveries. The chronological event replay preserves the route
@@ -131,6 +172,20 @@ python3 interactive/server/demo/dem/pathways_client.py \
 ... --agent 2 build ROUTE embankment   # alternative all-road alignment
 ... --agent 2 build-until ROUTE bridge # repeat atomic cells until a role gate
 ... --agent 3 deliver 21 30 WORKSITE_ROUTE
+
+# V4 observatory continuation (quarry 20 -> observatory 30)
+... --agent N survey ROUTE 20 30 DIST GRADE WATER RUNOFF REUSE
+... --agent 1 scout ROUTE
+... --agent 1 scout ROUTE
+... --agent 2 build-until ROUTE bridge
+... --agent 3 build ROUTE bridge       # only if construction reaches a crossing
+... --agent 3 deliver 30 20 ROUTE
+
+# V5 trail shelter (source 11 -> shelter 31); cargo forms the trail
+... --agent 1 survey ROUTE 11 31 1 12 1000 0 1
+... --agent 1 deliver 31 5 ROUTE
+... --agent 1 deliver 31 5 ROUTE
+... --agent 1 retire ROUTE
 ```
 
 V3 makes the handoffs explicit. Agent 1 alone activates the quarry and scouts
@@ -148,6 +203,11 @@ accepted semantic events in order, recomputes the route at each historical
 delivery and paving revision, and compares reconstructed routes,
 infrastructure, traversals, path counts, delivery modes, connectivity, grants,
 and bridge classifications with DDIR's final relations.
+
+On the wide board the recursive frontier joins its route request before
+fanning out over eight neighbour edges. This exact join reassociation removes
+an 8N intermediate arrangement; recovery over the same 62 commands reproduced
+all outputs and improved the 53-build sequence from 645.1 to 536.6 seconds.
 
 Event appends are flushed and synced, but the server mutation and filesystem
 append are not one atomic transaction. A crash in that narrow interval can

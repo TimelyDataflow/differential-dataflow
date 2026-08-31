@@ -27,6 +27,7 @@ from pathways_rules import (
     ENGINEERED_ROAD,
     ROAD,
     connected_cells,
+    edge_grade_ok,
     engineered_profile,
     infrastructure_spend,
     neighbors8,
@@ -175,10 +176,14 @@ def show_status(client, briefing):
     site_kinds = {
         site["id"]: site["kind"] for site in briefing["sites"]
     }
+    general_kinds = (
+        (0, 3, 6)
+        if int(briefing.get("version", 1)) >= 5 else (0, 3)
+    )
     general_delivered = sum(
         amount
         for site_id, amount in delivered.items()
-        if site_kinds[site_id] in (0, 3)
+        if site_kinds[site_id] in general_kinds
     )
     print(
         f"town/light cargo delivered: {general_delivered}/"
@@ -214,19 +219,42 @@ def show_status(client, briefing):
                     f"{'CONNECTED' if tuple(site['cell']) in connected else 'disconnected'}, "
                     f"rock {delivered.get(site['id'], 0)}/{site['amount']}"
                 )
+            elif site["kind"] == 5:
+                complete = (
+                    tuple(site["cell"]) in connected
+                    and delivered.get(site["id"], 0) == site["amount"]
+                )
+                print(
+                    f"observatory {site['id']} {site['label']}: "
+                    f"{'OPERATIONAL' if complete else 'in construction'}, "
+                    f"access {'connected' if tuple(site['cell']) in connected else 'missing'}, "
+                    f"foundation rock {delivered.get(site['id'], 0)}/{site['amount']}"
+                )
+            elif site["kind"] == 6:
+                print(
+                    f"trail outpost {site['id']} {site['label']}: "
+                    f"light supplies {delivered.get(site['id'], 0)}/"
+                    f"{site['amount']}, "
+                    f"{'trail established' if path_use.get(tuple(site['cell']), 0) >= briefing['trail_use_required'] else 'approach unestablished'}"
+                )
         aggregate_capacity = briefing["initial_aggregate"] + (
             briefing["quarry_aggregate"] if online else 0
         )
         rock_capacity = briefing["initial_rock"] + (
             briefing["quarry_rock"] if online else 0
         )
-        engineered = sum(
-            kind == ENGINEERED_ROAD
-            for kind, _owner in infrastructure.values()
+        build_rows = rows(client, "build_actions")
+        engineered = (
+            sum(value[4] == ENGINEERED_ROAD for value in build_rows.values())
+            if int(briefing.get("version", 1)) >= 4 else
+            sum(
+                kind == ENGINEERED_ROAD
+                for kind, _owner in infrastructure.values()
+            )
         )
         fill = sum(
             max(0, value[6] - value[5])
-            for value in rows(client, "build_actions").values()
+            for value in build_rows.values()
             if value[4] == ENGINEERED_ROAD
         )
         print(
@@ -514,7 +542,14 @@ def pave(client, run_dir, briefing, agent, route_id, count):
 def build_proposal(client, briefing, route_id, alignment):
     if alignment not in ("bridge", "embankment"):
         raise ValueError("alignment must be bridge or embankment")
-    _request, path, _cost = ordered_route(client, route_id)
+    request, path, _cost = ordered_route(client, route_id)
+    if int(briefing.get("version", 1)) >= 5:
+        target = (request[3], request[4])
+        if any(
+            site["kind"] == 6 and tuple(site["cell"]) == target
+            for site in briefing["sites"]
+        ):
+            raise ValueError("a trail-outpost route may not be built")
     (
         terrain,
         water,
@@ -686,13 +721,18 @@ def build(client, run_dir, briefing, agent, route_id, alignment):
     rock_capacity = briefing["initial_rock"] + (
         briefing["quarry_rock"] if online else 0
     )
-    engineered = sum(
-        built_kind == ENGINEERED_ROAD
-        for built_kind, _owner in infrastructure.values()
+    build_rows = rows(client, "build_actions")
+    engineered = (
+        sum(value[4] == ENGINEERED_ROAD for value in build_rows.values())
+        if int(briefing.get("version", 1)) >= 4 else
+        sum(
+            built_kind == ENGINEERED_ROAD
+            for built_kind, _owner in infrastructure.values()
+        )
     )
     fill_spent = sum(
         max(0, value[6] - value[5])
-        for value in rows(client, "build_actions").values()
+        for value in build_rows.values()
         if value[4] == ENGINEERED_ROAD
     )
     if kind == ENGINEERED_ROAD and engineered + 1 > aggregate_capacity:
@@ -790,7 +830,12 @@ def deliver(client, run_dir, briefing, agent, town_id, units, route_id=None):
     sites = site_map(briefing)
     town = sites.get(town_id)
     version = int(briefing.get("version", 1))
-    allowed = (0, 3, 4) if version >= 3 else (0,)
+    allowed = (
+        (0, 3, 4, 5, 6) if version >= 5 else
+        (0, 3, 4, 5) if version >= 4 else
+        (0, 3, 4) if version >= 3 else
+        (0,)
+    )
     if town is None or town["kind"] not in allowed:
         raise ValueError(f"site {town_id} is not a delivery target")
     connected = set(rows(client, "connected"))
@@ -798,11 +843,12 @@ def deliver(client, run_dir, briefing, agent, town_id, units, route_id=None):
     delivered = sum(value[2] for value in deliveries.values() if value[1] == town_id)
     if delivered + units > town["amount"]:
         raise ValueError(f"town demand exceeded: {delivered + units}/{town['amount']}")
-    if town["kind"] in (0, 3):
+    general_kinds = (0, 3, 6) if version >= 5 else (0, 3)
+    if town["kind"] in general_kinds:
         used = sum(
             value[2]
             for value in deliveries.values()
-            if sites[value[1]]["kind"] in (0, 3)
+            if sites[value[1]]["kind"] in general_kinds
         )
         supply = sum(
             site["amount"]
@@ -832,7 +878,7 @@ def deliver(client, run_dir, briefing, agent, town_id, units, route_id=None):
         tuple(site["cell"])
         for site in briefing["sites"] if site["kind"] == 1
     }
-    if town["kind"] == 4:
+    if town["kind"] in (4, 5):
         _totals, _activated, online = quarry_state(
             briefing, deliveries, connected
         )
@@ -845,13 +891,35 @@ def deliver(client, run_dir, briefing, agent, town_id, units, route_id=None):
         "quarry_activation_agent", agent
     ):
         raise ValueError("only the courier may activate the quarry")
+    elif town["kind"] == 6:
+        if agent != briefing.get("scout_agent", agent):
+            raise ValueError("only the mountain courier may supply an outpost")
+        if units != briefing["porter_trip_capacity"]:
+            raise ValueError("outpost delivery must be exactly porter capacity")
     if path[0] not in source_cells:
         raise ValueError("a delivery route must start at a supply site")
     if path[-1] != tuple(town["cell"]):
         raise ValueError(f"route {route_id} does not end at {town['label']}")
 
     freight = all(cell in connected for cell in path)
-    if town["kind"] == 4 and not freight:
+    if town["kind"] == 6:
+        terrain, water, _accum = world_metrics(client, briefing)
+        if any(water[cell] > terrain[cell] for cell in path):
+            raise ValueError("outpost route must be dry")
+        if any(
+            not edge_grade_ok(
+                src,
+                dst,
+                terrain,
+                briefing["foot_grade_permille"],
+                board_step_lengths(briefing),
+            )
+            for src, dst in zip(path, path[1:])
+        ):
+            raise ValueError("outpost route exceeds the foot-grade limit")
+        if freight:
+            raise ValueError("outpost delivery may not use road freight")
+    if town["kind"] in (4, 5) and not freight:
         raise ValueError("bulk rock requires a fully connected road route")
     mode = 1 if freight else 0
     if not freight:

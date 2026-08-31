@@ -2,7 +2,8 @@
 --
 -- input 0: sites ((site_id); (x, y, kind, amount))
 --          kind 0 = town/demand, 1 = source/supply, 2 = works yard,
---          kind 3 = quarry/material demand
+--          kind 3 = quarry/material demand, 4 = watershed worksite,
+--          kind 5 = high-altitude observatory foundation
 -- input 1: route requests
 --          ((route_id); (agent, sx, sy, tx, ty,
 --                        distance_w, grade_w, water_w, runoff_w, reuse_w))
@@ -129,16 +130,20 @@ let edges = exp + exm + eyp + eym + expp + expm + exmp + exmm;
 let route_seeds = requests
     | map($0[0], $1[1], $1[2] ; 0, $1[1], $1[2]);
 routes: {
-    let expanded = best
-        | map($0[1], $0[2] ; $0[0], $1[0])
-        | join(edges, ($1[0] ; $2[0], $2[1], $1[1], $0[0], $0[1],
-                              $2[2], $2[3], $2[4], $2[5], $2[6]));
-    let proposals = expanded
-        | join(requests, ($0[0], $1[0], $1[1] ;
-            $1[2] + $1[5] * $2[5] + $1[6] * $2[6] +
-                    $1[7] * $2[7] + $1[8] * $2[8] +
-                    $1[5] * $1[9] * $2[9],
-            $1[3], $1[4]));
+    -- Join the N-row recursive frontier to its singleton request before the
+    -- eight-edge fan-out. This is algebraically the same relaxation as
+    -- `(best join edges) join requests`, but avoids arranging the 8N-row
+    -- expanded relation inside the loop.
+    let weighted_frontier = best
+        | map($0[0] ; $0[1], $0[2], $1[0])
+        | join(requests, ($1[0], $1[1] ;
+            $0[0], $1[2], $2[5], $2[6], $2[7], $2[8], $2[9]));
+    let proposals = weighted_frontier
+        | join(edges, ($1[0], $2[0], $2[1] ;
+            $1[1] + $1[2] * $2[2] + $1[3] * $2[3] +
+                    $1[4] * $2[4] + $1[5] * $2[5] +
+                    $2[2] * $1[6] * $2[6],
+            $0[0], $0[1]));
     var best = route_seeds + proposals | min;
 }
 let best = routes::best;

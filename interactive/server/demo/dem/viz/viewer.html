@@ -457,7 +457,7 @@ const LAYER_DEFS = {
   ledger: { color: "#d5b5e0", on: true, desc: "terraform acts" },
   road_edges: { color: "#c9762b", on: false, desc: "network edges" },
   actions: { color: "#777", on: false, desc: "raw acts" },
-  sites: { color: "#f0cf65", on: true, desc: "towns+sources+hill works" },
+  sites: { color: "#f0cf65", on: true, desc: "towns+sources+hill projects" },
   towns: { color: "#e0a341", on: false, desc: "town demand" },
   supply: { color: "#58c586", on: false, desc: "source capacity" },
   demand: { color: "#e0a341", on: false, desc: "requested goods" },
@@ -474,9 +474,11 @@ const INFRA_SHAPE = {
   roads: (v) => ({ owner: v[0], bridge: v[1] === 1 }),
 };
 const siteColor = (kind) => kind === 0 ? "#e0a341" : kind === 1 ? "#58c586" :
-  kind === 2 ? "#4da3ff" : kind === 3 ? "#b58de0" : "#e06060";
+  kind === 2 ? "#4da3ff" : kind === 3 ? "#b58de0" :
+  kind === 4 ? "#e06060" : kind === 5 ? "#67e8f9" : "#facc15";
 const siteKind = (kind) => kind === 0 ? "town" : kind === 1 ? "source" :
-  kind === 2 ? "yard" : kind === 3 ? "quarry" : "worksite";
+  kind === 2 ? "yard" : kind === 3 ? "quarry" :
+  kind === 4 ? "worksite" : kind === 5 ? "observatory" : "trail outpost";
 // Non-grid, table-shaped exports handled by peek on refresh instead.
 const TABLE_TRACES = ["meta", "spend", "road_spend", "balance", "role_violations", "cost_violations", "infrastructure_conflicts"];
 

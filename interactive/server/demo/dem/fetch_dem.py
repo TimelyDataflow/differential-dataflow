@@ -2,7 +2,7 @@
 """Fetch and window a real DEM for the water demo: the Upper Engadine around
 St. Moritz, from the AWS Open Data terrain tiles (Terrarium encoding).
 
-Two committed boards, selected by preset name (default engadin_128):
+Three committed boards, selected by preset name (default engadin_128):
 
   engadin_128  zoom 11, ~53 m cells, 128x128. The calibrated game board:
                Lej da San Murezzan (~1763 m) in the southwest, the Inn
@@ -17,6 +17,11 @@ Two committed boards, selected by preset name (default engadin_128):
                plays on engadin_128 is calibrated for it. The dam column
                x=96 of the game board is column x=148 here. See
                GEOGRAPHY.md for verified landmarks and georeferencing.
+  engadin_wide zoom 11, ~53 m cells, 256x192. A wider continuation of the
+               calibrated board: 72 cells farther west, 56 farther east,
+               and 16 farther north/south. Existing world coordinates shift
+               by (+72,+16), leaving room for longer alpine connections while
+               retaining the original cell scale.
 
 Row 0 is north. Cell size is 156543.03 * cos(latitude) / 2^zoom meters.
 The generated files are committed, so this script is only needed to
@@ -46,6 +51,12 @@ PRESETS = {
         tiles=[(2159, 1448), (2159, 1449), (2160, 1448), (2160, 1449)],
         window=(188, 44, 256, 256),
         out="engadin_256.txt",
+    ),
+    "engadin_wide": dict(
+        zoom=11,
+        tiles=[(1079, 724), (1079, 725), (1080, 724), (1080, 725)],
+        window=(128, 0, 256, 192),
+        out="engadin_wide.txt",
     ),
 }
 

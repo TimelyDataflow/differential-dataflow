@@ -2,7 +2,8 @@
 
 A shared world over real Swiss terrain (the Upper Engadine around St.
 Moritz; ~53 m cells from the AWS Open Data terrain tiles, window committed
-as `engadin_128.txt`, regenerable by `fetch_dem.py`). Three physics
+as `engadin_128.txt`, with a wider persistent-game continuation in
+`engadin_wide.txt`, both regenerable by `fetch_dem.py`). Three physics
 programs maintain fixed points over it, edits re-derive only their
 consequences, and a civil-works protocol lets participants — human or
 agent — change the world together.
@@ -12,6 +13,8 @@ landmarks, georeferenced corners, orientation). A second board,
 `engadin_256.txt` (~26 m cells, same reach with Celerina and Pontresina in
 frame; `fetch_dem.py engadin_256`), exists for looking closer — the game
 and its calibrations stay on `engadin_128.txt`.
+The V4 pathways world instead uses `engadin_wide.txt`: a 256×192 crop at the
+same coarse scale, preserving every old cell under a `(+72,+16)` transform.
 
 Every driver in this directory cross-checks the server against an
 independent Python implementation and asserts exact equality; "it looks
@@ -132,9 +135,25 @@ construction rules. [`PATHWAYS_REPORT.md`](PATHWAYS_REPORT.md) records the V1
 and V2 playtests, controlled reuse comparison, completed four-town world,
 memory incident, and proposed hydraulic-road/mountain-path iterations.
 
-The 128×128 board is the lower-memory default. Keep one interactive world at a
-time; the route fixed point is substantially heavier on the optional 256×256
-board. Start a world with:
+V4 keeps one interactive world at a time on the 256×192 coarse board. It
+freezes the completed V3 network into a hashed genesis snapshot and adds a
+required Piz Nair ridge observatory. V5 follows it with a trail-only Muottas
+ridge shelter whose two light-supply journeys establish the path. Route fixed
+points remain substantially heavier than hydrology, so the wide world permits
+one live survey. The current live-style migration command is:
+
+```text
+python3 interactive/server/demo/dem/pathways_game.py setup \
+  --run-dir interactive/server/demo/dem/runs/pathways-observatory-01 \
+  --port 8051 --ws-host HOST --grid engadin_wide.txt --version 4 \
+  --migrate-from interactive/server/demo/dem/runs/pathways-hills-01
+
+# after the V4 observatory succeeds and its route is retired
+python3 interactive/server/demo/dem/pathways_game.py extend-trail \
+  --run-dir interactive/server/demo/dem/runs/pathways-observatory-01
+```
+
+For a fresh V2 world on the smaller board:
 
 ```text
 python3 interactive/server/demo/dem/pathways_game.py setup \
