@@ -228,3 +228,54 @@ so delta-stepping with a chosen bucket width is out of reach, as is anything
 needing more than ~12 classes over these ranges. Integer division in the term
 language would give that cheaply and is a pure term-level addition, not a
 server change. Worth having; not blocking.
+
+## Iteration 4: the full sweep, and what it buys
+
+Every row exact against its ground truth. Water: initial fill / peak RSS / dam
+edit. Baseline on engadin_512 was **not run** — extrapolating its scaling
+(~11.8x time and ~9.7x memory per 4x cells) puts it near five minutes and
+~30 GB, which is the swap death that rebooted a host in the pathways work.
+
+| board | cells | `water.ddp` | `water_seed.ddp` | `water_gpri.ddp` |
+|---|---:|---|---|---|
+| engadin_128 | 16,384 | 2.35s / 336 MB / 0.47s | **0.46s / 148 MB / 0.06s** | 0.49s / 144 MB / 0.11s |
+| engadin_wide | 49,152 | 12.00s / 1,222 MB / 0.22s | 2.47s / 486 MB / **0.07s** | **1.24s / 365 MB** / 0.19s |
+| engadin_256 | 65,536 | 27.67s / 3,250 MB / 2.01s | 3.78s / 724 MB / **0.18s** | **2.29s / 564 MB** / 0.53s |
+| engadin_512 | 262,144 | ~5 min / ~30 GB (not run) | 30.23s / 3,709 MB / **0.70s** | **12.66s / 2,325 MB** / 2.89s |
+
+Scaling from 16k to 65k cells (4x the mesh): baseline 11.8x time, prioritized
+seeds 8.2x, prioritized propagation **4.7x** — the only variant whose cost
+grows near-linearly with the mesh, which is the whole question for finer
+boards.
+
+Routes, engadin_128, cost and geometry both exact:
+
+| surveys | `pathways.ddp` | `pathways_gpri.ddp` | marginal cost per route |
+|---|---|---|---|
+| 2 | 4.16s / 1,241 MB | 2.55s / 920 MB | 2.57s and 358 MB → **1.00s and 180 MB** |
+| 4 | 9.30s / 1,956 MB | 4.54s / 1,279 MB | |
+
+The advantage grows with the number of live routes, which is exactly the
+resource that had to be capped at four in the pathways runs.
+
+### What this buys
+
+A **13 m mesh of the Engadine is now playable**: 262,144 cells, filled exactly
+in 12.66s inside 2.3 GB, with edits re-deriving in 0.7–2.9s. That board was out
+of reach before — not slow, impossible on a 16 GB machine. `fetch_dem.py` grows
+an `engadin_512` preset for it; the file itself is generated, not committed.
+
+### Which variant to run
+
+- **Live, edited worlds: `water_seed.ddp`.** Edits are 4x cheaper than under
+  propagation classes (0.70s vs 2.89s on engadin_512), and its cold load is
+  still 7x better than the baseline.
+- **Cold loads and large meshes: `water_gpri.ddp`.** 2.4x faster to load and
+  1.6x smaller at 262k cells, at the cost of slower edits.
+- **Routes: `pathways_gpri.ddp` unconditionally.** It is better on both axes,
+  and more so the more surveys are live.
+
+The trade-off has one shape: entering *propagation* in priority classes makes
+the first computation cheap and makes each later change walk the class ladder.
+Entering only the *seeds* leaves propagation at full speed, so edits stay
+cheap.

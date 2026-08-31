@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Bench one water program on one board: initial fill and an incremental dam.
+"""GUARD_MB
+Bench one water program on one board: initial fill and an incremental dam.
 
 Reports wall-clock, peak RSS, and verifies the equilibrium against the
 independent priority flood. Usage:
@@ -16,6 +17,8 @@ ap.add_argument("--port", type=int, default=7971)
 ap.add_argument("--skip-dam", action="store_true")
 ap.add_argument("--dam-x", type=int, default=96)
 ap.add_argument("--dam-crest", type=int, default=1775)
+ap.add_argument("--guard-mb", type=int, default=6000,
+                help="kill the server if its RSS exceeds this (keeps the host off swap)")
 a = ap.parse_args()
 
 terrain = load_grid(os.path.join(HERE, a.board))
@@ -32,6 +35,9 @@ def sampler():
             rss = int(subprocess.run(["ps","-o","rss=","-p",str(srv.pid)],
                       capture_output=True, text=True).stdout.strip() or 0)
             peak[0] = max(peak[0], rss)
+            if rss > a.guard_mb * 1024:
+                print(f"GUARD: RSS {rss/1024:.0f} MB exceeded {a.guard_mb} MB — killing")
+                srv.kill(); stop.set(); os._exit(2)
         except Exception: pass
         time.sleep(0.05)
 threading.Thread(target=sampler, daemon=True).start()

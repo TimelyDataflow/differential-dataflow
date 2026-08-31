@@ -52,6 +52,15 @@ PRESETS = {
         window=(188, 44, 256, 256),
         out="engadin_256.txt",
     ),
+    # Local scaling experiment (see NOTES_PERF.md): the engadin_256 reach at
+    # zoom 13, ~13 m cells, 512x512. Feasible only with prioritized water.
+    "engadin_512": dict(
+        zoom=13,
+        tiles=[(x, y) for x in (4318, 4319, 4320, 4321)
+               for y in (2896, 2897, 2898, 2899)],
+        window=(376, 88, 512, 512),
+        out="engadin_512.txt",
+    ),
     "engadin_wide": dict(
         zoom=11,
         tiles=[(1079, 724), (1079, 725), (1080, 724), (1080, 725)],
