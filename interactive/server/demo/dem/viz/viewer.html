@@ -463,8 +463,8 @@ const LAYER_DEFS = {
   demand: { color: "#e0a341", on: false, desc: "requested goods" },
   yards: { color: "#4da3ff", on: false, desc: "works yards" },
   route_path: { color: "#b58de0", on: false, desc: "live surveys" },
-  path_use: { color: "#a87948", on: true, desc: "desire paths" },
-  established_paths: { color: "#d0a66f", on: false, desc: "walked twice" },
+  path_use: { color: "#a87948", on: true, desc: "foot traffic" },
+  established_paths: { color: "#f1c27d", on: true, desc: "persistent trails" },
 };
 // Two vocabularies for built things share one renderer:
 //   logistics `infrastructure`: val (kind, owner), bridge = kind 2
@@ -1067,12 +1067,32 @@ function renderNow() {
   }
   const establishedRows = viewRows("established_paths");
   if (establishedRows) {
-    ctx.strokeStyle = "#d0a66f";
-    ctx.globalAlpha = 0.7;
-    for (const k of establishedRows.keys()) {
-      const [rx, ry, rw, rh] = cellRect(k, Math.max(1, SCALE / 4));
-      ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+    // Established paths are persistent connections, not merely highlighted
+    // cells. Join neighboring cells into a centreline so that a long trail is
+    // readable at map scale after the temporary route survey is retired.
+    const occupied = new Set();
+    for (const k of establishedRows.keys()) if (single(establishedRows, k)) occupied.add(k);
+    ctx.beginPath();
+    for (const k of occupied) {
+      const c = k.indexOf(",");
+      const x = Number(k.slice(0, c)), y = Number(k.slice(c + 1));
+      const px = (x - x0 + 0.5) * SCALE, py = (y - y0 + 0.5) * SCALE;
+      for (const [dx, dy] of [[1, 0], [0, 1], [1, 1], [1, -1]]) {
+        if (!occupied.has((x + dx) + "," + (y + dy))) continue;
+        ctx.moveTo(px, py);
+        ctx.lineTo((x + dx - x0 + 0.5) * SCALE, (y + dy - y0 + 0.5) * SCALE);
+      }
     }
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = 0.75;
+    ctx.strokeStyle = "#543a24";
+    ctx.lineWidth = Math.max(2.5, SCALE * 0.48);
+    ctx.stroke();
+    ctx.globalAlpha = 0.95;
+    ctx.strokeStyle = "#f1c27d";
+    ctx.lineWidth = Math.max(1.25, SCALE * 0.24);
+    ctx.stroke();
     ctx.globalAlpha = 1;
   }
   // Roads render honestly: a surface road under water is drowned (dim +
@@ -1250,6 +1270,7 @@ function build3D(fd) {
   const floodedRows = viewRows("flooded_roads");
   const ledgerRows = viewRows("ledger");
   const pathUseRows = viewRows("path_use");
+  const establishedRows3 = viewRows("established_paths");
   const siteRows3 = viewRows("sites");
   const netRows3 = viewRows("road_net") || viewRows("connected");
   const RED = hexRgb("#e06060"), WHITE = [245, 245, 245];
@@ -1267,6 +1288,11 @@ function build3D(fd) {
       const c = terrainRGB(fd, k, gx + x0, gy + y0);
       const o = i * 4;
       tCol[o] = c[0]; tCol[o + 1] = c[1]; tCol[o + 2] = c[2]; tCol[o + 3] = 255;
+      // In 3D the heightfield has no separate vector pass, so make walked
+      // routes and especially established trails strong terrain overlays.
+      // Deliberate infrastructure is applied afterwards and remains dominant.
+      if (pathUseRows && pathUseRows.has(k)) mixC(tCol, o, hexRgb("#a87948"), 0.6);
+      if (establishedRows3 && establishedRows3.has(k)) mixC(tCol, o, hexRgb("#f1c27d"), 0.88);
       for (const [rows, shape] of infraLayers) {
         const v = single(rows, k);
         if (v) {
@@ -1280,7 +1306,6 @@ function build3D(fd) {
         }
       }
       if (floodedRows && floodedRows.has(k)) mixC(tCol, o, RED, 0.55);
-      if (pathUseRows && pathUseRows.has(k)) mixC(tCol, o, hexRgb("#a87948"), 0.45);
       if (siteRows3 && siteRows3.has(k)) {
         const site = single(siteRows3, k);
         if (site) mixC(tCol, o, hexRgb(siteColor(site[1])), 0.8);
