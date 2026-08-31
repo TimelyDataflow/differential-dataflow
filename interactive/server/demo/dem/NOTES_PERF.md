@@ -51,26 +51,19 @@ intending the invariant "a cell is derived at round (level − lowest terrain)",
 i.e. priority flood with the queue expressed as time. It is exact but slower
 than the baseline (fill 2.89s, dam 7.83s, 16x worse than baseline).
 
-The reason is structural, and worth recording: `enter_at` is a **relative**
-delay, so along a path the delays *add*, while this recursion's level is a
-**max** along the path (a bottleneck/minimax problem, not an additive one).
-After the first hop the intended invariant is gone, cells are reached by
-cheaper-in-delay paths later, and pairs of adjacent cells oscillate: cell
-(56,95) alone logged 937 updates, flipping between 1997 and 2083 on
-consecutive rounds for hundreds of rounds. Only 1 cell in 16,384 was derived
-at the round its level predicts.
+The reason is that the *rise* is the wrong quantity to hand `enter_at`. See
+the correction in iteration 3: the operator floors a record's iteration at
+`256 * bit_length(term)`, an absolute priority class, so the term must be the
+record's own priority — its level — not the increment that produced it.
+Feeding it an increment scatters proposals into magnitude classes unrelated to
+their level, and adjacent cells oscillate: cell (56,95) alone logged 937
+updates, flipping between 1997 and 2083 on consecutive rounds for hundreds of
+rounds.
 
-Seeds are the exception that works, because a seed's delay is measured from
-time 0 — nothing accumulates — so `enter_at(height − lowest)` really does
-release the lowest drain first.
-
-**Does the core need changing?** For this recursion, an *absolute* `enter_at`
-(enter at time T, rather than delay by k) would express true priority-flood
-order, which relative delay cannot. That is the one core change these
-measurements argue for, and it is not urgent: seed ordering already captures
-most of the win without touching the server. Additive recursions — the
-pathways route scope, where accumulated delay *is* accumulated cost — should
-be able to use the relative form as it stands. That is the next experiment.
+Seeds work because `height − lowest` *is* an absolute priority, and because
+subtracting the minimum matters: raw heights (1693–3171) all share bit lengths
+11–12, which is two classes and no ordering, while heights above the minimum
+(0–1478) spread over twelve.
 
 ### The rules
 
@@ -119,11 +112,9 @@ is unknown until the low wavefront arrives. Releasing high seeds first injects
 upper bounds that are all retracted later: 14x the proposals, 48.6% of them
 churn.
 
-There is also a structural obstacle. A proposal's value is `max(t, L_n) >= L_n`
-— never lower than the record it came from. Under a descending clock
-(time = peak − level) a proposal would have to arrive *before* its own source:
-a negative delay, which `enter_at` cannot express. Ascending order is the only
-direction relative delays can even represent here.
+Both orders are expressed the same way and get the same number of priority
+classes (`height − lowest` and `peak − height` both span 0–1478, twelve
+classes), so this is a fair comparison of direction, not of resolution.
 
 ## Iteration 1c: is it the priority, or just the staggering?
 
@@ -167,27 +158,73 @@ There is plenty of churn to attack — the baseline issues 2,141,238 proposals
 for two 129-cell routes, 44.0% of them retractions, over 149 rounds — so the
 failure is not that the schedule is already perfect.
 
-The difference from water is *where* the delay is applied. Water's win delays
-**entry**: seeds cross into the scope at staggered times and propagation runs
-at full speed, so the loop's arrangements keep few distinct timestamps. Both
-route variants delay **every proposal inside the loop**, which multiplies the
-timestamp diversity of the loop's own arrangements — and memory more than
-doubles, which is the tell. Bucketing does not rescue it: four buckets cost
-slightly *more* than exact cost order, so the round count is not the dominant
-term either.
+Instrumented, the bucketed variant issues 8,890,652 proposals against the
+baseline's 2,141,238 — 4.2x *more* work, and more churn (48.5% against 44.0%),
+not less. A schedule that merely cost per-round overhead could not do that.
+Both variants were handing `enter_at` the wrong quantity; iteration 3 corrects
+it.
 
-Working rule from these five experiments: **prioritize entry, not
-propagation.** A delay on records crossing into a scope is close to free and
-can be worth 5-7x; a delay on records circulating within a scope is paid again
-in every arrangement the loop maintains.
+## Iteration 3: what `enter_at` actually does — and the corrected results
 
-Route scopes have no seed to order (one source per route), so the next lever is
-not scheduling at all. Two candidates, in order of expected value:
-1. `min` reduces `(cost, predecessor_x, predecessor_y)` lexicographically, so a
-   cell churns when its *predecessor* improves at equal cost. Reducing on cost
-   alone and recovering predecessors once, outside the loop, should cut churn
-   that no schedule can reach.
-2. The scope relaxes the whole board from every source when only one target is
-   wanted. Goal-directed pruning (A*'s `g+h`) needs an admissible bound in the
-   term language, and as a delay it would run into the same
-   propagation-delay cost as above — so it wants a filter, not a schedule.
+I had been reasoning about `enter_at` as a relative delay in iterations. It is
+not. `backend/vec.rs` evaluates the term and floors the record's iteration
+coordinate at
+
+    256 * bit_length(term)
+
+joined (max) with the time the record already carries — an **absolute,
+logarithmically bucketed priority class**, with 256 rounds of ordinary
+relaxation available inside each class. Probed directly:
+
+| term | 0 | 1 | 3 | 8 | 100 | 1000 | 1478 | 23144 | 65535 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| iteration | 0 | 256 | 512 | 1024 | 1792 | 2560 | 2816 | 3840 | 4096 |
+
+Three consequences, all of which the earlier experiments were unknowingly
+demonstrating:
+
+1. **The term must be a record's own absolute priority, never an increment.**
+   The rise between two levels, or one step's cost, has a magnitude class
+   unrelated to where the record belongs in the order.
+2. **Subtract the floor.** Raw Engadine heights span bit lengths 11–12: two
+   classes, no ordering. Heights above the lowest terrain span twelve.
+3. **A dozen classes is all there is.** This cannot express exact Dijkstra or
+   priority-flood order, and does not need to: coarse magnitude classes are the
+   point, and the 256 rounds inside a class are where the wavefront actually
+   propagates.
+
+Rerunning both scopes with the accumulated quantity instead of the increment:
+
+| program | what enters when | fill / routes tick | peak RSS |
+|---|---|---|---|
+| `water.ddp` | — | 27.89s | 2,994 MB |
+| `water_seed.ddp` | seeds by height above floor | 3.74s | 723 MB |
+| `water_gpri.ddp` | + proposals by level above floor | **2.28s** | **564 MB** |
+| `pathways.ddp` | — | 4.09s | 1,247 MB |
+| `pathways_pri.ddp` | proposals by step cost (wrong term) | 28.69s | 2,891 MB |
+| `pathways_gpri.ddp` | proposals by accumulated cost | **2.53s** | **917 MB** |
+
+(water on engadin_256, routes on engadin_128 with two surveys; every row exact
+against its ground truth — priority flood for water, `pathways_rules`' Dijkstra
+for both route cost and geometry.)
+
+So prioritized propagation *does* work, in both scopes, once the term is right:
+water's cold fill is now **12.2x** faster than the baseline in **5.3x** less
+memory, and the route scope is 1.6x faster in 27% less memory. The earlier
+"prioritize entry, not propagation" rule was an artifact of feeding the
+operator increments; the real rule is **prioritize by absolute magnitude**.
+
+One genuine trade-off remains, and it is worth knowing before adopting
+`water_gpri` wholesale: propagation classes help the cold fill and hurt the
+incremental edit, because an edit's consequences must now walk the class
+ladder. On engadin_256 the dam edit costs 0.53s under `water_gpri` against
+0.18s under `water_seed` (baseline 1.95s). A live world that is mostly edited
+should prefer `water_seed`; a world that is mostly loaded, or a mesh large
+enough that cold load is the binding constraint, should prefer `water_gpri`.
+
+**Does the core need changing?** Not for this. The one thing the language
+cannot currently express is a *linear* priority — every knob is log-quantized —
+so delta-stepping with a chosen bucket width is out of reach, as is anything
+needing more than ~12 classes over these ranges. Integer division in the term
+language would give that cheaply and is a pure term-level addition, not a
+server change. Worth having; not blocking.

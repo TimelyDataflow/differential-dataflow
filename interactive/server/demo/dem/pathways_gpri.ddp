@@ -1,0 +1,351 @@
+-- VARIANT of pathways.ddp: identical rules and answers, route scope entered
+-- in cost-magnitude classes. See NOTES_PERF.md.
+--
+-- Topographic route surveys, desire paths, and deliberate road upgrades.
+--
+-- input 0: sites ((site_id); (x, y, kind, amount))
+--          kind 0 = town/demand, 1 = source/supply, 2 = works yard,
+--          kind 3 = quarry/material demand, 4 = watershed worksite,
+--          kind 5 = high-altitude observatory foundation
+-- input 1: route requests
+--          ((route_id); (agent, sx, sy, tx, ty,
+--                        distance_w, grade_w, water_w, runoff_w, reuse_w))
+-- input 2: frozen traversals ((trip_id, x, y); (agent, route_id))
+-- input 3: infrastructure ((x, y); (kind, owner))
+--          kind 1 = surface road, 2 = bridge
+-- input 4: deliveries ((delivery_id); (agent, town_id, units, route_id, mode))
+--          mode 0 = porter delivery, 1 = road freight
+-- input 5: board geometry ((0); (orthogonal_metres, diagonal_metres))
+-- input 6: revisioned V3 build actions
+--          ((revision, item); (agent, route_id, x, y, kind, old_h, new_h))
+--          kind 1 = legacy surface road, 2 = bridge,
+--          kind 3 = engineered surface road
+-- input 7: engineering/material policy
+--          ((0); (schema_version, max_grade_permille,
+--                  initial_aggregate, quarry_aggregate,
+--                  initial_rock, quarry_rock))
+-- input 8: optional route-specific maximum grades
+--          ((route_id); (max_grade_permille))
+--
+-- Route cost is paid on entry to each destination cell:
+--   distance_w * configured step length
+--   + grade_w  * |destination height - source height|
+--   + water_w  * water depth
+--   + runoff_w * min(drainage area, 100)
+--   + reuse_w  * step length * surface factor (raw 2 / path 1 / road 0)
+-- `min` in the feedback scope is Dijkstra's relaxation. Its value begins
+-- with total cost, so the remaining predecessor coordinates only break ties.
+
+let sites = input 0;
+let requests = input 1;
+let traversals = input 2;
+let legacy_infrastructure = input 3;
+let deliveries = input 4;
+let geometry = input 5;
+let build_actions = input 6;
+let policy = input 7;
+let route_grade_caps = input 8;
+
+-- A missing route cap means effectively unlimited. An explicit cap wins the
+-- `min`, keeping the original request schema and all historical surveys
+-- backward-compatible while allowing new movement modes to constrain edges.
+let default_route_caps = requests | map($0 ; 1000000);
+let effective_route_caps = default_route_caps + route_grade_caps | min;
+let capped_requests = requests
+    | join(effective_route_caps, ($0 ;
+        $1[0], $1[1], $1[2], $1[3], $1[4],
+        $1[5], $1[6], $1[7], $1[8], $1[9], $2[0]));
+
+-- Inputs 0--5 retain their V2 shapes. V3 construction is revisioned in input
+-- 6, but both generations feed one canonical public-infrastructure relation.
+let built = build_actions
+    | map($1[2], $1[3] ; $1[4], $1[0]);
+let infrastructure = legacy_infrastructure + built;
+
+let terrain = import "terrain";
+let water = import "water";
+let accum = import "accum";
+
+-- A journey is frozen cell-by-cell, so later route changes do not rewrite
+-- its contribution. Two cargo journeys establish a path.
+let path_use = traversals
+    | map($0[1], $0[2] ;)
+    | count;
+let established = path_use
+    | filter($1[0] > 1)
+    | map($0 ;);
+let raw_surface = terrain | map($0 ; 2);
+let path_surface = established | map($0 ; 1);
+let dry_terrain = terrain
+    | join(water, ($0 ; $1[0], $2[0]))
+    | filter($1[0] == $1[1])
+    | map($0 ;);
+let dry_road_surface = infrastructure
+    | filter(or($1[0] == 1, $1[0] == 3))
+    | map($0 ;)
+    | join(dry_terrain, ($0 ;))
+    | map($0 ; 0);
+let bridge_surface = infrastructure
+    | filter($1[0] == 2)
+    | map($0 ; 0);
+let road_surface = dry_road_surface + bridge_surface;
+let surface = raw_surface + path_surface + road_surface | min;
+
+-- Every cell carries the metrics used by the route cost.
+-- ((x,y) ; (height, water_depth, capped_drainage_area, surface_factor,
+--           orthogonal_metres, diagonal_metres))
+let cells0 = terrain
+    | join(water, ($0 ; $1[0], $2[0] - $1[0]));
+let cell_metrics = cells0
+    | join(accum, ($0 ; $1[0], $1[1], if($2[0] < 100, $2[0], 100)))
+    | join(surface, ($0 ; $1[0], $1[1], $1[2], $2[0]));
+let step_lengths = geometry | map(; $1[0], $1[1]);
+let cells = cell_metrics
+    | map(; $0[0], $0[1], $1[0], $1[1], $1[2], $1[3])
+    | join(step_lengths, ($1[0], $1[1] ;
+        $1[2], $1[3], $1[4], $1[5], $2[0], $2[1]));
+
+-- Directed eight-neighbour edges, keyed by their source cell:
+-- ((x,y) ; (nx,ny,length,absolute_grade,destination_depth,
+--            destination_runoff,destination_surface_factor)).
+let sxp = cells | map($0[0] + 1, $0[1] ; $0[0], $0[1], $1[0]);
+let exp = sxp
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[4], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxm = cells | map($0[0] - 1, $0[1] ; $0[0], $0[1], $1[0]);
+let exm = sxm
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[4], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let syp = cells | map($0[0], $0[1] + 1 ; $0[0], $0[1], $1[0]);
+let eyp = syp
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[4], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sym = cells | map($0[0], $0[1] - 1 ; $0[0], $0[1], $1[0]);
+let eym = sym
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[4], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxpp = cells | map($0[0] + 1, $0[1] + 1 ; $0[0], $0[1], $1[0]);
+let expp = sxpp
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[5], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxpm = cells | map($0[0] + 1, $0[1] - 1 ; $0[0], $0[1], $1[0]);
+let expm = sxpm
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[5], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxmp = cells | map($0[0] - 1, $0[1] + 1 ; $0[0], $0[1], $1[0]);
+let exmp = sxmp
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[5], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxmm = cells | map($0[0] - 1, $0[1] - 1 ; $0[0], $0[1], $1[0]);
+let exmm = sxmm
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[5], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let edges = exp + exm + eyp + eym + expp + expm + exmp + exmm;
+
+-- ((route_id,x,y) ; (total_cost, predecessor_x, predecessor_y)).
+let route_seeds = requests
+    | map($0[0], $1[1], $1[2] ; 0, $1[1], $1[2]);
+routes: {
+    -- Join the N-row recursive frontier to its singleton request before the
+    -- eight-edge fan-out. This is algebraically the same relaxation as
+    -- `(best join edges) join requests`, but avoids arranging the 8N-row
+    -- expanded relation inside the loop.
+    let weighted_frontier = best
+        | map($0[0] ; $0[1], $0[2], $1[0])
+        | join(capped_requests, ($1[0], $1[1] ;
+            $0[0], $1[2], $2[5], $2[6], $2[7], $2[8], $2[9], $2[10]));
+    let candidate_edges = weighted_frontier
+        | join(edges, ($1[0], $2[0], $2[1] ;
+            $1[1] + $1[2] * $2[2] + $1[3] * $2[3] +
+                    $1[4] * $2[4] + $1[5] * $2[5] +
+                    $2[2] * $1[6] * $2[6],
+            $0[0], $0[1], $1[7], $2[2], $2[3]));
+    -- `enter_at` floors a record's iteration at 256 * bit-length(term), so
+    -- passing the ACCUMULATED cost puts each proposal in the Dijkstra
+    -- priority class of its own total: cheap frontier first, one
+    -- doubling per class, 256 rounds of relaxation inside each.
+    let proposals = candidate_edges
+        | filter(1000 * $1[5] <= $1[3] * $1[4])
+        | enter_at($1[0])
+        | map($0 ; $1[0], $1[1], $1[2]);
+    var best = route_seeds + proposals | min;
+}
+let best = routes::best;
+
+-- Walk predecessors back from each request's target. The source points to
+-- itself, so `distinct` closes the recursion there.
+let route_targets = requests | map($0[0], $1[3], $1[4] ;);
+chosen: {
+    let prior = path
+        | join(best, ($0[0], $2[1], $2[2] ;));
+    var path = route_targets + prior | distinct;
+}
+
+-- Viewer-friendly candidate routes retain their owner and enforced cap. A
+-- cell may carry several alternatives simultaneously.
+let option_steps = chosen::path
+    | join(best, ($0[0] ;
+        $0[1], $0[2], $2[1], $2[2], $2[0]));
+let route_options = option_steps
+    | join(capped_requests, ($1[0], $1[1] ;
+        $2[0], $0[0], $2[10], $1[2], $1[3], $1[4]));
+
+-- Surface roads drown; bridges remain passable. Engineered roads are ordinary
+-- surface roads hydraulically, but participate in the V3 maximum-grade rule.
+let dry = cells
+    | filter($1[1] == 0)
+    | map($0 ;);
+let surface_roads = infrastructure
+    | filter(or($1[0] == 1, $1[0] == 3))
+    | map($0 ; $1[0])
+    | join(dry, ($0 ; $1[0]));
+let bridges = infrastructure
+    | filter($1[0] == 2)
+    | map($0 ; 2);
+let passable_kinds = surface_roads + bridges | min;
+let passable = passable_kinds | map($0 ;);
+
+-- Only supply sites and works yards seed reachability. A kind-3 quarry must be
+-- activated by delivery and physically reached; it never seeds itself.
+let sources = sites
+    | filter(or($1[2] == 1, $1[2] == 2))
+    | map($1[0], $1[1] ;)
+    | distinct;
+
+-- Sources are road-like fixed-height nodes for grading. `min` also keeps the
+-- node relation functional if a seed happens to carry infrastructure.
+let source_kinds = sources | map($0 ; 1);
+let road_kinds = passable_kinds + source_kinds | min;
+let road_nodes = road_kinds
+    | join(terrain, ($0 ; $1[0], $2[0]));
+
+-- Reuse the live-terrain eight-neighbour edge metrics from routing. Candidate
+-- pairs carry source/destination kinds, step length, and absolute rise.
+let road_targets = road_nodes
+    | join(edges, ($2[0], $2[1] ;
+        $0[0], $0[1], $1[0], $2[2], $2[3]));
+let road_pairs = road_targets
+    | join(road_nodes, ($1[0], $1[1] ;
+        $0[0], $0[1], $1[2], $2[0], $1[3], $1[4]));
+let grade_policy = policy | map(; $1[0], $1[1]);
+let graded_pairs = road_pairs
+    | map(; $0[0], $0[1], $1[0], $1[1], $1[2], $1[3], $1[4], $1[5])
+    | join(grade_policy, ($1[0], $1[1] ;
+        $1[2], $1[3], $1[4], $1[5], $1[6], $1[7], $2[0], $2[1]));
+
+-- V2 bypasses grade. In V3, bridges exempt both incident edges, and a pair of
+-- legacy kind-1 nodes retains its historical ungraded connectivity. Every
+-- edge involving an engineered kind-3 road obeys the permille limit.
+let road_edges = graded_pairs
+    | filter(or($1[6] == 2,
+        or($1[2] == 2,
+        or($1[3] == 2,
+        or($1[2] + $1[3] == 2,
+           1000 * $1[5] <= $1[7] * $1[4])))))
+    | map($0 ; $1[0], $1[1]);
+
+network: {
+    let step = connected | join(road_edges, ($2[0], $2[1] ;));
+    var connected = sources + step | distinct;
+}
+
+let towns = sites
+    | filter($1[2] == 0)
+    | map($1[0], $1[1] ; $0[0], $1[3]);
+let supplies = sites
+    | filter($1[2] == 1)
+    | map($1[0], $1[1] ; $0[0], $1[3]);
+let yards = sites
+    | filter($1[2] == 2)
+    | map($1[0], $1[1] ; $0[0], $1[3]);
+let served = towns
+    | join(network::connected, ($0 ; $1[0], $1[1]));
+let delivered = deliveries
+    | map($1[1] ; $1[2])
+    | collect
+    | map($0 ; fold($1, 0, ^1 + ^0[0]));
+let demand_by_id = sites
+    | filter($1[2] == 0)
+    | map($0 ; $1[0], $1[1], $1[3]);
+let fulfilled = demand_by_id
+    | join(delivered, ($1[0], $1[1] ; $0[0], $1[2], $2[0]))
+    | filter($1[2] >= $1[1]);
+
+-- Quarry activation mirrors town fulfilment, but activation alone does not
+-- make material available: the quarry cell must also be on the public net.
+let quarry_by_id = sites
+    | filter($1[2] == 3)
+    | map($0 ; $1[0], $1[1], $1[3]);
+let activated_quarries = quarry_by_id
+    | join(delivered, ($1[0], $1[1] ; $0[0], $1[2], $2[0]))
+    | filter($1[2] >= $1[1]);
+let online_quarries = activated_quarries
+    | join(network::connected, ($0 ; $1[0], $1[1], $1[2]));
+
+-- Engineered fill remains attributable to its construction revision. Aggregate
+-- charges once per engineered cell; rock charges only positive fill height.
+let engineered_fill = build_actions
+    | filter($1[4] == 3)
+    | map($1[2], $1[3] ;
+        $0[0], $0[1], $1[0], $1[1], $1[5], $1[6],
+        if($1[6] > $1[5], $1[6] - $1[5], 0));
+let aggregate_spend = build_actions
+    | filter($1[4] == 3)
+    | map(0 ;)
+    | count;
+let fill_spend = build_actions
+    | filter($1[4] == 3)
+    | map(0 ; if($1[6] > $1[5], $1[6] - $1[5], 0))
+    | collect
+    | map($0 ; fold($1, 0, ^1 + ^0[0]));
+
+-- Material keys: 0 = aggregate road cells, 1 = rock/fill height-cells.
+-- Each online quarry contributes the configured increment; construction
+-- debits are negative terms in the same aggregate.
+let material_base = (policy | map(0 ; $1[2]))
+                  + (policy | map(1 ; $1[4]));
+let quarry_policy = policy | map(; $1[3], $1[5]);
+let quarry_material = (online_quarries
+    | map(; $0[0], $0[1])
+    | join(quarry_policy, (0 ; $2[0])))
+  + (online_quarries
+    | map(; $0[0], $0[1])
+    | join(quarry_policy, (1 ; $2[1])));
+let material_debits = (aggregate_spend | map(0 ; 0 - $1[0]))
+                     + (fill_spend | map(1 ; 0 - $1[0]));
+let material_balance = material_base + quarry_material + material_debits
+    | collect
+    | map($0 ; fold($1, 0, ^1 + ^0[0]));
+
+export "sites" = sites | map($1[0], $1[1] ; $0[0], $1[2]);
+export "towns" = towns;
+export "demand" = towns | map($0 ; 0, $1[1]);
+export "supply" = supplies;
+export "yards" = yards;
+export "route_requests" = requests;
+export "route_grade_caps" = route_grade_caps;
+export "route_limits" = effective_route_caps;
+export "route_cost" = route_targets
+    | join(best, ($0[0] ; $2[0]));
+export "route_steps" = chosen::path
+    | join(best, ($0 ; $2[0], $2[1], $2[2]));
+export "route_path" = chosen::path | map($0[1], $0[2] ; $0[0]);
+export "route_options" = route_options;
+export "traversals" = traversals;
+export "path_use" = path_use;
+export "established_paths" = established;
+export "surface_factor" = surface;
+export "infrastructure" = infrastructure;
+export "passable" = passable;
+export "connected" = network::connected;
+export "served_towns" = served;
+export "deliveries" = deliveries;
+export "delivered" = delivered;
+export "fulfilled_towns" = fulfilled;
+export "build_actions" = build_actions;
+export "engineered_fill" = engineered_fill;
+export "aggregate_spend" = aggregate_spend;
+export "fill_spend" = fill_spend;
+export "activated_quarries" = activated_quarries;
+export "online_quarries" = online_quarries;
+export "material_balance" = material_balance;
