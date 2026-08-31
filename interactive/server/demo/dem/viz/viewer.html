@@ -457,6 +457,14 @@ const LAYER_DEFS = {
   ledger: { color: "#d5b5e0", on: true, desc: "terraform acts" },
   road_edges: { color: "#c9762b", on: false, desc: "network edges" },
   actions: { color: "#777", on: false, desc: "raw acts" },
+  sites: { color: "#f0cf65", on: true, desc: "towns+sources" },
+  towns: { color: "#e0a341", on: false, desc: "town demand" },
+  supply: { color: "#58c586", on: false, desc: "source capacity" },
+  demand: { color: "#e0a341", on: false, desc: "requested goods" },
+  yards: { color: "#4da3ff", on: false, desc: "works yards" },
+  route_path: { color: "#b58de0", on: false, desc: "live surveys" },
+  path_use: { color: "#a87948", on: true, desc: "desire paths" },
+  established_paths: { color: "#d0a66f", on: false, desc: "walked twice" },
 };
 // Two vocabularies for built things share one renderer:
 //   logistics `infrastructure`: val (kind, owner), bridge = kind 2
@@ -466,7 +474,7 @@ const INFRA_SHAPE = {
   roads: (v) => ({ owner: v[0], bridge: v[1] === 1 }),
 };
 // Non-grid, table-shaped exports handled by peek on refresh instead.
-const TABLE_TRACES = ["spend", "road_spend", "balance", "role_violations", "cost_violations", "infrastructure_conflicts"];
+const TABLE_TRACES = ["meta", "spend", "road_spend", "balance", "role_violations", "cost_violations", "infrastructure_conflicts"];
 
 const layers = new Map();   // name -> {layer, tailId, on, avail, def}
 let listedTraces = [];
@@ -616,7 +624,6 @@ const agentColor = (a) => AGENT_COLORS[((a % AGENT_COLORS.length) + AGENT_COLORS
 async function refreshTables() {
   const present = TABLE_TRACES.filter((t) => listedTraces.includes(t));
   if (!present.length) return;
-  $("agents-section").style.display = "";
   const out = {};
   for (const t of present) {
     try {
@@ -625,6 +632,15 @@ async function refreshTables() {
         .map((u) => ({ key: parseValue(u.key), val: parseValue(u.val), diff: u.diff }));
     } catch (e) { /* trace may have raced away */ }
   }
+  if (!CELL_M_EXPLICIT && out.meta) {
+    const cell = out.meta.find((r) => r.key[0] === 0 && r.diff > 0);
+    if (cell && cell.val[0] > 0 && CELL_M !== cell.val[0] / 100) {
+      CELL_M = cell.val[0] / 100;
+      markDirty();
+    }
+  }
+  const hasAgentTables = present.some((t) => t !== "meta");
+  $("agents-section").style.display = hasAgentTables ? "" : "none";
   const el = $("agents");
   let html = "";
   const cols = ["spend", "road_spend", "balance"].filter((c) => (out[c] || []).length);
@@ -1007,12 +1023,52 @@ function renderNow() {
   ictx.putImageData(id, 0, 0);
   ctx.drawImage(img, 0, 0, w * SCALE, h * SCALE);
 
-  // --- vector pass: infrastructure, flooded roads, ledger, marks ---
+  // --- vector pass: paths, infrastructure, sites, ledger, marks ---
   const cellRect = (k, inset) => {
     const c = k.indexOf(",");
     const x = Number(k.slice(0, c)) - x0, y = Number(k.slice(c + 1)) - y0;
     return [x * SCALE + inset, y * SCALE + inset, SCALE - 2 * inset, SCALE - 2 * inset];
   };
+  // Survey alternatives are deliberately faint. Frozen traversal counts form
+  // the persistent desire-path layer beneath deliberate infrastructure.
+  const surveyRows = viewRows("route_path");
+  if (surveyRows) {
+    for (const [k, vals] of surveyRows) {
+      let route = 0;
+      for (const v of vals.values()) if (v.count > 0 && Array.isArray(v.val)) { route = v.val[0]; break; }
+      const [rx, ry, rw, rh] = cellRect(k, Math.max(1, SCALE / 3));
+      ctx.fillStyle = agentColor(route);
+      ctx.globalAlpha = 0.32;
+      ctx.fillRect(rx, ry, rw, rh);
+    }
+    ctx.globalAlpha = 1;
+  }
+  const useRows = viewRows("path_use");
+  if (useRows) {
+    let maxUse = 1;
+    for (const k of useRows.keys()) { const v = single(useRows, k); if (v) maxUse = Math.max(maxUse, v[0]); }
+    for (const k of useRows.keys()) {
+      const v = single(useRows, k);
+      if (!v || v[0] <= 0) continue;
+      const strength = Math.log(1 + v[0]) / Math.log(1 + maxUse);
+      const inset = Math.max(1, SCALE * (0.34 - 0.18 * strength));
+      const [rx, ry, rw, rh] = cellRect(k, inset);
+      ctx.fillStyle = "#a87948";
+      ctx.globalAlpha = 0.32 + 0.55 * strength;
+      ctx.fillRect(rx, ry, rw, rh);
+    }
+    ctx.globalAlpha = 1;
+  }
+  const establishedRows = viewRows("established_paths");
+  if (establishedRows) {
+    ctx.strokeStyle = "#d0a66f";
+    ctx.globalAlpha = 0.7;
+    for (const k of establishedRows.keys()) {
+      const [rx, ry, rw, rh] = cellRect(k, Math.max(1, SCALE / 4));
+      ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+    }
+    ctx.globalAlpha = 1;
+  }
   // Roads render honestly: a surface road under water is drowned (dim +
   // red edge), a road absent from the depot-connected net is stranded
   // (dim). Bridges stay passable over water (white outline).
@@ -1067,6 +1123,22 @@ function renderNow() {
       ctx.fill();
     }
   }
+  const siteRows = viewRows("sites");
+  if (siteRows) {
+    for (const k of siteRows.keys()) {
+      const site = single(siteRows, k);
+      if (!site) continue;
+      const [rx, ry, rw, rh] = cellRect(k, Math.max(0.5, SCALE / 8));
+      ctx.fillStyle = site[1] === 0 ? "#e0a341" : site[1] === 1 ? "#58c586" : "#4da3ff";
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1;
+      if (site[1] === 0) {
+        ctx.beginPath(); ctx.arc(rx + rw / 2, ry + rh / 2, Math.max(2, rw / 2), 0, 7); ctx.fill(); ctx.stroke();
+      } else {
+        ctx.fillRect(rx, ry, rw, rh); ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+      }
+    }
+  }
   for (const grid of ["connected", "access", "passable"]) {
     const rows = viewRows(grid);
     if (!rows) continue;
@@ -1115,7 +1187,8 @@ const glCanvas = $("map3d");
 let gl3 = null;   // {gl, prog, loc, bufs, idxCount, w, h, x0, y0, heights, hMid}
 const cam = { yaw: 0.9, pitch: 0.75, dist: 170, tx: 0, tz: 0 };
 let CELL_M = 76;        // meters per cell, horizontal (heights are meters);
-                        // Engadine-window default, override with ?cellm=<m>
+                        // world `meta` overrides this; ?cellm=<m> overrides both
+let CELL_M_EXPLICIT = false;
 const FOV = Math.PI / 4;
 
 function hexRgb(hex) {
@@ -1170,6 +1243,8 @@ function build3D(fd) {
   }
   const floodedRows = viewRows("flooded_roads");
   const ledgerRows = viewRows("ledger");
+  const pathUseRows = viewRows("path_use");
+  const siteRows3 = viewRows("sites");
   const netRows3 = viewRows("road_net") || viewRows("connected");
   const RED = hexRgb("#e06060"), WHITE = [245, 245, 245];
 
@@ -1199,6 +1274,11 @@ function build3D(fd) {
         }
       }
       if (floodedRows && floodedRows.has(k)) mixC(tCol, o, RED, 0.55);
+      if (pathUseRows && pathUseRows.has(k)) mixC(tCol, o, hexRgb("#a87948"), 0.45);
+      if (siteRows3 && siteRows3.has(k)) {
+        const site = single(siteRows3, k);
+        if (site) mixC(tCol, o, hexRgb(site[1] === 0 ? "#e0a341" : site[1] === 1 ? "#58c586" : "#4da3ff"), 0.8);
+      }
       if (ledgerRows && ledgerRows.has(k)) {
         let agent = 0;
         for (const v of ledgerRows.get(k).values()) if (v.count > 0 && Array.isArray(v.val)) agent = v.val[0];
@@ -1427,9 +1507,10 @@ function cellAt(ev) {
 
 function describeCell(k) {
   const parts = ["(" + k + ")"];
-  const terr = single(layerState("terrain").layer.rows, k);
+  const at = (name) => { const rows = viewRows(name); return rows ? single(rows, k) : null; };
+  const terr = at("terrain");
   if (terr) parts.push("h=" + terr[0]);
-  const wv = single(layerState("water").layer.rows, k);
+  const wv = at("water");
   if (terr && wv) parts.push(wv[0] > terr[0] ? "water=" + wv[0] + " depth=" + (wv[0] - terr[0]) : "dry");
   if (hypEdits.has(k)) parts.push("hyp h=" + hypEdits.get(k));
   if (hypWater && terr) {
@@ -1437,10 +1518,21 @@ function describeCell(k) {
     const eff = hypEdits.has(k) ? hypEdits.get(k) : terr[0];
     if (hyp !== undefined) parts.push("hyp " + (hyp > eff ? "depth=" + (hyp - eff) : "dry"));
   }
-  const acc = single(layerState("accum").layer.rows, k);
+  const acc = at("accum");
   if (acc && acc[0] > 1) parts.push("accum=" + acc[0]);
+  const use = at("path_use");
+  if (use && use[0] > 0) parts.push("path use=" + use[0]);
+  const site = at("sites");
+  if (site) {
+    const kind = site[1] === 0 ? "town" : site[1] === 1 ? "source" : "yard";
+    parts.push(kind + " id=" + site[0]);
+  }
+  const supply = at("supply");
+  if (supply) parts.push("source capacity=" + supply[1]);
+  const demand = at("demand");
+  if (demand) parts.push("demand=" + demand[1]);
   for (const [name, shape] of Object.entries(INFRA_SHAPE)) {
-    const infra = single(layerState(name).layer.rows, k);
+    const infra = at(name);
     if (infra) {
       const { owner, bridge } = shape(infra);
       parts.push((bridge ? "bridge" : "road") + " agent=" + owner);
@@ -1498,7 +1590,8 @@ function renderInspector() {
   const lines = ["cell (" + pinnedCell + ")"];
   for (const [name, st] of layers) {
     if (!st.on) continue;
-    const vals = st.layer.rows.get(pinnedCell);
+    const rows = viewRows(name);
+    const vals = rows && rows.get(pinnedCell);
     if (!vals) continue;
     for (const [vs, v] of vals) lines.push("  " + name + ": " + vs + " ×" + v.count);
   }
@@ -1532,7 +1625,7 @@ window.onresize = () => { if (viewMode === "3d") markDirty(); };
   const q = new URLSearchParams(location.search);
   glCap = q.get("glcap") === "1";
   const cm = Number(q.get("cellm"));
-  if (cm > 0) CELL_M = cm;
+  if (cm > 0) { CELL_M = cm; CELL_M_EXPLICIT = true; }
   let view = q.get("view");
   try { view = view || localStorage.getItem("ddir-viewer-view"); } catch (e) {}
   if (view === "3d") setView("3d");

@@ -7,6 +7,20 @@ scenarios), `MECHANICS.md` / `DESIGN_REPORT.md` / `MECHANICS_RESPONSE.md`
 (trial history and the agreed direction), `viz/NOTES.md` (viewer usage,
 world-side questions now answered in place).
 
+The persistent transport generalization is documented separately in
+`PATHWAYS_PROTOCOL.md` and `PATHWAYS_REPORT.md`. Read the report for the V1/V2
+trial ladder, completed four-town result, qualifications, memory incident, and
+proposed hydraulic-road/mountain-path iteration.
+
+## Live pathways world (mini-00)
+
+One lower-memory 128×128 pathways world is live at TCP `8051`, viewer
+`ws://100.123.78.70:8052`. It exports terrain, equilibrium water, accumulation,
+sites, paths, public roads/bridges, deliveries, and board `meta`. All four towns
+are fulfilled; the chronological replay judge returns `SUCCESS`. Keep this as
+the sole pathways world while it is being viewed—the prior host reboot occurred
+under extreme memory pressure with three 256-board DDIR worlds resident.
+
 ## Live worlds (mini-01, tailnet 100.65.36.17)
 
 Both restaged 2026-08-30 evening on the binary that carries the tail fix,

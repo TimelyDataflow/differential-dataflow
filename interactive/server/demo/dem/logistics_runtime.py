@@ -113,6 +113,8 @@ def append_event(run_dir, event):
     path = os.path.join(run_dir, "events.jsonl")
     with open(path, "a") as events:
         events.write(json.dumps(event, sort_keys=True) + "\n")
+        events.flush()
+        os.fsync(events.fileno())
 
 
 def read_briefing(run_dir):

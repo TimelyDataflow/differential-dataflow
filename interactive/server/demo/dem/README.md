@@ -117,3 +117,54 @@ python3 -m unittest \
   interactive.server.demo.dem.test_logistics_rules \
   interactive.server.demo.dem.test_logistics_scenario -v
 ```
+
+## Persistent pathways: towns, desire paths, and roads
+
+`pathways.ddp` generalizes the one-off civil puzzle into an evolving transport
+world. Agents submit weighted topographic surveys, DDIR finds their routes,
+completed journeys leave frozen path use, and established paths can be upgraded
+into a public road/bridge network that carries cargo from sources to towns.
+Terrain, equilibrium water, and `accum` drainage remain the shared physics and
+visualization substrate.
+
+[`PATHWAYS_PROTOCOL.md`](PATHWAYS_PROTOCOL.md) defines the route objective and
+construction rules. [`PATHWAYS_REPORT.md`](PATHWAYS_REPORT.md) records the V1
+and V2 playtests, controlled reuse comparison, completed four-town world,
+memory incident, and proposed hydraulic-road/mountain-path iterations.
+
+The 128×128 board is the lower-memory default. Keep one interactive world at a
+time; the route fixed point is substantially heavier on the optional 256×256
+board. Start a world with:
+
+```text
+python3 interactive/server/demo/dem/pathways_game.py setup \
+  --run-dir interactive/server/demo/dem/runs/pathways-01 --port 8081
+
+python3 interactive/server/demo/dem/pathways_client.py \
+  --run-dir interactive/server/demo/dem/runs/pathways-01 --agent 1 status
+
+python3 interactive/server/demo/dem/pathways_game.py judge \
+  --run-dir interactive/server/demo/dem/runs/pathways-01
+```
+
+A stopped or crashed V2 world can be rebuilt from its saved briefing and
+accepted semantic event log. Recovery stages one replacement, verifies saved
+program hashes when present, and publishes the destination only after every
+command replays successfully:
+
+```text
+python3 interactive/server/demo/dem/pathways_resume.py \
+  --from-run interactive/server/demo/dem/runs/pathways-01 \
+  --run-dir interactive/server/demo/dem/runs/pathways-01-recovered \
+  --port 8091 --ws-host 127.0.0.1
+```
+
+The viewer discovers `sites`, `route_path`, `path_use`, established paths, and
+the canonical `infrastructure` trace alongside terrain, water, drainage, and
+snow. The judge also replays historical route, porter, paving, and freight
+state rather than trusting final connectivity. Pure route/network/replay rules
+run with:
+
+```text
+python3 -m unittest interactive.server.demo.dem.test_pathways_rules -v
+```

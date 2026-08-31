@@ -1,0 +1,212 @@
+-- Topographic route surveys, desire paths, and deliberate road upgrades.
+--
+-- input 0: sites ((site_id); (x, y, kind, amount))
+--          kind 0 = town/demand, 1 = source/supply, 2 = works yard
+-- input 1: route requests
+--          ((route_id); (agent, sx, sy, tx, ty,
+--                        distance_w, grade_w, water_w, runoff_w, reuse_w))
+-- input 2: frozen traversals ((trip_id, x, y); (agent, route_id))
+-- input 3: infrastructure ((x, y); (kind, owner))
+--          kind 1 = surface road, 2 = bridge
+-- input 4: deliveries ((delivery_id); (agent, town_id, units, route_id, mode))
+--          mode 0 = porter delivery, 1 = road freight
+-- input 5: board geometry ((0); (orthogonal_metres, diagonal_metres))
+--
+-- Route cost is paid on entry to each destination cell:
+--   distance_w * configured step length
+--   + grade_w  * |destination height - source height|
+--   + water_w  * water depth
+--   + runoff_w * min(drainage area, 100)
+--   + reuse_w  * step length * surface factor (raw 2 / path 1 / road 0)
+-- `min` in the feedback scope is Dijkstra's relaxation. Its value begins
+-- with total cost, so the remaining predecessor coordinates only break ties.
+
+let sites = input 0;
+let requests = input 1;
+let traversals = input 2;
+let infrastructure = input 3;
+let deliveries = input 4;
+let geometry = input 5;
+
+let terrain = import "terrain";
+let water = import "water";
+let accum = import "accum";
+
+-- A journey is frozen cell-by-cell, so later route changes do not rewrite
+-- its contribution. Two cargo journeys establish a path.
+let path_use = traversals
+    | map($0[1], $0[2] ;)
+    | count;
+let established = path_use
+    | filter($1[0] > 1)
+    | map($0 ;);
+let raw_surface = terrain | map($0 ; 2);
+let path_surface = established | map($0 ; 1);
+let road_surface = infrastructure | map($0 ; 0);
+let surface = raw_surface + path_surface + road_surface | min;
+
+-- Every cell carries the metrics used by the route cost.
+-- ((x,y) ; (height, water_depth, capped_drainage_area, surface_factor,
+--           orthogonal_metres, diagonal_metres))
+let cells0 = terrain
+    | join(water, ($0 ; $1[0], $2[0] - $1[0]));
+let cell_metrics = cells0
+    | join(accum, ($0 ; $1[0], $1[1], if($2[0] < 100, $2[0], 100)))
+    | join(surface, ($0 ; $1[0], $1[1], $1[2], $2[0]));
+let step_lengths = geometry | map(; $1[0], $1[1]);
+let cells = cell_metrics
+    | map(; $0[0], $0[1], $1[0], $1[1], $1[2], $1[3])
+    | join(step_lengths, ($1[0], $1[1] ;
+        $1[2], $1[3], $1[4], $1[5], $2[0], $2[1]));
+
+-- Directed eight-neighbour edges, keyed by their source cell:
+-- ((x,y) ; (nx,ny,length,absolute_grade,destination_depth,
+--            destination_runoff,destination_surface_factor)).
+let sxp = cells | map($0[0] + 1, $0[1] ; $0[0], $0[1], $1[0]);
+let exp = sxp
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[4], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxm = cells | map($0[0] - 1, $0[1] ; $0[0], $0[1], $1[0]);
+let exm = sxm
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[4], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let syp = cells | map($0[0], $0[1] + 1 ; $0[0], $0[1], $1[0]);
+let eyp = syp
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[4], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sym = cells | map($0[0], $0[1] - 1 ; $0[0], $0[1], $1[0]);
+let eym = sym
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[4], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxpp = cells | map($0[0] + 1, $0[1] + 1 ; $0[0], $0[1], $1[0]);
+let expp = sxpp
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[5], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxpm = cells | map($0[0] + 1, $0[1] - 1 ; $0[0], $0[1], $1[0]);
+let expm = sxpm
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[5], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxmp = cells | map($0[0] - 1, $0[1] + 1 ; $0[0], $0[1], $1[0]);
+let exmp = sxmp
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[5], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let sxmm = cells | map($0[0] - 1, $0[1] - 1 ; $0[0], $0[1], $1[0]);
+let exmm = sxmm
+    | join(cells, ($1[0], $1[1] ; $0[0], $0[1],
+        $2[5], if($1[2] > $2[0], $1[2] - $2[0], $2[0] - $1[2]), $2[1], $2[2], $2[3]));
+let edges = exp + exm + eyp + eym + expp + expm + exmp + exmm;
+
+-- ((route_id,x,y) ; (total_cost, predecessor_x, predecessor_y)).
+let route_seeds = requests
+    | map($0[0], $1[1], $1[2] ; 0, $1[1], $1[2]);
+routes: {
+    let expanded = best
+        | map($0[1], $0[2] ; $0[0], $1[0])
+        | join(edges, ($1[0] ; $2[0], $2[1], $1[1], $0[0], $0[1],
+                              $2[2], $2[3], $2[4], $2[5], $2[6]));
+    let proposals = expanded
+        | join(requests, ($0[0], $1[0], $1[1] ;
+            $1[2] + $1[5] * $2[5] + $1[6] * $2[6] +
+                    $1[7] * $2[7] + $1[8] * $2[8] +
+                    $1[5] * $1[9] * $2[9],
+            $1[3], $1[4]));
+    var best = route_seeds + proposals | min;
+}
+let best = routes::best;
+
+-- Walk predecessors back from each request's target. The source points to
+-- itself, so `distinct` closes the recursion there.
+let route_targets = requests | map($0[0], $1[3], $1[4] ;);
+chosen: {
+    let prior = path
+        | join(best, ($0[0], $2[1], $2[2] ;));
+    var path = route_targets + prior | distinct;
+}
+
+-- Surface roads drown; bridges remain passable. All source and works-yard
+-- cells seed the connected public network.
+let dry = cells
+    | filter($1[1] == 0)
+    | map($0 ;);
+let surface_roads = infrastructure
+    | filter($1[0] == 1)
+    | map($0 ;)
+    | join(dry, ($0 ;))
+    | map($0 ;);
+let bridges = infrastructure
+    | filter($1[0] == 2)
+    | map($0 ;);
+let passable = surface_roads + bridges | distinct;
+let sources = sites
+    | filter(or($1[2] == 1, $1[2] == 2))
+    | map($1[0], $1[1] ;)
+    | distinct;
+let road_cells = passable + sources | distinct;
+
+let nxp = road_cells | map($0[0] + 1, $0[1] ; $0[0], $0[1]);
+let rxp = nxp | join(road_cells, ($1[0], $1[1] ; $0[0], $0[1]));
+let nxm = road_cells | map($0[0] - 1, $0[1] ; $0[0], $0[1]);
+let rxm = nxm | join(road_cells, ($1[0], $1[1] ; $0[0], $0[1]));
+let nyp = road_cells | map($0[0], $0[1] + 1 ; $0[0], $0[1]);
+let ryp = nyp | join(road_cells, ($1[0], $1[1] ; $0[0], $0[1]));
+let nym = road_cells | map($0[0], $0[1] - 1 ; $0[0], $0[1]);
+let rym = nym | join(road_cells, ($1[0], $1[1] ; $0[0], $0[1]));
+let nxpp = road_cells | map($0[0] + 1, $0[1] + 1 ; $0[0], $0[1]);
+let rxpp = nxpp | join(road_cells, ($1[0], $1[1] ; $0[0], $0[1]));
+let nxpm = road_cells | map($0[0] + 1, $0[1] - 1 ; $0[0], $0[1]);
+let rxpm = nxpm | join(road_cells, ($1[0], $1[1] ; $0[0], $0[1]));
+let nxmp = road_cells | map($0[0] - 1, $0[1] + 1 ; $0[0], $0[1]);
+let rxmp = nxmp | join(road_cells, ($1[0], $1[1] ; $0[0], $0[1]));
+let nxmm = road_cells | map($0[0] - 1, $0[1] - 1 ; $0[0], $0[1]);
+let rxmm = nxmm | join(road_cells, ($1[0], $1[1] ; $0[0], $0[1]));
+let road_edges = rxp + rxm + ryp + rym + rxpp + rxpm + rxmp + rxmm;
+
+network: {
+    let step = connected | join(road_edges, ($2[0], $2[1] ;));
+    var connected = sources + step | distinct;
+}
+
+let towns = sites
+    | filter($1[2] == 0)
+    | map($1[0], $1[1] ; $0[0], $1[3]);
+let supplies = sites
+    | filter($1[2] == 1)
+    | map($1[0], $1[1] ; $0[0], $1[3]);
+let yards = sites
+    | filter($1[2] == 2)
+    | map($1[0], $1[1] ; $0[0], $1[3]);
+let served = towns
+    | join(network::connected, ($0 ; $1[0], $1[1]));
+let delivered = deliveries
+    | map($1[1] ; $1[2])
+    | collect
+    | map($0 ; fold($1, 0, ^1 + ^0[0]));
+let demand_by_id = sites
+    | filter($1[2] == 0)
+    | map($0 ; $1[0], $1[1], $1[3]);
+let fulfilled = demand_by_id
+    | join(delivered, ($1[0], $1[1] ; $0[0], $1[2], $2[0]))
+    | filter($1[2] >= $1[1]);
+
+export "sites" = sites | map($1[0], $1[1] ; $0[0], $1[2]);
+export "towns" = towns;
+export "demand" = towns | map($0 ; 0, $1[1]);
+export "supply" = supplies;
+export "yards" = yards;
+export "route_requests" = requests;
+export "route_cost" = route_targets
+    | join(best, ($0[0] ; $2[0]));
+export "route_steps" = chosen::path
+    | join(best, ($0 ; $2[0], $2[1], $2[2]));
+export "route_path" = chosen::path | map($0[1], $0[2] ; $0[0]);
+export "traversals" = traversals;
+export "path_use" = path_use;
+export "established_paths" = established;
+export "surface_factor" = surface;
+export "infrastructure" = infrastructure;
+export "passable" = passable;
+export "connected" = network::connected;
+export "served_towns" = served;
+export "deliveries" = deliveries;
+export "delivered" = delivered;
+export "fulfilled_towns" = fulfilled;
