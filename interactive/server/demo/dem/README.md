@@ -8,6 +8,12 @@ programs maintain fixed points over it, edits re-derive only their
 consequences, and a civil-works protocol lets participants — human or
 agent — change the world together.
 
+[`WORLD_MODEL.md`](WORLD_MODEL.md) inventories the currently installed V5
+world, relation schemas, authority boundaries, and known omissions. It also
+defines an evolvable meaning of “contract”: mechanisms, institutional rules,
+planning policies, experiments, and presentation can change independently
+when their compatibility boundary is explicit.
+
 `GEOGRAPHY.md` maps board coordinates to the real valley (verified
 landmarks, georeferenced corners, orientation). A second board,
 `engadin_256.txt` (~26 m cells, same reach with Celerina and Pontresina in
