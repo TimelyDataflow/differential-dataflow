@@ -457,7 +457,7 @@ const LAYER_DEFS = {
   ledger: { color: "#d5b5e0", on: true, desc: "terraform acts" },
   road_edges: { color: "#c9762b", on: false, desc: "network edges" },
   actions: { color: "#777", on: false, desc: "raw acts" },
-  sites: { color: "#f0cf65", on: true, desc: "towns+sources" },
+  sites: { color: "#f0cf65", on: true, desc: "towns+sources+hill works" },
   towns: { color: "#e0a341", on: false, desc: "town demand" },
   supply: { color: "#58c586", on: false, desc: "source capacity" },
   demand: { color: "#e0a341", on: false, desc: "requested goods" },
@@ -473,6 +473,10 @@ const INFRA_SHAPE = {
   infrastructure: (v) => ({ owner: v[1], bridge: v[0] === 2 }),
   roads: (v) => ({ owner: v[0], bridge: v[1] === 1 }),
 };
+const siteColor = (kind) => kind === 0 ? "#e0a341" : kind === 1 ? "#58c586" :
+  kind === 2 ? "#4da3ff" : kind === 3 ? "#b58de0" : "#e06060";
+const siteKind = (kind) => kind === 0 ? "town" : kind === 1 ? "source" :
+  kind === 2 ? "yard" : kind === 3 ? "quarry" : "worksite";
 // Non-grid, table-shaped exports handled by peek on refresh instead.
 const TABLE_TRACES = ["meta", "spend", "road_spend", "balance", "role_violations", "cost_violations", "infrastructure_conflicts"];
 
@@ -1129,7 +1133,7 @@ function renderNow() {
       const site = single(siteRows, k);
       if (!site) continue;
       const [rx, ry, rw, rh] = cellRect(k, Math.max(0.5, SCALE / 8));
-      ctx.fillStyle = site[1] === 0 ? "#e0a341" : site[1] === 1 ? "#58c586" : "#4da3ff";
+      ctx.fillStyle = siteColor(site[1]);
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1;
       if (site[1] === 0) {
@@ -1277,7 +1281,7 @@ function build3D(fd) {
       if (pathUseRows && pathUseRows.has(k)) mixC(tCol, o, hexRgb("#a87948"), 0.45);
       if (siteRows3 && siteRows3.has(k)) {
         const site = single(siteRows3, k);
-        if (site) mixC(tCol, o, hexRgb(site[1] === 0 ? "#e0a341" : site[1] === 1 ? "#58c586" : "#4da3ff"), 0.8);
+        if (site) mixC(tCol, o, hexRgb(siteColor(site[1])), 0.8);
       }
       if (ledgerRows && ledgerRows.has(k)) {
         let agent = 0;
@@ -1524,8 +1528,7 @@ function describeCell(k) {
   if (use && use[0] > 0) parts.push("path use=" + use[0]);
   const site = at("sites");
   if (site) {
-    const kind = site[1] === 0 ? "town" : site[1] === 1 ? "source" : "yard";
-    parts.push(kind + " id=" + site[0]);
+    parts.push(siteKind(site[1]) + " id=" + site[0]);
   }
   const supply = at("supply");
   if (supply) parts.push("source capacity=" + supply[1]);

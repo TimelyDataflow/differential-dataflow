@@ -1,5 +1,86 @@
 # Civil logistics design report
 
+## Persistent pathways V3: quarry and watershed extension (2026-08-30)
+
+The newest iteration keeps one 128×128 Engadine world and extends the completed
+town network rather than staging another board. It adds a quarry bench at
+`(98,22)` above Samedan and a watershed worksite at `(36,106)` above St.
+Moritz. These are topographically defensible locations selected from the DEM;
+the model makes no claim about real geology or avalanche zoning.
+
+The bootstrap is deliberately chained:
+
+1. Agent 1 carries two light five-unit loads to activate the quarry. Those two
+   real journeys establish its desire path.
+2. Agent 2 spends the valley's 17 aggregate units to extend the existing road
+   network uphill. The calibrated contour route needs 15 cells, leaving only
+   two cells of revision slack.
+3. The quarry becomes a material source only when both activated and connected.
+   It then unlocks 24 aggregate and 50 rock units once, never by acting as a
+   reachability seed.
+4. Agent 1 scouts the watershed alignment twice. Agent 2 builds its ordinary
+   cells; agent 3 supplies a bridge if that crossing treatment was selected.
+5. Agent 3 can deliver 30 units of bulk rock only from the online quarry over a
+   fully connected route.
+
+New surface roads use a 400-permille coarse-raster grade limit. A monotone
+fixed-point computes the least fill-only profile over the whole remaining
+alignment, including diagonal lengths and nearby connected boundaries. Each
+accepted build commits one cell, consumes aggregate and rock, and edits the
+same terrain input that drives priority-flood water and drainage accumulation.
+The chronological replay recomputes hydrology and live routes after every such
+revision.
+
+At the watershed branch the two calibrated treatments are intentionally
+unequal:
+
+| Treatment | New cells after quarry access | Rock fill | Hydraulic effect |
+|---|---:|---:|---|
+| bridge-sensitive route | 7 roads + 1 bridge | 0 | channel terrain preserved |
+| embankment at the same runoff crossing | 8 roads | 39 | six accumulation cells reroute; crossing accumulation 555 → 1 |
+
+The embankment raises the runoff cell by 20 coarse elevation units and raises
+two approach cells by another 19 units to retain grade. This is deliberately a
+legible raster mechanism, not a literal road-design prescription. It creates
+the requested choice between scarce structure capacity and disruptive,
+material-hungry fill. A `preview` is read-only, and a route cannot switch from
+one crossing treatment to the other after construction begins.
+
+An exact offline chronological replay of the inherited 24 accepted V2 commands
+plus the new bridge treatment reached the quarry and worksite without flooding
+a protected valley site. Ten focused rules tests cover legacy compatibility,
+graded connectivity, bridge exemption, least fill, infeasible fixed
+boundaries, bridge/embankment alternatives, scouting, role enforcement, and
+deterministic replay.
+
+Three role-separated agents then completed the live upgraded world. The
+courier selected a 52-cell contour route, activated the quarry with two porter
+loads, and later scouted the worksite path. The road engineer built 15 quarry
+cells, then advanced four watershed cells until the role gate rejected a
+bridge at `(39,109)`. The structures agent built exactly that bridge; the road
+engineer added the final three cells; the structures agent delivered 30/30
+bulk rock. The final chronological judge agreed on all routes, journeys,
+infrastructure, terrain, water, accumulation, connectivity, roles, and
+materials: `VERDICT: SUCCESS`.
+
+The route choice was meaningful but the safe treatment was somewhat dominant.
+Runoff weight 1 produced a 7,106 m route with a 25 m maximum step and a bridge;
+runoff weight 8 was only 88 m shorter, cost substantially more, and introduced
+a 42 m step. At the chosen crossing, preview showed zero fill for the bridge
+versus 39 rock units for an embankment that would reroute six accumulation
+cells. With bridge kits still available, all agents preferred the bridge. A
+future storm, bridge scarcity, or a downstream benefit from diversion would
+be needed to make the embankment competitive rather than merely dangerous.
+
+Two usability findings were clearer than any rules failure. First, after a
+whole-route preview, issuing 15 identical one-cell quarry builds was tedious;
+the client now provides `build-until`, which stops at the next role/choice gate
+while retaining atomic historical revisions. Second, status initially combined
+lowland cargo and quarry rock into
+`220/200 source capacity`; the display now separates town/light cargo,
+worksite rock, road aggregate, and road-fill rock. The inherited design-space
+judgment below predates this V3 extension.
+
 ## Outcome
 
 The logistics scenario adds three non-transferable roles to the equilibrium

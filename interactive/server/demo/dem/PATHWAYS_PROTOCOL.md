@@ -1,8 +1,9 @@
 # Persistent pathways protocol
 
 This experiment asks whether cargo travel, topographic route choice, desire
-paths, and deliberate road investment produce a useful shared-world loop
-before adding more civil-engineering verbs.
+paths, road investment, and coarse hydraulic engineering produce a useful
+shared-world loop. Version 3 retains the completed valley network and adds a
+mountain quarry plus a watershed worksite.
 
 The interactive default is the 128×128 `engadin_128.txt` terrain. Its cells are
 approximately 53 m orthogonally and 75 m diagonally. Four settlements demand
@@ -54,7 +55,9 @@ hint and a conservative crossing signal.
 A completed cargo journey is frozen cell-by-cell. Later path formation or
 construction may reroute future surveys but never rewrites historical travel.
 
-Two cargo journeys establish a desire path. There is no free walk action.
+Two journeys establish a desire path. Ordinary town traffic still requires
+real cargo. In V3 the mountain courier may make at most two `scout` journeys
+per live route, representing a cheap footpath to a new industrial endpoint.
 Before a town has a complete public road, a porter can carry at most 5 units
 per journey and at most 10 units total to that town. This permits exactly the
 two real journeys needed to establish a path but cannot satisfy the town.
@@ -67,16 +70,27 @@ road. A wet cell or a cell with drainage area at least 256 on the default
 board requires a bridge; the area-scaled threshold is 1024 on the 256 board.
 Bridges remain passable while water continues beneath them.
 
-Roads are currently transport overlays and do not themselves raise the
-hydraulic terrain. Consequently the present game tests *where a crossing needs
-a bridge*, not yet whether road fill impounds a stream. Road embankments,
-culverts, and washout are proposed follow-on mechanics in
-`PATHWAYS_REPORT.md`.
+Legacy V2 roads remain transport overlays. New V3 engineered roads obey a
+400-permille coarse-grid grade envelope. The client computes the least
+fill-only profile for the entire unbuilt alignment, commits one frontier cell,
+charges one aggregate per road cell and one rock per elevation-unit-cell of
+fill, and feeds the raised bed into the authoritative terrain relation. Water
+and drainage then re-equilibrate.
 
-Construction grants are per-agent and non-transferable. Roads are public once
-built: another agent may extend or deliver over them. Cargo is pooled across
-supply sites, but may be delivered only from a supply site to the selected
-town and cannot exceed total supply or that town's demand.
+Every route commits to one crossing treatment. A `bridge` alignment preserves
+wet/high-runoff cells as bridge overlays. An `embankment` alignment raises such
+cells by at least 20 coarse elevation units, consumes rock, and can reroute or
+impound drainage. The large number is a deliberately visible raster
+abstraction, not a claim about a literal 20-metre road deck. `preview` reports
+both profiles before the first build. Once construction begins, the alignment
+cannot switch treatment opportunistically.
+
+The V3 bootstrap is intentionally non-fungible. Two five-unit courier loads
+activate quarry 20 and establish its approach path. Seventeen valley aggregate
+units can reach—but cannot bypass—the quarry. Only after that activated quarry
+is connected to a lowland source does its one-time stock of 24 aggregate and
+50 rock become available. Worksite 21 accepts 30 bulk-rock units only from the
+online quarry over a wholly connected route.
 
 ## Survey lifecycle and commands
 
@@ -105,14 +119,26 @@ python3 interactive/server/demo/dem/pathways_client.py \
 # upgrade a connected prefix, then send the remaining demand as freight
 ... --agent N pave ROUTE CELL_COUNT
 ... --agent N deliver TOWN UNITS ROUTE
+
+# V3 hill logistics
+... --agent 1 deliver 20 5 QUARRY_ROUTE
+... --agent 1 deliver 20 5 QUARRY_ROUTE
+... --agent 1 scout WORKSITE_ROUTE
+... --agent 1 scout WORKSITE_ROUTE
+... --agent N preview ROUTE
+... --agent 2 build ROUTE bridge
+... --agent 3 build ROUTE bridge       # when the next cell is a bridge
+... --agent 2 build ROUTE embankment   # alternative all-road alignment
+... --agent 2 build-until ROUTE bridge # repeat atomic cells until a role gate
+... --agent 3 deliver 21 30 WORKSITE_ROUTE
 ```
 
-The briefing assigns suggested coefficient profiles rather than exclusive
-verbs: a direct courier, contour-sensitive surveyor, and watershed-sensitive
-surveyor. Any agent may survey, travel, pave, bridge, or deliver. Separate
-grants, public infrastructure, and different route information create useful
-handoffs, although the completed playtest did not yet demonstrate strong role
-asymmetry; see the report's qualifications.
+V3 makes the handoffs explicit. Agent 1 alone activates the quarry and scouts
+footpaths. Agent 2 alone builds engineered surface roads. Agent 3 alone builds
+bridges and performs the final bulk-rock haul. Any agent may survey, and all
+paths and infrastructure are public. The bridge alignment therefore requires
+all three roles; the embankment alternative removes the bridge handoff but
+spends substantially more quarry rock and disturbs flow.
 
 ## Authority, persistence, and limitations
 
@@ -130,7 +156,8 @@ still lose the final acknowledged action. For a stopped or crashed world,
 replays accepted commands; program hashes prevent recovery with changed DDIR
 semantics for newly created runs.
 
-This version intentionally omits path decay, road maintenance, source-specific
-commodities, finite freight capacity, conserved cut/fill, hydraulic road
-embankments, and time-dependent culvert discharge. Porter and road-freight
-limits are coarse capacity classes, not a traffic simulation.
+This version intentionally omits path decay, road maintenance, production
+rates, excavation/cut spoil, finite freight capacity, and time-dependent
+culvert discharge. Fill is conserved against finite rock stock, but its coarse
+height-cell unit is not a physical volume. Porter and road-freight limits are
+capacity classes, not a traffic simulation.

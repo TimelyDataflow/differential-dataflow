@@ -7,6 +7,7 @@ import shlex
 
 ROAD = 1
 BRIDGE = 2
+ENGINEERED_ROAD = 3
 TRAIL_USE = 2
 BRIDGE_ACCUM = 1024
 RAW_SURFACE = 2
@@ -24,10 +25,20 @@ def neighbors8(cell):
         yield (x + dx, y + dy)
 
 
-def surface_factor(cell, path_use=None, infrastructure=None):
+def surface_factor(
+    cell,
+    path_use=None,
+    infrastructure=None,
+    terrain=None,
+    water=None,
+):
     """Return the generalized-haul surface factor: raw 2, path 1, road 0."""
     if infrastructure and cell in infrastructure:
-        return ROAD_SURFACE
+        kind, _owner = infrastructure[cell]
+        if kind == BRIDGE or terrain is None or water is None:
+            return ROAD_SURFACE
+        if water[cell] == terrain[cell]:
+            return ROAD_SURFACE
     if path_use and path_use.get(cell, 0) >= TRAIL_USE:
         return PATH_SURFACE
     return RAW_SURFACE
@@ -63,7 +74,9 @@ def step_cost(
         + runoff * runoff_w
         + distance
         * reuse_w
-        * surface_factor(dst, path_use, infrastructure)
+        * surface_factor(
+            dst, path_use, infrastructure, terrain, water
+        )
     )
 
 
@@ -175,17 +188,171 @@ def passable_infrastructure(infrastructure, terrain, water):
     }
 
 
-def connected_cells(infrastructure, sources, terrain, water):
+def grade_limit(src, dst, grade_permille, step_lengths):
+    """Maximum integer height step for an orthogonal/diagonal road edge."""
+    diagonal = src[0] != dst[0] and src[1] != dst[1]
+    distance = step_lengths[1] if diagonal else step_lengths[0]
+    return grade_permille * distance // 1000
+
+
+def graded_edge_ok(
+    src,
+    dst,
+    infrastructure,
+    terrain,
+    grade_permille,
+    step_lengths,
+):
+    """Whether a public-network edge satisfies the V3 road-grade rule.
+
+    V2 roads are retained as legacy infrastructure.  Their mutual edges, and
+    every edge touching a bridge, remain exempt.  A new engineered road must
+    meet the grade at its source/yard boundary and at legacy intersections.
+    """
+    if grade_permille is None:
+        return True
+    src_kind = infrastructure.get(src, (0, 0))[0]
+    dst_kind = infrastructure.get(dst, (0, 0))[0]
+    if BRIDGE in (src_kind, dst_kind):
+        return True
+    if ENGINEERED_ROAD not in (src_kind, dst_kind):
+        return True
+    return (
+        abs(terrain[src] - terrain[dst])
+        <= grade_limit(src, dst, grade_permille, step_lengths)
+    )
+
+
+def connected_cells(
+    infrastructure,
+    sources,
+    terrain,
+    water,
+    grade_permille=None,
+    step_lengths=(26, 37),
+):
     allowed = passable_infrastructure(infrastructure, terrain, water) | set(sources)
     seen = set(sources)
     todo = deque(sources)
     while todo:
         cell = todo.popleft()
         for nxt in neighbors8(cell):
-            if nxt in allowed and nxt not in seen:
+            if (
+                nxt in allowed
+                and nxt not in seen
+                and graded_edge_ok(
+                    cell,
+                    nxt,
+                    infrastructure,
+                    terrain,
+                    grade_permille,
+                    step_lengths,
+                )
+            ):
                 seen.add(nxt)
                 todo.append(nxt)
     return seen
+
+
+def engineered_profile(
+    path,
+    infrastructure,
+    fixed_cells,
+    terrain,
+    water,
+    accum,
+    bridge_accum,
+    grade_permille,
+    step_lengths,
+    crossing_mode="bridge",
+    drainage_fill=0,
+):
+    """Return the least fill-only profile for all missing cells on a route.
+
+    Bridges split the grade envelope and never alter terrain.  Existing
+    connected roads/source pads are fixed boundaries.  New road cells may be
+    raised but never cut.  Looking through the whole missing alignment avoids
+    committing an early cell too low to meet a later climb.
+    """
+    proposed = []
+    kinds = {}
+    for cell in path:
+        if cell in infrastructure or cell in fixed_cells:
+            continue
+        crossing = (
+            required_kind(cell, terrain, water, accum, bridge_accum)
+            == BRIDGE
+        )
+        kind = (
+            BRIDGE
+            if crossing and crossing_mode == "bridge"
+            else ENGINEERED_ROAD
+        )
+        kinds[cell] = kind
+        proposed.append(cell)
+
+    heights = {
+        cell: max(
+            terrain[cell],
+            water[cell]
+            + (
+                drainage_fill
+                if required_kind(
+                    cell, terrain, water, accum, bridge_accum
+                ) == BRIDGE
+                and crossing_mode == "embankment"
+                else 0
+            ),
+        )
+        for cell in proposed
+        if kinds[cell] == ENGINEERED_ROAD
+    }
+    variables = set(heights)
+    fixed = {
+        cell
+        for cell in fixed_cells
+        if cell in terrain
+        and infrastructure.get(cell, (0, 0))[0] != BRIDGE
+    }
+    # Only boundaries adjacent to a proposed road can constrain the envelope.
+    fixed = {
+        cell
+        for cell in fixed
+        if any(nxt in variables for nxt in neighbors8(cell))
+    }
+
+    changed = True
+    while changed:
+        changed = False
+        for cell in sorted(variables):
+            for nxt in neighbors8(cell):
+                if nxt not in variables and nxt not in fixed:
+                    continue
+                limit = grade_limit(
+                    cell, nxt, grade_permille, step_lengths
+                )
+                other = heights[nxt] if nxt in variables else terrain[nxt]
+                needed = other - limit
+                if heights[cell] < needed:
+                    heights[cell] = needed
+                    changed = True
+
+    for cell in sorted(variables):
+        for nxt in neighbors8(cell):
+            if nxt not in fixed:
+                continue
+            limit = grade_limit(cell, nxt, grade_permille, step_lengths)
+            if heights[cell] > terrain[nxt] + limit:
+                raise ValueError(
+                    f"fill-only profile cannot meet fixed boundary at {nxt}"
+                )
+
+    actions = []
+    for cell in proposed:
+        old = terrain[cell]
+        new = heights.get(cell, old)
+        actions.append((cell, kinds[cell], old, new, new - old))
+    return actions
 
 
 def required_kind(cell, terrain, water, accum, bridge_accum=BRIDGE_ACCUM):
@@ -203,6 +370,12 @@ def replay_history(events, briefing, terrain, water, accum):
     that had already been established.  The returned relations can then be
     compared directly with the server's final inputs and derived path counts.
     """
+    # V3 owns mutable terrain.  Copies also keep V2 callers from observing
+    # accidental mutation while preserving the original replay semantics.
+    terrain = dict(terrain)
+    water = dict(water)
+    accum = dict(accum)
+    version = int(briefing.get("version", 1))
     sites = {int(site["id"]): site for site in briefing["sites"]}
     agents = {int(agent) for agent in briefing["agents"]}
     sources = {
@@ -227,6 +400,15 @@ def replay_history(events, briefing, terrain, water, accum):
     delivered = {}
     porter_delivered = {}
     total_delivered = 0
+    build_actions = {}
+    build_revision = 0
+    fill_spent = 0
+    scout_counts = {}
+    route_build_modes = {}
+    grade_permille = (
+        int(briefing["road_grade_permille"])
+        if version >= 3 else None
+    )
 
     def fail(index, message):
         raise ValueError(f"accepted event {index}: {message}")
@@ -249,6 +431,26 @@ def replay_history(events, briefing, terrain, water, accum):
         if path is None or cost is None:
             fail(index, f"route {route_id} is unresolved")
         return path
+
+    def public_network():
+        return connected_cells(
+            infrastructure,
+            network_seeds,
+            terrain,
+            water,
+            grade_permille,
+            step_lengths,
+        )
+
+    def online_quarries():
+        connected = public_network()
+        return {
+            site_id
+            for site_id, site in sites.items()
+            if int(site["kind"]) == 3
+            and delivered.get(site_id, 0) >= int(site["amount"])
+            and tuple(site["cell"]) in connected
+        }
 
     for index, event in enumerate(events, 1):
         if not event.get("accepted"):
@@ -302,6 +504,33 @@ def replay_history(events, briefing, terrain, water, accum):
                 fail(index, f"agent {agent} does not own route {route_id}")
             del routes[route_id]
 
+        elif command == "scout":
+            if version < 3 or len(tokens) != 2:
+                fail(index, "scout requires one live route in V3")
+            try:
+                route_id = int(tokens[1])
+            except ValueError as error:
+                fail(index, f"invalid scout route: {error}")
+            if agent != int(briefing.get("scout_agent", agent)):
+                fail(index, "only the mountain courier may scout")
+            if scout_counts.get(route_id, 0) >= int(
+                briefing.get("scout_trip_limit", 2)
+            ):
+                fail(index, "route scout limit exceeded")
+            path = live_path(route_id, index)
+            trip_id = min((key[0] for key in traversals), default=0) - 1
+            expected_detail = {
+                "trip": trip_id,
+                "route": route_id,
+                "cells": len(path),
+            }
+            if event.get("detail") != expected_detail:
+                fail(index, "recorded scout journey disagrees with replay")
+            for cell in path:
+                traversals[(trip_id, cell[0], cell[1])] = (agent, route_id)
+                path_use[cell] = path_use.get(cell, 0) + 1
+            scout_counts[route_id] = scout_counts.get(route_id, 0) + 1
+
         elif command == "deliver":
             if len(tokens) != 4:
                 fail(index, "delivery requires town, units, and route")
@@ -310,28 +539,52 @@ def replay_history(events, briefing, terrain, water, accum):
             except ValueError as error:
                 fail(index, f"invalid delivery integer: {error}")
             town = sites.get(town_id)
-            if town is None or int(town["kind"]) != 0:
-                fail(index, f"site {town_id} is not a town")
+            target_kind = int(town["kind"]) if town is not None else -1
+            allowed_targets = (0, 3, 4) if version >= 3 else (0,)
+            if town is None or target_kind not in allowed_targets:
+                fail(index, f"site {town_id} is not a delivery target")
             if units < 1:
                 fail(index, "delivery units must be positive")
             path = live_path(route_id, index)
-            if path[0] not in sources:
-                fail(index, "delivery route does not start at a supply site")
+            if target_kind in (0, 3):
+                if path[0] not in sources:
+                    fail(index, "delivery route does not start at a supply site")
+            else:
+                online_cells = {
+                    tuple(sites[site_id]["cell"])
+                    for site_id in online_quarries()
+                }
+                if path[0] not in online_cells:
+                    fail(index, "bulk-rock route does not start at an online quarry")
             if path[-1] != tuple(town["cell"]):
-                fail(index, "delivery route does not end at its town")
+                fail(index, "delivery route does not end at its target")
             if delivered.get(town_id, 0) + units > int(town["amount"]):
-                fail(index, "town demand exceeded")
-            supply = sum(
-                int(site["amount"])
-                for site in briefing["sites"]
-                if int(site["kind"]) == 1
-            )
-            if total_delivered + units > supply:
-                fail(index, "pooled source supply exceeded")
-            connected = connected_cells(
-                infrastructure, network_seeds, terrain, water
-            )
+                fail(index, "delivery target demand exceeded")
+            if target_kind in (0, 3):
+                supply = sum(
+                    int(site["amount"])
+                    for site in briefing["sites"]
+                    if int(site["kind"]) == 1
+                )
+                general_used = sum(
+                    units0
+                    for target_id, units0 in delivered.items()
+                    if int(sites[target_id]["kind"]) in (0, 3)
+                )
+                if general_used + units > supply:
+                    fail(index, "pooled source supply exceeded")
+            if target_kind == 3 and agent != int(
+                briefing.get("quarry_activation_agent", agent)
+            ):
+                fail(index, "only the courier may activate the quarry")
+            if target_kind == 4 and agent != int(
+                briefing.get("worksite_haul_agent", agent)
+            ):
+                fail(index, "only the works crew may haul bulk rock")
+            connected = public_network()
             freight = all(cell in connected for cell in path)
+            if target_kind == 4 and not freight:
+                fail(index, "bulk rock requires a fully connected road route")
             if not freight:
                 if units > int(briefing["porter_trip_capacity"]):
                     fail(index, "porter trip capacity exceeded")
@@ -363,6 +616,13 @@ def replay_history(events, briefing, terrain, water, accum):
             total_delivered += units
 
         elif command == "pave":
+            # Legacy V2 paving remains replayable after a world is upgraded.
+            # The V3 client exposes `build` instead, so no new ungraded road can
+            # be introduced through this compatibility branch.
+            if version >= 3 and index > int(
+                briefing.get("legacy_event_count", 0)
+            ):
+                fail(index, "legacy paving occurred after the upgrade boundary")
             if len(tokens) != 3:
                 fail(index, "pave requires route and cell count")
             try:
@@ -372,9 +632,7 @@ def replay_history(events, briefing, terrain, water, accum):
             if count < 1:
                 fail(index, "pave count must be positive")
             path = live_path(route_id, index)
-            connected = connected_cells(
-                infrastructure, network_seeds, terrain, water
-            )
+            connected = public_network()
             if path[0] not in connected:
                 fail(index, "paving route starts outside the public network")
             reachable = set(connected)
@@ -432,6 +690,126 @@ def replay_history(events, briefing, terrain, water, accum):
             for cell, kind in proposed:
                 infrastructure[cell] = (kind, agent)
 
+        elif command == "build":
+            if version < 3:
+                fail(index, "build requires a V3 briefing")
+            if len(tokens) != 3 or tokens[2] not in ("bridge", "embankment"):
+                fail(index, "build requires ROUTE and bridge|embankment")
+            try:
+                route_id = int(tokens[1])
+            except ValueError as error:
+                fail(index, f"invalid build route: {error}")
+            alignment = tokens[2]
+            prior_alignment = route_build_modes.get(route_id)
+            if prior_alignment is not None and prior_alignment != alignment:
+                fail(index, "a route cannot change its crossing alignment mid-build")
+            path = live_path(route_id, index)
+            connected = public_network()
+            if path[0] not in connected:
+                fail(index, "build route starts outside the public network")
+
+            reachable = set(connected)
+            frontier = None
+            for cell in path:
+                if cell in network_seeds:
+                    reachable.add(cell)
+                    continue
+                if cell in infrastructure:
+                    if cell not in connected:
+                        break
+                    reachable.add(cell)
+                    continue
+                if not any(nxt in reachable for nxt in neighbors8(cell)):
+                    break
+                if path_use.get(cell, 0) < int(briefing["trail_use_required"]):
+                    fail(index, f"building precedes path establishment at {cell}")
+                frontier = cell
+                break
+            if frontier is None:
+                fail(index, "route has no reachable unbuilt frontier")
+
+            try:
+                profile = engineered_profile(
+                    path,
+                    infrastructure,
+                    connected | network_seeds,
+                    terrain,
+                    water,
+                    accum,
+                    int(briefing["bridge_accum_threshold"]),
+                    grade_permille,
+                    step_lengths,
+                    alignment,
+                    int(briefing["drainage_embankment_fill"]),
+                )
+            except ValueError as error:
+                fail(index, str(error))
+            action = next(
+                (candidate for candidate in profile if candidate[0] == frontier),
+                None,
+            )
+            if action is None:
+                fail(index, "frontier is absent from engineered profile")
+            cell, kind, old, new, fill = action
+
+            allowed_kinds = {
+                int(value)
+                for value in briefing["agents"][str(agent)].get(
+                    "build_kinds", []
+                )
+            }
+            if kind not in allowed_kinds:
+                label = "bridge" if kind == BRIDGE else "surface road"
+                fail(index, f"agent role may not build the required {label}")
+
+            quarry_online_before = bool(online_quarries())
+            aggregate_capacity = int(briefing["initial_aggregate"])
+            rock_capacity = int(briefing["initial_rock"])
+            if quarry_online_before:
+                aggregate_capacity += int(briefing["quarry_aggregate"])
+                rock_capacity += int(briefing["quarry_rock"])
+            aggregate_spent = sum(
+                built_kind == ENGINEERED_ROAD
+                for built_kind, _owner in infrastructure.values()
+            )
+            if (
+                kind == ENGINEERED_ROAD
+                and aggregate_spent + 1 > aggregate_capacity
+            ):
+                fail(index, "aggregate stock exhausted")
+            if fill_spent + fill > rock_capacity:
+                fail(index, "road-fill rock stock exhausted")
+
+            build_revision += 1
+            expected_detail = {
+                "engineering": "fill-envelope-v1",
+                "alignment": alignment,
+                "revision": build_revision,
+                "cell": [cell[0], cell[1], kind, old, new, fill],
+            }
+            if event.get("detail") != expected_detail:
+                fail(index, "recorded build action disagrees with replay")
+
+            infrastructure[cell] = (kind, agent)
+            route_build_modes[route_id] = alignment
+            build_actions[(build_revision, 0)] = (
+                agent,
+                route_id,
+                cell[0],
+                cell[1],
+                kind,
+                old,
+                new,
+            )
+            if new != old:
+                from run_dem import priority_flood
+                from run_physics import py_flow_accum
+
+                terrain[cell] = new
+                water = priority_flood(terrain)
+                _flow, accum = py_flow_accum(water)
+            fill_spent += fill
+
         else:
             fail(index, f"accepted non-semantic command {command!r}")
 
@@ -452,4 +830,12 @@ def replay_history(events, briefing, terrain, water, accum):
         "path_use": path_use,
         "infrastructure": infrastructure,
         "porter_delivered": porter_delivered,
+        "terrain": terrain,
+        "water": water,
+        "accum": accum,
+        "build_actions": build_actions,
+        "fill_spent": fill_spent,
+        "delivered_by_target": delivered,
+        "online_quarries": online_quarries(),
+        "connected": public_network(),
     }

@@ -24,15 +24,18 @@ sys.path.insert(0, HERE)
 from logistics_runtime import append_event, read_briefing, run_lock, unique_rows
 from pathways_rules import (
     BRIDGE,
+    ENGINEERED_ROAD,
     ROAD,
     connected_cells,
+    engineered_profile,
     infrastructure_spend,
     neighbors8,
     required_kind,
     route_metrics,
     shortest_route,
 )
-from run_dem import Client, load_grid
+from run_dem import Client, load_grid, priority_flood
+from run_physics import py_flow_accum
 
 
 def rows(client, name):
@@ -64,7 +67,10 @@ def board_step_lengths(briefing):
 
 
 def world_metrics(client, briefing):
-    terrain = load_grid(os.path.join(HERE, briefing["grid"]))
+    if int(briefing.get("version", 1)) >= 3:
+        terrain = {key: value[0] for key, value in rows(client, "terrain").items()}
+    else:
+        terrain = load_grid(os.path.join(HERE, briefing["grid"]))
     water = {key: value[0] for key, value in rows(client, "water").items()}
     accum = {key: value[0] for key, value in rows(client, "accum").items()}
     return terrain, water, accum
@@ -110,7 +116,13 @@ def construction_state(client, briefing):
         if int(site["kind"]) in (1, 2)
     }
     expected_connected = connected_cells(
-        infrastructure, sources, terrain, water
+        infrastructure,
+        sources,
+        terrain,
+        water,
+        briefing.get("road_grade_permille")
+        if int(briefing.get("version", 1)) >= 3 else None,
+        board_step_lengths(briefing),
     )
     actual_connected = set(rows(client, "connected"))
     if actual_connected != expected_connected:
@@ -144,7 +156,9 @@ def show_status(client, briefing):
     )
     for agent_text, values in sorted(briefing["agents"].items(), key=lambda row: int(row[0])):
         agent = int(agent_text)
-        roads = spent.get((agent, ROAD), 0)
+        roads = spent.get((agent, ROAD), 0) + spent.get(
+            (agent, ENGINEERED_ROAD), 0
+        )
         bridges = spent.get((agent, BRIDGE), 0)
         print(
             f"agent {agent} {values['name']}: roads {roads}/{values['road_grant']}, "
@@ -158,9 +172,17 @@ def show_status(client, briefing):
     total_supply = sum(
         site["amount"] for site in briefing["sites"] if site["kind"] == 1
     )
+    site_kinds = {
+        site["id"]: site["kind"] for site in briefing["sites"]
+    }
+    general_delivered = sum(
+        amount
+        for site_id, amount in delivered.items()
+        if site_kinds[site_id] in (0, 3)
+    )
     print(
-        f"cargo delivered: {sum(delivered.values())}/"
-        f"{total_supply} source capacity"
+        f"town/light cargo delivered: {general_delivered}/"
+        f"{total_supply} lowland source capacity"
     )
     for site in briefing["sites"]:
         if site["kind"] != 0:
@@ -171,6 +193,48 @@ def show_status(client, briefing):
             f"town {site['id']} {site['label']}: "
             f"{'CONNECTED' if cell in connected else 'disconnected'}, "
             f"delivery {amount}/{site['amount']}"
+        )
+
+    if int(briefing.get("version", 1)) >= 3:
+        online = []
+        for site in briefing["sites"]:
+            if site["kind"] == 3:
+                activated = delivered.get(site["id"], 0) >= site["amount"]
+                is_online = activated and tuple(site["cell"]) in connected
+                if is_online:
+                    online.append(site["id"])
+                print(
+                    f"quarry {site['id']} {site['label']}: activation "
+                    f"{delivered.get(site['id'], 0)}/{site['amount']}, "
+                    f"{'ONLINE' if is_online else 'offline'}"
+                )
+            elif site["kind"] == 4:
+                print(
+                    f"worksite {site['id']} {site['label']}: "
+                    f"{'CONNECTED' if tuple(site['cell']) in connected else 'disconnected'}, "
+                    f"rock {delivered.get(site['id'], 0)}/{site['amount']}"
+                )
+        aggregate_capacity = briefing["initial_aggregate"] + (
+            briefing["quarry_aggregate"] if online else 0
+        )
+        rock_capacity = briefing["initial_rock"] + (
+            briefing["quarry_rock"] if online else 0
+        )
+        engineered = sum(
+            kind == ENGINEERED_ROAD
+            for kind, _owner in infrastructure.values()
+        )
+        fill = sum(
+            max(0, value[6] - value[5])
+            for value in rows(client, "build_actions").values()
+            if value[4] == ENGINEERED_ROAD
+        )
+        print(
+            f"construction materials: road aggregate "
+            f"{aggregate_capacity - engineered}/"
+            f"{aggregate_capacity}, road-fill rock "
+            f"{rock_capacity - fill}/{rock_capacity}; "
+            f"online quarry ids {online or 'none'}"
         )
 
     requests = rows(client, "route_requests")
@@ -342,6 +406,34 @@ def walk(client, run_dir, agent, route_id, count):
     print(f"recorded {count} journey(s) over route {route_id}, {len(path)} cells each")
 
 
+def scout(client, run_dir, briefing, agent, route_id):
+    if agent != briefing.get("scout_agent", agent):
+        raise ValueError("only the mountain courier may scout footpaths")
+    _request, path, _cost = ordered_route(client, route_id)
+    traversals = rows(client, "traversals")
+    used = {
+        key[0]
+        for key, value in traversals.items()
+        if key[0] < 0 and value[1] == route_id
+    }
+    if len(used) >= briefing.get("scout_trip_limit", 2):
+        raise ValueError(
+            f"route {route_id} already has {len(used)} scout journeys"
+        )
+    trip = min((key[0] for key in traversals), default=0) - 1
+    client.batch([
+        f"feed pathways 2 {trip},{x},{y} val={agent},{route_id}"
+        for x, y in path
+    ])
+    client.cmd("tick")
+    detail = {"trip": trip, "route": route_id, "cells": len(path)}
+    event(run_dir, agent, f"scout {route_id}", True, detail)
+    print(
+        f"scouted route {route_id}: journey {trip}, {len(path)} cells; "
+        "two journeys establish its footpath"
+    )
+
+
 def pave(client, run_dir, briefing, agent, route_id, count):
     if count < 1:
         raise ValueError("pave count must be positive")
@@ -419,22 +511,305 @@ def pave(client, run_dir, briefing, agent, route_id, count):
     print(f"new end: {proposed[-1][0]}")
 
 
+def build_proposal(client, briefing, route_id, alignment):
+    if alignment not in ("bridge", "embankment"):
+        raise ValueError("alignment must be bridge or embankment")
+    _request, path, _cost = ordered_route(client, route_id)
+    (
+        terrain,
+        water,
+        accum,
+        infrastructure,
+        path_use,
+        sources,
+        connected,
+    ) = construction_state(client, briefing)
+    if path[0] not in connected:
+        raise ValueError(
+            f"route {route_id} starts outside the public road network"
+        )
+
+    reachable = set(connected)
+    frontier = None
+    for cell in path:
+        if cell in sources:
+            reachable.add(cell)
+            continue
+        if cell in infrastructure:
+            if cell not in connected:
+                break
+            reachable.add(cell)
+            continue
+        if not any(nxt in reachable for nxt in neighbors8(cell)):
+            break
+        if path_use.get(cell, 0) < briefing["trail_use_required"]:
+            raise ValueError(
+                f"{cell} has path use {path_use.get(cell, 0)}; "
+                f"needs {briefing['trail_use_required']} before building"
+            )
+        frontier = cell
+        break
+    if frontier is None:
+        raise ValueError("route has no reachable unbuilt frontier")
+
+    profile = engineered_profile(
+        path,
+        infrastructure,
+        connected | sources,
+        terrain,
+        water,
+        accum,
+        briefing["bridge_accum_threshold"],
+        briefing["road_grade_permille"],
+        board_step_lengths(briefing),
+        alignment,
+        briefing["drainage_embankment_fill"],
+    )
+    action = next(
+        (candidate for candidate in profile if candidate[0] == frontier),
+        None,
+    )
+    if action is None:
+        raise RuntimeError("frontier is absent from the engineered profile")
+    return (
+        terrain,
+        water,
+        accum,
+        infrastructure,
+        connected,
+        path,
+        profile,
+        action,
+    )
+
+
+def quarry_state(briefing, deliveries, connected):
+    delivered = {}
+    for value in deliveries.values():
+        delivered[value[1]] = delivered.get(value[1], 0) + value[2]
+    activated = {
+        site["id"]
+        for site in briefing["sites"]
+        if site["kind"] == 3
+        and delivered.get(site["id"], 0) >= site["amount"]
+    }
+    online = {
+        site["id"]
+        for site in briefing["sites"]
+        if site["id"] in activated and tuple(site["cell"]) in connected
+    }
+    return delivered, activated, online
+
+
+def preview_build(client, briefing, route_id):
+    for alignment in ("bridge", "embankment"):
+        try:
+            (
+                terrain,
+                water,
+                _accum,
+                _infrastructure,
+                _connected,
+                _path,
+                profile,
+                action,
+            ) = build_proposal(client, briefing, route_id, alignment)
+        except ValueError as error:
+            print(f"{alignment}: infeasible ({error})")
+            continue
+        cell, kind, old, new, fill = action
+        total_fill = sum(candidate[4] for candidate in profile)
+        crossings = sum(
+            candidate[1] == BRIDGE
+            or candidate[3] - candidate[2]
+            >= briefing["drainage_embankment_fill"]
+            for candidate in profile
+        )
+        kind_name = "bridge" if kind == BRIDGE else "engineered road"
+        print(
+            f"{alignment}: next {cell} is {kind_name}, bed {old}->{new}, "
+            f"immediate fill {fill}; remaining profile {len(profile)} cells, "
+            f"total planned fill {total_fill}, crossing markers {crossings}"
+        )
+        if new != old:
+            candidate_terrain = dict(terrain)
+            candidate_terrain[cell] = new
+            candidate_water = priority_flood(candidate_terrain)
+            changed = sum(
+                candidate_water[key] != water[key] for key in water
+            )
+            print(
+                f"  immediate hydraulic preview: {changed} water levels change"
+            )
+
+
+def build(client, run_dir, briefing, agent, route_id, alignment):
+    with open(os.path.join(run_dir, "events.jsonl")) as source:
+        prior_modes = {
+            tokens[2]
+            for record in (json.loads(line) for line in source if line.strip())
+            if record.get("accepted")
+            and (tokens := record.get("command", "").split())
+            and len(tokens) == 3
+            and tokens[0] == "build"
+            and tokens[1] == str(route_id)
+        }
+    if prior_modes and prior_modes != {alignment}:
+        raise ValueError(
+            f"route {route_id} is already committed to {next(iter(prior_modes))}"
+        )
+    (
+        terrain,
+        water,
+        _accum,
+        infrastructure,
+        connected,
+        _path,
+        _profile,
+        action,
+    ) = build_proposal(client, briefing, route_id, alignment)
+    cell, kind, old, new, fill = action
+    profile = briefing["agents"][str(agent)]
+    if kind not in profile.get("build_kinds", []):
+        required = "bridge" if kind == BRIDGE else "surface road"
+        raise ValueError(
+            f"{profile['name']} cannot build the required {required} at {cell}"
+        )
+
+    deliveries = rows(client, "deliveries")
+    _delivered, _activated, online = quarry_state(
+        briefing, deliveries, connected
+    )
+    aggregate_capacity = briefing["initial_aggregate"] + (
+        briefing["quarry_aggregate"] if online else 0
+    )
+    rock_capacity = briefing["initial_rock"] + (
+        briefing["quarry_rock"] if online else 0
+    )
+    engineered = sum(
+        built_kind == ENGINEERED_ROAD
+        for built_kind, _owner in infrastructure.values()
+    )
+    fill_spent = sum(
+        max(0, value[6] - value[5])
+        for value in rows(client, "build_actions").values()
+        if value[4] == ENGINEERED_ROAD
+    )
+    if kind == ENGINEERED_ROAD and engineered + 1 > aggregate_capacity:
+        raise ValueError(
+            f"aggregate stock exhausted: {engineered + 1}/{aggregate_capacity}"
+        )
+    if fill_spent + fill > rock_capacity:
+        raise ValueError(
+            f"road-fill rock exhausted: {fill_spent + fill}/{rock_capacity}"
+        )
+    if kind == BRIDGE:
+        spent = infrastructure_spend(infrastructure)
+        after = spent.get((agent, BRIDGE), 0) + 1
+        if after > profile["bridge_grant"]:
+            raise ValueError(
+                f"bridge-kit grant exceeded: {after}/{profile['bridge_grant']}"
+            )
+
+    actions = rows(client, "build_actions")
+    revision = max((key[0] for key in actions), default=0) + 1
+    feeds = []
+    if new != old:
+        feeds.extend([
+            f"feed water 0 {cell[0]},{cell[1]} val={old} diff=-1",
+            f"feed water 0 {cell[0]},{cell[1]} val={new}",
+        ])
+    feeds.append(
+        f"feed pathways 6 {revision},0 "
+        f"val={agent},{route_id},{cell[0]},{cell[1]},{kind},{old},{new}"
+    )
+    client.batch(feeds)
+    client.cmd("tick")
+    detail = {
+        "engineering": "fill-envelope-v1",
+        "alignment": alignment,
+        "revision": revision,
+        "cell": [cell[0], cell[1], kind, old, new, fill],
+    }
+    event(run_dir, agent, f"build {route_id} {alignment}", True, detail)
+
+    changed = 0
+    flooded_sites = []
+    if new != old:
+        candidate = dict(terrain)
+        candidate[cell] = new
+        candidate_water = priority_flood(candidate)
+        changed = sum(candidate_water[key] != water[key] for key in water)
+        flooded_sites = [
+            site["label"]
+            for site in briefing["sites"]
+            if site["kind"] in (0, 1)
+            and candidate_water[tuple(site["cell"])]
+            > candidate[tuple(site["cell"])]
+        ]
+    print(
+        f"built {'bridge' if kind == BRIDGE else 'engineered road'} at {cell}; "
+        f"bed {old}->{new}, fill {fill}; water levels changed {changed}"
+    )
+    if flooded_sites:
+        print(f"WARNING: protected sites now flooded: {flooded_sites}")
+
+
+def build_until_choice(
+    client,
+    run_dir,
+    briefing,
+    agent,
+    route_id,
+    alignment,
+    limit,
+):
+    if limit < 1 or limit > 100:
+        raise ValueError("build-until limit must be between 1 and 100")
+    completed = 0
+    for _ in range(limit):
+        try:
+            build(client, run_dir, briefing, agent, route_id, alignment)
+            completed += 1
+        except ValueError as error:
+            if completed and (
+                "cannot build the required" in str(error)
+                or "no reachable unbuilt frontier" in str(error)
+            ):
+                print(
+                    f"build-until stopped after {completed} cells: {error}"
+                )
+                return
+            raise
+    print(f"build-until reached its {limit}-cell safety limit")
+
+
 def deliver(client, run_dir, briefing, agent, town_id, units, route_id=None):
     if units < 1:
         raise ValueError("delivery units must be positive")
     sites = site_map(briefing)
     town = sites.get(town_id)
-    if town is None or town["kind"] != 0:
-        raise ValueError(f"site {town_id} is not a town")
+    version = int(briefing.get("version", 1))
+    allowed = (0, 3, 4) if version >= 3 else (0,)
+    if town is None or town["kind"] not in allowed:
+        raise ValueError(f"site {town_id} is not a delivery target")
     connected = set(rows(client, "connected"))
     deliveries = rows(client, "deliveries")
     delivered = sum(value[2] for value in deliveries.values() if value[1] == town_id)
     if delivered + units > town["amount"]:
         raise ValueError(f"town demand exceeded: {delivered + units}/{town['amount']}")
-    total = sum(value[2] for value in deliveries.values())
-    supply = sum(site["amount"] for site in briefing["sites"] if site["kind"] == 1)
-    if total + units > supply:
-        raise ValueError(f"source supply exceeded: {total + units}/{supply}")
+    if town["kind"] in (0, 3):
+        used = sum(
+            value[2]
+            for value in deliveries.values()
+            if sites[value[1]]["kind"] in (0, 3)
+        )
+        supply = sum(
+            site["amount"]
+            for site in briefing["sites"] if site["kind"] == 1
+        )
+        if used + units > supply:
+            raise ValueError(f"source supply exceeded: {used + units}/{supply}")
     delivery_id = max((key[0] for key in deliveries), default=0) + 1
     if briefing.get("version", 1) < 2:
         if tuple(town["cell"]) not in connected:
@@ -455,15 +830,29 @@ def deliver(client, run_dir, briefing, agent, town_id, units, route_id=None):
     request, path, _cost = ordered_route(client, route_id)
     source_cells = {
         tuple(site["cell"])
-        for site in briefing["sites"]
-        if site["kind"] == 1
+        for site in briefing["sites"] if site["kind"] == 1
     }
+    if town["kind"] == 4:
+        _totals, _activated, online = quarry_state(
+            briefing, deliveries, connected
+        )
+        source_cells = {
+            tuple(sites[site_id]["cell"]) for site_id in online
+        }
+        if agent != briefing.get("worksite_haul_agent", agent):
+            raise ValueError("only the works crew may haul bulk rock")
+    elif town["kind"] == 3 and agent != briefing.get(
+        "quarry_activation_agent", agent
+    ):
+        raise ValueError("only the courier may activate the quarry")
     if path[0] not in source_cells:
         raise ValueError("a delivery route must start at a supply site")
     if path[-1] != tuple(town["cell"]):
         raise ValueError(f"route {route_id} does not end at {town['label']}")
 
     freight = all(cell in connected for cell in path)
+    if town["kind"] == 4 and not freight:
+        raise ValueError("bulk rock requires a fully connected road route")
     mode = 1 if freight else 0
     if not freight:
         if units > briefing["porter_trip_capacity"]:
@@ -509,6 +898,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--agent", type=int, required=True)
+    parser.add_argument(
+        "--replay",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("command", nargs="+")
     args = parser.parse_args()
     run_dir = os.path.abspath(args.run_dir)
@@ -568,7 +962,30 @@ def main():
                     int(args.command[1]),
                     int(args.command[2]) if len(args.command) == 3 else 1,
                 )
+            elif command == "scout":
+                if briefing.get("version", 1) < 3 or len(args.command) != 2:
+                    raise ValueError("scout requires one ROUTE_ID in V3")
+                scout(
+                    client,
+                    run_dir,
+                    briefing,
+                    args.agent,
+                    int(args.command[1]),
+                )
             elif command == "pave":
+                if briefing.get("version", 1) >= 3 and not args.replay:
+                    raise ValueError(
+                        "V3 uses one-cell `build ROUTE_ID`; inspect it first "
+                        "with `preview ROUTE_ID`"
+                    )
+                if briefing.get("version", 1) >= 3:
+                    with open(os.path.join(run_dir, "events.jsonl")) as source:
+                        accepted = sum(
+                            bool(json.loads(line).get("accepted"))
+                            for line in source if line.strip()
+                        )
+                    if accepted >= briefing.get("legacy_event_count", 0):
+                        raise ValueError("legacy paving replay window is closed")
                 if len(args.command) != 3:
                     raise ValueError("pave requires ROUTE_ID CELL_COUNT")
                 pave(
@@ -578,6 +995,37 @@ def main():
                     args.agent,
                     int(args.command[1]),
                     int(args.command[2]),
+                )
+            elif command == "preview":
+                if briefing.get("version", 1) < 3 or len(args.command) != 2:
+                    raise ValueError("preview requires one ROUTE_ID in V3")
+                preview_build(client, briefing, int(args.command[1]))
+            elif command == "build":
+                if briefing.get("version", 1) < 3 or len(args.command) != 3:
+                    raise ValueError(
+                        "build requires ROUTE_ID bridge|embankment in V3"
+                    )
+                build(
+                    client,
+                    run_dir,
+                    briefing,
+                    args.agent,
+                    int(args.command[1]),
+                    args.command[2],
+                )
+            elif command == "build-until":
+                if briefing.get("version", 1) < 3 or len(args.command) not in (3, 4):
+                    raise ValueError(
+                        "build-until requires ROUTE_ID bridge|embankment [LIMIT]"
+                    )
+                build_until_choice(
+                    client,
+                    run_dir,
+                    briefing,
+                    args.agent,
+                    int(args.command[1]),
+                    args.command[2],
+                    int(args.command[3]) if len(args.command) == 4 else 100,
                 )
             elif command == "deliver":
                 expected = 4 if briefing.get("version", 1) >= 2 else 3
@@ -597,7 +1045,10 @@ def main():
                 raise ValueError(
                     "commands: status | survey RID FROM TO DIST GRADE WATER RUNOFF "
                     "REUSE | route RID | retire RID | overlap RID RID | "
-                    "pave RID COUNT | deliver TOWN UNITS ROUTE"
+                    "scout RID | preview RID | build RID bridge|embankment | "
+                    "build-until RID bridge|embankment [LIMIT] | "
+                    "pave RID COUNT (V2) | "
+                    "deliver TARGET UNITS ROUTE"
                 )
     except (ValueError, RuntimeError) as error:
         event(run_dir, args.agent, command_text, False, str(error))
