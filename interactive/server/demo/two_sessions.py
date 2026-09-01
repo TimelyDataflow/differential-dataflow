@@ -73,7 +73,6 @@ def main():
         DDIR_BIND=f"127.0.0.1:{PORT}",
         DDIR_WS_BIND=f"127.0.0.1:{PORT + 1}",
         DDIR_DIAG_PORT=str(PORT + 2),
-        DDIR_TICK_MS="0",
         DDIR_MAX_PROGRAM_BYTES="4096",
     )
     server = subprocess.Popen(

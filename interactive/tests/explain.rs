@@ -1,8 +1,8 @@
 //! End-to-end semantic tests for the explanation rewrite, built on
 //! `backend::vec::evaluate` (explicit inputs in, every export out). The
-//! sufficiency properties are checked against `vec`, the correctness reference;
-//! a final section cross-checks that the rewritten programs render identically
-//! on the corgi backend.
+//! sufficiency properties use that row execution to evaluate the rewrite; a
+//! final section cross-checks the behavior shared by the row and corgi
+//! implementations for these programs.
 //!
 //! The central property is *sufficiency*: for a query against a program's
 //! output, the original inputs *restricted to* the demand-sets the rewritten
@@ -668,4 +668,3 @@ fn corgi_agrees_on_two_query_explanation() {
     assert_eq!(qs.len(), 2, "expected at least two scc edges to query");
     assert_explained_backends_agree(SCC_ROW, SCC_SHAPES, &inputs, &qs);
 }
-

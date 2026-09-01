@@ -1,7 +1,7 @@
 //! The corgi rendering substrate: corgi columns are the native representation on dataflow edges,
 //! arrangements are chains of sorted columnar chunks (`ChunkSpine<CorgiChunk>`, cursor-less), and
-//! scalar logic runs columnar via `eval_graph`. Parallels the row-wise `backend::vec`, which stays
-//! the correctness reference.
+//! scalar logic runs columnar via `eval_graph`. The row-wise `backend::vec` remains useful for
+//! comparison, but its representation choices do not define corgi's physical semantics.
 //!
 //! All `Backend` methods are corgi-native: `linear` folds a `LinearOp` chain over each container
 //! ([`apply_ops`], columnar fast paths with row-wise fallbacks); `arrange` ingests columns without

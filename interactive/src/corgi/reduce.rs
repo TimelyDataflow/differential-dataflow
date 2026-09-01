@@ -14,13 +14,9 @@
 //!
 //! Transcode-free: the real keys/values never leave corgi columns. Ids are resolved to rows by
 //! integer index (`key_index`/`val_index` → offsets into the concatenated `key_blocks`/`val_blocks`
-//! pools), not by carrying `DValue`s. Min/Collect's ordering is corgi's own — one `sort_blocks` per
-//! retire orders every bracket's candidates (Min = each block's first, Collect = each block's sorted
-//! run, expanded by diff). This uses corgi's STRUCTURAL order, which equals DDIR `Ord` for the
-//! non-negative scalar/tuple values these reductions see (all 6 canonical programs); it diverges only
-//! for negative ints (corgi's leaf compare is unsigned) and list-valued compares (corgi lists order
-//! length-first) — neither arises here. A signed/​list-general order would need a corgi order fix
-//! (offset-binary leaf or lex-first lists), not a change here.
+//! pools), not by carrying `DValue`s. Min/Collect use corgi's one-pass segmented structural sort.
+//! DDIR integers are signed, so Min builds an order-only columnar view with each integer leaf's
+//! sign bit swizzled before sorting; the winning row is still gathered from the original columns.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
@@ -39,7 +35,7 @@ use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes, sort_blocks};
-use corgi::{Bounds, Value as CValue};
+use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
 use crate::corgi::col_times::ColTime;
 use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
@@ -47,6 +43,34 @@ use crate::ir::Diff;
 use crate::parse::Reducer;
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
+
+/// Build a sortable view whose integer leaves have signed `i64` order.
+///
+/// DDIR's only scalar is `Int`, transcoded into a Corgi primitive as its raw
+/// bits. Corgi's radix sort is unsigned, so XORing each payload leaf's sign bit
+/// turns signed order into unsigned order. Sum discriminants remain untouched;
+/// only their payload lanes recurse. This consumes freshly gathered candidate
+/// columns, allowing Corgi to swizzle their buffers in place when unshared.
+fn signed_order_view(value: CValue) -> CValue {
+    match value {
+        value @ CValue::Prim(_) => NumOp::from(ArithOp::ToSigned).eval(value),
+        CValue::Prod(fields) => {
+            CValue::Prod(fields.into_iter().map(signed_order_view).collect())
+        }
+        CValue::Sum(tags, within, variants) => CValue::Sum(
+            tags,
+            within,
+            variants
+                .into_iter()
+                .map(|variant| variant.map(signed_order_view))
+                .collect(),
+        ),
+        CValue::List(bounds, values) => {
+            CValue::List(bounds, Box::new(signed_order_view(*values)))
+        }
+        CValue::Unit(len) => CValue::Unit(len),
+    }
+}
 
 /// An identity `Hasher` for the id-index maps: their keys are already well-distributed 64-bit
 /// content hashes (`hash_rows`), so passing the id straight through avoids re-hashing it (siphash
@@ -434,12 +458,9 @@ where
                 self.register_vals(col, &out_ids);
             }
             Reducer::Min => {
-                // The DDIR `min` over the values with NON-ZERO net, in corgi's structural order
-                // (== DDIR `Ord` for the non-negative scalar/tuple values these reductions see; see
-                // module doc). The sign does not select candidates: `backend::vec` takes `min` over
-                // every value DD presents, and DD presents every non-zero accumulation. Filtering to
-                // `> 0` here both dropped all-negative keys and could pick a different minimum when a
-                // bracket mixed signs.
+                // The structural minimum over values with NON-ZERO net. The sign does not select
+                // candidates: DD presents every non-zero accumulation. Filtering to `> 0` here both
+                // drops all-negative keys and can pick a different minimum when a bracket mixes signs.
                 // Gather all candidates across brackets into one column, segment by
                 // bracket, and one corgi `sort_blocks` gives every bracket's argmin at once
                 // (`perm[block_start]`). The winning ROW is taken columnar and reuses its input value id.
@@ -467,14 +488,14 @@ where
                     return (Vec::new(), out_ends);
                 }
                 let cand_col = gather(&self.in_vals, &cand_reps);
-                let (perm, _) = sort_blocks(&labels, &cand_col);
+                let (perm, _) = sort_blocks(&labels, &signed_order_view(cand_col));
                 let min_reps: Vec<usize> = block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect();
                 let col = gather(&self.in_vals, &min_reps);
                 out_ids = ids(&col);
                 self.register_vals(col, &out_ids);
             }
             Reducer::Collect => {
-                // One row per bracket: the values sorted in corgi structural order (== DDIR `Ord` here),
+                // One row per bracket: the values sorted in corgi structural order,
                 // each repeated by its diff, as a `List`. One `sort_blocks` orders every bracket's
                 // entries at once; element rows are then taken columnar. Every bracket emits (empty
                 // list if all diffs ≤ 0), matching the row reducer.

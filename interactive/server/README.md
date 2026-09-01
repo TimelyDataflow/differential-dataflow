@@ -1,16 +1,39 @@
 # Live DDIR server
 
-One long-running timely worker hosts interpreted DDIR dataflows through a
+A long-running Timely worker group hosts interpreted DDIR dataflows through a
 load-run-drop lifecycle. Programs share results by name — each may import
-collections that others export — and clients follow along over TCP,
-WebSocket, or stdin.
+collections that others export — and clients follow along over TCP, WebSocket,
+or stdin.
 
 Run `cargo run -p ddir-server`, then open `interactive/server/console.html` or
 connect a line-oriented client to TCP port 7777. The same protocol is available
-over WebSocket on port 7778. Set `DDIR_BIND`, `DDIR_WS_BIND`, or
-`DDIR_TICK_MS` to change those defaults; `DDIR_TICK_MS=0` disables automatic
-progress while subscriptions are active. The current `diagnostics` crate is
-connected on `DDIR_DIAG_PORT` (default 51371).
+over WebSocket on port 7778. Set `DDIR_BIND` or `DDIR_WS_BIND` to change those
+defaults. Diagnostics are disabled by default so an idle server can park;
+`DDIR_DIAGNOSTICS=1` enables the diagnostics dataflow and its listener on
+`DDIR_DIAG_PORT` (default 51371). `DDIR_WORKERS` selects the number of worker
+threads (default 1), and `DDIR_BACKEND=vec|corgi` selects the renderer for installed
+programs (default `vec`).
+
+One backend is selected for the whole server. The current registry is a
+transitional row-speaking bridge: inputs and imports convert from `Value` rows
+to Corgi columns at a program boundary, and exports convert back before they
+become shareable traces. A Corgi program stays columnar between those
+boundaries, but a production Corgi server should replace the bridge with native
+columnar inputs and traces.
+
+Worker 0 admits one FIFO control stream and routes one ordered record to every
+worker. Small commands are replicated; framed input batches are partitioned by
+body position before exchange, so each worker receives only its local typed
+shard. Because the one source already defines a total order, command
+coordination uses no wall clock or distributed sequencer. Workers execute
+commands serially in that order without a physical rendezvous between commands;
+Timely progress and probes establish logical completion where it is required.
+Response channels remain local to worker 0.
+
+Transport threads wake worker 0 when they enqueue a control event, and Timely
+wakes the other workers when their control record arrives. When neither Timely
+nor the control plane has work, workers park through the scheduler; the server
+does not poll requests with a periodic sleep.
 
 Every request can begin with an arbitrary request id. If omitted, the server
 generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
@@ -27,6 +50,7 @@ pipe-syntax program:
     export "graph.edges" = edges;
     graph end-load
     tail graph.edges
+    tick
 
 A binding may also be spelled as a call, so
 `edges=random(seed=1,arity=2,range=8,count=12,churn=1)` redirects the local
@@ -35,14 +59,11 @@ import named `edges` to the same content-addressed source as the
 fixed-size window into an infinite hash-derived sequence and replaces
 `churn` rows on every tick.
 
-Automatic ticking happens only while at least one tail is active. This makes a
-live demonstration move without assigning input durability semantics to DDIR.
-Explicit `tick [n]` remains available for reproducible sessions. Treat
-auto-tick as demo furniture rather than a design commitment: as specified,
-observation advances time (an observer effect), and the alternative — that a
-watcher must be present to move things along, by ticking or by running a
-metronome client whose ticks are ordinary logged commands — may be the better
-design once the server has real tenants.
+Only an explicit, ordered `tick [n]` closes epochs. Tails observe progress but
+do not cause it, and an idle server has no deadline to service. A future
+queue-driven commit policy can seal an epoch as soon as the preceding epoch
+retires and intents are waiting; that decision should come from logical queue
+state, not elapsed wall-clock time.
 
 ## Writes: `feed`
 
@@ -51,6 +72,31 @@ design once the server has real tenants.
 pushes one update into a loaded program's positional input, exactly as in the
 `ddir_server` example (`1,2` → a tuple; `_` → unit; a closed scalar term such
 as `inject(2,tuple(3,4))` for ADT-shaped rows).
+
+For many updates to one target at the current epoch, frame them as one feed:
+
+    feed world 0 begin
+    7 val=9
+    7 val=-3
+    8 val=10 diff=-1
+    end-feed
+
+Each body row is `<key> [val=<v>] [diff=<d>]`; `time=` is intentionally absent
+because the enclosing command supplies one epoch. The complete body is admitted
+atomically, and workers divide its rows by body position before introducing
+them to the dataflow. Partitioning happens before worker transport, avoiding a
+full `Value` batch clone on every worker. Text parsing and the row-to-column
+boundary remain visible optimization opportunities rather than hidden protocol
+behavior.
+
+The batch's `ok` means that the complete request was admitted to the ordered
+worker stream; it does not wait for every worker to stage its shard. A later
+`tick` is the visibility and completion boundary for those rows.
+
+This text-to-`Value` framing is a convenience and compatibility path, not the
+intended representation for high-volume ingestion. Large or already-columnar
+payloads should be acquired and partitioned through the data plane, with only a
+small descriptor entering the ordered control stream.
 
 The stance on contention: **writes are open; policy lives in the dataflow**.
 The server does not decide who may write what. Cooperating clients follow a
@@ -81,14 +127,15 @@ and bind the export `f(state) + (seed | negate)` to the feedback input; then
 perturbations. A bound source cannot be dropped (it holds an importer), nor
 can the bound target (unbind first).
 
-## One gate
+## Intake gates
 
-Loads are cheap to request and costly to render, so intake is bounded:
-`DDIR_MAX_PROGRAM_BYTES` (default 65536) — a larger `load` body is swallowed
-and rejected with one error, before parsing. This is transport self-defense,
-not semantics. There are no ownership or quota gates: sessions are trusted,
-and admission policy (auth, quotas, rate limits) belongs in a fronting proxy
-if a deployment ever needs one.
+Multi-line intake is bounded: `DDIR_MAX_PROGRAM_BYTES` (default 65536) caps a
+`load`, and `DDIR_MAX_FEED_BYTES` (default 16 MiB) caps a framed `feed`. An
+oversized or malformed body is swallowed through its terminator and rejected
+with one error; no partial command reaches a worker. This is transport
+self-defense, not semantics. There are no ownership or quota gates: sessions
+are trusted, and admission policy (auth, quotas, rate limits) belongs in a
+fronting proxy if a deployment ever needs one.
 
 ## Demos
 

@@ -10,8 +10,9 @@
 //! The server executes a [`Command`] — already parsed, lowered, and validated.
 //! Programs are parsed *off the worker threads* (on the intake side) and shipped
 //! here as `scope_ir::Program`s; a malformed program is rejected before it ever
-//! reaches a worker, so bad input can't panic the computation. `Command` is
-//! serializable precisely so it can ride a timely `Sequencer` to every worker.
+//! reaches a worker, so bad input can't panic the computation. [`Command`] is
+//! serializable so worker 0 can broadcast one ordered command stream to the
+//! whole worker group.
 //!
 //! # The two binding points
 //!
@@ -54,12 +55,47 @@ use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
 use timely::worker::Worker;
 
+use crate::backend::corgi::render_tree_rows;
 use crate::backend::vec::render_tree;
 use crate::ir::{Diff, Value};
 use crate::scope_ir as st;
 
 /// The host (outer) timestamp shared across all installed programs.
 pub type OuterTime = u64;
+
+/// The substrate used to render newly installed DDIR programs.
+///
+/// One backend is selected for the whole server. Imports and exports currently
+/// pass through a transitional row-speaking registry; the Corgi backend stays
+/// columnar within each program, but a native Corgi registry is the intended
+/// production shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderBackend {
+    Vec,
+    Corgi,
+}
+
+/// One row in the server's compatibility input path. The enclosing command
+/// supplies the program, positional input, and current server epoch once for
+/// the whole batch. Native bulk ingress need not materialize this row form.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct InputUpdate {
+    pub key: Value,
+    pub val: Value,
+    pub diff: Diff,
+}
+
+impl std::str::FromStr for RenderBackend {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "vec" => Ok(Self::Vec),
+            "corgi" => Ok(Self::Corgi),
+            other => Err(format!("backend must be vec or corgi, got {other:?}")),
+        }
+    }
+}
 
 /// A registered, shareable arrangement: the published form of an `export`,
 /// arranged by key at the host time so any later install can `import` it.
@@ -184,9 +220,9 @@ fn canonical_source_name(name: &str) -> String {
 
 /// A unit of server work, already parsed/lowered/validated on the intake side.
 ///
-/// Serializable so it can be circulated to every worker through a timely
-/// `Sequencer`; the workers execute it without any further parsing.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// Serializable so worker 0 can circulate it to every worker; the workers
+/// execute it without any further parsing.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Command {
     /// Install `program` under `name`.
     Install { name: String, program: st::Program },
@@ -200,8 +236,14 @@ pub enum Command {
         time: Option<OuterTime>,
         diff: Diff,
     },
-    /// Close the current epoch and run to quiescence.
-    Tick,
+    /// Stage several rows into one positional input at the current epoch.
+    FeedBatch {
+        prog: String,
+        input: usize,
+        updates: Vec<InputUpdate>,
+    },
+    /// Close `n` epochs, running to quiescence after each one.
+    Tick { n: u64 },
     /// Drop the named program.
     Drop { name: String },
     /// Snapshot a registered trace (optionally one key) and print it (worker 0).
@@ -220,8 +262,6 @@ pub enum Command {
     },
     /// Print the registry (worker 0).
     List,
-    /// Print the command help (worker 0).
-    Help,
     /// Stop the server.
     Exit,
 }
@@ -305,17 +345,25 @@ pub struct Server {
     bindings: Vec<Binding>,
     /// The current open epoch; inputs sit here until `tick` closes it.
     epoch: OuterTime,
+    /// Rendering substrate for subsequently installed programs.
+    backend: RenderBackend,
 }
 
 impl Server {
     /// A fresh server with the host clock at epoch 0.
     pub fn new() -> Self {
+        Self::with_backend(RenderBackend::Vec)
+    }
+
+    /// A fresh server using `backend` for installed DDIR programs.
+    pub fn with_backend(backend: RenderBackend) -> Self {
         Server {
             traces: HashMap::new(),
             programs: HashMap::new(),
             importers: HashMap::new(),
             bindings: Vec::new(),
             epoch: 0,
+            backend,
         }
     }
 
@@ -428,6 +476,7 @@ impl Server {
         let probe = ProbeHandle::new();
         let root = &prog.root;
         let traces = &mut self.traces;
+        let backend = self.backend;
 
         // The id this dataflow will get; captured so `drop` can remove it.
         let dataflow_id = worker.next_dataflow_index();
@@ -465,7 +514,12 @@ impl Server {
                     .iterative::<PointStamp<OuterTime>, _, _>(|inner| {
                         let entered: Vec<_> =
                             outer_cols.iter().map(|c| c.clone().enter(inner)).collect();
-                        let exports = render_tree(root, inner.clone(), 0, entered);
+                        let exports = match backend {
+                            RenderBackend::Vec => render_tree(root, inner.clone(), 0, entered),
+                            RenderBackend::Corgi => {
+                                render_tree_rows(root, inner.clone(), 0, entered)
+                            }
+                        };
                         exports
                             .into_iter()
                             .map(|c| c.leave(outer))
@@ -611,16 +665,50 @@ impl Server {
         diff: Diff,
     ) -> Result<(), String> {
         let t = time.unwrap_or(self.epoch);
-        if t < self.epoch {
+        self.validate_feed(prog, input, t)?;
+        self.apply_feed(prog, input, key, val, t, diff);
+        Ok(())
+    }
+
+    /// Atomically stage several rows into one input at the current open epoch.
+    ///
+    /// The target is validated before its handle changes. The batch does not
+    /// advance time; all rows become visible together when a later `tick`
+    /// closes this epoch.
+    pub fn feed_batch(
+        &mut self,
+        prog: &str,
+        input: usize,
+        updates: Vec<InputUpdate>,
+    ) -> Result<(), String> {
+        let time = self.epoch;
+        self.validate_feed(prog, input, time)?;
+        for update in updates {
+            self.apply_feed(
+                prog,
+                input,
+                update.key,
+                update.val,
+                time,
+                update.diff,
+            );
+        }
+        Ok(())
+    }
+
+    /// Check everything about an input target that can fail without changing
+    /// its handle. Both singular and batched feeds validate before applying.
+    fn validate_feed(&self, prog: &str, input: usize, time: OuterTime) -> Result<(), String> {
+        if time < self.epoch {
             return Err(format!(
                 "cannot feed at time {} < current epoch {}",
-                t, self.epoch
+                time, self.epoch
             ));
         }
         let prog = canonical_source_name(prog);
         let installed = self
             .programs
-            .get_mut(&prog)
+            .get(&prog)
             .ok_or_else(|| format!("no program {:?}", prog))?;
         if installed.origin != Origin::Program {
             let kind = if installed.origin == Origin::Clock {
@@ -633,12 +721,30 @@ impl Server {
                 prog, kind
             ));
         }
-        let handle = installed
+        if !installed.inputs.contains_key(&input) {
+            return Err(format!("program {:?} has no input {}", prog, input));
+        }
+        Ok(())
+    }
+
+    /// Apply a feed whose target was already validated.
+    fn apply_feed(
+        &mut self,
+        prog: &str,
+        input: usize,
+        key: Value,
+        val: Value,
+        time: OuterTime,
+        diff: Diff,
+    ) {
+        let prog = canonical_source_name(prog);
+        self.programs
+            .get_mut(&prog)
+            .expect("feed target was prevalidated")
             .inputs
             .get_mut(&input)
-            .ok_or_else(|| format!("program {:?} has no input {}", prog, input))?;
-        handle.update_at((key, val), t, diff);
-        Ok(())
+            .expect("feed input was prevalidated")
+            .update_at((key, val), time, diff);
     }
 
     /// Bind trace `trace` to positional `input` of program `prog`: from now
