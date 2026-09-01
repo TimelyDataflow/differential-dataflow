@@ -55,12 +55,37 @@ use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
 use timely::worker::Worker;
 
+use crate::backend::corgi::render_tree_rows;
 use crate::backend::vec::render_tree;
 use crate::ir::{Diff, Value};
 use crate::scope_ir as st;
 
 /// The host (outer) timestamp shared across all installed programs.
 pub type OuterTime = u64;
+
+/// The substrate used to render newly installed DDIR programs.
+///
+/// One backend is selected for the whole server. Imports and exports currently
+/// pass through a transitional row-speaking registry; the Corgi backend stays
+/// columnar within each program, but a native Corgi registry is the intended
+/// production shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderBackend {
+    Vec,
+    Corgi,
+}
+
+impl std::str::FromStr for RenderBackend {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "vec" => Ok(Self::Vec),
+            "corgi" => Ok(Self::Corgi),
+            other => Err(format!("backend must be vec or corgi, got {other:?}")),
+        }
+    }
+}
 
 /// A registered, shareable arrangement: the published form of an `export`,
 /// arranged by key at the host time so any later install can `import` it.
@@ -304,17 +329,25 @@ pub struct Server {
     bindings: Vec<Binding>,
     /// The current open epoch; inputs sit here until `tick` closes it.
     epoch: OuterTime,
+    /// Rendering substrate for subsequently installed programs.
+    backend: RenderBackend,
 }
 
 impl Server {
     /// A fresh server with the host clock at epoch 0.
     pub fn new() -> Self {
+        Self::with_backend(RenderBackend::Vec)
+    }
+
+    /// A fresh server using `backend` for installed DDIR programs.
+    pub fn with_backend(backend: RenderBackend) -> Self {
         Server {
             traces: HashMap::new(),
             programs: HashMap::new(),
             importers: HashMap::new(),
             bindings: Vec::new(),
             epoch: 0,
+            backend,
         }
     }
 
@@ -427,6 +460,7 @@ impl Server {
         let probe = ProbeHandle::new();
         let root = &prog.root;
         let traces = &mut self.traces;
+        let backend = self.backend;
 
         // The id this dataflow will get; captured so `drop` can remove it.
         let dataflow_id = worker.next_dataflow_index();
@@ -464,7 +498,12 @@ impl Server {
                     .iterative::<PointStamp<OuterTime>, _, _>(|inner| {
                         let entered: Vec<_> =
                             outer_cols.iter().map(|c| c.clone().enter(inner)).collect();
-                        let exports = render_tree(root, inner.clone(), 0, entered);
+                        let exports = match backend {
+                            RenderBackend::Vec => render_tree(root, inner.clone(), 0, entered),
+                            RenderBackend::Corgi => {
+                                render_tree_rows(root, inner.clone(), 0, entered)
+                            }
+                        };
                         exports
                             .into_iter()
                             .map(|c| c.leave(outer))

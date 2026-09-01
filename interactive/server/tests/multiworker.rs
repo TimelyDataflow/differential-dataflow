@@ -77,8 +77,7 @@ fn request_observing(
     }
 }
 
-#[test]
-fn commands_replay_on_four_workers_without_duplicating_input() {
+fn assert_backend(backend: &str) {
     let listeners: Vec<_> = (0..3)
         .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
         .collect();
@@ -90,6 +89,7 @@ fn commands_replay_on_four_workers_without_duplicating_input() {
 
     let child = Command::new(env!("CARGO_BIN_EXE_ddir_server"))
         .env("DDIR_WORKERS", "4")
+        .env("DDIR_BACKEND", backend)
         // The retired polling/tick knob must not reintroduce wall-clock
         // progress if it remains in an old deployment environment.
         .env("DDIR_TICK_MS", "1")
@@ -123,12 +123,24 @@ fn commands_replay_on_four_workers_without_duplicating_input() {
         &mut writer,
         &mut reader,
         "r0",
-        "r0 load world begin\nlet rows = input 0;\nexport \"rows\" = rows;\nr0 end-load\n",
+        "r0 load world begin\nlet rows = input 0;\nexport \"rows\" = rows;\nexport \"minimum\" = rows | min;\nr0 end-load\n",
     );
     request(&mut writer, &mut reader, "r1", "r1 feed world 0 7 val=9\n");
-    request(&mut writer, &mut reader, "r2", "r2 tick\n");
-    let rows = request(&mut writer, &mut reader, "r3", "r3 peek rows\n");
-    assert_eq!(rows, vec!["diff=1 key=Tuple([Int(7)]) val=Tuple([Int(9)])"]);
+    request(&mut writer, &mut reader, "r2", "r2 feed world 0 7 val=3\n");
+    request(&mut writer, &mut reader, "r3", "r3 tick\n");
+    let rows = request(&mut writer, &mut reader, "r4", "r4 peek rows\n");
+    assert_eq!(
+        rows,
+        vec![
+            "diff=1 key=Tuple([Int(7)]) val=Tuple([Int(3)])",
+            "diff=1 key=Tuple([Int(7)]) val=Tuple([Int(9)])",
+        ]
+    );
+    let minimum = request(&mut writer, &mut reader, "r5", "r5 peek minimum\n");
+    assert_eq!(
+        minimum,
+        vec!["diff=1 key=Tuple([Int(7)]) val=Tuple([Int(3)])"]
+    );
 
     request(&mut writer, &mut reader, "r6", "r6 tail rows\n");
     request(&mut writer, &mut reader, "r7", "r7 feed world 0 8 val=10\n");
@@ -161,4 +173,14 @@ fn commands_replay_on_four_workers_without_duplicating_input() {
     drop(reader);
     drop(writer);
     server.stop();
+}
+
+#[test]
+fn vec_commands_replay_on_four_workers_without_duplicating_input() {
+    assert_backend("vec");
+}
+
+#[test]
+fn corgi_commands_replay_on_four_workers_without_duplicating_input() {
+    assert_backend("corgi");
 }

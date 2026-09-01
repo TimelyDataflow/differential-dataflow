@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 
 use differential_dataflow::operators::arrange::ShutdownButton;
-use interactive::server::{Command as ServerCommand, OuterTime, Server};
+use interactive::server::{Command as ServerCommand, OuterTime, RenderBackend, Server};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
@@ -48,6 +48,7 @@ enum Work {
 pub fn run_worker(
     worker: &mut Worker,
     events: Option<Receiver<ControlEvent>>,
+    backend: RenderBackend,
 ) {
     // Logging a park wakes the diagnostics dataflow, whose scheduling logs can
     // in turn wake it again. Keep idle servers genuinely idle unless an
@@ -88,7 +89,7 @@ pub fn run_worker(
     // total order, so a wall-clock sequencer would add machinery, not meaning.
     let mut work_input = (worker.index() == 0).then_some(input);
 
-    let mut server = Server::new();
+    let mut server = Server::with_backend(backend);
     let mut tails: HashMap<TailKey, Tail> = HashMap::new();
     let mut responses: HashMap<u64, Sender<String>> = HashMap::new();
     let mut next_token = 0u64;

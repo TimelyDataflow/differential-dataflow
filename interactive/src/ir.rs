@@ -13,8 +13,10 @@ pub type Time = timely::order::Product<u64, differential_dataflow::dynamic::poin
 /// An algebraic data type over a single scalar (`Int`). `Tuple`/`Variant`/
 /// `List` are the product/sum/sequence constructors; together they cover
 /// JSON-shaped data and program ASTs. A collection element is a `(key, val)`
-/// pair of `Value`s (typically `Tuple`s). The derived `Ord` gives `min`,
-/// join-key matching, and `distinct` for free.
+/// pair of `Value`s (typically `Tuple`s). The row backend uses the derived
+/// `Ord` as its physical arrangement order. In particular, `min` observes the
+/// signed ordering of `Int`; columnar backends reproduce that ordering without
+/// materializing rows.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Int(i64),

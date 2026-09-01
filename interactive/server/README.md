@@ -11,7 +11,15 @@ over WebSocket on port 7778. Set `DDIR_BIND` or `DDIR_WS_BIND` to change those
 defaults. Diagnostics are disabled by default so an idle server can park;
 `DDIR_DIAGNOSTICS=1` enables the diagnostics dataflow and its listener on
 `DDIR_DIAG_PORT` (default 51371). `DDIR_WORKERS` selects the number of worker
-threads (default 1).
+threads (default 1), and `DDIR_BACKEND=vec|corgi` selects the renderer for installed
+programs (default `vec`).
+
+One backend is selected for the whole server. The current registry is a
+transitional row-speaking bridge: inputs and imports convert from `Value` rows
+to Corgi columns at a program boundary, and exports convert back before they
+become shareable traces. A Corgi program stays columnar between those
+boundaries, but a production Corgi server should replace the bridge with native
+columnar inputs and traces.
 
 Worker 0 admits one FIFO control stream and broadcasts it to every worker.
 Because that one source already defines a total order, command coordination

@@ -33,6 +33,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cmd::{prepare, ConnectionId, LineParser, Request};
+use interactive::server::RenderBackend;
 use timely::scheduling::activate::SyncActivations;
 
 enum ControlEvent {
@@ -76,6 +77,10 @@ fn main() {
         })
         .unwrap_or(1);
     assert!(workers > 0, "DDIR_WORKERS must be positive");
+    let backend = std::env::var("DDIR_BACKEND")
+        .unwrap_or_else(|_| "vec".to_string())
+        .parse::<RenderBackend>()
+        .unwrap_or_else(|error| panic!("DDIR_BACKEND: {error}"));
 
     let (event_tx, event_rx) = channel::<ControlEvent>();
     let (activation_tx, activation_rx) = sync_channel(1);
@@ -99,7 +104,7 @@ fn main() {
             } else {
                 None
             };
-            control_loop::run_worker(worker, events);
+            control_loop::run_worker(worker, events, backend);
 
             // The live server intentionally keeps installed dataflows and
             // diagnostics around. Once every worker observes shutdown, remove

@@ -1,0 +1,5 @@
+-- DDIR integers are signed even though Corgi stores their raw bits in u64
+-- leaves. Min must sign-swizzle those leaves for sorting without decoding rows.
+let pairs = input 0 | key($0[0] ; $0[1]);
+
+export "minimum" = pairs | min;
