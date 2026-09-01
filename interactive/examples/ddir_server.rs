@@ -180,6 +180,13 @@ fn dispatch(cmd: &Command, server: &mut Server, worker: &mut Worker) -> bool {
                 }
             }
         }
+        Command::FeedBatch { prog, input, updates } => {
+            if w0 {
+                if let Err(e) = server.feed_batch(prog, *input, updates.clone()) {
+                    println!("error: {}", e);
+                }
+            }
+        }
         Command::Tick { n } => {
             for _ in 0..*n {
                 server.tick(worker);

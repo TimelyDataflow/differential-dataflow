@@ -1,5 +1,5 @@
 //! Multi-worker live control loop. Worker 0 admits one FIFO command stream;
-//! a single-source Timely broadcast delivers that order to every worker.
+//! a single-source Timely exchange delivers one ordered record to every worker.
 //! No external clock or distributed sequencing protocol participates in
 //! command ordering.
 
@@ -13,7 +13,7 @@ use interactive::server::{Command as ServerCommand, OuterTime, RenderBackend, Se
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
-use timely::dataflow::operators::vec::{Broadcast, Input as VecInput};
+use timely::dataflow::operators::vec::{Input as VecInput, Map};
 use timely::dataflow::operators::{CapabilitySet, Exchange, Inspect, Probe};
 use timely::worker::Worker;
 
@@ -40,9 +40,61 @@ enum Work {
         reqid: String,
         command: Result<PreparedCommand, String>,
         connection_id: ConnectionId,
+        /// Original logical row count retained when a batch is sharded.
+        logical_count: Option<usize>,
     },
     SessionEnded(ConnectionId),
     Shutdown,
+}
+
+impl Work {
+    /// Produce exactly one ordered control record per worker. Large input
+    /// batches are partitioned before exchange; small commands are cloned.
+    fn distribute(self, peers: usize) -> Vec<(u64, Work)> {
+        match self {
+            Work::Request {
+                token,
+                reqid,
+                command:
+                    Ok(PreparedCommand::Server(ServerCommand::FeedBatch {
+                        prog,
+                        input,
+                        updates,
+                    })),
+                connection_id,
+                logical_count: _,
+            } => {
+                let logical_count = updates.len();
+                let mut shards = (0..peers).map(|_| Vec::new()).collect::<Vec<_>>();
+                for (position, update) in updates.into_iter().enumerate() {
+                    shards[position % peers].push(update);
+                }
+                shards
+                    .into_iter()
+                    .enumerate()
+                    .map(|(target, updates)| {
+                        (
+                            target as u64,
+                            Work::Request {
+                                token,
+                                reqid: reqid.clone(),
+                                command: Ok(PreparedCommand::Server(ServerCommand::FeedBatch {
+                                    prog: prog.clone(),
+                                    input,
+                                    updates,
+                                })),
+                                connection_id,
+                                logical_count: Some(logical_count),
+                            },
+                        )
+                    })
+                    .collect()
+            }
+            work => (0..peers)
+                .map(|target| (target as u64, work.clone()))
+                .collect(),
+        }
+    }
 }
 
 pub fn run_worker(
@@ -74,10 +126,13 @@ pub fn run_worker(
 
     let work_queue = Rc::new(RefCell::new(VecDeque::new()));
     let queue_out = work_queue.clone();
+    let peers = worker.peers();
     let input = worker.dataflow::<u64, _, _>(|scope| {
         let (input, stream) = scope.new_input::<Work>();
         stream
-            .broadcast()
+            .flat_map(move |work| work.distribute(peers))
+            .exchange(|(target, _work)| *target)
+            .map(|(_target, work)| work)
             .sink(Pipeline, "QueueControl", move |(input, _frontier)| {
                 input.for_each(|_time, data| {
                     queue_out.borrow_mut().extend(data.drain(..));
@@ -105,6 +160,7 @@ pub fn run_worker(
                     reqid,
                     command,
                     connection_id,
+                    logical_count,
                 } => {
                     let response = if worker.index() == 0 {
                         responses.remove(&token)
@@ -120,6 +176,7 @@ pub fn run_worker(
                         &mut tails,
                         worker,
                         &mut shutdown,
+                        logical_count,
                     );
                 }
                 Work::SessionEnded(connection) => {
@@ -158,6 +215,7 @@ pub fn run_worker(
                                 reqid,
                                 command: kind,
                                 connection_id,
+                                logical_count: None,
                             });
                         admitted = true;
                     }
@@ -213,6 +271,7 @@ fn dispatch(
     tails: &mut HashMap<TailKey, Tail>,
     worker: &mut Worker,
     shutdown: &mut bool,
+    logical_count: Option<usize>,
 ) {
     let result = match command {
         Err(error) => Err(error),
@@ -259,6 +318,19 @@ fn dispatch(
                 };
                 result.map(|()| format!("fed {:?} input {} at t={}", prog, input, server.epoch()))
             }
+            ServerCommand::FeedBatch {
+                prog,
+                input,
+                updates,
+            } => server.feed_batch(&prog, input, updates).map(|()| {
+                format!(
+                    "fed {} rows to {:?} input {} at t={}",
+                    logical_count.expect("distributed batch retains its logical row count"),
+                    prog,
+                    input,
+                    server.epoch()
+                )
+            }),
             ServerCommand::Bind { trace, prog, input } => server
                 .bind(worker, &trace, &prog, input)
                 .map(|()| format!("bound {:?} -> {:?} input {}", trace, prog, input)),

@@ -75,6 +75,16 @@ pub enum RenderBackend {
     Corgi,
 }
 
+/// One row in the server's compatibility input path. The enclosing command
+/// supplies the program, positional input, and current server epoch once for
+/// the whole batch. Native bulk ingress need not materialize this row form.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct InputUpdate {
+    pub key: Value,
+    pub val: Value,
+    pub diff: Diff,
+}
+
 impl std::str::FromStr for RenderBackend {
     type Err = String;
 
@@ -225,6 +235,12 @@ pub enum Command {
         val: Value,
         time: Option<OuterTime>,
         diff: Diff,
+    },
+    /// Stage several rows into one positional input at the current epoch.
+    FeedBatch {
+        prog: String,
+        input: usize,
+        updates: Vec<InputUpdate>,
     },
     /// Close `n` epochs, running to quiescence after each one.
     Tick { n: u64 },
@@ -649,16 +665,50 @@ impl Server {
         diff: Diff,
     ) -> Result<(), String> {
         let t = time.unwrap_or(self.epoch);
-        if t < self.epoch {
+        self.validate_feed(prog, input, t)?;
+        self.apply_feed(prog, input, key, val, t, diff);
+        Ok(())
+    }
+
+    /// Atomically stage several rows into one input at the current open epoch.
+    ///
+    /// The target is validated before its handle changes. The batch does not
+    /// advance time; all rows become visible together when a later `tick`
+    /// closes this epoch.
+    pub fn feed_batch(
+        &mut self,
+        prog: &str,
+        input: usize,
+        updates: Vec<InputUpdate>,
+    ) -> Result<(), String> {
+        let time = self.epoch;
+        self.validate_feed(prog, input, time)?;
+        for update in updates {
+            self.apply_feed(
+                prog,
+                input,
+                update.key,
+                update.val,
+                time,
+                update.diff,
+            );
+        }
+        Ok(())
+    }
+
+    /// Check everything about an input target that can fail without changing
+    /// its handle. Both singular and batched feeds validate before applying.
+    fn validate_feed(&self, prog: &str, input: usize, time: OuterTime) -> Result<(), String> {
+        if time < self.epoch {
             return Err(format!(
                 "cannot feed at time {} < current epoch {}",
-                t, self.epoch
+                time, self.epoch
             ));
         }
         let prog = canonical_source_name(prog);
         let installed = self
             .programs
-            .get_mut(&prog)
+            .get(&prog)
             .ok_or_else(|| format!("no program {:?}", prog))?;
         if installed.origin != Origin::Program {
             let kind = if installed.origin == Origin::Clock {
@@ -671,12 +721,30 @@ impl Server {
                 prog, kind
             ));
         }
-        let handle = installed
+        if !installed.inputs.contains_key(&input) {
+            return Err(format!("program {:?} has no input {}", prog, input));
+        }
+        Ok(())
+    }
+
+    /// Apply a feed whose target was already validated.
+    fn apply_feed(
+        &mut self,
+        prog: &str,
+        input: usize,
+        key: Value,
+        val: Value,
+        time: OuterTime,
+        diff: Diff,
+    ) {
+        let prog = canonical_source_name(prog);
+        self.programs
+            .get_mut(&prog)
+            .expect("feed target was prevalidated")
             .inputs
             .get_mut(&input)
-            .ok_or_else(|| format!("program {:?} has no input {}", prog, input))?;
-        handle.update_at((key, val), t, diff);
-        Ok(())
+            .expect("feed input was prevalidated")
+            .update_at((key, val), time, diff);
     }
 
     /// Bind trace `trace` to positional `input` of program `prog`: from now

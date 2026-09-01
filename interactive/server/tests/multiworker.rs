@@ -125,8 +125,12 @@ fn assert_backend(backend: &str) {
         "r0",
         "r0 load world begin\nlet rows = input 0;\nexport \"rows\" = rows;\nexport \"minimum\" = rows | min;\nr0 end-load\n",
     );
-    request(&mut writer, &mut reader, "r1", "r1 feed world 0 7 val=9\n");
-    request(&mut writer, &mut reader, "r2", "r2 feed world 0 7 val=3\n");
+    request(
+        &mut writer,
+        &mut reader,
+        "r1",
+        "r1 feed world 0 begin\n7 val=9\n7 val=3\nr1 end-feed\n",
+    );
     request(&mut writer, &mut reader, "r3", "r3 tick\n");
     let rows = request(&mut writer, &mut reader, "r4", "r4 peek rows\n");
     assert_eq!(

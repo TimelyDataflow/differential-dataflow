@@ -7,9 +7,9 @@
 //!   - `data <fields...>` — one streamed body line (peek/tail batches)
 //!   - `end` — terminator after a stream of `data` lines
 //!
-//! Multi-line bodies (a DDIR program) come via a two-phase upload:
-//! `<reqid> load <id> <bindings...> begin` opens; subsequent lines are
-//! literal program text terminated by `<reqid> end-load`.
+//! Multi-line bodies use two-phase framing: `load ... begin` accepts literal
+//! DDIR through `end-load`, while `feed <prog> <in#> begin` accepts row updates
+//! through `end-feed` and becomes one non-interleavable server command.
 
 use std::any::{type_name_of_val, Any};
 use std::collections::{BTreeMap, HashMap};
@@ -17,7 +17,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use interactive::ir::{eval, Diff, Value};
 use interactive::scope_ir::{Program, Source};
-use interactive::server::{Command as ServerCommand, OuterTime};
+use interactive::server::{Command as ServerCommand, InputUpdate, OuterTime};
 
 pub type ReqId = String;
 
@@ -70,6 +70,12 @@ pub enum Cmd {
         val: Value,
         time: Option<OuterTime>,
         diff: Diff,
+    },
+    /// Atomically stage many rows into one program input at the current epoch.
+    FeedBatch {
+        prog: String,
+        input: usize,
+        updates: Vec<InputUpdate>,
     },
     /// Bind a trace's changes into `prog`'s positional `input`, delivered at
     /// each tick one epoch delayed — the write path for installed programs.
@@ -188,6 +194,15 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
             time,
             diff,
         },
+        Cmd::FeedBatch {
+            prog,
+            input,
+            updates,
+        } => ServerCommand::FeedBatch {
+            prog,
+            input,
+            updates,
+        },
         Cmd::Bind { trace, prog, input } => ServerCommand::Bind { trace, prog, input },
         Cmd::Unbind { trace, prog, input } => ServerCommand::Unbind { trace, prog, input },
         Cmd::Query { .. } => {
@@ -270,14 +285,16 @@ pub struct Request {
     pub connection_id: ConnectionId,
 }
 
-/// State carried between lines so the parser can splice a multi-line
-/// `load <id> ... begin` body together. The parser hands back either a
-/// complete `Request` or `None` (more lines required).
+/// State carried between lines so the parser can splice a multi-line load or
+/// feed body together. The parser hands back either a complete `Request` or
+/// `None` (more lines required).
 #[derive(Default)]
 pub struct LineParser {
     pending_load: Option<PendingLoad>,
+    pending_feed: Option<PendingFeed>,
     auto_reqid_counter: u64,
     max_load_bytes: usize,
+    max_feed_bytes: usize,
 }
 
 /// Tokens that introduce a command. If a line begins with one of these
@@ -298,6 +315,15 @@ fn max_program_bytes() -> usize {
         .unwrap_or(65536)
 }
 
+/// A framed feed is accumulated on its session thread before admission. Keep
+/// that buffering bounded while allowing the 100k-row performance regime.
+fn max_feed_bytes() -> usize {
+    std::env::var("DDIR_MAX_FEED_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16 * 1024 * 1024)
+}
+
 struct PendingLoad {
     reqid: ReqId,
     id_hint: String,
@@ -310,10 +336,22 @@ struct PendingLoad {
     poisoned: Option<String>,
 }
 
+struct PendingFeed {
+    reqid: ReqId,
+    prog: String,
+    input: usize,
+    updates: Vec<InputUpdate>,
+    bytes: usize,
+    /// Malformed and oversized bodies are swallowed through `end-feed`, then
+    /// reported once; no partial command reaches the worker group.
+    poisoned: Option<String>,
+}
+
 impl LineParser {
     pub fn new() -> Self {
         LineParser {
             max_load_bytes: max_program_bytes(),
+            max_feed_bytes: max_feed_bytes(),
             ..Self::default()
         }
     }
@@ -323,6 +361,7 @@ impl LineParser {
     fn with_cap(max_load_bytes: usize) -> Self {
         LineParser {
             max_load_bytes,
+            max_feed_bytes: max_load_bytes,
             ..Self::default()
         }
     }
@@ -333,6 +372,55 @@ impl LineParser {
     /// the result with a per-connection response sender to form a
     /// `Request`.
     pub fn feed(&mut self, line: &str) -> Option<(ReqId, Result<Cmd, String>)> {
+        // A framed feed fixes its target once, then accepts compact rows until
+        // `end-feed`. Parse and buffer the whole body on the session thread so
+        // the worker group sees either one complete command or no command.
+        if let Some(ref mut pending) = self.pending_feed {
+            let trimmed = line.trim();
+            let mut parts = trimmed.split_whitespace();
+            let first = parts.next();
+            let second = parts.next();
+            let third = parts.next();
+            let explicit_end = first == Some(pending.reqid.as_str())
+                && second == Some("end-feed")
+                && third.is_none();
+            let bare_end = first == Some("end-feed") && second.is_none();
+            if explicit_end || bare_end {
+                let done = self.pending_feed.take().unwrap();
+                if let Some(err) = done.poisoned {
+                    return Some((done.reqid, Err(err)));
+                }
+                return Some((
+                    done.reqid,
+                    Ok(Cmd::FeedBatch {
+                        prog: done.prog,
+                        input: done.input,
+                        updates: done.updates,
+                    }),
+                ));
+            }
+
+            pending.bytes = pending.bytes.saturating_add(line.len() + 1);
+            if pending.poisoned.is_none() && pending.bytes > self.max_feed_bytes {
+                pending.poisoned = Some(format!(
+                    "feed: body exceeds {} bytes (DDIR_MAX_FEED_BYTES)",
+                    self.max_feed_bytes
+                ));
+                pending.updates.clear();
+            }
+            if pending.poisoned.is_some() || trimmed.is_empty() || trimmed.starts_with('#') {
+                return None;
+            }
+            match parse_input_update(trimmed) {
+                Ok(update) => pending.updates.push(update),
+                Err(error) => {
+                    pending.poisoned = Some(format!("feed row: {error}"));
+                    pending.updates.clear();
+                }
+            }
+            return None;
+        }
+
         // Inside a pending load body: every line is literal program text
         // until `<reqid> end-load` or `<id_hint> end-load`. The id_hint
         // form is the friendly default when the load was auto-reqid'd
@@ -373,8 +461,8 @@ impl LineParser {
         }
 
         let trimmed = line.trim();
-        // Blank lines and `#` comments are skipped between commands (inside
-        // a load body every line is literal program text, handled above).
+        // Blank lines and `#` comments are skipped between commands. Body
+        // handling above decides whether they are literal or ignorable.
         if trimmed.is_empty() || trimmed.starts_with('#') {
             return None;
         }
@@ -414,13 +502,24 @@ impl LineParser {
                 });
                 None
             }
+            ParseOutcome::BeginFeed { prog, input } => {
+                self.pending_feed = Some(PendingFeed {
+                    reqid,
+                    prog,
+                    input,
+                    updates: Vec::new(),
+                    bytes: 0,
+                    poisoned: None,
+                });
+                None
+            }
         }
     }
 
-    /// True if waiting for a `<reqid> end-load`. WS transport uses this
-    /// to forward blank-line program body content verbatim.
+    /// True if waiting for the terminator of a multi-line body. WS transport
+    /// uses this to forward blank-line body content verbatim.
     pub fn awaiting_body(&self) -> bool {
-        self.pending_load.is_some()
+        self.pending_load.is_some() || self.pending_feed.is_some()
     }
 }
 
@@ -431,6 +530,10 @@ enum ParseOutcome {
         id_hint: String,
         bindings: BTreeMap<String, String>,
         explain: bool,
+    },
+    BeginFeed {
+        prog: String,
+        input: usize,
     },
 }
 
@@ -467,6 +570,32 @@ fn parse_value(s: &str) -> Result<Value, String> {
             format!("malformed value {:?}", s)
         }
     })
+}
+
+/// Parse one row in a framed feed. Its target and timestamp belong to the
+/// enclosing command, which keeps large requests compact and atomic.
+fn parse_input_update(line: &str) -> Result<InputUpdate, String> {
+    let mut args = line.split_whitespace();
+    let Some(key) = args.next() else {
+        return Err("expected `<key> [val=<v>] [diff=<d>]`".into());
+    };
+    let key = parse_value(key).map_err(|error| format!("key: {error}"))?;
+    let mut val = Value::unit();
+    let mut diff: Diff = 1;
+    for tok in args {
+        if let Some(value) = tok.strip_prefix("val=") {
+            val = parse_value(value).map_err(|error| format!("val: {error}"))?;
+        } else if let Some(value) = tok.strip_prefix("diff=") {
+            diff = value
+                .parse()
+                .map_err(|_| format!("diff= must be an integer, got {value:?}"))?;
+        } else if tok.starts_with("time=") {
+            return Err("time= is not allowed; a framed feed uses the current epoch".into());
+        } else {
+            return Err(format!("unrecognized argument {tok:?}"));
+        }
+    }
+    Ok(InputUpdate { key, val, diff })
 }
 
 fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
@@ -569,6 +698,20 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
             })
         }
         "feed" => {
+            if let [prog, input, "begin"] = args {
+                let input = match input.parse() {
+                    Ok(input) => input,
+                    Err(_) => {
+                        return ParseOutcome::Err(format!(
+                            "feed: <in#> must be a number, got {input:?}"
+                        ))
+                    }
+                };
+                return ParseOutcome::BeginFeed {
+                    prog: (*prog).to_string(),
+                    input,
+                };
+            }
             // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
             // A `<v>`/`<key>` is a comma-separated integer row (`1,2` → tuple;
             // `_`/empty → unit) or a closed scalar term written without
@@ -869,6 +1012,68 @@ mod tests {
         assert!(got[3].1.is_err());
         assert!(got[4].1.is_err());
         assert!(got[5].1.is_err());
+    }
+
+    #[test]
+    fn framed_feed_becomes_one_typed_command() {
+        let mut p = LineParser::new();
+        assert!(p.feed("r0 feed world 2 begin").is_none());
+        assert!(p.awaiting_body());
+        assert!(p.feed("# rows use the enclosing command's epoch").is_none());
+        assert!(p.feed("1 val=10").is_none());
+        assert!(p.feed("2 val=-20 diff=-1").is_none());
+        let (reqid, parsed) = p.feed("r0 end-feed").expect("feed is complete");
+        assert_eq!(reqid, "r0");
+        assert!(!p.awaiting_body());
+
+        let prepared = prepare(parsed.expect("protocol parse succeeds")).unwrap();
+        let PreparedCommand::Server(ServerCommand::FeedBatch {
+            prog,
+            input,
+            updates,
+        }) = prepared
+        else {
+            panic!("expected prepared feed batch, got {prepared:?}");
+        };
+        assert_eq!(prog, "world");
+        assert_eq!(input, 2);
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].key, Value::Tuple(vec![Value::Int(1)]));
+        assert_eq!(updates[0].val, Value::Tuple(vec![Value::Int(10)]));
+        assert_eq!(updates[0].diff, 1);
+        assert_eq!(updates[1].diff, -1);
+    }
+
+    #[test]
+    fn malformed_framed_feed_is_rejected_atomically() {
+        let mut p = LineParser::new();
+        assert!(p.feed("r0 feed world 0 begin").is_none());
+        assert!(p.feed("1 val=10").is_none());
+        assert!(p.feed("2 time=3").is_none());
+        // Once poisoned, otherwise command-looking lines are body and cannot
+        // leak a partial batch or desynchronize the protocol.
+        assert!(p.feed("r1 list").is_none());
+        let (reqid, result) = p.feed("end-feed").expect("bare terminator works");
+        assert_eq!(reqid, "r0");
+        assert!(result
+            .as_ref()
+            .is_err_and(|error| error.contains("uses the current epoch")));
+        assert!(matches!(p.feed("r2 list"), Some((_, Ok(Cmd::List)))));
+    }
+
+    #[test]
+    fn oversized_framed_feed_is_rejected_cleanly() {
+        let mut p = LineParser::with_cap(32);
+        assert!(p.feed("r0 feed world 0 begin").is_none());
+        for key in 0..16 {
+            assert!(p.feed(&format!("{key} val={key}")).is_none());
+        }
+        let (reqid, result) = p.feed("r0 end-feed").expect("feed is complete");
+        assert_eq!(reqid, "r0");
+        assert!(result
+            .as_ref()
+            .is_err_and(|error| error.contains("exceeds 32 bytes")));
+        assert!(matches!(p.feed("r1 list"), Some((_, Ok(Cmd::List)))));
     }
 
     #[test]

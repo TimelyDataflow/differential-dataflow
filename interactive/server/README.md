@@ -21,17 +21,19 @@ become shareable traces. A Corgi program stays columnar between those
 boundaries, but a production Corgi server should replace the bridge with native
 columnar inputs and traces.
 
-Worker 0 admits one FIFO control stream and broadcasts it to every worker.
-Because that one source already defines a total order, command coordination
-uses no wall clock or distributed sequencer. Workers execute commands serially
-in that order without a physical rendezvous between commands; Timely progress
-and probes establish logical completion where it is required. Response channels
-remain local to worker 0.
+Worker 0 admits one FIFO control stream and routes one ordered record to every
+worker. Small commands are replicated; framed input batches are partitioned by
+body position before exchange, so each worker receives only its local typed
+shard. Because the one source already defines a total order, command
+coordination uses no wall clock or distributed sequencer. Workers execute
+commands serially in that order without a physical rendezvous between commands;
+Timely progress and probes establish logical completion where it is required.
+Response channels remain local to worker 0.
 
 Transport threads wake worker 0 when they enqueue a control event, and Timely
-wakes the other workers when the broadcast arrives. When neither Timely nor the
-control plane has work, workers park through the scheduler; the server does not
-poll requests with a periodic sleep.
+wakes the other workers when their control record arrives. When neither Timely
+nor the control plane has work, workers park through the scheduler; the server
+does not poll requests with a periodic sleep.
 
 Every request can begin with an arbitrary request id. If omitted, the server
 generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
@@ -71,6 +73,31 @@ pushes one update into a loaded program's positional input, exactly as in the
 `ddir_server` example (`1,2` → a tuple; `_` → unit; a closed scalar term such
 as `inject(2,tuple(3,4))` for ADT-shaped rows).
 
+For many updates to one target at the current epoch, frame them as one feed:
+
+    feed world 0 begin
+    7 val=9
+    7 val=-3
+    8 val=10 diff=-1
+    end-feed
+
+Each body row is `<key> [val=<v>] [diff=<d>]`; `time=` is intentionally absent
+because the enclosing command supplies one epoch. The complete body is admitted
+atomically, and workers divide its rows by body position before introducing
+them to the dataflow. Partitioning happens before worker transport, avoiding a
+full `Value` batch clone on every worker. Text parsing and the row-to-column
+boundary remain visible optimization opportunities rather than hidden protocol
+behavior.
+
+The batch's `ok` means that the complete request was admitted to the ordered
+worker stream; it does not wait for every worker to stage its shard. A later
+`tick` is the visibility and completion boundary for those rows.
+
+This text-to-`Value` framing is a convenience and compatibility path, not the
+intended representation for high-volume ingestion. Large or already-columnar
+payloads should be acquired and partitioned through the data plane, with only a
+small descriptor entering the ordered control stream.
+
 The stance on contention: **writes are open; policy lives in the dataflow**.
 The server does not decide who may write what. Cooperating clients follow a
 simple protocol — include your id and an ordering epoch in the data — and
@@ -100,14 +127,15 @@ and bind the export `f(state) + (seed | negate)` to the feedback input; then
 perturbations. A bound source cannot be dropped (it holds an importer), nor
 can the bound target (unbind first).
 
-## One gate
+## Intake gates
 
-Loads are cheap to request and costly to render, so intake is bounded:
-`DDIR_MAX_PROGRAM_BYTES` (default 65536) — a larger `load` body is swallowed
-and rejected with one error, before parsing. This is transport self-defense,
-not semantics. There are no ownership or quota gates: sessions are trusted,
-and admission policy (auth, quotas, rate limits) belongs in a fronting proxy
-if a deployment ever needs one.
+Multi-line intake is bounded: `DDIR_MAX_PROGRAM_BYTES` (default 65536) caps a
+`load`, and `DDIR_MAX_FEED_BYTES` (default 16 MiB) caps a framed `feed`. An
+oversized or malformed body is swallowed through its terminator and rejected
+with one error; no partial command reaches a worker. This is transport
+self-defense, not semantics. There are no ownership or quota gates: sessions
+are trusted, and admission policy (auth, quotas, rate limits) belongs in a
+fronting proxy if a deployment ever needs one.
 
 ## Demos
 
