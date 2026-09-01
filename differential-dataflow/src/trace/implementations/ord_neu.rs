@@ -358,6 +358,17 @@ pub mod val_batch {
         staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
     }
 
+    impl<L: Layout> OrdValMerger<L> {
+        /// The partially assembled merge output.
+        ///
+        /// The containers are allocated at their full merged capacity when the merge begins, so
+        /// this storage accounts for the merge's whole memory cost from the outset, even though
+        /// the number of updates in it grows as the merge proceeds.
+        pub fn result(&self) -> &OrdValStorage<L> {
+            &self.result
+        }
+    }
+
     impl<L: Layout> Merger<OrdValBatch<L>> for OrdValMerger<L>
     where
         OrdValBatch<L>: Batch<Time=layout::Time<L>>,
@@ -858,6 +869,17 @@ pub mod key_batch {
 
         /// Local stash of updates, to use for consolidation.
         staging: UpdsBuilder<L::TimeContainer, L::DiffContainer>,
+    }
+
+    impl<L: Layout> OrdKeyMerger<L> {
+        /// The partially assembled merge output.
+        ///
+        /// The containers are allocated at their full merged capacity when the merge begins, so
+        /// this storage accounts for the merge's whole memory cost from the outset, even though
+        /// the number of updates in it grows as the merge proceeds.
+        pub fn result(&self) -> &OrdKeyStorage<L> {
+            &self.result
+        }
     }
 
     impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> Merger<OrdKeyBatch<L>> for OrdKeyMerger<L>

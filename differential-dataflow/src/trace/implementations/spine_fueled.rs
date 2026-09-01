@@ -223,6 +223,23 @@ impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
     }
 }
 
+impl<B: Batch> Spine<B> {
+    /// Applies `f` to the merger of each layer that is currently mid-merge.
+    ///
+    /// A merger owns the partially assembled output of its merge. That storage is memory the
+    /// spine holds but which [`TraceReader::map_batches`] does not reach: it presents the two
+    /// input batches of a merge and stops there. A caller that accounts for the spine's memory
+    /// footprint must visit both, and must re-read a merger on each observation rather than
+    /// cache what it learns, because a merger's contents change as the merge proceeds.
+    pub fn map_mergers<F: FnMut(&<B as Batch>::Merger)>(&self, mut f: F) {
+        for state in self.merging.iter().rev() {
+            if let MergeState::Double(MergeVariant::InProgress(_, _, merger)) = state {
+                f(merger);
+            }
+        }
+    }
+}
+
 // A trace implementation for any key type that can be borrowed from or converted into `Key`.
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
 impl<B: Batch+Clone+'static> Trace for Spine<B> {

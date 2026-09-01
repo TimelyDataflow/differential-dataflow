@@ -430,6 +430,11 @@ pub mod rc_blanket_impls {
     /// Wrapper type for merging reference counted batches.
     pub struct RcMerger<B:Batch> { merger: B::Merger }
 
+    impl<B:Batch> RcMerger<B> {
+        /// The wrapped batch's merger, which owns the merge's partially assembled output.
+        pub fn inner(&self) -> &B::Merger { &self.merger }
+    }
+
     /// Represents a merge in progress.
     impl<B:Batch> Merger<Rc<B>> for RcMerger<B> {
         fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
