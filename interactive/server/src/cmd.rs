@@ -11,11 +11,13 @@
 //! `<reqid> load <id> <bindings...> begin` opens; subsequent lines are
 //! literal program text terminated by `<reqid> end-load`.
 
-use std::collections::BTreeMap;
+use std::any::{type_name_of_val, Any};
+use std::collections::{BTreeMap, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use interactive::ir::{eval, Diff, Value};
-use interactive::server::OuterTime;
+use interactive::scope_ir::{Program, Source};
+use interactive::server::{Command as ServerCommand, OuterTime};
 
 pub type ReqId = String;
 
@@ -115,11 +117,150 @@ pub enum DataflowRef {
     Name(String),
 }
 
-/// A parsed request: reqid plus the command (or a parse error).
+/// A command ready to broadcast to the worker group. Protocol-only tail
+/// lifecycle wraps the typed server command vocabulary rather than leaking
+/// response channels into the dataflow.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum PreparedCommand {
+    Server(ServerCommand),
+    Tail { name: String },
+    Stop { tail_reqid: ReqId },
+}
+
+/// Parse and lower the expensive parts of a protocol command on its session
+/// thread. Every worker receives the same typed program, and malformed DDIR
+/// never reaches a Timely worker.
+pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
+    let command = match command {
+        Cmd::Load {
+            id_hint,
+            bindings,
+            program,
+            explain,
+        } => {
+            if explain {
+                return Err(
+                    "load --explain is reserved; explanation is not implemented here yet".into(),
+                );
+            }
+            let mut program = catch_unwind(AssertUnwindSafe(|| {
+                let statements = interactive::parse::pipe::parse(&program);
+                interactive::lower::lower_tree(statements)
+            }))
+            .map_err(panic_message)?;
+            apply_bindings(&mut program, &bindings)?;
+            program.optimize();
+            ServerCommand::Install {
+                name: id_hint,
+                program,
+            }
+        }
+        Cmd::Drop { target } => ServerCommand::Drop {
+            name: match target {
+                DataflowRef::Name(name) => name,
+                DataflowRef::Id(id) => {
+                    return Err(format!(
+                        "numeric dataflow id {} is no longer exposed; use its name",
+                        id
+                    ))
+                }
+            },
+        },
+        Cmd::List => ServerCommand::List,
+        Cmd::Peek { name } => ServerCommand::Peek {
+            trace: name,
+            key: None,
+        },
+        Cmd::Tail { name } => return Ok(PreparedCommand::Tail { name }),
+        Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
+        Cmd::Feed {
+            prog,
+            input,
+            key,
+            val,
+            time,
+            diff,
+        } => ServerCommand::Feed {
+            prog,
+            input,
+            key,
+            val,
+            time,
+            diff,
+        },
+        Cmd::Bind { trace, prog, input } => ServerCommand::Bind { trace, prog, input },
+        Cmd::Unbind { trace, prog, input } => ServerCommand::Unbind { trace, prog, input },
+        Cmd::Query { .. } => {
+            return Err("query is reserved for --explain dataflows and is not implemented".into())
+        }
+        Cmd::Tick { n } => ServerCommand::Tick { n },
+        Cmd::Exit => ServerCommand::Exit,
+    };
+    Ok(PreparedCommand::Server(command))
+}
+
+fn apply_bindings(
+    program: &mut Program,
+    bindings: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    for (local, binding) in bindings {
+        let import = program
+            .root
+            .imports
+            .iter_mut()
+            .find(|import| import.name == *local)
+            .ok_or_else(|| format!("binding names no import {:?}", local))?;
+        import.from = Source::Trace(random_binding(binding)?);
+    }
+    Ok(())
+}
+
+/// Translate the call spelling of a binding (`random(...)`) into its
+/// content-addressed source name.
+fn random_binding(binding: &str) -> Result<String, String> {
+    let Some(body) = binding
+        .strip_prefix("random(")
+        .and_then(|s| s.strip_suffix(')'))
+    else {
+        return Ok(binding.to_string());
+    };
+    let mut values: HashMap<&str, &str> = HashMap::new();
+    for field in body.split(',') {
+        let (key, value) = field
+            .trim()
+            .split_once('=')
+            .ok_or_else(|| format!("malformed random field {:?}", field))?;
+        values.insert(key.trim(), value.trim());
+    }
+    let nodes = values.remove("range").ok_or("random requires range")?;
+    let edges = values.remove("count").ok_or("random requires count")?;
+    let arity = values.remove("arity").unwrap_or("2");
+    let seed = values.remove("seed").unwrap_or("0");
+    let churn = values.remove("churn").unwrap_or("0");
+    if !values.is_empty() {
+        return Err(format!("unknown random fields: {:?}", values.keys()));
+    }
+    Ok(format!(
+        "random:nodes={},edges={},arity={},seed={},churn={}",
+        nodes, edges, arity, seed, churn
+    ))
+}
+
+fn panic_message(panic: Box<dyn Any + Send>) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        format!("DDIR parser panicked ({})", type_name_of_val(&panic))
+    }
+}
+
+/// A prepared request: reqid plus the command (or a parse/lowering error).
 #[derive(Debug)]
 pub struct Request {
     pub reqid: ReqId,
-    pub kind: Result<Cmd, String>,
+    pub kind: Result<PreparedCommand, String>,
     /// Where to route responses for this request (and, for `tail`, all
     /// subsequent batches until `stop`). Cloned from the per-connection
     /// outbound sender.
@@ -617,6 +758,24 @@ mod tests {
                 assert!(!*explain);
             }
             _ => panic!("expected Load, got {:?}", got[0].1),
+        }
+    }
+
+    #[test]
+    fn load_is_lowered_before_worker_admission() {
+        let mut p = LineParser::new();
+        assert!(p.feed("r0 load world begin").is_none());
+        assert!(p.feed("let rows = input 0;").is_none());
+        assert!(p.feed("export \"rows\" = rows;").is_none());
+        let (_, parsed) = p.feed("r0 end-load").expect("load is complete");
+        let prepared = prepare(parsed.expect("protocol parse succeeds"))
+            .expect("DDIR parsing and lowering succeed");
+        match prepared {
+            PreparedCommand::Server(ServerCommand::Install { name, program }) => {
+                assert_eq!(name, "world");
+                assert_eq!(program.root.exports[0].name, "rows");
+            }
+            other => panic!("expected prepared install, got {other:?}"),
         }
     }
 

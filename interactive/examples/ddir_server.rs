@@ -124,7 +124,7 @@ fn parse_command(line: &str) -> Result<Command, String> {
             }
             Ok(Command::Feed { prog, input, key, val, time, diff })
         }
-        "tick" => Ok(Command::Tick),
+        "tick" if toks.len() == 1 => Ok(Command::Tick { n: 1 }),
         "bind" | "unbind" if toks.len() == 4 => {
             let trace = toks[1].to_string();
             let prog = toks[2].to_string();
@@ -145,7 +145,6 @@ fn parse_command(line: &str) -> Result<Command, String> {
             Ok(Command::Peek { trace, key })
         }
         "list" => Ok(Command::List),
-        "help" => Ok(Command::Help),
         "exit" | "quit" => Ok(Command::Exit),
         other => Err(format!("unknown or malformed command {:?} (try `help`)", other)),
     }
@@ -181,8 +180,10 @@ fn dispatch(cmd: &Command, server: &mut Server, worker: &mut Worker) -> bool {
                 }
             }
         }
-        Command::Tick => {
-            server.tick(worker);
+        Command::Tick { n } => {
+            for _ in 0..*n {
+                server.tick(worker);
+            }
             if w0 { println!("tick -> epoch {}", server.epoch()); }
         }
         Command::Drop { name } => match server.drop_program(worker, name) {
@@ -207,7 +208,6 @@ fn dispatch(cmd: &Command, server: &mut Server, worker: &mut Worker) -> bool {
             }
         }
         Command::List => if w0 { server.list(); },
-        Command::Help => if w0 { print_help(); },
         Command::Exit => return false,
     }
     true
@@ -295,6 +295,10 @@ fn main() {
     for line in lines {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with("--") {
+            continue;
+        }
+        if line == "help" {
+            print_help();
             continue;
         }
         match parse_command(line) {

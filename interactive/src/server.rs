@@ -10,8 +10,9 @@
 //! The server executes a [`Command`] — already parsed, lowered, and validated.
 //! Programs are parsed *off the worker threads* (on the intake side) and shipped
 //! here as `scope_ir::Program`s; a malformed program is rejected before it ever
-//! reaches a worker, so bad input can't panic the computation. `Command` is
-//! serializable precisely so it can ride a timely `Sequencer` to every worker.
+//! reaches a worker, so bad input can't panic the computation. [`Command`] is
+//! serializable so worker 0 can broadcast one ordered command stream to the
+//! whole worker group.
 //!
 //! # The two binding points
 //!
@@ -184,9 +185,9 @@ fn canonical_source_name(name: &str) -> String {
 
 /// A unit of server work, already parsed/lowered/validated on the intake side.
 ///
-/// Serializable so it can be circulated to every worker through a timely
-/// `Sequencer`; the workers execute it without any further parsing.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// Serializable so worker 0 can circulate it to every worker; the workers
+/// execute it without any further parsing.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Command {
     /// Install `program` under `name`.
     Install { name: String, program: st::Program },
@@ -200,8 +201,8 @@ pub enum Command {
         time: Option<OuterTime>,
         diff: Diff,
     },
-    /// Close the current epoch and run to quiescence.
-    Tick,
+    /// Close `n` epochs, running to quiescence after each one.
+    Tick { n: u64 },
     /// Drop the named program.
     Drop { name: String },
     /// Snapshot a registered trace (optionally one key) and print it (worker 0).
@@ -220,8 +221,6 @@ pub enum Command {
     },
     /// Print the registry (worker 0).
     List,
-    /// Print the command help (worker 0).
-    Help,
     /// Stop the server.
     Exit,
 }
