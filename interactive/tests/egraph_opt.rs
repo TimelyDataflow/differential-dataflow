@@ -150,6 +150,93 @@ fn dag_extraction_keeps_a_shared_arrangement() {
     assert_eq!(arranges, 5);
 }
 
+/// Nested concatenations, however associated, are one concatenation.
+#[test]
+fn concat_flattening_merges_spellings() {
+    let src = "let a = input 0 | key($0[0] ; $0[1]);\n\
+               let b = input 1 | key($0[0] ; $0[1]);\n\
+               let c = input 0 | key($0[1] ; $0[0]);\n\
+               let s1 = (a + b) + c;\n\
+               let s2 = a + (b + c);\n\
+               export \"s1\" = s1 | arrange;\n\
+               export \"s2\" = s2 | arrange;\n";
+    let tree = lower::lower_tree(parse::pipe::parse(src));
+    let inputs = vec![rows(&[&[1, 2], &[2, 5]]), rows(&[&[1, 9], &[2, 8]])];
+    let eg = egraph::optimize(&tree, &widths_of(&inputs));
+    assert_eq!(vec::evaluate(&eg, &inputs), vec::evaluate(&tree, &inputs));
+    let concats: Vec<usize> = eg.root.items.iter().filter_map(|it| match it {
+        scope_ir::Item::Op(scope_ir::Node::Concat(xs)) => Some(xs.len()),
+        _ => None,
+    }).collect();
+    if concats != vec![3] {
+        eg.dump();
+    }
+    assert_eq!(concats, vec![3], "one concatenation of three parts");
+}
+
+/// A filter after a join that reads one input's fields sinks to that input, below its arrange
+/// and through the projection that built it.
+#[test]
+fn filter_sinks_below_join() {
+    let src = "let wide = input 0 | key($0[0] ; $0[1], $0[0] * $0[1], $0[1] + 7);\n\
+               let left = input 1 | key($0[0] ; $0[1]);\n\
+               let j = left | join(wide, ($0[0] ; $1[0], $2[2])) | filter($1[0] > 8);\n\
+               export \"j\" = j | arrange;\n";
+    let tree = lower::lower_tree(parse::pipe::parse(src));
+    let inputs = vec![rows(&[&[1, 2], &[1, 3], &[2, 5]]), rows(&[&[1, 9], &[2, 8]])];
+    let eg = egraph::optimize(&tree, &widths_of(&inputs));
+    assert_eq!(vec::evaluate(&eg, &inputs), vec::evaluate(&tree, &inputs));
+    // no filter reads the join; the join's left side is a chain from input 1 that filters
+    let mut filtered_join = false;
+    let mut left_filters = false;
+    for it in &eg.root.items {
+        if let scope_ir::Item::Op(scope_ir::Node::Join { left, .. }) = it {
+            let scope_ir::Ref::Local(i) = left else { panic!("join reads {left:?}") };
+            let i = match &eg.root.items[*i] {
+                scope_ir::Item::Op(scope_ir::Node::Arrange(scope_ir::Ref::Local(j))) => *j,
+                _ => *i,
+            };
+            if let scope_ir::Item::Op(scope_ir::Node::Linear { input, ops }) = &eg.root.items[i] {
+                left_filters = matches!(input, scope_ir::Ref::Import(1)) && ops.iter().any(|op| matches!(op, interactive::ir::LinearOp::Filter(_)));
+            }
+        }
+        if let scope_ir::Item::Op(scope_ir::Node::Linear { input: scope_ir::Ref::Local(i), ops }) = it {
+            if matches!(eg.root.items[*i], scope_ir::Item::Op(scope_ir::Node::Join { .. })) && ops.iter().any(|op| matches!(op, interactive::ir::LinearOp::Filter(_))) {
+                filtered_join = true;
+            }
+        }
+    }
+    if filtered_join || !left_filters {
+        eg.dump();
+    }
+    assert!(!filtered_join, "a filter still reads the join");
+    assert!(left_filters, "the join's left side does not filter");
+}
+
+/// A filter after a concatenation sinks into each part.
+#[test]
+fn filter_sinks_through_concat() {
+    let src = "let a = input 0 | key($0[0] ; $0[1]);\n\
+               let b = input 1 | key($0[0] ; $0[1]);\n\
+               let s = (a + b) | filter($1[0] > 4);\n\
+               export \"s\" = s | arrange;\n";
+    let tree = lower::lower_tree(parse::pipe::parse(src));
+    let inputs = vec![rows(&[&[1, 2], &[2, 5]]), rows(&[&[1, 9], &[2, 8]])];
+    let eg = egraph::optimize(&tree, &widths_of(&inputs));
+    assert_eq!(vec::evaluate(&eg, &inputs), vec::evaluate(&tree, &inputs));
+    let parts_filter = eg.root.items.iter().find_map(|it| match it {
+        scope_ir::Item::Op(scope_ir::Node::Concat(xs)) => Some(xs.iter().all(|x| match x {
+            scope_ir::Ref::Local(i) => matches!(&eg.root.items[*i], scope_ir::Item::Op(scope_ir::Node::Linear { ops, .. }) if ops.iter().any(|op| matches!(op, interactive::ir::LinearOp::Filter(_)))),
+            _ => false,
+        })),
+        _ => None,
+    }).expect("a concatenation");
+    if !parts_filter {
+        eg.dump();
+    }
+    assert!(parts_filter, "the concatenation's parts do not each filter");
+}
+
 #[test]
 fn corpus_programs() {
     for prog in ["reach", "scc", "stable", "unnest", "adt", "ast", "binders", "tour"] {

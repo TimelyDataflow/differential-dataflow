@@ -1,9 +1,9 @@
 -- The DDIR optimizer as a DDIR program: an e-graph over one scope's operators.
 --
--- input 0: nodes  (id, kind, payload, width) ;   input 1: edges  (parent, pos, child) ;
--- (width: the row width the node is priced by — its input's for an Arrange or a Reduce, which
--- hold those rows; its output's for everything else)
+-- input 0: nodes  (id, kind, payload, price) ;   input 1: edges  (parent, pos, child) ;
 -- input 2: equal  (a, b) ; -- equalities the host asserted from facts about scalar operators
+-- (price: what the host charges for the node — an op weight, times the width of the rows it
+-- holds or produces, times their relative volume)
 --
 -- kind: 0 Import  1 Var  2 ChildExport  3 Op (one linear step)  4 Concat  5 Arrange  6 Join
 --       7 Reduce  8 Inspect  9 Sub (a child scope)
@@ -12,24 +12,34 @@
 --
 -- Congruence closure (`arrange_idem.ddp`'s core): a node's signature is (kind, payload, the
 -- classes of its children by position); nodes with equal signatures are equal. `Concat`'s
--- children are unordered, so its signature lists their classes without positions, which makes
--- commutativity and idempotence of concatenation free (a `Concat` of one class twice is a
--- different node from a `Concat` of it once — a multiset — and that is right: concat is union
--- with multiplicity).
+-- children are unordered, and taken through nested `Concat`s to their leaves, so its signature
+-- lists the classes of its leaves without positions, which makes commutativity and associativity
+-- of concatenation free (a `Concat` of one class twice is a different node from a `Concat` of it
+-- once — a multiset — and that is right: concat is union with multiplicity).
 --
 -- Rules:
 --   arrange_idem   Arrange(x) ≡ x when x's class already holds an Arrange or a Reduce.
 --   input 2        whatever the host instantiated from scalar facts (demand pushdown: a reducer
 --                  that reads no values equals itself over a key-only projection of its input).
 --
--- Extraction: each class's cost is the cheapest node in it — an op weight times one plus its
--- width, plus its children's class costs (a tree cost); "best" names that node. The host rebuilds
--- the scope from "best".
+-- Extraction: each class's cost is the cheapest node in it — its price plus its children's class
+-- costs (a tree cost); "best" names that node. The host refines the choice against the DAG cost
+-- and rebuilds the scope from it.
 
-let node  = input 0 | key($0[0] ; $0[1], $0[2], $0[3]);          -- id ; (kind, payload, width)
+let node  = input 0 | key($0[0] ; $0[1], $0[2], $0[3]);          -- id ; (kind, payload, price)
 let given = input 2 | key($0[0] ; $0[1]);                         -- a ; b
 let edge  = input 1 | key($0[2] ; $0[0], $0[1]);                 -- child ; (parent, pos)
 let edge_by_parent = input 1 | key($0[0] ; $0[1], $0[2]);        -- parent ; (pos, child)
+
+-- a Concat's leaves: its children that are not Concats, and its Concat children's leaves
+let cc = edge_by_parent | join(node, ($0[0] ; $1[1], $2[0])) | filter($1[1] == 4) | map($0[0] ; $1[0]);   -- concat ; child
+let cc_kind = cc | key($1[0] ; $0[0]) | join(node, ($1[0] ; $0[0], $2[0]));                              -- concat ; (child, child kind)
+flat: {
+    let direct  = cc_kind | filter(not($1[1] == 4)) | map($0[0] ; $1[0]);                                 -- concat ; leaf
+    let through = cc_kind | filter($1[1] == 4) | key($1[0] ; $0[0]) | join(parts, ($1[0] ; $2[0]));       -- concat ; leaf, via a nested concat
+    var parts = direct + through;
+}
+let cparts = flat::parts;
 
 eqsat: {
     let elems = node | map($0[0] ; $0[0]);                       -- id ; id
@@ -38,7 +48,7 @@ eqsat: {
     let canon = edge | join(eq, ($1[0] ; $1[1], $2[0]));           -- parent ; (pos, class)
     let ckind = canon | join(node, ($0[0], $2[0], $2[1] ; $1[0], $1[1]));   -- (parent, kind, payload) ; (pos, class)
     let cpos  = ckind | filter(not($0[1] == 4)) | map($0 ; $1[0], $1[1]);   -- positional children keep their slot
-    let cset  = ckind | filter($0[1] == 4)      | map($0 ; 0, $1[1]);       -- concat children: slot 0, so they sort by class
+    let cset  = cparts | key($1[0] ; $0[0]) | join(eq, ($1[0] ; $2[0])) | map($0[0], 4, 0 ; 0, $1[0]);   -- concat leaves: slot 0, so they sort by class
     let bsig  = (cpos + cset) | collect | map($0[1], $0[2], ($1) ; $0[0]);  -- (kind, payload, [(pos, class)]) ; id
     -- leaves (Import, Var) have no children to collect; each signs with its own id, so it is its
     -- own class unless a rule says otherwise.
@@ -60,9 +70,8 @@ eqsat: {
 
 let classes = eqsat::eq;
 
--- extraction: op weights by kind (Arrange 3, Join 5, Reduce 4, Sub 8, everything else 1), times
--- one plus the node's width
-let weight = node | map($0[0] ; if($1[0] == 5, 3, if($1[0] == 6, 5, if($1[0] == 7, 4, if($1[0] == 9, 8, 1)))) * (1 + $1[2]));
+-- extraction: each node's price, from the host
+let weight = node | map($0[0] ; $1[2]);
 let nkids  = edge_by_parent | count;                             -- parent ; (n)
 let leaves = node | filter(or($1[0] == 0, $1[0] == 1)) | map($0[0] ; 0);
 extract: {

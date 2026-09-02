@@ -11,7 +11,10 @@
 //!     projected away before it;
 //!   * **narrowing** — the operator that keeps only what a consumer demands, and the consumer
 //!     rewritten to read the narrowed row;
-//!   * **renaming** — an operator with two inputs, with its inputs swapped.
+//!   * **renaming** — an operator with two inputs, with its inputs swapped;
+//!   * **composition** — a predicate over an operator's output, as a predicate over its input,
+//!     so a filter can sink below the operator;
+//!   * **volume** — how a step changes the number of rows (a filter halves it, an estimate).
 //!
 //! `None` for a width means the language cannot tell statically (a `Spread` of something whose
 //! arity is not fixed); the optimizer then neither prices nor narrows that row. The intended
@@ -214,4 +217,85 @@ pub fn reducer_reads_values(r: &Reducer) -> bool {
 /// The step that keeps a row's key and drops its value: `map($0 ;)`.
 pub fn keep_key_only() -> LinearOp {
     LinearOp::Project(Projection { key: Term::Tuple(vec![Term::Spread(Box::new(Term::Var(0)))]), val: Term::Tuple(vec![]) })
+}
+
+/// The relative row volume after a linear step: a filter keeps half (an estimate, there to
+/// order the alternatives a rule proposes, with no claim to more).
+pub fn volume_after(op: &LinearOp, v: i64) -> i64 {
+    match op {
+        LinearOp::Filter(_) => (v + 1) / 2,
+        _ => v,
+    }
+}
+
+/// The term for field `i` of what a tuple term produces over rows of the given widths, through
+/// any `Spread`s; `None` when a spread reaches an unknown arity or `i` is out of range.
+pub fn field_term(t: &Term, i: usize, env: &[usize]) -> Option<Term> {
+    match t {
+        Term::Tuple(fields) => {
+            let mut idx = i;
+            for f in fields {
+                match f {
+                    Term::Spread(inner) => match &**inner {
+                        Term::Var(n) => {
+                            let w = *env.get(*n)?;
+                            if idx < w {
+                                return Some(Term::Proj(Box::new(Term::Var(*n)), idx));
+                            }
+                            idx -= w;
+                        }
+                        _ => return None,
+                    },
+                    other => {
+                        if idx == 0 {
+                            return Some(other.clone());
+                        }
+                        idx -= 1;
+                    }
+                }
+            }
+            None
+        }
+        Term::Var(n) => Some(Term::Proj(Box::new(Term::Var(*n)), i)),
+        _ => None,
+    }
+}
+
+/// A predicate over a projection's output rows as a predicate over its input rows: every
+/// `$0[i]` becomes the key's `i`th field term, every `$1[j]` the value's. `None` when the
+/// predicate uses an output row whole or a field cannot be resolved.
+pub fn compose(p: &Term, q: &Projection, env: &[usize]) -> Option<Term> {
+    let c = |x: &Term| compose(x, q, env);
+    Some(match p {
+        Term::Var(_) => return None,
+        Term::Proj(inner, i) => match &**inner {
+            Term::Var(0) => field_term(&q.key, *i, env)?,
+            Term::Var(1) => field_term(&q.val, *i, env)?,
+            Term::Var(_) => return None,
+            other => Term::Proj(Box::new(c(other)?), *i),
+        },
+        Term::Bound(_) | Term::Int(_) => p.clone(),
+        Term::Spread(inner) => Term::Spread(Box::new(c(inner)?)),
+        Term::Unary(op, inner) => Term::Unary(*op, Box::new(c(inner)?)),
+        Term::Tuple(xs) => Term::Tuple(xs.iter().map(c).collect::<Option<_>>()?),
+        Term::List(xs) => Term::List(xs.iter().map(c).collect::<Option<_>>()?),
+        Term::Hash(xs) => Term::Hash(xs.iter().map(c).collect::<Option<_>>()?),
+        Term::Inject { tag, payload, sum } => Term::Inject { tag: Box::new(c(tag)?), payload: Box::new(c(payload)?), sum: sum.clone() },
+        Term::Case { scrutinee, arms, default } => Term::Case {
+            scrutinee: Box::new(c(scrutinee)?),
+            arms: arms.iter().map(c).collect::<Option<_>>()?,
+            default: match default {
+                Some(d) => Some(Box::new(c(d)?)),
+                None => None,
+            },
+        },
+        Term::Fold { list, init, step } => Term::Fold { list: Box::new(c(list)?), init: Box::new(c(init)?), step: Box::new(c(step)?) },
+        Term::If { cond, then, els } => Term::If { cond: Box::new(c(cond)?), then: Box::new(c(then)?), els: Box::new(c(els)?) },
+        Term::Binary(op, a, b) => Term::Binary(*op, Box::new(c(a)?), Box::new(c(b)?)),
+    })
+}
+
+/// `t` with rows renamed: `$n` becomes `$rows[n]` (identity when absent).
+pub fn rename_rows(t: &Term, rows: &BTreeMap<usize, usize>) -> Term {
+    rewrite(t, usize::MAX, &BTreeMap::new(), rows)
 }
