@@ -180,7 +180,7 @@ where
 
                 // Stash capabilities and associated data (ordered by time).
                 input.for_each(|cap, data| {
-                    capabilities.insert(cap.retain(0));
+                    if let Some(cap) = cap.retain_least(0) { capabilities.insert(cap); }
                     for (key, val, time) in data.drain(..) {
                         priority_queue.push(std::cmp::Reverse((time, key, val)))
                     }
