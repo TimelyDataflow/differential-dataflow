@@ -245,6 +245,7 @@ fn lanes_of(sum: &SumTy, tag: usize, payload: &Shape, expected: Option<&Shape>) 
             1 => Ok(vec![other(0, "Ok")?, payload.clone()]),
             _ => Err("Result has two variants".into()),
         },
+        SumTy::Dynamic => Err("an untyped `inject(tag, payload)` names no sum; declare a `type` and use its constructor".into()),
     }
 }
 
@@ -408,7 +409,7 @@ pub fn compile(
                 }
                 _ => {
                     let SumTy::Declared(lanes) = sum else {
-                        return Err("a data-driven variant tag needs a declared type".into());
+                        return Err("a data-driven variant tag needs a declared type: `variant(Type, tag, payload)`".into());
                     };
                     if let Some(l) = lanes.iter().find(|l| **l != pshape) {
                         return Err(format!("variant: every lane must have the payload's shape {pshape}, but one is {l}"));

@@ -76,6 +76,10 @@ pub enum SumTy {
     Option,
     /// `Result(T, E)` = `Sum{ T | E }`: `Ok` is lane 0, `Err` lane 1.
     Result,
+    /// An untyped literal, `inject(tag, payload)`: a `Value::Variant` written as a constant, for
+    /// closed terms fed to the row interpreter (the server's `feed`). It names no sum, so the
+    /// columnar lowering rejects it — a program builds sums from declared types.
+    Dynamic,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -164,7 +168,7 @@ pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
     match name {
         "tuple" => Term::Tuple(std::mem::take(args)),
         "list" => Term::List(std::mem::take(args)),
-        "inject" | "variant" => panic!("`{name}(tag, payload)` has no type: write `variant(Type, tag, payload)` after a `type` declaration, or a constructor `Ctor(payload)`"),
+        "inject" | "variant" => { assert_eq!(args.len(), 2, "{}(tag, payload)", name); let payload = Box::new(args.remove(1)); Term::Inject { tag: Box::new(args.remove(0)), payload, sum: SumTy::Dynamic } }
         "case" => { assert!(args.len() >= 2, "case(scrutinee, arm0, ...)"); let scrutinee = Box::new(args.remove(0)); Term::Case { scrutinee, arms: std::mem::take(args), default: None } }
         "fold" => { assert_eq!(args.len(), 3, "fold(list, init, step)"); let step = Box::new(args.remove(2)); let init = Box::new(args.remove(1)); let list = Box::new(args.remove(0)); Term::Fold { list, init, step } }
         "proj" => { assert_eq!(args.len(), 2, "proj(value, index)"); let i = int_arg(&args[1]) as usize; Term::Proj(Box::new(args.remove(0)), i) }

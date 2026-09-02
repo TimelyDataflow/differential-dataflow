@@ -47,7 +47,9 @@
 //!   (every lane must then share the payload's shape); `istag(tag, v)` tests.
 //!   The built-ins `Some(x)`/`None` and `Ok(x)`/`Err(e)` build `Option`/`Result`;
 //!   a `None`/`Ok`/`Err` learns its other lane from the other branch of an `if`
-//!   or the other arms of a `case`.
+//!   or the other arms of a `case`. The untyped `inject(tag, payload)` remains as
+//!   a VALUE literal for closed terms (the server's `feed`): it names no sum, so
+//!   the row interpreter takes it and the columnar lowering rejects it.
 //! - Pattern match: `case scrut { Ctor(a, b) => arm, …, _ => default }` — an arm
 //!   names the payload's tuple fields, or the whole payload with one name.
 //! - Fold: `fold(list, init, step)` — in `step`, `^0` is the element and `^1`
@@ -589,7 +591,7 @@ impl Parser {
                     .resolve_ctor(ty.as_deref(), &name)
                     .unwrap_or_else(|| panic!("unknown constructor in pattern: `{}`", name));
                 match &lanes {
-                    None => lanes = Some(match &sum { SumTy::Declared(ls) => ls.len(), SumTy::Option | SumTy::Result => 2 }),
+                    None => lanes = Some(match &sum { SumTy::Declared(ls) => ls.len(), SumTy::Option | SumTy::Result => 2, SumTy::Dynamic => unreachable!("patterns name a constructor") }),
                     Some(n) => assert_eq!(*n, match &sum { SumTy::Declared(ls) => ls.len(), _ => 2 }, "case arms mix types (`{name}`)"),
                 }
                 let mut names = Vec::new();
@@ -657,9 +659,10 @@ impl Parser {
     /// Function-call style ADT operators: `tuple`, `list`, `variant`, `case`,
     /// `fold`, `proj`, `len`, `istag`, `not`, `or`, `if`.
     fn parse_builtin(&mut self, name: &str) -> Term {
-        if name == "variant" || name == "inject" {
+        if (name == "variant" || name == "inject") && matches!(self.tokens.get(self.pos + 1), Some(Token::Ident(t)) if self.types.contains_key(t)) {
             // `variant(Type, tag, payload)`: a data-driven tag into a declared type. Every lane
-            // of the type must share the payload's shape (the columnar form is a demux).
+            // of the type must share the payload's shape (the columnar form is a demux). The
+            // two-argument `inject(tag, payload)` stays the untyped value literal (`SumTy::Dynamic`).
             self.expect(&Token::LParen);
             let ty = self.parse_ident();
             let lanes = self.type_lanes(&ty);
