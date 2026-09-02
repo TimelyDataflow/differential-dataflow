@@ -1252,6 +1252,42 @@ pub mod vec {
     }
 }
 
+/// Routes the records of one message to singleton capabilities when the message's stamp has
+/// several elements.
+///
+/// A batch is shipped under the set of capabilities it retires, so a message of batches can
+/// carry several timestamps. Records each have one time, and an operator over records reads a
+/// message's time as one (`InputCapability::time`); an operator that turns batches into records
+/// keeps that true by sending each record under the first element of the stamp at or before its
+/// time. The elements cover every record: a batch's times are at or beyond one of the
+/// capabilities it retired under.
+pub struct StampRouter<T: Timestamp> {
+    caps: Vec<timely::dataflow::operators::Capability<T>>,
+}
+
+impl<T: Timestamp> StampRouter<T> {
+    /// One capability per element of the message's stamp, for output `port`.
+    pub fn new(cap: &timely::dataflow::operators::InputCapability<T>, port: usize) -> Self {
+        Self { caps: cap.stamp().iter().map(|t| cap.delayed(t, port)).collect() }
+    }
+    /// One capability per element of a set.
+    pub fn from_set(set: &timely::dataflow::operators::CapabilitySet<T>) -> Self {
+        Self { caps: set.iter().cloned().collect() }
+    }
+    /// The capabilities, in the order `index` names them.
+    pub fn capabilities(&self) -> &[timely::dataflow::operators::Capability<T>] {
+        &self.caps
+    }
+    /// Which capability a record at `time` goes under.
+    pub fn index(&self, time: &T) -> usize {
+        self.caps.iter().position(|c| c.time().less_equal(time)).expect("a record's time is at or beyond an element of its message's stamp")
+    }
+    /// Empty buffers, one per capability, to route records into and then give under each.
+    pub fn buffers<D>(&self) -> Vec<Vec<D>> {
+        (0..self.caps.len()).map(|_| Vec::new()).collect()
+    }
+}
+
 /// Conversion to a differential dataflow Collection.
 pub trait AsCollection<'scope, T: Timestamp, C> {
     /// Converts the type to a differential dataflow collection.

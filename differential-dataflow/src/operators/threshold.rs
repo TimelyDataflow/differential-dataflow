@@ -144,7 +144,14 @@ where
 
                 if !caps.is_empty() {
 
-                    let mut session = output.session(&caps);
+                    // The batches' capabilities may span several timestamps; each record goes out
+                    // under the one at or before its time, so the collection's messages carry one.
+                    let router = crate::collection::StampRouter::from_set(&caps);
+                    let mut buffers = router.buffers();
+                    let mut give = |record: (_, Tr::Time, _)| {
+                        let index = router.index(&record.1);
+                        buffers[index].push(record);
+                    };
 
                     let (mut batch_cursor, batch_storage) = crate::trace::cursor::cursor_list(batch_storage.into_iter().filter_map(|b| b.inner).collect());
                     let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(trace.batches_through(lower_limit.borrow()).unwrap());
@@ -185,12 +192,17 @@ where
 
                             if let Some(difference) = difference {
                                 if !difference.is_zero() {
-                                    session.give((key.clone(), <BatchCursor<Tr> as Cursor>::owned_time(time), difference));
+                                    give((key.clone(), <BatchCursor<Tr> as Cursor>::owned_time(time), difference));
                                 }
                             }
                         });
 
                         batch_cursor.step_key(&batch_storage);
+                    }
+                    for (cap, mut buffer) in router.capabilities().iter().zip(buffers) {
+                        if !buffer.is_empty() {
+                            output.session(cap).give_container(&mut buffer);
+                        }
                     }
                 }
 

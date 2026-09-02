@@ -174,20 +174,30 @@ where
         .unary::<Builder<U>, _, _, _>(Pipeline, "AsRecordedUpdates", |_, _| {
             move |input, output| {
                 input.for_each(|time, batches| {
-                    let mut session = output.session_with_builder(&time);
-                    for batch in batches.drain(..) {
-                        let Some(batch) = batch.inner else { continue };
-                        let mut cursor = batch.cursor();
-                        while cursor.key_valid(&batch) {
-                            while cursor.val_valid(&batch) {
-                                let key = cursor.key(&batch);
-                                let val = cursor.val(&batch);
-                                cursor.map_times(&batch, |time, diff| {
-                                    session.give((key, val, time, diff));
-                                });
-                                cursor.step_val(&batch);
+                    // A message of batches may carry several timestamps; each record goes out
+                    // under the one at or before its time (a pass per element, the rare case),
+                    // so the collection's messages carry one each.
+                    let router = crate::collection::StampRouter::new(&time, 0);
+                    let batches: Vec<_> = batches.drain(..).filter_map(|b| b.inner).collect();
+                    let mut owned_time = U::Time::default();
+                    for (index, cap) in router.capabilities().iter().enumerate() {
+                        let mut session = output.session_with_builder(cap);
+                        for batch in batches.iter() {
+                            let mut cursor = batch.cursor();
+                            while cursor.key_valid(batch) {
+                                while cursor.val_valid(batch) {
+                                    let key = cursor.key(batch);
+                                    let val = cursor.val(batch);
+                                    cursor.map_times(batch, |time, diff| {
+                                        columnar::Columnar::copy_from(&mut owned_time, time);
+                                        if router.index(&owned_time) == index {
+                                            session.give((key, val, time, diff));
+                                        }
+                                    });
+                                    cursor.step_val(batch);
+                                }
+                                cursor.step_key(batch);
                             }
-                            cursor.step_key(&batch);
                         }
                     }
                 });

@@ -284,19 +284,36 @@ impl Backend for CorgiBackend {
             .unary(Pipeline, "CorgiAsCollection", |_, _| {
                 |input, output| {
                     input.for_each(|cap, data| {
-                        let mut session = output.session(&cap);
+                        // A message of batches may carry several timestamps; each row goes out
+                        // under the one at or before its time, so the collection's messages
+                        // carry one each. One capability is the usual case and takes the chunk
+                        // whole; several split it by row.
+                        let router = differential_dataflow::collection::StampRouter::new(&cap, 0);
                         for batch in data.iter() {
                             let Some(payload) = batch.inner.as_ref() else { continue };
                             for ch in payload.chunks.iter().filter(|c| c.len() > 0) {
-                                let mut c = CorgiContainer {
-                                    // Drop the arrangement's leading identifier lane: edges carry
-                                    // the key the program wrote, so `$0` indexes what it always did.
-                                    keys: recover_key(ch.keys()),
-                                    vals: ch.vals().clone(),
-                                    times: ch.times().to_vec(),
-                                    diffs: ch.diffs().to_vec(),
-                                };
-                                session.give_container(&mut c);
+                                // Drop the arrangement's leading identifier lane: edges carry
+                                // the key the program wrote, so `$0` indexes what it always did.
+                                let keys = recover_key(ch.keys());
+                                let times = ch.times().to_vec();
+                                if router.capabilities().len() == 1 {
+                                    let mut c = CorgiContainer { keys, vals: ch.vals().clone(), times, diffs: ch.diffs().to_vec() };
+                                    output.session(&router.capabilities()[0]).give_container(&mut c);
+                                    continue;
+                                }
+                                for (index, cap) in router.capabilities().iter().enumerate() {
+                                    let keep: Vec<usize> = (0..times.len()).filter(|&i| router.index(&times[i]) == index).collect();
+                                    if keep.is_empty() {
+                                        continue;
+                                    }
+                                    let mut c = CorgiContainer {
+                                        keys: gather(&keys, &keep),
+                                        vals: gather(ch.vals(), &keep),
+                                        times: keep.iter().map(|&i| times[i].clone()).collect(),
+                                        diffs: keep.iter().map(|&i| ch.diffs()[i]).collect(),
+                                    };
+                                    output.session(cap).give_container(&mut c);
+                                }
                             }
                         }
                     });
