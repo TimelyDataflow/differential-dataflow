@@ -226,8 +226,8 @@ mod test {
             let c = container_of(name, updates);
             let (keys, vals) = (c.keys.clone(), c.vals.clone());
             let back = round_trip(&c);
-            assert_eq!(corgi::arrange::hash_rows(&back.keys), corgi::arrange::hash_rows(&keys), "{name} keys");
-            assert_eq!(corgi::arrange::hash_rows(&back.vals), corgi::arrange::hash_rows(&vals), "{name} vals");
+            assert_eq!(corgi::hash(&back.keys), corgi::hash(&keys), "{name} keys");
+            assert_eq!(corgi::hash(&back.vals), corgi::hash(&vals), "{name} vals");
         }
     }
 

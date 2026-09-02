@@ -130,10 +130,7 @@ pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
                 other => panic!("untranscode: expected List, got {other:?}"),
             };
             let flat = untranscode(vals, elem);
-            let ends: Vec<usize> = match &bounds {
-                corgi::Bounds::Offsets(v) => v.clone(),
-                corgi::Bounds::Stride(k, rows) => (1..=*rows).map(|i| i * k).collect(),
-            };
+            let ends: Vec<usize> = bounds.to_vec();
             let mut out = Vec::with_capacity(ends.len());
             let mut start = 0usize;
             for end in ends {
@@ -146,12 +143,14 @@ pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
             // Inverse of transcode's Sum: untranscode each lane, then for each row pull its payload
             // from its lane at the recorded within-lane OFFSET (robust to row reordering from a
             // prior gather/merge — not a sequential cursor).
-            let (tags, offsets, variant_vals) = col.into_sum("untranscode").unwrap();
+            let (tags, variant_vals) = col.into_sum("untranscode").unwrap();
             let lane_rows: Vec<Vec<DValue>> =
                 variant_vals.into_iter().zip(lanes.iter()).map(|(v, ls)| untranscode(v, ls)).collect();
-            tags.iter()
-                .zip(&offsets)
-                .map(|(&tag, &off)| DValue::Variant(tag as u32, Box::new(lane_rows[tag][off].clone())))
+            (0..tags.len())
+                .map(|r| {
+                    let (tag, off) = (tags.tag_at(r), tags.offset_at(r));
+                    DValue::Variant(tag as u32, Box::new(lane_rows[tag][off].clone()))
+                })
                 .collect()
         }
     }
@@ -702,7 +701,7 @@ mod tests {
     /// this is what fails.
     fn hash_agrees(rows: Vec<V>, shape: Shape) {
         let col = transcode(&rows, &shape);
-        let columnar = corgi::hash(&col).into_u64("hash").unwrap();
+        let columnar = corgi::hash(&col);
         let row_wise: Vec<u64> = rows.iter().map(crate::ir::structural_hash).collect();
         assert_eq!(columnar, row_wise, "hash disagrees (shape {shape:?})");
     }
