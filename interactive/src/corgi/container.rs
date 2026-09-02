@@ -14,7 +14,7 @@ use timely::progress::{PathSummary, Timestamp};
 use differential_dataflow::collection::containers::{Enter, Leave, Negate, ResultsIn};
 use differential_dataflow::difference::Abelian;
 
-use crate::corgi::logic::{infer_shape_cols, transcode, untranscode};
+use crate::corgi::logic::{transcode, untranscode};
 use crate::ir::Value as DValue;
 
 type Row = DValue;
@@ -58,33 +58,29 @@ impl<T: 'static, R: 'static> Accountable for CorgiContainer<T, R> {
 }
 
 impl<T: Clone + 'static, R: Clone + 'static> CorgiContainer<T, R> {
-    /// Build a container from DDIR row updates — the **ingest boundary** transcode (once per batch).
-    ///
-    /// Intended to have exactly ONE caller: external rows entering the dataflow. The other
-    /// callers (with [`into_updates`](Self::into_updates)) are `apply_ops`' row-wise fallbacks,
-    /// each scheduled to disappear: `Project`/`Filter` with the `Case`/`Inject`/`List`/`Unary`/
-    /// `Hash` lowerings, `EnterAt` with bulk time mutation, `LiftIter` with a columnar
-    /// column-append, `FlatMap` with corgi's list ops. Row↔column round-trips inside the
-    /// dataflow are debt, not design.
-    /// Shapes are inferred by scanning the whole column ([`infer_shape_cols`]) — required so a
-    /// `Variant` column discovers all its arms (a single sample shows only one tag).
-    pub fn from_updates(updates: Vec<((Row, Row), T, R)>) -> Self {
-        if updates.is_empty() {
-            return Self::default();
-        }
+    /// Build a container from DDIR row updates at the collection's PINNED shapes — the **ingest
+    /// boundary** transcode (once per batch). The only rows→columns conversion in the corgi
+    /// backend: inside the dataflow every operator is columnar.
+    pub fn from_updates(updates: Vec<((Row, Row), T, R)>, kshape: &corgi::Shape, vshape: &corgi::Shape) -> Self {
         let keys_rows: Vec<DValue> = updates.iter().map(|u| u.0 .0.clone()).collect();
         let vals_rows: Vec<DValue> = updates.iter().map(|u| u.0 .1.clone()).collect();
-        let kshape = infer_shape_cols(&keys_rows);
-        let vshape = infer_shape_cols(&vals_rows);
         let times = updates.iter().map(|u| u.1.clone()).collect();
         let diffs = updates.iter().map(|u| u.2.clone()).collect();
-        CorgiContainer { keys: transcode(&keys_rows, &kshape), vals: transcode(&vals_rows, &vshape), times, diffs }
+        CorgiContainer { keys: transcode(&keys_rows, kshape), vals: transcode(&vals_rows, vshape), times, diffs }
+    }
+
+    /// Test convenience: build a container from row updates, pinning the shapes from the first
+    /// row (what the ingest operator does with the first batch it sees).
+    #[cfg(test)]
+    pub(crate) fn from_updates_pinned(updates: Vec<((Row, Row), T, R)>) -> Self {
+        use crate::corgi::logic::shape_of_row;
+        let Some(((k, v), _, _)) = updates.first() else { return Self::default() };
+        let (ks, vs) = (shape_of_row(k).unwrap(), shape_of_row(v).unwrap());
+        Self::from_updates(updates, &ks, &vs)
     }
 
     /// Read the container back to DDIR row updates — the **egress boundary** transcode (once).
-    /// corgi `Value` is self-describing, so shapes come from `shape_of_value`. Intended callers
-    /// are inspection/output edges; in-dataflow uses are fallback debt (see
-    /// [`from_updates`](Self::from_updates)).
+    /// corgi `Value` is self-describing, so shapes come from `shape_of_value`.
     pub fn into_updates(self) -> Vec<((Row, Row), T, R)> {
         if self.times.is_empty() {
             return Vec::new();

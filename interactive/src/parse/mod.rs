@@ -42,10 +42,13 @@ pub enum Term {
     Spread(Box<Term>),
     /// Product/list elimination: index into a `Tuple` or `List`.
     Proj(Box<Term>, usize),
-    /// Sum intro: tag a payload. The tag is a `Term` (evaluated to an `Int`),
-    /// so the constructor can be data-driven — essential for ASTs/JSON whose
-    /// node kind comes from the data, not a literal.
-    Inject(Box<Term>, Box<Term>),
+    /// Sum intro: tag a payload into a KNOWN sum type. `sum` names every lane's
+    /// shape (from a `type` declaration, or a built-in `Option`/`Result`), so a
+    /// column of these is one concrete columnar sum whichever lanes its rows
+    /// happen to use. The tag is a `Term`: a literal for a constructor call,
+    /// or data-driven (`variant(Type, tag, payload)`) when every lane of the
+    /// type shares the payload's shape.
+    Inject { tag: Box<Term>, payload: Box<Term>, sum: SumTy },
     /// Sum elimination. The scrutinee's payload is pushed as `Bound(0)` for
     /// the chosen arm. `arms[t]` handles tag `t`; `default` handles the rest.
     Case { scrutinee: Box<Term>, arms: Vec<Term>, default: Option<Box<Term>> },
@@ -60,6 +63,23 @@ pub enum Term {
     /// (the raw non-negative hash if `bound <= 0`), mixed from the key `Int`s.
     /// The building block for generators derived from `iota`/`clock`.
     Hash(Vec<Term>),
+}
+
+/// The sum type an `Inject` builds into. `Declared` carries the full lane shapes of a `type`
+/// declaration. The built-ins are shape constructors whose parameter is filled in at compile
+/// time from the payload (`Some(x)`, `Ok(x)`, `Err(e)`) or from the other branch of an enclosing
+/// `if` (`None`, and the lane the payload does not fill).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum SumTy {
+    Declared(Vec<corgi::Shape>),
+    /// `Option(T)` = `Sum{ () | T }`: `None` is lane 0, `Some` lane 1.
+    Option,
+    /// `Result(T, E)` = `Sum{ T | E }`: `Ok` is lane 0, `Err` lane 1.
+    Result,
+    /// An untyped literal, `inject(tag, payload)`: a `Value::Variant` written as a constant, for
+    /// closed terms fed to the row interpreter (the server's `feed`). It names no sum, so the
+    /// columnar lowering rejects it — a program builds sums from declared types.
+    Dynamic,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -148,7 +168,7 @@ pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
     match name {
         "tuple" => Term::Tuple(std::mem::take(args)),
         "list" => Term::List(std::mem::take(args)),
-        "inject" | "variant" => { assert_eq!(args.len(), 2, "{}(tag, payload)", name); let payload = Box::new(args.remove(1)); Term::Inject(Box::new(args.remove(0)), payload) }
+        "inject" | "variant" => { assert_eq!(args.len(), 2, "{}(tag, payload)", name); let payload = Box::new(args.remove(1)); Term::Inject { tag: Box::new(args.remove(0)), payload, sum: SumTy::Dynamic } }
         "case" => { assert!(args.len() >= 2, "case(scrutinee, arm0, ...)"); let scrutinee = Box::new(args.remove(0)); Term::Case { scrutinee, arms: std::mem::take(args), default: None } }
         "fold" => { assert_eq!(args.len(), 3, "fold(list, init, step)"); let step = Box::new(args.remove(2)); let init = Box::new(args.remove(1)); let list = Box::new(args.remove(0)); Term::Fold { list, init, step } }
         "proj" => { assert_eq!(args.len(), 2, "proj(value, index)"); let i = int_arg(&args[1]) as usize; Term::Proj(Box::new(args.remove(0)), i) }

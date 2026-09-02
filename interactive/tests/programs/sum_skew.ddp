@@ -1,21 +1,9 @@
--- Two collections that commit DIFFERENT variant arms, concatenated into one arrangement.
--- Neither side's shape names the whole variant universe: one infers `Sum([Some(_)])` (tag 0
--- only), the other `Sum([None, Some(_)])` (tag 1 only) — two arities for one DDIR type. corgi
--- reads a differing Sum arity as a type error, so the two must be reconciled with uncommitted
--- (⊥) lanes before anything compares or gathers them (corgi's `gather_lanes` fix, DDIR #817).
---
--- Both derivations under-approximate, and neither is avoidable here. `infer_term_shape` gives
--- `Inject(tag, _)` an arity of `tag + 1`, so `Rare(_)` compiles to one lane and `Common(_)` to
--- two; `infer_shape_cols` scanning the data reaches the same place from the other side. A
--- single term reconciles its own arms (`If` joins them), but two separate operators have
--- nothing to reconcile them, and the declared universe (`con`) that would is discarded at parse.
---
--- (There used to be a second copy of this program whose maps wrapped `hash(..)`, on the
--- premise that `hash` forced the row-wise path and so exercised the data-derived derivation
--- separately. `hash` now lowers, the two copies became one program twice, and the surviving
--- one is this.)
-con Rare(1)   = 0;
-con Common(1) = 1;
+-- Two collections that build DIFFERENT arms of one declared sum, concatenated into one
+-- arrangement. The declaration is the universe: both sides transcode to the whole `Kind`
+-- (the arm a side never builds is an empty lane of its declared shape), so the two batches
+-- have one shape and merge without reconciliation. This program used to need corgi's
+-- uncommitted (⊥) lanes to typecheck (DDIR #817); now it is an ordinary program.
+type Kind = Rare u64 | Common u64;
 
 let pairs = input 0 | key($0[0] ; $0[1]);
 

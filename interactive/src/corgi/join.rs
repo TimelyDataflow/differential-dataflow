@@ -174,9 +174,10 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             let kc = recover_key(&gather_lanes(&keys0, &tag0, &off0));
             let v0 = gather_lanes(&vals0, &tag0, &off0);
             let v1 = gather_lanes(&vals1, &tag1, &off1);
-            let proj = compile_join_projection(&self.key, &self.val, &shape_of_value(&kc), &shape_of_value(&v0), &shape_of_value(&v1));
+            let proj = compile_join_projection(&self.key, &self.val, &shape_of_value(&kc), &shape_of_value(&v0), &shape_of_value(&v1))
+                .unwrap_or_else(|e| panic!("join projection: type error: {e}"));
             let projected = corgi::eval_graph(&proj, CValue::Prod(vec![kc, v0, v1]));
-            let mut cols = projected.into_prod("corgi join projection");
+            let mut cols = projected.into_prod("corgi join projection").unwrap();
             let nv = cols.pop().unwrap();
             let nk = cols.pop().unwrap();
             output.push(CorgiContainer {
@@ -236,7 +237,7 @@ fn leaf_valued<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
 fn pull_lanes(col: &CValue, idx: &[usize]) -> Vec<Vec<u64>> {
     leaf_lanes(col).expect("pull_lanes: leaf-laned column")
         .into_iter()
-        .map(|lane| gather(lane, idx).into_u64("corgi join lane pull"))
+        .map(|lane| gather(lane, idx).into_u64("corgi join lane pull").unwrap())
         .collect()
 }
 

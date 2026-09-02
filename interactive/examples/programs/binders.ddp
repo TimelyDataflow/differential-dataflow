@@ -1,7 +1,7 @@
 -- Depth-tracking test: a pattern binder `xs` used INSIDE a fold step. Correct
 -- de Bruijn resolution => xs is the case payload at Bound(2) inside the fold;
 -- a wrong index would hit the fold's Int element and panic on Proj.
-con Node(1) = 0;
+type Node = Node List(u64);
 
 let rows = input 0 | key($0[0] ; Node(list($0[0], $0[1])));
 

@@ -1,10 +1,9 @@
--- `case` on the compiled path (CapSum/MapSum/Unwrap), checked against vec:
--- an arm using both the payload binder and a captured outer var, a `_ =>`
--- default (evaluated without the binder), and a shape-conflicted case (in a
--- filter, so the program stays valid) that defers to rows.
+-- `case` on the compiled path (CapSum/MapSum/Unwrap), checked against vec: an arm using
+-- both the payload binder and a captured outer var, a `_ =>` default (evaluated without the
+-- binder), a `case` inside a filter whose arms are both predicates, and the built-in
+-- `Option`: `Some`/`None` in the two branches of an `if` (the `if` fixes `None`'s type).
 
-con Small(1) = 0;
-con Big(1) = 1;
+type Size = Small u64 | Big u64;
 
 let pairs = input 0 | key($0[0] ; $0[1]);
 let tagged = pairs | map($0 ; if($1[0] < 15, Small($1[0]), Big($1[0])));
@@ -12,8 +11,13 @@ let tagged = pairs | map($0 ; if($1[0] < 15, Small($1[0]), Big($1[0])));
 let picked = tagged
     | map($0 ; case $1[0] { Small(x) => x + $0[0], _ => 0 - 1 });
 
-let clash = tagged
-    | filter(case $1[0] { Small(x) => x < 12, Big(x) => tuple(x, x) });
+let sieved = tagged
+    | filter(case $1[0] { Small(x) => x < 12, Big(x) => x > 25 });
+
+let maybe = pairs
+    | map($0 ; if($1[0] < 15, Some($1[0]), None))
+    | map($0 ; case $1[0] { Some(x) => x * 2, None => 0 });
 
 export "picked" = picked | arrange | inspect(total);
-export "clash" = clash | arrange | inspect(adt);
+export "sieved" = sieved | arrange | inspect(adt);
+export "maybe" = maybe | arrange | inspect(total);

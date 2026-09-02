@@ -3,8 +3,7 @@
 -- fixtures under tests/programs/ pin individual lowerings and their fallback
 -- routing; this program pins that the constructs work TOGETHER.
 
-con Fwd(1) = 0;
-con Bwd(1) = 1;
+type Dir = Fwd u64 | Bwd u64;
 
 let edges = input 0 | key($0[0] ; $0[1]);
 let roots = input 1 | key($0[0] ;);
