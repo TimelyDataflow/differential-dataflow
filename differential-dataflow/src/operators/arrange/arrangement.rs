@@ -179,20 +179,30 @@ impl<'scope, Tr: TraceReader> Arranged<'scope, Tr> {
     {
         stream.unary(Pipeline, "AsCollection", move |_,_| move |input, output| {
             input.for_each(|time, data| {
-                let mut session = output.session(&time);
+                // A message of batches may carry several timestamps; each record goes out under
+                // the one at or before its time, so the collection's messages carry one each.
+                let router = crate::collection::StampRouter::new(&time, 0);
+                let mut buffers = router.buffers();
                 for wrapper in data.iter() {
                     let Some(batch) = wrapper.inner.as_ref() else { continue };
                     let mut cursor = batch.cursor();
                     while let Some(key) = cursor.get_key(batch) {
                         while let Some(val) = cursor.get_val(batch) {
                             for datum in logic(key, val) {
-                                cursor.map_times(batch, |time, diff| {
-                                    session.give((datum.clone(), <BatchCursor<Tr> as Cursor>::owned_time(time), <BatchCursor<Tr> as Cursor>::owned_diff(diff)));
+                                cursor.map_times(batch, |t, diff| {
+                                    let t = <BatchCursor<Tr> as Cursor>::owned_time(t);
+                                    let index = router.index(&t);
+                                    buffers[index].push((datum.clone(), t, <BatchCursor<Tr> as Cursor>::owned_diff(diff)));
                                 });
                             }
                             cursor.step_val(batch);
                         }
                         cursor.step_key(batch);
+                    }
+                }
+                for (cap, mut buffer) in router.capabilities().iter().zip(buffers) {
+                    if !buffer.is_empty() {
+                        output.session(cap).give_container(&mut buffer);
                     }
                 }
             });

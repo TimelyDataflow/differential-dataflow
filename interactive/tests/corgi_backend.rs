@@ -12,6 +12,26 @@ fn rows(rs: &[&[i64]]) -> Vec<(Value, Value)> {
     rs.iter().map(|f| (tup(f), Value::unit())).collect()
 }
 
+/// A random term DAG for the e-graph programs: row `(id, op, x, y)` with op 0 = Num(x),
+/// 1 = Var(x), 2 = Add(x, y), 3 = Mul(x, y), 4 = Neg(x); children are earlier ids. Small
+/// constants (0, 1, 2) so the identity and folding rules fire.
+fn egraph_rows(n: u64, seed: u64) -> Vec<(Value, Value)> {
+    let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut next = move || { s ^= s << 13; s ^= s >> 7; s ^= s << 17; s };
+    (0..n)
+        .map(|id| {
+            let (op, x, y) = if id < 2 {
+                ((next() % 2) as i64, (next() % 3) as i64, 0)
+            } else {
+                let op = match next() % 8 { 0 => 0, 1 => 1, 2 | 3 => 2, 4 | 5 => 3, _ => 4 };
+                let (x, y) = if op < 2 { ((next() % 3) as i64, 0) } else { ((next() % id) as i64, (next() % id) as i64) };
+                (op, x, y)
+            };
+            (tup(&[id as i64, op, x, y]), Value::unit())
+        })
+        .collect()
+}
+
 /// Per-program inputs (arity matches each `.ddp`'s `input N` usage).
 fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
     let edges = rows(&[&[1, 2], &[2, 3], &[3, 4], &[5, 6], &[4, 2]]);
@@ -59,6 +79,7 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
             rows(&[&[1, 2], &[2, 3], &[3, 1], &[3, 4], &[5, 2]]),
             rows(&[&[1], &[5]]),
         ],
+        "egraph_math" => vec![egraph_rows(48, 1)],
         other => panic!("no inputs configured for {other}"),
     }
 }
@@ -123,3 +144,4 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn tour() { assert_backends_agree("tour"); }
 #[test] fn pair_keys() { assert_backends_agree("pair_keys"); }
 #[test] fn signed_min() { assert_backends_agree("signed_min"); }
+#[test] fn egraph_math() { assert_backends_agree("egraph_math"); }
