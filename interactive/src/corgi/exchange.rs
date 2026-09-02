@@ -111,7 +111,7 @@ impl<T: Clone + 'static, R: Clone + 'static> Distributor<CorgiContainer<T, R>> f
         }
         let peers = pushers.len();
 
-        let ids = corgi::hash(&container.keys).into_u64("corgi exchange: key hash");
+        let ids = corgi::hash(&container.keys).into_u64("corgi exchange: key hash").unwrap();
         self.counting_sort(&ids, peers);
 
         // Whole-container fast path. When every row shares a destination — a batch narrower than
@@ -213,7 +213,7 @@ mod test {
 
     /// Partition `updates` across `peers` destinations and read each destination back as rows.
     fn partition(updates: Vec<((DValue, DValue), Time, Diff)>, peers: usize) -> Vec<Vec<((DValue, DValue), Time, Diff)>> {
-        let mut container = CorgiContainer::<Time, Diff>::from_updates(updates);
+        let mut container = CorgiContainer::<Time, Diff>::from_updates_pinned(updates);
         let mut pushers: Vec<Collect<Time, Diff>> = (0..peers).map(|_| Collect::default()).collect();
         let mut distributor = CorgiDistributor::<Time, Diff>::default();
         distributor.partition(&mut container, &timely::progress::Stamp::from_elem(0u64), &mut pushers);
@@ -299,7 +299,7 @@ mod test {
     /// either way so no row is sent twice.
     #[test]
     fn the_input_is_consumed() {
-        let mut container = CorgiContainer::<Time, Diff>::from_updates(scalar_updates(50));
+        let mut container = CorgiContainer::<Time, Diff>::from_updates_pinned(scalar_updates(50));
         let mut pushers: Vec<Collect<Time, Diff>> = (0..4).map(|_| Collect::default()).collect();
         let mut distributor = CorgiDistributor::<Time, Diff>::default();
         distributor.partition(&mut container, &timely::progress::Stamp::from_elem(0u64), &mut pushers);

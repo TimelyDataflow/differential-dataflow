@@ -8,7 +8,7 @@
 -- because the join has no shapes to reason with. (It previously used `hash`, which stopped
 -- driving the fallback once `hash` became corgi's structural hash — a test keyed to a hole in
 -- the compiler rather than to a property of the design.)
-con L(1) = 0;
+type L = L u64;
 
 let left = input 0 | key($0[0] ; $0[1]);
 let right = input 1 | key($0[0] ; $0[1]);

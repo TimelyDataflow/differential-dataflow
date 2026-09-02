@@ -1,114 +1,47 @@
-//! corgi as DDIR's columnar scalar logic: compile a `Term` to a corgi `Graph<NumOp>`,
-//! transcode DDIR rows (`ir::Value`) to/from corgi columnar `Value`, directed by a `Shape`
-//! inferred from the data (the dynamic-typing primitive).
+//! corgi as DDIR's columnar scalar logic: compile a `Term` to a corgi `Graph<NumOp>`, and
+//! transcode DDIR rows (`ir::Value`) to/from corgi columnar `Value` at the I/O boundaries.
 //!
-//! The compiler (`compile`) covers Var/Bound/Int/Tuple(+Spread)/Proj/Binary/If/Fold, list and
-//! sum intro (`List`/`Inject`), sum elimination (`Case`), and the Neg/Not/Len/IsTag unaries.
-//! Ordered compares are signed-correct (`ToSigned`); the residual non-negative-int assumption is
-//! confined to order-SENSITIVE contexts (the `Min` reducer and structural sort order compare raw
-//! `u64` bits). `hash` is corgi's structural `Op::Hash`, the same function `ir::eval` folds row-wise.
-//! Only shape-dependent cases decline (heterogeneous lists, conflicting `Case` arms, data-driven
-//! tags); those fall back to row-wise `ir::eval` in the backend. The transcode layer is total over `Shape` (Prim/Unit/Prod/List/Sum), so a
-//! `Variant` column round-trips via corgi `Sum` (see `infer_shape_cols` for the all-rows arm scan).
+//! Shapes are STATIC. A collection's shape is fixed when it is first seen — pinned from its first
+//! row at ingest ([`shape_of_row`]), or computed from its operator's term — and never re-derived
+//! from data. Sums are the case where a row cannot tell: a `Variant` carries a tag, not its type,
+//! so every sum a program builds is one it declared (`Term::Inject` carries the whole sum's lane
+//! shapes), and a sum arriving on input needs a declared schema.
+//!
+//! The typer is corgi's. [`shape_of_term`] compiles a term into a scratch graph and asks
+//! `corgi::shape_of` (its evaluator on zero rows) for the result shape, so every shape rule —
+//! which lanes a `case` sees, what an `if` may blend, whether two operands compare — is the one
+//! the kernels enforce, and a program that lowers is a program that runs. The compiler covers
+//! Var/Bound/Int/Tuple(+Spread)/Proj/Binary/If/Fold, list and sum intro (`List`/`Inject`), sum
+//! elimination (`Case`), and the Neg/Not/Len/IsTag unaries; `Err` is a type error, reported with
+//! corgi's message. Ordered compares are signed-correct (`ToSigned`); `hash` is corgi's structural
+//! `Op::Hash`, the same function `ir::eval` folds row-wise.
 
 use crate::ir::Value as DValue;
-use crate::parse::{BinOp, Term, UnOp};
+use crate::parse::{BinOp, SumTy, Term, UnOp};
 
 use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, Kind, NumOp, Op, Pred, Shape, Value as CValue};
 
-/// Dynamic typing over a whole COLUMN: infer a `Shape` by scanning every row, not just a sample.
-/// Required for sum types — a `Variant` column's shape is the union of all arms that appear, which a
-/// single sample can't reveal (it shows only one tag), so the scan is over every row, recursing
-/// column-wise to cover nested variants too.
-pub fn infer_shape_cols(rows: &[DValue]) -> Shape {
-    assert_uniform(rows);
-    let Some(first) = rows.first() else { return Shape::Unit };
-    match first {
-        DValue::Int(_) => Shape::Prim(64),
-        DValue::Tuple(xs) if xs.is_empty() => Shape::Unit,
-        DValue::Tuple(xs) => {
-            let n = xs.len();
-            Shape::Prod(
-                (0..n)
-                    .map(|i| {
-                        let col: Vec<DValue> = rows
-                            .iter()
-                            .map(|r| match r {
-                                DValue::Tuple(f) => f[i].clone(),
-                                other => panic!("infer_shape_cols: expected Tuple, got {other:?}"),
-                            })
-                            .collect();
-                        infer_shape_cols(&col)
-                    })
-                    .collect(),
-            )
-        }
-        DValue::List(_) => {
-            let flat: Vec<DValue> = rows
-                .iter()
-                .flat_map(|r| match r {
-                    DValue::List(xs) => xs.clone(),
-                    other => panic!("infer_shape_cols: expected List, got {other:?}"),
-                })
-                .collect();
-            Shape::List(Box::new(infer_shape_cols(&flat)))
-        }
-        DValue::Variant(..) => {
-            // One lane per variant 0..=max_tag; a lane present in the data gets its arm's shape (from
-            // that arm's rows), an absent tag stays `None` (⊥, uncommitted — adopts a sibling on join).
-            let max_tag = rows
-                .iter()
-                .map(|r| match r {
-                    DValue::Variant(t, _) => *t as usize,
-                    other => panic!("infer_shape_cols: expected Variant, got {other:?}"),
-                })
-                .max()
-                .unwrap();
-            let lanes = (0..=max_tag)
-                .map(|tag| {
-                    let payloads: Vec<DValue> = rows
-                        .iter()
-                        .filter_map(|r| match r {
-                            DValue::Variant(t, p) if *t as usize == tag => Some((**p).clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    (!payloads.is_empty()).then(|| infer_shape_cols(&payloads))
-                })
-                .collect();
-            Shape::Sum(lanes)
-        }
+type Res<T> = Result<T, String>;
+
+/// The shape of one input row — what a collection is pinned to when its first row arrives. An
+/// `Int`, a `Tuple`, or a non-empty `List` determines its shape alone; a `Variant` (whose type a
+/// bare tag cannot name) or an empty `List` (whose element shape nothing supplies) needs the
+/// input's schema declared.
+pub fn shape_of_row(row: &DValue) -> Res<Shape> {
+    match row {
+        DValue::Int(_) => Ok(Shape::Prim(64)),
+        DValue::Tuple(xs) if xs.is_empty() => Ok(Shape::Unit),
+        DValue::Tuple(xs) => Ok(Shape::Prod(xs.iter().map(shape_of_row).collect::<Res<_>>()?)),
+        DValue::List(xs) => match xs.first() {
+            Some(x) => Ok(Shape::List(Box::new(shape_of_row(x)?))),
+            None => Err("an empty list on input has no element shape; declare the input's schema".into()),
+        },
+        DValue::Variant(..) => Err("a variant on input has no type; declare the input's schema".into()),
     }
 }
 
-/// The uniformity contract, enforced LOUDLY at the ingest boundary: corgi columns are SoA
-/// and carry ONE shape, while DDIR rows are dynamically typed. Without this check a mixed
-/// column either truncated silently (rows wider than row 0 lost their extra fields — silent
-/// wrong answers) or panicked with a bare `index out of bounds` — both worse than saying why.
-/// Nested levels are covered by `infer_shape_cols`' recursion (each recursive call re-checks).
-fn assert_uniform(rows: &[DValue]) {
-    let Some(first) = rows.first() else { return };
-    fn kind(r: &DValue) -> (&'static str, usize) {
-        match r {
-            DValue::Int(_) => ("Int", 0),
-            DValue::Tuple(xs) => ("Tuple", xs.len()),
-            DValue::List(_) => ("List", 0),
-            DValue::Variant(..) => ("Variant", 0),
-        }
-    }
-    let k0 = kind(first);
-    for (i, r) in rows.iter().enumerate().skip(1) {
-        let ki = kind(r);
-        assert!(
-            ki == k0,
-            "corgi transcode: heterogeneous column — row 0 is {}/{} but row {} is {}/{}: \
-             the corgi backend requires shape-uniform columns (pad rows to one arity, or use --backend=vec)",
-            k0.0, k0.1, i, ki.0, ki.1
-        );
-    }
-}
-
-/// AoS rows -> SoA corgi columns, directed by `shape`.
+/// AoS rows -> SoA corgi columns, directed by `shape`. A row that does not fit the shape is a
+/// panic: the shape was pinned from a row of this collection, so a misfit is an ingest error.
 pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
     match shape {
         Shape::Prim(_) => CValue::u64(rows.iter().map(|r| r.as_int() as u64).collect()),
@@ -146,8 +79,8 @@ pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
             CValue::List(ends.into(), Box::new(transcode(&flat, elem)))
         }
         Shape::Sum(lanes) => {
-            // Per-row tag, plus one packed lane per committed variant (its arm's rows in row order;
-            // `Value::sum_opt` derives each row's within-lane offset). Absent arms stay `⊥` (None).
+            // Per-row tag, plus one packed lane per variant (its arm's rows in row order; a
+            // variant no row uses is an empty column of its declared shape).
             let tags: Vec<usize> = rows
                 .iter()
                 .map(|r| match r {
@@ -155,23 +88,24 @@ pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
                     other => panic!("transcode: expected Variant, got {other:?}"),
                 })
                 .collect();
-            let lane_vals: Vec<Option<CValue>> = lanes
+            if let Some(t) = tags.iter().find(|&&t| t >= lanes.len()) {
+                panic!("transcode: tag {t} is outside the declared {}-variant sum", lanes.len());
+            }
+            let lane_vals: Vec<CValue> = lanes
                 .iter()
                 .enumerate()
-                .map(|(tag, ls)| {
-                    ls.as_ref().map(|lshape| {
-                        let payloads: Vec<DValue> = rows
-                            .iter()
-                            .filter_map(|r| match r {
-                                DValue::Variant(t, p) if *t as usize == tag => Some((**p).clone()),
-                                _ => None,
-                            })
-                            .collect();
-                        transcode(&payloads, lshape)
-                    })
+                .map(|(tag, lshape)| {
+                    let payloads: Vec<DValue> = rows
+                        .iter()
+                        .filter_map(|r| match r {
+                            DValue::Variant(t, p) if *t as usize == tag => Some((**p).clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    transcode(&payloads, lshape)
                 })
                 .collect();
-            CValue::sum_opt(tags, lane_vals)
+            CValue::sum(tags, lane_vals)
         }
     }
 }
@@ -179,10 +113,10 @@ pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
 /// SoA corgi columns -> AoS rows, directed by `shape`. Inverse of [`transcode`].
 pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
     match shape {
-        Shape::Prim(_) => col.into_u64("untranscode").into_iter().map(|x| DValue::Int(x as i64)).collect(),
+        Shape::Prim(_) => col.into_u64("untranscode").unwrap().into_iter().map(|x| DValue::Int(x as i64)).collect(),
         Shape::Unit => vec![DValue::unit(); col.len()],
         Shape::Prod(fs) => {
-            let cols = col.into_prod("untranscode");
+            let cols = col.into_prod("untranscode").unwrap();
             let n = if cols.is_empty() { 0 } else { cols[0].len() };
             let per_field: Vec<Vec<DValue>> =
                 cols.into_iter().zip(fs.iter()).map(|(c, fsi)| untranscode(c, fsi)).collect();
@@ -209,171 +143,59 @@ pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
             out
         }
         Shape::Sum(lanes) => {
-            // Inverse of transcode's Sum: untranscode each committed lane, then for each row pull its
-            // payload from its lane at the recorded within-lane OFFSET (robust to row reordering from
-            // a prior gather/merge — not a sequential cursor).
-            let (tags, offsets, variant_vals) = col.into_sum("untranscode");
-            let lane_rows: Vec<Option<Vec<DValue>>> = variant_vals
-                .into_iter()
-                .zip(lanes.iter())
-                .map(|(v, ls)| match (v, ls) {
-                    (Some(cv), Some(lshape)) => Some(untranscode(cv, lshape)),
-                    _ => None,
-                })
-                .collect();
+            // Inverse of transcode's Sum: untranscode each lane, then for each row pull its payload
+            // from its lane at the recorded within-lane OFFSET (robust to row reordering from a
+            // prior gather/merge — not a sequential cursor).
+            let (tags, offsets, variant_vals) = col.into_sum("untranscode").unwrap();
+            let lane_rows: Vec<Vec<DValue>> =
+                variant_vals.into_iter().zip(lanes.iter()).map(|(v, ls)| untranscode(v, ls)).collect();
             tags.iter()
                 .zip(&offsets)
-                .map(|(&tag, &off)| {
-                    let payload = lane_rows[tag].as_ref().expect("untranscode: committed lane")[off].clone();
-                    DValue::Variant(tag as u32, Box::new(payload))
-                })
+                .map(|(&tag, &off)| DValue::Variant(tag as u32, Box::new(lane_rows[tag][off].clone())))
                 .collect()
         }
     }
 }
 
-/// Structural shape of a "place" Term (Var/Proj chain) given the env vars' shapes — used to resolve
-/// `Spread`'s arity (how many fields to splice) and (later) Proj-on-list vs Proj-on-tuple.
-pub fn shape_of_place(t: &Term, env_shapes: &[Shape]) -> Shape {
-    match t {
-        Term::Var(i) => env_shapes[*i].clone(),
-        Term::Proj(inner, i) => match shape_of_place(inner, env_shapes) {
-            Shape::Prod(fs) => fs[*i].clone(),
-            Shape::List(e) => *e,
-            other => panic!("shape_of_place: Proj on non-aggregate {other:?}"),
-        },
-        other => panic!("shape_of_place: unsupported place {other:?}"),
-    }
+/// The shape of a term in an environment — corgi's typer, asked through a scratch lowering.
+/// `expected` is the shape an enclosing `if` or `case` arm already fixed; it fills the lane a
+/// built-in `None`/`Ok`/`Err` cannot fix from its payload.
+pub fn shape_of_term(t: &Term, env_shapes: &[Shape], expected: Option<&Shape>) -> Res<Shape> {
+    let mut b = Builder::<NumOp>::default();
+    let inp = b.input();
+    let env: Vec<usize> = (0..env_shapes.len()).map(|i| b.add(Op::Field(i), vec![inp])).collect();
+    let out = compile(t, &mut b, &env, env_shapes, inp, expected)?;
+    corgi::shape_of(&b.finish(out), &Shape::Prod(env_shapes.to_vec()))
 }
 
-/// TOTAL best-effort shape of a `Proj` operand: resolve the `Var`/`Bound`/`Proj` spine
-/// through KNOWN shapes only; `None` means "can't tell" (never a panic), and the caller
-/// keeps the old lowering. The non-panicking cousin of [`shape_of_place`].
-fn place_shape_opt(t: &Term, env_shapes: &[Shape]) -> Option<Shape> {
+/// Does `t` read anything outside its own `depth` innermost binders — an input row (`Var`) or an
+/// enclosing binder? A fold step that does needs its environment captured into the fold.
+fn mentions_env(t: &Term, depth: usize) -> bool {
     match t {
-        Term::Var(i) => env_shapes.get(*i).cloned(),
-        Term::Bound(k) => env_shapes.get(env_shapes.len().checked_sub(1 + *k)?).cloned(),
-        Term::Proj(inner, i) => match place_shape_opt(inner, env_shapes)? {
-            Shape::Prod(fs) => fs.get(*i).cloned(),
-            Shape::List(e) => Some(*e),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Best-effort structural `Shape` of a (non-place) compiled `Term`, used to decide cross-shape
-/// `Eq`/`Ne`: DDIR compares `Value`s structurally, so e.g. `Tuple != Int` is *always* true (the
-/// variants differ) — but corgi's `CmpOp::Rel` requires matching shapes. When the operand shapes
-/// differ we fold the comparison to a constant instead of emitting a (panicking) `Rel`.
-fn infer_term_shape(t: &Term, env_shapes: &[Shape]) -> Shape {
-    match t {
-        Term::Var(i) => env_shapes[*i].clone(),
-        Term::Int(_) => Shape::Prim(64),
-        Term::Proj(inner, i) => match infer_term_shape(inner, env_shapes) {
-            Shape::Prod(fs) => fs[*i].clone(),
-            Shape::List(e) => *e,
-            other => panic!("infer_term_shape: Proj on non-aggregate {other:?}"),
-        },
-        Term::Tuple(fields) => {
-            let mut fs = Vec::new();
-            for f in fields {
-                match f {
-                    Term::Spread(inner) => match infer_term_shape(inner, env_shapes) {
-                        Shape::Prod(inner_fs) => fs.extend(inner_fs),
-                        Shape::Unit => {}
-                        other => fs.push(other),
-                    },
-                    _ => fs.push(infer_term_shape(f, env_shapes)),
-                }
-            }
-            if fs.is_empty() { Shape::Unit } else { Shape::Prod(fs) }
-        }
-        // A list literal is a `List` of its elements' joined shape. `Fold` reads this to find its
-        // element shape, so a literal folded in place (`fold(list(..), ..)`) depends on it; a
-        // heterogeneous literal keeps the first field's shape here and declines in `compile`.
-        Term::List(fields) => {
-            let elem = fields
-                .iter()
-                .map(|f| infer_term_shape(f, env_shapes))
-                .reduce(|acc, s| shape_join(&acc, &s).unwrap_or(acc))
-                .unwrap_or(Shape::Unit);
-            Shape::List(Box::new(elem))
-        }
-        Term::Bound(k) => env_shapes.get(env_shapes.len().wrapping_sub(1 + *k)).cloned().unwrap_or(Shape::Prim(64)),
-        Term::If { then, els, .. } => {
-            // Join the branch shapes (⊥ sum lanes unify), so a downstream `Case` sees every
-            // lane either branch can commit; under-approximating lanes would leave runtime
-            // rows unmapped.
-            let t = infer_term_shape(then, env_shapes);
-            shape_join(&t, &infer_term_shape(els, env_shapes)).unwrap_or(t)
-        }
+        Term::Var(_) => true,
+        Term::Bound(k) => *k >= depth,
+        Term::Int(_) => false,
+        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) => fs.iter().any(|f| mentions_env(f, depth)),
+        Term::Spread(inner) | Term::Proj(inner, _) | Term::Unary(_, inner) => mentions_env(inner, depth),
+        Term::Inject { tag, payload, .. } => mentions_env(tag, depth) || mentions_env(payload, depth),
         Term::Case { scrutinee, arms, default } => {
-            // The joined shape of the reachable arms (the committed scrutinee lanes).
-            let lanes = match infer_term_shape(scrutinee, env_shapes) { Shape::Sum(l) => l, _ => Vec::new() };
-            let mut shape: Option<Shape> = None;
-            for (i, lane) in lanes.iter().enumerate() {
-                let Some(lane_shape) = lane else { continue };
-                let s = if i < arms.len() {
-                    let mut es = env_shapes.to_vec();
-                    es.push(lane_shape.clone());
-                    infer_term_shape(&arms[i], &es)
-                } else if let Some(d) = default {
-                    infer_term_shape(d, env_shapes)
-                } else {
-                    continue;
-                };
-                shape = Some(match shape { None => s, Some(prev) => shape_join(&prev, &s).unwrap_or(prev) });
-            }
-            shape.unwrap_or(Shape::Prim(64))
+            mentions_env(scrutinee, depth)
+                || arms.iter().any(|a| mentions_env(a, depth + 1))
+                || default.as_ref().is_some_and(|d| mentions_env(d, depth))
         }
-        Term::Inject(tag, payload) => {
-            let t = match &**tag { Term::Int(t) => *t as usize, _ => 0 };
-            let mut lanes: Vec<Option<Shape>> = vec![None; t + 1];
-            lanes[t] = Some(infer_term_shape(payload, env_shapes));
-            Shape::Sum(lanes)
+        Term::Fold { list, init, step } => {
+            mentions_env(list, depth) || mentions_env(init, depth) || mentions_env(step, depth + 2)
         }
-        // Arithmetic, comparisons, and anything else scalar-ish reduce to a primitive column.
-        _ => Shape::Prim(64),
-    }
-}
-
-/// The ⊥-tolerant join of two shapes: `Sum` lanes unify lane-wise with an uncommitted (`None`)
-/// lane adopting its sibling; `None` (the function's) means the shapes genuinely conflict.
-/// Local until corgi exports its `shape::join`.
-fn shape_join(a: &Shape, b: &Shape) -> Option<Shape> {
-    match (a, b) {
-        (Shape::Prim(x), Shape::Prim(y)) if x == y => Some(Shape::Prim(*x)),
-        (Shape::Unit, Shape::Unit) => Some(Shape::Unit),
-        (Shape::Prod(xs), Shape::Prod(ys)) if xs.len() == ys.len() => {
-            let fs: Option<Vec<Shape>> = xs.iter().zip(ys).map(|(x, y)| shape_join(x, y)).collect();
-            Some(Shape::Prod(fs?))
-        }
-        (Shape::List(x), Shape::List(y)) => Some(Shape::List(Box::new(shape_join(x, y)?))),
-        (Shape::Sum(xs), Shape::Sum(ys)) => {
-            let n = xs.len().max(ys.len());
-            let mut lanes = Vec::with_capacity(n);
-            for i in 0..n {
-                lanes.push(match (xs.get(i).cloned().flatten(), ys.get(i).cloned().flatten()) {
-                    (Some(x), Some(y)) => Some(shape_join(&x, &y)?),
-                    (x, y) => x.or(y),
-                });
-            }
-            Some(Shape::Sum(lanes))
-        }
-        _ => None,
+        Term::If { cond, then, els } => mentions_env(cond, depth) || mentions_env(then, depth) || mentions_env(els, depth),
+        Term::Binary(_, l, r) => mentions_env(l, depth) || mentions_env(r, depth),
     }
 }
 
 /// Whether [`compile`] can lower this term WITHOUT knowing its operands' shapes — the gate for
 /// join-INLINE projections, which are compiled before any container is in hand. It is therefore
-/// deliberately narrower than `compile`: every shape-dependent form (`List`, `Case`, data-driven
-/// `Inject`) answers false here and is compiled by the linear stage the join defers it to, which
-/// does have shapes. Capability never depends on this; only where the work happens.
-///
-/// The only term with no lowering at all is a data-driven `Inject` tag, which has no static lane
-/// count — and no surface syntax either, so nothing a program can write reaches the row-wise
-/// fallback on shape-free grounds.
+/// deliberately narrower than `compile`: every shape-dependent form (`List`, `Case`, a built-in
+/// sum whose lane the payload fixes, a data-driven tag) answers false here and is compiled by the
+/// linear stage the join defers it to, which does have shapes.
 pub fn compilable(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::Bound(_) | Term::Int(_) => true,
@@ -383,38 +205,92 @@ pub fn compilable(t: &Term) -> bool {
         Term::If { cond, then, els } => compilable(cond) && compilable(then) && compilable(els),
         Term::Fold { list, init, step } => compilable(list) && compilable(init) && compilable(step),
         Term::Unary(op, inner) => matches!(op, UnOp::Neg | UnOp::Not | UnOp::Len | UnOp::IsTag(_)) && compilable(inner),
-        // Literal-tag sum intro lowers (`Op::Inject`); a data-driven tag has no static lane
-        // count, so it stays row-wise.
-        Term::Inject(tag, payload) => matches!(&**tag, Term::Int(_)) && compilable(payload),
+        // A literal tag into a declared type knows its whole sum; the built-ins and a data-driven
+        // tag need the payload's shape.
+        Term::Inject { tag, payload, sum } => {
+            matches!(&**tag, Term::Int(_)) && matches!(sum, SumTy::Declared(_)) && compilable(payload)
+        }
         // `Op::Hash` is shape-generic (it folds whatever structure it is handed), so `hash`
         // needs no shapes to lower and can answer true here.
         Term::Hash(args) => args.iter().all(compilable),
-        // `List` and `Case` deliberately stay false HERE even though `compile` lowers both:
-        // each needs shapes to decide homogeneity (a list's elements, a case's arms), and this
-        // check runs without them. The join defers such projections to a linear stage, whose
-        // shape-aware `compile` lowers them there.
-        _ => false, // List intro, Case (here), data-driven Inject — see `compile`.
+        _ => false, // List intro, Case — see `compile`.
     }
 }
 
-/// Compile a `Term` to a corgi node. `env[i]` = node for `Var(i)`; `env_shapes[i]` = its shape
-/// (for `Spread`). Binders push on top (read by `Bound(k)`). `anchor` sizes `Lit` broadcasts.
-pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &[Shape], anchor: usize) -> Option<usize> {
+/// The lane shapes of the sum an `Inject` builds: the declaration's, or a built-in's with the
+/// payload in its lane and the other lane from `expected`.
+fn lanes_of(sum: &SumTy, tag: usize, payload: &Shape, expected: Option<&Shape>) -> Res<Vec<Shape>> {
+    let other = |k: usize, what: &str| -> Res<Shape> {
+        match expected {
+            Some(Shape::Sum(ls)) if ls.len() == 2 => Ok(ls[k].clone()),
+            _ => Err(format!(
+                "cannot infer the {what} lane of this built-in sum here; use a declared type, or an `if` whose other branch fixes it"
+            )),
+        }
+    };
+    match sum {
+        SumTy::Declared(lanes) => {
+            if tag >= lanes.len() {
+                return Err(format!("constructor tag {tag} is outside the declared {}-variant sum", lanes.len()));
+            }
+            Ok(lanes.clone())
+        }
+        SumTy::Option => match tag {
+            0 => Ok(vec![Shape::Unit, other(1, "Some")?]),
+            1 => Ok(vec![Shape::Unit, payload.clone()]),
+            _ => Err("Option has two variants".into()),
+        },
+        SumTy::Result => match tag {
+            0 => Ok(vec![payload.clone(), other(1, "Err")?]),
+            1 => Ok(vec![other(0, "Ok")?, payload.clone()]),
+            _ => Err("Result has two variants".into()),
+        },
+    }
+}
+
+/// The shapes of an `if`'s two branches: each is typed on its own, and a branch that cannot be
+/// (a bare `None`/`Ok`/`Err`) borrows the other's shape.
+fn branch_shapes(then: &Term, els: &Term, env_shapes: &[Shape], expected: Option<&Shape>) -> Res<(Shape, Shape)> {
+    match (shape_of_term(then, env_shapes, expected), shape_of_term(els, env_shapes, expected)) {
+        (Ok(t), Ok(e)) => Ok((t, e)),
+        (Ok(t), Err(_)) => {
+            let e = shape_of_term(els, env_shapes, Some(&t))?;
+            Ok((t, e))
+        }
+        (Err(_), Ok(e)) => {
+            let t = shape_of_term(then, env_shapes, Some(&e))?;
+            Ok((t, e))
+        }
+        (Err(e), Err(_)) => Err(e),
+    }
+}
+
+/// Compile a `Term` to a corgi node. `env[i]` = node for `Var(i)`; `env_shapes[i]` = its shape.
+/// Binders push on top (read by `Bound(k)`). `anchor` sizes `Lit` broadcasts. `expected` is the
+/// shape the context already fixed for this term, if any (see [`shape_of_term`]). `Err` is a
+/// type error: the term has no meaning at these shapes.
+pub fn compile(
+    term: &Term,
+    b: &mut Builder<NumOp>,
+    env: &[usize],
+    env_shapes: &[Shape],
+    anchor: usize,
+    expected: Option<&Shape>,
+) -> Res<usize> {
     match term {
-        // Out-of-range env references decline rather than panic: closed bodies (fold steps,
-        // case arms) truncate the environment by design, and a term reaching past it is the
-        // documented restriction speaking — rows handle it.
-        Term::Var(i) => env.get(*i).copied(),
-        Term::Bound(k) => env.len().checked_sub(1 + *k).map(|i| env[i]),
-        Term::Int(n) => Some(b.add(Op::Lit(CValue::u64(vec![*n as u64])), vec![anchor])),
+        Term::Var(i) => env.get(*i).copied().ok_or_else(|| format!("`${i}` is not in scope here")),
+        Term::Bound(k) => {
+            env.len().checked_sub(1 + *k).map(|i| env[i]).ok_or_else(|| format!("binder `^{k}` is not in scope here"))
+        }
+        Term::Int(n) => Ok(b.add(Op::Lit(CValue::u64(vec![*n as u64])), vec![anchor])),
         Term::Tuple(fields) => {
-            // A `Spread(place)` child splices the place's `Prod` fields in place (the flat-row model).
+            // A `Spread(t)` child splices `t`'s `Prod` fields in place (the flat-row model).
             let mut ids: Vec<usize> = Vec::new();
             for f in fields {
                 match f {
                     Term::Spread(inner) => {
-                        let node = compile(inner, b, env, env_shapes, anchor)?;
-                        match shape_of_place(inner, env_shapes) {
+                        let node = compile(inner, b, env, env_shapes, anchor, None)?;
+                        match shape_of_term(inner, env_shapes, None)? {
                             Shape::Prod(fs) => {
                                 for i in 0..fs.len() {
                                     ids.push(b.add(Op::Field(i), vec![node]));
@@ -424,41 +300,42 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
                             _ => ids.push(node), // scalar: splice the value itself
                         }
                     }
-                    _ => ids.push(compile(f, b, env, env_shapes, anchor)?),
+                    _ => ids.push(compile(f, b, env, env_shapes, anchor, None)?),
                 }
             }
             // An empty field list is DDIR unit: emit a length-carrying `Unit` column over the anchor,
             // NOT `Prod([])` (an empty product has no rows to count, so the row count would be lost).
             if ids.is_empty() {
-                Some(b.add(Op::Unit, vec![anchor]))
+                Ok(b.add(Op::Unit, vec![anchor]))
             } else {
-                Some(b.tuple(ids))
+                Ok(b.tuple(ids))
             }
         }
+        Term::Spread(_) => Err("`$n...` spread is only meaningful inside a tuple".into()),
+        // Projection: a tuple field, or a list element (`Get`, faulting out of range as `eval` does).
         Term::Proj(t, i) => {
-            // Shape-directed: `Op::Field` is PRODUCT elimination only. On a `List` operand,
-            // DDIR's Proj means indexing (`ir::eval` ir.rs:112), which has no columnar
-            // lowering here yet (corgi's Get tier) — decline, and rows handle it. The check
-            // is the TOTAL place resolver (never panics); an unresolved operand compiles as
-            // before (`Field`, with corgi's runtime shape check behind it).
-            if matches!(place_shape_opt(t, env_shapes), Some(Shape::List(_))) {
-                return None;
+            let id = compile(t, b, env, env_shapes, anchor, None)?;
+            match shape_of_term(t, env_shapes, None)? {
+                Shape::List(_) => {
+                    let idx = b.add(Op::Lit(CValue::u64(vec![*i as u64])), vec![anchor]);
+                    let pair = b.tuple(vec![idx, id]);
+                    Ok(b.add(Op::Get, vec![pair]))
+                }
+                _ => Ok(b.add(Op::Field(*i), vec![id])),
             }
-            let id = compile(t, b, env, env_shapes, anchor)?;
-            Some(b.add(Op::Field(*i), vec![id]))
         }
         Term::Binary(op, l, r) => {
-            let lid = compile(l, b, env, env_shapes, anchor)?;
-            let rid = compile(r, b, env, env_shapes, anchor)?;
+            let lid = compile(l, b, env, env_shapes, anchor, None)?;
+            let rid = compile(r, b, env, env_shapes, anchor, None)?;
             let pair = |b: &mut Builder<NumOp>, x, y| b.tuple(vec![x, y]);
-            Some(match op {
+            Ok(match op {
                 BinOp::Add => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Add, Kind::U, 64), vec![p]) }
                 BinOp::Sub => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Sub, Kind::U, 64), vec![p]) }
                 BinOp::Mul => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Mul, Kind::U, 64), vec![p]) }
                 BinOp::Eq | BinOp::Ne => {
                     // Cross-shape structural compare folds to a constant (Eq→0, Ne→1) over `anchor`;
                     // same-shape emits a real corgi `Rel`.
-                    if infer_term_shape(l, env_shapes) != infer_term_shape(r, env_shapes) {
+                    if shape_of_term(l, env_shapes, None)? != shape_of_term(r, env_shapes, None)? {
                         let v = if matches!(op, BinOp::Ne) { 1u64 } else { 0u64 };
                         b.add(Op::Lit(CValue::u64(vec![v])), vec![anchor])
                     } else {
@@ -479,90 +356,134 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
             })
         }
         Term::If { cond, then, els } => {
-            // `Select` blends per row and is shape-generic, but the branches must agree up to
-            // ⊥ lanes; genuinely conflicting branch shapes (dynamic typing) defer to rows.
-            // Sum-shaped results included: `Select` gathers lanes, and the branches commit
-            // different ones (`if(c, Fwd(x), Bwd(y))` is the shape of every conditional
-            // constructor), which is what the pin bumped for in #817.
-            shape_join(&infer_term_shape(then, env_shapes), &infer_term_shape(els, env_shapes))?;
-            let c = compile(cond, b, env, env_shapes, anchor)?;
-            let t = compile(then, b, env, env_shapes, anchor)?;
-            let e = compile(els, b, env, env_shapes, anchor)?;
+            // `Select` blends per row and is shape-generic; the branches must share one shape,
+            // and a branch that cannot fix its own (a bare `None`) takes the other's.
+            let (ts, es) = branch_shapes(then, els, env_shapes, expected)?;
+            if ts != es {
+                return Err(format!("if: the branches differ in shape, {ts} vs {es}"));
+            }
+            let c = compile(cond, b, env, env_shapes, anchor, None)?;
+            let t = compile(then, b, env, env_shapes, anchor, Some(&ts))?;
+            let e = compile(els, b, env, env_shapes, anchor, Some(&es))?;
             let sel = b.tuple(vec![c, t, e]);
-            Some(b.add(Op::Select, vec![sel]))
+            Ok(b.add(Op::Select, vec![sel]))
         }
         // Fold over a List. corgi `Op::Fold` consumes `Prod([seed, List<A>])` and folds each row's
         // list; its body is a closed sub-graph over `Prod([acc, elem])`. DDIR's step sees
-        // elem=Bound(0), acc=Bound(1), so the body env is [acc, elem] (Bound counts from the top).
-        // Restriction: the step references only its binders (monoid-style), not outer
-        // Vars — corgi closes the body; an outer reference would need CapList capture.
+        // elem=Bound(0), acc=Bound(1). A step that reads outside its two binders gets the
+        // environment captured into the list first (`CapList`: every element paired with the
+        // context), so the closed body can see it — the same closure conversion `Case` does.
         Term::Fold { list, init, step } => {
-            let init_id = compile(init, b, env, env_shapes, anchor)?;
-            let list_id = compile(list, b, env, env_shapes, anchor)?;
-            let elem = match infer_term_shape(list, env_shapes) { Shape::List(e) => *e, _ => return None };
-            let init_shape = infer_term_shape(init, env_shapes);
-            let pair = b.tuple(vec![init_id, list_id]);
-            let body = compile_fold_body(step, &init_shape, &elem)?;
-            Some(b.add(Op::Fold(Box::new(body)), vec![pair]))
+            let init_id = compile(init, b, env, env_shapes, anchor, expected)?;
+            let list_id = compile(list, b, env, env_shapes, anchor, None)?;
+            let elem = match shape_of_term(list, env_shapes, None)? {
+                Shape::List(e) => *e,
+                other => return Err(format!("fold over a non-list: {other}")),
+            };
+            let init_shape = shape_of_term(init, env_shapes, expected)?;
+            if mentions_env(step, 2) {
+                let ctx = b.tuple(env.to_vec());
+                let cap_in = b.tuple(vec![ctx, list_id]);
+                let cap = b.add(Op::CapList, vec![cap_in]);
+                let pair = b.tuple(vec![init_id, cap]);
+                let body = compile_fold_body(step, Some(env_shapes), &init_shape, &elem)?;
+                Ok(b.add(Op::Fold(Box::new(body)), vec![pair]))
+            } else {
+                let pair = b.tuple(vec![init_id, list_id]);
+                let body = compile_fold_body(step, None, &init_shape, &elem)?;
+                Ok(b.add(Op::Fold(Box::new(body)), vec![pair]))
+            }
         }
-        // Literal-tag sum intro is `Op::Inject` (lane t of a t+1-lane sum); a data-driven tag
-        // has no static lane count, so it defers to rows.
-        Term::Inject(tag, payload) => {
-            let Term::Int(t) = &**tag else { return None };
-            let pid = compile(payload, b, env, env_shapes, anchor)?;
-            Some(b.add(Op::Inject(*t as usize, *t as usize + 1), vec![pid]))
+        // Sum intro. A literal tag is corgi's `Inject` into the whole declared sum (the lanes the
+        // payload does not fill are built empty). A data-driven tag is a demux (`Branch`), which
+        // needs every lane to share the payload's shape.
+        Term::Inject { tag, payload, sum } => {
+            let pid = compile(payload, b, env, env_shapes, anchor, None)?;
+            let pshape = shape_of_term(payload, env_shapes, None)?;
+            match &**tag {
+                Term::Int(t) => {
+                    let t = usize::try_from(*t).map_err(|_| format!("constructor tag {t} is negative"))?;
+                    let lanes = lanes_of(sum, t, &pshape, expected)?;
+                    Ok(b.add(Op::Inject(t, lanes), vec![pid]))
+                }
+                _ => {
+                    let SumTy::Declared(lanes) = sum else {
+                        return Err("a data-driven variant tag needs a declared type".into());
+                    };
+                    if let Some(l) = lanes.iter().find(|l| **l != pshape) {
+                        return Err(format!("variant: every lane must have the payload's shape {pshape}, but one is {l}"));
+                    }
+                    let tid = compile(tag, b, env, env_shapes, anchor, None)?;
+                    let pair = b.tuple(vec![pid, tid]);
+                    Ok(b.add(Op::Branch(lanes.len()), vec![pair]))
+                }
+            }
         }
-        // Sum elimination: distribute the environment into each committed lane (`CapSum`), run
-        // each arm as a closed body over `Prod([ctx, payload])` (`MapSum`), and collapse the
-        // homogeneous result (`Unwrap`). Arms see the outer env plus the payload as the top
-        // binder; a `default` runs WITHOUT the payload binder (matching `eval`). Arms whose
-        // result shapes genuinely conflict (dynamic typing) defer to rows, as does a lane with
-        // neither arm nor default (where `eval` panics).
+        // Sum elimination: distribute the environment into each lane (`CapSum`), run each arm as a
+        // closed body over `Prod([ctx, payload])` (`MapSum`), and collapse the homogeneous result
+        // (`Unwrap`, which is where arms that disagree are reported). Arms see the outer env plus
+        // the payload as the top binder; a `default` runs WITHOUT the payload binder (matching
+        // `eval`). An arm that cannot fix its own shape (a bare `None`) takes the first that can.
         Term::Case { scrutinee, arms, default } => {
-            let Shape::Sum(lanes) = infer_term_shape(scrutinee, env_shapes) else { return None };
-            let sid = compile(scrutinee, b, env, env_shapes, anchor)?;
+            let lanes = match shape_of_term(scrutinee, env_shapes, None)? {
+                Shape::Sum(lanes) => lanes,
+                other => return Err(format!("case on a non-sum: {other}")),
+            };
+            let sid = compile(scrutinee, b, env, env_shapes, anchor, None)?;
             let ctx = b.tuple(env.to_vec());
             let cap_in = b.tuple(vec![ctx, sid]);
             let cap = b.add(Op::CapSum, vec![cap_in]);
-            let mut bodies: Vec<(usize, Graph<NumOp>)> = Vec::new();
-            let mut result: Option<Shape> = None;
-            for (i, lane) in lanes.iter().enumerate() {
-                let Some(lane_shape) = lane else { continue };
+            let arm_graph = |i: usize, exp: Option<&Shape>| -> Res<(Graph<NumOp>, Shape)> {
                 let mut bb = Builder::<NumOp>::default();
                 let inp = bb.input();
                 let cnode = bb.add(Op::Field(0), vec![inp]);
                 let mut env2: Vec<usize> = (0..env.len()).map(|j| bb.add(Op::Field(j), vec![cnode])).collect();
                 let mut shapes2: Vec<Shape> = env_shapes.to_vec();
-                let (out, out_shape) = if i < arms.len() {
+                let term = if i < arms.len() {
                     let pnode = bb.add(Op::Field(1), vec![inp]);
                     env2.push(pnode);
-                    shapes2.push(lane_shape.clone());
-                    (compile(&arms[i], &mut bb, &env2, &shapes2, inp)?, infer_term_shape(&arms[i], &shapes2))
-                } else if let Some(d) = default {
-                    (compile(d, &mut bb, &env2, &shapes2, inp)?, infer_term_shape(d, &shapes2))
+                    shapes2.push(lanes[i].clone());
+                    &arms[i]
                 } else {
-                    return None;
+                    default.as_deref().ok_or_else(|| format!("case: no arm for tag {i} and no `_` default"))?
                 };
-                result = Some(match result { None => out_shape, Some(prev) => shape_join(&prev, &out_shape)? });
-                bodies.push((i, bb.finish(out)));
+                let out = compile(term, &mut bb, &env2, &shapes2, inp, exp)?;
+                let g = bb.finish(out);
+                let in_shape = Shape::Prod(vec![Shape::Prod(env_shapes.to_vec()), lanes[i].clone()]);
+                let s = corgi::shape_of(&g, &in_shape)?;
+                Ok((g, s))
+            };
+            let mut exp: Option<Shape> = expected.cloned();
+            let mut bodies: Vec<(usize, Graph<NumOp>)> = Vec::with_capacity(lanes.len());
+            let mut deferred: Vec<(usize, String)> = Vec::new();
+            for i in 0..lanes.len() {
+                match arm_graph(i, exp.as_ref()) {
+                    Ok((g, s)) => {
+                        bodies.push((i, g));
+                        exp.get_or_insert(s);
+                    }
+                    Err(e) => deferred.push((i, e)),
+                }
             }
-            if bodies.is_empty() {
-                return None; // an all-⊥ scrutinee shape: nothing to map
+            for (i, e) in deferred {
+                let Some(s) = exp.as_ref() else { return Err(e) };
+                let (g, _) = arm_graph(i, Some(s))?;
+                bodies.push((i, g));
             }
+            bodies.sort_by_key(|(i, _)| *i);
             let mapped = b.add(Op::MapSum(bodies), vec![cap]);
-            Some(b.add(Op::Unwrap, vec![mapped]))
+            Ok(b.add(Op::Unwrap, vec![mapped]))
         }
         Term::Unary(op, inner) => {
-            let id = compile(inner, b, env, env_shapes, anchor)?;
-            Some(match op {
+            let id = compile(inner, b, env, env_shapes, anchor, None)?;
+            let shape = shape_of_term(inner, env_shapes, None)?;
+            Ok(match op {
                 // Wrapping negate on the raw two's-complement bits — exactly `-as_int()`.
-                // (Order-sensitive use of negatives inherits the crate-wide non-negative-int
-                // comparison contract; `Neg` adds no new exposure over `Sub` below zero.)
                 UnOp::Neg => b.add(ArithOp::Neg(Kind::U, 64), vec![id]),
                 // `truthy` is "nonzero Int": scalars compare against zero; non-`Int` values
                 // are never truthy, so their `not` folds to the constant 1 (the cross-shape
                 // `Eq` fold's precedent).
-                UnOp::Not => match infer_term_shape(inner, env_shapes) {
+                UnOp::Not => match shape {
                     Shape::Prim(_) => {
                         let zero = b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]);
                         let p = b.tuple(vec![id, zero]);
@@ -572,7 +493,7 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
                 },
                 // Tuple arity is static (a shape fact); list length folds `acc + 1` along
                 // each row's list; anything else is the program error `eval` reports.
-                UnOp::Len => match infer_term_shape(inner, env_shapes) {
+                UnOp::Len => match shape {
                     Shape::Prod(fs) => b.add(Op::Lit(CValue::u64(vec![fs.len() as u64])), vec![anchor]),
                     Shape::Unit => b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]),
                     Shape::List(_) => {
@@ -587,24 +508,20 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
                         };
                         b.add(Op::Fold(Box::new(body)), vec![seed])
                     }
-                    _ => return None,
+                    other => return Err(format!("len of a {other}")),
                 },
-                // On a sum, every committed lane maps to its constant answer and the result
-                // unwraps (lanes are homogeneous `U64`); on any other shape, `istag` is
-                // constantly 0 (matching `eval`'s "non-Variant is never the tag").
-                UnOp::IsTag(t) => match infer_term_shape(inner, env_shapes) {
+                // On a sum, every lane maps to its constant answer and the result unwraps
+                // (lanes are homogeneous `U64`); on any other shape, `istag` is constantly 0
+                // (matching `eval`'s "non-Variant is never the tag").
+                UnOp::IsTag(t) => match shape {
                     Shape::Sum(lanes) => {
-                        let arms: Vec<(usize, Graph<NumOp>)> = lanes
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(i, lane)| {
-                                lane.as_ref().map(|_| {
-                                    let mut bb = Builder::<NumOp>::default();
-                                    let inp = bb.input();
-                                    let v = (i as u32 == *t) as u64;
-                                    let out = bb.add(Op::Lit(CValue::u64(vec![v])), vec![inp]);
-                                    (i, bb.finish(out))
-                                })
+                        let arms: Vec<(usize, Graph<NumOp>)> = (0..lanes.len())
+                            .map(|i| {
+                                let mut bb = Builder::<NumOp>::default();
+                                let inp = bb.input();
+                                let v = (i as u32 == *t) as u64;
+                                let out = bb.add(Op::Lit(CValue::u64(vec![v])), vec![inp]);
+                                (i, bb.finish(out))
                             })
                             .collect();
                         let mapped = b.add(Op::MapSum(arms), vec![id]);
@@ -618,19 +535,15 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
         // the existing kernel matrix, with no per-row work and no new corgi op — `Enlist` each
         // element (a length-1 lane per row), `Iota` a per-row `[0..k)` tag list, `Weave`
         // interleaves the lanes in field order into `List<Sum{X x k}>`, and `MapList(Unwrap)`
-        // strips the now-homogeneous sum. A fused list-intro kernel is corgi's call if this
-        // composition ever profiles hot.
-        //
-        // Empty and heterogeneous literals decline: `Weave` needs at least one lane, and
-        // `Unwrap` needs the committed lanes to join. Rows handle both.
+        // strips the now-homogeneous sum (and reports a heterogeneous literal). A fused
+        // list-intro kernel is corgi's call if this composition ever profiles hot.
         Term::List(fields) => {
-            let (first, rest) = fields.split_first()?;
-            rest.iter().try_fold(infer_term_shape(first, env_shapes), |acc, f| {
-                shape_join(&acc, &infer_term_shape(f, env_shapes))
-            })?;
+            if fields.is_empty() {
+                return Err("an empty list literal has no element shape".into());
+            }
             let mut lanes = Vec::with_capacity(fields.len());
             for f in fields {
-                let e = compile(f, b, env, env_shapes, anchor)?;
+                let e = compile(f, b, env, env_shapes, anchor, None)?;
                 lanes.push(b.add(Op::Enlist, vec![e]));
             }
             let count = b.add(Op::Lit(CValue::u64(vec![fields.len() as u64])), vec![anchor]);
@@ -644,7 +557,7 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
                 let out = bb.add(Op::Unwrap, vec![inp]);
                 bb.finish(out)
             };
-            Some(b.add(Op::MapList(Box::new(unwrap_body)), vec![woven]))
+            Ok(b.add(Op::MapList(Box::new(unwrap_body)), vec![woven]))
         }
         // DDIR's `hash` IS corgi's `Op::Hash` (`ir::structural_hash` is the row-wise twin): hash
         // the arguments as one tuple, shift out the sign bit, reduce by the bound.
@@ -654,76 +567,94 @@ pub fn compile(term: &Term, b: &mut Builder<NumOp>, env: &[usize], env_shapes: &
         // which is larger than the shifted hash, so it reduces to the identity too. Both are
         // exactly what `ir::eval`'s `if bound > 0` produces.
         Term::Hash(args) => {
-            let (bound, rest) = args.split_first()?;
-            let bid = compile(bound, b, env, env_shapes, anchor)?;
+            let (bound, rest) = args.split_first().ok_or("hash needs a bound")?;
+            let bid = compile(bound, b, env, env_shapes, anchor, None)?;
             let payload = if rest.is_empty() {
                 b.add(Op::Unit, vec![anchor])
             } else {
                 let mut ids = Vec::with_capacity(rest.len());
                 for a in rest {
-                    ids.push(compile(a, b, env, env_shapes, anchor)?);
+                    ids.push(compile(a, b, env, env_shapes, anchor, None)?);
                 }
                 b.tuple(ids)
             };
             let h = b.add(Op::Hash, vec![payload]);
             let shifted = b.add(ArithOp::Shr(1), vec![h]);
             let pair = b.tuple(vec![shifted, bid]);
-            Some(b.add(ArithOp::Bin(CBinOp::Rem, Kind::U, 64), vec![pair]))
+            Ok(b.add(ArithOp::Bin(CBinOp::Rem, Kind::U, 64), vec![pair]))
         }
-        _ => None,
     }
 }
 
-/// Compile a `Fold` step into a closed corgi sub-graph over `Prod([acc, elem])`.
-/// Env `[acc, elem]` so `Bound(0)`=elem (top), `Bound(1)`=acc — matching `ir::eval`'s Fold.
-fn compile_fold_body(step: &Term, init_shape: &Shape, elem_shape: &Shape) -> Option<Graph<NumOp>> {
+/// Compile a `Fold` step into a closed corgi sub-graph. Without capture the body's input is
+/// `Prod([acc, elem])`; with it, `Prod([acc, (ctx, elem)])` where `ctx` is the captured
+/// environment (its fields come first, so `Var(i)` and outer `Bound`s resolve as they do in
+/// `ir::eval`'s stack). Either way `Bound(0)` = elem, `Bound(1)` = acc.
+fn compile_fold_body(step: &Term, ctx: Option<&[Shape]>, init_shape: &Shape, elem_shape: &Shape) -> Res<Graph<NumOp>> {
     let mut bb = Builder::<NumOp>::default();
     let inp = bb.input();
     let acc = bb.add(Op::Field(0), vec![inp]);
-    let elem = bb.add(Op::Field(1), vec![inp]);
-    let out = compile(step, &mut bb, &[acc, elem], &[init_shape.clone(), elem_shape.clone()], inp)?;
-    Some(bb.finish(out))
+    let (mut env, mut shapes) = (Vec::new(), Vec::new());
+    let elem = match ctx {
+        Some(cs) => {
+            let ce = bb.add(Op::Field(1), vec![inp]);
+            let c = bb.add(Op::Field(0), vec![ce]);
+            for (j, s) in cs.iter().enumerate() {
+                env.push(bb.add(Op::Field(j), vec![c]));
+                shapes.push(s.clone());
+            }
+            bb.add(Op::Field(1), vec![ce])
+        }
+        None => bb.add(Op::Field(1), vec![inp]),
+    };
+    env.push(acc);
+    env.push(elem);
+    shapes.push(init_shape.clone());
+    shapes.push(elem_shape.clone());
+    let out = compile(step, &mut bb, &env, &shapes, inp, Some(init_shape))?;
+    Ok(bb.finish(out))
 }
 
 /// Compile a term in the row environment `Var(0)=key` (shape `kshape`), `Var(1)=val` (`vshape`) —
-/// the environment every `LinearOp` reads. The graph's input is `Prod([key, val])`. `None` when
-/// the term has no lowering with these shapes; every caller falls back to rows there.
-fn compile_over_kv(term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+/// the environment every `LinearOp` reads. The graph's input is `Prod([key, val])`, and it is
+/// typechecked once here, so an `Ok` graph runs on every batch of these shapes.
+fn compile_over_kv(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     let mut b = Builder::<NumOp>::default();
     let input = b.input();
     let var_k = b.add(Op::Field(0), vec![input]);
     let var_v = b.add(Op::Field(1), vec![input]);
-    let out = compile(term, &mut b, &[var_k, var_v], &[kshape.clone(), vshape.clone()], input)?;
-    Some(b.finish(out))
+    let out = compile(term, &mut b, &[var_k, var_v], &[kshape.clone(), vshape.clone()], input, None)?;
+    let g = b.finish(out);
+    corgi::shape_of(&g, &Shape::Prod(vec![kshape.clone(), vshape.clone()]))?;
+    Ok(g)
 }
 
-/// Compile a `FlatMap`'s list term → a corgi `List` column, one list per input row. Declines when
-/// the term is not list-shaped: the backend explodes the column structurally and needs real list
-/// bounds to do it, where `ir::eval` would take any `List` value it happened to produce.
-pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
-    matches!(infer_term_shape(list_term, &[kshape.clone(), vshape.clone()]), Shape::List(_))
-        .then(|| compile_over_kv(list_term, kshape, vshape))
-        .flatten()
+/// Compile a `FlatMap`'s list term → a corgi `List` column, one list per input row. A term that is
+/// not list-shaped is the type error: the backend explodes the column structurally.
+pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+    match shape_of_term(list_term, &[kshape.clone(), vshape.clone()], None)? {
+        Shape::List(_) => compile_over_kv(list_term, kshape, vshape),
+        other => Err(format!("flatmap over a non-list: {other}")),
+    }
 }
 
-/// Compile a scalar term (`EnterAt`'s delay field) → a `U64` column. Declines when the term is not
-/// `Prim`-shaped: the delay is read as one integer per row, which a `Prod`/`List`/`Sum` column has
-/// no reading of.
-pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
-    matches!(infer_term_shape(term, &[kshape.clone(), vshape.clone()]), Shape::Prim(_))
-        .then(|| compile_over_kv(term, kshape, vshape))
-        .flatten()
+/// Compile a scalar term (`EnterAt`'s delay field) → a `U64` column; a non-integer term is the
+/// type error (the delay is read as one integer per row).
+pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+    match shape_of_term(term, &[kshape.clone(), vshape.clone()], None)? {
+        Shape::Prim(_) => compile_over_kv(term, kshape, vshape),
+        other => Err(format!("enter_at delay is not an integer: {other}")),
+    }
 }
 
 /// Compile a `Filter` predicate → a mask column (nonzero keeps the row).
-pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     compile_over_kv(cond, kshape, vshape)
 }
 
 /// Compile a join projection: key/val Terms over `Var(0)=key`, `Var(1)=val0`, `Var(2)=val1` (with
-/// their shapes for `Spread`). Input `Prod([key, val0, val1])`; output `Prod([newkey, newval])`.
-/// Join-inline projections are gated by [`compilable`], so the lowering must succeed.
-pub fn compile_join_projection(key: &Term, val: &Term, kshape: &Shape, v0shape: &Shape, v1shape: &Shape) -> Graph<NumOp> {
+/// their shapes). Input `Prod([key, val0, val1])`; output `Prod([newkey, newval])`.
+pub fn compile_join_projection(key: &Term, val: &Term, kshape: &Shape, v0shape: &Shape, v1shape: &Shape) -> Res<Graph<NumOp>> {
     let mut b = Builder::<NumOp>::default();
     let input = b.input();
     let var_k = b.add(Op::Field(0), vec![input]);
@@ -731,26 +662,29 @@ pub fn compile_join_projection(key: &Term, val: &Term, kshape: &Shape, v0shape: 
     let var_1 = b.add(Op::Field(2), vec![input]);
     let env = [var_k, var_0, var_1];
     let shapes = [kshape.clone(), v0shape.clone(), v1shape.clone()];
-    let nk = compile(key, &mut b, &env, &shapes, input).expect("join-inline projections are gated by `compilable`");
-    let nv = compile(val, &mut b, &env, &shapes, input).expect("join-inline projections are gated by `compilable`");
+    let nk = compile(key, &mut b, &env, &shapes, input, None)?;
+    let nv = compile(val, &mut b, &env, &shapes, input, None)?;
     let out = b.tuple(vec![nk, nv]);
-    b.finish(out)
+    let g = b.finish(out);
+    corgi::shape_of(&g, &Shape::Prod(shapes.to_vec()))?;
+    Ok(g)
 }
 
 /// Compile a DDIR `Projection` over `Var(0)=key` (`kshape`), `Var(1)=val` (`vshape`).
-/// Input `Prod([key, val])`; output `Prod([newkey, newval])`. `None` when either term (with
-/// these shapes) has no lowering; the caller falls back to rows.
-pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape) -> Option<Graph<NumOp>> {
+/// Input `Prod([key, val])`; output `Prod([newkey, newval])`.
+pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     let mut b = Builder::<NumOp>::default();
     let input = b.input();
     let var_k = b.add(Op::Field(0), vec![input]);
     let var_v = b.add(Op::Field(1), vec![input]);
     let env = [var_k, var_v];
     let shapes = [kshape.clone(), vshape.clone()];
-    let nk = compile(key, &mut b, &env, &shapes, input)?;
-    let nv = compile(val, &mut b, &env, &shapes, input)?;
+    let nk = compile(key, &mut b, &env, &shapes, input, None)?;
+    let nv = compile(val, &mut b, &env, &shapes, input, None)?;
     let out = b.tuple(vec![nk, nv]);
-    Some(b.finish(out))
+    let g = b.finish(out);
+    corgi::shape_of(&g, &Shape::Prod(shapes.to_vec()))?;
+    Ok(g)
 }
 
 #[cfg(test)]
@@ -758,27 +692,31 @@ mod tests {
     use super::*;
     use crate::ir::Value as V;
 
+    fn u64s() -> Shape { Shape::Prim(64) }
+    fn sum(lanes: Vec<Shape>) -> Shape { Shape::Sum(lanes) }
+
     /// The pin on DDIR's `hash`: `ir::structural_hash` is a row-at-a-time transcription of
     /// `corgi::hash`, and the two backends compute the SAME program value, so they must agree
     /// bit for bit on every shape the transcode layer covers. If corgi's salts or fold change,
     /// this is what fails.
-    fn hash_agrees(rows: Vec<V>) {
-        let shape = infer_shape_cols(&rows);
+    fn hash_agrees(rows: Vec<V>, shape: Shape) {
         let col = transcode(&rows, &shape);
-        let columnar = corgi::hash(&col).into_u64("hash");
+        let columnar = corgi::hash(&col).into_u64("hash").unwrap();
         let row_wise: Vec<u64> = rows.iter().map(crate::ir::structural_hash).collect();
         assert_eq!(columnar, row_wise, "hash disagrees (shape {shape:?})");
     }
 
     #[test]
     fn hash_matches_corgi_on_scalars() {
-        hash_agrees(vec![V::Int(0), V::Int(1), V::Int(-1), V::Int(i64::MIN), V::Int(i64::MAX)]);
+        hash_agrees(vec![V::Int(0), V::Int(1), V::Int(-1), V::Int(i64::MIN), V::Int(i64::MAX)], u64s());
     }
 
     #[test]
     fn hash_matches_corgi_on_tuples_and_units() {
-        hash_agrees(vec![V::Tuple(vec![V::Int(1), V::Int(2)]), V::Tuple(vec![V::Int(2), V::Int(1)])]);
-        hash_agrees(vec![V::unit(), V::unit()]);
+        let rows = vec![V::Tuple(vec![V::Int(1), V::Int(2)]), V::Tuple(vec![V::Int(2), V::Int(1)])];
+        let shape = shape_of_row(&rows[0]).unwrap();
+        hash_agrees(rows, shape);
+        hash_agrees(vec![V::unit(), V::unit()], Shape::Unit);
         // A 1-tuple must not collapse onto its scalar, nor a unit onto an empty anything.
         assert_ne!(
             crate::ir::structural_hash(&V::Tuple(vec![V::Int(7)])),
@@ -788,34 +726,36 @@ mod tests {
 
     #[test]
     fn hash_matches_corgi_on_lists() {
-        hash_agrees(vec![
-            V::List(vec![V::Int(1), V::Int(2), V::Int(3)]),
-            V::List(vec![]),
-            V::List(vec![V::Int(3), V::Int(2), V::Int(1)]),
-        ]);
+        hash_agrees(
+            vec![V::List(vec![V::Int(1), V::Int(2), V::Int(3)]), V::List(vec![]), V::List(vec![V::Int(3), V::Int(2), V::Int(1)])],
+            Shape::List(Box::new(u64s())),
+        );
     }
 
     #[test]
     fn hash_matches_corgi_on_variants() {
-        hash_agrees(vec![
-            V::Variant(0, Box::new(V::Int(5))),
-            V::Variant(1, Box::new(V::Int(5))),
-            V::Variant(0, Box::new(V::Int(6))),
-        ]);
+        hash_agrees(
+            vec![V::Variant(0, Box::new(V::Int(5))), V::Variant(1, Box::new(V::Int(5))), V::Variant(0, Box::new(V::Int(6)))],
+            sum(vec![u64s(), u64s()]),
+        );
     }
 
     #[test]
     fn hash_matches_corgi_on_nesting() {
-        hash_agrees(vec![
-            V::Tuple(vec![V::List(vec![V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(3)])))]),
-            V::Tuple(vec![V::List(vec![V::Int(1), V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(4)])))]),
-        ]);
+        let pair = Shape::Prod(vec![u64s(), u64s()]);
+        hash_agrees(
+            vec![
+                V::Tuple(vec![V::List(vec![V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(3)])))]),
+                V::Tuple(vec![V::List(vec![V::Int(1), V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(4)])))]),
+            ],
+            Shape::Prod(vec![Shape::List(Box::new(u64s())), sum(vec![pair, Shape::Unit])]),
+        );
     }
 
-    /// Round-trip a column of rows through infer_shape_cols → transcode → untranscode.
-    fn roundtrip(rows: Vec<V>) {
-        let shape = infer_shape_cols(&rows);
+    /// Round-trip a column of rows through transcode → untranscode at a given shape.
+    fn roundtrip(rows: Vec<V>, shape: Shape) {
         let col = transcode(&rows, &shape);
+        assert_eq!(corgi::shape_of_value(&col), shape, "transcode builds the declared shape");
         let back = untranscode(col, &shape);
         assert_eq!(back, rows, "roundtrip mismatch (shape {shape:?})");
     }
@@ -823,40 +763,55 @@ mod tests {
     #[test]
     fn roundtrip_variant_single_arm() {
         // binders-style: a single constructor wrapping a list.
-        roundtrip(vec![
-            V::Variant(0, Box::new(V::List(vec![V::Int(1), V::Int(2)]))),
-            V::Variant(0, Box::new(V::List(vec![V::Int(3)]))),
-            V::Variant(0, Box::new(V::List(vec![]))),
-        ]);
+        roundtrip(
+            vec![
+                V::Variant(0, Box::new(V::List(vec![V::Int(1), V::Int(2)]))),
+                V::Variant(0, Box::new(V::List(vec![V::Int(3)]))),
+                V::Variant(0, Box::new(V::List(vec![]))),
+            ],
+            sum(vec![Shape::List(Box::new(u64s()))]),
+        );
     }
 
     #[test]
     fn roundtrip_variant_multi_arm() {
         // adt-style: two arms, interleaved; payloads of different shape per arm.
-        roundtrip(vec![
-            V::Variant(0, Box::new(V::Int(10))),
-            V::Variant(1, Box::new(V::Tuple(vec![V::Int(1), V::Int(2)]))),
-            V::Variant(0, Box::new(V::Int(20))),
-            V::Variant(1, Box::new(V::Tuple(vec![V::Int(3), V::Int(4)]))),
-            V::Variant(0, Box::new(V::Int(30))),
-        ]);
+        roundtrip(
+            vec![
+                V::Variant(0, Box::new(V::Int(10))),
+                V::Variant(1, Box::new(V::Tuple(vec![V::Int(1), V::Int(2)]))),
+                V::Variant(0, Box::new(V::Int(20))),
+                V::Variant(1, Box::new(V::Tuple(vec![V::Int(3), V::Int(4)]))),
+                V::Variant(0, Box::new(V::Int(30))),
+            ],
+            sum(vec![u64s(), Shape::Prod(vec![u64s(), u64s()])]),
+        );
     }
 
     #[test]
-    fn roundtrip_variant_absent_arm_is_bottom() {
-        // tags {0, 2} present, arm 1 absent → a ⊥ lane; round-trip must still reconstruct.
-        roundtrip(vec![
-            V::Variant(0, Box::new(V::Int(1))),
-            V::Variant(2, Box::new(V::Int(2))),
-            V::Variant(0, Box::new(V::Int(3))),
-        ]);
+    fn roundtrip_variant_absent_arm_is_an_empty_lane() {
+        // tags {0, 2} present, arm 1 absent: its lane is an empty column of the declared shape.
+        roundtrip(
+            vec![V::Variant(0, Box::new(V::Int(1))), V::Variant(2, Box::new(V::Int(2))), V::Variant(0, Box::new(V::Int(3)))],
+            sum(vec![u64s(), Shape::List(Box::new(u64s())), u64s()]),
+        );
     }
 
     #[test]
     fn roundtrip_nested_variant_in_tuple() {
-        roundtrip(vec![
-            V::Tuple(vec![V::Int(1), V::Variant(0, Box::new(V::Int(7)))]),
-            V::Tuple(vec![V::Int(2), V::Variant(1, Box::new(V::unit()))]),
-        ]);
+        roundtrip(
+            vec![
+                V::Tuple(vec![V::Int(1), V::Variant(0, Box::new(V::Int(7)))]),
+                V::Tuple(vec![V::Int(2), V::Variant(1, Box::new(V::unit()))]),
+            ],
+            Shape::Prod(vec![u64s(), sum(vec![u64s(), Shape::Unit])]),
+        );
+    }
+
+    #[test]
+    fn shape_of_row_pins_what_a_row_can_say() {
+        assert_eq!(shape_of_row(&V::Tuple(vec![V::Int(1), V::List(vec![V::Int(2)])])).unwrap(), Shape::Prod(vec![u64s(), Shape::List(Box::new(u64s()))]));
+        assert!(shape_of_row(&V::List(vec![])).is_err());
+        assert!(shape_of_row(&V::Variant(0, Box::new(V::Int(1)))).is_err());
     }
 }

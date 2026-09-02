@@ -133,7 +133,7 @@ pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
                 }
             }
         }
-        Term::Inject(tag, t) => Value::Variant(eval(tag, env).as_int() as u32, Box::new(eval(t, env))),
+        Term::Inject { tag, payload, .. } => Value::Variant(eval(tag, env).as_int() as u32, Box::new(eval(payload, env))),
         Term::Case { scrutinee, arms, default } => {
             let Value::Variant(tag, payload) = eval(scrutinee, env) else {
                 panic!("Case scrutinee is not a Variant")

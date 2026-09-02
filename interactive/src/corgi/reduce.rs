@@ -53,7 +53,7 @@ type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 /// columns, allowing Corgi to swizzle their buffers in place when unshared.
 fn signed_order_view(value: CValue) -> CValue {
     match value {
-        value @ CValue::Prim(_) => NumOp::from(ArithOp::ToSigned).eval(value),
+        value @ CValue::Prim(_) => NumOp::from(ArithOp::ToSigned).eval(value).expect("ToSigned on a leaf"),
         CValue::Prod(fields) => {
             CValue::Prod(fields.into_iter().map(signed_order_view).collect())
         }
@@ -62,7 +62,7 @@ fn signed_order_view(value: CValue) -> CValue {
             within,
             variants
                 .into_iter()
-                .map(|variant| variant.map(signed_order_view))
+                .map(signed_order_view)
                 .collect(),
         ),
         CValue::List(bounds, values) => {
@@ -200,7 +200,7 @@ fn ids(col: &CValue) -> Vec<u64> {
     if let Some(sl) = corgi::arrange::leaf_slice(col) {
         return sl.to_vec();
     }
-    corgi::hash(col).into_u64("ids")
+    corgi::hash(col).into_u64("ids").unwrap()
 }
 
 /// Concatenate the records of the `changed` keys across a run of chunks into parallel

@@ -2,8 +2,8 @@
 -- carrying the field-sum as payload, then matched back out to a (bucket; sum)
 -- and counted per bucket. (Contrived — exercises sum intro/outro + fold.)
 
-con Fwd(1) = 0;   -- src < dst
-con Bwd(1) = 1;   -- otherwise
+type Dir = Fwd u64   -- src < dst
+         | Bwd u64;  -- otherwise
 
 let edges = input 0 | key($0[0] ; $0[1]);
 

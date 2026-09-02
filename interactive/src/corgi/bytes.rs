@@ -177,11 +177,32 @@ mod test {
         ]
     }
 
+    /// The declared shapes of each family — what a program's schema would pin (a variant carries
+    /// only its tag, so a family with sums cannot be pinned from a row).
+    fn shapes_of(name: &str) -> (corgi::Shape, corgi::Shape) {
+        use corgi::Shape::{List, Prim, Prod, Sum};
+        let u = || Prim(64);
+        let pair = || Prod(vec![u(), u()]);
+        match name {
+            "scalars" => (u(), u()),
+            "tuples" => (pair(), Prod(vec![u()])),
+            "lists" => (u(), List(Box::new(u()))),
+            "variants" => (Sum(vec![u(), pair()]), u()),
+            "nested" => (Prod(vec![u(), Sum(vec![u(), pair()])]), List(Box::new(u()))),
+            other => panic!("no shapes for family {other}"),
+        }
+    }
+
+    fn container_of(name: &str, updates: Vec<((DValue, DValue), Time, Diff)>) -> CorgiContainer<Time, Diff> {
+        let (k, v) = shapes_of(name);
+        CorgiContainer::from_updates(updates, &k, &v)
+    }
+
     /// Every update survives the round trip, with its time and diff, for every shape family.
     #[test]
     fn round_trip_preserves_updates() {
         for (name, updates) in shape_families() {
-            let c = CorgiContainer::<Time, Diff>::from_updates(updates.clone());
+            let c = container_of(name, updates.clone());
             let back = round_trip(&c);
             assert_eq!(back.into_updates(), updates, "{name} did not survive the round trip");
         }
@@ -202,7 +223,7 @@ mod test {
     #[test]
     fn round_trip_preserves_column_hashes() {
         for (name, updates) in shape_families() {
-            let c = CorgiContainer::<Time, Diff>::from_updates(updates);
+            let c = container_of(name, updates);
             let (keys, vals) = (c.keys.clone(), c.vals.clone());
             let back = round_trip(&c);
             assert_eq!(corgi::arrange::hash_rows(&back.keys), corgi::arrange::hash_rows(&keys), "{name} keys");
@@ -218,7 +239,7 @@ mod test {
         let updates: Vec<_> = (0..1000i64)
             .map(|i| ((DValue::Int(i), DValue::Int(i * 2)), time(0, &[]), 1))
             .collect();
-        let c = CorgiContainer::<Time, Diff>::from_updates(updates);
+        let c = CorgiContainer::<Time, Diff>::from_updates_pinned(updates);
         assert_eq!(corgi::bytes::length_in_bytes(&c.keys), 24 + 8 * 1000);
         assert_eq!(corgi::bytes::length_in_bytes(&c.vals), 24 + 8 * 1000);
     }

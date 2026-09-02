@@ -30,7 +30,8 @@ use crate::corgi::exchange::CorgiPact;
 use crate::corgi::join::CorgiJoinBackend;
 use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
-use crate::corgi::logic::{compilable, compile_flatmap, compile_predicate, compile_projection, compile_scalar};
+use crate::corgi::logic::{compilable, compile_flatmap, compile_predicate, compile_projection, compile_scalar, shape_of_row};
+use corgi::{Graph, NumOp, Shape};
 use crate::ir::{Diff, LinearOp, Time, Value as DValue};
 use crate::parse::{Projection, Reducer};
 use crate::scope_ir as st;
@@ -38,7 +39,6 @@ use crate::scope_ir as st;
 /// A DDIR row, an update, the corgi container on dataflow edges, and the columnar trace —
 /// the shorthands the `Backend` methods below are written in terms of.
 type Row = DValue;
-type Upd = ((Row, Row), Time, Diff);
 type CC = CorgiContainer<Time, Diff>;
 type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, Diff>>;
 
@@ -59,7 +59,7 @@ fn rebase_join_term(t: &crate::parse::Term) -> crate::parse::Term {
         List(fs) => List(fs.iter().map(rebase_join_term).collect()),
         Spread(inner) => Spread(Box::new(rebase_join_term(inner))),
         Proj(inner, i) => Proj(Box::new(rebase_join_term(inner)), *i),
-        Inject(tag, payload) => Inject(Box::new(rebase_join_term(tag)), Box::new(rebase_join_term(payload))),
+        Inject { tag, payload, sum } => Inject { tag: Box::new(rebase_join_term(tag)), payload: Box::new(rebase_join_term(payload)), sum: sum.clone() },
         Case { scrutinee, arms, default } => Case {
             scrutinee: Box::new(rebase_join_term(scrutinee)),
             arms: arms.iter().map(rebase_join_term).collect(),
@@ -81,84 +81,68 @@ fn rebase_join_term(t: &crate::parse::Term) -> crate::parse::Term {
     }
 }
 
+/// The compiled form of one `LinearOp`, pinned to the shapes it was compiled against. Shapes are
+/// static per collection, so a chain compiles ONCE, on the first non-empty batch, and every later
+/// batch reuses the graph; a batch of a different shape is the invariant violation, not a
+/// recompile.
+#[derive(Default)]
+pub struct Plan {
+    compiled: Option<(Shape, Shape, Graph<NumOp>)>,
+}
+
+impl Plan {
+    /// The graph for a container of these shapes, compiling on first use. A type error is a
+    /// panic with corgi's message: a program that typechecks never reaches it.
+    fn graph(&mut self, what: &str, kshape: Shape, vshape: Shape, compile: impl FnOnce(&Shape, &Shape) -> Result<Graph<NumOp>, String>) -> &Graph<NumOp> {
+        if self.compiled.is_none() {
+            let g = compile(&kshape, &vshape).unwrap_or_else(|e| panic!("{what}: type error at shapes ({kshape}, {vshape}): {e}"));
+            self.compiled = Some((kshape.clone(), vshape.clone(), g));
+        }
+        let (k, v, g) = self.compiled.as_ref().unwrap();
+        assert!(*k == kshape && *v == vshape, "{what}: a batch of shape ({kshape}, {vshape}) reached an operator pinned at ({k}, {v})");
+        g
+    }
+}
+
 /// Apply a `LinearOp` chain to one corgi container (the corgi-native compute per batch).
 /// Project = corgi `eval_graph`; Filter = corgi mask + `gather`; FlatMap = `eval_graph` to a list
-/// column + a structural explode; Negate = Rust. Each falls back to rows when the term has no
-/// lowering with this container's shapes, so capability never depends on the compiler's coverage.
+/// column + a structural explode; Negate = Rust. Every term is columnar — there is no row-wise
+/// path inside the dataflow — and each op's graph is compiled once (`plans`). An empty batch
+/// passes through untouched: it carries no shape to compile against and no rows to compute.
 /// The two data<->time ops are columnar and total: EnterAt reads its delay field as a column and
 /// joins it into `times` in place; LiftIter reads the iteration coordinate out of `times` and
 /// appends it to `vals`. `level` is the scope depth (it locates that coordinate).
-fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
-    use timely::order::Product;
-    use differential_dataflow::lattice::Lattice;
+fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> CC {
     use differential_dataflow::dynamic::pointstamp::PointStamp;
 
-    // A container with no rows has no SHAPE either, and the ops below are shape-directed.
-    //
-    // Every path that rebuilds a container from rows (`from_updates`) infers its columns by
-    // scanning them, so with nothing to scan it returns the shape-erased default — `Unit` keys and
-    // `Unit` vals. Feed that to the next op and `compile_projection` cheerfully lowers `$1[0]`
-    // against a `Unit`, because a `Field` is legal in the abstract; `eval_graph` then meets a
-    // column that is not a product and panics. A filter that empties a batch mid-chain is enough
-    // to arrange this: `... | filter(len($1) == 2) | map(; $1[0][0] * $1[1][0])`.
-    //
-    // Skipping is not a shortcut, it is the whole answer: every `LinearOp` here maps zero rows to
-    // zero rows, so the only thing the ops could contribute is the output shape, and the input's
-    // shape is already gone. Nothing downstream reads it either — `CorgiChunker::push_into` drops
-    // empty containers before they reach `concat_blocks`, which is the one place shapes must
-    // agree.
-    //
-    // Latent since the backend was written; a single worker rarely empties a batch it was given,
-    // and the key-hash exchange makes it routine.
-    //
-    // The check belongs at the top of the LOOP, not before it. A chain empties itself: a filter
-    // takes the row-wise path, drops every row, and hands the erased container to the very next
-    // op in the same `ops` slice. Guarding only the entry catches the batch that arrives empty
-    // and misses the one that becomes empty, which is the common case.
-    for op in ops {
+    // A container with no rows has no SHAPE either, and the ops below are shape-directed: an
+    // empty batch passes through untouched (every `LinearOp` maps zero rows to zero rows), and
+    // nothing downstream reads its shape — `CorgiChunker::push_into` drops empty containers
+    // before they reach `concat_blocks`, the one place shapes must agree. The check belongs at
+    // the top of the LOOP, not before it: a filter can empty a batch mid-chain, and the next op
+    // in the same `ops` slice must not compile against the erased container.
+    for (op, plan) in ops.iter().zip(plans.iter_mut()) {
         if c.times.is_empty() {
-            break;
+            return c;
         }
+        let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
         c = match op {
             LinearOp::Project(p) => {
-                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
-                // The shape-aware gate: attempt the lowering with this container's shapes and
-                // fall back to rows only when it declines — a heterogeneous list literal, a
-                // `Case` whose arms disagree, a data-driven tag.
-                if let Some(g) = compile_projection(&p.key, &p.val, &kshape, &vshape) {
-                    let mut cols = corgi::eval_graph(&g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project");
-                    let vals = cols.pop().unwrap();
-                    let keys = cols.pop().unwrap();
-                    CorgiContainer { keys, vals, times: c.times, diffs: c.diffs }
-                } else {
-                    let mut out: Vec<Upd> = Vec::new();
-                    for ((k, v), t, d) in c.into_updates() {
-                        let mut env = vec![k, v];
-                        let nk = crate::ir::eval(&p.key, &mut env);
-                        let nv = crate::ir::eval(&p.val, &mut env);
-                        out.push(((nk, nv), t, d));
-                    }
-                    CorgiContainer::from_updates(out)
-                }
+                let g = plan.graph("map", kshape, vshape, |k, v| compile_projection(&p.key, &p.val, k, v));
+                let mut cols = corgi::eval_graph(g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project").unwrap();
+                let vals = cols.pop().unwrap();
+                let keys = cols.pop().unwrap();
+                CorgiContainer { keys, vals, times: c.times, diffs: c.diffs }
             }
             LinearOp::Filter(cond) => {
-                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
-                if let Some(g) = compile_predicate(cond, &kshape, &vshape) {
-                    let mask = corgi::eval_graph(&g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask");
-                    let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
-                    let keys = gather(&c.keys, &keep);
-                    let vals = gather(&c.vals, &keep);
-                    let times = keep.iter().map(|&i| c.times[i].clone()).collect();
-                    let diffs = keep.iter().map(|&i| c.diffs[i]).collect();
-                    CorgiContainer { keys, vals, times, diffs }
-                } else {
-                    let mut out: Vec<Upd> = Vec::new();
-                    for ((k, v), t, d) in c.into_updates() {
-                        let keep = { let mut env = vec![k.clone(), v.clone()]; crate::ir::eval(cond, &mut env).truthy() };
-                        if keep { out.push(((k, v), t, d)); }
-                    }
-                    CorgiContainer::from_updates(out)
-                }
+                let g = plan.graph("filter", kshape, vshape, |k, v| compile_predicate(cond, k, v));
+                let mask = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask").unwrap();
+                let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
+                let keys = gather(&c.keys, &keep);
+                let vals = gather(&c.vals, &keep);
+                let times = keep.iter().map(|&i| c.times[i].clone()).collect();
+                let diffs = keep.iter().map(|&i| c.diffs[i]).collect();
+                CorgiContainer { keys, vals, times, diffs }
             }
             LinearOp::Negate => {
                 for d in c.diffs.iter_mut() {
@@ -167,47 +151,30 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
                 c
             }
             LinearOp::EnterAt(field) => {
-                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
-                if let Some(g) = compile_scalar(field, &kshape, &vshape) {
-                    // The key and val columns are IDENTITY here — only times change. Evaluate the
-                    // delay field to a `U64` column and join it into each time in place. Joining
-                    // `Product(0, PointStamp([0,..,0, delay]))` is, coordinate-wise, `max` at index
-                    // `level-1` and identity everywhere else (u64's minimum is 0), so the delta
-                    // never has to be built. `PointStamp::new` re-strips the trailing minimums the
-                    // resize may add, keeping the representation canonical for a zero delay.
-                    let raw = corgi::eval_graph(&g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
-                        .into_u64("enter_at delay");
-                    let idx = level.saturating_sub(1);
-                    for (t, &r) in c.times.iter_mut().zip(raw.iter()) {
-                        let delay = 256 * (64 - r.leading_zeros() as u64);
-                        let mut coords = std::mem::take(&mut t.inner).into_inner();
-                        if coords.len() <= idx {
-                            coords.resize(idx + 1, 0);
-                        }
-                        coords[idx] = coords[idx].max(delay);
-                        t.inner = PointStamp::new(coords);
+                let g = plan.graph("enter_at", kshape, vshape, |k, v| compile_scalar(field, k, v));
+                // The key and val columns are IDENTITY here — only times change. Evaluate the
+                // delay field to a `U64` column and join it into each time in place. Joining
+                // `Product(0, PointStamp([0,..,0, delay]))` is, coordinate-wise, `max` at index
+                // `level-1` and identity everywhere else (u64's minimum is 0), so the delta
+                // never has to be built. `PointStamp::new` re-strips the trailing minimums the
+                // resize may add, keeping the representation canonical for a zero delay.
+                let raw = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
+                    .into_u64("enter_at delay")
+                    .unwrap();
+                let idx = level.saturating_sub(1);
+                for (t, &r) in c.times.iter_mut().zip(raw.iter()) {
+                    let delay = 256 * (64 - r.leading_zeros() as u64);
+                    let mut coords = std::mem::take(&mut t.inner).into_inner();
+                    if coords.len() <= idx {
+                        coords.resize(idx + 1, 0);
                     }
-                    c
-                } else {
-                    let mut out: Vec<Upd> = Vec::new();
-                    for ((k, v), t, d) in c.into_updates() {
-                        let delay = {
-                            let mut env = vec![k.clone(), v.clone()];
-                            let raw = crate::ir::eval(field, &mut env).as_int() as u64;
-                            256 * (64 - raw.leading_zeros() as u64)
-                        };
-                        let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
-                        for _ in 0..level.saturating_sub(1) { coords.push(0); }
-                        coords.push(delay);
-                        let delta = Product::new(0u64, PointStamp::new(coords));
-                        out.push(((k, v), t.join(&delta), d));
-                    }
-                    CorgiContainer::from_updates(out)
+                    coords[idx] = coords[idx].max(delay);
+                    t.inner = PointStamp::new(coords);
                 }
+                c
             }
             // The inverse of `EnterAt`: a value read OUT of each row's time. Vals gain one
-            // integer field; keys, times and diffs are untouched, and no term is compiled, so
-            // this path is total — there is no fallback to fall back to.
+            // integer field; keys, times and diffs are untouched, and no term is compiled.
             //
             // It mirrors [`append_iter`] shape for shape, and the empty product is where the two
             // representations part company: DDIR unit IS `Tuple([])`, which `append_iter` extends
@@ -228,65 +195,39 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize) -> CC {
                 };
                 CorgiContainer { keys: c.keys, vals, times: c.times, diffs: c.diffs }
             }
-            // Row-wise ops (parity with `backend::vec::render_linear`).
             LinearOp::FlatMap(list_term) => {
-                let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
-                if let Some(g) = compile_flatmap(list_term, &kshape, &vshape) {
-                    // Structural explode: the evaluated list column's FLAT element storage already
-                    // IS the new value column, so the elements never move. Each row's span in the
-                    // bounds gives both the within-row position (DDIR's `$1[0]`) and a repeat map
-                    // carrying key/time/diff across. No per-row eval, no transcode.
-                    let (bounds, elems) =
-                        corgi::eval_graph(&g, CValue::Prod(vec![c.keys.clone(), c.vals])).into_list("flatmap list");
-                    let ends: Vec<usize> = match &bounds {
-                        corgi::Bounds::Offsets(v) => v.clone(),
-                        corgi::Bounds::Stride(k, rows) => (1..=*rows).map(|i| i * k).collect(),
-                    };
-                    let total = ends.last().copied().unwrap_or(0);
-                    let (mut reps, mut pos) = (Vec::with_capacity(total), Vec::with_capacity(total));
-                    let mut start = 0usize;
-                    for (row, end) in ends.into_iter().enumerate() {
-                        for p in 0..(end - start) {
-                            reps.push(row);
-                            pos.push(p as u64);
-                        }
-                        start = end;
+                let g = plan.graph("flatmap", kshape, vshape, |k, v| compile_flatmap(list_term, k, v));
+                // Structural explode: the evaluated list column's FLAT element storage already
+                // IS the new value column, so the elements never move. Each row's span in the
+                // bounds gives both the within-row position (DDIR's `$1[0]`) and a repeat map
+                // carrying key/time/diff across. No per-row eval, no transcode.
+                let (bounds, elems) =
+                    corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals])).into_list("flatmap list").unwrap();
+                let ends: Vec<usize> = match &bounds {
+                    corgi::Bounds::Offsets(v) => v.clone(),
+                    corgi::Bounds::Stride(k, rows) => (1..=*rows).map(|i| i * k).collect(),
+                };
+                let total = ends.last().copied().unwrap_or(0);
+                let (mut reps, mut pos) = (Vec::with_capacity(total), Vec::with_capacity(total));
+                let mut start = 0usize;
+                for (row, end) in ends.into_iter().enumerate() {
+                    for p in 0..(end - start) {
+                        reps.push(row);
+                        pos.push(p as u64);
                     }
-                    CorgiContainer {
-                        keys: gather(&c.keys, &reps),
-                        vals: CValue::Prod(vec![CValue::u64(pos), elems]),
-                        times: reps.iter().map(|&r| c.times[r].clone()).collect(),
-                        diffs: reps.iter().map(|&r| c.diffs[r]).collect(),
-                    }
-                } else {
-                    apply_flatmap_rows(c, list_term)
+                    start = end;
+                }
+                CorgiContainer {
+                    keys: gather(&c.keys, &reps),
+                    vals: CValue::Prod(vec![CValue::u64(pos), elems]),
+                    times: reps.iter().map(|&r| c.times[r].clone()).collect(),
+                    diffs: reps.iter().map(|&r| c.diffs[r]).collect(),
                 }
             }
         };
     }
     c
 }
-
-/// The row-wise `FlatMap`: untranscode, `ir::eval` the list term per row, explode, re-transcode.
-/// Parity with `backend::vec::render_linear`, and the fallback when the list term has no columnar
-/// lowering with this container's shapes.
-fn apply_flatmap_rows(c: CC, list_term: &crate::parse::Term) -> CC {
-    let mut out: Vec<Upd> = Vec::new();
-    for ((k, v), t, d) in c.into_updates() {
-        let elems = {
-            let mut env = vec![k.clone(), v.clone()];
-            match crate::ir::eval(list_term, &mut env) {
-                DValue::List(xs) => xs,
-                other => panic!("flatmap: expected a List, got {other:?}"),
-            }
-        };
-        for (pos, elem) in elems.into_iter().enumerate() {
-            out.push(((k.clone(), DValue::Tuple(vec![DValue::Int(pos as i64), elem])), t.clone(), d));
-        }
-    }
-    CorgiContainer::from_updates(out)
-}
-
 
 /// The corgi rendering substrate. An uninhabited type used only as a type-level tag: it
 /// carries the [`Backend`] impl (a namespace of rendering functions selected by type) and is
@@ -303,9 +244,10 @@ impl Backend for CorgiBackend {
         // `level` is the scope depth (locates the iteration coordinate for LiftIter/EnterAt).
         c.inner
             .unary(Pipeline, "CorgiLinear", move |_, _| {
+                let mut plans: Vec<Plan> = ops.iter().map(|_| Plan::default()).collect();
                 move |input, output| {
                     input.for_each(|cap, data| {
-                        let mut out = apply_ops(std::mem::take(data), &ops, level);
+                        let mut out = apply_ops(std::mem::take(data), &ops, level, &mut plans);
                         output.session(&cap).give_container(&mut out);
                     });
                 }
@@ -469,9 +411,22 @@ pub fn render_tree_rows<'s>(
         .map(|c| {
             c.inner
                 .unary(Pipeline, "ToCorgi", |_, _| {
-                    |input, output| {
+                    // The collection's shape, pinned from its first row: every later batch
+                    // transcodes against it (a misfit row is a panic in `transcode`).
+                    let mut pinned: Option<(Shape, Shape)> = None;
+                    move |input, output| {
                         input.for_each(|cap, data| {
-                            let mut cc = CorgiContainer::from_updates(std::mem::take(data));
+                            let rows = std::mem::take(data);
+                            let mut cc = match rows.first() {
+                                None => CorgiContainer::default(),
+                                Some(((k, v), _, _)) => {
+                                    let (ks, vs) = pinned.get_or_insert_with(|| {
+                                        let pin = |r: &Row, what: &str| shape_of_row(r).unwrap_or_else(|e| panic!("input {what}: {e}"));
+                                        (pin(k, "key"), pin(v, "value"))
+                                    });
+                                    CorgiContainer::from_updates(rows, ks, vs)
+                                }
+                            };
                             output.session(&cap).give_container(&mut cc);
                         });
                     }

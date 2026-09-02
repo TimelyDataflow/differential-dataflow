@@ -75,7 +75,7 @@ impl<T: Columnar, R> Default for CorgiChunk<T, R> {
 
 /// Split a `Prod([keys, vals])` corgi value into its two columns.
 fn split_kv(kv: CValue) -> (CValue, CValue) {
-    let mut cols = kv.into_prod("corgi chunk kv");
+    let mut cols = kv.into_prod("corgi chunk kv").unwrap();
     let vals = cols.pop().unwrap();
     let keys = cols.pop().unwrap();
     (keys, vals)
@@ -497,7 +497,7 @@ pub fn present_key(keys: CValue) -> CValue {
     if corgi::arrange::leaf_slice(&keys).is_some() {
         return keys;
     }
-    let hashes = corgi::hash(&keys).into_u64("present_key");
+    let hashes = corgi::hash(&keys).into_u64("present_key").unwrap();
     CValue::Prod(vec![CValue::u64(hashes), keys])
 }
 
@@ -638,8 +638,8 @@ mod test {
     fn read_batch(b: &ChunkBatch<CorgiChunk<u64, i64>>) -> BTreeMap<((u64, u64), u64), i64> {
         let mut m = BTreeMap::new();
         for ch in &b.chunks {
-            let ks = ch.keys().clone().into_u64("k");
-            let vs = ch.vals().clone().into_u64("v");
+            let ks = ch.keys().clone().into_u64("k").unwrap();
+            let vs = ch.vals().clone().into_u64("v").unwrap();
             for i in 0..ch.len_() { *m.entry(((ks[i], vs[i]), ch.times().get(i))).or_insert(0) += ch.diffs()[i]; }
         }
         m.retain(|_, d| *d != 0);

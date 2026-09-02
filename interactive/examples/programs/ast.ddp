@@ -12,8 +12,7 @@
 -- `$0[0] - $1[0] + 32768` stays non-negative -- corgi's structural order is unsigned at the
 -- integer leaf, so signed values are out of contract for `min`.
 
-con Fwd(1) = 0;
-con Bwd(1) = 1;
+type Dir = Fwd u64 | Bwd u64;
 
 let rows = input 0 | key($0[0] ; $0[1]);
 
