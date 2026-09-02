@@ -128,15 +128,23 @@ fn run(
         // With `EDGES_FILE` set, rows come from the file (one row per line,
         // whitespace-separated i64 fields), assigned round-robin to inputs.
         // Otherwise `gen_row` synthesizes `edges` rows.
+        // With a file, the rounds EDIT its rows (retract one, re-insert it with its last field
+        // rewired to a value below its first) rather than churning synthetic rows, so an update is
+        // a change to data the dataflow has, not a phantom retraction of a row it never saw.
+        let mut file_rows: Option<Vec<(usize, Vec<i64>)>> = None;
         if let Some(path) = &edges_file {
             let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Cannot read {}: {}", path, e));
+            let mut mine = Vec::new();
             for (e, line) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
                 if e % peers == index {
                     let input_idx = e % n_inputs;
-                    let fields: Vec<Value> = line.split_whitespace().map(|t| Value::Int(t.parse::<i64>().unwrap())).collect();
+                    let ints: Vec<i64> = line.split_whitespace().map(|t| t.parse::<i64>().unwrap()).collect();
+                    let fields: Vec<Value> = ints.iter().map(|&n| Value::Int(n)).collect();
                     inputs[input_idx].update((Value::Tuple(fields), Value::unit()), 1);
+                    mine.push((input_idx, ints));
                 }
             }
+            file_rows = Some(mine);
         } else {
             for e in 0..edges {
                 if (e as usize) % peers == index {
@@ -175,6 +183,23 @@ fn run(
             let timer_round = std::time::Instant::now();
             let time = (round + 2) as u64;
             for _ in 0..batch {
+                if let Some(rows) = file_rows.as_mut() {
+                    if !rows.is_empty() {
+                        let idx = (cursor as usize) % rows.len();
+                        let (input_idx, old) = rows[idx].clone();
+                        let mut new = old.clone();
+                        let last = new.len() - 1;
+                        let mut h = cursor.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03;
+                        h ^= h >> 29; h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9); h ^= h >> 32;
+                        new[last] = if old[0] > 0 { (h % old[0] as u64) as i64 } else { 0 };
+                        let row = |f: &Vec<i64>| (Value::Tuple(f.iter().map(|&n| Value::Int(n)).collect()), Value::unit());
+                        inputs[input_idx].update(row(&old), -1);
+                        inputs[input_idx].update(row(&new), 1);
+                        rows[idx] = (input_idx, new);
+                    }
+                    cursor += 1;
+                    continue;
+                }
                 let remove_idx = cursor;
                 let add_idx = edges + cursor;
                 if (remove_idx as usize) % peers == index {
