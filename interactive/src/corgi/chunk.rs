@@ -28,7 +28,7 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_at, compare_idx, gather, gather_lanes, group_bounds, sort_perm};
+use corgi::arrange::{compare_adjacent, compare_at, gather, gather_lanes, group_bounds, sort_perm};
 use corgi::Value as CValue;
 
 use columnar::Columnar;
@@ -348,7 +348,7 @@ where
 /// (summing diffs, dropping zeros). Returns a sorted+consolidated `(keys, vals, times, diffs)`.
 ///
 /// Multi-record: one columnar `sort_perm` (discrimination sort) orders by `(key, val)`, one batched
-/// `compare_idx` flags adjacent-equal runs; only the small per-run *time* tiebreak is a Rust sort
+/// `compare_adjacent` flags adjacent-equal runs; only the small per-run *time* tiebreak is a Rust sort
 /// (time is not a corgi type). No per-pair `compare_at`.
 fn sort_consolidate<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> (CValue, CValue, Vec<T>, Vec<R>)
 where
@@ -366,13 +366,9 @@ where
     let times_s: Vec<T> = perm.iter().map(|&i| times[i].clone()).collect();
     let diffs_s: Vec<R> = perm.iter().map(|&i| diffs[i].clone()).collect();
     // Batched adjacent-equality over the kv-sorted column: `adj[m] == 0` iff `kv_s[m] == kv_s[m+1]`.
-    let adj: Vec<i8> = if n > 1 {
-        let left: Vec<usize> = (0..n - 1).collect();
-        let right: Vec<usize> = (1..n).collect();
-        compare_idx(&kv_s, &kv_s, &left, &right)
-    } else {
-        Vec::new()
-    };
+    // Naming the pattern rather than writing out the two index columns: corgi reads both sides
+    // densely, and the `i`/`i+1` index vectors this used to build are not built at all.
+    let adj: Vec<i8> = compare_adjacent(&kv_s);
 
     // Walk maximal equal-`(key,val)` runs; within each, order by time and consolidate equal times.
     let (mut keep, mut ot, mut od) = (Vec::new(), Vec::new(), Vec::new());
@@ -497,7 +493,7 @@ pub fn present_key(keys: CValue) -> CValue {
     if corgi::arrange::leaf_slice(&keys).is_some() {
         return keys;
     }
-    let hashes = corgi::hash(&keys).into_u64("present_key").unwrap();
+    let hashes = corgi::hash(&keys);
     CValue::Prod(vec![CValue::u64(hashes), keys])
 }
 

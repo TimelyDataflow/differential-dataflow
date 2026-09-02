@@ -111,7 +111,7 @@ impl<T: Clone + 'static, R: Clone + 'static> Distributor<CorgiContainer<T, R>> f
         }
         let peers = pushers.len();
 
-        let ids = corgi::hash(&container.keys).into_u64("corgi exchange: key hash").unwrap();
+        let ids = corgi::hash(&container.keys);
         self.counting_sort(&ids, peers);
 
         // Whole-container fast path. When every row shares a destination — a batch narrower than

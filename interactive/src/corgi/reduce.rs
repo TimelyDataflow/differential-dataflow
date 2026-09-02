@@ -57,14 +57,10 @@ fn signed_order_view(value: CValue) -> CValue {
         CValue::Prod(fields) => {
             CValue::Prod(fields.into_iter().map(signed_order_view).collect())
         }
-        CValue::Sum(tags, within, variants) => CValue::Sum(
-            tags,
-            within,
-            variants
-                .into_iter()
-                .map(signed_order_view)
-                .collect(),
-        ),
+        CValue::Sum(tags, variants) => {
+            // the lane assignment is untouched — only the payload lanes are swizzled.
+            CValue::Sum(tags, variants.into_iter().map(signed_order_view).collect())
+        }
         CValue::List(bounds, values) => {
             CValue::List(bounds, Box::new(signed_order_view(*values)))
         }
@@ -200,7 +196,7 @@ fn ids(col: &CValue) -> Vec<u64> {
     if let Some(sl) = corgi::arrange::leaf_slice(col) {
         return sl.to_vec();
     }
-    corgi::hash(col).into_u64("ids").unwrap()
+    corgi::hash(col)
 }
 
 /// Concatenate the records of the `changed` keys across a run of chunks into parallel
@@ -542,7 +538,7 @@ where
                 // next batch's `List<T>` where the two are concatenated. `gather` at no indices
                 // is the empty column of that shape.
                 let elems = gather(&self.in_vals, &elem_reps);
-                let col = CValue::List(Bounds::Offsets(bracket_ends), Box::new(elems));
+                let col = CValue::List(Bounds::offsets(bracket_ends), Box::new(elems));
                 out_ids = ids(&col);
                 self.register_vals(col, &out_ids);
             }

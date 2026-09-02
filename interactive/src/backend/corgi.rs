@@ -203,10 +203,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 // carrying key/time/diff across. No per-row eval, no transcode.
                 let (bounds, elems) =
                     corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals])).into_list("flatmap list").unwrap();
-                let ends: Vec<usize> = match &bounds {
-                    corgi::Bounds::Offsets(v) => v.clone(),
-                    corgi::Bounds::Stride(k, rows) => (1..=*rows).map(|i| i * k).collect(),
-                };
+                let ends: Vec<usize> = bounds.to_vec();
                 let total = ends.last().copied().unwrap_or(0);
                 let (mut reps, mut pos) = (Vec::with_capacity(total), Vec::with_capacity(total));
                 let mut start = 0usize;
