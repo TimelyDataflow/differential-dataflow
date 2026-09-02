@@ -497,22 +497,27 @@ where
             Reducer::Collect => {
                 // One row per bracket: the values sorted in corgi structural order,
                 // each repeated by its diff, as a `List`. One `sort_blocks` orders every bracket's
-                // entries at once; element rows are then taken columnar. Every bracket emits (empty
-                // list if all diffs ≤ 0), matching the row reducer.
+                // entries at once; element rows are then taken columnar. A bracket emits iff some
+                // value has NON-ZERO net (as Distinct/Min: DD invokes the reducer only for a key
+                // with input, and the row reducer then lists the positive copies — an empty list
+                // when every net is negative). A bracket whose values all cancelled is a key with
+                // no input: it must emit nothing, or a retracted key keeps a stale (empty) list.
                 let mut entry_reps: Vec<usize> = Vec::new();
                 let mut entry_diffs: Vec<Diff> = Vec::new();
                 let mut labels: Vec<u64> = Vec::new();
                 let mut blocks: Vec<(usize, usize)> = Vec::with_capacity(ends.len());
                 let mut start = 0;
                 for (bi, &end) in ends.iter().enumerate() {
-                    let lo = entry_reps.len();
-                    for k in start..end {
-                        entry_reps.push(input[k].0);
-                        entry_diffs.push(input[k].1);
-                        labels.push(bi as u64);
+                    if input[start..end].iter().any(|&(_, d)| d != 0) {
+                        let lo = entry_reps.len();
+                        for k in start..end {
+                            entry_reps.push(input[k].0);
+                            entry_diffs.push(input[k].1);
+                            labels.push(bi as u64);
+                        }
+                        blocks.push((lo, entry_reps.len()));
+                        out_diffs.push(1);
                     }
-                    blocks.push((lo, entry_reps.len()));
-                    out_diffs.push(1);
                     out_ends.push(out_diffs.len());
                     start = end;
                 }
@@ -532,7 +537,11 @@ where
                     }
                     bracket_ends.push(elem_reps.len());
                 }
-                let elems = if elem_reps.is_empty() { CValue::Unit(0) } else { gather(&self.in_vals, &elem_reps) };
+                // A window whose lists are all empty still has an element SHAPE — the input
+                // values' — and the column must carry it, or this batch's `List<()>` meets the
+                // next batch's `List<T>` where the two are concatenated. `gather` at no indices
+                // is the empty column of that shape.
+                let elems = gather(&self.in_vals, &elem_reps);
                 let col = CValue::List(Bounds::Offsets(bracket_ends), Box::new(elems));
                 out_ids = ids(&col);
                 self.register_vals(col, &out_ids);
