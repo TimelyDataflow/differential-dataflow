@@ -16,6 +16,7 @@ pub mod pointstamp;
 use timely::order::Product;
 use timely::progress::Timestamp;
 use timely::dataflow::operators::generic::{OutputBuilder, builder_rc::OperatorBuilder};
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::progress::Antichain;
 
@@ -47,17 +48,21 @@ where
         builder.build(move |_capability| move |_frontier| {
             let mut output = output.activate();
             input.for_each(|cap, data| {
-                let mut new_time = cap.time().clone();
-                let mut vec = std::mem::take(&mut new_time.inner).into_inner();
-                vec.truncate(level - 1);
-                new_time.inner = PointStamp::new(vec);
-                let new_cap = cap.delayed(&new_time, 0);
-                for (_data, time, _diff) in data.iter_mut() {
-                    let mut vec = std::mem::take(&mut time.inner).into_inner();
+                // A message may carry several timestamps (a multi-element stamp, e.g. late
+                // iterations of one epoch alongside early ones of the next): hold a capability
+                // for each, truncated exactly as the records are.
+                let truncate = |time: &Product<TOuter, PointStamp<T>>| {
+                    let mut new_time = time.clone();
+                    let mut vec = std::mem::take(&mut new_time.inner).into_inner();
                     vec.truncate(level - 1);
-                    time.inner = PointStamp::new(vec);
+                    new_time.inner = PointStamp::new(vec);
+                    new_time
+                };
+                let caps: CapabilitySet<_> = cap.stamp().iter().map(|t| cap.delayed(&truncate(t), 0)).collect();
+                for (_data, time, _diff) in data.iter_mut() {
+                    *time = truncate(time);
                 }
-                output.session(&new_cap).give_container(data);
+                output.session(&caps).give_container(data);
             });
         });
 
