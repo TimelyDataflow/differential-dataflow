@@ -71,7 +71,12 @@ fn run(
         tree = interactive::explain::explain_with(&tree, &source_shapes, options);
     }
     let ops_before = tree.op_count();
-    tree.optimize();
+    // the positional inputs' rows are `arity` keys with no value; the query input is unknown
+    let widths: Vec<Option<(usize, usize)>> = tree.root.imports.iter().map(|imp| match &imp.from {
+        st::Source::Input(k) if *k < n_inputs => Some((arity, 0)),
+        _ => None,
+    }).collect();
+    tree.optimize_with_widths(&widths);
     let tree_export_idx = tree.root.exports.iter().position(|e| e.name == "result").unwrap_or(0);
     println!("{}: {} ops before optimize, {} after; driving export {:?}",
         name, ops_before, tree.op_count(), tree.root.exports[tree_export_idx].name);

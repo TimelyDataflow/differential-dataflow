@@ -144,9 +144,18 @@ pub struct Program {
 }
 
 impl Program {
-    /// Optimize every scope in place. See `Scope::optimize`.
+    /// Optimize every scope in place, through the e-graph (`crate::egraph`), with the root
+    /// inputs' row widths unknown: rows are then priced by operator alone, and the rewrites that
+    /// narrow rows do not fire. `Scope::optimize` is the hand-written optimizer the e-graph
+    /// subsumes.
     pub fn optimize(&mut self) {
-        self.root.optimize();
+        self.optimize_with_widths(&[]);
+    }
+
+    /// Optimize every scope in place through the e-graph, with each root input's row width
+    /// (key fields, value fields) where known, so the rewrites that narrow rows can pay.
+    pub fn optimize_with_widths(&mut self, source_widths: &[Option<(usize, usize)>]) {
+        *self = crate::egraph::optimize(self, source_widths);
     }
 
     /// Print the tree as indented structural text (readability, not

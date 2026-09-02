@@ -12,7 +12,11 @@
 //! that reads only some of an input's fields, the same operator over a projection of that input
 //! keeping just those fields, and asserts the two equal; join commutativity mints each join with
 //! its inputs swapped.
-//! Extraction picks, per class, the node with the least tree cost, and the host regroups
+//! Extraction picks one node per class: the program computes the least *tree* cost per class
+//! (a dynamic program, which counts a shared subterm once per use), and the host refines that
+//! choice against the *DAG* cost — the weight of what the choices materialize from the roots,
+//! shared subterms once — by hill-climbing to a local optimum (optimal DAG extraction is
+//! NP-hard; this is the standard greedy, seeded by the tree optimum). The host then regroups
 //! single-consumer chains of steps back into `Linear` operators.
 //!
 //! Child scopes are opaque leaves of their parent's e-graph, optimized on their own first: a scope
@@ -70,7 +74,7 @@ fn optimizer() -> &'static Program {
     PROGRAM.get_or_init(|| {
         let src = include_str!("optimize.ddp");
         let mut tree = crate::lower::lower_tree(crate::parse::pipe::parse(src));
-        tree.optimize();
+        tree.root.optimize(); // the hand-written optimizer: the e-graph cannot optimize itself
         tree
     })
 }
@@ -466,6 +470,8 @@ fn optimize_scope(scope: &Scope, import_widths: &[Option<Width>]) -> (Scope, Vec
         out["classes"].iter().filter(|(_, d)| *d > 0).map(|((k, v), _)| (ints(k)[0] as usize, ints(v)[0] as usize)).collect();
     let best: BTreeMap<usize, usize> =
         out["best"].iter().filter(|(_, d)| *d > 0).map(|((k, v), _)| (ints(k)[0] as usize, ints(v)[0] as usize)).collect();
+    let roots: Vec<usize> = bind_roots.iter().chain(&export_roots).copied().collect();
+    let best = refine_dag(&r, &classes, &roots, best);
     let chosen = |node: usize| -> usize {
         let class = classes[&node];
         *best.get(&class).unwrap_or_else(|| panic!("class {class} has no extracted node"))
@@ -505,6 +511,86 @@ fn optimize_scope(scope: &Scope, import_widths: &[Option<Width>]) -> (Scope, Vec
     }
     let export_widths: Vec<Option<Width>> = export_roots.iter().map(|&n| r.nodes[n].width).collect();
     (out_scope, export_widths)
+}
+
+/// DAG-aware extraction: starting from a choice per class (the tree-cost optimum), hill-climb on
+/// the weight of the DAG the choices materialize from the roots — every reached class's node
+/// once, however many consumers it has. A move changes one reached class's node and is taken
+/// when the whole DAG gets strictly lighter (so a move that makes the choices cyclic, or that
+/// pays for a second copy of something a sibling already materializes, is never taken).
+/// Optimal DAG extraction is NP-hard; this is the standard greedy, seeded by the tree optimum.
+fn refine_dag(r: &Reified, classes: &BTreeMap<usize, usize>, roots: &[usize], mut pick: BTreeMap<usize, usize>) -> BTreeMap<usize, usize> {
+    let w: Vec<i64> = r.nodes.iter().map(|x| price(x.kind, x.priced(&r.nodes))).collect();
+    let mut members: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (&node, &class) in classes {
+        members.entry(class).or_default().push(node);
+    }
+    let root_classes: Vec<usize> = roots.iter().map(|&n| classes[&n]).collect();
+
+    /// The chosen DAG's walker: from a class, sum weights and list the classes reached;
+    /// `false` on a cycle or a class without a choice.
+    struct Walk<'a> {
+        r: &'a Reified,
+        classes: &'a BTreeMap<usize, usize>,
+        w: &'a [i64],
+    }
+    impl Walk<'_> {
+        fn visit(&self, class: usize, choice: &BTreeMap<usize, usize>, state: &mut HashMap<usize, u8>, sum: &mut i64, reached: &mut Vec<usize>) -> bool {
+            match state.get(&class) {
+                Some(1) => return false,
+                Some(_) => return true,
+                None => {}
+            }
+            let Some(&p) = choice.get(&class) else { return false };
+            state.insert(class, 1);
+            *sum += self.w[p];
+            reached.push(class);
+            for &k in &self.r.nodes[p].children {
+                if !self.visit(self.classes[&k], choice, state, sum, reached) {
+                    return false;
+                }
+            }
+            state.insert(class, 2);
+            true
+        }
+    }
+    let walk = Walk { r, classes, w: &w };
+    let total = |choice: &BTreeMap<usize, usize>| -> Option<(i64, Vec<usize>)> {
+        let mut state = HashMap::new();
+        let (mut sum, mut reached) = (0, Vec::new());
+        for &rc in &root_classes {
+            if !walk.visit(rc, choice, &mut state, &mut sum, &mut reached) {
+                return None;
+            }
+        }
+        Some((sum, reached))
+    };
+
+    let (mut best, mut reached) = total(&pick).expect("the tree-cost extraction is acyclic and complete");
+    loop {
+        let mut improved = false;
+        'moves: for &class in &reached {
+            let cur = pick[&class];
+            for &node in &members[&class] {
+                if node == cur {
+                    continue;
+                }
+                pick.insert(class, node);
+                if let Some((t, rr)) = total(&pick) {
+                    if t < best {
+                        best = t;
+                        reached = rr;
+                        improved = true;
+                        break 'moves;
+                    }
+                }
+                pick.insert(class, cur);
+            }
+        }
+        if !improved {
+            return pick;
+        }
+    }
 }
 
 /// What rebuilding a scope reads: the reified nodes, the classes, the choice per class, the

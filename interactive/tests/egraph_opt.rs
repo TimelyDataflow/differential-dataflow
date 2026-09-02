@@ -1,7 +1,7 @@
 //! The e-graph optimizer against the hand-written one: on every corpus program, and on its
 //! explanation rewrite (a large, mechanically generated, redundant IR), the e-graph-optimized
-//! program must evaluate to the same outputs as the original, and reach an operator count no
-//! worse than `Scope::optimize`'s.
+//! program must evaluate to the same outputs as the original, and cost no more than
+//! `Scope::optimize`'s result under the e-graph's own model.
 
 use interactive::backend::vec;
 use interactive::ir::Value;
@@ -53,7 +53,7 @@ fn check(name: &str, tree: &scope_ir::Program, inputs: &[Vec<(Value, Value)>]) -
     let widths = widths_of(inputs);
     let want = vec::evaluate(tree, inputs);
     let mut rust = tree.clone();
-    rust.optimize();
+    rust.root.optimize();
     let eg = egraph::optimize(tree, &widths);
     assert_eq!(vec::evaluate(&eg, inputs), want, "{name}: the e-graph-optimized program changed the outputs");
     let costs = (egraph::cost(tree, &widths), egraph::cost(&rust, &widths), egraph::cost(&eg, &widths));
@@ -127,6 +127,29 @@ fn join_commutativity_merges() {
     assert_eq!(joins, 1, "{:#?}", eg.root);
 }
 
+/// Tree extraction would narrow a join input that another join needs whole, paying for a second
+/// arrangement of it; DAG-aware extraction sees the shared arrangement is already paid for.
+#[test]
+fn dag_extraction_keeps_a_shared_arrangement() {
+    let src = "let wide = input 0 | key($0[0] ; $0[1], $0[0] * $0[1], $0[1] + 7);\n\
+               let left = input 1 | key($0[0] ; $0[1]);\n\
+               let other = input 1 | key($0[1] ; $0[0]);\n\
+               let j1 = left | join(wide, ($0[0] ; $2[2], $1[0]));\n\
+               let j2 = other | join(wide, ($0[0] ; $2[0], $2[1], $2[2], $1[0]));\n\
+               export \"j1\" = j1 | arrange;\n\
+               export \"j2\" = j2 | arrange;\n";
+    let tree = lower::lower_tree(parse::pipe::parse(src));
+    let inputs = vec![rows(&[&[1, 2], &[1, 3], &[2, 5]]), rows(&[&[1, 9], &[2, 8]])];
+    let eg = egraph::optimize(&tree, &widths_of(&inputs));
+    assert_eq!(vec::evaluate(&eg, &inputs), vec::evaluate(&tree, &inputs));
+    let arranges = eg.root.items.iter().filter(|it| matches!(it, scope_ir::Item::Op(scope_ir::Node::Arrange(_)))).count();
+    // wide, left, other, and the two exports: no second arrangement of wide
+    if arranges != 5 {
+        eg.dump();
+    }
+    assert_eq!(arranges, 5);
+}
+
 #[test]
 fn corpus_programs() {
     for prog in ["reach", "scc", "stable", "unnest", "adt", "ast", "binders", "tour"] {
@@ -153,6 +176,13 @@ fn explain_corpus() {
         while inputs.len() < rewritten.root.imports.len() {
             inputs.push(Vec::new());
         }
+        let t = std::time::Instant::now();
+        let _ = egraph::optimize(&rewritten, &widths_of(&inputs));
+        let t_eg = t.elapsed();
+        let t_hand = std::time::Instant::now();
+        let mut hand = rewritten.clone();
+        hand.root.optimize();
+        println!("explain({prog}): e-graph optimize {t_eg:?}, hand-written {:?}", t_hand.elapsed());
         let (o, r, e) = check(&format!("explain({prog})"), &rewritten, &inputs);
         println!("explain({prog}): {o} ops -> rust {r}, egraph {e}");
     }
