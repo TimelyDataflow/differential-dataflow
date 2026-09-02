@@ -107,7 +107,23 @@ fn root_rows(program: &Program, source_widths: &[Option<Width>]) -> Vec<Row> {
 /// gives each root import's row width, so rows can be priced; `None` for an input whose width is
 /// not known.
 pub fn optimize(program: &Program, source_widths: &[Option<Width>]) -> Program {
-    Program { root: optimize_scope(&program.root, &root_rows(program, source_widths)).0 }
+    optimize_with(program, source_widths, Extraction::Cheapest)
+}
+
+/// How to choose a node per class once the classes are known. The cost model lives entirely
+/// here: saturation is the same whatever the choice, and any acyclic choice is a correct
+/// program — `Random` exists to check exactly that, over alternatives the cost never picks.
+#[derive(Clone, Copy, Debug)]
+pub enum Extraction {
+    /// The cheapest DAG the hill-climb finds from the tree optimum.
+    Cheapest,
+    /// From the tree optimum, a few hundred random moves, each kept if the choices stay acyclic.
+    Random(u64),
+}
+
+/// `optimize`, with the extraction chosen.
+pub fn optimize_with(program: &Program, source_widths: &[Option<Width>], extraction: Extraction) -> Program {
+    Program { root: optimize_scope(&program.root, &root_rows(program, source_widths), extraction).0 }
 }
 
 /// The DAG cost of a program under the optimizer's model: every operator priced by kind, row
@@ -365,7 +381,7 @@ impl Refs {
 /// Reify a scope: one node per import, var, linear step, and operator; children scopes optimized
 /// first and entered as opaque `Sub` nodes. Returns the table with the nodes of the binds and of
 /// the exports (the roots).
-fn reify(scope: &Scope, f: &Facts) -> (Reified, Vec<usize>, Vec<usize>) {
+fn reify(scope: &Scope, f: &Facts, extraction: Extraction) -> (Reified, Vec<usize>, Vec<usize>) {
     let mut r = Reified::default();
     let mut refs = Refs {
         import_nodes: (0..scope.imports.len()).map(|k| r.push(KIND_IMPORT, k as i64, vec![], f.imports[k])).collect(),
@@ -411,7 +427,7 @@ fn reify(scope: &Scope, f: &Facts) -> (Reified, Vec<usize>, Vec<usize>) {
                 r.push(KIND_INSPECT, payload, vec![kid], f.items[i])
             }
             Item::Sub(child) => {
-                let (optimized, export_rows) = optimize_scope(child, &f.child_imports(child));
+                let (optimized, export_rows) = optimize_scope(child, &f.child_imports(child), extraction);
                 refs.sub_export_rows.insert(i, export_rows);
                 let kids: Vec<usize> = optimized
                     .imports
@@ -588,9 +604,9 @@ fn filter_pushdown(r: &mut Reified, n: usize, found: &mut Vec<(usize, usize)>) {
 }
 
 /// Optimize one scope; returns it with its exports' rows (what its parent needs of it).
-fn optimize_scope(scope: &Scope, import_rows: &[Row]) -> (Scope, Vec<Row>) {
+fn optimize_scope(scope: &Scope, import_rows: &[Row], extraction: Extraction) -> (Scope, Vec<Row>) {
     let f = scope_facts(scope, import_rows);
-    let (mut r, bind_roots, export_roots) = reify(scope, &f);
+    let (mut r, bind_roots, export_roots) = reify(scope, &f, extraction);
     instantiate_rules(&mut r);
 
     // the child scope behind each Sub node, by node id.
@@ -624,7 +640,10 @@ fn optimize_scope(scope: &Scope, import_rows: &[Row]) -> (Scope, Vec<Row>) {
     let best: BTreeMap<usize, usize> =
         out["best"].iter().filter(|(_, d)| *d > 0).map(|((k, v), _)| (ints(k)[0] as usize, ints(v)[0] as usize)).collect();
     let roots: Vec<usize> = bind_roots.iter().chain(&export_roots).copied().collect();
-    let best = refine_dag(&r, &classes, &roots, best);
+    let best = match extraction {
+        Extraction::Cheapest => refine_dag(&r, &classes, &roots, best),
+        Extraction::Random(seed) => random_dag(&r, &classes, &roots, best, seed),
+    };
     let chosen = |node: usize| -> usize {
         let class = classes[&node];
         *best.get(&class).unwrap_or_else(|| panic!("class {class} has no extracted node"))
@@ -673,53 +692,12 @@ fn optimize_scope(scope: &Scope, import_rows: &[Row]) -> (Scope, Vec<Row>) {
 /// pays for a second copy of something a sibling already materializes, is never taken).
 /// Optimal DAG extraction is NP-hard; this is the standard greedy, seeded by the tree optimum.
 fn refine_dag(r: &Reified, classes: &BTreeMap<usize, usize>, roots: &[usize], mut pick: BTreeMap<usize, usize>) -> BTreeMap<usize, usize> {
-    let w: Vec<i64> = (0..r.nodes.len()).map(|n| r.price_of(n)).collect();
+    let walk = Walk::new(r, classes, roots);
     let mut members: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (&node, &class) in classes {
         members.entry(class).or_default().push(node);
     }
-    let root_classes: Vec<usize> = roots.iter().map(|&n| classes[&n]).collect();
-
-    /// The chosen DAG's walker: from a class, sum weights and list the classes reached;
-    /// `false` on a cycle or a class without a choice.
-    struct Walk<'a> {
-        r: &'a Reified,
-        classes: &'a BTreeMap<usize, usize>,
-        w: &'a [i64],
-    }
-    impl Walk<'_> {
-        fn visit(&self, class: usize, choice: &BTreeMap<usize, usize>, state: &mut HashMap<usize, u8>, sum: &mut i64, reached: &mut Vec<usize>) -> bool {
-            match state.get(&class) {
-                Some(1) => return false,
-                Some(_) => return true,
-                None => {}
-            }
-            let Some(&p) = choice.get(&class) else { return false };
-            state.insert(class, 1);
-            *sum += self.w[p];
-            reached.push(class);
-            for &k in &self.r.nodes[p].children {
-                if !self.visit(self.classes[&k], choice, state, sum, reached) {
-                    return false;
-                }
-            }
-            state.insert(class, 2);
-            true
-        }
-    }
-    let walk = Walk { r, classes, w: &w };
-    let total = |choice: &BTreeMap<usize, usize>| -> Option<(i64, Vec<usize>)> {
-        let mut state = HashMap::new();
-        let (mut sum, mut reached) = (0, Vec::new());
-        for &rc in &root_classes {
-            if !walk.visit(rc, choice, &mut state, &mut sum, &mut reached) {
-                return None;
-            }
-        }
-        Some((sum, reached))
-    };
-
-    let (mut best, mut reached) = total(&pick).expect("the tree-cost extraction is acyclic and complete");
+    let (mut best, mut reached) = walk.total(&pick).expect("the tree-cost extraction is acyclic and complete");
     loop {
         let mut improved = false;
         'moves: for &class in &reached {
@@ -729,7 +707,7 @@ fn refine_dag(r: &Reified, classes: &BTreeMap<usize, usize>, roots: &[usize], mu
                     continue;
                 }
                 pick.insert(class, node);
-                if let Some((t, rr)) = total(&pick) {
+                if let Some((t, rr)) = walk.total(&pick) {
                     if t < best {
                         best = t;
                         reached = rr;
@@ -743,6 +721,84 @@ fn refine_dag(r: &Reified, classes: &BTreeMap<usize, usize>, roots: &[usize], mu
         if !improved {
             return pick;
         }
+    }
+}
+
+/// Extraction by coin: from the tree optimum, a few hundred moves to a random member of a
+/// random reached class, each kept if the choices stay acyclic, whatever it costs.
+fn random_dag(r: &Reified, classes: &BTreeMap<usize, usize>, roots: &[usize], mut pick: BTreeMap<usize, usize>, seed: u64) -> BTreeMap<usize, usize> {
+    let walk = Walk::new(r, classes, roots);
+    let mut members: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (&node, &class) in classes {
+        members.entry(class).or_default().push(node);
+    }
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let (_, mut reached) = walk.total(&pick).expect("the tree-cost extraction is acyclic and complete");
+    for _ in 0..256 {
+        let class = reached[(next() % reached.len() as u64) as usize];
+        let nodes = &members[&class];
+        let node = nodes[(next() % nodes.len() as u64) as usize];
+        let cur = pick[&class];
+        if node == cur {
+            continue;
+        }
+        pick.insert(class, node);
+        match walk.total(&pick) {
+            Some((_, rr)) => reached = rr,
+            None => {
+                pick.insert(class, cur);
+            }
+        }
+    }
+    pick
+}
+
+/// The chosen DAG's walker: from the roots, sum prices and list the classes reached; nothing on
+/// a cycle or a class without a choice.
+struct Walk<'a> {
+    r: &'a Reified,
+    classes: &'a BTreeMap<usize, usize>,
+    root_classes: Vec<usize>,
+    w: Vec<i64>,
+}
+
+impl<'a> Walk<'a> {
+    fn new(r: &'a Reified, classes: &'a BTreeMap<usize, usize>, roots: &[usize]) -> Self {
+        Walk { r, classes, root_classes: roots.iter().map(|&n| classes[&n]).collect(), w: (0..r.nodes.len()).map(|n| r.price_of(n)).collect() }
+    }
+    fn total(&self, choice: &BTreeMap<usize, usize>) -> Option<(i64, Vec<usize>)> {
+        let mut state = HashMap::new();
+        let (mut sum, mut reached) = (0, Vec::new());
+        for &rc in &self.root_classes {
+            if !self.visit(rc, choice, &mut state, &mut sum, &mut reached) {
+                return None;
+            }
+        }
+        Some((sum, reached))
+    }
+    fn visit(&self, class: usize, choice: &BTreeMap<usize, usize>, state: &mut HashMap<usize, u8>, sum: &mut i64, reached: &mut Vec<usize>) -> bool {
+        match state.get(&class) {
+            Some(1) => return false,
+            Some(_) => return true,
+            None => {}
+        }
+        let Some(&p) = choice.get(&class) else { return false };
+        state.insert(class, 1);
+        *sum += self.w[p];
+        reached.push(class);
+        for &k in &self.r.nodes[p].children {
+            if !self.visit(self.classes[&k], choice, state, sum, reached) {
+                return false;
+            }
+        }
+        state.insert(class, 2);
+        true
     }
 }
 

@@ -237,6 +237,38 @@ fn filter_sinks_through_concat() {
     assert!(parts_filter, "the concatenation's parts do not each filter");
 }
 
+/// The cost model is extraction's alone: any acyclic choice per class is the same program.
+/// Random choices exercise the alternatives the cost never picks — swapped joins, pushed
+/// filters, narrowed inputs — on every corpus program and both explanation rewrites.
+#[test]
+fn random_extraction_is_equivalent() {
+    let mut programs: Vec<(String, scope_ir::Program, Vec<Vec<(Value, Value)>>)> = Vec::new();
+    for prog in ["reach", "scc", "stable", "unnest", "adt", "ast", "binders", "tour"] {
+        programs.push((prog.to_string(), load(prog), inputs_for(prog)));
+    }
+    for prog in ["reach", "scc"] {
+        let tree = load(prog);
+        let inputs0 = inputs_for(prog);
+        let shapes: Vec<(usize, usize)> = inputs0.iter().map(|rows| (arity(&rows[0].0), 0)).collect();
+        let rewritten = explain::explain(&tree, &shapes);
+        let mut inputs = inputs0;
+        while inputs.len() < rewritten.root.imports.len() {
+            inputs.push(Vec::new());
+        }
+        programs.push((format!("explain({prog})"), rewritten, inputs));
+    }
+    for (name, tree, inputs) in &programs {
+        let want = vec::evaluate(tree, inputs);
+        let mut counts = Vec::new();
+        for seed in 1..=4 {
+            let eg = egraph::optimize_with(tree, &widths_of(inputs), egraph::Extraction::Random(seed));
+            assert_eq!(vec::evaluate(&eg, inputs), want, "{name}, seed {seed}: a random extraction changed the outputs");
+            counts.push(eg.op_count());
+        }
+        println!("{name:>14}: cheapest {} ops; random {counts:?}", egraph::optimize(tree, &widths_of(inputs)).op_count());
+    }
+}
+
 #[test]
 fn corpus_programs() {
     for prog in ["reach", "scc", "stable", "unnest", "adt", "ast", "binders", "tour"] {
