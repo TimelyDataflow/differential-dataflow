@@ -109,9 +109,8 @@ where
             let output: &mut OutputBuilderSession<'_, Tr::Time, NoopBuilder<C>> = output;
 
             // Stage all arriving updates, retaining capabilities that cover them.
-            // TODO: Tolerate multi-capability inputs.
             input1.for_each(|capability, data| {
-                caps.insert(capability.retain(0));
+                for cap in capability.retain_stamp(0).iter() { caps.insert(cap.clone()); }
                 batcher.insert(data);
             });
 

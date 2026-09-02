@@ -134,6 +134,7 @@ impl<'scope, T: Timestamp, C: Container> Collection<'scope, T, C> {
     pub fn inspect_container<F>(self, func: F) -> Self
     where
         F: FnMut(Result<(&T, &C), &[T]>)+'static,
+        T: timely::order::TotalOrder,
     {
         self.inner
             .inspect_container(func)
@@ -628,6 +629,7 @@ pub mod vec {
         pub fn inspect_batch<F>(self, mut func: F) -> Collection<'scope, T, D, R>
         where
             F: FnMut(&T, &[(D, T, R)])+'static,
+            T: timely::order::TotalOrder,
         {
             self.inner
                 .inspect_batch(move |time, data| func(time, data))
