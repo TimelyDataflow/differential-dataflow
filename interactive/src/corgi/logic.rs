@@ -440,7 +440,7 @@ pub fn compile(
                 let cnode = bb.add(Op::Field(0), vec![inp]);
                 let mut env2: Vec<usize> = (0..env.len()).map(|j| bb.add(Op::Field(j), vec![cnode])).collect();
                 let mut shapes2: Vec<Shape> = env_shapes.to_vec();
-                let term = if i < arms.len() {
+                let arm = if i < arms.len() {
                     let pnode = bb.add(Op::Field(1), vec![inp]);
                     env2.push(pnode);
                     shapes2.push(lanes[i].clone());
@@ -448,7 +448,7 @@ pub fn compile(
                 } else {
                     default.as_deref().ok_or_else(|| format!("case: no arm for tag {i} and no `_` default"))?
                 };
-                let out = compile(term, &mut bb, &env2, &shapes2, inp, exp)?;
+                let out = compile(arm, &mut bb, &env2, &shapes2, inp, exp)?;
                 let g = bb.finish(out);
                 let in_shape = Shape::Prod(vec![Shape::Prod(env_shapes.to_vec()), lanes[i].clone()]);
                 let s = corgi::shape_of(&g, &in_shape)?;
