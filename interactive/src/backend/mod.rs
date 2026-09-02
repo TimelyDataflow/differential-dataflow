@@ -48,6 +48,14 @@ pub trait Backend {
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
+    /// The same collection with its changes consolidated: rows that cancel are gone. A feedback
+    /// variable is set to this — an iteration quiesces when its feedback carries no *records*,
+    /// so a step whose additions and retractions cancel only logically (a `negate` under a
+    /// `concat`, say) would never quiesce. Through the arrangement by default; a backend with a
+    /// cheaper consolidation can override.
+    fn consolidate<'s>(c: Collection<'s, Time, Self::Container>) -> Collection<'s, Time, Self::Container> {
+        Self::as_collection(Self::arrange(c))
+    }
 }
 
 /// A rendered item's value: a collection, or an arrangement.
@@ -170,7 +178,7 @@ pub fn render_tree<'s, B: Backend>(
 
     for bind in &s.binds {
         let c = resolve(&items, &imports, &var_cols, &bind.value).collection();
-        var_handles[bind.var].take().expect("bind: variable already bound").set(c);
+        var_handles[bind.var].take().expect("bind: variable already bound").set(B::consolidate(c));
     }
 
     s.exports.iter().map(|e| resolve(&items, &imports, &var_cols, &e.value).collection()).collect()
