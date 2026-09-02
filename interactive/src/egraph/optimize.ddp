@@ -1,0 +1,80 @@
+-- The DDIR optimizer as a DDIR program: an e-graph over one scope's operators.
+--
+-- input 0: nodes  (id, kind, payload) ;   input 1: edges  (parent, pos, child) ;
+--
+-- kind: 0 Import  1 Var  2 ChildExport  3 Op (one linear step)  4 Concat  5 Arrange  6 Join
+--       7 Reduce  8 Inspect  9 Sub (a child scope)
+-- payload: an interned id for whatever the node closes over (the op, projection, reducer,
+-- label, export index, or the child scope's body); 0 when there is nothing to close over.
+--
+-- Congruence closure (`arrange_idem.ddp`'s core): a node's signature is (kind, payload, the
+-- classes of its children by position); nodes with equal signatures are equal. `Concat`'s
+-- children are unordered, so its signature lists their classes without positions, which makes
+-- commutativity and idempotence of concatenation free (a `Concat` of one class twice is a
+-- different node from a `Concat` of it once — a multiset — and that is right: concat is union
+-- with multiplicity).
+--
+-- Rules:
+--   arrange_idem   Arrange(x) ≡ x when x's class already holds an Arrange or a Reduce.
+--
+-- Extraction: each class's cost is the cheapest node in it (an op weight plus its children's
+-- class costs, a tree cost); "best" names that node. The host rebuilds the scope from "best".
+
+let node  = input 0 | key($0[0] ; $0[1], $0[2]);                 -- id ; (kind, payload)
+let edge  = input 1 | key($0[2] ; $0[0], $0[1]);                 -- child ; (parent, pos)
+let edge_by_parent = input 1 | key($0[0] ; $0[1], $0[2]);        -- parent ; (pos, child)
+
+eqsat: {
+    let elems = node | map($0[0] ; $0[0]);                       -- id ; id
+
+    -- canonicalize each child through the class map, regroup into signatures
+    let canon = edge | join(eq, ($1[0] ; $1[1], $2[0]));           -- parent ; (pos, class)
+    let ckind = canon | join(node, ($0[0], $2[0], $2[1] ; $1[0], $1[1]));   -- (parent, kind, payload) ; (pos, class)
+    let cpos  = ckind | filter(not($0[1] == 4)) | map($0 ; $1[0], $1[1]);   -- positional children keep their slot
+    let cset  = ckind | filter($0[1] == 4)      | map($0 ; 0, $1[1]);       -- concat children: slot 0, so they sort by class
+    let bsig  = (cpos + cset) | collect | map($0[1], $0[2], ($1) ; $0[0]);  -- (kind, payload, [(pos, class)]) ; id
+    -- leaves (Import, Var) have no children to collect; each signs with its own id, so it is its
+    -- own class unless a rule says otherwise.
+    let sig   = bsig + (node | filter(or($1[0] == 0, $1[0] == 1)) | map($1[0], $1[1], list(tuple(0, $0[0])) ; $0[0]));
+    let reps  = sig | min;                                      -- signature ; min id
+    let cong  = sig | join(reps, ($1[0] ; $2[0]));              -- id ; representative
+
+    -- RULE arrange_idem: an Arrange whose child's class holds an Arrange or a Reduce equals it.
+    let arr   = node | filter($1[0] == 5) | join(edge_by_parent, ($0[0] ; $2[1]));   -- arrange ; child
+    let arranged = node | filter(or($1[0] == 5, $1[0] == 7)) | join(eq, ($2[0] ;)) | distinct;   -- class ;
+    let arr_cls  = arr | key($1[0] ; $0[0]) | join(eq, ($2[0] ; $1[0]));                  -- child class ; arrange
+    let rule     = arr_cls | join(arranged, ($1[0] ; $0[0]));                               -- arrange ; child class
+
+    let edges0 = cong + rule;
+    let edges  = edges0 + (edges0 | key($1[0] ; $0[0]));
+    let prop   = eq | join(edges, ($2[0] ; $1[0]));
+    var eq   = (elems + prop) | min;
+}
+
+let classes = eqsat::eq;
+
+-- extraction: op weights by kind (Arrange 3, Join 5, Reduce 4, Sub 8, everything else 1)
+let weight = node | map($0[0] ; if($1[0] == 5, 3, if($1[0] == 6, 5, if($1[0] == 7, 4, if($1[0] == 9, 8, 1)))));
+let nkids  = edge_by_parent | count;                             -- parent ; (n)
+let leaves = node | filter(or($1[0] == 0, $1[0] == 1)) | map($0[0] ; 0);
+extract: {
+    let leafc = leaves | join(weight, ($0[0] ; $2[0])) | join(classes, ($2[0] ; $1[0]));   -- class ; w
+    let kc = edge_by_parent
+        | map($1[1] ; $0[0], $1[0])                                -- child ; (parent, pos)
+        | join(classes, ($2[0] ; $1[0], $1[1]))                    -- class ; (parent, pos)
+        | join(cost, ($1[0] ; $1[1], $2[0]))                       -- parent ; (pos, c)
+        | collect                                                  -- parent ; [(pos, c)]
+        | join(nkids, ($0[0] ; ($1), $2[0]))                       -- parent ; (list, n)
+        | filter(len($1[0]) == $1[1])
+        | join(weight, ($0[0] ; $1[0], $2[0]))                     -- parent ; (list, w)
+        | map($0[0] ; $1[1] + fold($1[0], 0, ^1 + ^0[1]));          -- id ; node cost
+    let classc = kc | join(classes, ($2[0] ; $1[0])) | min;
+    var cost = (leafc + classc) | min;
+}
+
+export "classes" = classes | arrange;
+export "best" = (extract::kc + (leaves | join(weight, ($0[0] ; $2[0]))))
+    | join(classes, ($2[0] ; $0[0], $1[0]))
+    | join(extract::cost, ($0[0] ; $1[0], $1[1], $2[0]))
+    | filter($1[1] == $1[2]) | map($0[0] ; $1[0]) | min
+    | arrange;
