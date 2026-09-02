@@ -367,17 +367,21 @@ impl Backend for CorgiBackend {
         builder.build(move |_capability| move |_frontier| {
             let mut output = output.activate();
             input.for_each(|cap, data| {
-                let mut new_time = cap.time().clone();
-                let mut v = std::mem::take(&mut new_time.inner).into_inner();
-                v.truncate(level - 1);
-                new_time.inner = PointStamp::new(v);
-                let new_cap = cap.delayed(&new_time, 0);
-                for t in data.times.iter_mut() {
-                    let mut v = std::mem::take(&mut t.inner).into_inner();
+                // A message may carry several timestamps (a multi-element stamp): hold a
+                // capability for each, truncated exactly as the records are.
+                let truncate = |t: &Time| {
+                    let mut new_time = t.clone();
+                    let mut v = std::mem::take(&mut new_time.inner).into_inner();
                     v.truncate(level - 1);
-                    t.inner = PointStamp::new(v);
+                    new_time.inner = PointStamp::new(v);
+                    new_time
+                };
+                let caps: timely::dataflow::operators::CapabilitySet<Time> =
+                    cap.stamp().iter().map(|t| cap.delayed(&truncate(t), 0)).collect();
+                for t in data.times.iter_mut() {
+                    *t = truncate(t);
                 }
-                output.session(&new_cap).give_container(data);
+                output.session(&caps).give_container(data);
             });
         });
 

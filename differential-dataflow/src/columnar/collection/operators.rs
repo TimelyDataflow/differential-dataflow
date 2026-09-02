@@ -116,12 +116,19 @@ where
         move |_frontier| {
             let mut output = output.activate();
             op_input.for_each(|cap, data| {
-                // Truncate the capability's timestamp.
-                let mut new_time = cap.time().clone();
-                let mut vec = std::mem::take(&mut new_time.inner).into_inner();
-                vec.truncate(level - 1);
-                new_time.inner = PointStamp::new(vec);
-                let new_cap = cap.delayed(&new_time, 0);
+                // A message may carry several timestamps (a multi-element stamp): hold a
+                // capability for each, truncated exactly as the updates are.
+                let new_cap: timely::dataflow::operators::CapabilitySet<_> = cap
+                    .stamp()
+                    .iter()
+                    .map(|t| {
+                        let mut new_time = t.clone();
+                        let mut vec = std::mem::take(&mut new_time.inner).into_inner();
+                        vec.truncate(level - 1);
+                        new_time.inner = PointStamp::new(vec);
+                        cap.delayed(&new_time, 0)
+                    })
+                    .collect();
                 // Push updates with truncated times into the builder.
                 // The builder's form call on flush sorts and consolidates,
                 // handling the duplicate times that truncation can produce.
