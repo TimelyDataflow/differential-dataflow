@@ -1,0 +1,129 @@
+-- An arithmetic e-graph: equality saturation over a term DAG, as one differential dataflow.
+--
+-- Terms are a declared sum; children name e-classes by id. The saturation core is the one
+-- `arrange_idem.ddp` established (congruence closure by canonical signature, min-leader
+-- propagation to a fixpoint), and it is where node-CREATING rewrites now live: a rule that
+-- builds a term mints it with `hash(0, ..)` of its canonical form, and congruence folds the
+-- new node into its class. Identity is EXACT: signatures and terms are keys, compared
+-- structurally; the hash is only the minted node's name, and `collisions` (two signatures
+-- sharing a name) is exported so an accidental collision is seen rather than merged.
+--
+-- input 0: (id, op, x, y) ;   op 0 = Num(x), 1 = Var(x), 2 = Add(x, y), 3 = Mul(x, y), 4 = Neg(x);
+--          children (x, y for ops 2-4) are ids of earlier rows, so the input is a DAG.
+--
+-- Rules: commutativity (Add, Mul), constant folding (Add, Mul over two Nums), x + 0 ≡ x,
+-- x * 1 ≡ x, x * 0 ≡ 0, ¬¬x ≡ x. All terminate: minting is bounded by the classes' leaders.
+--
+-- Exports: "classes" (id ; leader), "cost" (class ; cheapest term size), "best" (class ; the
+-- node achieving it), "collisions" (must be empty).
+
+type Term = Num u64 | Var u64 | Add (u64, u64) | Mul (u64, u64) | Neg u64;
+
+let raw = input 0 | key($0[0] ; $0[1], $0[2], $0[3]);          -- id ; (op, x, y)
+let node0 = raw | map($0[0] ;
+    if($1[0] == 0, Num($1[1]),
+    if($1[0] == 1, Var($1[1]),
+    if($1[0] == 2, Add($1[1], $1[2]),
+    if($1[0] == 3, Mul($1[1], $1[2]),
+                   Neg($1[1]))))));                           -- id ; term
+
+eqsat: {
+    let elems = node | map($0[0] ; $0[0]);                     -- id ; id   (seed each to itself)
+
+    -- every node's op code and children, and each leaf's signature (no canonicalization needed)
+    let kids = node
+        | filter(not(istag(0, $1[0])) && not(istag(1, $1[0])))
+        | map($0[0] ; case $1[0] { Add(a, b) => 2, Mul(a, b) => 3, Neg(a) => 4, _ => 9 },
+                      case $1[0] { Add(a, b) => list(a, b), Mul(a, b) => list(a, b), Neg(a) => list(a), _ => list(0) });
+    let leafsig = node
+        | filter(or(istag(0, $1[0]), istag(1, $1[0])))
+        | map(case $1[0] { Num(n) => 0, _ => 1 },
+              case $1[0] { Num(n) => list(tuple(0, n)), Var(v) => list(tuple(0, v)), _ => list(tuple(0, 0)) } ; $0[0]);
+
+    -- congruence closure: canonicalize each child through the class map, regroup into a signature
+    let pc    = kids | map($0[0], $1[0] ; $1[1]) | flatmap($1[0]) | map($1[1] ; $0[0], $0[1], $1[0]);  -- child ; (id, op, pos)
+    let canon = pc | join(eq, ($1[0], $1[1] ; $1[2], $2[0]));  -- (id, op) ; (pos, class)
+    let bsig  = (canon | collect | map($0[1], ($1) ; $0[0])) + leafsig; -- signature ; id
+    let reps  = bsig | min;                                    -- signature ; min id
+    let cong  = bsig | join(reps, ($1[0] ; $2[0]));            -- id ; representative
+
+    -- binary nodes with their children's leaders: id ; (is_mul, la, lb)
+    let bin  = node
+        | filter(or(istag(2, $1[0]), istag(3, $1[0])))
+        | map($0[0] ; istag(3, $1[0]),
+                      case $1[0] { Add(a, b) => a, Mul(a, b) => a, _ => 0 },
+                      case $1[0] { Add(a, b) => b, Mul(a, b) => b, _ => 0 });
+    let binl = bin
+        | key($1[1] ; $0[0], $1[0], $1[2]) | join(eq, ($1[0] ; $1[1], $2[0], $1[2]))
+        | key($1[2] ; $0[0], $1[0], $1[1]) | join(eq, ($1[0] ; $1[1], $1[2], $2[0]));
+
+    -- RULE commutativity: mint the mirror over the leaders, equate it with the node.
+    let mirror      = binl | map(hash(0, 7, $1[0], $1[2], $1[1]) ; if($1[0] == 1, Mul($1[2], $1[1]), Add($1[2], $1[1])));
+    let mirror_edge = binl | map($0[0] ; hash(0, 7, $1[0], $1[2], $1[1]));
+
+    -- classes with a known constant value (a class holds one value; `min` is a safe pick)
+    let cval = node | filter(istag(0, $1[0])) | map($0[0] ; case $1[0] { Num(n) => n, _ => 0 })
+                    | join(eq, ($2[0] ; $1[0])) | min;         -- class ; value
+    let zero = cval | filter($1[0] == 0) | map($0[0] ;);        -- class ;
+    let one  = cval | filter($1[0] == 1) | map($0[0] ;);
+
+    -- RULE constant folding: a binary node over two constant classes mints its value.
+    let binc = binl
+        | key($1[1] ; $0[0], $1[0], $1[2]) | join(cval, ($1[0] ; $1[1], $2[0], $1[2]))
+        | key($1[2] ; $0[0], $1[0], $1[1]) | join(cval, ($1[0] ; $1[1], $1[2], $2[0]));   -- id ; (is_mul, x, y)
+    let folded      = binc | map(hash(0, 8, if($1[0] == 1, $1[1] * $1[2], $1[1] + $1[2])) ; Num(if($1[0] == 1, $1[1] * $1[2], $1[1] + $1[2])));
+    let folded_edge = binc | map($0[0] ; hash(0, 8, if($1[0] == 1, $1[1] * $1[2], $1[1] + $1[2])));
+
+    -- RULES x + 0 ≡ x, x * 1 ≡ x, x * 0 ≡ 0 (the mirror rule covers the other operand order)
+    let add_zero = binl | filter($1[0] == 0) | key($1[2] ; $0[0], $1[1]) | join(zero, ($1[0] ; $1[1]));
+    let mul_one  = binl | filter($1[0] == 1) | key($1[2] ; $0[0], $1[1]) | join(one,  ($1[0] ; $1[1]));
+    let mul_zero = binl | filter($1[0] == 1) | key($1[2] ; $0[0])        | join(zero, ($1[0] ; $0[0]));
+
+    -- RULE ¬¬x ≡ x: a Neg whose child class holds a Neg(c) equates with c's class.
+    let negs   = node | filter(istag(4, $1[0])) | map($0[0] ; case $1[0] { Neg(a) => a, _ => 0 })
+                      | key($1[0] ; $0[0]) | join(eq, ($1[0] ; $2[0]));        -- neg_id ; la
+    let negc   = negs | join(eq, ($2[0] ; $1[0]));                              -- class(neg_id) ; la
+    let negneg = negs | key($1[0] ; $0[0]) | join(negc, ($1[0] ; $2[0]));       -- neg_id ; class(c)
+
+    -- all equalities, symmetrized, then one min-label hop
+    let edges0 = cong + mirror_edge + folded_edge + add_zero + mul_one + mul_zero + negneg;
+    let edges  = edges0 + (edges0 | key($1[0] ; $0[0]));
+    let prop   = eq | join(edges, ($2[0] ; $1[0]));
+    var eq   = (elems + prop) | min;
+
+    -- the node table grows with what the rules mint (distinct, since many nodes mint one term)
+    let minted = mirror + folded;
+    var node = (node0 + minted) | key($0[0], $1[0] ;) | distinct | map($0[0] ; $0[1]);
+}
+
+let classes = eqsat::eq;                                        -- id ; leader
+let nodes   = eqsat::node;                                      -- id ; term
+let kids2   = nodes
+    | filter(not(istag(0, $1[0])) && not(istag(1, $1[0])))
+    | map($0[0] ; case $1[0] { Add(a, b) => list(a, b), Mul(a, b) => list(a, b), Neg(a) => list(a), _ => list(0) });
+let nkids   = kids2 | map($0[0] ; len($1[0]));
+
+-- extraction: a class's cost is the cheapest term in it, one plus its children's class costs
+extract: {
+    let leafc = nodes | filter(or(istag(0, $1[0]), istag(1, $1[0]))) | join(classes, ($2[0] ; 1));   -- class ; 1
+    let kc = kids2
+        | flatmap($1[0]) | map($1[1] ; $0[0], $1[0])              -- child ; (id, pos)
+        | join(classes, ($2[0] ; $1[0], $1[1]))                    -- class ; (id, pos)
+        | join(cost, ($1[0] ; $1[1], $2[0]))                       -- id ; (pos, c)
+        | collect                                                  -- id ; [(pos, c)]
+        | join(nkids, ($0[0] ; ($1), $2[0]))                       -- id ; (list, n)
+        | filter(len($1[0]) == $1[1])                              -- every child priced
+        | map($0[0] ; 1 + fold($1[0], 0, ^1 + ^0[1]));              -- id ; node cost
+    let classc = kc | join(classes, ($2[0] ; $1[0])) | min;        -- class ; min cost
+    var cost = (leafc + classc) | min;
+}
+
+export "classes" = classes | arrange | inspect(classes);
+export "cost" = extract::cost | arrange | inspect(cost);
+export "best" = extract::kc
+    | join(classes, ($2[0] ; $0[0], $1[0]))
+    | join(extract::cost, ($0[0] ; $1[0], $1[1], $2[0]))
+    | filter($1[1] == $1[2]) | map($0[0] ; $1[0]) | min
+    | arrange | inspect(best);
+export "collisions" = nodes | map($0[0], $1[0] ;) | distinct | map($0[0] ;) | count | filter($1[0] > 1)
+    | arrange | inspect(collisions);
