@@ -1,6 +1,9 @@
 -- The DDIR optimizer as a DDIR program: an e-graph over one scope's operators.
 --
--- input 0: nodes  (id, kind, payload) ;   input 1: edges  (parent, pos, child) ;
+-- input 0: nodes  (id, kind, payload, width) ;   input 1: edges  (parent, pos, child) ;
+-- (width: the row width the node is priced by — its input's for an Arrange or a Reduce, which
+-- hold those rows; its output's for everything else)
+-- input 2: equal  (a, b) ; -- equalities the host asserted from facts about scalar operators
 --
 -- kind: 0 Import  1 Var  2 ChildExport  3 Op (one linear step)  4 Concat  5 Arrange  6 Join
 --       7 Reduce  8 Inspect  9 Sub (a child scope)
@@ -16,11 +19,15 @@
 --
 -- Rules:
 --   arrange_idem   Arrange(x) ≡ x when x's class already holds an Arrange or a Reduce.
+--   input 2        whatever the host instantiated from scalar facts (demand pushdown: a reducer
+--                  that reads no values equals itself over a key-only projection of its input).
 --
--- Extraction: each class's cost is the cheapest node in it (an op weight plus its children's
--- class costs, a tree cost); "best" names that node. The host rebuilds the scope from "best".
+-- Extraction: each class's cost is the cheapest node in it — an op weight times one plus its
+-- width, plus its children's class costs (a tree cost); "best" names that node. The host rebuilds
+-- the scope from "best".
 
-let node  = input 0 | key($0[0] ; $0[1], $0[2]);                 -- id ; (kind, payload)
+let node  = input 0 | key($0[0] ; $0[1], $0[2], $0[3]);          -- id ; (kind, payload, width)
+let given = input 2 | key($0[0] ; $0[1]);                         -- a ; b
 let edge  = input 1 | key($0[2] ; $0[0], $0[1]);                 -- child ; (parent, pos)
 let edge_by_parent = input 1 | key($0[0] ; $0[1], $0[2]);        -- parent ; (pos, child)
 
@@ -45,7 +52,7 @@ eqsat: {
     let arr_cls  = arr | key($1[0] ; $0[0]) | join(eq, ($2[0] ; $1[0]));                  -- child class ; arrange
     let rule     = arr_cls | join(arranged, ($1[0] ; $0[0]));                               -- arrange ; child class
 
-    let edges0 = cong + rule;
+    let edges0 = cong + rule + given;
     let edges  = edges0 + (edges0 | key($1[0] ; $0[0]));
     let prop   = eq | join(edges, ($2[0] ; $1[0]));
     var eq   = (elems + prop) | min;
@@ -53,8 +60,9 @@ eqsat: {
 
 let classes = eqsat::eq;
 
--- extraction: op weights by kind (Arrange 3, Join 5, Reduce 4, Sub 8, everything else 1)
-let weight = node | map($0[0] ; if($1[0] == 5, 3, if($1[0] == 6, 5, if($1[0] == 7, 4, if($1[0] == 9, 8, 1)))));
+-- extraction: op weights by kind (Arrange 3, Join 5, Reduce 4, Sub 8, everything else 1), times
+-- one plus the node's width
+let weight = node | map($0[0] ; if($1[0] == 5, 3, if($1[0] == 6, 5, if($1[0] == 7, 4, if($1[0] == 9, 8, 1)))) * (1 + $1[2]));
 let nkids  = edge_by_parent | count;                             -- parent ; (n)
 let leaves = node | filter(or($1[0] == 0, $1[0] == 1)) | map($0[0] ; 0);
 extract: {
