@@ -101,7 +101,22 @@ def without_inspects(program):
     its "load" time (one unbuffered stderr write per row). The taps are for reading, not
     for timing, so the benchmark runs the programs without them."""
     src = open(os.path.join(CRATE, program)).read()
-    stripped = re.sub(r"\|\s*inspect\([^)]*\)", "", src)
+    stripped = re.sub(r"\|\s*inspect\([^)]*\)", "", src)      # pipe form: `| inspect(label)`
+    while (at := stripped.find("INSPECT(")) >= 0:              # applicative: `INSPECT(expr, label)`
+        depth, i = 0, at + len("INSPECT(")
+        start, comma = i, None
+        while True:
+            c = stripped[i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif c == "," and depth == 0 and comma is None:
+                comma = i
+            i += 1
+        stripped = stripped[:at] + stripped[start:comma] + stripped[i + 1:]
     tmp = os.path.join(HERE, ".tmp")
     os.makedirs(tmp, exist_ok=True)
     path = os.path.join(tmp, os.path.basename(program))
