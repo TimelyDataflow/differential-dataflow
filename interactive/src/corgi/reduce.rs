@@ -232,7 +232,6 @@ where
     let mut run_ends = Vec::new();
     let total: usize = chunks.iter().map(|c| c.diffs().len()).sum();
     let seek = changed.len().saturating_mul(SEEK_ADVANTAGE) < total;
-    let needles = CValue::u64(changed.to_vec());
     // Chunks are id-ordered and `changed` ascends, so either branch emits in merged order.
     for (ci, ch) in chunks.iter().enumerate() {
         let before = khs.len();
@@ -241,12 +240,22 @@ where
         }
         let lane = key_lane(ch.keys());
         if seek {
+            // Only the needles within this chunk's key range can hit it. A batch's chunks
+            // partition its key range, so at scale each chunk is probed with its slice of the
+            // change set rather than the whole of it.
+            let kh = corgi::arrange::leaf_slice(lane).expect("the identifier lane is a u64 leaf");
+            let from = changed.partition_point(|c| *c < kh[0]);
+            let to = changed.partition_point(|c| *c <= kh[kh.len() - 1]);
+            if from == to {
+                continue;
+            }
+            let needles = CValue::u64(changed[from..to].to_vec());
             let (lo, hi) = find_ranges(&needles, lane);
             for (j, (&l, &h)) in lo.iter().zip(hi.iter()).enumerate() {
                 for i in l..h {
                     tags.push(ci);
                     offs.push(i);
-                    khs.push(changed[j]);
+                    khs.push(changed[from + j]);
                     times.push(ch.times().get(i));
                     diffs.push(ch.diffs()[i]);
                 }
