@@ -1,0 +1,16 @@
+-- Connected components: every node takes the least node id it can reach,
+-- over the edges read as undirected.
+-- input 0: edges (src, dst ;)
+
+let edges = input 0 | key($0[0] ; $0[1]);
+let sym = edges + (edges | key($1 ; $0));
+
+cc: {
+    -- Each node proposes itself, introduced in rounds by magnitude (as scc
+    -- does), so the small labels that win settle first.
+    let nodes = sym | key($0 ; $0) | enter_at($1[0]);
+    let prop = label | join(sym, ($2 ; $1));
+    var label = nodes + prop | min;
+}
+
+export "result" = cc::label | arrange;

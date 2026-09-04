@@ -49,6 +49,8 @@ def graph(nodes, edges, churn, arity=2, seed=0):
 # returns the commands between `install` and the ticks.
 WORKLOADS = {
     "scc":    ("examples/programs/scc.ddp",    lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
+    "cc":     ("examples/programs/cc.ddp",     lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
+    "triangles": ("examples/programs/triangles.ddp", lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
     "reach":  ("examples/programs/reach.ddp",  lambda n, e, c: [f"load p 0 {graph(n, e, c)}", "feed p 1 0"]),
     "kcore":  ("examples/programs/kcore.ddir", lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
     "stable": ("examples/programs/stable.ddp", lambda n, e, c: [f"load p 0 {graph(n, e, c, arity=4)}"]),

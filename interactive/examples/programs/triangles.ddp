@@ -1,0 +1,17 @@
+-- Triangle counting: the number of node triples a < b < c with edges ab, bc
+-- and ac. Two joins and no recursion: the join-heavy shape.
+-- input 0: edges (src, dst ;)
+
+let edges = input 0 | filter($0[0] < $0[1]) | key($0[0], $0[1] ;) | distinct | key($0[0] ; $0[1]);
+-- (a ; b) with a < b, once each (`distinct` keeps keys only, hence the re-key)
+
+let by_b = edges | key($1 ; $0);
+-- (b ; a)
+let paths = by_b | join(edges, ($1[0], $2[0] ; $0[0]));
+-- (a, c ; b): two-step paths a -> b -> c
+let closing = edges | key($0[0], $1[0] ;);
+-- (a, c ;)
+let tri = paths | join(closing, ($0 ; $1));
+-- (a, c ; b): the closed ones
+
+export "result" = tri | key(;) | count | arrange | inspect(triangles);

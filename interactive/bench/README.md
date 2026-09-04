@@ -19,7 +19,7 @@ cargo build --release -p interactive --example ddir_server
 
 | name | program | input |
 |---|---|---|
-| scc, kcore, adt, ast, unnest | `examples/programs/` | a seeded random graph, `random:nodes=N,edges=2N,churn=C` |
+| scc, cc, triangles, kcore, adt, ast, unnest | `examples/programs/` | a seeded random graph, `random:nodes=N,edges=2N,churn=C` |
 | reach, tour | same | the graph plus one root, `feed p 1 0` |
 | stable | same | random 4-field rows (`arity=4`), the preference edges |
 | aocDDpP | `examples/aoc2023/dayDD/partP.ddp` | the transcribed fact file, one epoch, no churn |
