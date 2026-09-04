@@ -17,17 +17,18 @@ mixed-arity inputs.
 
 ## Run
 
-    cargo build --release --example ddir
-    ./run.sh    # every part on the vec backend vs expected.txt; nonzero exit on any mismatch
+    cargo build --release --example ddir_server
+    ./run.sh          # every part on the vec backend vs expected.txt; nonzero exit on any mismatch
+    ./run.sh corgi    # the same through the Corgi columnar backend
 
 `run.sh` first runs `transcribe.py` (python3) to regenerate `gen/`, then
-runs each part as `EDGES_FILE=gen/<input> ddir --backend=vec
-dayNN/partN.ddp <arity> 10 0 1 0`; the answer is the `Int` on the
-`[partN]` inspect line.
+runs each part as one server session — `install`, `load` the fact file into
+input 0, `tick` — and reads the answer off the `[partN]` inspect line.
 
-`run.sh` asserts the **vec** backend only; corgi currently disagrees or
-crashes on 4 of these parts (known open issues, minimized separately) and
-is not asserted yet.
+The vec backend passes all 33 parts. Corgi passes 32: it needs day05's
+arity-padded inputs (`run.sh corgi` transcribes with `--pad`), and day13
+part 1 still crashes it (a batch of one shape reaching an operator pinned at
+another — a known open issue).
 
 ## Verdicts
 

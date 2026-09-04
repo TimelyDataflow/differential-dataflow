@@ -8,6 +8,9 @@
 //!   cargo run --release --example ddir_server -- -w4               # stdin, 4 workers
 //! e.g. cargo run --example ddir_server -- interactive/examples/server/sessions/shared_trace.txt
 //!
+//! `--backend=vec|corgi` picks the rendering substrate for every installed
+//! program (default `vec`). Any other flag is passed to timely (`-w4`).
+//!
 //! # Where parsing happens
 //!
 //! Commands are parsed, lowered, and validated **on the main (intake) thread**,
@@ -15,13 +18,14 @@
 //! and the server keeps running — bad input can never panic a worker. Only a
 //! well-typed [`Command`] is handed to worker 0, which injects it into a timely
 //! `Sequencer`; the resulting total order is replayed on every worker, so
-//! install/tick/drop stay collective while `feed` is applied on worker 0 only
-//! (the arrangement's exchange pact routes data to key owners).
+//! install/load/tick/drop stay collective while `feed` is applied on worker 0
+//! only (the arrangement's exchange pact routes data to key owners).
 //!
 //! Commands (one per line; `#` or `--` starts a comment):
-//!   install <name> <file>
+//!   install <name> <file> [explain=<arity>[,debug]]
 //!   feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]
-//!   tick
+//!   load <prog> <in#> <recipe-or-file>
+//!   tick [n]
 //!   drop <name>
 //!   peek <trace> [key]
 //!   list
@@ -34,6 +38,17 @@
 //! `inject(2,tuple(3,4))`, etc. A value is one whitespace-delimited token, so
 //! write terms without spaces. `feed`'s value defaults to unit, `time` to the
 //! current epoch (use a future `time=` to schedule ahead), and `diff` to +1.
+//!
+//! `load` fills an input in bulk, sharded across the workers: from a recipe
+//! (`random:nodes=N,edges=E[,arity=A][,seed=S][,churn=C]`, `iota:N`) or from a
+//! text file of whitespace-separated integer rows. A `churn=C` recipe then
+//! replaces `C` rows on every `tick` — so `install`, `load`, `tick 100` is a
+//! program under standing change. `tick` reports its wall-clock time.
+//!
+//! `install … explain=<arity>` applies the explanation rewrite (every source
+//! has `arity` key fields and no value); the query input is the one after the
+//! program's own inputs, fed as `(key ; val ++ q)`. `,debug` taps every demand
+//! collection with an inspect.
 
 use mimalloc::MiMalloc;
 
@@ -53,10 +68,11 @@ use interactive::parse;
 use interactive::lower;
 use interactive::scope_ir as st;
 use interactive::ir::{eval, Value};
-use interactive::server::{Command, Server};
+use interactive::server::{Command, RenderBackend, Server};
 
-/// Parse, lower, and optimize a program file (`.ddp` = pipe syntax, else applicative).
-fn load(path: &str) -> st::Program {
+/// Parse, lower, optionally explain, and optimize a program file (`.ddp` =
+/// pipe syntax, else applicative).
+fn load(path: &str, explain: Option<(usize, bool)>) -> st::Program {
     let src = interactive::load_program(path);
     let stmts = if path.ends_with(".ddp") {
         parse::pipe::parse(&src)
@@ -64,6 +80,12 @@ fn load(path: &str) -> st::Program {
         parse::applicative::parse(&src)
     };
     let mut prog = lower::lower_tree(stmts);
+    // The rewrite precedes optimization (its rules assume single-op Linears).
+    if let Some((arity, debug)) = explain {
+        let shapes: Vec<(usize, usize)> = prog.root.imports.iter().map(|_| (arity, 0)).collect();
+        let options = interactive::explain::Options { debug_inspects: debug };
+        prog = interactive::explain::explain_with(&prog, &shapes, options);
+    }
     prog.optimize();
     prog
 }
@@ -98,10 +120,23 @@ fn panic_msg(e: Box<dyn Any + Send>) -> String {
 fn parse_command(line: &str) -> Result<Command, String> {
     let toks: Vec<&str> = line.split_whitespace().collect();
     match toks[0] {
-        "install" if toks.len() == 3 => {
+        "install" if toks.len() == 3 || toks.len() == 4 => {
             let name = toks[1].to_string();
             let file = toks[2].to_string();
-            let program = catch_unwind(AssertUnwindSafe(|| load(&file))).map_err(panic_msg)?;
+            let explain = match toks.get(3) {
+                None => None,
+                Some(t) => {
+                    let spec = t.strip_prefix("explain=").ok_or_else(|| format!("install: unrecognized argument {:?}", t))?;
+                    let (arity, debug) = match spec.split_once(',') {
+                        Some((a, "debug")) => (a, true),
+                        Some(_) => return Err(format!("install: explain=<arity>[,debug], got {:?}", t)),
+                        None => (spec, false),
+                    };
+                    let arity = arity.parse().map_err(|_| format!("install: explain= arity must be a number, got {:?}", arity))?;
+                    Some((arity, debug))
+                }
+            };
+            let program = catch_unwind(AssertUnwindSafe(|| load(&file, explain))).map_err(panic_msg)?;
             Ok(Command::Install { name, program })
         }
         "feed" if toks.len() >= 4 => {
@@ -124,7 +159,18 @@ fn parse_command(line: &str) -> Result<Command, String> {
             }
             Ok(Command::Feed { prog, input, key, val, time, diff })
         }
-        "tick" if toks.len() == 1 => Ok(Command::Tick { n: 1 }),
+        "load" if toks.len() == 4 => {
+            let prog = toks[1].to_string();
+            let input: usize = toks[2].parse().map_err(|_| format!("load: <in#> must be a number, got {:?}", toks[2]))?;
+            Ok(Command::Load { prog, input, source: toks[3].to_string() })
+        }
+        "tick" if toks.len() <= 2 => {
+            let n = match toks.get(1) {
+                Some(n) => n.parse().map_err(|_| format!("tick: [n] must be a number, got {:?}", n))?,
+                None => 1,
+            };
+            Ok(Command::Tick { n })
+        }
         "bind" | "unbind" if toks.len() == 4 => {
             let trace = toks[1].to_string();
             let prog = toks[2].to_string();
@@ -152,9 +198,10 @@ fn parse_command(line: &str) -> Result<Command, String> {
 
 fn print_help() {
     println!("commands:");
-    println!("  install <name> <file>");
+    println!("  install <name> <file> [explain=<arity>[,debug]]");
     println!("  feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]");
-    println!("  tick");
+    println!("  load <prog> <in#> <recipe-or-file>   (random:nodes=N,edges=E[,arity=A][,seed=S][,churn=C] | iota:N | path)");
+    println!("  tick [n]");
     println!("  bind <trace> <prog> <in#>    (feed the trace's changes back in, each tick)");
     println!("  unbind <trace> <prog> <in#>");
     println!("  drop <name>");
@@ -164,13 +211,13 @@ fn print_help() {
 }
 
 /// Execute one sequenced command on this worker. Collective commands
-/// (`install`/`tick`/`drop`) run on every worker; `feed` and all printing
-/// happen on worker 0. Returns `false` for `exit`.
+/// (`install`/`load`/`tick`/`drop`) run on every worker; `feed` and all
+/// printing happen on worker 0. Returns `false` for `exit`.
 fn dispatch(cmd: &Command, server: &mut Server, worker: &mut Worker) -> bool {
     let w0 = worker.index() == 0;
     match cmd {
         Command::Install { name, program } => match server.install(worker, name, program) {
-            Ok(()) => if w0 { println!("installed {:?}", name); },
+            Ok(()) => if w0 { println!("installed {:?} ({} ops)", name, program.op_count()); },
             Err(e) => if w0 { println!("error: {}", e); },
         },
         Command::Feed { prog, input, key, val, time, diff } => {
@@ -187,11 +234,17 @@ fn dispatch(cmd: &Command, server: &mut Server, worker: &mut Worker) -> bool {
                 }
             }
         }
+        // Collective: each worker feeds its shard of the source.
+        Command::Load { prog, input, source } => match server.load(worker, prog, *input, source) {
+            Ok(rows) => if w0 { println!("loaded {} rows from {:?} into {:?} input {}", rows, source, prog, input); },
+            Err(e) => if w0 { println!("error: {}", e); },
+        },
         Command::Tick { n } => {
+            let timer = Instant::now();
             for _ in 0..*n {
                 server.tick(worker);
             }
-            if w0 { println!("tick -> epoch {}", server.epoch()); }
+            if w0 { println!("tick -> epoch {} ({:.2?})", server.epoch(), timer.elapsed()); }
         }
         Command::Drop { name } => match server.drop_program(worker, name) {
             Ok(()) => if w0 { println!("dropped {:?}", name); },
@@ -231,15 +284,19 @@ fn main() {
         }
     }));
 
-    // First positional arg (if it isn't a flag) is the script; the rest go to
-    // timely. We always pass a leading dummy so getopts has an argv[0] to skip.
+    // `--backend=` is ours; the first other positional arg is the script; the
+    // rest go to timely. We always pass a leading dummy so getopts has an
+    // argv[0] to skip.
     let mut it = std::env::args();
     let _bin = it.next();
+    let mut backend = RenderBackend::Vec;
     let mut script: Option<String> = None;
     let mut timely_args: Vec<String> = vec!["ddir_server".to_string()];
     let mut saw_positional = false;
     for a in it {
-        if !saw_positional && !a.starts_with('-') {
+        if let Some(b) = a.strip_prefix("--backend=") {
+            backend = b.parse().unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
+        } else if !saw_positional && !a.starts_with('-') {
             script = Some(a);
             saw_positional = true;
         } else {
@@ -255,7 +312,7 @@ fn main() {
     let guards = timely::execute_from_args(timely_args.into_iter(), move |worker| {
         let recv = recv.clone();
         let me_zero = worker.index() == 0;
-        let mut server = Server::new();
+        let mut server = Server::with_backend(backend);
         let mut sequencer: Sequencer<Command> = Sequencer::new(worker, Instant::now());
 
         let mut done = false;

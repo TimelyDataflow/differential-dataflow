@@ -73,9 +73,17 @@ The flow moves through four steps:
 4. The `examples/` directory contains back-ends that execute programs.
 
 The `examples/programs/` directory contains example programs, intentionally simple at the moment.
-You can run any of them with one of the example harnesses, for example
+The one executable is the server (`examples/ddir_server.rs`, documented in `examples/server/README.md`);
+a program runs by installing it, loading its inputs, and closing epochs. For example, on a random
+graph of 100 nodes and 200 edges, 10 of which change each epoch, for 100 epochs:
 ```
-cargo run --release --example ddir_vec -- ./examples/programs/reach.ddp 2 100 200 1 100
+cd interactive
+printf 'install reach examples/programs/reach.ddp
+load reach 0 random:nodes=100,edges=200,churn=10
+feed reach 1 0
+tick 100
+exit
+' | cargo run --release --example ddir_server -- --backend=corgi -w4
 ```
 
 More generally, you can run

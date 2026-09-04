@@ -14,9 +14,9 @@ totally ordered across workers by a timely `Sequencer`.
 ## Two kinds of file (don't mix them up)
 
 - **`programs/*.ddp`** — DDIR *programs*: dataflow definitions you `install`.
-  The ones here are server-oriented (they use `import`/`export`), so unlike the
-  programs in `../programs/` they are not runnable by the batch `ddir_vec`
-  harness.
+  The ones here are server-oriented (they use `import`/`export`); the programs
+  in `../programs/` read positional `input`s instead, which you fill with
+  `feed` or `load` (see "Running a program in batch" below).
 - **`sessions/*.txt`** — *command scripts*: a stream of server commands
   (`install`/`feed`/`tick`/…) you hand to the server. You do **not** `install` a
   session; you run the server *on* it.
@@ -29,6 +29,9 @@ cargo run --release --example ddir_server -- interactive/examples/server/session
 
 # Or interactively (no script arg): type `help`, or `exit`.
 cargo run --release --example ddir_server
+
+# Render every installed program on the Corgi columnar backend (default: vec):
+cargo run --release --example ddir_server -- --backend=corgi -w4
 ```
 
 Paths inside the session scripts are relative to the `interactive/` crate
@@ -39,9 +42,11 @@ the repo root with `--example`; adjust if you `cd interactive` first).
 
 | command | effect |
 |---|---|
-| `install <name> <file>` | parse + lower + install a program under `<name>` |
+| `install <name> <file> [explain=<arity>[,debug]]` | parse + lower + install a program under `<name>`; optionally after the explanation rewrite |
 | `feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
-| `tick` | close the epoch and run to quiescence |
+| `load <prog> <in#> <recipe-or-file>` | bulk-load an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
+| `tick [n]` | close `n` epochs (default 1), running to quiescence after each; reports the wall-clock time |
+| `bind <trace> <prog> <in#>` / `unbind …` | feed a trace's changes back into an input at every tick (one-epoch-delayed feedback) |
 | `drop <name>` | evict a program (refused if a live program still imports its trace) |
 | `peek <trace> [key]` | print a trace's current contents (consolidated across workers) |
 | `list` | show traces (+ importer counts) and installed programs |
@@ -50,6 +55,36 @@ A `<value>` is a comma-separated integer row (`1,2` → a tuple; `_`/empty → u
 or any **closed scalar term, written without spaces** (`inject(2,tuple(3,4))`,
 `list(1,2,3)`) for ADT-shaped data such as ASTs. `feed` defaults to value=unit,
 `time`=the current epoch (use a future `time=` to schedule ahead), `diff`=+1.
+
+## Running a program in batch
+
+The programs in `../programs/` (reachability, SCC, stable matching, …) read
+positional inputs. A session fills them in bulk and closes epochs; that is the
+whole of the old single-program harness, so there is no separate binary:
+
+```
+install scc ../programs/scc.ddp
+load scc 0 random:nodes=100000,edges=200000,churn=100
+tick          # the initial load: reported as one epoch's time
+tick 100      # 100 epochs of 100 replaced edges each, timed together
+peek result
+exit
+```
+
+`load` deals the rows across the workers (each feeds its shard, and the
+exchange places every row on its key's owner). A `random:` recipe with
+`churn=C` keeps the input changing: every later `tick` retracts the next `C`
+rows of its window and adds `C` fresh ones, which is the standing-change regime
+programs are benchmarked under. A file source is one row per line of
+whitespace-separated integers, each becoming `(Tuple[ints] ; ())`; the
+`aoc2023/run.sh` suite drives every AoC program this way. `feed` still works
+alongside `load` for the small inputs (roots, queries).
+
+`install … explain=<arity>` applies the explanation rewrite before
+optimization, treating every source as `arity` key fields with no value; the
+rewritten program has one extra input after its own — the query input, fed as
+`(key ; val ++ q)` — and exports one `demand:inputN` trace per source, which
+you `peek`. `,debug` taps every demand collection with an inspect.
 
 ## Generated (named) sources
 

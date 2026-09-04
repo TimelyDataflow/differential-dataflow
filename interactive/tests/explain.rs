@@ -1,5 +1,5 @@
 //! End-to-end semantic tests for the explanation rewrite, built on
-//! `backend::vec::evaluate` (explicit inputs in, every export out). The
+//! `server::evaluate` (explicit inputs in, every export out). The
 //! sufficiency properties use that row execution to evaluate the rewrite; a
 //! final section cross-checks the behavior shared by the row and corgi
 //! implementations for these programs.
@@ -11,12 +11,12 @@
 //! regenerate the queried output row. Tests marked `#[ignore]` are heavier sweeps meant for
 //! `cargo test --release -- --ignored`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use interactive::backend::corgi::evaluate as corgi_evaluate;
-use interactive::backend::vec::{evaluate, Row};
+use interactive::backend::vec::Row;
 use interactive::ir::Value;
 use interactive::scope_ir::Program;
+use interactive::server::{self, RenderBackend};
 use interactive::{explain, lower, parse};
 
 /// SCC with the scc edge-set itself as the result, so individual output
@@ -99,6 +99,12 @@ fn gen_edges_seeded(seed: u64, nodes: u64, edges: u64) -> Vec<(Row, Row)> {
 /// A row value: a `Tuple` of `Int`s.
 fn row(fields: &[i64]) -> Row {
     Value::Tuple(fields.iter().map(|&n| Value::Int(n)).collect())
+}
+
+/// Run `p` on `inputs` through the server on the vec backend: every export's
+/// consolidated rows, by name.
+fn evaluate(p: &Program, inputs: &[Vec<(Row, Row)>]) -> BTreeMap<String, Vec<((Row, Row), i64)>> {
+    server::evaluate(RenderBackend::Vec, timely::Config::process(1), p, inputs)
 }
 
 /// Run `p` on `inputs` and return one export's rows (asserting positive
@@ -508,7 +514,7 @@ fn assert_explained_backends_agree(
     ex_inputs.push(query_rows(queries));
 
     let by_vec = evaluate(&ex, &ex_inputs);
-    let by_corgi = corgi_evaluate(&ex, &ex_inputs);
+    let by_corgi = server::evaluate(RenderBackend::Corgi, timely::Config::process(1), &ex, &ex_inputs);
     assert_eq!(
         by_vec.keys().collect::<Vec<_>>(),
         by_corgi.keys().collect::<Vec<_>>(),
