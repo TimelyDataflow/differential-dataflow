@@ -356,6 +356,12 @@ pub fn compile(
             })
         }
         Term::If { cond, then, els } => {
+            // A literal condition takes one branch, so only that branch needs a shape. This is
+            // the `if(1, $1, 0)` idiom: it carries a whole value as ONE field where a bare `$1`
+            // would splice, and its dead branch need not agree in shape.
+            if let Term::Int(c) = **cond {
+                return compile(if c != 0 { then } else { els }, b, env, env_shapes, anchor, expected);
+            }
             // `Select` blends per row and is shape-generic; the branches must share one shape,
             // and a branch that cannot fix its own (a bare `None`) takes the other's.
             let (ts, es) = branch_shapes(then, els, env_shapes, expected)?;

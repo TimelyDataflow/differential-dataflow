@@ -25,10 +25,8 @@ mixed-arity inputs.
 runs each part as one server session — `install`, `load` the fact file into
 input 0, `tick` — and reads the answer off the `[partN]` inspect line.
 
-The vec backend passes all 33 parts. Corgi passes 32: it needs day05's
-arity-padded inputs (`run.sh corgi` transcribes with `--pad`), and day13
-part 1 still crashes it (a batch of one shape reaching an operator pinned at
-another — a known open issue).
+Both backends pass all 33 parts. Corgi needs day05's arity-padded inputs
+(`run.sh corgi` transcribes with `--pad`).
 
 ## Verdicts
 
