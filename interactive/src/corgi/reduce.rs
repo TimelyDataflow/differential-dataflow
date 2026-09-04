@@ -34,7 +34,7 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes, sort_blocks};
+use corgi::arrange::{find_ranges, gather, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
 use crate::corgi::col_times::ColTime;
@@ -295,12 +295,14 @@ fn merge_present<T: Ord + Clone>(
     bridge: &mut ProxyBridge<T, Diff>,
 ) -> bool {
     let ordered_keys = corgi::arrange::leaf_slice(keys_col).is_some() || {
+        // One columnar pass over the adjacent pairs, rather than a dispatching structural
+        // compare per row: every row of a group shares its id with its predecessor, so the
+        // per-row form was a `compare_at` for nearly every row of every retire.
+        let adjacent = corgi::arrange::compare_adjacent(keys_col);
         let mut start = 0usize;
         run_ends.iter().all(|&end| {
-            let one_real_key_per_id = (start + 1..end).all(|index| {
-                khs[index - 1] != khs[index]
-                    || compare_at(keys_col, index - 1, keys_col, index) == std::cmp::Ordering::Equal
-            });
+            let one_real_key_per_id =
+                (start + 1..end).all(|index| khs[index - 1] != khs[index] || adjacent[index - 1] == 0);
             start = end;
             one_real_key_per_id
         }) && start == khs.len()
