@@ -41,6 +41,11 @@ deterministic (`seed=0`), so two runs at one revision see the same rows.
   server maintains for `peek`/`import` **is** included; it is part of running
   on the server.
 
+- The graph workloads run **without their `| inspect(..)` taps** (a stripped
+  copy of each program is written to `bench/.tmp/`). The taps print every row
+  they see; unnest's tap on 200k rows was 90% of its "load" time, one
+  unbuffered stderr write per row. They are for reading, not for timing.
+
 Medians over `--runs` are reported; the JSONL keeps every run. Single runs
 are not comparable across machines or with other things running.
 

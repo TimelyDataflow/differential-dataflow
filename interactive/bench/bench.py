@@ -89,7 +89,23 @@ def run_session(lines, backend, workers, timeout=3600, wrap=None):
 
 def session(name, nodes, edges, churn, rounds):
     program, build = WORKLOADS[name]
-    return [f"install p {program}", *build(nodes, edges, churn), "tick", f"tick {rounds}"]
+    return [f"install p {without_inspects(program)}", *build(nodes, edges, churn), "tick", f"tick {rounds}"]
+
+
+def without_inspects(program):
+    """A copy of the program with its `| inspect(..)` taps removed, in `bench/.tmp/`.
+
+    The example programs print what they compute; unnest's tap on 200k rows was 90% of
+    its "load" time (one unbuffered stderr write per row). The taps are for reading, not
+    for timing, so the benchmark runs the programs without them."""
+    src = open(os.path.join(CRATE, program)).read()
+    stripped = re.sub(r"\|\s*inspect\([^)]*\)", "", src)
+    tmp = os.path.join(HERE, ".tmp")
+    os.makedirs(tmp, exist_ok=True)
+    path = os.path.join(tmp, os.path.basename(program))
+    with open(path, "w") as f:
+        f.write(stripped)
+    return path
 
 
 def aoc_sessions(backend):
