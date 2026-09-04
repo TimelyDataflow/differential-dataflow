@@ -57,6 +57,7 @@ WORKLOADS = {
     "tour":   ("examples/programs/tour.ddp",   lambda n, e, c: [f"load p 0 {graph(n, e, c)}", "feed p 1 0"]),
     "adt":    ("examples/programs/adt.ddp",    lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
     "ast":    ("examples/programs/ast.ddp",    lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
+    "ast_hier": ("bench/programs/ast_hier.ddp", lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
     "unnest": ("examples/programs/unnest.ddp", lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
 }
 
