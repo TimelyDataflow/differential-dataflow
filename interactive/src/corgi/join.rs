@@ -36,7 +36,7 @@ use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes};
-use corgi::{shape_of_value, Shape, Value as CValue};
+use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, CorgiChunk};
 use crate::corgi::col_times::ColTime;
@@ -53,10 +53,14 @@ const TARGET_OUT: usize = 1 << 18;
 const COORD_BITS: u32 = 48;
 
 /// The corgi [`ProxyJoinBackend`]: holds the projection `Term`s (`Var(0)=key`, `Var(1)=val0`,
-/// `Var(2)=val1`), compiled per container against the matched columns' shapes.
+/// `Var(2)=val1`) and their compiled form, pinned at the first block's shapes.
 pub struct CorgiJoinBackend<T: ColTime> {
     key: Term,
     val: Term,
+    /// The projection compiled against `(key, val0, val1)` shapes. A join's operands are static
+    /// per operator, so a chain compiles once; recompiling per output block made the compile
+    /// (a scratch lowering plus a type check) 53% of a small-input program's time.
+    plan: Option<(Shape, Shape, Shape, Graph<NumOp>)>,
     /// Identifier tokens in the current block that cover more than one real key. `advance` writes
     /// this and the immediately following `cross` reads it before the next `advance`; only matches
     /// under these astronomically rare tokens need a real-key comparison.
@@ -66,7 +70,7 @@ pub struct CorgiJoinBackend<T: ColTime> {
 
 impl<T: ColTime> CorgiJoinBackend<T> {
     pub fn new(key: Term, val: Term) -> Self {
-        CorgiJoinBackend { key, val, colliding: Vec::new(), _t: PhantomData }
+        CorgiJoinBackend { key, val, plan: None, colliding: Vec::new(), _t: PhantomData }
     }
 }
 
@@ -174,9 +178,15 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             let kc = recover_key(&gather_lanes(&keys0, &tag0, &off0));
             let v0 = gather_lanes(&vals0, &tag0, &off0);
             let v1 = gather_lanes(&vals1, &tag1, &off1);
-            let proj = compile_join_projection(&self.key, &self.val, &shape_of_value(&kc), &shape_of_value(&v0), &shape_of_value(&v1))
-                .unwrap_or_else(|e| panic!("join projection: type error: {e}"));
-            let projected = corgi::eval_graph(&proj, CValue::Prod(vec![kc, v0, v1]));
+            let shapes = (shape_of_value(&kc), shape_of_value(&v0), shape_of_value(&v1));
+            let pinned = matches!(&self.plan, Some((k, a, b, _)) if (k, a, b) == (&shapes.0, &shapes.1, &shapes.2));
+            if !pinned {
+                let graph = compile_join_projection(&self.key, &self.val, &shapes.0, &shapes.1, &shapes.2)
+                    .unwrap_or_else(|e| panic!("join projection: type error: {e}"));
+                self.plan = Some((shapes.0, shapes.1, shapes.2, graph));
+            }
+            let proj = &self.plan.as_ref().expect("compiled above").3;
+            let projected = corgi::eval_graph(proj, CValue::Prod(vec![kc, v0, v1]));
             let mut cols = projected.into_prod("corgi join projection").unwrap();
             let nv = cols.pop().unwrap();
             let nk = cols.pop().unwrap();
