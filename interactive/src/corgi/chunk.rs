@@ -143,6 +143,29 @@ where
     fn len_(&self) -> usize { self.0.times.len() }
 }
 
+/// A column the merge can order without a structural walk: a bare `u64` leaf, or unit.
+enum Lane<'a> {
+    Ints(&'a [u64]),
+    Unit,
+}
+
+impl<'a> Lane<'a> {
+    fn of(column: &'a CValue) -> Option<Lane<'a>> {
+        match column {
+            CValue::Unit(_) => Some(Lane::Unit),
+            other => corgi::arrange::leaf_slice(other).map(Lane::Ints),
+        }
+    }
+
+    #[inline]
+    fn cmp(&self, i: usize, other: &Lane<'_>, j: usize) -> Ordering {
+        match (self, other) {
+            (Lane::Ints(a), Lane::Ints(b)) => a[i].cmp(&b[j]),
+            _ => Ordering::Equal,
+        }
+    }
+}
+
 impl<T, R> Chunk for CorgiChunk<T, R>
 where
     T: ColTime,
@@ -176,9 +199,21 @@ where
         let (mut tags, mut offs) = (Vec::new(), Vec::new());
         let (mut times, mut diffs) = (ColTimes::new(), Vec::new());
         let (mut p1, mut p2) = (0usize, 0usize);
+        // When both sides' keys and values are bare `u64` leaves (or the value is unit, as under
+        // `distinct`) — integer keys are their own identifiers, and integer values are the common
+        // case — structural order is two integer compares read straight off the lanes; otherwise
+        // `compare_at` walks the shape per row.
+        let fast = match (Lane::of(c1.keys()), Lane::of(c1.vals()), Lane::of(c2.keys()), Lane::of(c2.vals())) {
+            (Some(k1), Some(v1), Some(k2), Some(v2)) => Some((k1, v1, k2, v2)),
+            _ => None,
+        };
         while p1 < n1 && p2 < n2 {
             // `(key, val)` structurally, then `time` in place via the columnar `Ref: Ord`.
-            let ord = compare_at(&kv1, p1, &kv2, p2).then_with(|| t1.cmp_cross(p1, t2, p2));
+            let kv_ord = match &fast {
+                Some((k1, v1, k2, v2)) => k1.cmp(p1, k2, p2).then_with(|| v1.cmp(p1, v2, p2)),
+                None => compare_at(&kv1, p1, &kv2, p2),
+            };
+            let ord = kv_ord.then_with(|| t1.cmp_cross(p1, t2, p2));
             match ord {
                 Ordering::Less => { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d1[p1].clone()); p1 += 1; }
                 Ordering::Greater => { tags.push(1); offs.push(p2); times.push_ref(t2, p2); diffs.push(d2[p2].clone()); p2 += 1; }
