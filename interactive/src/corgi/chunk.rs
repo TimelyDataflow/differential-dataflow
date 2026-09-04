@@ -278,21 +278,53 @@ where
         let srcs = [Some(&ckv)];
         let (mut tags, mut offs) = (Vec::new(), Vec::new());
         let (mut otimes, mut odiffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
+        // A batch holds few distinct times (one epoch, a handful of iterations), so each is
+        // advanced ONCE. `seen` keeps the distinct source times as refs, `order` a permutation of
+        // them sorted for binary search, `advanced[j]` the advanced form of `seen[j]`. Rows carry
+        // an index into `advanced`: no `T` is materialized, joined, or cloned per row, and the
+        // `PointStamp` allocations that go with each of those happen once per distinct time.
+        let mut seen: ColTimes<T> = ColTimes::new();
+        let mut order: Vec<usize> = Vec::new();
+        let mut advanced: Vec<T> = Vec::new();
+        let mut last = usize::MAX;
+        // One scratch buffer for every group: most groups are a row or two, and a fresh `Vec`
+        // per group was an allocation per row.
+        let mut pairs: Vec<(usize, R)> = Vec::new();
         let mut i = 0;
         for &g_end in &bounds {
             if g_end > end { break; }
-            let mut pairs: Vec<(T, R)> = (i..g_end)
-                .map(|k| { let mut t = ctimes.get(k); t.advance_by(frontier); (t, cdiffs[k].clone()) })
-                .collect();
-            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            pairs.clear();
+            for k in i..g_end {
+                // Sorted input repeats the previous row's time far more often than not.
+                let j = if last != usize::MAX && ctimes.cmp_cross(k, &seen, last) == Ordering::Equal {
+                    last
+                } else {
+                    match order.binary_search_by(|&j| seen.cmp_cross(j, &ctimes, k)) {
+                        Ok(pos) => order[pos],
+                        Err(pos) => {
+                            let mut t = ctimes.get(k);
+                            t.advance_by(frontier);
+                            let j = advanced.len();
+                            seen.push_ref(&ctimes, k);
+                            advanced.push(t);
+                            order.insert(pos, j);
+                            j
+                        }
+                    }
+                };
+                last = j;
+                pairs.push((j, cdiffs[k].clone()));
+            }
+            // Distinct source times may advance to one time; coalesce by the advanced value.
+            pairs.sort_by(|a, b| advanced[a.0].cmp(&advanced[b.0]));
             let mut k = 0;
             while k < pairs.len() {
-                let t = pairs[k].0.clone();
+                let t = &advanced[pairs[k].0];
                 let mut d = pairs[k].1.clone();
                 k += 1;
-                while k < pairs.len() && pairs[k].0 == t { d.plus_equals(&pairs[k].1); k += 1; }
+                while k < pairs.len() && advanced[pairs[k].0] == *t { d.plus_equals(&pairs[k].1); k += 1; }
                 if !d.is_zero() {
-                    tags.push(0); offs.push(i); otimes.push(&t); odiffs.push(d);
+                    tags.push(0); offs.push(i); otimes.push(t); odiffs.push(d);
                     if otimes.len() >= TARGET {
                         Self::emit(&srcs, &tags, &offs, &otimes, &odiffs, out);
                         tags.clear(); offs.clear(); otimes.clear(); odiffs.clear();
