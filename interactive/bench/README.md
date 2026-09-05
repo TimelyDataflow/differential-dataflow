@@ -1,7 +1,7 @@
 # DDIR benchmarks
 
 Every workload here runs as a **session on the one server binary**: `install`
-a program, `load` its inputs in bulk (sharded across the workers), `tick` once
+a program, `feed … from` its inputs in bulk (sharded across the workers), `tick` once
 for the initial epoch, then `tick R` for R epochs of standing change. The
 server times each `tick`; `bench.py` collects the times across backends,
 worker counts and repetitions, and writes a JSONL log plus a markdown summary
@@ -30,7 +30,7 @@ deterministic (`seed=0`), so two runs at one revision see the same rows.
 
 ## What the numbers mean
 
-- **initial epoch**: the first `tick` — the bulk load reaching the dataflow
+- **initial epoch**: the first `tick` — the bulk feed reaching the dataflow
   and the whole computation running to its fixed point.
 - **per churn epoch**: the `tick R` time divided by R — each epoch retracts C
   rows of the window and inserts C fresh ones, and the tick waits for every

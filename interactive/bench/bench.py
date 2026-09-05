@@ -2,7 +2,7 @@
 """DDIR benchmark harness: every workload runs as a session on the one server binary.
 
 Each workload is a program from `examples/programs/` (or an AoC part) plus a
-recipe for its inputs. A run is `install`, `load` (bulk, sharded across
+recipe for its inputs. A run is `install`, `feed … from` (bulk, sharded across
 workers), one `tick` (the initial epoch: load + first computation), then
 `tick R` (R epochs of `churn` replaced rows each). The server reports each
 `tick`'s wall-clock time; this script collects them across backends, worker
@@ -48,17 +48,17 @@ def graph(nodes, edges, churn, arity=2, seed=0):
 # name -> (program, session builder). The builder gets (nodes, edges, churn) and
 # returns the commands between `install` and the ticks.
 WORKLOADS = {
-    "scc":    ("examples/programs/scc.ddp",    lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
-    "cc":     ("examples/programs/cc.ddp",     lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
-    "triangles": ("examples/programs/triangles.ddp", lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
-    "reach":  ("examples/programs/reach.ddp",  lambda n, e, c: [f"load p 0 {graph(n, e, c)}", "feed p 1 0"]),
-    "kcore":  ("examples/programs/kcore.ddir", lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
-    "stable": ("examples/programs/stable.ddp", lambda n, e, c: [f"load p 0 {graph(n, e, c, arity=4)}"]),
-    "tour":   ("examples/programs/tour.ddp",   lambda n, e, c: [f"load p 0 {graph(n, e, c)}", "feed p 1 0"]),
-    "adt":    ("examples/programs/adt.ddp",    lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
-    "ast":    ("examples/programs/ast.ddp",    lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
-    "ast_hier": ("bench/programs/ast_hier.ddp", lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
-    "unnest": ("examples/programs/unnest.ddp", lambda n, e, c: [f"load p 0 {graph(n, e, c)}"]),
+    "scc":    ("examples/programs/scc.ddp",    lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}"]),
+    "cc":     ("examples/programs/cc.ddp",     lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}"]),
+    "triangles": ("examples/programs/triangles.ddp", lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}"]),
+    "reach":  ("examples/programs/reach.ddp",  lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}", "feed p 1 0"]),
+    "kcore":  ("examples/programs/kcore.ddir", lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}"]),
+    "stable": ("examples/programs/stable.ddp", lambda n, e, c: [f"feed p 0 from {graph(n, e, c, arity=4)}"]),
+    "tour":   ("examples/programs/tour.ddp",   lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}", "feed p 1 0"]),
+    "adt":    ("examples/programs/adt.ddp",    lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}"]),
+    "ast":    ("examples/programs/ast.ddp",    lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}"]),
+    "ast_hier": ("bench/programs/ast_hier.ddp", lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}"]),
+    "unnest": ("examples/programs/unnest.ddp", lambda n, e, c: [f"feed p 0 from {graph(n, e, c)}"]),
 }
 
 UNITS = {"ns": 1e-9, "µs": 1e-6, "ms": 1e-3, "s": 1.0}
@@ -140,7 +140,7 @@ def aoc_sessions(backend):
         for cand in (f"gen/day{day}/input{part}.txt", f"gen/day{day}/input{part}p.txt" if pad else None):
             if cand and os.path.exists(os.path.join(AOC, cand)):
                 inp = cand
-        out.append((f"aoc{day}p{part}", [f"install p {AOC}/day{day}/part{part}.ddp", f"load p 0 {AOC}/{inp}", "tick"]))
+        out.append((f"aoc{day}p{part}", [f"install p {AOC}/day{day}/part{part}.ddp", f"feed p 0 from {AOC}/{inp}", "tick"]))
     return out
 
 
