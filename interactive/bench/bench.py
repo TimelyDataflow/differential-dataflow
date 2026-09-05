@@ -2,7 +2,7 @@
 """DDIR benchmark harness: every workload runs as a session on the one server binary.
 
 Each workload is a program from `examples/programs/` (or an AoC part) plus a
-recipe for its inputs. A run is `install`, `feed … from` (bulk, sharded across
+recipe for its inputs. A run is `load`, `feed … from` (bulk, sharded across
 workers), one `tick` (the initial epoch: load + first computation), then
 `tick R` (R epochs of `churn` replaced rows each). The server reports each
 `tick`'s wall-clock time; this script collects them across backends, worker
@@ -32,7 +32,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 CRATE = os.path.dirname(HERE)                 # interactive/
 ROOT = os.path.dirname(CRATE)                 # repo root
-SERVER = os.path.join(ROOT, "target", "release", "examples", "ddir_server")
+SERVER = os.path.join(ROOT, "target", "release", "ddir_server")
 AOC = os.path.join(CRATE, "examples", "aoc2023")
 
 # scale -> (nodes, edges, churn, rounds)
@@ -62,18 +62,21 @@ WORKLOADS = {
 }
 
 UNITS = {"ns": 1e-9, "µs": 1e-6, "ms": 1e-3, "s": 1.0}
-TICK = re.compile(r"^tick -> epoch (\d+) \(([\d.]+)(ns|µs|ms|s)\)$")
-INSTALLED = re.compile(r'^installed "p" \((\d+) ops\)$')
-LOADED = re.compile(r"^loaded (\d+) rows")
+# The live server's responses: `<reqid> ok …` / `<reqid> err …` / `<reqid> data …`.
+TICK = re.compile(r"^\S+ ok t=(\d+) elapsed=([\d.]+)(ns|µs|ms|s)$")
+INSTALLED = re.compile(r'^\S+ ok installed "p" \((\d+) ops\)$')
+LOADED = re.compile(r"^\S+ ok loaded (\d+) rows")
+ERROR = re.compile(r"^\S+ err ")
 
 
 def run_session(lines, backend, workers, timeout=3600, wrap=None):
     """Run one session on the server; return (ops, rows, [(epoch, seconds)]) or raise."""
-    cmd = [SERVER, f"--backend={backend}", f"-w{workers}"]
+    cmd = [SERVER]
     if wrap:
         cmd = wrap + cmd
+    env = dict(os.environ, DDIR_BACKEND=backend, DDIR_WORKERS=str(workers))
     proc = subprocess.run(cmd, input="\n".join(lines) + "\nexit\n", capture_output=True,
-                          text=True, timeout=timeout, cwd=CRATE)
+                          text=True, timeout=timeout, cwd=CRATE, env=env)
     ops = rows = None
     ticks = []
     for line in proc.stdout.splitlines():
@@ -83,7 +86,7 @@ def run_session(lines, backend, workers, timeout=3600, wrap=None):
             rows = int(m.group(1))
         elif m := TICK.match(line):
             ticks.append((int(m.group(1)), float(m.group(2)) * UNITS[m.group(3)]))
-        elif line.startswith("error:") or "panicked" in line:
+        elif ERROR.match(line) or "panicked" in line:
             raise RuntimeError(line)
     if proc.returncode != 0 or "panicked" in proc.stderr:
         raise RuntimeError(proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else f"exit {proc.returncode}")
@@ -92,7 +95,7 @@ def run_session(lines, backend, workers, timeout=3600, wrap=None):
 
 def session(name, nodes, edges, churn, rounds):
     program, build = WORKLOADS[name]
-    return [f"install p {without_inspects(program)}", *build(nodes, edges, churn), "tick", f"tick {rounds}"]
+    return [f"load p from {without_inspects(program)}", *build(nodes, edges, churn), "tick", f"tick {rounds}"]
 
 
 def without_inspects(program):
@@ -140,7 +143,7 @@ def aoc_sessions(backend):
         for cand in (f"gen/day{day}/input{part}.txt", f"gen/day{day}/input{part}p.txt" if pad else None):
             if cand and os.path.exists(os.path.join(AOC, cand)):
                 inp = cand
-        out.append((f"aoc{day}p{part}", [f"install p {AOC}/day{day}/part{part}.ddp", f"feed p 0 from {AOC}/{inp}", "tick"]))
+        out.append((f"aoc{day}p{part}", [f"load p from {AOC}/day{day}/part{part}.ddp", f"feed p 0 from {AOC}/{inp}", "tick"]))
     return out
 
 
@@ -209,8 +212,7 @@ def main():
     args = ap.parse_args()
 
     if not args.no_build:
-        subprocess.run(["cargo", "build", "--release", "-p", "interactive", "--example", "ddir_server"],
-                       cwd=ROOT, check=True)
+        subprocess.run(["cargo", "build", "--release", "-p", "ddir-server"], cwd=ROOT, check=True)
     rev = git("rev-parse", "--short", "HEAD")
     dirty = bool(git("status", "--porcelain", "--", "interactive"))
     stamp = dt.date.today().isoformat()

@@ -1,6 +1,6 @@
 # DDIR benchmarks
 
-Every workload here runs as a **session on the one server binary**: `install`
+Every workload here runs as a **session on the one server binary**: `load`
 a program, `feed … from` its inputs in bulk (sharded across the workers), `tick` once
 for the initial epoch, then `tick R` for R epochs of standing change. The
 server times each `tick`; `bench.py` collects the times across backends,
@@ -8,7 +8,7 @@ worker counts and repetitions, and writes a JSONL log plus a markdown summary
 under `reports/`, named by date and git revision.
 
 ```
-cargo build --release -p interactive --example ddir_server
+cargo build --release -p ddir-server
 ./bench.py --scale small --runs 3                       # sanity pass, seconds
 ./bench.py --scale medium --workers 1,4 --runs 3        # the standing report
 ./bench.py --aoc --backends vec,corgi                   # the 33 AoC parts, one epoch each
