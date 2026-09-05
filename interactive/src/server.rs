@@ -722,6 +722,11 @@ impl Server {
     /// retracts the next `C` rows of the window and adds `C` fresh ones, the
     /// standing-change regime a program is benchmarked under. Returns the
     /// number of rows in the source (across all workers).
+    ///
+    /// A file is validated in full on every worker before any of its rows is
+    /// applied: a malformed line fails the load on every worker, so a source
+    /// is fed whole or not at all, and the workers agree because they read the
+    /// same file (the source must be visible, and identical, to all of them).
     pub fn load(
         &mut self,
         worker: &Worker,
@@ -744,17 +749,20 @@ impl Server {
                     .map_err(|e| format!("load: cannot read {:?}: {}", source, e))?;
                 let mut total = 0;
                 let mut rows = Vec::new();
+                // Every line is parsed, whichever worker's shard it falls in: a
+                // malformed line must fail the load everywhere, or the other
+                // workers would apply their shards and the client would see
+                // "loaded" over partial data.
                 for (e, line) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
                     total += 1;
-                    if !mine(e as u64) {
-                        continue;
-                    }
                     let fields = line
                         .split_whitespace()
                         .map(|t| t.parse::<i64>().map(Value::Int))
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|_| format!("load: line {} of {:?} is not a row of integers: {:?}", e + 1, source, line))?;
-                    rows.push((Value::Tuple(fields), Value::unit()));
+                    if mine(e as u64) {
+                        rows.push((Value::Tuple(fields), Value::unit()));
+                    }
                 }
                 (total, rows)
             }
