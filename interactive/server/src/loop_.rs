@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::time::Instant;
 
 use differential_dataflow::operators::arrange::ShutdownButton;
 use interactive::server::{Command as ServerCommand, OuterTime, RenderBackend, Server};
@@ -278,7 +279,7 @@ fn dispatch(
         Ok(PreparedCommand::Server(command)) => match command {
             ServerCommand::Install { name, program } => server
                 .install(worker, &name, &program)
-                .map(|()| format!("installed {:?}", name)),
+                .map(|()| format!("installed {:?} ({} ops)", name, program.op_count())),
             ServerCommand::Drop { name } => {
                 if tails.values().any(|tail| {
                     server
@@ -331,6 +332,10 @@ fn dispatch(
                     server.epoch()
                 )
             }),
+            // Collective: every worker sources its own shard.
+            ServerCommand::Load { prog, input, source } => server
+                .load(worker, &prog, input, &source)
+                .map(|rows| format!("loaded {rows} rows into {prog:?} input {input}")),
             ServerCommand::Bind { trace, prog, input } => server
                 .bind(worker, &trace, &prog, input)
                 .map(|()| format!("bound {:?} -> {:?} input {}", trace, prog, input)),
@@ -395,10 +400,11 @@ fn dispatch(
                 Err(error) => Err(error),
             },
             ServerCommand::Tick { n } => {
+                let timer = Instant::now();
                 for _ in 0..n {
                     tick(server, tails, worker);
                 }
-                Ok(format!("t={}", server.epoch()))
+                Ok(format!("t={} elapsed={:.2?}", server.epoch(), timer.elapsed()))
             }
             ServerCommand::Exit => {
                 *shutdown = connection_id == 0;

@@ -32,6 +32,9 @@
 //!   for teardown.
 //! - **feed** stages an input update at a chosen time (default: the current
 //!   epoch) via `update_at`, so inputs can be scheduled into the future.
+//! - **load** fills an input in bulk from a recipe or a file, each worker
+//!   feeding its own shard; a churning recipe then changes the input on every
+//!   tick, which is how a program is run under standing change.
 //! - **tick** advances all inputs to the next epoch, runs to quiescence, then
 //!   lets every trace compact (an importer's own handle holds the shared
 //!   `TraceBox` back to what it still needs).
@@ -242,6 +245,14 @@ pub enum Command {
         input: usize,
         updates: Vec<InputUpdate>,
     },
+    /// Fill positional `input` of `prog` from `source` — a recipe name or a
+    /// file path — at the current epoch. Collective: every worker feeds its
+    /// own shard of the rows (see [`Server::load`]).
+    Load {
+        prog: String,
+        input: usize,
+        source: String,
+    },
     /// Close `n` epochs, running to quiescence after each one.
     Tick { n: u64 },
     /// Drop the named program.
@@ -284,8 +295,10 @@ struct Installed {
     /// [`Origin`]. Generated/clock entries advance and drop like any program but
     /// are not writable by `feed`.
     origin: Origin,
-    /// Generator recipe and next row to retract, for changing random sources.
-    generator: Option<(Recipe, u64)>,
+    /// Per input: the recipe whose rows it holds and the next row to retract,
+    /// for inputs that churn each `tick` (a generated `random:` source's own
+    /// input, or a program input bulk-loaded from such a recipe).
+    generators: HashMap<usize, (Recipe, u64)>,
 }
 
 /// A stable, transport-friendly description of one installed dataflow.
@@ -563,7 +576,7 @@ impl Server {
                 dataflow_id,
                 probe,
                 origin: Origin::Program,
-                generator: None,
+                generators: HashMap::new(),
             },
         );
         Ok(())
@@ -607,7 +620,7 @@ impl Server {
                 dataflow_id,
                 probe,
                 origin: Origin::Generated,
-                generator: Some((recipe, 0)),
+                generators: HashMap::from([(0usize, (recipe, 0u64))]),
             },
         );
     }
@@ -645,7 +658,7 @@ impl Server {
                 dataflow_id,
                 probe,
                 origin: Origin::Clock,
-                generator: None,
+                generators: HashMap::new(),
             },
         );
     }
@@ -694,6 +707,78 @@ impl Server {
             );
         }
         Ok(())
+    }
+
+    /// Bulk-load rows into positional `input` of `prog` at the current epoch.
+    ///
+    /// `source` is either a recipe (`random:…`, `iota:N` — the same names an
+    /// `import` accepts) or the path of a text file with one row per line of
+    /// whitespace-separated integers (`(Tuple[ints] ; ())`). Collective: every
+    /// worker must call this, and each feeds only its shard (`row % peers ==
+    /// index`) through its own handle, so the union is the source exactly once
+    /// and the exchange places each row on its key's owner.
+    ///
+    /// A `random:` recipe with `churn=C` keeps churning: every later `tick`
+    /// retracts the next `C` rows of the window and adds `C` fresh ones, the
+    /// standing-change regime a program is benchmarked under. Returns the
+    /// number of rows in the source (across all workers).
+    ///
+    /// A file is validated in full on every worker before any of its rows is
+    /// applied: a malformed line fails the load on every worker, so a source
+    /// is fed whole or not at all, and the workers agree because they read the
+    /// same file (the source must be visible, and identical, to all of them).
+    pub fn load(
+        &mut self,
+        worker: &Worker,
+        prog: &str,
+        input: usize,
+        source: &str,
+    ) -> Result<u64, String> {
+        let time = self.epoch;
+        self.validate_feed(prog, input, time)?;
+        let (index, peers) = (worker.index(), worker.peers());
+        let mine = |e: u64| (e as usize) % peers == index;
+        let recipe = Recipe::parse(source);
+        let (total, rows): (u64, Vec<(Value, Value)>) = match recipe {
+            Some(recipe) => (
+                recipe.rows_len(),
+                (0..recipe.rows_len()).filter(|e| mine(*e)).map(|e| recipe.row(e)).collect(),
+            ),
+            None => {
+                let text = std::fs::read_to_string(source)
+                    .map_err(|e| format!("load: cannot read {:?}: {}", source, e))?;
+                let mut total = 0;
+                let mut rows = Vec::new();
+                // Every line is parsed, whichever worker's shard it falls in: a
+                // malformed line must fail the load everywhere, or the other
+                // workers would apply their shards and the client would see
+                // "loaded" over partial data.
+                for (e, line) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+                    total += 1;
+                    let fields = line
+                        .split_whitespace()
+                        .map(|t| t.parse::<i64>().map(Value::Int))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|_| format!("load: line {} of {:?} is not a row of integers: {:?}", e + 1, source, line))?;
+                    if mine(e as u64) {
+                        rows.push((Value::Tuple(fields), Value::unit()));
+                    }
+                }
+                (total, rows)
+            }
+        };
+        let installed = self
+            .programs
+            .get_mut(&canonical_source_name(prog))
+            .expect("load target was prevalidated");
+        if let Some(recipe @ Recipe::Random { churn: 1.., .. }) = recipe {
+            installed.generators.insert(input, (recipe, 0));
+        }
+        let handle = installed.inputs.get_mut(&input).expect("load input was prevalidated");
+        for row in rows {
+            handle.update_at(row, time, 1);
+        }
+        Ok(total)
     }
 
     /// Check everything about an input target that can fail without changing
@@ -1058,10 +1143,10 @@ impl Server {
             }
             // A random source denotes an infinite deterministic row stream.
             // Each tick replaces `churn` members of its fixed-size window.
-            if let Some((recipe, cursor)) = &mut installed.generator {
+            for (input, (recipe, cursor)) in installed.generators.iter_mut() {
                 let recipe = *recipe;
                 if let Recipe::Random { edges, churn, .. } = recipe {
-                    if let Some(h) = installed.inputs.get_mut(&0) {
+                    if let Some(h) = installed.inputs.get_mut(input) {
                         for _ in 0..churn {
                             let old = *cursor;
                             let new = edges + *cursor;
@@ -1184,4 +1269,58 @@ impl Default for Server {
     fn default() -> Self {
         Server::new()
     }
+}
+
+/// Evaluate `program` on explicit inputs through a throwaway server: every
+/// export's consolidated final contents (rows with non-zero net multiplicity),
+/// by name.
+///
+/// This is the data-in/data-out entry point the test suites build on, and it
+/// takes the same path a live install does — `install`, one `feed` of each
+/// positional input (`inputs[i]` holds input `i`'s rows, each at multiplicity
+/// +1, dealt round-robin across the workers), one `tick`, then a `snapshot` of
+/// each export. `config` picks the worker group: `Config::process(n)` hands
+/// exchanged containers between threads as typed values, while
+/// `CommunicationConfig::ProcessBinary(n)` sends every one through the wire
+/// format. The answer must not depend on either choice.
+pub fn evaluate(
+    backend: RenderBackend,
+    config: timely::Config,
+    program: &st::Program,
+    inputs: &[Vec<(Value, Value)>],
+) -> std::collections::BTreeMap<String, Vec<((Value, Value), Diff)>> {
+    let program = program.clone();
+    let inputs = inputs.to_vec();
+    let guards = timely::execute(config, move |worker| {
+        let mut server = Server::with_backend(backend);
+        server.install(worker, "evaluate", &program).expect("evaluate: install");
+        let has_input = |i: usize| program.root.imports.iter().any(|imp| matches!(imp.from, st::Source::Input(n) if n == i));
+        for (input, rows) in inputs.iter().enumerate().filter(|(i, _)| has_input(*i)) {
+            let shard = rows
+                .iter()
+                .skip(worker.index())
+                .step_by(worker.peers())
+                .map(|(key, val)| InputUpdate { key: key.clone(), val: val.clone(), diff: 1 })
+                .collect();
+            server.feed_batch("evaluate", input, shard).expect("evaluate: feed");
+        }
+        server.tick(worker);
+        // `snapshot` gathers to worker 0; the other workers' results are empty.
+        program
+            .root
+            .exports
+            .iter()
+            .map(|e| {
+                let rows = server.snapshot(worker, &e.name).expect("evaluate: snapshot");
+                (e.name.clone(), rows.into_iter().map(|(k, v, d)| ((k, v), d)).collect())
+            })
+            .collect()
+    })
+    .expect("evaluate: worker startup");
+    guards
+        .join()
+        .into_iter()
+        .next()
+        .expect("evaluate: worker 0")
+        .expect("evaluate: worker 0 returned")
 }

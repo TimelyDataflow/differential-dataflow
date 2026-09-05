@@ -25,6 +25,12 @@ mod cmd;
 #[path = "loop_.rs"]
 mod control_loop;
 
+use mimalloc::MiMalloc;
+
+/// The allocator the retired example driver ran on; the arrangement-heavy paths lean on it.
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};

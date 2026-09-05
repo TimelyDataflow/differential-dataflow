@@ -37,14 +37,18 @@ pub enum Cmd {
     /// a fresh id (echo'd in the response).
     /// `bindings` — `import-name -> binding`, where the binding is either a
     /// registered trace name or a builtin call (`random(...)`).
-    /// `program` — DDIR text.
-    /// `explain` — request the explain rewrite (reserved; the server
-    /// reports an error rather than improvising a meaning).
+    /// `program` — DDIR text, inline (`load … begin` … `end-load`) or read
+    /// from a file (`load <name> from <path>`).
+    /// `explain` — `explain=<arity>[,debug]`: apply the explanation rewrite,
+    /// every source taken to have `arity` key fields and no value; the query
+    /// input is the one after the program's own, the demand sets its exports.
+    /// `applicative` — the text is in the applicative syntax (a `.ddir` file).
     Load {
         id_hint: String,
         bindings: BTreeMap<String, String>,
         program: String,
-        explain: bool,
+        explain: Option<(usize, bool)>,
+        applicative: bool,
     },
     /// Drop the dataflow named by id or by `id_hint`. Fails if any
     /// export of this dataflow is still imported by another live
@@ -52,8 +56,8 @@ pub enum Cmd {
     Drop { target: DataflowRef },
     /// List held names.
     List,
-    /// One-shot snapshot of a named trace.
-    Peek { name: String },
+    /// One-shot snapshot of a named trace, optionally of one key.
+    Peek { name: String, key: Option<Value> },
     /// Persistent subscription to a named trace.
     Tail { name: String },
     /// Cancel a previous `tail` (matched by its reqid).
@@ -76,6 +80,14 @@ pub enum Cmd {
         prog: String,
         input: usize,
         updates: Vec<InputUpdate>,
+    },
+    /// Fill one program input from a source the server reads itself — a recipe
+    /// (`random:…`, `iota:N`) or a file of integer rows — each worker taking its
+    /// shard, so no row crosses the wire. `feed <prog> <in#> from <source>`.
+    Source {
+        prog: String,
+        input: usize,
+        source: String,
     },
     /// Bind a trace's changes into `prog`'s positional `input`, delivered at
     /// each tick one epoch delayed — the write path for installed programs.
@@ -143,18 +155,25 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
             bindings,
             program,
             explain,
+            applicative,
         } => {
-            if explain {
-                return Err(
-                    "load --explain is reserved; explanation is not implemented here yet".into(),
-                );
-            }
             let mut program = catch_unwind(AssertUnwindSafe(|| {
-                let statements = interactive::parse::pipe::parse(&program);
+                let statements = if applicative {
+                    interactive::parse::applicative::parse(&program)
+                } else {
+                    interactive::parse::pipe::parse(&program)
+                };
                 interactive::lower::lower_tree(statements)
             }))
             .map_err(panic_message)?;
             apply_bindings(&mut program, &bindings)?;
+            // The rewrite precedes optimization (its rules assume single-op Linears).
+            if let Some((arity, debug)) = explain {
+                let shapes: Vec<(usize, usize)> = program.root.imports.iter().map(|_| (arity, 0)).collect();
+                let options = interactive::explain::Options { debug_inspects: debug };
+                program = catch_unwind(AssertUnwindSafe(|| interactive::explain::explain_with(&program, &shapes, options)))
+                    .map_err(panic_message)?;
+            }
             program.optimize();
             ServerCommand::Install {
                 name: id_hint,
@@ -173,10 +192,7 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
             },
         },
         Cmd::List => ServerCommand::List,
-        Cmd::Peek { name } => ServerCommand::Peek {
-            trace: name,
-            key: None,
-        },
+        Cmd::Peek { name, key } => ServerCommand::Peek { trace: name, key },
         Cmd::Tail { name } => return Ok(PreparedCommand::Tail { name }),
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
         Cmd::Feed {
@@ -203,6 +219,7 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
             input,
             updates,
         },
+        Cmd::Source { prog, input, source } => ServerCommand::Load { prog, input, source },
         Cmd::Bind { trace, prog, input } => ServerCommand::Bind { trace, prog, input },
         Cmd::Unbind { trace, prog, input } => ServerCommand::Unbind { trace, prog, input },
         Cmd::Query { .. } => {
@@ -328,7 +345,7 @@ struct PendingLoad {
     reqid: ReqId,
     id_hint: String,
     bindings: BTreeMap<String, String>,
-    explain: bool,
+    explain: Option<(usize, bool)>,
     body: String,
     /// Set once the body exceeds the size gate; the rest of the body is
     /// swallowed (not stored) and `end-load` reports this error, so an
@@ -442,6 +459,7 @@ impl LineParser {
                             bindings: done.bindings,
                             program: done.body,
                             explain: done.explain,
+                            applicative: false,
                         }),
                     ));
                 }
@@ -529,12 +547,26 @@ enum ParseOutcome {
     BeginLoad {
         id_hint: String,
         bindings: BTreeMap<String, String>,
-        explain: bool,
+        explain: Option<(usize, bool)>,
     },
     BeginFeed {
         prog: String,
         input: usize,
     },
+}
+
+/// `explain=<arity>[,debug]`: the sources' key arity, and whether to tap every
+/// demand collection with an inspect.
+fn parse_explain(spec: &str) -> Result<(usize, bool), String> {
+    let (arity, debug) = match spec.split_once(',') {
+        Some((arity, "debug")) => (arity, true),
+        Some(_) => return Err(format!("load: explain=<arity>[,debug], got {spec:?}")),
+        None => (spec, false),
+    };
+    let arity = arity
+        .parse()
+        .map_err(|_| format!("load: explain= arity must be a number, got {arity:?}"))?;
+    Ok((arity, debug))
 }
 
 /// A `<value>` for `feed`: a comma-separated integer row → `Tuple`, `_` or
@@ -601,32 +633,38 @@ fn parse_input_update(line: &str) -> Result<InputUpdate, String> {
 fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
     match cmd {
         "load" => {
-            // Syntax: `load <id-hint> [--explain] [name=binding ...] begin`
-            // The trailing `begin` switches the parser into body-collection
-            // mode; subsequent input lines are program text terminated by
-            // `<reqid> end-load`.
-            if args.is_empty() {
-                return ParseOutcome::Err(
-                    "load: expected `<id-hint> [--explain] [name=binding ...] begin`".into(),
-                );
-            }
-            if args.last() != Some(&"begin") {
-                return ParseOutcome::Err(
-                    "load: must end with `begin` (multi-line body required)".into(),
-                );
-            }
-            let id_hint = args[0].to_string();
-            let middle = &args[1..args.len() - 1];
+            // Two forms. `load <name> from <path> [options]` installs a program file
+            // (`.ddp` = pipe syntax, else applicative), read here on the session
+            // thread. `load <name> [options] begin` switches the parser into
+            // body-collection mode; subsequent lines are program text terminated by
+            // `<reqid> end-load`. Options: `explain=<arity>[,debug]`, `name=binding`.
+            const USAGE: &str = "load: expected `<name> from <path> [options]` or `<name> [options] begin`";
+            let Some((id_hint, rest)) = args.split_first() else {
+                return ParseOutcome::Err(USAGE.into());
+            };
+            let (path, options): (Option<&str>, &[&str]) = match rest {
+                ["from", path, options @ ..] => (Some(path), options),
+                [options @ .., "begin"] => (None, options),
+                _ => return ParseOutcome::Err(USAGE.into()),
+            };
             let mut bindings = BTreeMap::new();
-            let mut explain = false;
-            for tok in middle {
-                if *tok == "--explain" {
-                    explain = true;
+            let mut explain = None;
+            for tok in options {
+                if let Some(spec) = tok.strip_prefix("explain=") {
+                    explain = match parse_explain(spec) {
+                        Ok(explain) => Some(explain),
+                        Err(error) => return ParseOutcome::Err(error),
+                    };
                     continue;
+                }
+                if *tok == "--explain" {
+                    return ParseOutcome::Err(
+                        "load: `--explain` needs the sources' arity: `explain=<arity>[,debug]`".into(),
+                    );
                 }
                 let Some((k, v)) = tok.split_once('=') else {
                     return ParseOutcome::Err(format!(
-                        "load: argument {:?} must be `--explain` or `name=binding`",
+                        "load: argument {:?} must be `explain=<arity>[,debug]` or `name=binding`",
                         tok
                     ));
                 };
@@ -634,10 +672,25 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                     return ParseOutcome::Err(format!("load: duplicate binding for {:?}", k));
                 }
             }
-            ParseOutcome::BeginLoad {
-                id_hint,
-                bindings,
-                explain,
+            let id_hint = id_hint.to_string();
+            match path {
+                // A file the server reads itself is not an upload, so the program-size
+                // gate (an intake defense) does not apply to it.
+                Some(path) => match std::fs::read_to_string(path) {
+                    Ok(program) => ParseOutcome::Cmd(Cmd::Load {
+                        id_hint,
+                        bindings,
+                        program,
+                        explain,
+                        applicative: !path.ends_with(".ddp"),
+                    }),
+                    Err(error) => ParseOutcome::Err(format!("load: cannot read {path:?}: {error}")),
+                },
+                None => ParseOutcome::BeginLoad {
+                    id_hint,
+                    bindings,
+                    explain,
+                },
             }
         }
         "query" => {
@@ -712,10 +765,21 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                     input,
                 };
             }
+            // Syntax: `feed <prog> <in#> from <recipe-or-file>` — the server sources the rows.
+            if let [prog, input, "from", source] = args {
+                return match input.parse() {
+                    Ok(input) => ParseOutcome::Cmd(Cmd::Source {
+                        prog: (*prog).to_string(),
+                        input,
+                        source: (*source).to_string(),
+                    }),
+                    Err(_) => ParseOutcome::Err(format!("feed: <in#> must be a number, got {input:?}")),
+                };
+            }
             // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
             // A `<v>`/`<key>` is a comma-separated integer row (`1,2` → tuple;
             // `_`/empty → unit) or a closed scalar term written without
-            // spaces (`inject(2,tuple(3,4))`), as in the ddir_server example.
+            // spaces (`inject(2,tuple(3,4))`).
             if args.len() < 3 {
                 return ParseOutcome::Err(
                     "feed: expected `<prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`".into(),
@@ -810,8 +874,16 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
         "peek" => match args {
             [name] => ParseOutcome::Cmd(Cmd::Peek {
                 name: (*name).to_string(),
+                key: None,
             }),
-            _ => ParseOutcome::Err("peek: expected `<name>`".into()),
+            [name, key] => match parse_value(key) {
+                Ok(key) => ParseOutcome::Cmd(Cmd::Peek {
+                    name: (*name).to_string(),
+                    key: Some(key),
+                }),
+                Err(error) => ParseOutcome::Err(format!("peek key: {}", error)),
+            },
+            _ => ParseOutcome::Err("peek: expected `<name> [key]`".into()),
         },
         "tail" => match args {
             [name] => ParseOutcome::Cmd(Cmd::Tail {
@@ -853,6 +925,21 @@ mod tests {
     }
 
     #[test]
+    fn feed_from_sources_rows_server_side() {
+        let mut p = LineParser::default();
+        let out = feed_all(&mut p, &["r1 feed world 0 from iota:3\n"]);
+        match &out[..] {
+            [(reqid, Ok(Cmd::Source { prog, input, source }))] => {
+                assert_eq!(reqid.as_str(), "r1");
+                assert_eq!((prog.as_str(), *input, source.as_str()), ("world", 0, "iota:3"));
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        let out = feed_all(&mut p, &["r2 feed world x from iota:3\n"]);
+        assert!(matches!(&out[..], [(_, Err(_))]), "a bad input index must be rejected: {out:?}");
+    }
+
+    #[test]
     fn simple_commands() {
         let mut p = LineParser::new();
         let got = feed_all(
@@ -868,7 +955,7 @@ mod tests {
                 target: DataflowRef::Id(3)
             })
         ));
-        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name }) if name == "foo"));
+        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None }) if name == "foo"));
     }
 
     #[test]
@@ -890,6 +977,7 @@ mod tests {
                 bindings,
                 program,
                 explain,
+                applicative,
             }) => {
                 assert_eq!(id_hint, "gen");
                 assert_eq!(
@@ -898,7 +986,8 @@ mod tests {
                 );
                 assert!(program.contains("import \"edges/v1\""));
                 assert!(program.contains("export \"reach\""));
-                assert!(!*explain);
+                assert!(explain.is_none());
+                assert!(!applicative);
             }
             _ => panic!("expected Load, got {:?}", got[0].1),
         }
@@ -923,18 +1012,43 @@ mod tests {
     }
 
     #[test]
-    fn load_explain() {
-        let mut p = LineParser::new();
+    fn load_from_file_reads_the_program_here() {
+        let dir = std::env::temp_dir().join(format!("ddir-load-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ddp = dir.join("p.ddp");
+        std::fs::write(&ddp, "export \"r\" = input 0;\n").unwrap();
+        let ddir = dir.join("q.ddir");
+        std::fs::write(&ddir, "export \"r\" = INPUT 0;\n").unwrap();
+        let mut p = LineParser::default();
         let got = feed_all(&mut p, &[
-            "rE load reach --explain edges=random(seed=1,arity=2,range=10,count=2,churn=0) begin",
-            "export \"reach_out\" = import \"edges\";",
-            "rE end-load",
+            &format!("r1 load p from {} explain=2,debug e=random(seed=1,arity=2,range=8,count=12)\n", ddp.display()),
+            &format!("r2 load q from {}\n", ddir.display()),
+            "r3 load p from /nonexistent/p.ddp\n",
+            "r4 load p --explain begin\n",
         ]);
-        assert_eq!(got.len(), 1);
         match &got[0].1 {
-            Ok(Cmd::Load { explain, .. }) => assert!(*explain),
-            _ => panic!("expected explain Load, got {:?}", got[0].1),
+            Ok(Cmd::Load { id_hint, bindings, program, explain, applicative }) => {
+                assert_eq!(id_hint, "p");
+                assert_eq!(program, "export \"r\" = input 0;\n");
+                assert_eq!(*explain, Some((2, true)));
+                assert!(!applicative);
+                assert_eq!(bindings.get("e").map(String::as_str), Some("random(seed=1,arity=2,range=8,count=12)"));
+            }
+            other => panic!("unexpected {other:?}"),
         }
+        assert!(matches!(&got[1].1, Ok(Cmd::Load { applicative: true, explain: None, .. })));
+        assert!(matches!(&got[2].1, Err(e) if e.starts_with("load: cannot read")));
+        assert!(matches!(&got[3].1, Err(e) if e.contains("explain=<arity>")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn peek_takes_an_optional_key() {
+        let mut p = LineParser::default();
+        let got = feed_all(&mut p, &["r1 peek t 2,3\n", "r2 peek t\n", "r3 peek t oops(\n"]);
+        assert!(matches!(&got[0].1, Ok(Cmd::Peek { key: Some(_), .. })));
+        assert!(matches!(&got[1].1, Ok(Cmd::Peek { key: None, .. })));
+        assert!(matches!(&got[2].1, Err(_)));
     }
 
     #[test]
@@ -970,7 +1084,7 @@ mod tests {
         assert_eq!(got[1].0, "_2"); // tick 3
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 3 })));
         assert_eq!(got[2].0, "rA"); // explicit reqid preserved
-        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name }) if name == "foo"));
+        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None }) if name == "foo"));
         assert_eq!(got[3].0, "_3"); // exit
         assert!(matches!(got[3].1, Ok(Cmd::Exit)));
     }

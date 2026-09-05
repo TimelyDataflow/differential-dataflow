@@ -1,8 +1,11 @@
 //! The corgi backend's correctness gate: each canonical `.ddp` program must evaluate
 //! identically through the corgi backend and the reference vec backend.
+//!
+//! Every evaluation goes through the server (`server::evaluate`): install, feed, tick,
+//! snapshot — the same path a live install takes.
 
-use interactive::backend::{corgi, vec};
 use interactive::ir::Value;
+use interactive::server::{evaluate, RenderBackend};
 use interactive::{lower, parse};
 
 fn tup(fields: &[i64]) -> Value {
@@ -42,6 +45,7 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         // sum_skew: any keyed pairs — the skew is in the program, not the data.
         "sum_skew" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21], &[3, 30]])],
         "case_ops" => vec![rows(&[&[1, 10], &[2, 20], &[3, 14], &[3, 30]])],
+        "if_literal" => vec![rows(&[&[1, 10], &[1, 20], &[2, 30]])],
         // pair_keys: composite keys with overlap, fanout, and one-sided keys on both sides.
         "pair_keys" => vec![
             rows(&[&[1, 1, 10], &[1, 2, 20], &[2, 1, 30], &[2, 1, 31], &[9, 9, 90]]),
@@ -77,14 +81,14 @@ fn assert_backends_agree(prog: &str) {
     let mut tree = lower::lower_tree(parse::pipe::parse(&src));
     tree.optimize();
     let inputs = inputs_for(prog);
-    let want = vec::evaluate(&tree, &inputs);
+    let want = evaluate(RenderBackend::Vec, timely::Config::process(1), &tree, &inputs);
     // At every worker count: the exchange places each key on one worker and every operator is
     // key-local from there, so the answer must not depend on how many workers ran it. 3 is in the
     // list on purpose — it is not a power of two, so it takes the modulus path rather than the
     // mask, and it cannot divide these inputs evenly.
     for workers in [1, 2, 3, 4] {
         assert_eq!(
-            corgi::evaluate_with_workers(&tree, &inputs, workers),
+            evaluate(RenderBackend::Corgi, timely::Config::process(workers), &tree, &inputs),
             want,
             "corgi backend at {workers} worker(s) disagrees with the vec backend on {prog}",
         );
@@ -93,7 +97,7 @@ fn assert_backends_agree(prog: &str) {
     // round trip through the wire format. This is the multi-process path: `Config::process` above
     // hands containers between threads as typed values and never encodes a byte.
     assert_eq!(
-        corgi::evaluate_with_config(&tree, &inputs, serializing(3)),
+        evaluate(RenderBackend::Corgi, serializing(3), &tree, &inputs),
         want,
         "corgi backend over serializing channels disagrees with the vec backend on {prog}",
     );
@@ -120,6 +124,7 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn empty_batch() { assert_backends_agree("empty_batch"); }
 #[test] fn sum_skew() { assert_backends_agree("sum_skew"); }
 #[test] fn case_ops() { assert_backends_agree("case_ops"); }
+#[test] fn if_literal() { assert_backends_agree("if_literal"); }
 #[test] fn tour() { assert_backends_agree("tour"); }
 #[test] fn pair_keys() { assert_backends_agree("pair_keys"); }
 #[test] fn signed_min() { assert_backends_agree("signed_min"); }

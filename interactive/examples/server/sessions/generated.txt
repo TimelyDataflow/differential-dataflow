@@ -3,9 +3,9 @@
 
 # Importing "random:nodes=8,edges=12" auto-installs the generator — no producer
 # to set up first.
-install reach examples/server/programs/reach_gen.ddp
+load reach from examples/server/programs/reach_gen.ddp
 # A second program imports the SAME recipe; it shares the one source.
-install counter examples/server/programs/count_gen.ddp
+load counter from examples/server/programs/count_gen.ddp
 feed reach 0 0
 tick
 

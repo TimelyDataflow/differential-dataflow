@@ -1,0 +1,5 @@
+-- Pins the literal-condition `if`. `if(1, $1, 0)` carries a collected List as
+-- ONE field (a bare `$1` would splice its elements), and corgi compiles only
+-- the live branch, so the dead branch need not agree in shape.
+let lists = input 0 | key($0[0] ; $0[1]) | collect;
+export "result" = lists | map($0[0] ; if(1, $1, 0), if(0, 7, $0[0]));

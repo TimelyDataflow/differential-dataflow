@@ -7,49 +7,86 @@ consumer maintains a computation incrementally over a producer's output. It is
 the interpreter-driven successor to the old `dd_server` crate (which hot-loaded
 compiled `.so`s); here "install" means render a DDIR program, not `dlopen`.
 
-The implementation is `interactive::server` (the registry + lifecycle) driven by
-the `ddir_server` example (a command loop). It is multi-worker: commands are
-totally ordered across workers by a timely `Sequencer`.
+The implementation is `interactive::server` (the registry + lifecycle), driven
+by the `ddir-server` crate in `interactive/server/` — a long-running process
+that takes commands over stdin, TCP and WebSocket (its README has the protocol
+and the configuration). The session scripts here are piped into its stdin.
 
 ## Two kinds of file (don't mix them up)
 
-- **`programs/*.ddp`** — DDIR *programs*: dataflow definitions you `install`.
-  The ones here are server-oriented (they use `import`/`export`), so unlike the
-  programs in `../programs/` they are not runnable by the batch `ddir_vec`
-  harness.
+- **`programs/*.ddp`** — DDIR *programs*: dataflow definitions you `load`.
+  The ones here are server-oriented (they use `import`/`export`); the programs
+  in `../programs/` read positional `input`s instead, which you fill with
+  `feed` (see "Running a program in batch" below).
 - **`sessions/*.txt`** — *command scripts*: a stream of server commands
-  (`install`/`feed`/`tick`/…) you hand to the server. You do **not** `install` a
+  (`load`/`feed`/`tick`/…) you hand to the server. You do **not** `load` a
   session; you run the server *on* it.
 
 ## Running
 
 ```
-# Run a session script (add -w4 for four workers):
-cargo run --release --example ddir_server -- interactive/examples/server/sessions/shared_trace.txt
+cd interactive
+# Run a session script (paths inside the scripts are relative to here):
+cargo run --release -p ddir-server < examples/server/sessions/shared_trace.txt
 
-# Or interactively (no script arg): type `help`, or `exit`.
-cargo run --release --example ddir_server
+# Four workers, the Corgi columnar backend (default: one worker, vec):
+DDIR_WORKERS=4 DDIR_BACKEND=corgi cargo run --release -p ddir-server < examples/server/sessions/shared_trace.txt
+
+# Or interactively: type commands; `exit` (or end of input) stops the server.
+cargo run --release -p ddir-server
 ```
 
-Paths inside the session scripts are relative to the `interactive/` crate
-directory, so run from there (as the examples above assume `cargo` is invoked at
-the repo root with `--example`; adjust if you `cd interactive` first).
+Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
+`_7 err …`); the server numbers requests that do not carry one.
 
 ## Commands
 
 | command | effect |
 |---|---|
-| `install <name> <file>` | parse + lower + install a program under `<name>` |
+| `load <name> from <file> [explain=<arity>[,debug]]` | parse + lower + install a program file under `<name>`; optionally after the explanation rewrite (`load <name> begin … end-load` takes the program inline) |
 | `feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
-| `tick` | close the epoch and run to quiescence |
+| `feed <prog> <in#> from <recipe-or-file>` | fill an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
+| `tick [n]` | close `n` epochs (default 1), running to quiescence after each; reports the epoch and the wall-clock time |
+| `bind <trace> <prog> <in#>` / `unbind …` | feed a trace's changes back into an input at every tick (one-epoch-delayed feedback) |
 | `drop <name>` | evict a program (refused if a live program still imports its trace) |
-| `peek <trace> [key]` | print a trace's current contents (consolidated across workers) |
-| `list` | show traces (+ importer counts) and installed programs |
+| `peek <trace> [key]` | print a trace's current contents (consolidated across workers), one `data` line per row |
+| `tail <trace>` / `stop <reqid>` | follow a trace's changes at every tick, until stopped |
+| `list` | show programs, traces (+ importer counts) and bindings |
 
 A `<value>` is a comma-separated integer row (`1,2` → a tuple; `_`/empty → unit)
 or any **closed scalar term, written without spaces** (`inject(2,tuple(3,4))`,
 `list(1,2,3)`) for ADT-shaped data such as ASTs. `feed` defaults to value=unit,
 `time`=the current epoch (use a future `time=` to schedule ahead), `diff`=+1.
+
+## Running a program in batch
+
+The programs in `../programs/` (reachability, SCC, stable matching, …) read
+positional inputs. A session fills them in bulk and closes epochs; that is the
+whole of the old single-program harness, so there is no separate binary:
+
+```
+load scc from examples/programs/scc.ddp
+feed scc 0 from random:nodes=100000,edges=200000,churn=100
+tick          # the initial load: reported as one epoch's time
+tick 100      # 100 epochs of 100 replaced edges each, timed together
+peek result
+exit
+```
+
+`feed … from` deals the rows across the workers (each feeds its shard, and
+the exchange places every row on its key's owner). A `random:` recipe with
+`churn=C` keeps the input changing: every later `tick` retracts the next `C`
+rows of its window and adds `C` fresh ones, which is the standing-change regime
+programs are benchmarked under. A file source is one row per line of
+whitespace-separated integers, each becoming `(Tuple[ints] ; ())`; the
+`aoc2023/run.sh` suite drives every AoC program this way. A row `feed` still
+serves the small inputs (roots, queries).
+
+`load … explain=<arity>` applies the explanation rewrite before
+optimization, treating every source as `arity` key fields with no value; the
+rewritten program has one extra input after its own — the query input, fed as
+`(key ; val ++ q)` — and exports one `demand:inputN` trace per source, which
+you `peek`. `,debug` taps every demand collection with an inspect.
 
 ## Generated (named) sources
 
@@ -123,7 +160,7 @@ log-work form is left for later.)
 - **`peek.txt`** — reading results back out: `peek` a whole trace and a single
   key, and the clean error for an unknown trace.
 - **`generated.txt`** — a random graph imported by recipe, installed on demand
-  and shared by two programs (`importers: 2`, one source), then GC'd on drop.
+  and shared by two programs (`importers=2`, one source), then GC'd on drop.
 - **`derived.txt`** — a random graph derived in-language from `iota` via `hash`.
 - **`clock.txt`** — the `clock` source advancing one step per tick (O(1) deltas).
 - **`arrange_idem.txt`** — the e-graph rewrite rule firing **incrementally**:

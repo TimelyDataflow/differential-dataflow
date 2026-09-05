@@ -3,8 +3,8 @@
 # tracks the nodes reachable from its roots. Run from the interactive/ dir:
 #   cargo run --release --example ddir_server -- examples/server/sessions/shared_trace.txt
 
-install prod examples/server/programs/producer.ddp
-install reach examples/server/programs/reach_import.ddp
+load prod from examples/server/programs/producer.ddp
+load reach from examples/server/programs/reach_import.ddp
 list
 
 # graph: 1 -> 2 -> 3 ; root: 1   (reach should become {1, 2, 3})
