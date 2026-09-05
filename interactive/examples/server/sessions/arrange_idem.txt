@@ -6,7 +6,7 @@
 # 1 = Arrange, 2 = Reduce (both produce an arrangement). Run from interactive/:
 #   cargo run --release --example ddir_server -- examples/server/sessions/arrange_idem.txt
 
-install eg examples/server/programs/arrange_idem.ddp
+load eg from examples/server/programs/arrange_idem.ddp
 
 # Base: node 0 (a source), 1 = Arrange(0), 2 = Reduce(1).
 feed eg 0 0 val=tuple(5,list())

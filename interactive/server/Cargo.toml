@@ -17,6 +17,7 @@ workspace = true
 differential-dataflow = { workspace = true }
 timely = { workspace = true }
 interactive = { path = ".." }
+mimalloc = "0.1.48"
 diagnostics = { path = "../../diagnostics" }
 serde = { version = "1.0", features = ["derive"] }
 tungstenite = "0.26"

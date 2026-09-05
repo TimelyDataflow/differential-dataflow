@@ -42,12 +42,18 @@ Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
 The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
-`peek`, `tail`, `stop`, `tick`, and `exit`. `feed <prog> <in#> from <source>`
-fills an input from a source the server reads itself — a recipe such as
-`random:nodes=N,edges=E,churn=C` or `iota:N`, or a file of integer rows — with
-each worker taking its shard, so no row crosses the wire; a `churn=C` recipe
-then replaces `C` rows on every `tick`. `load` accepts an inline pipe-syntax
-program:
+`peek`, `tail`, `stop`, `tick`, and `exit`. `load <name> from <path>` installs
+a program file (`.ddp` pipe syntax, anything else applicative); `load <name>
+from <path> explain=<arity>[,debug]` applies the explanation rewrite first,
+every source taken to have `arity` key fields and no value, after which the
+query input is the one after the program's own and the demand sets are
+`peek`able exports. `feed <prog> <in#> from <source>` fills an input from a
+source the server reads itself — a recipe such as `random:nodes=N,edges=E,churn=C`
+or `iota:N`, or a file of integer rows — with each worker taking its shard, so
+no row crosses the wire; a `churn=C` recipe then replaces `C` rows on every
+`tick`. `peek <trace> [key]` snapshots a trace or one key of it, and `tick [n]`
+reports the epoch reached and the wall-clock time it took. `load` also accepts
+an inline pipe-syntax program:
 
     load graph begin
     let edges = import "random:nodes=8,edges=12,seed=1,churn=1";
@@ -74,7 +80,7 @@ state, not elapsed wall-clock time.
     feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]
 
 pushes one update into a loaded program's positional input, exactly as in the
-`ddir_server` example (`1,2` → a tuple; `_` → unit; a closed scalar term such
+`interactive::server` tests (`1,2` → a tuple; `_` → unit; a closed scalar term such
 as `inject(2,tuple(3,4))` for ADT-shaped rows).
 
 For many updates to one target at the current epoch, frame them as one feed:

@@ -73,17 +73,18 @@ The flow moves through four steps:
 4. The `examples/` directory contains back-ends that execute programs.
 
 The `examples/programs/` directory contains example programs, intentionally simple at the moment.
-The one executable is the server (`examples/ddir_server.rs`, documented in `examples/server/README.md`);
-a program runs by installing it, loading its inputs, and closing epochs. For example, on a random
-graph of 100 nodes and 200 edges, 10 of which change each epoch, for 100 epochs:
+The one executable is the server (the `ddir-server` crate in `server/`, documented in
+`server/README.md`; the session scripts in `examples/server/` show it at work); a program runs by
+loading it, feeding its inputs, and closing epochs. For example, on a random graph of 100 nodes and
+200 edges, 10 of which change each epoch, for 100 epochs, on four workers of the Corgi backend:
 ```
 cd interactive
-printf 'install reach examples/programs/reach.ddp
+printf 'load reach from examples/programs/reach.ddp
 feed reach 0 from random:nodes=100,edges=200,churn=10
 feed reach 1 0
 tick 100
 exit
-' | cargo run --release --example ddir_server -- --backend=corgi -w4
+' | DDIR_BACKEND=corgi DDIR_WORKERS=4 cargo run --release -p ddir-server
 ```
 
 More generally, you can run

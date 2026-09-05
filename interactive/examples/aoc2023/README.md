@@ -17,13 +17,14 @@ mixed-arity inputs.
 
 ## Run
 
-    cargo build --release --example ddir_server
+    cargo build --release -p ddir-server
     ./run.sh          # every part on the vec backend vs expected.txt; nonzero exit on any mismatch
     ./run.sh corgi    # the same through the Corgi columnar backend
 
 `run.sh` first runs `transcribe.py` (python3) to regenerate `gen/`, then
-runs each part as one server session — `install`, `feed … from` the fact
-file into input 0, `tick` — and reads the answer off the `[partN]` inspect line.
+runs each part as one server session piped into `ddir_server` — `load` the
+program from its file, `feed … from` the fact file into input 0, `tick` — and
+reads the answer off the `[partN]` inspect line.
 
 Both backends pass all 33 parts. Corgi needs day05's arity-padded inputs
 (`run.sh corgi` transcribes with `--pad`).
