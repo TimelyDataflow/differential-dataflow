@@ -79,7 +79,7 @@ graph of 100 nodes and 200 edges, 10 of which change each epoch, for 100 epochs:
 ```
 cd interactive
 printf 'install reach examples/programs/reach.ddp
-load reach 0 random:nodes=100,edges=200,churn=10
+feed reach 0 from random:nodes=100,edges=200,churn=10
 feed reach 1 0
 tick 100
 exit

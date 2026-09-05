@@ -16,7 +16,7 @@ totally ordered across workers by a timely `Sequencer`.
 - **`programs/*.ddp`** — DDIR *programs*: dataflow definitions you `install`.
   The ones here are server-oriented (they use `import`/`export`); the programs
   in `../programs/` read positional `input`s instead, which you fill with
-  `feed` or `load` (see "Running a program in batch" below).
+  `feed` (see "Running a program in batch" below).
 - **`sessions/*.txt`** — *command scripts*: a stream of server commands
   (`install`/`feed`/`tick`/…) you hand to the server. You do **not** `install` a
   session; you run the server *on* it.
@@ -44,7 +44,7 @@ the repo root with `--example`; adjust if you `cd interactive` first).
 |---|---|
 | `install <name> <file> [explain=<arity>[,debug]]` | parse + lower + install a program under `<name>`; optionally after the explanation rewrite |
 | `feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]` | stage an input update |
-| `load <prog> <in#> <recipe-or-file>` | bulk-load an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
+| `feed <prog> <in#> from <recipe-or-file>` | fill an input from a recipe (`random:…`, `iota:N`) or a file of integer rows, sharded across workers |
 | `tick [n]` | close `n` epochs (default 1), running to quiescence after each; reports the wall-clock time |
 | `bind <trace> <prog> <in#>` / `unbind …` | feed a trace's changes back into an input at every tick (one-epoch-delayed feedback) |
 | `drop <name>` | evict a program (refused if a live program still imports its trace) |
@@ -64,21 +64,21 @@ whole of the old single-program harness, so there is no separate binary:
 
 ```
 install scc ../programs/scc.ddp
-load scc 0 random:nodes=100000,edges=200000,churn=100
+feed scc 0 from random:nodes=100000,edges=200000,churn=100
 tick          # the initial load: reported as one epoch's time
 tick 100      # 100 epochs of 100 replaced edges each, timed together
 peek result
 exit
 ```
 
-`load` deals the rows across the workers (each feeds its shard, and the
-exchange places every row on its key's owner). A `random:` recipe with
+`feed … from` deals the rows across the workers (each feeds its shard, and
+the exchange places every row on its key's owner). A `random:` recipe with
 `churn=C` keeps the input changing: every later `tick` retracts the next `C`
 rows of its window and adds `C` fresh ones, which is the standing-change regime
 programs are benchmarked under. A file source is one row per line of
 whitespace-separated integers, each becoming `(Tuple[ints] ; ())`; the
-`aoc2023/run.sh` suite drives every AoC program this way. `feed` still works
-alongside `load` for the small inputs (roots, queries).
+`aoc2023/run.sh` suite drives every AoC program this way. A row `feed` still
+serves the small inputs (roots, queries).
 
 `install … explain=<arity>` applies the explanation rewrite before
 optimization, treating every source as `arity` key fields with no value; the

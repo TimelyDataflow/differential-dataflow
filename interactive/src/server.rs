@@ -245,9 +245,9 @@ pub enum Command {
         input: usize,
         updates: Vec<InputUpdate>,
     },
-    /// Bulk-load `source` — a recipe name or a file path — into positional
-    /// `input` of `prog` at the current epoch. Collective: every worker feeds
-    /// its own shard of the rows (see [`Server::load`]).
+    /// Fill positional `input` of `prog` from `source` — a recipe name or a
+    /// file path — at the current epoch. Collective: every worker feeds its
+    /// own shard of the rows (see [`Server::load`]).
     Load {
         prog: String,
         input: usize,

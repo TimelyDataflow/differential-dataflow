@@ -42,8 +42,12 @@ Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
 The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
-`peek`, `tail`, `stop`, `tick`, and `exit`. `load` accepts an inline
-pipe-syntax program:
+`peek`, `tail`, `stop`, `tick`, and `exit`. `feed <prog> <in#> from <source>`
+fills an input from a source the server reads itself — a recipe such as
+`random:nodes=N,edges=E,churn=C` or `iota:N`, or a file of integer rows — with
+each worker taking its shard, so no row crosses the wire; a `churn=C` recipe
+then replaces `C` rows on every `tick`. `load` accepts an inline pipe-syntax
+program:
 
     load graph begin
     let edges = import "random:nodes=8,edges=12,seed=1,churn=1";

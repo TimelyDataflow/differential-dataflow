@@ -174,6 +174,27 @@ fn assert_backend(backend: &str) {
         Some("time=1 diff=1 key=Tuple([Int(8)]) val=Tuple([Int(10)])")
     );
 
+    // Server-side sourcing: every worker feeds its shard of the recipe, so the
+    // union is the source exactly once however many workers there are. Its own
+    // program, because a recipe's rows carry a unit value and `world`'s carry
+    // an integer, and one input holds one shape.
+    request(&mut writer, &mut reader, "r9", "r9 stop r6\n");
+    request(
+        &mut writer,
+        &mut reader,
+        "r10",
+        "r10 load counted begin\nlet rows = input 0;\nexport \"counted\" = rows;\nr10 end-load\n",
+    );
+    request(&mut writer, &mut reader, "r11", "r11 feed counted 0 from iota:5\n");
+    request(&mut writer, &mut reader, "r12", "r12 tick\n");
+    let rows = request(&mut writer, &mut reader, "r13", "r13 peek counted\n");
+    assert_eq!(
+        rows,
+        (0..5)
+            .map(|n| format!("diff=1 key=Tuple([Int({n})]) val=Tuple([])"))
+            .collect::<Vec<_>>()
+    );
+
     drop(reader);
     drop(writer);
     server.stop();

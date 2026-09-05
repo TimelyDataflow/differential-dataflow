@@ -18,13 +18,14 @@
 //! and the server keeps running — bad input can never panic a worker. Only a
 //! well-typed [`Command`] is handed to worker 0, which injects it into a timely
 //! `Sequencer`; the resulting total order is replayed on every worker, so
-//! install/load/tick/drop stay collective while `feed` is applied on worker 0
-//! only (the arrangement's exchange pact routes data to key owners).
+//! install/tick/drop and `feed … from` stay collective while a row `feed` is
+//! applied on worker 0 only (the arrangement's exchange pact routes data to
+//! key owners).
 //!
 //! Commands (one per line; `#` or `--` starts a comment):
 //!   install <name> <file> [explain=<arity>[,debug]]
 //!   feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]
-//!   load <prog> <in#> <recipe-or-file>
+//!   feed <prog> <in#> from <recipe-or-file>
 //!   tick [n]
 //!   drop <name>
 //!   peek <trace> [key]
@@ -39,11 +40,12 @@
 //! write terms without spaces. `feed`'s value defaults to unit, `time` to the
 //! current epoch (use a future `time=` to schedule ahead), and `diff` to +1.
 //!
-//! `load` fills an input in bulk, sharded across the workers: from a recipe
-//! (`random:nodes=N,edges=E[,arity=A][,seed=S][,churn=C]`, `iota:N`) or from a
-//! text file of whitespace-separated integer rows. A `churn=C` recipe then
-//! replaces `C` rows on every `tick` — so `install`, `load`, `tick 100` is a
-//! program under standing change. `tick` reports its wall-clock time.
+//! `feed … from <source>` fills an input in bulk, sharded across the workers:
+//! from a recipe (`random:nodes=N,edges=E[,arity=A][,seed=S][,churn=C]`,
+//! `iota:N`) or from a text file of whitespace-separated integer rows. A
+//! `churn=C` recipe then replaces `C` rows on every `tick` — so `install`,
+//! `feed … from`, `tick 100` is a program under standing change. `tick`
+//! reports its wall-clock time.
 //!
 //! `install … explain=<arity>` applies the explanation rewrite (every source
 //! has `arity` key fields and no value); the query input is the one after the
@@ -142,6 +144,9 @@ fn parse_command(line: &str) -> Result<Command, String> {
         "feed" if toks.len() >= 4 => {
             let prog = toks[1].to_string();
             let input: usize = toks[2].parse().map_err(|_| format!("feed: <in#> must be a number, got {:?}", toks[2]))?;
+            if let ["from", source] = toks[3..] {
+                return Ok(Command::Load { prog, input, source: source.to_string() });
+            }
             let key = catch_unwind(AssertUnwindSafe(|| parse_value(toks[3]))).map_err(panic_msg)?;
             let mut val = Value::unit();
             let mut time = None;
@@ -158,11 +163,6 @@ fn parse_command(line: &str) -> Result<Command, String> {
                 }
             }
             Ok(Command::Feed { prog, input, key, val, time, diff })
-        }
-        "load" if toks.len() == 4 => {
-            let prog = toks[1].to_string();
-            let input: usize = toks[2].parse().map_err(|_| format!("load: <in#> must be a number, got {:?}", toks[2]))?;
-            Ok(Command::Load { prog, input, source: toks[3].to_string() })
         }
         "tick" if toks.len() <= 2 => {
             let n = match toks.get(1) {
@@ -200,7 +200,7 @@ fn print_help() {
     println!("commands:");
     println!("  install <name> <file> [explain=<arity>[,debug]]");
     println!("  feed <prog> <in#> <value> [val=<value>] [time=<t>] [diff=<int>]");
-    println!("  load <prog> <in#> <recipe-or-file>   (random:nodes=N,edges=E[,arity=A][,seed=S][,churn=C] | iota:N | path)");
+    println!("  feed <prog> <in#> from <recipe-or-file>   (random:nodes=N,edges=E[,arity=A][,seed=S][,churn=C] | iota:N | path)");
     println!("  tick [n]");
     println!("  bind <trace> <prog> <in#>    (feed the trace's changes back in, each tick)");
     println!("  unbind <trace> <prog> <in#>");
@@ -211,8 +211,8 @@ fn print_help() {
 }
 
 /// Execute one sequenced command on this worker. Collective commands
-/// (`install`/`load`/`tick`/`drop`) run on every worker; `feed` and all
-/// printing happen on worker 0. Returns `false` for `exit`.
+/// (`install`/`feed … from`/`tick`/`drop`) run on every worker; a row `feed`
+/// and all printing happen on worker 0. Returns `false` for `exit`.
 fn dispatch(cmd: &Command, server: &mut Server, worker: &mut Worker) -> bool {
     let w0 = worker.index() == 0;
     match cmd {

@@ -16,7 +16,7 @@ while read -r day part expected; do
   [ -n "$PAD" ] && [ -f "gen/$dir/input${part}p.txt" ] && inp=gen/$dir/input${part}p.txt
   # One session per part: install the program, bulk-load its input, close the
   # epoch. The answer is the `Int` on the `[partN]` inspect line.
-  got=$(printf 'install p %s\nload p 0 %s\ntick\nexit\n' "$dir/part$part.ddp" "$inp" \
+  got=$(printf 'install p %s\nfeed p 0 from %s\ntick\nexit\n' "$dir/part$part.ddp" "$inp" \
         | "$SERVER" --backend="$BACKEND" 2>&1 \
         | sed -n "s/.*\\[part$part\\].*Int(\\(-\\{0,1\\}[0-9]*\\)).*/\\1/p")
   if [ "$got" = "$expected" ]; then

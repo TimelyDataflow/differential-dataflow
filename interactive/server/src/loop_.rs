@@ -331,6 +331,10 @@ fn dispatch(
                     server.epoch()
                 )
             }),
+            // Collective: every worker sources its own shard.
+            ServerCommand::Load { prog, input, source } => server
+                .load(worker, &prog, input, &source)
+                .map(|rows| format!("loaded {rows} rows into {prog:?} input {input}")),
             ServerCommand::Bind { trace, prog, input } => server
                 .bind(worker, &trace, &prog, input)
                 .map(|()| format!("bound {:?} -> {:?} input {}", trace, prog, input)),

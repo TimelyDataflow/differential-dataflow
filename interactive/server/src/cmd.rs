@@ -77,6 +77,14 @@ pub enum Cmd {
         input: usize,
         updates: Vec<InputUpdate>,
     },
+    /// Fill one program input from a source the server reads itself — a recipe
+    /// (`random:…`, `iota:N`) or a file of integer rows — each worker taking its
+    /// shard, so no row crosses the wire. `feed <prog> <in#> from <source>`.
+    Source {
+        prog: String,
+        input: usize,
+        source: String,
+    },
     /// Bind a trace's changes into `prog`'s positional `input`, delivered at
     /// each tick one epoch delayed — the write path for installed programs.
     Bind {
@@ -203,6 +211,7 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
             input,
             updates,
         },
+        Cmd::Source { prog, input, source } => ServerCommand::Load { prog, input, source },
         Cmd::Bind { trace, prog, input } => ServerCommand::Bind { trace, prog, input },
         Cmd::Unbind { trace, prog, input } => ServerCommand::Unbind { trace, prog, input },
         Cmd::Query { .. } => {
@@ -712,6 +721,17 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                     input,
                 };
             }
+            // Syntax: `feed <prog> <in#> from <recipe-or-file>` — the server sources the rows.
+            if let [prog, input, "from", source] = args {
+                return match input.parse() {
+                    Ok(input) => ParseOutcome::Cmd(Cmd::Source {
+                        prog: (*prog).to_string(),
+                        input,
+                        source: (*source).to_string(),
+                    }),
+                    Err(_) => ParseOutcome::Err(format!("feed: <in#> must be a number, got {input:?}")),
+                };
+            }
             // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
             // A `<v>`/`<key>` is a comma-separated integer row (`1,2` → tuple;
             // `_`/empty → unit) or a closed scalar term written without
@@ -850,6 +870,21 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn feed_from_sources_rows_server_side() {
+        let mut p = LineParser::default();
+        let out = feed_all(&mut p, &["r1 feed world 0 from iota:3\n"]);
+        match &out[..] {
+            [(reqid, Ok(Cmd::Source { prog, input, source }))] => {
+                assert_eq!(reqid.as_str(), "r1");
+                assert_eq!((prog.as_str(), *input, source.as_str()), ("world", 0, "iota:3"));
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        let out = feed_all(&mut p, &["r2 feed world x from iota:3\n"]);
+        assert!(matches!(&out[..], [(_, Err(_))]), "a bad input index must be rejected: {out:?}");
     }
 
     #[test]
