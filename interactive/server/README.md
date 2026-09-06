@@ -118,6 +118,16 @@ every replay. Identity is convention, not enforcement: we are not defending
 against adversarial clients yet, and server-side attribution is deliberately
 deferred until a deployment needs it.
 
+## Requests as input rows
+
+Request parameters can arrive as ordinary input rows. For example, a row
+`(request_id, node)` can join a named graph export by `node`, retaining
+`request_id` in the output.
+Insert the request, `tick`, `peek` its answer, then retract the request and
+`tick` again. An empty result is complete when the tick completes; it does not
+need an output row as a completion marker. Keeping the binding instead gives
+a standing query whose answer follows later graph changes.
+
 ## Feedback: `bind`
 
     bind <trace> <prog> <in#>        unbind <trace> <prog> <in#>
