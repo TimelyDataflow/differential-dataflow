@@ -190,12 +190,7 @@ fn assert_backend(backend: &str) {
         "r10",
         "r10 load counted begin\nlet rows = input 0;\nexport \"counted\" = rows;\nr10 end-load\n",
     );
-    request(
-        &mut writer,
-        &mut reader,
-        "r11",
-        "r11 feed counted 0 from iota:5\n",
-    );
+    request(&mut writer, &mut reader, "r11", "r11 feed counted 0 from iota:5\n");
     request(&mut writer, &mut reader, "r12", "r12 tick\n");
     let rows = request(&mut writer, &mut reader, "r13", "r13 peek counted\n");
     assert_eq!(
@@ -220,11 +215,9 @@ fn corgi_commands_replay_on_four_workers_without_duplicating_input() {
     assert_backend("corgi");
 }
 
-/// A prepared query is an installed dataflow, not a preinstalled binding.
-/// Keep two consumers over the same named graph while request inputs vary.
-/// Tiny, deterministic, and network-facing: no external DB or downloaded data.
-fn assert_prepared_requests(backend: &str, workers: usize) {
-    eprintln!("prepared requests: backend={backend}, workers={workers}");
+/// Two consumers join request rows against the same named graph through TCP,
+/// while both the requests and graph change.
+fn assert_shared_import_requests(backend: &str, workers: usize) {
     let (server, mut writer, mut reader) = start_server(backend, workers);
     request(
         &mut writer,
@@ -314,7 +307,7 @@ fn assert_prepared_requests(backend: &str, workers: usize) {
         .is_empty());
     }
     // Reuse an id with a different parameter against the changed graph. No
-    // template reinstall and no retained answer from its previous binding.
+    // program reinstall and no retained answer from its previous binding.
     request(&mut writer, &mut reader, "f", "f feed a 0 10,2\n");
     request(&mut writer, &mut reader, "t", "t tick\n");
     assert_eq!(
@@ -333,10 +326,21 @@ fn assert_prepared_requests(backend: &str, workers: usize) {
 }
 
 #[test]
-fn prepared_requests_share_named_graphs_and_follow_changes() {
-    for backend in ["vec", "corgi"] {
-        for workers in [1, 4] {
-            assert_prepared_requests(backend, workers);
-        }
-    }
+fn vec_requests_follow_shared_graph_changes_on_one_worker() {
+    assert_shared_import_requests("vec", 1);
+}
+
+#[test]
+fn vec_requests_follow_shared_graph_changes_on_four_workers() {
+    assert_shared_import_requests("vec", 4);
+}
+
+#[test]
+fn corgi_requests_follow_shared_graph_changes_on_one_worker() {
+    assert_shared_import_requests("corgi", 1);
+}
+
+#[test]
+fn corgi_requests_follow_shared_graph_changes_on_four_workers() {
+    assert_shared_import_requests("corgi", 4);
 }
