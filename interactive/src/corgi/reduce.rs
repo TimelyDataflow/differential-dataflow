@@ -34,7 +34,7 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes, sort_blocks};
+use corgi::arrange::{find_ranges, gather, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
 use crate::corgi::col_times::ColTime;
@@ -232,7 +232,6 @@ where
     let mut run_ends = Vec::new();
     let total: usize = chunks.iter().map(|c| c.diffs().len()).sum();
     let seek = changed.len().saturating_mul(SEEK_ADVANTAGE) < total;
-    let needles = CValue::u64(changed.to_vec());
     // Chunks are id-ordered and `changed` ascends, so either branch emits in merged order.
     for (ci, ch) in chunks.iter().enumerate() {
         let before = khs.len();
@@ -241,12 +240,22 @@ where
         }
         let lane = key_lane(ch.keys());
         if seek {
+            // Only the needles within this chunk's key range can hit it. A batch's chunks
+            // partition its key range, so at scale each chunk is probed with its slice of the
+            // change set rather than the whole of it.
+            let kh = corgi::arrange::leaf_slice(lane).expect("the identifier lane is a u64 leaf");
+            let from = changed.partition_point(|c| *c < kh[0]);
+            let to = changed.partition_point(|c| *c <= kh[kh.len() - 1]);
+            if from == to {
+                continue;
+            }
+            let needles = CValue::u64(changed[from..to].to_vec());
             let (lo, hi) = find_ranges(&needles, lane);
             for (j, (&l, &h)) in lo.iter().zip(hi.iter()).enumerate() {
                 for i in l..h {
                     tags.push(ci);
                     offs.push(i);
-                    khs.push(changed[j]);
+                    khs.push(changed[from + j]);
                     times.push(ch.times().get(i));
                     diffs.push(ch.diffs()[i]);
                 }
@@ -286,12 +295,14 @@ fn merge_present<T: Ord + Clone>(
     bridge: &mut ProxyBridge<T, Diff>,
 ) -> bool {
     let ordered_keys = corgi::arrange::leaf_slice(keys_col).is_some() || {
+        // One columnar pass over the adjacent pairs, rather than a dispatching structural
+        // compare per row: every row of a group shares its id with its predecessor, so the
+        // per-row form was a `compare_at` for nearly every row of every retire.
+        let adjacent = corgi::arrange::compare_adjacent(keys_col);
         let mut start = 0usize;
         run_ends.iter().all(|&end| {
-            let one_real_key_per_id = (start + 1..end).all(|index| {
-                khs[index - 1] != khs[index]
-                    || compare_at(keys_col, index - 1, keys_col, index) == std::cmp::Ordering::Equal
-            });
+            let one_real_key_per_id =
+                (start + 1..end).all(|index| khs[index - 1] != khs[index] || adjacent[index - 1] == 0);
             start = end;
             one_real_key_per_id
         }) && start == khs.len()

@@ -21,6 +21,9 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
     match prog {
         "reach" => vec![edges, rows(&[&[1]])],
         "scc" => vec![edges],
+        "cc" => vec![rows(&[&[1, 2], &[2, 3], &[5, 6], &[7, 7], &[9, 8]])],
+        // triangles: {1,2,3} and {2,3,4} close; {1,3,4} does not; a duplicate and a self-loop.
+        "triangles" => vec![rows(&[&[1, 2], &[2, 3], &[1, 3], &[3, 4], &[2, 4], &[4, 1], &[1, 2], &[5, 5]])],
         // stable: edges (l_node, l_pref, r_node, r_pref)
         "stable" => vec![rows(&[&[1, 1, 10, 1], &[1, 2, 11, 1], &[2, 1, 10, 2], &[2, 2, 11, 2]])],
         "unnest" => vec![rows(&[&[1, 2], &[3, 4]])],
@@ -113,6 +116,8 @@ fn serializing(n: usize) -> timely::Config {
 
 #[test] fn reach() { assert_backends_agree("reach"); }
 #[test] fn scc() { assert_backends_agree("scc"); }
+#[test] fn cc() { assert_backends_agree("cc"); }
+#[test] fn triangles() { assert_backends_agree("triangles"); }
 #[test] fn stable() { assert_backends_agree("stable"); }
 #[test] fn unnest() { assert_backends_agree("unnest"); }
 #[test] fn adt() { assert_backends_agree("adt"); }

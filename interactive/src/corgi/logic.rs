@@ -16,6 +16,7 @@
 //! corgi's message. Ordered compares are signed-correct (`ToSigned`); `hash` is corgi's structural
 //! `Op::Hash`, the same function `ir::eval` folds row-wise.
 
+use std::collections::HashMap;
 use crate::ir::Value as DValue;
 use crate::parse::{BinOp, SumTy, Term, UnOp};
 
@@ -159,12 +160,51 @@ pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
 /// The shape of a term in an environment — corgi's typer, asked through a scratch lowering.
 /// `expected` is the shape an enclosing `if` or `case` arm already fixed; it fills the lane a
 /// built-in `None`/`Ok`/`Err` cannot fix from its payload.
+///
+/// Memoized within one top-level lowering. `compile` asks for the shapes of an `if`'s branches
+/// (and a `case`'s arms, a fold's parts, ...) before compiling them, and each ask is itself a
+/// full lowering of that subterm — so nested conditionals re-lowered their subtrees once per
+/// enclosing level, 3^depth in all. AoC day 7 (five-deep `if`s) spent half its install time
+/// there. The memo is keyed by the term's address, so it lives only as long as the outermost
+/// `compile` or `shape_of_term` on this thread; no address can be met again with a different
+/// term behind it.
 pub fn shape_of_term(t: &Term, env_shapes: &[Shape], expected: Option<&Shape>) -> Res<Shape> {
-    let mut b = Builder::<NumOp>::default();
-    let inp = b.input();
-    let env: Vec<usize> = (0..env_shapes.len()).map(|i| b.add(Op::Field(i), vec![inp])).collect();
-    let out = compile(t, &mut b, &env, env_shapes, inp, expected)?;
-    corgi::shape_of(&b.finish(out), &Shape::Prod(env_shapes.to_vec()))
+    let key = (t as *const Term as usize, env_shapes.to_vec(), expected.cloned());
+    if let Some(known) = SHAPE_MEMO.with(|m| m.borrow().1.get(&key).cloned()) {
+        return known;
+    }
+    memo_enter();
+    let result = (|| {
+        let mut b = Builder::<NumOp>::default();
+        let inp = b.input();
+        let env: Vec<usize> = (0..env_shapes.len()).map(|i| b.add(Op::Field(i), vec![inp])).collect();
+        let out = compile(t, &mut b, &env, env_shapes, inp, expected)?;
+        corgi::shape_of(&b.finish(out), &Shape::Prod(env_shapes.to_vec()))
+    })();
+    SHAPE_MEMO.with(|m| m.borrow_mut().1.insert(key, result.clone()));
+    memo_exit();
+    result
+}
+
+thread_local! {
+    /// `(nesting depth, memo)` for [`shape_of_term`]: the depth counts live `compile` /
+    /// `shape_of_term` frames on this thread, and the memo is dropped when it returns to zero.
+    static SHAPE_MEMO: std::cell::RefCell<(usize, HashMap<(usize, Vec<Shape>, Option<Shape>), Res<Shape>>)> =
+        std::cell::RefCell::new((0, HashMap::new()));
+}
+
+fn memo_enter() {
+    SHAPE_MEMO.with(|m| m.borrow_mut().0 += 1);
+}
+
+fn memo_exit() {
+    SHAPE_MEMO.with(|m| {
+        let mut m = m.borrow_mut();
+        m.0 -= 1;
+        if m.0 == 0 {
+            m.1.clear();
+        }
+    });
 }
 
 /// Does `t` read anything outside its own `depth` innermost binders — an input row (`Var`) or an
@@ -270,6 +310,20 @@ fn branch_shapes(then: &Term, els: &Term, env_shapes: &[Shape], expected: Option
 /// shape the context already fixed for this term, if any (see [`shape_of_term`]). `Err` is a
 /// type error: the term has no meaning at these shapes.
 pub fn compile(
+    term: &Term,
+    b: &mut Builder<NumOp>,
+    env: &[usize],
+    env_shapes: &[Shape],
+    anchor: usize,
+    expected: Option<&Shape>,
+) -> Res<usize> {
+    memo_enter();
+    let result = compile_term(term, b, env, env_shapes, anchor, expected);
+    memo_exit();
+    result
+}
+
+fn compile_term(
     term: &Term,
     b: &mut Builder<NumOp>,
     env: &[usize],
