@@ -118,6 +118,24 @@ every replay. Identity is convention, not enforcement: we are not defending
 against adversarial clients yet, and server-side attribution is deliberately
 deferred until a deployment needs it.
 
+## Prepared parameterized queries
+
+A prepared query can remain installed while its parameter bindings arrive as
+rows on a positional input. For example, a request row `(request_id, node)`
+can join a named graph export by `node`, retaining `request_id` in the output.
+Insert the request, `tick`, read its answer, then retract the request and
+`tick` again. An empty result is complete when the tick completes; it does not
+need an output row as a completion marker. Keeping the binding instead gives
+a standing query whose answer follows later graph changes.
+
+The `prepared_requests_share_named_graphs_and_follow_changes` integration test
+exercises this lifecycle through TCP, with two consumers of a shared named
+graph, duplicate bindings under distinct ids, empty results, graph changes and
+request-id reuse. It runs on both backends with one and four workers, without
+downloads, external services or performance thresholds. Named sharing currently
+uses the row-speaking registry bridge described above, not native Corgi trace
+sharing across program boundaries.
+
 ## Feedback: `bind`
 
     bind <trace> <prog> <in#>        unbind <trace> <prog> <in#>

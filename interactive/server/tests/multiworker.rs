@@ -77,7 +77,7 @@ fn request_observing(
     }
 }
 
-fn assert_backend(backend: &str) {
+fn start_server(backend: &str, workers: usize) -> (ServerProcess, TcpStream, BufReader<TcpStream>) {
     let listeners: Vec<_> = (0..3)
         .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
         .collect();
@@ -88,7 +88,7 @@ fn assert_backend(backend: &str) {
     drop(listeners);
 
     let child = Command::new(env!("CARGO_BIN_EXE_ddir_server"))
-        .env("DDIR_WORKERS", "4")
+        .env("DDIR_WORKERS", workers.to_string())
         .env("DDIR_BACKEND", backend)
         // The retired polling/tick knob must not reintroduce wall-clock
         // progress if it remains in an old deployment environment.
@@ -116,8 +116,13 @@ fn assert_backend(backend: &str) {
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
-    let mut writer = stream.try_clone().unwrap();
-    let mut reader = BufReader::new(stream);
+    let writer = stream.try_clone().unwrap();
+    let reader = BufReader::new(stream);
+    (server, writer, reader)
+}
+
+fn assert_backend(backend: &str) {
+    let (server, mut writer, mut reader) = start_server(backend, 4);
 
     request(
         &mut writer,
@@ -185,7 +190,12 @@ fn assert_backend(backend: &str) {
         "r10",
         "r10 load counted begin\nlet rows = input 0;\nexport \"counted\" = rows;\nr10 end-load\n",
     );
-    request(&mut writer, &mut reader, "r11", "r11 feed counted 0 from iota:5\n");
+    request(
+        &mut writer,
+        &mut reader,
+        "r11",
+        "r11 feed counted 0 from iota:5\n",
+    );
     request(&mut writer, &mut reader, "r12", "r12 tick\n");
     let rows = request(&mut writer, &mut reader, "r13", "r13 peek counted\n");
     assert_eq!(
@@ -208,4 +218,125 @@ fn vec_commands_replay_on_four_workers_without_duplicating_input() {
 #[test]
 fn corgi_commands_replay_on_four_workers_without_duplicating_input() {
     assert_backend("corgi");
+}
+
+/// A prepared query is an installed dataflow, not a preinstalled binding.
+/// Keep two consumers over the same named graph while request inputs vary.
+/// Tiny, deterministic, and network-facing: no external DB or downloaded data.
+fn assert_prepared_requests(backend: &str, workers: usize) {
+    eprintln!("prepared requests: backend={backend}, workers={workers}");
+    let (server, mut writer, mut reader) = start_server(backend, workers);
+    request(
+        &mut writer,
+        &mut reader,
+        "g",
+        "g load graph begin\nlet e = input 0;\nexport \"edges\" = e | arrange;\ng end-load\n",
+    );
+    for name in ["a", "b"] {
+        request(
+            &mut writer,
+            &mut reader,
+            name,
+            &format!(
+                "{name} load {name} begin\nlet q = input 0;\nlet e = import \"edges\";\nexport \"{name}.answer\" = (q | key($0[1] ; $0[0])) | join(e, ($1[0] ; $2[0]));\n{name} end-load\n"
+            ),
+        );
+    }
+    request(
+        &mut writer,
+        &mut reader,
+        "f",
+        "f feed graph 0 begin\n1 val=2\n1 val=3\n2 val=4\nf end-feed\n",
+    );
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    for name in ["a", "b"] {
+        assert!(request(
+            &mut writer,
+            &mut reader,
+            "p",
+            &format!("p peek {name}.answer\n")
+        )
+        .is_empty());
+    }
+    // Distinct request identities with equal bindings must not collapse. A
+    // missing key completes normally with no output rows for its request id.
+    request(
+        &mut writer,
+        &mut reader,
+        "f",
+        "f feed a 0 begin\n10,1\n11,1\n12,99\nf end-feed\n",
+    );
+    request(&mut writer, &mut reader, "f", "f feed b 0 20,2\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    let answer = |rid, node| format!("diff=1 key=Tuple([Int({rid})]) val=Tuple([Int({node})])");
+    assert_eq!(
+        request(&mut writer, &mut reader, "p", "p peek a.answer\n"),
+        vec![answer(10, 2), answer(10, 3), answer(11, 2), answer(11, 3)]
+    );
+    assert_eq!(
+        request(&mut writer, &mut reader, "p", "p peek b.answer\n"),
+        vec![answer(20, 4)]
+    );
+
+    // Retract one request without removing the other equal binding. Graph
+    // changes maintain active requests in both independently installed plans.
+    request(&mut writer, &mut reader, "f", "f feed a 0 10,1 diff=-1\n");
+    request(
+        &mut writer,
+        &mut reader,
+        "f",
+        "f feed graph 0 begin\n1 val=3 diff=-1\n1 val=5\n2 val=4 diff=-1\n2 val=6\nf end-feed\n",
+    );
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert_eq!(
+        request(&mut writer, &mut reader, "p", "p peek a.answer\n"),
+        vec![answer(11, 2), answer(11, 5)]
+    );
+    assert_eq!(
+        request(&mut writer, &mut reader, "p", "p peek b.answer\n"),
+        vec![answer(20, 6)]
+    );
+    request(
+        &mut writer,
+        &mut reader,
+        "f",
+        "f feed a 0 begin\n11,1 diff=-1\n12,99 diff=-1\nf end-feed\n",
+    );
+    request(&mut writer, &mut reader, "f", "f feed b 0 20,2 diff=-1\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    for name in ["a", "b"] {
+        assert!(request(
+            &mut writer,
+            &mut reader,
+            "p",
+            &format!("p peek {name}.answer\n")
+        )
+        .is_empty());
+    }
+    // Reuse an id with a different parameter against the changed graph. No
+    // template reinstall and no retained answer from its previous binding.
+    request(&mut writer, &mut reader, "f", "f feed a 0 10,2\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert_eq!(
+        request(&mut writer, &mut reader, "p", "p peek a.answer\n"),
+        vec![answer(10, 6)]
+    );
+    request(&mut writer, &mut reader, "f", "f feed a 0 10,2 diff=-1\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert!(request(&mut writer, &mut reader, "p", "p peek a.answer\n").is_empty());
+    request(&mut writer, &mut reader, "d", "d drop a\n");
+    request(&mut writer, &mut reader, "d", "d drop b\n");
+    request(&mut writer, &mut reader, "d", "d drop graph\n");
+    drop(reader);
+    drop(writer);
+    server.stop();
+}
+
+#[test]
+fn prepared_requests_share_named_graphs_and_follow_changes() {
+    for backend in ["vec", "corgi"] {
+        for workers in [1, 4] {
+            assert_prepared_requests(backend, workers);
+        }
+    }
 }
