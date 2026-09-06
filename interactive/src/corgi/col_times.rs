@@ -17,7 +17,7 @@
 
 use std::cmp::Ordering;
 
-use columnar::{Borrow, Clear, Columnar, Index, Len, Push};
+use columnar::{Borrow, Clear, Columnar, Container, Index, Len, Push};
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
@@ -98,14 +98,12 @@ impl<T: Columnar> ColTimes<T> {
         <T as Columnar>::into_owned(self.store.borrow().get(i))
     }
 
-    /// Append rows `[s, e)` of `other`, pushing `Ref`s straight across — no `T` materialized. The
-    /// range copy used by `emit`/`concat`/merge-suffix.
+    /// Append rows `[s, e)` of `other` as one range copy of the SoA lanes — `columnar`'s
+    /// `extend_from_self`, a `memcpy` per lane with the list bounds rebased — never a `T` and never
+    /// a row at a time. The range copy used by `emit`/`concat`/the merge's exclusive runs.
     #[inline]
     pub fn push_range(&mut self, other: &ColTimes<T>, s: usize, e: usize) {
-        let b = other.store.borrow();
-        for i in s..e {
-            self.store.push(b.get(i));
-        }
+        self.store.extend_from_self(other.store.borrow(), s..e);
     }
 
     /// Materialize the whole column to `Vec<T>` — the egress boundary (owned times for
