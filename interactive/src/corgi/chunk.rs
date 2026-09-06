@@ -28,7 +28,7 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_adjacent, compare_at, gather, gather_lanes, group_bounds, sort_perm};
+use corgi::arrange::{compare_adjacent, compare_at, gather, gather_lanes, group_bounds, sort_perm, survey, Run};
 use corgi::Value as CValue;
 
 use columnar::Columnar;
@@ -143,27 +143,22 @@ where
     fn len_(&self) -> usize { self.0.times.len() }
 }
 
-/// A column the merge can order without a structural walk: a bare `u64` leaf, or unit.
-enum Lane<'a> {
-    Ints(&'a [u64]),
-    Unit,
-}
-
-impl<'a> Lane<'a> {
-    fn of(column: &'a CValue) -> Option<Lane<'a>> {
-        match column {
-            CValue::Unit(_) => Some(Lane::Unit),
-            other => corgi::arrange::leaf_slice(other).map(Lane::Ints),
+/// The `u64` leaf lanes of a column that is nothing but nested products of `u64` leaves and units,
+/// in structural order — the `(key, val)` column of an integer-keyed arrangement — or `None`.
+/// Structural order on such a column is lexicographic over these lanes.
+fn u64_lanes(v: &CValue) -> Option<Vec<&[u64]>> {
+    fn walk<'a>(v: &'a CValue, out: &mut Vec<&'a [u64]>) -> bool {
+        match v {
+            CValue::Prod(fields) => fields.iter().all(|f| walk(f, out)),
+            CValue::Unit(_) => true,
+            leaf => match corgi::arrange::leaf_slice(leaf) {
+                Some(xs) => { out.push(xs); true }
+                None => false,
+            },
         }
     }
-
-    #[inline]
-    fn cmp(&self, i: usize, other: &Lane<'_>, j: usize) -> Ordering {
-        match (self, other) {
-            (Lane::Ints(a), Lane::Ints(b)) => a[i].cmp(&b[j]),
-            _ => Ordering::Equal,
-        }
-    }
+    let mut out = Vec::new();
+    walk(v, &mut out).then_some(out)
 }
 
 impl<T, R> Chunk for CorgiChunk<T, R>
@@ -176,18 +171,15 @@ where
 
     fn len(&self) -> usize { self.0.times.len() }
 
-    /// Two-pointer merge of the two front chunks through their shared horizon, FULLY consolidating
-    /// equal `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
-    /// contract). NB a `survey`-based merge cannot be substituted as-is: survey aligns only
-    /// `(key, val)` (corgi owns no time), so its positional `Both` under-consolidates cross-side
-    /// times, and consuming both chunks with no push-back un-grades the chain; it would need a
-    /// group-RANGE `Both` (both sides' full equal-`(key,val)` group) to time-merge correctly.
-    ///
-    /// TODO: newer corgi revs export exactly that (`survey_groups` -> `GroupRun::{A, B, Both}`,
-    /// with `Both` carrying both sides' group ranges). Once the pin moves past it, rewrite this
-    /// merge batched: bulk-copy `A`/`B` runs (range gather + `push_range` + `extend_from_slice`),
-    /// row-merge times only within `Both` classes. This row-at-a-time loop is the largest
-    /// `compare_at`-in-a-hot-path residue in the backend (the ingest batcher's merge).
+    /// Merge of the two front chunks through their shared horizon, FULLY consolidating equal
+    /// `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
+    /// contract). Batched: corgi's `survey` reports the interleaving of the two `(key, val)`
+    /// columns as maximal ranges exclusive to one side and matched pairs, so rows only one side
+    /// holds are copied by range, and only the `(key, val)` groups both sides hold — where
+    /// consolidation can happen — are merged row by row, on their times, which corgi does not
+    /// own. A matched pair names its two groups (`group_bounds` on each side); the groups'
+    /// remaining rows surface in later exclusive runs and are skipped there, having been emitted
+    /// with their pair. The shape is walked a few times per chunk, never once per row.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         let c1 = in1.pop_front().unwrap();
         let c2 = in2.pop_front().unwrap();
@@ -196,32 +188,71 @@ where
         let (t1, d1) = (c1.times(), c1.diffs());
         let (t2, d2) = (c2.times(), c2.diffs());
 
-        let (mut tags, mut offs) = (Vec::new(), Vec::new());
-        let (mut times, mut diffs) = (ColTimes::new(), Vec::new());
-        let (mut p1, mut p2) = (0usize, 0usize);
-        // When both sides' keys and values are bare `u64` leaves (or the value is unit, as under
-        // `distinct`) — integer keys are their own identifiers, and integer values are the common
-        // case — structural order is two integer compares read straight off the lanes; otherwise
-        // `compare_at` walks the shape per row.
-        let fast = match (Lane::of(c1.keys()), Lane::of(c1.vals()), Lane::of(c2.keys()), Lane::of(c2.vals())) {
-            (Some(k1), Some(v1), Some(k2), Some(v2)) => Some((k1, v1, k2, v2)),
-            _ => None,
+        let runs = survey(&kv1, &kv2);
+        // A matched pair names the heads of two equal-`(key, val)` groups; each group extends
+        // forward while its rows stay equal to the head — a scan over the matched rows only, on
+        // the `u64` lanes directly where the column is a product of them, else structurally.
+        let (l1, l2) = (u64_lanes(&kv1), u64_lanes(&kv2));
+        let group_end = |kv: &CValue, lanes: &Option<Vec<&[u64]>>, n: usize, head: usize| -> usize {
+            let mut end = head + 1;
+            match lanes {
+                Some(lanes) => while end < n && lanes.iter().all(|lane| lane[end] == lane[head]) { end += 1; },
+                None => while end < n && compare_at(kv, head, kv, end) == Ordering::Equal { end += 1; },
+            }
+            end
         };
-        while p1 < n1 && p2 < n2 {
-            // `(key, val)` structurally, then `time` in place via the columnar `Ref: Ord`.
-            let kv_ord = match &fast {
-                Some((k1, v1, k2, v2)) => k1.cmp(p1, k2, p2).then_with(|| v1.cmp(p1, v2, p2)),
-                None => compare_at(&kv1, p1, &kv2, p2),
-            };
-            let ord = kv_ord.then_with(|| t1.cmp_cross(p1, t2, p2));
-            match ord {
-                Ordering::Less => { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d1[p1].clone()); p1 += 1; }
-                Ordering::Greater => { tags.push(1); offs.push(p2); times.push_ref(t2, p2); diffs.push(d2[p2].clone()); p2 += 1; }
-                Ordering::Equal => {
-                    let mut d = d1[p1].clone();
-                    d.plus_equals(&d2[p2]);
-                    if !d.is_zero() { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d); }
-                    p1 += 1; p2 += 1;
+
+        let (mut tags, mut offs) = (Vec::with_capacity(n1 + n2), Vec::with_capacity(n1 + n2));
+        let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::with_capacity(n1 + n2));
+        // Everything below these marks was emitted with a matched group pair; an exclusive run
+        // that starts under a mark is that pair's tail and skips to it.
+        let (mut done1, mut done2) = (0usize, 0usize);
+        // Where the survivor's pushed-back suffix starts: the last run, if it is exclusive.
+        let (mut back1, mut back2) = (n1, n2);
+        let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, times: &mut ColTimes<T>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
+            let (t, d) = if side == 0 { (t1, d1) } else { (t2, d2) };
+            tags.resize(tags.len() + (hi - lo), side);
+            offs.extend(lo..hi);
+            times.push_range(t, lo, hi);
+            diffs.extend_from_slice(&d[lo..hi]);
+        };
+        for (r, run) in runs.iter().enumerate() {
+            let last = r + 1 == runs.len();
+            match *run {
+                Run::A(lo, hi) => {
+                    let lo = lo.max(done1);
+                    if lo >= hi { continue; }
+                    if last { back1 = lo; } else { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, lo, hi); }
+                }
+                Run::B(lo, hi) => {
+                    let lo = lo.max(done2);
+                    if lo >= hi { continue; }
+                    if last { back2 = lo; } else { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, lo, hi); }
+                }
+                Run::Both(ia, ib) => {
+                    if ia < done1 { continue; } // a later pair of a group pair already merged
+                    debug_assert!(ib >= done2, "survey paired a row of a group already merged");
+                    let ((a_lo, a_hi), (b_lo, b_hi)) = ((ia, group_end(&kv1, &l1, n1, ia)), (ib, group_end(&kv2, &l2, n2, ib)));
+                    // Both groups hold one `(key, val)`, sorted by time: merge on time, summing the
+                    // diffs of equal times, which is the consolidation.
+                    let (mut i, mut j) = (a_lo, b_lo);
+                    while i < a_hi && j < b_hi {
+                        match t1.cmp_cross(i, t2, j) {
+                            Ordering::Less => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, i + 1); i += 1; }
+                            Ordering::Greater => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, j + 1); j += 1; }
+                            Ordering::Equal => {
+                                let mut d = d1[i].clone();
+                                d.plus_equals(&d2[j]);
+                                if !d.is_zero() { tags.push(0); offs.push(i); times.push_ref(t1, i); diffs.push(d); }
+                                i += 1;
+                                j += 1;
+                            }
+                        }
+                    }
+                    if i < a_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, a_hi); }
+                    if j < b_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, b_hi); }
+                    done1 = a_hi;
+                    done2 = b_hi;
                 }
             }
         }
@@ -229,18 +260,18 @@ where
         let srcs = [Some(&kv1), Some(&kv2)];
         Self::emit(&srcs, &tags, &offs, &times, &diffs, out);
 
-        // Push back the survivor's unconsumed suffix (all `>` the horizon), ahead of its deque.
-        if p1 < n1 {
-            let idx: Vec<usize> = (p1..n1).collect();
+        // Push back the survivor's unconsumed suffix (all beyond the horizon), ahead of its deque.
+        if back1 < n1 {
+            let idx: Vec<usize> = (back1..n1).collect();
             let mut t = ColTimes::new();
-            t.push_range(t1, p1, n1);
-            in1.push_front(Self::from_kv(gather(&kv1, &idx), t, d1[p1..].to_vec()));
+            t.push_range(t1, back1, n1);
+            in1.push_front(Self::from_kv(gather(&kv1, &idx), t, d1[back1..].to_vec()));
         }
-        if p2 < n2 {
-            let idx: Vec<usize> = (p2..n2).collect();
+        if back2 < n2 {
+            let idx: Vec<usize> = (back2..n2).collect();
             let mut t = ColTimes::new();
-            t.push_range(t2, p2, n2);
-            in2.push_front(Self::from_kv(gather(&kv2, &idx), t, d2[p2..].to_vec()));
+            t.push_range(t2, back2, n2);
+            in2.push_front(Self::from_kv(gather(&kv2, &idx), t, d2[back2..].to_vec()));
         }
     }
 
@@ -758,6 +789,84 @@ mod test {
             // A merge that cancels to nothing reports an absent payload.
             assert_eq!(result.is_none(), want.is_empty(), "absence must track emptiness\nu1={u1:?}\nu2={u2:?}\nf={f}");
             assert_eq!(result.as_ref().map_or_else(BTreeMap::new, read_batch), want, "u1={u1:?}\nu2={u2:?}\nf={f}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    //! The batched merge against the definition: the emitted rows are sorted and consolidated,
+    //! the pushed-back suffix lies beyond them on one side only, and together they are the
+    //! consolidated union of the two inputs. Small key and value universes so that groups collide
+    //! across sides, several times per group, and cancellations.
+    use super::*;
+    use std::collections::BTreeMap;
+    use differential_dataflow::dynamic::pointstamp::PointStamp;
+    use timely::order::Product;
+
+    type T = Product<u64, PointStamp<u64>>;
+    type Row = (u64, u64, T, i64);
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self, bound: u64) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (self.0 >> 33) % bound
+        }
+    }
+
+    fn time(outer: u64, inner: u64) -> T {
+        Product::new(outer, PointStamp::new([inner].into_iter().collect()))
+    }
+
+    fn chunk(rows: &[Row]) -> CorgiChunk<T, i64> {
+        CorgiChunk::from_columns(
+            CValue::u64(rows.iter().map(|r| r.0).collect()),
+            CValue::u64(rows.iter().map(|r| r.1).collect()),
+            rows.iter().map(|r| r.2.clone()).collect(),
+            rows.iter().map(|r| r.3).collect(),
+        )
+    }
+
+    fn rows_of(c: &CorgiChunk<T, i64>) -> Vec<Row> {
+        let keys = corgi::arrange::leaf_slice(c.keys()).expect("u64 keys");
+        let vals = corgi::arrange::leaf_slice(c.vals()).expect("u64 vals");
+        (0..c.len_()).map(|i| (keys[i], vals[i], c.times().get(i), c.diffs()[i])).collect()
+    }
+
+    fn consolidated(rows: impl Iterator<Item = Row>) -> BTreeMap<(u64, u64, T), i64> {
+        let mut out = BTreeMap::new();
+        for (k, v, t, d) in rows {
+            *out.entry((k, v, t)).or_insert(0) += d;
+        }
+        out.retain(|_, d| *d != 0);
+        out
+    }
+
+    #[test]
+    fn merge_is_the_consolidated_union_with_a_pushed_back_suffix() {
+        let mut g = Lcg(5);
+        for _ in 0..2000 {
+            let mut make = |g: &mut Lcg| -> Vec<Row> {
+                (0..g.next(14)).map(|_| (g.next(4), g.next(3), time(g.next(2), g.next(3)), if g.next(4) == 0 { -1 } else { 1 })).collect()
+            };
+            let (a, b) = (chunk(&make(&mut g)), chunk(&make(&mut g)));
+            let expect = consolidated(rows_of(&a).into_iter().chain(rows_of(&b)));
+            let (mut in1, mut in2, mut out) = (VecDeque::from([a]), VecDeque::from([b]), VecDeque::new());
+            <CorgiChunk<T, i64> as Chunk>::merge(&mut in1, &mut in2, &mut out);
+            let emitted: Vec<Row> = out.iter().flat_map(rows_of).collect();
+            for w in emitted.windows(2) {
+                assert!((w[0].0, w[0].1, &w[0].2) < (w[1].0, w[1].1, &w[1].2), "emitted rows out of order or repeated: {:?} then {:?}", w[0], w[1]);
+            }
+            assert!(emitted.iter().all(|r| r.3 != 0), "a zero diff was emitted");
+            assert!(in1.is_empty() || in2.is_empty(), "both sides pushed back");
+            let back: Vec<Row> = in1.iter().chain(in2.iter()).flat_map(rows_of).collect();
+            if let Some(last) = emitted.last() {
+                for r in &back {
+                    assert!((r.0, r.1, &r.2) > (last.0, last.1, &last.2), "pushed-back row {:?} is not beyond the last emitted {:?}", r, last);
+                }
+            }
+            assert_eq!(consolidated(emitted.into_iter().chain(back)), expect);
         }
     }
 }
