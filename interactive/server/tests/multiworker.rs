@@ -215,6 +215,37 @@ fn corgi_commands_replay_on_four_workers_without_duplicating_input() {
     assert_backend("corgi");
 }
 
+fn assert_typed_sources(backend: &str) {
+    let (server, mut writer, mut reader) = start_server(backend, 4);
+    request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int), Option(List(int))) ; ());\nexport \"typed.rows\" = rows | arrange;\ng end-load\n");
+    request(&mut writer, &mut reader, "q", "q load copy begin\nlet rows = import \"typed.rows\" : ((int, List(int), Option(List(int))) ; ());\nexport \"typed.copy\" = rows;\nq end-load\n");
+    // Neither a first empty list nor a never-populated sum lane can supply
+    // its encoding by example. Both the producer and imported trace use the
+    // declared shape, without sentinel rows or altered data.
+    request(&mut writer, &mut reader, "f", "f feed graph 0 tuple(1,list(),inject(0,tuple()))\n");
+    request(&mut writer, &mut reader, "t", "t tick\n");
+    assert_eq!(request(&mut writer, &mut reader, "p", "p peek typed.copy\n"),
+        vec!["diff=1 key=Tuple([Int(1), List([]), Variant(0, Tuple([]))]) val=Tuple([])"]);
+    request(&mut writer, &mut reader, "f2", "f2 feed graph 0 tuple(2,list(97),inject(1,list()))\n");
+    request(&mut writer, &mut reader, "f3", "f3 feed graph 0 tuple(1,list(),inject(0,tuple())) diff=-1\n");
+    request(&mut writer, &mut reader, "t2", "t2 tick\n");
+    assert_eq!(request(&mut writer, &mut reader, "p2", "p2 peek typed.copy\n"),
+        vec!["diff=1 key=Tuple([Int(2), List([Int(97)]), Variant(1, List([]))]) val=Tuple([])"]);
+    drop(reader);
+    drop(writer);
+    server.stop();
+}
+
+#[test]
+fn vec_typed_empty_sources_and_imports_on_four_workers() {
+    assert_typed_sources("vec");
+}
+
+#[test]
+fn corgi_typed_empty_sources_and_imports_on_four_workers() {
+    assert_typed_sources("corgi");
+}
+
 /// Two consumers join request rows against the same named graph through TCP,
 /// while both the requests and graph change.
 fn assert_shared_import_requests(backend: &str, workers: usize) {

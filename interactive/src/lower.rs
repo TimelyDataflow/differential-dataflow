@@ -47,7 +47,7 @@ fn expr_free_names<'a>(expr: &'a Expr, out: &mut BTreeSet<&'a str>) {
         Expr::Input(_) | Expr::Import(_) => {},
         Expr::Name(n) => { out.insert(n.as_str()); },
         Expr::Qualified(scope, _) => { out.insert(scope.as_str()); },
-        Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
+        Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Reduce(e, _) | Expr::Filter(e, _)
             | Expr::Negate(e) | Expr::EnterAt(e, _) | Expr::LiftIter(e)
             | Expr::FlatMap(e, _)
             | Expr::Inspect(e, _) | Expr::Arrange(e) => expr_free_names(e, out),
@@ -115,7 +115,7 @@ impl ScopeLower {
         assert!(self.is_root, "`input {}` used outside the root scope (not yet supported)", n);
         if let Some(&i) = self.input_import.get(&n) { return st::Ref::Import(i); }
         let i = self.imports.len();
-        self.imports.push(st::Import { name: format!("input{}", n), from: st::Source::Input(n) });
+        self.imports.push(st::Import { name: format!("input{}", n), from: st::Source::Input(n), shape: None });
         self.input_import.insert(n, i);
         st::Ref::Import(i)
     }
@@ -123,7 +123,7 @@ impl ScopeLower {
         assert!(self.is_root, "`import {:?}` used outside the root scope (not yet supported)", name);
         if let Some(&i) = self.trace_import.get(name) { return st::Ref::Import(i); }
         let i = self.imports.len();
-        self.imports.push(st::Import { name: name.to_string(), from: st::Source::Trace(name.to_string()) });
+        self.imports.push(st::Import { name: name.to_string(), from: st::Source::Trace(name.to_string()), shape: None });
         self.trace_import.insert(name.to_string(), i);
         st::Ref::Import(i)
     }
@@ -137,6 +137,17 @@ impl ScopeLower {
         match e {
             Expr::Input(n) => self.input_ref(*n),
             Expr::Import(name) => self.trace_ref(name),
+            Expr::TypedSource(source, key, val) => {
+                let r = self.lower_expr(source);
+                let st::Ref::Import(i) = r else { panic!("a shape ascription requires an external source") };
+                assert!(self.is_root, "external shape ascriptions belong at the root");
+                let shape = (key.clone(), val.clone());
+                if let Some(previous) = &self.imports[i].shape {
+                    assert_eq!(previous, &shape, "conflicting source shape ascriptions");
+                }
+                self.imports[i].shape = Some(shape);
+                r
+            }
             Expr::Name(name) => self.env.get(name).cloned()
                 .unwrap_or_else(|| panic!("unresolved name `{}`", name)),
             Expr::Qualified(s, f) => self.qualified_ref(s, f),
@@ -194,7 +205,7 @@ fn lower_scope_tree(
             let from = parent_env.get(name).cloned()
                 .unwrap_or_else(|| panic!("scope references unknown outer name `{}`", name));
             let i = s.imports.len();
-            s.imports.push(st::Import { name: name.to_string(), from: st::Source::Parent(from) });
+            s.imports.push(st::Import { name: name.to_string(), from: st::Source::Parent(from), shape: None });
             s.env.insert(name.to_string(), st::Ref::Import(i));
         }
     }
@@ -300,7 +311,7 @@ fn qualified_fields(body: &[Stmt], scope: &str) -> Vec<String> {
 fn collect_qualified(e: &Expr, scope: &str, out: &mut Vec<String>) {
     match e {
         Expr::Qualified(s, f) => if s == scope && !out.contains(f) { out.push(f.clone()); },
-        Expr::Map(e, _) | Expr::Filter(e, _) | Expr::Negate(e) | Expr::EnterAt(e, _)
+        Expr::TypedSource(e, _, _) | Expr::Map(e, _) | Expr::Filter(e, _) | Expr::Negate(e) | Expr::EnterAt(e, _)
         | Expr::FlatMap(e, _)
         | Expr::LiftIter(e) | Expr::Reduce(e, _) | Expr::Inspect(e, _) | Expr::Arrange(e) => collect_qualified(e, scope, out),
         Expr::Join(l, r, _) => { collect_qualified(l, scope, out); collect_qualified(r, scope, out); },

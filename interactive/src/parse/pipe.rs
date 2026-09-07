@@ -9,6 +9,10 @@
 //!
 //! Sources: `input N` (positional input), `import "name"` (named trace),
 //! `name` (a `let`/`var` in scope), `scope::field` (a child scope's export).
+//! External sources may append `: (key_shape ; val_shape)`, using the shape
+//! syntax below. This supplies the column encoding even when the first row
+//! contains empty lists or inactive sum lanes. Ascriptions are checked during
+//! execution, not by the server's feed-admission acknowledgement.
 //! Operators chain with `|`:
 //!
 //! - `| key(k… ; v…)` — reshape to `(key ; val)`; `map` is an alias.
@@ -372,8 +376,8 @@ impl Parser {
 
     fn parse_atom(&mut self) -> Expr {
         match self.peek().clone() {
-            Token::Input => { self.next(); match self.next() { Token::Int(n) => Expr::Input(n as usize), o => panic!("Expected int, got {:?}", o) } },
-            Token::Import => { self.next(); match self.next() { Token::Str(s) => Expr::Import(s), o => panic!("Expected string literal after `import`, got {:?}", o) } },
+            Token::Input => { self.next(); let source = match self.next() { Token::Int(n) => Expr::Input(n as usize), o => panic!("Expected int, got {:?}", o) }; self.source_shape(source) },
+            Token::Import => { self.next(); let source = match self.next() { Token::Str(s) => Expr::Import(s), o => panic!("Expected string literal after `import`, got {:?}", o) }; self.source_shape(source) },
             Token::Ident(_) => { let n = self.parse_ident(); if *self.peek() == Token::ColonColon { self.next(); let f = self.parse_ident(); Expr::Qualified(n, f) } else { Expr::Name(n) } },
             Token::LParen => { self.next(); let e = self.parse_pipe_expr(); self.expect(&Token::RParen); e },
             other => panic!("Unexpected token in atom: {:?}", other),
@@ -384,6 +388,17 @@ impl Parser {
         let mut expr = self.parse_atom();
         while *self.peek() == Token::Pipe { self.next(); expr = self.parse_pipe_op(expr); }
         expr
+    }
+
+    fn source_shape(&mut self, source: Expr) -> Expr {
+        if *self.peek() != Token::Colon { return source; }
+        self.next();
+        self.expect(&Token::LParen);
+        let key = self.parse_shape();
+        self.expect(&Token::Semi);
+        let val = self.parse_shape();
+        self.expect(&Token::RParen);
+        Expr::TypedSource(Box::new(source), key, val)
     }
 
     fn parse_pipe_op(&mut self, lhs: Expr) -> Expr {

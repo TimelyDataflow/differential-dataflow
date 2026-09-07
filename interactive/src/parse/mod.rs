@@ -119,6 +119,9 @@ pub enum Reducer {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Input(usize),
+    /// Shape ascription on an external source: `input N : (key_shape ; val_shape)`.
+    /// The same syntax follows `import "name"` for independently installed consumers.
+    TypedSource(Box<Expr>, corgi::Shape, corgi::Shape),
     /// Named external trace resolved at install time. Carries only the name;
     /// shape comes from the registry the program is installed against.
     Import(String),

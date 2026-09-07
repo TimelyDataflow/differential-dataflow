@@ -403,14 +403,16 @@ pub fn render_tree_rows<'s>(
     depth: usize,
     imports: Vec<crate::backend::vec::Col<'s>>,
 ) -> Vec<crate::backend::vec::Col<'s>> {
-    let corgi_imports: Vec<Collection<'s, Time, CC>> = imports
+    let corgi_imports: Vec<Collection<'s, Time, CC>> = crate::backend::vec::check_import_shapes(s, imports)
         .into_iter()
-        .map(|c| {
+        .zip(&s.imports)
+        .map(|(c, import)| {
+            let shape = import.shape.clone();
             c.inner
-                .unary(Pipeline, "ToCorgi", |_, _| {
-                    // The collection's shape, pinned from its first row: every later batch
-                    // transcodes against it (a misfit row is a panic in `transcode`).
-                    let mut pinned: Option<(Shape, Shape)> = None;
+                .unary(Pipeline, "ToCorgi", move |_, _| {
+                    // Ascriptions describe empty lists and inactive sum lanes;
+                    // unannotated imports retain first-row inference.
+                    let mut pinned = shape;
                     move |input, output| {
                         input.for_each(|cap, data| {
                             let rows = std::mem::take(data);

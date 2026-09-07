@@ -26,6 +26,18 @@ pub enum Value {
 }
 
 impl Value {
+    /// Whether a boundary value satisfies an explicitly ascribed column shape.
+    pub fn has_shape(&self, shape: &corgi::Shape) -> bool {
+        use corgi::Shape;
+        match (self, shape) {
+            (Self::Int(_), Shape::Prim(64)) => true,
+            (Self::Tuple(xs), Shape::Unit) => xs.is_empty(),
+            (Self::Tuple(xs), Shape::Prod(fs)) => xs.len() == fs.len() && xs.iter().zip(fs).all(|(x, f)| x.has_shape(f)),
+            (Self::List(xs), Shape::List(f)) => xs.iter().all(|x| x.has_shape(f)),
+            (Self::Variant(tag, value), Shape::Sum(fs)) => fs.get(*tag as usize).is_some_and(|f| value.has_shape(f)),
+            _ => false,
+        }
+    }
     /// The empty tuple — the conventional "unit"/empty value.
     pub fn unit() -> Value { Value::Tuple(Vec::new()) }
     /// Truthiness: a nonzero `Int` is true; everything else is false.

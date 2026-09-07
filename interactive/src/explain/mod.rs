@@ -119,6 +119,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
                 // side refs mapped into the output parent.
                 let cloned_imports: Vec<Import> = child.imports.iter().map(|imp| Import {
                     name: imp.name.clone(),
+                    shape: imp.shape.clone(),
                     from: match &imp.from {
                         Source::Parent(r) => Source::Parent(map_ref(r, &locals, &subs, import_map, var_base)),
                         other => panic!("clone: nested scope with external source {:?}", other),
@@ -399,7 +400,7 @@ impl Sb {
     }
     fn import(&mut self, name: String, from: Source) -> Ref {
         let k = self.s.imports.len();
-        self.s.imports.push(Import { name, from });
+        self.s.imports.push(Import { name, from, shape: None });
         Ref::Import(k)
     }
     fn export(&mut self, name: String, value: Ref) -> usize {
