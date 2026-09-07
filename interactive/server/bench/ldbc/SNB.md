@@ -61,7 +61,10 @@ python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_serv
 ```
 
 The adapter reads all 18 required tables in SNB BI CSV `composite-merged-fk`
-layout, including `.csv.gz` partitions. It projects 17 relations: people,
+layout, including `.csv.gz` partitions, through the same
+[snapshot dialect reader](README.md#four-query-control-panel) as the small panel
+(double-quoted fields, backslash escaping within quotes; not raw-generator CSV).
+A plain partition takes precedence over its `.csv.gz` copy. It projects 17 relations: people,
 posts/comments, forums, friendships, memberships, tags/classes, places,
 organisations, interests, message/forum tags, likes, education, employment,
 email, and languages. Missing files fail explicitly. All reads have their
@@ -135,8 +138,17 @@ Standing-result reads are `maintained:*`; cleanup checks are `empty:*`, so empty
 reads do not dilute the latency summary for bound requests.
 
 Per-event command preparation, encoding, wire wait/receipt, and decoding are
-recorded. Wire time includes server work and TCP overhead; it is not a kernel
-profile. Shared update/bind time cannot be attributed to one query by inspecting
+recorded and summarized separately as `prepare_ms`, `encode_ms`, `wire_ms`,
+`decode_ms` and `client_ms`. Comparisons default to client-observed request/response
+time (`wire_ms`), which includes server work, transport and Python protocol
+handling; it is not server CPU time. `client_ms` includes command preparation,
+encoding and answer decoding, but excludes parameter selection and oracle work.
+`batch_answers` sums each component over bind/read phases separately.
+The snapshot deltas are computed once during setup (`delta_prepare_ms`) and
+reused for every update/restore; these phases do work proportional to the delta,
+not repeated full-graph differences in the client. Version `snb-suite-2` reports
+require a fresh baseline; the comparison tool rejects the old summary format.
+Shared update/bind time cannot be attributed to one query by inspecting
 its later `peek`. Use `--isolated` and selected concurrent panels for attribution.
 Parsing/planning is setup cost here: **this is not an ad-hoc re-planning test**.
 Do not omit release or standing maintenance when assessing sustained work.

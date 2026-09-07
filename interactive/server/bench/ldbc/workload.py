@@ -1,10 +1,11 @@
 """Narrow SNB snapshot adapter and independent, untimed reference queries."""
 from collections import Counter, defaultdict
-import csv
 from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
+
+from snapshot import read_table
 
 HERE = Path(__file__).resolve().parent
 TABLES = ('person', 'knows', 'message', 'tag', 'message_tag', 'likes', 'place')
@@ -29,30 +30,25 @@ def load(snapshot):
     }
     for entity, table in entities.items():
         category = 'static' if entity in ('Tag', 'Place') else 'dynamic'
-        paths = sorted((snapshot / category / entity).glob('*.csv'))
-        if not paths:
-            raise ValueError(f'missing CSV partition(s): {category}/{entity}')
-        for path in paths:
-            with path.open(newline='', encoding='utf-8') as source:
-                for r in csv.DictReader(source, delimiter='|', quoting=csv.QUOTE_NONE):
-                    if table == 'person':
-                        row = (int(r['id']), r['firstName'], r['lastName'], int(r['LocationCityId']))
-                    elif table == 'knows':
-                        a, b = sorted((int(r['Person1Id']), int(r['Person2Id'])))
-                        row = (a, b, millis(r['creationDate']))
-                    elif table == 'message':
-                        parent = r.get('ParentPostId') or r.get('ParentCommentId') or '-1'
-                        row = (int(r['id']), int(entity == 'Comment'), int(r['CreatorPersonId']), int(parent))
-                    elif table == 'tag':
-                        row = (int(r['id']), r['name'])
-                    elif table == 'place':
-                        row = (int(r['id']), r['name'], int(r.get('PartOfPlaceId') or '-1'))
-                    else:
-                        mid = int(r['PostId'] if 'PostId' in r else r['CommentId'])
-                        row = (mid, int(r['TagId'])) if table == 'message_tag' else (int(r['PersonId']), mid)
-                    if any(isinstance(v, str) and not v for v in row):
-                        raise ValueError(f'{path}: empty strings require typed server inputs; not padded here')
-                    result[table].add(row)
+        for r in read_table(snapshot, category, entity):
+            if table == 'person':
+                row = (int(r['id']), r['firstName'], r['lastName'], int(r['LocationCityId']))
+            elif table == 'knows':
+                a, b = sorted((int(r['Person1Id']), int(r['Person2Id'])))
+                row = (a, b, millis(r['creationDate']))
+            elif table == 'message':
+                parent = r.get('ParentPostId') or r.get('ParentCommentId') or '-1'
+                row = (int(r['id']), int(entity == 'Comment'), int(r['CreatorPersonId']), int(parent))
+            elif table == 'tag':
+                row = (int(r['id']), r['name'])
+            elif table == 'place':
+                row = (int(r['id']), r['name'], int(r.get('PartOfPlaceId') or '-1'))
+            else:
+                mid = int(r['PostId'] if 'PostId' in r else r['CommentId'])
+                row = (mid, int(r['TagId'])) if table == 'message_tag' else (int(r['PersonId']), mid)
+            if any(isinstance(v, str) and not v for v in row):
+                raise ValueError(f'{entity}: empty strings require typed server inputs; not padded here')
+            result[table].add(row)
     return result
 
 

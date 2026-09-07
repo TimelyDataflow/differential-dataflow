@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Run the complete SNB read catalogue through a private, real ddir_server."""
 import argparse
-from collections import defaultdict, deque
+from collections import deque
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import shutil
-import statistics
 import subprocess
 import sys
 import tempfile
 import time
 
-from client import Server, decode
+from client import Server
+import measure
 from run import checked, digest, positive
 from snb import data, witness
 from snb.parameters import alternate, parameters, reference, requests
@@ -53,7 +53,7 @@ def fingerprint(graph):
     return h.hexdigest()
 
 
-def run_server(args, backend, names, graph, changed, bank, plans, report):
+def run_server(args, backend, names, graph, changed, delta, bank, plans, report):
     suffix = '-'.join(names) if args.isolated else 'all'
     record = dict(backend=backend, workers=args.workers, queries=names, events=[], bindings=[])
     report['runs'].append(record)
@@ -65,11 +65,7 @@ def run_server(args, backend, names, graph, changed, bank, plans, report):
         context = dict(round=-1, warmup=True, state='setup')
 
         def command(phase, make_commands):
-            start = time.perf_counter()
-            commands = make_commands()
-            prepared = time.perf_counter()
-            metrics, replies = server.commands(commands)
-            metrics.update(prepare_ms=1000*(prepared-start), client_ms=1000*(time.perf_counter()-start))
+            metrics, replies = measure.commands(server, make_commands)
             record['events'].append(dict(context, phase=phase, **metrics))
             return replies
 
@@ -81,11 +77,8 @@ def run_server(args, backend, names, graph, changed, bank, plans, report):
                                  {**current, 'request': active[name]}) if active[name] else []
                 phase = 'empty' if not active[name] else 'maintained' if name in standing else 'read'
                 lines, = command(phase + ':' + name, lambda: [f'peek {name}.answer'])
-                start = time.perf_counter()
-                actual = decode(lines)
                 event = record['events'][-1]
-                event.update(decode_ms=1000*(time.perf_counter()-start), rows=len(actual))
-                event['client_ms'] += event['decode_ms']
+                actual = measure.decode_answer(lines, event)
                 checked(actual, want, f'{backend}/{context}/{name}')
                 event['answer_sha256'] = hashlib.sha256(json.dumps(actual).encode()).hexdigest()
 
@@ -96,13 +89,15 @@ def run_server(args, backend, names, graph, changed, bank, plans, report):
             return set().union(*(requests(name, schema, bank[name][(cycle+i//2) % len(bank[name])], i+1)
                                  for i in range(args.batch_size)))
 
-        def update(before, after, phase):
+        def update(phase, reverse=False):
             def commands():
                 result = []
+                removed, added = ('added', 'removed') if reverse else ('removed', 'added')
                 for i, table in enumerate(data.SCHEMA):
-                    for rows, diff in ((before[table]-after[table], -1), (after[table]-before[table], 1)):
-                        if rows:
-                            result.append(Server.feed('graph', i, sorted(rows), diff))
+                    if table in delta:
+                        for side, diff in ((removed, -1), (added, 1)):
+                            if delta[table][side]:
+                                result.append(Server.feed('graph', i, delta[table][side], diff))
                 return [*result, 'tick']
             command(phase, commands)
 
@@ -123,7 +118,7 @@ def run_server(args, backend, names, graph, changed, bank, plans, report):
             for state, current in (('initial', graph), ('changed', changed)):
                 context['state'] = state
                 if state == 'changed':
-                    update(graph, changed, 'update')
+                    update('update')
                     read(current)
                 if dynamic:
                     for name in dynamic:
@@ -132,15 +127,15 @@ def run_server(args, backend, names, graph, changed, bank, plans, report):
                     first = len(record['events'])
                     command('bind', lambda: [Server.feed(n, 0, sorted(active[n]), 1) for n in dynamic] + ['tick'])
                     read(current, dynamic)
-                    elapsed = sum(e['client_ms'] for e in record['events'][first:])
-                    record['events'].append(dict(context, phase='batch_answers', client_ms=elapsed,
+                    totals = measure.total(record['events'][first:])
+                    record['events'].append(dict(context, phase='batch_answers', **totals,
                                                   derived=True, requests=len(dynamic)*args.batch_size))
                     command('release', lambda: [Server.feed(n, 0, sorted(active[n]), -1) for n in dynamic] + ['tick'])
                     for name in dynamic:
                         active[name] = set()
                     read(current, dynamic)
             context['state'] = 'restored'
-            update(changed, graph, 'restore')
+            update('restore', reverse=True)
             read(graph)
             print(f'{backend}/{suffix}: round {cycle-args.warmup+1}/{args.rounds}, {len(names)} queries checked', flush=True)
         context.update(state='retired', warmup=True)
@@ -150,13 +145,7 @@ def run_server(args, backend, names, graph, changed, bank, plans, report):
                 active[name] = set()
             read(graph)
         record['peak_server_rss_bytes_sampled'] = server.peak_rss
-    buckets = defaultdict(list)
-    for event in record['events']:
-        if not event['warmup']:
-            buckets[(event['state'], event['phase'])].append(event['client_ms'])
-    record['summary'] = {f'{state}/{phase}': dict(samples=len(xs), median_ms=statistics.median(xs),
-                                                min_ms=min(xs), max_ms=max(xs))
-                         for (state, phase), xs in sorted(buckets.items())}
+    record['summary'] = measure.summarize(record['events'])
 
 
 def main():
@@ -218,7 +207,7 @@ def main():
     repo = HERE.parents[3]
     def git(*command):
         return subprocess.run(['git', '-C', str(repo), *command], capture_output=True, text=True, check=False).stdout.strip()
-    report = dict(format_version='snb-suite-1', status='running', spec_commit=SPEC, catalogue=catalogue,
+    report = dict(format_version='snb-suite-2', status='running', spec_commit=SPEC, catalogue=catalogue,
                   config={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                   platform=platform.platform(), python=platform.python_version(), logical_cpus=os.cpu_count(),
                   revision=git('rev-parse', 'HEAD'), worktree=git('status', '--porcelain'),
@@ -252,14 +241,17 @@ def main():
                 bank[name] = [{**base, **p} for p in overrides[name]]
             for binding in bank[name]:
                 requests(name, plans[name]['parameters'], binding, 0)
-        report.update(data=dict(rows={n: len(rows) for n, rows in graph.items()}, sha256=fingerprint(graph)),
-                      parameter_bank=bank, changed_sha256=fingerprint(changed),
-                      changes={n: dict(removed=sorted(graph[n]-changed[n]), added=sorted(changed[n]-graph[n]))
-                               for n in graph if graph[n] != changed[n]})
+        # Compute full-snapshot differences once, outside every server phase.
+        started = time.perf_counter()
+        delta = {n: dict(removed=sorted(graph[n]-changed[n]), added=sorted(changed[n]-graph[n]))
+                 for n in graph if graph[n] != changed[n]}
+        report.update(delta_prepare_ms=1000*(time.perf_counter()-started),
+                      data=dict(rows={n: len(rows) for n, rows in graph.items()}, sha256=fingerprint(graph)),
+                      parameter_bank=bank, changed_sha256=fingerprint(changed), changes=delta)
         print(f'{len(names)} queries; {sum(map(len, graph.values()))} projected rows', flush=True)
         for backend in ('vec', 'corgi') if args.backend == 'both' else (args.backend,):
             for selected in [[n] for n in names] if args.isolated else [names]:
-                run_server(args, backend, selected, graph, changed, bank, plans, report)
+                run_server(args, backend, selected, graph, changed, delta, bank, plans, report)
         report['status'] = 'passed'
     except BaseException as error:
         report.update(status='failed', error=f'{type(error).__name__}: {error}')

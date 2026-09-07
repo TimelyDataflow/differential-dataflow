@@ -51,6 +51,7 @@ jobs:
       - name: Complete SNB read catalogue
         if: matrix.os == 'ubuntu' && matrix.toolchain == 'stable'
         run: |
+          python3 interactive/server/bench/ldbc/test_harness.py
           python3 interactive/server/bench/ldbc/test_snb.py
           for workers in 1 4; do
             python3 interactive/server/bench/ldbc/suite.py --server target/debug/ddir_server \

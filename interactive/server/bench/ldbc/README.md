@@ -48,6 +48,15 @@ and large scale factors. Missing table directories fail rather than silently
 becoming empty tables. Only seven relations/needed columns are loaded; the
 reported projected row counts and data hash define the actual input.
 
+Both runners share [snapshot.py](snapshot.py), supporting the default Spark BI
+export dialect: UTF-8, pipe separators, double-quoted fields and backslash
+escapes inside quoted fields. Literal backslashes in unquoted fields survive.
+This follows the [BI snapshot writer](https://github.com/ldbc/ldbc_snb_datagen_spark/blob/b3dc986898efac7c1676abba865a30865334922e/src/main/scala/ldbc/snb/datagen/io/graphs.scala#L49)
+and [Spark CSV options](https://spark.apache.org/docs/3.5.6/sql-data-sources-csv.html#data-source-option),
+not the raw generator's unquoted format. Custom export dialects are unsupported.
+Plain `.csv` and `.csv.gz` partitions are accepted; when both copies exist under
+the same partition name, the plain file takes precedence and is read once.
+
 `--queries ic6` isolates one query over the same common graph substrate;
 `--queries bi5 bi11` measures BI maintenance without interactive consumers.
 Compare those controls with the default concurrent panel. `--batch-size 1`
@@ -129,7 +138,14 @@ LDBC conformance suite.
   separate; subtracting them does not remove the maintenance cost.
 
 Events split command preparation, encoding, wire wait/receipt and Value decoding.
-Wire time includes server work and TCP overhead; it is not a kernel profile.
+Every phase's `summary` contains separate `prepare_ms`, `encode_ms`, `wire_ms`,
+`decode_ms` and `client_ms` statistics. `wire_ms` is the default printed/comparison
+metric: time from sending the encoded command group through receipt of its final
+acknowledgement, including transport and Python protocol handling. It excludes
+command construction, request encoding and answer Value decoding, but is **not
+server CPU time**. `client_ms` retains the timed phase's total including those
+client costs; it excludes parameter selection and oracle/validation work.
+Derived `batch_answers` sums each metric over bind/read phases separately.
 Medians/min/max exclude warmup; raw samples, result bytes, reference answers,
 sampled server RSS, machine metadata, binary/source/data hashes, repository
 revision/status and the available Cargo lockfile accompany the report. Keep the
@@ -143,6 +159,12 @@ After running a candidate binary with the same arguments, compare the reports:
 python3 interactive/server/bench/ldbc/compare.py \
   /tmp/ldbc-baseline/report.json /tmp/ldbc-candidate/report.json
 ```
+
+Use `--metric client_ms` (or another timing field) to compare that component
+instead. Reports now use format version 2 (`snb-suite-2` for the full suite).
+The comparison rejects old reports: their summaries used client totals, and
+the old full-suite update/restore totals included full-graph set differences.
+Establish a fresh baseline after this harness correction.
 
 The comparison rejects failed runs, changed data/parameters/schedules/answers,
 different worker counts or environments, and changed measurement code. Changed

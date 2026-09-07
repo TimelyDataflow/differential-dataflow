@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Reproducible maintained/parameterized LDBC-derived server workload (stdlib only)."""
 import argparse
-from collections import defaultdict, deque
+from collections import deque
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import shutil
-import statistics
 import subprocess
 import sys
 import tempfile
 import time
 
-from client import Server, decode
+from client import Server
+import measure
 from workload import HERE, TABLES, QUERIES, Reference, changes, expected, fingerprint, load, parameters
 
 
@@ -51,23 +51,14 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
         context = dict(round=-1, warmup=True, state='setup')
 
         def command(phase, make_commands):
-            start = time.perf_counter()
-            commands = make_commands()
-            prepared = time.perf_counter()
-            metrics, replies = server.commands(commands)
-            metrics['prepare_ms'] = 1000*(prepared-start)
-            metrics['client_ms'] = 1000*(time.perf_counter()-start)
+            metrics, replies = measure.commands(server, make_commands)
             record['events'].append(dict(context, phase=phase, **metrics))
             return replies
 
         def read(name, want, phase='read'):
             lines, = command(f'{phase}:{name}', lambda: [f'peek {name}.answer'])
-            start = time.perf_counter()
-            actual = decode(lines)
             event = record['events'][-1]
-            event['decode_ms'] = 1000*(time.perf_counter()-start)
-            event['client_ms'] += event['decode_ms']
-            event['rows'] = len(actual)
+            actual = measure.decode_answer(lines, event)
             # Validation/reference work is deliberately outside all timings.
             checked(actual, want, f'{backend}/{context}/{phase}/{name}')
 
@@ -109,8 +100,8 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
                                 want.append([[rid, key[1]], value, diff])
                         read(name, want)
                     # Sum measured phases, excluding the intervening answer checks.
-                    elapsed = sum(e['client_ms'] for e in record['events'][first_event:])
-                    record['events'].append(dict(context, phase='batch_answers', client_ms=elapsed,
+                    totals = measure.total(record['events'][first_event:])
+                    record['events'].append(dict(context, phase='batch_answers', **totals,
                                                  derived=True, requests=len(interactive)*args.batch_size))
                     command('release', lambda: [Server.feed(name, 0, bindings[name], -1) for name in interactive] + ['tick'])
                     for name in interactive:
@@ -122,16 +113,11 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
                 read(name, answers['initial'][name][standing[name]], 'maintained')
             print(f'{backend}: round {cycle-args.warmup + 1}/{args.rounds}, answers verified', flush=True)
         record['peak_server_rss_bytes_sampled'] = server.peak_rss
-    buckets = defaultdict(list)
-    for event in record['events']:
-        if not event['warmup']:
-            buckets[(event['state'], event['phase'])].append(event['client_ms'])
-    record['summary'] = {f'{state}/{phase}': dict(samples=len(values), median_ms=statistics.median(values),
-                                                min_ms=min(values), max_ms=max(values))
-                         for (state, phase), values in sorted(buckets.items())}
-    for label, summary in record['summary'].items():
+    record['summary'] = measure.summarize(record['events'])
+    for label, metrics in record['summary'].items():
         if not label.split('/')[-1].startswith('empty'):
-            print(f'  {label}: {summary["median_ms"]:.3f} ms median ({summary["samples"]} samples)')
+            summary = metrics['wire_ms']
+            print(f'  {label}: {summary["median_ms"]:.3f} ms request/response median ({summary["samples"]} samples)')
 
 
 def main():
@@ -164,7 +150,7 @@ def main():
     def git(*command):
         return subprocess.run(['git', '-C', str(repo), *command], capture_output=True,
                               text=True, check=False).stdout.strip()
-    report = dict(format_version=1, status='running', config={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+    report = dict(format_version=2, status='running', config={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                   platform=platform.platform(), python=platform.python_version(), logical_cpus=os.cpu_count(),
                   revision=git('rev-parse', 'HEAD'), worktree=git('status', '--porcelain'),
                   binary_sha256=digest(args.server),

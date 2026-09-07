@@ -1,7 +1,7 @@
 """Project the 18 SNB BI composite-merged-fk snapshot tables; no query results."""
-import csv
 from datetime import datetime, timezone
-import gzip
+
+from snapshot import read_table
 
 # Field names are shared with the named relational query definitions.
 SCHEMA = {
@@ -67,18 +67,11 @@ def load(snapshot):
     """Read an existing initial_snapshot directory. Never download data."""
     tables = {entity: {} for entity in (*ENTITIES, *STATIC)}
     for entity in tables:
-        directory = snapshot / ("static" if entity in STATIC else "dynamic") / entity
-        paths = sorted([*directory.glob("*.csv"), *directory.glob("*.csv.gz")])
-        if not paths:
-            raise FileNotFoundError(f"missing {entity} CSV in {directory}")
-        for path in paths:
-            opener = gzip.open if path.suffix == ".gz" else open
-            with opener(path, "rt", newline="", encoding="utf-8") as source:
-                for row in csv.DictReader(source, delimiter="|"):
-                    identity = key(entity, row)
-                    if identity in tables[entity]:
-                        raise ValueError(f"duplicate {entity} {identity}")
-                    tables[entity][identity] = row
+        for row in read_table(snapshot, "static" if entity in STATIC else "dynamic", entity):
+            identity = key(entity, row)
+            if identity in tables[entity]:
+                raise ValueError(f"duplicate {entity} {identity}")
+            tables[entity][identity] = row
     return project(tables)
 
 
