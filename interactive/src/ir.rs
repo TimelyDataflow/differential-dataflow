@@ -37,6 +37,21 @@ impl Value {
             (Self::Variant(tag, value), Shape::Sum(fs)) => fs.get(*tag as usize).is_some_and(|f| value.has_shape(f)),
             _ => false,
         }
+}
+    /// F64 is an explicit one-variant newtype, not an implicit second meaning
+    /// for Int arithmetic. Its payload is the signed-order form of Corgi's
+    /// total-order float encoding, so existing structural hash/Ord and the
+    /// columnar SUM representation apply without row/column type erasure.
+    /// Like other DDIR sum types, the nominal type name is erased at runtime.
+    pub fn f64_value(value: f64) -> Self {
+        let bits = value.to_bits();
+        let ordered = if bits >> 63 == 1 { !bits } else { bits ^ (1 << 63) };
+        Self::Variant(0, Box::new(Self::Int((ordered ^ (1 << 63)) as i64)))
+    }
+    pub fn as_f64(&self) -> f64 {
+        let Self::Variant(0, payload) = self else { panic!("expected F64 newtype, got {self:?}") };
+        let ordered = payload.as_int() as u64 ^ (1 << 63);
+        f64::from_bits(if ordered >> 63 == 1 { ordered ^ (1 << 63) } else { !ordered })
     }
     /// The empty tuple — the conventional "unit"/empty value.
     pub fn unit() -> Value { Value::Tuple(Vec::new()) }
@@ -233,6 +248,8 @@ fn build_seq(fields: &[Term], env: &mut Vec<Value>) -> Vec<Value> {
 fn eval_unary(op: UnOp, v: Value) -> Value {
     match op {
         UnOp::Neg => Value::Int(-v.as_int()),
+        UnOp::ToF64 => Value::f64_value(v.as_int() as f64),
+        UnOp::F64Neg => Value::f64_value(-v.as_f64()),
         UnOp::Not => Value::Int((!v.truthy()) as i64),
         UnOp::IsTag(t) => Value::Int(matches!(&v, Value::Variant(tag, _) if *tag == t) as i64),
         UnOp::Len => match v {
@@ -248,6 +265,15 @@ fn eval_binary(op: BinOp, l: Value, r: Value) -> Value {
         BinOp::Add => Value::Int(l.as_int() + r.as_int()),
         BinOp::Sub => Value::Int(l.as_int() - r.as_int()),
         BinOp::Mul => Value::Int(l.as_int() * r.as_int()),
+        BinOp::Div => Value::Int(if r.as_int() == 0 { 0 } else { l.as_int().wrapping_div(r.as_int()) }),
+        BinOp::Append => match (l, r) {
+            (Value::List(mut a), Value::List(b)) => { a.extend(b); Value::List(a) }
+            other => panic!("append expects two lists, got {other:?}"),
+        },
+        BinOp::F64Add => Value::f64_value(l.as_f64() + r.as_f64()),
+        BinOp::F64Sub => Value::f64_value(l.as_f64() - r.as_f64()),
+        BinOp::F64Mul => Value::f64_value(l.as_f64() * r.as_f64()),
+        BinOp::F64Div => Value::f64_value(l.as_f64() / r.as_f64()),
         // Comparisons are structural, using the derived `Ord`/`Eq` on `Value`.
         BinOp::Eq => b(l == r),
         BinOp::Ne => b(l != r),

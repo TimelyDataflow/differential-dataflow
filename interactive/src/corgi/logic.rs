@@ -203,7 +203,7 @@ pub fn compilable(t: &Term) -> bool {
         Term::Binary(_, l, r) => compilable(l) && compilable(r),
         Term::If { cond, then, els } => compilable(cond) && compilable(then) && compilable(els),
         Term::Fold { list, init, step } => compilable(list) && compilable(init) && compilable(step),
-        Term::Unary(op, inner) => matches!(op, UnOp::Neg | UnOp::Not | UnOp::Len | UnOp::IsTag(_)) && compilable(inner),
+        Term::Unary(_, inner) => compilable(inner),
         // A literal tag into a declared type knows its whole sum; the built-ins and a data-driven
         // tag need the payload's shape.
         Term::Inject { tag, payload, sum } => {
@@ -332,6 +332,29 @@ pub fn compile(
                 BinOp::Add => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Add, Kind::U, 64), vec![p]) }
                 BinOp::Sub => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Sub, Kind::U, 64), vec![p]) }
                 BinOp::Mul => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Mul, Kind::U, 64), vec![p]) }
+                BinOp::Div => {
+                    let l = b.add(ArithOp::ToSigned, vec![lid]);
+                    let r = b.add(ArithOp::ToSigned, vec![rid]);
+                    let p = pair(b, l, r);
+                    let q = b.add(ArithOp::Bin(CBinOp::Div, Kind::I, 64), vec![p]);
+                    b.add(ArithOp::ToSigned, vec![q])
+                }
+                BinOp::Append => { let p = pair(b, lid, rid); b.add(Op::Append, vec![p]) }
+                BinOp::F64Add | BinOp::F64Sub | BinOp::F64Mul | BinOp::F64Div => {
+                    let expected = Shape::Sum(vec![Shape::Prim(64)]);
+                    if shape_of_term(l, env_shapes, None)? != expected || shape_of_term(r, env_shapes, None)? != expected {
+                        return Err("floating arithmetic expects two F64 newtypes; use float(int)".into());
+                    }
+                    let l = b.add(Op::Unwrap, vec![lid]);
+                    let r = b.add(Op::Unwrap, vec![rid]);
+                    let l = b.add(ArithOp::ToSigned, vec![l]);
+                    let r = b.add(ArithOp::ToSigned, vec![r]);
+                    let p = pair(b, l, r);
+                    let op = match op { BinOp::F64Add => CBinOp::Add, BinOp::F64Sub => CBinOp::Sub, BinOp::F64Mul => CBinOp::Mul, _ => CBinOp::Div };
+                    let f = b.add(ArithOp::Bin(op, Kind::F, 64), vec![p]);
+                    let payload = b.add(ArithOp::ToSigned, vec![f]);
+                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                }
                 BinOp::Eq | BinOp::Ne => {
                     // Cross-shape structural compare folds to a constant (Eq→0, Ne→1) over `anchor`;
                     // same-shape emits a real corgi `Rel`.
@@ -347,10 +370,16 @@ pub fn compile(
                 // Ordered compares go through `ToSigned` (XOR the sign bit: the order-preserving
                 // signed encoding), so they agree with `ir::eval`'s signed semantics for negative
                 // ints too. `Eq`/`Ne` are bit-equality — sign-safe as raw bits.
-                BinOp::Lt => { let (ls, rs) = (b.add(ArithOp::ToSigned, vec![lid]), b.add(ArithOp::ToSigned, vec![rid])); let p = pair(b, ls, rs); b.add(CmpOp::Rel(Pred::Lt), vec![p]) }
-                BinOp::Le => { let (ls, rs) = (b.add(ArithOp::ToSigned, vec![lid]), b.add(ArithOp::ToSigned, vec![rid])); let p = pair(b, ls, rs); b.add(CmpOp::Rel(Pred::Le), vec![p]) }
-                BinOp::Gt => { let (ls, rs) = (b.add(ArithOp::ToSigned, vec![lid]), b.add(ArithOp::ToSigned, vec![rid])); let p = pair(b, rs, ls); b.add(CmpOp::Rel(Pred::Lt), vec![p]) }
-                BinOp::Ge => { let (ls, rs) = (b.add(ArithOp::ToSigned, vec![lid]), b.add(ArithOp::ToSigned, vec![rid])); let p = pair(b, rs, ls); b.add(CmpOp::Rel(Pred::Le), vec![p]) }
+                BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                    let float_shape = Shape::Sum(vec![Shape::Prim(64)]);
+                    let (lid, rid) = if shape_of_term(l, env_shapes, None)? == float_shape && shape_of_term(r, env_shapes, None)? == float_shape {
+                        (b.add(Op::Unwrap, vec![lid]), b.add(Op::Unwrap, vec![rid]))
+                    } else { (lid, rid) };
+                    let ls = b.add(ArithOp::ToSigned, vec![lid]);
+                    let rs = b.add(ArithOp::ToSigned, vec![rid]);
+                    let p = if matches!(op, BinOp::Gt | BinOp::Ge) { pair(b, rs, ls) } else { pair(b, ls, rs) };
+                    b.add(CmpOp::Rel(if matches!(op, BinOp::Le | BinOp::Ge) { Pred::Le } else { Pred::Lt }), vec![p])
+                }
                 BinOp::And => { let p = pair(b, lid, rid); b.add(CmpOp::Min, vec![p]) }
                 BinOp::Or => { let p = pair(b, lid, rid); b.add(CmpOp::Max, vec![p]) }
             })
@@ -404,8 +433,14 @@ pub fn compile(
         // payload does not fill are built empty). A data-driven tag is a demux (`Branch`), which
         // needs every lane to share the payload's shape.
         Term::Inject { tag, payload, sum } => {
-            let pid = compile(payload, b, env, env_shapes, anchor, None)?;
-            let pshape = shape_of_term(payload, env_shapes, None)?;
+            // A declared constructor is also a type annotation for an empty
+            // payload (notably List<T>, whose T cannot come from runtime rows).
+            let payload_expected = match (sum, &**tag) {
+                (SumTy::Declared(lanes), Term::Int(t)) => usize::try_from(*t).ok().and_then(|t| lanes.get(t)),
+                _ => None,
+            };
+            let pid = compile(payload, b, env, env_shapes, anchor, payload_expected)?;
+            let pshape = shape_of_term(payload, env_shapes, payload_expected)?;
             match &**tag {
                 Term::Int(t) => {
                     let t = usize::try_from(*t).map_err(|_| format!("constructor tag {t} is negative"))?;
@@ -486,6 +521,27 @@ pub fn compile(
             Ok(match op {
                 // Wrapping negate on the raw two's-complement bits — exactly `-as_int()`.
                 UnOp::Neg => b.add(ArithOp::Neg(Kind::U, 64), vec![id]),
+                UnOp::ToF64 => {
+                    if shape != Shape::Prim(64) { return Err("float expects an Int".into()); }
+                    let sign = b.add(ArithOp::Shr(63), vec![id]);
+                    let negative = b.add(ArithOp::Neg(Kind::U, 64), vec![id]);
+                    let choices = b.tuple(vec![sign, negative, id]);
+                    let magnitude = b.add(Op::Select, vec![choices]);
+                    let positive = b.add(ArithOp::ToFloat(64), vec![magnitude]);
+                    let negative = b.add(ArithOp::Neg(Kind::F, 64), vec![positive]);
+                    let choices = b.tuple(vec![sign, negative, positive]);
+                    let f = b.add(Op::Select, vec![choices]);
+                    let payload = b.add(ArithOp::ToSigned, vec![f]);
+                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                }
+                UnOp::F64Neg => {
+                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err("fneg expects an F64 newtype".into()); }
+                    let payload = b.add(Op::Unwrap, vec![id]);
+                    let f = b.add(ArithOp::ToSigned, vec![payload]);
+                    let negative = b.add(ArithOp::Neg(Kind::F, 64), vec![f]);
+                    let payload = b.add(ArithOp::ToSigned, vec![negative]);
+                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                }
                 // `truthy` is "nonzero Int": scalars compare against zero; non-`Int` values
                 // are never truthy, so their `not` folds to the constant 1 (the cross-shape
                 // `Eq` fold's precedent).
@@ -545,7 +601,11 @@ pub fn compile(
         // list-intro kernel is corgi's call if this composition ever profiles hot.
         Term::List(fields) => {
             if fields.is_empty() {
-                return Err("an empty list literal has no element shape".into());
+                let Some(Shape::List(element)) = expected else {
+                    return Err("an empty list literal has no element shape".into());
+                };
+                let value = CValue::List(corgi::Bounds::Stride(0, 1), Box::new(CValue::empty(element)));
+                return Ok(b.add(Op::Lit(value), vec![anchor]));
             }
             let mut lanes = Vec::with_capacity(fields.len());
             for f in fields {
@@ -700,6 +760,45 @@ mod tests {
 
     fn u64s() -> Shape { Shape::Prim(64) }
     fn sum(lanes: Vec<Shape>) -> Shape { Shape::Sum(lanes) }
+
+    fn agrees_with_rows(term: &Term, shapes: &[Shape], rows: &[Vec<V>]) {
+        let mut b = Builder::<NumOp>::default();
+        let inp = b.input();
+        let env: Vec<_> = (0..shapes.len()).map(|i| b.add(Op::Field(i), vec![inp])).collect();
+        let out = compile(term, &mut b, &env, shapes, inp, None).unwrap();
+        let g = b.finish(out);
+        let os = corgi::shape_of(&g, &Shape::Prod(shapes.to_vec())).unwrap();
+        let cols = shapes.iter().enumerate().map(|(i, s)| {
+            transcode(&rows.iter().map(|r| r[i].clone()).collect::<Vec<_>>(), s)
+        }).collect();
+        let actual = untranscode(corgi::eval_graph(&g, CValue::Prod(cols)), &os);
+        let expected: Vec<_> = rows.iter().map(|r| crate::ir::eval(term, &mut r.clone())).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn explicit_numeric_and_list_operations_agree() {
+        let rows: Vec<_> = [i64::MIN, -100, -1, 0, 1, 100, i64::MAX].into_iter()
+            .flat_map(|a| [-7, -1, 0, 1, 7].into_iter().map(move |b| vec![V::Int(a), V::Int(b)]))
+            .collect();
+        for source in ["idiv($0, $1)", "float($0)", "fneg(float($0))",
+            "fadd(float($0), float($1))", "fsub(float($0), float($1))",
+            "fmul(float($0), float($1))", "fdiv(float($0), float($1))",
+            "float($0) < float($1)", "float($0) >= float($1)",
+            "append(list($0), list($1, $0))"] {
+            let term = crate::parse::pipe::parse_term(source);
+            agrees_with_rows(&term, &[u64s(), u64s()], &rows);
+        }
+    }
+
+    #[test]
+    fn declared_constructor_types_an_empty_list() {
+        let term = Term::Inject {
+            tag: Box::new(Term::Int(0)), payload: Box::new(Term::List(vec![])),
+            sum: SumTy::Declared(vec![Shape::List(Box::new(Shape::List(Box::new(u64s()))))]),
+        };
+        agrees_with_rows(&term, &[u64s()], &[vec![V::Int(0)], vec![V::Int(1)]]);
+    }
 
     /// The pin on DDIR's `hash`: `ir::structural_hash` is a row-at-a-time transcription of
     /// `corgi::hash`, and the two backends compute the SAME program value, so they must agree

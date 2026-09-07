@@ -16,6 +16,8 @@
 //! Operators chain with `|`:
 //!
 //! - `| key(k… ; v…)` — reshape to `(key ; val)`; `map` is an alias.
+//! - `| value(term)` — replace the value without wrapping it in a tuple;
+//!   useful for collecting a list of scalars or lists instead of singleton tuples.
 //! - `| join(other, (k… ; v…))` — equijoin on the key.
 //! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `collect` is
 //!   NEST (gather a key's values into a `List`).
@@ -40,8 +42,17 @@
 //!   fields; `$n[i]` selects field `i`; chains as `$n[i][j]`.
 //! - Arithmetic / compare / logic: `+ - *`, `== != < <= > >=`, `&&`,
 //!   `or(a, b)`, `not(x)`, unary `-x`.
+//! - Integer division: `idiv(a, b)` truncates toward zero, returns zero for a
+//!   zero divisor, and wraps `i64::MIN / -1` to `i64::MIN`.
+//! - Explicit floating point: `float(int)`, `fneg(x)`, and
+//!   `fadd(a, b)` / `fsub(a, b)` / `fmul(a, b)` / `fdiv(a, b)` use IEEE f64.
+//!   Values are a one-variant SUM carrying an order-encoded integer payload,
+//!   not ordinary integers or an implicit numeric coercion. Generic ordering
+//!   is IEEE total order (including distinct signed zeros and NaN payloads).
 //! - Products: `tuple(a, …)`; index with `v[i]` or `proj(v, i)`; `len(v)`.
-//! - Lists: `list(a, …)`; eliminated by `flatmap` / `collect` / `fold`.
+//! - Lists: `list(a, …)`, `append(a, b)` (concatenation); eliminated by
+//!   `flatmap` / `collect` / `fold`. A declared constructor supplies the element
+//!   shape for an otherwise ambiguous empty `list()`.
 //! - Sums: every sum is a declared type, `type Size = Small u64 | Big (u64, u64)
 //!   | Empty;` — tags are positions, scoped to the type; a payload shape is
 //!   `u64`/`int`, `()` (the default when omitted), `(a, b, …)`, `List(a)`,
@@ -405,6 +416,11 @@ impl Parser {
         match self.peek().clone() {
             Token::Key => { self.next(); let p = self.parse_projection(); Expr::Map(Box::new(lhs), p) },
             Token::Map => { self.next(); let p = self.parse_projection(); Expr::Map(Box::new(lhs), p) },
+            Token::Ident(name) if name == "value" => {
+                self.next(); self.expect(&Token::LParen);
+                let val = self.parse_term(); self.expect(&Token::RParen);
+                Expr::Map(Box::new(lhs), Projection { key: Term::Var(0), val })
+            },
             Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_join_arg(); self.expect(&Token::Comma); let p = self.parse_projection(); self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
             Token::Min => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Min) },
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
