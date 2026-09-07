@@ -215,6 +215,14 @@ where
                             }
                         }
                     }
+                    // Equal (key, val) classes can continue in the next chunk. Once either
+                    // whole input chunk is spent, its last timestamp is the shared horizon:
+                    // retain the other side's suffix, including the rest of this class.
+                    if i == n1 || j == n2 {
+                        p1 = i;
+                        p2 = j;
+                        break;
+                    }
                     if i < a_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, a_hi); }
                     if j < b_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, b_hi); }
                 }
