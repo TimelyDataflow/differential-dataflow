@@ -1,0 +1,22 @@
+-- BI5: standing request(request_id, tag_name). Tagged messages and their
+-- immediate replies/likes contribute 1/2/10 points to the message's author.
+let request = input 0;
+let tagged = import "tagged";
+let message = import "message";
+let likes = import "likes";
+let selected = request | key($0[1] ; $0[0])
+    | join(tagged | key($1[0] ; $0[0]), ($2[0] ; $1[0]))
+    | join(message, ($1[0], $0[0], $2[1] ;)) | distinct;
+-- Contributions are (messages, replies, likes). Collect+fold expresses a
+-- sum without introducing a new reducer or optimizer in this benchmark.
+let own = selected | map($0[0], $0[2] ; 1, 0, 0);
+let liked = selected | key($0[1] ; $0[0], $0[2])
+    | join(likes, ($1[0], $1[1] ; 0, 0, 1));
+let comments = message | filter($1[0] == 1) | key($1[2] ; $0[0]);
+let replied = selected | key($0[1] ; $0[0], $0[2])
+    | join(comments, ($1[0], $1[1] ; 0, 1, 0));
+let totals = (own + liked + replied) | collect
+    | map($0 ; fold($1, tuple(0, 0, 0), tuple(^1[0]+^0[0], ^1[1]+^0[1], ^1[2]+^0[2])));
+let scores = totals | map($0[0] ; -($1[0][0]+2*$1[0][1]+10*$1[0][2]), $0[1], $1[0]);
+export "bi5.answer" = scores | collect | flatmap($1) | filter($1[0] < 100)
+    | map($0[0], $1[0] ; $1[1][1], $1[1][2][1], $1[1][2][2], $1[1][2][0], -$1[1][0]);

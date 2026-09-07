@@ -170,3 +170,9 @@ fronting proxy if a deployment ever needs one.
 support belongs on the scope-tree explanation machinery, and until that lands
 the server reports an error rather than giving those commands an improvised
 meaning.
+
+## Benchmarking
+
+The [LDBC-derived workload](bench/ldbc/README.md) runs parameterized interactive
+queries and maintained BI queries together through this server. It includes a
+tiny correctness fixture and can read an existing SNB CSV snapshot for timing.

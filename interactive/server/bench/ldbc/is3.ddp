@@ -1,0 +1,9 @@
+-- IS3: request(request_id, person_id). Full friend list, newest friendship first.
+let request = input 0;
+let edge = import "edge";
+let person = import "person";
+let friends = request | key($0[1] ; $0[0])
+    | join(edge, ($2[0] ; $1[0], $2[1]))
+    | join(person, ($1[0] ; -$1[1], $0[0], $2[0], $2[1]));
+export "is3.answer" = friends | collect | flatmap($1)
+    | map($0[0], $1[0] ; $1[1][1], $1[1][2], $1[1][3], -$1[1][0]);
