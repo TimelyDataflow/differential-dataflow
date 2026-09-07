@@ -79,6 +79,12 @@ def params(name):
     return base
 
 
+def alternate_params(name):
+    # Person 4 is beyond two hops from 8; unlike 1 and 2, this requester has
+    # no IC3 answer. Exercise parameter sensitivity through the real server.
+    return {'pid': 8} if name == 'ic3' else {}
+
+
 def changed(original):
     """A valid projected update: remove a friendship and a post, rename a person."""
     g={name:set(rows) for name,rows in original.items()}

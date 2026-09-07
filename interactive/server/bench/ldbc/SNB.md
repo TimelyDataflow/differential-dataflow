@@ -62,7 +62,7 @@ python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_serv
 
 The adapter reads all 18 required tables in SNB BI CSV `composite-merged-fk`
 layout, including `.csv.gz` partitions, through the same
-[snapshot dialect reader](README.md#four-query-control-panel) as the small panel
+[snapshot dialect reader](README.md#run) as the small panel
 (double-quoted fields, backslash escaping within quotes; not raw-generator CSV).
 A plain partition takes precedence over its `.csv.gz` copy. It projects 17 relations: people,
 posts/comments, forums, friendships, memberships, tags/classes, places,
@@ -89,6 +89,8 @@ reads; generated datasets may legitimately give empty answers. Actual values
 (people, messages, tags, dates) vary between interactive request batches, not
 just request IDs. Equal bindings under distinct IDs are also exercised at the
 default batch size. The full bank and exact bindings are recorded.
+The tiny IC3 bank includes a requester outside the qualifying person's two-hop
+neighborhood, so varying bindings changes the answer, not just request IDs.
 
 Override bindings with `--parameters /path/to/bindings.json`. Its format is a
 query-name object containing a nonempty list of parameter objects; omitted
@@ -171,9 +173,11 @@ fresh baseline. Four-query and full-suite reports are not interchangeable.
 Every returned row, rank, multiplicity, and empty result is checked against
 fresh Python evaluation of the **same logical plan**, outside the timers. This
 checks DDP lowering and incremental execution; it is not an independent query
-specification oracle. [test_snb.py](test_snb.py) adds hand-counted witnesses for
-paths, ranking/ties, optional nested collections, triangles, propagation,
-recruitment, language sets, and floating aggregates. The older four-query panel
+specification oracle. All 41 have nonempty default witnesses; **14 queries**
+also have independent hand-checked expectations in [test_snb.py](test_snb.py),
+not necessarily a complete oracle for each query. IC3 checks two-hop requester
+sensitivity and loss of a required-country message. The other 27 have no
+independent semantic oracle here. The older four-query panel
 retains independent traversal/counting oracles. Official conformance validation
 is still separate work.
 
@@ -216,3 +220,9 @@ BI17 for broad temporal joins. Keep optimizer and kernel changes separate from
 these definitions so each improvement can be measured against an unchanged
 workload. In particular, the IC6 baseline has not been hand-rewritten to push
 the tag filter ahead of friendship/message expansion.
+BI19 retains an unbounded rank whose result is discarded by its next projection;
+eliminating that unused ranking operation is an optimizer opportunity, not a
+query-semantics correction. BI13's current message-count interval includes the
+end date while profiles use a strict upper bound. The specification's endpoint
+wording remains an interpretation question; this harness correction does not
+change that policy or its inclusive calendar-month count.

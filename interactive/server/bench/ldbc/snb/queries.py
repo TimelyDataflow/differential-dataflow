@@ -450,12 +450,12 @@ def bi18(x,q):
 
 @query('bi19','city1:int city2:int','Interaction path between cities')
 def bi19(x,q):
-    # One start per person, carried in the internal request key. Expand request
-    # identity to (original rid, source) through a deterministic id relation.
+    # One start per person. The unbounded rank is discarded by the seeds
+    # projection: retain this baseline form to exercise optimizer elimination
+    # of an unused ranking operation, rather than hand-optimizing the query.
     starts=q.join(x.person,{'city1':'city'},'p_').select('rid','city2',source=c.p_id)
     indexed=starts.rank([c.source],groups=('rid',)).rename(rank='startindex')
-    # Source IDs are globally unique. Use them as internal request IDs; preserve
-    # the outer request in a separate field by running paths per (rid,source).
+    # Carry both outer request identity and source through each path search.
     # The composite key is encoded as a tuple, not a collision-prone hash.
     seeds=indexed.select(rid=call('tuple',c.rid,c.source),p1=c.source)
     paths=x.shortest(seeds,x.weighted).select(internal=c.rid,node=c.node,cost=c.cost)

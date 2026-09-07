@@ -60,6 +60,18 @@ class SuiteTests(unittest.TestCase):
         self.assertEqual(len(rows),7)
         self.assertTrue(any(not r[-1] for r in rows))
 
+    def test_ic3_depends_on_request_and_foreign_messages(self):
+        # Person 4 lives in Gamma, is two hops from 1, and has one message
+        # in each of Alpha and Beta. From 8, person 4 is beyond two hops.
+        self.assertEqual(self.rows('ic3'), [[4, list(b'Alex'), list(b'Person4'), 1, 1, 2]])
+        self.assertEqual(self.rows('ic3', **witness.alternate_params('ic3')), [])
+        # Retract the only Alpha message (and its tags). One visited country
+        # is insufficient even though the friendship paths still exist.
+        changed = {name: set(rows) for name, rows in self.graph.items()}
+        changed['message'] = {row for row in changed['message'] if row[0] != 10009}
+        changed['mtag'] = {row for row in changed['mtag'] if row[0] != 10009}
+        self.assertEqual(self.rows('ic3', changed), [])
+
     def test_hand_checked_floating_aggregates(self):
         rows=self.rows('bi1')
         self.assertEqual([(r[0],r[1],r[2],r[3],r[5]) for r in rows],[(2012,0,0,31,120),(2012,1,0,4,16)])

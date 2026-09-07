@@ -235,6 +235,8 @@ def main():
             if not args.snapshot:
                 base.update(witness.params(name))
             bank[name] = [base, alternate(graph, base)]
+            if not args.snapshot:
+                bank[name][1].update(witness.alternate_params(name))
             if name in overrides:
                 if not isinstance(overrides[name], list) or not overrides[name]:
                     raise ValueError(f'{name}: parameters must be a nonempty list of objects')
