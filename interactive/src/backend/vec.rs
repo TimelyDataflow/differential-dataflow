@@ -26,6 +26,24 @@ use crate::ir::{LinearOp, Diff, Time, Value, eval};
 pub type Row = Value;
 /// A rendered collection at the renderer's (inner, dynamic) time.
 pub type Col<'scope> = VecCollection<'scope, Time, (Row, Row), Diff>;
+
+/// Validate explicit encoding contracts at the row boundary on either backend.
+/// A mismatch panics inside a dataflow operator, which can take down the shared
+/// server on either backend. This is not transactional feed admission or
+/// per-program failure isolation.
+pub(crate) fn check_import_shapes<'s>(s: &st::Scope, imports: Vec<Col<'s>>) -> Vec<Col<'s>> {
+    use differential_dataflow::AsCollection;
+    use timely::dataflow::operators::core::Map;
+    assert_eq!(s.imports.len(), imports.len());
+    imports.into_iter().zip(&s.imports).map(|(c, import)| {
+        if let Some((key, val)) = import.shape.clone() {
+            c.inner.map(move |row| {
+                assert!(row.0.0.has_shape(&key) && row.0.1.has_shape(&val), "input does not match its shape ascription");
+                row
+            }).as_collection()
+        } else { c }
+    }).collect()
+}
 type Arr<'scope> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, Time, Diff>>>;
 
 /// Append the user-iter coordinate to a value: extend a `Tuple` in place, or
@@ -167,5 +185,5 @@ pub fn render_tree<'s>(
     depth: usize,
     imports: Vec<Col<'s>>,
 ) -> Vec<Col<'s>> {
-    crate::backend::render_tree::<VecBackend>(s, scope, depth, imports)
+    crate::backend::render_tree::<VecBackend>(s, scope, depth, check_import_shapes(s, imports))
 }

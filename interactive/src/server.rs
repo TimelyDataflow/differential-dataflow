@@ -10,9 +10,12 @@
 //! The server executes a [`Command`] — already parsed, lowered, and validated.
 //! Programs are parsed *off the worker threads* (on the intake side) and shipped
 //! here as `scope_ir::Program`s; a malformed program is rejected before it ever
-//! reaches a worker, so bad input can't panic the computation. [`Command`] is
-//! serializable so worker 0 can broadcast one ordered command stream to the
-//! whole worker group.
+//! reaches a worker. This does not make execution safe for arbitrary data:
+//! violating an input/import shape ascription panics inside a dataflow operator
+//! on either backend and can take down the shared server, disconnecting other
+//! clients. Feed acknowledgements do not check these contracts, and there is
+//! no per-program failure isolation. [`Command`] is serializable so worker 0
+//! can broadcast one ordered command stream to the whole worker group.
 //!
 //! # The two binding points
 //!

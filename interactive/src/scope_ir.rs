@@ -76,6 +76,10 @@ pub enum Source {
 pub struct Import {
     pub name: String,
     pub from: Source,
+    /// Optional external encoding contract; unlike derived intermediate shapes,
+    /// this can describe empty lists and sum lanes absent from the input rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<(corgi::Shape, corgi::Shape)>,
 }
 
 /// A value surrendered up — `leave_region` (+ `leave_dynamic` if iterating).
@@ -414,8 +418,8 @@ mod tests {
         let inner = Scope {
             name: "reach".into(),
             imports: vec![
-                Import { name: "edges".into(), from: Source::Parent(Ref::Import(0)) },
-                Import { name: "roots".into(), from: Source::Parent(Ref::Import(1)) },
+                Import { name: "edges".into(), from: Source::Parent(Ref::Import(0)), shape: None },
+                Import { name: "roots".into(), from: Source::Parent(Ref::Import(1)), shape: None },
             ],
             vars: vec![Var { name: "reach".into() }],
             items: vec![
@@ -430,8 +434,8 @@ mod tests {
         let root = Scope {
             name: "root".into(),
             imports: vec![
-                Import { name: "in0".into(), from: Source::Input(0) },
-                Import { name: "in1".into(), from: Source::Input(1) },
+                Import { name: "in0".into(), from: Source::Input(0), shape: None },
+                Import { name: "in1".into(), from: Source::Input(1), shape: None },
             ],
             items: vec![Item::Sub(inner)], // item 0 = the reach sub-scope
             exports: vec![Export { name: "result".into(), value: Ref::ChildExport(0, 0) }],

@@ -92,11 +92,20 @@ pub enum UnOp {
     IsTag(u32),
     /// Number of elements in a `Tuple` or `List`, as an `Int`.
     Len,
+    /// Explicit signed Int -> F64 newtype conversion (see Value::f64_value).
+    ToF64,
+    /// Floating-point negation; does not reinterpret integer arithmetic.
+    F64Neg,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum BinOp {
     Add, Sub, Mul,
+    /// Truncating signed division; zero divisor returns zero, MIN / -1 wraps.
+    Div,
+    /// Concatenation of two lists with the same element type.
+    Append,
+    F64Add, F64Sub, F64Mul, F64Div,
     Eq, Ne, Lt, Le, Gt, Ge,
     And, Or,
 }
@@ -119,6 +128,9 @@ pub enum Reducer {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Input(usize),
+    /// Shape ascription on an external source: `input N : (key_shape ; val_shape)`.
+    /// The same syntax follows `import "name"` for independently installed consumers.
+    TypedSource(Box<Expr>, corgi::Shape, corgi::Shape),
     /// Named external trace resolved at install time. Carries only the name;
     /// shape comes from the registry the program is installed against.
     Import(String),
@@ -175,7 +187,21 @@ pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
         "len" => { assert_eq!(args.len(), 1, "len(value)"); Term::Unary(UnOp::Len, Box::new(args.remove(0))) }
         "istag" => { assert_eq!(args.len(), 2, "istag(tag, value)"); let tag = int_arg(&args[0]) as u32; Term::Unary(UnOp::IsTag(tag), Box::new(args.remove(1))) }
         "not" => { assert_eq!(args.len(), 1, "not(value)"); Term::Unary(UnOp::Not, Box::new(args.remove(0))) }
+        "float" | "fneg" => {
+            assert_eq!(args.len(), 1, "{name}(value)");
+            Term::Unary(if name == "float" { UnOp::ToF64 } else { UnOp::F64Neg }, Box::new(args.remove(0)))
+        }
+        "fadd" | "fsub" | "fmul" | "fdiv" => {
+            assert_eq!(args.len(), 2, "{name}(a, b)");
+            let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0));
+            Term::Binary(match name { "fadd" => BinOp::F64Add, "fsub" => BinOp::F64Sub, "fmul" => BinOp::F64Mul, _ => BinOp::F64Div }, a, b)
+        }
         "or" => { assert_eq!(args.len(), 2, "or(a, b)"); let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0)); Term::Binary(BinOp::Or, a, b) }
+        "idiv" | "append" => {
+            assert_eq!(args.len(), 2, "{name}(a, b)");
+            let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0));
+            Term::Binary(if name == "idiv" { BinOp::Div } else { BinOp::Append }, a, b)
+        }
         "if" => { assert_eq!(args.len(), 3, "if(cond, then, els)"); let els = Box::new(args.remove(2)); let then = Box::new(args.remove(1)); let cond = Box::new(args.remove(0)); Term::If { cond, then, els } }
         "hash" => { assert!(args.len() >= 2, "hash(bound, key, ...)"); Term::Hash(std::mem::take(args)) }
         other => panic!("Unknown scalar builtin: {}", other),
