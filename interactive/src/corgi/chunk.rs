@@ -37,10 +37,19 @@ use crate::corgi::col_times::{ColTime, ColTimes};
 
 use std::cmp::Ordering;
 
-/// The grading target (also the merge/advance emit-chunk size). Larger than `VecChunk`'s 8192 to
-/// amortize corgi's per-chunk columnar set-up (each chunk boundary costs a `gather` materialization);
-/// bigger chunks mean fewer boundaries. Bounded so the fueled merger still yields.
-const TARGET: usize = 1 << 18;
+/// The chunk size the merge and the advance emit, and the unit the fueled merger yields on.
+/// Larger than `VecChunk`'s 8192 to amortize corgi's per-chunk columnar set-up (each chunk
+/// boundary costs a `gather` materialization). Swept at 1M nodes with `INGEST` at 2^24: 2^18 to
+/// 2^20 takes ast's initial epoch 6.98 to 5.46 s and kcore's 4.27 to 3.05 with churn epochs flat;
+/// 2^22 is within noise of that; 2^24 costs a merge-heavy churn epoch 11% (ast 2.42 -> 2.69 s).
+const TARGET: usize = 1 << 20;
+
+/// How many rows the chunker accumulates before sorting them into one chunk: the ingest bundle.
+/// A separate knob from `TARGET`, since a radix sort of a big bundle is cheaper than merging its
+/// pieces while the merger's granularity is `TARGET`'s to set. On its own, 2^18 to 2^22 at 1M
+/// nodes takes kcore's initial epoch 4.27 to 3.42 s and scc's 22.99 to 22.16 with churn flat;
+/// 2^24 sorts the whole of a large epoch's input at once.
+const INGEST: usize = 1 << 24;
 
 /// Shared, immutable chunk contents. `Clone` of a `CorgiChunk` is an `Rc` bump.
 ///
@@ -606,7 +615,7 @@ where
         self.v_blocks.push(std::mem::replace(&mut c.vals, CValue::Unit(0)));
         self.times.append(&mut c.times);
         self.diffs.append(&mut c.diffs);
-        if self.times.len() >= TARGET {
+        if self.times.len() >= INGEST {
             self.flush();
         }
     }
