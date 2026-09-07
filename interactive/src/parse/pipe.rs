@@ -11,8 +11,11 @@
 //! `name` (a `let`/`var` in scope), `scope::field` (a child scope's export).
 //! External sources may append `: (key_shape ; val_shape)`, using the shape
 //! syntax below. This supplies the column encoding even when the first row
-//! contains empty lists or inactive sum lanes. Ascriptions are checked during
-//! execution, not by the server's feed-admission acknowledgement.
+//! contains empty lists or inactive sum lanes. Ascriptions are asserted during
+//! execution, not checked by the server's feed-admission acknowledgement. On
+//! either backend a mismatched row can panic a dataflow worker and take down
+//! the shared server, disconnecting other clients; there is no per-program
+//! failure isolation. Use these contracts only with trusted, shape-correct data.
 //! Operators chain with `|`:
 //!
 //! - `| key(k… ; v…)` — reshape to `(key ; val)`; `map` is an alias.
@@ -49,10 +52,15 @@
 //!   Values are a one-variant SUM carrying an order-encoded integer payload,
 //!   not ordinary integers or an implicit numeric coercion. Generic ordering
 //!   is IEEE total order (including distinct signed zeros and NaN payloads).
+//!   Nominal type names are erased: `fneg` and binary floating operators also
+//!   accept a user's single-variant integer newtype, treating its payload as
+//!   encoded f64 bits.
 //! - Products: `tuple(a, …)`; index with `v[i]` or `proj(v, i)`; `len(v)`.
 //! - Lists: `list(a, …)`, `append(a, b)` (concatenation); eliminated by
 //!   `flatmap` / `collect` / `fold`. A declared constructor supplies the element
 //!   shape for an otherwise ambiguous empty `list()`.
+//!   Corgi's shape inference does not propagate between `append` arguments:
+//!   `append(list(), xs)` is rejected even when `xs` has a known element shape.
 //! - Sums: every sum is a declared type, `type Size = Small u64 | Big (u64, u64)
 //!   | Empty;` — tags are positions, scoped to the type; a payload shape is
 //!   `u64`/`int`, `()` (the default when omitted), `(a, b, …)`, `List(a)`,

@@ -37,7 +37,7 @@ impl Value {
             (Self::Variant(tag, value), Shape::Sum(fs)) => fs.get(*tag as usize).is_some_and(|f| value.has_shape(f)),
             _ => false,
         }
-}
+    }
     /// F64 is an explicit one-variant newtype, not an implicit second meaning
     /// for Int arithmetic. Its payload is the signed-order form of Corgi's
     /// total-order float encoding, so existing structural hash/Ord and the

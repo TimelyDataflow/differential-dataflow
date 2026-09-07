@@ -28,7 +28,9 @@ pub type Row = Value;
 pub type Col<'scope> = VecCollection<'scope, Time, (Row, Row), Diff>;
 
 /// Validate explicit encoding contracts at the row boundary on either backend.
-/// This is execution-time validation, not transactional feed admission.
+/// A mismatch panics inside a dataflow operator, which can take down the shared
+/// server on either backend. This is not transactional feed admission or
+/// per-program failure isolation.
 pub(crate) fn check_import_shapes<'s>(s: &st::Scope, imports: Vec<Col<'s>>) -> Vec<Col<'s>> {
     use differential_dataflow::AsCollection;
     use timely::dataflow::operators::core::Map;

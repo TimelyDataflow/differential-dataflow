@@ -203,7 +203,11 @@ pub fn compilable(t: &Term) -> bool {
         Term::Binary(_, l, r) => compilable(l) && compilable(r),
         Term::If { cond, then, els } => compilable(cond) && compilable(then) && compilable(els),
         Term::Fold { list, init, step } => compilable(list) && compilable(init) && compilable(step),
-        Term::Unary(_, inner) => compilable(inner),
+        // Keep this exhaustive so a new unary operator needs an explicit
+        // decision about whether it supports shape-free lowering.
+        Term::Unary(op, inner) => match op {
+            UnOp::Neg | UnOp::ToF64 | UnOp::F64Neg | UnOp::Not | UnOp::Len | UnOp::IsTag(_) => compilable(inner),
+        },
         // A literal tag into a declared type knows its whole sum; the built-ins and a data-driven
         // tag need the payload's shape.
         Term::Inject { tag, payload, sum } => {

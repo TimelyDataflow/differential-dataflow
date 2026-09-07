@@ -71,6 +71,13 @@ fn signed_order_view(value: CValue) -> CValue {
 /// that contract and adapt here: rank the element columns, then refine tied
 /// list prefixes in column batches, with end-of-list preceding every element.
 /// No DDIR rows or per-comparison interpreter calls are materialized.
+///
+/// This is a correctness adapter, not a performance-neutral view: it eagerly
+/// ranks all elements, including unused tails, and each prefix round scans all
+/// lists and allocates fresh scratch even when most prefixes are resolved.
+/// Cost therefore grows with total element count and unresolved prefix depth.
+/// Only list-valued subcolumns pay this ranking cost (including strings encoded
+/// as lists); physical arrangement-key ordering is unchanged.
 fn lexicographic_list_ranks(bounds: Bounds, ordered_elements: CValue) -> CValue {
     let ends = bounds.to_vec();
     let rows = ends.len();
@@ -528,7 +535,7 @@ where
                 self.register_vals(col, &out_ids);
             }
             Reducer::Collect => {
-                // One row per bracket: the values sorted in corgi structural order,
+                // One row per bracket: the values sorted in DDIR observable order,
                 // each repeated by its diff, as a `List`. One `sort_blocks` orders every bracket's
                 // entries at once; element rows are then taken columnar. A bracket emits iff some
                 // value has NON-ZERO net (as Distinct/Min: DD invokes the reducer only for a key
