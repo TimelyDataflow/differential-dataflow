@@ -187,6 +187,11 @@ the hop-indexed path plans are intended to make all-query SF1 runs cheap. The
 default 120-second command deadline and sampled 6-GiB server RSS ceiling exclude
 Python and are not a hard OS memory limit. Small debug runs establish correctness,
 not competitive performance; use release builds and a quiet machine for timing.
+RSS can fall under compression or swapping while memory pressure grows. For
+larger runs, apply external limits or monitoring to the whole process group,
+including the Python loader/reference process, and retain host headroom. The
+built-in RSS ceiling alone cannot make an all-query SF1 run safe on a
+memory-constrained machine.
 
 Useful initial attribution groups (not official choke-point classifications):
 IC1/IC12 for optional/nested output; IC2/IC6 for selective joins and ranking;

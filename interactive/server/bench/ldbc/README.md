@@ -55,9 +55,13 @@ measures single bindings **per interactive query**; in the default panel that
 still means two simultaneous requests per tick. Increase batch size separately
 from data size to study dispatch amortization. Defaults enforce a 120-second
 command deadline and a sampled 6-GiB **server** RSS ceiling. The latter is not
-a hard memory limit and excludes the Python loader/reference process.
-SF1 can exceed the default ceiling during loading; use `--max-rss-gib 8`
-if the host has sufficient memory for both processes.
+a hard memory limit and excludes the Python loader/reference process. RSS can
+fall as pages are compressed or swapped, even while the total memory burden
+grows. Do not treat the ceiling as protection against exhausting the host.
+Start with small snapshots and selected queries; for larger runs use external
+resource limits or monitoring that covers the server and Python descendants,
+compressed memory, swap and host headroom. Increasing `--max-rss-gib` alone
+does not establish that a workload fits.
 
 ## Queries and lifecycle
 
