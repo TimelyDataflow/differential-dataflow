@@ -29,6 +29,11 @@ def decode(lines):
                     return -arg
             if isinstance(node, ast.List):
                 return [parse(v) for v in node.elts]
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == 'Variant' and not node.keywords and len(node.args) == 2):
+                tag, payload = map(parse, node.args)
+                if type(tag) is int and tag >= 0:
+                    return dict(tag=tag, payload=payload)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords and len(node.args) == 1:
                 arg = parse(node.args[0])
                 if node.func.id == 'Int' and type(arg) is int:

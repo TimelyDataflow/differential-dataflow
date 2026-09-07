@@ -1,4 +1,15 @@
-# LDBC-derived server workload
+# LDBC-derived server benchmarks
+
+The **[complete read suite](SNB.md)** is in `suite.py`: IS1–7, IC1–14 (v2),
+and BI1–20, with readable named-field definitions, generated DDP, shared server
+inputs, varying interactive bindings, and maintained BI results. Start there
+for full query coverage. It requires no downloaded data for its CI fixture.
+
+The four-query `run.py` panel documented below remains a smaller control with
+independent graph oracles and hand-written physical plans. Its measurements
+are not directly interchangeable with the full suite's wider schema/plans.
+
+## Four-query control panel
 
 A small performance/correctness baseline for DDIR, through the real
 `ddir_server` TCP interface. No server extensions, external database, generator,
@@ -149,9 +160,9 @@ python3 interactive/server/bench/ldbc/run.py --server target/debug/ddir_server \
 First optimization controls: IC6's expand-before-tag-filter plan, BI5's
 `collect`/`fold` sums, repeated scalar compilation/dispatch, and shared-import
 row/column conversion. Keep their patches independent and compare against this
-baseline before stacking them. Add the remaining queries in small panels,
-especially recursive, optional/SUM, temporal and large-output cases. This panel
+baseline before stacking them. The [full suite](SNB.md) adds recursive,
+optional, temporal and large-output cases on a separate shared substrate. This panel
 does not yet measure ad-hoc re-planning, parameterized BI, simultaneous bound-IC
 updates, or the official update stream. Empty strings are rejected by this narrow
-adapter: general nullable/message-content queries need typed server admission,
-not padding the data to evade the current shape-inference limitation.
+adapter; the full suite handles them through explicit source-shape contracts,
+without padding the data to evade shape-inference limitations.
