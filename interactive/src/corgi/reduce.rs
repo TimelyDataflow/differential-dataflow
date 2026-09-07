@@ -14,9 +14,9 @@
 //!
 //! Transcode-free: the real keys/values never leave corgi columns. Ids are resolved to rows by
 //! integer index (`key_index`/`val_index` → offsets into the concatenated `key_blocks`/`val_blocks`
-//! pools), not by carrying `DValue`s. Min/Collect use corgi's one-pass segmented structural sort.
-//! DDIR integers are signed, so Min builds an order-only columnar view with each integer leaf's
-//! sign bit swizzled before sorting; the winning row is still gathered from the original columns.
+//! pools), not by carrying `DValue`s. Min/Collect use a segmented structural sort over an
+//! order-only columnar view: signed integer leaves are swizzled, and lists become lexicographic
+//! ranks. The winning rows are still gathered from the original columns.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
@@ -44,9 +44,9 @@ use crate::parse::Reducer;
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 
-/// Build a sortable view whose integer leaves have signed `i64` order.
+/// Build a sortable view matching DDIR's signed leaves and lexicographic lists.
 ///
-/// DDIR's only scalar is `Int`, transcoded into a Corgi primitive as its raw
+/// DDIR's leaf scalar is `Int`, transcoded into a Corgi primitive as its raw
 /// bits. Corgi's radix sort is unsigned, so XORing each payload leaf's sign bit
 /// turns signed order into unsigned order. Sum discriminants remain untouched;
 /// only their payload lanes recurse. This consumes freshly gathered candidate
@@ -61,11 +61,48 @@ fn signed_order_view(value: CValue) -> CValue {
             // the lane assignment is untouched — only the payload lanes are swizzled.
             CValue::Sum(tags, variants.into_iter().map(signed_order_view).collect())
         }
-        CValue::List(bounds, values) => {
-            CValue::List(bounds, Box::new(signed_order_view(*values)))
-        }
+        CValue::List(bounds, values) => lexicographic_list_ranks(bounds, signed_order_view(*values)),
         CValue::Unit(len) => CValue::Unit(len),
     }
+}
+
+/// An order-only integer rank for each list, using DDIR's lexicographic order.
+/// Corgi's general structural order is intentionally length-first. Preserve
+/// that contract and adapt here: rank the element columns, then refine tied
+/// list prefixes in column batches, with end-of-list preceding every element.
+/// No DDIR rows or per-comparison interpreter calls are materialized.
+fn lexicographic_list_ranks(bounds: Bounds, ordered_elements: CValue) -> CValue {
+    let ends = bounds.to_vec();
+    let rows = ends.len();
+    let (element_perm, element_labels) = sort_blocks(&vec![0; ordered_elements.len()], &ordered_elements);
+    let mut element_ranks = vec![0; element_perm.len()];
+    for (i, &row) in element_perm.iter().enumerate() { element_ranks[row] = element_labels[i]; }
+    let starts: Vec<_> = std::iter::once(0).chain(ends.iter().copied()).take(rows).collect();
+    let mut perm: Vec<_> = (0..rows).collect();
+    let mut labels = vec![0; rows];
+    let mut position = 0;
+    loop {
+        let mut present = vec![0; rows];
+        let mut keys = vec![0; rows];
+        let mut active = false;
+        for i in 0..rows {
+            let tied = (i > 0 && labels[i] == labels[i-1]) || (i+1 < rows && labels[i] == labels[i+1]);
+            let row = perm[i];
+            if tied && position < ends[row]-starts[row] {
+                present[i] = 1;
+                keys[i] = element_ranks[starts[row]+position];
+                active = true;
+            }
+        }
+        if !active { break; }
+        let (order, refined) = sort_blocks(&labels, &CValue::Prod(vec![CValue::u64(present), CValue::u64(keys)]));
+        perm = order.into_iter().map(|i| perm[i]).collect();
+        labels = refined;
+        position += 1;
+    }
+    let mut ranks = vec![0; rows];
+    for (i, &row) in perm.iter().enumerate() { ranks[row] = labels[i]; }
+    CValue::u64(ranks)
 }
 
 /// An identity `Hasher` for the id-index maps: their keys are already well-distributed 64-bit
@@ -520,7 +557,7 @@ where
                 let perm = if entry_reps.is_empty() {
                     Vec::new()
                 } else {
-                    sort_blocks(&labels, &gather(&self.in_vals, &entry_reps)).0
+                    sort_blocks(&labels, &signed_order_view(gather(&self.in_vals, &entry_reps))).0
                 };
                 // Expand each bracket's sorted entries by their diff (max(0, ·) copies).
                 let mut elem_reps: Vec<usize> = Vec::new();
@@ -707,6 +744,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn order_view_matches_ddir_for_ragged_lists_and_signed_products() {
+        use crate::ir::Value as V;
+        use crate::corgi::logic::{transcode, shape_of_row};
+        let mut rows = Vec::new();
+        for n in [-3, 0, 7] {
+            for bytes in [vec![], vec![0], vec![1], vec![1, -1], vec![1, 0], vec![2], vec![2, -2, 0]] {
+                rows.push(V::Tuple(vec![V::Int(n), V::List(bytes.into_iter().map(V::Int).collect())]));
+            }
+        }
+        rows.reverse();
+        // Infer from a non-empty representative; the first row need not carry
+        // data for every nested-list position once the schema is declared.
+        let shape = shape_of_row(&rows[0]).unwrap();
+        let columns = transcode(&rows, &shape);
+        let (perm, _) = sort_blocks(&vec![0; rows.len()], &signed_order_view(columns));
+        let actual: Vec<_> = perm.into_iter().map(|i| rows[i].clone()).collect();
+        rows.sort();
+        assert_eq!(actual, rows);
+    }
 
     fn compound_keys(hashes: Vec<u64>, real: Vec<u64>) -> CValue {
         CValue::Prod(vec![CValue::u64(hashes), CValue::Prod(vec![CValue::u64(real), CValue::u64(vec![0, 0])])])
