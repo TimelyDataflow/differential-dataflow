@@ -185,7 +185,7 @@ def main():
             checked(reference.answer('bi5', ('Topic',))[:1], [(2, 2, 2, 1, 25)], 'tiny BI5')
             checked(reference.answer('bi11', ('CountryA', 100, 700)), [(2,)], 'tiny BI11')
         bank, standing = parameters(reference)
-        delta = changes(graph, args.changes)
+        delta = changes(graph, args.changes, reference, standing)
         report.update(parameter_bank=bank, standing=standing, retracted_rows=delta)
         answers = {}
         for state in ('initial', 'changed'):
@@ -206,6 +206,9 @@ def main():
             print(f'{name}: {nonempty}/{len(cases)} distinct parameter cases have nonempty answers', flush=True)
         if 'bi11' in args.queries:
             print(f'bi11: {answers["initial"]["bi11"][standing["bi11"]][0][1][0]} initial triangles', flush=True)
+        report['changed_bi_answers'] = {name: answers['initial'][name] != answers['changed'][name]
+                                        for name in args.queries if name.startswith('b')}
+        print(f'Churn changes displayed BI answers: {report["changed_bi_answers"]}', flush=True)
         for backend in ('vec', 'corgi') if args.backend == 'both' else (args.backend,):
             run_server(args, backend, graph, delta, bank, standing, answers, report)
         report['status'] = 'passed'

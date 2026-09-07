@@ -70,7 +70,11 @@ it does not introduce native Corgi trace sharing or a new prepared-query feature
 
 Each round runs requests on the initial graph, retracts those bindings, removes
 a deterministic bounded set of friendship/tag/like edges, runs new requests on
-the changed graph, retracts them, and restores the exact removed edges. The
+the changed graph, retracts them, and restores the exact removed edges. Churn
+targets edges in the standing BI11 country's triangles and the tagged messages
+of BI5's top-100 authors, filling shortfalls with other edges. This is deliberate
+**footprint-targeted stress**, not a random or official update distribution.
+The report states whether each displayed BI answer actually changed. The
 dataset oscillates between two states: **bounded churn, not growth or a
 time-bounded saturation run**. No node deletion/cascade semantics are assumed.
 Every `feed` group ends with `tick`; acknowledgement of that tick, not of feed

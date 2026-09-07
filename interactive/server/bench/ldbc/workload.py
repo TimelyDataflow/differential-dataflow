@@ -165,10 +165,33 @@ def parameters(reference):
     return requests, standing
 
 
-def changes(graph, limit):
-    # Bounded churn: detach selected friendship, tag and like edges; then restore
-    # the exact same rows. No node deletion/cascades or synthetic timestamps.
-    return {name: sorted(graph[name])[:limit] for name in ('knows', 'message_tag', 'likes')}
+def changes(graph, limit, reference, standing):
+    # Target standing BI footprints instead of measuring mostly irrelevant
+    # changes. This is an explicit stress schedule, not LDBC's update stream.
+    country, start, end = standing['bi11']
+    residents = {p for p in reference.people if reference.country(p) == country}
+    neighbors = {p: {f for f, d in reference.edges[p].items()
+                     if f in residents and start <= d <= end} for p in residents}
+    triangles = [row for row in graph['knows'] if row[0] in neighbors
+                 and row[1] in neighbors[row[0]] and neighbors[row[0]] & neighbors[row[1]]]
+    topic, = standing['bi5']
+    leaders = {row[0] for row in reference.answer('bi5', (topic,))}
+    tagged = {mid for mid, tags in reference.tags.items()
+              if topic in tags and reference.messages[mid][1] in leaders}
+    candidates = {
+        'knows': triangles,
+        'message_tag': [row for row in graph['message_tag'] if row[0] in tagged and reference.tag_names[row[1]] == topic],
+        'likes': [row for row in graph['likes'] if row[1] in tagged],
+    }
+    # Fill any shortfall with other edges, so even a zero-triangle case churns.
+    result = {}
+    for name, rows in candidates.items():
+        selected = sorted(rows)[:limit]
+        remaining = limit - len(selected)
+        if remaining:
+            selected += sorted(graph[name] - set(selected))[:remaining]
+        result[name] = sorted(selected)
+    return result
 
 
 def wire_value(value):
