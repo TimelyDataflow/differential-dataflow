@@ -28,7 +28,7 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_adjacent, compare_at, gather, gather_lanes, group_bounds, sort_perm};
+use corgi::arrange::{compare_adjacent, gather, gather_lanes, group_bounds, sort_perm, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
 use columnar::Columnar;
@@ -153,18 +153,13 @@ where
 
     fn len(&self) -> usize { self.0.times.len() }
 
-    /// Two-pointer merge of the two front chunks through their shared horizon, FULLY consolidating
-    /// equal `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
-    /// contract). NB a `survey`-based merge cannot be substituted as-is: survey aligns only
-    /// `(key, val)` (corgi owns no time), so its positional `Both` under-consolidates cross-side
-    /// times, and consuming both chunks with no push-back un-grades the chain; it would need a
-    /// group-RANGE `Both` (both sides' full equal-`(key,val)` group) to time-merge correctly.
-    ///
-    /// TODO: newer corgi revs export exactly that (`survey_groups` -> `GroupRun::{A, B, Both}`,
-    /// with `Both` carrying both sides' group ranges). Once the pin moves past it, rewrite this
-    /// merge batched: bulk-copy `A`/`B` runs (range gather + `push_range` + `extend_from_slice`),
-    /// row-merge times only within `Both` classes. This row-at-a-time loop is the largest
-    /// `compare_at`-in-a-hot-path residue in the backend (the ingest batcher's merge).
+    /// Merge of the two front chunks through their shared horizon, FULLY consolidating equal
+    /// `(key, val, time)` triples and pushing back the survivor's suffix (the fueled-merger
+    /// contract). Batched: corgi's `survey_groups` reports the interleaving of the two `(key, val)`
+    /// columns as maximal ranges exclusive to one side and equal classes as their ranges on BOTH
+    /// sides, so rows only one side holds are copied by range, and only the classes both sides
+    /// hold — where consolidation can happen — are merged row by row, on their times, which corgi
+    /// does not own. The shape is walked once per level per chunk, never once per row.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         let c1 = in1.pop_front().unwrap();
         let c2 = in2.pop_front().unwrap();
@@ -173,20 +168,46 @@ where
         let (t1, d1) = (c1.times(), c1.diffs());
         let (t2, d2) = (c2.times(), c2.diffs());
 
-        let (mut tags, mut offs) = (Vec::new(), Vec::new());
-        let (mut times, mut diffs) = (ColTimes::new(), Vec::new());
-        let (mut p1, mut p2) = (0usize, 0usize);
-        while p1 < n1 && p2 < n2 {
-            // `(key, val)` structurally, then `time` in place via the columnar `Ref: Ord`.
-            let ord = compare_at(&kv1, p1, &kv2, p2).then_with(|| t1.cmp_cross(p1, t2, p2));
-            match ord {
-                Ordering::Less => { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d1[p1].clone()); p1 += 1; }
-                Ordering::Greater => { tags.push(1); offs.push(p2); times.push_ref(t2, p2); diffs.push(d2[p2].clone()); p2 += 1; }
-                Ordering::Equal => {
-                    let mut d = d1[p1].clone();
-                    d.plus_equals(&d2[p2]);
-                    if !d.is_zero() { tags.push(0); offs.push(p1); times.push_ref(t1, p1); diffs.push(d); }
-                    p1 += 1; p2 += 1;
+        let runs = survey_groups(&kv1, &kv2);
+        let (mut tags, mut offs) = (Vec::with_capacity(n1 + n2), Vec::with_capacity(n1 + n2));
+        let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::with_capacity(n1 + n2));
+        // Where the survivor's pushed-back suffix starts: the last run, if it is exclusive.
+        let (mut p1, mut p2) = (n1, n2);
+        let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, times: &mut ColTimes<T>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
+            let (t, d) = if side == 0 { (t1, d1) } else { (t2, d2) };
+            tags.resize(tags.len() + (hi - lo), side);
+            offs.extend(lo..hi);
+            times.push_range(t, lo, hi);
+            diffs.extend_from_slice(&d[lo..hi]);
+        };
+        for (r, run) in runs.iter().enumerate() {
+            let last = r + 1 == runs.len();
+            match *run {
+                GroupRun::A(lo, hi) => {
+                    if last { p1 = lo; } else { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, lo, hi); }
+                }
+                GroupRun::B(lo, hi) => {
+                    if last { p2 = lo; } else { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, lo, hi); }
+                }
+                GroupRun::Both(a_lo, a_hi, b_lo, b_hi) => {
+                    // Both classes hold one `(key, val)`, sorted by time: merge on time, summing the
+                    // diffs of equal times, which is the consolidation.
+                    let (mut i, mut j) = (a_lo, b_lo);
+                    while i < a_hi && j < b_hi {
+                        match t1.cmp_cross(i, t2, j) {
+                            Ordering::Less => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, i + 1); i += 1; }
+                            Ordering::Greater => { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, j + 1); j += 1; }
+                            Ordering::Equal => {
+                                let mut d = d1[i].clone();
+                                d.plus_equals(&d2[j]);
+                                if !d.is_zero() { tags.push(0); offs.push(i); times.push_ref(t1, i); diffs.push(d); }
+                                i += 1;
+                                j += 1;
+                            }
+                        }
+                    }
+                    if i < a_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 0, i, a_hi); }
+                    if j < b_hi { copy(&mut tags, &mut offs, &mut times, &mut diffs, 1, j, b_hi); }
                 }
             }
         }
