@@ -1,0 +1,18 @@
+-- BI11: standing request(request_id, country_name, start, end), inclusive dates.
+-- Count each unordered friendship triangle once; a missing triangle count is 0.
+let request = input 0;
+let resident = import "resident";
+let edge = import "edge";
+let people = request | key($0[1] ; $0[0], $0[2], $0[3])
+    | join(resident, ($2[0] ; $1[0], $1[1], $1[2]));
+let candidates = people | join(edge, ($1[0], $0[0], $2[0], $2[1], $1[1], $1[2] ;))
+    | filter($0[1] < $0[2] && $0[3] >= $0[4] && $0[3] <= $0[5]);
+let membership = people | map($1[0], $0[0] ;) | distinct;
+let pairs = candidates | key($0[0], $0[2] ; $0[1])
+    | join(membership, ($0[0], $1[0], $0[1] ;)) | distinct;
+let paths = pairs | key($0[0], $0[2] ; $0[1])
+    | join(pairs | key($0[0], $0[1] ; $0[2]), ($0[0], $1[0], $2[0] ; $0[1]));
+let counts = paths | join(pairs, ($0[0] ;)) | count;
+let zero = request | map($0[0] ; 0);
+let missing = zero - (zero | join(counts, ($0 ; 0)));
+export "bi11.answer" = (counts + missing) | map($0[0], 0 ; $1[0]);

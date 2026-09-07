@@ -1,0 +1,23 @@
+-- IC6: request(request_id, person_id, tag_name). Two-hop tag co-occurrence.
+-- This explicit plan expands friends and posts before testing the bound tag.
+let request = input 0;
+let edge = import "edge";
+let message = import "message";
+let tagged = import "tagged";
+-- Reachable rows: (request_id, origin, author, tag_name), deduplicated across paths.
+let one = request | key($0[1] ; $0[0], $0[2])
+    | join(edge, ($1[0], $0[0], $2[0], $1[1] ;));
+let two = one | key($0[2] ; $0[0], $0[1], $0[3])
+    | join(edge, ($1[0], $1[1], $2[0], $1[2] ;));
+let authors = (one + two) | filter($0[1] != $0[2]) | distinct;
+let posts = message | filter($1[0] == 0) | key($1[1] ; $0[0]);
+let candidates = authors | key($0[2] ; $0[0], $0[3])
+    | join(posts, ($2[0] ; $1[0], $1[1]));
+let selected = candidates | join(tagged, ($1[0], $0[0], $1[1], $2[0] ;))
+    | filter($0[2] == $0[3]) | map($0[0], $0[1], $0[2] ;) | distinct;
+let counts = selected | key($0[1] ; $0[0], $0[2])
+    | join(tagged, ($1[0], $2[0], $1[1] ;))
+    | filter($0[1] != $0[2]) | map($0[0], $0[1] ;) | count;
+export "ic6.answer" = counts | key($0[0] ; -$1[0], $0[1])
+    | collect | flatmap($1) | filter($1[0] < 10)
+    | map($0[0], $1[0] ; $1[1][1], -$1[1][0]);

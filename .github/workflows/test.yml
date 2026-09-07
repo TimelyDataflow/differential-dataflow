@@ -39,6 +39,15 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: Cargo doc test
         run: cargo test --doc
+      # One small server-backed workload; no data download or timing thresholds.
+      - name: LDBC-derived correctness smoke
+        if: matrix.os == 'ubuntu' && matrix.toolchain == 'stable'
+        run: |
+          cargo build -p ddir-server
+          for workers in 1 4; do
+            python3 interactive/server/bench/ldbc/run.py --server target/debug/ddir_server \
+              --workers "$workers" --rounds 1 --warmup 0 --batch-size 9 --changes 1
+          done
       # The explanation suite's heavier sweeps (soundness regression, fuzz)
       # are #[ignore]d for local debug runs but must gate merges. The metric
       # report is skipped (it prints, it does not assert).

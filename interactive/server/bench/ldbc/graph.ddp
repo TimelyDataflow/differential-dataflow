@@ -1,0 +1,28 @@
+-- Positional input schema (all rows arrive as keys, with unit values):
+-- 0 person(id, first, last, city); 1 knows(src, dst, created);
+-- 2 message(id, kind, creator, parent), where post=0, comment=1, no parent=-1;
+-- 3 tag(id, name); 4 message_tag(message, tag); 5 likes(person, message);
+-- 6 place(id, name, parent). Strings are UTF-8 List(int).
+let person = input 0;
+let knows = input 1;
+let message = input 2;
+let tag = input 3;
+let message_tag = input 4;
+let likes = input 5;
+let place = input 6;
+
+export "person" = person | key($0[0] ; $0[1], $0[2], $0[3]) | arrange;
+-- The input contains each undirected friendship once.
+let edges = ((knows | map($0[0], $0[1], $0[2] ;))
+           + (knows | map($0[1], $0[0], $0[2] ;))) | distinct;
+export "edge" = edges | key($0[0] ; $0[1], $0[2]) | arrange;
+export "message" = message | key($0[0] ; $0[1], $0[2], $0[3]) | arrange;
+export "likes" = likes | key($0[1] ; $0[0]) | arrange;
+let tags = tag | key($0[0] ; $0[1]);
+export "tagged" = message_tag | key($0[1] ; $0[0])
+    | join(tags, ($1[0] ; $2[0])) | arrange;
+let places = place | key($0[0] ; $0[1], $0[2]);
+-- City -> country is one parent step in SNB.
+export "resident" = person | key($0[3] ; $0[0])
+    | join(places, ($2[1] ; $1[0]))
+    | join(places, ($2[0] ; $1[0])) | arrange;
