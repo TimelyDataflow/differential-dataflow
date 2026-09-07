@@ -75,7 +75,10 @@ leaves are 64-bit integers, not byte-packed or dictionary-encoded strings.
 Post and Comment share a tuple with a kind field; they are **not** an enum-layout
 optimization experiment. Source shape ascriptions supply the element encoding
 of empty lists and inactive sum lanes. They are execution-time contracts, not
-transactional validation at `feed` admission.
+transactional validation at `feed` admission. A mismatched row can panic a
+dataflow worker and take down the shared server on either backend, disconnecting
+other clients. There is no per-program failure isolation; use trusted programs
+and shape-correct data. The benchmark starts private server processes.
 
 Default bindings are deterministic smoke parameters selected from input facts,
 not LDBC's parameter generator. The fixture has nonempty witnesses for all 41
