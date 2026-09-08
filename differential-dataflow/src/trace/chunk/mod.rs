@@ -261,7 +261,7 @@ impl<C: NavigableChunk> crate::trace::Navigable for ChunkBatch<C> {
     }
 }
 
-impl<C: Chunk + Default + 'static> SpineBatch for ChunkBatch<C>
+impl<C: Chunk + 'static> SpineBatch for ChunkBatch<C>
 where
     C::Time: timely::progress::Timestamp + Lattice + Ord,
 {
@@ -579,7 +579,7 @@ pub struct ChunkBatchMerger<C: Chunk> {
 
 impl<C> crate::trace::implementations::spine_fueled::Merger<ChunkBatch<C>> for ChunkBatchMerger<C>
 where
-    C: Chunk + Default + 'static,
+    C: Chunk + 'static,
     C::Time: timely::progress::Timestamp + Lattice + Ord + 'static,
 {
     fn new(_source1: &ChunkBatch<C>, _source2: &ChunkBatch<C>, frontier: AntichainRef<C::Time>) -> Self {
