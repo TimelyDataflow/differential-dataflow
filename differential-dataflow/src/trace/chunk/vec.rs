@@ -293,7 +293,7 @@ pub mod cursor {
     use crate::lattice::Lattice;
     use crate::trace::Navigable;
     use crate::trace::cursor::Cursor;
-    use crate::trace::implementations::{BatchContainer, Layout, Vector, WithLayout};
+    use crate::trace::implementations::{BatchContainer, Layout, Vector};
 
     use crate::trace::chunk::vec::VecChunk;
 
@@ -305,16 +305,6 @@ pub mod cursor {
         key_pos: usize,
         val_pos: usize,
         phantom: PhantomData<(K, V, T, R)>,
-    }
-
-    impl<K, V, T, R> WithLayout for VecChunk<K, V, T, R>
-    where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-        type Layout = Vector<((K, V), T, R)>;
-    }
-
-    impl<K, V, T, R> WithLayout for VecChunkCursor<K, V, T, R>
-    where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-        type Layout = Vector<((K, V), T, R)>;
     }
 
     impl<K, V, T, R> Cursor for VecChunkCursor<K, V, T, R>

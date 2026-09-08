@@ -99,13 +99,6 @@ pub trait Layout {
     type OffsetContainer: for<'a> BatchContainer<ReadItem<'a> = usize>;
 }
 
-/// A type bearing a layout.
-pub trait WithLayout {
-    /// The layout.
-    type Layout: Layout;
-}
-
-
 // An easy way to provide an explicit layout: as a 5-tuple.
 // Valuable when one wants to perform layout surgery.
 impl<KC, VC, TC, DC, OC> Layout for (KC, VC, TC, DC, OC)
