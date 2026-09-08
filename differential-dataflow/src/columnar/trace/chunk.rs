@@ -327,7 +327,7 @@ where U::Time: 'static {
 
 impl<U: ColumnarUpdate> Chunk for ColChunk<U>
 where U::Time: 'static {
-    type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
+    type Time = U::Time;
 
     const TARGET: usize = TARGET;
 
