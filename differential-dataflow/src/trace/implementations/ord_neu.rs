@@ -295,10 +295,6 @@ pub mod val_batch {
         pub updates: usize,
     }
 
-    impl<L: Layout> WithLayout for OrdValBatch<L> {
-        type Layout = L;
-    }
-
     impl<L: Layout> crate::trace::Navigable for OrdValBatch<L> {
         type Cursor = OrdValCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -532,11 +528,6 @@ pub mod val_batch {
         val_cursor: usize,
         /// Phantom marker for Rust happiness.
         phantom: PhantomData<L>,
-    }
-
-    use crate::trace::implementations::WithLayout;
-    impl<L: Layout> WithLayout for OrdValCursor<L> {
-        type Layout = L;
     }
 
     impl<L: Layout> Cursor for OrdValCursor<L> {
@@ -782,10 +773,6 @@ pub mod key_batch {
         }
     }
 
-    impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> WithLayout for OrdKeyBatch<L> {
-        type Layout = L;
-    }
-
     impl<L: Layout<ValContainer: BatchContainer<Owned: Default>>> crate::trace::Navigable for OrdKeyBatch<L> {
         type Cursor = OrdKeyCursor<L>;
         fn cursor(&self) -> Self::Cursor {
@@ -943,11 +930,6 @@ pub mod key_batch {
         val_stepped: bool,
         /// Phantom marker for Rust happiness.
         phantom: PhantomData<L>,
-    }
-
-    use crate::trace::implementations::WithLayout;
-    impl<L: Layout<ValContainer: BatchContainer>> WithLayout for OrdKeyCursor<L> {
-        type Layout = L;
     }
 
     impl<L: for<'a> Layout<ValContainer: BatchContainer<Owned: Default>>> Cursor for OrdKeyCursor<L> {

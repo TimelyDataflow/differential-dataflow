@@ -42,7 +42,7 @@ use crate::consolidation::Consolidate;
 use crate::lattice::Lattice;
 use crate::trace::Navigable;
 use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{BatchContainer, Layout, WithLayout};
+use crate::trace::implementations::{BatchContainer, Layout};
 
 use crate::columnar::layout::{ColumnarLayout, ColumnarUpdate, Coltainer};
 use crate::columnar::updates::{child_range, UpdatesBuilder, UpdatesTyped};
@@ -196,13 +196,6 @@ pub struct ColChunkCursor<U: ColumnarUpdate> {
     phantom: PhantomData<U>,
 }
 
-impl<U: ColumnarUpdate> WithLayout for ColChunk<U> {
-    type Layout = ColumnarLayout<U>;
-}
-impl<U: ColumnarUpdate> WithLayout for ColChunkCursor<U> {
-    type Layout = ColumnarLayout<U>;
-}
-
 impl<U: ColumnarUpdate> Cursor for ColChunkCursor<U> {
     type Storage = ColChunk<U>;
 
@@ -327,7 +320,7 @@ where U::Time: 'static {
 
 impl<U: ColumnarUpdate> Chunk for ColChunk<U>
 where U::Time: 'static {
-    type Time = <<ColumnarLayout<U> as Layout>::TimeContainer as BatchContainer>::Owned;
+    type Time = U::Time;
 
     const TARGET: usize = TARGET;
 

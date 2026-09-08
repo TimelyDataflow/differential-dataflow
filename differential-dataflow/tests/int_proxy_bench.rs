@@ -34,8 +34,8 @@ use differential_dataflow::operators::iterate::Iterate;
 use differential_dataflow::operators::reduce::reduce_with_tactic;
 use differential_dataflow::trace::chunk::vec::{
     ChunkBatcher as VChunkBatcher, ChunkBuilder as VChunkBuilder, ChunkSpine as VChunkSpine,
-    VecChunkCursor,
 };
+use differential_dataflow::trace::chunk::vec::cursor::VecChunkCursor;
 use differential_dataflow::trace::cursor::Cursor;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

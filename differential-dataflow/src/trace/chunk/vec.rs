@@ -14,7 +14,6 @@
 //! copying them.
 
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use timely::Accountable;
@@ -25,9 +24,6 @@ use timely::progress::frontier::AntichainRef;
 use crate::consolidation::Consolidate;
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
-use crate::trace::Navigable;
-use crate::trace::cursor::Cursor;
-use crate::trace::implementations::{BatchContainer, Layout, Vector, WithLayout};
 
 use super::Chunk;
 
@@ -86,136 +82,14 @@ where K: Clone+'static, V: Clone+'static, T: Clone+'static, R: Clone+'static {
     fn push_into(&mut self, item: ((K, V), T, R)) { Rc::make_mut(&mut self.0).push(item); }
 }
 
-/// First index `>= start` at which `pred` turns false, by galloping (exponential)
-/// search. `pred` must hold for a prefix then not — i.e. `|u| u < target`.
-/// O(log distance), so O(1) for short hops and logarithmic for long ones.
-fn gallop<U>(s: &[U], start: usize, pred: impl Fn(&U) -> bool) -> usize {
-    let mut pos = start;
-    if pos < s.len() && pred(&s[pos]) {
-        let mut step = 1;
-        while pos + step < s.len() && pred(&s[pos + step]) { pos += step; step <<= 1; }
-        step >>= 1;
-        while step > 0 {
-            if pos + step < s.len() && pred(&s[pos + step]) { pos += step; }
-            step >>= 1;
-        }
-        pos += 1;
-    }
-    pos
-}
-
-/// A cursor over a [`VecChunk`], tracking the current key and `(key, val)`
-/// group starts as indices into the flat vector.
-pub struct VecChunkCursor<K, V, T, R> {
-    key_pos: usize,
-    val_pos: usize,
-    phantom: PhantomData<(K, V, T, R)>,
-}
-
-impl<K, V, T, R> WithLayout for VecChunk<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Layout = Vector<((K, V), T, R)>;
-}
-
-impl<K, V, T, R> WithLayout for VecChunkCursor<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Layout = Vector<((K, V), T, R)>;
-}
-
-impl<K, V, T, R> Cursor for VecChunkCursor<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Storage = VecChunk<K, V, T, R>;
-
-    type KeyContainer = <Vector<((K, V), T, R)> as Layout>::KeyContainer;
-    type Key<'a> = <<Vector<((K, V), T, R)> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
-    type ValContainer = <Vector<((K, V), T, R)> as Layout>::ValContainer;
-    type Val<'a> = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
-    type ValOwn = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::Owned;
-    type TimeContainer = <Vector<((K, V), T, R)> as Layout>::TimeContainer;
-    type TimeGat<'a> = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
-    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
-    type DiffContainer = <Vector<((K, V), T, R)> as Layout>::DiffContainer;
-    type DiffGat<'a> = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
-    type Diff = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::Owned;
-
-    fn key_valid(&self, s: &Self::Storage) -> bool { self.key_pos < s.0.len() }
-    fn val_valid(&self, s: &Self::Storage) -> bool {
-        self.key_pos < s.0.len() && self.val_pos < s.0.len() && s.0[self.val_pos].0.0 == s.0[self.key_pos].0.0
-    }
-    fn key<'a>(&self, s: &'a Self::Storage) -> &'a K { &s.0[self.key_pos].0.0 }
-    fn val<'a>(&self, s: &'a Self::Storage) -> &'a V { &s.0[self.val_pos].0.1 }
-    fn get_key<'a>(&self, s: &'a Self::Storage) -> Option<&'a K> {
-        if self.key_valid(s) { Some(self.key(s)) } else { None }
-    }
-    fn get_val<'a>(&self, s: &'a Self::Storage) -> Option<&'a V> {
-        if self.val_valid(s) { Some(self.val(s)) } else { None }
-    }
-    fn map_times<L: FnMut(&T, &R)>(&mut self, s: &Self::Storage, mut logic: L) {
-        if !self.val_valid(s) { return; }
-        let kv = &s.0[self.val_pos].0;
-        let mut i = self.val_pos;
-        while i < s.0.len() && &s.0[i].0 == kv {
-            logic(&s.0[i].1, &s.0[i].2);
-            i += 1;
-        }
-    }
-    fn step_key(&mut self, s: &Self::Storage) {
-        // Linear: stepping is a short hop to the next group; an inlined scan
-        // beats a gallop call for the common small-group case.
-        if self.key_pos >= s.0.len() { return; }
-        let key = s.0[self.key_pos].0.0.clone();
-        let mut i = self.key_pos;
-        while i < s.0.len() && s.0[i].0.0 == key { i += 1; }
-        self.key_pos = i;
-        self.val_pos = i;
-    }
-    fn seek_key(&mut self, s: &Self::Storage, key: &K) {
-        // Logarithmic: O(log distance), independent of chunk size.
-        self.key_pos = gallop(&s.0, self.key_pos, |u| &u.0.0 < key);
-        self.val_pos = self.key_pos;
-    }
-    fn step_val(&mut self, s: &Self::Storage) {
-        if !self.val_valid(s) { return; }
-        let kv = s.0[self.val_pos].0.clone();
-        let mut i = self.val_pos;
-        while i < s.0.len() && s.0[i].0 == kv { i += 1; }
-        self.val_pos = i;
-    }
-    fn seek_val(&mut self, s: &Self::Storage, val: &V) {
-        if !self.key_valid(s) { return; }
-        let key = s.0[self.key_pos].0.0.clone();
-        self.val_pos = gallop(&s.0, self.val_pos, |u| (&u.0.0, &u.0.1) < (&key, val));
-    }
-    fn rewind_keys(&mut self, _s: &Self::Storage) { self.key_pos = 0; self.val_pos = 0; }
-    fn rewind_vals(&mut self, _s: &Self::Storage) { self.val_pos = self.key_pos; }
-}
-
 /// Take the `Vec` out of a chunk, copying only if the `Rc` is shared.
 fn take<K: Clone, V: Clone, T: Clone, R: Clone>(chunk: VecChunk<K, V, T, R>) -> Vec<((K, V), T, R)> {
     Rc::try_unwrap(chunk.0).unwrap_or_else(|rc| (*rc).clone())
 }
 
-impl<K, V, T, R> Navigable for VecChunk<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Cursor = VecChunkCursor<K, V, T, R>;
-
-    fn cursor(&self) -> Self::Cursor {
-        VecChunkCursor { key_pos: 0, val_pos: 0, phantom: PhantomData }
-    }
-}
-
-impl<K, V, T, R> super::NavigableChunk for VecChunk<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    fn bounds(&self) -> ((&K, &V, &T), (&K, &V, &T)) {
-        let s = &self.0[..];
-        let (f, l) = (&s[0], &s[s.len() - 1]);
-        ((&f.0.0, &f.0.1, &f.1), (&l.0.0, &l.0.1, &l.1))
-    }
-}
-
 impl<K, V, T, R> Chunk for VecChunk<K, V, T, R>
-where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
-    type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
+where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Semigroup+'static {
+    type Time = T;
 
     const TARGET: usize = TARGET;
 
@@ -387,6 +261,136 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+S
             |chunk, n| { let mut rows = take(chunk); let rest = rows.split_off(n); (VecChunk(Rc::new(rows)), VecChunk(Rc::new(rest))) },
             |chunk| chunk,
         );
+    }
+}
+
+/// First index `>= start` at which `pred` turns false, by galloping (exponential)
+/// search. `pred` must hold for a prefix then not — i.e. `|u| u < target`.
+/// O(log distance), so O(1) for short hops and logarithmic for long ones.
+fn gallop<U>(s: &[U], start: usize, pred: impl Fn(&U) -> bool) -> usize {
+    let mut pos = start;
+    if pos < s.len() && pred(&s[pos]) {
+        let mut step = 1;
+        while pos + step < s.len() && pred(&s[pos + step]) { pos += step; step <<= 1; }
+        step >>= 1;
+        while step > 0 {
+            if pos + step < s.len() && pred(&s[pos + step]) { pos += step; }
+            step >>= 1;
+        }
+        pos += 1;
+    }
+    pos
+}
+
+/// Implementations specific to the `Cursor` trait.
+pub mod cursor {
+
+    use std::marker::PhantomData;
+
+    use timely::progress::Timestamp;
+
+    use crate::difference::Semigroup;
+    use crate::lattice::Lattice;
+    use crate::trace::Navigable;
+    use crate::trace::cursor::Cursor;
+    use crate::trace::implementations::{BatchContainer, Layout, Vector};
+
+    use crate::trace::chunk::vec::VecChunk;
+
+    use super::gallop;
+
+    /// A cursor over a [`VecChunk`], tracking the current key and `(key, val)`
+    /// group starts as indices into the flat vector.
+    pub struct VecChunkCursor<K, V, T, R> {
+        key_pos: usize,
+        val_pos: usize,
+        phantom: PhantomData<(K, V, T, R)>,
+    }
+
+    impl<K, V, T, R> Cursor for VecChunkCursor<K, V, T, R>
+    where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
+        type Storage = VecChunk<K, V, T, R>;
+
+        type KeyContainer = <Vector<((K, V), T, R)> as Layout>::KeyContainer;
+        type Key<'a> = <<Vector<((K, V), T, R)> as Layout>::KeyContainer as BatchContainer>::ReadItem<'a>;
+        type ValContainer = <Vector<((K, V), T, R)> as Layout>::ValContainer;
+        type Val<'a> = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::ReadItem<'a>;
+        type ValOwn = <<Vector<((K, V), T, R)> as Layout>::ValContainer as BatchContainer>::Owned;
+        type TimeContainer = <Vector<((K, V), T, R)> as Layout>::TimeContainer;
+        type TimeGat<'a> = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::ReadItem<'a>;
+        type Time = <<Vector<((K, V), T, R)> as Layout>::TimeContainer as BatchContainer>::Owned;
+        type DiffContainer = <Vector<((K, V), T, R)> as Layout>::DiffContainer;
+        type DiffGat<'a> = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::ReadItem<'a>;
+        type Diff = <<Vector<((K, V), T, R)> as Layout>::DiffContainer as BatchContainer>::Owned;
+
+        fn key_valid(&self, s: &Self::Storage) -> bool { self.key_pos < s.0.len() }
+        fn val_valid(&self, s: &Self::Storage) -> bool {
+            self.key_pos < s.0.len() && self.val_pos < s.0.len() && s.0[self.val_pos].0.0 == s.0[self.key_pos].0.0
+        }
+        fn key<'a>(&self, s: &'a Self::Storage) -> &'a K { &s.0[self.key_pos].0.0 }
+        fn val<'a>(&self, s: &'a Self::Storage) -> &'a V { &s.0[self.val_pos].0.1 }
+        fn get_key<'a>(&self, s: &'a Self::Storage) -> Option<&'a K> {
+            if self.key_valid(s) { Some(self.key(s)) } else { None }
+        }
+        fn get_val<'a>(&self, s: &'a Self::Storage) -> Option<&'a V> {
+            if self.val_valid(s) { Some(self.val(s)) } else { None }
+        }
+        fn map_times<L: FnMut(&T, &R)>(&mut self, s: &Self::Storage, mut logic: L) {
+            if !self.val_valid(s) { return; }
+            let kv = &s.0[self.val_pos].0;
+            let mut i = self.val_pos;
+            while i < s.0.len() && &s.0[i].0 == kv {
+                logic(&s.0[i].1, &s.0[i].2);
+                i += 1;
+            }
+        }
+        fn step_key(&mut self, s: &Self::Storage) {
+            // Linear: stepping is a short hop to the next group; an inlined scan
+            // beats a gallop call for the common small-group case.
+            if self.key_pos >= s.0.len() { return; }
+            let key = s.0[self.key_pos].0.0.clone();
+            let mut i = self.key_pos;
+            while i < s.0.len() && s.0[i].0.0 == key { i += 1; }
+            self.key_pos = i;
+            self.val_pos = i;
+        }
+        fn seek_key(&mut self, s: &Self::Storage, key: &K) {
+            // Logarithmic: O(log distance), independent of chunk size.
+            self.key_pos = gallop(&s.0, self.key_pos, |u| &u.0.0 < key);
+            self.val_pos = self.key_pos;
+        }
+        fn step_val(&mut self, s: &Self::Storage) {
+            if !self.val_valid(s) { return; }
+            let kv = s.0[self.val_pos].0.clone();
+            let mut i = self.val_pos;
+            while i < s.0.len() && s.0[i].0 == kv { i += 1; }
+            self.val_pos = i;
+        }
+        fn seek_val(&mut self, s: &Self::Storage, val: &V) {
+            if !self.key_valid(s) { return; }
+            let key = s.0[self.key_pos].0.0.clone();
+            self.val_pos = gallop(&s.0, self.val_pos, |u| (&u.0.0, &u.0.1) < (&key, val));
+        }
+        fn rewind_keys(&mut self, _s: &Self::Storage) { self.key_pos = 0; self.val_pos = 0; }
+        fn rewind_vals(&mut self, _s: &Self::Storage) { self.val_pos = self.key_pos; }
+    }
+
+    impl<K, V, T, R> Navigable for VecChunk<K, V, T, R>
+    where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
+        type Cursor = VecChunkCursor<K, V, T, R>;
+
+        fn cursor(&self) -> Self::Cursor {
+            VecChunkCursor { key_pos: 0, val_pos: 0, phantom: PhantomData }
+        }
+    }
+
+    impl<K, V, T, R> crate::trace::chunk::NavigableChunk for VecChunk<K, V, T, R>
+    where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Ord+Semigroup+'static {
+        fn bounds(&self) -> ((&K, &V, &T), (&K, &V, &T)) {
+            let s = &self.0[..];
+            let (f, l) = (&s[0], &s[s.len() - 1]);
+            ((&f.0.0, &f.0.1, &f.1), (&l.0.0, &l.0.1, &l.1))
+        }
     }
 }
 
