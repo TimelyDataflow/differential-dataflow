@@ -35,7 +35,8 @@ use differential_dataflow::operators::int_proxy::{JoinInstance, ProxyBridge, Pro
 use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes};
+use corgi::arrange::{compare_at, gather, gather_lanes};
+use crate::corgi::search::MatchingRanges;
 use corgi::{shape_of_value, Shape, Value as CValue};
 
 use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, CorgiChunk};
@@ -459,7 +460,7 @@ impl<'a, T: ColTime> LeafView<'a, T> {
 }
 
 /// The batched probe of one PROBEE-side chunk: per driver key, its equal-range in the
-/// chunk (`find_ranges`), with the matched rows' vals gathered once as a `u64` buffer
+/// chunk, with the matched rows' vals gathered once as a `u64` buffer
 /// when leaf-shaped (`off` gives each key's slice within it).
 struct Probe<'a, T: ColTime> {
     chunk: &'a CorgiChunk<T, Diff>,
@@ -471,8 +472,13 @@ struct Probe<'a, T: ColTime> {
 }
 
 impl<'a, T: ColTime> Probe<'a, T> {
-    fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &CValue, leaf_vals: bool) -> Self {
-        let (lo, hi) = find_ranges(needles, key_lane(chunk.keys()));
+    fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &[u64], leaf_vals: bool) -> Self {
+        let keys = corgi::arrange::leaf_slice(key_lane(chunk.keys())).expect("identifier lane is a u64 leaf");
+        let (mut lo, mut hi) = (vec![0; needles.len()], vec![0; needles.len()]);
+        for (j, range) in MatchingRanges::new(needles, keys) {
+            lo[j] = range.start;
+            hi[j] = range.end;
+        }
         let mut off = Vec::with_capacity(lo.len() + 1);
         let mut idx: Vec<usize> = Vec::new();
         off.push(0);
@@ -576,7 +582,7 @@ fn stage_collision<T: ColTime>(
 ///
 /// Two regimes: when one side is much smaller (the fresh delta against an accumulated
 /// trace), the small side DRIVES and the large side is presented only at the driver's keys
-/// (batched `find_ranges` — cost tracks the driver plus matches). When the sides are
+/// (sorted probes — cost tracks the driver plus matches). When the sides are
 /// comparable, probing costs `n log n` against a merge's `n`, so both sides are pulled and
 /// merged symmetrically instead.
 fn advance_leaf<T: ColTime>(
@@ -628,7 +634,7 @@ fn advance_leaf<T: ColTime>(
 }
 
 /// Lopsided regime: the driver views are walked; the probee is presented only at the
-/// driver's keys, one batched `find_ranges` per probee chunk per block.
+/// driver's sorted keys, one monotone search per probee chunk per block.
 fn leaf_probe<'a, T: ColTime>(
     mut dviews: Vec<LeafView<'a, T>>,
     pchunks: &[&CorgiChunk<T, Diff>],
@@ -665,7 +671,7 @@ fn leaf_probe<'a, T: ColTime>(
     let pvleaf = leaf_valued(pchunks);
     let probes: Vec<Probe<T>> = pchunks.iter().enumerate()
         .filter(|(_, c)| c.len() > 0)
-        .map(|(cid, c)| Probe::new(c, cid, &CValue::u64(keyset.clone()), pvleaf))
+        .map(|(cid, c)| Probe::new(c, cid, &keyset, pvleaf))
         .collect();
 
     // Walk the keys in order, staging both sides and emitting the survivors.

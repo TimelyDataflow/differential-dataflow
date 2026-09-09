@@ -13,3 +13,4 @@ pub mod exchange;
 pub mod join;
 pub mod logic;
 pub mod reduce;
+mod search;
