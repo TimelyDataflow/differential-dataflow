@@ -27,6 +27,7 @@ use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
+use std::sync::LazyLock;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::Description;
@@ -244,6 +245,33 @@ fn ids(col: &CValue) -> Vec<u64> {
     corgi::hash(col)
 }
 
+// Use Corgi's canonical ID at every unit presentation and correction site.
+static UNIT_ID: LazyLock<u64> = LazyLock::new(|| corgi::hash(&CValue::Unit(1))[0]);
+
+/// Unit columns need one ID, independent of the number of presented rows.
+/// Inspect each column anew; an empty presentation never fixes a future shape.
+enum PresentedIds {
+    Unit(u64),
+    Rows(Vec<u64>),
+}
+impl PresentedIds {
+    fn new(col: &CValue) -> Self {
+        match col {
+            CValue::Unit(_) => Self::Unit(*UNIT_ID),
+            _ => Self::Rows(ids(col)),
+        }
+    }
+}
+impl std::ops::Index<usize> for PresentedIds {
+    type Output = u64;
+    fn index(&self, row: usize) -> &u64 {
+        match self {
+            Self::Unit(id) => id,
+            Self::Rows(ids) => &ids[row],
+        }
+    }
+}
+
 /// Concatenate the records of the `changed` keys across a run of chunks into parallel
 /// `(keys_col, vals_col)` corgi columns plus per-record `(key_hash, time, diff)`. `changed` is the
 /// ASCENDING set of changed key ids; a row is kept iff its key id is in it.
@@ -286,15 +314,15 @@ where
     (keys_col, vals_col, khs, times, diffs, run_ends)
 }
 
-/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Leaf values
-/// preserve value-id order. Keys may either be identity-id leaves or carried-hash columns, provided
+/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Leaf and unit
+/// values preserve value-id order. Keys may either be identity-id leaves or carried-hash columns, provided
 /// no one chunk run contains two real keys under the same hash; in the latter case the real-key
 /// tie-break would interrupt proxy `(key_id, value_id, time)` order, so we fall back to ordinary
 /// consolidation. A debug assertion audits the inferred order. Returns false when the inference
 /// does not hold or the bridge is nonempty.
 fn merge_present<T: Ord + Clone>(
     keys_col: &CValue, vals_col: &CValue,
-    khs: &[u64], vids: &[u64], times: &[T], diffs: &[Diff], run_ends: &[usize],
+    khs: &[u64], vids: &PresentedIds, times: &[T], diffs: &[Diff], run_ends: &[usize],
     bridge: &mut ProxyBridge<T, Diff>,
 ) -> bool {
     let ordered_keys = corgi::arrange::leaf_slice(keys_col).is_some() || {
@@ -308,7 +336,8 @@ fn merge_present<T: Ord + Clone>(
             one_real_key_per_id
         }) && start == khs.len()
     };
-    let ordered_ids = ordered_keys && corgi::arrange::leaf_slice(vals_col).is_some();
+    let ordered_ids = ordered_keys
+        && (matches!(vals_col, CValue::Unit(_)) || corgi::arrange::leaf_slice(vals_col).is_some());
     if !ordered_ids || !bridge.is_empty() {
         return false;
     }
@@ -403,11 +432,18 @@ where
         if khs.is_empty() {
             return;
         }
-        let vids = ids(&p_vals);
+        let vids = PresentedIds::new(&p_vals);
         let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &times, &diffs, &run_ends, bridge);
-        for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
-        *len += p_vals.len();
-        blocks.push(p_vals);
+        // Distinct needs value identity in the sweep, but never resolves input payloads.
+        if !matches!(self.reducer, Reducer::Distinct) {
+            if matches!(p_vals, CValue::Unit(_)) {
+                self.in_index.entry(*UNIT_ID).or_insert(*len);
+            } else {
+                for row in 0..p_vals.len() { self.in_index.entry(vids[row]).or_insert(*len + row); }
+            }
+            *len += p_vals.len();
+            blocks.push(p_vals);
+        }
         self.register_keys(p_keys, &khs);
         if !merged {
             bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
@@ -445,29 +481,7 @@ where
                 out_ids = ids(&col);
                 self.register_vals(col, &out_ids);
             }
-            Reducer::Distinct => {
-                // Present iff any value has NON-ZERO net -- the sign does not matter. DD's `reduce`
-                // presents every value whose accumulation is non-zero, negatives included, and
-                // `backend::vec`'s Distinct then emits `1` without looking at the diffs at all. A
-                // `> 0` test here silently drops a key whose values all accumulate negative, which
-                // is exactly what a negated collection produces. Output value is unit (a `Unit` column).
-                let mut present = 0usize;
-                let mut start = 0;
-                for &end in ends {
-                    if input[start..end].iter().any(|&(_, d)| d != 0) {
-                        present += 1;
-                        out_diffs.push(1);
-                    }
-                    out_ends.push(out_diffs.len());
-                    start = end;
-                }
-                if present == 0 {
-                    return (Vec::new(), out_ends);
-                }
-                let col = CValue::Unit(present);
-                out_ids = ids(&col); // all equal (unit content hash)
-                self.register_vals(col, &out_ids);
-            }
+            Reducer::Distinct => unreachable!("distinct corrections do not resolve values"),
             Reducer::Min => {
                 // The structural minimum over values with NON-ZERO net. The sign does not select
                 // candidates: DD presents every non-zero accumulation. Filtering to `> 0` here both
@@ -649,10 +663,19 @@ where
         // Output-history presentation, same keys (register keys + values for correction resolution).
         let (o_keys, o_vals, o_khs, o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
         if !o_khs.is_empty() {
-            let vids = ids(&o_vals);
+            let vids = PresentedIds::new(&o_vals);
             let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output);
             self.register_keys(o_keys, &o_khs);
-            self.register_vals(o_vals, &vids);
+            if !matches!(self.reducer, Reducer::Distinct) {
+                match &vids {
+                    PresentedIds::Unit(id) => {
+                        self.val_index.entry(*id).or_insert(self.val_len);
+                        self.val_len += o_vals.len();
+                        self.val_blocks.push(o_vals);
+                    }
+                    PresentedIds::Rows(ids) => self.register_vals(o_vals, ids),
+                }
+            }
             if !merged {
                 window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
                 consolidate_updates(&mut window.output);
@@ -661,6 +684,25 @@ where
     }
 
     fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+        if matches!(self.reducer, Reducer::Distinct) {
+            // Output is always unit. Input values remain distinct in the sweep: a:+1, b:-1
+            // is present, as is an all-negative input. Only an empty accumulation disappears.
+            let unit_id = *UNIT_ID;
+            let mut corr = Vec::new();
+            let mut ends = Vec::with_capacity(keys.len());
+            let (mut is, mut os) = (0, 0);
+            for (&ie, &oe) in in_ends.iter().zip(out_ends) {
+                let desired = Diff::from(input[is..ie].iter().any(|&(_, d)| d != 0));
+                let current: Diff = output[os..oe].iter().map(|&(_, d)| d).sum();
+                let diff = desired - current;
+                if diff != 0 { corr.push((unit_id, diff)); }
+                ends.push(corr.len());
+                is = ie;
+                os = oe;
+            }
+            return (corr, ends);
+        }
+
         // Resolve input value_ids to `in_vals` rows, reduce (desired output), then difference the
         // desired against the presented current output per key: correction = desired − current.
         let in_rows: Vec<(usize, Diff)> = input.iter()
@@ -694,14 +736,17 @@ where
     }
 
     fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
-        // Resolve each correction's key/value proxies to pool rows and accumulate.
+        // Unit output has no value rows to resolve or retain.
+        if !matches!(self.reducer, Reducer::Distinct) {
+            self.rows.1.extend(records.iter().map(|rec| {
+                *self.val_index.get(&rec.0.1).expect("value resolvable this retire")
+            }));
+        }
         for rec in records {
-            let ((kh, vid), t, d) = (rec.0, &rec.1, rec.2);
+            let ((kh, _), t, d) = (rec.0, &rec.1, rec.2);
             let kr = *self.key_index.get(&kh).expect("key resolvable this retire");
-            let vr = *self.val_index.get(&vid).expect("value resolvable this retire");
-            let (krows, vrows, times, diffs) = &mut self.rows;
+            let (krows, _, times, diffs) = &mut self.rows;
             krows.push(kr);
-            vrows.push(vr);
             times.push(t.clone());
             diffs.push(d);
         }
@@ -710,11 +755,14 @@ where
     fn finish(&mut self) -> Option<CBatch<T>> {
         // Seal the batch: gather the accumulated (key, val) pool rows into columns, one CorgiChunk batch.
         let key_pool = concat_columns(&self.key_blocks);
-        let val_pool = concat_columns(&self.val_blocks);
         let (krows, vrows, times, diffs) = std::mem::take(&mut self.rows);
         if times.is_empty() { return None; }
         let keys = gather(&key_pool, &krows);
-        let vals = gather(&val_pool, &vrows);
+        let vals = if matches!(self.reducer, Reducer::Distinct) {
+            CValue::Unit(times.len())
+        } else {
+            gather(&concat_columns(&self.val_blocks), &vrows)
+        };
         Some(Rc::new(columns_to_batch(keys, vals, times, diffs)))
     }
 }
@@ -754,7 +802,7 @@ mod tests {
         let vals = CValue::u64(vec![10, 20]);
         let mut bridge = Vec::new();
         assert!(merge_present(
-            &keys, &vals, &[1, 2], &[10, 20], &[0u64, 0], &[1, 1], &[2], &mut bridge,
+            &keys, &vals, &[1, 2], &PresentedIds::new(&vals), &[0u64, 0], &[1, 1], &[2], &mut bridge,
         ));
         assert_eq!(bridge.len(), 2);
     }
@@ -773,42 +821,56 @@ mod tests {
                  ((4, 40), Product::new(0, 0), -1)],
             vec![((1, 10), Product::new(1, 0), 2)],
         ];
-        for count in 1..=runs.len() {
-            let (mut rows, mut ends) = (Vec::new(), Vec::new());
-            let mut expected = BTreeMap::new();
-            for run in &runs[..count] {
-                rows.extend_from_slice(run);
-                ends.push(rows.len());
-                for &(kv, time, diff) in run {
-                    *expected.entry((kv, time)).or_insert(0) += diff;
+        for unit in [false, true] {
+            let runs = runs.clone().map(|mut run| {
+                if unit {
+                    for row in &mut run { row.0.1 = *UNIT_ID; }
+                    run.sort_unstable();
                 }
+                run
+            });
+            for count in 1..=runs.len() {
+                let (mut rows, mut ends) = (Vec::new(), Vec::new());
+                let mut expected = BTreeMap::new();
+                for run in &runs[..count] {
+                    rows.extend_from_slice(run);
+                    ends.push(rows.len());
+                    for &(kv, time, diff) in run {
+                        *expected.entry((kv, time)).or_insert(0) += diff;
+                    }
+                }
+                let khs: Vec<_> = rows.iter().map(|r| r.0.0).collect();
+                let vids: Vec<_> = rows.iter().map(|r| r.0.1).collect();
+                let times: Vec<_> = rows.iter().map(|r| r.1).collect();
+                let diffs: Vec<_> = rows.iter().map(|r| r.2).collect();
+                let mut bridge = Vec::new();
+                let vals = if unit { CValue::Unit(vids.len()) } else { CValue::u64(vids) };
+                assert!(merge_present(&CValue::u64(khs.clone()), &vals,
+                    &khs, &PresentedIds::new(&vals), &times, &diffs, &ends, &mut bridge));
+                let expected: Vec<_> = expected.into_iter().filter(|(_, d)| *d != 0)
+                    .map(|((kv, time), diff)| (kv, time, diff)).collect();
+                assert_eq!(bridge, expected, "run count: {count}, unit: {unit}");
             }
-            let khs: Vec<_> = rows.iter().map(|r| r.0.0).collect();
-            let vids: Vec<_> = rows.iter().map(|r| r.0.1).collect();
-            let times: Vec<_> = rows.iter().map(|r| r.1).collect();
-            let diffs: Vec<_> = rows.iter().map(|r| r.2).collect();
-            let mut bridge = Vec::new();
-            assert!(merge_present(&CValue::u64(khs.clone()), &CValue::u64(vids.clone()),
-                &khs, &vids, &times, &diffs, &ends, &mut bridge));
-            let expected: Vec<_> = expected.into_iter().filter(|(_, d)| *d != 0)
-                .map(|((kv, time), diff)| (kv, time, diff)).collect();
-            assert_eq!(bridge, expected, "run count: {count}");
         }
     }
 
     #[test]
     fn merge_present_rejects_a_compound_hash_collision_within_a_run() {
         let keys = compound_keys(vec![1, 1], vec![7, 8]);
-        let vals = CValue::u64(vec![10, 20]);
-        assert!(!merge_present(
-            &keys,
-            &vals,
-            &[1, 1],
-            &[10, 20],
-            &[0u64, 0],
-            &[1, 1],
-            &[2],
-            &mut Vec::new(),
-        ));
+        for vals in [CValue::u64(vec![10, 20]), CValue::Unit(2)] {
+            assert!(!merge_present(
+                &keys,
+                &vals,
+                &[1, 1],
+                &PresentedIds::new(&vals),
+                &[0u64, 0],
+                &[1, 1],
+                &[2],
+                &mut Vec::new(),
+            ));
+        }
     }
 }
+
+#[cfg(test)]
+mod unit_tests;
