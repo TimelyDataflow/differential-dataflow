@@ -387,12 +387,15 @@ fn merge_present<T: Ord + Clone>(
         heap.push(Reverse(((khs[lo], vids[lo]), &times[lo], run, lo)));
         lo = hi;
     }
-    while let Some(Reverse((kv, time, run, index))) = heap.pop() {
+    while let Some(mut head) = heap.peek_mut() {
+        let Reverse((kv, time, run, index)) = *head;
         accumulate(kv, time, diffs[index]);
         let end = run_ends[run];
         if index + 1 < end {
             let next = index + 1;
-            heap.push(Reverse(((khs[next], vids[next]), &times[next], run, next)));
+            *head = Reverse(((khs[next], vids[next]), &times[next], run, next));
+        } else {
+            std::collections::binary_heap::PeekMut::pop(head);
         }
     }
     drop(accumulate);
@@ -786,6 +789,43 @@ mod tests {
             &keys, &vals, &[1, 2], &[10, 20], &[0u64, 0], &[1, 1], &[2], &mut bridge,
         ));
         assert_eq!(bridge.len(), 2);
+    }
+
+    #[test]
+    fn merge_present_combines_runs_with_ties_cancellation_and_different_lengths() {
+        use std::collections::BTreeMap;
+        use timely::order::Product;
+        let runs = [
+            vec![((1, 10), Product::new(0u64, 2u64), 1),
+                 ((1, 10), Product::new(1, 0), -1),
+                 ((3, 30), Product::new(0, 0), 2)],
+            vec![((1, 10), Product::new(0, 2), -1),
+                 ((1, 11), Product::new(0, 0), 5),
+                 ((3, 30), Product::new(0, 0), -2),
+                 ((4, 40), Product::new(0, 0), -1)],
+            vec![((1, 10), Product::new(1, 0), 2)],
+        ];
+        for count in 1..=runs.len() {
+            let (mut rows, mut ends) = (Vec::new(), Vec::new());
+            let mut expected = BTreeMap::new();
+            for run in &runs[..count] {
+                rows.extend_from_slice(run);
+                ends.push(rows.len());
+                for &(kv, time, diff) in run {
+                    *expected.entry((kv, time)).or_insert(0) += diff;
+                }
+            }
+            let khs: Vec<_> = rows.iter().map(|r| r.0.0).collect();
+            let vids: Vec<_> = rows.iter().map(|r| r.0.1).collect();
+            let times: Vec<_> = rows.iter().map(|r| r.1).collect();
+            let diffs: Vec<_> = rows.iter().map(|r| r.2).collect();
+            let mut bridge = Vec::new();
+            assert!(merge_present(&CValue::u64(khs.clone()), &CValue::u64(vids.clone()),
+                &khs, &vids, &times, &diffs, &ends, &mut bridge));
+            let expected: Vec<_> = expected.into_iter().filter(|(_, d)| *d != 0)
+                .map(|((kv, time), diff)| (kv, time, diff)).collect();
+            assert_eq!(bridge, expected, "run count: {count}");
+        }
     }
 
     #[test]
