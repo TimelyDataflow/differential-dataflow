@@ -342,12 +342,24 @@ fn merge_present<T: Ord + Clone>(
         return false;
     }
 
+    // Select once per presentation. The merge loop sees either a constant ID or a
+    // slice lookup, without a unit-versus-row choice at each element.
+    match vids {
+        PresentedIds::Unit(id) => merge_present_ids(khs, |_| *id, times, diffs, run_ends, bridge),
+        PresentedIds::Rows(ids) => merge_present_ids(khs, |row| ids[row], times, diffs, run_ends, bridge),
+    }
+}
+
+fn merge_present_ids<T: Ord + Clone>(
+    khs: &[u64], vids: impl Fn(usize) -> u64, times: &[T], diffs: &[Diff], run_ends: &[usize],
+    bridge: &mut ProxyBridge<T, Diff>,
+) -> bool {
     debug_assert!({
         let mut start = 0usize;
         let sorted = run_ends.iter().all(|&end| {
             let sorted = (start + 1..end).all(|i| {
-                (khs[i - 1], vids[i - 1], &times[i - 1])
-                    <= (khs[i], vids[i], &times[i])
+                (khs[i - 1], vids(i - 1), &times[i - 1])
+                    <= (khs[i], vids(i), &times[i])
             });
             start = end;
             sorted
@@ -369,7 +381,7 @@ fn merge_present<T: Ord + Clone>(
 
     if run_ends.len() == 1 {
         for index in 0..run_ends[0] {
-            accumulate((khs[index], vids[index]), &times[index], diffs[index]);
+            accumulate((khs[index], vids(index)), &times[index], diffs[index]);
         }
         drop(accumulate);
         if let Some(record) = current {
@@ -381,7 +393,7 @@ fn merge_present<T: Ord + Clone>(
     let mut heap: BinaryHeap<Reverse<((u64, u64), &T, usize, usize)>> = BinaryHeap::new();
     let mut lo = 0usize;
     for (run, &hi) in run_ends.iter().enumerate() {
-        heap.push(Reverse(((khs[lo], vids[lo]), &times[lo], run, lo)));
+        heap.push(Reverse(((khs[lo], vids(lo)), &times[lo], run, lo)));
         lo = hi;
     }
     while let Some(mut head) = heap.peek_mut() {
@@ -390,7 +402,7 @@ fn merge_present<T: Ord + Clone>(
         let end = run_ends[run];
         if index + 1 < end {
             let next = index + 1;
-            *head = Reverse(((khs[next], vids[next]), &times[next], run, next));
+            *head = Reverse(((khs[next], vids(next)), &times[next], run, next));
         } else {
             std::collections::binary_heap::PeekMut::pop(head);
         }
@@ -436,10 +448,11 @@ where
         let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &times, &diffs, &run_ends, bridge);
         // Distinct needs value identity in the sweep, but never resolves input payloads.
         if !matches!(self.reducer, Reducer::Distinct) {
-            if matches!(p_vals, CValue::Unit(_)) {
-                self.in_index.entry(*UNIT_ID).or_insert(*len);
-            } else {
-                for row in 0..p_vals.len() { self.in_index.entry(vids[row]).or_insert(*len + row); }
+            match &vids {
+                PresentedIds::Unit(id) => { self.in_index.entry(*id).or_insert(*len); }
+                PresentedIds::Rows(ids) => {
+                    for (row, &id) in ids.iter().enumerate() { self.in_index.entry(id).or_insert(*len + row); }
+                }
             }
             *len += p_vals.len();
             blocks.push(p_vals);
