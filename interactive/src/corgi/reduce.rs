@@ -34,10 +34,11 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{compare_at, find_ranges, gather, gather_lanes, sort_blocks};
+use corgi::arrange::{compare_at, gather, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
 use crate::corgi::col_times::ColTime;
+use crate::corgi::search::MatchingRanges;
 use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
 use crate::ir::Diff;
 use crate::parse::Reducer;
@@ -247,65 +248,32 @@ fn ids(col: &CValue) -> Vec<u64> {
 /// `(keys_col, vals_col)` corgi columns plus per-record `(key_hash, time, diff)`. `changed` is the
 /// ASCENDING set of changed key ids; a row is kept iff its key id is in it.
 ///
-/// Seek or scan, decided per retire now that the sizes are known: seeking the changed keys wins
-/// when the changed set is narrow (the steady incremental case), and a flat membership scan wins
-/// for broad churn — loads and label-cascade retires, where most keys change and a gallop per key
-/// only adds overhead.
-///
-/// What the stored identifier changed is that BOTH branches are now available, and cheap, for every
-/// key shape. An arrangement's key leads with its identifier and is sorted by it
-/// ([`present_key`](crate::corgi::chunk::present_key)), so [`key_lane`] is a sorted `u64` leaf: the
-/// seek is `find_ranges` over it (corgi's `u64` fast path) and the scan borrows it outright, with no
-/// hashing and no allocation on either side. Previously a structural key could do neither — its
-/// identifier was hashed per chunk per retire, and a hash derived on the fly cannot be inverted into
-/// a needle, so those keys were forced onto the scan and forced to materialize to take it.
+/// Both the changed set and stored identifier lane are sorted. Match them with
+/// monotone positions, galloping over long gaps and stepping through adjacent
+/// keys. The same compiled search covers narrow updates and broad cascades.
 fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>, Vec<usize>)
 where
     T: ColTime,
 {
-    /// Seek only when the changed set is at least this many times narrower than the presented
-    /// rows: a `find_ranges` probe costs ~log(rows) compares against the scan's flat membership
-    /// test, so marginal seeks LOSE — measured, not modeled; 16 regressed load-shaped retires
-    /// before this was widened.
-    const SEEK_ADVANTAGE: usize = 64;
-
     let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
     let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
     let (mut tags, mut offs) = (Vec::new(), Vec::new());
     let (mut khs, mut times, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
     let mut run_ends = Vec::new();
-    let total: usize = chunks.iter().map(|c| c.diffs().len()).sum();
-    let seek = changed.len().saturating_mul(SEEK_ADVANTAGE) < total;
-    let needles = CValue::u64(changed.to_vec());
-    // Chunks are id-ordered and `changed` ascends, so either branch emits in merged order.
     for (ci, ch) in chunks.iter().enumerate() {
         let before = khs.len();
         if ch.diffs().is_empty() {
             continue;
         }
         let lane = key_lane(ch.keys());
-        if seek {
-            let (lo, hi) = find_ranges(&needles, lane);
-            for (j, (&l, &h)) in lo.iter().zip(hi.iter()).enumerate() {
-                for i in l..h {
-                    tags.push(ci);
-                    offs.push(i);
-                    khs.push(changed[j]);
-                    times.push(ch.times().get(i));
-                    diffs.push(ch.diffs()[i]);
-                }
-            }
-        } else {
-            // Borrowed, never materialized: the identifier lane is a `u64` leaf whatever the key.
-            let kh = corgi::arrange::leaf_slice(lane).expect("the identifier lane is a u64 leaf");
-            for i in 0..kh.len() {
-                if changed.binary_search(&kh[i]).is_ok() {
-                    tags.push(ci);
-                    offs.push(i);
-                    khs.push(kh[i]);
-                    times.push(ch.times().get(i));
-                    diffs.push(ch.diffs()[i]);
-                }
+        let kh = corgi::arrange::leaf_slice(lane).expect("the identifier lane is a u64 leaf");
+        for (j, range) in MatchingRanges::new(changed, kh) {
+            for i in range {
+                tags.push(ci);
+                offs.push(i);
+                khs.push(changed[j]);
+                times.push(ch.times().get(i));
+                diffs.push(ch.diffs()[i]);
             }
         }
         if khs.len() > before { run_ends.push(khs.len()); }
