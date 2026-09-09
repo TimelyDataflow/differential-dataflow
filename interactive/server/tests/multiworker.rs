@@ -1,20 +1,24 @@
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::time::{Duration, Instant};
 
-struct ServerProcess(Child);
+struct ServerProcess {
+    child: Child,
+    stderr: Option<thread::JoinHandle<String>>,
+}
 
 impl ServerProcess {
     fn stop(mut self) {
-        let stdin = self.0.stdin.as_mut().expect("server stdin is piped");
+        let stdin = self.child.stdin.as_mut().expect("server stdin is piped");
         stdin.write_all(b"exit\n").unwrap();
         stdin.flush().unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            if let Some(status) = self.0.try_wait().unwrap() {
+            if let Some(status) = self.child.try_wait().unwrap() {
                 assert!(status.success(), "server exited with {status}");
                 return;
             }
@@ -26,9 +30,17 @@ impl ServerProcess {
 
 impl Drop for ServerProcess {
     fn drop(&mut self) {
-        if self.0.try_wait().ok().flatten().is_none() {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+        if let Some(stderr) = self.stderr.take() {
+            let output = stderr
+                .join()
+                .unwrap_or_else(|_| "stderr reader panicked".to_string());
+            if thread::panicking() {
+                eprintln!("server stderr:\n{output}");
+            }
         }
     }
 }
@@ -55,7 +67,9 @@ fn request_observing(
     loop {
         let mut line = String::new();
         assert_ne!(
-            reader.read_line(&mut line).unwrap(),
+            reader
+                .read_line(&mut line)
+                .unwrap_or_else(|error| panic!("request {reqid}: {error}")),
             0,
             "server disconnected"
         );
@@ -78,41 +92,50 @@ fn request_observing(
 }
 
 fn start_server(backend: &str, workers: usize) -> (ServerProcess, TcpStream, BufReader<TcpStream>) {
-    let listeners: Vec<_> = (0..3)
-        .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
-        .collect();
-    let ports: Vec<_> = listeners
-        .iter()
-        .map(|listener| listener.local_addr().unwrap().port())
-        .collect();
-    drop(listeners);
-
-    let child = Command::new(env!("CARGO_BIN_EXE_ddir_server"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ddir_server"))
         .env("DDIR_WORKERS", workers.to_string())
         .env("DDIR_BACKEND", backend)
         // The retired polling/tick knob must not reintroduce wall-clock
         // progress if it remains in an old deployment environment.
         .env("DDIR_TICK_MS", "1")
-        .env("DDIR_BIND", format!("127.0.0.1:{}", ports[0]))
-        .env("DDIR_WS_BIND", format!("127.0.0.1:{}", ports[1]))
-        .env("DDIR_DIAG_PORT", ports[2].to_string())
+        // The child owns these ephemeral ports from bind through shutdown.
+        // Probing a free port and dropping its listener races other tests.
+        .env("DDIR_BIND", "127.0.0.1:0")
+        .env("DDIR_WS_BIND", "127.0.0.1:0")
+        .env("DDIR_DIAG_PORT", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let server = ServerProcess(child);
-
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let stream = loop {
-        match TcpStream::connect(("127.0.0.1", ports[0])) {
-            Ok(stream) => break stream,
-            Err(error) => {
-                assert!(Instant::now() < deadline, "server did not listen: {error}");
-                thread::sleep(Duration::from_millis(10));
+    let stderr = child.stderr.take().expect("server stderr is piped");
+    let (ready_tx, ready_rx) = sync_channel(1);
+    let stderr = thread::spawn(move || {
+        let mut output = String::new();
+        for line in BufReader::new(stderr).lines() {
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => {
+                    output.push_str(&format!("reading server stderr failed: {error}\n"));
+                    break;
+                }
+            };
+            if let Some(address) = line.strip_prefix("ddir_server: tcp listening on ") {
+                let _ = ready_tx.send(address.to_string());
             }
+            output.push_str(&line);
+            output.push('\n');
         }
+        output
+    });
+    let server = ServerProcess {
+        child,
+        stderr: Some(stderr),
     };
+    let address = ready_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("server did not announce its TCP listener");
+    let stream = TcpStream::connect(address).expect("connect to server's bound TCP listener");
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();

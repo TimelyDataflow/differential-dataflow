@@ -410,13 +410,15 @@ where
 
     // Walk maximal equal-`(key,val)` runs; within each, order by time and consolidate equal times.
     let (mut keep, mut ot, mut od) = (Vec::new(), Vec::new(), Vec::new());
+    let mut run = Vec::new();
     let mut i = 0;
     while i < n {
         let mut j = i + 1;
         while j < n && adj[j - 1] == 0 {
             j += 1;
         }
-        let mut run: Vec<usize> = (i..j).collect();
+        run.clear();
+        run.extend(i..j);
         run.sort_by(|&a, &b| times_s[a].cmp(&times_s[b]));
         let mut k = 0;
         while k < run.len() {

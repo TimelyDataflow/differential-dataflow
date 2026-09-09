@@ -187,7 +187,8 @@ where
 {
     match TcpListener::bind(bind) {
         Ok(listener) => {
-            eprintln!("ddir_server: {} listening on {}", label, bind);
+            let address = listener.local_addr().expect("bound listener has an address");
+            eprintln!("ddir_server: {} listening on {}", label, address);
             let session = Arc::new(session);
             Some(std::thread::spawn(move || {
                 for incoming in listener.incoming() {

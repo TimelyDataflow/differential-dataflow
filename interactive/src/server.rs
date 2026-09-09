@@ -699,15 +699,14 @@ impl Server {
     ) -> Result<(), String> {
         let time = self.epoch;
         self.validate_feed(prog, input, time)?;
+        let handle = self.programs
+            .get_mut(&canonical_source_name(prog))
+            .expect("feed target was prevalidated")
+            .inputs
+            .get_mut(&input)
+            .expect("feed input was prevalidated");
         for update in updates {
-            self.apply_feed(
-                prog,
-                input,
-                update.key,
-                update.val,
-                time,
-                update.diff,
-            );
+            handle.update_at((update.key, update.val), time, update.diff);
         }
         Ok(())
     }

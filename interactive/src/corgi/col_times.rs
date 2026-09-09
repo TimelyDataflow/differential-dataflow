@@ -17,7 +17,7 @@
 
 use std::cmp::Ordering;
 
-use columnar::{Borrow, Clear, Columnar, Index, Len, Push};
+use columnar::{Borrow, Clear, Columnar, Container, Index, Len, Push};
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
@@ -98,14 +98,12 @@ impl<T: Columnar> ColTimes<T> {
         <T as Columnar>::into_owned(self.store.borrow().get(i))
     }
 
-    /// Append rows `[s, e)` of `other`, pushing `Ref`s straight across — no `T` materialized. The
-    /// range copy used by `emit`/`concat`/merge-suffix.
+    /// Append rows `[s, e)` of `other` using the container's bulk range copy.
+    /// Primitive lanes copy as slices, and nested-vector offsets are rebased
+    /// without reconstructing timestamps or pushing each row separately.
     #[inline]
     pub fn push_range(&mut self, other: &ColTimes<T>, s: usize, e: usize) {
-        let b = other.store.borrow();
-        for i in s..e {
-            self.store.push(b.get(i));
-        }
+        self.store.extend_from_self(other.store.borrow(), s..e);
     }
 
     /// Materialize the whole column to `Vec<T>` — the egress boundary (owned times for
@@ -158,6 +156,22 @@ mod cmp_agreement_tests {
 
     fn t(outer: u64, coords: &[u64]) -> T {
         Product::new(outer, PointStamp::new(coords.iter().copied().collect()))
+    }
+
+    #[test]
+    fn range_copy_rebases_variable_length_timestamps() {
+        let values = vec![t(0, &[]), t(1, &[2]), t(2, &[3, 4]), t(3, &[]), t(4, &[5, 6, 7])];
+        let source: ColTimes<T> = values.iter().cloned().collect();
+        let mut copy: ColTimes<T> = std::iter::once(t(9, &[8, 7])).collect();
+        copy.push_range(&source, 1, 4);
+        copy.push_range(&source, 2, 2);
+        copy.push_range(&source, 0, 5);
+        let expected: Vec<_> = std::iter::once(t(9, &[8, 7]))
+            .chain(values[1..4].iter().cloned()).chain(values.iter().cloned()).collect();
+        assert_eq!(copy.to_vec(), expected);
+        copy.clear();
+        copy.push_range(&source, 4, 5);
+        assert_eq!(copy.to_vec(), values[4..5]);
     }
 
     /// `ColTime::cmp_refs` (the derived `Ord` on the columnar `Ref`) must agree with the
