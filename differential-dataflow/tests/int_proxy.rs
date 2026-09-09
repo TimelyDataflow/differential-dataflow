@@ -311,7 +311,7 @@ fn reduce_collision_inside_iterate() {
             let result = input.iterate(|_scope, inner| {
                 let hashed = inner.map(|(k, v)| (k % 2, (k, v)));
                 let arr = arrange_core::<Pipeline, Vec<((u64, (u64, u64)), Product<u64, u64>, i64)>, _, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>>(hashed.inner, Pipeline, "ArrCollide", VChunkBatcher::new);
-                reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "CollideReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, 1)))
+                reduce_with_tactic::<_, VChunkSpine<u64, (u64, u64), Product<u64, u64>, i64>, _>(arr, "CollideReduce", ProxyReduceTactic::new(VecReduceBackend::with_window(max_logic, usize::MAX)).with_key_batch_size(1))
                     .as_collection(|_h, kw: &(u64, u64)| (kw.0, kw.1))
             });
             result.inspect(move |(d, t, r)| os.lock().unwrap().push((*d, *t, *r)));
@@ -448,4 +448,74 @@ fn reduce_seed_survives_cancellation() {
     );
     let out1: Vec<_> = p1.into_iter().filter_map(|b| b.inner).flat_map(|b| hread(&[b])).collect();
     assert_eq!(out1, vec![((7u64, 3u64), 1u64, -1i64)], "the stale output must be retracted");
+}
+
+/// Reusing slots must preserve incomparable times, pending-only retires, and
+/// cancellations against compacted history across multiple groups in one window.
+#[test]
+fn bounded_sweeps_match_partial_order_oracle() {
+    type T = Product<u64, u64>;
+    let time = T::new;
+    let mut initial = Vec::new();
+    let mut novel = Vec::new();
+    let mut expected = Vec::new();
+    for key in 0..1031u64 {
+        let mut rows = vec![((key, 3), time(0, 0), 1i64),
+                            ((key, 7), time(1, 0), 1),
+                            ((key, 9), time(0, 1), 1)];
+        initial.extend(rows.iter().cloned());
+        let mut changes = Vec::new();
+        if key % 2 == 0 { changes.push(((key, 9), time(2, 2), -1)); }
+        if key % 3 == 0 { changes.push(((key, 7), time(2, 2), -1)); }
+        // Some keys cancel entirely after compaction: only the raw novel seeds
+        // and stale output remain to trigger their final retraction.
+        if key % 6 == 0 { changes.push(((key, 3), time(2, 2), -1)); }
+        novel.extend(changes.iter().cloned());
+        rows.extend(changes);
+
+        // Recompute the desired maximum at each time from the original updates,
+        // then subtract the output in its partial-order past. No sweep machinery.
+        let mut prior: Vec<((u64, u64), T, i64)> = Vec::new();
+        for at in [time(0, 0), time(0, 1), time(1, 0), time(1, 1), time(2, 2)] {
+            let mut counts = std::collections::BTreeMap::new();
+            for ((_, value), t, diff) in &rows {
+                if timely::PartialOrder::less_equal(t, &at) {
+                    *counts.entry(*value).or_insert(0i64) += diff;
+                }
+            }
+            let mut correction = std::collections::BTreeMap::new();
+            if let Some((&value, _)) = counts.iter().rev().find(|(_, d)| **d > 0) {
+                correction.insert(value, 1i64);
+            }
+            for ((_, value), t, diff) in &prior {
+                if timely::PartialOrder::less_equal(t, &at) {
+                    *correction.entry(*value).or_default() -= diff;
+                }
+            }
+            prior.extend(correction.into_iter().filter(|(_, d)| *d != 0)
+                .map(|(value, diff)| ((key, value), at, diff)));
+        }
+        expected.extend(prior);
+    }
+    consolidate_updates(&mut expected);
+    for limit in [1, 7, 256, 1024, usize::MAX] {
+        let backend = VecReduceBackend::with_window(max_logic, usize::MAX);
+        let mut tactic = ProxyReduceTactic::new(backend).with_key_batch_size(limit);
+        let source = hbatch(initial.clone(), time(0, 0), time(1, 1));
+        let lower = Antichain::from_elem(time(0, 0));
+        let middle = Antichain::from_elem(time(1, 1));
+        let upper = Antichain::from_elem(time(2, 2));
+        let (first, pending) = tactic.retire(vec![], vec![], vec![source.clone()], &lower, &middle, &lower);
+        assert_eq!(pending, middle, "limit {limit}: synthesized crossing must remain carried");
+        let mut all: Vec<_> = first.into_iter().filter_map(|s| s.inner).collect();
+        // No new records: every key is revisited solely because of its pending join.
+        let (second, pending) = tactic.retire(vec![source.clone()], all.clone(), vec![], &middle, &upper, &pending);
+        assert!(pending.is_empty(), "limit {limit}: pending-only retire");
+        all.extend(second.into_iter().filter_map(|s| s.inner));
+        let input = hbatch(novel.clone(), time(2, 2), time(3, 3));
+        let (third, pending) = tactic.retire(vec![source], all.clone(), vec![input], &upper, &Antichain::from_elem(time(3, 3)), &upper);
+        assert!(pending.is_empty(), "limit {limit}: cancellations");
+        all.extend(third.into_iter().filter_map(|s| s.inner));
+        assert_eq!(hread(&all), expected, "limit {limit}");
+    }
 }

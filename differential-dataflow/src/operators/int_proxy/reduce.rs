@@ -134,6 +134,8 @@ pub trait ProxyReduceBackend<T, B1, B2> {
 /// A proxy-space [`ReduceTactic`]: matches input and output records by `key_hash`.
 pub struct ProxyReduceTactic<T, Bk> {
     backend: Bk,
+    /// Maximum number of key hashes with live sweep state at once.
+    key_batch_size: usize,
     /// Pending interesting times beyond the upper frontier, keyed by key hash.
     pending: BTreeMap<u64, Vec<T>>,
 }
@@ -141,7 +143,20 @@ pub struct ProxyReduceTactic<T, Bk> {
 impl<T, Bk> ProxyReduceTactic<T, Bk> {
     /// A tactic deferring all value semantics to `backend`.
     pub fn new(backend: Bk) -> Self {
-        ProxyReduceTactic { backend, pending: BTreeMap::new() }
+        ProxyReduceTactic { backend, key_batch_size: usize::MAX, pending: BTreeMap::new() }
+    }
+
+    /// Limit simultaneous sweeps independently of the backend's presentation window.
+    ///
+    /// Complete key hashes stay together, including all real keys sharing a hash.
+    /// Sweep scratch is reused between groups within a retire. The bound does not
+    /// limit a single key's size, the presentation, or the output batch. Corrections
+    /// remain batched, and emission still happens once per backend window.
+    /// By default, all keys in the presentation can have live sweeps at once.
+    pub fn with_key_batch_size(mut self, key_batch_size: usize) -> Self {
+        assert!(key_batch_size > 0, "key batch size must be positive");
+        self.key_batch_size = key_batch_size;
+        self
     }
 }
 
@@ -224,7 +239,7 @@ where
         let mut from = Some(0u64);
         let mut window: ReduceWindow<T, Bk::RIn, Bk::ROut> = ReduceWindow::default();
 
-        // Retire-wide reusable scratch: cleared per window or wave, never reallocated. Fresh
+        // Retire-wide reusable scratch: cleared per group, window or wave, retaining capacity. Fresh
         // per-key/per-wave `Vec`s were once the dominant cost here, which is why the slots and the
         // staging buffers are held across the whole retire rather than built where they are used.
         let mut slots: Vec<KeySweep<T, Bk::RIn, Bk::ROut>> = Vec::new();
@@ -279,105 +294,107 @@ where
             //
             // Each key gets a `Sweep`, which discovers and evaluates in ONE ascending pass,
             // suspending where the conventional reduce would call user logic. Slots are reused
-            // across windows, so a key costs no allocation of its own beyond the first window wide
-            // enough to need it. Peak state is O(window presentation), bounded by what
-            // `next_window` already materialized.
-            let mut n_slots = 0usize;
+            // across bounded groups as well as windows. A backend can present a large
+            // window without allocating sweep state for every key simultaneously.
             let (mut is, mut ns, mut os) = (0usize, 0usize, 0usize);
-            live.clear();
-            // Mapped to hashes before the min: the sources differ in shape.
-            while let Some(key) = [
-                p_in.get(is).map(|record| record.0.0),
-                seeds.get(ns).map(|seed| seed.0),
-                p_out.get(os).map(|record| record.0.0),
-            ].into_iter().flatten().min() {
-                let i0 = is;
-                while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
-                let i1 = is;
-                let n0 = ns;
-                while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
-                let n1 = ns;
-                let o0 = os;
-                while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
-                let o1 = os;
+            while is < p_in.len() || ns < seeds.len() || os < p_out.len() {
+                let mut n_slots = 0usize;
+                live.clear();
+                // Mapped to hashes before the min: the sources differ in shape.
+                while let Some(key) = [
+                    p_in.get(is).map(|record| record.0.0),
+                    seeds.get(ns).map(|seed| seed.0),
+                    p_out.get(os).map(|record| record.0.0),
+                ].into_iter().flatten().min() {
+                    let i0 = is;
+                    while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
+                    let i1 = is;
+                    let n0 = ns;
+                    while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
+                    let n1 = ns;
+                    let o0 = os;
+                    while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
+                    let o1 = os;
 
-                if n_slots == slots.len() { slots.push(KeySweep::empty()); }
-                let slot = &mut slots[n_slots];
-                slot.key = key;
-                slot.pended.clear();
-                // Only the DUE times seed the sweep; the carried ones remain in `self.pending`.
-                let owed = due.get(&key).map(|p| &p[..]).unwrap_or(&[]);
-                slot.sweep.load(
-                    owed,
-                    (n0..n1).map(|n| seeds[n].1.clone()),
-                    (i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())),
-                    (o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())),
-                );
-                slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
-                if slot.at.is_some() { live.push(n_slots); }
-                else if !slot.pended.is_empty() {
-                    for time in &slot.pended { pending_frontier.insert_ref(time); }
-                    self.pending.entry(key).or_default().append(&mut slot.pended);
-                }
-                n_slots += 1;
-            }
-
-            // Each wave: read every suspended key's accumulations, cross the non-empty ones in one
-            // call, hand the corrections back, and step every live key on. A key retires when its
-            // sweep runs dry, at which point its pended times are carried forward.
-            while !live.is_empty() {
-                batch_keys.clear();
-                in_ends.clear();
-                in_all.clear();
-                out_ends.clear();
-                out_all.clear();
-                active.clear();
-
-                for &si in live.iter() {
-                    let at = slots[si].at.clone().expect("live slots are suspended at a time");
-                    in_accum.clear();
-                    cur_out.clear();
-                    slots[si].sweep.input_at(&at, &mut in_accum);
-                    slots[si].sweep.output_at(&at, &mut cur_out);
-                    // An interesting time can still reach the gate with nothing to read; the
-                    // conventional reduce skips user logic there and so do we.
-                    if in_accum.is_empty() && cur_out.is_empty() { continue; }
-                    batch_keys.push(slots[si].key);
-                    in_all.append(&mut in_accum);
-                    in_ends.push(in_all.len());
-                    out_all.append(&mut cur_out);
-                    out_ends.push(out_all.len());
-                    active.push((si, at));
-                }
-
-                if !batch_keys.is_empty() {
-                    let (corr, corr_ends) = self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all);
-                    let mut cstart = 0usize;
-                    for (bi, (si, at)) in active.iter().enumerate() {
-                        let cend = corr_ends[bi];
-                        if cstart != cend {
-                            debug_assert!(held.elements().iter().any(|h| h.less_equal(at)), "no held capability <= active time");
-                            for (vid, d) in &corr[cstart..cend] {
-                                deltas.push(((slots[*si].key, *vid), at.clone(), d.clone()));
-                            }
-                            slots[*si].sweep.commit(at, corr[cstart..cend].iter().cloned());
-                        }
-                        cstart = cend;
-                    }
-                }
-
-                // Step every live key past the time it was suspended at, and retire the spent ones.
-                for &si in live.iter() {
-                    let slot = &mut slots[si];
+                    if n_slots == slots.len() { slots.push(KeySweep::empty()); }
+                    let slot = &mut slots[n_slots];
+                    slot.key = key;
+                    slot.pended.clear();
+                    // Only the DUE times seed the sweep; the carried ones remain in `self.pending`.
+                    let owed = due.get(&key).map(|p| &p[..]).unwrap_or(&[]);
+                    slot.sweep.load(
+                        owed,
+                        (n0..n1).map(|n| seeds[n].1.clone()),
+                        (i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())),
+                        (o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())),
+                    );
                     slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
-                    if slot.at.is_none() && !slot.pended.is_empty() {
+                    if slot.at.is_some() { live.push(n_slots); }
+                    else if !slot.pended.is_empty() {
                         for time in &slot.pended { pending_frontier.insert_ref(time); }
-                        let entry = self.pending.entry(slot.key).or_default();
-                        entry.append(&mut slot.pended);
-                        crate::operators::reduce::sort_dedup(entry);
+                        self.pending.entry(key).or_default().append(&mut slot.pended);
                     }
+                    n_slots += 1;
+                    if n_slots == self.key_batch_size { break; }
                 }
-                live.retain(|&si| slots[si].at.is_some());
+
+                // Each wave: read every suspended key's accumulations, cross the non-empty ones in one
+                // call, hand the corrections back, and step every live key on. A key retires when its
+                // sweep runs dry, at which point its pended times are carried forward.
+                while !live.is_empty() {
+                    batch_keys.clear();
+                    in_ends.clear();
+                    in_all.clear();
+                    out_ends.clear();
+                    out_all.clear();
+                    active.clear();
+
+                    for &si in live.iter() {
+                        let at = slots[si].at.clone().expect("live slots are suspended at a time");
+                        in_accum.clear();
+                        cur_out.clear();
+                        slots[si].sweep.input_at(&at, &mut in_accum);
+                        slots[si].sweep.output_at(&at, &mut cur_out);
+                        // An interesting time can still reach the gate with nothing to read; the
+                        // conventional reduce skips user logic there and so do we.
+                        if in_accum.is_empty() && cur_out.is_empty() { continue; }
+                        batch_keys.push(slots[si].key);
+                        in_all.append(&mut in_accum);
+                        in_ends.push(in_all.len());
+                        out_all.append(&mut cur_out);
+                        out_ends.push(out_all.len());
+                        active.push((si, at));
+                    }
+
+                    if !batch_keys.is_empty() {
+                        let (corr, corr_ends) = self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all);
+                        let mut cstart = 0usize;
+                        for (bi, (si, at)) in active.iter().enumerate() {
+                            let cend = corr_ends[bi];
+                            if cstart != cend {
+                                debug_assert!(held.elements().iter().any(|h| h.less_equal(at)), "no held capability <= active time");
+                                for (vid, d) in &corr[cstart..cend] {
+                                    deltas.push(((slots[*si].key, *vid), at.clone(), d.clone()));
+                                }
+                                slots[*si].sweep.commit(at, corr[cstart..cend].iter().cloned());
+                            }
+                            cstart = cend;
+                        }
+                    }
+
+                    // Step every live key past the time it was suspended at, and retire the spent ones.
+                    for &si in live.iter() {
+                        let slot = &mut slots[si];
+                        slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
+                        if slot.at.is_none() && !slot.pended.is_empty() {
+                            for time in &slot.pended { pending_frontier.insert_ref(time); }
+                            let entry = self.pending.entry(slot.key).or_default();
+                            entry.append(&mut slot.pended);
+                            crate::operators::reduce::sort_dedup(entry);
+                        }
+                    }
+                    live.retain(|&si| slots[si].at.is_some());
+                }
             }
 
             if !deltas.is_empty() {
@@ -393,8 +410,8 @@ where
 }
 
 /// One key's slot in a window: its [`Sweep`], the time it is suspended at, and the times it has
-/// pended so far. Slots are reused across windows, so a key costs no allocation of its own beyond
-/// the first window wide enough to need it.
+/// pended so far. Slots and their scratch capacity are reused across groups and windows
+/// within a retire, then dropped when the retire completes.
 struct KeySweep<T, RIn, ROut> {
     key: u64,
     sweep: Sweep<T, RIn, ROut>,
@@ -486,7 +503,7 @@ enum Tick<T> {
 }
 
 impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sweep<T, RIn, ROut> {
-    /// An empty sweep, to be `load`ed. Reuse one per key rather than allocating per key.
+    /// An empty sweep, to be `load`ed and reused for successive keys.
     fn new() -> Self {
         Sweep {
             input: ValueHistory::new(), output: ValueHistory::new(),

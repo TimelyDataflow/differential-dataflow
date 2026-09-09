@@ -326,7 +326,9 @@ impl Backend for CorgiBackend {
     }
 
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
-        reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone())))
+        // Amortize columnar corrections while reusing sweep scratch across wide presentations.
+        let tactic = ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone())).with_key_batch_size(256);
+        reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic)
     }
 
     fn inspect<'s>(c: Collection<'s, Time, CC>, label: String) -> Collection<'s, Time, CC> {
