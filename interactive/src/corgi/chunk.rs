@@ -117,17 +117,24 @@ where
         srcs: &[Option<&CValue>],
         tags: &[usize],
         offs: &[usize],
-        times: &ColTimes<T>,
-        diffs: &[R],
+        times: ColTimes<T>,
+        diffs: Vec<R>,
         out: &mut VecDeque<Self>,
     ) {
         let n = times.len();
+        if n <= TARGET {
+            if n != 0 {
+                let kv = gather_lanes(srcs, tags, offs);
+                out.push_back(Self::from_kv(kv, times, diffs));
+            }
+            return;
+        }
         let mut s = 0;
         while s < n {
             let e = (s + TARGET).min(n);
             let kv = gather_lanes(srcs, &tags[s..e], &offs[s..e]);
             let mut t = ColTimes::new();
-            t.push_range(times, s, e);
+            t.push_range(&times, s, e);
             out.push_back(Self::from_kv(kv, t, diffs[s..e].to_vec()));
             s = e;
         }
@@ -179,7 +186,9 @@ where
 
         let runs = survey_groups(&kv1, &kv2);
         let (mut tags, mut offs) = (Vec::with_capacity(n1 + n2), Vec::with_capacity(n1 + n2));
-        let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::with_capacity(n1 + n2));
+        // Emitted chunks own this allocation. Size it by surviving rows so cancellation
+        // does not leave a small result holding storage for both full inputs.
+        let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
         // Where the survivor's pushed-back suffix starts: the last run, if it is exclusive.
         let (mut p1, mut p2) = (n1, n2);
         let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, times: &mut ColTimes<T>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
@@ -230,7 +239,7 @@ where
         }
 
         let srcs = [Some(&kv1), Some(&kv2)];
-        Self::emit(&srcs, &tags, &offs, &times, &diffs, out);
+        Self::emit(&srcs, &tags, &offs, times, diffs, out);
 
         // Push back the survivor's unconsumed suffix (all `>` the horizon), ahead of its deque.
         if p1 < n1 {
@@ -286,8 +295,17 @@ where
         // Concatenate the pushed-back carry with the newly-arrived chunks, then advance/consolidate
         // each *complete* `(key, val)` group; withhold the last group as the carry unless `done`.
         if input.is_empty() { return; }
-        let chunks: Vec<Self> = input.drain(..).collect();
-        let (ckv, ctimes, cdiffs) = Self::concat(&chunks);
+        let (ckv, ctimes, cdiffs) = if input.len() == 1 {
+            // Merge output normally arrives uniquely owned. Move its columns
+            // into advancement instead of copying the whole chunk first.
+            let chunk = input.pop_front().unwrap();
+            match Rc::try_unwrap(chunk.0) {
+                Ok(inner) => (CValue::Prod(vec![inner.keys, inner.vals]), inner.times, inner.diffs),
+                Err(inner) => Self::concat(&[Self(inner)]),
+            }
+        } else {
+            Self::concat(&input.drain(..).collect::<Vec<_>>())
+        };
         let n = ctimes.len();
         if n == 0 { return; }
 
@@ -316,30 +334,31 @@ where
         let srcs = [Some(&ckv)];
         let (mut tags, mut offs) = (Vec::new(), Vec::new());
         let (mut otimes, mut odiffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
+        let mut pairs: Vec<(T, R)> = Vec::new();
         let mut i = 0;
         for &g_end in &bounds {
             if g_end > end { break; }
-            let mut pairs: Vec<(T, R)> = (i..g_end)
-                .map(|k| { let mut t = ctimes.get(k); t.advance_by(frontier); (t, cdiffs[k].clone()) })
-                .collect();
+            pairs.extend((i..g_end)
+                .map(|k| { let mut t = ctimes.get(k); t.advance_by(frontier); (t, cdiffs[k].clone()) }));
             pairs.sort_by(|a, b| a.0.cmp(&b.0));
-            let mut k = 0;
-            while k < pairs.len() {
-                let t = pairs[k].0.clone();
-                let mut d = pairs[k].1.clone();
-                k += 1;
-                while k < pairs.len() && pairs[k].0 == t { d.plus_equals(&pairs[k].1); k += 1; }
+            // Reuse scratch across groups and move owned times out. Cloning
+            // each consolidated representative could allocate for nested times.
+            let mut drain = pairs.drain(..).peekable();
+            while let Some((t, mut d)) = drain.next() {
+                while drain.peek().is_some_and(|(next, _)| next == &t) {
+                    d.plus_equals(&drain.next().unwrap().1);
+                }
                 if !d.is_zero() {
                     tags.push(0); offs.push(i); otimes.push(&t); odiffs.push(d);
                     if otimes.len() >= TARGET {
-                        Self::emit(&srcs, &tags, &offs, &otimes, &odiffs, out);
-                        tags.clear(); offs.clear(); otimes.clear(); odiffs.clear();
+                        Self::emit(&srcs, &tags, &offs, std::mem::replace(&mut otimes, ColTimes::new()), std::mem::take(&mut odiffs), out);
+                        tags.clear(); offs.clear();
                     }
                 }
             }
             i = g_end;
         }
-        if !otimes.is_empty() { Self::emit(&srcs, &tags, &offs, &otimes, &odiffs, out); }
+        if !otimes.is_empty() { Self::emit(&srcs, &tags, &offs, otimes, odiffs, out); }
     }
 
     /// Maximal packing via the harness [`pack`]: coalesce by concatenating columns (`gather_lanes`),
@@ -657,6 +676,84 @@ mod test {
     use std::collections::BTreeMap;
 
     fn xorshift(s: &mut u64) -> u64 { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; *s }
+
+    #[test]
+    fn cancelled_merge_does_not_retain_input_sized_diff_storage() {
+        let mut retained_capacity = None;
+        for rows in [16, 256, 4096] {
+            let make = |diffs| CorgiChunk::from_columns(
+                CValue::u64((0..rows).collect()), CValue::Unit(rows as usize),
+                vec![0u64; rows as usize], diffs,
+            );
+            let mut retractions = vec![-1i64; rows as usize];
+            *retractions.last_mut().unwrap() = -2;
+            let mut left = VecDeque::from([make(vec![1i64; rows as usize])]);
+            let mut right = VecDeque::from([make(retractions)]);
+            let mut output = VecDeque::new();
+            CorgiChunk::merge(&mut left, &mut right, &mut output);
+            assert!(left.is_empty() && right.is_empty());
+            assert_eq!(output.len(), 1);
+            assert_eq!(output[0].diffs(), &[-1]);
+            assert_eq!(corgi::arrange::leaf_slice(output[0].keys()).unwrap(), &[rows - 1]);
+            let capacity = output[0].0.diffs.capacity();
+            assert_eq!(*retained_capacity.get_or_insert(capacity), capacity,
+                "one surviving row should not retain storage proportional to cancelled input");
+        }
+    }
+
+    #[test]
+    fn advance_owned_and_shared_nested_times_matches_reference() {
+        use differential_dataflow::dynamic::pointstamp::PointStamp;
+        use differential_dataflow::lattice::Lattice;
+        use timely::order::Product;
+        type T = Product<u64, PointStamp<u64>>;
+        let time = |outer, coords: &[u64]| T::new(outer, PointStamp::new(coords.iter().copied().collect()));
+        let times = [time(0, &[]), time(1, &[2, 3]), time(2, &[1, 4]), time(2, &[3, 1]), time(3, &[2])];
+        let rows: Vec<_> = (0..5).flat_map(|k| (0..2).flat_map(move |v| (0..5).map(move |t| (k, v, t))))
+            .map(|(k, v, i)| ((k, v), times[i].clone(), if i % 2 == 0 { 1i64 } else { -1 }))
+            .collect();
+        for frontier in [Antichain::new(), Antichain::from_elem(time(3, &[2, 2])),
+                         Antichain::from(vec![time(1, &[4, 1]), time(3, &[1, 2])])] {
+            let mut expected = BTreeMap::new();
+            for (kv, t, d) in &rows {
+                let mut t = t.clone();
+                t.advance_by(frontier.borrow());
+                *expected.entry((*kv, t)).or_insert(0i64) += d;
+            }
+            expected.retain(|_, d| *d != 0);
+            for size in [1, 3, rows.len()] {
+                for shared in [false, true] {
+                    let chunks: Vec<_> = rows.chunks(size).map(|rows| CorgiChunk::from_columns(
+                        CValue::u64(rows.iter().map(|r| r.0.0).collect()),
+                        CValue::u64(rows.iter().map(|r| r.0.1).collect()),
+                        rows.iter().map(|r| r.1.clone()).collect(), rows.iter().map(|r| r.2).collect(),
+                    )).collect();
+                    let retained = if shared { chunks.clone() } else { Vec::new() };
+                    let (mut input, mut output) = (VecDeque::new(), VecDeque::new());
+                    for chunk in chunks {
+                        input.push_back(chunk);
+                        CorgiChunk::advance(&mut input, frontier.borrow(), false, &mut output);
+                    }
+                    CorgiChunk::advance(&mut input, frontier.borrow(), true, &mut output);
+                    assert!(input.is_empty());
+                    let mut actual = BTreeMap::new();
+                    let mut previous = None;
+                    for chunk in output {
+                        let keys = corgi::arrange::leaf_slice(chunk.keys()).unwrap();
+                        let vals = corgi::arrange::leaf_slice(chunk.vals()).unwrap();
+                        for i in 0..chunk.len_() {
+                            let key = ((keys[i], vals[i]), chunk.times().get(i));
+                            assert!(previous.as_ref().is_none_or(|p| p < &key));
+                            previous = Some(key.clone());
+                            assert!(actual.insert(key, chunk.diffs()[i]).is_none());
+                        }
+                    }
+                    assert_eq!(actual, expected, "size={size}, shared={shared}, frontier={frontier:?}");
+                    drop(retained);
+                }
+            }
+        }
+    }
 
     /// Build a single sorted+consolidated CorgiChunk from u64 (key,val,time,diff) rows.
     fn chunk(rows: &[((u64, u64), u64, i64)]) -> CorgiChunk<u64, i64> {
