@@ -62,10 +62,15 @@ impl<T: Clone + 'static, R: Clone + 'static> CorgiContainer<T, R> {
     /// boundary** transcode (once per batch). The only rows→columns conversion in the corgi
     /// backend: inside the dataflow every operator is columnar.
     pub fn from_updates(updates: Vec<((Row, Row), T, R)>, kshape: &corgi::Shape, vshape: &corgi::Shape) -> Self {
-        let keys_rows: Vec<DValue> = updates.iter().map(|u| u.0 .0.clone()).collect();
-        let vals_rows: Vec<DValue> = updates.iter().map(|u| u.0 .1.clone()).collect();
-        let times = updates.iter().map(|u| u.1.clone()).collect();
-        let diffs = updates.iter().map(|u| u.2.clone()).collect();
+        let len = updates.len();
+        let (mut keys_rows, mut vals_rows) = (Vec::with_capacity(len), Vec::with_capacity(len));
+        let (mut times, mut diffs) = (Vec::with_capacity(len), Vec::with_capacity(len));
+        for ((key, val), time, diff) in updates {
+            keys_rows.push(key);
+            vals_rows.push(val);
+            times.push(time);
+            diffs.push(diff);
+        }
         CorgiContainer { keys: transcode(&keys_rows, kshape), vals: transcode(&vals_rows, vshape), times, diffs }
     }
 
