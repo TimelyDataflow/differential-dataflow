@@ -172,6 +172,21 @@ impl<T> CorgiReduceBackend<T> {
         }
     }
 
+    /// Whether this reducer's output values are always unit.
+    fn unit_output(&self) -> bool {
+        match self.reducer {
+            Reducer::Distinct => true,
+            Reducer::Count | Reducer::Min | Reducer::Collect => false,
+        }
+    }
+
+    /// Whether the current reduction path resolves input IDs to payload rows.
+    fn resolves_input_payloads(&self) -> bool {
+        // Count only consumes diffs, but still uses the general row-resolution path.
+        // A diff-only Count path can opt out here without changing presentation.
+        !self.unit_output()
+    }
+
     /// Clear the resolution pools at the start of a retire (called from `next_window`'s first call).
     fn reset_pools(&mut self) {
         self.key_index.clear();
@@ -198,6 +213,14 @@ impl<T> CorgiReduceBackend<T> {
         }
         self.val_len += col.len();
         self.val_blocks.push(col);
+    }
+
+    /// Register presented values, using just the first representative for a unit column.
+    fn register_vals_ids(&mut self, col: CValue, ids: &PresentedIds) {
+        match ids {
+            PresentedIds::Unit(id) => self.register_vals(col, std::slice::from_ref(id)),
+            PresentedIds::Rows(ids) => self.register_vals(col, ids),
+        }
     }
 }
 
@@ -447,7 +470,7 @@ where
         let vids = PresentedIds::new(&p_vals);
         let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &times, &diffs, &run_ends, bridge);
         // Distinct needs value identity in the sweep, but never resolves input payloads.
-        if !matches!(self.reducer, Reducer::Distinct) {
+        if self.resolves_input_payloads() {
             match &vids {
                 PresentedIds::Unit(id) => { self.in_index.entry(*id).or_insert(*len); }
                 PresentedIds::Rows(ids) => {
@@ -494,7 +517,7 @@ where
                 out_ids = ids(&col);
                 self.register_vals(col, &out_ids);
             }
-            Reducer::Distinct => unreachable!("distinct corrections do not resolve values"),
+            Reducer::Distinct => unreachable!("unit_output() reducers are handled directly in reduce_corrections"),
             Reducer::Min => {
                 // The structural minimum over values with NON-ZERO net. The sign does not select
                 // candidates: DD presents every non-zero accumulation. Filtering to `> 0` here both
@@ -679,15 +702,8 @@ where
             let vids = PresentedIds::new(&o_vals);
             let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output);
             self.register_keys(o_keys, &o_khs);
-            if !matches!(self.reducer, Reducer::Distinct) {
-                match &vids {
-                    PresentedIds::Unit(id) => {
-                        self.val_index.entry(*id).or_insert(self.val_len);
-                        self.val_len += o_vals.len();
-                        self.val_blocks.push(o_vals);
-                    }
-                    PresentedIds::Rows(ids) => self.register_vals(o_vals, ids),
-                }
+            if !self.unit_output() {
+                self.register_vals_ids(o_vals, &vids);
             }
             if !merged {
                 window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
@@ -697,9 +713,13 @@ where
     }
 
     fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
-        if matches!(self.reducer, Reducer::Distinct) {
-            // Output is always unit. Input values remain distinct in the sweep: a:+1, b:-1
-            // is present, as is an all-negative input. Only an empty accumulation disappears.
+        debug_assert_eq!(in_ends.len(), keys.len());
+        debug_assert_eq!(out_ends.len(), keys.len());
+        if self.unit_output() {
+            // Distinct emits unit for any non-empty accumulation. DD reduce includes
+            // values with negative accumulated diffs: a negated collection is all-negative
+            // but must still be present, so testing > 0 would be wrong. Input identities
+            // remain separate in the sweep: a:+1, b:-1 is also present despite its zero sum.
             let unit_id = *UNIT_ID;
             let mut corr = Vec::new();
             let mut ends = Vec::with_capacity(keys.len());
@@ -750,7 +770,7 @@ where
 
     fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
         // Unit output has no value rows to resolve or retain.
-        if !matches!(self.reducer, Reducer::Distinct) {
+        if !self.unit_output() {
             self.rows.1.extend(records.iter().map(|rec| {
                 *self.val_index.get(&rec.0.1).expect("value resolvable this retire")
             }));
@@ -771,7 +791,7 @@ where
         let (krows, vrows, times, diffs) = std::mem::take(&mut self.rows);
         if times.is_empty() { return None; }
         let keys = gather(&key_pool, &krows);
-        let vals = if matches!(self.reducer, Reducer::Distinct) {
+        let vals = if self.unit_output() {
             CValue::Unit(times.len())
         } else {
             gather(&concat_columns(&self.val_blocks), &vrows)
@@ -886,4 +906,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod unit_tests;
+mod unit_value_tests;
