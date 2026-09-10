@@ -10,6 +10,8 @@ IC14 is the v2 cheapest-interaction-path query, not v1's all-shortest-path query
 
 Follow-up work is tracked in [GAPS.md](GAPS.md), with a caveated
 [M4 measurement record](MEASUREMENTS.md) and [pinned generated-data recipes](DATA.md).
+Use [CURRENT.md](CURRENT.md) for qualification status and [REFRESH.md](REFRESH.md)
+to produce and promote a replacement readout independently of an engine PR.
 
 ## Run
 

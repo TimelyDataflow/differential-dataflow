@@ -5,6 +5,13 @@ list of proven causes for every slow query. The [measurement record](MEASUREMENT
 separates observations, experimental controls, and incomplete runs. Start with
 the [runnable suite](SNB.md) and [data recipes](DATA.md), not a session-local tree.
 
+**Freshness:** these are dated assessments, not automatically current defects.
+[CURRENT.md](CURRENT.md) records which engine revisions have qualifying evidence;
+as of the 2026-09-10 rebase to `229508dd`, the historical performance findings
+need remeasurement. [REFRESH.md](REFRESH.md) defines portable recipes and permits
+any investigator to replace an assessment with newer evidence, independently
+of the engine change's author. Source changes alone do not establish a fix.
+
 Keep the natural query definitions as the baseline. A hand-authored alternative
 can establish an attainable improvement, but is not evidence that an automatic
 optimizer implements it. Keep independent changes separate until measured.
@@ -16,7 +23,8 @@ not a claim of official choke-point coverage or benchmark conformance.
 
 Stable IDs are never renumbered. Record the owner/issue/PR when work starts;
 initially all open entries are unassigned. Use **observed**, **hypothesis**,
-**prototyped**, or **fixed**, with the assessment revision/date. For each result:
+**prototyped**, **not reproduced**, **contested**, or **fixed**, with the
+assessment revision/date and evidence link. For each result:
 
 - Preserve the reproduction: query, dataset hash, binding bank, exact delta,
   mode, workers, build, machine, and resource envelope. Label synthetic probes.
@@ -27,6 +35,10 @@ initially all open entries are unassigned. Use **observed**, **hypothesis**,
 - Close with a fix revision/PR, matched before/after results, and the relevant
   semantic check or static guarantee. Keep the closed entry and contrary results.
   CI should pin semantics; do not turn these M4 timings into CI thresholds.
+- An unexplained disappearance can retire a performance hypothesis as
+  **not reproduced at X**; it need not wait for a bisect or the original author.
+  Changed workloads start new measurement series. Repeated contradictory
+  evidence takes precedence over the prose here; preserve unresolved conflicts.
 
 The recipes below name existing query definitions and a bounded first task.
 Except for the ordinary suite commands, they are investigation recipes, not

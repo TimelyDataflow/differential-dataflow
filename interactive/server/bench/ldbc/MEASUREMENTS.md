@@ -7,6 +7,11 @@ harness.** Establish a fresh baseline before claiming an improvement to merged
 code. Equivalent M4 minis are useful comparison hosts; they do not make
 different plans, bindings, builds, or swap states equal.
 
+This file is a **historical archive**, not the replaceable current readout.
+See [CURRENT.md](CURRENT.md) for qualification status and [REFRESH.md](REFRESH.md)
+for exact portable recipes, accounting, and how new results supersede old ones.
+The 2026-09-10 upstream revision `229508dd` is not measured by this archive.
+
 ## Machine, builds, and timing epochs
 
 Apple M4 Mac mini (`Mac16,10`), 10 logical CPUs, 16 GiB memory, macOS 26.1 /
@@ -219,6 +224,10 @@ not proof all 16 GiB are insufficient. There is no all-query concurrent SF1
 result.
 
 ## Making a new comparable record
+
+For new records follow [REFRESH.md](REFRESH.md), which specifies named recipes,
+build receipts, repetitions, raw-event readouts and promotion. The older generic
+guidance below remains context, not an alternative versioned workload contract.
 
 Start with the tiny fixture, then pinned SF0.003; keep SF1 opt-in with
 whole-process memory controls. Record CPU model/memory explicitly: reports
