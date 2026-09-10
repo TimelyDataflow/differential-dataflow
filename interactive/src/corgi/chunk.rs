@@ -327,6 +327,20 @@ where
             input.push_front(Self::from_kv(gather(&ckv, &idx), ct, cdiffs[end..].to_vec()));
         }
 
+        // Dispatch once per buffer for DDIR's numeric product lattice. The general
+        // timestamp path below retains its own Lattice::advance_by semantics.
+        use std::any::Any;
+        use crate::ir::Time;
+        if let Some(times) = (&ctimes as &dyn Any).downcast_ref::<ColTimes<Time>>() {
+            let frontier: Antichain<Time> = frontier.iter()
+                .map(|t| (t as &dyn Any).downcast_ref::<Time>().expect("checked time type").clone())
+                .collect();
+            let target = (out as &mut dyn Any).downcast_mut::<VecDeque<CorgiChunk<Time, R>>>()
+                .expect("checked time type");
+            CorgiChunk::<Time, R>::advance_rows(&ckv, times, &cdiffs, &bounds, end, frontier.borrow(), target);
+            return;
+        }
+
         // Advance + consolidate each complete group; emit `TARGET`-sized chunks. All rows of a group
         // share `(key, val)`, so one representative offset materializes each output row's kv. Times are
         // materialized here (owned `T`) because `advance_by` mutates and the tiebreak re-sort is a Rust
@@ -398,6 +412,41 @@ where
             },
             |chunk| chunk,
         );
+    }
+}
+
+impl<R: Semigroup + Clone + 'static> CorgiChunk<crate::ir::Time, R> {
+    /// Advance complete key/value groups without constructing an owned timestamp per record.
+    fn advance_rows(
+        kv: &CValue, times: &ColTimes<crate::ir::Time>, diffs: &[R], bounds: &[usize], end: usize,
+        frontier: AntichainRef<crate::ir::Time>, out: &mut VecDeque<Self>,
+    ) {
+        let times = crate::corgi::col_times::TimeRows::advance(times, end, frontier);
+        let (mut tags, mut offs, mut order) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut otimes, mut odiffs) = (ColTimes::new(), Vec::new());
+        let mut start = 0;
+        for &stop in bounds {
+            if stop > end { break; }
+            order.extend(start..stop);
+            order.sort_by(|&a, &b| times.cmp(a, b));
+            let mut run = order.drain(..).peekable();
+            while let Some(row) = run.next() {
+                let mut diff = diffs[row].clone();
+                while run.peek().is_some_and(|&other| times.cmp(row, other).is_eq()) {
+                    diff.plus_equals(&diffs[run.next().unwrap()]);
+                }
+                if !diff.is_zero() {
+                    // A complete group shares one key/value; keep its representative offset.
+                    tags.push(0); offs.push(start); times.push_to(row, &mut otimes); odiffs.push(diff);
+                    if otimes.len() >= TARGET {
+                        Self::emit(&[Some(kv)], &tags, &offs, std::mem::replace(&mut otimes, ColTimes::new()), std::mem::take(&mut odiffs), out);
+                        tags.clear(); offs.clear();
+                    }
+                }
+            }
+            start = stop;
+        }
+        if !otimes.is_empty() { Self::emit(&[Some(kv)], &tags, &offs, otimes, odiffs, out); }
     }
 }
 
@@ -831,3 +880,7 @@ mod test {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "time_advance_tests.rs"]
+mod time_advance_tests;

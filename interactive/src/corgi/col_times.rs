@@ -8,9 +8,9 @@
 //!
 //! Times are compared IN PLACE via the container's derived `Ord` on `Ref` (both `Product` and
 //! `PointStamp` carry `#[columnar(derive(Ord, PartialOrd))]`), so merge/sort never materialize a
-//! `T`. An owned `T` is reconstructed (`get`) only where a `Lattice` op is unavoidable — `join` in
-//! the join cross-product, `advance_by` in compaction — or at the emit boundary handing `T` back to
-//! DD. Range copies (`emit`/`concat`) push `Ref`s straight across (`push_ref`), also no `T`.
+//! `T`. DDIR's numeric product times can also advance in bulk through `TimeRows`. Other lattice
+//! operations and the emit boundary reconstruct owned times through `get`. Range copies
+//! (`emit`/`concat`) push `Ref`s straight across (`push_ref`), also no `T`.
 //!
 //! This is the O(data) time store; DD's `Chunk` boundary only ever sees whole chunks + frontier
 //! antichains (control complexity), so this stays entirely inside the backend — no DD change.
@@ -21,6 +21,10 @@ use columnar::{Borrow, Clear, Columnar, Container, Index, Len, Push};
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
+
+#[path = "time_rows.rs"]
+mod time_rows;
+pub(crate) use time_rows::TimeRows;
 
 /// A timestamp usable as a columnar time column: `Timestamp + Lattice` (DD's algebra) plus
 /// `Columnar` with an *ordered* `Ref` (so times compare in their SoA form). Our
