@@ -328,28 +328,28 @@ where
         }
 
         // Advance + consolidate each complete group; emit `TARGET`-sized chunks. All rows of a group
-        // share `(key, val)`, so one representative offset materializes each output row's kv. Times are
-        // materialized here (owned `T`) because `advance_by` mutates and the tiebreak re-sort is a Rust
-        // sort — the compaction path, not the merge hot path.
+        // share `(key, val)`, so one representative offset materializes each output row's kv. Times
+        // are advanced once per distinct stored time (`advance_classes`), and a row carries only its
+        // class: classes are numbered in time order, so sorting a group by class is the time
+        // tiebreak, equal classes are the rows to consolidate, and the output time is a range copy
+        // from the class table. No `T` is materialized per row.
+        let (class_of, class_times) = ctimes.advance_classes(end, frontier);
         let srcs = [Some(&ckv)];
         let (mut tags, mut offs) = (Vec::new(), Vec::new());
         let (mut otimes, mut odiffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
-        let mut pairs: Vec<(T, R)> = Vec::new();
+        let mut pairs: Vec<(u32, R)> = Vec::new();
         let mut i = 0;
         for &g_end in &bounds {
             if g_end > end { break; }
-            pairs.extend((i..g_end)
-                .map(|k| { let mut t = ctimes.get(k); t.advance_by(frontier); (t, cdiffs[k].clone()) }));
-            pairs.sort_by(|a, b| a.0.cmp(&b.0));
-            // Reuse scratch across groups and move owned times out. Cloning
-            // each consolidated representative could allocate for nested times.
+            pairs.extend((i..g_end).map(|k| (class_of[k], cdiffs[k].clone())));
+            pairs.sort_by_key(|p| p.0);
             let mut drain = pairs.drain(..).peekable();
-            while let Some((t, mut d)) = drain.next() {
-                while drain.peek().is_some_and(|(next, _)| next == &t) {
+            while let Some((c, mut d)) = drain.next() {
+                while drain.peek().is_some_and(|(next, _)| *next == c) {
                     d.plus_equals(&drain.next().unwrap().1);
                 }
                 if !d.is_zero() {
-                    tags.push(0); offs.push(i); otimes.push(&t); odiffs.push(d);
+                    tags.push(0); offs.push(i); otimes.push_ref(&class_times, c as usize); odiffs.push(d);
                     if otimes.len() >= TARGET {
                         Self::emit(&srcs, &tags, &offs, std::mem::replace(&mut otimes, ColTimes::new()), std::mem::take(&mut odiffs), out);
                         tags.clear(); offs.clear();

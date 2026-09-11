@@ -20,6 +20,7 @@ use std::cmp::Ordering;
 use columnar::{Borrow, Clear, Columnar, Container, Index, Len, Push};
 
 use differential_dataflow::lattice::Lattice;
+use timely::progress::frontier::AntichainRef;
 use timely::progress::Timestamp;
 
 /// A timestamp usable as a columnar time column: `Timestamp + Lattice` (DD's algebra) plus
@@ -133,6 +134,65 @@ impl<T: Columnar> ColTimes<T> {
         let bb = other.store.borrow();
         T::cmp_refs(ba.get(i), bb.get(j))
     }
+
+    /// The times of rows `[0, n)` advanced by `frontier`, as a class per row and the classes'
+    /// times: two rows share a class iff their advanced times are equal, and the classes are
+    /// numbered in time order, so ordering rows by class orders them by advanced time.
+    ///
+    /// `Lattice::advance_by` runs once per DISTINCT stored time, not once per row. A batch of a
+    /// million rows carries a few hundred distinct times, and each `advance_by` on a nested time
+    /// allocates, so this is the difference between a few hundred allocations and a million. The
+    /// distinct times are found in their stored form: a row is matched against the representative
+    /// of the time seen just before it, then the next one, then by binary search, and only a time
+    /// never seen is materialized and advanced.
+    pub fn advance_classes(&self, n: usize, frontier: AntichainRef<T>) -> (Vec<u32>, ColTimes<T>)
+    where
+        T: ColTime,
+    {
+        let b = self.store.borrow();
+        let same = |i: usize, j: usize| T::cmp_refs(b.get(i), b.get(j)) == Ordering::Equal;
+        // Representatives of the distinct stored times, kept in stored order for the search, each
+        // naming the advanced time it maps to; ids are stable, positions are not.
+        let mut reps: Vec<(usize, u32)> = Vec::new();
+        let mut advanced: Vec<T> = Vec::new();
+        let mut id_of_row: Vec<u32> = Vec::with_capacity(n);
+        let mut hint = 0usize;
+        for i in 0..n {
+            let at = if hint < reps.len() && same(reps[hint].0, i) {
+                hint
+            } else if hint + 1 < reps.len() && same(reps[hint + 1].0, i) {
+                hint + 1
+            } else {
+                match reps.binary_search_by(|&(rep, _)| T::cmp_refs(b.get(rep), b.get(i))) {
+                    Ok(at) => at,
+                    Err(at) => {
+                        let mut t = self.get(i);
+                        t.advance_by(frontier);
+                        reps.insert(at, (i, advanced.len() as u32));
+                        advanced.push(t);
+                        at
+                    }
+                }
+            };
+            hint = at;
+            id_of_row.push(reps[at].1);
+        }
+        // Distinct advanced times in time order are the classes.
+        let mut order: Vec<usize> = (0..advanced.len()).collect();
+        order.sort_by(|&x, &y| advanced[x].cmp(&advanced[y]));
+        let mut class_of_id = vec![0u32; advanced.len()];
+        let mut class_times = ColTimes::new();
+        for (k, &id) in order.iter().enumerate() {
+            if k == 0 || advanced[order[k - 1]] != advanced[id] {
+                class_times.push(&advanced[id]);
+            }
+            class_of_id[id] = (class_times.len() - 1) as u32;
+        }
+        for id in id_of_row.iter_mut() {
+            *id = class_of_id[*id as usize];
+        }
+        (id_of_row, class_times)
+    }
 }
 
 /// Build a column from an iterator of owned times (the `FromIterator` path used at construction).
@@ -172,6 +232,33 @@ mod cmp_agreement_tests {
         copy.clear();
         copy.push_range(&source, 4, 5);
         assert_eq!(copy.to_vec(), values[4..5]);
+    }
+
+    /// `advance_classes` must agree with a per-row `advance_by`: same advanced time per row,
+    /// classes numbered in time order, for single- and multi-element frontiers.
+    #[test]
+    fn advance_classes_matches_per_row_advance() {
+        use timely::progress::Antichain;
+        let times: Vec<T> = vec![
+            t(0, &[]), t(0, &[2]), t(1, &[3, 1]), t(0, &[2]), t(2, &[1, 4]), t(0, &[]),
+            t(1, &[3, 1]), t(3, &[2]), t(2, &[3, 1]), t(1, &[1]), t(0, &[2]), t(3, &[2, 2]),
+        ];
+        let store: ColTimes<T> = times.iter().cloned().collect();
+        for frontier in [
+            Antichain::new(),
+            Antichain::from_elem(t(0, &[])),
+            Antichain::from_elem(t(2, &[2, 2])),
+            Antichain::from(vec![t(1, &[4, 1]), t(3, &[1, 2])]),
+        ] {
+            let (classes, class_times) = store.advance_classes(times.len(), frontier.borrow());
+            let class_times = class_times.to_vec();
+            assert!(class_times.windows(2).all(|w| w[0] < w[1]), "classes are distinct and ordered");
+            for (i, time) in times.iter().enumerate() {
+                let mut expected = time.clone();
+                expected.advance_by(frontier.borrow());
+                assert_eq!(class_times[classes[i] as usize], expected, "row {i} under {frontier:?}");
+            }
+        }
     }
 
     /// `ColTime::cmp_refs` (the derived `Ord` on the columnar `Ref`) must agree with the
