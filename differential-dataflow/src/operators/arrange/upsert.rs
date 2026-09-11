@@ -142,7 +142,7 @@ where
 {
     let mut reader: Option<TraceAgent<Tr>> = None;
 
-    // fabricate a data-parallel operator using the `unary_notify` pattern.
+    // fabricate a data-parallel operator that holds capabilities and consults its input frontier.
     let stream = {
 
         let reader = &mut reader;
