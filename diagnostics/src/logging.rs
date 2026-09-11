@@ -448,46 +448,46 @@ fn construct_timely<'scope>(
                 let mut chs = ch_act.session(&cap);
                 let mut els = el_act.session(&cap);
                 let mut msgs = msg_act.session(&cap);
-                let ts = *cap.time();
-
-                for (event_time, event) in data.drain(..) {
-                    match event {
-                        TimelyEvent::Operates(e) => {
-                            ops.give(((e.id, e.name.clone(), e.addr.clone()), ts, 1i64));
-                            state.operators.insert(e.id, e);
-                        }
-                        TimelyEvent::Shutdown(e) => {
-                            if let Some(op) = state.operators.remove(&e.id) {
-                                ops.give(((op.id, op.name, op.addr), ts, -1i64));
+                if let Some(&ts) = cap.least() {
+                    for (event_time, event) in data.drain(..) {
+                        match event {
+                            TimelyEvent::Operates(e) => {
+                                ops.give(((e.id, e.name.clone(), e.addr.clone()), ts, 1i64));
+                                state.operators.insert(e.id, e);
                             }
-                        }
-                        TimelyEvent::Channels(e) => {
-                            chs.give((
-                                (e.id, e.scope_addr.clone(), e.source, e.target),
-                                ts,
-                                1i64,
-                            ));
-                        }
-                        TimelyEvent::Schedule(e) => match e.start_stop {
-                            StartStop::Start => {
-                                state.schedule_starts.insert(e.id, event_time);
-                            }
-                            StartStop::Stop => {
-                                if let Some(start) = state.schedule_starts.remove(&e.id) {
-                                    let elapsed_ns =
-                                        event_time.saturating_sub(start).as_nanos() as i64;
-                                    if elapsed_ns > 0 {
-                                        els.give((e.id, ts, elapsed_ns));
-                                    }
+                            TimelyEvent::Shutdown(e) => {
+                                if let Some(op) = state.operators.remove(&e.id) {
+                                    ops.give(((op.id, op.name, op.addr), ts, -1i64));
                                 }
                             }
-                        },
-                        TimelyEvent::Messages(e) => {
-                            if e.is_send {
-                                msgs.give((e.channel, ts, e.record_count as i64));
+                            TimelyEvent::Channels(e) => {
+                                chs.give((
+                                    (e.id, e.scope_addr.clone(), e.source, e.target),
+                                    ts,
+                                    1i64,
+                                ));
                             }
+                            TimelyEvent::Schedule(e) => match e.start_stop {
+                                StartStop::Start => {
+                                    state.schedule_starts.insert(e.id, event_time);
+                                }
+                                StartStop::Stop => {
+                                    if let Some(start) = state.schedule_starts.remove(&e.id) {
+                                        let elapsed_ns =
+                                            event_time.saturating_sub(start).as_nanos() as i64;
+                                        if elapsed_ns > 0 {
+                                            els.give((e.id, ts, elapsed_ns));
+                                        }
+                                    }
+                                }
+                            },
+                            TimelyEvent::Messages(e) => {
+                                if e.is_send {
+                                    msgs.give((e.channel, ts, e.record_count as i64));
+                                }
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
             });
@@ -587,40 +587,40 @@ fn construct_differential<'scope>(
                 let mut b_sz = bs_act.session(&cap);
                 let mut b_cap = bc_act.session(&cap);
                 let mut b_alloc = ba_act.session(&cap);
-                let ts = *cap.time();
-
-                for (_event_time, event) in data.drain(..) {
-                    match event {
-                        DifferentialEvent::Batch(e) => {
-                            bat.give((e.operator, ts, 1i64));
-                            rec.give((e.operator, ts, e.length as i64));
-                        }
-                        DifferentialEvent::Merge(e) => {
-                            if let Some(complete) = e.complete {
+                if let Some(&ts) = cap.least() {
+                    for (_event_time, event) in data.drain(..) {
+                        match event {
+                            DifferentialEvent::Batch(e) => {
+                                bat.give((e.operator, ts, 1i64));
+                                rec.give((e.operator, ts, e.length as i64));
+                            }
+                            DifferentialEvent::Merge(e) => {
+                                if let Some(complete) = e.complete {
+                                    bat.give((e.operator, ts, -1i64));
+                                    let diff = complete as i64 - (e.length1 + e.length2) as i64;
+                                    if diff != 0 {
+                                        rec.give((e.operator, ts, diff));
+                                    }
+                                }
+                            }
+                            DifferentialEvent::Drop(e) => {
                                 bat.give((e.operator, ts, -1i64));
-                                let diff = complete as i64 - (e.length1 + e.length2) as i64;
+                                let diff = -(e.length as i64);
                                 if diff != 0 {
                                     rec.give((e.operator, ts, diff));
                                 }
                             }
-                        }
-                        DifferentialEvent::Drop(e) => {
-                            bat.give((e.operator, ts, -1i64));
-                            let diff = -(e.length as i64);
-                            if diff != 0 {
-                                rec.give((e.operator, ts, diff));
+                            DifferentialEvent::TraceShare(e) => {
+                                shr.give((e.operator, ts, e.diff as i64));
                             }
+                            DifferentialEvent::Batcher(e) => {
+                                b_rec.give((e.operator, ts, e.records_diff as i64));
+                                b_sz.give((e.operator, ts, e.size_diff as i64));
+                                b_cap.give((e.operator, ts, e.capacity_diff as i64));
+                                b_alloc.give((e.operator, ts, e.allocations_diff as i64));
+                            }
+                            _ => {}
                         }
-                        DifferentialEvent::TraceShare(e) => {
-                            shr.give((e.operator, ts, e.diff as i64));
-                        }
-                        DifferentialEvent::Batcher(e) => {
-                            b_rec.give((e.operator, ts, e.records_diff as i64));
-                            b_sz.give((e.operator, ts, e.size_diff as i64));
-                            b_cap.give((e.operator, ts, e.capacity_diff as i64));
-                            b_alloc.give((e.operator, ts, e.allocations_diff as i64));
-                        }
-                        _ => {}
                     }
                 }
             });

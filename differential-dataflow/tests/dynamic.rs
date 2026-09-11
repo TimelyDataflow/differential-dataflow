@@ -48,7 +48,7 @@ fn leave_dynamic_on_a_message_over_two_epochs() {
                         let mut output = output.activate();
                         input.for_each(|cap, data| {
                             let Some(root) = root.as_ref() else { return };
-                            let epoch = cap.time().outer;
+                            let epoch = cap.stamp().iter().map(|t| t.outer).min().unwrap();
                             let t1 = Product::new(epoch, PointStamp::new([3].into_iter().collect()));
                             let t2 = Product::new(epoch + 1, PointStamp::new([0].into_iter().collect()));
                             let caps: CapabilitySet<Time> = [root.delayed(&t1), root.delayed(&t2)].into_iter().collect();
@@ -138,7 +138,7 @@ fn as_collection_routes_records_under_singleton_stamps() {
                 let checked = records.inner.unary(Pipeline, "OneTime", |_, _| {
                     move |input, output| {
                         input.for_each(|time, data| {
-                            let _one = time.time();
+                            assert_eq!(time.stamp().len(), 1, "expected one time per message; found {:?}", time.stamp());
                             output.session(&time).give_container(data);
                         });
                     }

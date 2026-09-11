@@ -83,7 +83,7 @@ where
 {
     let mut result_trace = None;
 
-    // fabricate a data-parallel operator using the `unary_notify` pattern.
+    // fabricate a data-parallel operator that holds capabilities and consults its input frontier.
     let stream = {
 
         let mut source_trace = trace.trace;

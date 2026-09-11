@@ -128,15 +128,15 @@ impl<'scope, T: Timestamp, C: Container> Collection<'scope, T, C> {
     ///     scope.new_collection_from(1 .. 10).1
     ///          .map_in_place(|x| *x *= 2)
     ///          .filter(|x| x % 2 == 1)
-    ///          .inspect_container(|event| println!("event: {:?}", event));
+    ///          .inspect_core(|event| println!("event: {:?}", event));
     /// });
     /// ```
-    pub fn inspect_container<F>(self, func: F) -> Self
+    pub fn inspect_core<F>(self, func: F) -> Self
     where
-        F: FnMut(Result<(&T, &C), &[T]>)+'static,
+        F: FnMut(Result<(&timely::progress::Stamp<T>, &C), &[T]>)+'static,
     {
         self.inner
-            .inspect_container(func)
+            .inspect_core(func)
             .as_collection()
     }
     /// Attaches a timely dataflow probe to the output of a Collection.
@@ -562,17 +562,25 @@ pub mod vec {
         /// ordered, they should have the same order or compare equal once `func` is applied to them (this
         /// is because we advance the timely capability with the same logic, and it must remain `less_equal`
         /// to all of the data timestamps).
-        pub fn delay<F>(self, func: F) -> Collection<'scope, T, D, R>
+        pub fn delay<F>(self, mut func: F) -> Collection<'scope, T, D, R>
         where
-            T: Hash,
-            F: FnMut(&T) -> T + Clone + 'static,
+            F: FnMut(&T) -> T + 'static,
         {
-            let mut func1 = func.clone();
-            let mut func2 = func.clone();
-
+            use timely::dataflow::channels::pact::Pipeline;
+            use timely::dataflow::operators::CapabilitySet;
             self.inner
-                .delay_batch(move |x| func1(x))
-                .map_in_place(move |x| x.1 = func2(&x.1))
+                .unary(Pipeline, "Delay", move |_, _| move |input, output| {
+                    input.for_each_stamp(|time, data| {
+                        // Each element of the stamp is delayed by `func`, and each update's time likewise;
+                        // by monotonicity the delayed capabilities still cover the delayed updates.
+                        let caps: CapabilitySet<T> = time.stamp().iter().map(|t| time.delayed(&func(t), output.output_index())).collect();
+                        let mut session = output.session(&caps);
+                        for data in data {
+                            for (_, t, _) in data.iter_mut() { *t = func(t); }
+                            session.give_container(data);
+                        }
+                    });
+                })
                 .as_collection()
         }
 
@@ -609,8 +617,8 @@ pub mod vec {
         }
         /// Applies a supplied function to each batch of updates.
         ///
-        /// This method is analogous to `inspect`, but operates on batches and reveals the timestamp of the
-        /// timely dataflow capability associated with the batch of updates. The observed batching depends
+        /// This method is analogous to `inspect`, but operates on batches and reveals the stamp under which
+        /// the batch of updates travels: the timestamps of the timely dataflow capabilities associated with it. The observed batching depends
         /// on how the system executes, and may vary run to run.
         ///
         /// # Examples
@@ -627,10 +635,10 @@ pub mod vec {
         /// ```
         pub fn inspect_batch<F>(self, mut func: F) -> Collection<'scope, T, D, R>
         where
-            F: FnMut(&T, &[(D, T, R)])+'static,
+            F: FnMut(&timely::progress::Stamp<T>, &[(D, T, R)])+'static,
         {
             self.inner
-                .inspect_batch(move |time, data| func(time, data))
+                .inspect_core(move |event| if let Ok((stamp, data)) = event { func(stamp, data) })
                 .as_collection()
         }
 
