@@ -92,7 +92,7 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
                             let raw = eval(field, &mut env).as_int() as u64;
                             256 * (64 - raw.leading_zeros() as u64)
                         };
-                        let mut coords = smallvec::SmallVec::<[u64; 2]>::new();
+                        let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
                         for _ in 0..level.saturating_sub(1) { coords.push(0); }
                         coords.push(delay);
                         next.push(((k, v), Product::new(0u64, PointStamp::new(coords)), d));
