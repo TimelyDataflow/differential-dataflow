@@ -39,7 +39,7 @@ use corgi::arrange::{compare_at, gather, gather_lanes};
 use crate::corgi::search::MatchingRanges;
 use corgi::{shape_of_value, Shape, Value as CValue};
 
-use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, CorgiChunk};
+use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, recover_val, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_join_projection;
@@ -125,8 +125,12 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
         let chunks0 = side_chunks(&instance.batches0);
         let chunks1 = side_chunks(&instance.batches1);
         let keys0: Vec<Option<&CValue>> = chunks0.iter().map(|c| Some(c.keys())).collect();
-        let vals0: Vec<Option<&CValue>> = chunks0.iter().map(|c| Some(c.vals())).collect();
-        let vals1: Vec<Option<&CValue>> = chunks1.iter().map(|c| Some(c.vals())).collect();
+        // The projection reads the values the program wrote: a structured value is stored under
+        // its hash lane, dropped here (an `Arc` bump) so the gather moves only the value.
+        let rec0: Vec<CValue> = chunks0.iter().map(|c| recover_val(c.vals())).collect();
+        let rec1: Vec<CValue> = chunks1.iter().map(|c| recover_val(c.vals())).collect();
+        let vals0: Vec<Option<&CValue>> = rec0.iter().map(Some).collect();
+        let vals1: Vec<Option<&CValue>> = rec1.iter().map(Some).collect();
 
         let n = matches.ids.len();
         let (mut tag0, mut off0) = (Vec::new(), Vec::new());
@@ -215,7 +219,7 @@ fn side_chunks<T: ColTime>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>> {
 /// The column flattened to `u64` leaf lanes: `Some(lanes)` when it is a (possibly nested)
 /// product of 64-bit leaves — the shape DDIR tuples transcode to — so row order is the
 /// lexicographic order of the lane tuples. `Sum`/`List`/narrow leaves give `None`
-/// (structural compares).
+/// (structural compares over the stored form, whose leading hash lane decides most of them).
 fn leaf_lanes(col: &CValue) -> Option<Vec<&CValue>> {
     fn walk<'a>(col: &'a CValue, out: &mut Vec<&'a CValue>) -> bool {
         match col {

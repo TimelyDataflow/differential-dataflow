@@ -24,7 +24,7 @@ use corgi::arrange::gather;
 use corgi::Value as CValue;
 
 use crate::backend::Backend;
-use crate::corgi::chunk::{recover_key, CorgiChunk, CorgiChunker};
+use crate::corgi::chunk::{recover_key, recover_val, CorgiChunk, CorgiChunker};
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::exchange::CorgiPact;
 use crate::corgi::join::CorgiJoinBackend;
@@ -289,7 +289,7 @@ impl Backend for CorgiBackend {
                                     // Drop the arrangement's leading identifier lane: edges carry
                                     // the key the program wrote, so `$0` indexes what it always did.
                                     keys: recover_key(ch.keys()),
-                                    vals: ch.vals().clone(),
+                                    vals: recover_val(ch.vals()),
                                     times: ch.times().to_vec(),
                                     diffs: ch.diffs().to_vec(),
                                 };

@@ -5,7 +5,9 @@
 //!
 //!   * ids — `key_hash`/`value_id` are value-as-id for primitive columns (the value IS the id) and
 //!     the canonical native `corgi::hash` for compound columns (columnar, content-addressed, so ids
-//!     coincide across the output→input boundary); DD never hashes.
+//!     coincide across the output→input boundary); DD never hashes. A structured value's hash is
+//!     read off the lane the arrangement stores it under ([`present_val`]), computed once at
+//!     ingest; only a product of leaves or a unit is hashed here, at presentation.
 //!   * the value callback — `reduce_many` runs ONE crossing per retire over every `(key, time)`
 //!     bracket, building the output value COLUMNS directly (Count → a `u64` prim, Distinct → a
 //!     `Unit`, Min → the chosen input rows, Collect → a `List`), never through DDIR rows.
@@ -34,12 +36,12 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::ProxyBridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{compare_at, gather, gather_lanes, sort_blocks};
+use corgi::arrange::{equal_idx, gather, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
 use crate::corgi::col_times::ColTime;
 use crate::corgi::search::MatchingRanges;
-use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
+use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, present_val, recover_val, val_is_hashed, val_lane, CorgiChunk};
 use crate::ir::Diff;
 use crate::parse::Reducer;
 
@@ -133,7 +135,8 @@ type IdMap = HashMap<u64, usize, BuildHasherDefault<IdHasher>>;
 /// id→row-index maps; nothing carries a `DValue`.
 pub struct CorgiReduceBackend<T> {
     reducer: Reducer,
-    /// Input value column for the current window, indexed by `in_index` (for Min/Collect resolution).
+    /// Input value column for the current window, in its stored form (a structured value under
+    /// its hash lane), indexed by `in_index` (for Min/Collect resolution).
     in_vals: CValue,
     /// Input `value_id → row` in `in_vals` for the current window (reduce-time resolution; first row
     /// wins, so equal values — which share a content-hash `value_id` — resolve to one representative).
@@ -221,44 +224,49 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
     }
 }
 
-/// Id column for a VALUE column. For a PRIMITIVE column — a bare 64-bit `Prim`, or a 1-field
-/// `Prod([Prim(64)])` — the value itself is already a collision-free id (`i64 as u64` is a bijection),
-/// so pass it straight through and skip the content hash. Compound shapes (Unit / List / Sum /
-/// multi-field `Prod`) hash via the CANONICAL native `corgi::hash` (the designed boundary-id fold,
-/// width-blind and consistent-with-equality) — not the branch-local `arrange::hash_rows`; DDIR
-/// transcodes every leaf to `u64`, so width-blindness is a no-op for us and there is no cross-path
-/// hash comparison (value-as-id and native hash are never used for the same value: shape is uniform
-/// per column). Compound ids are used only for identity, but the leaf fast path additionally relies
-/// on raw-id order matching corgi's unsigned leaf order: the stored key lane is searched in that order and
-/// `merge_present` merges chunk runs in it. Raw two's-complement `u64` therefore remains correct for
-/// negative ints (no swizzle); changing the leaf encoding must also revisit those ordered paths.
-/// Applied CONSISTENTLY at every id site (both value presentations AND the freshly-produced
-/// `reduce_brackets` outputs), else `desired − current` nets across mismatched ids for the same value.
-fn ids(col: &CValue) -> Vec<u64> {
+/// Id column for a VALUE column in its stored form. For a PRIMITIVE column — a bare 64-bit
+/// `Prim`, or a 1-field `Prod([Prim(64)])` — the value itself is already a collision-free id
+/// (`i64 as u64` is a bijection), so pass it straight through. A structured column carries its
+/// hash as a lane ([`present_val`]), computed once at ingest: read it. What remains — a product
+/// of leaves, a unit — hashes via the CANONICAL native `corgi::hash` (the designed boundary-id
+/// fold, width-blind and consistent-with-equality), the same function the lane holds, so an id
+/// means one thing whichever way it was obtained. Compound ids are used only for identity, but
+/// the leaf fast path additionally relies on raw-id order matching corgi's unsigned leaf order:
+/// the stored key lane is searched in that order and `merge_present` merges chunk runs in it. Raw
+/// two's-complement `u64` therefore remains correct for negative ints (no swizzle); changing the
+/// leaf encoding must also revisit those ordered paths. Applied CONSISTENTLY at every id site
+/// (both value presentations AND the freshly-produced `reduce_brackets` outputs), else
+/// `desired − current` nets across mismatched ids for the same value.
+fn val_ids(col: &CValue) -> Vec<u64> {
     // Value-as-id: borrow the leaf and copy once, rather than `clone().into_u64()` — the
     // clone bumps the `Arc`, so `into_u64`'s try-unwrap always fails and copies anyway,
     // even for a freshly-gathered column with one holder.
     if let Some(sl) = corgi::arrange::leaf_slice(col) {
         return sl.to_vec();
     }
+    if let Some(lane) = val_lane(col) {
+        return corgi::arrange::leaf_slice(lane).expect("the value lane is a u64 leaf").to_vec();
+    }
     corgi::hash(col)
 }
 
-/// Concatenate the records of the `changed` keys across a run of chunks into parallel
-/// `(keys_col, vals_col)` corgi columns plus per-record `(key_hash, time, diff)`. `changed` is the
-/// ASCENDING set of changed key ids; a row is kept iff its key id is in it.
+/// The records of the `changed` keys across a run of chunks: parallel `(keys_col, vals_col)`
+/// corgi columns plus, per record, its key id, its diff, and where it lives — `(tags[i], offs[i])`
+/// is the chunk and row — so that its time is read from the chunk when wanted rather than
+/// materialized here for every record and again at the bridge. `changed` is the ASCENDING set of
+/// changed key ids; a row is kept iff its key id is in it.
 ///
 /// Both the changed set and stored identifier lane are sorted. Match them with
 /// monotone positions, galloping over long gaps and stepping through adjacent
 /// keys. The same compiled search covers narrow updates and broad cascades.
-fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>, Vec<usize>)
+fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> Presented
 where
     T: ColTime,
 {
     let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
     let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
     let (mut tags, mut offs) = (Vec::new(), Vec::new());
-    let (mut khs, mut times, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut khs, mut diffs) = (Vec::new(), Vec::new());
     let mut run_ends = Vec::new();
     for (ci, ch) in chunks.iter().enumerate() {
         let before = khs.len();
@@ -268,48 +276,90 @@ where
         let lane = key_lane(ch.keys());
         let kh = corgi::arrange::leaf_slice(lane).expect("the identifier lane is a u64 leaf");
         for (j, range) in MatchingRanges::new(changed, kh) {
-            for i in range {
-                tags.push(ci);
-                offs.push(i);
-                khs.push(changed[j]);
-                times.push(ch.times().get(i));
-                diffs.push(ch.diffs()[i]);
-            }
+            tags.resize(tags.len() + range.len(), ci);
+            offs.extend(range.clone());
+            khs.resize(khs.len() + range.len(), changed[j]);
+            diffs.extend_from_slice(&ch.diffs()[range]);
         }
         if khs.len() > before { run_ends.push(khs.len()); }
     }
-    if tags.is_empty() {
-        return (CValue::Unit(0), CValue::Unit(0), khs, times, diffs, run_ends);
-    }
-    let keys_col = gather_lanes(&key_srcs, &tags, &offs);
-    let vals_col = gather_lanes(&val_srcs, &tags, &offs);
-    (keys_col, vals_col, khs, times, diffs, run_ends)
+    let (keys_col, vals_col) = if tags.is_empty() {
+        (CValue::Unit(0), CValue::Unit(0))
+    } else {
+        (gather_lanes(&key_srcs, &tags, &offs), gather_lanes(&val_srcs, &tags, &offs))
+    };
+    Presented { keys_col, vals_col, khs, tags, offs, diffs, run_ends }
 }
 
-/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Leaf values
-/// preserve value-id order. Keys may either be identity-id leaves or carried-hash columns, provided
-/// no one chunk run contains two real keys under the same hash; in the latter case the real-key
-/// tie-break would interrupt proxy `(key_id, value_id, time)` order, so we fall back to ordinary
-/// consolidation. A debug assertion audits the inferred order. Returns false when the inference
-/// does not hold or the bridge is nonempty.
-fn merge_present<T: Ord + Clone>(
-    keys_col: &CValue, vals_col: &CValue,
-    khs: &[u64], vids: &[u64], times: &[T], diffs: &[Diff], run_ends: &[usize],
+/// A presentation: the selected records' columns and, per record, its key id, its diff and its
+/// place `(chunk, row)` in the chunks it was collected from; `run_ends` delimits the records
+/// of each chunk, each run in that chunk's (stored) order.
+struct Presented {
+    keys_col: CValue,
+    vals_col: CValue,
+    khs: Vec<u64>,
+    tags: Vec<usize>,
+    offs: Vec<usize>,
+    diffs: Vec<Diff>,
+    run_ends: Vec<usize>,
+}
+
+impl Presented {
+    fn is_empty(&self) -> bool { self.khs.is_empty() }
+    /// Record `i`'s time, materialized from its chunk.
+    fn time<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], i: usize) -> T {
+        chunks[self.tags[i]].times().get(self.offs[i])
+    }
+    /// The order of records `i` and `j`'s times, read in place.
+    fn cmp_times<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], i: usize, j: usize) -> std::cmp::Ordering {
+        chunks[self.tags[i]].times().cmp_cross(self.offs[i], chunks[self.tags[j]].times(), self.offs[j])
+    }
+    /// The records as bridge entries in presentation order, for the consolidation fallback.
+    fn extend_into<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], vids: &[u64], bridge: &mut ProxyBridge<T, Diff>) {
+        bridge.extend((0..self.khs.len()).map(|i| ((self.khs[i], vids[i]), self.time(chunks, i), self.diffs[i])));
+    }
+}
+
+/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. A run is in
+/// proxy `(key_id, value_id, time)` order when its identifiers name one real key and, under it,
+/// one real value each: a leaf key or value is its own identifier; a carried-hash key or value
+/// is, provided no run holds two real keys under one hash or two real values under one
+/// `(key, hash)`, which one batched equality over the run's adjacent equal-identifier rows
+/// confirms. A unit value has one identifier for all rows. Otherwise the real tie-break would
+/// interrupt proxy order, and we fall back to ordinary consolidation. A debug assertion audits
+/// the inferred order. Returns false when the inference does not hold or the bridge is nonempty.
+fn merge_present<T: ColTime>(
+    chunks: &[&CorgiChunk<T, Diff>],
+    p: &Presented,
+    vids: &[u64],
     bridge: &mut ProxyBridge<T, Diff>,
 ) -> bool {
-    let ordered_keys = corgi::arrange::leaf_slice(keys_col).is_some() || {
-        let mut start = 0usize;
-        run_ends.iter().all(|&end| {
-            let one_real_key_per_id = (start + 1..end).all(|index| {
-                khs[index - 1] != khs[index]
-                    || compare_at(keys_col, index - 1, keys_col, index) == std::cmp::Ordering::Equal
-            });
-            start = end;
-            one_real_key_per_id
-        }) && start == khs.len()
-    };
-    let ordered_ids = ordered_keys && corgi::arrange::leaf_slice(vals_col).is_some();
-    if !ordered_ids || !bridge.is_empty() {
+    let Presented { keys_col, vals_col, khs, diffs, run_ends, .. } = p;
+    let keys_hashed = corgi::arrange::leaf_slice(keys_col).is_none();
+    let vals_hashed = val_is_hashed(vals_col);
+    let (mut ka, mut kb, mut va, mut vb) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut start = 0usize;
+    for &end in run_ends {
+        for index in start + 1..end {
+            if khs[index - 1] == khs[index] {
+                if keys_hashed {
+                    ka.push(index - 1);
+                    kb.push(index);
+                }
+                if vals_hashed && vids[index - 1] == vids[index] {
+                    va.push(index - 1);
+                    vb.push(index);
+                }
+            }
+        }
+        start = end;
+    }
+    debug_assert_eq!(start, khs.len(), "run ends must cover the presentation");
+    let ordered_keys = !keys_hashed || equal_idx(keys_col, keys_col, &ka, &kb).into_iter().all(|e| e);
+    let ordered_vals = corgi::arrange::leaf_slice(vals_col).is_some()
+        || matches!(vals_col, CValue::Unit(_))
+        || (vals_hashed && equal_idx(vals_col, vals_col, &va, &vb).into_iter().all(|e| e));
+    if !ordered_keys || !ordered_vals || !bridge.is_empty() {
         return false;
     }
 
@@ -317,8 +367,8 @@ fn merge_present<T: Ord + Clone>(
         let mut start = 0usize;
         let sorted = run_ends.iter().all(|&end| {
             let sorted = (start + 1..end).all(|i| {
-                (khs[i - 1], vids[i - 1], &times[i - 1])
-                    <= (khs[i], vids[i], &times[i])
+                (khs[i - 1], vids[i - 1]) < (khs[i], vids[i])
+                    || ((khs[i - 1], vids[i - 1]) == (khs[i], vids[i]) && p.cmp_times(chunks, i - 1, i) != std::cmp::Ordering::Greater)
             });
             start = end;
             sorted
@@ -326,49 +376,64 @@ fn merge_present<T: Ord + Clone>(
         sorted && start == khs.len()
     }, "identity ids do not preserve selected chunk order");
 
-    let mut current: Option<((u64, u64), T, Diff)> = None;
-    let mut accumulate = |kv, time: &T, diff| {
-        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == time) {
-            current.as_mut().unwrap().2 += diff;
+    // The record being consolidated: its `(key id, value id)`, the index whose time it carries,
+    // and the diff so far. The time is read in place to compare and materialized once, at the push.
+    let mut current: Option<((u64, u64), usize, Diff)> = None;
+    let mut accumulate = |kv, index: usize| {
+        if current.as_ref().is_some_and(|&(ckv, ci, _)| ckv == kv && p.cmp_times(chunks, ci, index) == std::cmp::Ordering::Equal) {
+            current.as_mut().unwrap().2 += diffs[index];
         } else {
-            if let Some(record) = current.take() {
-                if record.2 != 0 { bridge.push(record); }
+            if let Some((ckv, ci, d)) = current.take() {
+                if d != 0 { bridge.push((ckv, p.time(chunks, ci), d)); }
             }
-            current = Some((kv, time.clone(), diff));
+            current = Some((kv, index, diffs[index]));
         }
     };
 
     if run_ends.len() == 1 {
         for index in 0..run_ends[0] {
-            accumulate((khs[index], vids[index]), &times[index], diffs[index]);
+            accumulate((khs[index], vids[index]), index);
         }
         drop(accumulate);
-        if let Some(record) = current {
-            if record.2 != 0 { bridge.push(record); }
+        if let Some((ckv, ci, d)) = current {
+            if d != 0 { bridge.push((ckv, p.time(chunks, ci), d)); }
         }
         return true;
     }
 
-    let mut heap: BinaryHeap<Reverse<((u64, u64), &T, usize, usize)>> = BinaryHeap::new();
+    // One head per run, least `(key id, value id, time)` first; the time compared in place.
+    struct Head<'a, T: ColTime> { kv: (u64, u64), run: usize, index: usize, chunks: &'a [&'a CorgiChunk<T, Diff>], p: &'a Presented }
+    impl<T: ColTime> PartialEq for Head<'_, T> { fn eq(&self, o: &Self) -> bool { self.cmp(o) == std::cmp::Ordering::Equal } }
+    impl<T: ColTime> Eq for Head<'_, T> {}
+    impl<T: ColTime> PartialOrd for Head<'_, T> { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } }
+    impl<T: ColTime> Ord for Head<'_, T> {
+        fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+            self.kv.cmp(&o.kv)
+                .then_with(|| self.p.cmp_times(self.chunks, self.index, o.index))
+                .then_with(|| (self.run, self.index).cmp(&(o.run, o.index)))
+        }
+    }
+    let mut heap: BinaryHeap<Reverse<Head<T>>> = BinaryHeap::new();
     let mut lo = 0usize;
     for (run, &hi) in run_ends.iter().enumerate() {
-        heap.push(Reverse(((khs[lo], vids[lo]), &times[lo], run, lo)));
+        heap.push(Reverse(Head { kv: (khs[lo], vids[lo]), run, index: lo, chunks, p }));
         lo = hi;
     }
     while let Some(mut head) = heap.peek_mut() {
-        let Reverse((kv, time, run, index)) = *head;
-        accumulate(kv, time, diffs[index]);
+        let (kv, run, index) = (head.0.kv, head.0.run, head.0.index);
+        accumulate(kv, index);
         let end = run_ends[run];
         if index + 1 < end {
             let next = index + 1;
-            *head = Reverse(((khs[next], vids[next]), &times[next], run, next));
+            head.0.kv = (khs[next], vids[next]);
+            head.0.index = next;
         } else {
             std::collections::binary_heap::PeekMut::pop(head);
         }
     }
     drop(accumulate);
-    if let Some(record) = current {
-        if record.2 != 0 { bridge.push(record); }
+    if let Some((ckv, ci, d)) = current {
+        if d != 0 { bridge.push((ckv, p.time(chunks, ci), d)); }
     }
     true
 }
@@ -399,30 +464,44 @@ where
         len: &mut usize,
         bridge: &mut ProxyBridge<T, Diff>,
     ) {
-        let (p_keys, p_vals, khs, times, diffs, run_ends) = collect_present(chunks, keys);
-        if khs.is_empty() {
+        let p = collect_present(chunks, keys);
+        if p.is_empty() {
             return;
         }
-        let vids = ids(&p_vals);
-        let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &times, &diffs, &run_ends, bridge);
-        for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
-        *len += p_vals.len();
-        blocks.push(p_vals);
-        self.register_keys(p_keys, &khs);
+        let vids = val_ids(&p.vals_col);
+        let merged = merge_present(chunks, &p, &vids, bridge);
         if !merged {
-            bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
+            p.extend_into(chunks, &vids, bridge);
             consolidate_updates(bridge);
         }
+        for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
+        *len += p.vals_col.len();
+        let Presented { keys_col, vals_col, khs, .. } = p;
+        blocks.push(vals_col);
+        self.register_keys(keys_col, &khs);
     }
 
     /// The one value crossing for a retire: every `(key, time)` bracket at once. Builds the output
     /// value COLUMN directly per reducer, registers it (id → row) into the val pool, and returns the
     /// proxy `(value_id, diff)` deltas with per-bracket ends. `input[k] = (rep index into the input
-    /// presentation, accumulated diff)`; the bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
-    fn reduce_brackets(&mut self, ends: &[usize], input: &[(usize, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+    /// presentation, accumulated diff)` and `vids[k]` its value id; the bracket `i` is
+    /// `input[ends[i-1]..ends[i]]`, non-empty and in ascending value-id order (the tactic hands
+    /// over consolidated accumulations).
+    ///
+    /// A leaf value is its own identifier, so a bracket of leaf values arrives sorted by the
+    /// value's unsigned bits, and DDIR's signed order is that order with the sign-bit half moved
+    /// to the front: Min is the first value with the sign bit set, else the first value; Collect
+    /// is the two halves in turn. Neither sorts. A structured value takes the segmented
+    /// structural sort over DDIR's order.
+    fn reduce_brackets(&mut self, ends: &[usize], input: &[(usize, Diff)], vids: &[u64]) -> (Vec<(u64, Diff)>, Vec<usize>) {
         let mut out_diffs: Vec<Diff> = Vec::new();
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
         let out_ids: Vec<u64>;
+        let leaf = corgi::arrange::leaf_slice(&self.in_vals).is_some();
+        debug_assert!({
+            let mut start = 0;
+            ends.iter().all(|&end| { let ok = vids[start..end].windows(2).all(|w| w[0] <= w[1]); start = end; ok })
+        }, "a bracket arrives in ascending value-id order");
 
         match self.reducer {
             Reducer::Count => {
@@ -442,7 +521,7 @@ where
                     return (Vec::new(), out_ends);
                 }
                 let col = CValue::Prod(vec![CValue::u64(sums)]);
-                out_ids = ids(&col);
+                out_ids = val_ids(&col);
                 self.register_vals(col, &out_ids);
             }
             Reducer::Distinct => {
@@ -465,7 +544,7 @@ where
                     return (Vec::new(), out_ends);
                 }
                 let col = CValue::Unit(present);
-                out_ids = ids(&col); // all equal (unit content hash)
+                out_ids = val_ids(&col); // all equal (unit content hash)
                 self.register_vals(col, &out_ids);
             }
             Reducer::Min => {
@@ -474,35 +553,60 @@ where
                 // drops all-negative keys and can pick a different minimum when a bracket mixes signs.
                 // Gather all candidates across brackets into one column, segment by
                 // bracket, and one corgi `sort_blocks` gives every bracket's argmin at once
-                // (`perm[block_start]`). The winning ROW is taken columnar and reuses its input value id.
+                // (`perm[block_start]`). The order is DDIR's, over the values as the program wrote
+                // them (the stored form's hash lane dropped); the winning ROW is taken columnar,
+                // in its stored form, and so reuses its input value id.
+                let mut min_reps: Vec<usize> = Vec::new(); // per emitted bracket: the winning rep
                 let mut cand_reps: Vec<usize> = Vec::new(); // input presentation rep index per candidate
                 let mut labels: Vec<u64> = Vec::new(); // dense segment id per candidate
                 let mut block_starts: Vec<usize> = Vec::new(); // per emitted bracket: start offset in cand_reps
                 let mut start = 0;
                 for &end in ends {
-                    let lo = cand_reps.len();
-                    let seg = block_starts.len() as u64;
-                    for k in start..end {
-                        if input[k].1 != 0 {
-                            cand_reps.push(input[k].0);
-                            labels.push(seg);
+                    if leaf {
+                        let (mut first, mut first_neg) = (None, None);
+                        for k in start..end {
+                            if input[k].1 == 0 {
+                                continue;
+                            }
+                            if first.is_none() {
+                                first = Some(k);
+                            }
+                            if vids[k] >> 63 == 1 {
+                                first_neg = Some(k);
+                                break;
+                            }
                         }
-                    }
-                    if cand_reps.len() > lo {
-                        block_starts.push(lo);
-                        out_diffs.push(1);
+                        if let Some(k) = first_neg.or(first) {
+                            min_reps.push(input[k].0);
+                            out_diffs.push(1);
+                        }
+                    } else {
+                        let lo = cand_reps.len();
+                        let seg = block_starts.len() as u64;
+                        for k in start..end {
+                            if input[k].1 != 0 {
+                                cand_reps.push(input[k].0);
+                                labels.push(seg);
+                            }
+                        }
+                        if cand_reps.len() > lo {
+                            block_starts.push(lo);
+                            out_diffs.push(1);
+                        }
                     }
                     out_ends.push(out_diffs.len());
                     start = end;
                 }
-                if cand_reps.is_empty() {
+                if !cand_reps.is_empty() {
+                    let cand_col = gather(&recover_val(&self.in_vals), &cand_reps);
+                    let (perm, _) = sort_blocks(&labels, &signed_order_view(cand_col));
+                    min_reps.extend(block_starts.iter().map(|&lo| cand_reps[perm[lo]]));
+                }
+                if min_reps.is_empty() {
                     return (Vec::new(), out_ends);
                 }
-                let cand_col = gather(&self.in_vals, &cand_reps);
-                let (perm, _) = sort_blocks(&labels, &signed_order_view(cand_col));
-                let min_reps: Vec<usize> = block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect();
                 let col = gather(&self.in_vals, &min_reps);
-                out_ids = ids(&col);
+                out_ids = val_ids(&col);
                 self.register_vals(col, &out_ids);
             }
             Reducer::Collect => {
@@ -513,6 +617,8 @@ where
                 // with input, and the row reducer then lists the positive copies — an empty list
                 // when every net is negative). A bracket whose values all cancelled is a key with
                 // no input: it must emit nothing, or a retracted key keeps a stale (empty) list.
+                let mut elem_reps: Vec<usize> = Vec::new();
+                let mut bracket_ends: Vec<usize> = Vec::with_capacity(ends.len());
                 let mut entry_reps: Vec<usize> = Vec::new();
                 let mut entry_diffs: Vec<Diff> = Vec::new();
                 let mut labels: Vec<u64> = Vec::new();
@@ -520,41 +626,50 @@ where
                 let mut start = 0;
                 for (bi, &end) in ends.iter().enumerate() {
                     if input[start..end].iter().any(|&(_, d)| d != 0) {
-                        let lo = entry_reps.len();
-                        for k in start..end {
-                            entry_reps.push(input[k].0);
-                            entry_diffs.push(input[k].1);
-                            labels.push(bi as u64);
+                        if leaf {
+                            // the sign-bit half first, then the rest, each entry by its diff
+                            // (max(0, ·) copies): DDIR's signed order, read off the id order.
+                            let split = start + vids[start..end].partition_point(|&v| v >> 63 == 0);
+                            for k in (split..end).chain(start..split) {
+                                for _ in 0..input[k].1.max(0) {
+                                    elem_reps.push(input[k].0);
+                                }
+                            }
+                            bracket_ends.push(elem_reps.len());
+                        } else {
+                            let lo = entry_reps.len();
+                            for k in start..end {
+                                entry_reps.push(input[k].0);
+                                entry_diffs.push(input[k].1);
+                                labels.push(bi as u64);
+                            }
+                            blocks.push((lo, entry_reps.len()));
                         }
-                        blocks.push((lo, entry_reps.len()));
                         out_diffs.push(1);
                     }
                     out_ends.push(out_diffs.len());
                     start = end;
                 }
-                let perm = if entry_reps.is_empty() {
-                    Vec::new()
-                } else {
-                    sort_blocks(&labels, &signed_order_view(gather(&self.in_vals, &entry_reps))).0
-                };
-                // Expand each bracket's sorted entries by their diff (max(0, ·) copies).
-                let mut elem_reps: Vec<usize> = Vec::new();
-                let mut bracket_ends: Vec<usize> = Vec::with_capacity(ends.len());
-                for (lo, hi) in blocks {
-                    for &e in &perm[lo..hi] {
-                        for _ in 0..entry_diffs[e].max(0) {
-                            elem_reps.push(entry_reps[e]);
+                let in_vals = recover_val(&self.in_vals);
+                if !entry_reps.is_empty() {
+                    let perm = sort_blocks(&labels, &signed_order_view(gather(&in_vals, &entry_reps))).0;
+                    // Expand each bracket's sorted entries by their diff (max(0, ·) copies).
+                    for (lo, hi) in blocks {
+                        for &e in &perm[lo..hi] {
+                            for _ in 0..entry_diffs[e].max(0) {
+                                elem_reps.push(entry_reps[e]);
+                            }
                         }
+                        bracket_ends.push(elem_reps.len());
                     }
-                    bracket_ends.push(elem_reps.len());
                 }
                 // A window whose lists are all empty still has an element SHAPE — the input
                 // values' — and the column must carry it, or this batch's `List<()>` meets the
                 // next batch's `List<T>` where the two are concatenated. `gather` at no indices
                 // is the empty column of that shape.
-                let elems = gather(&self.in_vals, &elem_reps);
-                let col = CValue::List(Bounds::offsets(bracket_ends), Box::new(elems));
-                out_ids = ids(&col);
+                let elems = gather(&in_vals, &elem_reps);
+                let col = present_val(CValue::List(Bounds::offsets(bracket_ends), Box::new(elems)));
+                out_ids = val_ids(&col);
                 self.register_vals(col, &out_ids);
             }
         }
@@ -647,16 +762,18 @@ where
         self.in_vals = concat_columns(&in_blocks);
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
-        let (o_keys, o_vals, o_khs, o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
-        if !o_khs.is_empty() {
-            let vids = ids(&o_vals);
-            let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output);
-            self.register_keys(o_keys, &o_khs);
-            self.register_vals(o_vals, &vids);
+        let out_chunks = chunks_of(instance.output_batches);
+        let p = collect_present(&out_chunks, &keys);
+        if !p.is_empty() {
+            let vids = val_ids(&p.vals_col);
+            let merged = merge_present(&out_chunks, &p, &vids, &mut window.output);
             if !merged {
-                window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
+                p.extend_into(&out_chunks, &vids, &mut window.output);
                 consolidate_updates(&mut window.output);
             }
+            let Presented { keys_col, vals_col, khs, .. } = p;
+            self.register_keys(keys_col, &khs);
+            self.register_vals(vals_col, &vids);
         }
     }
 
@@ -666,7 +783,8 @@ where
         let in_rows: Vec<(usize, Diff)> = input.iter()
             .map(|&(vid, d)| (*self.in_index.get(&vid).expect("input value_id presented this window"), d))
             .collect();
-        let (desired, desired_ends) = self.reduce_brackets(in_ends, &in_rows);
+        let in_vids: Vec<u64> = input.iter().map(|&(vid, _)| vid).collect();
+        let (desired, desired_ends) = self.reduce_brackets(in_ends, &in_rows, &in_vids);
 
         let mut corr: Vec<(u64, Diff)> = Vec::new();
         let mut corr_ends: Vec<usize> = Vec::with_capacity(keys.len());
@@ -744,18 +862,66 @@ mod tests {
         assert_eq!(actual, rows);
     }
 
+    /// Leaf Min and Collect read DDIR's signed order off the bracket's id order: the sign-bit half
+    /// first. Checked against the structural path on the same brackets (a 1-field product is a
+    /// leaf to `val_ids` but structured to `leaf_slice`... no: both peel, so the structured path
+    /// is forced by wrapping the values in a 2-field product with a constant second field).
+    #[test]
+    fn leaf_min_and_collect_match_the_structural_order() {
+        let vals: Vec<u64> = vec![5, (-3i64) as u64, 7, (-1i64) as u64, 0, 9];
+        // brackets over rows {0,2,1}, {4,3}, {5}, {0} with a zero diff, in ascending id order.
+        let ends = vec![3, 5, 6, 7];
+        let input: Vec<(usize, Diff)> = vec![(0, 2), (2, 1), (1, 1), (4, 1), (3, -1), (5, 1), (0, 0)];
+        let vids: Vec<u64> = input.iter().map(|&(r, _)| vals[r]).collect();
+        for reducer in [Reducer::Min, Reducer::Collect] {
+            let mut leaf = CorgiReduceBackend::<u64>::new(reducer.clone());
+            leaf.in_vals = CValue::u64(vals.clone());
+            let (leaf_out, leaf_ends) = leaf.reduce_brackets(&ends, &input, &vids);
+            let mut structured = CorgiReduceBackend::<u64>::new(reducer.clone());
+            structured.in_vals = CValue::Prod(vec![CValue::u64(vals.clone()), CValue::u64(vec![0; vals.len()])]);
+            let (str_out, str_ends) = structured.reduce_brackets(&ends, &input, &vids);
+            assert_eq!(leaf_ends, str_ends, "{reducer:?}");
+            assert_eq!(leaf_out.len(), str_out.len(), "{reducer:?}");
+            // compare the produced values through each pool, as the values the program sees.
+            let leaf_pool = recover_val(&concat_columns(&leaf.val_blocks));
+            let str_pool = recover_val(&concat_columns(&structured.val_blocks));
+            let leaf_rows: Vec<usize> = leaf_out.iter().map(|(id, _)| leaf.val_index[id]).collect();
+            let str_rows: Vec<usize> = str_out.iter().map(|(id, _)| structured.val_index[id]).collect();
+            let got = gather(&leaf_pool, &leaf_rows);
+            let want = match gather(&str_pool, &str_rows) {
+                CValue::Prod(mut cols) => cols.remove(0),
+                CValue::List(b, elems) => match *elems { CValue::Prod(mut cols) => CValue::List(b, Box::new(cols.remove(0))), _ => unreachable!() },
+                other => other,
+            };
+            assert_eq!(got, want, "{reducer:?}");
+        }
+    }
+
     fn compound_keys(hashes: Vec<u64>, real: Vec<u64>) -> CValue {
         CValue::Prod(vec![CValue::u64(hashes), CValue::Prod(vec![CValue::u64(real), CValue::u64(vec![0, 0])])])
+    }
+
+    /// One chunk per run, presented at `changed`, merged: `(merged?, bridge)`.
+    fn present_runs<T: ColTime + Ord>(runs: Vec<(CValue, CValue, Vec<T>, Vec<Diff>)>, changed: &[u64]) -> (bool, ProxyBridge<T, Diff>) {
+        let chunks: Vec<CorgiChunk<T, Diff>> = runs.into_iter().map(|(k, v, t, d)| CorgiChunk::from_columns(k, v, t, d)).collect();
+        let refs: Vec<&CorgiChunk<T, Diff>> = chunks.iter().collect();
+        let p = collect_present(&refs, changed);
+        let vids = val_ids(&p.vals_col);
+        let mut bridge = Vec::new();
+        let merged = merge_present(&refs, &p, &vids, &mut bridge);
+        if !merged {
+            p.extend_into(&refs, &vids, &mut bridge);
+            consolidate_updates(&mut bridge);
+        }
+        (merged, bridge)
     }
 
     #[test]
     fn merge_present_accepts_ordered_compound_keys() {
         let keys = compound_keys(vec![1, 2], vec![7, 8]);
         let vals = CValue::u64(vec![10, 20]);
-        let mut bridge = Vec::new();
-        assert!(merge_present(
-            &keys, &vals, &[1, 2], &[10, 20], &[0u64, 0], &[1, 1], &[2], &mut bridge,
-        ));
+        let (merged, bridge) = present_runs(vec![(keys, vals, vec![0u64, 0], vec![1, 1])], &[1, 2]);
+        assert!(merged);
         assert_eq!(bridge.len(), 2);
     }
 
@@ -774,41 +940,55 @@ mod tests {
             vec![((1, 10), Product::new(1, 0), 2)],
         ];
         for count in 1..=runs.len() {
-            let (mut rows, mut ends) = (Vec::new(), Vec::new());
             let mut expected = BTreeMap::new();
+            let mut columns = Vec::new();
             for run in &runs[..count] {
-                rows.extend_from_slice(run);
-                ends.push(rows.len());
                 for &(kv, time, diff) in run {
                     *expected.entry((kv, time)).or_insert(0) += diff;
                 }
+                columns.push((
+                    CValue::u64(run.iter().map(|r| r.0.0).collect()),
+                    CValue::u64(run.iter().map(|r| r.0.1).collect()),
+                    run.iter().map(|r| r.1).collect::<Vec<_>>(),
+                    run.iter().map(|r| r.2).collect::<Vec<_>>(),
+                ));
             }
-            let khs: Vec<_> = rows.iter().map(|r| r.0.0).collect();
-            let vids: Vec<_> = rows.iter().map(|r| r.0.1).collect();
-            let times: Vec<_> = rows.iter().map(|r| r.1).collect();
-            let diffs: Vec<_> = rows.iter().map(|r| r.2).collect();
-            let mut bridge = Vec::new();
-            assert!(merge_present(&CValue::u64(khs.clone()), &CValue::u64(vids.clone()),
-                &khs, &vids, &times, &diffs, &ends, &mut bridge));
+            let (merged, bridge) = present_runs(columns, &[1, 3, 4]);
+            assert!(merged);
             let expected: Vec<_> = expected.into_iter().filter(|(_, d)| *d != 0)
                 .map(|((kv, time), diff)| (kv, time, diff)).collect();
             assert_eq!(bridge, expected, "run count: {count}");
         }
     }
 
+    /// A structured value under its hash lane merges in identifier order too, across runs,
+    /// with equal values consolidating and the ids read off the lane.
+    #[test]
+    fn merge_present_accepts_hashed_values_across_runs() {
+        use crate::corgi::chunk::present_val;
+        let list = |rows: &[&[u64]]| {
+            let mut ends = Vec::new();
+            let mut elems = Vec::new();
+            for r in rows { elems.extend_from_slice(r); ends.push(elems.len()); }
+            present_val(CValue::List(Bounds::offsets(ends), Box::new(CValue::u64(elems))))
+        };
+        let a = (CValue::u64(vec![1, 1, 2]), list(&[&[5, 6], &[7], &[5, 6]]), vec![0u64, 1, 0], vec![1, 1, 1]);
+        let b = (CValue::u64(vec![1, 2]), list(&[&[5, 6], &[9]]), vec![0u64, 0], vec![-1, 1]);
+        let (merged, bridge) = present_runs(vec![a, b], &[1, 2]);
+        assert!(merged);
+        // key 1: [5,6] cancels at time 0, [7] stays at time 1. key 2: [5,6] and [9] at 0.
+        let ids: Vec<u64> = corgi::hash(&CValue::List(Bounds::offsets(vec![2, 3, 4]), Box::new(CValue::u64(vec![5, 6, 7, 9]))));
+        let mut want = vec![((1, ids[1]), 1u64, 1), ((2, ids[0]), 0, 1), ((2, ids[2]), 0, 1)];
+        want.sort();
+        assert_eq!(bridge, want);
+    }
+
     #[test]
     fn merge_present_rejects_a_compound_hash_collision_within_a_run() {
         let keys = compound_keys(vec![1, 1], vec![7, 8]);
         let vals = CValue::u64(vec![10, 20]);
-        assert!(!merge_present(
-            &keys,
-            &vals,
-            &[1, 1],
-            &[10, 20],
-            &[0u64, 0],
-            &[1, 1],
-            &[2],
-            &mut Vec::new(),
-        ));
+        let (merged, bridge) = present_runs(vec![(keys, vals, vec![0u64, 0], vec![1, 1])], &[1]);
+        assert!(!merged);
+        assert_eq!(bridge.len(), 2);
     }
 }

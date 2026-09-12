@@ -12,8 +12,12 @@
 //! `Rc<Vec<row>>` swapped for corgi columns. Adopting the `Chunk` framework gives us the fueled,
 //! graded `ChunkBatchMerger` for free.
 //!
-//! Order: `(key, val)` by corgi structural order (`compare_at` over `Prod([keys, vals])`), then `time`
-//! by `Ord`. Any consistent total order is fine — correctness compares multisets, not DDIR's `Ord`.
+//! Order: `(key, val)` by corgi structural order over the STORED columns, then `time` by `Ord`. Any
+//! consistent total order is fine — correctness compares multisets, not DDIR's `Ord`. The stored
+//! key leads with its identifier ([`present_key`]) and a structured value with its hash
+//! ([`present_val`]), so that order is `(key id, key, value id, value)`: the radix on the two
+//! `u64` lanes does the sorting, and the structural levels only ever confirm that the rows one
+//! identifier left tied are one value.
 //!
 //! Simplification vs `VecChunk`: `merge` processes only the two front chunks per call (no mid-merge
 //! refill), so `gather_lanes` source indices stay valid for the whole call. The `Chunk` contract
@@ -28,7 +32,7 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_adjacent, gather, gather_lanes, group_bounds, sort_perm, survey_groups, GroupRun};
+use corgi::arrange::{gather, gather_lanes, group_bounds, sort_values, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
 use columnar::Columnar;
@@ -404,9 +408,10 @@ where
 /// Sort parallel columns by `(key, val, time)` and consolidate exact `(key, val, time)` triples
 /// (summing diffs, dropping zeros). Returns a sorted+consolidated `(keys, vals, times, diffs)`.
 ///
-/// Multi-record: one columnar `sort_perm` (discrimination sort) orders by `(key, val)`, one batched
-/// `compare_adjacent` flags adjacent-equal runs; only the small per-run *time* tiebreak is a Rust sort
-/// (time is not a corgi type). No per-pair `compare_at`.
+/// Multi-record: one columnar `sort_values` (discrimination sort) orders by `(key, val)` and hands
+/// back the sorted column and the equal-row labels, so the runs the consolidation walks are the
+/// sort's own refinement rather than a second pass over the sorted column; only the small per-run
+/// *time* tiebreak is a Rust sort (time is not a corgi type). No per-pair `compare_at`.
 fn sort_consolidate<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> (CValue, CValue, Vec<T>, Vec<R>)
 where
     T: Ord + Clone + Columnar,
@@ -417,15 +422,11 @@ where
         return (keys, vals, times, diffs);
     }
     let kv = CValue::Prod(vec![keys, vals]);
-    // Batched argsort by (key, val); reorder the parallel Rust columns by the same permutation.
-    let perm = sort_perm(&kv);
-    let kv_s = gather(&kv, &perm);
+    // Batched argsort by (key, val), the sorted column, and the labels — two rows share a label iff
+    // they are equal; reorder the parallel Rust columns by the same permutation.
+    let (perm, labels, kv_s) = sort_values(&[], &kv);
     let times_s: Vec<T> = perm.iter().map(|&i| times[i].clone()).collect();
     let diffs_s: Vec<R> = perm.iter().map(|&i| diffs[i].clone()).collect();
-    // Batched adjacent-equality over the kv-sorted column: `adj[m] == 0` iff `kv_s[m] == kv_s[m+1]`.
-    // Naming the pattern rather than writing out the two index columns: corgi reads both sides
-    // densely, and the `i`/`i+1` index vectors this used to build are not built at all.
-    let adj: Vec<i8> = compare_adjacent(&kv_s);
 
     // Walk maximal equal-`(key,val)` runs; within each, order by time and consolidate equal times.
     let (mut keep, mut ot, mut od) = (Vec::new(), Vec::new(), Vec::new());
@@ -433,7 +434,7 @@ where
     let mut i = 0;
     while i < n {
         let mut j = i + 1;
-        while j < n && adj[j - 1] == 0 {
+        while j < n && labels[j] == labels[i] {
             j += 1;
         }
         run.clear();
@@ -467,8 +468,13 @@ where
     R: Semigroup + Clone + 'static,
 {
     /// One sorted+consolidated chunk from columns already in corgi form (the column-native arrange
-    /// ingest — no transcode).
+    /// ingest — no transcode). `keys` and `vals` are in their STORED forms, [`present_key`] and
+    /// [`present_val`] applied.
     pub fn from_columns(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> Self {
+        debug_assert!(
+            !val_is_hashed(&vals) || val_lane(&vals).and_then(corgi::arrange::leaf_slice) == Some(&corgi::hash(&recover_val(&vals))[..]),
+            "a structured arrangement value must carry its hash lane",
+        );
         let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
         debug_assert!({
             let lane = corgi::arrange::leaf_slice(key_lane(&keys));
@@ -483,7 +489,8 @@ where
 /// reading an arrangement back column-natively (e.g. `Backend::as_collection` straight into a
 /// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
 /// consolidate into one chunk, then `settle`. The column-native egress the reduce backend seals its
-/// output with (it resolves proxy ids to real columns by `gather` and hands them here).
+/// output with (it resolves proxy ids to real columns by `gather` and hands them here). The columns
+/// arrive in their stored forms ([`present_key`], [`present_val`]): the reduce's pools hold them so.
 pub fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> ChunkBatch<CorgiChunk<T, R>>
 where
     T: ColTime,
@@ -595,6 +602,59 @@ pub fn recover_key(keys: &CValue) -> CValue {
     }
 }
 
+/// An arrangement's value column, in the form a `CorgiChunk` stores it: a value holding a `Sum`
+/// or a `List` anywhere is hashed and the hash is PREPENDED, `Prod([hash, val])`, so the chunk's
+/// sort orders values by identifier first and the structural order only breaks ties within one
+/// hash — the rows of one value, up to a collision, which the sort confirms with one equality
+/// pass instead of descending the structure element by element. A leaf, a product of leaves or a
+/// unit is stored as it stands: its structural sort is a radix on its own lanes, and a hash lane
+/// would be a pass for nothing (measured at 1M rows, two rows a key: a `List` of three `u64`
+/// 44 -> 27 ns/row, a `Sum` 40 -> 27, a string 36 -> 27, a product of four `u64` 30 -> 37).
+///
+/// The stored forms are told apart by shape alone — a value holding structure is always the
+/// prepended one and a value without never is — so [`recover_val`] and [`val_lane`] need no flag.
+/// Like the key's hash, the value's is computed ONCE here and thereafter moves as data; the
+/// reduce reads its value identifiers off the lane rather than hashing at every presentation.
+pub fn present_val(vals: CValue) -> CValue {
+    if !has_structure(&vals) {
+        return vals;
+    }
+    let hashes = corgi::hash(&vals);
+    CValue::Prod(vec![CValue::u64(hashes), vals])
+}
+
+/// Whether the shape holds a `Sum` or a `List` anywhere.
+fn has_structure(v: &CValue) -> bool {
+    match v {
+        CValue::Sum(..) | CValue::List(..) => true,
+        CValue::Prod(cols) => cols.iter().any(has_structure),
+        CValue::Prim(_) | CValue::Unit(_) => false,
+    }
+}
+
+/// Whether [`present_val`] prepended a hash to this value column.
+pub fn val_is_hashed(vals: &CValue) -> bool {
+    has_structure(vals)
+}
+
+/// The identifier lane of a stored value column: the prepended hash when there is one. A value
+/// stored without one is a leaf (its own identifier, read by `leaf_slice`), a product of leaves
+/// or a unit, none of which carries a single `u64` identifier.
+pub fn val_lane(vals: &CValue) -> Option<&CValue> {
+    match vals {
+        CValue::Prod(cols) if val_is_hashed(vals) => Some(&cols[0]),
+        _ => None,
+    }
+}
+
+/// Undo [`present_val`]: the value as the program wrote it. An `Arc` bump.
+pub fn recover_val(vals: &CValue) -> CValue {
+    match vals {
+        CValue::Prod(cols) if val_is_hashed(vals) => cols[1].clone(),
+        _ => vals.clone(),
+    }
+}
+
 /// Concatenate column blocks into one column (multi-source `gather_lanes`, no sort).
 fn concat_blocks(blocks: &[CValue]) -> CValue {
     if blocks.len() == 1 {
@@ -619,7 +679,7 @@ where
             return;
         }
         let keys = present_key(concat_blocks(&self.k_blocks));
-        let vals = concat_blocks(&self.v_blocks);
+        let vals = present_val(concat_blocks(&self.v_blocks));
         self.k_blocks.clear();
         self.v_blocks.clear();
         let times = std::mem::take(&mut self.times);
