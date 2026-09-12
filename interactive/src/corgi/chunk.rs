@@ -127,7 +127,11 @@ where
         if n <= TARGET {
             if n != 0 {
                 let kv = gather_lanes(srcs, tags, offs);
-                out.push_back(Self::from_kv(kv, times, diffs));
+                // A caller may have reserved for the worst case (a merge reserves both inputs);
+                // what the chunk KEEPS is cut to what survived.
+                let mut diffs = diffs;
+                if diffs.capacity() > 2 * n { diffs.shrink_to_fit(); }
+                out.push_back(Self::from_kv(kv, times.shrunk(), diffs));
             }
             return;
         }
@@ -136,6 +140,7 @@ where
             let e = (s + TARGET).min(n);
             let kv = gather_lanes(srcs, &tags[s..e], &offs[s..e]);
             let mut t = ColTimes::new();
+            t.reserve(e - s);
             t.push_range(&times, s, e);
             out.push_back(Self::from_kv(kv, t, diffs[s..e].to_vec()));
             s = e;
@@ -149,6 +154,7 @@ where
         let total: usize = chunks.iter().map(Self::len_).sum();
         let (mut tags, mut offs) = (Vec::with_capacity(total), Vec::with_capacity(total));
         let (mut times, mut diffs) = (ColTimes::new(), Vec::with_capacity(total));
+        times.reserve(total);
         for (ti, ch) in chunks.iter().enumerate() {
             for o in 0..ch.len_() { tags.push(ti); offs.push(o); }
             times.push_range(ch.times(), 0, ch.len_());
@@ -188,9 +194,11 @@ where
 
         let runs = survey_groups(&kv1, &kv2);
         let (mut tags, mut offs) = (Vec::with_capacity(n1 + n2), Vec::with_capacity(n1 + n2));
-        // Emitted chunks own this allocation. Size it by surviving rows so cancellation
-        // does not leave a small result holding storage for both full inputs.
-        let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
+        // Reserve for both inputs — growing these by doubling re-copies what is already in them,
+        // and a merge fills them in one pass — then let `emit` cut what a chunk keeps to what
+        // survived, so cancellation does not leave a small result holding both inputs' storage.
+        let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::with_capacity(n1 + n2));
+        times.reserve(n1 + n2);
         // Where the survivor's pushed-back suffix starts: the last run, if it is exclusive.
         let (mut p1, mut p2) = (n1, n2);
         let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, times: &mut ColTimes<T>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
@@ -343,8 +351,9 @@ where
         // No `T` is built: the output times are row copies.
         ctimes.advance_by(frontier, end);
         let srcs = [Some(&ckv)];
-        let (mut tags, mut offs) = (Vec::new(), Vec::new());
-        let (mut otimes, mut odiffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
+        let (mut tags, mut offs) = (Vec::with_capacity(end.min(TARGET)), Vec::with_capacity(end.min(TARGET)));
+        let (mut otimes, mut odiffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::with_capacity(end.min(TARGET)));
+        otimes.reserve(end.min(TARGET));
         let mut order: Vec<usize> = Vec::new();
         let mut i = 0;
         for &g_end in &bounds {

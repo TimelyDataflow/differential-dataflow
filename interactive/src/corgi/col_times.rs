@@ -171,6 +171,34 @@ impl<T> ColTimes<T> {
         self.len = 0;
     }
 
+    /// Room for `rows` more rows, so that filling a column of a known size grows it once
+    /// rather than by doubling (which copies what is already there each time).
+    #[inline]
+    pub fn reserve(&mut self, rows: usize) {
+        self.lanes.reserve(rows * self.width.max(1));
+    }
+
+    /// How many rows the allocation holds.
+    #[inline]
+    pub fn capacity_rows(&self) -> usize {
+        if self.width == 0 { self.len } else { self.lanes.capacity() / self.width }
+    }
+
+    /// This column, its allocation cut to its rows when it is holding much more than it needs —
+    /// what a caller that reserved for the worst case does before the result is kept. Cheap
+    /// when the reservation was about right: the column is returned as it stands.
+    pub fn shrunk(self) -> Self {
+        if self.len == 0 {
+            return ColTimes { lanes: Vec::new(), width: self.width, len: 0, scratch: self.scratch, _t: PhantomData };
+        }
+        if self.capacity_rows() <= 2 * self.len {
+            return self;
+        }
+        let mut out = ColTimes { lanes: Vec::with_capacity(self.len * self.width), width: self.width, len: self.len, scratch: Vec::new(), _t: PhantomData };
+        out.lanes.extend_from_slice(&self.lanes[..self.len * self.width]);
+        out
+    }
+
     /// Row `i`'s lanes.
     #[inline]
     pub fn row(&self, i: usize) -> &[u64] {
