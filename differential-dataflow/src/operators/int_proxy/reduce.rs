@@ -136,18 +136,50 @@ pub trait ProxyReduceBackend<T, B1, B2> {
 }
 
 /// A proxy-space [`ReduceTactic`]: matches input and output records by `key_hash`.
-pub struct ProxyReduceTactic<T, Bk> {
+pub struct ProxyReduceTactic<T, B1, B2, Bk: ProxyReduceBackend<T, B1, B2>> {
     backend: Bk,
     /// Maximum number of key hashes with live sweep state at once.
     key_batch_size: usize,
     /// Pending interesting times beyond the upper frontier, keyed by key hash.
     pending: BTreeMap<u64, Vec<T>>,
+    /// The per-retire working state, kept so that its columns and vectors keep their capacity
+    /// from one retire to the next.
+    scratch: ReduceScratch<Bk::Times, Bk::RIn, Bk::ROut>,
+    _marker: std::marker::PhantomData<(B1, B2)>,
 }
 
-impl<T, Bk> ProxyReduceTactic<T, Bk> {
+/// A retire's working state: the window, the sweep slots, and the staging buffers. Cleared per
+/// group, window or wave, retaining capacity. Fresh per-key/per-wave `Vec`s were once the
+/// dominant cost here, and a retire that starts from empty columns grows them by doubling.
+struct ReduceScratch<C, RIn, ROut> {
+    window: ReduceWindow<C, RIn, ROut>,
+    slots: Vec<KeySweep<C, RIn, ROut>>,
+    live: Vec<usize>,
+    deltas: Bridge<C, ROut>,
+    batch_keys: Vec<u64>,
+    in_ends: Vec<usize>,
+    in_all: Vec<(u64, RIn)>,
+    out_ends: Vec<usize>,
+    out_all: Vec<(u64, ROut)>,
+    active: Vec<(usize, usize)>,
+    in_accum: Vec<(u64, RIn)>,
+    cur_out: Vec<(u64, ROut)>,
+}
+
+impl<C: Default, RIn, ROut> Default for ReduceScratch<C, RIn, ROut> {
+    fn default() -> Self {
+        ReduceScratch {
+            window: ReduceWindow::default(), slots: Vec::new(), live: Vec::new(), deltas: Bridge::default(),
+            batch_keys: Vec::new(), in_ends: Vec::new(), in_all: Vec::new(), out_ends: Vec::new(), out_all: Vec::new(),
+            active: Vec::new(), in_accum: Vec::new(), cur_out: Vec::new(),
+        }
+    }
+}
+
+impl<T, B1, B2, Bk: ProxyReduceBackend<T, B1, B2>> ProxyReduceTactic<T, B1, B2, Bk> {
     /// A tactic deferring all value semantics to `backend`.
     pub fn new(backend: Bk) -> Self {
-        ProxyReduceTactic { backend, key_batch_size: usize::MAX, pending: BTreeMap::new() }
+        ProxyReduceTactic { backend, key_batch_size: usize::MAX, pending: BTreeMap::new(), scratch: ReduceScratch::default(), _marker: std::marker::PhantomData }
     }
 
     /// Limit simultaneous sweeps independently of the backend's presentation window.
@@ -173,7 +205,7 @@ fn debug_assert_pending_frontier<T: PartialOrder + Clone>(pending: &BTreeMap<u64
     }, "maintained pending frontier differs from pending times");
 }
 
-impl<T, B1, B2, Bk> ReduceTactic<T, B1, B2> for ProxyReduceTactic<T, Bk>
+impl<T, B1, B2, Bk> ReduceTactic<T, B1, B2> for ProxyReduceTactic<T, B1, B2, Bk>
 where
     T: Timestamp + Lattice,
     Bk: ProxyReduceBackend<T, B1, B2>,
@@ -241,27 +273,19 @@ where
         // Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
         // once the backend reports the space covered.
         let mut from = Some(0u64);
-        let mut window: ReduceWindow<Bk::Times, Bk::RIn, Bk::ROut> = ReduceWindow::default();
 
-        // Retire-wide reusable scratch: cleared per group, window or wave, retaining capacity. Fresh
-        // per-key/per-wave `Vec`s were once the dominant cost here, which is why the slots and the
-        // staging buffers are held across the whole retire rather than built where they are used.
-        let mut slots: Vec<KeySweep<Bk::Times, Bk::RIn, Bk::ROut>> = Vec::new();
-        let mut live: Vec<usize> = Vec::new();
-        let mut deltas: Bridge<Bk::Times, Bk::ROut> = Bridge::default();
-        let mut batch_keys: Vec<u64> = Vec::new();
-        let mut in_ends: Vec<usize> = Vec::new();
-        let mut in_all: Vec<(u64, Bk::RIn)> = Vec::new();
-        let mut out_ends: Vec<usize> = Vec::new();
-        let mut out_all: Vec<(u64, Bk::ROut)> = Vec::new();
-        let mut active: Vec<(usize, usize)> = Vec::new();
-        let mut in_accum: Vec<(u64, Bk::RIn)> = Vec::new();
-        let mut cur_out: Vec<(u64, Bk::ROut)> = Vec::new();
+        // The working state, kept across retires for its capacity.
+        let ReduceScratch { window, slots, live, deltas, batch_keys, in_ends, in_all, out_ends, out_all, active, in_accum, cur_out } = &mut self.scratch;
+        let (window, slots, live, deltas) = (window, slots, live, deltas);
+        let (batch_keys, in_ends, in_all, out_ends, out_all, active, in_accum, cur_out) = (batch_keys, in_ends, in_all, out_ends, out_all, active, in_accum, cur_out);
+        let pending = &mut self.pending;
+        let backend = &mut self.backend;
+        let key_batch_size = self.key_batch_size;
 
         while from.is_some() {
             let before = from;
             window.clear();
-            self.backend.next_window(&instance, &changed, &mut from, &mut window);
+            backend.next_window(&instance, &changed, &mut from, window);
             let p_in = &window.input;
             let seeds = &window.seeds;
             let p_out = &window.output;
@@ -327,10 +351,10 @@ where
                     slot.at = slot.sweep.next_crossing(&mut slot.pended);
                     if slot.at.is_some() { live.push(n_slots); }
                     else if !slot.pended.is_empty() {
-                        slot.retire_pended(&mut self.pending, &mut pending_frontier);
+                        slot.retire_pended(pending, &mut pending_frontier);
                     }
                     n_slots += 1;
-                    if n_slots == self.key_batch_size { break; }
+                    if n_slots == key_batch_size { break; }
                 }
 
                 // Each wave: read every suspended key's accumulations, cross the non-empty ones in one
@@ -348,21 +372,21 @@ where
                         let at = slots[si].at.expect("live slots are suspended at a time");
                         in_accum.clear();
                         cur_out.clear();
-                        slots[si].sweep.input_at(at, &mut in_accum);
-                        slots[si].sweep.output_at(at, &mut cur_out);
+                        slots[si].sweep.input_at(at, in_accum);
+                        slots[si].sweep.output_at(at, cur_out);
                         // An interesting time can still reach the gate with nothing to read; the
                         // conventional reduce skips user logic there and so do we.
                         if in_accum.is_empty() && cur_out.is_empty() { continue; }
                         batch_keys.push(slots[si].key);
-                        in_all.append(&mut in_accum);
+                        in_all.append(in_accum);
                         in_ends.push(in_all.len());
-                        out_all.append(&mut cur_out);
+                        out_all.append(cur_out);
                         out_ends.push(out_all.len());
                         active.push((si, at));
                     }
 
                     if !batch_keys.is_empty() {
-                        let (corr, corr_ends) = self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all);
+                        let (corr, corr_ends) = backend.reduce_corrections(batch_keys, in_ends, in_all, out_ends, out_all);
                         let mut cstart = 0usize;
                         for (bi, &(si, at)) in active.iter().enumerate() {
                             let cend = corr_ends[bi];
@@ -385,7 +409,7 @@ where
                         let slot = &mut slots[si];
                         slot.at = slot.sweep.next_crossing(&mut slot.pended);
                         if slot.at.is_none() && !slot.pended.is_empty() {
-                            slot.retire_pended(&mut self.pending, &mut pending_frontier);
+                            slot.retire_pended(pending, &mut pending_frontier);
                         }
                     }
                     live.retain(|&si| slots[si].at.is_some());
@@ -394,12 +418,12 @@ where
 
             if !deltas.is_empty() {
                 deltas.consolidate();
-                self.backend.emit(&deltas);
+                backend.emit(deltas);
             }
         }
 
-        let produced = Some(Span::new(description, self.backend.finish()));
-        debug_assert_pending_frontier(&self.pending, &pending_frontier);
+        let produced = Some(Span::new(description, backend.finish()));
+        debug_assert_pending_frontier(pending, &pending_frontier);
         (produced, pending_frontier)
     }
 }
