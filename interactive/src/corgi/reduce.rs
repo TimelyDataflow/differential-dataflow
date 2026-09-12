@@ -154,6 +154,14 @@ pub struct CorgiReduceBackend<T> {
     val_index: IdMap,
     val_blocks: Vec<CValue>,
     val_len: usize,
+    /// The leaf fast path for the current retire: when keys and values are both leaves (their
+    /// own identifiers) and the reducer builds its output from identifiers alone, presentations
+    /// read the id lanes directly and the output is built from the emitted ids — no column
+    /// gathers, no pools, no id maps. Holds the key and value templates (empty columns of the
+    /// stored shapes) the output is built in.
+    leaf: Option<(CValue, CValue)>,
+    /// The emitted `(key id, value id)` pairs on the leaf fast path, aligned with `rows`' times.
+    leaf_ids: Vec<(u64, u64)>,
     _t: std::marker::PhantomData<T>,
 }
 
@@ -170,6 +178,8 @@ impl<T> CorgiReduceBackend<T> {
             val_index: IdMap::default(),
             val_blocks: Vec::new(),
             val_len: 0,
+            leaf: None,
+            leaf_ids: Vec::new(),
             _t: std::marker::PhantomData,
         }
     }
@@ -290,20 +300,66 @@ where
     } else {
         (gather_lanes(&key_srcs, &tags, &offs), gather_lanes(&val_srcs, &tags, &offs))
     };
-    Presented { keys_col, vals_col, khs, tags, offs, diffs, run_ends }
+    Presented { keys_col, vals_col, khs, vids: Vec::new(), leaf: false, tags, offs, diffs, run_ends }
 }
 
 /// A presentation: the selected records' columns and, per record, its key id, its diff and its
 /// place `(chunk, row)` in the chunks it was collected from; `run_ends` delimits the records
-/// of each chunk, each run in that chunk's (stored) order.
+/// of each chunk, each run in that chunk's (stored) order. On the leaf fast path the columns
+/// are not gathered (`leaf`), and `vids` holds the value lane read directly.
 struct Presented {
     keys_col: CValue,
     vals_col: CValue,
     khs: Vec<u64>,
+    vids: Vec<u64>,
+    leaf: bool,
     tags: Vec<usize>,
     offs: Vec<usize>,
     diffs: Vec<Diff>,
     run_ends: Vec<usize>,
+}
+
+/// [`collect_present`] for leaf keys and values: the value ids are the value lane, copied by
+/// range; no column is gathered.
+fn collect_present_leaf<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> Presented
+where
+    T: ColTime,
+{
+    let (mut tags, mut offs) = (Vec::new(), Vec::new());
+    let (mut khs, mut vids, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
+    let mut run_ends = Vec::new();
+    for (ci, ch) in chunks.iter().enumerate() {
+        let before = khs.len();
+        if ch.diffs().is_empty() {
+            continue;
+        }
+        let kh = corgi::arrange::leaf_slice(key_lane(ch.keys())).expect("the identifier lane is a u64 leaf");
+        // The value lane, or — for an output history whose values are not leaves, such as
+        // Distinct's units — the ids the output was emitted under.
+        let owned;
+        let vs: &[u64] = match corgi::arrange::leaf_slice(ch.vals()) {
+            Some(lane) => lane,
+            None => { owned = val_ids(ch.vals()); &owned }
+        };
+        for (j, range) in MatchingRanges::new(changed, kh) {
+            tags.resize(tags.len() + range.len(), ci);
+            offs.extend(range.clone());
+            khs.resize(khs.len() + range.len(), changed[j]);
+            vids.extend_from_slice(&vs[range.clone()]);
+            diffs.extend_from_slice(&ch.diffs()[range]);
+        }
+        if khs.len() > before { run_ends.push(khs.len()); }
+    }
+    Presented { keys_col: CValue::Unit(0), vals_col: CValue::Unit(0), khs, vids, leaf: true, tags, offs, diffs, run_ends }
+}
+
+/// A leaf column of `ids` in the shape of `template` (a bare 64-bit leaf, or the 1-field
+/// product DDIR wraps a scalar in).
+fn leaf_like(template: &CValue, ids: Vec<u64>) -> CValue {
+    match template {
+        CValue::Prod(cols) if cols.len() == 1 => CValue::Prod(vec![CValue::u64(ids)]),
+        _ => CValue::u64(ids),
+    }
 }
 
 impl Presented {
@@ -340,8 +396,8 @@ fn merge_present<T: ColTime>(
     bridge: &mut Bridge<ColTimes<T>, Diff>,
 ) -> bool {
     let Presented { keys_col, vals_col, khs, diffs, run_ends, .. } = p;
-    let keys_hashed = corgi::arrange::leaf_slice(keys_col).is_none();
-    let vals_hashed = val_is_hashed(vals_col);
+    let keys_hashed = !p.leaf && corgi::arrange::leaf_slice(keys_col).is_none();
+    let vals_hashed = !p.leaf && val_is_hashed(vals_col);
     let (mut ka, mut kb, mut va, mut vb) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut start = 0usize;
     for &end in run_ends {
@@ -361,7 +417,8 @@ fn merge_present<T: ColTime>(
     }
     debug_assert_eq!(start, khs.len(), "run ends must cover the presentation");
     let ordered_keys = !keys_hashed || equal_idx(keys_col, keys_col, &ka, &kb).into_iter().all(|e| e);
-    let ordered_vals = corgi::arrange::leaf_slice(vals_col).is_some()
+    let ordered_vals = p.leaf
+        || corgi::arrange::leaf_slice(vals_col).is_some()
         || matches!(vals_col, CValue::Unit(_))
         || (vals_hashed && equal_idx(vals_col, vals_col, &va, &vb).into_iter().all(|e| e));
     if !ordered_keys || !ordered_vals || !bridge.is_empty() {
@@ -469,6 +526,14 @@ where
         len: &mut usize,
         bridge: &mut Bridge<ColTimes<T>, Diff>,
     ) {
+        if self.leaf.is_some() {
+            let p = collect_present_leaf(chunks, keys);
+            if !p.is_empty() && !merge_present(chunks, &p, &p.vids, bridge) {
+                p.extend_into(chunks, &p.vids, bridge);
+                bridge.consolidate();
+            }
+            return;
+        }
         let p = collect_present(chunks, keys);
         if p.is_empty() {
             return;
@@ -504,7 +569,7 @@ where
         let mut out_diffs: Vec<Diff> = Vec::new();
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
         let out_ids: Vec<u64>;
-        let leaf = corgi::arrange::leaf_slice(&self.in_vals).is_some();
+        let leaf = self.leaf.is_some() || corgi::arrange::leaf_slice(&self.in_vals).is_some();
         debug_assert!({
             let mut start = 0;
             ends.iter().all(|&end| { let ok = vids[start..end].windows(2).all(|w| w[0] <= w[1]); start = end; ok })
@@ -529,7 +594,7 @@ where
                 }
                 let col = CValue::Prod(vec![CValue::u64(sums)]);
                 out_ids = val_ids(&col);
-                self.register_vals(col, &out_ids);
+                if self.leaf.is_none() { self.register_vals(col, &out_ids); }
             }
             Reducer::Distinct => {
                 // Present iff any value has NON-ZERO net -- the sign does not matter. DD's `reduce`
@@ -552,7 +617,7 @@ where
                 }
                 let col = CValue::Unit(present);
                 out_ids = val_ids(&col); // all equal (unit content hash)
-                self.register_vals(col, &out_ids);
+                if self.leaf.is_none() { self.register_vals(col, &out_ids); }
             }
             Reducer::Min => {
                 // The structural minimum over values with NON-ZERO net. The sign does not select
@@ -612,9 +677,15 @@ where
                 if min_reps.is_empty() {
                     return (Vec::new(), out_ends);
                 }
-                let col = gather(&self.in_vals, &min_reps);
-                out_ids = val_ids(&col);
-                self.register_vals(col, &out_ids);
+                if self.leaf.is_some() {
+                    // The winners are their own identifiers; the output is built from them at
+                    // `finish`, so nothing is pooled.
+                    out_ids = min_reps.iter().map(|&k| vids[k]).collect();
+                } else {
+                    let col = gather(&self.in_vals, &min_reps);
+                    out_ids = val_ids(&col);
+                    self.register_vals(col, &out_ids);
+                }
             }
             Reducer::Collect => {
                 // One row per bracket: the values sorted in DDIR observable order,
@@ -698,6 +769,8 @@ where
         // Open the output session for this retire; reset the per-retire resolution pools.
         self.reset_pools();
         self.rows = (Vec::new(), Vec::new(), ColTimes::new(), Vec::new());
+        self.leaf = None;
+        self.leaf_ids.clear();
     }
 
     fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<ColTimes<T>, Diff, Diff>) {
@@ -716,6 +789,17 @@ where
         // harness supplies. The novel hashes come from the scan the presentation needs anyway — the
         // separate seeding pass this replaced read the delta a second time to derive them.
         let novel_chunks = chunks_of(instance.input_batches);
+        // The leaf fast path is decided per retire from the stored shapes, which every chunk of
+        // the arrangement shares.
+        if self.leaf.is_none() && matches!(self.reducer, Reducer::Count | Reducer::Distinct | Reducer::Min) {
+            let sample = chunks_of(instance.source_batches).into_iter().chain(novel_chunks.iter().copied())
+                .chain(chunks_of(instance.output_batches)).find(|c| !c.diffs().is_empty());
+            if let Some(c) = sample {
+                if corgi::arrange::leaf_slice(c.keys()).is_some() && corgi::arrange::leaf_slice(c.vals()).is_some() {
+                    self.leaf = Some((gather(c.keys(), &[]), gather(c.vals(), &[])));
+                }
+            }
+        }
         let mut keys: Vec<u64> = Vec::new();
         // The seeds are the novel batches' RAW (key_hash, time) support, recorded here — before the
         // merged presentation below, whose consolidation may net a novel record away entirely. The
@@ -767,6 +851,16 @@ where
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
         let out_chunks = chunks_of(instance.output_batches);
+        if self.leaf.is_some() {
+            // The output of Count is its own id (a 1-field product of it), of Distinct the unit
+            // and of Min an input value: the output column is rebuilt from ids at `finish`.
+            let p = collect_present_leaf(&out_chunks, &keys);
+            if !p.is_empty() && !merge_present(&out_chunks, &p, &p.vids, &mut window.output) {
+                p.extend_into(&out_chunks, &p.vids, &mut window.output);
+                window.output.consolidate();
+            }
+            return;
+        }
         let p = collect_present(&out_chunks, &keys);
         if !p.is_empty() {
             let vids = val_ids(&p.vals_col);
@@ -784,9 +878,14 @@ where
     fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
         // Resolve input value_ids to `in_vals` rows, reduce (desired output), then difference the
         // desired against the presented current output per key: correction = desired − current.
-        let in_rows: Vec<(usize, Diff)> = input.iter()
-            .map(|&(vid, d)| (*self.in_index.get(&vid).expect("input value_id presented this window"), d))
-            .collect();
+        let in_rows: Vec<(usize, Diff)> = if self.leaf.is_some() {
+            // A leaf value needs no row: its id is the value, and `vids` carries it.
+            input.iter().enumerate().map(|(k, &(_, d))| (k, d)).collect()
+        } else {
+            input.iter()
+                .map(|&(vid, d)| (*self.in_index.get(&vid).expect("input value_id presented this window"), d))
+                .collect()
+        };
         let in_vids: Vec<u64> = input.iter().map(|&(vid, _)| vid).collect();
         let (desired, desired_ends) = self.reduce_brackets(in_ends, &in_rows, &in_vids);
 
@@ -816,6 +915,16 @@ where
     }
 
     fn emit(&mut self, records: &Bridge<ColTimes<T>, Diff>) {
+        if self.leaf.is_some() {
+            // The ids are the data: keep them, and the times as row copies.
+            let (_, _, times, diffs) = &mut self.rows;
+            for i in 0..records.len() {
+                self.leaf_ids.push(records.ids[i]);
+                times.push_ref(&records.times, i);
+                diffs.push(records.diffs[i]);
+            }
+            return;
+        }
         // Resolve each correction's key/value proxies to pool rows and accumulate; the time is a
         // row copy out of the tactic's column.
         for i in 0..records.len() {
@@ -831,6 +940,20 @@ where
     }
 
     fn finish(&mut self) -> Option<CBatch<T>> {
+        if let Some((ktemplate, vtemplate)) = self.leaf.take() {
+            let (_, _, times, diffs) = std::mem::take(&mut self.rows);
+            let ids = std::mem::take(&mut self.leaf_ids);
+            if times.is_empty() { return None; }
+            let keys = leaf_like(&ktemplate, ids.iter().map(|id| id.0).collect());
+            let vids: Vec<u64> = ids.iter().map(|id| id.1).collect();
+            let vals = match self.reducer {
+                Reducer::Count => CValue::Prod(vec![CValue::u64(vids)]),
+                Reducer::Distinct => CValue::Unit(vids.len()),
+                Reducer::Min => leaf_like(&vtemplate, vids),
+                Reducer::Collect => unreachable!("the leaf fast path excludes Collect"),
+            };
+            return Some(Rc::new(columns_to_batch(keys, vals, times, diffs)));
+        }
         // Seal the batch: gather the accumulated (key, val) pool rows into columns, one CorgiChunk batch.
         let key_pool = concat_columns(&self.key_blocks);
         let val_pool = concat_columns(&self.val_blocks);
