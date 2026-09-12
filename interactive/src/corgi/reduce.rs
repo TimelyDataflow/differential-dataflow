@@ -162,6 +162,8 @@ pub struct CorgiReduceBackend<T> {
     leaf: Option<(CValue, CValue)>,
     /// The emitted `(key id, value id)` pairs on the leaf fast path, aligned with `rows`' times.
     leaf_ids: Vec<(u64, u64)>,
+    /// The presentation buffers, reused by every window of every retire.
+    presented: Presented<T>,
     _t: std::marker::PhantomData<T>,
 }
 
@@ -180,6 +182,7 @@ impl<T> CorgiReduceBackend<T> {
             val_len: 0,
             leaf: None,
             leaf_ids: Vec::new(),
+            presented: Presented::default(),
             _t: std::marker::PhantomData,
         }
     }
@@ -271,14 +274,13 @@ fn val_ids(col: &CValue) -> Vec<u64> {
 /// match is a contiguous RANGE of a chunk, which is the unit every column here is filled in:
 /// the times by range copy, the key ids by fill, the diffs and value ids by slice copy. Nothing
 /// is done per record.
-fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64], leaf: bool) -> Presented<T>
+fn collect_present<T>(p: &mut Presented<T>, chunks: &[&CorgiChunk<T, Diff>], changed: &[u64], leaf: bool)
 where
     T: ColTime,
 {
-    let (mut tags, mut offs) = (Vec::new(), Vec::new());
-    let (mut khs, mut vids, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
-    let mut times = ColTimes::new();
-    let mut run_ends = Vec::new();
+    p.clear();
+    p.leaf = leaf;
+    let Presented { tags, offs, khs, vids, times, diffs, run_ends, .. } = p;
     for (ci, ch) in chunks.iter().enumerate() {
         let before = khs.len();
         if ch.diffs().is_empty() {
@@ -308,20 +310,22 @@ where
         }
         if khs.len() > before { run_ends.push(khs.len()); }
     }
-    let (keys_col, vals_col) = if leaf || tags.is_empty() {
-        (CValue::Unit(0), CValue::Unit(0))
-    } else {
+    if !leaf && !tags.is_empty() {
         let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
         let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
-        (gather_lanes(&key_srcs, &tags, &offs), gather_lanes(&val_srcs, &tags, &offs))
-    };
-    Presented { keys_col, vals_col, khs, vids, leaf, times, diffs, run_ends }
+        p.keys_col = gather_lanes(&key_srcs, tags, offs);
+        p.vals_col = gather_lanes(&val_srcs, tags, offs);
+    }
 }
 
 /// A presentation: the selected records' columns, their times as one lane column, and per
 /// record its key id and diff; `run_ends` delimits the records of each chunk, each run in that
 /// chunk's (stored) order. On the leaf fast path the key/value columns are not gathered at all
 /// (`leaf`) and `vids` holds the value lane read directly.
+///
+/// Held as backend scratch and cleared per presentation: every column keeps its capacity, so a
+/// window's presentation reallocates nothing after the first (growing them from empty was a
+/// quarter of the run's memory traffic).
 struct Presented<T> {
     keys_col: CValue,
     vals_col: CValue,
@@ -331,6 +335,19 @@ struct Presented<T> {
     times: ColTimes<T>,
     diffs: Vec<Diff>,
     run_ends: Vec<usize>,
+    /// Row indices into the chunks, for the structured path's column gathers.
+    tags: Vec<usize>,
+    offs: Vec<usize>,
+}
+
+impl<T> Default for Presented<T> {
+    fn default() -> Self {
+        Presented {
+            keys_col: CValue::Unit(0), vals_col: CValue::Unit(0), khs: Vec::new(), vids: Vec::new(),
+            leaf: false, times: ColTimes::default(), diffs: Vec::new(), run_ends: Vec::new(),
+            tags: Vec::new(), offs: Vec::new(),
+        }
+    }
 }
 
 /// A leaf column of `ids` in the shape of `template` (a bare 64-bit leaf, or the 1-field
@@ -344,6 +361,18 @@ fn leaf_like(template: &CValue, ids: Vec<u64>) -> CValue {
 
 impl<T: ColTime> Presented<T> {
     fn is_empty(&self) -> bool { self.khs.is_empty() }
+    /// Empty every column, keeping its allocation.
+    fn clear(&mut self) {
+        self.keys_col = CValue::Unit(0);
+        self.vals_col = CValue::Unit(0);
+        self.khs.clear();
+        self.vids.clear();
+        self.times.clear();
+        self.diffs.clear();
+        self.run_ends.clear();
+        self.tags.clear();
+        self.offs.clear();
+    }
     /// The order of records `i` and `j`'s times, read in place.
     #[inline]
     fn cmp_times(&self, i: usize, j: usize) -> std::cmp::Ordering {
@@ -506,16 +535,21 @@ where
         len: &mut usize,
         bridge: &mut Bridge<ColTimes<T>, Diff>,
     ) {
-        if self.leaf.is_some() {
-            let p = collect_present(chunks, keys, true);
-            if !p.is_empty() && !merge_present(&p, &p.vids, bridge) {
+        // The presentation buffers are the backend's; take them so the registration below can
+        // borrow the backend too, and put them back with their capacity.
+        let mut p = std::mem::take(&mut self.presented);
+        let leaf = self.leaf.is_some();
+        collect_present(&mut p, chunks, keys, leaf);
+        if p.is_empty() {
+            self.presented = p;
+            return;
+        }
+        if leaf {
+            if !merge_present(&p, &p.vids, bridge) {
                 p.extend_into(&p.vids, bridge);
                 bridge.consolidate();
             }
-            return;
-        }
-        let p = collect_present(chunks, keys, false);
-        if p.is_empty() {
+            self.presented = p;
             return;
         }
         let vids = val_ids(&p.vals_col);
@@ -528,9 +562,11 @@ where
         self.in_index.reserve(vids.len());
         for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
         *len += p.vals_col.len();
-        let Presented { keys_col, vals_col, khs, .. } = p;
+        let keys_col = std::mem::replace(&mut p.keys_col, CValue::Unit(0));
+        let vals_col = std::mem::replace(&mut p.vals_col, CValue::Unit(0));
         blocks.push(vals_col);
-        self.register_keys(keys_col, &khs);
+        self.register_keys(keys_col, &p.khs);
+        self.presented = p;
     }
 
     /// The one value crossing for a retire: every `(key, time)` bracket at once. Builds the output
@@ -748,7 +784,11 @@ where
     fn begin(&mut self, _description: Description<T>) {
         // Open the output session for this retire; reset the per-retire resolution pools.
         self.reset_pools();
-        self.rows = (Vec::new(), Vec::new(), ColTimes::new(), Vec::new());
+        let (krows, vrows, times, diffs) = &mut self.rows;
+        krows.clear();
+        vrows.clear();
+        times.clear();
+        diffs.clear();
         self.leaf = None;
         self.leaf_ids.clear();
     }
@@ -831,17 +871,19 @@ where
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
         let out_chunks = chunks_of(instance.output_batches);
+        let mut p = std::mem::take(&mut self.presented);
         if self.leaf.is_some() {
             // The output of Count is its own id (a 1-field product of it), of Distinct the unit
             // and of Min an input value: the output column is rebuilt from ids at `finish`.
-            let p = collect_present(&out_chunks, &keys, true);
+            collect_present(&mut p, &out_chunks, &keys, true);
             if !p.is_empty() && !merge_present(&p, &p.vids, &mut window.output) {
                 p.extend_into(&p.vids, &mut window.output);
                 window.output.consolidate();
             }
+            self.presented = p;
             return;
         }
-        let p = collect_present(&out_chunks, &keys, false);
+        collect_present(&mut p, &out_chunks, &keys, false);
         if !p.is_empty() {
             let vids = val_ids(&p.vals_col);
             let merged = merge_present(&p, &vids, &mut window.output);
@@ -849,10 +891,12 @@ where
                 p.extend_into(&vids, &mut window.output);
                 window.output.consolidate();
             }
-            let Presented { keys_col, vals_col, khs, .. } = p;
-            self.register_keys(keys_col, &khs);
+            let keys_col = std::mem::replace(&mut p.keys_col, CValue::Unit(0));
+            let vals_col = std::mem::replace(&mut p.vals_col, CValue::Unit(0));
+            self.register_keys(keys_col, &p.khs);
             self.register_vals(vals_col, &vids);
         }
+        self.presented = p;
     }
 
     fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
@@ -921,7 +965,10 @@ where
 
     fn finish(&mut self) -> Option<CBatch<T>> {
         if let Some((ktemplate, vtemplate)) = self.leaf.take() {
-            let (_, _, times, diffs) = std::mem::take(&mut self.rows);
+            let (krows, vrows, times, diffs) = &mut self.rows;
+            krows.clear();
+            vrows.clear();
+            let (times, diffs) = (std::mem::take(times), std::mem::take(diffs));
             let ids = std::mem::take(&mut self.leaf_ids);
             if times.is_empty() { return None; }
             let keys = leaf_like(&ktemplate, ids.iter().map(|id| id.0).collect());
@@ -937,10 +984,13 @@ where
         // Seal the batch: gather the accumulated (key, val) pool rows into columns, one CorgiChunk batch.
         let key_pool = concat_columns(&self.key_blocks);
         let val_pool = concat_columns(&self.val_blocks);
-        let (krows, vrows, times, diffs) = std::mem::take(&mut self.rows);
+        let (krows, vrows, times, diffs) = &mut self.rows;
         if times.is_empty() { return None; }
-        let keys = gather(&key_pool, &krows);
-        let vals = gather(&val_pool, &vrows);
+        let keys = gather(&key_pool, krows);
+        let vals = gather(&val_pool, vrows);
+        krows.clear();
+        vrows.clear();
+        let (times, diffs) = (std::mem::take(times), std::mem::take(diffs));
         Some(Rc::new(columns_to_batch(keys, vals, times, diffs)))
     }
 }
@@ -1013,7 +1063,8 @@ mod tests {
     fn present_runs<T: ColTime + Ord>(runs: Vec<(CValue, CValue, Vec<T>, Vec<Diff>)>, changed: &[u64]) -> (bool, Vec<((u64, u64), T, Diff)>) {
         let chunks: Vec<CorgiChunk<T, Diff>> = runs.into_iter().map(|(k, v, t, d)| CorgiChunk::from_columns(k, v, t.into_iter().collect(), d)).collect();
         let refs: Vec<&CorgiChunk<T, Diff>> = chunks.iter().collect();
-        let p = collect_present(&refs, changed, false);
+        let mut p = Presented::default();
+        collect_present(&mut p, &refs, changed, false);
         let vids = val_ids(&p.vals_col);
         let mut bridge = Bridge::default();
         let merged = merge_present(&p, &vids, &mut bridge);
