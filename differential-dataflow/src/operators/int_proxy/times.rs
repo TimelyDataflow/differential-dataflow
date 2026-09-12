@@ -55,6 +55,21 @@ pub trait TimeColumn: Default {
     /// The partial order across columns: this column's row `i` at or below `other`'s row `j`.
     fn less_equal_cross(&self, i: usize, other: &Self, j: usize) -> bool;
 
+    /// Insert `other`'s row `i` into this column read as an ANTICHAIN: dropped when some row is
+    /// already at or below it, else added and the rows at or above it dropped. The antichain of a
+    /// set of times, built one row at a time, with no timestamp materialized.
+    fn insert_antichain(&mut self, other: &Self, i: usize) {
+        if (0..self.len()).any(|r| self.less_equal_cross(r, other, i)) {
+            return;
+        }
+        let mut kept = Self::default();
+        for r in 0..self.len() {
+            if !other.less_equal_cross(i, self, r) { kept.push_from(self, r); }
+        }
+        kept.push_from(other, i);
+        *self = kept;
+    }
+
     /// Row `i` becomes its join with row `j`.
     fn join_assign(&mut self, i: usize, j: usize);
     /// Row `i` becomes its meet with row `j`.
@@ -173,6 +188,45 @@ impl<C: TimeColumn, R: Semigroup + Clone> Bridge<C, R> {
             "{}: a presented bridge must be sorted & consolidated by ((key_hash, value_id), time)",
             who,
         );
+    }
+}
+
+/// Times held for later, each under a key hash: one column and `(key, row)` entries, in place
+/// of a timestamp per time. The reduce tactic carries interesting times beyond a retire's upper
+/// frontier here, and hands a key's due ones to its sweep as a range of rows.
+pub struct Carried<C> {
+    /// `(key hash, row)`, sorted by key and then by time once [`Carried::order`] has run.
+    pub entries: Vec<(u64, usize)>,
+    /// The times the entries' rows index.
+    pub times: C,
+}
+
+impl<C: Default> Default for Carried<C> {
+    fn default() -> Self { Carried { entries: Vec::new(), times: C::default() } }
+}
+
+impl<C: TimeColumn> Carried<C> {
+    /// How many times are held.
+    pub fn len(&self) -> usize { self.entries.len() }
+    /// Whether no time is held.
+    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    /// Forget every time, keeping the allocations.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.times.clear();
+    }
+    /// Hold `other`'s row `i` under `key`.
+    pub fn push_from(&mut self, key: u64, other: &C, i: usize) {
+        let row = self.times.push_from(other, i);
+        self.entries.push((key, row));
+    }
+    /// Sort the entries by key and then time, and drop the duplicates — a key holds a SET of
+    /// times. The rows the entries name are left as they are; a compaction rebuilds the column.
+    pub fn order(&mut self) {
+        let times = &self.times;
+        self.entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| times.cmp(a.1, b.1)));
+        let times = &self.times;
+        self.entries.dedup_by(|a, b| a.0 == b.0 && times.cmp(a.1, b.1) == Ordering::Equal);
     }
 }
 

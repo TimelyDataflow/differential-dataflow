@@ -5,8 +5,6 @@
 //! [`TimeColumn`]: the tactic reads, compares, joins and meets them by index and never holds
 //! one per record.
 
-use std::collections::BTreeMap;
-
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::AntichainRef;
@@ -14,9 +12,9 @@ use timely::progress::frontier::AntichainRef;
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{Span, Description};
-use super::times::{Bridge, Seeds, TimeColumn};
+use super::times::{Bridge, Carried, Seeds, TimeColumn};
 use super::history::{consolidate_buffer, ColumnHistory};
-use crate::operators::reduce::{sort_dedup, ReduceTactic};
+use crate::operators::reduce::ReduceTactic;
 
 /// A unit of proxied reduce work, presented to the backend.
 pub struct ReduceInstance<'a, T, B1, B2> {
@@ -140,8 +138,9 @@ pub struct ProxyReduceTactic<T, B1, B2, Bk: ProxyReduceBackend<T, B1, B2>> {
     backend: Bk,
     /// Maximum number of key hashes with live sweep state at once.
     key_batch_size: usize,
-    /// Pending interesting times beyond the upper frontier, keyed by key hash.
-    pending: BTreeMap<u64, Vec<T>>,
+    /// Interesting times beyond the upper frontier, held as one column with `(key, row)`
+    /// entries rather than a timestamp apiece.
+    pending: Carried<Bk::Times>,
     /// The per-retire working state, kept so that its columns and vectors keep their capacity
     /// from one retire to the next.
     scratch: ReduceScratch<Bk::Times, Bk::RIn, Bk::ROut>,
@@ -164,6 +163,15 @@ struct ReduceScratch<C, RIn, ROut> {
     active: Vec<(usize, usize)>,
     in_accum: Vec<(u64, RIn)>,
     cur_out: Vec<(u64, ROut)>,
+    /// The retire's partition of the held times: those DUE now (`due`, a key's times a run of
+    /// rows delimited by `due_ends`), those still carried, the frontier of the carried ones, and
+    /// `upper`'s own elements — all as rows of columns.
+    due: Carried<C>,
+    due_keys: Vec<u64>,
+    due_ends: Vec<usize>,
+    carried: Carried<C>,
+    front: C,
+    upper_rows: C,
 }
 
 impl<C: Default, RIn, ROut> Default for ReduceScratch<C, RIn, ROut> {
@@ -172,6 +180,8 @@ impl<C: Default, RIn, ROut> Default for ReduceScratch<C, RIn, ROut> {
             window: ReduceWindow::default(), slots: Vec::new(), live: Vec::new(), deltas: Bridge::default(),
             batch_keys: Vec::new(), in_ends: Vec::new(), in_all: Vec::new(), out_ends: Vec::new(), out_all: Vec::new(),
             active: Vec::new(), in_accum: Vec::new(), cur_out: Vec::new(),
+            due: Carried::default(), due_keys: Vec::new(), due_ends: Vec::new(),
+            carried: Carried::default(), front: C::default(), upper_rows: C::default(),
         }
     }
 }
@@ -179,7 +189,7 @@ impl<C: Default, RIn, ROut> Default for ReduceScratch<C, RIn, ROut> {
 impl<T, B1, B2, Bk: ProxyReduceBackend<T, B1, B2>> ProxyReduceTactic<T, B1, B2, Bk> {
     /// A tactic deferring all value semantics to `backend`.
     pub fn new(backend: Bk) -> Self {
-        ProxyReduceTactic { backend, key_batch_size: usize::MAX, pending: BTreeMap::new(), scratch: ReduceScratch::default(), _marker: std::marker::PhantomData }
+        ProxyReduceTactic { backend, key_batch_size: usize::MAX, pending: Carried::default(), scratch: ReduceScratch::default(), _marker: std::marker::PhantomData }
     }
 
     /// Limit simultaneous sweeps independently of the backend's presentation window.
@@ -196,13 +206,26 @@ impl<T, B1, B2, Bk: ProxyReduceBackend<T, B1, B2>> ProxyReduceTactic<T, B1, B2, 
     }
 }
 
-fn debug_assert_pending_frontier<T: PartialOrder + Clone>(pending: &BTreeMap<u64, Vec<T>>, maintained: &Antichain<T>) {
+/// A column read as an antichain, as the timestamps the harness speaks.
+fn antichain_of<C: TimeColumn>(front: &C) -> Antichain<C::Time>
+where
+    C::Time: PartialOrder + Clone,
+{
+    let mut out = Antichain::new();
+    for r in 0..front.len() { out.insert(front.get(r)); }
+    out
+}
+
+fn debug_assert_pending_frontier<C: TimeColumn>(pending: &Carried<C>, maintained: &Antichain<C::Time>)
+where
+    C::Time: PartialOrder + Clone,
+{
     debug_assert!({
         let mut expected = Antichain::new();
-        for time in pending.values().flatten() { expected.insert_ref(time); }
+        for &(_, row) in pending.entries.iter() { expected.insert(pending.times.get(row)); }
         expected.elements().iter().all(|t| maintained.less_equal(t))
             && maintained.elements().iter().all(|t| expected.less_equal(t))
-    }, "maintained pending frontier differs from pending times");
+    }, "maintained pending frontier differs from the times held");
 }
 
 impl<T, B1, B2, Bk> ReduceTactic<T, B1, B2> for ProxyReduceTactic<T, B1, B2, Bk>
@@ -221,7 +244,7 @@ where
     ) -> (Option<Span<T, B2>>, Antichain<T>) {
         if held.elements().iter().all(|t| upper.less_equal(t)) {
             debug_assert!(
-                self.pending.values().flatten().all(|time| held.less_equal(time)),
+                self.pending.entries.iter().all(|&(_, row)| held.less_equal(&self.pending.times.get(row))),
                 "held capabilities do not cover pending times",
             );
             return (None, held.clone());
@@ -234,27 +257,40 @@ where
             lower: lower.borrow(),
         };
 
-        // Split the carried interesting times against `upper`.
-        // A time below it is DUE: its key must be re-evaluated this retire, so the key is `changed`.
-        // A time at or beyond it remains carried in `self.pending`. Partition in place: rebuilding
-        // the whole map cloned every carried timestamp on every retire, even though only the small
-        // due subset changes.
-        let mut due: BTreeMap<u64, Vec<T>> = BTreeMap::new();
-        let mut pending_frontier = Antichain::new();
-        for (&key, times) in self.pending.iter_mut() {
-            let mut ready = Vec::new();
-            times.retain_mut(|time| {
-                let carried = upper.less_equal(time);
-                if carried { pending_frontier.insert_ref(time); }
-                else { ready.push(std::mem::replace(time, T::minimum())); }
-                carried
-            });
-            if !ready.is_empty() { due.insert(key, ready); }
+        // Split the held interesting times against `upper`, key by key in one pass over the
+        // column: a time below it is DUE — its key must be re-evaluated this retire, so the key
+        // is `changed` — and a time at or beyond it stays held. Both sides are built as rows of
+        // fresh columns, which compacts the held column to exactly what survives; the frontier
+        // of the survivors is built as an antichain column, so a timestamp is materialized once
+        // per frontier element rather than once per held time.
+        let scratch = &mut self.scratch;
+        scratch.due.clear();
+        scratch.due_keys.clear();
+        scratch.due_ends.clear();
+        scratch.carried.clear();
+        scratch.front.clear();
+        scratch.upper_rows.clear();
+        for time in upper.elements() { scratch.upper_rows.push(time); }
+        self.pending.order();
+        for &(key, row) in self.pending.entries.iter() {
+            // `upper.less_equal(time)`: some element of the frontier at or below the time.
+            let beyond = (0..scratch.upper_rows.len()).any(|u| scratch.upper_rows.less_equal_cross(u, &self.pending.times, row));
+            if beyond {
+                scratch.carried.push_from(key, &self.pending.times, row);
+                scratch.front.insert_antichain(&self.pending.times, row);
+            } else {
+                if scratch.due_keys.last() != Some(&key) {
+                    if !scratch.due_keys.is_empty() { scratch.due_ends.push(scratch.due.len()); }
+                    scratch.due_keys.push(key);
+                }
+                scratch.due.push_from(key, &self.pending.times, row);
+            }
         }
-        self.pending.retain(|_, times| !times.is_empty());
+        if !scratch.due_keys.is_empty() { scratch.due_ends.push(scratch.due.len()); }
+        std::mem::swap(&mut self.pending, &mut scratch.carried);
         // The keys the harness knows must be revisited. The backend adds those its novel batches
         // touch, which it discovers while reading them; neither side scans the whole key space.
-        let changed: Vec<u64> = due.keys().copied().collect();
+        let changed: Vec<u64> = scratch.due_keys.clone();
 
         // Nothing due and nothing novel: no time in the interval can be interesting, so there is no
         // work and no output. Return the frontier bounding the times still withheld — NOT an empty
@@ -262,8 +298,9 @@ where
         // beyond `upper` can remain when nothing is due, and releasing their capabilities would
         // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
         if changed.is_empty() && instance.input_batches.is_empty() {
-            debug_assert_pending_frontier(&self.pending, &pending_frontier);
-            return (None, pending_frontier);
+            let frontier = antichain_of(&self.scratch.front);
+            debug_assert_pending_frontier(&self.pending, &frontier);
+            return (None, frontier);
         }
 
         // The single output batch spans the retired interval.
@@ -275,9 +312,10 @@ where
         let mut from = Some(0u64);
 
         // The working state, kept across retires for its capacity.
-        let ReduceScratch { window, slots, live, deltas, batch_keys, in_ends, in_all, out_ends, out_all, active, in_accum, cur_out } = &mut self.scratch;
+        let ReduceScratch { window, slots, live, deltas, batch_keys, in_ends, in_all, out_ends, out_all, active, in_accum, cur_out, due, due_keys, due_ends, front, .. } = &mut self.scratch;
         let (window, slots, live, deltas) = (window, slots, live, deltas);
         let (batch_keys, in_ends, in_all, out_ends, out_all, active, in_accum, cur_out) = (batch_keys, in_ends, in_all, out_ends, out_all, active, in_accum, cur_out);
+        let (due, due_keys, due_ends, front) = (&*due, &*due_keys, &*due_ends, front);
         let pending = &mut self.pending;
         let backend = &mut self.backend;
         let key_batch_size = self.key_batch_size;
@@ -345,13 +383,16 @@ where
                     let slot = &mut slots[n_slots];
                     slot.key = key;
                     slot.pended.clear();
-                    // Only the DUE times seed the sweep; the carried ones remain in `self.pending`.
-                    let owed = due.get(&key).map(|p| &p[..]).unwrap_or(&[]);
-                    slot.sweep.load(upper, owed, seeds, n0..n1, p_in, i0..i1, p_out, o0..o1);
+                    // Only the DUE times seed the sweep; the rest stay held for a later retire.
+                    let owed = due_keys.binary_search(&key).map_or(0..0, |k| {
+                        let start = if k == 0 { 0 } else { due_ends[k - 1] };
+                        start..due_ends[k]
+                    });
+                    slot.sweep.load(upper, &due.times, owed, seeds, n0..n1, p_in, i0..i1, p_out, o0..o1);
                     slot.at = slot.sweep.next_crossing(&mut slot.pended);
                     if slot.at.is_some() { live.push(n_slots); }
                     else if !slot.pended.is_empty() {
-                        slot.retire_pended(pending, &mut pending_frontier);
+                        slot.retire_pended(pending, front);
                     }
                     n_slots += 1;
                     if n_slots == key_batch_size { break; }
@@ -409,7 +450,7 @@ where
                         let slot = &mut slots[si];
                         slot.at = slot.sweep.next_crossing(&mut slot.pended);
                         if slot.at.is_none() && !slot.pended.is_empty() {
-                            slot.retire_pended(pending, &mut pending_frontier);
+                            slot.retire_pended(pending, front);
                         }
                     }
                     live.retain(|&si| slots[si].at.is_some());
@@ -423,8 +464,11 @@ where
         }
 
         let produced = Some(Span::new(description, backend.finish()));
-        debug_assert_pending_frontier(pending, &pending_frontier);
-        (produced, pending_frontier)
+        // The frontier of everything still held, read off the antichain column once: the times
+        // the harness must keep capabilities for.
+        let frontier = antichain_of(front);
+        debug_assert_pending_frontier(pending, &frontier);
+        (produced, frontier)
     }
 }
 
@@ -449,16 +493,15 @@ where
         KeySweep { key: 0, sweep: Sweep::new(), pended: Vec::new(), at: None }
     }
 
-    /// Carry the pended times forward as owned timestamps: the one place a sweep builds one.
-    fn retire_pended(&mut self, pending: &mut BTreeMap<u64, Vec<C::Time>>, frontier: &mut Antichain<C::Time>) {
-        let entry = pending.entry(self.key).or_default();
+    /// Hold the pended times for a later retire: their rows are copied out of the sweep's pool
+    /// into the held column, and into the frontier column read as an antichain. No timestamp is
+    /// built here; the retire reads the frontier off that column once, at its return.
+    fn retire_pended(&mut self, pending: &mut Carried<C>, front: &mut C) {
         for &row in &self.pended {
-            let time = self.sweep.pool.get(row);
-            frontier.insert_ref(&time);
-            entry.push(time);
+            pending.push_from(self.key, &self.sweep.pool, row);
+            front.insert_antichain(&self.sweep.pool, row);
         }
         self.pended.clear();
-        sort_dedup(entry);
     }
 }
 
@@ -557,8 +600,8 @@ where
 
     /// Position the sweep at the start of one key.
     ///
-    /// `owed` is the harness's due (warned) times and `seeds[novel]` the window's raw novel time
-    /// support, both ascending; they merge into the seed list, which is held raw — the schedule is
+    /// `owed_times[owed]` is the harness's due (warned) times and `seeds[novel]` the window's raw
+    /// novel time support, both ascending; they merge into the seed list, held raw — the schedule is
     /// stated over these times, so they are never advanced. The records in `input` are merged and
     /// netted (novel and prior together): a cancelled record's time survives in the seed list, so
     /// netting loses nothing, and every record is a mere partner/accumulant that the meet may
@@ -567,7 +610,8 @@ where
     fn load(
         &mut self,
         upper: &Antichain<C::Time>,
-        owed: &[C::Time],
+        owed_times: &C,
+        owed: std::ops::Range<usize>,
         seeds: &Seeds<C>,
         novel: std::ops::Range<usize>,
         input: &Bridge<C, RIn>,
@@ -582,9 +626,9 @@ where
 
         // Merge the two ascending seed sources, deduplicated, as rows.
         self.seeds.clear();
-        let (mut oi, mut ni) = (0usize, novel.start);
+        let (mut oi, mut ni) = (owed.start, novel.start);
         loop {
-            let owed_row = (oi < owed.len()).then(|| pool.push(&owed[oi]));
+            let owed_row = (oi < owed.end).then(|| pool.push_from(owed_times, oi));
             let novel_row = (ni < novel.end).then(|| pool.push_from(&seeds.times, ni));
             let take_owed = match (owed_row, novel_row) {
                 (Some(a), Some(b)) => pool.cmp(a, b) != std::cmp::Ordering::Greater,

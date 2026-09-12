@@ -51,6 +51,6 @@ pub mod join;
 pub mod reduce;
 pub mod vec_backend;
 
-pub use times::{Bridge, Seeds, TimeColumn, VecTimes};
+pub use times::{Bridge, Carried, Seeds, TimeColumn, VecTimes};
 pub use join::{JoinInstance, JoinMatches, ProxyJoinBackend, ProxyJoinTactic};
 pub use reduce::{ProxyReduceBackend, ProxyReduceTactic, ReduceInstance, ReduceWindow};
