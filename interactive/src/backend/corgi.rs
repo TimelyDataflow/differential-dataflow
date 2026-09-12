@@ -113,8 +113,6 @@ impl Plan {
 /// joins it into `times` in place; LiftIter reads the iteration coordinate out of `times` and
 /// appends it to `vals`. `level` is the scope depth (it locates that coordinate).
 fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> CC {
-    use differential_dataflow::dynamic::pointstamp::PointStamp;
-
     // A container with no rows has no SHAPE either, and the ops below are shape-directed: an
     // empty batch passes through untouched (every `LinearOp` maps zero rows to zero rows), and
     // nothing downstream reads its shape — `CorgiChunker::push_into` drops empty containers
@@ -140,7 +138,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
                 let keys = gather(&c.keys, &keep);
                 let vals = gather(&c.vals, &keep);
-                let times = keep.iter().map(|&i| c.times[i].clone()).collect();
+                let times = c.times.gather(&keep);
                 let diffs = keep.iter().map(|&i| c.diffs[i]).collect();
                 CorgiContainer { keys, vals, times, diffs }
             }
@@ -153,24 +151,15 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
             LinearOp::EnterAt(field) => {
                 let g = plan.graph("enter_at", kshape, vshape, |k, v| compile_scalar(field, k, v));
                 // The key and val columns are IDENTITY here — only times change. Evaluate the
-                // delay field to a `U64` column and join it into each time in place. Joining
-                // `Product(0, PointStamp([0,..,0, delay]))` is, coordinate-wise, `max` at index
-                // `level-1` and identity everywhere else (u64's minimum is 0), so the delta
-                // never has to be built. `PointStamp::new` re-strips the trailing minimums the
-                // resize may add, keeping the representation canonical for a zero delay.
+                // delay field to a `U64` column and join it into each time: joining
+                // `Product(0, PointStamp([0,..,0, delay]))` is, coordinate-wise, `max` at
+                // coordinate `level-1` and identity everywhere else, one lane operation on the
+                // column. The epoch is lane 0, so coordinate `level-1` is lane `level`.
                 let raw = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
                     .into_u64("enter_at delay")
                     .unwrap();
-                let idx = level.saturating_sub(1);
-                for (t, &r) in c.times.iter_mut().zip(raw.iter()) {
-                    let delay = 256 * (64 - r.leading_zeros() as u64);
-                    let mut coords = std::mem::take(&mut t.inner).into_inner();
-                    if coords.len() <= idx {
-                        coords.resize(idx + 1, 0);
-                    }
-                    coords[idx] = coords[idx].max(delay);
-                    t.inner = PointStamp::new(coords);
-                }
+                let delays: Vec<u64> = raw.iter().map(|r| 256 * (64 - r.leading_zeros() as u64)).collect();
+                c.times.lane_max(level.max(1), &delays);
                 c
             }
             // The inverse of `EnterAt`: a value read OUT of each row's time. Vals gain one
@@ -182,11 +171,9 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
             // So `Unit` must become `Prod([iter])` — `Prod([Unit, iter])` would be a silent
             // one-field-too-many divergence from `backend::vec`.
             LinearOp::LiftIter => {
-                let iters: Vec<u64> = c
-                    .times
-                    .iter()
-                    .map(|t| level.checked_sub(1).and_then(|idx| t.inner.get(idx).copied()).unwrap_or(0))
-                    .collect();
+                // Coordinate `level-1` is lane `level` (the epoch is lane 0); at the root there
+                // is no iteration coordinate and the value is the minimum.
+                let iters: Vec<u64> = if level == 0 { vec![0; c.times.len()] } else { c.times.lane(level) };
                 let lane = CValue::u64(iters);
                 let vals = match c.vals {
                     CValue::Prod(mut fields) => { fields.push(lane); CValue::Prod(fields) }
@@ -217,7 +204,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 CorgiContainer {
                     keys: gather(&c.keys, &reps),
                     vals: CValue::Prod(vec![CValue::u64(pos), elems]),
-                    times: reps.iter().map(|&r| c.times[r].clone()).collect(),
+                    times: c.times.gather(&reps),
                     diffs: reps.iter().map(|&r| c.diffs[r]).collect(),
                 }
             }
@@ -274,9 +261,9 @@ impl Backend for CorgiBackend {
 
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, CC> {
         // Each chunk already IS a columnar container: its key/val columns clone by Arc bump,
-        // so a chunk becomes a `CorgiContainer` for the price of materializing its times
-        // (`ColTimes` → `Vec<T>`, the owned-time egress) and a diffs memcpy. One container
-        // per chunk — no concatenation, no gather, no columns→rows→columns round-trip.
+        // so a chunk becomes a `CorgiContainer` for the price of a lane-column memcpy and a
+        // diffs memcpy. One container per chunk — no concatenation, no gather, no
+        // columns→rows→columns round-trip.
         a.stream
             .unary(Pipeline, "CorgiAsCollection", |_, _| {
                 |input, output| {
@@ -290,7 +277,7 @@ impl Backend for CorgiBackend {
                                     // the key the program wrote, so `$0` indexes what it always did.
                                     keys: recover_key(ch.keys()),
                                     vals: recover_val(ch.vals()),
-                                    times: ch.times().to_vec(),
+                                    times: ch.times().clone(),
                                     diffs: ch.diffs().to_vec(),
                                 };
                                 session.give_container(&mut c);
@@ -349,9 +336,10 @@ impl Backend for CorgiBackend {
 
     fn leave_dynamic<'s>(c: Collection<'s, Time, CC>, level: usize) -> Collection<'s, Time, CC> {
         // Mirror DD's `Collection::leave_dynamic` (dynamic/mod.rs:40), but over a `CorgiContainer`:
-        // strip all but `level-1` PointStamp coordinates from the capability AND from each row's time
-        // (stored columnar in `CorgiContainer.times`, not inline in the data tuples). The input
-        // connection summary advertises the `retain` so timely's progress tracking stays correct.
+        // strip all but `level-1` PointStamp coordinates from the capability AND from the rows'
+        // times, which is one truncation of the lane column (the epoch is lane 0, so `level-1`
+        // coordinates are `level` lanes). The input connection summary advertises the `retain`
+        // so timely's progress tracking stays correct.
         use timely::dataflow::operators::generic::{builder_rc::OperatorBuilder, OutputBuilder};
         use timely::order::Product;
         use timely::progress::Antichain;
@@ -371,11 +359,7 @@ impl Backend for CorgiBackend {
                 v.truncate(level - 1);
                 new_time.inner = PointStamp::new(v);
                 let new_cap = cap.delayed(&new_time, 0);
-                for t in data.times.iter_mut() {
-                    let mut v = std::mem::take(&mut t.inner).into_inner();
-                    v.truncate(level - 1);
-                    t.inner = PointStamp::new(v);
-                }
+                data.times.truncate_lanes(level);
                 output.session(&new_cap).give_container(data);
             });
         });

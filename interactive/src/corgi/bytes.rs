@@ -10,10 +10,9 @@
 //! * `keys` / `vals` go through [`corgi::bytes`], which writes each leaf column as one contiguous
 //!   run of its stored bytes. A batch of a million `(u64, u64)` keys is two headers and two 8 MB
 //!   writes — no per-row framing, no per-row dispatch.
-//! * `times` / `diffs` go through `columnar`'s [`Stash`], the same encoder DD's own columnar
-//!   updates use. `T` is already `Columnar` (the arrangement stores times SoA in
-//!   [`ColTimes`](crate::corgi::col_times::ColTimes)), so this is the encoder that type was chosen
-//!   for.
+//! * `times` are a lane column ([`ColTimes`](crate::corgi::col_times::ColTimes)): the section is
+//!   its width, its row count and its lanes, one memcpy. `diffs` go through `columnar`'s
+//!   [`Stash`], the same encoder DD's own columnar updates use.
 //!
 //! Every section is a whole number of 64-bit words, so each begins 8-aligned in an 8-aligned
 //! buffer — which is what lets `Stash::try_from_bytes` install the received bytes directly rather
@@ -25,11 +24,9 @@
 //! worth building.
 //!
 //! **Known cost.** `length_in_bytes` and `into_bytes` are separate calls on `&self`, and the
-//! time/diff columns must be built to be measured, so they are built twice — two linear passes
-//! over `times`. The fix is the one [`container`](crate::corgi::container) already names: hold
-//! times columnar in the container instead of as `Vec<T>`, at which point both calls read a
-//! column that already exists. Keys and values do not have this problem: `corgi::bytes` sizes a
-//! `Value` by walking its shape, without touching a payload byte.
+//! diff column must be built to be measured, so it is built twice. Keys, values and times do
+//! not have this problem: `corgi::bytes` sizes a `Value` by walking its shape, and the lane
+//! column is sized from its dimensions.
 
 use columnar::Columnar;
 use columnar::bytes::stash::Stash;
@@ -37,10 +34,32 @@ use columnar::bytes::stash::Stash;
 use timely::bytes::arc::Bytes;
 use timely::dataflow::channels::ContainerBytes;
 
+use crate::corgi::col_times::ColTimes;
 use crate::corgi::container::CorgiContainer;
 
 /// A columnar column of `T` backed either by an owned container or by received bytes.
 type ColStash<T> = Stash<<T as Columnar>::Container, Bytes>;
+
+/// The time section: `u64 width | u64 rows | lanes`.
+fn times_len<T>(times: &ColTimes<T>) -> usize {
+    let (_, _, lanes) = times.raw();
+    16 + 8 * lanes.len()
+}
+
+fn write_times<T, W: std::io::Write>(times: &ColTimes<T>, writer: &mut W) {
+    let (width, rows, lanes) = times.raw();
+    writer.write_all(&(width as u64).to_le_bytes()).unwrap();
+    writer.write_all(&(rows as u64).to_le_bytes()).unwrap();
+    for lane in lanes {
+        writer.write_all(&lane.to_le_bytes()).unwrap();
+    }
+}
+
+fn read_times<T>(bytes: &[u8]) -> ColTimes<T> {
+    let (width, rows) = (header_word(bytes, 0), header_word(bytes, 1));
+    let lanes: Vec<u64> = bytes[16..].chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
+    ColTimes::from_raw(width, rows, lanes)
+}
 
 /// Read a `u64` length word out of the framing header.
 fn header_word(header: &[u8], i: usize) -> usize {
@@ -55,7 +74,7 @@ fn to_owned_vec<T: Columnar>(stash: &ColStash<T>) -> Vec<T> {
     (0..borrowed.len()).map(|i| <T as Columnar>::into_owned(borrowed.get(i))).collect()
 }
 
-impl<T: Columnar, R: Columnar> ContainerBytes for CorgiContainer<T, R> {
+impl<T, R: Columnar> ContainerBytes for CorgiContainer<T, R> {
     fn from_bytes(mut bytes: Bytes) -> Self {
         let header = bytes.extract_to(32);
         let (kl, vl, tl, dl) = (header_word(&header, 0), header_word(&header, 1), header_word(&header, 2), header_word(&header, 3));
@@ -67,9 +86,9 @@ impl<T: Columnar, R: Columnar> ContainerBytes for CorgiContainer<T, R> {
         let (vals, vread) = corgi::bytes::read_from(&val_bytes).expect("corgi val column decode");
         assert_eq!(vread, vl, "corgi val column decode read {vread} of {vl} bytes");
 
-        let times: ColStash<T> = Stash::try_from_bytes(bytes.extract_to(tl)).expect("time column decode");
+        let times: ColTimes<T> = read_times(&bytes.extract_to(tl));
         let diffs: ColStash<R> = Stash::try_from_bytes(bytes.extract_to(dl)).expect("diff column decode");
-        let container = CorgiContainer { keys, vals, times: to_owned_vec(&times), diffs: to_owned_vec(&diffs) };
+        let container = CorgiContainer { keys, vals, times, diffs: to_owned_vec(&diffs) };
 
         // The four columns are one table, so they must agree on how many rows it has. Checking
         // that here is not ceremony — it is the only layer that knows the answer.
@@ -92,21 +111,19 @@ impl<T: Columnar, R: Columnar> ContainerBytes for CorgiContainer<T, R> {
     }
 
     fn length_in_bytes(&self) -> usize {
-        let times: ColStash<T> = Stash::Typed(T::as_columns(self.times.iter()));
         let diffs: ColStash<R> = Stash::Typed(R::as_columns(self.diffs.iter()));
         32 + corgi::bytes::length_in_bytes(&self.keys)
            + corgi::bytes::length_in_bytes(&self.vals)
-           + times.length_in_bytes()
+           + times_len(&self.times)
            + diffs.length_in_bytes()
     }
 
     fn into_bytes<W: std::io::Write>(&self, writer: &mut W) {
-        let times: ColStash<T> = Stash::Typed(T::as_columns(self.times.iter()));
         let diffs: ColStash<R> = Stash::Typed(R::as_columns(self.diffs.iter()));
         let lens = [
             corgi::bytes::length_in_bytes(&self.keys) as u64,
             corgi::bytes::length_in_bytes(&self.vals) as u64,
-            times.length_in_bytes() as u64,
+            times_len(&self.times) as u64,
             diffs.length_in_bytes() as u64,
         ];
         for l in lens {
@@ -114,7 +131,7 @@ impl<T: Columnar, R: Columnar> ContainerBytes for CorgiContainer<T, R> {
         }
         corgi::bytes::write_to(&self.keys, writer).unwrap();
         corgi::bytes::write_to(&self.vals, writer).unwrap();
-        times.write_bytes(writer).unwrap();
+        write_times(&self.times, writer);
         diffs.write_bytes(writer).unwrap();
     }
 }

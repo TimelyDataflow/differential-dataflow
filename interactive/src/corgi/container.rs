@@ -1,7 +1,8 @@
-//! Phase 2 — the corgi-native container: corgi columns for the (key,val) payload, plain Rust
-//! Vecs for time/diff (corgi never touches the lattice). This is what flows on dataflow edges in
-//! the corgi backend; operators transform block→block via `eval_graph` with NO per-op transcode.
-//! Conversion to/from DDIR rows happens only at I/O boundaries (`from_updates`/`into_updates`).
+//! Phase 2 — the corgi-native container: corgi columns for the (key,val) payload, times as a
+//! lane column, diffs a plain Rust Vec. This is what flows on dataflow edges in the corgi
+//! backend; operators transform block→block via `eval_graph` with NO per-op transcode, and no
+//! operator builds a time per row. Conversion to/from DDIR rows happens only at I/O boundaries
+//! (`from_updates`/`into_updates`).
 //!
 //! Trait surface: `Accountable + Default + Clone` (= `timely::Container`) for dataflow edges,
 //! `Negate`/`Enter`/`Leave`/`ResultsIn` for iterative scopes, and `ContainerBytes` (in
@@ -9,11 +10,12 @@
 //! workers is [`exchange`](crate::corgi::exchange)'s job.
 
 use timely::Accountable;
-use timely::progress::{PathSummary, Timestamp};
+use timely::progress::Timestamp;
 
 use differential_dataflow::collection::containers::{Enter, Leave, Negate, ResultsIn};
 use differential_dataflow::difference::Abelian;
 
+use crate::corgi::col_times::{ColTimes, LaneSummary, Lanes};
 use crate::corgi::logic::{transcode, untranscode};
 use crate::ir::Value as DValue;
 
@@ -21,17 +23,15 @@ type Row = DValue;
 
 /// A batch of `(key, val, time, diff)` updates: payload columnar (corgi), time/diff native Rust.
 ///
-/// Same payload as the chunk contents in [`chunk`](crate::corgi::chunk), and the two should
-/// eventually be ONE type — see the note on the chunk's `Inner`. Times are `Vec<T>` here only
-/// because timely's feedback/enter mutate them row-wise on edges; that difference dies with a
-/// bulk-mutation time container.
+/// Same payload as the chunk contents in [`chunk`](crate::corgi::chunk): the two differ only
+/// in their invariants (sorted+consolidated+shared there, raw+owned here).
 pub struct CorgiContainer<T, R> {
     /// Key column (corgi columnar `Value`).
     pub keys: corgi::Value,
     /// Val column (corgi columnar `Value`).
     pub vals: corgi::Value,
-    /// Per-update times (corgi never reads these; the Rust side keeps the lattice algebra).
-    pub times: Vec<T>,
+    /// Per-update times, as lanes; the feedback step and scope entry/exit are lane operations.
+    pub times: ColTimes<T>,
     /// Per-update diffs.
     pub diffs: Vec<R>,
 }
@@ -39,7 +39,7 @@ pub struct CorgiContainer<T, R> {
 impl<T, R> Default for CorgiContainer<T, R> {
     fn default() -> Self {
         // Empty sentinel columns (shape-agnostic length-0 unit columns).
-        CorgiContainer { keys: corgi::Value::Unit(0), vals: corgi::Value::Unit(0), times: Vec::new(), diffs: Vec::new() }
+        CorgiContainer { keys: corgi::Value::Unit(0), vals: corgi::Value::Unit(0), times: ColTimes::default(), diffs: Vec::new() }
     }
 }
 
@@ -57,18 +57,18 @@ impl<T: 'static, R: 'static> Accountable for CorgiContainer<T, R> {
     }
 }
 
-impl<T: Clone + 'static, R: Clone + 'static> CorgiContainer<T, R> {
+impl<T: Lanes + Clone + 'static, R: Clone + 'static> CorgiContainer<T, R> {
     /// Build a container from DDIR row updates at the collection's PINNED shapes — the **ingest
     /// boundary** transcode (once per batch). The only rows→columns conversion in the corgi
     /// backend: inside the dataflow every operator is columnar.
     pub fn from_updates(updates: Vec<((Row, Row), T, R)>, kshape: &corgi::Shape, vshape: &corgi::Shape) -> Self {
         let len = updates.len();
         let (mut keys_rows, mut vals_rows) = (Vec::with_capacity(len), Vec::with_capacity(len));
-        let (mut times, mut diffs) = (Vec::with_capacity(len), Vec::with_capacity(len));
+        let (mut times, mut diffs) = (ColTimes::new(), Vec::with_capacity(len));
         for ((key, val), time, diff) in updates {
             keys_rows.push(key);
             vals_rows.push(val);
-            times.push(time);
+            times.push(&time);
             diffs.push(diff);
         }
         CorgiContainer { keys: transcode(&keys_rows, kshape), vals: transcode(&vals_rows, vshape), times, diffs }
@@ -97,7 +97,7 @@ impl<T: Clone + 'static, R: Clone + 'static> CorgiContainer<T, R> {
         keys_rows
             .into_iter()
             .zip(vals_rows)
-            .zip(self.times)
+            .zip(self.times.to_vec())
             .zip(self.diffs)
             .map(|(((k, v), t), d)| ((k, v), t, d))
             .collect()
@@ -132,20 +132,16 @@ impl<T: Timestamp, R: 'static> Leave<T, T> for CorgiContainer<T, R> {
     }
 }
 
-impl<T: Timestamp, R: Clone + 'static> ResultsIn<T::Summary> for CorgiContainer<T, R> {
+impl<T: Timestamp + Lanes, R: Clone + 'static> ResultsIn<T::Summary> for CorgiContainer<T, R>
+where
+    T::Summary: LaneSummary,
+{
     fn results_in(self, step: &T::Summary) -> Self {
-        let n = self.times.len();
-        let mut keep = Vec::with_capacity(n);
-        let mut new_times = Vec::with_capacity(n);
-        for (i, t) in self.times.iter().enumerate() {
-            if let Some(nt) = step.results_in(t) {
-                keep.push(i);
-                new_times.push(nt);
-            }
-        }
-        if keep.len() == n {
+        // The step on lanes; a row whose time overflows is dropped, as `results_in`'s `None` is.
+        let (new_times, dropped) = self.times.results_in(step);
+        let Some(keep) = dropped else {
             return CorgiContainer { keys: self.keys, vals: self.vals, times: new_times, diffs: self.diffs };
-        }
+        };
         let keys = corgi::arrange::gather(&self.keys, &keep);
         let vals = corgi::arrange::gather(&self.vals, &keep);
         let diffs = keep.iter().map(|&i| self.diffs[i].clone()).collect();

@@ -189,8 +189,8 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
                 keys: nk,
                 vals: nv,
                 times: kept.as_ref().map_or_else(
-                    || matches.times[start..end].to_vec(),
-                    |kept| kept.iter().map(|&index| matches.times[index].clone()).collect(),
+                    || matches.times[start..end].iter().collect(),
+                    |kept| kept.iter().map(|&index| &matches.times[index]).collect(),
                 ),
                 diffs: kept.as_ref().map_or_else(
                     || matches.diffs[start..end].to_vec(),
@@ -791,7 +791,7 @@ mod tests {
         // Deliberately equal across different real keys: collision staging must not consolidate
         // these together before `cross` has a chance to compare their keys.
         let vals = CValue::u64(vec![0; rows.len()]);
-        let chunk = CorgiChunk::from_columns(keys, vals, vec![0; rows.len()], vec![1; rows.len()]);
+        let chunk = CorgiChunk::from_columns(keys, vals, vec![0; rows.len()].into_iter().collect(), vec![1; rows.len()]);
         Rc::new(ChunkBatch::new(vec![chunk]))
     }
 

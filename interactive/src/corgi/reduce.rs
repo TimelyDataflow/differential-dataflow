@@ -837,7 +837,7 @@ where
         if times.is_empty() { return None; }
         let keys = gather(&key_pool, &krows);
         let vals = gather(&val_pool, &vrows);
-        Some(Rc::new(columns_to_batch(keys, vals, times, diffs)))
+        Some(Rc::new(columns_to_batch(keys, vals, times.into_iter().collect(), diffs)))
     }
 }
 
@@ -907,7 +907,7 @@ mod tests {
 
     /// One chunk per run, presented at `changed`, merged: `(merged?, bridge)`.
     fn present_runs<T: ColTime + Ord>(runs: Vec<(CValue, CValue, Vec<T>, Vec<Diff>)>, changed: &[u64]) -> (bool, ProxyBridge<T, Diff>) {
-        let chunks: Vec<CorgiChunk<T, Diff>> = runs.into_iter().map(|(k, v, t, d)| CorgiChunk::from_columns(k, v, t, d)).collect();
+        let chunks: Vec<CorgiChunk<T, Diff>> = runs.into_iter().map(|(k, v, t, d)| CorgiChunk::from_columns(k, v, t.into_iter().collect(), d)).collect();
         let refs: Vec<&CorgiChunk<T, Diff>> = chunks.iter().collect();
         let p = collect_present(&refs, changed);
         let vids = val_ids(&p.vals_col);

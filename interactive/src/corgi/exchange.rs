@@ -130,7 +130,7 @@ impl<T: Clone + 'static, R: Clone + 'static> Distributor<CorgiContainer<T, R>> f
             let mut part = CorgiContainer {
                 keys: gather(&container.keys, idx),
                 vals: gather(&container.vals, idx),
-                times: idx.iter().map(|&i| container.times[i].clone()).collect(),
+                times: container.times.gather(idx),
                 diffs: idx.iter().map(|&i| container.diffs[i].clone()).collect(),
             };
             Message::push_at(&mut part, stamp.clone(), pusher);
