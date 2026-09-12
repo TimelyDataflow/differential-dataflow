@@ -30,16 +30,15 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::Description;
 use differential_dataflow::trace::chunk::ChunkBatch;
-use differential_dataflow::operators::int_proxy::ProxyBridge;
+use differential_dataflow::operators::int_proxy::Bridge;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 use corgi::arrange::{equal_idx, gather, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
-use crate::corgi::col_times::ColTime;
+use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::MatchingRanges;
 use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, present_val, recover_val, val_is_hashed, val_lane, CorgiChunk};
 use crate::ir::Diff;
@@ -142,8 +141,9 @@ pub struct CorgiReduceBackend<T> {
     /// wins, so equal values — which share a content-hash `value_id` — resolve to one representative).
     in_index: IdMap,
     /// Output rows for `begin`/`emit`/`finish`: the accumulated
-    /// `(key row, value row, time, diff)` (pool indices, gathered into columns at `finish`).
-    rows: (Vec<usize>, Vec<usize>, Vec<T>, Vec<Diff>),
+    /// `(key row, value row, time, diff)` (pool indices, gathered into columns at `finish`;
+    /// the times a lane column copied from the tactic's).
+    rows: (Vec<usize>, Vec<usize>, ColTimes<T>, Vec<Diff>),
     /// Key-resolution pool for the current retire: `key_hash → row index` into the concatenation of
     /// `key_blocks` (representative keys from the input + output presentations).
     key_index: IdMap,
@@ -163,7 +163,7 @@ impl<T> CorgiReduceBackend<T> {
             reducer,
             in_vals: CValue::Unit(0),
             in_index: IdMap::default(),
-            rows: (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            rows: (Vec::new(), Vec::new(), ColTimes::new(), Vec::new()),
             key_index: IdMap::default(),
             key_blocks: Vec::new(),
             key_len: 0,
@@ -308,17 +308,20 @@ struct Presented {
 
 impl Presented {
     fn is_empty(&self) -> bool { self.khs.is_empty() }
-    /// Record `i`'s time, materialized from its chunk.
-    fn time<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], i: usize) -> T {
-        chunks[self.tags[i]].times().get(self.offs[i])
-    }
     /// The order of records `i` and `j`'s times, read in place.
     fn cmp_times<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], i: usize, j: usize) -> std::cmp::Ordering {
         chunks[self.tags[i]].times().cmp_cross(self.offs[i], chunks[self.tags[j]].times(), self.offs[j])
     }
+    /// Append record `i` to the bridge with `diff`: ids, a row copy of its time from its chunk,
+    /// the diff.
+    fn push_into<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], vids: &[u64], i: usize, diff: Diff, bridge: &mut Bridge<ColTimes<T>, Diff>) {
+        bridge.push_from((self.khs[i], vids[i]), chunks[self.tags[i]].times(), self.offs[i], diff);
+    }
     /// The records as bridge entries in presentation order, for the consolidation fallback.
-    fn extend_into<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], vids: &[u64], bridge: &mut ProxyBridge<T, Diff>) {
-        bridge.extend((0..self.khs.len()).map(|i| ((self.khs[i], vids[i]), self.time(chunks, i), self.diffs[i])));
+    fn extend_into<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], vids: &[u64], bridge: &mut Bridge<ColTimes<T>, Diff>) {
+        for i in 0..self.khs.len() {
+            self.push_into(chunks, vids, i, self.diffs[i], bridge);
+        }
     }
 }
 
@@ -334,7 +337,7 @@ fn merge_present<T: ColTime>(
     chunks: &[&CorgiChunk<T, Diff>],
     p: &Presented,
     vids: &[u64],
-    bridge: &mut ProxyBridge<T, Diff>,
+    bridge: &mut Bridge<ColTimes<T>, Diff>,
 ) -> bool {
     let Presented { keys_col, vals_col, khs, diffs, run_ends, .. } = p;
     let keys_hashed = corgi::arrange::leaf_slice(keys_col).is_none();
@@ -379,14 +382,14 @@ fn merge_present<T: ColTime>(
     }, "identity ids do not preserve selected chunk order");
 
     // The record being consolidated: its `(key id, value id)`, the index whose time it carries,
-    // and the diff so far. The time is read in place to compare and materialized once, at the push.
+    // and the diff so far. The time is read in place to compare and copied once, at the push.
     let mut current: Option<((u64, u64), usize, Diff)> = None;
     let mut accumulate = |kv, index: usize| {
         if current.as_ref().is_some_and(|&(ckv, ci, _)| ckv == kv && p.cmp_times(chunks, ci, index) == std::cmp::Ordering::Equal) {
             current.as_mut().unwrap().2 += diffs[index];
         } else {
-            if let Some((ckv, ci, d)) = current.take() {
-                if d != 0 { bridge.push((ckv, p.time(chunks, ci), d)); }
+            if let Some((_, ci, d)) = current.take() {
+                if d != 0 { p.push_into(chunks, vids, ci, d, bridge); }
             }
             current = Some((kv, index, diffs[index]));
         }
@@ -397,8 +400,8 @@ fn merge_present<T: ColTime>(
             accumulate((khs[index], vids[index]), index);
         }
         drop(accumulate);
-        if let Some((ckv, ci, d)) = current {
-            if d != 0 { bridge.push((ckv, p.time(chunks, ci), d)); }
+        if let Some((_, ci, d)) = current {
+            if d != 0 { p.push_into(chunks, vids, ci, d, bridge); }
         }
         return true;
     }
@@ -434,8 +437,8 @@ fn merge_present<T: ColTime>(
         }
     }
     drop(accumulate);
-    if let Some((ckv, ci, d)) = current {
-        if d != 0 { bridge.push((ckv, p.time(chunks, ci), d)); }
+    if let Some((_, ci, d)) = current {
+        if d != 0 { p.push_into(chunks, vids, ci, d, bridge); }
     }
     true
 }
@@ -464,7 +467,7 @@ where
         keys: &[u64],
         blocks: &mut Vec<CValue>,
         len: &mut usize,
-        bridge: &mut ProxyBridge<T, Diff>,
+        bridge: &mut Bridge<ColTimes<T>, Diff>,
     ) {
         let p = collect_present(chunks, keys);
         if p.is_empty() {
@@ -474,7 +477,7 @@ where
         let merged = merge_present(chunks, &p, &vids, bridge);
         if !merged {
             p.extend_into(chunks, &vids, bridge);
-            consolidate_updates(bridge);
+            bridge.consolidate();
         }
         // Sized once: growing the map as it fills was 7% of a retire-bound run (ast).
         self.in_index.reserve(vids.len());
@@ -689,14 +692,15 @@ where
 {
     type RIn = Diff;
     type ROut = Diff;
+    type Times = ColTimes<T>;
 
     fn begin(&mut self, _description: Description<T>) {
         // Open the output session for this retire; reset the per-retire resolution pools.
         self.reset_pools();
-        self.rows = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        self.rows = (Vec::new(), Vec::new(), ColTimes::new(), Vec::new());
     }
 
-    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
+    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<ColTimes<T>, Diff, Diff>) {
         // Single window: present the WHOLE key space at once, and report it covered. This is NOT a
         // deferred refinement — bounded windows were measured and rejected: at WINDOW = 1<<14, scc
         // (100 rounds x batch 100) cost 84.4s against 63.7s, a 33% regression, while peak RSS
@@ -715,19 +719,15 @@ where
         let mut keys: Vec<u64> = Vec::new();
         // The seeds are the novel batches' RAW (key_hash, time) support, recorded here — before the
         // merged presentation below, whose consolidation may net a novel record away entirely. The
-        // key hashes come from the scan the key list needs anyway.
-        let mut seeds: Vec<(u64, T)> = Vec::new();
+        // key hashes come from the scan the key list needs anyway; the times are row copies.
         for ch in novel_chunks.iter() {
             let khs = key_ids(ch.keys());
-            let times = ch.times();
             for (i, kh) in khs.iter().enumerate() {
-                seeds.push((*kh, times.get(i)));
+                window.seeds.push_from(*kh, ch.times(), i);
             }
             keys.extend(khs);
         }
-        seeds.sort_unstable_by(|a, b| a.cmp(b));
-        seeds.dedup();
-        window.seeds = seeds;
+        window.seeds.sort_dedup();
         keys.sort_unstable();
         keys.dedup();
         if !changed.is_empty() {
@@ -773,7 +773,7 @@ where
             let merged = merge_present(&out_chunks, &p, &vids, &mut window.output);
             if !merged {
                 p.extend_into(&out_chunks, &vids, &mut window.output);
-                consolidate_updates(&mut window.output);
+                window.output.consolidate();
             }
             let Presented { keys_col, vals_col, khs, .. } = p;
             self.register_keys(keys_col, &khs);
@@ -815,17 +815,18 @@ where
         (corr, corr_ends)
     }
 
-    fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
-        // Resolve each correction's key/value proxies to pool rows and accumulate.
-        for rec in records {
-            let ((kh, vid), t, d) = (rec.0, &rec.1, rec.2);
+    fn emit(&mut self, records: &Bridge<ColTimes<T>, Diff>) {
+        // Resolve each correction's key/value proxies to pool rows and accumulate; the time is a
+        // row copy out of the tactic's column.
+        for i in 0..records.len() {
+            let (kh, vid) = records.ids[i];
             let kr = *self.key_index.get(&kh).expect("key resolvable this retire");
             let vr = *self.val_index.get(&vid).expect("value resolvable this retire");
             let (krows, vrows, times, diffs) = &mut self.rows;
             krows.push(kr);
             vrows.push(vr);
-            times.push(t.clone());
-            diffs.push(d);
+            times.push_ref(&records.times, i);
+            diffs.push(records.diffs[i]);
         }
     }
 
@@ -837,7 +838,7 @@ where
         if times.is_empty() { return None; }
         let keys = gather(&key_pool, &krows);
         let vals = gather(&val_pool, &vrows);
-        Some(Rc::new(columns_to_batch(keys, vals, times.into_iter().collect(), diffs)))
+        Some(Rc::new(columns_to_batch(keys, vals, times, diffs)))
     }
 }
 
@@ -905,19 +906,20 @@ mod tests {
         CValue::Prod(vec![CValue::u64(hashes), CValue::Prod(vec![CValue::u64(real), CValue::u64(vec![0, 0])])])
     }
 
-    /// One chunk per run, presented at `changed`, merged: `(merged?, bridge)`.
-    fn present_runs<T: ColTime + Ord>(runs: Vec<(CValue, CValue, Vec<T>, Vec<Diff>)>, changed: &[u64]) -> (bool, ProxyBridge<T, Diff>) {
+    /// One chunk per run, presented at `changed`, merged: `(merged?, bridge as rows)`.
+    fn present_runs<T: ColTime + Ord>(runs: Vec<(CValue, CValue, Vec<T>, Vec<Diff>)>, changed: &[u64]) -> (bool, Vec<((u64, u64), T, Diff)>) {
         let chunks: Vec<CorgiChunk<T, Diff>> = runs.into_iter().map(|(k, v, t, d)| CorgiChunk::from_columns(k, v, t.into_iter().collect(), d)).collect();
         let refs: Vec<&CorgiChunk<T, Diff>> = chunks.iter().collect();
         let p = collect_present(&refs, changed);
         let vids = val_ids(&p.vals_col);
-        let mut bridge = Vec::new();
+        let mut bridge = Bridge::default();
         let merged = merge_present(&refs, &p, &vids, &mut bridge);
         if !merged {
             p.extend_into(&refs, &vids, &mut bridge);
-            consolidate_updates(&mut bridge);
+            bridge.consolidate();
         }
-        (merged, bridge)
+        let rows = (0..bridge.len()).map(|i| (bridge.ids[i], bridge.times.get(i), bridge.diffs[i])).collect();
+        (merged, rows)
     }
 
     #[test]

@@ -3,9 +3,11 @@
 //! The tactics are intended to support custom operator implementations without rebuilding
 //! the non-trivial and often non-obvious time-based logic that supports them.
 //!
-//! The tactics here run DD's operator logic over consolidated `[((u64, u64), time, diff)]`
-//! lists, the first integer a hash of the "key" and granule of independence, the second an
-//! ephemeral data identifier understood by the backend but opaque to the operator harness.
+//! The tactics here run DD's operator logic over consolidated bridges of `(u64, u64)` ids,
+//! a time column and diffs ([`Bridge`]), the first integer a hash of the "key" and granule of
+//! independence, the second an ephemeral data identifier understood by the backend but opaque
+//! to the operator harness. Times are rows of a [`TimeColumn`] the backend chooses, so a
+//! backend whose times are products of integers keeps them as lanes end to end.
 //! The tactics first elicit proxy identifiers from the backends, perform their necessary time
 //! and difference based computations to stage integer collections, and then re-invoke the
 //! backends with those same identifiers to produce the necessary output.
@@ -43,26 +45,12 @@
 //! or to ignore the risk entirely and live dangerously.
 
 mod history;
+pub mod times;
 
 pub mod join;
 pub mod reduce;
 pub mod vec_backend;
 
-/// Integer-only exchange medium: a consolidated collection of `[((hash, id), time, diff)]`.
-///
-/// The [`debug_assert_sorted_bridge`] method is (and can be) used to validate this property.
-pub type ProxyBridge<T, R> = Vec<((u64, u64), T, R)>;
-
-/// Debug check that a presented [`ProxyBridge`] is consolidated.
-///
-/// Operator harnesses use the test to flag backend implementations that do not uphold it.
-pub(crate) fn debug_assert_sorted_bridge<T: Ord, R>(bridge: &ProxyBridge<T, R>, who: &str) {
-    debug_assert!(
-        bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)),
-        "{}: a presented bridge must be sorted & consolidated by ((key_hash, value_id), time)",
-        who,
-    );
-}
-
-pub use join::{JoinInstance, ProxyJoinBackend, ProxyJoinTactic};
+pub use times::{Bridge, Seeds, TimeColumn, VecTimes};
+pub use join::{JoinInstance, JoinMatches, ProxyJoinBackend, ProxyJoinTactic};
 pub use reduce::{ProxyReduceBackend, ProxyReduceTactic, ReduceInstance, ReduceWindow};

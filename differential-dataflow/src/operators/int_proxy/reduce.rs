@@ -1,7 +1,9 @@
 //! The proxy reduce framework.
 //!
 //! A conventional differential reduce against `(u64, u64)`, where the backend supplies the
-//! implementation of the interpretation of the integers.
+//! implementation of the interpretation of the integers. Times are rows of the backend's
+//! [`TimeColumn`]: the tactic reads, compares, joins and meets them by index and never holds
+//! one per record.
 
 use std::collections::BTreeMap;
 
@@ -12,9 +14,9 @@ use timely::progress::frontier::AntichainRef;
 use crate::difference::Semigroup;
 use crate::lattice::Lattice;
 use crate::trace::{Span, Description};
-use super::ProxyBridge;
+use super::times::{Bridge, Seeds, TimeColumn};
+use super::history::{consolidate_buffer, ColumnHistory};
 use crate::operators::reduce::{sort_dedup, ReduceTactic};
-use crate::operators::history::ValueHistory;
 
 /// A unit of proxied reduce work, presented to the backend.
 pub struct ReduceInstance<'a, T, B1, B2> {
@@ -38,23 +40,23 @@ pub struct ReduceInstance<'a, T, B1, B2> {
 /// interesting time is lost to netting — the invariant that once forced the runs apart.
 ///
 /// Owned by the harness and refilled by [`ProxyReduceBackend::next_window`].
-pub struct ReduceWindow<T, RIn, ROut> {
+pub struct ReduceWindow<C, RIn, ROut> {
     /// The key's full input — novel and prior merged, netted — sorted & consolidated by
     /// `((key_hash, value_id), time)`. May be advanced to the compaction frontier.
-    pub input: ProxyBridge<T, RIn>,
+    pub input: Bridge<C, RIn>,
     /// The RAW novel time support: `(key_hash, time)` pairs sorted by `(key_hash, time)` and
     /// deduplicated, recorded from the novel batches BEFORE any consolidation or advancement —
     /// a netted-away record's time must still appear here.
-    pub seeds: Vec<(u64, T)>,
+    pub seeds: Seeds<C>,
     /// Accumulated output preceding the retire's interval, same ordering as `input`.
-    pub output: ProxyBridge<T, ROut>,
+    pub output: Bridge<C, ROut>,
 }
 
-impl<T, RIn, ROut> Default for ReduceWindow<T, RIn, ROut> {
-    fn default() -> Self { ReduceWindow { input: Vec::new(), seeds: Vec::new(), output: Vec::new() } }
+impl<C: Default, RIn, ROut> Default for ReduceWindow<C, RIn, ROut> {
+    fn default() -> Self { ReduceWindow { input: Bridge::default(), seeds: Seeds::default(), output: Bridge::default() } }
 }
 
-impl<T, RIn, ROut> ReduceWindow<T, RIn, ROut> {
+impl<C: TimeColumn, RIn, ROut> ReduceWindow<C, RIn, ROut> {
     /// Clear the presentations, keeping their allocations.
     pub fn clear(&mut self) {
         self.input.clear();
@@ -73,6 +75,8 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     type RIn: Semigroup;
     /// Diff type of the output.
     type ROut: Semigroup + 'static;
+    /// The time column the bridges carry.
+    type Times: TimeColumn<Time = T>;
 
     /// Initiate a session to create batches for these descriptions, which span `[lower, upper)`.
     ///
@@ -106,7 +110,7 @@ pub trait ProxyReduceBackend<T, B1, B2> {
         instance: &ReduceInstance<'_, T, B1, B2>,
         changed: &[u64],
         from: &mut Option<u64>,
-        window: &mut ReduceWindow<T, Self::RIn, Self::ROut>,
+        window: &mut ReduceWindow<Self::Times, Self::RIn, Self::ROut>,
     );
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
@@ -123,8 +127,8 @@ pub trait ProxyReduceBackend<T, B1, B2> {
         output: &[(u64, Self::ROut)],
     ) -> (Vec<(u64, Self::ROut)>, Vec<usize>);
 
-    /// Commit a collection of updates to the batch in progress.
-    fn emit(&mut self, records: &[((u64, u64), T, Self::ROut)]);
+    /// Commit a consolidated bridge of updates to the batch in progress.
+    fn emit(&mut self, records: &Bridge<Self::Times, Self::ROut>);
 
     /// Complete the session matching `begin`, yielding the batch it described,
     /// or `None` when the span it described carries no updates.
@@ -237,20 +241,20 @@ where
         // Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
         // once the backend reports the space covered.
         let mut from = Some(0u64);
-        let mut window: ReduceWindow<T, Bk::RIn, Bk::ROut> = ReduceWindow::default();
+        let mut window: ReduceWindow<Bk::Times, Bk::RIn, Bk::ROut> = ReduceWindow::default();
 
         // Retire-wide reusable scratch: cleared per group, window or wave, retaining capacity. Fresh
         // per-key/per-wave `Vec`s were once the dominant cost here, which is why the slots and the
         // staging buffers are held across the whole retire rather than built where they are used.
-        let mut slots: Vec<KeySweep<T, Bk::RIn, Bk::ROut>> = Vec::new();
+        let mut slots: Vec<KeySweep<Bk::Times, Bk::RIn, Bk::ROut>> = Vec::new();
         let mut live: Vec<usize> = Vec::new();
-        let mut deltas: Vec<((u64, u64), T, Bk::ROut)> = Vec::new();
+        let mut deltas: Bridge<Bk::Times, Bk::ROut> = Bridge::default();
         let mut batch_keys: Vec<u64> = Vec::new();
         let mut in_ends: Vec<usize> = Vec::new();
         let mut in_all: Vec<(u64, Bk::RIn)> = Vec::new();
         let mut out_ends: Vec<usize> = Vec::new();
         let mut out_all: Vec<(u64, Bk::ROut)> = Vec::new();
-        let mut active: Vec<(usize, T)> = Vec::new();
+        let mut active: Vec<(usize, usize)> = Vec::new();
         let mut in_accum: Vec<(u64, Bk::RIn)> = Vec::new();
         let mut cur_out: Vec<(u64, Bk::ROut)> = Vec::new();
 
@@ -261,12 +265,9 @@ where
             let p_in = &window.input;
             let seeds = &window.seeds;
             let p_out = &window.output;
-            super::debug_assert_sorted_bridge(p_in, "next_window.input");
-            super::debug_assert_sorted_bridge(p_out, "next_window.output");
-            debug_assert!(
-                seeds.windows(2).all(|w| w[0] < w[1]),
-                "next_window.seeds must be sorted by (key_hash, time) and deduplicated",
-            );
+            p_in.debug_assert_sorted("next_window.input");
+            p_out.debug_assert_sorted("next_window.output");
+            seeds.debug_assert_sorted("next_window.seeds");
             // Without progress the window loop would never retire, so this guards liveness as well
             // as contract; the range check catches a key reported outside the window that owns it,
             // which would silently drop the interaction between its halves.
@@ -276,7 +277,7 @@ where
             );
             debug_assert!(
                 {
-                    let mut keys = p_in.iter().map(|r| r.0.0).chain(seeds.iter().map(|s| s.0)).chain(p_out.iter().map(|r| r.0.0));
+                    let mut keys = p_in.ids.iter().map(|r| r.0).chain(seeds.keys.iter().copied()).chain(p_out.ids.iter().map(|r| r.0));
                     keys.all(|k| before.is_none_or(|b| b <= k) && from.is_none_or(|f| k < f))
                 },
                 "next_window must report a key hash entirely within the window that first mentions it",
@@ -302,18 +303,18 @@ where
                 live.clear();
                 // Mapped to hashes before the min: the sources differ in shape.
                 while let Some(key) = [
-                    p_in.get(is).map(|record| record.0.0),
-                    seeds.get(ns).map(|seed| seed.0),
-                    p_out.get(os).map(|record| record.0.0),
+                    p_in.ids.get(is).map(|record| record.0),
+                    seeds.keys.get(ns).copied(),
+                    p_out.ids.get(os).map(|record| record.0),
                 ].into_iter().flatten().min() {
                     let i0 = is;
-                    while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
+                    while is < p_in.len() && p_in.ids[is].0 == key { is += 1; }
                     let i1 = is;
                     let n0 = ns;
-                    while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
+                    while ns < seeds.len() && seeds.keys[ns] == key { ns += 1; }
                     let n1 = ns;
                     let o0 = os;
-                    while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
+                    while os < p_out.len() && p_out.ids[os].0 == key { os += 1; }
                     let o1 = os;
 
                     if n_slots == slots.len() { slots.push(KeySweep::empty()); }
@@ -322,17 +323,11 @@ where
                     slot.pended.clear();
                     // Only the DUE times seed the sweep; the carried ones remain in `self.pending`.
                     let owed = due.get(&key).map(|p| &p[..]).unwrap_or(&[]);
-                    slot.sweep.load(
-                        owed,
-                        (n0..n1).map(|n| seeds[n].1.clone()),
-                        (i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())),
-                        (o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())),
-                    );
-                    slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
+                    slot.sweep.load(upper, owed, seeds, n0..n1, p_in, i0..i1, p_out, o0..o1);
+                    slot.at = slot.sweep.next_crossing(&mut slot.pended);
                     if slot.at.is_some() { live.push(n_slots); }
                     else if !slot.pended.is_empty() {
-                        for time in &slot.pended { pending_frontier.insert_ref(time); }
-                        self.pending.entry(key).or_default().append(&mut slot.pended);
+                        slot.retire_pended(&mut self.pending, &mut pending_frontier);
                     }
                     n_slots += 1;
                     if n_slots == self.key_batch_size { break; }
@@ -350,11 +345,11 @@ where
                     active.clear();
 
                     for &si in live.iter() {
-                        let at = slots[si].at.clone().expect("live slots are suspended at a time");
+                        let at = slots[si].at.expect("live slots are suspended at a time");
                         in_accum.clear();
                         cur_out.clear();
-                        slots[si].sweep.input_at(&at, &mut in_accum);
-                        slots[si].sweep.output_at(&at, &mut cur_out);
+                        slots[si].sweep.input_at(at, &mut in_accum);
+                        slots[si].sweep.output_at(at, &mut cur_out);
                         // An interesting time can still reach the gate with nothing to read; the
                         // conventional reduce skips user logic there and so do we.
                         if in_accum.is_empty() && cur_out.is_empty() { continue; }
@@ -369,14 +364,17 @@ where
                     if !batch_keys.is_empty() {
                         let (corr, corr_ends) = self.backend.reduce_corrections(&batch_keys, &in_ends, &in_all, &out_ends, &out_all);
                         let mut cstart = 0usize;
-                        for (bi, (si, at)) in active.iter().enumerate() {
+                        for (bi, &(si, at)) in active.iter().enumerate() {
                             let cend = corr_ends[bi];
                             if cstart != cend {
-                                debug_assert!(held.elements().iter().any(|h| h.less_equal(at)), "no held capability <= active time");
+                                debug_assert!(
+                                    held.elements().iter().any(|h| h.less_equal(&slots[si].sweep.pool.get(at))),
+                                    "no held capability <= active time",
+                                );
                                 for (vid, d) in &corr[cstart..cend] {
-                                    deltas.push(((slots[*si].key, *vid), at.clone(), d.clone()));
+                                    deltas.push_from((slots[si].key, *vid), &slots[si].sweep.pool, at, d.clone());
                                 }
-                                slots[*si].sweep.commit(at, corr[cstart..cend].iter().cloned());
+                                slots[si].sweep.commit(at, corr[cstart..cend].iter().cloned());
                             }
                             cstart = cend;
                         }
@@ -385,12 +383,9 @@ where
                     // Step every live key past the time it was suspended at, and retire the spent ones.
                     for &si in live.iter() {
                         let slot = &mut slots[si];
-                        slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
+                        slot.at = slot.sweep.next_crossing(&mut slot.pended);
                         if slot.at.is_none() && !slot.pended.is_empty() {
-                            for time in &slot.pended { pending_frontier.insert_ref(time); }
-                            let entry = self.pending.entry(slot.key).or_default();
-                            entry.append(&mut slot.pended);
-                            crate::operators::reduce::sort_dedup(entry);
+                            slot.retire_pended(&mut self.pending, &mut pending_frontier);
                         }
                     }
                     live.retain(|&si| slots[si].at.is_some());
@@ -398,8 +393,8 @@ where
             }
 
             if !deltas.is_empty() {
-                crate::consolidation::consolidate_updates(&mut deltas);
-                self.backend.emit(&deltas[..]);
+                deltas.consolidate();
+                self.backend.emit(&deltas);
             }
         }
 
@@ -412,28 +407,34 @@ where
 /// One key's slot in a window: its [`Sweep`], the time it is suspended at, and the times it has
 /// pended so far. Slots and their scratch capacity are reused across groups and windows
 /// within a retire, then dropped when the retire completes.
-struct KeySweep<T, RIn, ROut> {
+struct KeySweep<C, RIn, ROut> {
     key: u64,
-    sweep: Sweep<T, RIn, ROut>,
-    /// Times at or beyond `upper` the sweep has reached; carried forward when the slot retires.
-    pended: Vec<T>,
-    /// The time the sweep last suspended at, or `None` once it is spent.
-    at: Option<T>,
+    sweep: Sweep<C, RIn, ROut>,
+    /// Times at or beyond `upper` the sweep has reached (rows of its pool); carried forward when
+    /// the slot retires.
+    pended: Vec<usize>,
+    /// The time the sweep last suspended at (a row of its pool), or `None` once it is spent.
+    at: Option<usize>,
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> KeySweep<T, RIn, ROut> {
+impl<C: TimeColumn, RIn: Semigroup + Clone, ROut: Semigroup + Clone> KeySweep<C, RIn, ROut>
+where
+    C::Time: Timestamp + Lattice,
+{
     fn empty() -> Self {
         KeySweep { key: 0, sweep: Sweep::new(), pended: Vec::new(), at: None }
     }
-}
 
-/// Updates an optional meet by an optional time.
-fn update_meet<T: Lattice + Clone>(meet: &mut Option<T>, other: Option<&T>) {
-    if let Some(time) = other {
-        match meet.as_mut() {
-            Some(m) => m.meet_assign(time),
-            None => *meet = Some(time.clone()),
+    /// Carry the pended times forward as owned timestamps: the one place a sweep builds one.
+    fn retire_pended(&mut self, pending: &mut BTreeMap<u64, Vec<C::Time>>, frontier: &mut Antichain<C::Time>) {
+        let entry = pending.entry(self.key).or_default();
+        for &row in &self.pended {
+            let time = self.sweep.pool.get(row);
+            frontier.insert_ref(&time);
+            entry.push(time);
         }
+        self.pended.clear();
+        sort_dedup(entry);
     }
 }
 
@@ -460,95 +461,130 @@ fn update_meet<T: Lattice + Clone>(meet: &mut Option<T>, other: Option<&T>) {
 /// witness duty, which is what lets them net and advance. Coverage is invariant under that move:
 /// the witness clause reads only times, and consolidation cancels only equal-time pairs whose time
 /// the seed list retains.
-struct Sweep<T, RIn, ROut> {
+///
+/// Every time the sweep holds is a row of `pool`, its own time column: the frontier's elements,
+/// the seeds and their suffix meets, the histories' times, the synthesized and reached times, the
+/// produced corrections' times, the running meet. Rows are appended as joins produce them and
+/// the pool is compacted when the dead rows outnumber the live ones.
+struct Sweep<C, RIn, ROut> {
+    /// The time column every row below refers to.
+    pool: C,
+    /// The retire's upper frontier, as rows.
+    upper: Vec<usize>,
     /// The accumulated input (novel and prior, merged and netted) and output: join partners, and
     /// the accumulations to evaluate over. Both may be advanced freely — witness duty lives in
     /// `seeds`, not in any record.
-    input: ValueHistory<u64, T, RIn>,
-    output: ValueHistory<u64, T, ROut>,
+    input: ColumnHistory<u64, RIn>,
+    output: ColumnHistory<u64, ROut>,
     /// The key's seed times — the harness's due (warned) times merged with the raw novel time
     /// support — ascending and deduplicated, with their suffix meets; `seed_pos` consumes them.
     /// These are the ONLY source of interest: the schedule is stated over them, so they are held
     /// raw, never advanced.
-    seeds: Vec<T>,
-    seed_meets: Vec<T>,
+    seeds: Vec<usize>,
+    seed_meets: Vec<usize>,
     seed_pos: usize,
     /// Synthesized times not yet visited, sorted DESCENDING so `last()` is the least.
-    synth: Vec<T>,
+    synth: Vec<usize>,
     /// The seed times reached so far, compacted by the running meet. They are the witnesses the
     /// absorption test looks for, and the partners a close joins against; keeping them collapsed is
     /// what stops a key with many reached times rescanning all of them.
-    reached: Vec<T>,
+    reached: Vec<usize>,
     /// Scratch for one step's synthesized times.
-    temporary: Vec<T>,
+    temporary: Vec<usize>,
     /// Corrections emitted so far this sweep, meet-collapsed; both a join partner and part of the
     /// output accumulation.
-    produced: Vec<((u64, T), ROut)>,
+    produced: Vec<((u64, usize), ROut)>,
     /// The meet of every time still to come.
-    meet: Option<T>,
+    meet: Option<usize>,
     /// Whether the last `next_crossing` returned a time whose step is not yet settled.
     suspended: bool,
+    /// Scratch for a pool compaction: the live rows, and the old-to-new row map.
+    live_rows: Vec<usize>,
+    row_map: Vec<usize>,
 }
 
 /// What one [`tick`](Sweep::tick) decided about the time it visited.
-enum Tick<T> {
+enum Tick {
     /// No seed reaches this time; the sweep moved past it.
     Passed,
     /// Reached, but at or beyond `upper`: carried to a later round rather than evaluated.
     Pended,
     /// Reached and in the interval. The caller must evaluate here before the sweep goes on.
-    Crossing(T),
+    Crossing(usize),
     /// Every source is drained.
     Done,
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sweep<T, RIn, ROut> {
+impl<C: TimeColumn, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sweep<C, RIn, ROut>
+where
+    C::Time: Timestamp + Lattice,
+{
     /// An empty sweep, to be `load`ed and reused for successive keys.
     fn new() -> Self {
         Sweep {
-            input: ValueHistory::new(), output: ValueHistory::new(),
+            pool: C::default(), upper: Vec::new(),
+            input: ColumnHistory::new(), output: ColumnHistory::new(),
             seeds: Vec::new(), seed_meets: Vec::new(), seed_pos: 0,
             synth: Vec::new(), reached: Vec::new(), temporary: Vec::new(),
             produced: Vec::new(), meet: None, suspended: false,
+            live_rows: Vec::new(), row_map: Vec::new(),
         }
     }
 
     /// Position the sweep at the start of one key.
     ///
-    /// `owed` is the harness's due (warned) times and `novel_times` the window's raw novel time
+    /// `owed` is the harness's due (warned) times and `seeds[novel]` the window's raw novel time
     /// support, both ascending; they merge into the seed list, which is held raw — the schedule is
     /// stated over these times, so they are never advanced. The records in `input` are merged and
     /// netted (novel and prior together): a cancelled record's time survives in the seed list, so
     /// netting loses nothing, and every record is a mere partner/accumulant that the meet may
     /// advance freely.
+    #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
-        owed: &[T],
-        novel_times: impl Iterator<Item = T>,
-        input: impl Iterator<Item = (u64, T, RIn)>,
-        output: impl Iterator<Item = (u64, T, ROut)>,
+        upper: &Antichain<C::Time>,
+        owed: &[C::Time],
+        seeds: &Seeds<C>,
+        novel: std::ops::Range<usize>,
+        input: &Bridge<C, RIn>,
+        input_rows: std::ops::Range<usize>,
+        output: &Bridge<C, ROut>,
+        output_rows: std::ops::Range<usize>,
     ) {
-        // Merge the two ascending seed sources, deduplicated.
+        let pool = &mut self.pool;
+        pool.clear();
+        self.upper.clear();
+        self.upper.extend(upper.elements().iter().map(|t| pool.push(t)));
+
+        // Merge the two ascending seed sources, deduplicated, as rows.
         self.seeds.clear();
-        let mut owed = owed.iter().cloned().peekable();
-        let mut novel = novel_times.peekable();
+        let (mut oi, mut ni) = (0usize, novel.start);
         loop {
-            let take_owed = match (owed.peek(), novel.peek()) {
-                (Some(a), Some(b)) => a <= b,
+            let owed_row = (oi < owed.len()).then(|| pool.push(&owed[oi]));
+            let novel_row = (ni < novel.end).then(|| pool.push_from(&seeds.times, ni));
+            let take_owed = match (owed_row, novel_row) {
+                (Some(a), Some(b)) => pool.cmp(a, b) != std::cmp::Ordering::Greater,
                 (Some(_), None) => true,
                 (None, Some(_)) => false,
                 (None, None) => break,
             };
-            let time = if take_owed { owed.next() } else { novel.next() }.expect("peeked");
-            if self.seeds.last() != Some(&time) {
-                self.seeds.push(time);
+            let row = if take_owed {
+                oi += 1;
+                if let Some(b) = novel_row { debug_assert_eq!(b, pool.len() - 1); pool.truncate(b); }
+                owed_row.expect("taken")
+            } else {
+                ni += 1;
+                novel_row.expect("taken")
+            };
+            if self.seeds.last().is_none_or(|&l| pool.cmp(l, row) != std::cmp::Ordering::Equal) {
+                self.seeds.push(row);
             }
         }
         self.seed_meets.clear();
-        self.seed_meets.extend(self.seeds.iter().cloned());
+        for &s in &self.seeds { self.seed_meets.push(pool.push_copy(s)); }
         for i in (1..self.seed_meets.len()).rev() {
-            let (init, tail) = self.seed_meets.split_at_mut(i);
-            init[i - 1].meet_assign(&tail[0]);
+            let (prev, next) = (self.seed_meets[i - 1], self.seed_meets[i]);
+            pool.meet_assign(prev, next);
         }
         self.seed_pos = 0;
         self.synth.clear();
@@ -559,10 +595,9 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
 
         // The meet of every seed bounds every time the sweep will visit, so the record buffers can
         // be advanced by it at load.
-        let mut meet: Option<T> = None;
-        update_meet(&mut meet, self.seed_meets.first());
-        self.input.load_iter(input, meet.as_ref());
-        self.output.load_iter(output, meet.as_ref());
+        let meet = self.seed_meets.first().copied();
+        self.input.load(pool, &input.times, input_rows.map(|i| (input.ids[i].1, i, input.diffs[i].clone())), meet);
+        self.output.load(pool, &output.times, output_rows.map(|i| (output.ids[i].1, i, output.diffs[i].clone())), meet);
         self.meet = meet;
     }
 
@@ -570,7 +605,7 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     ///
     /// Times at or beyond `upper` that the schedule reaches are appended to `pended` for the caller
     /// to carry into a later round.
-    fn next_crossing(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Option<T> {
+    fn next_crossing(&mut self, pended: &mut Vec<usize>) -> Option<usize> {
         loop {
             // A crossing leaves its step half-finished, because `settle` must see the corrections
             // the caller commits. Finishing it is the first thing the next call does.
@@ -578,7 +613,7 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
                 self.suspended = false;
                 self.settle();
             }
-            match self.tick(upper, pended) {
+            match self.tick(pended) {
                 Tick::Done => return None,
                 Tick::Crossing(at) => {
                     self.suspended = true;
@@ -590,10 +625,10 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     }
 
     /// Visit one time: find it, decide whether it is reached, close it forward, and report.
-    fn tick(&mut self, upper: &Antichain<T>, pended: &mut Vec<T>) -> Tick<T> {
+    fn tick(&mut self, pended: &mut Vec<usize>) -> Tick {
         let Some(at) = self.frontier() else { return Tick::Done };
-        let reached = self.absorb(&at);
-        if upper.less_equal(&at) {
+        let reached = self.absorb(at);
+        if self.beyond_upper(at) {
             // Out of the interval: nothing can be emitted here, so there is nothing to close
             // against either — a join with `at` is at or beyond `at`, hence also out of interval,
             // and will be rediscovered from `at` in the round that admits it.
@@ -601,22 +636,30 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
             if reached { pended.push(at); return Tick::Pended; }
             return Tick::Passed;
         }
-        self.close(&at, reached, upper, pended);
+        self.close(at, reached, pended);
         if reached { return Tick::Crossing(at); }
         self.settle();
         Tick::Passed
     }
 
-    /// The sweep's position: the least time any source still offers.
+    /// Whether row `at` is at or beyond the retire's upper frontier.
+    fn beyond_upper(&self, at: usize) -> bool {
+        self.upper.iter().any(|&u| self.pool.less_equal(u, at))
+    }
+
+    /// The sweep's position: the least time any source still offers, as a fresh row (so the
+    /// sources may be advanced while it is held).
     ///
     /// The TOTAL order, not the partial one. Every time `close` produces is strictly greater than
     /// the position that produced it, so new work only ever lands ahead of here and the sweep never
     /// revisits.
-    fn frontier(&self) -> Option<T> {
-        [
-            self.seeds.get(self.seed_pos), self.input.time(),
-            self.output.time(), self.synth.last(),
-        ].into_iter().flatten().min().cloned()
+    fn frontier(&mut self) -> Option<usize> {
+        let pool = &mut self.pool;
+        let mut least: Option<usize> = None;
+        for cand in [self.seeds.get(self.seed_pos).copied(), self.input.time(), self.output.time(), self.synth.last().copied()].into_iter().flatten() {
+            if least.is_none_or(|l| pool.cmp(cand, l) == std::cmp::Ordering::Less) { least = Some(cand); }
+        }
+        least.map(|l| pool.push_copy(l))
     }
 
     /// Step every source sitting at `at`, and decide whether `at` is REACHED.
@@ -630,26 +673,27 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     /// moves an edit across; it consolidates nothing. The expensive part — `advance_buffer_by`,
     /// which joins every buffered time and re-consolidates — is deferred to `close`, and happens
     /// only where the buffers are actually read.
-    fn absorb(&mut self, at: &T) -> bool {
-        self.input.step_while_time_is(at);
-        self.output.step_while_time_is(at);
+    fn absorb(&mut self, at: usize) -> bool {
+        self.input.step_while_time_is(&self.pool, at);
+        self.output.step_while_time_is(&self.pool, at);
 
         // A seed here — a due time or a novel-support time — is consumed into the reached set,
         // where it becomes a witness and a join partner for every later time. So is a synthetic
         // join scheduled for here.
         let mut reached = false;
-        while self.synth.last() == Some(at) {
+        while self.synth.last().is_some_and(|&s| self.pool.cmp(s, at) == std::cmp::Ordering::Equal) {
             self.reached.push(self.synth.pop().expect("nonempty"));
             reached = true;
         }
-        while self.seeds.get(self.seed_pos) == Some(at) {
-            self.reached.push(at.clone());
+        while self.seeds.get(self.seed_pos).is_some_and(|&s| self.pool.cmp(s, at) == std::cmp::Ordering::Equal) {
+            let copy = self.pool.push_copy(at);
+            self.reached.push(copy);
             self.seed_pos += 1;
             reached = true;
         }
         // Absorption: a time at or above a seed already consumed is itself reached, because
         // joining that seed with it yields it back.
-        reached || self.reached.iter().any(|t| t.less_equal(at))
+        reached || self.reached.iter().any(|&t| self.pool.less_equal(t, at))
     }
 
     /// Close `at` forward under joins — clause one of `round_coverage`, the join-closure.
@@ -666,72 +710,129 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
     /// every time at or above `p`, so `p ∨ at` has to be visited; nothing else covers it, since
     /// this round's corrections are not in the output history and `at` was not yet stepped in when
     /// the sweep passed `p`.
-    fn close(&mut self, at: &T, reached: bool, upper: &Antichain<T>, pended: &mut Vec<T>) {
-        self.temporary.extend(self.reached.iter()
-            .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
-        if reached {
-            if let Some(meet) = self.meet.as_ref() {
-                self.input.advance_buffer_by(meet);
-                self.output.advance_buffer_by(meet);
-            }
-            self.temporary.extend(self.input.buffer().iter().map(|((_, t), _)| t)
-                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
-            self.temporary.extend(self.output.buffer().iter().map(|((_, t), _)| t)
-                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
-            self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
-                .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
+    fn close(&mut self, at: usize, reached: bool, pended: &mut Vec<usize>) {
+        let pool = &mut self.pool;
+        for &t in &self.reached {
+            if !pool.less_equal(t, at) { self.temporary.push(pool.push_join(t, at)); }
         }
-        sort_dedup(&mut self.temporary);
+        if reached {
+            if let Some(meet) = self.meet {
+                self.input.advance_buffer_by(pool, meet);
+                self.output.advance_buffer_by(pool, meet);
+            }
+            for ((_, t), _) in self.input.buffer() {
+                if !pool.less_equal(*t, at) { self.temporary.push(pool.push_join(*t, at)); }
+            }
+            for ((_, t), _) in self.output.buffer() {
+                if !pool.less_equal(*t, at) { self.temporary.push(pool.push_join(*t, at)); }
+            }
+            for ((_, t), _) in &self.produced {
+                if !pool.less_equal(*t, at) { self.temporary.push(pool.push_join(*t, at)); }
+            }
+        }
+        self.temporary.sort_by(|&x, &y| pool.cmp(x, y));
+        self.temporary.dedup_by(|&mut x, &mut y| pool.cmp(x, y) == std::cmp::Ordering::Equal);
         let before = self.synth.len();
         for time in self.temporary.drain(..) {
-            if upper.less_equal(&time) { pended.push(time); } else { self.synth.push(time); }
+            if self.upper.iter().any(|&u| pool.less_equal(u, time)) { pended.push(time); } else { self.synth.push(time); }
         }
         if self.synth.len() > before {
-            self.synth.sort_by(|x, y| y.cmp(x));
-            self.synth.dedup();
+            self.synth.sort_by(|&x, &y| pool.cmp(y, x));
+            self.synth.dedup_by(|&mut x, &mut y| pool.cmp(x, y) == std::cmp::Ordering::Equal);
         }
     }
 
     /// The input accumulation at the suspended time.
-    fn input_at(&self, at: &T, into: &mut Vec<(u64, RIn)>) {
+    fn input_at(&self, at: usize, into: &mut Vec<(u64, RIn)>) {
         for ((id, time), diff) in self.input.buffer().iter() {
-            if time.less_equal(at) { into.push((*id, diff.clone())); }
+            if self.pool.less_equal(*time, at) { into.push((*id, diff.clone())); }
         }
         crate::consolidation::consolidate(into);
     }
 
     /// The tentative output accumulation at the suspended time, including this sweep's corrections.
-    fn output_at(&self, at: &T, into: &mut Vec<(u64, ROut)>) {
+    fn output_at(&self, at: usize, into: &mut Vec<(u64, ROut)>) {
         for ((id, time), diff) in self.output.buffer().iter().chain(self.produced.iter()) {
-            if time.less_equal(at) { into.push((*id, diff.clone())); }
+            if self.pool.less_equal(*time, at) { into.push((*id, diff.clone())); }
         }
         crate::consolidation::consolidate(into);
     }
 
     /// Record the corrections evaluated at the suspended time, and collapse them by the meet.
-    fn commit(&mut self, at: &T, corrections: impl Iterator<Item = (u64, ROut)>) {
+    fn commit(&mut self, at: usize, corrections: impl Iterator<Item = (u64, ROut)>) {
         let before = self.produced.len();
-        for (id, diff) in corrections { self.produced.push(((id, at.clone()), diff)); }
+        for (id, diff) in corrections {
+            let row = self.pool.push_copy(at);
+            self.produced.push(((id, row), diff));
+        }
         if self.produced.len() > before {
-            if let Some(meet) = self.meet.as_ref() {
-                for entry in self.produced.iter_mut() { (entry.0).1.join_assign(meet); }
+            if let Some(meet) = self.meet {
+                for entry in self.produced.iter_mut() { self.pool.join_assign((entry.0).1, meet); }
             }
-            crate::consolidation::consolidate(&mut self.produced);
+            consolidate_buffer(&self.pool, &mut self.produced);
         }
     }
 
     /// Close a step: recompute the meet of everything still to come, and compact the reached set by
     /// it. This is what keeps a key with a long history linear rather than quadratic.
     fn settle(&mut self) {
-        let mut meet: Option<T> = None;
-        update_meet(&mut meet, self.input.meet());
-        update_meet(&mut meet, self.output.meet());
-        for time in self.synth.iter() { update_meet(&mut meet, Some(time)); }
-        update_meet(&mut meet, self.seed_meets.get(self.seed_pos));
-        if let Some(m) = meet.as_ref() {
-            for time in self.reached.iter_mut() { *time = time.join(m); }
+        let pool = &mut self.pool;
+        let mut meet: Option<usize> = None;
+        let mut update = |meet: &mut Option<usize>, other: Option<usize>| {
+            if let Some(t) = other {
+                match *meet {
+                    Some(m) => pool.meet_assign(m, t),
+                    None => *meet = Some(pool.push_copy(t)),
+                }
+            }
+        };
+        update(&mut meet, self.input.meet());
+        update(&mut meet, self.output.meet());
+        for &time in &self.synth { update(&mut meet, Some(time)); }
+        update(&mut meet, self.seed_meets.get(self.seed_pos).copied());
+        if let Some(m) = meet {
+            for &time in &self.reached { pool.join_assign(time, m); }
         }
-        sort_dedup(&mut self.reached);
+        self.reached.sort_by(|&x, &y| pool.cmp(x, y));
+        self.reached.dedup_by(|&mut x, &mut y| pool.cmp(x, y) == std::cmp::Ordering::Equal);
         self.meet = meet;
+        self.compact_if_large();
+    }
+
+    /// Rebuild the pool from its live rows once the dead ones dominate: every join appends a row,
+    /// and a key with a long history would otherwise keep every time it ever synthesized.
+    fn compact_if_large(&mut self) {
+        let live_estimate = self.upper.len() + self.seeds.len() + self.seed_meets.len() + self.synth.len()
+            + self.reached.len() + self.produced.len() + 2;
+        if self.pool.len() < 4 * live_estimate + 256 { return; }
+        let live = &mut self.live_rows;
+        live.clear();
+        live.extend(&self.upper);
+        live.extend(&self.seeds);
+        live.extend(&self.seed_meets);
+        live.extend(&self.synth);
+        live.extend(&self.reached);
+        live.extend(self.produced.iter().map(|p| (p.0).1));
+        live.extend(self.meet);
+        self.input.rows(live);
+        self.output.rows(live);
+        live.sort_unstable();
+        live.dedup();
+        if self.pool.len() < 4 * live.len() + 256 { return; }
+        let map = &mut self.row_map;
+        map.clear();
+        map.resize(self.pool.len(), usize::MAX);
+        let mut fresh = C::default();
+        for &row in live.iter() { map[row] = fresh.push_from(&self.pool, row); }
+        self.pool = fresh;
+        for r in self.upper.iter_mut() { *r = map[*r]; }
+        for r in self.seeds.iter_mut() { *r = map[*r]; }
+        for r in self.seed_meets.iter_mut() { *r = map[*r]; }
+        for r in self.synth.iter_mut() { *r = map[*r]; }
+        for r in self.reached.iter_mut() { *r = map[*r]; }
+        for p in self.produced.iter_mut() { (p.0).1 = map[(p.0).1]; }
+        if let Some(m) = self.meet.as_mut() { *m = map[*m]; }
+        self.input.remap(map);
+        self.output.remap(map);
     }
 }

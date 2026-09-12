@@ -35,6 +35,7 @@ use crate::trace::chunk::vec::VecChunk;
 use crate::trace::Description;
 
 use super::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
+use super::times::{Bridge, VecTimes};
 
 /// The batch type of a hash-keyed [`ChunkSpine`](crate::trace::chunk::vec::ChunkSpine): updates
 /// `D` is `(K, V)` on the input side and `(K, W)` on the output side.
@@ -102,6 +103,7 @@ where
 {
     type RIn = R;
     type ROut = R;
+    type Times = VecTimes<T>;
 
     fn begin(&mut self, _description: Description<T>) {
         self.chunks.clear();
@@ -113,7 +115,7 @@ where
         instance: &ReduceInstance<'_, T, VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>,
         changed: &[u64],
         from: &mut Option<u64>,
-        window: &mut ReduceWindow<T, R, R>,
+        window: &mut ReduceWindow<VecTimes<T>, R, R>,
     ) {
         let Some(start) = *from else { return };
 
@@ -157,21 +159,22 @@ where
                 }
                 // Novel and prior share the id space and arrive (id, time)-adjacent, so an exactly
                 // cancelling pair meets here and nets away; its time survives in the seeds.
-                if let Some(((k2, i2), t2, d2)) = window.input.last_mut() {
-                    if *k2 == key && *i2 == id && *t2 == time {
-                        d2.plus_equals(&diff);
-                        if d2.is_zero() {
-                            window.input.pop();
-                        }
-                        continue;
+                let n = window.input.len();
+                if n > 0 && window.input.ids[n - 1] == (key, id) && window.input.times.0[n - 1] == time {
+                    window.input.diffs[n - 1].plus_equals(&diff);
+                    if window.input.diffs[n - 1].is_zero() {
+                        window.input.ids.pop();
+                        window.input.times.0.pop();
+                        window.input.diffs.pop();
                     }
+                    continue;
                 }
-                window.input.push(((key, id), time, diff));
+                window.input.push((key, id), &time, diff);
             }
             // Per key, seeds arrive in (value, time) order; the contract wants (key, time) order.
             seed_scratch.sort();
             seed_scratch.dedup();
-            window.seeds.extend(seed_scratch.drain(..).map(|t| (key, t)));
+            for t in seed_scratch.drain(..) { window.seeds.push(key, &t); }
             self.reps.push(single.map(|_| rep));
             if collides { self.collisions.push(key); }
             if budget == 0 { break; }
@@ -205,7 +208,7 @@ where
                     last = Some(data);
                 }
                 let id = (self.out_pool.len() - 1) as u64;
-                window.output.push(((key, id), time, diff));
+                window.output.push((key, id), &time, diff);
             }
             // The two passes agree or the hash collides. Neither can see this alone: a hash whose
             // input has fully cancelled for one real key still carries that key's stale output.
@@ -301,11 +304,12 @@ where
     }
 
     #[inline(never)]
-    fn emit(&mut self, records: &[((u64, u64), T, R)]) {
+    fn emit(&mut self, records: &Bridge<VecTimes<T>, R>) {
         self.stage.clear();
-        for ((h, vid), t, d) in records {
-            let row = self.out_pool[*vid as usize].clone();
-            self.stage.push(((*h, row), t.clone(), d.clone()));
+        for i in 0..records.len() {
+            let (h, vid) = records.ids[i];
+            let row = self.out_pool[vid as usize].clone();
+            self.stage.push(((h, row), records.times.0[i].clone(), records.diffs[i].clone()));
         }
         // TODO: could consolidate only within a hash key, rather than the whole chunk.
         consolidate_updates(&mut self.stage);

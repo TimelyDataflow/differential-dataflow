@@ -24,6 +24,7 @@ use std::marker::PhantomData;
 
 use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::int_proxy::TimeColumn;
 use timely::order::Product;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Timestamp;
@@ -200,9 +201,9 @@ impl<T> ColTimes<T> {
         self.len += 1;
     }
 
-    /// Append an owned time.
+    /// Append an owned time; its row.
     #[inline]
-    pub fn push(&mut self, t: &T)
+    pub fn push(&mut self, t: &T) -> usize
     where
         T: Lanes,
     {
@@ -211,12 +212,51 @@ impl<T> ColTimes<T> {
         t.write_lanes(&mut scratch);
         self.push_row(&scratch);
         self.scratch = scratch;
+        self.len - 1
     }
 
-    /// Append `other`'s row `i` — a row copy, no `T`.
+    /// Append a copy of this column's own row `i`; its row.
     #[inline]
-    pub fn push_ref(&mut self, other: &ColTimes<T>, i: usize) {
+    pub fn push_copy(&mut self, i: usize) -> usize {
+        let w = self.width;
+        self.lanes.extend_from_within(i * w..(i + 1) * w);
+        self.len += 1;
+        self.len - 1
+    }
+
+    /// Whether row `i` is at or below row `j` in the partial order: lane by lane.
+    #[inline]
+    pub fn less_equal(&self, i: usize, j: usize) -> bool {
+        self.row(i).iter().zip(self.row(j)).all(|(a, b)| a <= b)
+    }
+
+    /// Row `i` becomes its join with row `j`: a lane-wise max.
+    #[inline]
+    pub fn join_assign(&mut self, i: usize, j: usize) {
+        let w = self.width;
+        for k in 0..w {
+            let other = self.lanes[j * w + k];
+            let x = &mut self.lanes[i * w + k];
+            *x = (*x).max(other);
+        }
+    }
+
+    /// Row `i` becomes its meet with row `j`: a lane-wise min.
+    #[inline]
+    pub fn meet_assign(&mut self, i: usize, j: usize) {
+        let w = self.width;
+        for k in 0..w {
+            let other = self.lanes[j * w + k];
+            let x = &mut self.lanes[i * w + k];
+            *x = (*x).min(other);
+        }
+    }
+
+    /// Append `other`'s row `i` — a row copy, no `T`; its row.
+    #[inline]
+    pub fn push_ref(&mut self, other: &ColTimes<T>, i: usize) -> usize {
         self.push_row(other.row(i));
+        self.len - 1
     }
 
     /// Append rows `[s, e)` of `other`: one slice copy when the widths agree.
@@ -401,6 +441,47 @@ impl<T> ColTimes<T> {
     }
 }
 
+/// The proxy tactics' column: every verb lane-wise, rows padded with zeros where widths differ.
+impl<T: Lanes> TimeColumn for ColTimes<T> {
+    type Time = T;
+    fn len(&self) -> usize { self.len }
+    fn clear(&mut self) { ColTimes::clear(self) }
+    fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            self.lanes.truncate(len * self.width);
+            self.len = len;
+        }
+    }
+    fn push(&mut self, time: &T) -> usize { ColTimes::push(self, time) }
+    fn push_from(&mut self, other: &Self, i: usize) -> usize {
+        self.push_row(other.row(i));
+        self.len - 1
+    }
+    fn push_copy(&mut self, i: usize) -> usize { ColTimes::push_copy(self, i) }
+    fn push_range(&mut self, other: &Self, s: usize, e: usize) { ColTimes::push_range(self, other, s, e) }
+    fn get(&self, i: usize) -> T { ColTimes::get(self, i) }
+    fn cmp(&self, i: usize, j: usize) -> Ordering { ColTimes::cmp(self, i, j) }
+    fn cmp_cross(&self, i: usize, other: &Self, j: usize) -> Ordering { ColTimes::cmp_cross(self, i, other, j) }
+    fn less_equal(&self, i: usize, j: usize) -> bool { ColTimes::less_equal(self, i, j) }
+    fn less_equal_cross(&self, i: usize, other: &Self, j: usize) -> bool {
+        let (a, b) = (self.row(i), other.row(j));
+        let n = a.len().max(b.len());
+        (0..n).all(|k| a.get(k).copied().unwrap_or(0) <= b.get(k).copied().unwrap_or(0))
+    }
+    fn join_assign(&mut self, i: usize, j: usize) { ColTimes::join_assign(self, i, j) }
+    fn meet_assign(&mut self, i: usize, j: usize) { ColTimes::meet_assign(self, i, j) }
+    fn push_join_cross(&mut self, a: &Self, i: usize, b: &Self, j: usize) -> usize {
+        let (x, y) = (a.row(i), b.row(j));
+        let n = x.len().max(y.len());
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.clear();
+        scratch.extend((0..n).map(|k| x.get(k).copied().unwrap_or(0).max(y.get(k).copied().unwrap_or(0))));
+        self.push_row(&scratch);
+        self.scratch = scratch;
+        self.len - 1
+    }
+}
+
 /// Lexicographic order of two lane rows, the shorter padded with zeros.
 fn cmp_padded(a: &[u64], b: &[u64]) -> Ordering {
     let n = a.len().max(b.len());
@@ -528,6 +609,42 @@ mod tests {
         assert_eq!(col.gather(&[5, 0, 2]).to_vec(), vec![times[5].clone(), times[0].clone(), times[2].clone()]);
         let (w, n, lanes) = col.raw();
         assert_eq!(ColTimes::<T>::from_raw(w, n, lanes.to_vec()).to_vec(), times);
+    }
+
+    /// The proxy tactics' verbs agree with the timestamp's own order and lattice: partial order,
+    /// join and meet in place, a copied row, a cross-column join, a truncation.
+    #[test]
+    fn column_verbs_match_the_lattice() {
+        use timely::PartialOrder;
+        let times: Vec<T> = vec![t(0, &[]), t(0, &[2]), t(1, &[1, 1]), t(2, &[0, 3]), t(3, &[4]), t(1, &[5, 0, 2])];
+        let col: ColTimes<T> = times.iter().cloned().collect();
+        let narrow: ColTimes<T> = vec![t(1, &[1]), t(0, &[3])].into_iter().collect();
+        for i in 0..times.len() {
+            for j in 0..times.len() {
+                assert_eq!(TimeColumn::less_equal(&col, i, j), times[i].less_equal(&times[j]), "{:?} <= {:?}", times[i], times[j]);
+                let mut c = col.clone();
+                TimeColumn::join_assign(&mut c, i, j);
+                assert_eq!(c.get(i), times[i].join(&times[j]));
+                let mut c = col.clone();
+                TimeColumn::meet_assign(&mut c, i, j);
+                assert_eq!(c.get(i), times[i].meet(&times[j]));
+                let mut c = col.clone();
+                let r = TimeColumn::push_join(&mut c, i, j);
+                assert_eq!(c.get(r), times[i].join(&times[j]));
+            }
+            for j in 0..2 {
+                assert_eq!(TimeColumn::less_equal_cross(&col, i, &narrow, j), times[i].less_equal(&narrow.get(j)));
+                assert_eq!(TimeColumn::less_equal_cross(&narrow, j, &col, i), narrow.get(j).less_equal(&times[i]));
+                let mut out = ColTimes::<T>::new();
+                let r = TimeColumn::push_join_cross(&mut out, &col, i, &narrow, j);
+                assert_eq!(out.get(r), times[i].join(&narrow.get(j)));
+            }
+        }
+        let mut c = col.clone();
+        let r = TimeColumn::push_copy(&mut c, 5);
+        assert_eq!(c.get(r), times[5]);
+        TimeColumn::truncate(&mut c, 2);
+        assert_eq!(c.to_vec(), times[..2]);
     }
 
     /// Advancing by a frontier lane-wise must agree with `Lattice::advance_by` on every row, for
