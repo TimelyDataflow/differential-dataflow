@@ -186,6 +186,7 @@ impl<T> CorgiReduceBackend<T> {
 
     /// Add representative key rows (aligned with `ids`) to the key pool; first id wins.
     fn register_keys(&mut self, col: CValue, ids: &[u64]) {
+        self.key_index.reserve(ids.len());
         for (i, &id) in ids.iter().enumerate() {
             self.key_index.entry(id).or_insert(self.key_len + i);
         }
@@ -195,6 +196,7 @@ impl<T> CorgiReduceBackend<T> {
 
     /// Add value rows (aligned with `ids`) to the val pool; first id wins.
     fn register_vals(&mut self, col: CValue, ids: &[u64]) {
+        self.val_index.reserve(ids.len());
         for (i, &id) in ids.iter().enumerate() {
             self.val_index.entry(id).or_insert(self.val_len + i);
         }
@@ -474,6 +476,8 @@ where
             p.extend_into(chunks, &vids, bridge);
             consolidate_updates(bridge);
         }
+        // Sized once: growing the map as it fills was 7% of a retire-bound run (ast).
+        self.in_index.reserve(vids.len());
         for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
         *len += p.vals_col.len();
         let Presented { keys_col, vals_col, khs, .. } = p;
