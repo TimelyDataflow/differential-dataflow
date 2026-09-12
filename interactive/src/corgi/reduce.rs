@@ -263,70 +263,21 @@ fn val_ids(col: &CValue) -> Vec<u64> {
 }
 
 /// The records of the `changed` keys across a run of chunks: parallel `(keys_col, vals_col)`
-/// corgi columns plus, per record, its key id, its diff, and where it lives — `(tags[i], offs[i])`
-/// is the chunk and row — so that its time is read from the chunk when wanted rather than
-/// materialized here for every record and again at the bridge. `changed` is the ASCENDING set of
-/// changed key ids; a row is kept iff its key id is in it.
+/// corgi columns, the records' times as one lane column, and per record its key id and diff.
+/// `changed` is the ASCENDING set of changed key ids; a row is kept iff its key id is in it.
 ///
-/// Both the changed set and stored identifier lane are sorted. Match them with
-/// monotone positions, galloping over long gaps and stepping through adjacent
-/// keys. The same compiled search covers narrow updates and broad cascades.
-fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> Presented
-where
-    T: ColTime,
-{
-    let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
-    let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
-    let (mut tags, mut offs) = (Vec::new(), Vec::new());
-    let (mut khs, mut diffs) = (Vec::new(), Vec::new());
-    let mut run_ends = Vec::new();
-    for (ci, ch) in chunks.iter().enumerate() {
-        let before = khs.len();
-        if ch.diffs().is_empty() {
-            continue;
-        }
-        let lane = key_lane(ch.keys());
-        let kh = corgi::arrange::leaf_slice(lane).expect("the identifier lane is a u64 leaf");
-        for (j, range) in MatchingRanges::new(changed, kh) {
-            tags.resize(tags.len() + range.len(), ci);
-            offs.extend(range.clone());
-            khs.resize(khs.len() + range.len(), changed[j]);
-            diffs.extend_from_slice(&ch.diffs()[range]);
-        }
-        if khs.len() > before { run_ends.push(khs.len()); }
-    }
-    let (keys_col, vals_col) = if tags.is_empty() {
-        (CValue::Unit(0), CValue::Unit(0))
-    } else {
-        (gather_lanes(&key_srcs, &tags, &offs), gather_lanes(&val_srcs, &tags, &offs))
-    };
-    Presented { keys_col, vals_col, khs, vids: Vec::new(), leaf: false, tags, offs, diffs, run_ends }
-}
-
-/// A presentation: the selected records' columns and, per record, its key id, its diff and its
-/// place `(chunk, row)` in the chunks it was collected from; `run_ends` delimits the records
-/// of each chunk, each run in that chunk's (stored) order. On the leaf fast path the columns
-/// are not gathered (`leaf`), and `vids` holds the value lane read directly.
-struct Presented {
-    keys_col: CValue,
-    vals_col: CValue,
-    khs: Vec<u64>,
-    vids: Vec<u64>,
-    leaf: bool,
-    tags: Vec<usize>,
-    offs: Vec<usize>,
-    diffs: Vec<Diff>,
-    run_ends: Vec<usize>,
-}
-
-/// [`collect_present`] for leaf keys and values: the value ids are the value lane, copied by
-/// range; no column is gathered.
-fn collect_present_leaf<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> Presented
+/// Both the changed set and the stored identifier lane are sorted, so the match is a walk of
+/// monotone positions, galloping over long gaps and stepping through adjacent keys — and every
+/// match is a contiguous RANGE of a chunk, which is the unit every column here is filled in:
+/// the times by range copy, the key ids by fill, the diffs and value ids by slice copy. Nothing
+/// is done per record.
+fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64], leaf: bool) -> Presented<T>
 where
     T: ColTime,
 {
     let (mut tags, mut offs) = (Vec::new(), Vec::new());
     let (mut khs, mut vids, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
+    let mut times = ColTimes::new();
     let mut run_ends = Vec::new();
     for (ci, ch) in chunks.iter().enumerate() {
         let before = khs.len();
@@ -334,23 +285,52 @@ where
             continue;
         }
         let kh = corgi::arrange::leaf_slice(key_lane(ch.keys())).expect("the identifier lane is a u64 leaf");
-        // The value lane, or — for an output history whose values are not leaves, such as
-        // Distinct's units — the ids the output was emitted under.
+        // On the leaf path the value ids are the value lane — or, for an output history whose
+        // values are not leaves (Distinct's units), the ids its output was emitted under.
         let owned;
-        let vs: &[u64] = match corgi::arrange::leaf_slice(ch.vals()) {
-            Some(lane) => lane,
-            None => { owned = val_ids(ch.vals()); &owned }
+        let vs: &[u64] = if !leaf { &[] } else {
+            match corgi::arrange::leaf_slice(ch.vals()) {
+                Some(lane) => lane,
+                None => { owned = val_ids(ch.vals()); &owned }
+            }
         };
         for (j, range) in MatchingRanges::new(changed, kh) {
-            tags.resize(tags.len() + range.len(), ci);
-            offs.extend(range.clone());
             khs.resize(khs.len() + range.len(), changed[j]);
-            vids.extend_from_slice(&vs[range.clone()]);
-            diffs.extend_from_slice(&ch.diffs()[range]);
+            times.push_range(ch.times(), range.start, range.end);
+            diffs.extend_from_slice(&ch.diffs()[range.clone()]);
+            if leaf {
+                vids.extend_from_slice(&vs[range]);
+            } else {
+                // The key and value columns are gathered, so these rows are named by index.
+                tags.resize(tags.len() + range.len(), ci);
+                offs.extend(range);
+            }
         }
         if khs.len() > before { run_ends.push(khs.len()); }
     }
-    Presented { keys_col: CValue::Unit(0), vals_col: CValue::Unit(0), khs, vids, leaf: true, tags, offs, diffs, run_ends }
+    let (keys_col, vals_col) = if leaf || tags.is_empty() {
+        (CValue::Unit(0), CValue::Unit(0))
+    } else {
+        let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
+        let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
+        (gather_lanes(&key_srcs, &tags, &offs), gather_lanes(&val_srcs, &tags, &offs))
+    };
+    Presented { keys_col, vals_col, khs, vids, leaf, times, diffs, run_ends }
+}
+
+/// A presentation: the selected records' columns, their times as one lane column, and per
+/// record its key id and diff; `run_ends` delimits the records of each chunk, each run in that
+/// chunk's (stored) order. On the leaf fast path the key/value columns are not gathered at all
+/// (`leaf`) and `vids` holds the value lane read directly.
+struct Presented<T> {
+    keys_col: CValue,
+    vals_col: CValue,
+    khs: Vec<u64>,
+    vids: Vec<u64>,
+    leaf: bool,
+    times: ColTimes<T>,
+    diffs: Vec<Diff>,
+    run_ends: Vec<usize>,
 }
 
 /// A leaf column of `ids` in the shape of `template` (a bare 64-bit leaf, or the 1-field
@@ -362,21 +342,22 @@ fn leaf_like(template: &CValue, ids: Vec<u64>) -> CValue {
     }
 }
 
-impl Presented {
+impl<T: ColTime> Presented<T> {
     fn is_empty(&self) -> bool { self.khs.is_empty() }
     /// The order of records `i` and `j`'s times, read in place.
-    fn cmp_times<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], i: usize, j: usize) -> std::cmp::Ordering {
-        chunks[self.tags[i]].times().cmp_cross(self.offs[i], chunks[self.tags[j]].times(), self.offs[j])
+    #[inline]
+    fn cmp_times(&self, i: usize, j: usize) -> std::cmp::Ordering {
+        self.times.cmp(i, j)
     }
-    /// Append record `i` to the bridge with `diff`: ids, a row copy of its time from its chunk,
-    /// the diff.
-    fn push_into<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], vids: &[u64], i: usize, diff: Diff, bridge: &mut Bridge<ColTimes<T>, Diff>) {
-        bridge.push_from((self.khs[i], vids[i]), chunks[self.tags[i]].times(), self.offs[i], diff);
+    /// Append record `i` to the bridge with `diff`: its ids, a row copy of its time, the diff.
+    #[inline]
+    fn push_into(&self, vids: &[u64], i: usize, diff: Diff, bridge: &mut Bridge<ColTimes<T>, Diff>) {
+        bridge.push_from((self.khs[i], vids[i]), &self.times, i, diff);
     }
     /// The records as bridge entries in presentation order, for the consolidation fallback.
-    fn extend_into<T: ColTime>(&self, chunks: &[&CorgiChunk<T, Diff>], vids: &[u64], bridge: &mut Bridge<ColTimes<T>, Diff>) {
+    fn extend_into(&self, vids: &[u64], bridge: &mut Bridge<ColTimes<T>, Diff>) {
         for i in 0..self.khs.len() {
-            self.push_into(chunks, vids, i, self.diffs[i], bridge);
+            self.push_into(vids, i, self.diffs[i], bridge);
         }
     }
 }
@@ -390,8 +371,7 @@ impl Presented {
 /// interrupt proxy order, and we fall back to ordinary consolidation. A debug assertion audits
 /// the inferred order. Returns false when the inference does not hold or the bridge is nonempty.
 fn merge_present<T: ColTime>(
-    chunks: &[&CorgiChunk<T, Diff>],
-    p: &Presented,
+    p: &Presented<T>,
     vids: &[u64],
     bridge: &mut Bridge<ColTimes<T>, Diff>,
 ) -> bool {
@@ -430,7 +410,7 @@ fn merge_present<T: ColTime>(
         let sorted = run_ends.iter().all(|&end| {
             let sorted = (start + 1..end).all(|i| {
                 (khs[i - 1], vids[i - 1]) < (khs[i], vids[i])
-                    || ((khs[i - 1], vids[i - 1]) == (khs[i], vids[i]) && p.cmp_times(chunks, i - 1, i) != std::cmp::Ordering::Greater)
+                    || ((khs[i - 1], vids[i - 1]) == (khs[i], vids[i]) && p.cmp_times(i - 1, i) != std::cmp::Ordering::Greater)
             });
             start = end;
             sorted
@@ -442,11 +422,11 @@ fn merge_present<T: ColTime>(
     // and the diff so far. The time is read in place to compare and copied once, at the push.
     let mut current: Option<((u64, u64), usize, Diff)> = None;
     let mut accumulate = |kv, index: usize| {
-        if current.as_ref().is_some_and(|&(ckv, ci, _)| ckv == kv && p.cmp_times(chunks, ci, index) == std::cmp::Ordering::Equal) {
+        if current.as_ref().is_some_and(|&(ckv, ci, _)| ckv == kv && p.cmp_times(ci, index) == std::cmp::Ordering::Equal) {
             current.as_mut().unwrap().2 += diffs[index];
         } else {
             if let Some((_, ci, d)) = current.take() {
-                if d != 0 { p.push_into(chunks, vids, ci, d, bridge); }
+                if d != 0 { p.push_into(vids, ci, d, bridge); }
             }
             current = Some((kv, index, diffs[index]));
         }
@@ -458,27 +438,27 @@ fn merge_present<T: ColTime>(
         }
         drop(accumulate);
         if let Some((_, ci, d)) = current {
-            if d != 0 { p.push_into(chunks, vids, ci, d, bridge); }
+            if d != 0 { p.push_into(vids, ci, d, bridge); }
         }
         return true;
     }
 
     // One head per run, least `(key id, value id, time)` first; the time compared in place.
-    struct Head<'a, T: ColTime> { kv: (u64, u64), run: usize, index: usize, chunks: &'a [&'a CorgiChunk<T, Diff>], p: &'a Presented }
+    struct Head<'a, T: ColTime> { kv: (u64, u64), run: usize, index: usize, p: &'a Presented<T> }
     impl<T: ColTime> PartialEq for Head<'_, T> { fn eq(&self, o: &Self) -> bool { self.cmp(o) == std::cmp::Ordering::Equal } }
     impl<T: ColTime> Eq for Head<'_, T> {}
     impl<T: ColTime> PartialOrd for Head<'_, T> { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } }
     impl<T: ColTime> Ord for Head<'_, T> {
         fn cmp(&self, o: &Self) -> std::cmp::Ordering {
             self.kv.cmp(&o.kv)
-                .then_with(|| self.p.cmp_times(self.chunks, self.index, o.index))
+                .then_with(|| self.p.cmp_times(self.index, o.index))
                 .then_with(|| (self.run, self.index).cmp(&(o.run, o.index)))
         }
     }
     let mut heap: BinaryHeap<Reverse<Head<T>>> = BinaryHeap::new();
     let mut lo = 0usize;
     for (run, &hi) in run_ends.iter().enumerate() {
-        heap.push(Reverse(Head { kv: (khs[lo], vids[lo]), run, index: lo, chunks, p }));
+        heap.push(Reverse(Head { kv: (khs[lo], vids[lo]), run, index: lo, p }));
         lo = hi;
     }
     while let Some(mut head) = heap.peek_mut() {
@@ -495,7 +475,7 @@ fn merge_present<T: ColTime>(
     }
     drop(accumulate);
     if let Some((_, ci, d)) = current {
-        if d != 0 { p.push_into(chunks, vids, ci, d, bridge); }
+        if d != 0 { p.push_into(vids, ci, d, bridge); }
     }
     true
 }
@@ -527,21 +507,21 @@ where
         bridge: &mut Bridge<ColTimes<T>, Diff>,
     ) {
         if self.leaf.is_some() {
-            let p = collect_present_leaf(chunks, keys);
-            if !p.is_empty() && !merge_present(chunks, &p, &p.vids, bridge) {
-                p.extend_into(chunks, &p.vids, bridge);
+            let p = collect_present(chunks, keys, true);
+            if !p.is_empty() && !merge_present(&p, &p.vids, bridge) {
+                p.extend_into(&p.vids, bridge);
                 bridge.consolidate();
             }
             return;
         }
-        let p = collect_present(chunks, keys);
+        let p = collect_present(chunks, keys, false);
         if p.is_empty() {
             return;
         }
         let vids = val_ids(&p.vals_col);
-        let merged = merge_present(chunks, &p, &vids, bridge);
+        let merged = merge_present(&p, &vids, bridge);
         if !merged {
-            p.extend_into(chunks, &vids, bridge);
+            p.extend_into(&vids, bridge);
             bridge.consolidate();
         }
         // Sized once: growing the map as it fills was 7% of a retire-bound run (ast).
@@ -854,19 +834,19 @@ where
         if self.leaf.is_some() {
             // The output of Count is its own id (a 1-field product of it), of Distinct the unit
             // and of Min an input value: the output column is rebuilt from ids at `finish`.
-            let p = collect_present_leaf(&out_chunks, &keys);
-            if !p.is_empty() && !merge_present(&out_chunks, &p, &p.vids, &mut window.output) {
-                p.extend_into(&out_chunks, &p.vids, &mut window.output);
+            let p = collect_present(&out_chunks, &keys, true);
+            if !p.is_empty() && !merge_present(&p, &p.vids, &mut window.output) {
+                p.extend_into(&p.vids, &mut window.output);
                 window.output.consolidate();
             }
             return;
         }
-        let p = collect_present(&out_chunks, &keys);
+        let p = collect_present(&out_chunks, &keys, false);
         if !p.is_empty() {
             let vids = val_ids(&p.vals_col);
-            let merged = merge_present(&out_chunks, &p, &vids, &mut window.output);
+            let merged = merge_present(&p, &vids, &mut window.output);
             if !merged {
-                p.extend_into(&out_chunks, &vids, &mut window.output);
+                p.extend_into(&vids, &mut window.output);
                 window.output.consolidate();
             }
             let Presented { keys_col, vals_col, khs, .. } = p;
@@ -1033,12 +1013,12 @@ mod tests {
     fn present_runs<T: ColTime + Ord>(runs: Vec<(CValue, CValue, Vec<T>, Vec<Diff>)>, changed: &[u64]) -> (bool, Vec<((u64, u64), T, Diff)>) {
         let chunks: Vec<CorgiChunk<T, Diff>> = runs.into_iter().map(|(k, v, t, d)| CorgiChunk::from_columns(k, v, t.into_iter().collect(), d)).collect();
         let refs: Vec<&CorgiChunk<T, Diff>> = chunks.iter().collect();
-        let p = collect_present(&refs, changed);
+        let p = collect_present(&refs, changed, false);
         let vids = val_ids(&p.vals_col);
         let mut bridge = Bridge::default();
-        let merged = merge_present(&refs, &p, &vids, &mut bridge);
+        let merged = merge_present(&p, &vids, &mut bridge);
         if !merged {
-            p.extend_into(&refs, &vids, &mut bridge);
+            p.extend_into(&vids, &mut bridge);
             bridge.consolidate();
         }
         let rows = (0..bridge.len()).map(|i| (bridge.ids[i], bridge.times.get(i), bridge.diffs[i])).collect();
