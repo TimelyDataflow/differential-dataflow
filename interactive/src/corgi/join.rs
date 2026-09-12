@@ -35,7 +35,7 @@ use differential_dataflow::operators::int_proxy::{Bridge, JoinInstance, ProxyJoi
 use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_at, gather, gather_lanes};
+use corgi::arrange::{compare_at, gather_lanes};
 use crate::corgi::search::MatchingRanges;
 use corgi::{shape_of_value, Shape, Value as CValue};
 
@@ -242,41 +242,38 @@ fn leaf_valued<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
     chunks.iter().filter(|c| c.len() > 0).all(|c| leaf_lanes(c.vals()).is_some())
 }
 
-/// Pull rows `idx` of the column's leaf lanes as `u64` buffers.
-fn pull_lanes(col: &CValue, idx: &[usize]) -> Vec<Vec<u64>> {
-    leaf_lanes(col).expect("pull_lanes: leaf-laned column")
+/// The column's leaf lanes as borrowed `u64` slices, each spanning the whole chunk, so a row
+/// is read at its own (absolute) index. Nothing is copied: a block reads the rows it touches.
+fn lane_slices(col: &CValue) -> Vec<&[u64]> {
+    leaf_lanes(col).expect("lane_slices: leaf-laned column")
         .into_iter()
-        .map(|lane| gather(lane, idx).into_u64("corgi join lane pull").unwrap())
+        .map(|lane| corgi::arrange::leaf_slice(lane).expect("a 64-bit leaf lane"))
         .collect()
 }
 
 /// One key's records in one chunk: absolute rows `[s, e)`. When the vals are leaf-laned,
-/// `vals = (lanes, pos)` gives row `r`'s tuple as `lanes[.][pos + r - s]`; `None` falls
-/// back to structural compares against the chunk itself.
+/// `vals` are the chunk's lanes and row `r`'s tuple is `lanes[.][r]`; `None` falls back to
+/// structural compares against the chunk itself.
 struct RunRef<'a, T: ColTime> {
     chunk: &'a CorgiChunk<T, Diff>,
     cid: usize,
     s: usize,
     e: usize,
-    vals: Option<(&'a [Vec<u64>], usize)>,
+    vals: Option<&'a [&'a [u64]]>,
 }
 
 impl<'a, T: ColTime> RunRef<'a, T> {
     fn val_less(&self, row: usize, other: &Self, orow: usize) -> bool {
         match (self.vals, other.vals) {
-            (Some((a, ap)), Some((b, bp))) => {
-                let (i, j) = (ap + row - self.s, bp + orow - other.s);
-                a.iter().zip(b).map(|(la, lb)| (la[i], lb[j])).find(|(x, y)| x != y).is_some_and(|(x, y)| x < y)
+            (Some(a), Some(b)) => {
+                a.iter().zip(b).map(|(la, lb)| (la[row], lb[orow])).find(|(x, y)| x != y).is_some_and(|(x, y)| x < y)
             }
             _ => compare_at(self.chunk.vals(), row, other.chunk.vals(), orow) == Ordering::Less,
         }
     }
     fn val_eq(&self, row: usize, other: &Self, orow: usize) -> bool {
         match (self.vals, other.vals) {
-            (Some((a, ap)), Some((b, bp))) => {
-                let (i, j) = (ap + row - self.s, bp + orow - other.s);
-                a.iter().zip(b).all(|(la, lb)| la[i] == lb[j])
-            }
+            (Some(a), Some(b)) => a.iter().zip(b).all(|(la, lb)| la[row] == lb[orow]),
             _ => compare_at(self.chunk.vals(), row, other.chunk.vals(), orow) == Ordering::Equal,
         }
     }
@@ -478,17 +475,17 @@ fn block_ends<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], horizon: Option<u64>)
     }).collect()
 }
 
-/// View over one leaf-keyed chunk's rows for THIS block, `[base, end)`. The identifiers are
-/// borrowed from the chunk's own lane — the block reads them, it does not copy them — and the
-/// vals are gathered once, over exactly those rows.
+/// View over one leaf-keyed chunk's rows for THIS block, `[base, end)`. Both the identifiers
+/// and the val lanes are borrowed from the chunk's own columns — the block reads the rows it
+/// touches and copies nothing.
 struct LeafView<'a, T: ColTime> {
     chunk: &'a CorgiChunk<T, Diff>,
     cid: usize,
     /// Absolute row of `keys[0]`.
     base: usize,
     keys: &'a [u64],
-    /// Leaf-laned vals over the same rows; `None` when vals are structured.
-    vals: Option<Vec<Vec<u64>>>,
+    /// Leaf-laned vals, whole columns indexed by absolute row; `None` when vals are structured.
+    vals: Option<Vec<&'a [u64]>>,
     /// Cursor within `keys`.
     cur: usize,
 }
@@ -498,7 +495,7 @@ const PULL: usize = 1 << 14;
 
 impl<'a, T: ColTime> LeafView<'a, T> {
     fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, start: usize, end: usize, leaf_vals: bool) -> Self {
-        let vals = (leaf_vals && end > start).then(|| pull_lanes(chunk.vals(), &(start..end).collect::<Vec<_>>()));
+        let vals = (leaf_vals && end > start).then(|| lane_slices(chunk.vals()));
         LeafView { chunk, cid, base: start, keys: &ident(chunk)[start..end], vals, cur: 0 }
     }
     /// The key under the cursor, if any remains in this block.
@@ -515,61 +512,39 @@ impl<'a, T: ColTime> LeafView<'a, T> {
     }
     /// The run `[s, e)` as a [`RunRef`].
     fn run_ref(&self, s: usize, e: usize) -> RunRef<'_, T> {
-        RunRef {
-            chunk: self.chunk,
-            cid: self.cid,
-            s,
-            e,
-            vals: self.vals.as_ref().map(|lanes| (&lanes[..], s - self.base)),
-        }
+        RunRef { chunk: self.chunk, cid: self.cid, s, e, vals: self.vals.as_deref() }
     }
 }
 
-/// The batched probe of one PROBEE-side chunk: per driver key, its equal-range in the
-/// chunk, with the matched rows' vals gathered once as a `u64` buffer
-/// when leaf-shaped (`off` gives each key's slice within it).
+/// The batched probe of one PROBEE-side chunk: per driver key, its equal-range in the chunk.
+/// The matched rows' vals are read from the chunk's own lanes at their absolute rows, so a
+/// probe copies nothing but the ranges themselves.
 struct Probe<'a, T: ColTime> {
     chunk: &'a CorgiChunk<T, Diff>,
     cid: usize,
     lo: Vec<usize>,
     hi: Vec<usize>,
-    vals: Option<Vec<Vec<u64>>>,
-    off: Vec<usize>,
+    vals: Option<Vec<&'a [u64]>>,
 }
 
 impl<'a, T: ColTime> Probe<'a, T> {
     fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &[u64], leaf_vals: bool) -> Self {
         let keys = corgi::arrange::leaf_slice(key_lane(chunk.keys())).expect("identifier lane is a u64 leaf");
         let (mut lo, mut hi) = (vec![0; needles.len()], vec![0; needles.len()]);
+        let mut matched = false;
         for (j, range) in MatchingRanges::new(needles, keys) {
             lo[j] = range.start;
             hi[j] = range.end;
+            matched = true;
         }
-        let mut off = Vec::with_capacity(lo.len() + 1);
-        let mut idx: Vec<usize> = Vec::new();
-        off.push(0);
-        for i in 0..lo.len() {
-            idx.extend(lo[i]..hi[i]);
-            off.push(idx.len());
-        }
-        let vals = if leaf_vals && !idx.is_empty() {
-            Some(pull_lanes(chunk.vals(), &idx))
-        } else {
-            None
-        };
-        Probe { chunk, cid, lo, hi, vals, off }
+        let vals = (leaf_vals && matched).then(|| lane_slices(chunk.vals()));
+        Probe { chunk, cid, lo, hi, vals }
     }
     /// The run of driver key `j` in this chunk, if any.
     fn run_ref(&self, j: usize) -> Option<RunRef<'_, T>> {
         let (s, e) = (self.lo[j], self.hi[j]);
         if s == e { return None; }
-        Some(RunRef {
-            chunk: self.chunk,
-            cid: self.cid,
-            s,
-            e,
-            vals: self.vals.as_ref().map(|lanes| (&lanes[..], self.off[j])),
-        })
+        Some(RunRef { chunk: self.chunk, cid: self.cid, s, e, vals: self.vals.as_deref() })
     }
 }
 
@@ -636,10 +611,7 @@ fn stage_collision<T: ColTime>(
                         compare_at(run.chunk.keys(), candidate, reference, row) != Ordering::Equal
                     })
                     .unwrap_or(run.e - start);
-            let vals = run
-                .vals
-                .map(|(lanes, offset)| (lanes, offset + start - run.s));
-            equal_runs.push(RunRef { chunk: run.chunk, cid: run.cid, s: start, e: end, vals });
+            equal_runs.push(RunRef { chunk: run.chunk, cid: run.cid, s: start, e: end, vals: run.vals });
             positions[index] = end;
         }
         scratch.stage_runs(&equal_runs, lower);
