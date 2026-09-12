@@ -2,6 +2,7 @@
 """Render v2 suite cycle accounting; does not certify provenance or comparability."""
 import argparse
 from collections import defaultdict
+import gzip
 import hashlib
 import json
 import math
@@ -83,18 +84,56 @@ def render(report, sha):
     return '\n'.join(lines)
 
 
+def summary(reports):
+    """Median of fresh-trial cycle medians, with no pooling across binaries."""
+    def identity(report):
+        fields = ('format_version', 'binary_sha256', 'data', 'changed_sha256',
+                  'parameter_bank', 'changes', 'plans_sha256', 'sources_sha256',
+                  'platform', 'python', 'logical_cpus', 'spec_commit', 'catalogue')
+        config = ('queries', 'backend', 'mode', 'isolated', 'workers', 'rounds',
+                  'warmup', 'batch_size', 'changes', 'timeout', 'max_rss_gib')
+        return ({k: report[k] for k in fields}, {k: report['config'][k] for k in config},
+                [(r['queries'], r['backend'], r['bindings']) for r in report['runs']])
+    if any(identity(r) != identity(reports[0]) for r in reports[1:]):
+        raise ValueError('summary requires repeated trials of the same binary, workload and environment')
+    lines = ['# Repeated standard-suite trials', '',
+             f'{len(reports)} fresh trials. Each cell is the median of trial cycle medians, in milliseconds.',
+             'Wire includes transport; client also includes preparation/encoding/decoding. Neither includes the oracle.', '',
+             '| Query / panel | Backend | Cycle wire | Trial-median wire range | Cycle client |',
+             '| --- | --- | ---: | ---: | ---: |']
+    for index, run in enumerate(reports[0]['runs']):
+        medians = []
+        for report in reports:
+            rounds = report['config']['rounds']
+            totals = account(report['runs'][index], rounds)
+            medians.append({m: statistics.median(totals[i][m] for i in range(rounds)) for m in TIMINGS})
+        wire = [m['wire_ms'] for m in medians]
+        client = [m['client_ms'] for m in medians]
+        lines.append(f'| {", ".join(run["queries"])} | {run["backend"]} | '
+                     f'{statistics.median(wire):.3f} | {min(wire):.3f}–{max(wire):.3f} | '
+                     f'{statistics.median(client):.3f} |')
+    return '\n'.join(lines) + '\n'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('reports', type=Path, nargs='+')
+    parser.add_argument('--summary', action='store_true', help='compact repeated-trial table; requires identical binary/workload')
     args = parser.parse_args()
     rendered = []
+    reports = []
     try:
         for path in args.reports:
             raw = path.read_bytes()
-            rendered.append(render(json.loads(raw), hashlib.sha256(raw).hexdigest()))
+            if path.suffix == '.gz':
+                raw = gzip.decompress(raw)
+            report = json.loads(raw)
+            rendered.append(render(report, hashlib.sha256(raw).hexdigest()))
+            reports.append(report)
+        result = summary(reports) if args.summary else '\n'.join(rendered)
     except (OSError, KeyError, TypeError, ValueError) as error:
         parser.error(f'{path}: {error}')
-    print('\n'.join(rendered))
+    print(result)
 
 
 if __name__ == '__main__':

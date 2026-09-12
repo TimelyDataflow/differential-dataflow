@@ -8,8 +8,8 @@ and [BI1–20](https://github.com/ldbc/ldbc_snb_docs/blob/b2269610f433da72e7c970
 There are **41 reads**, not 25 per family. No selected query is silently skipped.
 IC14 is the v2 cheapest-interaction-path query, not v1's all-shortest-path query.
 
-Follow-up work is tracked in [GAPS.md](GAPS.md), with a caveated
-[M4 measurement record](MEASUREMENTS.md) and [pinned generated-data recipes](DATA.md).
+Follow-up work is tracked in [GAPS.md](GAPS.md), with the
+[current M4 readout](CURRENT.md) and [pinned generated-data recipe](DATA.md).
 Use [CURRENT.md](CURRENT.md) for qualification status and [REFRESH.md](REFRESH.md)
 to produce and promote a replacement readout independently of an engine PR.
 

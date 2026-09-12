@@ -7,9 +7,8 @@ for full query coverage. It requires no downloaded data for its CI fixture.
 
 See [CURRENT.md](CURRENT.md) for evidence freshness and the replaceable readout,
 [REFRESH.md](REFRESH.md) for versioned recipes and how anyone can supersede a
-result, [GAPS.md](GAPS.md) for follow-up investigations,
-[MEASUREMENTS.md](MEASUREMENTS.md) for the historical M4 results, and
-[DATA.md](DATA.md) for pinned generated-data recipes.
+result, [GAPS.md](GAPS.md) for follow-up investigations, and
+[DATA.md](DATA.md) for the pinned generated-data snapshot.
 
 The four-query `run.py` panel documented below remains a smaller control with
 independent graph oracles and hand-written physical plans. Its measurements
