@@ -120,6 +120,10 @@ impl<V: Copy + Ord, D: Semigroup + Clone> ColumnHistory<V, D> {
         consolidate_buffer(pool, &mut self.buffer);
     }
 
+    /// How many pool rows this history refers to.
+    pub fn rows_len(&self) -> usize {
+        self.edits.len() + 2 * self.history.len() + self.buffer.len()
+    }
     /// Every pool row this history refers to, for a pool compaction.
     pub fn rows(&self, out: &mut Vec<usize>) {
         out.extend(self.edits.iter().map(|e| e.0));

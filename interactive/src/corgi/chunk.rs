@@ -266,16 +266,20 @@ where
         ship: &mut VecDeque<Self>,
     ) {
         // One input chunk per call: partition into keep (`>= frontier`) and ship pieces via `gather`.
-        // Which rows are at or beyond the frontier is one lane-wise pass; only the kept rows'
-        // times are built, for the residual antichain.
+        // Which rows are at or beyond the frontier is one lane-wise pass, and the residual
+        // antichain of the kept rows is built lane-wise too; only its few elements become times.
         let Some(chunk) = input.pop_front() else { return };
         let kv = chunk.kv();
         let (times, diffs) = (chunk.times(), chunk.diffs());
         let (mut ki, mut si) = (Vec::new(), Vec::new());
         let mut lanes = ColTimes::new();
         lanes.push_range(times, 0, chunk.len_());
+        let mut kept_frontier = ColTimes::new();
         for (i, beyond) in lanes.beyond(frontier).into_iter().enumerate() {
-            if beyond { residual.insert_ref(&times.get(i)); ki.push(i); } else { si.push(i); }
+            if beyond { kept_frontier.insert_antichain(times, i); ki.push(i); } else { si.push(i); }
+        }
+        for r in 0..kept_frontier.len() {
+            residual.insert(kept_frontier.get(r));
         }
         if !ki.is_empty() {
             let mut t = ColTimes::new();

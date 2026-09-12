@@ -191,13 +191,17 @@ impl<T> ColTimes<T> {
         self.width = width;
     }
 
-    /// Append a row given as lanes, padded or widening as needed.
+    /// Append a row given as lanes, padded or widening as needed. A row is a few lanes, so this
+    /// is a short loop rather than a memcpy call.
     pub(crate) fn push_row(&mut self, row: &[u64]) {
         if row.len() > self.width {
             self.widen(row.len());
         }
-        self.lanes.extend_from_slice(row);
-        self.lanes.resize((self.len + 1) * self.width, 0);
+        let w = self.width;
+        self.lanes.reserve(w);
+        for k in 0..w {
+            self.lanes.push(row.get(k).copied().unwrap_or(0));
+        }
         self.len += 1;
     }
 
@@ -219,9 +223,38 @@ impl<T> ColTimes<T> {
     #[inline]
     pub fn push_copy(&mut self, i: usize) -> usize {
         let w = self.width;
-        self.lanes.extend_from_within(i * w..(i + 1) * w);
+        self.lanes.reserve(w);
+        for k in 0..w {
+            let x = self.lanes[i * w + k];
+            self.lanes.push(x);
+        }
         self.len += 1;
         self.len - 1
+    }
+
+    /// Insert row `i` of `other` into this column read as an antichain: dropped if some row is at
+    /// or below it, else added and the rows at or above it dropped. The antichain of a set of
+    /// times, built one row at a time, without a time built.
+    pub fn insert_antichain(&mut self, other: &ColTimes<T>, i: usize) {
+        if (0..self.len).any(|r| self.less_equal_cross(r, other, i)) {
+            return;
+        }
+        let w = self.width.max(other.width);
+        let mut kept = ColTimes { lanes: Vec::with_capacity((self.len + 1) * w), width: w, len: 0, scratch: Vec::new(), _t: PhantomData };
+        for r in 0..self.len {
+            if !other.less_equal_cross(i, self, r) {
+                kept.push_row(self.row(r));
+            }
+        }
+        kept.push_row(other.row(i));
+        *self = kept;
+    }
+
+    /// Whether this column's row `i` is at or below `other`'s row `j`, widths padded with zeros.
+    pub fn less_equal_cross(&self, i: usize, other: &ColTimes<T>, j: usize) -> bool {
+        let (a, b) = (self.row(i), other.row(j));
+        let n = a.len().max(b.len());
+        (0..n).all(|k| a.get(k).copied().unwrap_or(0) <= b.get(k).copied().unwrap_or(0))
     }
 
     /// Whether row `i` is at or below row `j` in the partial order: lane by lane.
@@ -351,9 +384,12 @@ impl<T> ColTimes<T> {
 
     /// The rows `idx[..]`, in that order, as a column.
     pub fn gather(&self, idx: &[usize]) -> ColTimes<T> {
-        let mut out = ColTimes { lanes: Vec::with_capacity(idx.len() * self.width), width: self.width, len: 0, scratch: Vec::new(), _t: PhantomData };
+        let w = self.width;
+        let mut out = ColTimes { lanes: Vec::with_capacity(idx.len() * w), width: w, len: 0, scratch: Vec::new(), _t: PhantomData };
         for &i in idx {
-            out.lanes.extend_from_slice(self.row(i));
+            for k in 0..w {
+                out.lanes.push(self.lanes[i * w + k]);
+            }
         }
         out.len = idx.len();
         out
@@ -463,11 +499,7 @@ impl<T: Lanes> TimeColumn for ColTimes<T> {
     fn cmp(&self, i: usize, j: usize) -> Ordering { ColTimes::cmp(self, i, j) }
     fn cmp_cross(&self, i: usize, other: &Self, j: usize) -> Ordering { ColTimes::cmp_cross(self, i, other, j) }
     fn less_equal(&self, i: usize, j: usize) -> bool { ColTimes::less_equal(self, i, j) }
-    fn less_equal_cross(&self, i: usize, other: &Self, j: usize) -> bool {
-        let (a, b) = (self.row(i), other.row(j));
-        let n = a.len().max(b.len());
-        (0..n).all(|k| a.get(k).copied().unwrap_or(0) <= b.get(k).copied().unwrap_or(0))
-    }
+    fn less_equal_cross(&self, i: usize, other: &Self, j: usize) -> bool { ColTimes::less_equal_cross(self, i, other, j) }
     fn join_assign(&mut self, i: usize, j: usize) { ColTimes::join_assign(self, i, j) }
     fn meet_assign(&mut self, i: usize, j: usize) { ColTimes::meet_assign(self, i, j) }
     fn push_join_cross(&mut self, a: &Self, i: usize, b: &Self, j: usize) -> usize {

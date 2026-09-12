@@ -802,8 +802,10 @@ where
     /// Rebuild the pool from its live rows once the dead ones dominate: every join appends a row,
     /// and a key with a long history would otherwise keep every time it ever synthesized.
     fn compact_if_large(&mut self) {
+        // An upper bound on the live rows, cheap to compute, so that a key with a long history is
+        // not scanned for its live rows at every step.
         let live_estimate = self.upper.len() + self.seeds.len() + self.seed_meets.len() + self.synth.len()
-            + self.reached.len() + self.produced.len() + 2;
+            + self.reached.len() + self.produced.len() + self.input.rows_len() + self.output.rows_len() + 2;
         if self.pool.len() < 4 * live_estimate + 256 { return; }
         let live = &mut self.live_rows;
         live.clear();
