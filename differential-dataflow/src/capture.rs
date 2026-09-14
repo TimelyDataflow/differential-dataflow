@@ -467,14 +467,12 @@ pub mod source {
                 // Drain all relevant update counts in to the mutable antichain tracking its frontier.
                 counts.for_each(|cap, counts| {
                     updates_frontier.update_iter(counts.iter().cloned());
-                    let caps = cap.retain_stamp(0);
-                    if !caps.is_empty() { capability = Some(caps); }
+                    capability = Some(cap.retain_stamp(0));
                 });
                 // Drain all progress statements into the queue out of which we will work.
                 input.for_each(|cap, progress| {
                     progress_queue.extend(progress.iter().map(|x| (x.1).clone()));
-                    let caps = cap.retain_stamp(0);
-                    if !caps.is_empty() { capability = Some(caps); }
+                    capability = Some(cap.retain_stamp(0));
                 });
 
                 // Extract and act on actionable progress messages.
