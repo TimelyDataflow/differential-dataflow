@@ -235,9 +235,6 @@ impl<'scope, T: Timestamp, C: Container> Collection<'scope, T, C> {
     ///
     /// # Examples
     /// ```
-    /// use timely::dataflow::Scope;
-    /// use timely::dataflow::operators::{ToStream, Concat, Inspect, vec::BranchWhen};
-    ///
     /// use differential_dataflow::input::Input;
     ///
     /// timely::example(|scope| {

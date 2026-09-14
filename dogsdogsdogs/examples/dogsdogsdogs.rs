@@ -1,4 +1,4 @@
-use timely::dataflow::operators::{ToStream, vec::{Map, Partition, count::Accumulate}, Inspect, Probe};
+use timely::dataflow::operators::{ToStream, vec::{Map, Partition}, Inspect, Probe};
 use timely::dataflow::operators::probe::Handle;
 use differential_dataflow::{Collection, AsCollection};
 use differential_dataflow::input::Input;
@@ -74,7 +74,10 @@ fn main() {
                 .concat(validate1)
                 // Delay updates to the payload time worked out while extending.
                 .inner.map(|((extended, payload), _time, r)| (extended, payload, r))
+                .as_collection()
+                .map(|_| ())
                 .count()
+                .inner
                 .inspect(move |x| println!("{:?}", x))
                 // .inspect(move |x| println!("{:?}:\t{:?}", timer.elapsed(), x))
                 .probe_with(&mut probe);
