@@ -83,9 +83,8 @@ fn triangles(deltas: &[((u32, u32), Time, isize)]) -> Vec<((u32, u32, u32), Time
                     .inner.map(|((d, payload), _time, r)| (d, payload, r)).as_collection();
 
                 let left = triangles
-                    .inspect_batch(move |_t, xs| {
-                        let mut v = found_outer.lock().unwrap();
-                        v.extend(xs.iter().cloned());
+                    .inspect(move |x| {
+                        found_outer.lock().unwrap().push(x.clone());
                     })
                     .leave(scope);
 
