@@ -227,7 +227,7 @@ pub mod source {
     use std::rc::Rc;
     use std::marker::{Send, Sync};
     use std::sync::Arc;
-    use timely::dataflow::{Scope, Stream, operators::{Capability, CapabilitySet}};
+    use timely::dataflow::{Scope, Stream, operators::CapabilitySet};
     use timely::dataflow::operators::generic::OutputBuilder;
     use timely::progress::Timestamp;
     use timely::scheduling::SyncActivator;
@@ -462,17 +462,17 @@ pub mod source {
 
                 // If the frontier changes we need a capability to express that.
                 // Any capability should work; the downstream listener doesn't care.
-                let mut capability: Option<Capability<T>> = None;
+                let mut capability: Option<CapabilitySet<T>> = None;
 
                 // Drain all relevant update counts in to the mutable antichain tracking its frontier.
                 counts.for_each(|cap, counts| {
                     updates_frontier.update_iter(counts.iter().cloned());
-                    capability = Some(cap.retain(0));
+                    capability = Some(cap.retain_stamp(0));
                 });
                 // Drain all progress statements into the queue out of which we will work.
                 input.for_each(|cap, progress| {
                     progress_queue.extend(progress.iter().map(|x| (x.1).clone()));
-                    capability = Some(cap.retain(0));
+                    capability = Some(cap.retain_stamp(0));
                 });
 
                 // Extract and act on actionable progress messages.
