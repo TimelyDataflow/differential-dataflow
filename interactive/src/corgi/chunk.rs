@@ -413,12 +413,11 @@ where
 /// Multi-record: one columnar `sort_perm` (discrimination sort) orders by `(key, val)`, one batched
 /// `compare_adjacent` flags adjacent-equal runs; only the small per-run *time* tiebreak is a Rust sort
 /// (time is not a corgi type). No per-pair `compare_at`.
-fn sort_consolidate<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> (CValue, CValue, ColTimes<T>, Vec<R>)
+fn sort_consolidate<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> (CValue, CValue, ColTimes<T>, Vec<R>)
 where
     T: ColTime,
     R: Semigroup + Clone,
 {
-    let times: ColTimes<T> = times.into_iter().collect();
     let n = times.len();
     if n == 0 {
         return (keys, vals, times, diffs);
@@ -472,7 +471,7 @@ where
 {
     /// One sorted+consolidated chunk from columns already in corgi form (the column-native arrange
     /// ingest — no transcode).
-    pub fn from_columns(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> Self {
+    pub fn from_columns(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> Self {
         let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
         debug_assert!({
             let lane = corgi::arrange::leaf_slice(key_lane(&keys));
@@ -488,7 +487,7 @@ where
 /// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
 /// consolidate into one chunk, then `settle`. The column-native egress the reduce backend seals its
 /// output with (it resolves proxy ids to real columns by `gather` and hands them here).
-pub fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> ChunkBatch<CorgiChunk<T, R>>
+pub fn columns_to_batch<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> ChunkBatch<CorgiChunk<T, R>>
 where
     T: ColTime,
     R: Semigroup + Clone + 'static,
@@ -522,7 +521,7 @@ pub struct CorgiChunker<T, R> {
     /// Un-consolidated key/val column blocks (one per absorbed container), flat time/diff.
     k_blocks: Vec<CValue>,
     v_blocks: Vec<CValue>,
-    times: Vec<T>,
+    times: ColTimes<T>,
     diffs: Vec<R>,
     ready: VecDeque<CorgiChunk<T, R>>,
     current: Option<CorgiChunk<T, R>>,
@@ -530,7 +529,7 @@ pub struct CorgiChunker<T, R> {
 
 impl<T, R> Default for CorgiChunker<T, R> {
     fn default() -> Self {
-        CorgiChunker { k_blocks: Vec::new(), v_blocks: Vec::new(), times: Vec::new(), diffs: Vec::new(), ready: VecDeque::new(), current: None }
+        CorgiChunker { k_blocks: Vec::new(), v_blocks: Vec::new(), times: ColTimes::default(), diffs: Vec::new(), ready: VecDeque::new(), current: None }
     }
 }
 
@@ -647,7 +646,9 @@ where
         }
         self.k_blocks.push(std::mem::replace(&mut c.keys, CValue::Unit(0)));
         self.v_blocks.push(std::mem::replace(&mut c.vals, CValue::Unit(0)));
-        self.times.append(&mut c.times);
+        // Times are held as lanes while the bundle accumulates, rather than as owned timestamps.
+        for t in c.times.iter() { self.times.push(t); }
+        c.times.clear();
         self.diffs.append(&mut c.diffs);
         if self.times.len() >= INGEST {
             self.flush();
@@ -688,7 +689,7 @@ mod test {
         for rows in [16, 256, 4096] {
             let make = |diffs| CorgiChunk::from_columns(
                 CValue::u64((0..rows).collect()), CValue::Unit(rows as usize),
-                vec![0u64; rows as usize], diffs,
+                (0..rows).map(|_| 0u64).collect(), diffs,
             );
             let mut retractions = vec![-1i64; rows as usize];
             *retractions.last_mut().unwrap() = -2;

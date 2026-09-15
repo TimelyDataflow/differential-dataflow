@@ -37,7 +37,7 @@ use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, Re
 use corgi::arrange::{compare_at, gather, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
-use crate::corgi::col_times::ColTime;
+use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::MatchingRanges;
 use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
 use crate::ir::Diff;
@@ -140,7 +140,7 @@ pub struct CorgiReduceBackend<T> {
     in_index: IdMap,
     /// Output rows for `begin`/`emit`/`finish`: the accumulated
     /// `(key row, value row, time, diff)` (pool indices, gathered into columns at `finish`).
-    rows: (Vec<usize>, Vec<usize>, Vec<T>, Vec<Diff>),
+    rows: (Vec<usize>, Vec<usize>, ColTimes<T>, Vec<Diff>),
     /// Key-resolution pool for the current retire: `key_hash → row index` into the concatenation of
     /// `key_blocks` (representative keys from the input + output presentations).
     key_index: IdMap,
@@ -160,7 +160,7 @@ impl<T> CorgiReduceBackend<T> {
             reducer,
             in_vals: CValue::Unit(0),
             in_index: IdMap::default(),
-            rows: (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
             key_index: IdMap::default(),
             key_blocks: Vec::new(),
             key_len: 0,
@@ -575,7 +575,7 @@ where
     fn begin(&mut self, _description: Description<T>) {
         // Open the output session for this retire; reset the per-retire resolution pools.
         self.reset_pools();
-        self.rows = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
     fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
@@ -706,7 +706,7 @@ where
             let (krows, vrows, times, diffs) = &mut self.rows;
             krows.push(kr);
             vrows.push(vr);
-            times.push(t.clone());
+            times.push(t);
             diffs.push(d);
         }
     }
