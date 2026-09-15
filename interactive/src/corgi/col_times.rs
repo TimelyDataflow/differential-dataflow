@@ -19,32 +19,33 @@ use timely::order::Product;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Timestamp;
 
-/// A timestamp that is a product of integers, each with minimum zero.
+/// A timestamp that is a sequence of integer coordinates, each with minimum zero.
+/// Absent trailing coordinates are zero.
 pub trait Lanes: Sized {
-    /// Append the coordinates, in order.
-    fn write_lanes(&self, out: &mut Vec<u64>);
-    /// The time with these coordinates; trailing zeros beyond its own coordinates are allowed.
-    fn from_lanes(lanes: &[u64]) -> Self;
+    /// The coordinates, in order.
+    fn coordinates(&self) -> impl Iterator<Item = u64> + '_;
+    /// The time with these coordinates; an iterator shorter than the time's own coordinates supplies zeros.
+    fn from_coordinates(coords: impl Iterator<Item = u64>) -> Self;
 }
 
 impl Lanes for u64 {
-    fn write_lanes(&self, out: &mut Vec<u64>) { out.push(*self); }
-    fn from_lanes(lanes: &[u64]) -> Self { lanes.first().copied().unwrap_or(0) }
+    fn coordinates(&self) -> impl Iterator<Item = u64> + '_ { std::iter::once(*self) }
+    fn from_coordinates(mut coords: impl Iterator<Item = u64>) -> Self { coords.next().unwrap_or(0) }
 }
 
 impl Lanes for PointStamp<u64> {
-    fn write_lanes(&self, out: &mut Vec<u64>) { out.extend_from_slice(self); }
+    fn coordinates(&self) -> impl Iterator<Item = u64> + '_ { self.iter().copied() }
     // `new` strips trailing zeros, which is the canonical form.
-    fn from_lanes(lanes: &[u64]) -> Self { PointStamp::new(lanes.iter().copied().collect()) }
+    fn from_coordinates(coords: impl Iterator<Item = u64>) -> Self { PointStamp::new(coords.collect()) }
 }
 
 impl<B: Lanes> Lanes for Product<u64, B> {
-    fn write_lanes(&self, out: &mut Vec<u64>) {
-        out.push(self.outer);
-        self.inner.write_lanes(out);
+    fn coordinates(&self) -> impl Iterator<Item = u64> + '_ {
+        std::iter::once(self.outer).chain(self.inner.coordinates())
     }
-    fn from_lanes(lanes: &[u64]) -> Self {
-        Product::new(lanes.first().copied().unwrap_or(0), B::from_lanes(lanes.get(1..).unwrap_or(&[])))
+    fn from_coordinates(mut coords: impl Iterator<Item = u64>) -> Self {
+        let outer = coords.next().unwrap_or(0);
+        Product::new(outer, B::from_coordinates(coords))
     }
 }
 
@@ -92,18 +93,15 @@ impl<T: Lanes> ColTimes<T> {
         }
     }
 
-    /// Append an owned time.
+    /// Append an owned time, each coordinate directly into its lane.
     pub fn push(&mut self, t: &T) {
-        self.push_with(t, &mut Vec::new());
-    }
-
-    fn push_with(&mut self, t: &T, scratch: &mut Vec<u64>) {
-        scratch.clear();
-        t.write_lanes(scratch);
-        self.widen(scratch.len());
-        for (j, lane) in self.lanes.iter_mut().enumerate() {
-            lane.push(scratch.get(j).copied().unwrap_or(0));
+        let mut width = 0;
+        for (j, x) in t.coordinates().enumerate() {
+            if j == self.lanes.len() { self.lanes.push(vec![0; self.len]); }
+            self.lanes[j].push(x);
+            width = j + 1;
         }
+        for lane in &mut self.lanes[width..] { lane.push(0); }
         self.len += 1;
     }
 
@@ -134,8 +132,7 @@ impl<T: Lanes> ColTimes<T> {
 
     /// The owned time at row `i`. Reserve for boundaries where DD wants a timestamp.
     pub fn get(&self, i: usize) -> T {
-        let row: Vec<u64> = self.lanes.iter().map(|lane| lane[i]).collect();
-        T::from_lanes(&row)
+        T::from_coordinates(self.lanes.iter().map(|lane| lane[i]))
     }
 
     /// Materialize the whole column to `Vec<T>`.
@@ -178,17 +175,15 @@ impl<T: Lanes> ColTimes<T> {
     pub fn advance_by(&mut self, frontier: AntichainRef<T>, end: usize) {
         if frontier.is_empty() || end == 0 { return; }
         let mut meet: Option<Vec<u64>> = None;
-        let mut row = Vec::new();
         for f in frontier.iter() {
-            row.clear();
-            f.write_lanes(&mut row);
             match &mut meet {
                 // Coordinates absent from either side are zero, so the meet is as short as the shortest.
                 Some(m) => {
-                    m.truncate(row.len());
-                    for (m, &x) in m.iter_mut().zip(&row) { *m = (*m).min(x); }
+                    let mut len = 0;
+                    for (m, x) in m.iter_mut().zip(f.coordinates()) { *m = (*m).min(x); len += 1; }
+                    m.truncate(len);
                 }
-                None => meet = Some(row.clone()),
+                None => meet = Some(f.coordinates().collect()),
             }
         }
         let meet = meet.unwrap();
@@ -203,12 +198,9 @@ impl<T: Lanes> ColTimes<T> {
     pub fn beyond(&self, frontier: AntichainRef<T>) -> Vec<bool> {
         let mut beyond = vec![false; self.len];
         let mut dominated = vec![true; self.len];
-        let mut row = Vec::new();
         for f in frontier.iter() {
-            row.clear();
-            f.write_lanes(&mut row);
             dominated.fill(true);
-            for (j, &bound) in row.iter().enumerate() {
+            for (j, bound) in f.coordinates().enumerate() {
                 if bound == 0 { continue; }
                 match self.lanes.get(j) {
                     Some(lane) => for (d, &x) in dominated.iter_mut().zip(lane) { *d &= bound <= x; },
@@ -236,8 +228,7 @@ impl<T: Lanes> ColTimes<T> {
 impl<T: Lanes> FromIterator<T> for ColTimes<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut out = ColTimes::new();
-        let mut scratch = Vec::new();
-        for t in iter { out.push_with(&t, &mut scratch); }
+        for t in iter { out.push(&t); }
         out
     }
 }
