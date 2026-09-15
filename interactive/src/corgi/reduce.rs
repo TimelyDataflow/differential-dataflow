@@ -13,7 +13,8 @@
 //!     seal a `CorgiChunk` batch column-natively.
 //!
 //! Transcode-free: primitive columns are reconstructed from their IDs; compound IDs resolve
-//! through columnar representative pools, without carrying `DValue`s. Min/Collect use a segmented structural sort over an
+//! through columnar representative pools, without carrying `DValue`s. Primitive Min scans signed
+//! IDs directly; other Min/Collect values use a segmented structural sort over an
 //! order-only columnar view: signed integer leaves are swizzled, and lists become lexicographic
 //! ranks. The winning rows are still gathered from the original columns.
 //!
@@ -410,6 +411,21 @@ where
     /// value COLUMN directly per reducer, registers it (id → row) into the val pool, and returns the
     /// proxy `(value_id, diff)` deltas with per-bracket ends. `input[k] = (value_id, accumulated diff)`; the bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
     fn reduce_brackets(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+        // Primitive IDs contain the signed integer itself; a segmented minimum
+        // needs neither payload resolution nor a structural sort.
+        if matches!(self.reducer, Reducer::Min) && self.input.depth.is_some() {
+            let (mut values, mut output_ends) = (Vec::new(), Vec::with_capacity(ends.len()));
+            let mut start = 0;
+            for &end in ends {
+                if let Some(&(id, _)) = input[start..end].iter().filter(|r| r.1 != 0).min_by_key(|r| r.0 as i64) {
+                    values.push((id, 1));
+                }
+                output_ends.push(values.len());
+                start = end;
+            }
+            self.vals.depth = self.input.depth;
+            return (values, output_ends);
+        }
         let mut out_diffs: Vec<Diff> = Vec::new();
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
         let out_ids: Vec<u64>;
@@ -702,6 +718,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primitive_min_uses_signed_ids_and_nonzero_support() {
+        for depth in 0..3 {
+            let mut backend = CorgiReduceBackend::<u64>::new(Reducer::Min);
+            let mut col = CValue::u64(vec![0, u64::MAX, i64::MIN as u64, i64::MAX as u64]);
+            for _ in 0..depth { col = CValue::Prod(vec![col]); }
+            let input_ids = ids(&col);
+            backend.input.register(col, &input_ids);
+            let input = [(0, 1), (u64::MAX, -1), (i64::MIN as u64, 0), (i64::MAX as u64, -1), (i64::MIN as u64, -2)];
+            let (values, ends) = backend.reduce_brackets(&[0, 3, 5], &input);
+            assert_eq!(values, vec![(u64::MAX, 1), (i64::MIN as u64, 1)]);
+            assert_eq!(ends, vec![0, 1, 2]);
+            assert_eq!(backend.vals.depth, Some(depth));
+        }
+    }
 
     #[test]
     fn id_pool_preserves_primitive_shapes_and_compound_fallback() {
