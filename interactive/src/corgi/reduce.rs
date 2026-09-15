@@ -293,9 +293,9 @@ where
 /// tie-break would interrupt proxy `(key_id, value_id, time)` order, so we fall back to ordinary
 /// consolidation. A debug assertion audits the inferred order. Returns false when the inference
 /// does not hold or the bridge is nonempty.
-fn merge_present<T: Ord + Clone>(
+fn merge_present<T: timely::progress::Timestamp>(
     keys_col: &CValue, vals_col: &CValue,
-    khs: &[u64], vids: &[u64], times: &[T], diffs: &[Diff], run_ends: &[usize],
+    khs: &[u64], vids: &[u64], times: &mut [T], diffs: &[Diff], run_ends: &[usize],
     bridge: &mut ProxyBridge<T, Diff>,
 ) -> bool {
     let ordered_keys = corgi::arrange::leaf_slice(keys_col).is_some() || {
@@ -328,20 +328,20 @@ fn merge_present<T: Ord + Clone>(
     }, "identity ids do not preserve selected chunk order");
 
     let mut current: Option<((u64, u64), T, Diff)> = None;
-    let mut accumulate = |kv, time: &T, diff| {
-        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == time) {
+    let mut accumulate = |kv, time: T, diff| {
+        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == &time) {
             current.as_mut().unwrap().2 += diff;
         } else {
             if let Some(record) = current.take() {
                 if record.2 != 0 { bridge.push(record); }
             }
-            current = Some((kv, time.clone(), diff));
+            current = Some((kv, time, diff));
         }
     };
 
     if run_ends.len() == 1 {
         for index in 0..run_ends[0] {
-            accumulate((khs[index], vids[index]), &times[index], diffs[index]);
+            accumulate((khs[index], vids[index]), std::mem::replace(&mut times[index], T::minimum()), diffs[index]);
         }
         drop(accumulate);
         if let Some(record) = current {
@@ -350,19 +350,20 @@ fn merge_present<T: Ord + Clone>(
         return true;
     }
 
-    let mut heap: BinaryHeap<Reverse<((u64, u64), &T, usize, usize)>> = BinaryHeap::new();
+    let mut heap: BinaryHeap<Reverse<((u64, u64), T, usize, usize)>> = BinaryHeap::new();
     let mut lo = 0usize;
     for (run, &hi) in run_ends.iter().enumerate() {
-        heap.push(Reverse(((khs[lo], vids[lo]), &times[lo], run, lo)));
+        heap.push(Reverse(((khs[lo], vids[lo]), std::mem::replace(&mut times[lo], T::minimum()), run, lo)));
         lo = hi;
     }
     while let Some(mut head) = heap.peek_mut() {
-        let Reverse((kv, time, run, index)) = *head;
+        let Reverse((kv, _, run, index)) = *head;
+        let time = std::mem::replace(&mut head.0.1, T::minimum());
         accumulate(kv, time, diffs[index]);
         let end = run_ends[run];
         if index + 1 < end {
             let next = index + 1;
-            *head = Reverse(((khs[next], vids[next]), &times[next], run, next));
+            *head = Reverse(((khs[next], vids[next]), std::mem::replace(&mut times[next], T::minimum()), run, next));
         } else {
             std::collections::binary_heap::PeekMut::pop(head);
         }
@@ -400,18 +401,18 @@ where
         len: &mut usize,
         bridge: &mut ProxyBridge<T, Diff>,
     ) {
-        let (p_keys, p_vals, khs, times, diffs, run_ends) = collect_present(chunks, keys);
+        let (p_keys, p_vals, khs, mut times, diffs, run_ends) = collect_present(chunks, keys);
         if khs.is_empty() {
             return;
         }
         let vids = ids(&p_vals);
-        let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &times, &diffs, &run_ends, bridge);
+        let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &mut times, &diffs, &run_ends, bridge);
         for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
         *len += p_vals.len();
         blocks.push(p_vals);
         self.register_keys(p_keys, &khs);
         if !merged {
-            bridge.extend((0..khs.len()).map(|i| ((khs[i], vids[i]), times[i].clone(), diffs[i])));
+            bridge.extend(times.into_iter().enumerate().map(|(i, time)| ((khs[i], vids[i]), time, diffs[i])));
             consolidate_updates(bridge);
         }
     }
@@ -648,14 +649,14 @@ where
         self.in_vals = concat_columns(&in_blocks);
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
-        let (o_keys, o_vals, o_khs, o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
+        let (o_keys, o_vals, o_khs, mut o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
         if !o_khs.is_empty() {
             let vids = ids(&o_vals);
-            let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &o_times, &o_diffs, &o_run_ends, &mut window.output);
+            let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &mut o_times, &o_diffs, &o_run_ends, &mut window.output);
             self.register_keys(o_keys, &o_khs);
             self.register_vals(o_vals, &vids);
             if !merged {
-                window.output.extend((0..o_khs.len()).map(|i| ((o_khs[i], vids[i]), o_times[i].clone(), o_diffs[i])));
+                window.output.extend(o_times.into_iter().enumerate().map(|(i, time)| ((o_khs[i], vids[i]), time, o_diffs[i])));
                 consolidate_updates(&mut window.output);
             }
         }
@@ -758,7 +759,7 @@ mod tests {
         let vals = CValue::u64(vec![10, 20]);
         let mut bridge = Vec::new();
         assert!(merge_present(
-            &keys, &vals, &[1, 2], &[10, 20], &[0u64, 0], &[1, 1], &[2], &mut bridge,
+            &keys, &vals, &[1, 2], &[10, 20], &mut [0u64, 0], &[1, 1], &[2], &mut bridge,
         ));
         assert_eq!(bridge.len(), 2);
     }
@@ -789,11 +790,11 @@ mod tests {
             }
             let khs: Vec<_> = rows.iter().map(|r| r.0.0).collect();
             let vids: Vec<_> = rows.iter().map(|r| r.0.1).collect();
-            let times: Vec<_> = rows.iter().map(|r| r.1).collect();
+            let mut times: Vec<_> = rows.iter().map(|r| r.1).collect();
             let diffs: Vec<_> = rows.iter().map(|r| r.2).collect();
             let mut bridge = Vec::new();
             assert!(merge_present(&CValue::u64(khs.clone()), &CValue::u64(vids.clone()),
-                &khs, &vids, &times, &diffs, &ends, &mut bridge));
+                &khs, &vids, &mut times, &diffs, &ends, &mut bridge));
             let expected: Vec<_> = expected.into_iter().filter(|(_, d)| *d != 0)
                 .map(|((kv, time), diff)| (kv, time, diff)).collect();
             assert_eq!(bridge, expected, "run count: {count}");
@@ -809,7 +810,7 @@ mod tests {
             &vals,
             &[1, 1],
             &[10, 20],
-            &[0u64, 0],
+            &mut [0u64, 0],
             &[1, 1],
             &[2],
             &mut Vec::new(),

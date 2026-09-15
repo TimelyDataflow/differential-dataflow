@@ -237,9 +237,9 @@ where
             let before = from;
             window.clear();
             self.backend.next_window(&instance, &changed, &mut from, &mut window);
-            let p_in = &window.input;
+            let p_in = &mut window.input;
             let seeds = &window.seeds;
-            let p_out = &window.output;
+            let p_out = &mut window.output;
             super::debug_assert_sorted_bridge(p_in, "next_window.input");
             super::debug_assert_sorted_bridge(p_out, "next_window.output");
             debug_assert!(
@@ -303,14 +303,27 @@ where
                     while due_pos < due.rows.len() && due.rows[due_pos].0 < key { due_pos += 1; }
                     let start = due_pos;
                     while due_pos < due.rows.len() && due.rows[due_pos].0 == key { due_pos += 1; }
-                    let owed = due.rows[start..due_pos].iter().map(|&(_, row)| due.times[row].clone());
-                    slot.sweep.load(
-                        owed,
-                        (n0..n1).map(|n| seeds[n].1.clone()),
-                        (i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())),
-                        (o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())),
-                    );
-                    slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
+                    let owed = &due.rows[start..due_pos];
+                    let novel = &seeds[n0..n1];
+                    // One seed dominating every record has exactly one possible evaluation.
+                    let single = owed.first().map(|r| &due.times[r.1]).or_else(|| novel.first().map(|r| &r.1))
+                        .filter(|at| owed.len() <= 1 && novel.len() <= 1
+                            && novel.first().is_none_or(|r| &r.1 == *at)
+                            && p_in[i0..i1].iter().all(|r| r.1.less_equal(at))
+                            && p_out[o0..o1].iter().all(|r| r.1.less_equal(at)));
+                    slot.direct = single.map(|_| (i0..i1, o0..o1));
+                    slot.at = if let Some(at) = single {
+                        if upper.less_equal(at) { slot.pended.push(at.clone()); None }
+                        else { Some(at.clone()) }
+                    } else {
+                        slot.sweep.load(
+                            owed.iter().map(|&(_, row)| due.times[row].clone()),
+                            novel.iter().map(|r| r.1.clone()),
+                            p_in[i0..i1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
+                            p_out[o0..o1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
+                        );
+                        slot.sweep.next_crossing(upper, &mut slot.pended)
+                    };
                     if slot.at.is_some() { live.push(n_slots); }
                     else if !slot.pended.is_empty() {
                         deferred.extend(slot.pended.drain(..).map(|time| (time, key)));
@@ -334,8 +347,15 @@ where
                         let at = slots[si].at.clone().expect("live slots are suspended at a time");
                         in_accum.clear();
                         cur_out.clear();
-                        slots[si].sweep.input_at(&at, &mut in_accum);
-                        slots[si].sweep.output_at(&at, &mut cur_out);
+                        if let Some((ir, or)) = &slots[si].direct {
+                            in_accum.extend(p_in[ir.clone()].iter().map(|r| (r.0.1, r.2.clone())));
+                            cur_out.extend(p_out[or.clone()].iter().map(|r| (r.0.1, r.2.clone())));
+                            crate::consolidation::consolidate(&mut in_accum);
+                            crate::consolidation::consolidate(&mut cur_out);
+                        } else {
+                            slots[si].sweep.input_at(&at, &mut in_accum);
+                            slots[si].sweep.output_at(&at, &mut cur_out);
+                        }
                         // An interesting time can still reach the gate with nothing to read; the
                         // conventional reduce skips user logic there and so do we.
                         if in_accum.is_empty() && cur_out.is_empty() { continue; }
@@ -357,7 +377,9 @@ where
                                 for (vid, d) in &corr[cstart..cend] {
                                     deltas.push(((slots[*si].key, *vid), at.clone(), d.clone()));
                                 }
-                                slots[*si].sweep.commit(at, corr[cstart..cend].iter().cloned());
+                                if slots[*si].direct.is_none() {
+                                    slots[*si].sweep.commit(at, corr[cstart..cend].iter().cloned());
+                                }
                             }
                             cstart = cend;
                         }
@@ -366,7 +388,8 @@ where
                     // Step every live key past the time it was suspended at, and retire the spent ones.
                     for &si in live.iter() {
                         let slot = &mut slots[si];
-                        slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
+                        slot.at = if slot.direct.is_some() { None }
+                            else { slot.sweep.next_crossing(upper, &mut slot.pended) };
                         if slot.at.is_none() && !slot.pended.is_empty() {
                             deferred.extend(slot.pended.drain(..).map(|time| (time, slot.key)));
                         }
@@ -394,6 +417,7 @@ where
 struct KeySweep<T, RIn, ROut> {
     key: u64,
     sweep: Sweep<T, RIn, ROut>,
+    direct: Option<(std::ops::Range<usize>, std::ops::Range<usize>)>,
     /// Times at or beyond `upper` the sweep has reached; carried forward when the slot retires.
     pended: Vec<T>,
     /// The time the sweep last suspended at, or `None` once it is spent.
@@ -402,7 +426,7 @@ struct KeySweep<T, RIn, ROut> {
 
 impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> KeySweep<T, RIn, ROut> {
     fn empty() -> Self {
-        KeySweep { key: 0, sweep: Sweep::new(), pended: Vec::new(), at: None }
+        KeySweep { key: 0, sweep: Sweep::new(), direct: None, pended: Vec::new(), at: None }
     }
 }
 
