@@ -37,7 +37,7 @@ use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, Re
 use corgi::arrange::{compare_at, gather, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
-use crate::corgi::col_times::ColTime;
+use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::MatchingRanges;
 use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
 use crate::ir::Diff;
@@ -140,7 +140,7 @@ pub struct CorgiReduceBackend<T> {
     in_index: IdMap,
     /// Output rows for `begin`/`emit`/`finish`: the accumulated
     /// `(key row, value row, time, diff)` (pool indices, gathered into columns at `finish`).
-    rows: (Vec<usize>, Vec<usize>, Vec<T>, Vec<Diff>),
+    rows: (Vec<usize>, Vec<usize>, ColTimes<T>, Vec<Diff>),
     /// Key-resolution pool for the current retire: `key_hash → row index` into the concatenation of
     /// `key_blocks` (representative keys from the input + output presentations).
     key_index: IdMap,
@@ -160,7 +160,7 @@ impl<T> CorgiReduceBackend<T> {
             reducer,
             in_vals: CValue::Unit(0),
             in_index: IdMap::default(),
-            rows: (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
             key_index: IdMap::default(),
             key_blocks: Vec::new(),
             key_len: 0,
@@ -209,7 +209,8 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
         1 => non_empty[0].clone(),
         _ => {
             let srcs: Vec<Option<&CValue>> = non_empty.iter().map(|b| Some(*b)).collect();
-            let (mut tags, mut offs) = (Vec::new(), Vec::new());
+            let total: usize = non_empty.iter().map(|b| b.len()).sum();
+            let (mut tags, mut offs) = (Vec::with_capacity(total), Vec::with_capacity(total));
             for (ti, b) in non_empty.iter().enumerate() {
                 for o in 0..b.len() {
                     tags.push(ti);
@@ -574,7 +575,7 @@ where
     fn begin(&mut self, _description: Description<T>) {
         // Open the output session for this retire; reset the per-retire resolution pools.
         self.reset_pools();
-        self.rows = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
     fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
@@ -597,7 +598,7 @@ where
         // The seeds are the novel batches' RAW (key_hash, time) support, recorded here — before the
         // merged presentation below, whose consolidation may net a novel record away entirely. The
         // key hashes come from the scan the key list needs anyway.
-        let mut seeds: Vec<(u64, T)> = Vec::new();
+        let mut seeds: Vec<(u64, T)> = Vec::with_capacity(novel_chunks.iter().map(|c| c.diffs().len()).sum());
         for ch in novel_chunks.iter() {
             let khs = key_ids(ch.keys());
             let times = ch.times();
@@ -671,18 +672,21 @@ where
         let mut corr: Vec<(u64, Diff)> = Vec::new();
         let mut corr_ends: Vec<usize> = Vec::with_capacity(keys.len());
         let (mut ds, mut os) = (0usize, 0usize);
+        // Scratch for netting, cleared per key rather than allocated per key.
+        let mut net: HashMap<u64, Diff, BuildHasherDefault<IdHasher>> = Default::default();
+        let mut order: Vec<u64> = Vec::new();
         for i in 0..keys.len() {
             let (de, oe) = (desired_ends[i], out_ends[i]);
             // Net by value_id: desired (+) minus current output (−); keep non-zero, in first-seen order.
-            let mut net: HashMap<u64, Diff, BuildHasherDefault<IdHasher>> = Default::default();
-            let mut order: Vec<u64> = Vec::new();
+            net.clear();
+            order.clear();
             for &(vid, d) in &desired[ds..de] {
                 if let Some(x) = net.get_mut(&vid) { *x += d; } else { net.insert(vid, d); order.push(vid); }
             }
             for &(vid, d) in &output[os..oe] {
                 if let Some(x) = net.get_mut(&vid) { *x -= d; } else { net.insert(vid, -d); order.push(vid); }
             }
-            for vid in order {
+            for &vid in &order {
                 let d = net[&vid];
                 if d != 0 { corr.push((vid, d)); }
             }
@@ -702,7 +706,7 @@ where
             let (krows, vrows, times, diffs) = &mut self.rows;
             krows.push(kr);
             vrows.push(vr);
-            times.push(t.clone());
+            times.push(t);
             diffs.push(d);
         }
     }

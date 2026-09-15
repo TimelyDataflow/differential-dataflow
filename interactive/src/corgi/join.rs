@@ -787,7 +787,7 @@ mod tests {
         // Deliberately equal across different real keys: collision staging must not consolidate
         // these together before `cross` has a chance to compare their keys.
         let vals = CValue::u64(vec![0; rows.len()]);
-        let chunk = CorgiChunk::from_columns(keys, vals, vec![0; rows.len()], vec![1; rows.len()]);
+        let chunk = CorgiChunk::from_columns(keys, vals, (0..rows.len()).map(|_| 0).collect(), vec![1; rows.len()]);
         Rc::new(ChunkBatch::new(vec![chunk]))
     }
 
