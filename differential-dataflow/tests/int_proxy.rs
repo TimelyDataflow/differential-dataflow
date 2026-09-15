@@ -519,3 +519,66 @@ fn bounded_sweeps_match_partial_order_oracle() {
         assert_eq!(hread(&all), expected, "limit {limit}");
     }
 }
+
+/// A single seed stays pending beyond upper, then evaluates with no novel input.
+#[test]
+fn reduce_single_seed_deferred_then_due() {
+    let time = Product::<u64, u64>::new;
+    let lower = Antichain::from_elem(time(0, 0));
+    let middle = Antichain::from_elem(time(1, 1));
+    let seed = time(2, 2);
+    let input = hbatch(vec![((7u64, 3u64), seed, 1i64)], time(0, 0), time(3, 3));
+    let mut tactic = ProxyReduceTactic::new(VecReduceBackend::new(max_logic));
+    let (first, pending) = tactic.retire(
+        vec![], vec![], vec![input.clone()], &lower, &middle, &lower,
+    );
+    let outputs: Vec<_> = first.into_iter().filter_map(|s| s.inner).collect();
+    assert!(hread(&outputs).is_empty(), "a seed beyond upper must not evaluate");
+    assert_eq!(pending, Antichain::from_elem(seed));
+    let (second, pending) = tactic.retire(
+        vec![input], outputs, vec![], &middle, &Antichain::from_elem(time(3, 3)), &pending,
+    );
+    let outputs: Vec<_> = second.into_iter().filter_map(|s| s.inner).collect();
+    assert_eq!(hread(&outputs), vec![((7, 3), seed, 1)], "the due seed needs no novel support");
+    assert!(pending.is_empty());
+}
+
+/// Input and prior output at exactly the seed time participate in direct reconciliation.
+#[test]
+fn reduce_single_seed_includes_equal_times() {
+    let time = Product::<u64, u64>::new;
+    let zero = time(0, 0);
+    let seed = time(1, 1);
+    let prior = hbatch(vec![((7u64, 3u64), zero, 1i64)], zero, seed);
+    let input = hbatch(vec![((7u64, 9u64), seed, 1i64)], seed, time(2, 2));
+    let mut tactic = ProxyReduceTactic::new(VecReduceBackend::new(max_logic));
+    // The backend advances both the prior input and output to lower = seed.
+    let (result, pending) = tactic.retire(
+        vec![prior.clone()], vec![prior], vec![input],
+        &Antichain::from_elem(seed), &Antichain::from_elem(time(2, 2)), &Antichain::from_elem(seed),
+    );
+    let outputs: Vec<_> = result.into_iter().filter_map(|s| s.inner).collect();
+    assert_eq!(hread(&outputs), vec![((7, 3), seed, -1), ((7, 9), seed, 1)]);
+    assert!(pending.is_empty());
+}
+
+/// One incomparable record requires both the seed evaluation and its later join.
+#[test]
+fn reduce_single_seed_with_incomparable_record() {
+    let time = Product::<u64, u64>::new;
+    let zero = time(0, 0);
+    let seed = time(2, 0);
+    let mut lower = Antichain::from_elem(time(0, 2));
+    lower.insert(seed);
+    let prior = hbatch(vec![((7u64, 9u64), time(1, 1), 1i64)], zero, time(1, 1));
+    let input = hbatch(vec![((7u64, 3u64), seed, 1i64)], zero, time(2, 2));
+    let mut tactic = ProxyReduceTactic::new(VecReduceBackend::new(max_logic));
+    let (result, pending) = tactic.retire(
+        vec![prior.clone()], vec![prior], vec![input],
+        &lower, &Antichain::from_elem(time(3, 3)), &lower,
+    );
+    let outputs: Vec<_> = result.into_iter().filter_map(|s| s.inner).collect();
+    assert_eq!(hread(&outputs), vec![((7, 3), seed, 1), ((7, 3), time(2, 1), -1)],
+        "including the incomparable value at the seed, or skipping the join, is incorrect");
+    assert!(pending.is_empty());
+}
