@@ -237,9 +237,9 @@ where
             let before = from;
             window.clear();
             self.backend.next_window(&instance, &changed, &mut from, &mut window);
-            let p_in = &window.input;
+            let p_in = &mut window.input;
             let seeds = &window.seeds;
-            let p_out = &window.output;
+            let p_out = &mut window.output;
             super::debug_assert_sorted_bridge(p_in, "next_window.input");
             super::debug_assert_sorted_bridge(p_out, "next_window.output");
             debug_assert!(
@@ -307,8 +307,8 @@ where
                     slot.sweep.load(
                         owed,
                         (n0..n1).map(|n| seeds[n].1.clone()),
-                        (i0..i1).map(|i| (p_in[i].0.1, p_in[i].1.clone(), p_in[i].2.clone())),
-                        (o0..o1).map(|o| (p_out[o].0.1, p_out[o].1.clone(), p_out[o].2.clone())),
+                        p_in[i0..i1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
+                        p_out[o0..o1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
                     );
                     slot.at = slot.sweep.next_crossing(upper, &mut slot.pended);
                     if slot.at.is_some() { live.push(n_slots); }
