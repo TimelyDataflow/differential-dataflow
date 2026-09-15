@@ -2,7 +2,7 @@
 //!
 //! [`CorgiJoinBackend`] implements [`ProxyJoinBackend`]: `advance` draws blocks of the two
 //! inputs' key intersection as `((group, coord), time, diff)` bridges, and `cross` redeems
-//! matched coordinates directly against the instance's chunks (`gather_lanes`), runs the
+//! matched IDs into primitive columns or gathers coordinates from the instance's chunks, runs the
 //! compiled projection, and cuts `TARGET_OUT`-sized [`CorgiContainer`]s. Peak state is one
 //! block's bridges plus one container, however large the unit.
 //!
@@ -14,8 +14,10 @@
 //!     A hash collision remains under that token through proxy matching; only then does `cross`
 //!     compare the recorded real-key coordinates and discard unequal pairs.
 //!
-//! *   The **value token** is a *canonical coordinate*: `(chunk << 48) | row` of the value's
-//!     first occurrence among its side's chunks. Coordinates redeem against the instance
+//! *   With primitive keys, a primitive **value token** is the value itself (including
+//!     singleton-product wrappers). Equal values consolidate without choosing a representative,
+//!     and matched columns are reconstructed from IDs. Other values use a *canonical coordinate*:
+//!     `(chunk << 48) | row` of the value's first occurrence among its side's chunks. Coordinates redeem against the instance
 //!     alone (no backend state, no reliance on call adjacency), and value columns are never
 //!     copied into the presentation — they are gathered once, straight from chunk storage
 //!     into the projection input, and only for rows that matched. Assigning *equal* values
@@ -35,7 +37,7 @@ use differential_dataflow::operators::int_proxy::{JoinInstance, ProxyBridge, Pro
 use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_at, gather, gather_lanes};
+use corgi::arrange::{compare_at, gather, gather_lanes, leaf_slice};
 use crate::corgi::search::MatchingRanges;
 use corgi::{shape_of_value, Shape, Value as CValue};
 
@@ -128,6 +130,9 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
         let vals0: Vec<Option<&CValue>> = chunks0.iter().map(|c| Some(c.vals())).collect();
         let vals1: Vec<Option<&CValue>> = chunks1.iter().map(|c| Some(c.vals())).collect();
 
+        let primitive_keys = !key_is_hashed(chunks0[0].keys());
+        let primitive0 = primitive_values(chunks0[0]);
+        let primitive1 = primitive_values(chunks1[0]);
         let n = matches.ids.len();
         let (mut tag0, mut off0) = (Vec::new(), Vec::new());
         let (mut tag1, mut off1) = (Vec::new(), Vec::new());
@@ -136,12 +141,16 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             let end = (start + TARGET_OUT).min(n);
             tag0.clear(); off0.clear(); tag1.clear(); off1.clear();
             let kept = if self.colliding.is_empty() {
-                // The universal hot path: preserve the old allocation-free slice copies.
+                // Only coordinate-backed values need gather indices.
                 for (_, (c0, c1)) in &matches.ids[start..end] {
-                    tag0.push((c0 >> COORD_BITS) as usize);
-                    off0.push((c0 & ((1 << COORD_BITS) - 1)) as usize);
-                    tag1.push((c1 >> COORD_BITS) as usize);
-                    off1.push((c1 & ((1 << COORD_BITS) - 1)) as usize);
+                    if !primitive0 {
+                        tag0.push((c0 >> COORD_BITS) as usize);
+                        off0.push((c0 & ((1 << COORD_BITS) - 1)) as usize);
+                    }
+                    if !primitive1 {
+                        tag1.push((c1 >> COORD_BITS) as usize);
+                        off1.push((c1 & ((1 << COORD_BITS) - 1)) as usize);
+                    }
                 }
                 None
             } else {
@@ -172,9 +181,16 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             // The join's projection is written against the key the program declared, so drop
             // the arrangement's leading identifier lane before evaluating it. The output goes to
             // an arrange, which re-derives the identifier for the new key.
-            let kc = recover_key(&gather_lanes(&keys0, &tag0, &off0));
-            let v0 = gather_lanes(&vals0, &tag0, &off0);
-            let v1 = gather_lanes(&vals1, &tag1, &off1);
+            let ids = &matches.ids[start..end];
+            let kc = if primitive_keys {
+                from_ids(chunks0[0].keys(), ids.iter().map(|x| x.0).collect())
+            } else { recover_key(&gather_lanes(&keys0, &tag0, &off0)) };
+            let v0 = if primitive0 {
+                from_ids(chunks0[0].vals(), ids.iter().map(|x| x.1.0).collect())
+            } else { gather_lanes(&vals0, &tag0, &off0) };
+            let v1 = if primitive1 {
+                from_ids(chunks1[0].vals(), ids.iter().map(|x| x.1.1).collect())
+            } else { gather_lanes(&vals1, &tag1, &off1) };
             let proj = compile_join_projection(&self.key, &self.val, &shape_of_value(&kc), &shape_of_value(&v0), &shape_of_value(&v1))
                 .unwrap_or_else(|e| panic!("join projection: type error: {e}"));
             let projected = corgi::eval_graph(&proj, CValue::Prod(vec![kc, v0, v1]));
@@ -195,6 +211,19 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             });
             start = end;
         }
+    }
+}
+
+/// Coordinates remain necessary for structured keys, including collision validation.
+fn primitive_values<T: ColTime>(chunk: &CorgiChunk<T, Diff>) -> bool {
+    !key_is_hashed(chunk.keys()) && leaf_slice(chunk.vals()).is_some()
+}
+
+/// Rebuild a primitive column with its original singleton-product wrappers.
+fn from_ids(template: &CValue, ids: Vec<u64>) -> CValue {
+    match template {
+        CValue::Prod(fields) => CValue::Prod(vec![from_ids(&fields[0], ids)]),
+        _ => CValue::u64(ids),
     }
 }
 
@@ -229,9 +258,10 @@ fn leaf_lanes(col: &CValue) -> Option<Vec<&CValue>> {
     if walk(col, &mut out) { Some(out) } else { None }
 }
 
-/// Whether every nonempty chunk's val column flattens to `u64` leaf lanes.
+/// Whether to copy comparison lanes. Primitive tokens read their source lane directly.
 fn leaf_valued<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
-    chunks.iter().filter(|c| c.len() > 0).all(|c| leaf_lanes(c.vals()).is_some())
+    !primitive_values(chunks[0])
+        && chunks.iter().filter(|c| c.len() > 0).all(|c| leaf_lanes(c.vals()).is_some())
 }
 
 /// Pull rows `idx` of the column's leaf lanes as `u64` buffers.
@@ -280,7 +310,7 @@ impl<'a, T: ColTime> RunRef<'a, T> {
     }
 }
 
-/// Per-key staging for one side: consolidated `(coord, time, diff)` entries, built in scratch
+/// Per-key staging for one side: consolidated `(token, time, diff)` entries, built in scratch
 /// so a side that nets to zero suppresses the key before anything reaches the bridges.
 struct SideScratch<T> {
     entries: Vec<(u64, T, Diff)>,
@@ -301,11 +331,21 @@ impl<T: ColTime> SideScratch<T> {
     }
 
     /// Stage one key's records from `runs` (its equal-key row ranges, one per chunk holding it):
-    /// values merged across chunks by content, equal values sharing the canonical coordinate of
-    /// their least occurrence, times advanced by `lower`, consolidated, zeros dropped. Entries
-    /// end sorted by `(coord, time)`.
+    /// primitive values identify themselves; other values share their least occurrence's
+    /// coordinate across chunks. Times are advanced by `lower`, consolidated, zeros dropped.
+    /// Entries end sorted by `(token, time)`.
     fn stage_runs(&mut self, runs: &[RunRef<'_, T>], lower: &T) {
         self.entries.clear();
+        if runs.first().is_some_and(|run| primitive_values(run.chunk)) {
+            for run in runs {
+                let ids = leaf_slice(run.chunk.vals()).unwrap();
+                self.entries.extend((run.s..run.e).map(|row| {
+                    (ids[row], run.chunk.times().get(row).join(lower), run.chunk.diffs()[row])
+                }));
+            }
+            differential_dataflow::consolidation::consolidate_updates(&mut self.entries);
+            return;
+        }
         if let [run] = runs {
             // Single-chunk run: values grouped, times ascending within a value; advanced times
             // stay ascending (join is monotone), so consolidation is adjacent. Coordinates of
@@ -817,6 +857,80 @@ mod tests {
         let mut output = Vec::new();
         backend.cross(instance, &mut matches, &mut output);
         output.iter().map(|container| container.diffs.len()).sum()
+    }
+
+    #[test]
+    fn primitive_tokens_cancel_across_chunks_and_reconstruct_mixed_shapes() {
+        for depth in 0..3 {
+            for (compound0, compound1) in [(false, false), (false, true), (true, false), (true, true)] {
+                for padded_side in [None, Some(false), Some(true)] {
+                    let wrap = |mut col| {
+                        for _ in 0..depth { col = CValue::Prod(vec![col]); }
+                        col
+                    };
+                    let values = |ids: Vec<u64>, compound| {
+                        let n = ids.len();
+                        let col = wrap(CValue::u64(ids));
+                        if compound { CValue::Prod(vec![col, CValue::u64(vec![9; n])]) } else { col }
+                    };
+                    let make = |compound, ids: Vec<u64>, diffs: Vec<Diff>, time| {
+                        let n = ids.len();
+                        Rc::new(ChunkBatch::new(vec![CorgiChunk::from_columns(
+                            wrap(CValue::u64(vec![7; n])), values(ids, compound),
+                            (0..n).map(|_| time).collect(), diffs,
+                        )]))
+                    };
+                    let side = |compound| vec![
+                        make(compound, vec![0, i64::MIN as u64, u64::MAX], vec![1, 1, 2], 0),
+                        make(compound, vec![0, i64::MIN as u64], vec![-1, -1], 3),
+                    ];
+                    let mut instance = JoinInstance { batches0: side(compound0), batches1: side(compound1), lower: 5 };
+                    if let Some(right) = padded_side {
+                        let extra = CorgiChunk::from_columns(
+                            wrap(CValue::u64(vec![8; 20])), values(vec![0; 20], if right { compound1 } else { compound0 }),
+                            (0..20).collect(), vec![1; 20],
+                        );
+                        if right { &mut instance.batches1 } else { &mut instance.batches0 }
+                            .push(Rc::new(ChunkBatch::new(vec![extra])));
+                    }
+                    let mut backend = backend();
+                    let (mut left, mut right) = (Vec::new(), Vec::new());
+                    backend.advance(&instance, &mut Some(0), &mut left, &mut right);
+                    assert_eq!((left.len(), right.len()), (1, 1));
+                    assert_eq!((left[0].1, left[0].2), (5, 2));
+                    if !compound0 { assert_eq!(left[0].0.1, u64::MAX); }
+                    if !compound1 { assert_eq!(right[0].0.1, u64::MAX); }
+                    let mut matches = JoinMatches { ids: vec![(7, (left[0].0.1, right[0].0.1))], times: vec![5], diffs: vec![4] };
+                    let mut output = Vec::new();
+                    backend.cross(&instance, &mut matches, &mut output);
+                    assert_eq!(output.len(), 1);
+                    assert_eq!(output[0].keys, wrap(CValue::u64(vec![7])));
+                    assert_eq!(output[0].vals, CValue::Prod(vec![values(vec![u64::MAX], compound0), values(vec![u64::MAX], compound1)]));
+                    assert_eq!(output[0].diffs, vec![4]);
+                    assert_eq!(output[0].times.get(0), 5);
+                    instance.batches0.push(make(compound0, vec![u64::MAX], vec![-2], 3));
+                    left.clear(); right.clear();
+                    backend.advance(&instance, &mut Some(0), &mut left, &mut right);
+                    assert!(left.is_empty() && right.is_empty(), "suppress a fully cancelled key");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn primitive_tokens_consolidate_after_product_time_reordering() {
+        use timely::order::Product;
+        let chunk = CorgiChunk::from_columns(
+            CValue::u64(vec![7; 3]), CValue::u64(vec![11; 3]),
+            [Product::new(0, 2), Product::new(1, 0), Product::new(1, 2)].into_iter().collect(),
+            vec![1, 1, -1],
+        );
+        let mut scratch = SideScratch::new();
+        scratch.stage_runs(
+            &[RunRef { chunk: &chunk, cid: 0, s: 0, e: 3, vals: None }],
+            &Product::new(1u64, 0u64),
+        );
+        assert_eq!(scratch.entries, vec![(11, Product::new(1, 0), 1)]);
     }
 
     #[test]

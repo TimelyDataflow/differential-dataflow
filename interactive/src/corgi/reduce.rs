@@ -12,9 +12,9 @@
 //!   * materialize — resolve proxy ids back to real columns by `gather` from per-retire pools and
 //!     seal a `CorgiChunk` batch column-natively.
 //!
-//! Transcode-free: the real keys/values never leave corgi columns. Ids are resolved to rows by
-//! integer index (`key_index`/`val_index` → offsets into the concatenated `key_blocks`/`val_blocks`
-//! pools), not by carrying `DValue`s. Min/Collect use a segmented structural sort over an
+//! Transcode-free: primitive columns are reconstructed from their IDs; compound IDs resolve
+//! through columnar representative pools, without carrying `DValue`s. Primitive Min scans signed
+//! IDs directly; other Min/Collect values use a segmented structural sort over an
 //! order-only columnar view: signed integer leaves are swizzled, and lists become lexicographic
 //! ranks. The winning rows are still gathered from the original columns.
 //!
@@ -129,74 +129,68 @@ impl Hasher for IdHasher {
 /// `key_hash`/`value_id` → row index, hashed by identity.
 type IdMap = HashMap<u64, usize, BuildHasherDefault<IdHasher>>;
 
-/// A corgi reduce backend for a single `Reducer`. All per-retire scratch is corgi columns + integer
-/// id→row-index maps; nothing carries a `DValue`.
+/// A per-retire ID resolver. Primitive IDs already contain their payload; retain only
+/// the singleton-product nesting depth. Compound columns keep representatives.
+/// All nonempty registrations in a pool have the same shape, as required by its operator.
+#[derive(Default)]
+struct IdPool {
+    depth: Option<usize>,
+    blocks: Vec<CValue>,
+    index: IdMap,
+    len: usize,
+}
+impl IdPool {
+    fn clear(&mut self) {
+        self.depth = None;
+        self.blocks.clear();
+        self.index.clear();
+        self.len = 0;
+    }
+    fn register(&mut self, col: CValue, ids: &[u64]) {
+        if col.len() == 0 { return; }
+        if corgi::arrange::leaf_slice(&col).is_some() {
+            let (mut depth, mut leaf) = (0, &col);
+            while let CValue::Prod(fields) = leaf { depth += 1; leaf = &fields[0]; }
+            self.depth = Some(depth);
+        } else {
+            for (i, &id) in ids.iter().enumerate() { self.index.entry(id).or_insert(self.len + i); }
+            self.len += col.len();
+            self.blocks.push(col);
+        }
+    }
+    fn gather(&self, ids: &[u64]) -> CValue {
+        if let Some(depth) = self.depth {
+            let mut col = CValue::u64(ids.to_vec());
+            for _ in 0..depth { col = CValue::Prod(vec![col]); }
+            col
+        } else {
+            let rows: Vec<_> = ids.iter().map(|id| self.index[id]).collect();
+            if self.blocks.len() == 1 { gather(&self.blocks[0], &rows) }
+            else { gather(&concat_columns(&self.blocks), &rows) }
+        }
+    }
+}
+
+/// A corgi reduce backend for a single `Reducer`. Resolution uses primitive IDs
+/// directly and columnar representative pools for compound values.
 pub struct CorgiReduceBackend<T> {
     reducer: Reducer,
-    /// Input value column for the current window, indexed by `in_index` (for Min/Collect resolution).
-    in_vals: CValue,
-    /// Input `value_id → row` in `in_vals` for the current window (reduce-time resolution; first row
-    /// wins, so equal values — which share a content-hash `value_id` — resolve to one representative).
-    in_index: IdMap,
-    /// Output rows for `begin`/`emit`/`finish`: the accumulated
-    /// `(key row, value row, time, diff)` (pool indices, gathered into columns at `finish`).
-    rows: (Vec<usize>, Vec<usize>, ColTimes<T>, Vec<Diff>),
-    /// Key-resolution pool for the current retire: `key_hash → row index` into the concatenation of
-    /// `key_blocks` (representative keys from the input + output presentations).
-    key_index: IdMap,
-    key_blocks: Vec<CValue>,
-    key_len: usize,
-    /// Value-resolution pool for the current retire: `value_id → row index` into the concatenation of
-    /// `val_blocks` (output-history values + values minted by `reduce_many`).
-    val_index: IdMap,
-    val_blocks: Vec<CValue>,
-    val_len: usize,
-    _t: std::marker::PhantomData<T>,
+    input: IdPool,
+    keys: IdPool,
+    vals: IdPool,
+    /// Output IDs, times, and diffs accumulated until `finish`.
+    rows: (Vec<u64>, Vec<u64>, ColTimes<T>, Vec<Diff>),
 }
 
 impl<T> CorgiReduceBackend<T> {
     pub fn new(reducer: Reducer) -> Self {
         CorgiReduceBackend {
             reducer,
-            in_vals: CValue::Unit(0),
-            in_index: IdMap::default(),
+            input: IdPool::default(),
+            keys: IdPool::default(),
+            vals: IdPool::default(),
             rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
-            key_index: IdMap::default(),
-            key_blocks: Vec::new(),
-            key_len: 0,
-            val_index: IdMap::default(),
-            val_blocks: Vec::new(),
-            val_len: 0,
-            _t: std::marker::PhantomData,
         }
-    }
-
-    /// Clear the resolution pools at the start of a retire (called from `next_window`'s first call).
-    fn reset_pools(&mut self) {
-        self.key_index.clear();
-        self.key_blocks.clear();
-        self.key_len = 0;
-        self.val_index.clear();
-        self.val_blocks.clear();
-        self.val_len = 0;
-    }
-
-    /// Add representative key rows (aligned with `ids`) to the key pool; first id wins.
-    fn register_keys(&mut self, col: CValue, ids: &[u64]) {
-        for (i, &id) in ids.iter().enumerate() {
-            self.key_index.entry(id).or_insert(self.key_len + i);
-        }
-        self.key_len += col.len();
-        self.key_blocks.push(col);
-    }
-
-    /// Add value rows (aligned with `ids`) to the val pool; first id wins.
-    fn register_vals(&mut self, col: CValue, ids: &[u64]) {
-        for (i, &id) in ids.iter().enumerate() {
-            self.val_index.entry(id).or_insert(self.val_len + i);
-        }
-        self.val_len += col.len();
-        self.val_blocks.push(col);
     }
 }
 
@@ -390,15 +384,13 @@ where
     /// Present the merged input run — novel and prior chunks together — restricted to `keys`.
     ///
     /// Fills `bridge`, registers the run's representative keys, and extends the shared value pool
-    /// (`blocks`/`len`, concatenated into `in_vals`) with its values, so `in_index` resolves a value
+    /// with its values, so the input pool resolves a value
     /// id from EITHER run to a row. The two runs stay apart as presentations and meet only in the
     /// tactic's accumulation; the pool is shared because a value id means the same thing in both.
     fn present_input(
         &mut self,
         chunks: &[&CorgiChunk<T, Diff>],
         keys: &[u64],
-        blocks: &mut Vec<CValue>,
-        len: &mut usize,
         bridge: &mut ProxyBridge<T, Diff>,
     ) {
         let (p_keys, p_vals, khs, mut times, diffs, run_ends) = collect_present(chunks, keys);
@@ -407,10 +399,8 @@ where
         }
         let vids = ids(&p_vals);
         let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &mut times, &diffs, &run_ends, bridge);
-        for (row, &vid) in vids.iter().enumerate() { self.in_index.entry(vid).or_insert(*len + row); }
-        *len += p_vals.len();
-        blocks.push(p_vals);
-        self.register_keys(p_keys, &khs);
+        self.input.register(p_vals, &vids);
+        self.keys.register(p_keys, &khs);
         if !merged {
             bridge.extend(times.into_iter().enumerate().map(|(i, time)| ((khs[i], vids[i]), time, diffs[i])));
             consolidate_updates(bridge);
@@ -419,9 +409,23 @@ where
 
     /// The one value crossing for a retire: every `(key, time)` bracket at once. Builds the output
     /// value COLUMN directly per reducer, registers it (id → row) into the val pool, and returns the
-    /// proxy `(value_id, diff)` deltas with per-bracket ends. `input[k] = (rep index into the input
-    /// presentation, accumulated diff)`; the bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
-    fn reduce_brackets(&mut self, ends: &[usize], input: &[(usize, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+    /// proxy `(value_id, diff)` deltas with per-bracket ends. `input[k] = (value_id, accumulated diff)`; the bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
+    fn reduce_brackets(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+        // Primitive IDs contain the signed integer itself; a segmented minimum
+        // needs neither payload resolution nor a structural sort.
+        if matches!(self.reducer, Reducer::Min) && self.input.depth.is_some() {
+            let (mut values, mut output_ends) = (Vec::new(), Vec::with_capacity(ends.len()));
+            let mut start = 0;
+            for &end in ends {
+                if let Some(&(id, _)) = input[start..end].iter().filter(|r| r.1 != 0).min_by_key(|r| r.0 as i64) {
+                    values.push((id, 1));
+                }
+                output_ends.push(values.len());
+                start = end;
+            }
+            self.vals.depth = self.input.depth;
+            return (values, output_ends);
+        }
         let mut out_diffs: Vec<Diff> = Vec::new();
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
         let out_ids: Vec<u64>;
@@ -445,7 +449,7 @@ where
                 }
                 let col = CValue::Prod(vec![CValue::u64(sums)]);
                 out_ids = ids(&col);
-                self.register_vals(col, &out_ids);
+                self.vals.register(col, &out_ids);
             }
             Reducer::Distinct => {
                 // Present iff any value has NON-ZERO net -- the sign does not matter. DD's `reduce`
@@ -468,7 +472,7 @@ where
                 }
                 let col = CValue::Unit(present);
                 out_ids = ids(&col); // all equal (unit content hash)
-                self.register_vals(col, &out_ids);
+                self.vals.register(col, &out_ids);
             }
             Reducer::Min => {
                 // The structural minimum over values with NON-ZERO net. The sign does not select
@@ -477,7 +481,7 @@ where
                 // Gather all candidates across brackets into one column, segment by
                 // bracket, and one corgi `sort_blocks` gives every bracket's argmin at once
                 // (`perm[block_start]`). The winning ROW is taken columnar and reuses its input value id.
-                let mut cand_reps: Vec<usize> = Vec::new(); // input presentation rep index per candidate
+                let mut cand_reps: Vec<u64> = Vec::new(); // input value ID per candidate
                 let mut labels: Vec<u64> = Vec::new(); // dense segment id per candidate
                 let mut block_starts: Vec<usize> = Vec::new(); // per emitted bracket: start offset in cand_reps
                 let mut start = 0;
@@ -500,12 +504,12 @@ where
                 if cand_reps.is_empty() {
                     return (Vec::new(), out_ends);
                 }
-                let cand_col = gather(&self.in_vals, &cand_reps);
+                let cand_col = self.input.gather(&cand_reps);
                 let (perm, _) = sort_blocks(&labels, &signed_order_view(cand_col));
-                let min_reps: Vec<usize> = block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect();
-                let col = gather(&self.in_vals, &min_reps);
+                let min_reps: Vec<u64> = block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect();
+                let col = self.input.gather(&min_reps);
                 out_ids = ids(&col);
-                self.register_vals(col, &out_ids);
+                self.vals.register(col, &out_ids);
             }
             Reducer::Collect => {
                 // One row per bracket: the values sorted in DDIR observable order,
@@ -515,7 +519,7 @@ where
                 // with input, and the row reducer then lists the positive copies — an empty list
                 // when every net is negative). A bracket whose values all cancelled is a key with
                 // no input: it must emit nothing, or a retracted key keeps a stale (empty) list.
-                let mut entry_reps: Vec<usize> = Vec::new();
+                let mut entry_reps: Vec<u64> = Vec::new();
                 let mut entry_diffs: Vec<Diff> = Vec::new();
                 let mut labels: Vec<u64> = Vec::new();
                 let mut blocks: Vec<(usize, usize)> = Vec::with_capacity(ends.len());
@@ -537,10 +541,10 @@ where
                 let perm = if entry_reps.is_empty() {
                     Vec::new()
                 } else {
-                    sort_blocks(&labels, &signed_order_view(gather(&self.in_vals, &entry_reps))).0
+                    sort_blocks(&labels, &signed_order_view(self.input.gather(&entry_reps))).0
                 };
                 // Expand each bracket's sorted entries by their diff (max(0, ·) copies).
-                let mut elem_reps: Vec<usize> = Vec::new();
+                let mut elem_reps: Vec<u64> = Vec::new();
                 let mut bracket_ends: Vec<usize> = Vec::with_capacity(ends.len());
                 for (lo, hi) in blocks {
                     for &e in &perm[lo..hi] {
@@ -554,10 +558,10 @@ where
                 // values' — and the column must carry it, or this batch's `List<()>` meets the
                 // next batch's `List<T>` where the two are concatenated. `gather` at no indices
                 // is the empty column of that shape.
-                let elems = gather(&self.in_vals, &elem_reps);
+                let elems = self.input.gather(&elem_reps);
                 let col = CValue::List(Bounds::offsets(bracket_ends), Box::new(elems));
                 out_ids = ids(&col);
-                self.register_vals(col, &out_ids);
+                self.vals.register(col, &out_ids);
             }
         }
 
@@ -575,7 +579,9 @@ where
 
     fn begin(&mut self, _description: Description<T>) {
         // Open the output session for this retire; reset the per-retire resolution pools.
-        self.reset_pools();
+        self.input.clear();
+        self.keys.clear();
+        self.vals.clear();
         self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
@@ -631,30 +637,24 @@ where
             keys = merged;
         }
         if keys.is_empty() {
-            self.in_vals = CValue::Unit(0);
-            self.in_index = IdMap::default();
             return;
         }
 
         // ONE merged input presentation: novel and prior together, netted by the consolidation —
         // equal values share a content-hash id, so an exactly cancelling pair vanishes here, and
-        // its time survives in `window.seeds` above. `in_index` resolves a value id back to a
-        // representative row of `in_vals` for `reduce_corrections`.
-        self.in_index = IdMap::default();
-        let mut in_blocks: Vec<CValue> = Vec::new();
-        let mut in_len = 0usize;
+        // its time survives in `window.seeds` above. The input pool resolves values
+        // needed by Min and Collect.
         let mut in_chunks = chunks_of(instance.source_batches);
         in_chunks.extend(novel_chunks.iter().copied());
-        self.present_input(&in_chunks, &keys, &mut in_blocks, &mut in_len, &mut window.input);
-        self.in_vals = concat_columns(&in_blocks);
+        self.present_input(&in_chunks, &keys, &mut window.input);
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
         let (o_keys, o_vals, o_khs, mut o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
         if !o_khs.is_empty() {
             let vids = ids(&o_vals);
             let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &mut o_times, &o_diffs, &o_run_ends, &mut window.output);
-            self.register_keys(o_keys, &o_khs);
-            self.register_vals(o_vals, &vids);
+            self.keys.register(o_keys, &o_khs);
+            self.vals.register(o_vals, &vids);
             if !merged {
                 window.output.extend(o_times.into_iter().enumerate().map(|(i, time)| ((o_khs[i], vids[i]), time, o_diffs[i])));
                 consolidate_updates(&mut window.output);
@@ -663,12 +663,7 @@ where
     }
 
     fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
-        // Resolve input value_ids to `in_vals` rows, reduce (desired output), then difference the
-        // desired against the presented current output per key: correction = desired − current.
-        let in_rows: Vec<(usize, Diff)> = input.iter()
-            .map(|&(vid, d)| (*self.in_index.get(&vid).expect("input value_id presented this window"), d))
-            .collect();
-        let (desired, desired_ends) = self.reduce_brackets(in_ends, &in_rows);
+        let (desired, desired_ends) = self.reduce_brackets(in_ends, input);
 
         let mut corr: Vec<(u64, Diff)> = Vec::new();
         let mut corr_ends: Vec<usize> = Vec::with_capacity(keys.len());
@@ -699,14 +694,12 @@ where
     }
 
     fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
-        // Resolve each correction's key/value proxies to pool rows and accumulate.
+        // Accumulate IDs; resolve columns once at the output boundary.
         for rec in records {
             let ((kh, vid), t, d) = (rec.0, &rec.1, rec.2);
-            let kr = *self.key_index.get(&kh).expect("key resolvable this retire");
-            let vr = *self.val_index.get(&vid).expect("value resolvable this retire");
             let (krows, vrows, times, diffs) = &mut self.rows;
-            krows.push(kr);
-            vrows.push(vr);
+            krows.push(kh);
+            vrows.push(vid);
             times.push(t);
             diffs.push(d);
         }
@@ -714,12 +707,10 @@ where
 
     fn finish(&mut self) -> Option<CBatch<T>> {
         // Seal the batch: gather the accumulated (key, val) pool rows into columns, one CorgiChunk batch.
-        let key_pool = concat_columns(&self.key_blocks);
-        let val_pool = concat_columns(&self.val_blocks);
         let (krows, vrows, times, diffs) = std::mem::take(&mut self.rows);
         if times.is_empty() { return None; }
-        let keys = gather(&key_pool, &krows);
-        let vals = gather(&val_pool, &vrows);
+        let keys = self.keys.gather(&krows);
+        let vals = self.vals.gather(&vrows);
         Some(Rc::new(columns_to_batch(keys, vals, times, diffs)))
     }
 }
@@ -727,6 +718,44 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primitive_min_uses_signed_ids_and_nonzero_support() {
+        for depth in 0..3 {
+            let mut backend = CorgiReduceBackend::<u64>::new(Reducer::Min);
+            let mut col = CValue::u64(vec![0, u64::MAX, i64::MIN as u64, i64::MAX as u64]);
+            for _ in 0..depth { col = CValue::Prod(vec![col]); }
+            let input_ids = ids(&col);
+            backend.input.register(col, &input_ids);
+            let input = [(0, 1), (u64::MAX, -1), (i64::MIN as u64, 0), (i64::MAX as u64, -1), (i64::MIN as u64, -2)];
+            let (values, ends) = backend.reduce_brackets(&[0, 3, 5], &input);
+            assert_eq!(values, vec![(u64::MAX, 1), (i64::MIN as u64, 1)]);
+            assert_eq!(ends, vec![0, 1, 2]);
+            assert_eq!(backend.vals.depth, Some(depth));
+        }
+    }
+
+    #[test]
+    fn id_pool_preserves_primitive_shapes_and_compound_fallback() {
+        let mut pool = IdPool::default();
+        for depth in 0..4 {
+            pool.clear();
+            pool.register(CValue::Unit(0), &[]); // no shape information yet
+            let mut col = CValue::u64(vec![i64::MIN as u64, u64::MAX, 0, i64::MAX as u64]);
+            for _ in 0..depth { col = CValue::Prod(vec![col]); }
+            pool.register(col.clone(), &ids(&col));
+            assert!(pool.index.is_empty() && pool.blocks.is_empty());
+            assert_eq!(pool.gather(&[u64::MAX, 0, u64::MAX]), gather(&col, &[1, 2, 1]));
+            assert_eq!(pool.gather(&[]), gather(&col, &[]));
+        }
+        pool.clear();
+        let col = CValue::Prod(vec![CValue::u64(vec![7, 7]), CValue::u64(vec![9, 8])]);
+        let id = ids(&col);
+        pool.register(col.clone(), &id);
+        pool.register(col.clone(), &id); // first representative continues to resolve
+        assert_eq!(pool.gather(&[id[1], id[0], id[1]]), gather(&col, &[1, 0, 1]));
+        assert_eq!(pool.gather(&[]), gather(&col, &[]));
+    }
 
     #[test]
     fn order_view_matches_ddir_for_ragged_lists_and_signed_products() {
