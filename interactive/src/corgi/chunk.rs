@@ -408,28 +408,27 @@ where
 /// Multi-record: one columnar `sort_perm` (discrimination sort) orders by `(key, val)`, one batched
 /// `compare_adjacent` flags adjacent-equal runs; only the small per-run *time* tiebreak is a Rust sort
 /// (time is not a corgi type). No per-pair `compare_at`.
-fn sort_consolidate<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> (CValue, CValue, Vec<T>, Vec<R>)
+fn sort_consolidate<T, R>(keys: CValue, vals: CValue, times: Vec<T>, diffs: Vec<R>) -> (CValue, CValue, ColTimes<T>, Vec<R>)
 where
-    T: Ord + Clone,
+    T: ColTime,
     R: Semigroup + Clone,
 {
+    let times: ColTimes<T> = times.into_iter().collect();
     let n = times.len();
     if n == 0 {
         return (keys, vals, times, diffs);
     }
     let kv = CValue::Prod(vec![keys, vals]);
-    // Batched argsort by (key, val); reorder the parallel Rust columns by the same permutation.
+    // Order the payload; retain time/diff source coordinates until final consolidation.
     let perm = sort_perm(&kv);
     let kv_s = gather(&kv, &perm);
-    let times_s: Vec<T> = perm.iter().map(|&i| times[i].clone()).collect();
-    let diffs_s: Vec<R> = perm.iter().map(|&i| diffs[i].clone()).collect();
     // Batched adjacent-equality over the kv-sorted column: `adj[m] == 0` iff `kv_s[m] == kv_s[m+1]`.
     // Naming the pattern rather than writing out the two index columns: corgi reads both sides
     // densely, and the `i`/`i+1` index vectors this used to build are not built at all.
     let adj: Vec<i8> = compare_adjacent(&kv_s);
 
     // Walk maximal equal-`(key,val)` runs; within each, order by time and consolidate equal times.
-    let (mut keep, mut ot, mut od) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut keep, mut time_rows, mut od) = (Vec::new(), Vec::new(), Vec::new());
     let mut run = Vec::new();
     let mut i = 0;
     while i < n {
@@ -438,28 +437,27 @@ where
             j += 1;
         }
         run.clear();
-        run.extend(i..j);
-        run.sort_by(|&a, &b| times_s[a].cmp(&times_s[b]));
+        run.extend_from_slice(&perm[i..j]);
+        run.sort_by(|&a, &b| times.cmp(a, b));
         let mut k = 0;
         while k < run.len() {
             let rep = run[k];
-            let t = times_s[rep].clone();
-            let mut d = diffs_s[rep].clone();
+            let mut d = diffs[rep].clone();
             k += 1;
-            while k < run.len() && times_s[run[k]] == t {
-                d.plus_equals(&diffs_s[run[k]]);
+            while k < run.len() && times.cmp(run[k], rep) == Ordering::Equal {
+                d.plus_equals(&diffs[run[k]]);
                 k += 1;
             }
             if !d.is_zero() {
-                keep.push(rep);
-                ot.push(t);
+                keep.push(i);
+                time_rows.push(rep);
                 od.push(d);
             }
         }
         i = j;
     }
     let (keys, vals) = split_kv(gather(&kv_s, &keep));
-    (keys, vals, ot, od)
+    (keys, vals, times.gather(&time_rows), od)
 }
 
 impl<T, R> CorgiChunk<T, R>
@@ -475,7 +473,7 @@ where
             let lane = corgi::arrange::leaf_slice(key_lane(&keys));
             lane.is_some_and(|ids| ids.windows(2).all(|pair| pair[0] <= pair[1]))
         }, "arrangement key must lead with a sorted u64 identifier lane");
-        Self::from_parts(keys, vals, ColTimes::from_iter(times), diffs)
+        Self::from_parts(keys, vals, times, diffs)
     }
 
 }
