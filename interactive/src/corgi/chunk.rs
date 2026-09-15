@@ -185,8 +185,11 @@ where
         let runs = survey_groups(&kv1, &kv2);
         let (mut tags, mut offs) = (Vec::with_capacity(n1 + n2), Vec::with_capacity(n1 + n2));
         // Emitted chunks own this allocation. Size it by surviving rows so cancellation
-        // does not leave a small result holding storage for both full inputs.
+        // does not leave a small result holding storage for both full inputs. Times are
+        // reserved for both inputs, to copy ranges without regrowing, and shrunk below if
+        // fewer than half the rows survive.
         let (mut times, mut diffs): (ColTimes<T>, Vec<R>) = (ColTimes::new(), Vec::new());
+        times.reserve(t1.width().max(t2.width()), n1 + n2);
         // Where the survivor's pushed-back suffix starts: the last run, if it is exclusive.
         let (mut p1, mut p2) = (n1, n2);
         let copy = |tags: &mut Vec<usize>, offs: &mut Vec<usize>, times: &mut ColTimes<T>, diffs: &mut Vec<R>, side: usize, lo: usize, hi: usize| {
@@ -236,6 +239,7 @@ where
             }
         }
 
+        if times.len() * 2 < n1 + n2 { times.shrink_to_fit(); }
         let srcs = [Some(&kv1), Some(&kv2)];
         Self::emit(&srcs, &tags, &offs, times, diffs, out);
 
@@ -379,6 +383,7 @@ where
                 for o in 0..nb { tags.push(1); offs.push(o); }
                 let kv = gather_lanes(&srcs, &tags, &offs);
                 let mut times = ColTimes::new();
+                times.reserve(acc.times().width().max(next.times().width()), na + nb);
                 times.push_range(acc.times(), 0, na);
                 times.push_range(next.times(), 0, nb);
                 let mut diffs = acc.diffs().to_vec();
@@ -600,7 +605,8 @@ fn concat_blocks(blocks: &[CValue]) -> CValue {
         return blocks[0].clone();
     }
     let srcs: Vec<Option<&CValue>> = blocks.iter().map(Some).collect();
-    let (mut tags, mut offs) = (Vec::new(), Vec::new());
+    let total: usize = blocks.iter().map(CValue::len).sum();
+    let (mut tags, mut offs) = (Vec::with_capacity(total), Vec::with_capacity(total));
     for (ti, b) in blocks.iter().enumerate() {
         for o in 0..b.len() { tags.push(ti); offs.push(o); }
     }
@@ -749,6 +755,41 @@ mod test {
                     }
                     assert_eq!(actual, expected, "size={size}, shared={shared}, frontier={frontier:?}");
                     drop(retained);
+                }
+            }
+        }
+    }
+
+    /// `extract` must split rows at the frontier and extend the residual with exactly the kept
+    /// times, whether a chunk is kept whole, shipped whole, or split.
+    #[test]
+    fn extract_matches_owned_times_for_whole_and_split_chunks() {
+        use differential_dataflow::dynamic::pointstamp::PointStamp;
+        use timely::order::Product;
+        type T = Product<u64, PointStamp<u64>>;
+        let time = |outer, coords: &[u64]| T::new(outer, PointStamp::new(coords.iter().copied().collect()));
+        let times = [time(0, &[]), time(1, &[2]), time(2, &[0, 3]), time(1, &[4, 1]), time(3, &[1])];
+        let frontiers = [Antichain::new(), Antichain::from_elem(time(0, &[])), Antichain::from_elem(time(1, &[1])),
+                         Antichain::from(vec![time(1, &[3]), time(2, &[0, 1])]), Antichain::from_elem(time(9, &[]))];
+        for frontier in &frontiers {
+            for size in [1, 2, times.len()] {
+                let chunks: Vec<_> = (0..times.len()).collect::<Vec<_>>().chunks(size).map(|rows| CorgiChunk::from_columns(
+                    CValue::u64(rows.iter().map(|&r| r as u64).collect()), CValue::u64(vec![0; rows.len()]),
+                    rows.iter().map(|&r| times[r].clone()).collect(), vec![1i64; rows.len()],
+                )).collect();
+                let mut residual = Antichain::from_elem(time(5, &[5]));
+                let mut expected = residual.clone();
+                for t in times.iter().filter(|t| frontier.less_equal(t)) { expected.insert_ref(t); }
+                let (mut input, mut keep, mut ship) = (VecDeque::from(chunks), VecDeque::new(), VecDeque::new());
+                while !input.is_empty() {
+                    CorgiChunk::extract(&mut input, frontier.borrow(), &mut residual, &mut keep, &mut ship);
+                }
+                assert_eq!(residual, expected, "frontier={frontier:?}, size={size}");
+                for (chunks, beyond) in [(keep, true), (ship, false)] {
+                    let mut actual: Vec<T> = chunks.iter().flat_map(|c| c.times().to_vec()).collect();
+                    let mut expected: Vec<T> = times.iter().filter(|t| frontier.less_equal(t) == beyond).cloned().collect();
+                    actual.sort(); expected.sort();
+                    assert_eq!(actual, expected, "frontier={frontier:?}, size={size}, beyond={beyond}");
                 }
             }
         }

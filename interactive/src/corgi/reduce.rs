@@ -209,7 +209,8 @@ fn concat_columns(blocks: &[CValue]) -> CValue {
         1 => non_empty[0].clone(),
         _ => {
             let srcs: Vec<Option<&CValue>> = non_empty.iter().map(|b| Some(*b)).collect();
-            let (mut tags, mut offs) = (Vec::new(), Vec::new());
+            let total: usize = non_empty.iter().map(|b| b.len()).sum();
+            let (mut tags, mut offs) = (Vec::with_capacity(total), Vec::with_capacity(total));
             for (ti, b) in non_empty.iter().enumerate() {
                 for o in 0..b.len() {
                     tags.push(ti);
@@ -597,7 +598,7 @@ where
         // The seeds are the novel batches' RAW (key_hash, time) support, recorded here — before the
         // merged presentation below, whose consolidation may net a novel record away entirely. The
         // key hashes come from the scan the key list needs anyway.
-        let mut seeds: Vec<(u64, T)> = Vec::new();
+        let mut seeds: Vec<(u64, T)> = Vec::with_capacity(novel_chunks.iter().map(|c| c.diffs().len()).sum());
         for ch in novel_chunks.iter() {
             let khs = key_ids(ch.keys());
             let times = ch.times();
@@ -671,18 +672,21 @@ where
         let mut corr: Vec<(u64, Diff)> = Vec::new();
         let mut corr_ends: Vec<usize> = Vec::with_capacity(keys.len());
         let (mut ds, mut os) = (0usize, 0usize);
+        // Scratch for netting, cleared per key rather than allocated per key.
+        let mut net: HashMap<u64, Diff, BuildHasherDefault<IdHasher>> = Default::default();
+        let mut order: Vec<u64> = Vec::new();
         for i in 0..keys.len() {
             let (de, oe) = (desired_ends[i], out_ends[i]);
             // Net by value_id: desired (+) minus current output (−); keep non-zero, in first-seen order.
-            let mut net: HashMap<u64, Diff, BuildHasherDefault<IdHasher>> = Default::default();
-            let mut order: Vec<u64> = Vec::new();
+            net.clear();
+            order.clear();
             for &(vid, d) in &desired[ds..de] {
                 if let Some(x) = net.get_mut(&vid) { *x += d; } else { net.insert(vid, d); order.push(vid); }
             }
             for &(vid, d) in &output[os..oe] {
                 if let Some(x) = net.get_mut(&vid) { *x -= d; } else { net.insert(vid, -d); order.push(vid); }
             }
-            for vid in order {
+            for &vid in &order {
                 let d = net[&vid];
                 if d != 0 { corr.push((vid, d)); }
             }

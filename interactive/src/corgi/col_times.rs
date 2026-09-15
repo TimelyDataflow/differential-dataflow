@@ -105,6 +105,20 @@ impl<T: Lanes> ColTimes<T> {
         self.len += 1;
     }
 
+    /// The number of lanes.
+    pub fn width(&self) -> usize { self.lanes.len() }
+
+    /// Widen to at least `width` lanes and reserve room for `additional` more rows in each.
+    pub fn reserve(&mut self, width: usize, additional: usize) {
+        self.widen(width);
+        for lane in &mut self.lanes { lane.reserve(additional); }
+    }
+
+    /// Release capacity beyond the current rows.
+    pub fn shrink_to_fit(&mut self) {
+        for lane in &mut self.lanes { lane.shrink_to_fit(); }
+    }
+
     /// Append `other`'s row `i`.
     #[inline]
     pub fn push_ref(&mut self, other: &ColTimes<T>, i: usize) {
