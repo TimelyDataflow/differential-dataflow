@@ -185,8 +185,8 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
                 keys: nk,
                 vals: nv,
                 times: kept.as_ref().map_or_else(
-                    || matches.times[start..end].to_vec(),
-                    |kept| kept.iter().map(|&index| matches.times[index].clone()).collect(),
+                    || matches.times[start..end].iter().collect(),
+                    |kept| kept.iter().map(|&index| &matches.times[index]).collect(),
                 ),
                 diffs: kept.as_ref().map_or_else(
                     || matches.diffs[start..end].to_vec(),
