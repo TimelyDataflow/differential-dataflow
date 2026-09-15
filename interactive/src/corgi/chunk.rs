@@ -52,10 +52,8 @@ const INGEST: usize = 1 << 24;
 /// Shared, immutable chunk contents. `Clone` of a `CorgiChunk` is an `Rc` bump.
 ///
 /// Same payload as [`CorgiContainer`](crate::corgi::container::CorgiContainer), and the two
-/// should eventually be ONE type: today they differ only in time storage (`ColTimes` here —
-/// bulk-read, never mutated — vs `Vec<T>` there, because feedback/enter mutate times row-wise)
-/// and in invariants (sorted+consolidated+shared here, raw+owned there). A time container with
-/// bulk mutation verbs (apply one summary across a range) removes the last real difference.
+/// should eventually be ONE type: both hold times as a `ColTimes`, and they differ only in
+/// invariants (sorted+consolidated+shared here, raw+owned there).
 struct Inner<T, R> {
     /// Key column (corgi), aligned with `vals`/`times`/`diffs`, sorted by `(key, val, time)`.
     keys: CValue,
@@ -646,8 +644,7 @@ where
         }
         self.k_blocks.push(std::mem::replace(&mut c.keys, CValue::Unit(0)));
         self.v_blocks.push(std::mem::replace(&mut c.vals, CValue::Unit(0)));
-        // Times are held as lanes while the bundle accumulates, rather than as owned timestamps.
-        for t in c.times.iter() { self.times.push(t); }
+        self.times.push_range(&c.times, 0, c.times.len());
         c.times.clear();
         self.diffs.append(&mut c.diffs);
         if self.times.len() >= INGEST {

@@ -13,7 +13,7 @@
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 
-use differential_dataflow::dynamic::pointstamp::PointStamp;
+use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::lattice::Lattice;
 use timely::order::Product;
 use timely::progress::frontier::AntichainRef;
@@ -53,6 +53,29 @@ impl<B: Lanes> Lanes for Product<u64, B> {
 pub trait ColTime: Timestamp + Lattice + Lanes {}
 impl<T: Timestamp + Lattice + Lanes> ColTime for T {}
 
+/// A path summary as lane operations: keep the first `retain` lanes (all if `None`), then add
+/// `adds[j]` to lane `j`, where lanes beyond the column's width start at zero. A result that
+/// overflows does not exist, as the owned summary's `None`.
+pub trait LaneSummary {
+    fn lane_steps(&self) -> (Option<usize>, Vec<u64>);
+}
+
+impl LaneSummary for u64 {
+    fn lane_steps(&self) -> (Option<usize>, Vec<u64>) { (None, vec![*self]) }
+}
+
+impl LaneSummary for PointStampSummary<u64> {
+    fn lane_steps(&self) -> (Option<usize>, Vec<u64>) { (self.retain, self.actions.clone()) }
+}
+
+/// The outer summary on lane 0, the inner on the lanes after it.
+impl<B: LaneSummary> LaneSummary for Product<u64, B> {
+    fn lane_steps(&self) -> (Option<usize>, Vec<u64>) {
+        let (retain, adds) = self.inner.lane_steps();
+        (retain.map(|r| r + 1), std::iter::once(self.outer).chain(adds).collect())
+    }
+}
+
 /// A column of times as lanes: `lanes[j][i]` is coordinate `j` of row `i`.
 pub struct ColTimes<T> {
     lanes: Vec<Vec<u64>>,
@@ -64,7 +87,11 @@ impl<T> Default for ColTimes<T> {
     fn default() -> Self { ColTimes { lanes: Vec::new(), len: 0, _t: PhantomData } }
 }
 
-impl<T: Lanes> ColTimes<T> {
+impl<T> Clone for ColTimes<T> {
+    fn clone(&self) -> Self { ColTimes { lanes: self.lanes.clone(), len: self.len, _t: PhantomData } }
+}
+
+impl<T> ColTimes<T> {
     #[inline]
     pub fn new() -> Self { Self::default() }
 
@@ -94,7 +121,7 @@ impl<T: Lanes> ColTimes<T> {
     }
 
     /// Append an owned time, each coordinate directly into its lane.
-    pub fn push(&mut self, t: &T) {
+    pub fn push(&mut self, t: &T) where T: Lanes {
         let mut width = 0;
         for (j, x) in t.coordinates().enumerate() {
             if j == self.lanes.len() { self.lanes.push(vec![0; self.len]); }
@@ -145,12 +172,12 @@ impl<T: Lanes> ColTimes<T> {
     }
 
     /// The owned time at row `i`. Reserve for boundaries where DD wants a timestamp.
-    pub fn get(&self, i: usize) -> T {
+    pub fn get(&self, i: usize) -> T where T: Lanes {
         T::from_coordinates(self.lanes.iter().map(|lane| lane[i]))
     }
 
     /// Materialize the whole column to `Vec<T>`.
-    pub fn to_vec(&self) -> Vec<T> {
+    pub fn to_vec(&self) -> Vec<T> where T: Lanes {
         (0..self.len).map(|i| self.get(i)).collect()
     }
 
@@ -186,7 +213,7 @@ impl<T: Lanes> ColTimes<T> {
     /// Advance rows `0..end` by `frontier`, in place. Advancing by a frontier is the meet over its
     /// elements of the joins with each; in a product of chains that is the join with the elements'
     /// meet, so each lane takes a max with one constant. An empty frontier leaves rows unchanged.
-    pub fn advance_by(&mut self, frontier: AntichainRef<T>, end: usize) {
+    pub fn advance_by(&mut self, frontier: AntichainRef<T>, end: usize) where T: Lanes {
         if frontier.is_empty() || end == 0 { return; }
         let mut meet: Option<Vec<u64>> = None;
         for f in frontier.iter() {
@@ -209,7 +236,7 @@ impl<T: Lanes> ColTimes<T> {
     }
 
     /// For each row, whether some element of `frontier` is less than or equal to it.
-    pub fn beyond(&self, frontier: AntichainRef<T>) -> Vec<bool> {
+    pub fn beyond(&self, frontier: AntichainRef<T>) -> Vec<bool> where T: Lanes {
         let mut beyond = vec![false; self.len];
         let mut dominated = vec![true; self.len];
         for f in frontier.iter() {
@@ -237,12 +264,71 @@ impl<T: Lanes> ColTimes<T> {
         }
         minimal
     }
+
+    /// Coordinate `k` of every row, zero where the column is narrower.
+    pub fn lane(&self, k: usize) -> Vec<u64> {
+        self.lanes.get(k).cloned().unwrap_or_else(|| vec![0; self.len])
+    }
+
+    /// Raise coordinate `k` of each row to at least `values[i]`: the join with a time that is
+    /// `values[i]` at coordinate `k` and zero elsewhere.
+    pub fn lane_max(&mut self, k: usize, values: &[u64]) {
+        assert_eq!(values.len(), self.len);
+        self.widen(k + 1);
+        for (x, &v) in self.lanes[k].iter_mut().zip(values) { *x = (*x).max(v); }
+    }
+
+    /// Keep only the first `width` coordinates of every row.
+    pub fn truncate(&mut self, width: usize) {
+        self.lanes.truncate(width);
+    }
+
+    /// Apply a path summary to every row, in place. Returns the surviving row indices when some
+    /// row's result overflowed and was dropped, and `None` when every row survived.
+    pub fn results_in<S: LaneSummary>(&mut self, step: &S) -> Option<Vec<usize>> {
+        let (retain, adds) = step.lane_steps();
+        if let Some(retain) = retain { self.lanes.truncate(retain); }
+        self.widen(adds.len());
+        let len = self.len;
+        let mut alive: Option<Vec<bool>> = None;
+        for (lane, &add) in self.lanes.iter_mut().zip(&adds) {
+            if add == 0 { continue; }
+            for (i, x) in lane.iter_mut().enumerate() {
+                match x.checked_add(add) {
+                    Some(y) => *x = y,
+                    None => alive.get_or_insert_with(|| vec![true; len])[i] = false,
+                }
+            }
+        }
+        alive.map(|alive| {
+            let keep: Vec<usize> = (0..self.len).filter(|&i| alive[i]).collect();
+            *self = self.gather(&keep);
+            keep
+        })
+    }
+
+    /// The lanes, for a wire format.
+    pub fn raw_lanes(&self) -> &[Vec<u64>] { &self.lanes }
+
+    /// A column from lanes that each hold `len` rows.
+    pub fn from_raw_lanes(lanes: Vec<Vec<u64>>, len: usize) -> Self {
+        assert!(lanes.iter().all(|lane| lane.len() == len), "every lane must hold {len} rows");
+        ColTimes { lanes, len, _t: PhantomData }
+    }
 }
 
 impl<T: Lanes> FromIterator<T> for ColTimes<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut out = ColTimes::new();
         for t in iter { out.push(&t); }
+        out
+    }
+}
+
+impl<'a, T: Lanes> FromIterator<&'a T> for ColTimes<T> {
+    fn from_iter<I: IntoIterator<Item = &'a T>>(iter: I) -> Self {
+        let mut out = ColTimes::new();
+        for t in iter { out.push(t); }
         out
     }
 }
@@ -300,6 +386,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The edge operations on lanes must agree with the same operations on owned timestamps: a path
+    /// summary on every row, raising one coordinate, reading one coordinate, and truncation.
+    #[test]
+    fn edge_operations_match_owned_times() {
+        use differential_dataflow::dynamic::pointstamp::PointStampSummary;
+        use timely::progress::PathSummary;
+        let times: Vec<T> = vec![t(0, &[]), t(0, &[2]), t(1, &[1, 1]), t(2, &[0, 3]), t(3, &[4]), t(1, &[5, 0, 2])];
+        let col: ColTimes<T> = times.iter().cloned().collect();
+        let steps = [
+            Product::new(0u64, PointStampSummary { retain: None, actions: vec![0, 1] }),
+            Product::new(1u64, PointStampSummary { retain: Some(1), actions: vec![] }),
+            Product::new(0u64, PointStampSummary { retain: Some(0), actions: vec![7] }),
+            Product::new(0u64, PointStampSummary { retain: None, actions: vec![0, 0, 0, 1] }),
+            Product::new(0u64, PointStampSummary { retain: None, actions: vec![u64::MAX - 3] }),
+        ];
+        for step in &steps {
+            let mut out = col.clone();
+            let keep = out.results_in(step);
+            let expected: Vec<(usize, T)> = times.iter().enumerate().filter_map(|(i, x)| step.results_in(x).map(|y| (i, y))).collect();
+            assert_eq!(out.to_vec(), expected.iter().map(|(_, y)| y.clone()).collect::<Vec<_>>(), "{step:?}");
+            let kept: Vec<usize> = expected.iter().map(|(i, _)| *i).collect();
+            assert_eq!(keep.unwrap_or_else(|| (0..times.len()).collect()), kept, "{step:?}");
+        }
+        let delays = vec![3u64, 0, 1, 5, 0, 0];
+        let mut raised = col.clone();
+        raised.lane_max(2, &delays);
+        let expected: Vec<T> = times.iter().zip(&delays).map(|(x, &d)| x.join(&t(0, &[0, d]))).collect();
+        assert_eq!(raised.to_vec(), expected);
+        assert_eq!(col.lane(1), vec![0, 2, 1, 0, 4, 5]);
+        assert_eq!(col.lane(9), vec![0; 6]);
+        let mut cut = col.clone();
+        cut.truncate(2);
+        assert_eq!(cut.to_vec(), vec![t(0, &[]), t(0, &[2]), t(1, &[1]), t(2, &[0]), t(3, &[4]), t(1, &[5])]);
+        let rebuilt = ColTimes::<T>::from_raw_lanes(col.raw_lanes().to_vec(), col.len());
+        assert_eq!(rebuilt.to_vec(), times);
     }
 
     /// `advance_by`, `beyond` and `minimal` must agree with the lattice on owned timestamps.
