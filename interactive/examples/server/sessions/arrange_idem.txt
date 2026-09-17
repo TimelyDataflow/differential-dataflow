@@ -4,7 +4,7 @@
 # is already arranged. Unlike pure CSE, the rule equates *structurally
 # different* nodes, and congruence propagates it to a fixpoint. Op convention:
 # 1 = Arrange, 2 = Reduce (both produce an arrangement). Run from interactive/:
-#   cargo run --release --example ddir_server -- examples/server/sessions/arrange_idem.txt
+#   cargo run --release -p ddir-server < examples/server/sessions/arrange_idem.txt
 
 load eg from examples/server/programs/arrange_idem.ddp
 
