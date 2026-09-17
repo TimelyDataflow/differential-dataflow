@@ -16,8 +16,7 @@
 //! corgi's message. Ordered compares are signed-correct (`ToSigned`); `hash` is corgi's structural
 //! `Op::Hash`, the same function `ir::eval` folds row-wise.
 
-use crate::ir::Value as DValue;
-use crate::parse::{BinOp, SumTy, Term, UnOp};
+use crate::ir::{BinOp, SumTy, Term, UnOp, Value as DValue};
 
 use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, Kind, NumOp, Op, Pred, Shape, Value as CValue};
 

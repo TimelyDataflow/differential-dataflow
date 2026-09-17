@@ -82,6 +82,7 @@
 //! - Conditional: `if(cond, then, els)`.
 
 use super::*;
+use crate::ir::{BinOp, Projection, Reducer, SumTy, Term, UnOp};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {

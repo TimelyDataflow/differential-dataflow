@@ -38,8 +38,7 @@
 //! imports targeting the same definition are the same entity, so facts
 //! learned at a definition propagate to every importer along its edges.
 
-use crate::ir::LinearOp;
-use crate::parse::{Projection, Reducer};
+use crate::ir::{LinearOp, Projection, Reducer};
 
 pub type ItemId = usize; // index into `Scope::items`
 pub type ImportId = usize; // index into `Scope::imports`
@@ -407,7 +406,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::Term;
+    use crate::ir::Term;
 
     // Express a reach-shaped program by hand: it exercises items (Op + Sub),
     // every `Ref` variant, and both relevant `Source` variants — proving the

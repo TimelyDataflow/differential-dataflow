@@ -32,8 +32,7 @@ use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
 use crate::corgi::logic::{compilable, compile_flatmap, compile_predicate, compile_projection, compile_scalar, shape_of_row};
 use corgi::{Graph, NumOp, Shape};
-use crate::ir::{Diff, LinearOp, Time, Value as DValue};
-use crate::parse::{Projection, Reducer};
+use crate::ir::{Diff, LinearOp, Projection, Reducer, Term, Time, Value as DValue};
 use crate::scope_ir as st;
 
 /// A DDIR row, an update, the corgi container on dataflow edges, and the columnar trace —
@@ -46,8 +45,8 @@ type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, D
 /// `$2`=right val) onto the row environment of the identity join's output
 /// (`$0`=key, `$1`=(left val, right val)): `$1 -> $1[0]`, `$2 -> $1[1]`, structurally
 /// everywhere. `Bound` binders are scope-relative and pass through untouched.
-fn rebase_join_term(t: &crate::parse::Term) -> crate::parse::Term {
-    use crate::parse::Term::*;
+fn rebase_join_term(t: &Term) -> Term {
+    use crate::ir::Term::*;
     match t {
         Var(0) => Var(0),
         Var(1) => Proj(Box::new(Var(1)), 0),
@@ -303,7 +302,7 @@ impl Backend for CorgiBackend {
             // original terms as a row-wise `Project`, rebased from the join env
             // `[$0=key, $1=left val, $2=right val]` onto the row env `[$0=key, $1=(lv, rv)]`.
             // Capability never depends on the lowering's coverage; only speed does.
-            use crate::parse::Term;
+            use crate::ir::Term;
             let key = Term::Var(0);
             let val = Term::Tuple(vec![Term::Var(1), Term::Var(2)]);
             let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(key, val));

@@ -40,8 +40,7 @@ use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::MatchingRanges;
 use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
-use crate::ir::Diff;
-use crate::parse::Reducer;
+use crate::ir::{Diff, Reducer};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 

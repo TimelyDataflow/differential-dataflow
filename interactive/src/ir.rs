@@ -1,8 +1,7 @@
 //! Row vocabulary shared by the IR and the renderers: the `Value` data model,
-//! the `LinearOp` operator steps, and the scalar `Term` interpreter (`eval`).
-//! The program structure itself lives in `scope_ir`.
-
-use crate::parse::{Projection, Term, UnOp, BinOp};
+//! the scalar language (`Term` and its operators) with its interpreter
+//! (`eval`), and the `LinearOp` operator steps. The concrete syntax that
+//! produces a `Term` lives in `parse`; the program structure in `scope_ir`.
 
 pub type Diff = i64;
 pub type Id = usize;
@@ -59,6 +58,120 @@ impl Value {
     pub fn truthy(&self) -> bool { matches!(self, Value::Int(n) if *n != 0) }
     /// Unwrap an `Int`, panicking otherwise (interpreter is dynamically typed).
     pub fn as_int(&self) -> i64 { match self { Value::Int(n) => *n, other => panic!("expected Int, got {:?}", other) } }
+}
+
+/// Scalar expression over [`Value`]. For the concrete surface
+/// syntax (how each of these is written in a `.ddp` program), see the
+/// module-level reference on [`crate::parse::pipe`].
+///
+/// A `Term` is evaluated against an *environment* — a stack of `Value`s.
+/// The bottom of the stack is the operator's input rows:
+///
+/// - linear ops (`map`/`filter`/`enter_at`): `Var(0)` = key, `Var(1)` = val;
+/// - joins: `Var(0)` = key, `Var(1)` = left val, `Var(2)` = right val.
+///
+/// `Case` and `Fold` push their binders on top of the stack; those are read
+/// back with `Bound(k)` (de Bruijn, `0` = innermost) so a sub-term is
+/// independent of how deep it sits.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum Term {
+    /// Input row at absolute environment index.
+    Var(usize),
+    /// `case`/`fold` binder, counting from the innermost (`0`).
+    Bound(usize),
+    /// Integer literal.
+    Int(i64),
+    /// Product intro. A `Spread` child splices its tuple's fields in place.
+    Tuple(Vec<Term>),
+    /// List intro. A `Spread` child splices in place.
+    List(Vec<Term>),
+    /// Splice marker; only meaningful as a direct child of `Tuple`/`List`.
+    /// Lets a whole input row (`$n`) contribute all its fields, preserving
+    /// the flat-row concatenation the original `[i64]` model relied on.
+    Spread(Box<Term>),
+    /// Product/list elimination: index into a `Tuple` or `List`.
+    Proj(Box<Term>, usize),
+    /// Sum intro: tag a payload into a KNOWN sum type. `sum` names every lane's
+    /// shape (from a `type` declaration, or a built-in `Option`/`Result`), so a
+    /// column of these is one concrete columnar sum whichever lanes its rows
+    /// happen to use. The tag is a `Term`: a literal for a constructor call,
+    /// or data-driven (`variant(Type, tag, payload)`) when every lane of the
+    /// type shares the payload's shape.
+    Inject { tag: Box<Term>, payload: Box<Term>, sum: SumTy },
+    /// Sum elimination. The scrutinee's payload is pushed as `Bound(0)` for
+    /// the chosen arm. `arms[t]` handles tag `t`; `default` handles the rest.
+    Case { scrutinee: Box<Term>, arms: Vec<Term>, default: Option<Box<Term>> },
+    /// List elimination (left fold). For each element, `step` is evaluated
+    /// with the element as `Bound(0)` and the accumulator as `Bound(1)`.
+    Fold { list: Box<Term>, init: Box<Term>, step: Box<Term> },
+    /// Conditional; `cond` is truthy when it is a nonzero `Int`.
+    If { cond: Box<Term>, then: Box<Term>, els: Box<Term> },
+    Unary(UnOp, Box<Term>),
+    Binary(BinOp, Box<Term>, Box<Term>),
+    /// `hash(bound, keys…)`: a deterministic pseudo-random `Int` in `[0, bound)`
+    /// (the raw non-negative hash if `bound <= 0`), mixed from the key `Int`s.
+    /// The building block for generators derived from `iota`/`clock`.
+    Hash(Vec<Term>),
+}
+
+/// The sum type an `Inject` builds into. `Declared` carries the full lane shapes of a `type`
+/// declaration. The built-ins are shape constructors whose parameter is filled in at compile
+/// time from the payload (`Some(x)`, `Ok(x)`, `Err(e)`) or from the other branch of an enclosing
+/// `if` (`None`, and the lane the payload does not fill).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum SumTy {
+    Declared(Vec<corgi::Shape>),
+    /// `Option(T)` = `Sum{ () | T }`: `None` is lane 0, `Some` lane 1.
+    Option,
+    /// `Result(T, E)` = `Sum{ T | E }`: `Ok` is lane 0, `Err` lane 1.
+    Result,
+    /// An untyped literal, `inject(tag, payload)`: a `Value::Variant` written as a constant, for
+    /// closed terms fed to the row interpreter (the server's `feed`). It names no sum, so the
+    /// columnar lowering rejects it — a program builds sums from declared types.
+    Dynamic,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum UnOp {
+    /// Integer negation.
+    Neg,
+    /// Logical negation (truthy -> 0, else 1).
+    Not,
+    /// `1` if the operand is a `Variant` with the given tag, else `0`.
+    IsTag(u32),
+    /// Number of elements in a `Tuple` or `List`, as an `Int`.
+    Len,
+    /// Explicit signed Int -> F64 newtype conversion (see Value::f64_value).
+    ToF64,
+    /// Floating-point negation; does not reinterpret integer arithmetic.
+    F64Neg,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum BinOp {
+    Add, Sub, Mul,
+    /// Truncating signed division; zero divisor returns zero, MIN / -1 wraps.
+    Div,
+    /// Concatenation of two lists with the same element type.
+    Append,
+    F64Add, F64Sub, F64Mul, F64Div,
+    Eq, Ne, Lt, Le, Gt, Ge,
+    And, Or,
+}
+
+/// A `(key, val)` reshaping: each component evaluates to one `Value`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Projection { pub key: Term, pub val: Term }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum Reducer {
+    Min,
+    Distinct,
+    Count,
+    /// NEST: collect a key's values into a `Value::List`, in the values' own
+    /// (`Value: Ord`) order — so deterministic, and position-ordered when the
+    /// values are `tuple(pos, …)` as `flatmap` emits. The inverse of `FlatMap`.
+    Collect,
 }
 
 /// An individual step within a Linear node.

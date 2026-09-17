@@ -45,8 +45,7 @@ use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_join_projection;
-use crate::ir::Diff;
-use crate::parse::Term;
+use crate::ir::{Diff, Term};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 

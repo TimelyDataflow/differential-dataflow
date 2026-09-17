@@ -503,7 +503,7 @@ mod value_contract {
     use super::*;
     use crate::explain::Val;
     use crate::ir::{eval, Value};
-    use crate::parse::{Projection, Term};
+    use crate::ir::{Projection, Term};
 
     type Row = Value;
     type Coll = Vec<(Row, Row)>;
@@ -628,7 +628,7 @@ mod backstop {
 
     use super::*;
     use crate::ir::{eval, Value};
-    use crate::parse::{Projection, Term};
+    use crate::ir::{Projection, Term};
 
     type Coll = Vec<(Value, Value)>;
     struct Mem;
