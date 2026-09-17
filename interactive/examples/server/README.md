@@ -12,6 +12,11 @@ by the `ddir-server` crate in `interactive/server/` — a long-running process
 that takes commands over stdin, TCP and WebSocket (its README has the protocol
 and the configuration). The session scripts here are piped into its stdin.
 
+This is the canonical collection of short server sessions. Longer protocol
+demos live in `../../server/demo/`; the two locations share the same executable
+and command protocol. See [`../README.md`](../README.md) for the complete
+example map.
+
 ## Two kinds of file (don't mix them up)
 
 - **`programs/*.ddp`** — DDIR *programs*: dataflow definitions you `load`.
