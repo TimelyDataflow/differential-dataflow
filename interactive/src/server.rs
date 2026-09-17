@@ -260,7 +260,8 @@ pub enum Command {
     Tick { n: u64 },
     /// Drop the named program.
     Drop { name: String },
-    /// Snapshot a registered trace (optionally one key) and print it (worker 0).
+    /// Snapshot a registered trace, optionally keeping one key. The driver
+    /// reads the rows with [`Server::snapshot`] and renders them.
     Peek { trace: String, key: Option<Value> },
     /// Bind trace `trace`'s changes into input `input` of `prog` at each tick.
     Bind {
@@ -274,7 +275,8 @@ pub enum Command {
         prog: String,
         input: usize,
     },
-    /// Print the registry (worker 0).
+    /// Report the registry. The driver assembles it from [`Server::program_info`],
+    /// [`Server::trace_info`] and [`Server::binding_info`].
     List,
     /// Stop the server.
     Exit,
@@ -948,79 +950,14 @@ impl Server {
             .collect()
     }
 
-    /// Read a snapshot of a registered trace and print it (worker 0).
-    ///
-    /// Builds a transient dataflow that imports the trace, optionally filters to
-    /// a single `key`, **exchanges every row to worker 0**, and accumulates net
-    /// multiplicities as of the current epoch — so the result is the complete,
-    /// consolidated contents even when the trace is sharded across workers, not
-    /// each worker's slice. The dataflow is dropped as soon as it has drained.
-    pub fn peek(
-        &mut self,
-        worker: &mut Worker,
-        name: &str,
-        key: Option<Value>,
-    ) -> Result<(), String> {
-        use timely::dataflow::operators::{Exchange, Inspect, Probe};
-
-        let canon = canonical_source_name(name);
-        let name = canon.as_str();
-        if !self.traces.contains_key(name) {
-            return Err(format!("no trace {:?}", name));
-        }
-        let epoch = self.epoch;
-        // Net multiplicity per (key, val); filled on worker 0 after the exchange.
-        let acc: Rc<RefCell<HashMap<(Value, Value), Diff>>> = Rc::new(RefCell::new(HashMap::new()));
-        let acc_in = acc.clone();
-        let key_filter = key.clone();
-        let mut peek_probe = ProbeHandle::new();
-
-        let trace = self.traces.get_mut(name).unwrap();
-        let peek_id = worker.next_dataflow_index();
-        worker.dataflow::<OuterTime, _, _>(|scope| {
-            let imported = trace.import(scope.clone());
-            let coll = imported.as_collection(|k, v| (k.clone(), v.clone()));
-            let coll = match key_filter {
-                Some(k) => coll.filter(move |(kk, _)| kk == &k),
-                None => coll,
-            };
-            coll.inner
-                .exchange(|_| 0u64) // gather every shard onto worker 0
-                .inspect(move |((k, v), t, d)| {
-                    // The snapshot as of `epoch`: the closed past (t < epoch).
-                    if *t < epoch {
-                        *acc_in
-                            .borrow_mut()
-                            .entry((k.clone(), v.clone()))
-                            .or_insert(0) += *d;
-                    }
-                })
-                .probe_with(&mut peek_probe);
-        });
-        // Drain the transient dataflow up to the current epoch, then drop it.
-        while peek_probe.less_than(&epoch) {
-            worker.step();
-        }
-        worker.drop_dataflow(peek_id);
-
-        if worker.index() == 0 {
-            let acc = acc.borrow();
-            let mut rows: Vec<(&(Value, Value), &Diff)> =
-                acc.iter().filter(|(_, d)| **d != 0).collect();
-            rows.sort_by(|a, b| a.0.cmp(b.0));
-            match &key {
-                Some(k) => println!("peek {:?} key={:?} ({} rows):", name, k, rows.len()),
-                None => println!("peek {:?} ({} rows):", name, rows.len()),
-            }
-            for ((k, v), d) in rows {
-                println!("  ({:?}, {:?})  x{}", k, v, d);
-            }
-        }
-        Ok(())
-    }
-
     /// Return the consolidated closed-past contents of a trace on worker 0.
-    /// This is the structured counterpart to [`Server::peek`] for protocols.
+    ///
+    /// Builds a transient dataflow that imports the trace, **exchanges every
+    /// row to worker 0**, and accumulates net multiplicities as of the current
+    /// epoch — so the result is the complete, consolidated contents even when
+    /// the trace is sharded across workers, not each worker's slice. The
+    /// dataflow is dropped as soon as it has drained. Filtering and rendering
+    /// are the caller's: this returns rows, it does not print them.
     pub fn snapshot(
         &mut self,
         worker: &mut Worker,
@@ -1224,45 +1161,6 @@ impl Server {
         for trace in self.traces.values_mut() {
             trace.set_logical_compaction(frontier.borrow());
             trace.set_physical_compaction(frontier.borrow());
-        }
-    }
-
-    /// Print the registry: epoch, published traces (with importer counts),
-    /// installed programs.
-    pub fn list(&self) {
-        println!("epoch: {}", self.epoch);
-        println!("traces ({}):", self.traces.len());
-        let mut names: Vec<&String> = self.traces.keys().collect();
-        names.sort();
-        for n in names {
-            println!(
-                "  {} (importers: {})",
-                n,
-                self.importers.get(n).copied().unwrap_or(0)
-            );
-        }
-        println!("programs ({}):", self.programs.len());
-        let mut progs: Vec<&String> = self.programs.keys().collect();
-        progs.sort();
-        for p in progs {
-            let installed = &self.programs[p];
-            let mut ins: Vec<usize> = installed.inputs.keys().copied().collect();
-            ins.sort();
-            let tag = match installed.origin {
-                Origin::Program => "",
-                Origin::Generated => " [generated]",
-                Origin::Clock => " [clock]",
-            };
-            println!(
-                "  {}{} (inputs: {:?}, imports: {:?}, exports: {:?})",
-                p, tag, ins, installed.imports, installed.exports
-            );
-        }
-        if !self.bindings.is_empty() {
-            println!("bindings ({}):", self.bindings.len());
-            for b in &self.bindings {
-                println!("  {} -> {} input {}", b.source, b.target, b.input);
-            }
         }
     }
 }

@@ -65,12 +65,17 @@ I don't know much about designing languages, so I may have gotten this wrong.
 ## Architecture
 
 The architecture is fairly standard, and where it isn't it probably should become more standard.
-The flow moves through four steps:
+A program moves through these parts:
 
-1. The `parse/` directory contains any number of concrete syntax parsers.
-2. The `lower/` directory contains lowering from the AST to the IR.
-3. The `ir/` directory is the IR itself, with optimizations.
-4. The `examples/` directory contains back-ends that execute programs.
+1. `parse/` is the concrete syntax: one front-end, the pipe parser for `.ddp` files.
+2. `lower.rs` translates its AST into the scope-tree IR.
+3. `scope_ir.rs` is that IR — scopes, items, exports — and its optimizations; `ir.rs` is the
+   row vocabulary they are written over: the `Value` model, the scalar language, its interpreter.
+4. `backend/` renders a program against a substrate — `vec` (the row reference) or `corgi`
+   (columnar), whose kernels live in `corgi/`.
+5. `explain/` rewrites a program into one that explains its own outputs.
+6. `server.rs` is the in-process registry and lifecycle; the `ddir-server` crate in `server/`
+   is the executable that drives it.
 
 The `examples/programs/` directory contains example programs, intentionally simple at the moment.
 The one executable is the server (the `ddir-server` crate in `server/`, documented in
@@ -87,19 +92,9 @@ exit
 ' | DDIR_BACKEND=corgi DDIR_WORKERS=4 cargo run --release -p ddir-server
 ```
 
-More generally, you can run
-```
-cargo run --release --example ddir_vec -- <program> <arity> <range> <count> <batch> [<rounds>]
-```
-where
-* `<program>` is a path to your program file,
-* `<arity>` is the number of columns expected by your program,
-* `<range>` is the range of values from zero for each column,
-* `<count>` is the number of records the harness will maintain,
-* `<batch>` is the number of records the harness will change in each round,
-* `<rounds>` is the number of rounds the harness will perform.
-
-You can leave off the rounds, or any suffix really, to watch it just run for a while.
+For the full command vocabulary — `load`, `feed`, `tick`, `peek`, `tail`, and the rest — see
+[`examples/server/README.md`](examples/server/README.md), and `server/README.md` for the
+protocol and configuration.
 
 ## Status
 

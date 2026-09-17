@@ -196,7 +196,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
 // coordinates as the depths dictate. No op needs to know about boundaries.
 
 use std::collections::BTreeMap;
-use crate::parse::{Projection, Reducer, Term, BinOp};
+use crate::ir::{BinOp, Projection, Reducer, Term};
 mod decouple;
 use decouple::{Dataflow, RowModel};
 

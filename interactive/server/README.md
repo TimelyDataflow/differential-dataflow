@@ -43,9 +43,9 @@ scripts can be piped to stdin (see `demo/`).
 
 The useful commands are `load`, `drop`, `list`, `feed`, `bind`, `unbind`,
 `peek`, `tail`, `stop`, `tick`, and `exit`. `load <name> from <path>` installs
-a program file (`.ddp` pipe syntax, anything else applicative); `load <name>
-from <path> explain=<arity>[,debug]` applies the explanation rewrite first,
-every source taken to have `arity` key fields and no value, after which the
+a program file (`.ddp`, pipe syntax); `load <name> from <path>
+explain=<arity>[,debug]` applies the explanation rewrite first, every source
+taken to have `arity` key fields and no value, after which the
 query input is the one after the program's own and the demand sets are
 `peek`able exports. `feed <prog> <in#> from <source>` fills an input from a
 source the server reads itself — a recipe such as `random:nodes=N,edges=E,churn=C`

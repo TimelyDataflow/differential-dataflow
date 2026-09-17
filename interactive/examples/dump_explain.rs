@@ -13,12 +13,7 @@ fn main() {
     let arity: usize = std::env::args().nth(2).unwrap_or("2".into()).parse().unwrap();
 
     let source = interactive::load_program(&path);
-    let stmts = if path.ends_with(".ddp") {
-        parse::pipe::parse(&source)
-    } else {
-        parse::applicative::parse(&source)
-    };
-    let original = lower::lower_tree(stmts);
+    let original = lower::lower_tree(parse::pipe::parse(&source));
 
     println!("-- ====================================================");
     println!("-- ORIGINAL ({} ops)", original.op_count());

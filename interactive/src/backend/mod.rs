@@ -23,8 +23,7 @@ use differential_dataflow::dynamic::pointstamp::PointStampSummary;
 use differential_dataflow::dynamic::feedback_summary;
 use differential_dataflow::collection::containers::{Enter, Leave, ResultsIn};
 
-use crate::ir::{Time, LinearOp};
-use crate::parse::{Projection, Reducer};
+use crate::ir::{Time, LinearOp, Projection, Reducer};
 use crate::scope_ir as st;
 
 /// A rendering substrate: a differential container plus the leaf operators over

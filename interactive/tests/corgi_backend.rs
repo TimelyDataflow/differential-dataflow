@@ -20,7 +20,10 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
     let edges = rows(&[&[1, 2], &[2, 3], &[3, 4], &[5, 6], &[4, 2]]);
     match prog {
         "reach" => vec![edges, rows(&[&[1]])],
-        "scc" => vec![edges],
+        "scc" => vec![edges.clone()],
+        // kcore: the same edges. Symmetrized they leave a 2-core of {2, 3, 4} and peel
+        // 1, 5 and 6 away, so the fixpoint has to retract as well as accumulate.
+        "kcore" => vec![edges],
         // stable: edges (l_node, l_pref, r_node, r_pref)
         "stable" => vec![rows(&[&[1, 1, 10, 1], &[1, 2, 11, 1], &[2, 1, 10, 2], &[2, 2, 11, 2]])],
         "unnest" => vec![rows(&[&[1, 2], &[3, 4]])],
@@ -113,6 +116,7 @@ fn serializing(n: usize) -> timely::Config {
 
 #[test] fn reach() { assert_backends_agree("reach"); }
 #[test] fn scc() { assert_backends_agree("scc"); }
+#[test] fn kcore() { assert_backends_agree("kcore"); }
 #[test] fn stable() { assert_backends_agree("stable"); }
 #[test] fn unnest() { assert_backends_agree("unnest"); }
 #[test] fn adt() { assert_backends_agree("adt"); }

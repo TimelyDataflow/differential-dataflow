@@ -18,9 +18,8 @@ use smallvec::SmallVec;
 use smallvec::smallvec as svec;
 
 use crate::backend::Backend;
-use crate::parse::{Projection, Reducer};
 use crate::scope_ir as st;
-use crate::ir::{LinearOp, Diff, Time, Value, eval};
+use crate::ir::{LinearOp, Diff, Projection, Reducer, Time, Value, eval};
 
 /// The row type: a single `Value` (an `Int`, or a `Tuple`/`List`/`Variant`).
 pub type Row = Value;
