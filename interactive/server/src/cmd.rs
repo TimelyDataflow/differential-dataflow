@@ -42,13 +42,11 @@ pub enum Cmd {
     /// `explain` — `explain=<arity>[,debug]`: apply the explanation rewrite,
     /// every source taken to have `arity` key fields and no value; the query
     /// input is the one after the program's own, the demand sets its exports.
-    /// `applicative` — the text is in the applicative syntax (a `.ddir` file).
     Load {
         id_hint: String,
         bindings: BTreeMap<String, String>,
         program: String,
         explain: Option<(usize, bool)>,
-        applicative: bool,
     },
     /// Drop the dataflow named by id or by `id_hint`. Fails if any
     /// export of this dataflow is still imported by another live
@@ -155,15 +153,9 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
             bindings,
             program,
             explain,
-            applicative,
         } => {
             let mut program = catch_unwind(AssertUnwindSafe(|| {
-                let statements = if applicative {
-                    interactive::parse::applicative::parse(&program)
-                } else {
-                    interactive::parse::pipe::parse(&program)
-                };
-                interactive::lower::lower_tree(statements)
+                interactive::lower::lower_tree(interactive::parse::pipe::parse(&program))
             }))
             .map_err(panic_message)?;
             apply_bindings(&mut program, &bindings)?;
@@ -459,7 +451,6 @@ impl LineParser {
                             bindings: done.bindings,
                             program: done.body,
                             explain: done.explain,
-                            applicative: false,
                         }),
                     ));
                 }
@@ -633,9 +624,9 @@ fn parse_input_update(line: &str) -> Result<InputUpdate, String> {
 fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
     match cmd {
         "load" => {
-            // Two forms. `load <name> from <path> [options]` installs a program file
-            // (`.ddp` = pipe syntax, else applicative), read here on the session
-            // thread. `load <name> [options] begin` switches the parser into
+            // Two forms. `load <name> from <path> [options]` installs a program
+            // file, read here on the session thread. `load <name> [options] begin`
+            // switches the parser into
             // body-collection mode; subsequent lines are program text terminated by
             // `<reqid> end-load`. Options: `explain=<arity>[,debug]`, `name=binding`.
             const USAGE: &str = "load: expected `<name> from <path> [options]` or `<name> [options] begin`";
@@ -682,7 +673,6 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                         bindings,
                         program,
                         explain,
-                        applicative: !path.ends_with(".ddp"),
                     }),
                     Err(error) => ParseOutcome::Err(format!("load: cannot read {path:?}: {error}")),
                 },
@@ -977,7 +967,6 @@ mod tests {
                 bindings,
                 program,
                 explain,
-                applicative,
             }) => {
                 assert_eq!(id_hint, "gen");
                 assert_eq!(
@@ -987,7 +976,6 @@ mod tests {
                 assert!(program.contains("import \"edges/v1\""));
                 assert!(program.contains("export \"reach\""));
                 assert!(explain.is_none());
-                assert!(!applicative);
             }
             _ => panic!("expected Load, got {:?}", got[0].1),
         }
@@ -1017,26 +1005,25 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let ddp = dir.join("p.ddp");
         std::fs::write(&ddp, "export \"r\" = input 0;\n").unwrap();
-        let ddir = dir.join("q.ddir");
-        std::fs::write(&ddir, "export \"r\" = INPUT 0;\n").unwrap();
+        let ddp2 = dir.join("q.ddp");
+        std::fs::write(&ddp2, "export \"s\" = input 0;\n").unwrap();
         let mut p = LineParser::default();
         let got = feed_all(&mut p, &[
             &format!("r1 load p from {} explain=2,debug e=random(seed=1,arity=2,range=8,count=12)\n", ddp.display()),
-            &format!("r2 load q from {}\n", ddir.display()),
+            &format!("r2 load q from {}\n", ddp2.display()),
             "r3 load p from /nonexistent/p.ddp\n",
             "r4 load p --explain begin\n",
         ]);
         match &got[0].1 {
-            Ok(Cmd::Load { id_hint, bindings, program, explain, applicative }) => {
+            Ok(Cmd::Load { id_hint, bindings, program, explain }) => {
                 assert_eq!(id_hint, "p");
                 assert_eq!(program, "export \"r\" = input 0;\n");
                 assert_eq!(*explain, Some((2, true)));
-                assert!(!applicative);
                 assert_eq!(bindings.get("e").map(String::as_str), Some("random(seed=1,arity=2,range=8,count=12)"));
             }
             other => panic!("unexpected {other:?}"),
         }
-        assert!(matches!(&got[1].1, Ok(Cmd::Load { applicative: true, explain: None, .. })));
+        assert!(matches!(&got[1].1, Ok(Cmd::Load { explain: None, .. })));
         assert!(matches!(&got[2].1, Err(e) if e.starts_with("load: cannot read")));
         assert!(matches!(&got[3].1, Err(e) if e.contains("explain=<arity>")));
         let _ = std::fs::remove_dir_all(&dir);

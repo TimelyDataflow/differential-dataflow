@@ -80,9 +80,6 @@
 //! - Binders: `^k` refers to the k-th enclosing `case`/`fold` binder (de
 //!   Bruijn, innermost = 0); `case` patterns also bind payload fields by name.
 //! - Conditional: `if(cond, then, els)`.
-//!
-//! The applicative front-end ([`super::applicative`], `.ddir` files) parses the
-//! same scalar grammar with an S-expression operator syntax (`MAP`, `JOIN`, …).
 
 use super::*;
 
@@ -488,7 +485,7 @@ impl Parser {
         self.parse_term()
     }
 
-    // ---- General scalar term grammar (shared shape with applicative.rs). ----
+    // ---- General scalar term grammar. ----
 
     fn parse_term(&mut self) -> Term { self.parse_logic() }
 

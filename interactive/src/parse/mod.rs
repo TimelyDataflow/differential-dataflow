@@ -1,14 +1,12 @@
 //! Concrete syntax for DD IR programs.
 //!
-//! Two front-ends that produce the same AST:
-//! - `applicative::parse()` — S-expression-like syntax (MAP, JOIN, etc.) for .ddir files
-//! - `pipe::parse()` — pipe-oriented syntax (`expr | op | op`) for .ddp files
+//! One front-end: `pipe::parse()` — pipe-oriented syntax (`expr | op | op`)
+//! for `.ddp` files.
 //!
 //! The *collection* language (`Expr`/`Stmt`) describes the dataflow graph;
 //! the *scalar* language (`Term`) describes per-row value computation over
 //! [`crate::ir::Value`]. Only the scalar language knows about ADTs.
 
-pub mod applicative;
 pub mod pipe;
 
 /// Scalar expression over [`crate::ir::Value`]. For the concrete surface
@@ -171,8 +169,8 @@ pub enum Stmt {
 }
 
 /// Build a scalar builtin call from its (already-parsed) argument terms.
-/// Shared by both front-ends; validates arity and pulls out int-literal
-/// tags/indices. `args` is consumed in place.
+/// Validates arity and pulls out int-literal tags/indices. `args` is
+/// consumed in place.
 pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
     let int_arg = |t: &Term| -> i64 {
         match t { Term::Int(n) => *n, o => panic!("builtin `{}` expects an int literal here, got {:?}", name, o) }
