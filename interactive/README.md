@@ -64,17 +64,20 @@ I don't know much about designing languages, so I may have gotten this wrong.
 
 ## Architecture
 
-The architecture is fairly standard, and where it isn't it probably should become more standard.
-The flow moves through four steps:
+The architecture has one execution path: the server parses and installs DDIR
+programs, feeds their inputs, and advances logical time. The library is split
+into the following parts:
 
-1. The `parse/` directory contains any number of concrete syntax parsers.
-2. The `lower/` directory contains lowering from the AST to the IR.
-3. The `ir/` directory is the IR itself, with optimizations.
-4. The `examples/` directory contains back-ends that execute programs.
+1. `parse/` contains the concrete syntax parsers.
+2. `lower.rs` translates their AST into the scope-tree IR.
+3. `scope_ir.rs` and `ir.rs` define the program and row-level IRs.
+4. `backend/` contains the vector and Corgi renderers.
+5. `server.rs` owns the in-process registry and lifecycle; the `server/` crate
+   provides the `ddir-server` executable and its stdin/TCP/WebSocket protocol.
 
-The `examples/programs/` directory contains example programs, intentionally simple at the moment.
-The one executable is the server (the `ddir-server` crate in `server/`, documented in
-`server/README.md`; the session scripts in `examples/server/` show it at work); a program runs by
+The `examples/programs/` directory contains small example programs. The
+`examples/server/` directory contains command sessions, and `server/demo/`
+contains protocol demos. Both use the same server executable; a program runs by
 loading it, feeding its inputs, and closing epochs. For example, on a random graph of 100 nodes and
 200 edges, 10 of which change each epoch, for 100 epochs, on four workers of the Corgi backend:
 ```
@@ -87,19 +90,9 @@ exit
 ' | DDIR_BACKEND=corgi DDIR_WORKERS=4 cargo run --release -p ddir-server
 ```
 
-More generally, you can run
-```
-cargo run --release --example ddir_vec -- <program> <arity> <range> <count> <batch> [<rounds>]
-```
-where
-* `<program>` is a path to your program file,
-* `<arity>` is the number of columns expected by your program,
-* `<range>` is the range of values from zero for each column,
-* `<count>` is the number of records the harness will maintain,
-* `<batch>` is the number of records the harness will change in each round,
-* `<rounds>` is the number of rounds the harness will perform.
-
-You can leave off the rounds, or any suffix really, to watch it just run for a while.
+For the general command vocabulary, see [`examples/server/README.md`](examples/server/README.md).
+The server accepts both pipe-form `.ddp` programs and applicative `.ddir`
+programs; the extension selects the parser for `load ... from ...`.
 
 ## Status
 
