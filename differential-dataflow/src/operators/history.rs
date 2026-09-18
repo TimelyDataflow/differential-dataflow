@@ -39,6 +39,15 @@ impl<V: Copy, T: Ord + Lattice, D: crate::difference::Semigroup> EditList<V, T, 
             self.values.push((value, self.edits.len()));
         }
     }
+    /// The `index`th edit, as `(value, time, diff)`, in the order `map` visits them.
+    ///
+    /// The value is found by binary search over the per-value edit bounds, which `seal` leaves
+    /// ascending.
+    fn index(&self, index: usize) -> (V, &T, &D) {
+        let value_index = self.values.partition_point(|&(_, upper)| upper <= index);
+        let (time, diff) = &self.edits[index];
+        (self.values[value_index].0, time, diff)
+    }
     fn map<F: FnMut(V, &T, &D)>(&self, mut logic: F) {
         for index in 0 .. self.values.len() {
             let lower = if index == 0 { 0 } else { self.values[index-1].1 };
@@ -89,8 +98,16 @@ impl<V: Copy + Ord, T: Ord + Clone + Lattice, D: crate::difference::Semigroup> V
         self.edits.map(logic)
     }
 
+    /// The `index`th edit, as `(value, time, diff)`, in the order `map_edits` visits them.
+    ///
+    /// Indexed access lets a reader replay the edits a few at a time, rather than in one
+    /// closure-driven sweep it cannot interrupt.
+    pub(in crate::operators) fn edit_at(&self, index: usize) -> (V, &T, &D) {
+        self.edits.index(index)
+    }
+
     /// Organizes history based on current contents of edits (sort + suffix meets).
-    fn build(&mut self) {
+    pub(in crate::operators) fn build(&mut self) {
         self.buffer.clear();
         self.history.clear();
         for value_index in 0 .. self.edits.values.len() {
