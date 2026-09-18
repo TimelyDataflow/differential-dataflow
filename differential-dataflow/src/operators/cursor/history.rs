@@ -3,6 +3,7 @@
 use crate::lattice::Lattice;
 use crate::operators::history::{EditList, HistoryReplay, ValueHistory};
 use crate::trace::Cursor;
+use crate::trace::implementations::containers::BatchContainer;
 
 /// Walks the cursor's values at the current key into `target`, advancing times by `meet` if supplied.
 fn load_values<'a, V, T, D, C>(
@@ -45,6 +46,44 @@ where
 {
     history.clear();
     load_values(history.edits_mut(), cursor, storage, meet);
+}
+
+/// Loads the cursor's values at its current key into `values`, and their edits into `history`
+/// keyed by each value's index in `values`.
+///
+/// The indices are what let the history outlive the borrow of `storage`: a history of
+/// `Cursor::Val<'a>` can only live as long as the storage it reads from, and so cannot be held
+/// across calls by an iterator that owns that storage. A history of indices can, at the cost of
+/// copying the key's values into a container the iterator owns too. Callers that replay a key in
+/// one uninterrupted pass should prefer `load_current`, which copies nothing.
+///
+/// The cursor is left with its values exhausted, as `load_current` leaves it.
+pub(super) fn load_current_indexed<T, D, C>(
+    values: &mut C::ValContainer,
+    history: &mut ValueHistory<usize, T, D>,
+    cursor: &mut C,
+    storage: &C::Storage,
+    meet: Option<&T>,
+)
+where
+    T: Ord + Clone + Lattice,
+    D: crate::difference::Semigroup,
+    C: Cursor<Time = T, Diff = D>,
+{
+    history.clear();
+    values.clear();
+    let edits = history.edits_mut();
+    while let Some(val) = cursor.get_val(storage) {
+        let index = values.len();
+        values.push_ref(val);
+        cursor.map_times(storage, |time, diff| {
+            let mut time = C::owned_time(time);
+            if let Some(meet) = meet { time.join_assign(meet); }
+            edits.push(time, C::owned_diff(diff));
+        });
+        edits.seal(index);
+        cursor.step_val(storage);
+    }
 }
 
 /// Loads and replays a specified key.
