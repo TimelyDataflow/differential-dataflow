@@ -10,8 +10,9 @@
 //!   the scope builder `Sb` for real explain.
 //!
 //! Changing the data model means reimplementing [`RowModel`]; the rules and the
-//! orchestration are untouched. The flat `[i64]` impl lives in `explain.rs` and
-//! reuses `folded` for the time-filter/strip algebra.
+//! orchestration are untouched. [`crate::explain::Val`] is the only model the
+//! crate evaluates; the flat `[i64]` model this was factored out for, and the
+//! `folded` algebra it used, are both retired.
 //!
 //! ## The demand envelope
 //!
@@ -246,6 +247,49 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
 // model-agnostic proof below (`nested_contract`) runs the same generic rules
 // against a nested `Value`-shaped `RowModel` — the shape the real `explain::Val`
 // model uses — so it remains the runnable spec for the reverse rules.
+
+/// In-memory [`Dataflow`] over `Vec<(Value, Value)>`, shared by the contract
+/// modules below: projections and predicates run through the `Term`
+/// interpreter (`ir::eval`), and `join` is a nested-loop equi-join on the key.
+#[cfg(test)]
+mod mem {
+    use super::Dataflow;
+    use crate::ir::{eval, Projection, Term, Value};
+
+    pub type Coll = Vec<(Value, Value)>;
+    pub struct Mem;
+
+    impl Dataflow for Mem {
+        type Handle = Coll;
+        type Proj = Projection;
+        type Pred = Term;
+        fn project(&mut self, c: &Coll, p: Projection) -> Coll {
+            c.iter().map(|(k, v)| {
+                let mut e = vec![k.clone(), v.clone()];
+                (eval(&p.key, &mut e), eval(&p.val, &mut e))
+            }).collect()
+        }
+        fn filter(&mut self, c: &Coll, p: Term) -> Coll {
+            c.iter().filter(|(k, v)| {
+                let mut e = vec![k.clone(), v.clone()];
+                eval(&p, &mut e).truthy()
+            }).cloned().collect()
+        }
+        fn join(&mut self, l: &Coll, r: &Coll, p: Projection) -> Coll {
+            let mut out = Vec::new();
+            for (lk, lv) in l {
+                for (rk, rv) in r {
+                    if lk == rk {
+                        let mut e = vec![lk.clone(), lv.clone(), rv.clone()];
+                        out.push((eval(&p.key, &mut e), eval(&p.val, &mut e)));
+                    }
+                }
+            }
+            out
+        }
+        fn concat(&mut self, cs: Vec<Coll>) -> Coll { cs.into_iter().flatten().collect() }
+    }
+}
 
 #[cfg(test)]
 mod nested_contract {
@@ -502,45 +546,11 @@ mod value_contract {
 
     use super::*;
     use crate::explain::Val;
-    use crate::ir::{eval, Value};
+    use super::mem::{Coll, Mem};
+    use crate::ir::Value;
     use crate::ir::{Projection, Term};
 
     type Row = Value;
-    type Coll = Vec<(Row, Row)>;
-
-    /// In-memory dataflow: applies projections/predicates with the `Term`
-    /// interpreter (`ir::eval`); `join` is a nested-loop equi-join on the key.
-    struct Mem;
-    impl Dataflow for Mem {
-        type Handle = Coll;
-        type Proj = Projection;
-        type Pred = Term;
-        fn project(&mut self, c: &Coll, p: Projection) -> Coll {
-            c.iter().map(|(k, v)| {
-                let mut e = vec![k.clone(), v.clone()];
-                (eval(&p.key, &mut e), eval(&p.val, &mut e))
-            }).collect()
-        }
-        fn filter(&mut self, c: &Coll, p: Term) -> Coll {
-            c.iter().filter(|(k, v)| {
-                let mut e = vec![k.clone(), v.clone()];
-                eval(&p, &mut e).truthy()
-            }).cloned().collect()
-        }
-        fn join(&mut self, l: &Coll, r: &Coll, p: Projection) -> Coll {
-            let mut out = Vec::new();
-            for (lk, lv) in l {
-                for (rk, rv) in r {
-                    if lk == rk {
-                        let mut e = vec![lk.clone(), lv.clone(), rv.clone()];
-                        out.push((eval(&p.key, &mut e), eval(&p.val, &mut e)));
-                    }
-                }
-            }
-            out
-        }
-        fn concat(&mut self, cs: Vec<Coll>) -> Coll { cs.into_iter().flatten().collect() }
-    }
 
     /// A 1-field key `(n)`.
     fn key(n: i64) -> Row { Value::Tuple(vec![Value::Int(n)]) }
@@ -626,31 +636,10 @@ mod backstop {
     //! endpoint, so `RESIDUAL` is the whole input (here, the list). This pins
     //! "the gap is closable" before the real rule + wiring are built.
 
+    use super::mem::{Coll, Mem};
     use super::*;
-    use crate::ir::{eval, Value};
+    use crate::ir::Value;
     use crate::ir::{Projection, Term};
-
-    type Coll = Vec<(Value, Value)>;
-    struct Mem;
-    impl Dataflow for Mem {
-        type Handle = Coll;
-        type Proj = Projection;
-        type Pred = Term;
-        fn project(&mut self, c: &Coll, p: Projection) -> Coll {
-            c.iter().map(|(k, v)| { let mut e = vec![k.clone(), v.clone()]; (eval(&p.key, &mut e), eval(&p.val, &mut e)) }).collect()
-        }
-        fn filter(&mut self, c: &Coll, p: Term) -> Coll {
-            c.iter().filter(|(k, v)| { let mut e = vec![k.clone(), v.clone()]; eval(&p, &mut e).truthy() }).cloned().collect()
-        }
-        fn join(&mut self, l: &Coll, r: &Coll, p: Projection) -> Coll {
-            let mut out = Vec::new();
-            for (lk, lv) in l { for (rk, rv) in r {
-                if lk == rk { let mut e = vec![lk.clone(), lv.clone(), rv.clone()]; out.push((eval(&p.key, &mut e), eval(&p.val, &mut e))); }
-            }}
-            out
-        }
-        fn concat(&mut self, cs: Vec<Coll>) -> Coll { cs.into_iter().flatten().collect() }
-    }
 
     fn int(n: i64) -> Value { Value::Int(n) }
     fn list(xs: &[i64]) -> Value { Value::List(xs.iter().map(|&n| int(n)).collect()) }
