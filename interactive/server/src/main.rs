@@ -64,6 +64,40 @@ impl ControlHandle {
     }
 }
 
+/// What a session should do after handing one parsed line to the workers.
+enum Dispatch {
+    /// Keep reading this session.
+    Continue,
+    /// The client asked to exit.
+    Exit,
+    /// The worker group is gone; nothing more can be sent.
+    Disconnected,
+}
+
+/// Prepare one parsed line and hand it to the worker group. The two session
+/// loops (stdin/TCP and WebSocket) differ only in what they do with the
+/// answer, so the protocol step itself lives here once.
+fn dispatch(
+    parsed: (cmd::ReqId, Result<cmd::Cmd, String>),
+    control: &ControlHandle,
+    resp_tx: &Sender<String>,
+    connection_id: ConnectionId,
+) -> Dispatch {
+    let (reqid, kind) = parsed;
+    let is_exit = matches!(kind, Ok(cmd::Cmd::Exit));
+    let kind = kind.and_then(prepare);
+    let req = Request {
+        reqid,
+        kind,
+        resp: resp_tx.clone(),
+        connection_id,
+    };
+    if control.send(ControlEvent::Request(req)).is_err() {
+        return Dispatch::Disconnected;
+    }
+    if is_exit { Dispatch::Exit } else { Dispatch::Continue }
+}
+
 /// Process-wide allocator for per-session ids. Stdin uses 0;
 /// subsequent connections get 1, 2, 3, ....
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
@@ -246,22 +280,12 @@ fn run_session<R: BufRead, W: Write + Send + 'static>(
         let Ok(line) = line else {
             break;
         };
-        if let Some((reqid, kind)) = parser.feed(&line) {
-            let is_exit = matches!(kind, Ok(cmd::Cmd::Exit));
-            let kind = kind.and_then(prepare);
-            let req = Request {
-                reqid,
-                kind,
-                resp: resp_tx.clone(),
-                connection_id,
-            };
-            if control.send(ControlEvent::Request(req)).is_err() {
-                break;
-            }
+        if let Some(parsed) = parser.feed(&line) {
             // For stdin, `exit` terminates the whole server; for TCP, it
             // terminates only this session. Either way the reader stops.
-            if is_exit {
-                break;
+            match dispatch(parsed, &control, &resp_tx, connection_id) {
+                Dispatch::Continue => {}
+                Dispatch::Exit | Dispatch::Disconnected => break,
             }
         }
     }
@@ -369,21 +393,14 @@ fn run_ws_session(stream: TcpStream, control: ControlHandle) -> Result<(), tungs
                     if line.trim().is_empty() && !parser.awaiting_body() {
                         continue;
                     }
-                    if let Some((reqid, kind)) = parser.feed(line) {
-                        let is_exit = matches!(kind, Ok(cmd::Cmd::Exit));
-                        let kind = kind.and_then(prepare);
-                        let req = Request {
-                            reqid,
-                            kind,
-                            resp: resp_tx.clone(),
-                            connection_id,
-                        };
-                        if control.send(ControlEvent::Request(req)).is_err() {
-                            should_exit = true;
-                            break;
-                        }
-                        if is_exit {
-                            should_exit = true;
+                    if let Some(parsed) = parser.feed(line) {
+                        match dispatch(parsed, &control, &resp_tx, connection_id) {
+                            Dispatch::Continue => {}
+                            Dispatch::Exit => should_exit = true,
+                            Dispatch::Disconnected => {
+                                should_exit = true;
+                                break;
+                            }
                         }
                     }
                 }
