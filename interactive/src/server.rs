@@ -390,11 +390,6 @@ impl Server {
         self.epoch
     }
 
-    /// Whether a trace is registered under `name`.
-    pub fn has_trace(&self, name: &str) -> bool {
-        self.traces.contains_key(name)
-    }
-
     /// Clone a trace reader for a transient peek or subscription dataflow.
     pub fn trace(&self, name: &str) -> Option<ServerTrace> {
         self.traces.get(&canonical_source_name(name)).cloned()
