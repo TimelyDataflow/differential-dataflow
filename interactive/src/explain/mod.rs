@@ -1050,35 +1050,9 @@ mod tests {
 
     fn parse(src: &str) -> Vec<crate::parse::Stmt> { crate::parse::pipe::parse(src) }
 
-    const SCC: &str = r#"
-        let edges = input 0 | key($0[0] ; $0[1]);
-        let trans = edges | key($1 ; $0);
-        outer: {
-            let scc = edges + trim;
-            fwd: {
-                let nodes = edges | key($1 ; $1) | enter_at($1[0]);
-                let labels = proposals + nodes | min;
-                var proposals = labels | join(scc, ($2 ; $1));
-            }
-            let trim_fwd = edges
-                | join(fwd::labels, ($1 ; $0, $2))
-                | join(fwd::labels, ($0 ; $1, $2))
-                | filter($1[1] == $1[2])
-                | key($0 ; $1[0]);
-            bwd: {
-                let nodes = trans | key($1 ; $1) | enter_at($1[0]);
-                let labels = proposals + nodes | min;
-                var proposals = labels | join(trim_fwd, ($2 ; $1));
-            }
-            let trim_bwd = trans
-                | join(bwd::labels, ($1 ; $0, $2))
-                | join(bwd::labels, ($0 ; $1, $2))
-                | filter($1[1] == $1[2])
-                | key($0 ; $1[0]);
-            var trim = trim_bwd - edges;
-        }
-        export "result" = outer::scc | map(;) | arrange | inspect(total);
-    "#;
+    /// The checked-in example, so the fixture cannot drift from the program
+    /// the rest of the tree runs.
+    const SCC: &str = include_str!("../../examples/programs/scc.ddp");
 
     fn vars_total(s: &Scope) -> usize {
         s.vars.len() + s.items.iter().map(|i| match i { Item::Sub(c) => vars_total(c), _ => 0 }).sum::<usize>()

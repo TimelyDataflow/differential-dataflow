@@ -7,8 +7,7 @@
 //! everything else (enter/leave/concat/feedback) is DD's own container-generic
 //! machinery. Time is always `ir::Time`; only the container varies.
 //!
-//! The example binaries, the server, and a wasm front-end are thin drivers
-//! that pick a backend and call [`render_tree`].
+//! The server is a thin driver: it picks a backend and calls [`render_tree`].
 
 pub mod vec;
 pub mod corgi;
