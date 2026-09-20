@@ -391,35 +391,7 @@ mod tree_tests {
 
     #[test]
     fn lowers_scc_depth_two() {
-        let src = r#"
-            let edges = input 0 | key($0[0] ; $0[1]);
-            let trans = edges | key($1 ; $0);
-            outer: {
-                let scc = edges + trim;
-                fwd: {
-                    let nodes = edges | key($1 ; $1) | enter_at($1[0]);
-                    let labels = proposals + nodes | min;
-                    var proposals = labels | join(scc, ($2 ; $1));
-                }
-                let trim_fwd = edges
-                    | join(fwd::labels, ($1 ; $0, $2))
-                    | join(fwd::labels, ($0 ; $1, $2))
-                    | filter($1[1] == $1[2])
-                    | key($0 ; $1[0]);
-                bwd: {
-                    let nodes = trans | key($1 ; $1) | enter_at($1[0]);
-                    let labels = proposals + nodes | min;
-                    var proposals = labels | join(trim_fwd, ($2 ; $1));
-                }
-                let trim_bwd = trans
-                    | join(bwd::labels, ($1 ; $0, $2))
-                    | join(bwd::labels, ($0 ; $1, $2))
-                    | filter($1[1] == $1[2])
-                    | key($0 ; $1[0]);
-                var trim = trim_bwd - edges;
-            }
-            export "result" = outer::scc | map(;) | arrange | inspect(total);
-        "#;
+        let src = include_str!("../examples/programs/scc.ddp");
         let prog = lower_tree(parse(src));
         assert_eq!(subs(&prog.root).len(), 1); // outer
         let outer = subs(&prog.root)[0];
