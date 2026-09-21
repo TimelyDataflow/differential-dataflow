@@ -31,6 +31,7 @@ use std::rc::Rc;
 use differential_dataflow::trace::Description;
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::diffs::{consolidate, Records};
+use differential_dataflow::operators::int_proxy::KeyPosition;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 use corgi::arrange::{compare_at, gather, gather_lanes, sort_blocks};
@@ -574,6 +575,9 @@ impl<T> ProxyReduceBackend<T, CBatch<T>, CBatch<T>> for CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
 {
+    type Key = u64;
+    type VIn = u64;
+    type VOut = u64;
     type RIn = Vec<Diff>;
     type ROut = Vec<Diff>;
 
@@ -587,17 +591,17 @@ where
         self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
-    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut Option<u64>, window: &mut ReduceWindow<T, Vec<Diff>, Vec<Diff>>) {
+    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut KeyPosition<u64>, window: &mut ReduceWindow<T, Vec<Diff>, Vec<Diff>>) {
         // Single window: present the WHOLE key space at once, and report it covered. This is NOT a
         // deferred refinement — bounded windows were measured and rejected: at WINDOW = 1<<14, scc
         // (100 rounds x batch 100) cost 84.4s against 63.7s, a 33% regression, while peak RSS
         // fell only 356MB -> 340MB. Two reasons: the per-window, per-chunk seek setup is a
         // fixed cost that multiplies by the window count, and the presentation is not the
         // memory peak in the first place (the trace is).
-        if from.is_none() {
+        if *from == KeyPosition::End {
             return;
         }
-        *from = None;
+        *from = KeyPosition::End;
 
         // The window's keys: the hashes the novel batches touch, merged with the `changed` set the
         // harness supplies. The novel hashes come from the scan the presentation needs anyway — the

@@ -35,7 +35,7 @@ use crate::trace::chunk::vec::VecChunk;
 use crate::trace::Description;
 
 use super::diffs::Records;
-use super::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
+use super::{KeyPosition, ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 /// The batch type of a hash-keyed [`ChunkSpine`](crate::trace::chunk::vec::ChunkSpine): updates
 /// `D` is `(K, V)` on the input side and `(K, W)` on the output side.
@@ -101,6 +101,9 @@ where
     R: Semigroup + Ord + Clone + 'static,
     L: FnMut(&K, &[(V, R)], &mut Vec<(W, R)>, &mut Vec<(W, R)>),
 {
+    type Key = u64;
+    type VIn = u64;
+    type VOut = u64;
     type RIn = Vec<R>;
     type ROut = Vec<R>;
 
@@ -115,10 +118,10 @@ where
         &mut self,
         instance: &ReduceInstance<'_, T, VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>,
         changed: &[u64],
-        from: &mut Option<u64>,
+        from: &mut KeyPosition<u64>,
         window: &mut ReduceWindow<T, Vec<R>, Vec<R>>,
     ) {
-        let Some(start) = *from else { return };
+        let start = match *from { KeyPosition::Start => 0, KeyPosition::At(key) => key, KeyPosition::End => return };
 
         // Populating the novel and prior input bridges.
         self.in_pool.clear();
@@ -181,7 +184,7 @@ where
             if collides { self.collisions.push(key); }
             if budget == 0 { break; }
         }
-        *from = walk.due();
+        *from = walk.due().map_or(KeyPosition::End, KeyPosition::At);
 
         // Populating the output bridge.
         self.out_ids.clear();

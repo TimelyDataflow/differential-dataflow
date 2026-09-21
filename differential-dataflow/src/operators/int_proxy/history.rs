@@ -1,28 +1,28 @@
 //! Time-ordered replay of proxy update histories, with meet-advancement.
 
-/// A value history suitable for integer proxy values.
-pub(in crate::operators) type IdHistory<T, R> = crate::operators::history::ValueHistory<u64, T, R>;
+/// A value history suitable for ordered proxy values.
+pub(in crate::operators) type IdHistory<T, R, V = u64> = crate::operators::history::ValueHistory<V, T, R>;
 
 use crate::lattice::Lattice;
 use super::diffs::{Consolidation, DiffContainer, Records};
 
 /// Reduce history with opaque differences and a separate time-ordered replay index.
 /// Stepping gathers all edits at a time; advancement consolidates the buffered metadata.
-pub(super) struct DiffHistory<T, C> {
-    edits: Records<(u64, T), C>,
+pub(super) struct DiffHistory<T, C, V> {
+    edits: Records<(V, T), C>,
     history: Vec<(T, T, usize)>, // (time, suffix meet, row)
-    pub buffer: Records<(u64, T), C>,
-    scratch: Consolidation<(u64, T), C>,
+    pub buffer: Records<(V, T), C>,
+    scratch: Consolidation<(V, T), C>,
 }
 
-impl<T: Ord + Clone + Lattice, C: DiffContainer> DiffHistory<T, C> {
+impl<T: Ord + Clone + Lattice, C: DiffContainer, V: Copy + Ord> DiffHistory<T, C, V> {
     pub fn new(diffs: &C) -> Self {
         Self {
             edits: Records::new(diffs.empty()), history: Vec::new(),
             buffer: Records::new(diffs.empty()), scratch: Consolidation::new(diffs),
         }
     }
-    pub fn load(&mut self, source: &Records<((u64, u64), T), C>, rows: std::ops::Range<usize>, meet: Option<&T>) {
+    pub fn load<K>(&mut self, source: &Records<((K, V), T), C>, rows: std::ops::Range<usize>, meet: Option<&T>) {
         self.edits.clear();
         self.edits.extend(source, rows, |((_, id), time)| {
             (*id, meet.map_or_else(|| time.clone(), |meet| time.join(meet)))
