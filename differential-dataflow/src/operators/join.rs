@@ -32,6 +32,23 @@ pub trait JoinTactic<T, B0, B1, C> {
     fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: T) -> Box<dyn Iterator<Item = C>>;
 }
 
+/// Records a join activation may ship before it yields to the timely runtime.
+///
+/// The budget is split evenly between the two input queues, preserving the historical
+/// `1_000_000` of progress per input each activation. Tactics consult it to decide how far
+/// they may run before suspending.
+pub(crate) const FUEL: usize = 2_000_000;
+
+/// Matches a tactic may produce for one key before it must be able to suspend within that key.
+///
+/// A key replayed in one uninterrupted pass buffers its whole cross product, so the bound is what a
+/// join is willing to buffer: the driver's per-queue budget, which is the most one activation ships
+/// from a single iterator anyway. Tactics measure a key by the product of its two sides' edit
+/// counts, an upper bound on its matches. The bound is exact for a nested cross product and
+/// conservative for a replay that nets its inputs down as it goes, so a key a replay would have
+/// kept under the budget is only handled more carefully than it needed to be, never wrongly.
+pub(crate) const KEY_WORK_LIMIT: usize = FUEL / 2;
+
 /// Which input contributed the freshly-arrived batch of a deferred join unit.
 ///
 /// The fresh batch's times all lie at or beyond the capability, so its side is not advanced by the
@@ -293,8 +310,7 @@ where
             // Perform some amount of outstanding work by pulling the deferred iterators and shipping the
             // containers they yield. Each direction drains against its own half of the budget, so a burst
             // on one input cannot starve the other. We reschedule the operator whenever any work remains,
-            // which is observable directly: an iterator has yet to yield `None`. The budget is split from
-            // `2_000_000` to preserve the historical `1_000_000` of progress per input each activation.
+            // which is observable directly: an iterator has yet to yield `None`.
             // The driver only ships finished containers (`give_container`), never pushing records, so it
             // pins the operator output to `NoopBuilder<C>` — the builder for exactly this "containers ready
             // to go" case, which is a `ContainerBuilder` for any `C` without further bounds.
@@ -311,9 +327,8 @@ where
                     }
                 }
             };
-            let fuel = 2_000_000;
-            drain(&mut todo0, fuel / 2);
-            drain(&mut todo1, fuel / 2);
+            drain(&mut todo0, (FUEL / 2) as isize);
+            drain(&mut todo1, (FUEL / 2) as isize);
             if !todo0.is_empty() || !todo1.is_empty() {
                 activator.activate();
             }
