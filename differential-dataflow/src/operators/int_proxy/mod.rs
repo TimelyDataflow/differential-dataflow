@@ -1,17 +1,19 @@
-//! Backend-agnostic operator tactics using integer proxies.
+//! Backend-agnostic operator tactics using ordered, copyable proxies.
 //!
-//! The tactics are intended to support custom operator implementations without rebuilding
-//! the non-trivial and often non-obvious time-based logic that supports them.
+//! The tactics support custom operator implementations without rebuilding the non-trivial and often non-obvious time-based logic that supports them.
+//! They run DD's operator logic over consolidated `[((key, val), time, diff)]` lists.
+//! Keys identify independent groups; values identify data within a group.
+//! Both require only `Copy + Ord` and need not be the types presented to user logic.
+//! The tactics elicit proxies, perform time and difference computations, and return proxies to the backend for interpretation.
+//! The backend is oblivious to the navigation of time, and the operator to the backend's implementation.
 //!
-//! The tactics here run DD's operator logic over consolidated `[((u64, u64), time, diff)]`
-//! lists, the first integer a hash of the "key" and granule of independence, the second an
-//! ephemeral data identifier understood by the backend but opaque to the operator harness.
-//! The tactics first elicit proxy identifiers from the backends, perform their necessary time
-//! and difference based computations to stage integer collections, and then re-invoke the
-//! backends with those same identifiers to produce the necessary output.
+//! The default proxy types remain `u64`, with the interpretation described below.
+//! Exact key proxies do not require collision handling.
 //!
-//! The backend is oblivious to the navigation of time, and the operator to the backend's
-//! implementation.
+//! Input and output value proxies may have different types.
+//! Standalone reduce calls can use borrowed strings whose storage outlives the call and any pending keys.
+//! Deferred join work still requires `'static` proxies.
+//! Borrowing directly from backend-owned presentation storage needs a further lifetime or container abstraction.
 //!
 //! # The two integers
 //!
@@ -49,21 +51,33 @@ pub mod reduce;
 mod pending;
 pub mod vec_backend;
 
-/// Integer-only exchange medium: a consolidated collection of `[((hash, id), time, diff)]`.
+/// A consolidated collection of `[((key, val), time, diff)]` proxies.
 ///
 /// The [`debug_assert_sorted_bridge`] method is (and can be) used to validate this property.
-pub type ProxyBridge<T, R> = Vec<((u64, u64), T, R)>;
+pub type ProxyBridge<T, R, K = u64, V = u64> = Vec<((K, V), T, R)>;
 
 /// Debug check that a presented [`ProxyBridge`] is consolidated.
 ///
 /// Operator harnesses use the test to flag backend implementations that do not uphold it.
-pub(crate) fn debug_assert_sorted_bridge<T: Ord, R>(bridge: &ProxyBridge<T, R>, who: &str) {
+pub(crate) fn debug_assert_sorted_bridge<T: Ord, R, K: Copy + Ord, V: Copy + Ord>(bridge: &ProxyBridge<T, R, K, V>, who: &str) {
     debug_assert!(
         bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)),
-        "{}: a presented bridge must be sorted & consolidated by ((key_hash, value_id), time)",
+        "{}: a presented bridge must be sorted & consolidated by ((key, val), time)",
         who,
     );
 }
 
 pub use join::{JoinInstance, ProxyJoinBackend, ProxyJoinTactic};
 pub use reduce::{ProxyReduceBackend, ProxyReduceTactic, ReduceInstance, ReduceWindow};
+
+/// A position between windows of an ordered key space.
+/// No minimum key or successor operation is required.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum KeyPosition<K> {
+    /// No keys have been visited.
+    Start,
+    /// The inclusive lower bound on keys still to visit.
+    At(K),
+    /// All keys have been visited.
+    End,
+}
