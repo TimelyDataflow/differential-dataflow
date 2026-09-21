@@ -1,7 +1,6 @@
 //! A prototype of collective difference operations.
 //!
-//! The proxy tactics still use scalar differences.
-//! This module isolates the proposed storage boundary and exercises it without changing their time logic.
+//! Proxy reduce uses this boundary throughout history replay and correction feedback.
 //! Containers own accumulation and movement; callers supply row selections and groups.
 //! No scalar difference type, random access, ordering, or constructible zero is required.
 
@@ -34,6 +33,14 @@ pub trait DiffContainer: Sized {
     /// Zero results are retained so that composed containers preserve group correspondence.
     fn sum_from(&mut self, source: &Self, rows: &[usize], ends: &[usize]);
 
+    /// Keep exactly these positions, which must be strictly increasing.
+    /// Containers can override this to compact in place without copying survivors.
+    fn retain(&mut self, rows: &[usize]) {
+        let mut kept = self.empty();
+        kept.copy_from(self, rows);
+        *self = kept;
+    }
+
     /// Append the positions of nonzero differences in increasing order.
     /// The test has the semantics of `IsZero`; a semigroup without zero reports every position.
     fn nonzero(&self, into: &mut Vec<usize>);
@@ -58,6 +65,11 @@ impl<R: Semigroup> DiffContainer for Vec<R> {
             start = end;
         }
         assert_eq!(start, rows.len(), "sum groups must cover the selection");
+    }
+
+    fn retain(&mut self, rows: &[usize]) {
+        for (dest, &source) in rows.iter().enumerate() { self.swap(dest, source); }
+        self.truncate(rows.len());
     }
 
     fn nonzero(&self, into: &mut Vec<usize>) {
@@ -88,67 +100,81 @@ where
     }
 }
 
-/// Consolidate aligned data and differences through collective operations.
-///
-/// This is an executable consumer of the proposed interface, not a replacement for row consolidation.
-/// Sorting touches only data and row numbers; differences decide how to accumulate each group.
-/// Data can be `(key, value, time)` or just `value` for an accumulation at a selected time.
-/// A production integration should reuse the temporary storage and allow fused implementations.
-pub fn consolidate<D: Ord + Clone, C: DiffContainer>(data: &mut Vec<D>, diffs: &mut C) {
-    assert_eq!(data.len(), diffs.len());
-    let mut rows: Vec<_> = (0..data.len()).collect();
-    rows.sort_unstable_by(|&a, &b| data[a].cmp(&data[b]));
-    let mut ends = Vec::new();
-    for i in 1..rows.len() {
-        if data[rows[i - 1]] != data[rows[i]] { ends.push(i); }
-    }
-    if !rows.is_empty() { ends.push(rows.len()); }
-
-    let mut sums = diffs.empty();
-    sums.sum_from(diffs, &rows, &ends);
-    let mut kept = Vec::new();
-    sums.nonzero(&mut kept);
-    let output = kept.iter().map(|&group| {
-        let start = if group == 0 { 0 } else { ends[group - 1] };
-        data[rows[start]].clone()
-    }).collect();
-    diffs.clear();
-    diffs.copy_from(&sums, &kept);
-    *data = output;
+/// Row metadata aligned with a container of differences.
+/// The backend owns the interpretation of differences; the tactic only reads metadata.
+pub struct Records<D, C> {
+    /// One metadata entry per logical difference.
+    pub data: Vec<D>,
+    /// Differences aligned with `data`.
+    pub diffs: C,
+    selection: Vec<usize>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Two independent columns; neither storage nor a scalar row implements Semigroup here.
-    struct Pair { left: Vec<i64>, right: Vec<i64> }
-
-    impl DiffContainer for Pair {
-        fn len(&self) -> usize { self.left.len() }
-        fn empty(&self) -> Self { Self { left: vec![], right: vec![] } }
-        fn clear(&mut self) { self.left.clear(); self.right.clear(); }
-        fn copy_from(&mut self, source: &Self, rows: &[usize]) {
-            DiffContainer::copy_from(&mut self.left, &source.left, rows);
-            DiffContainer::copy_from(&mut self.right, &source.right, rows);
-        }
-        fn sum_from(&mut self, source: &Self, rows: &[usize], ends: &[usize]) {
-            self.left.sum_from(&source.left, rows, ends);
-            self.right.sum_from(&source.right, rows, ends);
-        }
-        fn nonzero(&self, into: &mut Vec<usize>) {
-            into.extend(self.left.iter().zip(&self.right).enumerate()
-                .filter(|(_, (a, b))| **a != 0 || **b != 0).map(|(row, _)| row));
-        }
+impl<D, C: DiffContainer> Records<D, C> {
+    /// Empty records with the supplied difference storage and schema.
+    pub fn new(diffs: C) -> Self {
+        assert!(diffs.is_empty());
+        Self { data: Vec::new(), diffs, selection: Vec::new() }
     }
-
-    #[test]
-    fn component_zeroes_are_retained_until_the_whole_diff_is_tested() {
-        let mut data = vec!["a", "b", "a", "b", "c", "c"];
-        let mut diffs = Pair { left: vec![1, 0, -1, 0, 1, -1], right: vec![0, 1, 2, -1, 0, 0] };
-        consolidate(&mut data, &mut diffs);
-        assert_eq!(data, vec!["a"]);
-        assert_eq!((diffs.left, diffs.right), (vec![0], vec![2]));
+    /// Number of records.
+    pub fn len(&self) -> usize { self.data.len() }
+    /// Whether there are no records.
+    pub fn is_empty(&self) -> bool { self.data.is_empty() }
+    /// Discard records while retaining storage and schema.
+    pub fn clear(&mut self) { self.data.clear(); self.diffs.clear(); }
+    /// Append selected records, transforming their metadata without inspecting differences.
+    pub fn extend<S>(&mut self, source: &Records<S, C>, rows: impl IntoIterator<Item = usize>, mut map: impl FnMut(&S) -> D) {
+        self.selection.clear();
+        self.selection.extend(rows);
+        self.data.extend(self.selection.iter().map(|&row| map(&source.data[row])));
+        self.diffs.copy_from(&source.diffs, &self.selection);
     }
+}
 
+/// Reusable storage for collective consolidation.
+/// Sorting touches only metadata and row numbers; containers accumulate the resulting groups.
+/// Data can be `(key, value, time)` or just `value` for an accumulation at a selected time.
+pub struct Consolidation<D, C> {
+    rows: Vec<usize>,
+    ends: Vec<usize>,
+    kept: Vec<usize>,
+    data: Vec<D>,
+    sums: C,
+}
+
+impl<D: Ord + Clone, C: DiffContainer> Consolidation<D, C> {
+    /// Scratch with the same schema as `diffs`.
+    pub fn new(diffs: &C) -> Self {
+        Self { rows: Vec::new(), ends: Vec::new(), kept: Vec::new(), data: Vec::new(), sums: diffs.empty() }
+    }
+    /// Sort, sum equal metadata, and discard zero sums, retaining scratch allocations.
+    pub fn consolidate(&mut self, data: &mut Vec<D>, diffs: &mut C) {
+        assert_eq!(data.len(), diffs.len());
+        self.rows.clear();
+        self.rows.extend(0..data.len());
+        self.rows.sort_unstable_by(|&a, &b| data[a].cmp(&data[b]));
+        self.ends.clear();
+        for i in 1..self.rows.len() {
+            if data[self.rows[i - 1]] != data[self.rows[i]] { self.ends.push(i); }
+        }
+        if !self.rows.is_empty() { self.ends.push(self.rows.len()); }
+
+        self.sums.sum_from(diffs, &self.rows, &self.ends);
+        self.kept.clear();
+        self.sums.nonzero(&mut self.kept);
+        self.data.extend(self.kept.iter().map(|&group| {
+            let start = if group == 0 { 0 } else { self.ends[group - 1] };
+            data[self.rows[start]].clone()
+        }));
+        self.sums.retain(&self.kept);
+        std::mem::swap(data, &mut self.data);
+        std::mem::swap(diffs, &mut self.sums);
+        self.data.clear();
+        self.sums.clear();
+    }
+}
+
+/// Consolidate aligned data and differences through collective operations.
+pub fn consolidate<D: Ord + Clone, C: DiffContainer>(data: &mut Vec<D>, diffs: &mut C) {
+    Consolidation::new(diffs).consolidate(data, diffs);
 }

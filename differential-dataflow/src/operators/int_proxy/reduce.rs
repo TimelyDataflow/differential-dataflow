@@ -8,12 +8,11 @@ use super::pending::Pending;
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::AntichainRef;
 
-use crate::difference::Semigroup;
+use super::diffs::{Consolidation, DiffContainer, Records};
 use crate::lattice::Lattice;
 use crate::trace::{Span, Description};
-use super::ProxyBridge;
+use super::history::DiffHistory;
 use crate::operators::reduce::{sort_dedup, ReduceTactic};
-use crate::operators::history::ValueHistory;
 
 /// A unit of proxied reduce work, presented to the backend.
 pub struct ReduceInstance<'a, T, B1, B2> {
@@ -40,20 +39,21 @@ pub struct ReduceInstance<'a, T, B1, B2> {
 pub struct ReduceWindow<T, RIn, ROut> {
     /// The key's full input — novel and prior merged, netted — sorted & consolidated by
     /// `((key_hash, value_id), time)`. May be advanced to the compaction frontier.
-    pub input: ProxyBridge<T, RIn>,
+    pub input: Records<((u64, u64), T), RIn>,
     /// The RAW novel time support: `(key_hash, time)` pairs sorted by `(key_hash, time)` and
     /// deduplicated, recorded from the novel batches BEFORE any consolidation or advancement —
     /// a netted-away record's time must still appear here.
     pub seeds: Vec<(u64, T)>,
     /// Accumulated output preceding the retire's interval, same ordering as `input`.
-    pub output: ProxyBridge<T, ROut>,
+    pub output: Records<((u64, u64), T), ROut>,
 }
 
-impl<T, RIn, ROut> Default for ReduceWindow<T, RIn, ROut> {
-    fn default() -> Self { ReduceWindow { input: Vec::new(), seeds: Vec::new(), output: Vec::new() } }
-}
+impl<T, RIn: DiffContainer, ROut: DiffContainer> ReduceWindow<T, RIn, ROut> {
+    /// Empty presentations with backend-supplied difference storage.
+    pub fn new(input: RIn, output: ROut) -> Self {
+        Self { input: Records::new(input), seeds: Vec::new(), output: Records::new(output) }
+    }
 
-impl<T, RIn, ROut> ReduceWindow<T, RIn, ROut> {
     /// Clear the presentations, keeping their allocations.
     pub fn clear(&mut self) {
         self.input.clear();
@@ -65,13 +65,13 @@ impl<T, RIn, ROut> ReduceWindow<T, RIn, ROut> {
 /// The reduce backend: value semantics for a proxy-space reduction, driven by [`ProxyReduceTactic`].
 ///
 /// The protocol for each round of invocation is
-/// `begin [ next_window reduce_corrections* emit ]* finish`,
+/// `begin new_diffs [ next_window reduce_corrections* emit ]* finish`,
 /// where the window loop runs until `next_window` reports the key space exhausted.
 pub trait ProxyReduceBackend<T, B1, B2> {
-    /// Diff type presented for the input.
-    type RIn: Semigroup;
-    /// Diff type of the output.
-    type ROut: Semigroup + 'static;
+    /// Difference storage presented for the input.
+    type RIn: DiffContainer;
+    /// Difference storage for the output.
+    type ROut: DiffContainer;
 
     /// Initiate a session to create batches for these descriptions, which span `[lower, upper)`.
     ///
@@ -79,6 +79,10 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     /// The computation proceeds in windows of keys, where only the backend maintains this
     /// work in progress, until `finish()` is called.
     fn begin(&mut self, description: Description<T>);
+
+    /// Empty input and output storage with this session's schemas and accumulation semantics.
+    /// Called after `begin`; all presentations and corrections must use these schemas.
+    fn new_diffs(&self) -> (Self::RIn, Self::ROut);
 
     /// Present the next window of the key space, and advance `from` past it.
     ///
@@ -117,13 +121,13 @@ pub trait ProxyReduceBackend<T, B1, B2> {
         &mut self,
         keys: &[u64],
         in_ends: &[usize],
-        input: &[(u64, Self::RIn)],
+        input: &Records<u64, Self::RIn>,
         out_ends: &[usize],
-        output: &[(u64, Self::ROut)],
-    ) -> (Vec<(u64, Self::ROut)>, Vec<usize>);
+        output: &Records<u64, Self::ROut>,
+    ) -> (Records<u64, Self::ROut>, Vec<usize>);
 
     /// Commit a collection of updates to the batch in progress.
-    fn emit(&mut self, records: &[((u64, u64), T, Self::ROut)]);
+    fn emit(&mut self, records: &Records<((u64, u64), T), Self::ROut>);
 
     /// Complete the session matching `begin`, yielding the batch it described,
     /// or `None` when the span it described carries no updates.
@@ -216,32 +220,39 @@ where
         // Progress through the key space: `Some(h)` for key hashes at or above `h` remaining, `None`
         // once the backend reports the space covered.
         let mut from = Some(0u64);
-        let mut window: ReduceWindow<T, Bk::RIn, Bk::ROut> = ReduceWindow::default();
+        let (input_diffs, output_diffs) = self.backend.new_diffs();
+        let mut window = ReduceWindow::new(input_diffs, output_diffs);
 
         // Retire-wide reusable scratch: cleared per group, window or wave, retaining capacity. Fresh
         // per-key/per-wave `Vec`s were once the dominant cost here, which is why the slots and the
         // staging buffers are held across the whole retire rather than built where they are used.
         let mut slots: Vec<KeySweep<T, Bk::RIn, Bk::ROut>> = Vec::new();
         let mut live: Vec<usize> = Vec::new();
-        let mut deltas: Vec<((u64, u64), T, Bk::ROut)> = Vec::new();
+        let mut deltas = Records::new(window.output.diffs.empty());
+        let mut delta_scratch = Consolidation::new(&window.output.diffs);
         let mut batch_keys: Vec<u64> = Vec::new();
         let mut in_ends: Vec<usize> = Vec::new();
-        let mut in_all: Vec<(u64, Bk::RIn)> = Vec::new();
+        let mut in_all = Records::new(window.input.diffs.empty());
         let mut out_ends: Vec<usize> = Vec::new();
-        let mut out_all: Vec<(u64, Bk::ROut)> = Vec::new();
+        let mut out_all = Records::new(window.output.diffs.empty());
         let mut active: Vec<(usize, T)> = Vec::new();
-        let mut in_accum: Vec<(u64, Bk::RIn)> = Vec::new();
-        let mut cur_out: Vec<(u64, Bk::ROut)> = Vec::new();
+        let mut in_accum = Records::new(window.input.diffs.empty());
+        let mut cur_out = Records::new(window.output.diffs.empty());
+
+        let mut in_scratch = Consolidation::new(&window.input.diffs);
+        let mut out_scratch = Consolidation::new(&window.output.diffs);
 
         while from.is_some() {
             let before = from;
             window.clear();
             self.backend.next_window(&instance, &changed, &mut from, &mut window);
-            let p_in = &mut window.input;
+            let p_in = &window.input;
             let seeds = &window.seeds;
-            let p_out = &mut window.output;
-            super::debug_assert_sorted_bridge(p_in, "next_window.input");
-            super::debug_assert_sorted_bridge(p_out, "next_window.output");
+            let p_out = &window.output;
+            debug_assert_eq!(p_in.len(), p_in.diffs.len());
+            debug_assert!(p_in.data.windows(2).all(|w| w[0] < w[1]), "next_window.input must be sorted and consolidated");
+            debug_assert_eq!(p_out.len(), p_out.diffs.len());
+            debug_assert!(p_out.data.windows(2).all(|w| w[0] < w[1]), "next_window.output must be sorted and consolidated");
             debug_assert!(
                 seeds.windows(2).all(|w| w[0] < w[1]),
                 "next_window.seeds must be sorted by (key_hash, time) and deduplicated",
@@ -255,7 +266,7 @@ where
             );
             debug_assert!(
                 {
-                    let mut keys = p_in.iter().map(|r| r.0.0).chain(seeds.iter().map(|s| s.0)).chain(p_out.iter().map(|r| r.0.0));
+                    let mut keys = p_in.data.iter().map(|r| r.0.0).chain(seeds.iter().map(|s| s.0)).chain(p_out.data.iter().map(|r| r.0.0));
                     keys.all(|k| before.is_none_or(|b| b <= k) && from.is_none_or(|f| k < f))
                 },
                 "next_window must report a key hash entirely within the window that first mentions it",
@@ -281,21 +292,21 @@ where
                 live.clear();
                 // Mapped to hashes before the min: the sources differ in shape.
                 while let Some(key) = [
-                    p_in.get(is).map(|record| record.0.0),
+                    p_in.data.get(is).map(|record| record.0.0),
                     seeds.get(ns).map(|seed| seed.0),
-                    p_out.get(os).map(|record| record.0.0),
+                    p_out.data.get(os).map(|record| record.0.0),
                 ].into_iter().flatten().min() {
                     let i0 = is;
-                    while is < p_in.len() && p_in[is].0.0 == key { is += 1; }
+                    while is < p_in.len() && p_in.data[is].0.0 == key { is += 1; }
                     let i1 = is;
                     let n0 = ns;
                     while ns < seeds.len() && seeds[ns].0 == key { ns += 1; }
                     let n1 = ns;
                     let o0 = os;
-                    while os < p_out.len() && p_out[os].0.0 == key { os += 1; }
+                    while os < p_out.len() && p_out.data[os].0.0 == key { os += 1; }
                     let o1 = os;
 
-                    if n_slots == slots.len() { slots.push(KeySweep::empty()); }
+                    if n_slots == slots.len() { slots.push(KeySweep::empty(&p_in.diffs, &p_out.diffs)); }
                     let slot = &mut slots[n_slots];
                     slot.key = key;
                     slot.pended.clear();
@@ -309,8 +320,8 @@ where
                     let single = owed.first().map(|r| &due.times[r.1]).or_else(|| novel.first().map(|r| &r.1))
                         .filter(|at| owed.len() <= 1 && novel.len() <= 1
                             && novel.first().is_none_or(|r| &r.1 == *at)
-                            && p_in[i0..i1].iter().all(|r| r.1.less_equal(at))
-                            && p_out[o0..o1].iter().all(|r| r.1.less_equal(at)));
+                            && p_in.data[i0..i1].iter().all(|r| r.1.less_equal(at))
+                            && p_out.data[o0..o1].iter().all(|r| r.1.less_equal(at)));
                     slot.direct = single.map(|_| (i0..i1, o0..o1));
                     slot.at = if let Some(at) = single {
                         if upper.less_equal(at) { slot.pended.push(at.clone()); None }
@@ -319,8 +330,8 @@ where
                         slot.sweep.load(
                             owed.iter().map(|&(_, row)| due.times[row].clone()),
                             novel.iter().map(|r| r.1.clone()),
-                            p_in[i0..i1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
-                            p_out[o0..o1].iter_mut().map(|r| (r.0.1, std::mem::replace(&mut r.1, T::minimum()), r.2.clone())),
+                            p_in, i0..i1,
+                            p_out, o0..o1,
                         );
                         slot.sweep.next_crossing(upper, &mut slot.pended)
                     };
@@ -348,21 +359,21 @@ where
                         in_accum.clear();
                         cur_out.clear();
                         if let Some((ir, or)) = &slots[si].direct {
-                            in_accum.extend(p_in[ir.clone()].iter().map(|r| (r.0.1, r.2.clone())));
-                            cur_out.extend(p_out[or.clone()].iter().map(|r| (r.0.1, r.2.clone())));
-                            crate::consolidation::consolidate(&mut in_accum);
-                            crate::consolidation::consolidate(&mut cur_out);
+                            in_accum.extend(p_in, ir.clone(), |r| r.0.1);
+                            cur_out.extend(p_out, or.clone(), |r| r.0.1);
                         } else {
                             slots[si].sweep.input_at(&at, &mut in_accum);
                             slots[si].sweep.output_at(&at, &mut cur_out);
                         }
+                        in_scratch.consolidate(&mut in_accum.data, &mut in_accum.diffs);
+                        out_scratch.consolidate(&mut cur_out.data, &mut cur_out.diffs);
                         // An interesting time can still reach the gate with nothing to read; the
                         // conventional reduce skips user logic there and so do we.
                         if in_accum.is_empty() && cur_out.is_empty() { continue; }
                         batch_keys.push(slots[si].key);
-                        in_all.append(&mut in_accum);
+                        in_all.extend(&in_accum, 0..in_accum.len(), |id| *id);
                         in_ends.push(in_all.len());
-                        out_all.append(&mut cur_out);
+                        out_all.extend(&cur_out, 0..cur_out.len(), |id| *id);
                         out_ends.push(out_all.len());
                         active.push((si, at));
                     }
@@ -374,11 +385,9 @@ where
                             let cend = corr_ends[bi];
                             if cstart != cend {
                                 debug_assert!(held.elements().iter().any(|h| h.less_equal(at)), "no held capability <= active time");
-                                for (vid, d) in &corr[cstart..cend] {
-                                    deltas.push(((slots[*si].key, *vid), at.clone(), d.clone()));
-                                }
+                                deltas.extend(&corr, cstart..cend, |vid| ((slots[*si].key, *vid), at.clone()));
                                 if slots[*si].direct.is_none() {
-                                    slots[*si].sweep.commit(at, corr[cstart..cend].iter().cloned());
+                                    slots[*si].sweep.commit(at, &corr, cstart..cend);
                                 }
                             }
                             cstart = cend;
@@ -401,8 +410,8 @@ where
             }
 
             if !deltas.is_empty() {
-                crate::consolidation::consolidate_updates(&mut deltas);
-                self.backend.emit(&deltas[..]);
+                delta_scratch.consolidate(&mut deltas.data, &mut deltas.diffs);
+                self.backend.emit(&deltas);
             }
         }
 
@@ -424,9 +433,9 @@ struct KeySweep<T, RIn, ROut> {
     at: Option<T>,
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> KeySweep<T, RIn, ROut> {
-    fn empty() -> Self {
-        KeySweep { key: 0, sweep: Sweep::new(), direct: None, pended: Vec::new(), at: None }
+impl<T: Timestamp + Lattice, RIn: DiffContainer, ROut: DiffContainer> KeySweep<T, RIn, ROut> {
+    fn empty(input: &RIn, output: &ROut) -> Self {
+        KeySweep { key: 0, sweep: Sweep::new(input, output), direct: None, pended: Vec::new(), at: None }
     }
 }
 
@@ -467,8 +476,8 @@ struct Sweep<T, RIn, ROut> {
     /// The accumulated input (novel and prior, merged and netted) and output: join partners, and
     /// the accumulations to evaluate over. Both may be advanced freely — witness duty lives in
     /// `seeds`, not in any record.
-    input: ValueHistory<u64, T, RIn>,
-    output: ValueHistory<u64, T, ROut>,
+    input: DiffHistory<T, RIn>,
+    output: DiffHistory<T, ROut>,
     /// The key's seed times — the harness's due (warned) times merged with the raw novel time
     /// support — ascending and deduplicated, with their suffix meets; `seed_pos` consumes them.
     /// These are the ONLY source of interest: the schedule is stated over them, so they are held
@@ -486,7 +495,8 @@ struct Sweep<T, RIn, ROut> {
     temporary: Vec<T>,
     /// Corrections emitted so far this sweep, meet-collapsed; both a join partner and part of the
     /// output accumulation.
-    produced: Vec<((u64, T), ROut)>,
+    produced: Records<(u64, T), ROut>,
+    produced_scratch: Consolidation<(u64, T), ROut>,
     /// The meet of every time still to come.
     meet: Option<T>,
     /// Whether the last `next_crossing` returned a time whose step is not yet settled.
@@ -505,14 +515,15 @@ enum Tick<T> {
     Done,
 }
 
-impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sweep<T, RIn, ROut> {
+impl<T: Timestamp + Lattice, RIn: DiffContainer, ROut: DiffContainer> Sweep<T, RIn, ROut> {
     /// An empty sweep, to be `load`ed and reused for successive keys.
-    fn new() -> Self {
+    fn new(input: &RIn, output: &ROut) -> Self {
         Sweep {
-            input: ValueHistory::new(), output: ValueHistory::new(),
+            input: DiffHistory::new(input), output: DiffHistory::new(output),
             seeds: Vec::new(), seed_meets: Vec::new(), seed_pos: 0,
             synth: Vec::new(), reached: Vec::new(), temporary: Vec::new(),
-            produced: Vec::new(), meet: None, suspended: false,
+            produced: Records::new(output.empty()), produced_scratch: Consolidation::new(output),
+            meet: None, suspended: false,
         }
     }
 
@@ -528,8 +539,10 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
         &mut self,
         owed: impl Iterator<Item = T>,
         novel_times: impl Iterator<Item = T>,
-        input: impl Iterator<Item = (u64, T, RIn)>,
-        output: impl Iterator<Item = (u64, T, ROut)>,
+        input: &Records<((u64, u64), T), RIn>,
+        in_rows: std::ops::Range<usize>,
+        output: &Records<((u64, u64), T), ROut>,
+        out_rows: std::ops::Range<usize>,
     ) {
         // Merge the two ascending seed sources, deduplicated.
         self.seeds.clear();
@@ -564,8 +577,8 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
         // be advanced by it at load.
         let mut meet: Option<T> = None;
         update_meet(&mut meet, self.seed_meets.first());
-        self.input.load_iter(input, meet.as_ref());
-        self.output.load_iter(output, meet.as_ref());
+        self.input.load(input, in_rows, meet.as_ref());
+        self.output.load(output, out_rows, meet.as_ref());
         self.meet = meet;
     }
 
@@ -677,11 +690,11 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
                 self.input.advance_buffer_by(meet);
                 self.output.advance_buffer_by(meet);
             }
-            self.temporary.extend(self.input.buffer().iter().map(|((_, t), _)| t)
+            self.temporary.extend(self.input.buffer.data.iter().map(|(_, t)| t)
                 .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
-            self.temporary.extend(self.output.buffer().iter().map(|((_, t), _)| t)
+            self.temporary.extend(self.output.buffer.data.iter().map(|(_, t)| t)
                 .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
-            self.temporary.extend(self.produced.iter().map(|((_, t), _)| t)
+            self.temporary.extend(self.produced.data.iter().map(|(_, t)| t)
                 .filter(|t| !t.less_equal(at)).map(|t| t.join(at)));
         }
         sort_dedup(&mut self.temporary);
@@ -695,31 +708,28 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
         }
     }
 
-    /// The input accumulation at the suspended time.
-    fn input_at(&self, at: &T, into: &mut Vec<(u64, RIn)>) {
-        for ((id, time), diff) in self.input.buffer().iter() {
-            if time.less_equal(at) { into.push((*id, diff.clone())); }
-        }
-        crate::consolidation::consolidate(into);
+    /// The input accumulation at the suspended time, to be consolidated by the caller.
+    fn input_at(&self, at: &T, into: &mut Records<u64, RIn>) {
+        let buffer = &self.input.buffer;
+        into.extend(buffer, (0..buffer.len()).filter(|&row| buffer.data[row].1.less_equal(at)), |r| r.0);
     }
 
     /// The tentative output accumulation at the suspended time, including this sweep's corrections.
-    fn output_at(&self, at: &T, into: &mut Vec<(u64, ROut)>) {
-        for ((id, time), diff) in self.output.buffer().iter().chain(self.produced.iter()) {
-            if time.less_equal(at) { into.push((*id, diff.clone())); }
+    /// The caller consolidates the combined selection.
+    fn output_at(&self, at: &T, into: &mut Records<u64, ROut>) {
+        for buffer in [&self.output.buffer, &self.produced] {
+            into.extend(buffer, (0..buffer.len()).filter(|&row| buffer.data[row].1.less_equal(at)), |r| r.0);
         }
-        crate::consolidation::consolidate(into);
     }
 
     /// Record the corrections evaluated at the suspended time, and collapse them by the meet.
-    fn commit(&mut self, at: &T, corrections: impl Iterator<Item = (u64, ROut)>) {
-        let before = self.produced.len();
-        for (id, diff) in corrections { self.produced.push(((id, at.clone()), diff)); }
-        if self.produced.len() > before {
+    fn commit(&mut self, at: &T, corrections: &Records<u64, ROut>, rows: std::ops::Range<usize>) {
+        if !rows.is_empty() {
+            self.produced.extend(corrections, rows, |id| (*id, at.clone()));
             if let Some(meet) = self.meet.as_ref() {
-                for entry in self.produced.iter_mut() { (entry.0).1.join_assign(meet); }
+                for (_, time) in &mut self.produced.data { time.join_assign(meet); }
             }
-            crate::consolidation::consolidate(&mut self.produced);
+            self.produced_scratch.consolidate(&mut self.produced.data, &mut self.produced.diffs);
         }
     }
 
@@ -737,4 +747,83 @@ impl<T: Timestamp + Lattice, RIn: Semigroup + Clone, ROut: Semigroup + Clone> Sw
         sort_dedup(&mut self.reached);
         self.meet = meet;
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::diffs::consolidate;
+    use timely::order::Product;
+
+    /// Two independent columns; neither storage nor a scalar row implements Semigroup here.
+    struct Pair { left: Vec<i64>, right: Vec<i64> }
+
+    impl DiffContainer for Pair {
+        fn len(&self) -> usize { self.left.len() }
+        fn empty(&self) -> Self { Self { left: vec![], right: vec![] } }
+        fn clear(&mut self) { self.left.clear(); self.right.clear(); }
+        fn copy_from(&mut self, source: &Self, rows: &[usize]) {
+            DiffContainer::copy_from(&mut self.left, &source.left, rows);
+            DiffContainer::copy_from(&mut self.right, &source.right, rows);
+        }
+        fn sum_from(&mut self, source: &Self, rows: &[usize], ends: &[usize]) {
+            self.left.sum_from(&source.left, rows, ends);
+            self.right.sum_from(&source.right, rows, ends);
+        }
+        fn nonzero(&self, into: &mut Vec<usize>) {
+            into.extend(self.left.iter().zip(&self.right).enumerate()
+                .filter(|(_, (a, b))| **a != 0 || **b != 0).map(|(row, _)| row));
+        }
+    }
+
+    #[test]
+    fn columnar_diffs_survive_consolidation_and_history_replay() {
+        let mut data = vec!["a", "b", "a", "b", "c", "c"];
+        let mut diffs = Pair { left: vec![1, 0, -1, 0, 1, -1], right: vec![0, 1, 2, -1, 0, 0] };
+        consolidate(&mut data, &mut diffs);
+        assert_eq!(data, vec!["a"]);
+        assert_eq!((diffs.left, diffs.right), (vec![0], vec![2]));
+
+        let schema = Pair { left: vec![], right: vec![] };
+        let mut input = Records::new(schema.empty());
+        input.data = vec![((0, 7), Product::new(0u64, 1u64)), ((0, 7), Product::new(1, 0)), ((0, 7), Product::new(2, 2))];
+        input.diffs = Pair { left: vec![1, -1, 3], right: vec![0, 2, -2] };
+        let output = Records::new(schema.empty());
+        let mut sweep = Sweep::new(&schema, &schema);
+        sweep.load(std::iter::empty(), input.data.iter().map(|r| r.1), &input, 0..3, &output, 0..0);
+        let mut pended = Vec::new();
+        let mut accum = Records::new(schema.empty());
+        let mut current = Records::new(schema.empty());
+        // Identity reduction: corrections from earlier crossings must enter later output sums.
+        for (time, expected_input, expected_output) in [
+            (Product::new(0, 1), (1, 0), None),
+            (Product::new(1, 0), (-1, 2), None),
+            (Product::new(1, 1), (0, 2), Some((0, 2))),
+            (Product::new(2, 2), (3, 0), Some((0, 2))),
+        ] {
+            assert_eq!(sweep.next_crossing(&Antichain::new(), &mut pended), Some(time));
+            accum.clear();
+            current.clear();
+            sweep.input_at(&time, &mut accum);
+            sweep.output_at(&time, &mut current);
+            consolidate(&mut accum.data, &mut accum.diffs);
+            consolidate(&mut current.data, &mut current.diffs);
+            assert_eq!(accum.data, [7]);
+            assert_eq!((accum.diffs.left[0], accum.diffs.right[0]), expected_input);
+            if let Some(expected) = expected_output {
+                assert_eq!(current.data, [7]);
+                assert_eq!((current.diffs.left[0], current.diffs.right[0]), expected);
+            } else {
+                assert!(current.is_empty());
+            }
+            let previous = expected_output.unwrap_or((0, 0));
+            accum.diffs.left[0] -= previous.0;
+            accum.diffs.right[0] -= previous.1;
+            consolidate(&mut accum.data, &mut accum.diffs);
+            sweep.commit(&time, &accum, 0..accum.len());
+        }
+        assert_eq!(sweep.next_crossing(&Antichain::new(), &mut pended), None);
+        assert!(pended.is_empty());
+    }
+
 }

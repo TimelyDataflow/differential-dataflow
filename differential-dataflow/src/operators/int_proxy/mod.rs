@@ -3,9 +3,11 @@
 //! The tactics are intended to support custom operator implementations without rebuilding
 //! the non-trivial and often non-obvious time-based logic that supports them.
 //!
-//! The tactics here run DD's operator logic over consolidated `[((u64, u64), time, diff)]`
-//! lists, the first integer a hash of the "key" and granule of independence, the second an
-//! ephemeral data identifier understood by the backend but opaque to the operator harness.
+//! The tactics here run DD's operator logic over consolidated updates with `(u64, u64)` proxies.
+//! The first integer is a hash of the "key" and granule of independence.
+//! The second is an ephemeral data identifier understood by the backend but opaque to the operator harness.
+//! Reduce keeps `((key, id), time)` metadata beside a [`diffs::DiffContainer`].
+//! Join still exchanges scalar-difference [`ProxyBridge`] lists.
 //! The tactics first elicit proxy identifiers from the backends, perform their necessary time
 //! and difference based computations to stage integer collections, and then re-invoke the
 //! backends with those same identifiers to produce the necessary output.
