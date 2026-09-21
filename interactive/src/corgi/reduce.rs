@@ -28,8 +28,6 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
-#[cfg(test)]
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::Description;
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::diffs::{consolidate, Records};
