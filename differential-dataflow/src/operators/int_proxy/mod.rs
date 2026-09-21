@@ -42,6 +42,7 @@
 //! Both are welcome to efficiently notice that there have been no collisions and optimize,
 //! or to ignore the risk entirely and live dangerously.
 
+pub mod diffs;
 mod history;
 
 pub mod join;
