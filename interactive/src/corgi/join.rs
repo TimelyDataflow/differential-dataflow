@@ -33,7 +33,7 @@ use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use differential_dataflow::operators::int_proxy::{JoinInstance, ProxyBridge, ProxyJoinBackend};
+use differential_dataflow::operators::int_proxy::{KeyPosition, JoinInstance, ProxyBridge, ProxyJoinBackend};
 use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
@@ -73,6 +73,9 @@ impl<T: ColTime> CorgiJoinBackend<T> {
 }
 
 impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> {
+    type Key = u64;
+    type V0 = u64;
+    type V1 = u64;
     type R0 = Diff;
     type R1 = Diff;
     type ROut = Diff;
@@ -81,15 +84,20 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
     fn advance(
         &mut self,
         instance: &JoinInstance<T, CBatch<T>, CBatch<T>>,
-        from: &mut Option<u64>,
+        from: &mut KeyPosition<u64>,
         bridge0: &mut ProxyBridge<T, Diff>,
         bridge1: &mut ProxyBridge<T, Diff>,
     ) {
+        let mut next = match *from {
+            KeyPosition::Start => Some(0),
+            KeyPosition::At(key) => Some(key),
+            KeyPosition::End => return,
+        };
         self.colliding.clear();
         let chunks0 = side_chunks(&instance.batches0);
         let chunks1 = side_chunks(&instance.batches1);
         if chunks0.is_empty() || chunks1.is_empty() {
-            *from = None;
+            *from = KeyPosition::End;
             return;
         }
         debug_assert_eq!(
@@ -110,11 +118,12 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             &chunks0,
             &chunks1,
             &instance.lower,
-            from,
+            &mut next,
             bridge0,
             bridge1,
             &mut self.colliding,
         );
+        *from = next.map_or(KeyPosition::End, KeyPosition::At);
     }
 
     fn cross(
@@ -894,7 +903,7 @@ mod tests {
                     }
                     let mut backend = backend();
                     let (mut left, mut right) = (Vec::new(), Vec::new());
-                    backend.advance(&instance, &mut Some(0), &mut left, &mut right);
+                    backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
                     assert_eq!((left.len(), right.len()), (1, 1));
                     assert_eq!((left[0].1, left[0].2), (5, 2));
                     if !compound0 { assert_eq!(left[0].0.1, u64::MAX); }
@@ -909,7 +918,7 @@ mod tests {
                     assert_eq!(output[0].times.get(0), 5);
                     instance.batches0.push(make(compound0, vec![u64::MAX], vec![-2], 3));
                     left.clear(); right.clear();
-                    backend.advance(&instance, &mut Some(0), &mut left, &mut right);
+                    backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
                     assert!(left.is_empty() && right.is_empty(), "suppress a fully cancelled key");
                 }
             }
@@ -943,11 +952,11 @@ mod tests {
             lower: 0,
         };
         let mut backend = backend();
-        let mut from = Some(0);
+        let mut from = KeyPosition::Start;
         let (mut left, mut right) = (Vec::new(), Vec::new());
 
         backend.advance(&instance, &mut from, &mut left, &mut right);
-        assert!(from.is_some(), "the first block must leave work for the collision block");
+        assert!(from != KeyPosition::End, "the first block must leave work for the collision block");
         assert!(backend.colliding.is_empty());
 
         left.clear();
@@ -969,7 +978,7 @@ mod tests {
             lower: 0,
         };
         let mut backend = backend();
-        let mut from = Some(0);
+        let mut from = KeyPosition::Start;
         let (mut left, mut right) = (Vec::new(), Vec::new());
 
         backend.advance(&instance, &mut from, &mut left, &mut right);

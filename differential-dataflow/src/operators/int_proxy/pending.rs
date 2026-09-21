@@ -3,20 +3,20 @@ use std::ops::Range;
 use timely::progress::{Antichain, frontier::AntichainRef, Timestamp};
 
 /// Activated associations refer to a shared time table, sorted by (key, time).
-pub(super) struct Due<T> {
+pub(super) struct Due<T, K> {
     pub times: Vec<T>,
-    pub rows: Vec<(u64, usize)>,
+    pub rows: Vec<(K, usize)>,
 }
 
-struct Run<T> {
+struct Run<T, K> {
     times: Vec<T>,
-    keys: Vec<u64>,
+    keys: Vec<K>,
     ends: Vec<usize>,
     live: Vec<usize>,
     live_keys: usize,
     frontier: Antichain<T>,
 }
-impl<T: Timestamp> Run<T> {
+impl<T: Timestamp, K: Copy + Ord> Run<T, K> {
     fn empty() -> Self {
         Self { times: vec![], keys: vec![], ends: vec![], live: vec![], live_keys: 0, frontier: Antichain::new() }
     }
@@ -24,7 +24,7 @@ impl<T: Timestamp> Run<T> {
         (if row == 0 { 0 } else { self.ends[row - 1] })..self.ends[row]
     }
     fn weight(&self) -> usize { self.live.len() + self.live_keys }
-    fn new(mut pairs: Vec<(T, u64)>) -> Self {
+    fn new(mut pairs: Vec<(T, K)>) -> Self {
         pairs.sort_unstable();
         pairs.dedup();
         let mut run = Self::empty();
@@ -83,12 +83,12 @@ impl<T: Timestamp> Run<T> {
     }
 }
 
-pub(super) struct Pending<T> { runs: Vec<Option<Run<T>>> }
-impl<T> Default for Pending<T> {
+pub(super) struct Pending<T, K = u64> { runs: Vec<Option<Run<T, K>>> }
+impl<T, K> Default for Pending<T, K> {
     fn default() -> Self { Self { runs: vec![] } }
 }
-impl<T: Timestamp> Pending<T> {
-    pub fn insert(&mut self, pairs: Vec<(T, u64)>) {
+impl<T: Timestamp, K: Copy + Ord> Pending<T, K> {
+    pub fn insert(&mut self, pairs: Vec<(T, K)>) {
         if pairs.is_empty() { return; }
         let mut run = Run::new(pairs);
         loop {
@@ -105,7 +105,7 @@ impl<T: Timestamp> Pending<T> {
         }
         frontier
     }
-    pub fn activate(&mut self, upper: AntichainRef<T>) -> Due<T> {
+    pub fn activate(&mut self, upper: AntichainRef<T>) -> Due<T, K> {
         let mut due = Due { times: vec![], rows: vec![] };
         for bin in &mut self.runs {
             let Some(run) = bin else { continue; };
@@ -133,7 +133,7 @@ impl<T: Timestamp> Pending<T> {
                 *bin = Some(old.merge(Run::empty()));
             }
         }
-        // Rank the small time table once; association sorting then compares only integers.
+        // Rank the small time table once; association sorting then compares keys and integer time ranks.
         let mut order: Vec<_> = (0..due.times.len()).collect();
         order.sort_unstable_by_key(|&row| &due.times[row]);
         let mut ranks = vec![0; order.len()];
