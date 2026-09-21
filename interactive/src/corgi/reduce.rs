@@ -28,10 +28,10 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::Description;
 use differential_dataflow::trace::chunk::ChunkBatch;
-use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
+use differential_dataflow::operators::int_proxy::diffs::{consolidate, Records};
+use differential_dataflow::operators::int_proxy::KeyPosition;
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 use corgi::arrange::{compare_at, gather, gather_lanes, sort_blocks};
@@ -289,7 +289,7 @@ where
 fn merge_present<T: timely::progress::Timestamp>(
     keys_col: &CValue, vals_col: &CValue,
     khs: &[u64], vids: &[u64], times: &mut [T], diffs: &[Diff], run_ends: &[usize],
-    bridge: &mut ProxyBridge<T, Diff>,
+    bridge: &mut Records<((u64, u64), T), Vec<Diff>>,
 ) -> bool {
     let ordered_keys = corgi::arrange::leaf_slice(keys_col).is_some() || {
         let mut start = 0usize;
@@ -326,7 +326,7 @@ fn merge_present<T: timely::progress::Timestamp>(
             current.as_mut().unwrap().2 += diff;
         } else {
             if let Some(record) = current.take() {
-                if record.2 != 0 { bridge.push(record); }
+                if record.2 != 0 { bridge.data.push((record.0, record.1)); bridge.diffs.push(record.2); }
             }
             current = Some((kv, time, diff));
         }
@@ -338,7 +338,7 @@ fn merge_present<T: timely::progress::Timestamp>(
         }
         drop(accumulate);
         if let Some(record) = current {
-            if record.2 != 0 { bridge.push(record); }
+            if record.2 != 0 { bridge.data.push((record.0, record.1)); bridge.diffs.push(record.2); }
         }
         return true;
     }
@@ -363,7 +363,7 @@ fn merge_present<T: timely::progress::Timestamp>(
     }
     drop(accumulate);
     if let Some(record) = current {
-        if record.2 != 0 { bridge.push(record); }
+        if record.2 != 0 { bridge.data.push((record.0, record.1)); bridge.diffs.push(record.2); }
     }
     true
 }
@@ -390,7 +390,7 @@ where
         &mut self,
         chunks: &[&CorgiChunk<T, Diff>],
         keys: &[u64],
-        bridge: &mut ProxyBridge<T, Diff>,
+        bridge: &mut Records<((u64, u64), T), Vec<Diff>>,
     ) {
         let (p_keys, p_vals, khs, mut times, diffs, run_ends) = collect_present(chunks, keys);
         if khs.is_empty() {
@@ -401,22 +401,24 @@ where
         self.input.register(p_vals, &vids);
         self.keys.register(p_keys, &khs);
         if !merged {
-            bridge.extend(times.into_iter().enumerate().map(|(i, time)| ((khs[i], vids[i]), time, diffs[i])));
-            consolidate_updates(bridge);
+            bridge.data.extend(times.into_iter().enumerate().map(|(i, time)| ((khs[i], vids[i]), time)));
+            bridge.diffs.extend(diffs);
+            consolidate(&mut bridge.data, &mut bridge.diffs);
         }
     }
 
     /// The one value crossing for a retire: every `(key, time)` bracket at once. Builds the output
     /// value COLUMN directly per reducer, registers it (id → row) into the val pool, and returns the
-    /// proxy `(value_id, diff)` deltas with per-bracket ends. `input[k] = (value_id, accumulated diff)`; the bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
-    fn reduce_brackets(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+    /// proxy `(value_id, diff)` deltas with per-bracket ends.
+    /// Input value IDs and accumulated diffs are aligned; ends delimit the brackets.
+    fn reduce_brackets(&mut self, ends: &[usize], input: &Records<u64, Vec<Diff>>) -> (Vec<(u64, Diff)>, Vec<usize>) {
         // Primitive IDs contain the signed integer itself; a segmented minimum
         // needs neither payload resolution nor a structural sort.
         if matches!(self.reducer, Reducer::Min) && self.input.depth.is_some() {
             let (mut values, mut output_ends) = (Vec::new(), Vec::with_capacity(ends.len()));
             let mut start = 0;
             for &end in ends {
-                if let Some(&(id, _)) = input[start..end].iter().filter(|r| r.1 != 0).min_by_key(|r| r.0 as i64) {
+                if let Some((&id, _)) = input.data[start..end].iter().zip(&input.diffs[start..end]).filter(|r| *r.1 != 0).min_by_key(|r| *r.0 as i64) {
                     values.push((id, 1));
                 }
                 output_ends.push(values.len());
@@ -435,7 +437,7 @@ where
                 let mut sums: Vec<u64> = Vec::new();
                 let mut start = 0;
                 for &end in ends {
-                    let c: Diff = input[start..end].iter().map(|&(_, d)| d).sum();
+                    let c: Diff = input.diffs[start..end].iter().sum();
                     if c > 0 {
                         sums.push(c as u64);
                         out_diffs.push(1);
@@ -459,7 +461,7 @@ where
                 let mut present = 0usize;
                 let mut start = 0;
                 for &end in ends {
-                    if input[start..end].iter().any(|&(_, d)| d != 0) {
+                    if input.diffs[start..end].iter().any(|&d| d != 0) {
                         present += 1;
                         out_diffs.push(1);
                     }
@@ -488,8 +490,8 @@ where
                     let lo = cand_reps.len();
                     let seg = block_starts.len() as u64;
                     for k in start..end {
-                        if input[k].1 != 0 {
-                            cand_reps.push(input[k].0);
+                        if input.diffs[k] != 0 {
+                            cand_reps.push(input.data[k]);
                             labels.push(seg);
                         }
                     }
@@ -524,11 +526,11 @@ where
                 let mut blocks: Vec<(usize, usize)> = Vec::with_capacity(ends.len());
                 let mut start = 0;
                 for (bi, &end) in ends.iter().enumerate() {
-                    if input[start..end].iter().any(|&(_, d)| d != 0) {
+                    if input.diffs[start..end].iter().any(|&d| d != 0) {
                         let lo = entry_reps.len();
                         for k in start..end {
-                            entry_reps.push(input[k].0);
-                            entry_diffs.push(input[k].1);
+                            entry_reps.push(input.data[k]);
+                            entry_diffs.push(input.diffs[k]);
                             labels.push(bi as u64);
                         }
                         blocks.push((lo, entry_reps.len()));
@@ -576,8 +578,10 @@ where
     type Key = u64;
     type VIn = u64;
     type VOut = u64;
-    type RIn = Diff;
-    type ROut = Diff;
+    type RIn = Vec<Diff>;
+    type ROut = Vec<Diff>;
+
+    fn new_diffs(&self) -> (Vec<Diff>, Vec<Diff>) { (Vec::new(), Vec::new()) }
 
     fn begin(&mut self, _description: Description<T>) {
         // Open the output session for this retire; reset the per-retire resolution pools.
@@ -587,7 +591,7 @@ where
         self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
-    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut KeyPosition<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
+    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut KeyPosition<u64>, window: &mut ReduceWindow<T, Vec<Diff>, Vec<Diff>>) {
         // Single window: present the WHOLE key space at once, and report it covered. This is NOT a
         // deferred refinement — bounded windows were measured and rejected: at WINDOW = 1<<14, scc
         // (100 rounds x batch 100) cost 84.4s against 63.7s, a 33% regression, while peak RSS
@@ -658,16 +662,17 @@ where
             self.keys.register(o_keys, &o_khs);
             self.vals.register(o_vals, &vids);
             if !merged {
-                window.output.extend(o_times.into_iter().enumerate().map(|(i, time)| ((o_khs[i], vids[i]), time, o_diffs[i])));
-                consolidate_updates(&mut window.output);
+                window.output.data.extend(o_times.into_iter().enumerate().map(|(i, time)| ((o_khs[i], vids[i]), time)));
+                window.output.diffs.extend(o_diffs);
+                consolidate(&mut window.output.data, &mut window.output.diffs);
             }
         }
     }
 
-    fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+    fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &Records<u64, Vec<Diff>>, out_ends: &[usize], output: &Records<u64, Vec<Diff>>) -> (Records<u64, Vec<Diff>>, Vec<usize>) {
         let (desired, desired_ends) = self.reduce_brackets(in_ends, input);
 
-        let mut corr: Vec<(u64, Diff)> = Vec::new();
+        let mut corr = Records::new(Vec::new());
         let mut corr_ends: Vec<usize> = Vec::with_capacity(keys.len());
         let (mut ds, mut os) = (0usize, 0usize);
         // Scratch for netting, cleared per key rather than allocated per key.
@@ -681,12 +686,12 @@ where
             for &(vid, d) in &desired[ds..de] {
                 if let Some(x) = net.get_mut(&vid) { *x += d; } else { net.insert(vid, d); order.push(vid); }
             }
-            for &(vid, d) in &output[os..oe] {
+            for (&vid, &d) in output.data[os..oe].iter().zip(&output.diffs[os..oe]) {
                 if let Some(x) = net.get_mut(&vid) { *x -= d; } else { net.insert(vid, -d); order.push(vid); }
             }
             for &vid in &order {
                 let d = net[&vid];
-                if d != 0 { corr.push((vid, d)); }
+                if d != 0 { corr.data.push(vid); corr.diffs.push(d); }
             }
             corr_ends.push(corr.len());
             ds = de;
@@ -695,15 +700,14 @@ where
         (corr, corr_ends)
     }
 
-    fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
+    fn emit(&mut self, records: &Records<((u64, u64), T), Vec<Diff>>) {
         // Accumulate IDs; resolve columns once at the output boundary.
-        for rec in records {
-            let ((kh, vid), t, d) = (rec.0, &rec.1, rec.2);
+        for (((kh, vid), t), d) in records.data.iter().zip(&records.diffs) {
             let (krows, vrows, times, diffs) = &mut self.rows;
-            krows.push(kh);
-            vrows.push(vid);
+            krows.push(*kh);
+            vrows.push(*vid);
             times.push(t);
-            diffs.push(d);
+            diffs.push(*d);
         }
     }
 
@@ -729,7 +733,9 @@ mod tests {
             for _ in 0..depth { col = CValue::Prod(vec![col]); }
             let input_ids = ids(&col);
             backend.input.register(col, &input_ids);
-            let input = [(0, 1), (u64::MAX, -1), (i64::MIN as u64, 0), (i64::MAX as u64, -1), (i64::MIN as u64, -2)];
+            let mut input = Records::new(Vec::new());
+            input.data = vec![0, u64::MAX, i64::MIN as u64, i64::MAX as u64, i64::MIN as u64];
+            input.diffs = vec![1, -1, 0, -1, -2];
             let (values, ends) = backend.reduce_brackets(&[0, 3, 5], &input);
             assert_eq!(values, vec![(u64::MAX, 1), (i64::MIN as u64, 1)]);
             assert_eq!(ends, vec![0, 1, 2]);
@@ -788,7 +794,7 @@ mod tests {
     fn merge_present_accepts_ordered_compound_keys() {
         let keys = compound_keys(vec![1, 2], vec![7, 8]);
         let vals = CValue::u64(vec![10, 20]);
-        let mut bridge = Vec::new();
+        let mut bridge = Records::new(Vec::new());
         assert!(merge_present(
             &keys, &vals, &[1, 2], &[10, 20], &mut [0u64, 0], &[1, 1], &[2], &mut bridge,
         ));
@@ -823,12 +829,13 @@ mod tests {
             let vids: Vec<_> = rows.iter().map(|r| r.0.1).collect();
             let mut times: Vec<_> = rows.iter().map(|r| r.1).collect();
             let diffs: Vec<_> = rows.iter().map(|r| r.2).collect();
-            let mut bridge = Vec::new();
+            let mut bridge = Records::new(Vec::new());
             assert!(merge_present(&CValue::u64(khs.clone()), &CValue::u64(vids.clone()),
                 &khs, &vids, &mut times, &diffs, &ends, &mut bridge));
             let expected: Vec<_> = expected.into_iter().filter(|(_, d)| *d != 0)
                 .map(|((kv, time), diff)| (kv, time, diff)).collect();
-            assert_eq!(bridge, expected, "run count: {count}");
+            let actual: Vec<_> = bridge.data.into_iter().zip(bridge.diffs).map(|((kv, t), d)| (kv, t, d)).collect();
+            assert_eq!(actual, expected, "run count: {count}");
         }
     }
 
@@ -844,7 +851,7 @@ mod tests {
             &mut [0u64, 0],
             &[1, 1],
             &[2],
-            &mut Vec::new(),
+            &mut Records::new(Vec::new()),
         ));
     }
 }

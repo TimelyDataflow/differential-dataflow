@@ -1,7 +1,9 @@
 //! Backend-agnostic operator tactics using ordered, copyable proxies.
 //!
 //! The tactics support custom operator implementations without rebuilding the non-trivial and often non-obvious time-based logic that supports them.
-//! They run DD's operator logic over consolidated `[((key, val), time, diff)]` lists.
+//! They run DD's operator logic over consolidated updates with `(key, val)` proxies.
+//! Reduce keeps `((key, val), time)` metadata beside a [`diffs::DiffContainer`].
+//! Join still exchanges scalar-difference [`ProxyBridge`] lists.
 //! Keys identify independent groups; values identify data within a group.
 //! Both require only `Copy + Ord` and need not be the types presented to user logic.
 //! The tactics elicit proxies, perform time and difference computations, and return proxies to the backend for interpretation.
@@ -44,6 +46,7 @@
 //! Both are welcome to efficiently notice that there have been no collisions and optimize,
 //! or to ignore the risk entirely and live dangerously.
 
+pub mod diffs;
 mod history;
 
 pub mod join;

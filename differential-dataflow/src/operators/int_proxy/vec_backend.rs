@@ -34,6 +34,7 @@ use crate::trace::chunk::ChunkBatch;
 use crate::trace::chunk::vec::VecChunk;
 use crate::trace::Description;
 
+use super::diffs::Records;
 use super::{KeyPosition, ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 /// The batch type of a hash-keyed [`ChunkSpine`](crate::trace::chunk::vec::ChunkSpine): updates
@@ -103,8 +104,10 @@ where
     type Key = u64;
     type VIn = u64;
     type VOut = u64;
-    type RIn = R;
-    type ROut = R;
+    type RIn = Vec<R>;
+    type ROut = Vec<R>;
+
+    fn new_diffs(&self) -> (Vec<R>, Vec<R>) { (Vec::new(), Vec::new()) }
 
     fn begin(&mut self, _description: Description<T>) {
         self.chunks.clear();
@@ -116,7 +119,7 @@ where
         instance: &ReduceInstance<'_, T, VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>,
         changed: &[u64],
         from: &mut KeyPosition<u64>,
-        window: &mut ReduceWindow<T, R, R>,
+        window: &mut ReduceWindow<T, Vec<R>, Vec<R>>,
     ) {
         let start = match *from { KeyPosition::Start => 0, KeyPosition::At(key) => key, KeyPosition::End => return };
 
@@ -160,16 +163,18 @@ where
                 }
                 // Novel and prior share the id space and arrive (id, time)-adjacent, so an exactly
                 // cancelling pair meets here and nets away; its time survives in the seeds.
-                if let Some(((k2, i2), t2, d2)) = window.input.last_mut() {
+                if let Some((((k2, i2), t2), d2)) = window.input.data.last().zip(window.input.diffs.last_mut()) {
                     if *k2 == key && *i2 == id && *t2 == time {
                         d2.plus_equals(&diff);
                         if d2.is_zero() {
-                            window.input.pop();
+                            window.input.data.pop();
+                            window.input.diffs.pop();
                         }
                         continue;
                     }
                 }
-                window.input.push(((key, id), time, diff));
+                window.input.data.push(((key, id), time));
+                window.input.diffs.push(diff);
             }
             // Per key, seeds arrive in (value, time) order; the contract wants (key, time) order.
             seed_scratch.sort();
@@ -208,7 +213,8 @@ where
                     last = Some(data);
                 }
                 let id = (self.out_pool.len() - 1) as u64;
-                window.output.push(((key, id), time, diff));
+                window.output.data.push(((key, id), time));
+                window.output.diffs.push(diff);
             }
             // The two passes agree or the hash collides. Neither can see this alone: a hash whose
             // input has fully cancelled for one real key still carries that key's stale output.
@@ -228,11 +234,11 @@ where
         &mut self,
         keys: &[u64],
         in_ends: &[usize],
-        input: &[(u64, R)],
+        input: &Records<u64, Vec<R>>,
         out_ends: &[usize],
-        output: &[(u64, R)],
-    ) -> (Vec<(u64, R)>, Vec<usize>) {
-        let mut corr: Vec<(u64, R)> = Vec::new();
+        output: &Records<u64, Vec<R>>,
+    ) -> (Records<u64, Vec<R>>, Vec<usize>) {
+        let mut corr = Records::new(Vec::new());
         let mut corr_ends: Vec<usize> = Vec::with_capacity(keys.len());
         let (mut is, mut os) = (0usize, 0usize);
         let mut updates: Vec<(W, R)> = Vec::new();
@@ -243,15 +249,15 @@ where
             // No hash collision fast path, expected to be the most common case.
             let collides = !self.collisions.is_empty() && self.collisions.binary_search(&keys[i]).is_ok();
             let single_key: Option<K> = if collides { None } else {
-                input[is..ie].first().map(|(vid, _)| self.in_pool[*vid as usize].0.clone())
-                    .or_else(|| output[os..oe].first().map(|(vid, _)| self.out_pool[*vid as usize].0.clone()))
+                input.data[is..ie].first().map(|vid| self.in_pool[*vid as usize].0.clone())
+                    .or_else(|| output.data[os..oe].first().map(|vid| self.out_pool[*vid as usize].0.clone()))
             };
             if let Some(key) = single_key {
                 input_vals.clear();
-                input_vals.extend(input[is..ie].iter().map(|(vid, d)| (self.in_pool[*vid as usize].1.clone(), d.clone())));
+                input_vals.extend(input.data[is..ie].iter().zip(&input.diffs[is..ie]).map(|(vid, d)| (self.in_pool[*vid as usize].1.clone(), d.clone())));
                 consolidate(&mut input_vals);
                 current.clear();
-                current.extend(output[os..oe].iter().map(|(vid, d)| (self.out_pool[*vid as usize].1.clone(), d.clone())));
+                current.extend(output.data[os..oe].iter().zip(&output.diffs[os..oe]).map(|(vid, d)| (self.out_pool[*vid as usize].1.clone(), d.clone())));
                 consolidate(&mut current);
                 updates.clear();
                 (self.logic)(&key, &input_vals, &mut current, &mut updates);
@@ -262,16 +268,17 @@ where
                         self.out_pool.push(key_w);
                         (self.out_pool.len() - 1) as u64
                     });
-                    corr.push((id, d));
+                    corr.data.push(id);
+                    corr.diffs.push(d);
                 }
             } else {
                 let mut ins: BTreeMap<K, Vec<(V, R)>> = BTreeMap::new();
-                for (vid, d) in &input[is..ie] {
+                for (vid, d) in input.data[is..ie].iter().zip(&input.diffs[is..ie]) {
                     let (k, v) = &self.in_pool[*vid as usize];
                     ins.entry(k.clone()).or_default().push((v.clone(), d.clone()));
                 }
                 let mut outs: BTreeMap<K, Vec<(W, R)>> = BTreeMap::new();
-                for (vid, d) in &output[os..oe] {
+                for (vid, d) in output.data[os..oe].iter().zip(&output.diffs[os..oe]) {
                     let (k, w) = &self.out_pool[*vid as usize];
                     outs.entry(k.clone()).or_default().push((w.clone(), d.clone()));
                 }
@@ -292,7 +299,8 @@ where
                             self.out_pool.push(key_w);
                             (self.out_pool.len() - 1) as u64
                         });
-                        corr.push((id, d));
+                        corr.data.push(id);
+                        corr.diffs.push(d);
                     }
                 }
             }
@@ -304,9 +312,9 @@ where
     }
 
     #[inline(never)]
-    fn emit(&mut self, records: &[((u64, u64), T, R)]) {
+    fn emit(&mut self, records: &Records<((u64, u64), T), Vec<R>>) {
         self.stage.clear();
-        for ((h, vid), t, d) in records {
+        for (((h, vid), t), d) in records.data.iter().zip(&records.diffs) {
             let row = self.out_pool[*vid as usize].clone();
             self.stage.push(((*h, row), t.clone(), d.clone()));
         }
