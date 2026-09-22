@@ -280,8 +280,8 @@ where
     (keys_col, vals_col, khs, times, diffs, run_ends)
 }
 
-/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Leaf values
-/// preserve value-id order. Keys may either be identity-id leaves or carried-hash columns, provided
+/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Leaf and unit
+/// values preserve value-id order. Keys may either be identity-id leaves or carried-hash columns, provided
 /// no one chunk run contains two real keys under the same hash; in the latter case the real-key
 /// tie-break would interrupt proxy `(key_id, value_id, time)` order, so we fall back to ordinary
 /// consolidation. A debug assertion audits the inferred order. Returns false when the inference
@@ -302,10 +302,12 @@ fn merge_present<T: timely::progress::Timestamp>(
             one_real_key_per_id
         }) && start == khs.len()
     };
-    let ordered_ids = ordered_keys && corgi::arrange::leaf_slice(vals_col).is_some();
+    let ordered_ids = ordered_keys && (matches!(vals_col, CValue::Unit(_)) || corgi::arrange::leaf_slice(vals_col).is_some());
     if !ordered_ids || !bridge.is_empty() {
         return false;
     }
+    // At most one record per presented row, reserved up front rather than grown by doubling.
+    bridge.reserve(khs.len());
 
     debug_assert!({
         let mut start = 0usize;
@@ -830,6 +832,18 @@ mod tests {
                 .map(|((kv, time), diff)| (kv, time, diff)).collect();
             assert_eq!(bridge, expected, "run count: {count}");
         }
+    }
+
+    /// Unit values all share one id, so the runs merge directly, here cancelling across runs.
+    #[test]
+    fn merge_present_accepts_unit_values() {
+        let vals = CValue::Unit(4);
+        let vids = ids(&vals);
+        let mut bridge = Vec::new();
+        assert!(merge_present(
+            &CValue::u64(vec![1, 3, 1, 2]), &vals, &[1, 3, 1, 2], &vids, &mut [0u64, 0, 0, 0], &[1, 2, -1, 5], &[2, 4], &mut bridge,
+        ));
+        assert_eq!(bridge, vec![((2, vids[0]), 0, 5), ((3, vids[0]), 0, 2)]);
     }
 
     #[test]
