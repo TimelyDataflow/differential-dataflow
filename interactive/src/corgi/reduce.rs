@@ -28,6 +28,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::ops::Range;
 use std::rc::Rc;
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
@@ -198,16 +199,40 @@ pub struct CorgiReduceBackend<T> {
     vals: IdPool,
     /// Output IDs, times, and diffs accumulated until `finish`.
     rows: (Vec<u64>, Vec<u64>, ColTimes<T>, Vec<Diff>),
+    /// Input records per window, bounding what the presentations cost at once.
+    window_size: usize,
+    /// The retire in progress, as its first window found it.
+    retire: Retire,
+}
+
+/// A retire's keys and where its input chunks hold them: searched once, by the first window,
+/// and presented a window at a time, each window a prefix of the keys not yet presented.
+#[derive(Default)]
+struct Retire {
+    /// The retire's keys, ascending.
+    keys: Vec<u64>,
+    /// The input records each key holds, novel and prior.
+    held: Vec<usize>,
+    /// Each input chunk's `(key index, rows)` matches, in key order; prior chunks first.
+    input: Vec<Vec<(usize, Range<usize>)>>,
+    /// The first key not yet presented.
+    next: usize,
 }
 
 impl<T> CorgiReduceBackend<T> {
-    pub fn new(reducer: Reducer) -> Self {
+    /// A backend covering the key space in windows of `1 << 12` input records.
+    pub fn new(reducer: Reducer) -> Self { Self::with_window(reducer, 1 << 12) }
+
+    /// A backend with an explicit window budget, in presented input records.
+    pub fn with_window(reducer: Reducer, window_size: usize) -> Self {
         CorgiReduceBackend {
             reducer,
             input: IdPool::default(),
             keys: IdPool::default(),
             vals: IdPool::default(),
             rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
+            window_size: window_size.max(1),
+            retire: Retire::default(),
         }
     }
 }
@@ -272,6 +297,10 @@ fn leaf_fields<'a>(col: &'a CValue, into: &mut Vec<&'a [u64]>) -> bool {
 }
 
 /// Each chunk's `(key index, rows)` matches of the ascending `keys`, in key order.
+///
+/// Both the keys and stored identifier lane are sorted. Match them with
+/// monotone positions, galloping over long gaps and stepping through adjacent
+/// keys. The same compiled search covers narrow updates and broad cascades.
 fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[u64]) -> Vec<Vec<(usize, std::ops::Range<usize>)>> {
     chunks.iter().map(|chunk| {
         if chunk.diffs().is_empty() { return Vec::new(); }
@@ -282,12 +311,8 @@ fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[u64]) -> Vec<Vec<
 
 /// Concatenate the records of the `changed` keys across a run of chunks into parallel
 /// `(keys_col, vals_col)` corgi columns plus per-record `(key_hash, time, diff)`. `changed` is the
-/// ASCENDING set of changed key ids; a row is kept iff its key id is in it.
-///
-/// Both the changed set and stored identifier lane are sorted. Match them with
-/// monotone positions, galloping over long gaps and stepping through adjacent
-/// keys. The same compiled search covers narrow updates and broad cascades.
-fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>, Vec<usize>)
+/// ASCENDING set of changed key ids, and `matches` their rows in each chunk, as [`search`] finds.
+fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64], matches: &[Vec<(usize, Range<usize>)>]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>, Vec<usize>)
 where
     T: ColTime,
 {
@@ -298,12 +323,7 @@ where
     let mut run_ends = Vec::new();
     for (ci, ch) in chunks.iter().enumerate() {
         let before = khs.len();
-        if ch.diffs().is_empty() {
-            continue;
-        }
-        let lane = key_lane(ch.keys());
-        let kh = corgi::arrange::leaf_slice(lane).expect("the identifier lane is a u64 leaf");
-        for (j, range) in MatchingRanges::new(changed, kh) {
+        for (j, range) in matches[ci].iter().cloned() {
             for i in range {
                 tags.push(ci);
                 offs.push(i);
@@ -420,6 +440,32 @@ where
     batches.iter().flat_map(|b| b.chunks.iter()).collect()
 }
 
+/// A retire's keys: the hashes the novel batches touch, merged with the `changed` set the harness
+/// supplies.
+fn retire_keys<T: ColTime>(novel_chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> Vec<u64> {
+    let mut keys: Vec<u64> = novel_chunks.iter().flat_map(|ch| key_ids(ch.keys())).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    if !changed.is_empty() {
+        // Both sides ascend, so this is a merge.
+        let mut merged: Vec<u64> = Vec::with_capacity(keys.len() + changed.len());
+        let (mut a, mut b) = (0usize, 0usize);
+        while a < keys.len() || b < changed.len() {
+            let key = match (keys.get(a), changed.get(b)) {
+                (Some(x), Some(y)) => *x.min(y),
+                (Some(x), None) => *x,
+                (None, Some(y)) => *y,
+                (None, None) => unreachable!("loop condition ensures one is present"),
+            };
+            if keys.get(a) == Some(&key) { a += 1; }
+            if changed.get(b) == Some(&key) { b += 1; }
+            merged.push(key);
+        }
+        keys = merged;
+    }
+    keys
+}
+
 impl<T> CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
@@ -434,9 +480,10 @@ where
         &mut self,
         chunks: &[&CorgiChunk<T, Diff>],
         keys: &[u64],
+        matches: &[Vec<(usize, Range<usize>)>],
         bridge: &mut ProxyBridge<T, Diff>,
     ) {
-        let (p_keys, p_vals, khs, mut times, diffs, run_ends) = collect_present(chunks, keys);
+        let (p_keys, p_vals, khs, mut times, diffs, run_ends) = collect_present(chunks, keys, matches);
         if khs.is_empty() {
             return;
         }
@@ -462,6 +509,7 @@ where
         &mut self,
         chunks: &[&CorgiChunk<T, Diff>],
         keys: &[u64],
+        matches: &[Vec<(usize, Range<usize>)>],
         bridge: &mut ProxyBridge<T, Diff>,
     ) -> bool {
         let Some(first) = chunks.iter().find(|chunk| !chunk.diffs().is_empty()) else { return true };
@@ -490,7 +538,6 @@ where
         let order = |(ca, ra): (usize, usize), (cb, rb): (usize, usize)| {
             (0..width).map(|f| leaves[ca][f][ra].cmp(&leaves[cb][f][rb])).find(|o| o.is_ne()).unwrap_or(std::cmp::Ordering::Equal)
         };
-        let matches = search(chunks, keys);
         // At most one record per matched row, as in `merge_present`.
         bridge.reserve(matches.iter().flatten().map(|(_, rows)| rows.len()).sum());
         let mut cursors = vec![0; chunks.len()];
@@ -707,72 +754,67 @@ where
     }
 
     fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut KeyPosition<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
-        // Single window: present the WHOLE key space at once, and report it covered. This is NOT a
-        // deferred refinement — bounded windows were measured and rejected: at WINDOW = 1<<14, scc
-        // (100 rounds x batch 100) cost 84.4s against 63.7s, a 33% regression, while peak RSS
-        // fell only 356MB -> 340MB. Two reasons: the per-window, per-chunk seek setup is a
-        // fixed cost that multiplies by the window count, and the presentation is not the
-        // memory peak in the first place (the trace is).
+        // Bounded windows: each takes the retire's next keys until it holds `window_size` input
+        // records, never splitting a key, as its presentations are all live at once.
         if *from == KeyPosition::End {
             return;
         }
-        *from = KeyPosition::End;
-
-        // The window's keys: the hashes the novel batches touch, merged with the `changed` set the
-        // harness supplies. The novel hashes come from the scan the presentation needs anyway — the
-        // separate seeding pass this replaced read the delta a second time to derive them.
         let novel_chunks = chunks_of(instance.input_batches);
-        let mut keys: Vec<u64> = Vec::new();
-        // The seeds are the novel batches' RAW (key_hash, time) support, recorded here — before the
-        // merged presentation below, whose consolidation may net a novel record away entirely. The
-        // key hashes come from the scan the key list needs anyway.
-        let mut seeds: Vec<(u64, T)> = Vec::with_capacity(novel_chunks.iter().map(|c| c.diffs().len()).sum());
-        for ch in novel_chunks.iter() {
-            let khs = key_ids(ch.keys());
-            let times = ch.times();
-            for (i, kh) in khs.iter().enumerate() {
-                seeds.push((*kh, times.get(i)));
-            }
-            keys.extend(khs);
+        let mut in_chunks = chunks_of(instance.source_batches);
+        let prior = in_chunks.len();
+        in_chunks.extend(novel_chunks.iter().copied());
+        if *from == KeyPosition::Start {
+            let keys = retire_keys(&novel_chunks, changed);
+            let input = search(&in_chunks, &keys);
+            let mut held = vec![0; keys.len()];
+            for (index, rows) in input.iter().flatten() { held[*index] += rows.len(); }
+            self.retire = Retire { keys, held, input, next: 0 };
         }
-        seeds.sort_unstable_by(|a, b| a.cmp(b));
-        seeds.dedup();
-        window.seeds = seeds;
-        keys.sort_unstable();
-        keys.dedup();
-        if !changed.is_empty() {
-            // Both sides ascend, so this is a merge.
-            let mut merged: Vec<u64> = Vec::with_capacity(keys.len() + changed.len());
-            let (mut a, mut b) = (0usize, 0usize);
-            while a < keys.len() || b < changed.len() {
-                let key = match (keys.get(a), changed.get(b)) {
-                    (Some(x), Some(y)) => *x.min(y),
-                    (Some(x), None) => *x,
-                    (None, Some(y)) => *y,
-                    (None, None) => unreachable!("loop condition ensures one is present"),
-                };
-                if keys.get(a) == Some(&key) { a += 1; }
-                if changed.get(b) == Some(&key) { b += 1; }
-                merged.push(key);
-            }
-            keys = merged;
+        let mut retire = std::mem::take(&mut self.retire);
+        let (start, mut stop, mut records) = (retire.next, retire.next, 0);
+        while stop < retire.keys.len() && (records < self.window_size || retire.held[stop] == 0) {
+            records += retire.held[stop];
+            stop += 1;
         }
-        if keys.is_empty() {
+        if stop == start {
+            *from = KeyPosition::End;
             return;
         }
+        let keys = &retire.keys[start..stop];
+        // Each chunk's matches within the window, indexed from its first key: all of them, when the
+        // window is the whole retire.
+        let matches: Vec<Vec<_>> = if keys.len() == retire.keys.len() { std::mem::take(&mut retire.input) } else {
+            retire.input.iter().map(|list| {
+                let (lo, hi) = (list.partition_point(|m| m.0 < start), list.partition_point(|m| m.0 < stop));
+                list[lo..hi].iter().map(|(index, rows)| (index - start, rows.clone())).collect()
+            }).collect()
+        };
+
+        // The seeds are the novel batches' RAW (key_hash, time) support, recorded here — before the
+        // merged presentation below, whose consolidation may net a novel record away entirely. The
+        // rows come from the retire's search, which the presentation needs anyway.
+        window.seeds.reserve(matches[prior..].iter().flatten().map(|(_, rows)| rows.len()).sum());
+        for (chunk, found) in in_chunks[prior..].iter().zip(&matches[prior..]) {
+            let times = chunk.times();
+            for (index, rows) in found {
+                window.seeds.extend(rows.clone().map(|row| (keys[*index], times.get(row))));
+            }
+        }
+        window.seeds.sort_unstable();
+        window.seeds.dedup();
 
         // ONE merged input presentation: novel and prior together, netted by the consolidation —
         // equal values share an id, so an exactly cancelling pair vanishes here, and
         // its time survives in `window.seeds` above. The input pool resolves values
-        // needed by Min and Collect.
-        let mut in_chunks = chunks_of(instance.source_batches);
-        in_chunks.extend(novel_chunks.iter().copied());
-        if !self.present_input_merged(&in_chunks, &keys, &mut window.input) {
-            self.present_input(&in_chunks, &keys, &mut window.input);
+        // needed by Min and Collect, for this window only: no input id outlives its window.
+        self.input.clear();
+        if !self.present_input_merged(&in_chunks, keys, &matches, &mut window.input) {
+            self.present_input(&in_chunks, keys, &matches, &mut window.input);
         }
 
         // Output-history presentation, same keys (register keys + values for correction resolution).
-        let (o_keys, o_vals, o_khs, mut o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
+        let out_chunks = chunks_of(instance.output_batches);
+        let (o_keys, o_vals, o_khs, mut o_times, o_diffs, o_run_ends) = collect_present(&out_chunks, keys, &search(&out_chunks, keys));
         if !o_khs.is_empty() {
             let vids = ids(&o_vals);
             let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &mut o_times, &o_diffs, &o_run_ends, &mut window.output);
@@ -782,6 +824,11 @@ where
                 window.output.extend(o_times.into_iter().enumerate().map(|(i, time)| ((o_khs[i], vids[i]), time, o_diffs[i])));
                 consolidate_updates(&mut window.output);
             }
+        }
+
+        *from = retire.keys.get(stop).map_or(KeyPosition::End, |key| KeyPosition::At(*key));
+        if stop < retire.keys.len() {
+            self.retire = Retire { next: stop, ..retire };
         }
     }
 
@@ -1004,8 +1051,9 @@ mod tests {
                 let chunks: Vec<_> = chunks.iter().collect();
                 let (mut merged, mut hashed) = (CorgiReduceBackend::<Time>::new(Reducer::Count), CorgiReduceBackend::<Time>::new(Reducer::Count));
                 let (mut m_bridge, mut h_bridge) = (Vec::new(), Vec::new());
-                assert!(merged.present_input_merged(&chunks, &keys, &mut m_bridge));
-                hashed.present_input(&chunks, &keys, &mut h_bridge);
+                let matches = search(&chunks, &keys);
+                assert!(merged.present_input_merged(&chunks, &keys, &matches, &mut m_bridge));
+                hashed.present_input(&chunks, &keys, &matches, &mut h_bridge);
                 for (backend, bridge) in [(&merged, &m_bridge), (&hashed, &h_bridge)] {
                     assert!(bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)));
                     let mut fields = Vec::new();
@@ -1027,7 +1075,7 @@ mod tests {
         hashes.sort();
         let chunk = CorgiChunk::from_columns(pairs, CValue::u64(vec![5, 6]), [stamp(0, &[]), stamp(0, &[])].into_iter().collect(), vec![1, 1]);
         let mut bridge = Vec::new();
-        assert!(!CorgiReduceBackend::<Time>::new(Reducer::Count).present_input_merged(&[&chunk], &hashes, &mut bridge));
+        assert!(!CorgiReduceBackend::<Time>::new(Reducer::Count).present_input_merged(&[&chunk], &hashes, &search(&[&chunk], &hashes), &mut bridge));
         assert!(bridge.is_empty());
     }
 
@@ -1045,5 +1093,108 @@ mod tests {
             &[2],
             &mut Vec::new(),
         ));
+    }
+
+    /// Windows partition a retire: at any budget each window stops once it holds the budget, and
+    /// together they present what one window would, which is what the chunks hold.
+    #[test]
+    fn windows_partition_a_retire() {
+        use std::collections::{BTreeMap, BTreeSet};
+        use differential_dataflow::dynamic::pointstamp::PointStamp;
+        use timely::progress::{Antichain, Timestamp};
+        use crate::corgi::chunk::present_key;
+        use crate::ir::Time;
+        let stamp = |outer, coords: &[u64]| Time::new(outer, PointStamp::new(coords.iter().copied().collect()));
+        let times = [stamp(0, &[]), stamp(1, &[2, 3]), stamp(2, &[1, 4]), stamp(3, &[2])];
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = |n: u64| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) % n
+        };
+        let mut row = || (next(40), (next(3), next(3)), times[next(4) as usize].clone(), [1, -1, 2][next(3) as usize]);
+        let prior: Vec<_> = (0..300).map(|_| row()).collect();
+        let mut novel: Vec<_> = (0..60).map(|_| row()).collect();
+        novel.extend(prior.iter().step_by(25).map(|(k, v, t, d)| (*k, *v, t.clone(), -d)));
+        let output: Vec<_> = (0..80).map(|_| row()).collect();
+        let lower = Antichain::from_elem(Time::minimum());
+        let key_shapes: [fn(&[u64]) -> CValue; 2] = [
+            |k| CValue::u64(k.to_vec()),
+            |k| present_key(CValue::Prod(vec![CValue::u64(k.to_vec()), CValue::u64(k.iter().map(|k| k * 7).collect())])),
+        ];
+        let val_shapes: [fn(&[(u64, u64)]) -> CValue; 2] = [
+            |v| CValue::u64(v.iter().map(|v| v.0).collect()),
+            |v| CValue::Prod(vec![CValue::u64(v.iter().map(|v| v.0).collect()), CValue::u64(v.iter().map(|v| v.1).collect())]),
+        ];
+        for (key_shape, val_shape) in key_shapes.iter().flat_map(|k| val_shapes.iter().map(move |v| (k, v))) {
+            // Each run of rows is a chunk, and each chunk a batch.
+            let batches = |rows: &[(u64, (u64, u64), Time, Diff)], size| -> Vec<CBatch<Time>> {
+                rows.chunks(size).map(|rows| CorgiChunk::from_columns(
+                    key_shape(&rows.iter().map(|r| r.0).collect::<Vec<_>>()),
+                    val_shape(&rows.iter().map(|r| r.1).collect::<Vec<_>>()),
+                    rows.iter().map(|r| r.2.clone()).collect(),
+                    rows.iter().map(|r| r.3).collect(),
+                )).filter(|chunk| !chunk.diffs().is_empty()).map(|chunk| Rc::new(ChunkBatch::new(vec![chunk]))).collect()
+            };
+            let (source, input, out) = (batches(&prior, 70), batches(&novel, 30), batches(&output, 50));
+            let instance = ReduceInstance { source_batches: &source, input_batches: &input, output_batches: &out, lower: lower.borrow() };
+            let mut in_chunks = chunks_of(&source);
+            in_chunks.extend(chunks_of(&input));
+            // Changed keys, two of them held by no batch, and the input records each retire key holds.
+            let mut changed = key_ids(&key_shape(&[3, 17, 41, 45]));
+            changed.sort();
+            let retire: BTreeSet<u64> = chunks_of(&input).iter().flat_map(|chunk| key_ids(chunk.keys())).chain(changed.iter().copied()).collect();
+            let mut held = BTreeMap::new();
+            for id in in_chunks.iter().flat_map(|chunk| key_ids(chunk.keys())).filter(|id| retire.contains(id)) {
+                *held.entry(id).or_insert(0) += 1;
+            }
+            let run = |window_size| {
+                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Count, window_size);
+                backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
+                let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
+                let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
+                while from != KeyPosition::End {
+                    let before = from;
+                    window.clear();
+                    backend.next_window(&instance, &changed, &mut from, &mut window);
+                    assert!(from > before);
+                    let within = |key: u64| before <= KeyPosition::At(key) && KeyPosition::At(key) < from;
+                    let counts: Vec<usize> = held.iter().filter(|(key, _)| within(**key)).map(|(_, count)| *count).collect();
+                    assert!(counts.iter().rev().skip(1).sum::<usize>() < window_size, "a window stops once it holds the budget");
+                    assert!(from == KeyPosition::End || counts.iter().sum::<usize>() >= window_size, "a window holds the budget");
+                    for (bridge, pool, into) in [(&window.input, &backend.input, &mut inputs), (&window.output, &backend.vals, &mut outputs)] {
+                        let (values, mut fields) = (pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()), Vec::new());
+                        assert!(leaf_fields(&values, &mut fields));
+                        for (i, ((key, _), time, diff)) in bridge.iter().enumerate() {
+                            assert!(within(*key));
+                            assert!(into.insert((*key, fields.iter().map(|field| field[i]).collect::<Vec<_>>(), time.clone()), *diff).is_none());
+                        }
+                    }
+                    for (key, time) in window.seeds.iter() {
+                        assert!(within(*key) && seeds.insert((*key, time.clone())));
+                    }
+                }
+                (inputs, seeds, outputs)
+            };
+            // What the chunks hold for the retire's keys: netted records, and the novel support.
+            let netted = |chunks: &[&CorgiChunk<Time, Diff>]| {
+                let mut netted = BTreeMap::new();
+                for chunk in chunks {
+                    let mut fields = Vec::new();
+                    assert!(leaf_fields(chunk.vals(), &mut fields));
+                    for (i, key) in key_ids(chunk.keys()).into_iter().enumerate().filter(|(_, key)| retire.contains(key)) {
+                        *netted.entry((key, fields.iter().map(|field| field[i]).collect::<Vec<_>>(), chunk.times().get(i))).or_insert(0) += chunk.diffs()[i];
+                    }
+                }
+                netted.retain(|_, diff| *diff != 0);
+                netted
+            };
+            let support: BTreeSet<_> = chunks_of(&input).iter()
+                .flat_map(|chunk| key_ids(chunk.keys()).into_iter().enumerate().map(|(i, key)| (key, chunk.times().get(i))))
+                .collect();
+            assert!(run(usize::MAX) == (netted(&in_chunks), support, netted(&chunks_of(&out))));
+            for window_size in [1, 3, 17] {
+                assert!(run(window_size) == run(usize::MAX), "window_size={window_size}");
+            }
+        }
     }
 }
