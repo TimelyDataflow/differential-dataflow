@@ -42,8 +42,10 @@ pub trait Backend {
     fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize) -> Collection<'s, Time, Self::Container>;
     fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s>;
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container>;
-    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, Self::Container>;
-    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s>;
+    /// A join in a scope at `depth` (root = 0), whose times have at most `depth` scope coordinates.
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, depth: usize) -> Collection<'s, Time, Self::Container>;
+    /// A reduce in a scope at `depth`, as for [`Self::join`].
+    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, depth: usize) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
 }
@@ -134,11 +136,11 @@ pub fn render_tree<'s, B: Backend>(
                     st::Node::Join { left, right, projection } => {
                         let l = resolve(&items, &imports, &var_cols, left).arrange();
                         let r = resolve(&items, &imports, &var_cols, right).arrange();
-                        Rendered::Collection(B::join(l, r, projection))
+                        Rendered::Collection(B::join(l, r, projection, depth))
                     },
                     st::Node::Reduce { input, reducer } => {
                         let a = resolve(&items, &imports, &var_cols, input).arrange();
-                        Rendered::Arrangement(B::reduce(a, reducer))
+                        Rendered::Arrangement(B::reduce(a, reducer, depth))
                     },
                     st::Node::Inspect { input, label } => {
                         let c = resolve(&items, &imports, &var_cols, input).collection();

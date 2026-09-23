@@ -24,6 +24,7 @@ use corgi::arrange::gather;
 use corgi::Value as CValue;
 
 use crate::backend::Backend;
+use crate::corgi::flat::Flat;
 use crate::corgi::chunk::{recover_key, CorgiChunk, CorgiChunker};
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::exchange::CorgiPact;
@@ -180,6 +181,21 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
 /// unit struct) makes constructing one impossible, signalling "type only". Mirrors `VecBackend`.
 pub enum CorgiBackend {}
 
+/// Invoke `$body!(T)` with the time the proxy tactics should reason in at scope `$depth`: a
+/// `Flat` with a lane for the epoch and one for each scope coordinate, or `Time` itself beyond
+/// the widths instantiated here.
+macro_rules! with_flat_time {
+    ($depth:expr, $body:ident) => {
+        match $depth {
+            0 => $body!(Flat<1>),
+            1 => $body!(Flat<2>),
+            2 => $body!(Flat<3>),
+            3 => $body!(Flat<4>),
+            _ => $body!(Time),
+        }
+    };
+}
+
 impl Backend for CorgiBackend {
     type Container = CC;
     type Arr<'scope> = Arranged<'scope, TraceAgent<CTrace>>;
@@ -250,18 +266,28 @@ impl Backend for CorgiBackend {
             .as_collection()
     }
 
-    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, CC> {
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, depth: usize) -> Collection<'s, Time, CC> {
         // The proxy-join seam drives the backend blockwise under the driver's fuel; the backend
         // compiles the projection per container (shape-directed, for `Spread`) and emits corgi
         // columns directly as `CorgiContainer`s — column-native, no row round-trip.
-        let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone()));
-        join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic).as_collection()
+        macro_rules! join_in {
+            ($time:ty) => {{
+                let tactic = ProxyJoinTactic::new(CorgiJoinBackend::<Time, $time>::new(projection.key.clone(), projection.val.clone()));
+                join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic).as_collection()
+            }};
+        }
+        with_flat_time!(depth, join_in)
     }
 
-    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
+    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, depth: usize) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
-        let tactic = ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone())).with_key_batch_size(256);
-        reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic)
+        macro_rules! reduce_in {
+            ($time:ty) => {{
+                let tactic = ProxyReduceTactic::new(CorgiReduceBackend::<Time, $time>::new(reducer.clone())).with_key_batch_size(256);
+                reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic)
+            }};
+        }
+        with_flat_time!(depth, reduce_in)
     }
 
     fn inspect<'s>(c: Collection<'s, Time, CC>, label: String) -> Collection<'s, Time, CC> {
