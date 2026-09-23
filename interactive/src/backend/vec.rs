@@ -79,7 +79,10 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
                         next.push(((nk, nv), t, d));
                     },
                     LinearOp::Filter(cond) => {
-                        let keep = { let mut env = vec![k.clone(), v.clone()]; eval(cond, &mut env).truthy() };
+                        let keep = match eval(cond, &mut vec![k.clone(), v.clone()]) {
+                            Value::Int(n) => n != 0,
+                            other => panic!("a filter predicate must be an Int, got {other:?}"),
+                        };
                         if keep { next.push(((k, v), t, d)); }
                     },
                     LinearOp::Negate => {

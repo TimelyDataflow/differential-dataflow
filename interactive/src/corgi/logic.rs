@@ -255,7 +255,7 @@ pub fn compile(
         }
         Term::Int(n) => Ok(b.add(Op::Lit(CValue::u64(vec![*n as u64])), vec![anchor])),
         Term::Tuple(fields) => {
-            // A `Spread(t)` child splices `t`'s `Prod` fields in place (the flat-row model).
+            // A `Spread(t)` child splices `t`'s `Prod` fields in place; any other value is one field.
             let mut ids: Vec<usize> = Vec::new();
             for f in fields {
                 match f {
@@ -683,9 +683,14 @@ pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<
     }
 }
 
-/// Compile a `Filter` predicate → a mask column (nonzero keeps the row).
+/// Compile a `Filter` predicate → a mask column (nonzero keeps the row). A predicate must be an
+/// `Int`; any other shape is a type error, as it is in the row backend.
 pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    compile_over_kv(cond, kshape, vshape)
+    let g = compile_over_kv(cond, kshape, vshape)?;
+    match corgi::shape_of(&g, &Shape::Prod(vec![kshape.clone(), vshape.clone()]))? {
+        Shape::Prim(_) => Ok(g),
+        other => Err(format!("a filter predicate must be an Int, got {other}")),
+    }
 }
 
 /// Compile a join projection: key/val Terms over `Var(0)=key`, `Var(1)=val0`, `Var(2)=val1` (with
