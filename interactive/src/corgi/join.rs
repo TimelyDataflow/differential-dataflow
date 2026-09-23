@@ -33,6 +33,8 @@ use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use differential_dataflow::lattice::Lattice;
+use timely::progress::Timestamp;
 use differential_dataflow::operators::int_proxy::{KeyPosition, JoinInstance, ProxyBridge, ProxyJoinBackend};
 use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
@@ -42,7 +44,7 @@ use crate::corgi::search::matching_ranges;
 use corgi::{shape_of_value, Shape, Value as CValue};
 
 use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, CorgiChunk};
-use crate::corgi::col_times::ColTime;
+use crate::corgi::col_times::{ColTime, ColTimes, RowTime};
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_join_projection;
 use crate::ir::{Diff, Term};
@@ -56,23 +58,26 @@ const COORD_BITS: u32 = 48;
 
 /// The corgi [`ProxyJoinBackend`]: holds the projection `Term`s (`Var(0)=key`, `Var(1)=val0`,
 /// `Var(2)=val1`), compiled per container against the matched columns' shapes.
-pub struct CorgiJoinBackend<T: ColTime> {
+///
+/// The tactic reasons in `I`: the column's own time `T`, or a fixed-width representation of it.
+pub struct CorgiJoinBackend<T: ColTime, I = T> {
     key: Term,
     val: Term,
     /// Identifier tokens in the current block that cover more than one real key. `advance` writes
     /// this and the immediately following `cross` reads it before the next `advance`; only matches
     /// under these astronomically rare tokens need a real-key comparison.
     colliding: Vec<u64>,
-    _t: PhantomData<T>,
+    _t: PhantomData<(T, I)>,
 }
 
-impl<T: ColTime> CorgiJoinBackend<T> {
+impl<T: ColTime, I> CorgiJoinBackend<T, I> {
     pub fn new(key: Term, val: Term) -> Self {
         CorgiJoinBackend { key, val, colliding: Vec::new(), _t: PhantomData }
     }
 }
 
-impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> {
+impl<T: ColTime, I: RowTime<T>> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<T, I> {
+    type Time = I;
     type Key = u64;
     type V0 = u64;
     type V1 = u64;
@@ -83,10 +88,10 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
 
     fn advance(
         &mut self,
-        instance: &JoinInstance<T, CBatch<T>, CBatch<T>>,
+        instance: &JoinInstance<I, CBatch<T>, CBatch<T>>,
         from: &mut KeyPosition<u64>,
-        bridge0: &mut ProxyBridge<T, Diff>,
-        bridge1: &mut ProxyBridge<T, Diff>,
+        bridge0: &mut ProxyBridge<I, Diff>,
+        bridge1: &mut ProxyBridge<I, Diff>,
     ) {
         let mut next = match *from {
             KeyPosition::Start => Some(0),
@@ -128,8 +133,8 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
 
     fn cross(
         &mut self,
-        instance: &JoinInstance<T, CBatch<T>, CBatch<T>>,
-        matches: &mut JoinMatches<T, Diff>,
+        instance: &JoinInstance<I, CBatch<T>, CBatch<T>>,
+        matches: &mut JoinMatches<I, Diff>,
         output: &mut Vec<CorgiContainer<T, Diff>>,
     ) {
         let chunks0 = side_chunks(&instance.batches0);
@@ -208,10 +213,14 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             output.push(CorgiContainer {
                 keys: nk,
                 vals: nv,
-                times: kept.as_ref().map_or_else(
-                    || matches.times[start..end].iter().collect(),
-                    |kept| kept.iter().map(|&index| &matches.times[index]).collect(),
-                ),
+                times: {
+                    let mut times = ColTimes::new();
+                    match kept.as_ref() {
+                        None => for time in &matches.times[start..end] { time.write(&mut times); },
+                        Some(kept) => for &index in kept { matches.times[index].write(&mut times); },
+                    }
+                    times
+                },
                 diffs: kept.as_ref().map_or_else(
                     || matches.diffs[start..end].to_vec(),
                     |kept| kept.iter().map(|&index| matches.diffs[index]).collect(),
@@ -326,7 +335,7 @@ struct SideScratch<T> {
     tds: Vec<(T, Diff)>,
 }
 
-impl<T: ColTime> SideScratch<T> {
+impl<T: Timestamp + Lattice> SideScratch<T> {
     fn new() -> Self {
         SideScratch { entries: Vec::new(), tds: Vec::new() }
     }
@@ -342,13 +351,13 @@ impl<T: ColTime> SideScratch<T> {
     /// primitive values identify themselves; other values share their least occurrence's
     /// coordinate across chunks. Times are advanced by `lower`, consolidated, zeros dropped.
     /// Entries end sorted by `(token, time)`.
-    fn stage_runs(&mut self, runs: &[RunRef<'_, T>], lower: &T) {
+    fn stage_runs<C: ColTime>(&mut self, runs: &[RunRef<'_, C>], lower: &T) where T: RowTime<C> {
         self.entries.clear();
         if runs.first().is_some_and(|run| primitive_values(run.chunk)) {
             for run in runs {
                 let ids = leaf_slice(run.chunk.vals()).unwrap();
                 self.entries.extend((run.s..run.e).map(|row| {
-                    (ids[row], run.chunk.times().get(row).join(lower), run.chunk.diffs()[row])
+                    (ids[row], T::read(run.chunk.times(), row).join(lower), run.chunk.diffs()[row])
                 }));
             }
             differential_dataflow::consolidation::consolidate_updates(&mut self.entries);
@@ -364,7 +373,7 @@ impl<T: ColTime> SideScratch<T> {
                 if row > v_start && !run.val_eq(row, run, v_start) {
                     v_start = row;
                 }
-                self.push(coord_hi | v_start as u64, run.chunk.times().get(row).join(lower), run.chunk.diffs()[row]);
+                self.push(coord_hi | v_start as u64, T::read(run.chunk.times(), row).join(lower), run.chunk.diffs()[row]);
             }
         } else {
             // Cross-chunk merge by value content: heads are (run index, row); each step takes
@@ -388,7 +397,7 @@ impl<T: ColTime> SideScratch<T> {
                     if run.val_eq(row, &runs[ri_min], row_min) {
                         let r_end = run.val_run_end(row);
                         for r in row..r_end {
-                            self.tds.push((run.chunk.times().get(r).join(lower), run.chunk.diffs()[r]));
+                            self.tds.push((T::read(run.chunk.times(), r).join(lower), run.chunk.diffs()[r]));
                         }
                         coord = coord.min(((run.cid as u64) << COORD_BITS) | row as u64);
                         if r_end < run.e { heads[h] = (ri, r_end); h += 1; } else { heads.swap_remove(h); }
@@ -577,11 +586,11 @@ fn one_key<T: ColTime>(a: &[RunRef<'_, T>], b: &[RunRef<'_, T>]) -> bool {
 /// Stage a colliding identifier without allowing equal values from different real keys to
 /// consolidate together. Each real key is staged independently, but all retain the identifier as
 /// their proxy token; `cross` uses the coordinates to discard unequal-key pairs afterward.
-fn stage_collision<T: ColTime>(
+fn stage_collision<T: ColTime, I: RowTime<T>>(
     runs: &[RunRef<'_, T>],
-    lower: &T,
+    lower: &I,
     token: u64,
-    bridge: &mut ProxyBridge<T, Diff>,
+    bridge: &mut ProxyBridge<I, Diff>,
 ) {
     let mut positions: Vec<usize> = runs.iter().map(|run| run.s).collect();
     let mut scratch = SideScratch::new();
@@ -634,13 +643,13 @@ fn stage_collision<T: ColTime>(
 /// trace), the small side DRIVES and the large side is presented only at the driver's keys
 /// (sorted probes — cost tracks the driver plus matches). When the sides are
 /// comparable, both sides are pulled and merged symmetrically instead.
-fn advance_leaf<T: ColTime>(
+fn advance_leaf<T: ColTime, I: RowTime<T>>(
     chunks0: &[&CorgiChunk<T, Diff>],
     chunks1: &[&CorgiChunk<T, Diff>],
-    lower: &T,
+    lower: &I,
     from: &mut Option<u64>,
-    bridge0: &mut ProxyBridge<T, Diff>,
-    bridge1: &mut ProxyBridge<T, Diff>,
+    bridge0: &mut ProxyBridge<I, Diff>,
+    bridge1: &mut ProxyBridge<I, Diff>,
     colliding: &mut Vec<u64>,
 ) {
     let start = from.expect("advance called on an exhausted unit");
@@ -684,14 +693,14 @@ fn advance_leaf<T: ColTime>(
 
 /// Lopsided regime: the driver views are walked; the probee is presented only at the
 /// driver's sorted keys, one monotone search per probee chunk per block.
-fn leaf_probe<'a, T: ColTime>(
+fn leaf_probe<'a, T: ColTime, I: RowTime<T>>(
     mut dviews: Vec<LeafView<'a, T>>,
     pchunks: &[&CorgiChunk<T, Diff>],
-    lower: &T,
+    lower: &I,
     h: Option<u64>,
     from: &mut Option<u64>,
-    bridge_d: &mut ProxyBridge<T, Diff>,
-    bridge_p: &mut ProxyBridge<T, Diff>,
+    bridge_d: &mut ProxyBridge<I, Diff>,
+    bridge_p: &mut ProxyBridge<I, Diff>,
     hashed: bool,
     colliding: &mut Vec<u64>,
 ) {
@@ -769,14 +778,14 @@ fn leaf_probe<'a, T: ColTime>(
 
 /// Comparable-sides regime: both sides pulled and merged symmetrically on the `u64`
 /// buffers.
-fn leaf_merge<'a, T: ColTime>(
+fn leaf_merge<'a, T: ColTime, I: RowTime<T>>(
     mut views0: Vec<LeafView<'a, T>>,
     mut views1: Vec<LeafView<'a, T>>,
-    lower: &T,
+    lower: &I,
     h: Option<u64>,
     from: &mut Option<u64>,
-    bridge0: &mut ProxyBridge<T, Diff>,
-    bridge1: &mut ProxyBridge<T, Diff>,
+    bridge0: &mut ProxyBridge<I, Diff>,
+    bridge1: &mut ProxyBridge<I, Diff>,
     hashed: bool,
     colliding: &mut Vec<u64>,
 ) {

@@ -100,6 +100,7 @@ where
     R: Semigroup + Ord + Clone + 'static,
     L: FnMut(&K, &[(V, R)], &mut Vec<(W, R)>, &mut Vec<(W, R)>),
 {
+    type Time = T;
     type Key = u64;
     type VIn = u64;
     type VOut = u64;

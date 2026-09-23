@@ -68,6 +68,12 @@ impl<T, RIn, ROut, K, VIn, VOut> ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
 /// `begin [ next_window reduce_corrections* emit ]* finish`,
 /// where the window loop runs until `next_window` reports the key space exhausted.
 pub trait ProxyReduceBackend<T, B1, B2> {
+    /// The time the harness reasons in, and in which windows and emitted records are presented.
+    ///
+    /// Either `T` itself, or a representation of it: the conversions to and from `T` must preserve
+    /// the partial order and the lattice operations, and the representation's `Ord` must extend
+    /// its partial order. The harness converts only frontiers.
+    type Time: Timestamp + Lattice + From<T>;
     /// Independent groups, with identities stable across retires.
     type Key: Copy + Ord;
     /// Input value proxies, valid throughout a window.
@@ -108,7 +114,7 @@ pub trait ProxyReduceBackend<T, B1, B2> {
         instance: &ReduceInstance<'_, T, B1, B2>,
         changed: &[Self::Key],
         from: &mut KeyPosition<Self::Key>,
-        window: &mut ReduceWindow<T, Self::RIn, Self::ROut, Self::Key, Self::VIn, Self::VOut>,
+        window: &mut ReduceWindow<Self::Time, Self::RIn, Self::ROut, Self::Key, Self::VIn, Self::VOut>,
     );
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
@@ -126,7 +132,7 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     ) -> (Vec<(Self::VOut, Self::ROut)>, Vec<usize>);
 
     /// Commit a collection of updates to the batch in progress.
-    fn emit(&mut self, records: &[((Self::Key, Self::VOut), T, Self::ROut)]);
+    fn emit(&mut self, records: &[((Self::Key, Self::VOut), Self::Time, Self::ROut)]);
 
     /// Complete the session matching `begin`, yielding the batch it described,
     /// or `None` when the span it described carries no updates.
@@ -134,6 +140,8 @@ pub trait ProxyReduceBackend<T, B1, B2> {
 }
 
 /// A proxy-space [`ReduceTactic`]: matches input and output records by `key`.
+///
+/// `T` is the backend's [`ProxyReduceBackend::Time`], in which the tactic reasons.
 pub struct ProxyReduceTactic<T, Bk, K = u64> {
     backend: Bk,
     /// Maximum number of keys with live sweep state at once.
@@ -162,27 +170,32 @@ impl<T, Bk, K> ProxyReduceTactic<T, Bk, K> {
     }
 }
 
-impl<T, B1, B2, Bk, K: Copy + Ord> ReduceTactic<T, B1, B2> for ProxyReduceTactic<T, Bk, K>
+impl<T0, T, B1, B2, Bk, K: Copy + Ord> ReduceTactic<T0, B1, B2> for ProxyReduceTactic<T, Bk, K>
 where
-    T: Timestamp + Lattice,
-    Bk: ProxyReduceBackend<T, B1, B2, Key = K>,
+    T0: Timestamp + Lattice + From<T>,
+    T: Timestamp + Lattice + From<T0>,
+    Bk: ProxyReduceBackend<T0, B1, B2, Key = K, Time = T>,
 {
     fn retire(
         &mut self,
         source_batches: Vec<B1>,
         output_batches: Vec<B2>,
         input_batches: Vec<B1>,
-        lower: &Antichain<T>,
-        upper: &Antichain<T>,
-        held: &Antichain<T>,
-    ) -> (Option<Span<T, B2>>, Antichain<T>) {
-        if held.elements().iter().all(|t| upper.less_equal(t)) {
+        lower: &Antichain<T0>,
+        upper0: &Antichain<T0>,
+        held0: &Antichain<T0>,
+    ) -> (Option<Span<T0, B2>>, Antichain<T0>) {
+        if held0.elements().iter().all(|t| upper0.less_equal(t)) {
             debug_assert!(
-                self.pending.frontier().iter().all(|time| held.less_equal(time)),
+                self.pending.frontier().iter().all(|time| held0.less_equal(&T0::from(time.clone()))),
                 "held capabilities do not cover pending times",
             );
-            return (None, held.clone());
+            return (None, held0.clone());
         }
+        // The tactic reasons in the backend's time, and converts only frontiers.
+        let upper: &Antichain<T> = &upper0.iter().cloned().map(T::from).collect();
+        let held: &Antichain<T> = &held0.iter().cloned().map(T::from).collect();
+        let outward = |frontier: Antichain<T>| -> Antichain<T0> { frontier.into_iter().map(T0::from).collect() };
 
         let instance = ReduceInstance {
             source_batches: &source_batches,
@@ -209,11 +222,11 @@ where
         // beyond `upper` can remain when nothing is due, and releasing their capabilities would
         // strand them (see the frontier clause of the `ReduceTactic::retire` contract).
         if changed.is_empty() && instance.input_batches.is_empty() {
-            return (None, self.pending.frontier());
+            return (None, outward(self.pending.frontier()));
         }
 
         // The single output batch spans the retired interval.
-        let description = Description::new(lower.clone(), upper.clone(), Antichain::from_elem(T::minimum()));
+        let description = Description::new(lower.clone(), upper0.clone(), Antichain::from_elem(T0::minimum()));
         self.backend.begin(description.clone());
 
         // Start before every key; each window advances to an inclusive key bound or the end.
@@ -409,7 +422,7 @@ where
         }
 
         let produced = Some(Span::new(description, self.backend.finish()));
-        (produced, self.pending.frontier())
+        (produced, outward(self.pending.frontier()))
     }
 }
 
