@@ -1,40 +1,37 @@
 //! The corgi `ProxyReduceBackend`: the value semantics for the DD `ProxyReduceTactic`.
 //!
 //! The tactic (differential's `operators::int_proxy::reduce`) owns ALL time/lattice logic over
-//! integer proxies `(key_hash, value_id, time, diff)`; this backend supplies only:
+//! integer proxies `(key_id, value_id, time, diff)`; this backend supplies only:
 //!
-//!   * ids — `key_hash`/`value_id` are value-as-id for primitive columns (the value IS the id) and
-//!     the canonical native `corgi::hash` for compound columns (columnar, content-addressed, so ids
-//!     coincide across the output→input boundary); DD never hashes.
-//!   * the value callback — `reduce_many` runs ONE crossing per retire over every `(key, time)`
+//!   * ids — a key's id is the identifier its arrangement is sorted by (the key itself when it is a
+//!     primitive integer, else its hash lane). A value's id names a row in a pool of columns: the
+//!     chunks' own value columns, and the output columns this backend builds. Within a window, a
+//!     key's equal input values share one id, found by corgi's segmented sort; output values are
+//!     matched to the current output by structural comparison. Nothing hashes values.
+//!   * the value callback — `reduce_brackets` runs ONE crossing per wave over every `(key, time)`
 //!     bracket, building the output value COLUMNS directly (Count → a `u64` prim, Distinct → a
 //!     `Unit`, Min → the chosen input rows, Collect → a `List`), never through DDIR rows.
-//!   * materialize — resolve proxy ids back to real columns by `gather` from per-retire pools and
-//!     seal a `CorgiChunk` batch column-natively.
+//!   * materialize — gather the emitted keys and values from the pools' columns and seal a
+//!     `CorgiChunk` batch column-natively.
 //!
-//! Transcode-free: primitive columns are reconstructed from their IDs; compound IDs resolve
-//! through columnar representative pools, without carrying `DValue`s. Primitive Min scans signed
-//! IDs directly; other Min/Collect values use a segmented structural sort over an
-//! order-only columnar view: signed integer leaves are swizzled, and lists become lexicographic
-//! ranks. The winning rows are still gathered from the original columns.
+//! Min/Collect values use a segmented structural sort over an order-only columnar view: signed
+//! integer leaves are swizzled, and lists become lexicographic ranks. The winning rows are still
+//! gathered from the original columns.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
 //! (a columnar semijoin — matching the row-wise tactic's read).
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
+use std::ops::Range;
 use std::rc::Rc;
 
-use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::consolidation::consolidate;
 use differential_dataflow::trace::Description;
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{compare_at, gather, gather_lanes, sort_blocks};
+use corgi::arrange::{compare_at, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
 use crate::corgi::col_times::{ColTime, ColTimes};
@@ -112,265 +109,168 @@ fn lexicographic_list_ranks(bounds: Bounds, ordered_elements: CValue) -> CValue 
     CValue::u64(ranks)
 }
 
-/// An identity `Hasher` for the id-index maps: their keys are already well-distributed 64-bit
-/// content hashes (`hash_rows`), so passing the id straight through avoids re-hashing it (siphash
-/// on `register_keys`/lookups was ~7% of the reduce in profiling). Only `write_u64` is used.
+/// Values named by id: id `i` is row `refs[i].1` of `columns[refs[i].0]`.
 #[derive(Default)]
-struct IdHasher(u64);
-impl Hasher for IdHasher {
-    #[inline]
-    fn write_u64(&mut self, i: u64) { self.0 = i; }
-    #[inline]
-    fn write(&mut self, _: &[u8]) { unreachable!("IdMap keys are u64") }
-    #[inline]
-    fn finish(&self) -> u64 { self.0 }
+struct Pool {
+    columns: Vec<CValue>,
+    refs: Vec<(usize, usize)>,
 }
-/// `key_hash`/`value_id` → row index, hashed by identity.
-type IdMap = HashMap<u64, usize, BuildHasherDefault<IdHasher>>;
 
-/// A per-retire ID resolver. Primitive IDs already contain their payload; retain only
-/// the singleton-product nesting depth. Compound columns keep representatives.
-/// All nonempty registrations in a pool have the same shape, as required by its operator.
-#[derive(Default)]
-struct IdPool {
-    depth: Option<usize>,
-    blocks: Vec<CValue>,
-    index: IdMap,
-    len: usize,
-}
-impl IdPool {
-    fn clear(&mut self) {
-        self.depth = None;
-        self.blocks.clear();
-        self.index.clear();
-        self.len = 0;
-    }
-    fn register(&mut self, col: CValue, ids: &[u64]) {
-        if col.len() == 0 { return; }
-        if corgi::arrange::leaf_slice(&col).is_some() {
-            let (mut depth, mut leaf) = (0, &col);
-            while let CValue::Prod(fields) = leaf { depth += 1; leaf = &fields[0]; }
-            self.depth = Some(depth);
-        } else {
-            for (i, &id) in ids.iter().enumerate() { self.index.entry(id).or_insert(self.len + i); }
-            self.len += col.len();
-            self.blocks.push(col);
-        }
-    }
+impl Pool {
+    /// The values `ids` name, as one column.
     fn gather(&self, ids: &[u64]) -> CValue {
-        if let Some(depth) = self.depth {
-            let mut col = CValue::u64(ids.to_vec());
-            for _ in 0..depth { col = CValue::Prod(vec![col]); }
-            col
-        } else {
-            let rows: Vec<_> = ids.iter().map(|id| self.index[id]).collect();
-            if self.blocks.len() == 1 { gather(&self.blocks[0], &rows) }
-            else { gather(&concat_columns(&self.blocks), &rows) }
-        }
+        gather_refs(&self.columns, ids.iter().map(|&id| self.refs[id as usize]))
     }
 }
 
-/// A corgi reduce backend for a single `Reducer`. Resolution uses primitive IDs
-/// directly and columnar representative pools for compound values.
+/// The rows `refs` names, each a `(column, row)` of `columns`, as one column.
+fn gather_refs(columns: &[CValue], refs: impl Iterator<Item = (usize, usize)>) -> CValue {
+    let srcs: Vec<Option<&CValue>> = columns.iter().map(Some).collect();
+    let (tags, offs): (Vec<usize>, Vec<usize>) = refs.unzip();
+    gather_lanes(&srcs, &tags, &offs)
+}
+
+/// Where each of a list of chunks holds some ascending keys: per chunk, the `(key index, rows)` of
+/// each key it holds, in key order.
+type Matches = Vec<Vec<(usize, Range<usize>)>>;
+
+/// A corgi reduce backend for a single `Reducer`.
+///
+/// Each retire goes: `begin`; then per window, `next_window` presents a run of keys' input and
+/// output as integer records, `reduce_corrections` computes the output each key wants and how it
+/// differs from what it has, and `emit` records the difference; finally `finish` builds the batch.
 pub struct CorgiReduceBackend<T> {
     reducer: Reducer,
-    input: IdPool,
-    keys: IdPool,
-    vals: IdPool,
-    /// Output IDs, times, and diffs accumulated until `finish`.
-    rows: (Vec<u64>, Vec<u64>, ColTimes<T>, Vec<Diff>),
+    /// The current window's input values: its chunks' value columns.
+    input: Pool,
+    /// The current retire's output values: its output chunks' value columns, then those built here.
+    output: Pool,
+    /// The current retire's input then output chunks' key columns.
+    key_columns: Vec<CValue>,
+    /// The output emitted so far: key rows in `key_columns`, value ids, times, and diffs.
+    rows: (Vec<(usize, usize)>, Vec<u64>, ColTimes<T>, Vec<Diff>),
+    /// Input records per window, bounding what the presentations cost at once.
+    window_size: usize,
+    /// The retire in progress.
+    retire: Retire,
+}
+
+/// A retire's keys and where its input chunks hold them, found once by its first window.
+#[derive(Default)]
+struct Retire {
+    /// The retire's keys, ascending.
+    keys: Vec<u64>,
+    /// The input records each key holds, novel and prior.
+    held: Vec<usize>,
+    /// Where the input chunks, prior then novel, hold the keys.
+    input: Matches,
+    /// The current window, as a range of `keys`.
+    window: Range<usize>,
+    /// A row of `key_columns` holding each key of the window.
+    key_rows: Vec<Option<(usize, usize)>>,
+}
+
+impl Retire {
+    /// Advance to the next window: the next keys, until they hold `budget` input records. A key is
+    /// never split, so a window holds at least one. Returns `false` once there are no keys left.
+    fn advance(&mut self, budget: usize) -> bool {
+        let start = self.window.end;
+        let (mut stop, mut records) = (start, 0);
+        while stop < self.keys.len() && (records < budget || self.held[stop] == 0) {
+            records += self.held[stop];
+            stop += 1;
+        }
+        self.window = start..stop;
+        stop > start
+    }
+
+    /// Where the input chunks hold the window's keys, as indices into the window. Moves the matches
+    /// out, rather than copying them, when the window is the whole retire.
+    fn input_matches(&mut self) -> Matches {
+        let Range { start, end } = self.window.clone();
+        if end - start == self.keys.len() {
+            return std::mem::take(&mut self.input);
+        }
+        self.input.iter().map(|found| {
+            let (lo, hi) = (found.partition_point(|m| m.0 < start), found.partition_point(|m| m.0 < end));
+            found[lo..hi].iter().map(|(index, rows)| (index - start, rows.clone())).collect()
+        }).collect()
+    }
 }
 
 impl<T> CorgiReduceBackend<T> {
-    pub fn new(reducer: Reducer) -> Self {
+    /// A backend covering the key space in windows of `1 << 12` input records.
+    pub fn new(reducer: Reducer) -> Self { Self::with_window(reducer, 1 << 12) }
+
+    /// A backend with an explicit window budget, in presented input records.
+    pub fn with_window(reducer: Reducer, window_size: usize) -> Self {
         CorgiReduceBackend {
             reducer,
-            input: IdPool::default(),
-            keys: IdPool::default(),
-            vals: IdPool::default(),
+            input: Pool::default(),
+            output: Pool::default(),
+            key_columns: Vec::new(),
             rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
+            window_size: window_size.max(1),
+            retire: Retire::default(),
         }
     }
 }
 
-/// Concatenate corgi columns (skipping empties, which contribute no rows and so don't shift the
-/// pool offsets accounted at registration). One `gather_lanes` over the non-empty blocks.
-fn concat_columns(blocks: &[CValue]) -> CValue {
-    let non_empty: Vec<&CValue> = blocks.iter().filter(|b| b.len() > 0).collect();
-    match non_empty.len() {
-        0 => CValue::Unit(0),
-        1 => non_empty[0].clone(),
-        _ => {
-            let srcs: Vec<Option<&CValue>> = non_empty.iter().map(|b| Some(*b)).collect();
-            let total: usize = non_empty.iter().map(|b| b.len()).sum();
-            let (mut tags, mut offs) = (Vec::with_capacity(total), Vec::with_capacity(total));
-            for (ti, b) in non_empty.iter().enumerate() {
-                for o in 0..b.len() {
-                    tags.push(ti);
-                    offs.push(o);
-                }
-            }
-            gather_lanes(&srcs, &tags, &offs)
-        }
-    }
-}
-
-/// Id column for a VALUE column. For a PRIMITIVE column — a bare 64-bit `Prim`, or a 1-field
-/// `Prod([Prim(64)])` — the value itself is already a collision-free id (`i64 as u64` is a bijection),
-/// so pass it straight through and skip the content hash. Compound shapes (Unit / List / Sum /
-/// multi-field `Prod`) hash via the CANONICAL native `corgi::hash` (the designed boundary-id fold,
-/// width-blind and consistent-with-equality) — not the branch-local `arrange::hash_rows`; DDIR
-/// transcodes every leaf to `u64`, so width-blindness is a no-op for us and there is no cross-path
-/// hash comparison (value-as-id and native hash are never used for the same value: shape is uniform
-/// per column). Compound ids are used only for identity, but the leaf fast path additionally relies
-/// on raw-id order matching corgi's unsigned leaf order: the stored key lane is searched in that order and
-/// `merge_present` merges chunk runs in it. Raw two's-complement `u64` therefore remains correct for
-/// negative ints (no swizzle); changing the leaf encoding must also revisit those ordered paths.
-/// Applied CONSISTENTLY at every id site (both value presentations AND the freshly-produced
-/// `reduce_brackets` outputs), else `desired − current` nets across mismatched ids for the same value.
-fn ids(col: &CValue) -> Vec<u64> {
-    // Value-as-id: borrow the leaf and copy once, rather than `clone().into_u64()` — the
-    // clone bumps the `Arc`, so `into_u64`'s try-unwrap always fails and copies anyway,
-    // even for a freshly-gathered column with one holder.
-    if let Some(sl) = corgi::arrange::leaf_slice(col) {
-        return sl.to_vec();
-    }
-    corgi::hash(col)
-}
-
-/// Concatenate the records of the `changed` keys across a run of chunks into parallel
-/// `(keys_col, vals_col)` corgi columns plus per-record `(key_hash, time, diff)`. `changed` is the
-/// ASCENDING set of changed key ids; a row is kept iff its key id is in it.
+/// Where `chunks` hold the ascending `keys`.
 ///
-/// Both the changed set and stored identifier lane are sorted. Match them with
+/// Both the keys and stored identifier lane are sorted. Match them with
 /// monotone positions, galloping over long gaps and stepping through adjacent
 /// keys. The same compiled search covers narrow updates and broad cascades.
-fn collect_present<T>(chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> (CValue, CValue, Vec<u64>, Vec<T>, Vec<Diff>, Vec<usize>)
-where
-    T: ColTime,
-{
-    let key_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.keys())).collect();
-    let val_srcs: Vec<Option<&CValue>> = chunks.iter().map(|c| Some(c.vals())).collect();
-    let (mut tags, mut offs) = (Vec::new(), Vec::new());
-    let (mut khs, mut times, mut diffs) = (Vec::new(), Vec::new(), Vec::new());
-    let mut run_ends = Vec::new();
-    for (ci, ch) in chunks.iter().enumerate() {
-        let before = khs.len();
-        if ch.diffs().is_empty() {
-            continue;
-        }
-        let lane = key_lane(ch.keys());
-        let kh = corgi::arrange::leaf_slice(lane).expect("the identifier lane is a u64 leaf");
-        for (j, range) in MatchingRanges::new(changed, kh) {
-            for i in range {
-                tags.push(ci);
-                offs.push(i);
-                khs.push(changed[j]);
-                times.push(ch.times().get(i));
-                diffs.push(ch.diffs()[i]);
-            }
-        }
-        if khs.len() > before { run_ends.push(khs.len()); }
-    }
-    if tags.is_empty() {
-        return (CValue::Unit(0), CValue::Unit(0), khs, times, diffs, run_ends);
-    }
-    let keys_col = gather_lanes(&key_srcs, &tags, &offs);
-    let vals_col = gather_lanes(&val_srcs, &tags, &offs);
-    (keys_col, vals_col, khs, times, diffs, run_ends)
+fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[u64]) -> Matches {
+    chunks.iter().map(|chunk| {
+        if chunk.diffs().is_empty() { return Vec::new(); }
+        let lane = corgi::arrange::leaf_slice(key_lane(chunk.keys())).expect("the identifier lane is a u64 leaf");
+        MatchingRanges::new(keys, lane).collect()
+    }).collect()
 }
 
-/// Merge already-ordered selected chunk runs directly into an empty proxy bridge. Leaf and unit
-/// values preserve value-id order. Keys may either be identity-id leaves or carried-hash columns, provided
-/// no one chunk run contains two real keys under the same hash; in the latter case the real-key
-/// tie-break would interrupt proxy `(key_id, value_id, time)` order, so we fall back to ordinary
-/// consolidation. A debug assertion audits the inferred order. Returns false when the inference
-/// does not hold or the bridge is nonempty.
-fn merge_present<T: timely::progress::Timestamp>(
-    keys_col: &CValue, vals_col: &CValue,
-    khs: &[u64], vids: &[u64], times: &mut [T], diffs: &[Diff], run_ends: &[usize],
+/// Present the records `chunks` hold for `keys`, at `matches`, into `bridge`, sorted by
+/// `((key, id), time)` and consolidated.
+///
+/// Each key's rows are sorted by value, and each run of equal values gets one id: the next index
+/// of `refs`, where it is recorded as the `(chunk, row)` of one of its rows.
+fn present<T: ColTime + Ord>(
+    chunks: &[&CorgiChunk<T, Diff>],
+    keys: &[u64],
+    matches: &Matches,
+    refs: &mut Vec<(usize, usize)>,
     bridge: &mut ProxyBridge<T, Diff>,
-) -> bool {
-    let ordered_keys = corgi::arrange::leaf_slice(keys_col).is_some() || {
-        let mut start = 0usize;
-        run_ends.iter().all(|&end| {
-            let one_real_key_per_id = (start + 1..end).all(|index| {
-                khs[index - 1] != khs[index]
-                    || compare_at(keys_col, index - 1, keys_col, index) == std::cmp::Ordering::Equal
-            });
-            start = end;
-            one_real_key_per_id
-        }) && start == khs.len()
-    };
-    let ordered_ids = ordered_keys && (matches!(vals_col, CValue::Unit(_)) || corgi::arrange::leaf_slice(vals_col).is_some());
-    if !ordered_ids || !bridge.is_empty() {
-        return false;
+) {
+    // The matched `(chunk, row)`s, key by key, and each one's key index.
+    let mut runs: Vec<_> = matches.iter().enumerate()
+        .flat_map(|(chunk, found)| found.iter().map(move |(key, rows)| (*key, chunk, rows.clone())))
+        .collect();
+    runs.sort_by_key(|run| run.0);
+    let (mut labels, mut rows) = (Vec::new(), Vec::new());
+    for (key, chunk, range) in runs {
+        labels.extend(range.clone().map(|_| key as u64));
+        rows.extend(range.map(|row| (chunk, row)));
     }
-    // At most one record per presented row, reserved up front rather than grown by doubling.
-    bridge.reserve(khs.len());
-
-    debug_assert!({
-        let mut start = 0usize;
-        let sorted = run_ends.iter().all(|&end| {
-            let sorted = (start + 1..end).all(|i| {
-                (khs[i - 1], vids[i - 1], &times[i - 1])
-                    <= (khs[i], vids[i], &times[i])
-            });
-            start = end;
-            sorted
-        });
-        sorted && start == khs.len()
-    }, "identity ids do not preserve selected chunk order");
-
-    let mut current: Option<((u64, u64), T, Diff)> = None;
-    let mut accumulate = |kv, time: T, diff| {
-        if current.as_ref().is_some_and(|(ckv, ct, _)| ckv == &kv && ct == &time) {
-            current.as_mut().unwrap().2 += diff;
-        } else {
-            if let Some(record) = current.take() {
-                if record.2 != 0 { bridge.push(record); }
-            }
-            current = Some((kv, time, diff));
-        }
-    };
-
-    if run_ends.len() == 1 {
-        for index in 0..run_ends[0] {
-            accumulate((khs[index], vids[index]), std::mem::replace(&mut times[index], T::minimum()), diffs[index]);
-        }
-        drop(accumulate);
-        if let Some(record) = current {
-            if record.2 != 0 { bridge.push(record); }
-        }
-        return true;
+    if rows.is_empty() {
+        return;
     }
-
-    let mut heap: BinaryHeap<Reverse<((u64, u64), T, usize, usize)>> = BinaryHeap::new();
-    let mut lo = 0usize;
-    for (run, &hi) in run_ends.iter().enumerate() {
-        heap.push(Reverse(((khs[lo], vids[lo]), std::mem::replace(&mut times[lo], T::minimum()), run, lo)));
-        lo = hi;
-    }
-    while let Some(mut head) = heap.peek_mut() {
-        let Reverse((kv, _, run, index)) = *head;
-        let time = std::mem::replace(&mut head.0.1, T::minimum());
-        accumulate(kv, time, diffs[index]);
-        let end = run_ends[run];
-        if index + 1 < end {
-            let next = index + 1;
-            *head = Reverse(((khs[next], vids[next]), std::mem::replace(&mut times[next], T::minimum()), run, next));
-        } else {
-            std::collections::binary_heap::PeekMut::pop(head);
+    let vals: Vec<CValue> = chunks.iter().map(|chunk| chunk.vals().clone()).collect();
+    let (sorted, groups) = sort_blocks(&labels, &gather_refs(&vals, rows.iter().copied()));
+    let update = |(chunk, row): (usize, usize)| (chunks[chunk].times().get(row), chunks[chunk].diffs()[row]);
+    let (mut start, mut updates) = (0, Vec::new());
+    for group in groups.chunk_by(|a, b| a == b) {
+        let members = &sorted[start..start + group.len()];
+        start += group.len();
+        updates.extend(members.iter().map(|&i| update(rows[i])));
+        consolidate(&mut updates);
+        if !updates.is_empty() {
+            let (key, id) = (keys[labels[members[0]] as usize], refs.len() as u64);
+            refs.push(rows[members[0]]);
+            bridge.extend(updates.drain(..).map(|(time, diff)| ((key, id), time, diff)));
         }
     }
-    drop(accumulate);
-    if let Some(record) = current {
-        if record.2 != 0 { bridge.push(record); }
-    }
-    true
 }
 
-/// All chunks of a batch list, flattened (empty chunks included — `hash_rows` yields nothing for them).
 fn chunks_of<T>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>>
 where
     T: ColTime,
@@ -378,59 +278,24 @@ where
     batches.iter().flat_map(|b| b.chunks.iter()).collect()
 }
 
+/// A retire's keys, ascending: those the novel batches touch, and the `changed` set the harness
+/// supplies.
+fn retire_keys<T: ColTime>(novel_chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> Vec<u64> {
+    let mut keys: Vec<u64> = novel_chunks.iter().flat_map(|chunk| key_ids(chunk.keys())).chain(changed.iter().copied()).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
 impl<T> CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
 {
-    /// Present the merged input run — novel and prior chunks together — restricted to `keys`.
-    ///
-    /// Fills `bridge`, registers the run's representative keys, and extends the shared value pool
-    /// with its values, so the input pool resolves a value
-    /// id from EITHER run to a row. The two runs stay apart as presentations and meet only in the
-    /// tactic's accumulation; the pool is shared because a value id means the same thing in both.
-    fn present_input(
-        &mut self,
-        chunks: &[&CorgiChunk<T, Diff>],
-        keys: &[u64],
-        bridge: &mut ProxyBridge<T, Diff>,
-    ) {
-        let (p_keys, p_vals, khs, mut times, diffs, run_ends) = collect_present(chunks, keys);
-        if khs.is_empty() {
-            return;
-        }
-        let vids = ids(&p_vals);
-        let merged = merge_present(&p_keys, &p_vals, &khs, &vids, &mut times, &diffs, &run_ends, bridge);
-        self.input.register(p_vals, &vids);
-        self.keys.register(p_keys, &khs);
-        if !merged {
-            bridge.extend(times.into_iter().enumerate().map(|(i, time)| ((khs[i], vids[i]), time, diffs[i])));
-            consolidate_updates(bridge);
-        }
-    }
-
-    /// The one value crossing for a retire: every `(key, time)` bracket at once. Builds the output
-    /// value COLUMN directly per reducer, registers it (id → row) into the val pool, and returns the
-    /// proxy `(value_id, diff)` deltas with per-bracket ends. `input[k] = (value_id, accumulated diff)`; the bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
-    fn reduce_brackets(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
-        // Primitive IDs contain the signed integer itself; a segmented minimum
-        // needs neither payload resolution nor a structural sort.
-        if matches!(self.reducer, Reducer::Min) && self.input.depth.is_some() {
-            let (mut values, mut output_ends) = (Vec::new(), Vec::with_capacity(ends.len()));
-            let mut start = 0;
-            for &end in ends {
-                if let Some(&(id, _)) = input[start..end].iter().filter(|r| r.1 != 0).min_by_key(|r| r.0 as i64) {
-                    values.push((id, 1));
-                }
-                output_ends.push(values.len());
-                start = end;
-            }
-            self.vals.depth = self.input.depth;
-            return (values, output_ends);
-        }
-        let mut out_diffs: Vec<Diff> = Vec::new();
+    /// The one value crossing for a wave: every `(key, time)` bracket at once. Builds a column of the
+    /// desired output values, one row each, and returns it with each bracket's end among its rows.
+    /// `input[k] = (value_id, accumulated diff)`; bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
+    fn reduce_brackets(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<usize>) {
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
-        let out_ids: Vec<u64>;
-
         match self.reducer {
             Reducer::Count => {
                 // Per-bracket sum of diffs; survivors become a `Tuple([Int(sum)])` = corgi `Prod([u64])`.
@@ -440,17 +305,11 @@ where
                     let c: Diff = input[start..end].iter().map(|&(_, d)| d).sum();
                     if c > 0 {
                         sums.push(c as u64);
-                        out_diffs.push(1);
                     }
-                    out_ends.push(out_diffs.len());
+                    out_ends.push(sums.len());
                     start = end;
                 }
-                if sums.is_empty() {
-                    return (Vec::new(), out_ends);
-                }
-                let col = CValue::Prod(vec![CValue::u64(sums)]);
-                out_ids = ids(&col);
-                self.vals.register(col, &out_ids);
+                (CValue::Prod(vec![CValue::u64(sums)]), out_ends)
             }
             Reducer::Distinct => {
                 // Present iff any value has NON-ZERO net -- the sign does not matter. DD's `reduce`
@@ -463,17 +322,11 @@ where
                 for &end in ends {
                     if input[start..end].iter().any(|&(_, d)| d != 0) {
                         present += 1;
-                        out_diffs.push(1);
                     }
-                    out_ends.push(out_diffs.len());
+                    out_ends.push(present);
                     start = end;
                 }
-                if present == 0 {
-                    return (Vec::new(), out_ends);
-                }
-                let col = CValue::Unit(present);
-                out_ids = ids(&col); // all equal (unit content hash)
-                self.vals.register(col, &out_ids);
+                (CValue::Unit(present), out_ends)
             }
             Reducer::Min => {
                 // The structural minimum over values with NON-ZERO net. The sign does not select
@@ -481,7 +334,7 @@ where
                 // drops all-negative keys and can pick a different minimum when a bracket mixes signs.
                 // Gather all candidates across brackets into one column, segment by
                 // bracket, and one corgi `sort_blocks` gives every bracket's argmin at once
-                // (`perm[block_start]`). The winning ROW is taken columnar and reuses its input value id.
+                // (`perm[block_start]`). The winning ROW is taken columnar.
                 let mut cand_reps: Vec<u64> = Vec::new(); // input value ID per candidate
                 let mut labels: Vec<u64> = Vec::new(); // dense segment id per candidate
                 let mut block_starts: Vec<usize> = Vec::new(); // per emitted bracket: start offset in cand_reps
@@ -497,20 +350,25 @@ where
                     }
                     if cand_reps.len() > lo {
                         block_starts.push(lo);
-                        out_diffs.push(1);
                     }
-                    out_ends.push(out_diffs.len());
+                    out_ends.push(block_starts.len());
                     start = end;
                 }
                 if cand_reps.is_empty() {
-                    return (Vec::new(), out_ends);
+                    return (CValue::Unit(0), out_ends);
                 }
-                let cand_col = self.input.gather(&cand_reps);
-                let (perm, _) = sort_blocks(&labels, &signed_order_view(cand_col));
-                let min_reps: Vec<u64> = block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect();
-                let col = self.input.gather(&min_reps);
-                out_ids = ids(&col);
-                self.vals.register(col, &out_ids);
+                let candidates = self.input.gather(&cand_reps);
+                // Integer values need no sort: scan each block for its least as signed.
+                let min_reps: Vec<u64> = if let Some(values) = corgi::arrange::leaf_slice(&candidates) {
+                    let block_ends = block_starts.iter().skip(1).copied().chain([cand_reps.len()]);
+                    block_starts.iter().zip(block_ends).map(|(&lo, hi)| {
+                        cand_reps[(lo..hi).min_by_key(|&k| values[k] as i64).expect("blocks are non-empty")]
+                    }).collect()
+                } else {
+                    let (perm, _) = sort_blocks(&labels, &signed_order_view(candidates));
+                    block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect()
+                };
+                (self.input.gather(&min_reps), out_ends)
             }
             Reducer::Collect => {
                 // One row per bracket: the values sorted in DDIR observable order,
@@ -534,16 +392,14 @@ where
                             labels.push(bi as u64);
                         }
                         blocks.push((lo, entry_reps.len()));
-                        out_diffs.push(1);
                     }
-                    out_ends.push(out_diffs.len());
+                    out_ends.push(blocks.len());
                     start = end;
                 }
-                let perm = if entry_reps.is_empty() {
-                    Vec::new()
-                } else {
-                    sort_blocks(&labels, &signed_order_view(self.input.gather(&entry_reps))).0
-                };
+                if blocks.is_empty() {
+                    return (CValue::Unit(0), out_ends);
+                }
+                let perm = sort_blocks(&labels, &signed_order_view(self.input.gather(&entry_reps))).0;
                 // Expand each bracket's sorted entries by their diff (max(0, ·) copies).
                 let mut elem_reps: Vec<u64> = Vec::new();
                 let mut bracket_ends: Vec<usize> = Vec::with_capacity(ends.len());
@@ -560,14 +416,9 @@ where
                 // next batch's `List<T>` where the two are concatenated. `gather` at no indices
                 // is the empty column of that shape.
                 let elems = self.input.gather(&elem_reps);
-                let col = CValue::List(Bounds::offsets(bracket_ends), Box::new(elems));
-                out_ids = ids(&col);
-                self.vals.register(col, &out_ids);
+                (CValue::List(Bounds::offsets(bracket_ends), Box::new(elems)), out_ends)
             }
         }
-
-        let outs = out_ids.into_iter().zip(out_diffs).collect();
-        (outs, out_ends)
     }
 }
 
@@ -582,183 +433,223 @@ where
     type ROut = Diff;
 
     fn begin(&mut self, _description: Description<T>) {
-        // Open the output session for this retire; reset the per-retire resolution pools.
-        self.input.clear();
-        self.keys.clear();
-        self.vals.clear();
         self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
     fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut KeyPosition<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
-        // Single window: present the WHOLE key space at once, and report it covered. This is NOT a
-        // deferred refinement — bounded windows were measured and rejected: at WINDOW = 1<<14, scc
-        // (100 rounds x batch 100) cost 84.4s against 63.7s, a 33% regression, while peak RSS
-        // fell only 356MB -> 340MB. Two reasons: the per-window, per-chunk seek setup is a
-        // fixed cost that multiplies by the window count, and the presentation is not the
-        // memory peak in the first place (the trace is).
         if *from == KeyPosition::End {
             return;
         }
-        *from = KeyPosition::End;
-
-        // The window's keys: the hashes the novel batches touch, merged with the `changed` set the
-        // harness supplies. The novel hashes come from the scan the presentation needs anyway — the
-        // separate seeding pass this replaced read the delta a second time to derive them.
         let novel_chunks = chunks_of(instance.input_batches);
-        let mut keys: Vec<u64> = Vec::new();
-        // The seeds are the novel batches' RAW (key_hash, time) support, recorded here — before the
-        // merged presentation below, whose consolidation may net a novel record away entirely. The
-        // key hashes come from the scan the key list needs anyway.
-        let mut seeds: Vec<(u64, T)> = Vec::with_capacity(novel_chunks.iter().map(|c| c.diffs().len()).sum());
-        for ch in novel_chunks.iter() {
-            let khs = key_ids(ch.keys());
-            let times = ch.times();
-            for (i, kh) in khs.iter().enumerate() {
-                seeds.push((*kh, times.get(i)));
-            }
-            keys.extend(khs);
+        let mut in_chunks = chunks_of(instance.source_batches);
+        let prior = in_chunks.len();
+        in_chunks.extend(novel_chunks.iter().copied());
+        let out_chunks = chunks_of(instance.output_batches);
+
+        // The first window finds the retire's keys, where the input holds them, and the columns
+        // that the retire's ids will name rows of.
+        if *from == KeyPosition::Start {
+            let keys = retire_keys(&novel_chunks, changed);
+            let input = search(&in_chunks, &keys);
+            let mut held = vec![0; keys.len()];
+            for (index, rows) in input.iter().flatten() { held[*index] += rows.len(); }
+            self.retire = Retire { keys, held, input, window: 0..0, key_rows: Vec::new() };
+            self.input.columns = in_chunks.iter().map(|chunk| chunk.vals().clone()).collect();
+            self.output = Pool { columns: out_chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs: Vec::new() };
+            self.key_columns = in_chunks.iter().chain(&out_chunks).map(|chunk| chunk.keys().clone()).collect();
         }
-        seeds.sort_unstable_by(|a, b| a.cmp(b));
-        seeds.dedup();
-        window.seeds = seeds;
-        keys.sort_unstable();
-        keys.dedup();
-        if !changed.is_empty() {
-            // Both sides ascend, so this is a merge.
-            let mut merged: Vec<u64> = Vec::with_capacity(keys.len() + changed.len());
-            let (mut a, mut b) = (0usize, 0usize);
-            while a < keys.len() || b < changed.len() {
-                let key = match (keys.get(a), changed.get(b)) {
-                    (Some(x), Some(y)) => *x.min(y),
-                    (Some(x), None) => *x,
-                    (None, Some(y)) => *y,
-                    (None, None) => unreachable!("loop condition ensures one is present"),
-                };
-                if keys.get(a) == Some(&key) { a += 1; }
-                if changed.get(b) == Some(&key) { b += 1; }
-                merged.push(key);
-            }
-            keys = merged;
-        }
-        if keys.is_empty() {
+
+        // Windows are bounded, as their presentations are all live at once.
+        let retire = &mut self.retire;
+        if !retire.advance(self.window_size) {
+            *from = KeyPosition::End;
             return;
         }
-
-        // ONE merged input presentation: novel and prior together, netted by the consolidation —
-        // equal values share a content-hash id, so an exactly cancelling pair vanishes here, and
-        // its time survives in `window.seeds` above. The input pool resolves values
-        // needed by Min and Collect.
-        let mut in_chunks = chunks_of(instance.source_batches);
-        in_chunks.extend(novel_chunks.iter().copied());
-        self.present_input(&in_chunks, &keys, &mut window.input);
-
-        // Output-history presentation, same keys (register keys + values for correction resolution).
-        let (o_keys, o_vals, o_khs, mut o_times, o_diffs, o_run_ends) = collect_present(&chunks_of(instance.output_batches), &keys);
-        if !o_khs.is_empty() {
-            let vids = ids(&o_vals);
-            let merged = merge_present(&o_keys, &o_vals, &o_khs, &vids, &mut o_times, &o_diffs, &o_run_ends, &mut window.output);
-            self.keys.register(o_keys, &o_khs);
-            self.vals.register(o_vals, &vids);
-            if !merged {
-                window.output.extend(o_times.into_iter().enumerate().map(|(i, time)| ((o_khs[i], vids[i]), time, o_diffs[i])));
-                consolidate_updates(&mut window.output);
+        let matches = retire.input_matches();
+        let keys = &retire.keys[retire.window.clone()];
+        let out_matches = search(&out_chunks, keys);
+        // A row holding each key: its first in the input chunks, else its first in the output chunks.
+        retire.key_rows = vec![None; keys.len()];
+        for (base, found) in [(0, &matches), (in_chunks.len(), &out_matches)] {
+            for (chunk, list) in found.iter().enumerate() {
+                for (index, rows) in list { retire.key_rows[*index].get_or_insert((base + chunk, rows.start)); }
             }
         }
+
+        // The seeds are the novel batches' RAW (key, time) support, recorded here — before the
+        // merged presentation below, whose consolidation may net a novel record away entirely.
+        window.seeds.reserve(matches[prior..].iter().flatten().map(|(_, rows)| rows.len()).sum());
+        for (chunk, found) in in_chunks[prior..].iter().zip(&matches[prior..]) {
+            for (index, rows) in found {
+                window.seeds.extend(rows.clone().map(|row| (keys[*index], chunk.times().get(row))));
+            }
+        }
+        window.seeds.sort_unstable();
+        window.seeds.dedup();
+
+        // ONE merged input presentation: novel and prior together, netted by the consolidation —
+        // equal values share an id, so an exactly cancelling pair vanishes here, and its time
+        // survives in `window.seeds` above. Input ids name rows for this window only.
+        self.input.refs.clear();
+        present(&in_chunks, keys, &matches, &mut self.input.refs, &mut window.input);
+        // The output history, same keys. Output ids name rows for the whole retire.
+        present(&out_chunks, keys, &out_matches, &mut self.output.refs, &mut window.output);
+
+        *from = retire.keys.get(retire.window.end).map_or(KeyPosition::End, |key| KeyPosition::At(*key));
     }
 
     fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+        // Each key wants its rows of `desired`, once each, and has `(id, diff)`s of output. The
+        // correction nets the two by value: a wanted row equal to an output id's value counts
+        // toward that id, and one equal to none gets a new id. Keys have a handful of each.
         let (desired, desired_ends) = self.reduce_brackets(in_ends, input);
-
-        let mut corr: Vec<(u64, Diff)> = Vec::new();
-        let mut corr_ends: Vec<usize> = Vec::with_capacity(keys.len());
-        let (mut ds, mut os) = (0usize, 0usize);
-        // Scratch for netting, cleared per key rather than allocated per key.
-        let mut net: HashMap<u64, Diff, BuildHasherDefault<IdHasher>> = Default::default();
-        let mut order: Vec<u64> = Vec::new();
-        for i in 0..keys.len() {
-            let (de, oe) = (desired_ends[i], out_ends[i]);
-            // Net by value_id: desired (+) minus current output (−); keep non-zero, in first-seen order.
-            net.clear();
-            order.clear();
-            for &(vid, d) in &desired[ds..de] {
-                if let Some(x) = net.get_mut(&vid) { *x += d; } else { net.insert(vid, d); order.push(vid); }
+        let fresh = self.output.columns.len();
+        if !desired.is_empty() { self.output.columns.push(desired); }
+        let Pool { columns, refs } = &mut self.output;
+        let (mut corr, mut corr_ends) = (Vec::new(), Vec::with_capacity(keys.len()));
+        let (mut ds, mut os) = (0, 0);
+        for (&de, &oe) in desired_ends.iter().zip(out_ends) {
+            let mut net: Vec<(u64, Diff)> = output[os..oe].iter().map(|&(id, d)| (id, -d)).collect();
+            for row in ds..de {
+                let equal = |&(id, _): &(u64, Diff)| {
+                    let (column, r) = refs[id as usize];
+                    compare_at(&columns[fresh], row, &columns[column], r).is_eq()
+                };
+                match net.iter().position(equal) {
+                    Some(at) => net[at].1 += 1,
+                    None => { net.push((refs.len() as u64, 1)); refs.push((fresh, row)); }
+                }
             }
-            for &(vid, d) in &output[os..oe] {
-                if let Some(x) = net.get_mut(&vid) { *x -= d; } else { net.insert(vid, -d); order.push(vid); }
-            }
-            for &vid in &order {
-                let d = net[&vid];
-                if d != 0 { corr.push((vid, d)); }
-            }
+            corr.extend(net.into_iter().filter(|&(_, d)| d != 0));
             corr_ends.push(corr.len());
-            ds = de;
-            os = oe;
+            (ds, os) = (de, oe);
         }
         (corr, corr_ends)
     }
 
     fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
-        // Accumulate IDs; resolve columns once at the output boundary.
-        for rec in records {
-            let ((kh, vid), t, d) = (rec.0, &rec.1, rec.2);
-            let (krows, vrows, times, diffs) = &mut self.rows;
-            krows.push(kh);
-            vrows.push(vid);
-            times.push(t);
-            diffs.push(d);
+        // Every emitted key is in the current window, and was presented there.
+        let keys = &self.retire.keys[self.retire.window.clone()];
+        let (key_rows, ids, times, diffs) = &mut self.rows;
+        for ((key, id), time, diff) in records {
+            let index = keys.binary_search(key).expect("emitted keys are in the window");
+            key_rows.push(self.retire.key_rows[index].expect("emitted keys were presented"));
+            ids.push(*id);
+            times.push(time);
+            diffs.push(*diff);
         }
     }
 
     fn finish(&mut self) -> Option<CBatch<T>> {
-        // Seal the batch: gather the accumulated (key, val) pool rows into columns, one CorgiChunk batch.
-        let (krows, vrows, times, diffs) = std::mem::take(&mut self.rows);
+        let (key_rows, ids, times, diffs) = std::mem::take(&mut self.rows);
         if times.is_empty() { return None; }
-        let keys = self.keys.gather(&krows);
-        let vals = self.vals.gather(&vrows);
-        Some(Rc::new(columns_to_batch(keys, vals, times, diffs)))
+        let keys = gather_refs(&self.key_columns, key_rows.into_iter());
+        Some(Rc::new(columns_to_batch(keys, self.output.gather(&ids), times, diffs)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+    use differential_dataflow::dynamic::pointstamp::PointStamp;
+    use crate::corgi::chunk::present_key;
+    use crate::ir::Time;
 
+    /// The rows of a column of `u64` leaves, products of them, or units, as vectors.
+    fn rows_of(col: &CValue) -> Vec<Vec<u64>> {
+        let fields: Vec<&[u64]> = match col {
+            CValue::Unit(_) => Vec::new(),
+            CValue::Prod(fields) => fields.iter().map(|field| corgi::arrange::leaf_slice(field).unwrap()).collect(),
+            leaf => vec![corgi::arrange::leaf_slice(leaf).unwrap()],
+        };
+        (0..col.len()).map(|i| fields.iter().map(|field| field[i]).collect()).collect()
+    }
+
+    /// Random `(key, value, time, diff)` rows over few keys and values, so that they collide.
+    fn random_rows(seed: u64, count: usize, keys: u64) -> Vec<(u64, (u64, u64), Time, Diff)> {
+        let stamp = |outer, coords: &[u64]| Time::new(outer, PointStamp::new(coords.iter().copied().collect()));
+        let times = [stamp(0, &[]), stamp(1, &[2, 3]), stamp(2, &[1, 4]), stamp(3, &[2])];
+        let mut state = seed;
+        let mut next = |n: u64| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) % n
+        };
+        (0..count).map(|_| (next(keys), (next(3), next(3)), times[next(4) as usize].clone(), [1, -1, 2][next(3) as usize])).collect()
+    }
+
+    const KEY_SHAPES: [fn(&[u64]) -> CValue; 2] = [
+        |k| CValue::u64(k.to_vec()),
+        |k| present_key(CValue::Prod(vec![CValue::u64(k.to_vec()), CValue::u64(k.iter().map(|k| k * 7).collect())])),
+    ];
+    const VAL_SHAPES: [fn(&[(u64, u64)]) -> CValue; 3] = [
+        |v| CValue::u64(v.iter().map(|v| v.0).collect()),
+        |v| CValue::Prod(vec![CValue::u64(v.iter().map(|v| v.0).collect()), CValue::u64(v.iter().map(|v| v.1).collect())]),
+        |v| CValue::Unit(v.len()),
+    ];
+
+    /// One chunk per run of `size` rows, in the given key and value shapes.
+    fn chunks(rows: &[(u64, (u64, u64), Time, Diff)], size: usize, key_shape: fn(&[u64]) -> CValue, val_shape: fn(&[(u64, u64)]) -> CValue) -> Vec<CorgiChunk<Time, Diff>> {
+        rows.chunks(size).map(|rows| CorgiChunk::from_columns(
+            key_shape(&rows.iter().map(|r| r.0).collect::<Vec<_>>()),
+            val_shape(&rows.iter().map(|r| r.1).collect::<Vec<_>>()),
+            rows.iter().map(|r| r.2.clone()).collect(),
+            rows.iter().map(|r| r.3).collect(),
+        )).filter(|chunk| !chunk.diffs().is_empty()).collect()
+    }
+
+    /// The netted records of `keys` in `chunks`, by key id and value.
+    fn netted(chunks: &[&CorgiChunk<Time, Diff>], keys: &BTreeSet<u64>) -> BTreeMap<(u64, Vec<u64>, Time), Diff> {
+        let mut netted = BTreeMap::new();
+        for chunk in chunks {
+            for (i, (key, value)) in key_ids(chunk.keys()).into_iter().zip(rows_of(chunk.vals())).enumerate() {
+                if keys.contains(&key) {
+                    *netted.entry((key, value, chunk.times().get(i))).or_insert(0) += chunk.diffs()[i];
+                }
+            }
+        }
+        netted.retain(|_, diff| *diff != 0);
+        netted
+    }
+
+    /// `present` gives what the chunks hold, sorted and consolidated, with one id per value under a
+    /// key, across key and value shapes, chunkings, and cancellations.
     #[test]
-    fn primitive_min_uses_signed_ids_and_nonzero_support() {
-        for depth in 0..3 {
-            let mut backend = CorgiReduceBackend::<u64>::new(Reducer::Min);
-            let mut col = CValue::u64(vec![0, u64::MAX, i64::MIN as u64, i64::MAX as u64]);
-            for _ in 0..depth { col = CValue::Prod(vec![col]); }
-            let input_ids = ids(&col);
-            backend.input.register(col, &input_ids);
-            let input = [(0, 1), (u64::MAX, -1), (i64::MIN as u64, 0), (i64::MAX as u64, -1), (i64::MIN as u64, -2)];
-            let (values, ends) = backend.reduce_brackets(&[0, 3, 5], &input);
-            assert_eq!(values, vec![(u64::MAX, 1), (i64::MIN as u64, 1)]);
-            assert_eq!(ends, vec![0, 1, 2]);
-            assert_eq!(backend.vals.depth, Some(depth));
+    fn present_groups_values_across_chunks() {
+        let rows = random_rows(0x9E37_79B9_7F4A_7C15, 300, 6);
+        for (key_shape, val_shape) in KEY_SHAPES.iter().flat_map(|k| VAL_SHAPES.iter().map(move |v| (*k, *v))) {
+            let mut keys = key_ids(&key_shape(&[0, 2, 3, 5, 9]));
+            keys.sort();
+            for size in [1, 7, rows.len()] {
+                let owned = chunks(&rows, size, key_shape, val_shape);
+                let chunks: Vec<_> = owned.iter().collect();
+                let (mut refs, mut bridge) = (Vec::new(), Vec::new());
+                present(&chunks, &keys, &search(&chunks, &keys), &mut refs, &mut bridge);
+                assert!(bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)));
+                let pool = Pool { columns: chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs };
+                let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));
+                let (mut actual, mut named) = (BTreeMap::new(), BTreeMap::new());
+                for (((key, id), time, diff), value) in bridge.iter().zip(values) {
+                    assert_eq!(named.entry((*key, value.clone())).or_insert(*id), id, "one id per value");
+                    actual.insert((*key, value, time.clone()), *diff);
+                }
+                assert_eq!(actual, netted(&chunks, &keys.iter().copied().collect()));
+            }
         }
     }
 
+    /// Corrections net desired against current output by value, whichever ids hold it: two ids of
+    /// one value count together, and a new value gets a new id naming its row.
     #[test]
-    fn id_pool_preserves_primitive_shapes_and_compound_fallback() {
-        let mut pool = IdPool::default();
-        for depth in 0..4 {
-            pool.clear();
-            pool.register(CValue::Unit(0), &[]); // no shape information yet
-            let mut col = CValue::u64(vec![i64::MIN as u64, u64::MAX, 0, i64::MAX as u64]);
-            for _ in 0..depth { col = CValue::Prod(vec![col]); }
-            pool.register(col.clone(), &ids(&col));
-            assert!(pool.index.is_empty() && pool.blocks.is_empty());
-            assert_eq!(pool.gather(&[u64::MAX, 0, u64::MAX]), gather(&col, &[1, 2, 1]));
-            assert_eq!(pool.gather(&[]), gather(&col, &[]));
-        }
-        pool.clear();
-        let col = CValue::Prod(vec![CValue::u64(vec![7, 7]), CValue::u64(vec![9, 8])]);
-        let id = ids(&col);
-        pool.register(col.clone(), &id);
-        pool.register(col.clone(), &id); // first representative continues to resolve
-        assert_eq!(pool.gather(&[id[1], id[0], id[1]]), gather(&col, &[1, 0, 1]));
-        assert_eq!(pool.gather(&[]), gather(&col, &[]));
+    fn corrections_net_by_value() {
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count);
+        backend.output = Pool { columns: vec![CValue::Prod(vec![CValue::u64(vec![5, 5, 7])])], refs: vec![(0, 0), (0, 1), (0, 2)] };
+        // Key 0 counts 5 and has output 5 twice; key 1 counts 3 and has output 7; key 2 counts 0.
+        let input = [(0, 2), (1, 3), (0, 3), (0, 1), (1, -1)];
+        let output = [(0, 1), (1, 1), (2, 1)];
+        let (corr, ends) = backend.reduce_corrections(&[10, 11, 12], &[2, 3, 5], &input, &[2, 3, 3], &output);
+        assert_eq!((corr.clone(), ends), (vec![(1, -1), (2, -1), (3, 1)], vec![1, 3, 3]));
+        assert_eq!(rows_of(&backend.output.gather(&[3])), vec![vec![3]]);
     }
 
     #[test]
@@ -782,83 +673,66 @@ mod tests {
         assert_eq!(actual, rows);
     }
 
-    fn compound_keys(hashes: Vec<u64>, real: Vec<u64>) -> CValue {
-        CValue::Prod(vec![CValue::u64(hashes), CValue::Prod(vec![CValue::u64(real), CValue::u64(vec![0, 0])])])
-    }
-
+    /// Windows partition a retire: at any budget each window stops once it holds the budget, and
+    /// together they present what one window would, which is what the chunks hold.
     #[test]
-    fn merge_present_accepts_ordered_compound_keys() {
-        let keys = compound_keys(vec![1, 2], vec![7, 8]);
-        let vals = CValue::u64(vec![10, 20]);
-        let mut bridge = Vec::new();
-        assert!(merge_present(
-            &keys, &vals, &[1, 2], &[10, 20], &mut [0u64, 0], &[1, 1], &[2], &mut bridge,
-        ));
-        assert_eq!(bridge.len(), 2);
-    }
-
-    #[test]
-    fn merge_present_combines_runs_with_ties_cancellation_and_different_lengths() {
-        use std::collections::BTreeMap;
-        use timely::order::Product;
-        let runs = [
-            vec![((1, 10), Product::new(0u64, 2u64), 1),
-                 ((1, 10), Product::new(1, 0), -1),
-                 ((3, 30), Product::new(0, 0), 2)],
-            vec![((1, 10), Product::new(0, 2), -1),
-                 ((1, 11), Product::new(0, 0), 5),
-                 ((3, 30), Product::new(0, 0), -2),
-                 ((4, 40), Product::new(0, 0), -1)],
-            vec![((1, 10), Product::new(1, 0), 2)],
-        ];
-        for count in 1..=runs.len() {
-            let (mut rows, mut ends) = (Vec::new(), Vec::new());
-            let mut expected = BTreeMap::new();
-            for run in &runs[..count] {
-                rows.extend_from_slice(run);
-                ends.push(rows.len());
-                for &(kv, time, diff) in run {
-                    *expected.entry((kv, time)).or_insert(0) += diff;
-                }
+    fn windows_partition_a_retire() {
+        use timely::progress::{Antichain, Timestamp};
+        let prior = random_rows(0x2545_F491_4F6C_DD1D, 300, 40);
+        let mut novel = random_rows(0x1234_5678, 60, 40);
+        novel.extend(prior.iter().step_by(25).map(|(k, v, t, d)| (*k, *v, t.clone(), -d)));
+        let output = random_rows(0x8765_4321, 80, 40);
+        let lower = Antichain::from_elem(Time::minimum());
+        for (key_shape, val_shape) in KEY_SHAPES.iter().flat_map(|k| VAL_SHAPES[..2].iter().map(move |v| (*k, *v))) {
+            let batches = |rows, size| -> Vec<CBatch<Time>> {
+                chunks(rows, size, key_shape, val_shape).into_iter().map(|chunk| Rc::new(ChunkBatch::new(vec![chunk]))).collect()
+            };
+            let (source, input, out) = (batches(&prior, 70), batches(&novel, 30), batches(&output, 50));
+            let instance = ReduceInstance { source_batches: &source, input_batches: &input, output_batches: &out, lower: lower.borrow() };
+            let mut in_chunks = chunks_of(&source);
+            in_chunks.extend(chunks_of(&input));
+            // Changed keys, two of them held by no batch, and the input records each retire key holds.
+            let mut changed = key_ids(&key_shape(&[3, 17, 41, 45]));
+            changed.sort();
+            let retire: BTreeSet<u64> = chunks_of(&input).iter().flat_map(|chunk| key_ids(chunk.keys())).chain(changed.iter().copied()).collect();
+            let mut held = BTreeMap::new();
+            for id in in_chunks.iter().flat_map(|chunk| key_ids(chunk.keys())).filter(|id| retire.contains(id)) {
+                *held.entry(id).or_insert(0) += 1;
             }
-            let khs: Vec<_> = rows.iter().map(|r| r.0.0).collect();
-            let vids: Vec<_> = rows.iter().map(|r| r.0.1).collect();
-            let mut times: Vec<_> = rows.iter().map(|r| r.1).collect();
-            let diffs: Vec<_> = rows.iter().map(|r| r.2).collect();
-            let mut bridge = Vec::new();
-            assert!(merge_present(&CValue::u64(khs.clone()), &CValue::u64(vids.clone()),
-                &khs, &vids, &mut times, &diffs, &ends, &mut bridge));
-            let expected: Vec<_> = expected.into_iter().filter(|(_, d)| *d != 0)
-                .map(|((kv, time), diff)| (kv, time, diff)).collect();
-            assert_eq!(bridge, expected, "run count: {count}");
+            let run = |window_size| {
+                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Count, window_size);
+                backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
+                let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
+                let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
+                while from != KeyPosition::End {
+                    let before = from;
+                    window.clear();
+                    backend.next_window(&instance, &changed, &mut from, &mut window);
+                    assert!(from > before);
+                    let within = |key: u64| before <= KeyPosition::At(key) && KeyPosition::At(key) < from;
+                    let counts: Vec<usize> = held.iter().filter(|(key, _)| within(**key)).map(|(_, count)| *count).collect();
+                    assert!(counts.iter().rev().skip(1).sum::<usize>() < window_size, "a window stops once it holds the budget");
+                    assert!(from == KeyPosition::End || counts.iter().sum::<usize>() >= window_size, "a window holds the budget");
+                    for (bridge, pool, into) in [(&window.input, &backend.input, &mut inputs), (&window.output, &backend.output, &mut outputs)] {
+                        let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));
+                        for (((key, _), time, diff), value) in bridge.iter().zip(values) {
+                            assert!(within(*key));
+                            assert!(into.insert((*key, value, time.clone()), *diff).is_none());
+                        }
+                    }
+                    for (key, time) in window.seeds.iter() {
+                        assert!(within(*key) && seeds.insert((*key, time.clone())));
+                    }
+                }
+                (inputs, seeds, outputs)
+            };
+            let support: BTreeSet<_> = chunks_of(&input).iter()
+                .flat_map(|chunk| key_ids(chunk.keys()).into_iter().enumerate().map(|(i, key)| (key, chunk.times().get(i))))
+                .collect();
+            assert!(run(usize::MAX) == (netted(&in_chunks, &retire), support, netted(&chunks_of(&out), &retire)));
+            for window_size in [1, 3, 17] {
+                assert!(run(window_size) == run(usize::MAX), "window_size={window_size}");
+            }
         }
-    }
-
-    /// Unit values all share one id, so the runs merge directly, here cancelling across runs.
-    #[test]
-    fn merge_present_accepts_unit_values() {
-        let vals = CValue::Unit(4);
-        let vids = ids(&vals);
-        let mut bridge = Vec::new();
-        assert!(merge_present(
-            &CValue::u64(vec![1, 3, 1, 2]), &vals, &[1, 3, 1, 2], &vids, &mut [0u64, 0, 0, 0], &[1, 2, -1, 5], &[2, 4], &mut bridge,
-        ));
-        assert_eq!(bridge, vec![((2, vids[0]), 0, 5), ((3, vids[0]), 0, 2)]);
-    }
-
-    #[test]
-    fn merge_present_rejects_a_compound_hash_collision_within_a_run() {
-        let keys = compound_keys(vec![1, 1], vec![7, 8]);
-        let vals = CValue::u64(vec![10, 20]);
-        assert!(!merge_present(
-            &keys,
-            &vals,
-            &[1, 1],
-            &[10, 20],
-            &mut [0u64, 0],
-            &[1, 1],
-            &[2],
-            &mut Vec::new(),
-        ));
     }
 }
