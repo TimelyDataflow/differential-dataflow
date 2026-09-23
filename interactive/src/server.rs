@@ -448,29 +448,38 @@ impl Server {
         if self.programs.contains_key(name) {
             return Err(format!("a program named {:?} is already installed", name));
         }
-        // Resolve trace imports against canonical names, installing generated
-        // sources (e.g. `random:...`) on demand. A name that is neither
-        // registered nor a recipe is an error.
+        // Resolve trace imports against canonical names. A name that is not registered must be a
+        // generated source (`clock`, or a recipe such as `random:...`), installed on demand below.
+        // Everything is checked before anything is installed, so a rejected program leaves no trace.
+        let mut generated: Vec<String> = Vec::new();
         for imp in &prog.root.imports {
             if let st::Source::Trace(t) = &imp.from {
                 let key = canonical_source_name(t);
                 if !self.traces.contains_key(&key) {
-                    if key == "clock" {
-                        self.install_clock(worker);
-                    } else if let Some(recipe) = Recipe::parse(&key) {
-                        self.install_generated(worker, &key, recipe);
-                    } else {
+                    if key != "clock" && Recipe::parse(&key).is_none() {
                         return Err(format!(
                             "program {:?} imports unknown trace {:?}; install its producer first",
                             name, t
                         ));
                     }
+                    generated.push(key);
                 }
             }
         }
         for e in &prog.root.exports {
-            if self.traces.contains_key(&e.name) {
+            if self.traces.contains_key(&e.name) || generated.contains(&e.name) {
                 return Err(format!("export name {:?} is already published; choose another name or drop its producer", e.name));
+            }
+        }
+        for key in generated {
+            if self.traces.contains_key(&key) {
+                continue; // imported twice
+            }
+            if key == "clock" {
+                self.install_clock(worker);
+            } else {
+                let recipe = Recipe::parse(&key).expect("checked above");
+                self.install_generated(worker, &key, recipe);
             }
         }
 
