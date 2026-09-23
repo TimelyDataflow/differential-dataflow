@@ -371,22 +371,9 @@ where
             input,
             done,
             out,
-            |acc, next| {
-                let (na, nb) = (acc.len_(), next.len_());
-                let kvs = [acc.kv(), next.kv()];
-                let srcs = [Some(&kvs[0]), Some(&kvs[1])];
-                let mut tags = Vec::with_capacity(na + nb);
-                let mut offs = Vec::with_capacity(na + nb);
-                for o in 0..na { tags.push(0); offs.push(o); }
-                for o in 0..nb { tags.push(1); offs.push(o); }
-                let kv = gather_lanes(&srcs, &tags, &offs);
-                let mut times = ColTimes::new();
-                times.reserve(acc.times().width().max(next.times().width()), na + nb);
-                times.push_range(acc.times(), 0, na);
-                times.push_range(next.times(), 0, nb);
-                let mut diffs = acc.diffs().to_vec();
-                diffs.extend_from_slice(next.diffs());
-                *acc = Self::from_kv(kv, times, diffs);
+            |run| {
+                let (kv, times, diffs) = Self::concat(&run);
+                Self::from_kv(kv, times, diffs)
             },
             |chunk, m| {
                 let kv = chunk.kv();

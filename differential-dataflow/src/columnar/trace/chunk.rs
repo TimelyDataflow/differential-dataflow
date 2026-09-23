@@ -436,17 +436,18 @@ where U::Time: 'static {
     }
 
     /// Maximal packing via the harness [`pack`](crate::trace::chunk::pack): coalesce by melding
-    /// the next trie onto the carry (adjacent chunks of a sorted, consolidated
+    /// each trie of the run onto the first (adjacent chunks of a sorted, consolidated
     /// chain, so meld's "strictly greater first triple" precondition holds), split
     /// with [`trie_merger::split_at`], and seal through [`seal_chunk`] (the spill
     /// point — pages a committed chunk when a spiller is installed).
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
         crate::trace::chunk::pack(
             input, done, out,
-            |acc, next| {
-                let mut build = UpdatesBuilder::new_from(into_trie(std::mem::take(acc)));
-                build.meld(&into_trie(next));
-                *acc = ColChunk::Resident(Rc::new(build.done()));
+            |run| {
+                let mut run = run.into_iter();
+                let mut build = UpdatesBuilder::new_from(into_trie(run.next().unwrap()));
+                for next in run { build.meld(&into_trie(next)); }
+                ColChunk::Resident(Rc::new(build.done()))
             },
             |chunk, n| {
                 let (first, rest) = trie_merger::split_at(into_trie(chunk), n);
