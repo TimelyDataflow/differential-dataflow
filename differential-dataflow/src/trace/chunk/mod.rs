@@ -133,68 +133,56 @@ pub trait Chunk: Sized + Clone {
 
 /// Maximal-packing driver an implementor's [`Chunk::settle`] may delegate to.
 ///
-/// Holds a `carry` chunk under construction, grown by `combine` until it reaches
-/// `TARGET` (then emitted) and emitted early when the next chunk can't be absorbed
-/// without exceeding `TARGET`; over-sized chunks are peeled with `split`. Each
-/// committed chunk is passed through `seal` (the compress / spill hook — use the
-/// identity closure when there's nothing to do). The closures are the only
-/// layout-specific pieces:
+/// Holds a `carry` run of chunks, grown until it reaches `TARGET` (then emitted as
+/// one chunk) and emitted early when the next chunk can't be absorbed without
+/// exceeding `TARGET`; over-sized chunks are peeled with `split`. Each committed
+/// chunk is passed through `seal` (the compress / spill hook — use the identity
+/// closure when there's nothing to do). The closures are the only layout-specific
+/// pieces:
 ///
-/// * `combine(&mut acc, next)` — append `next` onto `acc` (caller guarantees their
-///   lengths sum to at most `TARGET`, and `next` follows `acc` in one sorted,
-///   consolidated chain), so packing a run of small chunks stays linear.
+/// * `combine(run)` — one chunk from a run of at least two (caller guarantees their
+///   lengths sum to at most `TARGET`, and that they form one sorted, consolidated
+///   chain). A run is combined once, when emitted, so packing stays linear even
+///   when combining copies its inputs.
 /// * `split(chunk, n)` — the first `n` updates and the remaining `len - n`.
 /// * `seal(chunk)` — commit a chunk (e.g. compress or spill); identity to keep it.
 pub fn pack<C: Chunk>(
     input: &mut VecDeque<C>,
     done: bool,
     out: &mut VecDeque<C>,
-    mut combine: impl FnMut(&mut C, C),
+    mut combine: impl FnMut(Vec<C>) -> C,
     mut split: impl FnMut(C, usize) -> (C, C),
     mut seal: impl FnMut(C) -> C,
 ) {
-    let mut carry: Option<C> = None;
+    let (mut carry, mut carried) = (Vec::new(), 0);
+    let mut fuse = |carry: &mut Vec<C>| if carry.len() == 1 { carry.pop().unwrap() } else { combine(std::mem::take(carry)) };
     while let Some(chunk) = input.pop_front() {
-        match carry.take() {
-            None => pack_absorb(chunk, &mut carry, out, &mut split, &mut seal),
-            Some(mut c) if c.len() + chunk.len() <= C::TARGET => {
-                // Combines into one legal chunk; coalesce in place.
-                combine(&mut c, chunk);
-                if c.len() == C::TARGET { out.push_back(seal(c)); } else { carry = Some(c); }
-            }
-            Some(c) => {
-                // `c` is maximal against this neighbour; emit it and absorb afresh.
-                out.push_back(seal(c));
-                pack_absorb(chunk, &mut carry, out, &mut split, &mut seal);
-            }
-        }
-    }
-    if let Some(c) = carry {
-        if done { out.push_back(seal(c)); } else { input.push_front(c); }
-    }
-}
-
-/// Absorb `chunk` into an empty `carry` (a [`pack`] helper): pass a `TARGET` chunk
-/// straight through (sealed), hold a smaller one as the new carry, or peel
-/// `TARGET`-sized pieces off a larger one and carry the remainder.
-fn pack_absorb<C, S, L>(chunk: C, carry: &mut Option<C>, out: &mut VecDeque<C>, split: &mut S, seal: &mut L)
-where
-    C: Chunk,
-    S: FnMut(C, usize) -> (C, C),
-    L: FnMut(C) -> C,
-{
-    match chunk.len().cmp(&C::TARGET) {
-        std::cmp::Ordering::Equal => out.push_back(seal(chunk)),
-        std::cmp::Ordering::Less => *carry = Some(chunk),
-        std::cmp::Ordering::Greater => {
+        if carried + chunk.len() <= C::TARGET {
+            // Combines into one legal chunk; absorb it.
+            carried += chunk.len();
+            carry.push(chunk);
+            if carried == C::TARGET { out.push_back(seal(fuse(&mut carry))); carried = 0; }
+        } else if !carry.is_empty() {
+            // The carry is maximal against this neighbour; emit it and absorb afresh.
+            out.push_back(seal(fuse(&mut carry)));
+            carried = 0;
+            input.push_front(chunk);
+        } else {
+            // Peel `TARGET`-sized pieces off an over-sized chunk and absorb the remainder.
             let mut rest = chunk;
-            loop {
+            while rest.len() > C::TARGET {
                 let (head, tail) = split(rest, C::TARGET);
                 out.push_back(seal(head));
-                if tail.len() >= C::TARGET { rest = tail; }
-                else { if tail.len() > 0 { *carry = Some(tail); } break; }
+                rest = tail;
             }
+            input.push_front(rest);
         }
+    }
+    if done {
+        if !carry.is_empty() { out.push_back(seal(fuse(&mut carry))); }
+    } else {
+        // Hand the run back uncombined, to be combined once when it is emitted.
+        for chunk in carry.into_iter().rev() { input.push_front(chunk); }
     }
 }
 

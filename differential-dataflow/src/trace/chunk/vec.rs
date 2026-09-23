@@ -251,13 +251,12 @@ where K: Ord+Clone+'static, V: Ord+Clone+'static, T: Lattice+Timestamp, R: Semig
     }
 
     /// Maximal packing via the harness [`pack`](super::pack): coalesce by
-    /// extending the inner `Vec` in place (`make_mut` is free while the carry's
-    /// `Rc` is unique, so packing a run of small chunks stays linear), split with
-    /// `split_off`, and seal as a no-op (`Vec` chunks are never paged).
+    /// concatenating the run's `Vec`s, split with `split_off`, and seal as a
+    /// no-op (`Vec` chunks are never paged).
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
         super::pack(
             input, done, out,
-            |acc, next| Rc::make_mut(&mut acc.0).extend(take(next)),
+            |run| VecChunk(Rc::new(run.into_iter().flat_map(take).collect())),
             |chunk, n| { let mut rows = take(chunk); let rest = rows.split_off(n); (VecChunk(Rc::new(rows)), VecChunk(Rc::new(rest))) },
             |chunk| chunk,
         );
