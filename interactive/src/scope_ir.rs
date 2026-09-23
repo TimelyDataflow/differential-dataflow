@@ -6,12 +6,9 @@
 //! # Why a tree
 //!
 //! A scope boundary is a real semantic barrier: an operator cannot be hoisted
-//! across it, and an arrangement cannot be shared across it freely. The flat
-//! IR encodes boundaries *positionally* (`Scope`/`EndScope` markers in a node
-//! list), so every consumer that cares reconstructs them by analysis — and
-//! that reconstruction is where the explanation rewrite's level errors lived.
-//! Here the boundary is structural: a `Scope` owns its items, and nothing
-//! crosses except through an explicit import or export.
+//! across it, and an arrangement cannot be shared across it freely. So the
+//! boundary is structural: a `Scope` owns its items, and nothing crosses except
+//! through an explicit import or export.
 //!
 //! The guiding principle throughout: make explicit anything a consumer would
 //! otherwise have to analyze the IR to recover. Feedback variables are a
@@ -89,9 +86,8 @@ pub struct Export {
 }
 
 /// A feedback variable, identified by its index in `Scope::vars`. Carries its
-/// source name (readability, cross-scope name visibility). Its shape is *not*
-/// stored — the shape pass derives every node/var shape when a consumer needs
-/// it, so storing it here would cache a derivable (and currently unknown) value.
+/// source name (readability, cross-scope name visibility). Its shape is not
+/// stored; shapes are derived from the data where needed.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Var {
     pub name: String,
@@ -125,8 +121,8 @@ pub enum Item {
     Sub(Scope),
 }
 
-/// A scope owns its IR. It iterates iff it has `vars` (no `kind` field yet; see
-/// the design doc). Children are owned, inline in `items`.
+/// A scope owns its IR. It iterates iff it has `vars`. Children are owned,
+/// inline in `items`.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Scope {
     /// The source name of the `{ .. }` block ("root" for the program root).
@@ -179,10 +175,7 @@ impl Scope {
     /// - deduplicate structurally identical operators.
     ///
     /// All three are *within-scope*: a scope boundary is a semantic barrier,
-    /// so nothing merges or moves across one. (The flat IR's dedup was
-    /// position-blind and could merge across boundaries — sound only because
-    /// the dynamic model has no structural nesting; here the structure makes
-    /// the restriction automatic.)
+    /// so nothing merges or moves across one.
     pub fn optimize(&mut self) {
         for item in self.items.iter_mut() {
             if let Item::Sub(child) = item { child.optimize(); }

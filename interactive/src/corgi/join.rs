@@ -631,8 +631,7 @@ fn stage_collision<T: ColTime>(
 /// Two regimes: when one side is much smaller (the fresh delta against an accumulated
 /// trace), the small side DRIVES and the large side is presented only at the driver's keys
 /// (sorted probes — cost tracks the driver plus matches). When the sides are
-/// comparable, probing costs `n log n` against a merge's `n`, so both sides are pulled and
-/// merged symmetrically instead.
+/// comparable, both sides are pulled and merged symmetrically instead.
 fn advance_leaf<T: ColTime>(
     chunks0: &[&CorgiChunk<T, Diff>],
     chunks1: &[&CorgiChunk<T, Diff>],
@@ -767,7 +766,7 @@ fn leaf_probe<'a, T: ColTime>(
 }
 
 /// Comparable-sides regime: both sides pulled and merged symmetrically on the `u64`
-/// buffers — a probe here would cost `n log n` against this merge's `n`.
+/// buffers.
 fn leaf_merge<'a, T: ColTime>(
     mut views0: Vec<LeafView<'a, T>>,
     mut views1: Vec<LeafView<'a, T>>,

@@ -480,8 +480,6 @@ where
 
 }
 
-/// Concatenate chunks' columns into flat `(keys, vals, times, diffs)` with **no transcode** — for
-/// reading an arrangement back column-natively (e.g. `Backend::as_collection` straight into a
 /// Build a `ChunkBatch<CorgiChunk>` from corgi key/val COLUMNS directly (no transcode): sort +
 /// consolidate into one chunk, then `settle`. The column-native egress the reduce backend seals its
 /// output with (it resolves proxy ids to real columns by `gather` and hands them here).
@@ -494,7 +492,7 @@ where
     settle_one(chunk)
 }
 
-/// Grade one chunk into a `ChunkBatch` (shared tail of `rows_to_batch`/`columns_to_batch`).
+/// Grade one chunk into a `ChunkBatch`.
 fn settle_one<T, R>(chunk: CorgiChunk<T, R>) -> ChunkBatch<CorgiChunk<T, R>>
 where
     T: ColTime,
@@ -512,7 +510,7 @@ where
 /// standard `ChunkBatcher`/`ChunkBuilder`, the arrange ingest stays column-native — no
 /// columns→rows→columns round-trip at the arrangement boundary.
 ///
-/// Crucially it **accumulates to `TARGET`** before consolidating (like `ContainerChunker`), so it
+/// Crucially it **accumulates to `INGEST`** before consolidating (like `ContainerChunker`), so it
 /// emits few large chunks rather than one tiny chunk per input container — otherwise the columnar
 /// per-chunk set-up (`gather`/`sort_perm`) dominates when input arrives as many small batches.
 pub struct CorgiChunker<T, R> {
@@ -659,7 +657,7 @@ where
     R: Semigroup + Clone + 'static,
 {
     type Container = CorgiChunk<T, R>;
-    // `extract` ships ready chunks, leaving the sub-TARGET remainder to accumulate further.
+    // `extract` ships ready chunks, leaving the sub-`INGEST` remainder to accumulate further.
     fn extract(&mut self) -> Option<&mut Self::Container> {
         self.current = self.ready.pop_front();
         self.current.as_mut()

@@ -10,10 +10,8 @@
 //! The typer is corgi's. [`shape_of_term`] compiles a term into a scratch graph and asks
 //! `corgi::shape_of` (its evaluator on zero rows) for the result shape, so every shape rule —
 //! which lanes a `case` sees, what an `if` may blend, whether two operands compare — is the one
-//! the kernels enforce, and a program that lowers is a program that runs. The compiler covers
-//! Var/Bound/Int/Tuple(+Spread)/Proj/Binary/If/Fold, list and sum intro (`List`/`Inject`), sum
-//! elimination (`Case`), and the Neg/Not/Len/IsTag unaries; `Err` is a type error, reported with
-//! corgi's message. Ordered compares are signed-correct (`ToSigned`); `hash` is corgi's structural
+//! the kernels enforce, and a program that lowers is a program that runs. `Err` is a type error,
+//! reported with corgi's message. Ordered compares are signed-correct (`ToSigned`); `hash` is corgi's structural
 //! `Op::Hash`, the same function `ir::eval` folds row-wise.
 
 use crate::ir::{BinOp, SumTy, Term, UnOp, Value as DValue};
@@ -600,8 +598,7 @@ pub fn compile(
         // the existing kernel matrix, with no per-row work and no new corgi op — `Enlist` each
         // element (a length-1 lane per row), `Iota` a per-row `[0..k)` tag list, `Weave`
         // interleaves the lanes in field order into `List<Sum{X x k}>`, and `MapList(Unwrap)`
-        // strips the now-homogeneous sum (and reports a heterogeneous literal). A fused
-        // list-intro kernel is corgi's call if this composition ever profiles hot.
+        // strips the now-homogeneous sum (and reports a heterogeneous literal).
         Term::List(fields) => {
             if fields.is_empty() {
                 let Some(Shape::List(element)) = expected else {

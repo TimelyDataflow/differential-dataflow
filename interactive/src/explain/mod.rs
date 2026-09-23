@@ -14,13 +14,10 @@
 //! user-iter coordinates folded into the value, innermost first — at the
 //! embedding level.
 //!
-//! This is the tree form of the flat rewrite's `host` map. There it required
-//! positional scope tracking, a pending pile per scope, depth-offset
-//! arithmetic for each `leave`, and a fix-up pass for `Leave` aliasing; here
-//! it is "a scope exports its lifted internals", and the cascade through
-//! enclosing scopes is the recursion. The embedding depth is not a parameter:
-//! the renderer derives depth structurally, so a clone needn't know where it
-//! will sit.
+//! A scope exports its lifted internals, and the cascade through enclosing
+//! scopes is the recursion. The embedding depth is not a parameter: the
+//! renderer derives depth structurally, so a clone needn't know where it will
+//! sit.
 
 use crate::ir::LinearOp;
 use crate::scope_ir::{Bind, Export, Import, Item, Node, Program, Ref, Scope, Source, Var};
@@ -179,21 +176,12 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
 
 // ===== The explanation transform =====
 //
-// `explain(p)` produces a Program whose execution yields per-source
-// demand-set explanations for queries against `p`'s first export. Output
-// shape: root { sources, query input, witness clone } and an iterative
-// `explain` scope { demand-set vars, forward clone on demanded rows,
-// reverse-tracing ops, demand exports }.
-//
-// The reverse dataflow is *flat inside the explain scope* by design: demand
-// rows carry the user-iteration chain folded into the value (the `folded`
-// layout), so no nesting is needed. The per-op reverse rules port from the
-// flat rewrite nearly unchanged; what the tree changes is the boundary
-// bookkeeping. Flat `Leave` had a special backward rule injecting the inner
-// user-chain coordinate; here a reference is *resolved* through explicit
-// import/export edges to the value site it names, and the ordinary
-// shape-preserving lookup against that site's host form injects or strips
-// coordinates as the depths dictate. No op needs to know about boundaries.
+// The reverse dataflow is flat inside the explain scope: demand rows carry the
+// user-iteration chain in the value, so no nesting is needed. A reference is
+// *resolved* through explicit import/export edges to the value site it names,
+// and the ordinary shape-preserving lookup against that site's host form
+// injects or strips coordinates as the depths dictate. No op needs to know
+// about boundaries.
 
 use std::collections::BTreeMap;
 use crate::ir::{BinOp, Projection, Reducer, Term};
@@ -430,8 +418,6 @@ impl Sb {
 
 /// One upstream edge into a backward rule: the target's host-side `(data,
 /// user)` collections from both clones, its shape, and its user-chain length.
-/// (The flat version carried two lengths that diverged at `Leave`; with
-/// per-site hosts there is one.)
 struct Side {
     witness: Ref,
     forward: Ref,
@@ -470,8 +456,7 @@ impl Sb {
         decouple::keyed_lookup::<Val, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, min)
     }
 
-    /// Lossy lookup (Linear[Project]): pure-map shortcut when invertible and
-    /// same-scope, pair-table fallback otherwise.
+    /// Lossy lookup (Linear[Project]), through the pair table.
     fn emit_lookup_lossy(&mut self, dep_y: Ref, side: &Side, output_shape: (usize, usize), out_user_len: usize, proj: &Projection) -> Ref {
         decouple::lossy_lookup::<Val, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, proj)
     }
@@ -528,8 +513,7 @@ impl Sb {
 /// The `Value` data model for explain: a demand row is `(K ; Tuple([V…, chain…,
 /// q]))` — a flat value tuple of `V`'s fields, then the loop-iteration chain
 /// (innermost-first), then the trailing query id, matching the host lift's
-/// `append_iter`. Every builder works in field-index ranges; the flat `[i64]`
-/// model implemented the same trait over `[i64]` column ranges.
+/// `append_iter`. Every builder works in field-index ranges.
 pub(crate) struct Val;
 
 impl Dataflow for Sb {
@@ -620,9 +604,7 @@ impl RowModel for Val {
         Projection { key: tup(fidx(0, 0, k)), val: tup(val) }
     }
 
-    fn lossy_try_invert(_p: &Projection, _ki: usize, _vi: usize, _ko: usize, _vo: usize, _ol: usize) -> Option<Projection> {
-        None // always take the pair-table fallback; `lossy_pair` bounds Spread so it is sound.
-    }
+    // Bounds Spread, so the pair table serves every projection.
     fn lossy_pair(proj: &Projection, k_in: usize, v_in: usize, in_len: usize) -> Projection {
         let mut val = fidx(0, 0, k_in);
         val.extend(fidx(1, 0, v_in + in_len));
@@ -1000,8 +982,8 @@ impl<'a> Reverse<'a> {
                     }
                     LinearOp::Negate | LinearOp::EnterAt(_) => {
                         // Negate: pure pass-through. EnterAt: sound but
-                        // over-broad pass-through (see the flat rule's note);
-                        // the routing adapter handles any depth difference.
+                        // over-broad pass-through; the routing adapter handles
+                        // any depth difference.
                         self.push(ex, path, input, dep_this, out_user_len);
                     }
                     LinearOp::LiftIter => panic!("explain: LiftIter in user program"),

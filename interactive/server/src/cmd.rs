@@ -5,7 +5,7 @@
 //!   - `ok [body...]` — terminal success line
 //!   - `err [body...]` — terminal error line
 //!   - `data <fields...>` — one streamed body line (peek/tail batches)
-//!   - `end` — terminator after a stream of `data` lines
+//!   - `end` — terminator of a `tail` stream, once it is stopped
 //!
 //! Multi-line bodies use two-phase framing: `load ... begin` accepts literal
 //! DDIR through `end-load`, while `feed <prog> <in#> begin` accepts row updates
@@ -33,8 +33,7 @@ pub type ConnectionId = u64;
 #[derive(Debug)]
 pub enum Cmd {
     /// Install a dataflow.
-    /// `id_hint` — a client-chosen name; the server may keep it or assign
-    /// a fresh id (echo'd in the response).
+    /// `id_hint` — the client-chosen name the dataflow is installed under.
     /// `bindings` — `import-name -> binding`, where the binding is either a
     /// registered trace name or a builtin call (`random(...)`).
     /// `program` — DDIR text, inline (`load … begin` … `end-load`) or read
@@ -48,10 +47,9 @@ pub enum Cmd {
         program: String,
         explain: Option<(usize, bool)>,
     },
-    /// Drop the dataflow named by id or by `id_hint`. Fails if any
-    /// export of this dataflow is still imported by another live
-    /// dataflow or held by a reader.
-    Drop { target: DataflowRef },
+    /// Drop the named dataflow. Fails if any export of this dataflow is
+    /// still imported by another live dataflow or held by a reader.
+    Drop { name: String },
     /// List held names.
     List,
     /// One-shot snapshot of a named trace, optionally of one key.
@@ -100,37 +98,10 @@ pub enum Cmd {
         prog: String,
         input: usize,
     },
-    /// Push a row into the query input of a `--explain` dataflow
-    /// (reserved; unimplemented). Sign is `+1` for `add`, `-1` for `del`.
-    #[allow(dead_code)]
-    Query {
-        target: DataflowRef,
-        kind: QueryKind,
-        key: Vec<i64>,
-        val: Vec<i64>,
-    },
     /// Advance ambient time by `n` (default 1).
     Tick { n: u64 },
     /// End the session.
     Exit,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum QueryKind {
-    Add,
-    Del,
-}
-
-/// A reference to a registered dataflow, used by both `drop` and
-/// `query`. Either a numeric dataflow id or a name (the load's
-/// `id_hint`). Parsed by reading the token as a `u64` first, then
-/// falling back to a string name. So `drop 5` and `drop my_reach`
-/// both work, and `drop 5_alt` (which fails to parse as u64) falls
-/// through to the name lookup.
-#[derive(Debug, Clone)]
-pub enum DataflowRef {
-    Id(u64),
-    Name(String),
 }
 
 /// A command ready to broadcast to the worker group. Protocol-only tail
@@ -172,17 +143,7 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
                 program,
             }
         }
-        Cmd::Drop { target } => ServerCommand::Drop {
-            name: match target {
-                DataflowRef::Name(name) => name,
-                DataflowRef::Id(id) => {
-                    return Err(format!(
-                        "numeric dataflow id {} is no longer exposed; use its name",
-                        id
-                    ))
-                }
-            },
-        },
+        Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
         Cmd::Peek { name, key } => ServerCommand::Peek { trace: name, key },
         Cmd::Tail { name } => return Ok(PreparedCommand::Tail { name }),
@@ -214,9 +175,6 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
         Cmd::Source { prog, input, source } => ServerCommand::Load { prog, input, source },
         Cmd::Bind { trace, prog, input } => ServerCommand::Bind { trace, prog, input },
         Cmd::Unbind { trace, prog, input } => ServerCommand::Unbind { trace, prog, input },
-        Cmd::Query { .. } => {
-            return Err("query is reserved for --explain dataflows and is not implemented".into())
-        }
         Cmd::Tick { n } => ServerCommand::Tick { n },
         Cmd::Exit => ServerCommand::Exit,
     };
@@ -295,8 +253,8 @@ pub struct Request {
 }
 
 /// State carried between lines so the parser can splice a multi-line load or
-/// feed body together. The parser hands back either a complete `Request` or
-/// `None` (more lines required).
+/// feed body together. The parser hands back a request id with its parsed
+/// command (or parse error), or `None` when more lines are required.
 #[derive(Default)]
 pub struct LineParser {
     pending_load: Option<PendingLoad>,
@@ -309,7 +267,7 @@ pub struct LineParser {
 /// Tokens that introduce a command. If a line begins with one of these
 /// instead of an explicit reqid, the parser synthesizes a reqid.
 const COMMAND_KEYWORDS: &[&str] = &[
-    "load", "drop", "list", "peek", "tail", "stop", "tick", "query", "exit", "feed", "bind",
+    "load", "drop", "list", "peek", "tail", "stop", "tick", "exit", "feed", "bind",
     "unbind",
 ];
 
@@ -683,63 +641,6 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                 },
             }
         }
-        "query" => {
-            // Syntax: `query <df-id-or-name> add|del <k-fields> ; <v-fields>`
-            // Where k/v-fields are comma-separated i64. Empty side allowed
-            // (write nothing before/after the `;`).
-            if args.len() < 3 {
-                return ParseOutcome::Err(
-                    "query: expected `<df-id-or-name> add|del <k1,k2,..> ; <v1,v2,..>`".into(),
-                );
-            }
-            let target = match args[0].parse::<u64>() {
-                Ok(n) => DataflowRef::Id(n),
-                Err(_) => DataflowRef::Name(args[0].to_string()),
-            };
-            let kind = match args[1] {
-                "add" => QueryKind::Add,
-                "del" => QueryKind::Del,
-                other => {
-                    return ParseOutcome::Err(format!(
-                        "query: kind must be add|del, got {:?}",
-                        other
-                    ))
-                }
-            };
-            // Find the `;` separator among the remaining tokens.
-            let rest = &args[2..];
-            let sep = rest.iter().position(|t| *t == ";");
-            let (k_toks, v_toks): (&[&str], &[&str]) = match sep {
-                Some(i) => (&rest[..i], &rest[i + 1..]),
-                None => (rest, &[]),
-            };
-            fn parse_fields(toks: &[&str]) -> Result<Vec<i64>, String> {
-                let mut out = Vec::new();
-                for t in toks {
-                    for piece in t.split(',') {
-                        if piece.is_empty() {
-                            continue;
-                        }
-                        out.push(piece.parse().map_err(|_| format!("bad i64 {:?}", piece))?);
-                    }
-                }
-                Ok(out)
-            }
-            let key = match parse_fields(k_toks) {
-                Ok(v) => v,
-                Err(e) => return ParseOutcome::Err(format!("query key: {}", e)),
-            };
-            let val = match parse_fields(v_toks) {
-                Ok(v) => v,
-                Err(e) => return ParseOutcome::Err(format!("query val: {}", e)),
-            };
-            ParseOutcome::Cmd(Cmd::Query {
-                target,
-                kind,
-                key,
-                val,
-            })
-        }
         "feed" => {
             if let [prog, input, "begin"] = args {
                 let input = match input.parse() {
@@ -848,14 +749,8 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
             _ => ParseOutcome::Err(format!("{}: expected `<trace> <prog> <in#>`", cmd)),
         },
         "drop" => match args {
-            [tok] => {
-                let target = match tok.parse::<u64>() {
-                    Ok(n) => DataflowRef::Id(n),
-                    Err(_) => DataflowRef::Name((*tok).to_string()),
-                };
-                ParseOutcome::Cmd(Cmd::Drop { target })
-            }
-            _ => ParseOutcome::Err("drop: expected `<dataflow-id-or-name>`".into()),
+            [name] => ParseOutcome::Cmd(Cmd::Drop { name: (*name).to_string() }),
+            _ => ParseOutcome::Err("drop: expected `<name>`".into()),
         },
         "list" => match args {
             [] => ParseOutcome::Cmd(Cmd::List),
@@ -939,12 +834,7 @@ mod tests {
         assert_eq!(got.len(), 4);
         assert!(matches!(got[0].1, Ok(Cmd::List)));
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 5 })));
-        assert!(matches!(
-            got[2].1,
-            Ok(Cmd::Drop {
-                target: DataflowRef::Id(3)
-            })
-        ));
+        assert!(matches!(got[2].1, Ok(Cmd::Drop { ref name }) if name == "3"));
         assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None }) if name == "foo"));
     }
 
@@ -1036,27 +926,6 @@ mod tests {
         assert!(matches!(&got[0].1, Ok(Cmd::Peek { key: Some(_), .. })));
         assert!(matches!(&got[1].1, Ok(Cmd::Peek { key: None, .. })));
         assert!(matches!(&got[2].1, Err(_)));
-    }
-
-    #[test]
-    fn query_cmd() {
-        let mut p = LineParser::new();
-        let got = feed_all(&mut p, &["rQ query 3 add 1,2 ; 99"]);
-        assert_eq!(got.len(), 1);
-        match &got[0].1 {
-            Ok(Cmd::Query {
-                target,
-                kind,
-                key,
-                val,
-            }) => {
-                assert!(matches!(target, DataflowRef::Id(3)));
-                assert!(matches!(kind, QueryKind::Add));
-                assert_eq!(key, &vec![1, 2]);
-                assert_eq!(val, &vec![99]);
-            }
-            _ => panic!("expected Query, got {:?}", got[0].1),
-        }
     }
 
     #[test]
@@ -1221,15 +1090,8 @@ mod tests {
             ],
         );
         assert_eq!(got.len(), 3);
-        assert!(matches!(
-            got[0].1,
-            Ok(Cmd::Drop {
-                target: DataflowRef::Id(3)
-            })
-        ));
-        assert!(
-            matches!(got[1].1, Ok(Cmd::Drop { target: DataflowRef::Name(ref n) }) if n == "my_reach")
-        );
+        assert!(matches!(got[0].1, Ok(Cmd::Drop { ref name }) if name == "3"));
+        assert!(matches!(got[1].1, Ok(Cmd::Drop { ref name }) if name == "my_reach"));
         assert!(matches!(got[2].1, Err(_)));
     }
 }

@@ -20,8 +20,7 @@
 //! # The two binding points
 //!
 //! The named-trace IR (`import "x"` / `export "y"`) flows through parse → lower
-//! → `scope_ir`; every batch backend simply `panic!`s on a non-`Input` source
-//! because it has no registry. The server resolves both ends:
+//! → `scope_ir`. The server resolves both ends:
 //!
 //! - **`Source::Trace(name)`** — `import` the registered [`ServerTrace`] into the
 //!   new dataflow and feed it as a root collection.
@@ -522,7 +521,7 @@ impl Server {
                     .collect();
 
                 // Render the program body in its own iterative scope, then bring
-                // every export back out to the host time (mirrors `vec::evaluate`).
+                // every export back out to the host time.
                 let leaved: Vec<VecCollection<OuterTime, (Value, Value), Diff>> = outer
                     .iterative::<PointStamp<OuterTime>, _, _>(|inner| {
                         let entered: Vec<_> =

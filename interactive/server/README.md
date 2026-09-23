@@ -166,11 +166,6 @@ fronting proxy if a deployment ever needs one.
     ./target/release/ddir_server < interactive/server/demo/txn.txt
     python3 interactive/server/demo/two_sessions.py   # races + size gate over TCP
 
-`load --explain` and `query` are reserved but unimplemented: explanation
-support belongs on the scope-tree explanation machinery, and until that lands
-the server reports an error rather than giving those commands an improvised
-meaning.
-
 ## Benchmarking
 
 The [LDBC-derived workload](bench/ldbc/README.md) runs parameterized interactive
