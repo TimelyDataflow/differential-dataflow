@@ -449,9 +449,9 @@ impl Parser {
     }
 
     // A projection `(k1, k2 ; v1, v2)` builds `key = tuple(k1, k2)` and
-    // `val = tuple(v1, v2)`. A bare `$n` field splices the whole input row's
-    // fields (`Spread`), matching the flat-row concatenation of the original
-    // `[i64]` model; any other field is one (possibly nested) element.
+    // `val = tuple(v1, v2)`. A bare `$n` field splices the input row's tuple
+    // fields (`Spread`), or is one field when the row is not a tuple; any other
+    // field is one (possibly nested) element.
     fn parse_projection_inner(&mut self) -> Projection {
         let key = self.parse_field_list_until(&[Token::Semi, Token::RParen]);
         let val = if *self.peek() == Token::Semi {

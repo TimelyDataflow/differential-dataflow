@@ -1,0 +1,6 @@
+-- A bare `$n` splices a tuple's fields; any other value is one field. Here the spread value is a
+-- list (after `collect`) and an integer (after `value`), each kept whole.
+let rows = input 0 | key($0[0] ; $0[1]);
+
+export "lists" = rows | collect | key($0 ; $1) | inspect(lists);
+export "ints" = rows | value($1[0]) | key($0 ; $1) | inspect(ints);

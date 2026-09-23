@@ -54,6 +54,8 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
             rows(&[&[1, 1, 10], &[1, 2, 20], &[2, 1, 30], &[2, 1, 31], &[9, 9, 90]]),
             rows(&[&[1, 1, 5], &[2, 1, 6], &[3, 3, 7]]),
         ],
+        // spread_values: keys with one and with several values.
+        "spread_values" => vec![rows(&[&[1, 10], &[1, 20], &[2, 30]])],
         "signed_min" => vec![rows(&[
             &[1, 0],
             &[1, -1],
@@ -132,3 +134,18 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn tour() { assert_backends_agree("tour"); }
 #[test] fn pair_keys() { assert_backends_agree("pair_keys"); }
 #[test] fn signed_min() { assert_backends_agree("signed_min"); }
+#[test] fn spread_values() { assert_backends_agree("spread_values"); }
+
+/// A filter predicate must be an `Int`: both backends reject a tuple rather than one of them
+/// keeping nothing.
+#[test]
+fn filter_requires_an_int_predicate() {
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 | filter($0);"#));
+    tree.optimize();
+    let inputs = vec![rows(&[&[1, 10], &[0, 20]])];
+    for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
+        let (tree, inputs) = (tree.clone(), inputs.clone());
+        let result = std::panic::catch_unwind(move || evaluate(backend, timely::Config::process(1), &tree, &inputs));
+        assert!(result.is_err(), "{backend:?} accepted a tuple filter predicate");
+    }
+}

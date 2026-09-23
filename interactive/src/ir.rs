@@ -81,11 +81,12 @@ pub enum Term {
     Bound(usize),
     /// Integer literal.
     Int(i64),
-    /// Product intro. A `Spread` child splices its tuple's fields in place.
+    /// Product intro. A `Spread` child splices a tuple's fields in place; any
+    /// other value is one field.
     Tuple(Vec<Term>),
-    /// List intro. A `Spread` child splices in place.
+    /// List intro.
     List(Vec<Term>),
-    /// Splice marker; only meaningful as a direct child of `Tuple`/`List`.
+    /// Splice marker; only meaningful as a direct child of `Tuple`.
     /// Lets a whole input row (`$n`) contribute all its fields.
     Spread(Box<Term>),
     /// Product/list elimination: index into a `Tuple` or `List`.
@@ -248,9 +249,9 @@ pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
         Term::Var(i) => env[*i].clone(),
         Term::Bound(k) => env[env.len() - 1 - *k].clone(),
         Term::Int(n) => Value::Int(*n),
-        Term::Tuple(fields) => Value::Tuple(build_seq(fields, env)),
-        Term::List(fields) => Value::List(build_seq(fields, env)),
-        Term::Spread(_) => panic!("Spread is only valid as a direct child of Tuple/List"),
+        Term::Tuple(fields) => Value::Tuple(tuple_fields(fields, env)),
+        Term::List(fields) => Value::List(fields.iter().map(|f| eval(f, env)).collect()),
+        Term::Spread(_) => panic!("Spread is only valid as a direct child of Tuple"),
         Term::Proj(t, i) => {
             // If the operand is a "place" (a Var/Bound/Proj chain), index into
             // it by reference and clone only the selected field — avoids deep-
@@ -342,17 +343,17 @@ fn eval_ref<'a>(term: &Term, env: &'a [Value]) -> Option<&'a Value> {
     }
 }
 
-/// Build a tuple/list element sequence, splicing any `Spread` children.
-fn build_seq(fields: &[Term], env: &mut Vec<Value>) -> Vec<Value> {
+/// Build a tuple's fields. A `Spread` child splices a tuple's fields in place (a unit splices
+/// nothing); any other value is one field, so a tuple's arity never depends on the data.
+fn tuple_fields(fields: &[Term], env: &mut Vec<Value>) -> Vec<Value> {
     let mut out = Vec::with_capacity(fields.len());
     for f in fields {
-        if let Term::Spread(inner) = f {
-            match eval(inner, env) {
-                Value::Tuple(xs) | Value::List(xs) => out.extend(xs),
-                other => panic!("Spread of non-aggregate value: {:?}", other),
-            }
-        } else {
-            out.push(eval(f, env));
+        match f {
+            Term::Spread(inner) => match eval(inner, env) {
+                Value::Tuple(xs) => out.extend(xs),
+                other => out.push(other),
+            },
+            _ => out.push(eval(f, env)),
         }
     }
     out
