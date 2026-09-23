@@ -38,7 +38,7 @@ use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use corgi::arrange::{compare_at, gather, gather_lanes, leaf_slice};
-use crate::corgi::search::MatchingRanges;
+use crate::corgi::search::matching_ranges;
 use corgi::{shape_of_value, Shape, Value as CValue};
 
 use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, CorgiChunk};
@@ -523,7 +523,9 @@ impl<'a, T: ColTime> Probe<'a, T> {
     fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &[u64], leaf_vals: bool) -> Self {
         let keys = corgi::arrange::leaf_slice(key_lane(chunk.keys())).expect("identifier lane is a u64 leaf");
         let (mut lo, mut hi) = (vec![0; needles.len()], vec![0; needles.len()]);
-        for (j, range) in MatchingRanges::new(needles, keys) {
+        let mut found = Vec::new();
+        matching_ranges(needles, keys, &mut Vec::new(), &mut found);
+        for (j, range) in found {
             lo[j] = range.start;
             hi[j] = range.end;
         }
