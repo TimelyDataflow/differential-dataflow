@@ -12,8 +12,8 @@
 //! independently.
 //!
 //! Threads:
-//!   - main: spawns the worker, the TCP listener, and the stdin session;
-//!     then waits for the worker to finish.
+//!   - main: spawns the worker, the TCP and WebSocket listeners, and the stdin
+//!     session; then waits for the worker to finish.
 //!   - worker 0: admits the transport FIFO to the distributed control stream.
 //!   - all workers: replay the same registry + dispatch operations.
 //!   - per-session reader: parses lines into commands, tags each with this
@@ -27,7 +27,7 @@ mod control_loop;
 
 use mimalloc::MiMalloc;
 
-/// The allocator the retired example driver ran on; the arrangement-heavy paths lean on it.
+/// The arrangement-heavy paths lean on mimalloc.
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 

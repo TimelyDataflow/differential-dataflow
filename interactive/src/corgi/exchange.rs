@@ -26,12 +26,10 @@
 //! # The hash
 //!
 //! Routing uses [`corgi::hash`] — the same structural content hash that
-//! [`present_key`](crate::corgi::chunk::present_key) prepends as a key's identifier lane. Any
-//! deterministic function of the key would be correct here; choosing *this* one means the
-//! distributor and the arrangement agree on what a key's identifier is, so the hash a receiver
-//! recomputes is the one the sender routed by. (It is also seed-free and structural, so it agrees
-//! across processes and across runs, and its low bits are mixed — a raw key column would route a
-//! strided identifier space onto a fraction of the workers.)
+//! [`present_key`](crate::corgi::chunk::present_key) prepends as a compound key's identifier
+//! lane. Any deterministic function of the key would be correct here; this one is seed-free and
+//! structural, so it agrees across processes and runs, and its low bits are mixed — a raw key
+//! column would route a strided identifier space onto a fraction of the workers.
 
 use timely::communication::Push;
 use timely::dataflow::channels::Message;

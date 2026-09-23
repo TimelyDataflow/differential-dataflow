@@ -82,8 +82,8 @@ fn collect_body_free_names<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>) {
 // Produces the tree IR (see `scope_ir`): each `{ .. }` becomes an
 // owned child scope, cross-scope flow becomes explicit import/export edges,
 // and feedback vars are first-class. `input`/`import` external sources are
-// accepted at the root scope only. Shapes are not stored on the tree; a
-// shape pass derives them when a consumer needs them.
+// accepted at the root scope only. Shapes are not stored on the tree (beyond
+// an import's optional contract); they are derived from the data where needed.
 
 use crate::scope_ir as st;
 
@@ -159,8 +159,8 @@ impl ScopeLower {
             Expr::LiftIter(e)   => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::LiftIter] }) },
             Expr::Arrange(e)    => { let r = self.lower_expr(e); self.push(st::Node::Arrange(r)) },
             // Join/Reduce consume arrangements; arrange their inputs explicitly
-            // (as the flat lowering does) so identical arrangements are visible
-            // to `optimize`'s within-scope dedup and shared at render.
+            // so identical arrangements are visible to `optimize`'s within-scope
+            // dedup and shared at render.
             Expr::Join(l, r, p) => {
                 let lr = self.lower_expr(l); let la = self.push(st::Node::Arrange(lr));
                 let rr = self.lower_expr(r); let ra = self.push(st::Node::Arrange(rr));

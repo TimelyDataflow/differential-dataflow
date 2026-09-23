@@ -1,4 +1,4 @@
-//! Phase 2 — the corgi-native container: corgi columns for the (key,val) payload, times as a
+//! The corgi-native container: corgi columns for the (key,val) payload, times as a
 //! lane column, diffs a plain Rust Vec (corgi never touches the lattice). This is what flows on
 //! dataflow edges in the corgi backend; operators transform block→block via `eval_graph` with NO
 //! per-op transcode. Conversion to/from DDIR rows happens only at I/O boundaries

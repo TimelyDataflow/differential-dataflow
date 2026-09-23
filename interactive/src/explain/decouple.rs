@@ -1,18 +1,11 @@
 //! Data-model-agnostic surface for explain's reverse-tracing.
 //!
-//! The reverse rules used to hard-code the flat `[i64]` row layout — building
-//! projections as `FieldExpr` index ranges inline. This module factors that
-//! out: the rules are written **once** over two traits, and the data model
-//! supplies the representation.
+//! The reverse rules are written once, over two traits:
 //!
-//! * [`RowModel`] builds the projections/predicates each rule needs.
+//! * [`RowModel`] builds the projections/predicates each rule needs;
+//!   [`crate::explain::Val`] is the model the crate uses.
 //! * [`Dataflow`] is the orchestration backend (concat/project/filter/join) —
 //!   the scope builder `Sb` for real explain.
-//!
-//! Changing the data model means reimplementing [`RowModel`]; the rules and the
-//! orchestration are untouched. [`crate::explain::Val`] is the only model the
-//! crate evaluates; the flat `[i64]` model this was factored out for, and the
-//! `folded` algebra it used, are both retired.
 //!
 //! ## The demand envelope
 //!
@@ -25,12 +18,11 @@
 //! where `;` separates the *key* from the *value*. The value packs three
 //! logical parts, in order:
 //!
-//! * **`V`** — the underlying data value (`v` columns in the flat model). The
+//! * **`V`** — the underlying data value. The
 //!   demanded output's value on the `dep` side, the candidate input's value on
 //!   the pair-table side.
 //! * **`chain`** — the loop-iteration coordinates, innermost-first, length =
-//!   the node's scope depth. Time lives in data here; `folded` owns the
-//!   per-coordinate algebra (compare outer-aligned, strip).
+//!   the node's scope depth. Time lives in data here.
 //! * **`q`** — a single trailing query id, present on `dep` rows (the thing
 //!   being explained), absent on pair-table rows.
 //!
@@ -91,16 +83,11 @@ pub trait RowModel {
 
     // --- lossy lookup (Linear[Project]) ---
 
-    /// Fast path used when `proj` is invertible and the chains have equal length
-    /// (`in_len == out_len`): map `dep` directly to a contrib without the pair
-    /// table. `(K_out ; V_out, chain_out, q) -> (K_in ; V_in, chain_out, q)`,
-    /// reconstructing `(K_in, V_in)` from the output. `None` if not invertible.
-    fn lossy_try_invert(proj: &Self::Proj, k_in: usize, v_in: usize, k_out: usize, v_out: usize, out_len: usize) -> Option<Self::Proj>;
-    /// Fallback pair re-key: apply the user `proj.key` to a pair row to compute
+    /// Pair re-key: apply the user `proj.key` to a pair row to compute
     /// `K_out`, carrying the input data through.
     /// `(K_in ; V_in, chain_in) -> (K_out ; K_in, V_in, chain_in)`.
     fn lossy_pair(proj: &Self::Proj, k_in: usize, v_in: usize, in_len: usize) -> Self::Proj;
-    /// Reassemble after the fallback join on `K_out`. Input:
+    /// Reassemble after the join on `K_out`. Input:
     /// `[$0 = K_out, $1 = V_out ++ chain_out ++ q (dep), $2 = K_in ++ V_in ++ chain_in (pair)]`.
     /// Output: `(K_in ; V_in, chain_in, chain_out, q)`.
     fn lossy_reassemble(k_in: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize) -> Self::Proj;
@@ -127,7 +114,7 @@ pub trait RowModel {
     #[allow(clippy::too_many_arguments)]
     fn join_split(left: bool, k: usize, v_l: usize, v_r: usize, l_len: usize, r_len: usize, out_len: usize) -> Self::Proj;
 
-    // --- the chain (`folded`) algebra, shared by SP / keyed / lossy ---
+    // --- the chain algebra, shared by SP / keyed / lossy ---
 
     /// Soundness filter on a `(K ; V, chain_in, chain_out, q)` row: keep rows
     /// with `chain_in ≤ chain_out`, compared outer-aligned (an input can only
@@ -206,17 +193,12 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     df.project(&filtered, M::strip(k, v_in, in_len, out_len, in_len))
 }
 
-/// Lossy (Project) lookup: invert fast-path (equal chain lengths) else pair table.
+/// Lossy (Project) lookup, through the pair table.
 pub fn lossy_lookup<M, D>(df: &mut D, dep: &D::Handle, side: &SideInfo<D>, output_shape: (usize, usize), out_len: usize, proj: &M::Proj) -> D::Handle
 where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     let (k_in, v_in) = side.shape;
     let in_len = side.user_len;
-    let (k_out, v_out) = output_shape;
-    if in_len == out_len {
-        if let Some(p) = M::lossy_try_invert(proj, k_in, v_in, k_out, v_out, out_len) {
-            return df.project(dep, p);
-        }
-    }
+    let (_, v_out) = output_shape;
     let pair = df.concat(vec![side.witness.clone(), side.forward.clone()]);
     let pair_keyed = df.project(&pair, M::lossy_pair(proj, k_in, v_in, in_len));
     let joined = df.join(dep, &pair_keyed, M::lossy_reassemble(k_in, v_in, v_out, in_len, out_len));
@@ -243,14 +225,9 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     (lc, rc)
 }
 
-// The flat-row executable contract was removed with the `[i64]` model. The
-// model-agnostic proof below (`nested_contract`) runs the same generic rules
-// against a nested `Value`-shaped `RowModel` — the shape the real `explain::Val`
-// model uses — so it remains the runnable spec for the reverse rules.
-
-/// In-memory [`Dataflow`] over `Vec<(Value, Value)>`, shared by the contract
-/// modules below: projections and predicates run through the `Term`
-/// interpreter (`ir::eval`), and `join` is a nested-loop equi-join on the key.
+/// In-memory [`Dataflow`] over `Vec<(Value, Value)>`, for the contract below:
+/// projections and predicates run through the `Term` interpreter (`ir::eval`),
+/// and `join` is a nested-loop equi-join on the key.
 #[cfg(test)]
 mod mem {
     use super::Dataflow;
@@ -292,257 +269,10 @@ mod mem {
 }
 
 #[cfg(test)]
-mod nested_contract {
-    //! Proof that the trait is model-agnostic: a second `RowModel` over a
-    //! *nested* value (`Value::Tuple`/`Int`) — the shape an AST/JSON data model
-    //! would use — implemented against the SAME rules, run through the SAME
-    //! by-example specs as the flat model. Where the flat model lays the
-    //! envelope out positionally, this one nests it as `Tuple([V, chain, q])`;
-    //! e.g. the Min narrowing is one whole-`Value` equality, not a column loop.
-    //! If these pass, "swap the data model = reimplement `RowModel`" is earned.
-
-    use super::*;
-
-    /// Minimal nested value: an integer or a tuple. (`Variant`/`List` would
-    /// extend this; the reverse rules need only product nesting.)
-    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-    enum Value { Int(i64), Tuple(Vec<Value>) }
-    use Value::{Int, Tuple};
-    fn int(n: i64) -> Value { Int(n) }
-    fn tup(xs: Vec<Value>) -> Value { Tuple(xs) }
-
-    /// A scalar term over a nested row. `Field`/`Tuple` are project/construct.
-    #[derive(Clone, Debug)]
-    enum Term { Var(usize), Field(Box<Term>, usize), Tup(Vec<Term>), Sub1(Box<Term>) }
-    fn var(s: usize) -> Term { Term::Var(s) }
-    fn fld(t: Term, i: usize) -> Term { Term::Field(Box::new(t), i) }
-    fn f(s: usize, i: usize) -> Term { fld(var(s), i) }
-
-    #[derive(Clone, Debug)]
-    struct Proj { key: Term, val: Term }
-    #[derive(Clone, Debug)]
-    enum Pred { Le(Term, Term), Eq(Term, Term), Gt0(Term), And(Box<Pred>, Box<Pred>) }
-
-    fn eval(t: &Term, env: &[Value]) -> Value {
-        match t {
-            Term::Var(s) => env[*s].clone(),
-            Term::Field(x, i) => match eval(x, env) { Tuple(xs) => xs[*i].clone(), v => panic!("field of {:?}", v) },
-            Term::Tup(xs) => Tuple(xs.iter().map(|x| eval(x, env)).collect()),
-            Term::Sub1(x) => match eval(x, env) { Int(n) => Int(n - 1), v => panic!("sub1 of {:?}", v) },
-        }
-    }
-    fn eval_pred(p: &Pred, env: &[Value]) -> bool {
-        match p {
-            Pred::Le(a, b) => eval(a, env) <= eval(b, env),
-            Pred::Eq(a, b) => eval(a, env) == eval(b, env),
-            Pred::Gt0(a) => matches!(eval(a, env), Int(n) if n > 0),
-            Pred::And(a, b) => eval_pred(a, env) && eval_pred(b, env),
-        }
-    }
-
-    /// Redirect a user projection's value-access: `Var(r)` for `r` in `vars`
-    /// becomes `Var(r)[0]` (the `V` field of that slot's envelope).
-    fn subst(t: &Term, vars: &[usize]) -> Term {
-        match t {
-            Term::Var(r) if vars.contains(r) => f(*r, 0),
-            Term::Var(r) => var(*r),
-            Term::Field(x, i) => fld(subst(x, vars), *i),
-            Term::Tup(xs) => Term::Tup(xs.iter().map(|x| subst(x, vars)).collect()),
-            Term::Sub1(x) => Term::Sub1(Box::new(subst(x, vars))),
-        }
-    }
-
-    type Row = Value;
-    type Coll = Vec<(Row, Row)>;
-    struct Mem;
-    impl Dataflow for Mem {
-        type Handle = Coll;
-        type Proj = Proj;
-        type Pred = Pred;
-        fn project(&mut self, c: &Coll, p: Proj) -> Coll {
-            c.iter().map(|(k, v)| { let e = [k.clone(), v.clone()]; (eval(&p.key, &e), eval(&p.val, &e)) }).collect()
-        }
-        fn filter(&mut self, c: &Coll, p: Pred) -> Coll {
-            c.iter().filter(|(k, v)| eval_pred(&p, &[k.clone(), v.clone()])).cloned().collect()
-        }
-        fn join(&mut self, l: &Coll, r: &Coll, p: Proj) -> Coll {
-            let mut out = Vec::new();
-            for (lk, lv) in l { for (rk, rv) in r {
-                if lk == rk { let e = [lk.clone(), lv.clone(), rv.clone()]; out.push((eval(&p.key, &e), eval(&p.val, &e))); }
-            }}
-            out
-        }
-        fn concat(&mut self, cs: Vec<Coll>) -> Coll { cs.into_iter().flatten().collect() }
-    }
-
-    /// The nested model. `K`/`V` are single (opaque) values, so the column
-    /// counts `k`/`v`/… are ignored; only chain lengths matter for the algebra.
-    struct Nested;
-    fn chain_le(chain_in: Term, chain_out: Term, in_len: usize, out_len: usize) -> Option<Pred> {
-        let n = in_len.min(out_len);
-        let (is, os) = (in_len - n, out_len - n);
-        (0..n).map(|i| Pred::Le(fld(chain_in.clone(), is + i), fld(chain_out.clone(), os + i)))
-            .reduce(|a, b| Pred::And(Box::new(a), Box::new(b)))
-    }
-    impl RowModel for Nested {
-        type Proj = Proj;
-        type Pred = Pred;
-        fn pack(_k: usize, _v: usize, _cl: usize, has_q: bool) -> Proj {
-            let key = Term::Tup(vec![var(0), f(1, 0)]);            // [K, V]
-            let val = if has_q { Term::Tup(vec![f(1, 1), f(1, 2)]) } else { Term::Tup(vec![f(1, 1)]) };
-            Proj { key, val }
-        }
-        fn distinct_unpack(_k: usize, _v: usize) -> Proj { Proj { key: f(0, 0), val: f(0, 1) } }
-        fn project_kv(_k: usize, _v: usize) -> Proj { Proj { key: var(0), val: f(1, 0) } }
-        fn sp_reassemble(_k: usize, _v: usize, _il: usize, _ol: usize) -> Proj {
-            // [pack[K,V], dep=(chain_out,q), pair=(chain_in)]
-            Proj { key: f(0, 0), val: Term::Tup(vec![f(0, 1), f(2, 0), f(1, 0), f(1, 1)]) }
-        }
-        fn ky_join(_k: usize, _vi: usize, _vo: usize, _il: usize, _ol: usize, min: bool) -> Proj {
-            // [K, dep=(V_out,chain_out,q), pair=(V_in,chain_in)]
-            let mut val = vec![f(2, 0)];                          // V_in
-            if min { val.push(f(1, 0)); }                         // V_out
-            val.extend([f(2, 1), f(1, 1), f(1, 2)]);              // chain_in, chain_out, q
-            Proj { key: var(0), val: Term::Tup(val) }
-        }
-        fn ky_data_eq(_vi: usize) -> Option<Pred> { Some(Pred::Eq(f(1, 0), f(1, 1))) } // whole-Value
-        fn ky_drop_vout(_k: usize, _vi: usize, _vo: usize, _il: usize, _ol: usize) -> Proj {
-            Proj { key: var(0), val: Term::Tup(vec![f(1, 0), f(1, 2), f(1, 3), f(1, 4)]) }
-        }
-        fn lossy_try_invert(_p: &Proj, _ki: usize, _vi: usize, _ko: usize, _vo: usize, _ol: usize) -> Option<Proj> {
-            None // a nested model may skip the invert optimization; the fallback is always sound.
-        }
-        fn lossy_pair(proj: &Proj, _ki: usize, _vi: usize, _il: usize) -> Proj {
-            Proj { key: subst(&proj.key, &[1]), val: Term::Tup(vec![var(0), f(1, 0), f(1, 1)]) }
-        }
-        fn lossy_reassemble(_ki: usize, _vi: usize, _vo: usize, _il: usize, _ol: usize) -> Proj {
-            // [K_out, dep=(V_out,chain_out,q), pair=(K_in,V_in,chain_in)]
-            Proj { key: f(2, 0), val: Term::Tup(vec![f(2, 1), f(2, 2), f(1, 1), f(1, 2)]) }
-        }
-        fn join_forward(proj: &Proj, _k: usize, _vl: usize, _vr: usize, _ll: usize, _rl: usize) -> Proj {
-            // [K, left=(V_L,chain_L), right=(V_R,chain_R)]
-            let key = subst(&proj.key, &[1, 2]);
-            let v_out = subst(&proj.val, &[1, 2]);
-            Proj { key, val: Term::Tup(vec![var(0), f(1, 0), f(2, 0), f(1, 1), f(2, 1), v_out]) }
-        }
-        fn join_combined(_k: usize, _vl: usize, _vr: usize, _vo: usize, _ll: usize, _rl: usize, _ol: usize) -> Proj {
-            // [K_out, dep=(V_out,chain_out,q), pair=(K,V_L,V_R,chain_L,chain_R,V_out)]
-            Proj { key: f(2, 0), val: Term::Tup(vec![
-                f(2, 1), f(2, 2), f(2, 3), f(2, 4), f(1, 1), f(1, 2), f(1, 0), f(2, 5),
-            ]) }
-        }
-        fn join_filter(_vl: usize, _vr: usize, _vo: usize, ll: usize, rl: usize, ol: usize) -> Option<Pred> {
-            // wide val: V_L,V_R,chain_L,chain_R,chain_out,q,V_out_dep,V_out_pair
-            let conds = [
-                chain_le(f(1, 2), f(1, 4), ll, ol),
-                chain_le(f(1, 3), f(1, 4), rl, ol),
-                Some(Pred::Eq(f(1, 6), f(1, 7))),
-            ];
-            conds.into_iter().flatten().reduce(|a, b| Pred::And(Box::new(a), Box::new(b)))
-        }
-        fn join_split(left: bool, _k: usize, _vl: usize, _vr: usize, _ll: usize, _rl: usize, _ol: usize) -> Proj {
-            let val = if left { Term::Tup(vec![f(1, 0), f(1, 2), f(1, 5)]) }
-                      else { Term::Tup(vec![f(1, 1), f(1, 3), f(1, 5)]) };
-            Proj { key: var(0), val }
-        }
-        fn time_le(_v: usize, il: usize, ol: usize) -> Option<Pred> {
-            chain_le(f(1, 1), f(1, 2), il, ol)
-        }
-        fn strip(_k: usize, _v: usize, il: usize, _ol: usize, keep: usize) -> Proj {
-            let drop = il - keep;
-            let chain = Term::Tup((0..keep).map(|i| fld(f(1, 1), drop + i)).collect());
-            Proj { key: var(0), val: Term::Tup(vec![f(1, 0), chain, f(1, 3)]) }
-        }
-        fn bind_filter(_v: usize) -> Option<Pred> { Some(Pred::Gt0(fld(f(1, 1), 0))) }
-        fn bind_decrement(_k: usize, _v: usize, user_len: usize) -> Proj {
-            let mut coords = vec![Term::Sub1(Box::new(fld(f(1, 1), 0)))];
-            coords.extend((1..user_len).map(|i| fld(f(1, 1), i)));
-            Proj { key: var(0), val: Term::Tup(vec![f(1, 0), Term::Tup(coords), f(1, 2)]) }
-        }
-    }
-
-    fn side(witness: Coll, user_len: usize) -> SideInfo<Mem> {
-        SideInfo { witness, forward: vec![], shape: (1, 1), user_len }
-    }
-    fn chain(cs: &[i64]) -> Value { tup(cs.iter().map(|n| int(*n)).collect()) }
-
-    // The same six specs as the flat contract, in nested envelopes.
-
-    #[test]
-    fn sp_depth0_keeps_only_value_matching_pair() {
-        // pair vals are (V, chain); dep val is (V, chain, q).
-        let pair = vec![
-            (int(5), tup(vec![int(7), chain(&[])])),
-            (int(5), tup(vec![int(8), chain(&[])])),
-        ];
-        let dep = vec![(int(5), tup(vec![int(7), chain(&[]), int(9)]))];
-        let out = shape_preserving_lookup::<Nested, _>(&mut Mem, &dep, &side(pair, 0), 0);
-        assert_eq!(out, vec![(int(5), tup(vec![int(7), chain(&[]), int(9)]))]);
-    }
-
-    #[test]
-    fn sp_depth1_time_filters_late_inputs() {
-        let dep = vec![(int(5), tup(vec![int(7), chain(&[3]), int(9)]))];
-        let keep = vec![(int(5), tup(vec![int(7), chain(&[2])]))]; // iter 2 ≤ 3
-        let drop = vec![(int(5), tup(vec![int(7), chain(&[4])]))]; // iter 4 > 3
-        let kept = shape_preserving_lookup::<Nested, _>(&mut Mem, &dep, &side(keep, 1), 1);
-        assert_eq!(kept, vec![(int(5), tup(vec![int(7), chain(&[2]), int(9)]))]);
-        let dropped = shape_preserving_lookup::<Nested, _>(&mut Mem, &dep, &side(drop, 1), 1);
-        assert!(dropped.is_empty());
-    }
-
-    #[test]
-    fn keyed_min_narrows_to_the_demanded_value() {
-        let pair = vec![(int(5), tup(vec![int(7), chain(&[])])), (int(5), tup(vec![int(6), chain(&[])]))];
-        let dep = vec![(int(5), tup(vec![int(7), chain(&[]), int(9)]))];
-        let out = keyed_lookup::<Nested, _>(&mut Mem, &dep, &side(pair, 0), (1, 1), 0, true);
-        assert_eq!(out, vec![(int(5), tup(vec![int(7), chain(&[]), int(9)]))]);
-    }
-
-    #[test]
-    fn keyed_nonmin_demands_all_same_key_inputs() {
-        let pair = vec![(int(5), tup(vec![int(7), chain(&[])])), (int(5), tup(vec![int(6), chain(&[])]))];
-        let dep = vec![(int(5), tup(vec![int(1), chain(&[]), int(9)]))];
-        let mut out = keyed_lookup::<Nested, _>(&mut Mem, &dep, &side(pair, 0), (1, 1), 0, false);
-        out.sort();
-        assert_eq!(out, vec![
-            (int(5), tup(vec![int(6), chain(&[]), int(9)])),
-            (int(5), tup(vec![int(7), chain(&[]), int(9)])),
-        ]);
-    }
-
-    #[test]
-    fn lossy_via_fallback_recovers_input() {
-        // proj: K_out = V_in (Var 1), V_out = K_in (Var 0). No invert -> fallback.
-        let proj = Proj { key: var(1), val: var(0) };
-        let pair = vec![(int(3), tup(vec![int(8), chain(&[])]))];   // (K_in=3 ; V_in=8)
-        let dep = vec![(int(8), tup(vec![int(3), chain(&[]), int(9)]))]; // (K_out=8 ; V_out=3, q=9)
-        let out = lossy_lookup::<Nested, _>(&mut Mem, &dep, &side(pair, 0), (1, 1), 0, &proj);
-        assert_eq!(out, vec![(int(3), tup(vec![int(8), chain(&[]), int(9)]))]);
-    }
-
-    #[test]
-    fn join_demands_both_inputs() {
-        let proj = Proj { key: var(0), val: var(1) }; // K_out = K, V_out = V_L
-        let left = side(vec![(int(5), tup(vec![int(7), chain(&[])]))], 0);
-        let right = side(vec![(int(5), tup(vec![int(9), chain(&[])]))], 0);
-        let dep = vec![(int(5), tup(vec![int(7), chain(&[]), int(1)]))];
-        let (lc, rc) = join_lookup::<Nested, _>(&mut Mem, &dep, &left, &right, (1, 1), 0, &proj);
-        assert_eq!(lc, vec![(int(5), tup(vec![int(7), chain(&[]), int(1)]))]);
-        assert_eq!(rc, vec![(int(5), tup(vec![int(9), chain(&[]), int(1)]))]);
-    }
-}
-
-#[cfg(test)]
 mod value_contract {
-    //! Executable contract for the reverse rules over the real `Value` model.
-    //!
-    //! The same by-example specs as the (removed) flat `[i64]` contract, but on
-    //! `Value` rows in `Val`'s flat envelope `[V | chain | q]`, run through an
-    //! in-memory `Value` dataflow against `crate::explain::Val` — the unit-level
-    //! spec for the model the crate actually evaluates. (`nested_contract` above
-    //! proves the *rules* are model-agnostic with a different, nested layout;
-    //! this pins the model the backend runs.)
+    //! Executable contract for the reverse rules: by-example specs on `Value`
+    //! rows in `Val`'s envelope `[V | chain | q]`, run through the in-memory
+    //! dataflow against `crate::explain::Val`.
 
     use super::*;
     use crate::explain::Val;
@@ -604,8 +334,7 @@ mod value_contract {
 
     #[test]
     fn lossy_via_fallback_recovers_input() {
-        // proj: K_out = $1 (V_in), V_out = $0 (K_in). Val always takes the
-        // pair-table fallback (lossy_try_invert returns None).
+        // proj: K_out = $1 (V_in), V_out = $0 (K_in).
         let p = proj(spread(1), spread(0));
         let pair = vec![(key(3), val(&[8]))];             // (K_in=3 ; V_in=8)
         let dep = vec![(key(8), val(&[3, 9]))];           // (K_out=8 ; V_out=3, q=9)
@@ -623,52 +352,5 @@ mod value_contract {
         let (lc, rc) = join_lookup::<Val, _>(&mut Mem, &dep, &left, &right, (1, 1), 0, &p);
         assert_eq!(lc, vec![(key(5), val(&[7, 1]))]);
         assert_eq!(rc, vec![(key(5), val(&[9, 1]))]);
-    }
-}
-
-#[cfg(test)]
-mod backstop {
-    //! The *universal backstop* reverses `flatmap` — the op the live rewrite
-    //! still `panic!`s on — using only the existing `Dataflow` primitives. The
-    //! forward clone runs the op and keys each output by itself, carrying the
-    //! input (the `(output -> input)` pair table); the reverse is one join on
-    //! the output plus a `REFORM` projection. No op-supplied inverse: the `None`
-    //! endpoint, so `RESIDUAL` is the whole input (here, the list). This pins
-    //! "the gap is closable" before the real rule + wiring are built.
-
-    use super::mem::{Coll, Mem};
-    use super::*;
-    use crate::ir::Value;
-    use crate::ir::{Projection, Term};
-
-    fn int(n: i64) -> Value { Value::Int(n) }
-    fn list(xs: &[i64]) -> Value { Value::List(xs.iter().map(|&n| int(n)).collect()) }
-    fn tup(xs: Vec<Value>) -> Value { Value::Tuple(xs) }
-    fn f(s: usize, i: usize) -> Term { Term::Proj(Box::new(Term::Var(s)), i) }
-    fn tterm(xs: Vec<Term>) -> Term { Term::Tuple(xs) }
-
-    fn flatmap_forward(k: &Value, lst: &Value) -> Coll {
-        let Value::List(xs) = lst else { panic!("flatmap on non-list") };
-        xs.iter().enumerate().map(|(p, e)| (k.clone(), tup(vec![int(p as i64), e.clone()]))).collect()
-    }
-
-    #[test]
-    fn backstop_reverses_flatmap() {
-        let witness: Coll = vec![
-            (int(1), list(&[10, 20, 30])),
-            (int(1), list(&[40, 50])),
-            (int(2), list(&[30])),
-        ];
-        let pairs: Coll = witness.iter().flat_map(|(k, lst)| {
-            flatmap_forward(k, lst).into_iter().map(move |(ok, ov)| {
-                let Value::Tuple(o) = &ov else { unreachable!() };
-                (tup(vec![ok.clone(), o[0].clone(), o[1].clone()]), tup(vec![k.clone(), lst.clone()]))
-            })
-        }).collect();
-        let demand: Coll = vec![(tup(vec![int(1), int(2), int(30)]), tup(vec![int(9)]))];
-        let reform = Projection { key: f(2, 0), val: tterm(vec![f(2, 1), f(1, 0)]) };
-        let mut df = Mem;
-        let got = df.join(&demand, &pairs, reform);
-        assert_eq!(got, vec![(int(1), tup(vec![list(&[10, 20, 30]), int(9)]))]);
     }
 }

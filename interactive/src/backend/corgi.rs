@@ -4,7 +4,7 @@
 //! comparison, but its representation choices do not define corgi's physical semantics.
 //!
 //! All `Backend` methods are corgi-native: `linear` folds a `LinearOp` chain over each container
-//! ([`apply_ops`], columnar fast paths with row-wise fallbacks); `arrange` ingests columns without
+//! ([`apply_ops`]); `arrange` ingests columns without
 //! a row round-trip; `join`/`reduce` run through the int-proxy tactics ([`CorgiJoinBackend`],
 //! [`CorgiReduceBackend`]) over the columnar chunks.
 
@@ -335,7 +335,7 @@ impl Backend for CorgiBackend {
     }
 
     fn leave_dynamic<'s>(c: Collection<'s, Time, CC>, level: usize) -> Collection<'s, Time, CC> {
-        // Mirror DD's `Collection::leave_dynamic` (dynamic/mod.rs:40), but over a `CorgiContainer`:
+        // Mirror DD's `Collection::leave_dynamic`, but over a `CorgiContainer`:
         // strip all but `level-1` PointStamp coordinates from the capability AND from each row's time
         // (stored columnar in `CorgiContainer.times`, not inline in the data tuples). The input
         // connection summary advertises the `retain` so timely's progress tracking stays correct.

@@ -86,8 +86,7 @@ pub enum Term {
     /// List intro. A `Spread` child splices in place.
     List(Vec<Term>),
     /// Splice marker; only meaningful as a direct child of `Tuple`/`List`.
-    /// Lets a whole input row (`$n`) contribute all its fields, preserving
-    /// the flat-row concatenation the original `[i64]` model relied on.
+    /// Lets a whole input row (`$n`) contribute all its fields.
     Spread(Box<Term>),
     /// Product/list elimination: index into a `Tuple` or `List`.
     Proj(Box<Term>, usize),
@@ -109,7 +108,7 @@ pub enum Term {
     Unary(UnOp, Box<Term>),
     Binary(BinOp, Box<Term>, Box<Term>),
     /// `hash(bound, keys…)`: a deterministic pseudo-random `Int` in `[0, bound)`
-    /// (the raw non-negative hash if `bound <= 0`), mixed from the key `Int`s.
+    /// (the raw non-negative hash if `bound <= 0`), mixed from the keys.
     /// The building block for generators derived from `iota`/`clock`.
     Hash(Vec<Term>),
 }
@@ -197,7 +196,8 @@ pub enum LinearOp {
 // DDIR's `hash` IS corgi's structural hash, evaluated a row at a time here and a column at a
 // time in the corgi backend. The two must agree bit for bit — they are the same program value,
 // and the backends are checked against each other — so this is a transcription of
-// `corgi::hash`'s fold, not an independent design. `roundtrip_hash_matches_corgi` pins it.
+// `corgi::hash`'s fold, not an independent design. The `hash_matches_corgi_*` tests in
+// `corgi::logic` pin it.
 //
 // The values are DDIR's; the shapes they transcode to are corgi's, and the fold follows those:
 // `Int` is a `Prim` leaf, the empty `Tuple` is `Unit` (NOT a fieldless `Prod`), a `Tuple` is a
