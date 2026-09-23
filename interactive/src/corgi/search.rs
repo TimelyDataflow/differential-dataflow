@@ -52,6 +52,56 @@ impl Iterator for MatchingRanges<'_> {
     }
 }
 
+/// The items of [`MatchingRanges`], written to `out`: for each present needle, its index and the
+/// range of `haystack` equal to it, in needle order.
+///
+/// Few needles in a long haystack are searched in lockstep by branch-free binary search, so each
+/// level issues one independent load per needle and their cache misses overlap. Galloping from the
+/// previous match makes each search depend on the last and serializes the misses. Otherwise the
+/// two sorted lists are merged by [`MatchingRanges`]. `scratch` holds the search positions.
+pub(crate) fn matching_ranges(
+    needles: &[u64],
+    haystack: &[u64],
+    scratch: &mut Vec<usize>,
+    out: &mut Vec<(usize, Range<usize>)>,
+) {
+    out.clear();
+    let n = haystack.len();
+    if n == 0 || needles.is_empty() {
+        return;
+    }
+    let depth = (usize::BITS - n.leading_zeros()) as usize;
+    // A random probe costs several sequential merge steps; at four, loads that present most of
+    // a chunk keep the merge, and incremental rounds that present few keys take the search.
+    if 4 * needles.len() * depth > n + needles.len() {
+        out.extend(MatchingRanges::new(needles, haystack));
+        return;
+    }
+    debug_assert!(needles.windows(2).all(|w| w[0] < w[1]));
+    debug_assert!(haystack.windows(2).all(|w| w[0] <= w[1]));
+    scratch.clear();
+    scratch.resize(needles.len(), 0);
+    let mut size = n;
+    while size > 1 {
+        let half = size / 2;
+        for (base, &needle) in scratch.iter_mut().zip(needles) {
+            let mid = *base + half;
+            *base = if haystack[mid] < needle { mid } else { *base };
+        }
+        size -= half;
+    }
+    for (j, (&base, &needle)) in scratch.iter().zip(needles).enumerate() {
+        let start = base + (haystack[base] < needle) as usize;
+        if start < n && haystack[start] == needle {
+            let mut end = start + 1;
+            while end < n && haystack[end] == needle {
+                end += 1;
+            }
+            out.push((j, start..end));
+        }
+    }
+}
+
 /// First index at or after `start` outside a predicate's prefix.
 fn gallop(xs: &[u64], start: usize, predicate: impl Fn(&u64) -> bool) -> usize {
     let mut pos = start;
@@ -109,6 +159,9 @@ mod tests {
                 MatchingRanges::new(&needles, &haystack).collect::<Vec<_>>(),
                 expected
             );
+            let (mut scratch, mut out) = (Vec::new(), Vec::new());
+            matching_ranges(&needles, &haystack, &mut scratch, &mut out);
+            assert_eq!(out, expected);
         }
     }
 }

@@ -35,7 +35,7 @@ use corgi::arrange::{compare_at, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
 use crate::corgi::col_times::{ColTime, ColTimes};
-use crate::corgi::search::MatchingRanges;
+use crate::corgi::search::matching_ranges;
 use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
 use crate::ir::{Diff, Reducer};
 
@@ -218,14 +218,16 @@ impl<T> CorgiReduceBackend<T> {
 
 /// Where `chunks` hold the ascending `keys`.
 ///
-/// Both the keys and stored identifier lane are sorted. Match them with
-/// monotone positions, galloping over long gaps and stepping through adjacent
-/// keys. The same compiled search covers narrow updates and broad cascades.
+/// Both the keys and stored identifier lane are sorted; [`matching_ranges`] chooses between
+/// merging them and searching the keys in lockstep.
 fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[u64]) -> Matches {
+    let mut scratch = Vec::new();
     chunks.iter().map(|chunk| {
-        if chunk.diffs().is_empty() { return Vec::new(); }
+        let mut found = Vec::new();
+        if chunk.diffs().is_empty() { return found; }
         let lane = corgi::arrange::leaf_slice(key_lane(chunk.keys())).expect("the identifier lane is a u64 leaf");
-        MatchingRanges::new(keys, lane).collect()
+        matching_ranges(keys, lane, &mut scratch, &mut found);
+        found
     }).collect()
 }
 
