@@ -187,36 +187,6 @@ fn mentions_env(t: &Term, depth: usize) -> bool {
     }
 }
 
-/// Whether [`compile`] can lower this term WITHOUT knowing its operands' shapes — the gate for
-/// join-INLINE projections, which are compiled before any container is in hand. It is therefore
-/// deliberately narrower than `compile`: every shape-dependent form (`List`, `Case`, a built-in
-/// sum whose lane the payload fixes, a data-driven tag) answers false here and is compiled by the
-/// linear stage the join defers it to, which does have shapes.
-pub fn compilable(t: &Term) -> bool {
-    match t {
-        Term::Var(_) | Term::Bound(_) | Term::Int(_) => true,
-        Term::Proj(inner, _) | Term::Spread(inner) => compilable(inner),
-        Term::Tuple(fs) => fs.iter().all(compilable),
-        Term::Binary(_, l, r) => compilable(l) && compilable(r),
-        Term::If { cond, then, els } => compilable(cond) && compilable(then) && compilable(els),
-        Term::Fold { list, init, step } => compilable(list) && compilable(init) && compilable(step),
-        // Keep this exhaustive so a new unary operator needs an explicit
-        // decision about whether it supports shape-free lowering.
-        Term::Unary(op, inner) => match op {
-            UnOp::Neg | UnOp::ToF64 | UnOp::F64Neg | UnOp::Not | UnOp::Len | UnOp::IsTag(_) => compilable(inner),
-        },
-        // A literal tag into a declared type knows its whole sum; the built-ins and a data-driven
-        // tag need the payload's shape.
-        Term::Inject { tag, payload, sum } => {
-            matches!(&**tag, Term::Int(_)) && matches!(sum, SumTy::Declared(_)) && compilable(payload)
-        }
-        // `Op::Hash` is shape-generic (it folds whatever structure it is handed), so `hash`
-        // needs no shapes to lower and can answer true here.
-        Term::Hash(args) => args.iter().all(compilable),
-        _ => false, // List intro, Case — see `compile`.
-    }
-}
-
 /// The lane shapes of the sum an `Inject` builds: the declaration's, or a built-in's with the
 /// payload in its lane and the other lane from `expected`.
 fn lanes_of(sum: &SumTy, tag: usize, payload: &Shape, expected: Option<&Shape>) -> Res<Vec<Shape>> {
