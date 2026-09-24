@@ -112,6 +112,11 @@ pub enum Term {
     /// (the raw non-negative hash if `bound <= 0`), mixed from the keys.
     /// The building block for generators derived from `iota`/`clock`.
     Hash(Vec<Term>),
+    /// `name(args…)` for a function the embedding program registered (see
+    /// [`register`]): a pure Rust function from argument values to a value.
+    /// DDIR only moves its arguments and result; what it computes is the
+    /// embedder's. The columnar backend runs it a row at a time.
+    Call(String, Vec<Term>),
 }
 
 /// The sum type an `Inject` builds into. `Declared` carries the full lane shapes of a `type`
@@ -297,6 +302,11 @@ pub fn structural_hash(v: &Value) -> u64 {
 /// around sub-evaluation, so `env` is restored on return.
 pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
     match term {
+        Term::Call(name, args) => {
+            let f = lookup(name).unwrap_or_else(|| panic!("call to unregistered function `{name}`"));
+            let vals: Vec<Value> = args.iter().map(|a| eval(a, env)).collect();
+            (f.body)(&vals)
+        }
         Term::Var(i) => env[*i].clone(),
         Term::Bound(k) => env[env.len() - 1 - *k].clone(),
         Term::Int(n) => Value::Int(*n),
@@ -464,4 +474,39 @@ fn eval_binary(op: BinOp, l: Value, r: Value) -> Value {
         BinOp::Ge => b(l >= r),
         BinOp::And | BinOp::Or => unreachable!("logical ops short-circuit in eval"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Registered functions: how an embedding program extends the scalar language.
+
+/// A function an embedding program supplies to DDIR programs, called by name.
+///
+/// The contract is purity: the same arguments must always give the same
+/// result, because differential dataflow re-evaluates terms when it retracts
+/// what they produced, and a retraction must cancel exactly. The declared
+/// shapes are what the columnar backend types the call as; values that do not
+/// match them are an error of the embedder's.
+pub struct Function {
+    pub name: String,
+    pub args: Vec<corgi::Shape>,
+    pub result: corgi::Shape,
+    pub body: Box<dyn Fn(&[Value]) -> Value + Send + Sync>,
+}
+
+fn functions() -> &'static std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<Function>>> {
+    static REGISTRY: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<Function>>>> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(Default::default)
+}
+
+/// Register `f` under its name, for programs parsed afterwards (the parser
+/// resolves calls against the registry). Registering a name again replaces it;
+/// a name may not shadow a builtin.
+pub fn register(f: Function) {
+    assert!(!crate::parse::is_builtin(&f.name), "`{}` is a builtin and cannot be registered", f.name);
+    functions().write().unwrap().insert(f.name.clone(), std::sync::Arc::new(f));
+}
+
+/// The registered function called `name`, if any.
+pub fn lookup(name: &str) -> Option<std::sync::Arc<Function>> {
+    functions().read().unwrap().get(name).cloned()
 }

@@ -171,7 +171,7 @@ fn mentions_env(t: &Term, depth: usize) -> bool {
         Term::Var(_) => true,
         Term::Bound(k) => *k >= depth,
         Term::Int(_) => false,
-        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) => fs.iter().any(|f| mentions_env(f, depth)),
+        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) | Term::Call(_, fs) => fs.iter().any(|f| mentions_env(f, depth)),
         Term::Spread(inner) | Term::Proj(inner, _) | Term::Unary(_, inner) => mentions_env(inner, depth),
         Term::Inject { tag, payload, .. } => mentions_env(tag, depth) || mentions_env(payload, depth),
         Term::Case { scrutinee, arms, default } => {
@@ -249,6 +249,7 @@ pub fn compile(
     expected: Option<&Shape>,
 ) -> Res<usize> {
     match term {
+        Term::Call(name, _) => Err(format!("`{name}` is a registered function; it runs a row at a time (see `row_only`)")),
         Term::Var(i) => env.get(*i).copied().ok_or_else(|| format!("`${i}` is not in scope here")),
         Term::Bound(k) => {
             env.len().checked_sub(1 + *k).map(|i| env[i]).ok_or_else(|| format!("binder `^{k}` is not in scope here"))
@@ -788,7 +789,7 @@ pub fn row_only(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::Bound(_) | Term::Int(_) => false,
         Term::Unary(UnOp::F64Fn(f), _) if *f != F64Fn::Abs => true,
-        Term::Unary(UnOp::F64ToInt, _) | Term::Binary(BinOp::F64Pow | BinOp::F64PowI, _, _) => true,
+        Term::Unary(UnOp::F64ToInt, _) | Term::Binary(BinOp::F64Pow | BinOp::F64PowI, _, _) | Term::Call(..) => true,
         Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) => fs.iter().any(row_only),
         Term::Spread(inner) | Term::Proj(inner, _) | Term::Unary(_, inner) => row_only(inner),
         Term::Inject { tag, payload, .. } => row_only(tag) || row_only(payload),
@@ -814,6 +815,16 @@ fn columnar_stand_in(t: &Term) -> Term {
             Term::Binary(BinOp::Lt, Box::new(x.clone()), Box::new(x))
         }
         Term::Binary(BinOp::F64Pow, l, r) => Term::Binary(BinOp::F64Add, bx(l), bx(r)),
+        // A registered function: its arguments still compile (so they typecheck), and the
+        // result is a literal of the declared result shape.
+        Term::Call(name, args) => match crate::ir::lookup(name) {
+            Some(f) => {
+                let mut fields: Vec<Term> = args.iter().map(columnar_stand_in).collect();
+                fields.push(literal_of_shape(&f.result));
+                Term::Proj(Box::new(Term::Tuple(fields)), args.len())
+            }
+            None => t.clone(),
+        },
         Term::Binary(BinOp::F64PowI, l, r) => Term::Binary(BinOp::F64Add, bx(l), Box::new(Term::Unary(UnOp::ToF64, bx(r)))),
         Term::Tuple(fs) => Term::Tuple(fs.iter().map(columnar_stand_in).collect()),
         Term::List(fs) => Term::List(fs.iter().map(columnar_stand_in).collect()),
@@ -830,6 +841,21 @@ fn columnar_stand_in(t: &Term) -> Term {
         Term::Fold { list, init, step } => Term::Fold { list: bx(list), init: bx(init), step: bx(step) },
         Term::If { cond, then, els } => Term::If { cond: bx(cond), then: bx(then), els: bx(els) },
         Term::Binary(op, l, r) => Term::Binary(*op, bx(l), bx(r)),
+    }
+}
+
+/// A term whose corgi shape is `shape`: zeros, first lanes, one-element lists.
+fn literal_of_shape(shape: &Shape) -> Term {
+    match shape {
+        Shape::Prim(_) => Term::Int(0),
+        Shape::Unit => Term::Tuple(Vec::new()),
+        Shape::Prod(fs) => Term::Tuple(fs.iter().map(literal_of_shape).collect()),
+        Shape::List(e) => Term::List(vec![literal_of_shape(e)]),
+        Shape::Sum(lanes) => Term::Inject {
+            tag: Box::new(Term::Int(0)),
+            payload: Box::new(literal_of_shape(&lanes[0])),
+            sum: SumTy::Declared(lanes.clone()),
+        },
     }
 }
 

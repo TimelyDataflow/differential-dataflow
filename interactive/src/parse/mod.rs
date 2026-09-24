@@ -107,6 +107,18 @@ pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
         }
         "if" => { assert_eq!(args.len(), 3, "if(cond, then, els)"); let els = Box::new(args.remove(2)); let then = Box::new(args.remove(1)); let cond = Box::new(args.remove(0)); Term::If { cond, then, els } }
         "hash" => { assert!(args.len() >= 2, "hash(bound, key, ...)"); Term::Hash(std::mem::take(args)) }
-        other => panic!("Unknown scalar builtin: {}", other),
+        other if crate::ir::lookup(other).is_some() => {
+            let f = crate::ir::lookup(other).unwrap();
+            assert_eq!(args.len(), f.args.len(), "{other} takes {} arguments", f.args.len());
+            Term::Call(other.to_string(), std::mem::take(args))
+        }
+        other => panic!("Unknown scalar builtin (and no function registered by that name): {}", other),
     }
+}
+
+/// Whether `name` is a builtin of the scalar language (registered functions may not shadow one).
+pub fn is_builtin(name: &str) -> bool {
+    const NAMES: &[&str] = &["tuple", "list", "inject", "variant", "case", "fold", "proj", "len", "istag", "not", "float", "fneg", "fint",
+        "fpow", "fpowi", "fmin", "fmax", "feq", "fne", "flt", "fle", "fgt", "fge", "fadd", "fsub", "fmul", "fdiv", "or", "idiv", "append", "if", "hash"];
+    NAMES.contains(&name) || F64Fn::ALL.iter().any(|(n, _)| *n == name)
 }
