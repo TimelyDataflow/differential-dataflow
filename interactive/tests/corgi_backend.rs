@@ -63,6 +63,12 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
             &[2, 5],
             &[2, -2],
         ])],
+        // f64_math: (key, a, b) with x = a / 4, y = b / 2: negatives, zero, and a key with
+        // two rows; then (key, n) integer exponents for the join, one key unmatched.
+        "f64_math" => vec![
+            rows(&[&[1, 10, 1], &[2, -6, 3], &[3, 0, -1], &[4, 9, 0], &[5, -1, -4], &[5, 7, 5]]),
+            rows(&[&[1, 2], &[2, 3], &[3, -1], &[5, 0]]),
+        ],
         // tour: edges (with a cycle and a chord) + roots.
         "tour" => vec![
             rows(&[&[1, 2], &[2, 3], &[3, 1], &[3, 4], &[5, 2]]),
@@ -135,6 +141,7 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn pair_keys() { assert_backends_agree("pair_keys"); }
 #[test] fn signed_min() { assert_backends_agree("signed_min"); }
 #[test] fn spread_values() { assert_backends_agree("spread_values"); }
+#[test] fn f64_math() { assert_backends_agree("f64_math"); }
 
 /// A filter predicate must be an `Int`: both backends reject a tuple rather than one of them
 /// keeping nothing.

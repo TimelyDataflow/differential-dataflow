@@ -145,6 +145,43 @@ pub enum UnOp {
     ToF64,
     /// Floating-point negation; does not reinterpret integer arithmetic.
     F64Neg,
+    /// A one-argument F64 -> F64 function (`fsqrt`, `fexp`, ...), with Rust's `f64` semantics.
+    F64Fn(F64Fn),
+    /// F64 -> Int, truncating toward zero and saturating, exactly Rust's `x as i64`:
+    /// NaN is 0, and values beyond the `i64` range clamp to `i64::MIN`/`i64::MAX`.
+    F64ToInt,
+}
+
+/// The one-argument F64 -> F64 functions. Each is the Rust `f64` method of the same name, so a
+/// program ported from Rust gets bit-identical results on the same platform. `Abs` is exact
+/// everywhere; the transcendental ones (`Exp`, `Ln`, `Sin`, `Cos`, `Tan`) call the platform libm
+/// and are only as reproducible across platforms as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum F64Fn {
+    Abs, Sqrt, Exp, Ln, Floor, Ceil, Round, Sin, Cos, Tan,
+}
+
+impl F64Fn {
+    /// The surface names, `f` + the Rust method name (`ln`, not `log`).
+    pub const ALL: [(&'static str, F64Fn); 10] = [
+        ("fabs", F64Fn::Abs), ("fsqrt", F64Fn::Sqrt), ("fexp", F64Fn::Exp), ("fln", F64Fn::Ln),
+        ("ffloor", F64Fn::Floor), ("fceil", F64Fn::Ceil), ("fround", F64Fn::Round),
+        ("fsin", F64Fn::Sin), ("fcos", F64Fn::Cos), ("ftan", F64Fn::Tan),
+    ];
+    pub fn apply(self, x: f64) -> f64 {
+        match self {
+            F64Fn::Abs => x.abs(),
+            F64Fn::Sqrt => x.sqrt(),
+            F64Fn::Exp => x.exp(),
+            F64Fn::Ln => x.ln(),
+            F64Fn::Floor => x.floor(),
+            F64Fn::Ceil => x.ceil(),
+            F64Fn::Round => x.round(),
+            F64Fn::Sin => x.sin(),
+            F64Fn::Cos => x.cos(),
+            F64Fn::Tan => x.tan(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -155,6 +192,20 @@ pub enum BinOp {
     /// Concatenation of two lists with the same element type.
     Append,
     F64Add, F64Sub, F64Mul, F64Div,
+    /// `x.powf(y)`.
+    F64Pow,
+    /// `x.powi(n)` with an Int exponent (saturated to `i32`). Rust's `powi` is repeated
+    /// multiplication, which need not round like `powf`; this is here so ported code can match.
+    F64PowI,
+    /// Minimum and maximum that skip a NaN operand (as Rust's `f64::min`/`max` do), and otherwise
+    /// follow the total order, so `fmin(-0.0, 0.0)` is `-0.0` and `fmax` of them is `0.0` — a
+    /// deterministic choice where Rust leaves signed zeros unspecified. Two NaNs give the second.
+    F64Min, F64Max,
+    /// IEEE comparisons, returning `Int` 0/1 like the generic ones: every comparison with a NaN is
+    /// false except `F64Ne`, which is true, and `-0.0 == 0.0`. The generic `== < ...` instead
+    /// order F64 values by the total order (`f64::total_cmp`), which is right for negative numbers
+    /// but distinguishes the two zeros and places NaNs at the ends.
+    F64Eq, F64Ne, F64Lt, F64Le, F64Gt, F64Ge,
     Eq, Ne, Lt, Le, Gt, Ge,
     And, Or,
 }
@@ -364,6 +415,8 @@ fn eval_unary(op: UnOp, v: Value) -> Value {
         UnOp::Neg => Value::Int(-v.as_int()),
         UnOp::ToF64 => Value::f64_value(v.as_int() as f64),
         UnOp::F64Neg => Value::f64_value(-v.as_f64()),
+        UnOp::F64Fn(f) => Value::f64_value(f.apply(v.as_f64())),
+        UnOp::F64ToInt => Value::Int(v.as_f64() as i64),
         UnOp::Not => Value::Int((!v.truthy()) as i64),
         UnOp::IsTag(t) => Value::Int(matches!(&v, Value::Variant(tag, _) if *tag == t) as i64),
         UnOp::Len => match v {
@@ -388,6 +441,20 @@ fn eval_binary(op: BinOp, l: Value, r: Value) -> Value {
         BinOp::F64Sub => Value::f64_value(l.as_f64() - r.as_f64()),
         BinOp::F64Mul => Value::f64_value(l.as_f64() * r.as_f64()),
         BinOp::F64Div => Value::f64_value(l.as_f64() / r.as_f64()),
+        BinOp::F64Pow => Value::f64_value(l.as_f64().powf(r.as_f64())),
+        BinOp::F64PowI => Value::f64_value(l.as_f64().powi(r.as_int().clamp(i32::MIN as i64, i32::MAX as i64) as i32)),
+        BinOp::F64Min | BinOp::F64Max => {
+            let (x, y) = (l.as_f64(), r.as_f64());
+            let pick_x = if x.is_nan() { false } else if y.is_nan() { true }
+                else if matches!(op, BinOp::F64Min) { x.total_cmp(&y).is_le() } else { x.total_cmp(&y).is_ge() };
+            if pick_x { l } else { r }
+        }
+        BinOp::F64Eq => b(l.as_f64() == r.as_f64()),
+        BinOp::F64Ne => b(l.as_f64() != r.as_f64()),
+        BinOp::F64Lt => b(l.as_f64() < r.as_f64()),
+        BinOp::F64Le => b(l.as_f64() <= r.as_f64()),
+        BinOp::F64Gt => b(l.as_f64() > r.as_f64()),
+        BinOp::F64Ge => b(l.as_f64() >= r.as_f64()),
         // Comparisons are structural, using the derived `Ord`/`Eq` on `Value`.
         BinOp::Eq => b(l == r),
         BinOp::Ne => b(l != r),

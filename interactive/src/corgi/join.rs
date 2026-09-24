@@ -201,7 +201,7 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             } else { gather_lanes(&vals1, &tag1, &off1) };
             let proj = compile_join_projection(&self.key, &self.val, &shape_of_value(&kc), &shape_of_value(&v0), &shape_of_value(&v1))
                 .unwrap_or_else(|e| panic!("join projection: type error: {e}"));
-            let projected = corgi::eval_graph(&proj, CValue::Prod(vec![kc, v0, v1]));
+            let projected = proj.eval(CValue::Prod(vec![kc, v0, v1]));
             let mut cols = projected.into_prod("corgi join projection").unwrap();
             let nv = cols.pop().unwrap();
             let nk = cols.pop().unwrap();

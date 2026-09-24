@@ -13,6 +13,11 @@ let scored = edges
     | map($0 ; $1[0] * 2, -$1[0], if($1[0] > 2, 1, 0), hash(97, $0[0]))
     | filter(not($1[1] == 0 - 99));
 
+-- Floats: explicit `float`, IEEE arithmetic and math, IEEE compares, `fint` (truncating) back.
+let floated = edges
+    | map($0 ; fmul(fdiv(float(2786), float(10)), fpow(float($1[0]), fdiv(float(1), float(4)))))
+    | map($0 ; $1[0], fint($1[0]), fgt(fsqrt($1[0]), float(18)));
+
 -- Sums: tagged intro, `case` with binder + captured var + default, `istag`.
 let tagged = edges
     | map($0 ; if($0[0] < $1[0], Fwd($1[0]), Bwd($1[0])))
@@ -36,6 +41,7 @@ reach: {
 }
 
 export "scored" = scored | arrange | inspect(total);
+export "floats" = floated | arrange | inspect(total);
 export "sums"   = tagged | arrange | inspect(total);
 export "folded" = folded | arrange | inspect(total);
 export "nested" = nested | arrange | inspect(nest);

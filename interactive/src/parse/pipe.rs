@@ -55,6 +55,18 @@
 //!   Nominal type names are erased: `fneg` and binary floating operators also
 //!   accept a user's single-variant integer newtype, treating its payload as
 //!   encoded f64 bits.
+//! - Floating-point math, each the Rust `f64` method of the same name:
+//!   `fabs`, `fsqrt`, `fexp`, `fln`, `ffloor`, `fceil`, `fround`, `fsin`,
+//!   `fcos`, `ftan` (F64 -> F64); `fpow(x, y)` (`powf`), `fpowi(x, n)` (`powi`,
+//!   Int exponent). `fint(x)` is F64 -> Int as Rust's `x as i64`: truncate
+//!   toward zero, NaN is 0, out of range saturates. `fmin`/`fmax` skip a NaN
+//!   operand and otherwise follow the total order (`fmin(-0.0, 0.0)` is
+//!   `-0.0`). `feq fne flt fle fgt fge` are IEEE comparisons returning Int 0/1:
+//!   NaN compares false (`fne` true) and `-0.0` equals `0.0`, where the generic
+//!   `== < …` use the total order. There are no float literals: write
+//!   `fdiv(float(2786), float(10))` for 278.6. The Corgi backend computes
+//!   `fabs`, `fmin`/`fmax` and the comparisons in columns; a term using any
+//!   other of these is evaluated a row at a time.
 //! - Products: `tuple(a, …)`; index with `v[i]` or `proj(v, i)`; `len(v)`.
 //! - Lists: `list(a, …)`, `append(a, b)` (concatenation); eliminated by
 //!   `flatmap` / `collect` / `fold`. A declared constructor supplies the element
