@@ -39,75 +39,69 @@ pub fn shape_of_row(row: &DValue) -> Res<Shape> {
 
 /// AoS rows -> SoA corgi columns, directed by `shape`. A row that does not fit the shape is a
 /// panic: the shape was pinned from a row of this collection, so a misfit is an ingest error.
+/// Borrowing form: one clone of the rows, then [`transcode_owned`].
 pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
+    transcode_owned(rows.to_vec(), shape)
+}
+
+/// As [`transcode`], consuming the rows: each field moves into its column, nothing is cloned.
+pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
     match shape {
         Shape::Prim(_) => CValue::u64(rows.iter().map(|r| r.as_int() as u64).collect()),
         Shape::Unit => CValue::Unit(rows.len()),
-        Shape::Prod(fs) => CValue::Prod(
-            fs.iter()
-                .enumerate()
-                .map(|(i, fsi)| {
-                    let sub: Vec<DValue> = rows
-                        .iter()
-                        .map(|r| match r {
-                            DValue::Tuple(xs) => xs[i].clone(),
-                            other => panic!("transcode: expected Tuple, got {other:?}"),
-                        })
-                        .collect();
-                    transcode(&sub, fsi)
-                })
-                .collect(),
-        ),
+        Shape::Prod(fs) => {
+            // Transpose by moving: one Vec per field, filled by draining each tuple.
+            let mut cols: Vec<Vec<DValue>> = fs.iter().map(|_| Vec::with_capacity(rows.len())).collect();
+            for r in rows {
+                match r {
+                    DValue::Tuple(xs) => {
+                        assert!(xs.len() >= fs.len(), "transcode: a {}-tuple for a {}-field shape", xs.len(), fs.len());
+                        for (col, x) in cols.iter_mut().zip(xs) { col.push(x) }
+                    }
+                    other => panic!("transcode: expected Tuple, got {other:?}"),
+                }
+            }
+            CValue::Prod(cols.into_iter().zip(fs).map(|(c, fsi)| transcode_owned(c, fsi)).collect())
+        }
         Shape::List(elem) => {
             // List column = per-row END offsets + a flattened element column.
             let mut ends = Vec::with_capacity(rows.len());
             let mut flat: Vec<DValue> = Vec::new();
-            let mut acc = 0usize;
             for r in rows {
                 match r {
                     DValue::List(xs) => {
-                        acc += xs.len();
-                        ends.push(acc);
-                        flat.extend(xs.iter().cloned());
+                        flat.extend(xs);
+                        ends.push(flat.len());
                     }
                     other => panic!("transcode: expected List, got {other:?}"),
                 }
             }
-            CValue::List(ends.into(), Box::new(transcode(&flat, elem)))
+            CValue::List(ends.into(), Box::new(transcode_owned(flat, elem)))
         }
         Shape::Sum(lanes) => {
             // Per-row tag, plus one packed lane per variant (its arm's rows in row order; a
             // variant no row uses is an empty column of its declared shape).
-            let tags: Vec<usize> = rows
-                .iter()
-                .map(|r| match r {
-                    DValue::Variant(t, _) => *t as usize,
+            let mut tags: Vec<usize> = Vec::with_capacity(rows.len());
+            let mut payloads: Vec<Vec<DValue>> = lanes.iter().map(|_| Vec::new()).collect();
+            for r in rows {
+                match r {
+                    DValue::Variant(t, p) => {
+                        let t = t as usize;
+                        if t >= lanes.len() { panic!("transcode: tag {t} is outside the declared {}-variant sum", lanes.len()) }
+                        tags.push(t);
+                        payloads[t].push(*p);
+                    }
                     other => panic!("transcode: expected Variant, got {other:?}"),
-                })
-                .collect();
-            if let Some(t) = tags.iter().find(|&&t| t >= lanes.len()) {
-                panic!("transcode: tag {t} is outside the declared {}-variant sum", lanes.len());
+                }
             }
-            let lane_vals: Vec<CValue> = lanes
-                .iter()
-                .enumerate()
-                .map(|(tag, lshape)| {
-                    let payloads: Vec<DValue> = rows
-                        .iter()
-                        .filter_map(|r| match r {
-                            DValue::Variant(t, p) if *t as usize == tag => Some((**p).clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    transcode(&payloads, lshape)
-                })
-                .collect();
+            let lane_vals = payloads.into_iter().zip(lanes).map(|(p, lshape)| transcode_owned(p, lshape)).collect();
             CValue::sum(tags, lane_vals)
         }
     }
 }
 
-/// SoA corgi columns -> AoS rows, directed by `shape`. Inverse of [`transcode`].
+/// SoA corgi columns -> AoS rows, directed by `shape`. Inverse of [`transcode`]. Each value
+/// moves into its row; nothing is cloned.
 pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
     match shape {
         Shape::Prim(_) => col.into_u64("untranscode").unwrap().into_iter().map(|x| DValue::Int(x as i64)).collect(),
@@ -115,38 +109,47 @@ pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
         Shape::Prod(fs) => {
             let cols = col.into_prod("untranscode").unwrap();
             let n = if cols.is_empty() { 0 } else { cols[0].len() };
-            let per_field: Vec<Vec<DValue>> =
-                cols.into_iter().zip(fs.iter()).map(|(c, fsi)| untranscode(c, fsi)).collect();
-            (0..n).map(|i| DValue::Tuple(per_field.iter().map(|f| f[i].clone()).collect())).collect()
+            let mut per_field: Vec<std::vec::IntoIter<DValue>> =
+                cols.into_iter().zip(fs.iter()).map(|(c, fsi)| untranscode(c, fsi).into_iter()).collect();
+            (0..n).map(|_| DValue::Tuple(per_field.iter_mut().map(|f| f.next().expect("field columns agree in length")).collect())).collect()
         }
         Shape::List(elem) => {
             // Inverse of transcode's List: per-row END offsets + a flattened element column → one
-            // `List` per row, slicing the untranscoded flat column by each row's span.
+            // `List` per row, taking each row's span off the front of the untranscoded column.
             let (bounds, vals) = match col {
                 CValue::List(b, vals) => (b, *vals),
                 other => panic!("untranscode: expected List, got {other:?}"),
             };
-            let flat = untranscode(vals, elem);
+            let mut flat = untranscode(vals, elem).into_iter();
             let ends: Vec<usize> = bounds.to_vec();
             let mut out = Vec::with_capacity(ends.len());
             let mut start = 0usize;
             for end in ends {
-                out.push(DValue::List(flat[start..end].to_vec()));
+                out.push(DValue::List(flat.by_ref().take(end - start).collect()));
                 start = end;
             }
             out
         }
         Shape::Sum(lanes) => {
-            // Inverse of transcode's Sum: untranscode each lane, then for each row pull its payload
+            // Inverse of transcode's Sum: untranscode each lane, then for each row take its payload
             // from its lane at the recorded within-lane OFFSET (robust to row reordering from a
-            // prior gather/merge — not a sequential cursor).
+            // prior gather/merge — not a sequential cursor). Rows may share a payload, so each is
+            // cloned except at its last use, where it moves.
             let (tags, variant_vals) = col.into_sum("untranscode").unwrap();
-            let lane_rows: Vec<Vec<DValue>> =
+            let mut lane_rows: Vec<Vec<DValue>> =
                 variant_vals.into_iter().zip(lanes.iter()).map(|(v, ls)| untranscode(v, ls)).collect();
+            let mut uses: Vec<Vec<u32>> = lane_rows.iter().map(|l| vec![0; l.len()]).collect();
+            for r in 0..tags.len() { uses[tags.tag_at(r)][tags.offset_at(r)] += 1 }
             (0..tags.len())
                 .map(|r| {
                     let (tag, off) = (tags.tag_at(r), tags.offset_at(r));
-                    DValue::Variant(tag as u32, Box::new(lane_rows[tag][off].clone()))
+                    uses[tag][off] -= 1;
+                    let payload = if uses[tag][off] == 0 {
+                        std::mem::replace(&mut lane_rows[tag][off], DValue::Int(0))
+                    } else {
+                        lane_rows[tag][off].clone()
+                    };
+                    DValue::Variant(tag as u32, Box::new(payload))
                 })
                 .collect()
         }
@@ -777,7 +780,7 @@ impl Kernel {
                         }
                     })
                     .collect();
-                transcode(&results, output)
+                transcode_owned(results, output)
             }
         }
     }
