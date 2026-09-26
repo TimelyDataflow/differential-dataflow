@@ -252,7 +252,13 @@ pub fn compile(
     expected: Option<&Shape>,
 ) -> Res<usize> {
     match term {
-        Term::Call(name, _) => Err(format!("`{name}` is a registered function; it runs a row at a time (see `row_only`)")),
+        Term::Call(name, args) => {
+            // One host-kernel node over the tuple of its arguments; the kernel checks their shapes.
+            let kernel = crate::ir::kernel_of(name).ok_or_else(|| format!("`{name}` is not a registered function"))?;
+            let fields = args.iter().map(|a| compile(a, b, env, env_shapes, anchor, None)).collect::<Res<Vec<_>>>()?;
+            let tuple = b.tuple(fields);
+            Ok(b.add(NumOp::Host(corgi::HostOp(kernel)), vec![tuple]))
+        }
         Term::Var(i) => env.get(*i).copied().ok_or_else(|| format!("`${i}` is not in scope here")),
         Term::Bound(k) => {
             env.len().checked_sub(1 + *k).map(|i| env[i]).ok_or_else(|| format!("binder `^{k}` is not in scope here"))
@@ -792,8 +798,8 @@ pub fn row_only(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::Bound(_) | Term::Int(_) => false,
         Term::Unary(UnOp::F64Fn(f), _) if *f != F64Fn::Abs => true,
-        Term::Unary(UnOp::F64ToInt, _) | Term::Binary(BinOp::F64Pow | BinOp::F64PowI, _, _) | Term::Call(..) => true,
-        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) => fs.iter().any(row_only),
+        Term::Unary(UnOp::F64ToInt, _) | Term::Binary(BinOp::F64Pow | BinOp::F64PowI, _, _) => true,
+        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) | Term::Call(_, fs) => fs.iter().any(row_only),
         Term::Spread(inner) | Term::Proj(inner, _) | Term::Unary(_, inner) => row_only(inner),
         Term::Inject { tag, payload, .. } => row_only(tag) || row_only(payload),
         Term::Case { scrutinee, arms, default } => {

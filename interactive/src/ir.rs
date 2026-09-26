@@ -506,6 +506,46 @@ pub fn register(f: Function) {
     functions().write().unwrap().insert(f.name.clone(), std::sync::Arc::new(f));
 }
 
+fn kernels() -> &'static std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<dyn corgi::HostKernel>>> {
+    static KERNELS: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<dyn corgi::HostKernel>>>> = std::sync::OnceLock::new();
+    KERNELS.get_or_init(Default::default)
+}
+
+/// Give the registered function `name` a columnar body: the corgi backend calls `kernel` on whole
+/// columns instead of `body` a row at a time. Its declared shapes must be the function's.
+pub fn register_kernel(name: &str, kernel: std::sync::Arc<dyn corgi::HostKernel>) {
+    let f = lookup(name).unwrap_or_else(|| panic!("register_kernel: `{name}` is not a registered function"));
+    assert_eq!(kernel.input(), &corgi::Shape::Prod(f.args.clone()), "register_kernel: `{name}` input shape");
+    assert_eq!(kernel.output(), &f.result, "register_kernel: `{name}` output shape");
+    kernels().write().unwrap().insert(name.to_string(), kernel);
+}
+
+/// The columnar body of `name`: its registered kernel, or its row body behind an adapter that
+/// converts only the call's arguments and result.
+pub fn kernel_of(name: &str) -> Option<std::sync::Arc<dyn corgi::HostKernel>> {
+    if let Some(k) = kernels().read().unwrap().get(name) { return Some(k.clone()) }
+    let f = lookup(name)?;
+    let k: std::sync::Arc<dyn corgi::HostKernel> = std::sync::Arc::new(RowKernel { input: corgi::Shape::Prod(f.args.clone()), f });
+    // Keep it, so every call site shares one kernel (and CSE can merge equal calls).
+    Some(kernels().write().unwrap().entry(name.to_string()).or_insert(k).clone())
+}
+
+/// A row-at-a-time function as a host kernel.
+struct RowKernel { f: std::sync::Arc<Function>, input: corgi::Shape }
+impl corgi::HostKernel for RowKernel {
+    fn name(&self) -> &str { &self.f.name }
+    fn input(&self) -> &corgi::Shape { &self.input }
+    fn output(&self) -> &corgi::Shape { &self.f.result }
+    fn eval(&self, input: corgi::Value) -> Result<corgi::Value, String> {
+        let rows = crate::corgi::logic::untranscode(input, &self.input);
+        let out: Vec<Value> = rows.into_iter().map(|r| match r {
+            Value::Tuple(args) => (self.f.body)(&args),
+            other => (self.f.body)(std::slice::from_ref(&other)),
+        }).collect();
+        Ok(crate::corgi::logic::transcode_owned(out, &self.f.result))
+    }
+}
+
 /// The registered function called `name`, if any.
 pub fn lookup(name: &str) -> Option<std::sync::Arc<Function>> {
     functions().read().unwrap().get(name).cloned()
