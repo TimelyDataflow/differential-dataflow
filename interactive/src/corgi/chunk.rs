@@ -28,7 +28,7 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_adjacent, gather, gather_lanes, group_bounds, sort_perm, survey_groups, GroupRun};
+use corgi::arrange::{gather, gather_lanes, group_bounds, sort_blocks, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
 use crate::corgi::col_times::{ColTime, ColTimes};
@@ -408,9 +408,9 @@ where
 /// Sort parallel columns by `(key, val, time)` and consolidate exact `(key, val, time)` triples
 /// (summing diffs, dropping zeros). Returns a sorted+consolidated `(keys, vals, times, diffs)`.
 ///
-/// Multi-record: one columnar `sort_perm` (discrimination sort) orders by `(key, val)`, one batched
-/// `compare_adjacent` flags adjacent-equal runs; only the small per-run *time* tiebreak is a Rust sort
-/// (time is not a corgi type). No per-pair `compare_at`.
+/// Multi-record: one columnar `sort_blocks` (discrimination sort) orders by `(key, val)` and
+/// identifies equal runs. Only the small per-run *time* tiebreak is a Rust sort (time is not a
+/// corgi type). Gather the payload once, after consolidation, from the surviving source rows.
 fn sort_consolidate<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> (CValue, CValue, ColTimes<T>, Vec<R>)
 where
     T: ColTime,
@@ -422,20 +422,14 @@ where
     }
     let kv = CValue::Prod(vec![keys, vals]);
     // Order the payload; retain time/diff source coordinates until final consolidation.
-    let perm = sort_perm(&kv);
-    let kv_s = gather(&kv, &perm);
-    // Batched adjacent-equality over the kv-sorted column: `adj[m] == 0` iff `kv_s[m] == kv_s[m+1]`.
-    // Naming the pattern rather than writing out the two index columns: corgi reads both sides
-    // densely, and the `i`/`i+1` index vectors this used to build are not built at all.
-    let adj: Vec<i8> = compare_adjacent(&kv_s);
-
+    let (perm, labels) = sort_blocks(&[], &kv);
     // Walk maximal equal-`(key,val)` runs; within each, order by time and consolidate equal times.
-    let (mut keep, mut time_rows, mut od) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut time_rows, mut od) = (Vec::new(), Vec::new());
     let mut run = Vec::new();
     let mut i = 0;
     while i < n {
         let mut j = i + 1;
-        while j < n && adj[j - 1] == 0 {
+        while j < n && labels[j] == labels[i] {
             j += 1;
         }
         run.clear();
@@ -451,14 +445,13 @@ where
                 k += 1;
             }
             if !d.is_zero() {
-                keep.push(i);
                 time_rows.push(rep);
                 od.push(d);
             }
         }
         i = j;
     }
-    let (keys, vals) = split_kv(gather(&kv_s, &keep));
+    let (keys, vals) = split_kv(gather(&kv, &time_rows));
     (keys, vals, times.gather(&time_rows), od)
 }
 
@@ -672,11 +665,66 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use corgi::arrange::compare_at;
     use differential_dataflow::trace::chunk::{ChunkBatchMerger, is_graded};
         use differential_dataflow::trace::implementations::spine_fueled::Merger;
     use std::collections::BTreeMap;
 
     fn xorshift(s: &mut u64) -> u64 { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; *s }
+
+    #[test]
+    fn ingest_nested_payload_matches_scalar_consolidation() {
+        use differential_dataflow::dynamic::pointstamp::PointStamp;
+        use timely::order::Product;
+        type T = Product<u64, PointStamp<u64>>;
+        // Lists compare by length before content; their elements are products.
+        let ends: Vec<usize> = (0..32).scan(0, |end, i| { *end += i % 5; Some(*end) }).collect();
+        let elements = *ends.last().unwrap();
+        let values = CValue::List(ends.into(), Box::new(CValue::Prod(vec![
+            CValue::u64((0..elements).map(|i| (i % 7) as u64).collect()),
+            CValue::u64((0..elements).map(|i| (i % 3) as u64).collect()),
+        ])));
+        for n in [0, 1, 64, 1024] {
+            for cancel_all in [false, true] {
+                let mut seed = 719;
+                let rows: Vec<_> = (0..n).map(|_| xorshift(&mut seed) as usize % 32).collect();
+                let keys = CValue::u64(rows.iter().map(|&r| (r % 4) as u64).collect());
+                let vals = gather(&values, &rows);
+                let kv = CValue::Prod(vec![keys.clone(), vals.clone()]);
+                let times: ColTimes<T> = rows.iter().map(|&r| T::new((r % 2) as u64,
+                    PointStamp::new([(r % 3) as u64, (r % 5) as u64].into_iter().collect()))).collect();
+                let diffs: Vec<i64> = (0..n).map(|_| (xorshift(&mut seed) % 5) as i64 - 2).collect();
+                // The paired case cancels every triple, including on unordered input.
+                let input: Vec<usize> = if cancel_all { (0..n).chain(0..n).collect() } else { (0..n).collect() };
+                let diffs = if cancel_all { diffs.iter().copied().chain(diffs.iter().map(|d| -d)).collect() } else { diffs };
+                let keys = gather(&keys, &input);
+                let vals = gather(&vals, &input);
+                let times = times.gather(&input);
+                let mut order: Vec<_> = (0..input.len()).collect();
+                order.sort_by(|&a, &b| compare_at(&kv, input[a], &kv, input[b]).then_with(|| times.cmp(a, b)));
+                let mut expected: Vec<(usize, i64)> = Vec::new();
+                for row in order {
+                    if let Some((last, diff)) = expected.last_mut() {
+                        if compare_at(&kv, input[*last], &kv, input[row]) == Ordering::Equal
+                            && times.cmp(*last, row) == Ordering::Equal {
+                            *diff += diffs[row];
+                            continue;
+                        }
+                    }
+                    expected.push((row, diffs[row]));
+                }
+                expected.retain(|(_, d)| *d != 0);
+                let result = CorgiChunk::from_columns(keys, vals, times.clone(), diffs);
+                assert_eq!(result.len_(), expected.len(), "n={n}, cancel={cancel_all}");
+                let actual = result.kv();
+                for (i, &(row, diff)) in expected.iter().enumerate() {
+                    assert_eq!(compare_at(&actual, i, &kv, input[row]), Ordering::Equal);
+                    assert_eq!(result.times().get(i), times.get(row));
+                    assert_eq!(result.diffs()[i], diff);
+                }
+            }
+        }
+    }
 
     #[test]
     fn cancelled_merge_does_not_retain_input_sized_diff_storage() {
