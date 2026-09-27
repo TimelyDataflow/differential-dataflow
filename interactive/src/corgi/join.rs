@@ -37,9 +37,9 @@ use differential_dataflow::operators::int_proxy::{KeyPosition, JoinInstance, Pro
 use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_at, gather, gather_lanes, leaf_slice};
+use corgi::arrange::{compare_at, gather_lanes, leaf_slice};
 use crate::corgi::search::matching_ranges;
-use corgi::{shape_of_value, Shape, Value as CValue};
+use corgi::{shape_of_value, Value as CValue};
 
 use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, CorgiChunk};
 use crate::corgi::col_times::ColTime;
@@ -253,10 +253,10 @@ fn side_chunks<T: ColTime>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>> {
 /// product of 64-bit leaves — the shape DDIR tuples transcode to — so row order is the
 /// lexicographic order of the lane tuples. `Sum`/`List`/narrow leaves give `None`
 /// (structural compares).
-fn leaf_lanes(col: &CValue) -> Option<Vec<&CValue>> {
-    fn walk<'a>(col: &'a CValue, out: &mut Vec<&'a CValue>) -> bool {
+fn leaf_lanes(col: &CValue) -> Option<Vec<&[u64]>> {
+    fn walk<'a>(col: &'a CValue, out: &mut Vec<&'a [u64]>) -> bool {
         match col {
-            CValue::Prim(_) => { out.push(col); matches!(shape_of_value(col), Shape::Prim(64)) }
+            CValue::Prim(_) => match leaf_slice(col) { Some(lane) => { out.push(lane); true }, None => false },
             CValue::Prod(fields) => fields.iter().all(|f| walk(f, out)),
             CValue::Unit(_) => true,
             _ => false,
@@ -266,47 +266,33 @@ fn leaf_lanes(col: &CValue) -> Option<Vec<&CValue>> {
     if walk(col, &mut out) { Some(out) } else { None }
 }
 
-/// Whether to copy comparison lanes. Primitive tokens read their source lane directly.
+/// Whether to borrow comparison lanes. Primitive tokens read their source lane directly.
 fn leaf_valued<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
     !primitive_values(chunks[0])
         && chunks.iter().filter(|c| c.len() > 0).all(|c| leaf_lanes(c.vals()).is_some())
 }
 
-/// Pull rows `idx` of the column's leaf lanes as `u64` buffers.
-fn pull_lanes(col: &CValue, idx: &[usize]) -> Vec<Vec<u64>> {
-    leaf_lanes(col).expect("pull_lanes: leaf-laned column")
-        .into_iter()
-        .map(|lane| gather(lane, idx).into_u64("corgi join lane pull").unwrap())
-        .collect()
-}
-
 /// One key's records in one chunk: absolute rows `[s, e)`. When the vals are leaf-laned,
-/// `vals = (lanes, pos)` gives row `r`'s tuple as `lanes[.][pos + r - s]`; `None` falls
-/// back to structural compares against the chunk itself.
+/// `vals` borrows the chunk's full leaf lanes, indexed by absolute row; `None`
+/// falls back to structural compares against the chunk itself.
 struct RunRef<'a, T: ColTime> {
     chunk: &'a CorgiChunk<T, Diff>,
     cid: usize,
     s: usize,
     e: usize,
-    vals: Option<(&'a [Vec<u64>], usize)>,
+    vals: Option<&'a [&'a [u64]]>,
 }
 
 impl<'a, T: ColTime> RunRef<'a, T> {
     fn val_less(&self, row: usize, other: &Self, orow: usize) -> bool {
         match (self.vals, other.vals) {
-            (Some((a, ap)), Some((b, bp))) => {
-                let (i, j) = (ap + row - self.s, bp + orow - other.s);
-                a.iter().zip(b).map(|(la, lb)| (la[i], lb[j])).find(|(x, y)| x != y).is_some_and(|(x, y)| x < y)
-            }
+            (Some(a), Some(b)) => a.iter().zip(b).map(|(la, lb)| (la[row], lb[orow])).find(|(x, y)| x != y).is_some_and(|(x, y)| x < y),
             _ => compare_at(self.chunk.vals(), row, other.chunk.vals(), orow) == Ordering::Less,
         }
     }
     fn val_eq(&self, row: usize, other: &Self, orow: usize) -> bool {
         match (self.vals, other.vals) {
-            (Some((a, ap)), Some((b, bp))) => {
-                let (i, j) = (ap + row - self.s, bp + orow - other.s);
-                a.iter().zip(b).all(|(la, lb)| la[i] == lb[j])
-            }
+            (Some(a), Some(b)) => a.iter().zip(b).all(|(la, lb)| la[row] == lb[orow]),
             _ => compare_at(self.chunk.vals(), row, other.chunk.vals(), orow) == Ordering::Equal,
         }
     }
@@ -464,16 +450,16 @@ fn block_ends<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], horizon: Option<u64>)
 }
 
 /// View over one leaf-keyed chunk's rows for THIS block, `[base, end)`. The identifiers are
-/// borrowed from the chunk's own lane — the block reads them, it does not copy them — and the
-/// vals are gathered once, over exactly those rows.
+/// borrowed from the chunk's own lane. Value comparison lanes also borrow the chunk,
+/// so selecting a block copies neither identifiers nor values.
 struct LeafView<'a, T: ColTime> {
     chunk: &'a CorgiChunk<T, Diff>,
     cid: usize,
     /// Absolute row of `keys[0]`.
     base: usize,
     keys: &'a [u64],
-    /// Leaf-laned vals over the same rows; `None` when vals are structured.
-    vals: Option<Vec<Vec<u64>>>,
+    /// The chunk's full borrowed value lanes; `None` when vals are structured.
+    vals: Option<Vec<&'a [u64]>>,
     /// Cursor within `keys`.
     cur: usize,
 }
@@ -483,7 +469,7 @@ const PULL: usize = 1 << 14;
 
 impl<'a, T: ColTime> LeafView<'a, T> {
     fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, start: usize, end: usize, leaf_vals: bool) -> Self {
-        let vals = (leaf_vals && end > start).then(|| pull_lanes(chunk.vals(), &(start..end).collect::<Vec<_>>()));
+        let vals = (leaf_vals && end > start).then(|| leaf_lanes(chunk.vals()).unwrap());
         LeafView { chunk, cid, base: start, keys: &ident(chunk)[start..end], vals, cur: 0 }
     }
     /// The key under the cursor, if any remains in this block.
@@ -505,21 +491,20 @@ impl<'a, T: ColTime> LeafView<'a, T> {
             cid: self.cid,
             s,
             e,
-            vals: self.vals.as_ref().map(|lanes| (&lanes[..], s - self.base)),
+            vals: self.vals.as_deref(),
         }
     }
 }
 
 /// The batched probe of one PROBEE-side chunk: per driver key, its equal-range in the
-/// chunk, with the matched rows' vals gathered once as a `u64` buffer
-/// when leaf-shaped (`off` gives each key's slice within it).
+/// chunk, borrowing its full value lanes when leaf-shaped. Matched rows index the
+/// original lanes directly, without a gather or an index buffer.
 struct Probe<'a, T: ColTime> {
     chunk: &'a CorgiChunk<T, Diff>,
     cid: usize,
     lo: Vec<usize>,
     hi: Vec<usize>,
-    vals: Option<Vec<Vec<u64>>>,
-    off: Vec<usize>,
+    vals: Option<Vec<&'a [u64]>>,
 }
 
 impl<'a, T: ColTime> Probe<'a, T> {
@@ -532,19 +517,8 @@ impl<'a, T: ColTime> Probe<'a, T> {
             lo[j] = range.start;
             hi[j] = range.end;
         }
-        let mut off = Vec::with_capacity(lo.len() + 1);
-        let mut idx: Vec<usize> = Vec::new();
-        off.push(0);
-        for i in 0..lo.len() {
-            idx.extend(lo[i]..hi[i]);
-            off.push(idx.len());
-        }
-        let vals = if leaf_vals && !idx.is_empty() {
-            Some(pull_lanes(chunk.vals(), &idx))
-        } else {
-            None
-        };
-        Probe { chunk, cid, lo, hi, vals, off }
+        let vals = leaf_vals.then(|| leaf_lanes(chunk.vals()).unwrap());
+        Probe { chunk, cid, lo, hi, vals }
     }
     /// The run of driver key `j` in this chunk, if any.
     fn run_ref(&self, j: usize) -> Option<RunRef<'_, T>> {
@@ -555,7 +529,7 @@ impl<'a, T: ColTime> Probe<'a, T> {
             cid: self.cid,
             s,
             e,
-            vals: self.vals.as_ref().map(|lanes| (&lanes[..], self.off[j])),
+            vals: self.vals.as_deref(),
         })
     }
 }
@@ -616,9 +590,7 @@ fn stage_collision<T: ColTime>(
                         compare_at(run.chunk.keys(), candidate, reference, row) != Ordering::Equal
                     })
                     .unwrap_or(run.e - start);
-            let vals = run
-                .vals
-                .map(|(lanes, offset)| (lanes, offset + start - run.s));
+            let vals = run.vals;
             equal_runs.push(RunRef { chunk: run.chunk, cid: run.cid, s: start, e: end, vals });
             positions[index] = end;
         }
@@ -924,6 +896,44 @@ mod tests {
                     left.clear(); right.clear();
                     backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
                     assert!(left.is_empty() && right.is_empty(), "suppress a fully cancelled key");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn borrowed_comparisons_match_structural_rows_after_skips() {
+        let make = |keys: Vec<u64>, salt: u64| {
+            let n = keys.len();
+            CorgiChunk::from_columns(
+                CValue::u64(keys),
+                CValue::Prod(vec![
+                    CValue::u64((0..n).map(|i| (i as u64 ^ salt) % 3).collect()),
+                    CValue::Prod(vec![CValue::Unit(n), CValue::u64((0..n).map(|i| u64::MAX - i as u64).collect())]),
+                ]),
+                (0..n).map(|_| 0u64).collect(), vec![1; n],
+            )
+        };
+        let left = make(vec![0, 0, 1, 2, 2, 2, 4, 4, 5], 1);
+        let right = make(vec![0, 1, 1, 4, 5], 2);
+        let mut view = LeafView::new(&left, 0, 2, 8, true);
+        assert_eq!(view.take_run(1), Some((2, 3)));
+        assert_eq!(view.take_run(2), Some((3, 6)));
+        assert_eq!(view.take_run(4), Some((6, 8)));
+        assert_eq!(view.cur_key(), None);
+        let probe = Probe::new(&right, 1, &[0, 1, 3, 5], true);
+        assert!(probe.run_ref(2).is_none());
+        for (s, e) in [(2, 3), (3, 6), (6, 8)] {
+            let a = view.run_ref(s, e);
+            for j in [0, 1, 3] {
+                let b = probe.run_ref(j).unwrap();
+                for i in a.s..a.e {
+                    for k in b.s..b.e {
+                        let expected = compare_at(a.chunk.vals(), i, b.chunk.vals(), k);
+                        assert_eq!(a.val_eq(i, &b, k), expected == Ordering::Equal);
+                        assert_eq!(a.val_less(i, &b, k), expected == Ordering::Less);
+                        assert_eq!(b.val_less(k, &a, i), expected == Ordering::Greater);
+                    }
                 }
             }
         }
