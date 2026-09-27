@@ -41,7 +41,7 @@ use corgi::arrange::{compare_at, gather_lanes, leaf_slice};
 use crate::corgi::search::matching_ranges;
 use corgi::{shape_of_value, Value as CValue};
 
-use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key, CorgiChunk};
+use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key_ref, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_join_projection;
@@ -134,7 +134,7 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
     ) {
         let chunks0 = side_chunks(&instance.batches0);
         let chunks1 = side_chunks(&instance.batches1);
-        let keys0: Vec<Option<&CValue>> = chunks0.iter().map(|c| Some(c.keys())).collect();
+        let keys0: Vec<Option<&CValue>> = chunks0.iter().map(|c| Some(recover_key_ref(c.keys()))).collect();
         let vals0: Vec<Option<&CValue>> = chunks0.iter().map(|c| Some(c.vals())).collect();
         let vals1: Vec<Option<&CValue>> = chunks1.iter().map(|c| Some(c.vals())).collect();
 
@@ -186,13 +186,13 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
                 start = end;
                 continue;
             }
-            // The join's projection is written against the key the program declared, so drop
-            // the arrangement's leading identifier lane before evaluating it. The output goes to
-            // an arrange, which re-derives the identifier for the new key.
+            // Gather only the declared key borrowed above: the arrangement's leading
+            // identifier is not part of the projection input. A downstream arrange derives
+            // the identifier for the projected key.
             let ids = &matches.ids[start..end];
             let kc = if primitive_keys {
                 from_ids(chunks0[0].keys(), ids.iter().map(|x| x.0).collect())
-            } else { recover_key(&gather_lanes(&keys0, &tag0, &off0)) };
+            } else { gather_lanes(&keys0, &tag0, &off0) };
             let v0 = if primitive0 {
                 from_ids(chunks0[0].vals(), ids.iter().map(|x| x.1.0).collect())
             } else { gather_lanes(&vals0, &tag0, &off0) };

@@ -578,12 +578,18 @@ pub fn key_is_hashed(keys: &CValue) -> bool {
     corgi::arrange::leaf_slice(keys).is_none()
 }
 
-/// Undo [`present_key`]: the key as the rest of the system knows it. A corgi clone is an `Arc`
-/// bump, so dropping the hash lane costs nothing.
+/// Undo [`present_key`]: the key as the rest of the system knows it.
+/// Cloning the column shares its primitive buffers.
 pub fn recover_key(keys: &CValue) -> CValue {
+    recover_key_ref(keys).clone()
+}
+
+/// Borrow the declared key without its arrangement-only identifier lane.
+/// Use before gathering a projection input to avoid copying a discarded hash column.
+pub fn recover_key_ref(keys: &CValue) -> &CValue {
     match keys {
-        CValue::Prod(cols) if corgi::arrange::leaf_slice(keys).is_none() => cols[1].clone(),
-        _ => keys.clone(),
+        CValue::Prod(cols) if corgi::arrange::leaf_slice(keys).is_none() => &cols[1],
+        _ => keys,
     }
 }
 
