@@ -120,5 +120,5 @@ pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
 pub fn is_builtin(name: &str) -> bool {
     const NAMES: &[&str] = &["tuple", "list", "inject", "variant", "case", "fold", "proj", "len", "istag", "not", "float", "fneg", "fint",
         "fpow", "fpowi", "fmin", "fmax", "feq", "fne", "flt", "fle", "fgt", "fge", "fadd", "fsub", "fmul", "fdiv", "or", "idiv", "append", "if", "hash"];
-    NAMES.contains(&name) || F64Fn::ALL.iter().any(|(n, _)| *n == name)
+    NAMES.contains(&name) || F64Fn::ALL.iter().any(|(n, _)| *n == name) || pipe::is_keyword(name)
 }

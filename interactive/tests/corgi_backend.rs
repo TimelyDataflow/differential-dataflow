@@ -161,7 +161,7 @@ fn serializing(n: usize) -> timely::Config {
     assert_eq!(out["joined"].len(), 40);
 }
 
-/// The functions `registered.ddp` calls. Registering again is idempotent, so every
+/// The functions `registered.ddp` calls. Registering again replaces (here with the same bodies), so every
 /// test may do it.
 fn register_test_functions() {
     use corgi::Shape;
@@ -241,4 +241,40 @@ fn filter_requires_an_int_predicate() {
         let result = std::panic::catch_unwind(move || evaluate(backend, timely::Config::process(1), &tree, &inputs));
         assert!(result.is_err(), "{backend:?} accepted a tuple filter predicate");
     }
+}
+
+/// A call whose argument does not have the declared shape is rejected by both backends: corgi
+/// when it types the program, the row backend when it makes the call.
+#[test]
+fn call_argument_shapes_are_checked_by_both_backends() {
+    register_test_functions();
+    // `blend` takes a pair; pass it an Int.
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 | map($0 ; blend($0[0]));"#));
+    tree.optimize();
+    let inputs = vec![rows(&[&[1], &[2]])];
+    for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
+        let (tree, inputs) = (tree.clone(), inputs.clone());
+        let result = std::panic::catch_unwind(move || evaluate(backend, timely::Config::process(1), &tree, &inputs));
+        assert!(result.is_err(), "{backend:?} ran a call with a mis-shaped argument");
+    }
+}
+
+/// Registering a name again replaces its kernel too: the row adapter for the old body, or a
+/// columnar kernel registered for it, no longer runs.
+#[test]
+fn reregistering_a_function_drops_its_old_kernel() {
+    use corgi::Shape;
+    use interactive::ir::{kernel_of, register, register_kernel, Function};
+    let one = |k: i64| Function { name: "reregistered".into(), args: vec![Shape::Prim(64)], result: Shape::Prim(64), body: Box::new(move |_| Value::Int(k)) };
+    register(one(1));
+    let first = kernel_of("reregistered").unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &kernel_of("reregistered").unwrap()), "one kernel per registration");
+    register(one(2));
+    let second = kernel_of("reregistered").unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &second), "re-registration kept the old kernel");
+    register_kernel("reregistered", first);
+    register(one(3));
+    assert!(!std::sync::Arc::ptr_eq(&second, &kernel_of("reregistered").unwrap()));
+    // A keyword can never be called, so it cannot be registered.
+    assert!(std::panic::catch_unwind(|| register(Function { name: "min".into(), args: vec![], result: Shape::Prim(64), body: Box::new(|_| Value::Int(0)) })).is_err());
 }

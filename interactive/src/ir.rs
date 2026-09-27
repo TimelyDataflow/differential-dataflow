@@ -115,7 +115,9 @@ pub enum Term {
     /// `name(args…)` for a function the embedding program registered (see
     /// [`register`]): a pure Rust function from argument values to a value.
     /// DDIR only moves its arguments and result; what it computes is the
-    /// embedder's. The columnar backend runs it a row at a time.
+    /// embedder's. The corgi backend runs it as a host kernel: the function's
+    /// columnar kernel if one is registered (`register_kernel`), otherwise its
+    /// row body over just the call's arguments.
     Call(String, Vec<Term>),
 }
 
@@ -161,7 +163,7 @@ pub enum UnOp {
 /// program ported from Rust gets bit-identical results on the same platform. `Abs` is exact
 /// everywhere; the transcendental ones (`Exp`, `Ln`, `Sin`, `Cos`, `Tan`) call the platform libm
 /// and are only as reproducible across platforms as it is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum F64Fn {
     Abs, Sqrt, Exp, Ln, Floor, Ceil, Round, Sin, Cos, Tan,
 }
@@ -305,6 +307,11 @@ pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
         Term::Call(name, args) => {
             let f = lookup(name).unwrap_or_else(|| panic!("call to unregistered function `{name}`"));
             let vals: Vec<Value> = args.iter().map(|a| eval(a, env)).collect();
+            // The corgi backend rejects mis-shaped arguments when it types the program; the row
+            // backend has no typing pass, so it checks each call rather than run the body on them.
+            for (i, (v, s)) in vals.iter().zip(&f.args).enumerate() {
+                assert!(v.has_shape(s), "`{name}`: argument {i} is {v:?}, not of the declared shape {s}");
+            }
             (f.body)(&vals)
         }
         Term::Var(i) => env[*i].clone(),
@@ -502,7 +509,10 @@ fn functions() -> &'static std::sync::RwLock<std::collections::HashMap<String, s
 /// resolves calls against the registry). Registering a name again replaces it;
 /// a name may not shadow a builtin.
 pub fn register(f: Function) {
-    assert!(!crate::parse::is_builtin(&f.name), "`{}` is a builtin and cannot be registered", f.name);
+    assert!(!crate::parse::is_builtin(&f.name), "`{}` is a builtin or keyword and cannot be registered", f.name);
+    // A kernel for the old registration (its columnar body, or the row adapter holding the old
+    // body) no longer describes this function; `register_kernel` may give it a new one.
+    kernels().write().unwrap().remove(&f.name);
     functions().write().unwrap().insert(f.name.clone(), std::sync::Arc::new(f));
 }
 
@@ -544,9 +554,10 @@ impl corgi::HostKernel for RowKernel {
     fn output(&self) -> &corgi::Shape { &self.f.result }
     fn eval(&self, input: corgi::Value) -> Result<corgi::Value, String> {
         let rows = crate::corgi::logic::untranscode(input, &self.input);
-        let out: Vec<Value> = rows.into_iter().map(|r| match r {
-            Value::Tuple(args) => (self.f.body)(&args),
-            other => (self.f.body)(std::slice::from_ref(&other)),
+        // The input is `Prod(args)` or `Unit` (`call_input`); both untranscode to tuples.
+        let out: Vec<Value> = rows.into_iter().map(|r| {
+            let Value::Tuple(args) = r else { unreachable!("a call's arguments untranscode to a tuple") };
+            (self.f.body)(&args)
         }).collect();
         Ok(crate::corgi::logic::transcode_owned(out, &self.f.result))
     }

@@ -55,7 +55,7 @@ pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
             for r in rows {
                 match r {
                     DValue::Tuple(xs) => {
-                        assert!(xs.len() >= fs.len(), "transcode: a {}-tuple for a {}-field shape", xs.len(), fs.len());
+                        assert!(xs.len() == fs.len(), "transcode: a {}-tuple for a {}-field shape", xs.len(), fs.len());
                         for (col, x) in cols.iter_mut().zip(xs) { col.push(x) }
                     }
                     other => panic!("transcode: expected Tuple, got {other:?}"),
@@ -392,7 +392,23 @@ pub fn compile(
                         }
                     }
                 }
-                BinOp::F64Pow | BinOp::F64PowI => return Err(format!("{op:?} has no columnar kernel; it runs a row at a time (see `row_only`)")),
+                BinOp::F64Pow | BinOp::F64PowI => {
+                    let f64_shape = Shape::Sum(vec![Shape::Prim(64)]);
+                    let exponent = if matches!(op, BinOp::F64Pow) { f64_shape.clone() } else { Shape::Prim(64) };
+                    if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != exponent {
+                        return Err(format!("{op:?} expects an F64 newtype and an {}", if matches!(op, BinOp::F64Pow) { "F64" } else { "Int" }));
+                    }
+                    let x = float_leaf(b, lid);
+                    let (kind, y) = if matches!(op, BinOp::F64Pow) {
+                        (float_kernels::FloatOp::Pow, float_leaf(b, rid))
+                    } else {
+                        (float_kernels::FloatOp::PowI, rid)
+                    };
+                    let args = b.tuple(vec![x, y]);
+                    let z = b.add(NumOp::Host(float_kernels::op(kind)), vec![args]);
+                    let payload = b.add(ArithOp::ToSigned, vec![z]);
+                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                }
                 BinOp::Eq | BinOp::Ne => {
                     // Cross-shape structural compare folds to a constant (Eq→0, Ne→1) over `anchor`;
                     // same-shape emits a real corgi `Rel`.
@@ -589,7 +605,20 @@ pub fn compile(
                     let payload = b.add(ArithOp::ToSigned, vec![abs]);
                     b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
                 }
-                UnOp::F64Fn(_) | UnOp::F64ToInt => return Err(format!("{op:?} has no columnar kernel; it runs a row at a time (see `row_only`)")),
+                // The rest (sqrt, exp, ln, rounding, trig) and `fint` are host kernels over the
+                // float leaf: decode each key, apply the function, encode the result.
+                UnOp::F64Fn(f) => {
+                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err(format!("{op:?} expects an F64 newtype")); }
+                    let x = float_leaf(b, id);
+                    let y = b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::Fn(*f))), vec![x]);
+                    let payload = b.add(ArithOp::ToSigned, vec![y]);
+                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                }
+                UnOp::F64ToInt => {
+                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err("fint expects an F64 newtype".into()); }
+                    let x = float_leaf(b, id);
+                    b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::ToInt)), vec![x])
+                }
                 // `truthy` is "nonzero Int": scalars compare against zero; non-`Int` values
                 // are never truthy, so their `not` folds to the constant 1 (the cross-shape
                 // `Eq` fold's precedent).
@@ -763,142 +792,24 @@ fn compile_fold_body(step: &Term, ctx: Option<&[Shape]>, init_shape: &Shape, ele
     Ok(bb.finish(out))
 }
 
-/// A compiled term, ready to run on a batch of columns.
-pub enum Kernel {
-    /// Every op in the terms has a corgi kernel: one columnar graph.
-    Columnar(Graph<NumOp>),
-    /// Some op has none (see [`row_only`]). The terms run through `ir::eval` a row at a time:
-    /// the input columns are untranscoded from `inputs`, and the results transcoded to `output`.
-    /// The output shape is still corgi's typing, of the terms with each row-only op replaced by a
-    /// columnar op of the same shape ([`columnar_stand_in`]), so both paths type a term alike.
-    Rows { terms: Vec<Term>, inputs: Vec<Shape>, output: Shape },
-}
-
-impl Kernel {
-    /// Run on `Prod(inputs)`. One term yields its column; several yield `Prod` of their columns.
-    pub fn eval(&self, input: CValue) -> CValue {
-        match self {
-            Kernel::Columnar(g) => corgi::eval_graph(g, input),
-            Kernel::Rows { terms, inputs, output } => {
-                let rows = untranscode(input, &Shape::Prod(inputs.clone()));
-                let results: Vec<DValue> = rows
-                    .into_iter()
-                    .map(|row| {
-                        let DValue::Tuple(mut env) = row else { unreachable!("untranscode of a Prod is a Tuple") };
-                        match &terms[..] {
-                            [term] => crate::ir::eval(term, &mut env),
-                            _ => DValue::Tuple(terms.iter().map(|t| crate::ir::eval(t, &mut env)).collect()),
-                        }
-                    })
-                    .collect();
-                transcode_owned(results, output)
-            }
-        }
-    }
-}
-
-/// Does `t` use an op with no corgi kernel? These are the F64 functions other than `fabs`, `fint`,
-/// `fpow` and `fpowi`: libm calls and rounding, which corgi's arithmetic does not offer.
-pub fn row_only(t: &Term) -> bool {
-    match t {
-        Term::Var(_) | Term::Bound(_) | Term::Int(_) => false,
-        Term::Unary(UnOp::F64Fn(f), _) if *f != F64Fn::Abs => true,
-        Term::Unary(UnOp::F64ToInt, _) | Term::Binary(BinOp::F64Pow | BinOp::F64PowI, _, _) => true,
-        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) | Term::Call(_, fs) => fs.iter().any(row_only),
-        Term::Spread(inner) | Term::Proj(inner, _) | Term::Unary(_, inner) => row_only(inner),
-        Term::Inject { tag, payload, .. } => row_only(tag) || row_only(payload),
-        Term::Case { scrutinee, arms, default } => {
-            row_only(scrutinee) || arms.iter().any(row_only) || default.as_deref().is_some_and(row_only)
-        }
-        Term::Fold { list, init, step } => row_only(list) || row_only(init) || row_only(step),
-        Term::If { cond, then, els } => row_only(cond) || row_only(then) || row_only(els),
-        Term::Binary(_, l, r) => row_only(l) || row_only(r),
-    }
-}
-
-/// `t` with each row-only op replaced by a columnar op that demands the same operand shapes and
-/// yields the same result shape: F64 -> F64 by `fneg`, `fint` by a compare of two `fneg`s,
-/// `fpow` by `fadd`, and `fpowi(x, n)` by `fadd(x, float(n))`. Only its typing is used.
-fn columnar_stand_in(t: &Term) -> Term {
-    let bx = |term: &Term| Box::new(columnar_stand_in(term));
-    match t {
-        Term::Var(_) | Term::Bound(_) | Term::Int(_) => t.clone(),
-        Term::Unary(UnOp::F64Fn(f), x) if *f != F64Fn::Abs => Term::Unary(UnOp::F64Neg, bx(x)),
-        Term::Unary(UnOp::F64ToInt, x) => {
-            let x = Term::Unary(UnOp::F64Neg, bx(x));
-            Term::Binary(BinOp::Lt, Box::new(x.clone()), Box::new(x))
-        }
-        Term::Binary(BinOp::F64Pow, l, r) => Term::Binary(BinOp::F64Add, bx(l), bx(r)),
-        // A registered function: its arguments still compile (so they typecheck), and the
-        // result is a literal of the declared result shape.
-        Term::Call(name, args) => match crate::ir::lookup(name) {
-            Some(f) => {
-                let mut fields: Vec<Term> = args.iter().map(columnar_stand_in).collect();
-                fields.push(literal_of_shape(&f.result));
-                Term::Proj(Box::new(Term::Tuple(fields)), args.len())
-            }
-            None => t.clone(),
-        },
-        Term::Binary(BinOp::F64PowI, l, r) => Term::Binary(BinOp::F64Add, bx(l), Box::new(Term::Unary(UnOp::ToF64, bx(r)))),
-        Term::Tuple(fs) => Term::Tuple(fs.iter().map(columnar_stand_in).collect()),
-        Term::List(fs) => Term::List(fs.iter().map(columnar_stand_in).collect()),
-        Term::Hash(fs) => Term::Hash(fs.iter().map(columnar_stand_in).collect()),
-        Term::Spread(inner) => Term::Spread(bx(inner)),
-        Term::Proj(inner, i) => Term::Proj(bx(inner), *i),
-        Term::Unary(op, inner) => Term::Unary(*op, bx(inner)),
-        Term::Inject { tag, payload, sum } => Term::Inject { tag: bx(tag), payload: bx(payload), sum: sum.clone() },
-        Term::Case { scrutinee, arms, default } => Term::Case {
-            scrutinee: bx(scrutinee),
-            arms: arms.iter().map(columnar_stand_in).collect(),
-            default: default.as_deref().map(bx),
-        },
-        Term::Fold { list, init, step } => Term::Fold { list: bx(list), init: bx(init), step: bx(step) },
-        Term::If { cond, then, els } => Term::If { cond: bx(cond), then: bx(then), els: bx(els) },
-        Term::Binary(op, l, r) => Term::Binary(*op, bx(l), bx(r)),
-    }
-}
-
-/// A term whose corgi shape is `shape`: zeros, first lanes, one-element lists.
-fn literal_of_shape(shape: &Shape) -> Term {
-    match shape {
-        Shape::Prim(_) => Term::Int(0),
-        Shape::Unit => Term::Tuple(Vec::new()),
-        Shape::Prod(fs) => Term::Tuple(fs.iter().map(literal_of_shape).collect()),
-        Shape::List(e) => Term::List(vec![literal_of_shape(e)]),
-        Shape::Sum(lanes) => Term::Inject {
-            tag: Box::new(Term::Int(0)),
-            payload: Box::new(literal_of_shape(&lanes[0])),
-            sum: SumTy::Declared(lanes.clone()),
-        },
-    }
-}
-
 /// Compile `terms` over the environment `Var(i)` = field `i` of the input, whose shapes are
 /// `shapes`. The graph's input is `Prod(shapes)`; its output is the one term's column, or `Prod`
 /// of the terms' columns. Typechecked once here, so an `Ok` kernel runs on every batch of these
 /// shapes. Returns the kernel and its output shape.
-fn lower(terms: &[&Term], shapes: &[Shape]) -> Res<(Kernel, Shape)> {
-    let rows = terms.iter().any(|t| row_only(t));
-    let stand_ins: Vec<Term> = if rows { terms.iter().map(|t| columnar_stand_in(t)).collect() } else { Vec::new() };
-    let typed: Vec<&Term> = if rows { stand_ins.iter().collect() } else { terms.to_vec() };
+fn lower(terms: &[&Term], shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
     let mut b = Builder::<NumOp>::default();
     let input = b.input();
     let env: Vec<usize> = (0..shapes.len()).map(|i| b.add(Op::Field(i), vec![input])).collect();
-    let outs = typed.iter().map(|t| compile(t, &mut b, &env, shapes, input, None)).collect::<Res<Vec<_>>>()?;
+    let outs = terms.iter().map(|t| compile(t, &mut b, &env, shapes, input, None)).collect::<Res<Vec<_>>>()?;
     let out = if let [one] = outs[..] { one } else { b.tuple(outs) };
     let g = b.finish(out);
     let output = corgi::shape_of(&g, &Shape::Prod(shapes.to_vec()))?;
-    let kernel = if rows {
-        Kernel::Rows { terms: terms.iter().map(|t| (*t).clone()).collect(), inputs: shapes.to_vec(), output: output.clone() }
-    } else {
-        Kernel::Columnar(g)
-    };
-    Ok((kernel, output))
+    Ok((g, output))
 }
 
 /// Compile a `FlatMap`'s list term → a corgi `List` column, one list per input row. A term that is
 /// not list-shaped is the type error: the backend explodes the column structurally.
-pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Kernel> {
+pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match lower(&[list_term], &[kshape.clone(), vshape.clone()])? {
         (k, Shape::List(_)) => Ok(k),
         (_, other) => Err(format!("flatmap over a non-list: {other}")),
@@ -907,7 +818,7 @@ pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Res<
 
 /// Compile a scalar term (`EnterAt`'s delay field) → a `U64` column; a non-integer term is the
 /// type error (the delay is read as one integer per row).
-pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Kernel> {
+pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match lower(&[term], &[kshape.clone(), vshape.clone()])? {
         (k, Shape::Prim(_)) => Ok(k),
         (_, other) => Err(format!("enter_at delay is not an integer: {other}")),
@@ -916,7 +827,7 @@ pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Kernel
 
 /// Compile a `Filter` predicate → a mask column (nonzero keeps the row). A predicate must be an
 /// `Int`; any other shape is a type error, as it is in the row backend.
-pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Res<Kernel> {
+pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match lower(&[cond], &[kshape.clone(), vshape.clone()])? {
         (k, Shape::Prim(_)) => Ok(k),
         (_, other) => Err(format!("a filter predicate must be an Int, got {other}")),
@@ -925,14 +836,74 @@ pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Res<Ker
 
 /// Compile a join projection: key/val Terms over `Var(0)=key`, `Var(1)=val0`, `Var(2)=val1` (with
 /// their shapes). Input `Prod([key, val0, val1])`; output `Prod([newkey, newval])`.
-pub fn compile_join_projection(key: &Term, val: &Term, kshape: &Shape, v0shape: &Shape, v1shape: &Shape) -> Res<Kernel> {
+pub fn compile_join_projection(key: &Term, val: &Term, kshape: &Shape, v0shape: &Shape, v1shape: &Shape) -> Res<Graph<NumOp>> {
     Ok(lower(&[key, val], &[kshape.clone(), v0shape.clone(), v1shape.clone()])?.0)
 }
 
 /// Compile a DDIR `Projection` over `Var(0)=key` (`kshape`), `Var(1)=val` (`vshape`).
 /// Input `Prod([key, val])`; output `Prod([newkey, newval])`.
-pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape) -> Res<Kernel> {
+pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     Ok(lower(&[key, val], &[kshape.clone(), vshape.clone()])?.0)
+}
+
+/// The F64 functions without a composition of corgi ops, as host kernels over the float leaf
+/// (corgi's total-order key): decode each key, apply the function as `ir::eval` does, encode.
+/// One kernel per function, shared by every call site, so CSE merges equal calls.
+mod float_kernels {
+    use std::sync::{Arc, OnceLock};
+    use corgi::{HostKernel, HostOp, Shape, Value};
+    use crate::ir::F64Fn;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+    pub enum FloatOp { Fn(F64Fn), ToInt, Pow, PowI }
+
+    fn decode(key: u64) -> f64 {
+        f64::from_bits(if key >> 63 == 1 { key ^ (1 << 63) } else { !key })
+    }
+    fn encode(x: f64) -> u64 { super::float_key(x) }
+
+    struct Kernel { name: String, op: FloatOp, input: Shape, output: Shape }
+    impl HostKernel for Kernel {
+        fn name(&self) -> &str { &self.name }
+        fn input(&self) -> &Shape { &self.input }
+        fn output(&self) -> &Shape { &self.output }
+        fn eval(&self, input: Value) -> Result<Value, String> {
+            let out: Vec<u64> = match self.op {
+                FloatOp::Fn(f) => input.as_u64(&self.name)?.iter().map(|&k| encode(f.apply(decode(k)))).collect(),
+                FloatOp::ToInt => input.as_u64(&self.name)?.iter().map(|&k| decode(k) as i64 as u64).collect(),
+                FloatOp::Pow | FloatOp::PowI => {
+                    let args = input.into_prod(&self.name)?;
+                    let (x, y) = (args[0].as_u64(&self.name)?, args[1].as_u64(&self.name)?);
+                    x.iter().zip(y).map(|(&a, &b)| {
+                        let a = decode(a);
+                        encode(if self.op == FloatOp::Pow {
+                            a.powf(decode(b))
+                        } else {
+                            a.powi((b as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+                        })
+                    }).collect()
+                }
+            };
+            Ok(Value::u64(out))
+        }
+    }
+
+    /// The host op for `op`: one `Arc` per function for the life of the process.
+    pub fn op(op: FloatOp) -> HostOp {
+        static KERNELS: OnceLock<std::sync::Mutex<std::collections::HashMap<FloatOp, Arc<dyn HostKernel>>>> = OnceLock::new();
+        let mut map = KERNELS.get_or_init(Default::default).lock().unwrap();
+        let k = map.entry(op).or_insert_with(|| {
+            let (p, pair) = (Shape::Prim(64), Shape::Prod(vec![Shape::Prim(64), Shape::Prim(64)]));
+            let (name, input) = match op {
+                FloatOp::Fn(f) => (format!("{f:?}").to_lowercase(), p.clone()),
+                FloatOp::ToInt => ("fint".into(), p.clone()),
+                FloatOp::Pow => ("fpow".into(), pair.clone()),
+                FloatOp::PowI => ("fpowi".into(), pair),
+            };
+            Arc::new(Kernel { name: format!("f64:{name}"), op, input, output: p })
+        });
+        HostOp(Arc::clone(k))
+    }
 }
 
 #[cfg(test)]
@@ -979,40 +950,29 @@ mod tests {
         specials.iter().flat_map(|&a| specials.iter().map(move |&b| vec![V::f64_value(a), V::f64_value(b)])).collect()
     }
 
-    /// The F64 ops with a columnar kernel agree with `ir::eval` on every special pair.
+    /// Every F64 op agrees with `ir::eval` on every special pair: the ones composed of corgi ops
+    /// and the ones that are host kernels (`float_kernels`), alone and inside larger terms.
     #[test]
     fn columnar_float_math_agrees() {
         let f = sum(vec![u64s()]);
         for source in ["fabs($0)", "fmin($0, $1)", "fmax($0, $1)", "feq($0, $1)", "fne($0, $1)",
-            "flt($0, $1)", "fle($0, $1)", "fgt($0, $1)", "fge($0, $1)"] {
+            "flt($0, $1)", "fle($0, $1)", "fgt($0, $1)", "fge($0, $1)",
+            "fsqrt($0)", "fexp($0)", "fln($0)", "ffloor($0)", "fceil($0)", "fround($0)",
+            "fsin($0)", "fcos($0)", "ftan($0)", "fint($0)", "fpow($0, $1)", "fpowi($0, fint($1))"] {
             let term = crate::parse::pipe::parse_term(source);
-            assert!(!row_only(&term), "{source} should have a columnar kernel");
             agrees_with_rows(&term, &[f.clone(), f.clone()], &float_pairs());
         }
-    }
-
-    /// The F64 ops without one run a row at a time, typed as their columnar stand-ins; the
-    /// kernel's output round-trips through the transcode layer at that shape.
-    #[test]
-    fn row_wise_float_math_agrees() {
-        let f = sum(vec![u64s()]);
-        for source in ["fsqrt($0)", "fexp($0)", "fln($0)", "ffloor($0)", "fceil($0)", "fround($0)",
-            "fsin($0)", "fcos($0)", "ftan($0)", "fint($0)", "fpow($0, $1)", "fpowi($0, fint($1))",
-            "tuple(fadd(fexp($0), $1), flt(fln($0), $1))"] {
-            let term = crate::parse::pipe::parse_term(source);
-            assert!(row_only(&term), "{source} should run row-wise");
-            let shapes = [f.clone(), f.clone()];
-            let (kernel, output) = lower(&[&term], &shapes).unwrap();
-            assert!(matches!(kernel, Kernel::Rows { .. }));
-            let rows = float_pairs();
-            let cols = (0..2).map(|i| transcode(&rows.iter().map(|r| r[i].clone()).collect::<Vec<_>>(), &shapes[i])).collect();
-            let actual = untranscode(kernel.eval(CValue::Prod(cols)), &output);
-            let expected: Vec<_> = rows.iter().map(|r| crate::ir::eval(&term, &mut r.clone())).collect();
-            assert_eq!(actual, expected, "{source}");
+        // Inside a larger term. Over non-NaN pairs only: corgi's float `Add` returns the positive
+        // quiet NaN where `ir::eval` keeps a NaN operand's sign (as `fadd` alone does, before
+        // this change); the kernels themselves agree on NaNs above.
+        let finite: Vec<_> = float_pairs().into_iter().filter(|r| r.iter().all(|v| !v.as_f64().is_nan())).collect();
+        let term = crate::parse::pipe::parse_term("tuple(fadd(fexp($0), $1), flt(fln($0), $1), fpowi(fsqrt($0), fint($1)))");
+        agrees_with_rows(&term, &[f.clone(), f.clone()], &finite);
+        // The kernels are typed: their operands must be F64 newtypes (and `fpowi`'s exponent an Int).
+        for bad in ["fsqrt($0)", "fint($0)", "fpow($0, $0)"] {
+            assert!(lower(&[&crate::parse::pipe::parse_term(bad)], &[u64s()]).is_err(), "{bad}");
         }
-        // A row-only op is still typed: its operands must be F64 newtypes.
-        assert!(lower(&[&crate::parse::pipe::parse_term("fsqrt($0)")], &[u64s()]).is_err());
-        assert!(lower(&[&crate::parse::pipe::parse_term("fpow($0, $0)")], &[u64s()]).is_err());
+        assert!(lower(&[&crate::parse::pipe::parse_term("fpowi($0, $0)")], &[f.clone()]).is_err());
     }
 
     /// Spot checks of the chosen semantics, independent of either backend.

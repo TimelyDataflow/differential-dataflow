@@ -1,7 +1,6 @@
 //! The corgi rendering substrate: corgi columns are the native representation on dataflow edges,
 //! arrangements are chains of sorted columnar chunks (`ChunkSpine<CorgiChunk>`, cursor-less), and
-//! scalar logic runs columnar via `eval_graph` (a term using an F64 function corgi has no kernel
-//! for runs a row at a time instead; see `logic::Kernel`). The row-wise `backend::vec` remains useful for
+//! scalar logic runs columnar via `eval_graph`. The row-wise `backend::vec` remains useful for
 //! comparison, but its representation choices do not define corgi's physical semantics.
 //!
 //! All `Backend` methods are corgi-native: `linear` folds a `LinearOp` chain over each container
@@ -31,8 +30,8 @@ use crate::corgi::exchange::CorgiPact;
 use crate::corgi::join::CorgiJoinBackend;
 use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
-use crate::corgi::logic::{compile_flatmap, compile_predicate, compile_projection, compile_scalar, shape_of_row, Kernel};
-use corgi::Shape;
+use crate::corgi::logic::{compile_flatmap, compile_predicate, compile_projection, compile_scalar, shape_of_row};
+use corgi::{Graph, NumOp, Shape};
 use crate::ir::{Diff, LinearOp, Projection, Reducer, Time, Value as DValue};
 use crate::scope_ir as st;
 
@@ -48,13 +47,13 @@ type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, D
 /// recompile.
 #[derive(Default)]
 pub struct Plan {
-    compiled: Option<(Shape, Shape, Kernel)>,
+    compiled: Option<(Shape, Shape, Graph<NumOp>)>,
 }
 
 impl Plan {
     /// The graph for a container of these shapes, compiling on first use. A type error is a
     /// panic with corgi's message: a program that typechecks never reaches it.
-    fn graph(&mut self, what: &str, kshape: Shape, vshape: Shape, compile: impl FnOnce(&Shape, &Shape) -> Result<Kernel, String>) -> &Kernel {
+    fn graph(&mut self, what: &str, kshape: Shape, vshape: Shape, compile: impl FnOnce(&Shape, &Shape) -> Result<Graph<NumOp>, String>) -> &Graph<NumOp> {
         if self.compiled.is_none() {
             let g = compile(&kshape, &vshape).unwrap_or_else(|e| panic!("{what}: type error at shapes ({kshape}, {vshape}): {e}"));
             self.compiled = Some((kshape.clone(), vshape.clone(), g));
@@ -67,9 +66,8 @@ impl Plan {
 
 /// Apply a `LinearOp` chain to one corgi container (the corgi-native compute per batch).
 /// Project = corgi `eval_graph`; Filter = corgi mask + `gather`; FlatMap = `eval_graph` to a list
-/// column + a structural explode; Negate = Rust. Every term is columnar except one that uses an
-/// F64 function corgi has no kernel for (`logic::row_only`), which `ir::eval` runs a row at a
-/// time; either way each op's kernel is compiled once (`plans`). An empty batch
+/// column + a structural explode; Negate = Rust. Every term is columnar — there is no row-wise
+/// path inside the dataflow — and each op's graph is compiled once (`plans`). An empty batch
 /// passes through untouched: it carries no shape to compile against and no rows to compute.
 /// The two data<->time ops are columnar and total: EnterAt reads its delay field as a column and
 /// joins it into `times` in place; LiftIter reads the iteration coordinate out of `times` and
@@ -89,14 +87,14 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
         c = match op {
             LinearOp::Project(p) => {
                 let g = plan.graph("map", kshape, vshape, |k, v| compile_projection(&p.key, &p.val, k, v));
-                let mut cols = g.eval(CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project").unwrap();
+                let mut cols = corgi::eval_graph(g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project").unwrap();
                 let vals = cols.pop().unwrap();
                 let keys = cols.pop().unwrap();
                 CorgiContainer { keys, vals, times: c.times, diffs: c.diffs }
             }
             LinearOp::Filter(cond) => {
                 let g = plan.graph("filter", kshape, vshape, |k, v| compile_predicate(cond, k, v));
-                let mask = g.eval(CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask").unwrap();
+                let mask = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask").unwrap();
                 let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
                 let keys = gather(&c.keys, &keep);
                 let vals = gather(&c.vals, &keep);
@@ -118,7 +116,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 // `level-1` and identity everywhere else (u64's minimum is 0), so the delta
                 // never has to be built. The epoch is lane 0, so PointStamp index `level-1` is
                 // lane `level`, and the join is one lane-wise max.
-                let raw = g.eval(CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
+                let raw = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
                     .into_u64("enter_at delay")
                     .unwrap();
                 let delays: Vec<u64> = raw.iter().map(|r| 256 * (64 - r.leading_zeros() as u64)).collect();
@@ -152,7 +150,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 // bounds gives both the within-row position (DDIR's `$1[0]`) and a repeat map
                 // carrying key/time/diff across. No per-row eval, no transcode.
                 let (bounds, elems) =
-                    g.eval(CValue::Prod(vec![c.keys.clone(), c.vals])).into_list("flatmap list").unwrap();
+                    corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals])).into_list("flatmap list").unwrap();
                 let ends: Vec<usize> = bounds.to_vec();
                 let total = ends.last().copied().unwrap_or(0);
                 let (mut reps, mut pos) = (Vec::with_capacity(total), Vec::with_capacity(total));
