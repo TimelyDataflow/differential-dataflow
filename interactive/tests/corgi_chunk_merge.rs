@@ -35,3 +35,17 @@ fn merge_keeps_time_order_when_an_equal_value_class_crosses_a_chunk_boundary() {
 fn merge_horizon_with_graded_input_chains() {
     check_horizon(CorgiChunk::<u64, i64>::TARGET);
 }
+
+#[test]
+fn uniform_time_consolidation_keeps_values_and_cancels_zero_classes() {
+    let c = CorgiChunk::from_columns(
+        Value::u64(vec![2, 1, 2, 1, 3, 3]),
+        Value::u64(vec![8, 9, 8, 9, 7, 7]),
+        [5u64; 6].into_iter().collect(),
+        vec![3i64, 1, -3, 2, -1, 4],
+    );
+    assert_eq!(c.keys().as_u64("test keys").unwrap(), &[1, 3]);
+    assert_eq!(c.vals().as_u64("test vals").unwrap(), &[9, 7]);
+    assert_eq!(c.times().to_vec(), vec![5, 5]);
+    assert_eq!(c.diffs(), &[3, 3]);
+}

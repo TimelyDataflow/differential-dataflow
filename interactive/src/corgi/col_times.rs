@@ -181,6 +181,11 @@ impl<T> ColTimes<T> {
         (0..self.len).map(|i| self.get(i)).collect()
     }
 
+    /// Whether all rows denote the same timestamp, including zero-width times.
+    pub fn is_uniform(&self) -> bool {
+        self.lanes.iter().all(|lane| lane.windows(2).all(|w| w[0] == w[1]))
+    }
+
     /// Order rows `i` and `j` within this column.
     #[inline]
     pub fn cmp(&self, i: usize, j: usize) -> Ordering {
@@ -342,6 +347,20 @@ mod tests {
 
     fn t(outer: u64, coords: &[u64]) -> T {
         Product::new(outer, PointStamp::new(coords.iter().copied().collect()))
+    }
+
+    #[test]
+    fn uniform_times_respect_all_coordinates() {
+        let empty = ColTimes::<T>::new();
+        assert!(empty.is_uniform());
+        let same: ColTimes<_> = [t(0, &[7]), t(0, &[7, 0])].into_iter().collect();
+        assert!(same.is_uniform());
+        let changed: ColTimes<_> = [t(0, &[7]), t(0, &[7, 1])].into_iter().collect();
+        assert!(!changed.is_uniform());
+        let zeros: ColTimes<_> = [t(0, &[]), t(0, &[0, 0])].into_iter().collect();
+        assert!(zeros.is_uniform());
+        let outer: ColTimes<_> = [t(0, &[]), t(1, &[])].into_iter().collect();
+        assert!(!outer.is_uniform());
     }
 
     #[test]

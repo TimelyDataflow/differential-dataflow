@@ -423,6 +423,30 @@ where
     let kv = CValue::Prod(vec![keys, vals]);
     // Order the payload; retain time/diff source coordinates until final consolidation.
     let (perm, labels) = sort_blocks(&[], &kv);
+
+    // All rows at one time: each equal-`(key,val)` run consolidates to a single update, in
+    // addition order, with no per-run time sort.
+    if times.is_uniform() {
+        let (mut time_rows, mut od) = (Vec::new(), Vec::new());
+        let mut i = 0;
+        while i < n {
+            let rep = perm[i];
+            let mut d = diffs[rep].clone();
+            let mut j = i + 1;
+            while j < n && labels[j] == labels[i] {
+                d.plus_equals(&diffs[perm[j]]);
+                j += 1;
+            }
+            if !d.is_zero() {
+                time_rows.push(rep);
+                od.push(d);
+            }
+            i = j;
+        }
+        let (keys, vals) = split_kv(gather(&kv, &time_rows));
+        return (keys, vals, times.gather(&time_rows), od);
+    }
+
     // Walk maximal equal-`(key,val)` runs; within each, order by time and consolidate equal times.
     let (mut time_rows, mut od) = (Vec::new(), Vec::new());
     let mut run = Vec::new();
