@@ -515,7 +515,7 @@ fn kernels() -> &'static std::sync::RwLock<std::collections::HashMap<String, std
 /// columns instead of `body` a row at a time. Its declared shapes must be the function's.
 pub fn register_kernel(name: &str, kernel: std::sync::Arc<dyn corgi::HostKernel>) {
     let f = lookup(name).unwrap_or_else(|| panic!("register_kernel: `{name}` is not a registered function"));
-    assert_eq!(kernel.input(), &corgi::Shape::Prod(f.args.clone()), "register_kernel: `{name}` input shape");
+    assert_eq!(kernel.input(), &call_input(&f.args), "register_kernel: `{name}` input shape");
     assert_eq!(kernel.output(), &f.result, "register_kernel: `{name}` output shape");
     kernels().write().unwrap().insert(name.to_string(), kernel);
 }
@@ -523,11 +523,17 @@ pub fn register_kernel(name: &str, kernel: std::sync::Arc<dyn corgi::HostKernel>
 /// The columnar body of `name`: its registered kernel, or its row body behind an adapter that
 /// converts only the call's arguments and result.
 pub fn kernel_of(name: &str) -> Option<std::sync::Arc<dyn corgi::HostKernel>> {
-    if let Some(k) = kernels().read().unwrap().get(name) { return Some(k.clone()) }
+    if let Some(k) = kernels().read().unwrap().get(name) { return Some(std::sync::Arc::clone(k)) }
     let f = lookup(name)?;
-    let k: std::sync::Arc<dyn corgi::HostKernel> = std::sync::Arc::new(RowKernel { input: corgi::Shape::Prod(f.args.clone()), f });
+    let k: std::sync::Arc<dyn corgi::HostKernel> = std::sync::Arc::new(RowKernel { input: call_input(&f.args), f });
     // Keep it, so every call site shares one kernel (and CSE can merge equal calls).
-    Some(kernels().write().unwrap().entry(name.to_string()).or_insert(k).clone())
+    Some(std::sync::Arc::clone(kernels().write().unwrap().entry(name.to_string()).or_insert(k)))
+}
+
+/// The column a call passes its kernel: the tuple of its arguments, or `Unit` for a call with none
+/// (an empty product carries no row count, and corgi rejects it as a kernel input).
+pub fn call_input(args: &[corgi::Shape]) -> corgi::Shape {
+    if args.is_empty() { corgi::Shape::Unit } else { corgi::Shape::Prod(args.to_vec()) }
 }
 
 /// A row-at-a-time function as a host kernel.

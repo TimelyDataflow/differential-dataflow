@@ -255,9 +255,14 @@ pub fn compile(
         Term::Call(name, args) => {
             // One host-kernel node over the tuple of its arguments; the kernel checks their shapes.
             let kernel = crate::ir::kernel_of(name).ok_or_else(|| format!("`{name}` is not a registered function"))?;
-            let fields = args.iter().map(|a| compile(a, b, env, env_shapes, anchor, None)).collect::<Res<Vec<_>>>()?;
-            let tuple = b.tuple(fields);
-            Ok(b.add(NumOp::Host(corgi::HostOp(kernel)), vec![tuple]))
+            // A call with no arguments passes a `Unit` over the anchor (`ir::call_input`).
+            let input = if args.is_empty() {
+                b.add(Op::Unit, vec![anchor])
+            } else {
+                let fields = args.iter().map(|a| compile(a, b, env, env_shapes, anchor, None)).collect::<Res<Vec<_>>>()?;
+                b.tuple(fields)
+            };
+            Ok(b.add(NumOp::Host(corgi::HostOp(kernel)), vec![input]))
         }
         Term::Var(i) => env.get(*i).copied().ok_or_else(|| format!("`${i}` is not in scope here")),
         Term::Bound(k) => {
@@ -322,8 +327,8 @@ pub fn compile(
                 }
                 BinOp::Append => { let p = pair(b, lid, rid); b.add(Op::Append, vec![p]) }
                 BinOp::F64Add | BinOp::F64Sub | BinOp::F64Mul | BinOp::F64Div => {
-                    let expected = Shape::Sum(vec![Shape::Prim(64)]);
-                    if shape_of_term(l, env_shapes, None)? != expected || shape_of_term(r, env_shapes, None)? != expected {
+                    let f64_shape = Shape::Sum(vec![Shape::Prim(64)]);
+                    if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != f64_shape {
                         return Err("floating arithmetic expects two F64 newtypes; use float(int)".into());
                     }
                     let l = b.add(Op::Unwrap, vec![lid]);
@@ -337,8 +342,8 @@ pub fn compile(
                     b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
                 }
                 BinOp::F64Min | BinOp::F64Max | BinOp::F64Eq | BinOp::F64Ne | BinOp::F64Lt | BinOp::F64Le | BinOp::F64Gt | BinOp::F64Ge => {
-                    let expected = Shape::Sum(vec![Shape::Prim(64)]);
-                    if shape_of_term(l, env_shapes, None)? != expected || shape_of_term(r, env_shapes, None)? != expected {
+                    let f64_shape = Shape::Sum(vec![Shape::Prim(64)]);
+                    if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != f64_shape {
                         return Err(format!("{op:?} expects two F64 newtypes; use float(int)"));
                     }
                     let (x, y) = (float_leaf(b, lid), float_leaf(b, rid));
@@ -353,8 +358,8 @@ pub fn compile(
                             let choices = b.tuple(vec![y_nan, x, total]);
                             let unless_y = b.add(Op::Select, vec![choices]);
                             let x_nan = is_nan(b, x);
-                            let choices = b.tuple(vec![x_nan, y, unless_y]);
-                            let f = b.add(Op::Select, vec![choices]);
+                            let choices_x = b.tuple(vec![x_nan, y, unless_y]);
+                            let f = b.add(Op::Select, vec![choices_x]);
                             let payload = b.add(ArithOp::ToSigned, vec![f]);
                             b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
                         }
@@ -371,16 +376,16 @@ pub fn compile(
                             };
                             let rel = b.add(CmpOp::Rel(pred), vec![p]);
                             let (x_nan, y_nan) = (is_nan(b, x), is_nan(b, y));
-                            let p = pair(b, x_nan, y_nan);
-                            let any_nan = b.add(CmpOp::Max, vec![p]);
+                            let nans = pair(b, x_nan, y_nan);
+                            let any_nan = b.add(CmpOp::Max, vec![nans]);
                             let zero = b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]);
-                            let p = pair(b, any_nan, zero);
-                            let ordered = b.add(CmpOp::Rel(Pred::Eq), vec![p]);
-                            let p = pair(b, rel, ordered);
-                            let holds = b.add(CmpOp::Min, vec![p]);
+                            let no_nan = pair(b, any_nan, zero);
+                            let ordered = b.add(CmpOp::Rel(Pred::Eq), vec![no_nan]);
+                            let both = pair(b, rel, ordered);
+                            let holds = b.add(CmpOp::Min, vec![both]);
                             if matches!(op, BinOp::F64Ne) {
-                                let p = pair(b, holds, zero);
-                                b.add(CmpOp::Rel(Pred::Eq), vec![p])
+                                let negate = pair(b, holds, zero);
+                                b.add(CmpOp::Rel(Pred::Eq), vec![negate])
                             } else {
                                 holds
                             }
@@ -723,10 +728,10 @@ fn is_nan(b: &mut Builder<NumOp>, x: usize) -> usize {
 /// Replace `-0.0` by `0.0` in a float leaf. Their keys are adjacent, so this adds the mask.
 fn fold_negative_zero(b: &mut Builder<NumOp>, x: usize, anchor: usize) -> usize {
     let negative_zero = b.add(Op::Lit(CValue::u64(vec![float_key(-0.0)])), vec![anchor]);
-    let p = b.tuple(vec![x, negative_zero]);
-    let is_negative_zero = b.add(CmpOp::Rel(Pred::Eq), vec![p]);
-    let p = b.tuple(vec![x, is_negative_zero]);
-    b.add(ArithOp::Bin(CBinOp::Add, Kind::U, 64), vec![p])
+    let probe = b.tuple(vec![x, negative_zero]);
+    let is_negative_zero = b.add(CmpOp::Rel(Pred::Eq), vec![probe]);
+    let sum = b.tuple(vec![x, is_negative_zero]);
+    b.add(ArithOp::Bin(CBinOp::Add, Kind::U, 64), vec![sum])
 }
 
 /// Compile a `Fold` step into a closed corgi sub-graph. Without capture the body's input is
@@ -815,7 +820,7 @@ pub fn row_only(t: &Term) -> bool {
 /// yields the same result shape: F64 -> F64 by `fneg`, `fint` by a compare of two `fneg`s,
 /// `fpow` by `fadd`, and `fpowi(x, n)` by `fadd(x, float(n))`. Only its typing is used.
 fn columnar_stand_in(t: &Term) -> Term {
-    let bx = |t: &Term| Box::new(columnar_stand_in(t));
+    let bx = |term: &Term| Box::new(columnar_stand_in(term));
     match t {
         Term::Var(_) | Term::Bound(_) | Term::Int(_) => t.clone(),
         Term::Unary(UnOp::F64Fn(f), x) if *f != F64Fn::Abs => Term::Unary(UnOp::F64Neg, bx(x)),

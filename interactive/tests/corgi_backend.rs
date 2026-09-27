@@ -200,6 +200,33 @@ fn register_test_functions() {
             Value::Tuple(vec![Value::Tuple(vec![Value::Int(3 * n)]), Value::List(divisors)])
         }),
     });
+    // No arguments: the call passes a `Unit` column, so it still runs once per row.
+    register(Function {
+        name: "seven".into(),
+        args: vec![],
+        result: int(),
+        body: Box::new(|_| Value::Int(7)),
+    });
+    // A columnar body: the corgi backend runs `Double` on whole columns, the vec backend the row
+    // body; the gate checks they agree.
+    register(Function {
+        name: "double".into(),
+        args: vec![int()],
+        result: int(),
+        body: Box::new(|a| Value::Int(2 * a[0].as_int())),
+    });
+    struct Double(Shape, Shape);
+    impl corgi::HostKernel for Double {
+        fn name(&self) -> &str { "double" }
+        fn input(&self) -> &Shape { &self.0 }
+        fn output(&self) -> &Shape { &self.1 }
+        fn eval(&self, input: corgi::Value) -> Result<corgi::Value, String> {
+            let args = input.into_prod("double")?;
+            let xs = args[0].as_u64("double")?;
+            Ok(corgi::Value::u64(xs.iter().map(|&x| (2 * x as i64) as u64).collect()))
+        }
+    }
+    interactive::ir::register_kernel("double", std::sync::Arc::new(Double(Shape::Prod(vec![int()]), int())));
 }
 
 /// A filter predicate must be an `Int`: both backends reject a tuple rather than one of them
