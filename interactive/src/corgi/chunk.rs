@@ -641,9 +641,16 @@ where
         }
         self.k_blocks.push(std::mem::replace(&mut c.keys, CValue::Unit(0)));
         self.v_blocks.push(std::mem::replace(&mut c.vals, CValue::Unit(0)));
-        self.times.push_range(&c.times, 0, c.times.len());
-        c.times.clear();
-        self.diffs.append(&mut c.diffs);
+        if self.times.is_empty() {
+            // The first block can donate its owned lanes. Return our empty
+            // buffers to the sender; later blocks append to the donated ones.
+            std::mem::swap(&mut self.times, &mut c.times);
+            std::mem::swap(&mut self.diffs, &mut c.diffs);
+        } else {
+            self.times.push_range(&c.times, 0, c.times.len());
+            c.times.clear();
+            self.diffs.append(&mut c.diffs);
+        }
         if self.times.len() >= INGEST {
             self.flush();
         }
@@ -729,6 +736,48 @@ mod test {
                     assert_eq!(result.diffs()[i], diff);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn chunker_owned_lanes_match_scalar_across_flushes() {
+        use differential_dataflow::dynamic::pointstamp::PointStamp;
+        use timely::container::{ContainerBuilder, PushInto};
+        use crate::corgi::container::CorgiContainer;
+        let mut builder = CorgiChunker::<PointStamp<u64>, i64>::default();
+        let mut source = CorgiContainer::default();
+        let mut seed = 731;
+        for blocks in [1, 3, 1, 5] {
+            let mut expected = BTreeMap::new();
+            // Empty containers do not consume the first-block opportunity.
+            builder.push_into(&mut source);
+            for block in 0..blocks {
+                let mut keys = Vec::new();
+                for row in 0..64 {
+                    let key = xorshift(&mut seed) % 8;
+                    let time = PointStamp::new((0..(block + row) % 4)
+                        .map(|_| xorshift(&mut seed) % 3).collect());
+                    let diff = (xorshift(&mut seed) % 5) as i64 - 2;
+                    keys.push(key);
+                    source.times.push(&time);
+                    source.diffs.push(diff);
+                    *expected.entry((key, time)).or_insert(0i64) += diff;
+                }
+                source.keys = CValue::u64(keys);
+                source.vals = CValue::Unit(64);
+                let donated = source.diffs.as_ptr();
+                builder.push_into(&mut source);
+                if block == 0 { assert_eq!(builder.diffs.as_ptr(), donated); }
+                assert!(source.times.is_empty() && source.diffs.is_empty());
+            }
+            expected.retain(|_, diff| *diff != 0);
+            let result = builder.finish().unwrap();
+            let keys = corgi::arrange::leaf_slice(result.keys()).unwrap();
+            let actual: BTreeMap<_, _> = (0..result.len_()).map(|i|
+                ((keys[i], result.times().get(i)), result.diffs()[i])).collect();
+            assert_eq!(actual.len(), result.len_(), "duplicate output triples");
+            assert_eq!(actual, expected);
+            assert!(builder.finish().is_none());
         }
     }
 
