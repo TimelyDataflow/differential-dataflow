@@ -237,9 +237,14 @@ where
             }
         }
 
+        // The survey can be large. Its last use precedes materializing the
+        // output columns, so do not retain it across that allocation peak.
+        drop(runs);
         if times.len() * 2 < n1 + n2 { times.shrink_to_fit(); }
         let srcs = [Some(&kv1), Some(&kv2)];
         Self::emit(&srcs, &tags, &offs, times, diffs, out);
+        drop(tags);
+        drop(offs);
 
         // Push back the survivor's unconsumed suffix (all `>` the horizon), ahead of its deque.
         if p1 < n1 {
