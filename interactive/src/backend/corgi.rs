@@ -265,13 +265,19 @@ impl Backend for CorgiBackend {
     }
 
     fn inspect<'s>(c: Collection<'s, Time, CC>, label: String) -> Collection<'s, Time, CC> {
+        use std::fmt::Write;
         c.inner
             .unary(Pipeline, "CorgiInspect", move |_, _| {
+                let mut line = String::new();
                 move |input, output| {
                     input.for_each(|cap, data| {
                         let mut cont = std::mem::take(data);
                         for ((k, v), t, d) in cont.clone().into_updates() {
-                            eprintln!("  [{label}] (({k:?}, {v:?}), {t:?}, {d})");
+                            // Format before taking stderr's lock: nested Debug output
+                            // otherwise writes many small fragments while holding it.
+                            line.clear();
+                            writeln!(&mut line, "  [{label}] (({k:?}, {v:?}), {t:?}, {d})").unwrap();
+                            eprint!("{line}");
                         }
                         output.session(&cap).give_container(&mut cont);
                     });
