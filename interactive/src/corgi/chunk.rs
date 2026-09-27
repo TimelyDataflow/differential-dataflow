@@ -28,7 +28,7 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_adjacent, gather, gather_lanes, group_bounds, sort_perm, survey_groups, GroupRun};
+use corgi::arrange::{compare_adjacent, compare_at, gather, gather_lanes, group_bounds, sort_perm, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
 use crate::corgi::col_times::{ColTime, ColTimes};
@@ -153,6 +153,60 @@ where
     }
 
     fn len_(&self) -> usize { self.0.times.len() }
+
+    /// Whether `next` starts with the `(key, val)` group `prev` ends with.
+    fn continues(prev: &Self, next: &Self) -> bool {
+        compare_at(&prev.kv(), prev.len_() - 1, &next.kv(), 0) == Ordering::Equal
+    }
+
+    /// Advance a sorted, consolidated run whose groups are all complete, and emit it consolidated.
+    ///
+    /// Times advance in one lane-wise pass. A group whose advanced times still ascend is sorted and
+    /// consolidated as it stands; any other group has its rows re-sorted by time and equal times
+    /// summed. If no group needed that, the run keeps its `(key, val)` columns; otherwise the
+    /// surviving rows are gathered.
+    fn advance_run(kv: CValue, mut times: ColTimes<T>, diffs: Vec<R>, frontier: AntichainRef<T>, out: &mut VecDeque<Self>) {
+        let n = times.len();
+        if n == 0 { return; }
+        times.advance_by(frontier, n);
+        let bounds = group_bounds(&kv); // exclusive group ends, ascending, `bounds.last() == n`
+        let mut unsorted = Vec::new(); // the groups that need re-sorting, as `(start, end)`
+        let mut start = 0;
+        for &end in &bounds {
+            if (start + 1..end).any(|q| times.cmp(q - 1, q) != Ordering::Less) { unsorted.push((start, end)); }
+            start = end;
+        }
+        if unsorted.is_empty() && n <= TARGET {
+            out.push_back(Self::from_kv(kv, times, diffs));
+            return;
+        }
+        let (mut rows, mut odiffs) = (Vec::with_capacity(n), Vec::with_capacity(n));
+        let mut order: Vec<usize> = Vec::new();
+        let mut next = 0; // the next row not yet taken
+        for (start, end) in unsorted {
+            rows.extend(next..start);
+            odiffs.extend_from_slice(&diffs[next..start]);
+            order.clear();
+            order.extend(start..end);
+            order.sort_by(|&a, &b| times.cmp(a, b));
+            let mut k = 0;
+            while k < order.len() {
+                let rep = order[k];
+                let mut d = diffs[rep].clone();
+                k += 1;
+                while k < order.len() && times.cmp(order[k], rep) == Ordering::Equal {
+                    d.plus_equals(&diffs[order[k]]);
+                    k += 1;
+                }
+                if !d.is_zero() { rows.push(rep); odiffs.push(d); }
+            }
+            next = end;
+        }
+        rows.extend(next..n);
+        odiffs.extend_from_slice(&diffs[next..n]);
+        let tags = vec![0; rows.len()];
+        Self::emit(&[Some(&kv)], &tags, &rows, times.gather(&rows), odiffs, out);
+    }
 }
 
 impl<T, R> Chunk for CorgiChunk<T, R>
@@ -292,76 +346,25 @@ where
         done: bool,
         out: &mut VecDeque<Self>,
     ) {
-        // Concatenate the pushed-back carry with the newly-arrived chunks, then advance/consolidate
-        // each *complete* `(key, val)` group; withhold the last group as the carry unless `done`.
-        if input.is_empty() { return; }
-        let (ckv, mut ctimes, cdiffs) = if input.len() == 1 {
-            // Merge output normally arrives uniquely owned. Move its columns
-            // into advancement instead of copying the whole chunk first.
-            let chunk = input.pop_front().unwrap();
-            match Rc::try_unwrap(chunk.0) {
-                Ok(inner) => (CValue::Prod(vec![inner.keys, inner.vals]), inner.times, inner.diffs),
-                Err(inner) => Self::concat(&[Self(inner)]),
-            }
-        } else {
-            Self::concat(&input.drain(..).collect::<Vec<_>>())
-        };
-        let n = ctimes.len();
-        if n == 0 { return; }
-
-        // Group boundaries in ONE pass (corgi `group_bounds`) instead of a per-row `compare_at` scan.
-        let bounds = group_bounds(&ckv); // exclusive group ends, ascending, `bounds.last() == n`
-
-        // Giant-key case: a single group spanning the whole buffer → no group provably complete.
-        if !done && bounds.len() == 1 {
-            input.push_front(Self::from_kv(ckv, ctimes, cdiffs));
-            return;
-        }
-
-        // Withhold the trailing group as the carry unless `done` (its start = the 2nd-to-last end).
-        let end = if done { n } else { bounds[bounds.len() - 2] };
-        if end < n {
-            let idx: Vec<usize> = (end..n).collect();
-            let mut ct = ColTimes::new();
-            ct.push_range(&ctimes, end, n);
-            input.push_front(Self::from_kv(gather(&ckv, &idx), ct, cdiffs[end..].to_vec()));
-        }
-
-        // Advance + consolidate each complete group; emit `TARGET`-sized chunks. All rows of a group
-        // share `(key, val)`, so one representative offset materializes each output row's kv. Times
-        // advance in one lane-wise pass over the complete rows; advancing can reorder a group's times,
-        // so each group's row indices are re-sorted by time and equal times sum. Surviving rows are gathered.
-        ctimes.advance_by(frontier, end);
-        let srcs = [Some(&ckv)];
-        let (mut tags, mut offs, mut rows) = (Vec::new(), Vec::new(), Vec::new());
-        let mut odiffs: Vec<R> = Vec::new();
-        let mut order: Vec<usize> = Vec::new();
-        let mut i = 0;
-        for &g_end in &bounds {
-            if g_end > end { break; }
-            order.clear();
-            order.extend(i..g_end);
-            order.sort_by(|&a, &b| ctimes.cmp(a, b));
-            let mut k = 0;
-            while k < order.len() {
-                let rep = order[k];
-                let mut d = cdiffs[rep].clone();
-                k += 1;
-                while k < order.len() && ctimes.cmp(order[k], rep) == Ordering::Equal {
-                    d.plus_equals(&cdiffs[order[k]]);
-                    k += 1;
+        // Advance whole chunks. A chunk is complete once the next chunk starts a new `(key, val)`
+        // group, or on `done`; otherwise the last chunk waits, as its last group may continue.
+        // Chunks a group spans are advanced together, as one run.
+        while !input.is_empty() {
+            let mut len = 1;
+            while len < input.len() && Self::continues(&input[len - 1], &input[len]) { len += 1; }
+            if len == input.len() && !done { return; }
+            let (kv, times, diffs) = if len == 1 {
+                // Merge output normally arrives uniquely owned. Move its columns
+                // into advancement instead of copying the whole chunk first.
+                match Rc::try_unwrap(input.pop_front().unwrap().0) {
+                    Ok(inner) => (CValue::Prod(vec![inner.keys, inner.vals]), inner.times, inner.diffs),
+                    Err(inner) => Self::concat(&[Self(inner)]),
                 }
-                if !d.is_zero() {
-                    tags.push(0); offs.push(i); rows.push(rep); odiffs.push(d);
-                    if rows.len() >= TARGET {
-                        Self::emit(&srcs, &tags, &offs, ctimes.gather(&rows), std::mem::take(&mut odiffs), out);
-                        tags.clear(); offs.clear(); rows.clear();
-                    }
-                }
-            }
-            i = g_end;
+            } else {
+                Self::concat(&input.drain(..len).collect::<Vec<_>>())
+            };
+            Self::advance_run(kv, times, diffs, frontier, out);
         }
-        if !rows.is_empty() { Self::emit(&srcs, &tags, &offs, ctimes.gather(&rows), odiffs, out); }
     }
 
     /// Maximal packing via the harness [`pack`]: coalesce by concatenating columns (`gather_lanes`),
