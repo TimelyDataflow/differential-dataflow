@@ -21,6 +21,11 @@ use super::history::IdHistory;
 /// The harness repeatedly invokes [`advance`](Self::advance) to draw a block of the proxy collection,
 /// then [`cross`](Self::cross) to turn that block's matches into output containers, until `advance` reports the key space exhausted.
 pub trait ProxyJoinBackend<T, B0, B1> {
+    /// The time the harness reasons in, and in which bridges and matches are presented.
+    ///
+    /// Either `T` itself, or a representation of it: the conversion must preserve the partial
+    /// order and the lattice operations, and the representation's `Ord` must extend its partial order.
+    type Time: Timestamp + Lattice + From<T>;
     /// Independent groups, common to both inputs.
     type Key: Copy + Ord;
     /// First input value proxies, valid throughout a block.
@@ -45,10 +50,10 @@ pub trait ProxyJoinBackend<T, B0, B1> {
     /// which are greater or equal to the initial `from`, and not greater or equal to its value when returned.
     fn advance(
         &mut self,
-        instance: &JoinInstance<T, B0, B1>,
+        instance: &JoinInstance<Self::Time, B0, B1>,
         from: &mut KeyPosition<Self::Key>,
-        bridge0: &mut ProxyBridge<T, Self::R0, Self::Key, Self::V0>,
-        bridge1: &mut ProxyBridge<T, Self::R1, Self::Key, Self::V1>,
+        bridge0: &mut ProxyBridge<Self::Time, Self::R0, Self::Key, Self::V0>,
+        bridge1: &mut ProxyBridge<Self::Time, Self::R1, Self::Key, Self::V1>,
     );
 
     /// Interpret matches derived from the immediately preceding [`Self::advance`] call and place
@@ -57,8 +62,8 @@ pub trait ProxyJoinBackend<T, B0, B1> {
     /// block produced no matches, in which case the next `advance` may overwrite that state.
     fn cross(
         &mut self,
-        instance: &JoinInstance<T, B0, B1>,
-        matches: &mut JoinMatches<T, Self::ROut, Self::Key, Self::V0, Self::V1>,
+        instance: &JoinInstance<Self::Time, B0, B1>,
+        matches: &mut JoinMatches<Self::Time, Self::ROut, Self::Key, Self::V0, Self::V1>,
         output: &mut Vec<Self::Output>,
     );
 }
@@ -120,7 +125,7 @@ where
     fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, _fresh: Fresh, meet: T) -> Box<dyn Iterator<Item = Bk::Output>> {
         Box::new(ProxyJoinIter {
             backend: Rc::clone(&self.backend),
-            instance: JoinInstance { batches0: input0, batches1: input1, lower: meet },
+            instance: JoinInstance { batches0: input0, batches1: input1, lower: Bk::Time::from(meet) },
             from: KeyPosition::Start,
             p0: Vec::new(),
             p1: Vec::new(),
@@ -144,17 +149,17 @@ where
     /// The backend, shared across all outstanding iterators.
     backend: Rc<RefCell<Bk>>,
     /// The iterator's inputs, and the time at which they can consolidate as they load.
-    instance: JoinInstance<T, B0, B1>,
+    instance: JoinInstance<Bk::Time, B0, B1>,
     /// Progress through the key space, from `Start` through inclusive key bounds to `End`.
     from: KeyPosition<Bk::Key>,
     /// The current block: the two runs `advance` last drew, which one `next` consumes entirely.
-    p0: ProxyBridge<T, Bk::R0, Bk::Key, Bk::V0>,
-    p1: ProxyBridge<T, Bk::R1, Bk::Key, Bk::V1>,
+    p0: ProxyBridge<Bk::Time, Bk::R0, Bk::Key, Bk::V0>,
+    p1: ProxyBridge<Bk::Time, Bk::R1, Bk::Key, Bk::V1>,
     /// Per-key replay histories, held across the iterator and reloaded per key when needed.
-    h0: IdHistory<T, Bk::R0, Bk::V0>,
-    h1: IdHistory<T, Bk::R1, Bk::V1>,
+    h0: IdHistory<Bk::Time, Bk::R0, Bk::V0>,
+    h1: IdHistory<Bk::Time, Bk::R1, Bk::V1>,
     /// The block's matched records, held across blocks to keep their allocations.
-    matches: JoinMatches<T, Bk::ROut, Bk::Key, Bk::V0, Bk::V1>,
+    matches: JoinMatches<Bk::Time, Bk::ROut, Bk::Key, Bk::V0, Bk::V1>,
     /// The last block's containers, in reverse, served from the back one `next` at a time.
     ready: Vec<Bk::Output>,
 }

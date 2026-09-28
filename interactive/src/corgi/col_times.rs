@@ -19,6 +19,8 @@ use timely::order::Product;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Timestamp;
 
+use crate::corgi::flat::Flat;
+
 /// A timestamp that is a sequence of integer coordinates, each with minimum zero.
 /// Absent trailing coordinates are zero.
 pub trait Lanes: Sized {
@@ -76,6 +78,36 @@ impl<B: LaneSummary> LaneSummary for Product<u64, B> {
     }
 }
 
+/// A time the proxy tactics reason in, read from and written to a lane column directly.
+///
+/// Either the column's own timestamp, or a fixed-width [`Flat`] representation of it.
+pub trait RowTime<T>: Timestamp + Lattice + From<T> {
+    /// The time at row `i`.
+    fn read(col: &ColTimes<T>, i: usize) -> Self;
+    /// Append this time as a row.
+    fn write(&self, col: &mut ColTimes<T>);
+}
+
+impl<T: ColTime> RowTime<T> for T {
+    #[inline] fn read(col: &ColTimes<T>, i: usize) -> Self { col.get(i) }
+    #[inline] fn write(&self, col: &mut ColTimes<T>) { col.push(self) }
+}
+
+/// Lane `j` is coordinate `j`: the epoch, then the scope coordinates.
+impl<const K: usize> RowTime<crate::ir::Time> for Flat<K> {
+    #[inline]
+    fn read(col: &ColTimes<crate::ir::Time>, i: usize) -> Self {
+        debug_assert!(col.lanes.len() <= K, "a column of width {} exceeds Flat<{K}>", col.lanes.len());
+        let mut out = [0; K];
+        for (x, lane) in out.iter_mut().zip(&col.lanes) { *x = lane[i]; }
+        Flat(out)
+    }
+    #[inline]
+    fn write(&self, col: &mut ColTimes<crate::ir::Time>) {
+        col.push_coords(&self.0);
+    }
+}
+
 /// A column of times as lanes: `lanes[j][i]` is coordinate `j` of row `i`.
 pub struct ColTimes<T> {
     lanes: Vec<Vec<u64>>,
@@ -129,6 +161,17 @@ impl<T> ColTimes<T> {
             width = j + 1;
         }
         for lane in &mut self.lanes[width..] { lane.push(0); }
+        self.len += 1;
+    }
+
+    /// Append a row of coordinates, widening only for nonzero coordinates beyond the current width.
+    #[inline]
+    pub fn push_coords(&mut self, coords: &[u64]) {
+        let width = coords.iter().rposition(|&x| x != 0).map_or(0, |j| j + 1);
+        self.widen(width);
+        for (j, lane) in self.lanes.iter_mut().enumerate() {
+            lane.push(coords.get(j).copied().unwrap_or(0));
+        }
         self.len += 1;
     }
 

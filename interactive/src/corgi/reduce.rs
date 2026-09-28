@@ -34,6 +34,7 @@ use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, Re
 use corgi::arrange::{compare_at, gather_lanes, sort_blocks};
 use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
+use crate::corgi::col_times::RowTime;
 use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::matching_ranges;
 use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
@@ -139,7 +140,9 @@ type Matches = Vec<Vec<(usize, Range<usize>)>>;
 /// Each retire goes: `begin`; then per window, `next_window` presents a run of keys' input and
 /// output as integer records, `reduce_corrections` computes the output each key wants and how it
 /// differs from what it has, and `emit` records the difference; finally `finish` builds the batch.
-pub struct CorgiReduceBackend<T> {
+///
+/// The tactic reasons in `I`: the column's own time `T`, or a fixed-width representation of it.
+pub struct CorgiReduceBackend<T, I = T> {
     reducer: Reducer,
     /// The current window's input values: its chunks' value columns.
     input: Pool,
@@ -153,6 +156,7 @@ pub struct CorgiReduceBackend<T> {
     window_size: usize,
     /// The retire in progress.
     retire: Retire,
+    _time: std::marker::PhantomData<I>,
 }
 
 /// A retire's keys and where its input chunks hold them, found once by its first window.
@@ -198,7 +202,7 @@ impl Retire {
     }
 }
 
-impl<T> CorgiReduceBackend<T> {
+impl<T, I> CorgiReduceBackend<T, I> {
     /// A backend covering the key space in windows of `1 << 12` input records.
     pub fn new(reducer: Reducer) -> Self { Self::with_window(reducer, 1 << 12) }
 
@@ -212,6 +216,7 @@ impl<T> CorgiReduceBackend<T> {
             rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
             window_size: window_size.max(1),
             retire: Retire::default(),
+            _time: std::marker::PhantomData,
         }
     }
 }
@@ -236,12 +241,12 @@ fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[u64]) -> Matches 
 ///
 /// Each key's rows are sorted by value, and each run of equal values gets one id: the next index
 /// of `refs`, where it is recorded as the `(chunk, row)` of one of its rows.
-fn present<T: ColTime + Ord>(
+fn present<T: ColTime + Ord, I: RowTime<T>>(
     chunks: &[&CorgiChunk<T, Diff>],
     keys: &[u64],
     matches: &Matches,
     refs: &mut Vec<(usize, usize)>,
-    bridge: &mut ProxyBridge<T, Diff>,
+    bridge: &mut ProxyBridge<I, Diff>,
 ) {
     // The matched `(chunk, row)`s, key by key, and each one's key index.
     let mut runs: Vec<_> = matches.iter().enumerate()
@@ -258,7 +263,7 @@ fn present<T: ColTime + Ord>(
     }
     let vals: Vec<CValue> = chunks.iter().map(|chunk| chunk.vals().clone()).collect();
     let (sorted, groups) = sort_blocks(&labels, &gather_refs(&vals, rows.iter().copied()));
-    let update = |(chunk, row): (usize, usize)| (chunks[chunk].times().get(row), chunks[chunk].diffs()[row]);
+    let update = |(chunk, row): (usize, usize)| (I::read(chunks[chunk].times(), row), chunks[chunk].diffs()[row]);
     let (mut start, mut updates) = (0, Vec::new());
     for group in groups.chunk_by(|a, b| a == b) {
         let members = &sorted[start..start + group.len()];
@@ -289,7 +294,7 @@ fn retire_keys<T: ColTime>(novel_chunks: &[&CorgiChunk<T, Diff>], changed: &[u64
     keys
 }
 
-impl<T> CorgiReduceBackend<T>
+impl<T, I> CorgiReduceBackend<T, I>
 where
     T: ColTime + Ord,
 {
@@ -424,10 +429,12 @@ where
     }
 }
 
-impl<T> ProxyReduceBackend<T, CBatch<T>, CBatch<T>> for CorgiReduceBackend<T>
+impl<T, I> ProxyReduceBackend<T, CBatch<T>, CBatch<T>> for CorgiReduceBackend<T, I>
 where
     T: ColTime + Ord,
+    I: RowTime<T>,
 {
+    type Time = I;
     type Key = u64;
     type VIn = u64;
     type VOut = u64;
@@ -438,7 +445,7 @@ where
         self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
-    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut KeyPosition<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
+    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut KeyPosition<u64>, window: &mut ReduceWindow<I, Diff, Diff>) {
         if *from == KeyPosition::End {
             return;
         }
@@ -483,7 +490,7 @@ where
         window.seeds.reserve(matches[prior..].iter().flatten().map(|(_, rows)| rows.len()).sum());
         for (chunk, found) in in_chunks[prior..].iter().zip(&matches[prior..]) {
             for (index, rows) in found {
-                window.seeds.extend(rows.clone().map(|row| (keys[*index], chunk.times().get(row))));
+                window.seeds.extend(rows.clone().map(|row| (keys[*index], I::read(chunk.times(), row))));
             }
         }
         window.seeds.sort_unstable();
@@ -529,7 +536,7 @@ where
         (corr, corr_ends)
     }
 
-    fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
+    fn emit(&mut self, records: &[((u64, u64), I, Diff)]) {
         // Every emitted key is in the current window, and was presented there.
         let keys = &self.retire.keys[self.retire.window.clone()];
         let (key_rows, ids, times, diffs) = &mut self.rows;
@@ -537,7 +544,7 @@ where
             let index = keys.binary_search(key).expect("emitted keys are in the window");
             key_rows.push(self.retire.key_rows[index].expect("emitted keys were presented"));
             ids.push(*id);
-            times.push(time);
+            time.write(times);
             diffs.push(*diff);
         }
     }
@@ -625,9 +632,13 @@ mod tests {
             for size in [1, 7, rows.len()] {
                 let owned = chunks(&rows, size, key_shape, val_shape);
                 let chunks: Vec<_> = owned.iter().collect();
-                let (mut refs, mut bridge) = (Vec::new(), Vec::new());
+                let (mut refs, mut bridge) = (Vec::new(), ProxyBridge::<Time, Diff>::new());
                 present(&chunks, &keys, &search(&chunks, &keys), &mut refs, &mut bridge);
                 assert!(bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)));
+                // The same presentation in a fixed-width representation.
+                let mut flat = ProxyBridge::<crate::corgi::flat::Flat<3>, Diff>::new();
+                present(&chunks, &keys, &search(&chunks, &keys), &mut Vec::new(), &mut flat);
+                assert_eq!(flat.into_iter().map(|(ids, time, diff)| (ids, Time::from(time), diff)).collect::<Vec<_>>(), bridge);
                 let pool = Pool { columns: chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs };
                 let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));
                 let (mut actual, mut named) = (BTreeMap::new(), BTreeMap::new());

@@ -140,7 +140,7 @@ impl Backend for VecBackend {
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container> {
         a.as_collection(|k, v| (k.clone(), v.clone()))
     }
-    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, Self::Container> {
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, _depth: usize) -> Collection<'s, Time, Self::Container> {
         let proj = projection.clone();
         let f: Arc<dyn Fn(&Row, &Row, &Row) -> SmallVec<[(Row, Row); 2]> + Send + Sync> =
             Arc::new(move |key, left, right| {
@@ -151,7 +151,7 @@ impl Backend for VecBackend {
             });
         l.join_core(r, move |k, v1, v2| f(k, v1, v2))
     }
-    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
+    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, _depth: usize) -> Self::Arr<'s> {
         let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
             Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| (*v).clone()).min() { output.push((min, 1)); } }),
             Reducer::Distinct => Arc::new(|_key, _vals, output| { output.push((Value::unit(), 1)); }),
