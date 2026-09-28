@@ -994,7 +994,8 @@ impl Server {
                 .probe_with(&mut probe);
         });
         while probe.less_than(&epoch) {
-            worker.step();
+            // Remote data or progress wakes idle workers; do not busy-poll.
+            worker.step_or_park(None);
         }
         worker.drop_dataflow(id);
         let mut rows: Vec<_> = acc
@@ -1118,7 +1119,8 @@ impl Server {
         while self.programs.values().any(|p| p.probe.less_than(&epoch))
             || self.bindings.iter().any(|b| b.probe.less_than(&epoch))
         {
-            worker.step();
+            // Remote data or progress wakes idle workers; do not busy-poll.
+            worker.step_or_park(None);
         }
 
         // Feedback: deliver each binding's buffered source changes into its
