@@ -16,7 +16,7 @@ use differential_dataflow::collection::containers::{Enter, Leave, Negate, Result
 use differential_dataflow::difference::Abelian;
 
 use crate::corgi::col_times::{ColTimes, LaneSummary, Lanes};
-use crate::corgi::logic::{transcode, untranscode};
+use crate::corgi::logic::{transcode_owned, untranscode};
 use crate::ir::Value as DValue;
 
 type Row = DValue;
@@ -72,7 +72,7 @@ impl<T: Lanes + 'static, R: Clone + 'static> CorgiContainer<T, R> {
             times.push(&time);
             diffs.push(diff);
         }
-        CorgiContainer { keys: transcode(&keys_rows, kshape), vals: transcode(&vals_rows, vshape), times, diffs }
+        CorgiContainer { keys: transcode_owned(keys_rows, kshape), vals: transcode_owned(vals_rows, vshape), times, diffs }
     }
 
     /// Test convenience: build a container from row updates, pinning the shapes from the first

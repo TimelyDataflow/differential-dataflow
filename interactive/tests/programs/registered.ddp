@@ -1,0 +1,37 @@
+-- Registered functions: an embedding program supplies Rust functions by name
+-- (`ir::register`), and a program calls them like builtins. The test harness
+-- registers `grow`, `blend`, `describe`, `seven` (no arguments) and `double`
+-- (with a columnar kernel; see `corgi_backend.rs`). The corgi backend runs calls
+-- as host kernels; the results must match the vec backend's in a map, a filter,
+-- a flatmap, a join, and a refinement fixpoint (the shape of a procedural-
+-- generation layer: a record's children come from a rule, until none has any).
+
+-- Seeds: (n ;).
+let seeds = input 0 | key($0[0] ;);
+
+-- Refine: each cell's children are `grow(cell)`, until `grow` returns none.
+refine: {
+    let kids = cells | flatmap(grow($0[0])) | map($1[1][0] ;);
+    var cells = seeds + kids | distinct;
+}
+let cells = refine::cells;
+
+-- A float from a pair, a nested shape, and a filter on a registered result.
+let blended = cells | map($0 ; blend(tuple($0[0], $0[0] + 1)));
+let described = cells | map($0 ; describe($0[0]));
+let big = described | filter($1[0][0][0] > 40);
+
+-- A call with no arguments, and one with a columnar kernel.
+let sevens = cells | map($0 ; seven() + $0[0]);
+let doubled = cells | map($0 ; double($0[0]));
+
+-- A join whose projection calls a registered function on both sides.
+let joined = cells | join(described, ($0 ; blend(tuple($0[0], $2[0][0][0]))));
+
+export "cells" = cells | arrange | inspect(total);
+export "blended" = blended | arrange | inspect(total);
+export "described" = described | arrange | inspect(total);
+export "big" = big | arrange | inspect(total);
+export "joined" = joined | arrange | inspect(total);
+export "sevens" = sevens | arrange | inspect(total);
+export "doubled" = doubled | arrange | inspect(total);

@@ -1,0 +1,47 @@
+-- F64 math, checked against the vec backend. `fabs`, `fmin`/`fmax` and the IEEE
+-- comparisons have columnar kernels; the libm functions, rounding, `fint`, `fpow`
+-- and `fpowi` run a row at a time, in a map, a filter, a flatmap and a join.
+-- Values include negatives, zeros of both signs, infinities and NaN.
+
+-- (key ; x, y) with x = a / 4 and y = b / 2.
+let xs = input 0 | key($0[0] ; fdiv(float($0[1]), float(4)), fdiv(float($0[2]), float(2)));
+
+let unary = xs
+    | map($0 ; fabs($1[0]), fsqrt($1[0]), fexp($1[1]), fln($1[0]), ffloor($1[0]), fceil($1[0]),
+               fround($1[0]), fsin($1[0]), fcos($1[0]), ftan($1[0]), fint($1[0]), fint(fmul($1[0], float(1000))));
+
+-- Negative bases with fractional exponents are NaN; `fpowi` is repeated multiplication.
+let binary = xs
+    | map($0 ; fpow($1[0], $1[1]), fpow(fabs($1[0]), fdiv(float(1), float(4))), fpow($1[0], fdiv(float(1), float(3))),
+               fpowi($1[0], 3), fpowi($1[0], 0 - 2), fmin($1[0], $1[1]), fmax($1[0], $1[1]));
+
+-- IEEE compares beside the generic (total-order) ones: they agree on these finite values,
+-- negatives included.
+let compares = xs
+    | map($0 ; feq($1[0], $1[1]), fne($1[0], $1[1]), flt($1[0], $1[1]), fle($1[0], $1[1]),
+               fgt($1[0], $1[1]), fge($1[0], $1[1]), $1[0] < $1[1], $1[0] >= $1[1]);
+
+-- The special values: -0.0, +inf, NaN (0/0), and a NaN from fln/fsqrt of a negative.
+let specials = xs
+    | map($0 ; fneg(float(0)), fdiv(float(1), float(0)), fdiv(float(0), float(0)), $1[0])
+    | map($0 ; feq($1[0], float(0)), $1[0] == float(0), fle(float(0), $1[0]), float(0) <= $1[0],
+               flt($1[2], $1[3]), fgt($1[2], $1[3]), fne($1[2], $1[2]), feq($1[2], $1[2]),
+               fmin($1[2], $1[3]), fmax($1[3], $1[2]), fmin($1[0], float(0)), fmax(float(0), $1[0]),
+               fln(float(0)), fln(fneg(float(1))), fsqrt(fneg(float(1))), fexp($1[1]), fexp(fneg($1[1])),
+               fint($1[1]), fint(fneg($1[1])), fint($1[2]), fabs(fneg($1[2])), fabs($1[0]), flt($1[3], $1[1]));
+
+-- A row-at-a-time filter and flatmap.
+let big = xs | filter(fgt(fexp($1[0]), float(2)));
+let spread = xs | flatmap(list(fsqrt(fabs($1[0])), fexp($1[1])));
+
+-- A join whose projection runs a row at a time.
+let scale = input 1 | key($0[0] ; $0[1]);
+let scaled = xs | join(scale, ($0 ; fpowi($1[0], $2[0]), fint(fpow(fabs($1[1]), float($2[0])))));
+
+export "unary"    = unary | arrange | inspect(total);
+export "binary"   = binary | arrange | inspect(total);
+export "compares" = compares | arrange | inspect(total);
+export "specials" = specials | arrange | inspect(total);
+export "big"      = big | arrange | inspect(total);
+export "spread"   = spread | arrange | inspect(total);
+export "scaled"   = scaled | arrange | inspect(total);

@@ -14,7 +14,7 @@
 //! reported with corgi's message. Ordered compares are signed-correct (`ToSigned`); `hash` is corgi's structural
 //! `Op::Hash`, the same function `ir::eval` folds row-wise.
 
-use crate::ir::{BinOp, SumTy, Term, UnOp, Value as DValue};
+use crate::ir::{BinOp, F64Fn, SumTy, Term, UnOp, Value as DValue};
 
 use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, Kind, NumOp, Op, Pred, Shape, Value as CValue};
 
@@ -39,75 +39,69 @@ pub fn shape_of_row(row: &DValue) -> Res<Shape> {
 
 /// AoS rows -> SoA corgi columns, directed by `shape`. A row that does not fit the shape is a
 /// panic: the shape was pinned from a row of this collection, so a misfit is an ingest error.
+/// Borrowing form: one clone of the rows, then [`transcode_owned`].
 pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
+    transcode_owned(rows.to_vec(), shape)
+}
+
+/// As [`transcode`], consuming the rows: each field moves into its column, nothing is cloned.
+pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
     match shape {
         Shape::Prim(_) => CValue::u64(rows.iter().map(|r| r.as_int() as u64).collect()),
         Shape::Unit => CValue::Unit(rows.len()),
-        Shape::Prod(fs) => CValue::Prod(
-            fs.iter()
-                .enumerate()
-                .map(|(i, fsi)| {
-                    let sub: Vec<DValue> = rows
-                        .iter()
-                        .map(|r| match r {
-                            DValue::Tuple(xs) => xs[i].clone(),
-                            other => panic!("transcode: expected Tuple, got {other:?}"),
-                        })
-                        .collect();
-                    transcode(&sub, fsi)
-                })
-                .collect(),
-        ),
+        Shape::Prod(fs) => {
+            // Transpose by moving: one Vec per field, filled by draining each tuple.
+            let mut cols: Vec<Vec<DValue>> = fs.iter().map(|_| Vec::with_capacity(rows.len())).collect();
+            for r in rows {
+                match r {
+                    DValue::Tuple(xs) => {
+                        assert!(xs.len() == fs.len(), "transcode: a {}-tuple for a {}-field shape", xs.len(), fs.len());
+                        for (col, x) in cols.iter_mut().zip(xs) { col.push(x) }
+                    }
+                    other => panic!("transcode: expected Tuple, got {other:?}"),
+                }
+            }
+            CValue::Prod(cols.into_iter().zip(fs).map(|(c, fsi)| transcode_owned(c, fsi)).collect())
+        }
         Shape::List(elem) => {
             // List column = per-row END offsets + a flattened element column.
             let mut ends = Vec::with_capacity(rows.len());
             let mut flat: Vec<DValue> = Vec::new();
-            let mut acc = 0usize;
             for r in rows {
                 match r {
                     DValue::List(xs) => {
-                        acc += xs.len();
-                        ends.push(acc);
-                        flat.extend(xs.iter().cloned());
+                        flat.extend(xs);
+                        ends.push(flat.len());
                     }
                     other => panic!("transcode: expected List, got {other:?}"),
                 }
             }
-            CValue::List(ends.into(), Box::new(transcode(&flat, elem)))
+            CValue::List(ends.into(), Box::new(transcode_owned(flat, elem)))
         }
         Shape::Sum(lanes) => {
             // Per-row tag, plus one packed lane per variant (its arm's rows in row order; a
             // variant no row uses is an empty column of its declared shape).
-            let tags: Vec<usize> = rows
-                .iter()
-                .map(|r| match r {
-                    DValue::Variant(t, _) => *t as usize,
+            let mut tags: Vec<usize> = Vec::with_capacity(rows.len());
+            let mut payloads: Vec<Vec<DValue>> = lanes.iter().map(|_| Vec::new()).collect();
+            for r in rows {
+                match r {
+                    DValue::Variant(t, p) => {
+                        let t = t as usize;
+                        if t >= lanes.len() { panic!("transcode: tag {t} is outside the declared {}-variant sum", lanes.len()) }
+                        tags.push(t);
+                        payloads[t].push(*p);
+                    }
                     other => panic!("transcode: expected Variant, got {other:?}"),
-                })
-                .collect();
-            if let Some(t) = tags.iter().find(|&&t| t >= lanes.len()) {
-                panic!("transcode: tag {t} is outside the declared {}-variant sum", lanes.len());
+                }
             }
-            let lane_vals: Vec<CValue> = lanes
-                .iter()
-                .enumerate()
-                .map(|(tag, lshape)| {
-                    let payloads: Vec<DValue> = rows
-                        .iter()
-                        .filter_map(|r| match r {
-                            DValue::Variant(t, p) if *t as usize == tag => Some((**p).clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    transcode(&payloads, lshape)
-                })
-                .collect();
+            let lane_vals = payloads.into_iter().zip(lanes).map(|(p, lshape)| transcode_owned(p, lshape)).collect();
             CValue::sum(tags, lane_vals)
         }
     }
 }
 
-/// SoA corgi columns -> AoS rows, directed by `shape`. Inverse of [`transcode`].
+/// SoA corgi columns -> AoS rows, directed by `shape`. Inverse of [`transcode`]. Each value
+/// moves into its row; nothing is cloned.
 pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
     match shape {
         Shape::Prim(_) => col.into_u64("untranscode").unwrap().into_iter().map(|x| DValue::Int(x as i64)).collect(),
@@ -115,38 +109,47 @@ pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
         Shape::Prod(fs) => {
             let cols = col.into_prod("untranscode").unwrap();
             let n = if cols.is_empty() { 0 } else { cols[0].len() };
-            let per_field: Vec<Vec<DValue>> =
-                cols.into_iter().zip(fs.iter()).map(|(c, fsi)| untranscode(c, fsi)).collect();
-            (0..n).map(|i| DValue::Tuple(per_field.iter().map(|f| f[i].clone()).collect())).collect()
+            let mut per_field: Vec<std::vec::IntoIter<DValue>> =
+                cols.into_iter().zip(fs.iter()).map(|(c, fsi)| untranscode(c, fsi).into_iter()).collect();
+            (0..n).map(|_| DValue::Tuple(per_field.iter_mut().map(|f| f.next().expect("field columns agree in length")).collect())).collect()
         }
         Shape::List(elem) => {
             // Inverse of transcode's List: per-row END offsets + a flattened element column → one
-            // `List` per row, slicing the untranscoded flat column by each row's span.
+            // `List` per row, taking each row's span off the front of the untranscoded column.
             let (bounds, vals) = match col {
                 CValue::List(b, vals) => (b, *vals),
                 other => panic!("untranscode: expected List, got {other:?}"),
             };
-            let flat = untranscode(vals, elem);
+            let mut flat = untranscode(vals, elem).into_iter();
             let ends: Vec<usize> = bounds.to_vec();
             let mut out = Vec::with_capacity(ends.len());
             let mut start = 0usize;
             for end in ends {
-                out.push(DValue::List(flat[start..end].to_vec()));
+                out.push(DValue::List(flat.by_ref().take(end - start).collect()));
                 start = end;
             }
             out
         }
         Shape::Sum(lanes) => {
-            // Inverse of transcode's Sum: untranscode each lane, then for each row pull its payload
+            // Inverse of transcode's Sum: untranscode each lane, then for each row take its payload
             // from its lane at the recorded within-lane OFFSET (robust to row reordering from a
-            // prior gather/merge — not a sequential cursor).
+            // prior gather/merge — not a sequential cursor). Rows may share a payload, so each is
+            // cloned except at its last use, where it moves.
             let (tags, variant_vals) = col.into_sum("untranscode").unwrap();
-            let lane_rows: Vec<Vec<DValue>> =
+            let mut lane_rows: Vec<Vec<DValue>> =
                 variant_vals.into_iter().zip(lanes.iter()).map(|(v, ls)| untranscode(v, ls)).collect();
+            let mut uses: Vec<Vec<u32>> = lane_rows.iter().map(|l| vec![0; l.len()]).collect();
+            for r in 0..tags.len() { uses[tags.tag_at(r)][tags.offset_at(r)] += 1 }
             (0..tags.len())
                 .map(|r| {
                     let (tag, off) = (tags.tag_at(r), tags.offset_at(r));
-                    DValue::Variant(tag as u32, Box::new(lane_rows[tag][off].clone()))
+                    uses[tag][off] -= 1;
+                    let payload = if uses[tag][off] == 0 {
+                        std::mem::replace(&mut lane_rows[tag][off], DValue::Int(0))
+                    } else {
+                        lane_rows[tag][off].clone()
+                    };
+                    DValue::Variant(tag as u32, Box::new(payload))
                 })
                 .collect()
         }
@@ -171,7 +174,7 @@ fn mentions_env(t: &Term, depth: usize) -> bool {
         Term::Var(_) => true,
         Term::Bound(k) => *k >= depth,
         Term::Int(_) => false,
-        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) => fs.iter().any(|f| mentions_env(f, depth)),
+        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) | Term::Call(_, fs) => fs.iter().any(|f| mentions_env(f, depth)),
         Term::Spread(inner) | Term::Proj(inner, _) | Term::Unary(_, inner) => mentions_env(inner, depth),
         Term::Inject { tag, payload, .. } => mentions_env(tag, depth) || mentions_env(payload, depth),
         Term::Case { scrutinee, arms, default } => {
@@ -249,6 +252,18 @@ pub fn compile(
     expected: Option<&Shape>,
 ) -> Res<usize> {
     match term {
+        Term::Call(name, args) => {
+            // One host-kernel node over the tuple of its arguments; the kernel checks their shapes.
+            let kernel = crate::ir::kernel_of(name).ok_or_else(|| format!("`{name}` is not a registered function"))?;
+            // A call with no arguments passes a `Unit` over the anchor (`ir::call_input`).
+            let input = if args.is_empty() {
+                b.add(Op::Unit, vec![anchor])
+            } else {
+                let fields = args.iter().map(|a| compile(a, b, env, env_shapes, anchor, None)).collect::<Res<Vec<_>>>()?;
+                b.tuple(fields)
+            };
+            Ok(b.add(NumOp::Host(corgi::HostOp(kernel)), vec![input]))
+        }
         Term::Var(i) => env.get(*i).copied().ok_or_else(|| format!("`${i}` is not in scope here")),
         Term::Bound(k) => {
             env.len().checked_sub(1 + *k).map(|i| env[i]).ok_or_else(|| format!("binder `^{k}` is not in scope here"))
@@ -312,8 +327,8 @@ pub fn compile(
                 }
                 BinOp::Append => { let p = pair(b, lid, rid); b.add(Op::Append, vec![p]) }
                 BinOp::F64Add | BinOp::F64Sub | BinOp::F64Mul | BinOp::F64Div => {
-                    let expected = Shape::Sum(vec![Shape::Prim(64)]);
-                    if shape_of_term(l, env_shapes, None)? != expected || shape_of_term(r, env_shapes, None)? != expected {
+                    let f64_shape = Shape::Sum(vec![Shape::Prim(64)]);
+                    if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != f64_shape {
                         return Err("floating arithmetic expects two F64 newtypes; use float(int)".into());
                     }
                     let l = b.add(Op::Unwrap, vec![lid]);
@@ -324,6 +339,74 @@ pub fn compile(
                     let op = match op { BinOp::F64Add => CBinOp::Add, BinOp::F64Sub => CBinOp::Sub, BinOp::F64Mul => CBinOp::Mul, _ => CBinOp::Div };
                     let f = b.add(ArithOp::Bin(op, Kind::F, 64), vec![p]);
                     let payload = b.add(ArithOp::ToSigned, vec![f]);
+                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                }
+                BinOp::F64Min | BinOp::F64Max | BinOp::F64Eq | BinOp::F64Ne | BinOp::F64Lt | BinOp::F64Le | BinOp::F64Gt | BinOp::F64Ge => {
+                    let f64_shape = Shape::Sum(vec![Shape::Prim(64)]);
+                    if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != f64_shape {
+                        return Err(format!("{op:?} expects two F64 newtypes; use float(int)"));
+                    }
+                    let (x, y) = (float_leaf(b, lid), float_leaf(b, rid));
+                    match op {
+                        BinOp::F64Min | BinOp::F64Max => {
+                            // The total-order pick, then a NaN operand yields the other operand
+                            // (and two NaNs the second), as `ir::eval` does.
+                            let pick = if matches!(op, BinOp::F64Min) { CmpOp::Min } else { CmpOp::Max };
+                            let p = pair(b, x, y);
+                            let total = b.add(pick, vec![p]);
+                            let y_nan = is_nan(b, y);
+                            let choices = b.tuple(vec![y_nan, x, total]);
+                            let unless_y = b.add(Op::Select, vec![choices]);
+                            let x_nan = is_nan(b, x);
+                            let choices_x = b.tuple(vec![x_nan, y, unless_y]);
+                            let f = b.add(Op::Select, vec![choices_x]);
+                            let payload = b.add(ArithOp::ToSigned, vec![f]);
+                            b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                        }
+                        _ => {
+                            // IEEE: the total order once `-0.0` is folded onto `0.0`, and false
+                            // whenever an operand is NaN; `fne` is the negation of `feq`.
+                            let (cx, cy) = (fold_negative_zero(b, x, anchor), fold_negative_zero(b, y, anchor));
+                            let (p, pred) = match op {
+                                BinOp::F64Eq | BinOp::F64Ne => (pair(b, cx, cy), Pred::Eq),
+                                BinOp::F64Lt => (pair(b, cx, cy), Pred::Lt),
+                                BinOp::F64Le => (pair(b, cx, cy), Pred::Le),
+                                BinOp::F64Gt => (pair(b, cy, cx), Pred::Lt),
+                                _ => (pair(b, cy, cx), Pred::Le),
+                            };
+                            let rel = b.add(CmpOp::Rel(pred), vec![p]);
+                            let (x_nan, y_nan) = (is_nan(b, x), is_nan(b, y));
+                            let nans = pair(b, x_nan, y_nan);
+                            let any_nan = b.add(CmpOp::Max, vec![nans]);
+                            let zero = b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]);
+                            let no_nan = pair(b, any_nan, zero);
+                            let ordered = b.add(CmpOp::Rel(Pred::Eq), vec![no_nan]);
+                            let both = pair(b, rel, ordered);
+                            let holds = b.add(CmpOp::Min, vec![both]);
+                            if matches!(op, BinOp::F64Ne) {
+                                let negate = pair(b, holds, zero);
+                                b.add(CmpOp::Rel(Pred::Eq), vec![negate])
+                            } else {
+                                holds
+                            }
+                        }
+                    }
+                }
+                BinOp::F64Pow | BinOp::F64PowI => {
+                    let f64_shape = Shape::Sum(vec![Shape::Prim(64)]);
+                    let exponent = if matches!(op, BinOp::F64Pow) { f64_shape.clone() } else { Shape::Prim(64) };
+                    if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != exponent {
+                        return Err(format!("{op:?} expects an F64 newtype and an {}", if matches!(op, BinOp::F64Pow) { "F64" } else { "Int" }));
+                    }
+                    let x = float_leaf(b, lid);
+                    let (kind, y) = if matches!(op, BinOp::F64Pow) {
+                        (float_kernels::FloatOp::Pow, float_leaf(b, rid))
+                    } else {
+                        (float_kernels::FloatOp::PowI, rid)
+                    };
+                    let args = b.tuple(vec![x, y]);
+                    let z = b.add(NumOp::Host(float_kernels::op(kind)), vec![args]);
+                    let payload = b.add(ArithOp::ToSigned, vec![z]);
                     b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
                 }
                 BinOp::Eq | BinOp::Ne => {
@@ -513,6 +596,29 @@ pub fn compile(
                     let payload = b.add(ArithOp::ToSigned, vec![negative]);
                     b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
                 }
+                // |x| is the larger of x and -x in the total order: that clears the sign bit,
+                // NaN included, exactly as `f64::abs`.
+                UnOp::F64Fn(F64Fn::Abs) => {
+                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err("fabs expects an F64 newtype".into()); }
+                    let f = float_leaf(b, id);
+                    let abs = float_abs(b, f);
+                    let payload = b.add(ArithOp::ToSigned, vec![abs]);
+                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                }
+                // The rest (sqrt, exp, ln, rounding, trig) and `fint` are host kernels over the
+                // float leaf: decode each key, apply the function, encode the result.
+                UnOp::F64Fn(f) => {
+                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err(format!("{op:?} expects an F64 newtype")); }
+                    let x = float_leaf(b, id);
+                    let y = b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::Fn(*f))), vec![x]);
+                    let payload = b.add(ArithOp::ToSigned, vec![y]);
+                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                }
+                UnOp::F64ToInt => {
+                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err("fint expects an F64 newtype".into()); }
+                    let x = float_leaf(b, id);
+                    b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::ToInt)), vec![x])
+                }
                 // `truthy` is "nonzero Int": scalars compare against zero; non-`Int` values
                 // are never truthy, so their `not` folds to the constant 1 (the cross-shape
                 // `Eq` fold's precedent).
@@ -622,6 +728,41 @@ pub fn compile(
     }
 }
 
+/// Corgi's float encoding of an F64 constant: the total-order key, as a `U64` leaf holds it.
+fn float_key(f: f64) -> u64 {
+    let bits = f.to_bits();
+    if bits >> 63 == 1 { !bits } else { bits ^ (1 << 63) }
+}
+
+/// An F64 newtype column -> its corgi float leaf (total-order key). The DDIR payload is the
+/// signed form of that key, and `ToSigned` is the involution between the two.
+fn float_leaf(b: &mut Builder<NumOp>, newtype: usize) -> usize {
+    let payload = b.add(Op::Unwrap, vec![newtype]);
+    b.add(ArithOp::ToSigned, vec![payload])
+}
+
+/// `|x|` on a float leaf: the larger of `x` and `-x` in the total order.
+fn float_abs(b: &mut Builder<NumOp>, x: usize) -> usize {
+    let negated = b.add(ArithOp::Neg(Kind::F, 64), vec![x]);
+    let p = b.tuple(vec![x, negated]);
+    b.add(CmpOp::Max, vec![p])
+}
+
+/// A 0/1 mask: is the float leaf NaN? The NaNs are exactly the keys whose magnitude exceeds +inf.
+fn is_nan(b: &mut Builder<NumOp>, x: usize) -> usize {
+    let abs = float_abs(b, x);
+    b.add(CmpOp::Gt(float_key(f64::INFINITY)), vec![abs])
+}
+
+/// Replace `-0.0` by `0.0` in a float leaf. Their keys are adjacent, so this adds the mask.
+fn fold_negative_zero(b: &mut Builder<NumOp>, x: usize, anchor: usize) -> usize {
+    let negative_zero = b.add(Op::Lit(CValue::u64(vec![float_key(-0.0)])), vec![anchor]);
+    let probe = b.tuple(vec![x, negative_zero]);
+    let is_negative_zero = b.add(CmpOp::Rel(Pred::Eq), vec![probe]);
+    let sum = b.tuple(vec![x, is_negative_zero]);
+    b.add(ArithOp::Bin(CBinOp::Add, Kind::U, 64), vec![sum])
+}
+
 /// Compile a `Fold` step into a closed corgi sub-graph. Without capture the body's input is
 /// `Prod([acc, elem])`; with it, `Prod([acc, (ctx, elem)])` where `ctx` is the captured
 /// environment (its fields come first, so `Var(i)` and outer `Bound`s resolve as they do in
@@ -651,81 +792,118 @@ fn compile_fold_body(step: &Term, ctx: Option<&[Shape]>, init_shape: &Shape, ele
     Ok(bb.finish(out))
 }
 
-/// Compile a term in the row environment `Var(0)=key` (shape `kshape`), `Var(1)=val` (`vshape`) —
-/// the environment every `LinearOp` reads. The graph's input is `Prod([key, val])`, and it is
-/// typechecked once here, so an `Ok` graph runs on every batch of these shapes.
-fn compile_over_kv(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+/// Compile `terms` over the environment `Var(i)` = field `i` of the input, whose shapes are
+/// `shapes`. The graph's input is `Prod(shapes)`; its output is the one term's column, or `Prod`
+/// of the terms' columns. Typechecked once here, so an `Ok` kernel runs on every batch of these
+/// shapes. Returns the kernel and its output shape.
+fn lower(terms: &[&Term], shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
     let mut b = Builder::<NumOp>::default();
     let input = b.input();
-    let var_k = b.add(Op::Field(0), vec![input]);
-    let var_v = b.add(Op::Field(1), vec![input]);
-    let out = compile(term, &mut b, &[var_k, var_v], &[kshape.clone(), vshape.clone()], input, None)?;
+    let env: Vec<usize> = (0..shapes.len()).map(|i| b.add(Op::Field(i), vec![input])).collect();
+    let outs = terms.iter().map(|t| compile(t, &mut b, &env, shapes, input, None)).collect::<Res<Vec<_>>>()?;
+    let out = if let [one] = outs[..] { one } else { b.tuple(outs) };
     let g = b.finish(out);
-    corgi::shape_of(&g, &Shape::Prod(vec![kshape.clone(), vshape.clone()]))?;
-    Ok(g)
+    let output = corgi::shape_of(&g, &Shape::Prod(shapes.to_vec()))?;
+    Ok((g, output))
 }
 
 /// Compile a `FlatMap`'s list term → a corgi `List` column, one list per input row. A term that is
 /// not list-shaped is the type error: the backend explodes the column structurally.
 pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    match shape_of_term(list_term, &[kshape.clone(), vshape.clone()], None)? {
-        Shape::List(_) => compile_over_kv(list_term, kshape, vshape),
-        other => Err(format!("flatmap over a non-list: {other}")),
+    match lower(&[list_term], &[kshape.clone(), vshape.clone()])? {
+        (k, Shape::List(_)) => Ok(k),
+        (_, other) => Err(format!("flatmap over a non-list: {other}")),
     }
 }
 
 /// Compile a scalar term (`EnterAt`'s delay field) → a `U64` column; a non-integer term is the
 /// type error (the delay is read as one integer per row).
 pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    match shape_of_term(term, &[kshape.clone(), vshape.clone()], None)? {
-        Shape::Prim(_) => compile_over_kv(term, kshape, vshape),
-        other => Err(format!("enter_at delay is not an integer: {other}")),
+    match lower(&[term], &[kshape.clone(), vshape.clone()])? {
+        (k, Shape::Prim(_)) => Ok(k),
+        (_, other) => Err(format!("enter_at delay is not an integer: {other}")),
     }
 }
 
 /// Compile a `Filter` predicate → a mask column (nonzero keeps the row). A predicate must be an
 /// `Int`; any other shape is a type error, as it is in the row backend.
 pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    let g = compile_over_kv(cond, kshape, vshape)?;
-    match corgi::shape_of(&g, &Shape::Prod(vec![kshape.clone(), vshape.clone()]))? {
-        Shape::Prim(_) => Ok(g),
-        other => Err(format!("a filter predicate must be an Int, got {other}")),
+    match lower(&[cond], &[kshape.clone(), vshape.clone()])? {
+        (k, Shape::Prim(_)) => Ok(k),
+        (_, other) => Err(format!("a filter predicate must be an Int, got {other}")),
     }
 }
 
 /// Compile a join projection: key/val Terms over `Var(0)=key`, `Var(1)=val0`, `Var(2)=val1` (with
 /// their shapes). Input `Prod([key, val0, val1])`; output `Prod([newkey, newval])`.
 pub fn compile_join_projection(key: &Term, val: &Term, kshape: &Shape, v0shape: &Shape, v1shape: &Shape) -> Res<Graph<NumOp>> {
-    let mut b = Builder::<NumOp>::default();
-    let input = b.input();
-    let var_k = b.add(Op::Field(0), vec![input]);
-    let var_0 = b.add(Op::Field(1), vec![input]);
-    let var_1 = b.add(Op::Field(2), vec![input]);
-    let env = [var_k, var_0, var_1];
-    let shapes = [kshape.clone(), v0shape.clone(), v1shape.clone()];
-    let nk = compile(key, &mut b, &env, &shapes, input, None)?;
-    let nv = compile(val, &mut b, &env, &shapes, input, None)?;
-    let out = b.tuple(vec![nk, nv]);
-    let g = b.finish(out);
-    corgi::shape_of(&g, &Shape::Prod(shapes.to_vec()))?;
-    Ok(g)
+    Ok(lower(&[key, val], &[kshape.clone(), v0shape.clone(), v1shape.clone()])?.0)
 }
 
 /// Compile a DDIR `Projection` over `Var(0)=key` (`kshape`), `Var(1)=val` (`vshape`).
 /// Input `Prod([key, val])`; output `Prod([newkey, newval])`.
 pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    let mut b = Builder::<NumOp>::default();
-    let input = b.input();
-    let var_k = b.add(Op::Field(0), vec![input]);
-    let var_v = b.add(Op::Field(1), vec![input]);
-    let env = [var_k, var_v];
-    let shapes = [kshape.clone(), vshape.clone()];
-    let nk = compile(key, &mut b, &env, &shapes, input, None)?;
-    let nv = compile(val, &mut b, &env, &shapes, input, None)?;
-    let out = b.tuple(vec![nk, nv]);
-    let g = b.finish(out);
-    corgi::shape_of(&g, &Shape::Prod(shapes.to_vec()))?;
-    Ok(g)
+    Ok(lower(&[key, val], &[kshape.clone(), vshape.clone()])?.0)
+}
+
+/// The F64 functions without a composition of corgi ops, as host kernels over the float leaf
+/// (corgi's total-order key): decode each key, apply the function as `ir::eval` does, encode.
+/// One kernel per function, shared by every call site, so CSE merges equal calls.
+mod float_kernels {
+    use std::sync::{Arc, OnceLock};
+    use corgi::{HostKernel, HostOp, Shape, Value};
+    use crate::ir::F64Fn;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+    pub enum FloatOp { Fn(F64Fn), ToInt, Pow, PowI }
+
+    fn decode(key: u64) -> f64 {
+        f64::from_bits(if key >> 63 == 1 { key ^ (1 << 63) } else { !key })
+    }
+    fn encode(x: f64) -> u64 { super::float_key(x) }
+
+    struct Kernel { name: String, op: FloatOp, input: Shape, output: Shape }
+    impl HostKernel for Kernel {
+        fn name(&self) -> &str { &self.name }
+        fn input(&self) -> &Shape { &self.input }
+        fn output(&self) -> &Shape { &self.output }
+        fn eval(&self, input: Value) -> Result<Value, String> {
+            let out: Vec<u64> = match self.op {
+                FloatOp::Fn(f) => input.as_u64(&self.name)?.iter().map(|&k| encode(f.apply(decode(k)))).collect(),
+                FloatOp::ToInt => input.as_u64(&self.name)?.iter().map(|&k| decode(k) as i64 as u64).collect(),
+                FloatOp::Pow | FloatOp::PowI => {
+                    let args = input.into_prod(&self.name)?;
+                    let (x, y) = (args[0].as_u64(&self.name)?, args[1].as_u64(&self.name)?);
+                    x.iter().zip(y).map(|(&a, &b)| {
+                        let a = decode(a);
+                        encode(if self.op == FloatOp::Pow {
+                            a.powf(decode(b))
+                        } else {
+                            a.powi((b as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+                        })
+                    }).collect()
+                }
+            };
+            Ok(Value::u64(out))
+        }
+    }
+
+    /// The host op for `op`: one `Arc` per function for the life of the process.
+    pub fn op(op: FloatOp) -> HostOp {
+        static KERNELS: OnceLock<std::sync::Mutex<std::collections::HashMap<FloatOp, Arc<dyn HostKernel>>>> = OnceLock::new();
+        let mut map = KERNELS.get_or_init(Default::default).lock().unwrap();
+        let k = map.entry(op).or_insert_with(|| {
+            let (p, pair) = (Shape::Prim(64), Shape::Prod(vec![Shape::Prim(64), Shape::Prim(64)]));
+            let (name, input) = match op {
+                FloatOp::Fn(f) => (format!("{f:?}").to_lowercase(), p.clone()),
+                FloatOp::ToInt => ("fint".into(), p.clone()),
+                FloatOp::Pow => ("fpow".into(), pair.clone()),
+                FloatOp::PowI => ("fpowi".into(), pair),
+            };
+            Arc::new(Kernel { name: format!("f64:{name}"), op, input, output: p })
+        });
+        HostOp(Arc::clone(k))
+    }
 }
 
 #[cfg(test)]
@@ -764,6 +942,58 @@ mod tests {
             let term = crate::parse::pipe::parse_term(source);
             agrees_with_rows(&term, &[u64s(), u64s()], &rows);
         }
+    }
+
+    /// Every pair of these F64 values: signed zeros, infinities, and both signs of NaN.
+    fn float_pairs() -> Vec<Vec<V>> {
+        let specials = [f64::NEG_INFINITY, -2.5, -1.0, -0.0, 0.0, 0.5, 1.0, 2.0, 3.7, f64::INFINITY, f64::NAN, -f64::NAN];
+        specials.iter().flat_map(|&a| specials.iter().map(move |&b| vec![V::f64_value(a), V::f64_value(b)])).collect()
+    }
+
+    /// Every F64 op agrees with `ir::eval` on every special pair: the ones composed of corgi ops
+    /// and the ones that are host kernels (`float_kernels`), alone and inside larger terms.
+    #[test]
+    fn columnar_float_math_agrees() {
+        let f = sum(vec![u64s()]);
+        for source in ["fabs($0)", "fmin($0, $1)", "fmax($0, $1)", "feq($0, $1)", "fne($0, $1)",
+            "flt($0, $1)", "fle($0, $1)", "fgt($0, $1)", "fge($0, $1)",
+            "fsqrt($0)", "fexp($0)", "fln($0)", "ffloor($0)", "fceil($0)", "fround($0)",
+            "fsin($0)", "fcos($0)", "ftan($0)", "fint($0)", "fpow($0, $1)", "fpowi($0, fint($1))"] {
+            let term = crate::parse::pipe::parse_term(source);
+            agrees_with_rows(&term, &[f.clone(), f.clone()], &float_pairs());
+        }
+        // Inside a larger term. Over non-NaN pairs only: corgi's float `Add` returns the positive
+        // quiet NaN where `ir::eval` keeps a NaN operand's sign (as `fadd` alone does, before
+        // this change); the kernels themselves agree on NaNs above.
+        let finite: Vec<_> = float_pairs().into_iter().filter(|r| r.iter().all(|v| !v.as_f64().is_nan())).collect();
+        let term = crate::parse::pipe::parse_term("tuple(fadd(fexp($0), $1), flt(fln($0), $1), fpowi(fsqrt($0), fint($1)))");
+        agrees_with_rows(&term, &[f.clone(), f.clone()], &finite);
+        // The kernels are typed: their operands must be F64 newtypes (and `fpowi`'s exponent an Int).
+        for bad in ["fsqrt($0)", "fint($0)", "fpow($0, $0)"] {
+            assert!(lower(&[&crate::parse::pipe::parse_term(bad)], &[u64s()]).is_err(), "{bad}");
+        }
+        assert!(lower(&[&crate::parse::pipe::parse_term("fpowi($0, $0)")], &[f.clone()]).is_err());
+    }
+
+    /// Spot checks of the chosen semantics, independent of either backend.
+    #[test]
+    fn float_math_semantics() {
+        let f = |x: f64| V::f64_value(x);
+        let ev = |src: &str, a: f64, b: f64| crate::ir::eval(&crate::parse::pipe::parse_term(src), &mut vec![f(a), f(b)]);
+        assert_eq!(ev("fint($0)", -2.7, 0.0), V::Int(-2));
+        assert_eq!(ev("fint($0)", f64::NAN, 0.0), V::Int(0));
+        assert_eq!(ev("fint($0)", 1e300, 0.0), V::Int(i64::MAX));
+        assert_eq!(ev("flt($0, $1)", -2.0, -1.0), V::Int(1));
+        assert_eq!(ev("$0 < $1", -2.0, -1.0), V::Int(1));
+        assert_eq!(ev("feq($0, $1)", -0.0, 0.0), V::Int(1));
+        assert_eq!(ev("$0 == $1", -0.0, 0.0), V::Int(0));
+        assert_eq!(ev("fne($0, $1)", f64::NAN, f64::NAN), V::Int(1));
+        assert_eq!(ev("fmax($0, $1)", f64::NAN, 1.0), f(1.0));
+        assert_eq!(ev("fmin($0, $1)", 0.0, -0.0).as_f64().to_bits(), (-0.0f64).to_bits());
+        assert!(ev("fln($0)", -1.0, 0.0).as_f64().is_nan());
+        assert_eq!(ev("fln($0)", 0.0, 0.0), f(f64::NEG_INFINITY));
+        assert_eq!(ev("fpow($0, $1)", 4.0, 0.5), f(2.0));
+        assert!(ev("fpow($0, $1)", -8.0, 0.5).as_f64().is_nan());
     }
 
     #[test]

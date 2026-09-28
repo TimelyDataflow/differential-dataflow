@@ -10,7 +10,7 @@
 
 pub mod pipe;
 
-use crate::ir::{BinOp, Projection, Reducer, SumTy, Term, UnOp};
+use crate::ir::{BinOp, F64Fn, Projection, Reducer, SumTy, Term, UnOp};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
@@ -78,6 +78,22 @@ pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
             assert_eq!(args.len(), 1, "{name}(value)");
             Term::Unary(if name == "float" { UnOp::ToF64 } else { UnOp::F64Neg }, Box::new(args.remove(0)))
         }
+        "fint" => { assert_eq!(args.len(), 1, "fint(value)"); Term::Unary(UnOp::F64ToInt, Box::new(args.remove(0))) }
+        name if F64Fn::ALL.iter().any(|(n, _)| *n == name) => {
+            assert_eq!(args.len(), 1, "{name}(value)");
+            let f = F64Fn::ALL.iter().find(|(n, _)| *n == name).unwrap().1;
+            Term::Unary(UnOp::F64Fn(f), Box::new(args.remove(0)))
+        }
+        "fpow" | "fpowi" | "fmin" | "fmax" | "feq" | "fne" | "flt" | "fle" | "fgt" | "fge" => {
+            assert_eq!(args.len(), 2, "{name}(a, b)");
+            let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0));
+            let op = match name {
+                "fpow" => BinOp::F64Pow, "fpowi" => BinOp::F64PowI, "fmin" => BinOp::F64Min, "fmax" => BinOp::F64Max,
+                "feq" => BinOp::F64Eq, "fne" => BinOp::F64Ne, "flt" => BinOp::F64Lt, "fle" => BinOp::F64Le,
+                "fgt" => BinOp::F64Gt, _ => BinOp::F64Ge,
+            };
+            Term::Binary(op, a, b)
+        }
         "fadd" | "fsub" | "fmul" | "fdiv" => {
             assert_eq!(args.len(), 2, "{name}(a, b)");
             let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0));
@@ -91,6 +107,18 @@ pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
         }
         "if" => { assert_eq!(args.len(), 3, "if(cond, then, els)"); let els = Box::new(args.remove(2)); let then = Box::new(args.remove(1)); let cond = Box::new(args.remove(0)); Term::If { cond, then, els } }
         "hash" => { assert!(args.len() >= 2, "hash(bound, key, ...)"); Term::Hash(std::mem::take(args)) }
-        other => panic!("Unknown scalar builtin: {}", other),
+        other if crate::ir::lookup(other).is_some() => {
+            let f = crate::ir::lookup(other).unwrap();
+            assert_eq!(args.len(), f.args.len(), "{other} takes {} arguments", f.args.len());
+            Term::Call(other.to_string(), std::mem::take(args))
+        }
+        other => panic!("Unknown scalar builtin (and no function registered by that name): {}", other),
     }
+}
+
+/// Whether `name` is a builtin of the scalar language (registered functions may not shadow one).
+pub fn is_builtin(name: &str) -> bool {
+    const NAMES: &[&str] = &["tuple", "list", "inject", "variant", "case", "fold", "proj", "len", "istag", "not", "float", "fneg", "fint",
+        "fpow", "fpowi", "fmin", "fmax", "feq", "fne", "flt", "fle", "fgt", "fge", "fadd", "fsub", "fmul", "fdiv", "or", "idiv", "append", "if", "hash"];
+    NAMES.contains(&name) || F64Fn::ALL.iter().any(|(n, _)| *n == name) || pipe::is_keyword(name)
 }

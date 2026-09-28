@@ -55,6 +55,18 @@
 //!   Nominal type names are erased: `fneg` and binary floating operators also
 //!   accept a user's single-variant integer newtype, treating its payload as
 //!   encoded f64 bits.
+//! - Floating-point math, each the Rust `f64` method of the same name:
+//!   `fabs`, `fsqrt`, `fexp`, `fln`, `ffloor`, `fceil`, `fround`, `fsin`,
+//!   `fcos`, `ftan` (F64 -> F64); `fpow(x, y)` (`powf`), `fpowi(x, n)` (`powi`,
+//!   Int exponent). `fint(x)` is F64 -> Int as Rust's `x as i64`: truncate
+//!   toward zero, NaN is 0, out of range saturates. `fmin`/`fmax` skip a NaN
+//!   operand and otherwise follow the total order (`fmin(-0.0, 0.0)` is
+//!   `-0.0`). `feq fne flt fle fgt fge` are IEEE comparisons returning Int 0/1:
+//!   NaN compares false (`fne` true) and `-0.0` equals `0.0`, where the generic
+//!   `== < …` use the total order. There are no float literals: write
+//!   `fdiv(float(2786), float(10))` for 278.6. The Corgi backend computes all
+//!   of these in columns: `fabs`, `fmin`/`fmax` and the comparisons from corgi
+//!   ops, the rest as host kernels over the float column.
 //! - Products: `tuple(a, …)`; index with `v[i]` or `proj(v, i)`; `len(v)`.
 //! - Lists: `list(a, …)`, `append(a, b)` (concatenation); eliminated by
 //!   `flatmap` / `collect` / `fold`. A declared constructor supplies the element
@@ -144,19 +156,7 @@ fn tokenize(input: &str) -> Vec<Token> {
             c if c.is_ascii_alphabetic() || c == '_' => {
                 let mut ident = String::new();
                 while let Some(&c) = chars.peek() { if c.is_ascii_alphanumeric() || c == '_' { ident.push(c); chars.next(); } else { break; } }
-                tokens.push(match ident.as_str() {
-                    "let" => Token::Let, "var" => Token::Var, "export" => Token::Export,
-                    "type" => Token::Type, "case" => Token::Case, "fold" => Token::Fold,
-                    "input" => Token::Input, "import" => Token::Import,
-                    "key" => Token::Key, "map" => Token::Map,
-                    "join" => Token::Join, "min" => Token::Min, "distinct" => Token::Distinct,
-                    "count" => Token::Count, "collect" => Token::Collect,
-                    "flatmap" => Token::FlatMap,
-                    "arrange" => Token::Arrange, "negate" => Token::Negate,
-                    "filter" => Token::Filter, "enter_at" => Token::EnterAt, "inspect" => Token::Inspect,
-                    "lift_iter" => Token::LiftIter,
-                    _ => Token::Ident(ident),
-                });
+                tokens.push(keyword(&ident).unwrap_or(Token::Ident(ident)));
             },
             other => panic!("Unexpected character: {:?}", other),
         }
@@ -164,6 +164,26 @@ fn tokenize(input: &str) -> Vec<Token> {
     tokens.push(Token::Eof);
     tokens
 }
+
+/// The lexer's keywords: an identifier spelled like one lexes as the keyword, never as a name.
+fn keyword(ident: &str) -> Option<Token> {
+    Some(match ident {
+        "let" => Token::Let, "var" => Token::Var, "export" => Token::Export,
+        "type" => Token::Type, "case" => Token::Case, "fold" => Token::Fold,
+        "input" => Token::Input, "import" => Token::Import,
+        "key" => Token::Key, "map" => Token::Map,
+        "join" => Token::Join, "min" => Token::Min, "distinct" => Token::Distinct,
+        "count" => Token::Count, "collect" => Token::Collect,
+        "flatmap" => Token::FlatMap,
+        "arrange" => Token::Arrange, "negate" => Token::Negate,
+        "filter" => Token::Filter, "enter_at" => Token::EnterAt, "inspect" => Token::Inspect,
+        "lift_iter" => Token::LiftIter,
+        _ => return None,
+    })
+}
+
+/// Whether `ident` is a keyword of the lexer (so it can never be used as a name).
+pub(crate) fn is_keyword(ident: &str) -> bool { keyword(ident).is_some() }
 
 struct Parser {
     tokens: Vec<Token>,

@@ -112,6 +112,13 @@ pub enum Term {
     /// (the raw non-negative hash if `bound <= 0`), mixed from the keys.
     /// The building block for generators derived from `iota`/`clock`.
     Hash(Vec<Term>),
+    /// `name(args…)` for a function the embedding program registered (see
+    /// [`register`]): a pure Rust function from argument values to a value.
+    /// DDIR only moves its arguments and result; what it computes is the
+    /// embedder's. The corgi backend runs it as a host kernel: the function's
+    /// columnar kernel if one is registered (`register_kernel`), otherwise its
+    /// row body over just the call's arguments.
+    Call(String, Vec<Term>),
 }
 
 /// The sum type an `Inject` builds into. `Declared` carries the full lane shapes of a `type`
@@ -145,6 +152,43 @@ pub enum UnOp {
     ToF64,
     /// Floating-point negation; does not reinterpret integer arithmetic.
     F64Neg,
+    /// A one-argument F64 -> F64 function (`fsqrt`, `fexp`, ...), with Rust's `f64` semantics.
+    F64Fn(F64Fn),
+    /// F64 -> Int, truncating toward zero and saturating, exactly Rust's `x as i64`:
+    /// NaN is 0, and values beyond the `i64` range clamp to `i64::MIN`/`i64::MAX`.
+    F64ToInt,
+}
+
+/// The one-argument F64 -> F64 functions. Each is the Rust `f64` method of the same name, so a
+/// program ported from Rust gets bit-identical results on the same platform. `Abs` is exact
+/// everywhere; the transcendental ones (`Exp`, `Ln`, `Sin`, `Cos`, `Tan`) call the platform libm
+/// and are only as reproducible across platforms as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum F64Fn {
+    Abs, Sqrt, Exp, Ln, Floor, Ceil, Round, Sin, Cos, Tan,
+}
+
+impl F64Fn {
+    /// The surface names, `f` + the Rust method name (`ln`, not `log`).
+    pub const ALL: [(&'static str, F64Fn); 10] = [
+        ("fabs", F64Fn::Abs), ("fsqrt", F64Fn::Sqrt), ("fexp", F64Fn::Exp), ("fln", F64Fn::Ln),
+        ("ffloor", F64Fn::Floor), ("fceil", F64Fn::Ceil), ("fround", F64Fn::Round),
+        ("fsin", F64Fn::Sin), ("fcos", F64Fn::Cos), ("ftan", F64Fn::Tan),
+    ];
+    pub fn apply(self, x: f64) -> f64 {
+        match self {
+            F64Fn::Abs => x.abs(),
+            F64Fn::Sqrt => x.sqrt(),
+            F64Fn::Exp => x.exp(),
+            F64Fn::Ln => x.ln(),
+            F64Fn::Floor => x.floor(),
+            F64Fn::Ceil => x.ceil(),
+            F64Fn::Round => x.round(),
+            F64Fn::Sin => x.sin(),
+            F64Fn::Cos => x.cos(),
+            F64Fn::Tan => x.tan(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -155,6 +199,20 @@ pub enum BinOp {
     /// Concatenation of two lists with the same element type.
     Append,
     F64Add, F64Sub, F64Mul, F64Div,
+    /// `x.powf(y)`.
+    F64Pow,
+    /// `x.powi(n)` with an Int exponent (saturated to `i32`). Rust's `powi` is repeated
+    /// multiplication, which need not round like `powf`; this is here so ported code can match.
+    F64PowI,
+    /// Minimum and maximum that skip a NaN operand (as Rust's `f64::min`/`max` do), and otherwise
+    /// follow the total order, so `fmin(-0.0, 0.0)` is `-0.0` and `fmax` of them is `0.0` — a
+    /// deterministic choice where Rust leaves signed zeros unspecified. Two NaNs give the second.
+    F64Min, F64Max,
+    /// IEEE comparisons, returning `Int` 0/1 like the generic ones: every comparison with a NaN is
+    /// false except `F64Ne`, which is true, and `-0.0 == 0.0`. The generic `== < ...` instead
+    /// order F64 values by the total order (`f64::total_cmp`), which is right for negative numbers
+    /// but distinguishes the two zeros and places NaNs at the ends.
+    F64Eq, F64Ne, F64Lt, F64Le, F64Gt, F64Ge,
     Eq, Ne, Lt, Le, Gt, Ge,
     And, Or,
 }
@@ -246,6 +304,16 @@ pub fn structural_hash(v: &Value) -> u64 {
 /// around sub-evaluation, so `env` is restored on return.
 pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
     match term {
+        Term::Call(name, args) => {
+            let f = lookup(name).unwrap_or_else(|| panic!("call to unregistered function `{name}`"));
+            let vals: Vec<Value> = args.iter().map(|a| eval(a, env)).collect();
+            // The corgi backend rejects mis-shaped arguments when it types the program; the row
+            // backend has no typing pass, so it checks each call rather than run the body on them.
+            for (i, (v, s)) in vals.iter().zip(&f.args).enumerate() {
+                assert!(v.has_shape(s), "`{name}`: argument {i} is {v:?}, not of the declared shape {s}");
+            }
+            (f.body)(&vals)
+        }
         Term::Var(i) => env[*i].clone(),
         Term::Bound(k) => env[env.len() - 1 - *k].clone(),
         Term::Int(n) => Value::Int(*n),
@@ -364,6 +432,8 @@ fn eval_unary(op: UnOp, v: Value) -> Value {
         UnOp::Neg => Value::Int(-v.as_int()),
         UnOp::ToF64 => Value::f64_value(v.as_int() as f64),
         UnOp::F64Neg => Value::f64_value(-v.as_f64()),
+        UnOp::F64Fn(f) => Value::f64_value(f.apply(v.as_f64())),
+        UnOp::F64ToInt => Value::Int(v.as_f64() as i64),
         UnOp::Not => Value::Int((!v.truthy()) as i64),
         UnOp::IsTag(t) => Value::Int(matches!(&v, Value::Variant(tag, _) if *tag == t) as i64),
         UnOp::Len => match v {
@@ -388,6 +458,20 @@ fn eval_binary(op: BinOp, l: Value, r: Value) -> Value {
         BinOp::F64Sub => Value::f64_value(l.as_f64() - r.as_f64()),
         BinOp::F64Mul => Value::f64_value(l.as_f64() * r.as_f64()),
         BinOp::F64Div => Value::f64_value(l.as_f64() / r.as_f64()),
+        BinOp::F64Pow => Value::f64_value(l.as_f64().powf(r.as_f64())),
+        BinOp::F64PowI => Value::f64_value(l.as_f64().powi(r.as_int().clamp(i32::MIN as i64, i32::MAX as i64) as i32)),
+        BinOp::F64Min | BinOp::F64Max => {
+            let (x, y) = (l.as_f64(), r.as_f64());
+            let pick_x = if x.is_nan() { false } else if y.is_nan() { true }
+                else if matches!(op, BinOp::F64Min) { x.total_cmp(&y).is_le() } else { x.total_cmp(&y).is_ge() };
+            if pick_x { l } else { r }
+        }
+        BinOp::F64Eq => b(l.as_f64() == r.as_f64()),
+        BinOp::F64Ne => b(l.as_f64() != r.as_f64()),
+        BinOp::F64Lt => b(l.as_f64() < r.as_f64()),
+        BinOp::F64Le => b(l.as_f64() <= r.as_f64()),
+        BinOp::F64Gt => b(l.as_f64() > r.as_f64()),
+        BinOp::F64Ge => b(l.as_f64() >= r.as_f64()),
         // Comparisons are structural, using the derived `Ord`/`Eq` on `Value`.
         BinOp::Eq => b(l == r),
         BinOp::Ne => b(l != r),
@@ -397,4 +481,89 @@ fn eval_binary(op: BinOp, l: Value, r: Value) -> Value {
         BinOp::Ge => b(l >= r),
         BinOp::And | BinOp::Or => unreachable!("logical ops short-circuit in eval"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Registered functions: how an embedding program extends the scalar language.
+
+/// A function an embedding program supplies to DDIR programs, called by name.
+///
+/// The contract is purity: the same arguments must always give the same
+/// result, because differential dataflow re-evaluates terms when it retracts
+/// what they produced, and a retraction must cancel exactly. The declared
+/// shapes are what the columnar backend types the call as; values that do not
+/// match them are an error of the embedder's.
+pub struct Function {
+    pub name: String,
+    pub args: Vec<corgi::Shape>,
+    pub result: corgi::Shape,
+    pub body: Box<dyn Fn(&[Value]) -> Value + Send + Sync>,
+}
+
+fn functions() -> &'static std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<Function>>> {
+    static REGISTRY: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<Function>>>> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(Default::default)
+}
+
+/// Register `f` under its name, for programs parsed afterwards (the parser
+/// resolves calls against the registry). Registering a name again replaces it;
+/// a name may not shadow a builtin.
+pub fn register(f: Function) {
+    assert!(!crate::parse::is_builtin(&f.name), "`{}` is a builtin or keyword and cannot be registered", f.name);
+    // A kernel for the old registration (its columnar body, or the row adapter holding the old
+    // body) no longer describes this function; `register_kernel` may give it a new one.
+    kernels().write().unwrap().remove(&f.name);
+    functions().write().unwrap().insert(f.name.clone(), std::sync::Arc::new(f));
+}
+
+fn kernels() -> &'static std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<dyn corgi::HostKernel>>> {
+    static KERNELS: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<dyn corgi::HostKernel>>>> = std::sync::OnceLock::new();
+    KERNELS.get_or_init(Default::default)
+}
+
+/// Give the registered function `name` a columnar body: the corgi backend calls `kernel` on whole
+/// columns instead of `body` a row at a time. Its declared shapes must be the function's.
+pub fn register_kernel(name: &str, kernel: std::sync::Arc<dyn corgi::HostKernel>) {
+    let f = lookup(name).unwrap_or_else(|| panic!("register_kernel: `{name}` is not a registered function"));
+    assert_eq!(kernel.input(), &call_input(&f.args), "register_kernel: `{name}` input shape");
+    assert_eq!(kernel.output(), &f.result, "register_kernel: `{name}` output shape");
+    kernels().write().unwrap().insert(name.to_string(), kernel);
+}
+
+/// The columnar body of `name`: its registered kernel, or its row body behind an adapter that
+/// converts only the call's arguments and result.
+pub fn kernel_of(name: &str) -> Option<std::sync::Arc<dyn corgi::HostKernel>> {
+    if let Some(k) = kernels().read().unwrap().get(name) { return Some(std::sync::Arc::clone(k)) }
+    let f = lookup(name)?;
+    let k: std::sync::Arc<dyn corgi::HostKernel> = std::sync::Arc::new(RowKernel { input: call_input(&f.args), f });
+    // Keep it, so every call site shares one kernel (and CSE can merge equal calls).
+    Some(std::sync::Arc::clone(kernels().write().unwrap().entry(name.to_string()).or_insert(k)))
+}
+
+/// The column a call passes its kernel: the tuple of its arguments, or `Unit` for a call with none
+/// (an empty product carries no row count, and corgi rejects it as a kernel input).
+pub fn call_input(args: &[corgi::Shape]) -> corgi::Shape {
+    if args.is_empty() { corgi::Shape::Unit } else { corgi::Shape::Prod(args.to_vec()) }
+}
+
+/// A row-at-a-time function as a host kernel.
+struct RowKernel { f: std::sync::Arc<Function>, input: corgi::Shape }
+impl corgi::HostKernel for RowKernel {
+    fn name(&self) -> &str { &self.f.name }
+    fn input(&self) -> &corgi::Shape { &self.input }
+    fn output(&self) -> &corgi::Shape { &self.f.result }
+    fn eval(&self, input: corgi::Value) -> Result<corgi::Value, String> {
+        let rows = crate::corgi::logic::untranscode(input, &self.input);
+        // The input is `Prod(args)` or `Unit` (`call_input`); both untranscode to tuples.
+        let out: Vec<Value> = rows.into_iter().map(|r| {
+            let Value::Tuple(args) = r else { unreachable!("a call's arguments untranscode to a tuple") };
+            (self.f.body)(&args)
+        }).collect();
+        Ok(crate::corgi::logic::transcode_owned(out, &self.f.result))
+    }
+}
+
+/// The registered function called `name`, if any.
+pub fn lookup(name: &str) -> Option<std::sync::Arc<Function>> {
+    functions().read().unwrap().get(name).cloned()
 }

@@ -63,6 +63,13 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
             &[2, 5],
             &[2, -2],
         ])],
+        // f64_math: (key, a, b) with x = a / 4, y = b / 2: negatives, zero, and a key with
+        // two rows; then (key, n) integer exponents for the join, one key unmatched.
+        "registered" => vec![rows(&[&[1], &[3], &[-4]])],
+        "f64_math" => vec![
+            rows(&[&[1, 10, 1], &[2, -6, 3], &[3, 0, -1], &[4, 9, 0], &[5, -1, -4], &[5, 7, 5]]),
+            rows(&[&[1, 2], &[2, 3], &[3, -1], &[5, 0]]),
+        ],
         // tour: edges (with a cycle and a chord) + roots.
         "tour" => vec![
             rows(&[&[1, 2], &[2, 3], &[3, 1], &[3, 4], &[5, 2]]),
@@ -82,6 +89,7 @@ fn assert_backends_agree(prog: &str) {
     } else {
         format!("{}/examples/programs/{prog}.ddp", env!("CARGO_MANIFEST_DIR"))
     };
+    register_test_functions();
     let src = interactive::load_program(&path);
     let mut tree = lower::lower_tree(parse::pipe::parse(&src));
     tree.optimize();
@@ -135,6 +143,91 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn pair_keys() { assert_backends_agree("pair_keys"); }
 #[test] fn signed_min() { assert_backends_agree("signed_min"); }
 #[test] fn spread_values() { assert_backends_agree("spread_values"); }
+#[test] fn f64_math() { assert_backends_agree("f64_math"); }
+#[test] fn registered() {
+    assert_backends_agree("registered");
+    // And the program does what it says: the refinement from 1 and 3 reaches every
+    // number from 1 to 39 (grow stops at 20, so its last children are 38 and 39), and
+    // -4 has no children.
+    register_test_functions();
+    let src = interactive::load_program(&format!("{}/tests/programs/registered.ddp", env!("CARGO_MANIFEST_DIR")));
+    let tree = lower::lower_tree(parse::pipe::parse(&src));
+    let out = evaluate(RenderBackend::Corgi, timely::Config::process(2), &tree, &inputs_for("registered"));
+    let mut cells: Vec<i64> = out["cells"].iter().map(|((k, _), _)| match k { Value::Tuple(f) => f[0].as_int(), _ => panic!() }).collect();
+    cells.sort();
+    let mut want: Vec<i64> = (1..40).collect();
+    want.insert(0, -4);
+    assert_eq!(cells, want);
+    assert_eq!(out["joined"].len(), 40);
+}
+
+/// The functions `registered.ddp` calls. Registering again replaces (here with the same bodies), so every
+/// test may do it.
+fn register_test_functions() {
+    use corgi::Shape;
+    use interactive::ir::{register, Function};
+    let int = || Shape::Prim(64);
+    let float = || Shape::Sum(vec![Shape::Prim(64)]);
+    // A cell's children: two, while the cell is small and positive; none after.
+    register(Function {
+        name: "grow".into(),
+        args: vec![int()],
+        result: Shape::List(Box::new(Shape::Prod(vec![int(), int()]))),
+        body: Box::new(|a| {
+            let n = a[0].as_int();
+            let kids = if (1..20).contains(&n) { vec![2 * n, 2 * n + 1] } else { vec![] };
+            Value::List(kids.into_iter().map(|k| Value::Tuple(vec![Value::Int(k), Value::Int(n)])).collect())
+        }),
+    });
+    // A float from a pair of ints.
+    register(Function {
+        name: "blend".into(),
+        args: vec![Shape::Prod(vec![int(), int()])],
+        result: float(),
+        body: Box::new(|a| {
+            let Value::Tuple(p) = &a[0] else { panic!("blend expects a pair") };
+            Value::f64_value((p[0].as_int() as f64).sqrt() - p[1].as_int() as f64 / 3.0)
+        }),
+    });
+    // A nested shape: (n * 3, [divisors of n under 5]).
+    register(Function {
+        name: "describe".into(),
+        args: vec![int()],
+        result: Shape::Prod(vec![Shape::Prod(vec![int()]), Shape::List(Box::new(int()))]),
+        body: Box::new(|a| {
+            let n = a[0].as_int();
+            let divisors = (1..5).filter(|d| n % d == 0).map(Value::Int).collect();
+            Value::Tuple(vec![Value::Tuple(vec![Value::Int(3 * n)]), Value::List(divisors)])
+        }),
+    });
+    // No arguments: the call passes a `Unit` column, so it still runs once per row.
+    register(Function {
+        name: "seven".into(),
+        args: vec![],
+        result: int(),
+        body: Box::new(|_| Value::Int(7)),
+    });
+    // A columnar body: the corgi backend runs `Double` on whole columns, the vec backend the row
+    // body; the gate checks they agree.
+    register(Function {
+        name: "double".into(),
+        args: vec![int()],
+        result: int(),
+        body: Box::new(|a| Value::Int(2 * a[0].as_int())),
+    });
+    struct Double(Shape, Shape);
+    impl corgi::HostKernel for Double {
+        fn name(&self) -> &str { "double" }
+        fn input(&self) -> &Shape { &self.0 }
+        fn output(&self) -> &Shape { &self.1 }
+        fn eval(&self, input: corgi::Value) -> Result<corgi::Value, String> {
+            let args = input.into_prod("double")?;
+            let xs = args[0].as_u64("double")?;
+            Ok(corgi::Value::u64(xs.iter().map(|&x| (2 * x as i64) as u64).collect()))
+        }
+    }
+    interactive::ir::register_kernel("double", std::sync::Arc::new(Double(Shape::Prod(vec![int()]), int())));
+}
 
 /// A filter predicate must be an `Int`: both backends reject a tuple rather than one of them
 /// keeping nothing.
@@ -148,4 +241,40 @@ fn filter_requires_an_int_predicate() {
         let result = std::panic::catch_unwind(move || evaluate(backend, timely::Config::process(1), &tree, &inputs));
         assert!(result.is_err(), "{backend:?} accepted a tuple filter predicate");
     }
+}
+
+/// A call whose argument does not have the declared shape is rejected by both backends: corgi
+/// when it types the program, the row backend when it makes the call.
+#[test]
+fn call_argument_shapes_are_checked_by_both_backends() {
+    register_test_functions();
+    // `blend` takes a pair; pass it an Int.
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 | map($0 ; blend($0[0]));"#));
+    tree.optimize();
+    let inputs = vec![rows(&[&[1], &[2]])];
+    for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
+        let (tree, inputs) = (tree.clone(), inputs.clone());
+        let result = std::panic::catch_unwind(move || evaluate(backend, timely::Config::process(1), &tree, &inputs));
+        assert!(result.is_err(), "{backend:?} ran a call with a mis-shaped argument");
+    }
+}
+
+/// Registering a name again replaces its kernel too: the row adapter for the old body, or a
+/// columnar kernel registered for it, no longer runs.
+#[test]
+fn reregistering_a_function_drops_its_old_kernel() {
+    use corgi::Shape;
+    use interactive::ir::{kernel_of, register, register_kernel, Function};
+    let one = |k: i64| Function { name: "reregistered".into(), args: vec![Shape::Prim(64)], result: Shape::Prim(64), body: Box::new(move |_| Value::Int(k)) };
+    register(one(1));
+    let first = kernel_of("reregistered").unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &kernel_of("reregistered").unwrap()), "one kernel per registration");
+    register(one(2));
+    let second = kernel_of("reregistered").unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &second), "re-registration kept the old kernel");
+    register_kernel("reregistered", first);
+    register(one(3));
+    assert!(!std::sync::Arc::ptr_eq(&second, &kernel_of("reregistered").unwrap()));
+    // A keyword can never be called, so it cannot be registered.
+    assert!(std::panic::catch_unwind(|| register(Function { name: "min".into(), args: vec![], result: Shape::Prim(64), body: Box::new(|_| Value::Int(0)) })).is_err());
 }
