@@ -173,7 +173,14 @@ impl Backend for VecBackend {
         )
     }
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container> {
-        c.inspect(move |x| eprintln!("  [{}] {:?}", label, x.clone()))
+        use std::fmt::Write;
+        let mut line = String::new();
+        c.inspect(move |x| {
+            // Keep formatting outside stderr's lock, and write one complete record.
+            line.clear();
+            writeln!(&mut line, "  [{label}] {x:?}").unwrap();
+            eprint!("{line}");
+        })
     }
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container> {
         c.leave_dynamic(depth)
