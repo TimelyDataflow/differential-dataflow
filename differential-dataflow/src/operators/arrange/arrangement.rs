@@ -20,7 +20,8 @@
 use timely::dataflow::operators::{Enter, vec::Map};
 use timely::order::PartialOrder;
 use timely::dataflow::{Scope, Stream};
-use timely::dataflow::operators::generic::Operator;
+use timely::dataflow::operators::generic::{Operator, OperatorInfo};
+use timely::scheduling::Activator;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::progress::Timestamp;
 use timely::progress::Antichain;
@@ -316,6 +317,27 @@ where
     Ba: Batcher<C, Time = Tr::Time, Output: Into<Tr::Batch>> + 'static,
     Tr: Trace+'static,
 {
+    arrange_core_with_trace(stream, pact, name, batcher, Tr::new)
+}
+
+/// Arranges a stream of updates like [`arrange_core`], building the trace with `trace`.
+///
+/// `trace` receives the arguments [`Trace::new`] would, and is called once, on the operator's
+/// construction. A caller that needs to reach the trace after [`TraceAgent`] takes ownership of it,
+/// for example through a handle the trace shares, can obtain that handle here.
+pub fn arrange_core_with_trace<'scope, P, C, Ba, Tr>(
+    stream: Stream<'scope, Tr::Time, C>,
+    pact: P,
+    name: &str,
+    batcher: impl FnOnce(Option<Logger>, usize) -> Ba,
+    trace: impl FnOnce(OperatorInfo, Option<Logger>, Option<Activator>) -> Tr,
+) -> Arranged<'scope, TraceAgent<Tr>>
+where
+    C: Container + Clone + 'static,
+    P: ParallelizationContract<Tr::Time, C>,
+    Ba: Batcher<C, Time = Tr::Time, Output: Into<Tr::Batch>> + 'static,
+    Tr: Trace+'static,
+{
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
     // bounds are those frontiers, containing updates at times greater or
@@ -349,7 +371,7 @@ where
         let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
 
         let activator = Some(scope.activator_for(std::rc::Rc::clone(&info.address)));
-        let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
+        let mut empty_trace = trace(info.clone(), logger.clone(), activator);
         // If there is default exertion logic set, install it.
         if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
             empty_trace.set_exert_logic(exert_logic);

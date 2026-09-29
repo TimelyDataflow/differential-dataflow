@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `arrange_core_with_trace` and `reduce_with_tactic_and_trace`, which build the operator's trace with a caller-supplied factory in place of `Trace::new`, so a caller can keep a handle into the trace before `TraceAgent` takes ownership of it.
+
 ## [0.25.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.25.0...differential-dataflow-v0.25.1) - 2026-07-15
 
 ### Other

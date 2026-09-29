@@ -14,8 +14,11 @@ use timely::progress::Timestamp;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::OperatorInfo;
+use timely::scheduling::Activator;
 
 use crate::operators::arrange::{Arranged, TraceAgent};
+use crate::logging::Logger;
 use crate::trace::{Span, ExertionLogic, Trace, TraceReader};
 
 /// Sort and deduplicate a list. Shared by the cursor and proxy tactics, which
@@ -75,7 +78,27 @@ pub use crate::operators::cursor::reduce::reduce_trace;
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
 /// `spans_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
-pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
+pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
+where
+    Tr1: TraceReader + 'static,
+    Tr2: Trace<Time = Tr1::Time> + 'static,
+    T: ReduceTactic<Tr1::Time, Tr1::Batch, Tr2::Batch> + 'static,
+{
+    reduce_with_tactic_and_trace(trace, name, tactic, Tr2::new)
+}
+
+/// Drives a key-wise reduction like [`reduce_with_tactic`], building the output trace with
+/// `output`.
+///
+/// `output` receives the arguments [`Trace::new`] would, and is called once, on the operator's
+/// construction. See [`crate::operators::arrange::arrangement::arrange_core_with_trace`] for why a
+/// caller would supply it.
+pub fn reduce_with_tactic_and_trace<'scope, Tr1, Tr2, T>(
+    trace: Arranged<'scope, Tr1>,
+    name: &str,
+    mut tactic: T,
+    output: impl FnOnce(OperatorInfo, Option<Logger>, Option<Activator>) -> Tr2,
+) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
@@ -95,7 +118,7 @@ where
             let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
-            let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
+            let mut empty = output(operator_info.clone(), logger.clone(), activator);
             // If there is default exert logic set, install it.
             if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty.set_exert_logic(exert_logic);
