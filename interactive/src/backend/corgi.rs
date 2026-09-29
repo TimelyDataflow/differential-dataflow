@@ -343,12 +343,12 @@ pub fn render_tree<'s>(
 /// converts back (`FromCorgi`). Signature-compatible with
 /// [`vec::render_tree`](crate::backend::vec::render_tree) (hence the `vec::Col` alias), so a
 /// row-speaking driver switches backends by switching this one call.
-pub fn render_tree_rows<'s>(
+pub fn render_tree_corgi<'s>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
     depth: usize,
     imports: Vec<crate::backend::vec::Col<'s>>,
-) -> Vec<crate::backend::vec::Col<'s>> {
+) -> Vec<Collection<'s, Time, CC>> {
     let corgi_imports: Vec<Collection<'s, Time, CC>> = crate::backend::vec::check_import_shapes(s, imports)
         .into_iter()
         .zip(&s.imports)
@@ -380,6 +380,115 @@ pub fn render_tree_rows<'s>(
         })
         .collect();
     render_tree(s, scope, depth, corgi_imports)
+}
+
+/// A columnar export: the program's corgi collection, left to the host time and arranged as
+/// corgi chunks. Readers convert to rows only when they read ([`export_rows`]).
+pub type ExportTrace = TraceAgent<differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<u64, Diff>>>;
+
+/// Arrange an export (already at host time) as a columnar trace.
+pub fn arrange_export<'s>(c: Collection<'s, u64, CorgiContainer<u64, Diff>>) -> Arranged<'s, ExportTrace> {
+    arrange_core::<_, CorgiContainer<u64, Diff>, _, differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<u64, Diff>>>(
+        c.inner,
+        CorgiPact,
+        "CorgiExport",
+        ChunkBatcher::<CorgiChunker<u64, Diff>, _>::new,
+    )
+}
+
+/// The batches an export's arrangement has produced on this worker, not yet taken.
+pub type ExportTap = std::rc::Rc<std::cell::RefCell<Vec<<ExportTrace as differential_dataflow::trace::TraceReader>::Batch>>>;
+
+/// The updates in `batches`, as rows.
+pub fn batch_rows(batches: Vec<<ExportTrace as differential_dataflow::trace::TraceReader>::Batch>) -> Vec<((Row, Row), u64, Diff)> {
+    let mut out = Vec::new();
+    for batch in batches {
+        for ch in batch.chunks.iter().filter(|c| c.len() > 0) {
+            let c = CorgiContainer {
+                keys: recover_key(ch.keys()),
+                vals: ch.vals().clone(),
+                times: ch.times().clone(),
+                diffs: ch.diffs().to_vec(),
+            };
+            out.extend(c.into_updates());
+        }
+    }
+    out
+}
+
+/// Decode and consume at most `rows_per_batch` export rows at a time.
+/// Row payloads (including nested lists) can still vary in size.
+pub fn for_each_batch_rows(
+    batches: Vec<<ExportTrace as differential_dataflow::trace::TraceReader>::Batch>,
+    rows_per_batch: usize,
+    mut consume: impl FnMut(Vec<((Row, Row), u64, Diff)>),
+) {
+    assert!(rows_per_batch > 0, "export row batch size must be positive");
+    let mut indices = Vec::new();
+    for batch in batches {
+        for ch in batch.chunks.iter().filter(|c| c.len() > 0) {
+            let keys = recover_key(ch.keys());
+            for start in (0..ch.len()).step_by(rows_per_batch) {
+                let end = start.saturating_add(rows_per_batch).min(ch.len());
+                indices.clear();
+                indices.extend(start..end);
+                let c = CorgiContainer {
+                    keys: corgi::arrange::gather(&keys, &indices),
+                    vals: corgi::arrange::gather(ch.vals(), &indices),
+                    times: ch.times().gather(&indices),
+                    diffs: ch.diffs()[start..end].to_vec(),
+                };
+                consume(c.into_updates());
+            }
+        }
+    }
+}
+
+/// Record each batch the arrangement emits into `tap`, passing the stream through.
+pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::dataflow::Stream<'s, u64, Vec<differential_dataflow::trace::Span<u64, <ExportTrace as differential_dataflow::trace::TraceReader>::Batch>>> {
+    a.stream.clone().unary(Pipeline, "ExportTap", move |_, _| {
+        move |input, output| {
+            input.for_each(|cap, data| {
+                tap.borrow_mut().extend(data.iter().filter_map(|b| b.inner.clone()));
+                output.session(&cap).give_container(data);
+            });
+        }
+    })
+}
+
+/// The rows of an imported columnar export, as `((key, val), time, diff)` updates.
+pub fn export_rows<'s>(
+    a: Arranged<'s, ExportTrace>,
+) -> timely::dataflow::Stream<'s, u64, Vec<((Row, Row), u64, Diff)>> {
+    a.stream.unary(Pipeline, "ExportRows", |_, _| {
+        |input, output| {
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                for batch in data.iter() {
+                    let Some(payload) = batch.inner.as_ref() else { continue };
+                    for ch in payload.chunks.iter().filter(|c| c.len() > 0) {
+                        let c = CorgiContainer {
+                            keys: recover_key(ch.keys()),
+                            vals: ch.vals().clone(),
+                            times: ch.times().clone(),
+                            diffs: ch.diffs().to_vec(),
+                        };
+                        session.give_container(&mut c.into_updates());
+                    }
+                }
+            });
+        }
+    })
+}
+
+/// [`render_tree_corgi`] with each export converted back to rows (`FromCorgi`).
+pub fn render_tree_rows<'s>(
+    s: &st::Scope,
+    scope: Scope<'s, Time>,
+    depth: usize,
+    imports: Vec<crate::backend::vec::Col<'s>>,
+) -> Vec<crate::backend::vec::Col<'s>> {
+    render_tree_corgi(s, scope, depth, imports)
         .into_iter()
         .map(|c| {
             c.inner

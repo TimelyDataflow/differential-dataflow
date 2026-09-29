@@ -121,6 +121,8 @@ fn main() {
         .unwrap_or_else(|_| "vec".to_string())
         .parse::<RenderBackend>()
         .unwrap_or_else(|error| panic!("DDIR_BACKEND: {error}"));
+    // DDIR_COLUMNAR_EXPORTS=1: corgi-backend exports stay columnar (less memory; readers see rows).
+    let columnar_exports = std::env::var("DDIR_COLUMNAR_EXPORTS").is_ok_and(|v| v != "0" && !v.is_empty());
 
     let (event_tx, event_rx) = channel::<ControlEvent>();
     let (activation_tx, activation_rx) = sync_channel(1);
@@ -144,7 +146,7 @@ fn main() {
             } else {
                 None
             };
-            control_loop::run_worker(worker, events, backend);
+            control_loop::run_worker(worker, events, backend, columnar_exports);
 
             // The live server intentionally keeps installed dataflows and
             // diagnostics around. Once every worker observes shutdown, remove
