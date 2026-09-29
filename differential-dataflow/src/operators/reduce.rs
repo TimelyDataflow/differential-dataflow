@@ -15,7 +15,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
-use crate::operators::arrange::{Arranged, TraceAgent};
+use crate::operators::arrange::{Agent, Arranged, TraceAgent};
 use crate::trace::{Span, ExertionLogic, Trace, TraceReader};
 
 /// Sort and deduplicate a list. Shared by the cursor and proxy tactics, which
@@ -75,11 +75,23 @@ pub use crate::operators::cursor::reduce::reduce_trace;
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
 /// `spans_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
-pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
+pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
     T: ReduceTactic<Tr1::Time, Tr1::Batch, Tr2::Batch> + 'static,
+{
+    reduce_with_tactic_and_agent::<Tr1, TraceAgent<Tr2>, T>(trace, name, tactic)
+}
+
+/// Drives a key-wise reduction like [`reduce_with_tactic`], sharing the output trace through the
+/// agent `A`.
+pub fn reduce_with_tactic_and_agent<'scope, Tr1, A, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, A>
+where
+    Tr1: TraceReader + 'static,
+    A: Agent<Time = Tr1::Time> + Clone + 'static,
+    A::Trace: 'static,
+    T: ReduceTactic<Tr1::Time, Tr1::Batch, A::Batch> + 'static,
 {
     let mut result_trace = None;
 
@@ -95,13 +107,13 @@ where
             let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
-            let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
+            let mut empty = A::Trace::new(operator_info.clone(), logger.clone(), activator);
             // If there is default exert logic set, install it.
             if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty.set_exert_logic(exert_logic);
             }
 
-            let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
+            let (mut output_reader, mut output_writer) = A::new(empty, operator_info, logger);
 
             *result_trace = Some(output_reader.clone());
 

@@ -108,12 +108,12 @@ use timely::progress::{Antichain, Timestamp};
 use timely::dataflow::operators::Capability;
 
 use crate::operators::arrange::arrangement::Arranged;
-use crate::trace::{self, BatchCursor, BatchDiff, Builder, Cursor, Description, Navigable, Trace, TraceReader};
+use crate::trace::{self, BatchCursor, BatchDiff, Builder, Cursor, Description, Navigable, Trace};
 use crate::{ExchangeData, Hashable};
 
 use crate::trace::implementations::containers::BatchContainer;
 
-use super::TraceAgent;
+use super::{Agent, TraceAgent};
 
 /// Arrange data from a stream of keyed upserts.
 ///
@@ -140,14 +140,35 @@ where
     >,
     Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output: Into<Tr::Batch>>,
 {
-    let mut reader: Option<TraceAgent<Tr>> = None;
+    arrange_from_upsert_with_agent::<Bu, TraceAgent<Tr>, K, V>(stream, name)
+}
+
+/// Arranges data from a stream of keyed upserts like [`arrange_from_upsert`], sharing the trace
+/// through the agent `A`.
+pub fn arrange_from_upsert_with_agent<'scope, Bu, A, K, V>(
+    stream: Stream<'scope, A::Time, Vec<(K, Option<V>, A::Time)>>,
+    name: &str,
+) -> Arranged<'scope, A>
+where
+    K: ExchangeData+Hashable+std::hash::Hash,
+    V: ExchangeData,
+    A: Agent<Batch: Navigable, Time: TotalOrder+ExchangeData> + Clone + 'static,
+    A::Trace: 'static,
+    for<'a> BatchCursor<A>: Cursor<
+        Key<'a> = &'a K,
+        Val<'a> = &'a V,
+        Diff=isize,
+    >,
+    Bu: Builder<Time=A::Time, Input = Vec<((K, V), A::Time, BatchDiff<A>)>, Output: Into<A::Batch>>,
+{
+    let mut reader: Option<A> = None;
 
     // fabricate a data-parallel operator that holds capabilities and consults its input frontier.
     let stream = {
 
         let reader = &mut reader;
 
-        let exchange = Exchange::new(move |update: &(K,Option<V>,Tr::Time)| (update.0).hashed().into());
+        let exchange = Exchange::new(move |update: &(K,Option<V>,A::Time)| (update.0).hashed().into());
 
         let scope = stream.scope();
         stream.unary_frontier(exchange, name, move |_capability, info| {
@@ -156,24 +177,24 @@ where
             let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
 
             // Tracks the lower envelope of times in `priority_queue`.
-            let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
+            let mut capabilities = Antichain::<Capability<A::Time>>::new();
             // Form the trace we will both use internally and publish.
             let activator = Some(scope.activator_for(std::rc::Rc::clone(&info.address)));
-            let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
+            let mut empty_trace = A::Trace::new(info.clone(), logger.clone(), activator);
 
             if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
                 empty_trace.set_exert_logic(exert_logic);
             }
 
-            let (mut reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
+            let (mut reader_local, mut writer) = A::new(empty_trace, info, logger);
             // Capture the reader outside the builder scope.
             *reader = Some(reader_local.clone());
 
             // Tracks the input frontier, used to populate the lower bound of new batches.
-            let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
+            let mut prev_frontier = Antichain::from_elem(<A::Time as Timestamp>::minimum());
 
             // For stashing input upserts, ordered increasing by time (`BinaryHeap` is a max-heap).
-            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(Tr::Time, K, Option<V>)>>::new();
+            let mut priority_queue = BinaryHeap::<std::cmp::Reverse<(A::Time, K, Option<V>)>>::new();
             let mut updates = Vec::new();
 
             move |(input, frontier), output| {
@@ -234,7 +255,7 @@ where
                                 let batches = reader_local.batches_through(Antichain::new().borrow()).unwrap();
                                 let (mut trace_cursor, trace_storage) = crate::trace::cursor::cursor_list(batches);
                                 let mut builder = Bu::default();
-                                let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
+                                let mut key_con = <BatchCursor<A> as Cursor>::KeyContainer::with_capacity(1);
                                 for (key, mut list) in to_process {
 
                                     key_con.clear(); key_con.push_ref(&key);
@@ -248,7 +269,7 @@ where
                                         // Determine the prior value associated with the key.
                                         while let Some(val) = trace_cursor.get_val(&trace_storage) {
                                             let mut count = 0;
-                                            trace_cursor.map_times(&trace_storage, |_time, diff| count += <BatchCursor<Tr> as Cursor>::owned_diff(diff));
+                                            trace_cursor.map_times(&trace_storage, |_time, diff| count += <BatchCursor<A> as Cursor>::owned_diff(diff));
                                             assert!(count == 0 || count == 1);
                                             if count == 1 {
                                                 assert!(prev_value.is_none());
@@ -277,7 +298,7 @@ where
                                     updates.sort();
                                     builder.push(&mut updates);
                                 }
-                                let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(Tr::Time::minimum()));
+                                let description = Description::new(prev_frontier.clone(), upper.clone(), Antichain::from_elem(<A::Time as Timestamp>::minimum()));
                                 let batch = crate::trace::Span::new(description, builder.done().map(Into::into));
                                 prev_frontier.clone_from(&upper);
 

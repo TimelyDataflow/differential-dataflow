@@ -68,6 +68,28 @@ impl<Tr: TraceReader> TraceReader for TraceAgent<Tr> {
     fn map_spans<F: FnMut(&Span<Tr::Time, Tr::Batch>)>(&self, f: F) { self.trace.borrow().trace.map_spans(f) }
 }
 
+/// A shared reader of a trace, constructed by the operator that maintains the trace.
+///
+/// The arranging operators (`arrange_core_with_agent`, `reduce_with_tactic_and_agent`,
+/// `arrange_from_upsert_with_agent`) build their trace, hand it to `Agent::new`, keep the writer,
+/// and return the agent in the resulting `Arranged`. The operator also reads through its own copy of
+/// the agent, so an implementation must honour the `TraceReader` contract of the trace it shares.
+pub trait Agent: TraceReader + Sized {
+    /// The trace the agent shares.
+    type Trace: Trace<Time = Self::Time, Batch = Self::Batch>;
+    /// Takes ownership of `trace` and returns a reader and the writer that feeds it.
+    ///
+    /// Called once, on the operator's construction.
+    fn new(trace: Self::Trace, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, TraceWriter<Self::Trace>);
+}
+
+impl<Tr: Trace> Agent for TraceAgent<Tr> {
+    type Trace = Tr;
+    fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, TraceWriter<Tr>) {
+        TraceAgent::new(trace, operator, logging)
+    }
+}
+
 impl<Tr: TraceReader> TraceAgent<Tr> {
     /// Creates a new agent from a trace reader.
     pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, TraceWriter<Tr>)

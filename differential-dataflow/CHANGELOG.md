@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Agent` trait over the shared reader an arranging operator returns, implemented by `TraceAgent`, and `arrange_core_with_agent`, `reduce_with_tactic_and_agent`, and `arrange_from_upsert_with_agent`, which return a caller-chosen agent. `Agent::new` receives the trace by value, so an agent can keep state the trace shares before `TraceAgent` takes ownership of it.
+
 ## [0.25.1](https://github.com/TimelyDataflow/differential-dataflow/compare/differential-dataflow-v0.25.0...differential-dataflow-v0.25.1) - 2026-07-15
 
 ### Other

@@ -37,7 +37,7 @@ use crate::trace::{self, Description, SpanOf, Trace, TraceReader, Navigable, Bui
 
 use trace::wrappers::enter::{TraceEnter, enter_span};
 
-use super::TraceAgent;
+use super::{Agent, TraceAgent};
 
 /// An arranged collection of `(K,V)` values.
 ///
@@ -316,6 +316,23 @@ where
     Ba: Batcher<C, Time = Tr::Time, Output: Into<Tr::Batch>> + 'static,
     Tr: Trace+'static,
 {
+    arrange_core_with_agent::<P, C, Ba, TraceAgent<Tr>>(stream, pact, name, batcher)
+}
+
+/// Arranges a stream of updates like [`arrange_core`], sharing the trace through the agent `A`.
+pub fn arrange_core_with_agent<'scope, P, C, Ba, A>(
+    stream: Stream<'scope, A::Time, C>,
+    pact: P,
+    name: &str,
+    batcher: impl FnOnce(Option<Logger>, usize) -> Ba,
+) -> Arranged<'scope, A>
+where
+    C: Container + Clone + 'static,
+    P: ParallelizationContract<A::Time, C>,
+    Ba: Batcher<C, Time = A::Time, Output: Into<A::Batch>> + 'static,
+    A: Agent + 'static,
+    A::Trace: 'static,
+{
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
     // bounds are those frontiers, containing updates at times greater or
@@ -331,7 +348,7 @@ where
     // held by the batcher, which may prevents the operator from sending an
     // empty batch.
 
-    let mut reader: Option<TraceAgent<Tr>> = None;
+    let mut reader: Option<A> = None;
 
     // fabricate a data-parallel operator that holds capabilities and consults its input frontier.
     let reader_ref = &mut reader;
@@ -346,21 +363,21 @@ where
         let mut batcher = batcher(logger.clone(), info.global_id);
 
         // Capabilities for the lower envelope of updates in `batcher`.
-        let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
+        let mut capabilities = Antichain::<Capability<A::Time>>::new();
 
         let activator = Some(scope.activator_for(std::rc::Rc::clone(&info.address)));
-        let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
+        let mut empty_trace = A::Trace::new(info.clone(), logger.clone(), activator);
         // If there is default exertion logic set, install it.
         if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
             empty_trace.set_exert_logic(exert_logic);
         }
 
-        let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
+        let (reader_local, mut writer) = A::new(empty_trace, info, logger);
 
         *reader_ref = Some(reader_local);
 
         // Initialize to the minimal input frontier.
-        let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
+        let mut prev_frontier = Antichain::from_elem(<A::Time as Timestamp>::minimum());
 
         move |(input, frontier), output| {
 
@@ -418,7 +435,7 @@ where
                     let description = Description::new(
                         prev_frontier.clone(),
                         frontier.frontier().to_owned(),
-                        Antichain::from_elem(Tr::Time::minimum()),
+                        Antichain::from_elem(<A::Time as Timestamp>::minimum()),
                     );
                     let (extracted, retained) = batcher.extract(frontier.frontier());
 
