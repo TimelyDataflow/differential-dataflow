@@ -420,7 +420,7 @@ impl Server {
             traces: HashMap::new(),
             ctraces: HashMap::new(),
             taps: HashMap::new(),
-            columnar_exports: false,
+            columnar_exports: true,
             export_taps: false,
             programs: HashMap::new(),
             importers: HashMap::new(),
@@ -440,7 +440,7 @@ impl Server {
         self.traces.contains_key(name) || self.ctraces.contains_key(name)
     }
 
-    /// Keep corgi-backend exports columnar (default off): a program's exports leave its scope as
+    /// Keep corgi-backend exports columnar (default on): a program's exports leave its scope as
     /// corgi containers and are arranged as corgi chunks, and readers convert to rows only when
     /// they read (`snapshot`, imports, binds). Affects programs installed afterwards.
     pub fn set_columnar_exports(&mut self, on: bool) {

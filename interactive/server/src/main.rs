@@ -121,8 +121,9 @@ fn main() {
         .unwrap_or_else(|_| "vec".to_string())
         .parse::<RenderBackend>()
         .unwrap_or_else(|error| panic!("DDIR_BACKEND: {error}"));
-    // DDIR_COLUMNAR_EXPORTS=1: corgi-backend exports stay columnar (less memory; readers see rows).
-    let columnar_exports = std::env::var("DDIR_COLUMNAR_EXPORTS").is_ok_and(|v| v != "0" && !v.is_empty());
+    // Corgi-backend exports stay columnar (less memory; readers see rows); DDIR_COLUMNAR_EXPORTS=0
+    // keeps the row traces instead.
+    let columnar_exports = std::env::var("DDIR_COLUMNAR_EXPORTS").map_or(true, |v| v != "0");
 
     let (event_tx, event_rx) = channel::<ControlEvent>();
     let (activation_tx, activation_rx) = sync_channel(1);
