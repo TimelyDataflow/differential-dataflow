@@ -40,7 +40,8 @@ does not poll requests with a periodic sleep.
 
 Every request can begin with an arbitrary request id. If omitted, the server
 generates one. Responses are `<id> data ...`, followed by `<id> ok ...` or
-`<id> err ...`. A `tail` remains active after its `ok` and ends when stopped.
+`<id> err ...`. A `tail` remains active after its `ok` and ends when stopped;
+`tail <export> as corgi` sends binary frames instead of `data` lines (below).
 Between commands, blank lines and `#` comment lines are skipped, so command
 scripts can be piped to stdin (see `demo/`).
 
@@ -77,6 +78,43 @@ do not cause it, and an idle server has no deadline to service. A future
 queue-driven commit policy can seal an epoch as soon as the preceding epoch
 retires and intents are waiting; that decision should come from logical queue
 state, not elapsed wall-clock time.
+
+## Columnar subscriptions: `tail <export> as corgi`
+
+`tail <export> as corgi` streams an export as binary frames of Corgi columns
+instead of text lines (`tail <export>` and `tail <export> as rows` are the text
+form). It needs a columnar export: the corgi backend with columnar exports on,
+which is the default. Each frame is a header line followed by exactly `<nbytes>`
+bytes of payload:
+
+    <id> frame <kind> <nbytes>\n<payload>
+
+On TCP and stdin the header and payload follow each other on the stream; a
+line-oriented client reads the header line and then `<nbytes>` bytes. On
+WebSocket each frame is one binary message holding the same header line and
+payload. The frame kinds, all integers little-endian:
+
+- `schema`, once, before the first `data`: UTF-8 text such as
+  `export=<name> encoding=corgi-container/1 time=u64 diff=i64 data=worker:u64-le,container`.
+- `data`: `u64 worker` (the worker whose share of the batch this is), then one
+  encoded batch in the format workers exchange between processes
+  (`interactive/src/corgi/bytes.rs`): `u64 keys_len | u64 vals_len | u64 times_len |
+  u64 diffs_len | keys | vals | times | diffs`. Keys and values are self-describing
+  Corgi columns (`corgi::bytes`); times are one lane of `u64`; diffs are `i64`.
+  A DDIR `Int` travels as its `u64` bits, and an `F64` as a one-variant sum of its
+  order-preserving key.
+- `progress`: `u64 upper`. Every update at a time below `upper` has now been
+  sent, from every worker.
+
+Each worker sends its own batches, and workers hold disjoint keys, so the data
+frames of one tick together are that tick's consolidated changes. The first
+frames, before the `ok`, replay the export's compacted contents. A client adds
+the updates up; `interactive::corgi::container::CorgiContainer::from_bytes`
+decodes a `data` payload after its worker word (see `tests/columnar_tail.rs`).
+
+A subscription whose client falls more than 256 MiB behind gets `<id> err client
+too slow` and `<id> end` and stops sending; `stop <id>` or the end of the session
+removes it.
 
 ## Writes: `feed`
 

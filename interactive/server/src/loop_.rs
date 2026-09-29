@@ -18,7 +18,7 @@ use timely::dataflow::operators::vec::{Input as VecInput, Map};
 use timely::dataflow::operators::{CapabilitySet, Exchange, Inspect, Probe};
 use timely::worker::Worker;
 
-use crate::cmd::{ConnectionId, PreparedCommand, Request};
+use crate::cmd::{ConnectionId, Out, PreparedCommand, Request};
 use crate::ControlEvent;
 
 struct Tail {
@@ -149,7 +149,7 @@ pub fn run_worker(
     let mut server = Server::with_backend(backend);
     server.set_columnar_exports(columnar_exports);
     let mut tails: HashMap<TailKey, Tail> = HashMap::new();
-    let mut responses: HashMap<u64, Sender<String>> = HashMap::new();
+    let mut responses: HashMap<u64, Sender<Out>> = HashMap::new();
     let mut next_token = 0u64;
     let mut intake_closed = false;
     let mut shutdown = false;
@@ -269,7 +269,7 @@ fn dispatch(
     command: Result<PreparedCommand, String>,
     connection_id: ConnectionId,
     reqid: &str,
-    response: Option<Sender<String>>,
+    response: Option<Sender<Out>>,
     server: &mut Server,
     tails: &mut HashMap<TailKey, Tail>,
     worker: &mut Worker,
@@ -413,10 +413,11 @@ fn dispatch(
                 Ok("bye".into())
             }
         },
-        Ok(PreparedCommand::Tail { name }) => start_tail(
+        Ok(PreparedCommand::Tail { name, columnar }) => start_tail(
             connection_id,
             reqid,
             &name,
+            columnar,
             response.clone(),
             server,
             tails,
@@ -446,11 +447,18 @@ fn dispatch(
     }
 }
 
+/// A columnar tail's bound on frame bytes queued for its client and not yet
+/// written. Past it the subscription sends `err` and `end` and stops sending,
+/// rather than holding back the dataflow or growing server memory.
+const TAIL_PENDING_BYTES: usize = 256 << 20;
+
+#[allow(clippy::too_many_arguments)]
 fn start_tail(
     connection: ConnectionId,
     reqid: &str,
     name: &str,
-    response: Option<Sender<String>>,
+    columnar: bool,
+    response: Option<Sender<Out>>,
     server: &Server,
     tails: &mut HashMap<TailKey, Tail>,
     worker: &mut Worker,
@@ -465,6 +473,15 @@ fn start_tail(
     let dataflow_id = worker.next_dataflow_index();
     let tag = reqid.to_string();
     let mut probe = ProbeHandle::new();
+    if columnar {
+        if !trace.is_columnar() {
+            return Err(format!(
+                "tail {name:?} as corgi needs a columnar export (the corgi backend with columnar exports on); text tail reads any trace"
+            ));
+        }
+        let shutdown = columnar_tail(worker, &mut trace, name, tag, response, &probe);
+        return finish_tail(key, name, dataflow_id, shutdown, probe, server, tails, worker);
+    }
     let shutdown = worker.dataflow::<OuterTime, _, _>(|scope| {
         let (rows, shutdown) = trace.import_rows(scope.clone(), "TailImport");
         rows
@@ -483,6 +500,20 @@ fn start_tail(
         shutdown
     });
 
+    finish_tail(key, name, dataflow_id, shutdown, probe, server, tails, worker)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_tail(
+    key: TailKey,
+    name: &str,
+    dataflow_id: usize,
+    shutdown: ShutdownButton<CapabilitySet<OuterTime>>,
+    probe: ProbeHandle<OuterTime>,
+    server: &Server,
+    tails: &mut HashMap<TailKey, Tail>,
+    worker: &mut Worker,
+) -> Result<(), String> {
     // A tail's acknowledgement is its initial-replay boundary. Drive the new
     // import through the current closed epoch before returning. The response
     // channel is FIFO, so every replayed `data` message precedes dispatch's
@@ -501,6 +532,81 @@ fn start_tail(
         },
     );
     Ok(())
+}
+
+/// A columnar tail's dataflow: every worker encodes its share of each imported
+/// batch (`Published::import_encoded`), prefixes its worker index, and sends it to
+/// worker 0, which writes one `data` frame per batch, a `schema` frame before the
+/// first, and a `progress` frame whenever its input frontier advances: every update
+/// at a time below that upper has then been sent, from every worker.
+fn columnar_tail(
+    worker: &mut Worker,
+    trace: &mut interactive::server::Published,
+    name: &str,
+    tag: String,
+    response: Option<Sender<Out>>,
+    probe: &ProbeHandle<OuterTime>,
+) -> ShutdownButton<CapabilitySet<OuterTime>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use timely::container::CapacityContainerBuilder;
+    let schema = format!(
+        "export={name} encoding=corgi-container/1 time=u64 diff=i64 data=worker:u64-le,container"
+    );
+    worker.dataflow::<OuterTime, _, _>(|scope| {
+        let index = scope.index() as u64;
+        let (encoded, shutdown) = trace.import_encoded(scope, "TailImport").expect("checked columnar");
+        let pending = Arc::new(AtomicUsize::new(0));
+        let (mut sent_schema, mut upper, mut dropped) = (false, None::<OuterTime>, false);
+        encoded
+            .map(move |bytes| (index, bytes))
+            .exchange(|_| 0u64)
+            .unary_frontier::<CapacityContainerBuilder<Vec<()>>, _, _, _>(Pipeline, "ColumnarTail", move |capability, _info| {
+                drop(capability);
+                move |(input, frontier), _output| {
+                    let frame = |kind: &str, bytes: Vec<u8>| Out::Frame {
+                        header: format!("{} frame {} {}\n", tag, kind, bytes.len()),
+                        bytes,
+                        pending: Some(Arc::clone(&pending)),
+                    };
+                    let mut out = |message: Out| {
+                        if let (Some(response), false) = (response.as_ref(), dropped) {
+                            if pending.load(Ordering::Relaxed) > TAIL_PENDING_BYTES {
+                                dropped = true;
+                                send(response, &tag, "err", "client too slow: subscription ended; send stop".into());
+                                send(response, &tag, "end", String::new());
+                                return;
+                            }
+                            if let Out::Frame { bytes, .. } = &message {
+                                pending.fetch_add(bytes.len(), Ordering::Relaxed);
+                            }
+                            let _ = response.send(message);
+                        }
+                    };
+                    input.for_each(|_time, data| {
+                        for (from, container) in data.drain(..) {
+                            if !sent_schema {
+                                out(frame("schema", schema.clone().into_bytes()));
+                                sent_schema = true;
+                            }
+                            let mut bytes = Vec::with_capacity(8 + container.len());
+                            bytes.extend_from_slice(&from.to_le_bytes());
+                            bytes.extend_from_slice(&container);
+                            out(frame("data", bytes));
+                        }
+                    });
+                    let now = frontier.frontier().iter().min().copied();
+                    if let Some(t) = now {
+                        if upper != Some(t) {
+                            upper = Some(t);
+                            out(frame("progress", t.to_le_bytes().to_vec()));
+                        }
+                    }
+                }
+            })
+            .probe_with(probe);
+        shutdown
+    })
 }
 
 fn tick(server: &mut Server, tails: &mut HashMap<TailKey, Tail>, worker: &mut Worker) {
@@ -528,11 +634,11 @@ fn stop_connection(
     }
 }
 
-fn send(sender: &Sender<String>, reqid: &str, kind: &str, body: String) {
+fn send(sender: &Sender<Out>, reqid: &str, kind: &str, body: String) {
     let suffix = if body.is_empty() {
         String::new()
     } else {
         format!(" {}", body)
     };
-    let _ = sender.send(format!("{} {}{}\n", reqid, kind, suffix));
+    let _ = sender.send(Out::Line(format!("{} {}{}\n", reqid, kind, suffix)));
 }

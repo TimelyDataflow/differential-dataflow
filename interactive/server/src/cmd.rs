@@ -24,7 +24,40 @@ pub type ReqId = String;
 /// One client session's outbound stream. Cloned into each `Request` so
 /// dispatch can route responses back to the originating client (and so
 /// long-lived subscriptions like `tail` capture the right sender).
-pub type RespSender = std::sync::mpsc::Sender<String>;
+pub type RespSender = std::sync::mpsc::Sender<Out>;
+
+/// One message to a client: a protocol line, or a binary frame.
+pub enum Out {
+    /// A text line, newline included.
+    Line(String),
+    /// A binary frame: on TCP and stdin the header line `<reqid> frame <kind> <nbytes>\n`
+    /// followed by exactly `nbytes` bytes; on WebSocket one binary message holding the
+    /// same header line and bytes. `pending` counts the bytes of a subscription's frames
+    /// not yet written; the writer subtracts each frame's bytes once it is on the wire.
+    Frame {
+        header: String,
+        bytes: Vec<u8>,
+        pending: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    },
+}
+
+impl Out {
+    /// The frame's header line and payload as they go on the wire, releasing its
+    /// pending bytes; a line's bytes.
+    pub fn into_wire(self) -> Vec<u8> {
+        match self {
+            Out::Line(line) => line.into_bytes(),
+            Out::Frame { header, bytes, pending } => {
+                if let Some(pending) = pending {
+                    pending.fetch_sub(bytes.len(), std::sync::atomic::Ordering::Relaxed);
+                }
+                let mut wire = header.into_bytes();
+                wire.extend_from_slice(&bytes);
+                wire
+            }
+        }
+    }
+}
 
 /// Per-session identity. Lets the worker tear down long-lived
 /// subscriptions when a connection disappears without an explicit stop.
@@ -54,8 +87,9 @@ pub enum Cmd {
     List,
     /// One-shot snapshot of a named trace, optionally of one key.
     Peek { name: String, key: Option<Value> },
-    /// Persistent subscription to a named trace.
-    Tail { name: String },
+    /// Persistent subscription to a named trace: text lines, or with
+    /// `as corgi` binary frames of Corgi columns (see the README).
+    Tail { name: String, columnar: bool },
     /// Cancel a previous `tail` (matched by its reqid).
     Stop { tail_reqid: ReqId },
     /// Update positional `input` of `prog`: add `(key, val)` with `diff` at
@@ -110,7 +144,7 @@ pub enum Cmd {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum PreparedCommand {
     Server(ServerCommand),
-    Tail { name: String },
+    Tail { name: String, columnar: bool },
     Stop { tail_reqid: ReqId },
 }
 
@@ -146,7 +180,7 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
         Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
         Cmd::Peek { name, key } => ServerCommand::Peek { trace: name, key },
-        Cmd::Tail { name } => return Ok(PreparedCommand::Tail { name }),
+        Cmd::Tail { name, columnar } => return Ok(PreparedCommand::Tail { name, columnar }),
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
         Cmd::Feed {
             prog,
@@ -771,10 +805,15 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
             _ => ParseOutcome::Err("peek: expected `<name> [key]`".into()),
         },
         "tail" => match args {
-            [name] => ParseOutcome::Cmd(Cmd::Tail {
+            [name] | [name, "as", "rows"] => ParseOutcome::Cmd(Cmd::Tail {
                 name: (*name).to_string(),
+                columnar: false,
             }),
-            _ => ParseOutcome::Err("tail: expected `<name>`".into()),
+            [name, "as", "corgi"] => ParseOutcome::Cmd(Cmd::Tail {
+                name: (*name).to_string(),
+                columnar: true,
+            }),
+            _ => ParseOutcome::Err("tail: expected `<name> [as rows|corgi]`".into()),
         },
         "stop" => match args {
             [rid] => ParseOutcome::Cmd(Cmd::Stop {
