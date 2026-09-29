@@ -102,6 +102,7 @@ pub fn run_worker(
     worker: &mut Worker,
     events: Option<Receiver<ControlEvent>>,
     backend: RenderBackend,
+    columnar_exports: bool,
 ) {
     // Logging a park wakes the diagnostics dataflow, whose scheduling logs can
     // in turn wake it again. Keep idle servers genuinely idle unless an
@@ -146,6 +147,7 @@ pub fn run_worker(
     let mut work_input = (worker.index() == 0).then_some(input);
 
     let mut server = Server::with_backend(backend);
+    server.set_columnar_exports(columnar_exports);
     let mut tails: HashMap<TailKey, Tail> = HashMap::new();
     let mut responses: HashMap<u64, Sender<String>> = HashMap::new();
     let mut next_token = 0u64;
@@ -458,16 +460,14 @@ fn start_tail(
         return Err(format!("tail reqid {:?} is already active", reqid));
     }
     let mut trace = server
-        .trace(name)
+        .published(name)
         .ok_or_else(|| format!("no trace {:?}", name))?;
     let dataflow_id = worker.next_dataflow_index();
     let tag = reqid.to_string();
     let mut probe = ProbeHandle::new();
     let shutdown = worker.dataflow::<OuterTime, _, _>(|scope| {
-        let (arranged, shutdown) = trace.import_core(scope.clone(), "TailImport");
-        arranged
-            .as_collection(|key, val| (key.clone(), val.clone()))
-            .inner
+        let (rows, shutdown) = trace.import_rows(scope.clone(), "TailImport");
+        rows
             .exchange(|_| 0u64)
             .inspect(move |((key, val), time, diff)| {
                 if let Some(response) = response.as_ref() {

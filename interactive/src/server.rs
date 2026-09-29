@@ -106,6 +106,38 @@ impl std::str::FromStr for RenderBackend {
 /// arranged by key at the host time so any later install can `import` it.
 pub type ServerTrace = TraceAgent<ValSpine<Value, Value, OuterTime, Diff>>;
 
+/// A published export as its readers see it: a row trace, or with columnar exports
+/// ([`Server::set_columnar_exports`]) a trace of corgi chunks. Either reads as rows.
+#[derive(Clone)]
+pub enum Published {
+    Rows(ServerTrace),
+    Columnar(crate::backend::corgi::ExportTrace),
+}
+
+impl Published {
+    /// Import into `scope` as a stream of `((key, val), time, diff)` rows, with the
+    /// import's shutdown button. A columnar trace converts to rows as it is read.
+    pub fn import_rows<'s>(
+        &mut self,
+        scope: timely::dataflow::Scope<'s, OuterTime>,
+        name: &str,
+    ) -> (
+        timely::dataflow::Stream<'s, OuterTime, Vec<((Value, Value), OuterTime, Diff)>>,
+        ShutdownButton<CapabilitySet<OuterTime>>,
+    ) {
+        match self {
+            Published::Rows(trace) => {
+                let (arranged, shutdown) = trace.import_core(scope, name);
+                (arranged.as_collection(|k, v| (k.clone(), v.clone())).inner, shutdown)
+            }
+            Published::Columnar(trace) => {
+                let (arranged, shutdown) = trace.import_core(scope, name);
+                (crate::backend::corgi::export_rows(arranged), shutdown)
+            }
+        }
+    }
+}
+
 /// An input handle into an installed program's positional `input N`.
 type ServerInput = InputSession<OuterTime, (Value, Value), Diff>;
 
@@ -353,6 +385,16 @@ struct Binding {
 pub struct Server {
     /// Published export name -> shareable trace.
     traces: HashMap<String, ServerTrace>,
+    /// With columnar exports: published export name -> trace of corgi chunks. Readers
+    /// (imports, binds, snapshots, subscriptions) see rows, converted as they read.
+    ctraces: HashMap<String, crate::backend::corgi::ExportTrace>,
+    /// With export taps: each columnar export's new batches on this worker, drained by
+    /// `take_changes` / `for_each_change_batch`: a standing change stream without a snapshot.
+    taps: HashMap<String, crate::backend::corgi::ExportTap>,
+    /// `set_columnar_exports`.
+    columnar_exports: bool,
+    /// `set_export_taps`.
+    export_taps: bool,
     /// Installed program name -> its handles and lifecycle bookkeeping.
     programs: HashMap<String, Installed>,
     /// Trace name -> number of installed programs importing it (the drop gate).
@@ -376,6 +418,10 @@ impl Server {
     pub fn with_backend(backend: RenderBackend) -> Self {
         Server {
             traces: HashMap::new(),
+            ctraces: HashMap::new(),
+            taps: HashMap::new(),
+            columnar_exports: true,
+            export_taps: false,
             programs: HashMap::new(),
             importers: HashMap::new(),
             bindings: Vec::new(),
@@ -389,9 +435,35 @@ impl Server {
         self.epoch
     }
 
+    /// Whether `name` (canonical) is published, as a row or a columnar trace.
+    fn is_published(&self, name: &str) -> bool {
+        self.traces.contains_key(name) || self.ctraces.contains_key(name)
+    }
+
+    /// Keep corgi-backend exports columnar (default on): a program's exports leave its scope as
+    /// corgi containers and are arranged as corgi chunks, and readers convert to rows only when
+    /// they read (`snapshot`, imports, binds). Affects programs installed afterwards.
+    pub fn set_columnar_exports(&mut self, on: bool) {
+        self.columnar_exports = on;
+    }
+
+    /// With columnar exports, also keep each export's new batches for [`Server::take_changes`]
+    /// and [`Server::for_each_change_batch`] (default off). Affects programs installed afterwards.
+    pub fn set_export_taps(&mut self, on: bool) {
+        self.export_taps = on;
+    }
+
     /// Clone a trace reader for a transient peek or subscription dataflow.
     pub fn trace(&self, name: &str) -> Option<ServerTrace> {
         self.traces.get(&canonical_source_name(name)).cloned()
+    }
+
+    /// A reader for published trace `name`, row or columnar, for a transient peek or
+    /// subscription dataflow.
+    pub fn published(&self, name: &str) -> Option<Published> {
+        let name = canonical_source_name(name);
+        self.traces.get(&name).cloned().map(Published::Rows)
+            .or_else(|| self.ctraces.get(&name).cloned().map(Published::Columnar))
     }
 
     /// Return registry state without coupling a caller to stdout formatting.
@@ -455,7 +527,7 @@ impl Server {
         for imp in &prog.root.imports {
             if let st::Source::Trace(t) = &imp.from {
                 let key = canonical_source_name(t);
-                if !self.traces.contains_key(&key) {
+                if !self.is_published(&key) {
                     if key != "clock" && Recipe::parse(&key).is_none() {
                         return Err(format!(
                             "program {:?} imports unknown trace {:?}; install its producer first",
@@ -467,7 +539,7 @@ impl Server {
             }
         }
         for e in &prog.root.exports {
-            if self.traces.contains_key(&e.name) || generated.contains(&e.name) {
+            if self.is_published(&e.name) || generated.contains(&e.name) {
                 return Err(format!("export name {:?} is already published; choose another name or drop its producer", e.name));
             }
         }
@@ -498,11 +570,15 @@ impl Server {
         let root = &prog.root;
         let traces = &mut self.traces;
         let backend = self.backend;
+        let columnar = backend == RenderBackend::Corgi && self.columnar_exports;
+        let tapped = columnar && self.export_taps;
+        let ctraces = &mut self.ctraces;
 
         // The id this dataflow will get; captured so `drop` can remove it.
         let dataflow_id = worker.next_dataflow_index();
 
-        let (published, inputs): (Vec<(String, ServerTrace)>, Vec<(usize, ServerInput)>) =
+        #[allow(clippy::type_complexity)]
+        let (published, cpublished, inputs): (Vec<(String, ServerTrace)>, Vec<(String, crate::backend::corgi::ExportTrace, Option<crate::backend::corgi::ExportTap>)>, Vec<(usize, ServerInput)>) =
             worker.dataflow::<OuterTime, _, _>(|outer| {
                 let mut inputs: Vec<(usize, ServerInput)> = Vec::new();
 
@@ -519,6 +595,11 @@ impl Server {
                         st::Source::Trace(t) => {
                             // The first binding point: resolve a named trace by importing it.
                             let key = canonical_source_name(t);
+                            // A columnar export is read as rows by its importers.
+                            if let Some(ctrace) = ctraces.get_mut(&key) {
+                                let rows = crate::backend::corgi::export_rows(ctrace.import(outer.clone()));
+                                return differential_dataflow::AsCollection::as_collection(rows);
+                            }
                             let arranged = traces
                                 .get_mut(&key)
                                 .expect("validated above")
@@ -531,21 +612,41 @@ impl Server {
 
                 // Render the program body in its own iterative scope, then bring
                 // every export back out to the host time.
-                let leaved: Vec<VecCollection<OuterTime, (Value, Value), Diff>> = outer
+                let (leaved, cleaved) = outer
                     .iterative::<PointStamp<OuterTime>, _, _>(|inner| {
                         let entered: Vec<_> =
                             outer_cols.iter().map(|c| c.clone().enter(inner)).collect();
+                        if columnar {
+                            let exports = crate::backend::corgi::render_tree_corgi(root, inner.clone(), 0, entered);
+                            return (Vec::new(), exports.into_iter().map(|c| c.leave(outer)).collect::<Vec<_>>());
+                        }
                         let exports = match backend {
                             RenderBackend::Vec => render_tree(root, inner.clone(), 0, entered),
                             RenderBackend::Corgi => {
                                 render_tree_rows(root, inner.clone(), 0, entered)
                             }
                         };
-                        exports
+                        (exports
                             .into_iter()
                             .map(|c| c.leave(outer))
-                            .collect::<Vec<_>>()
+                            .collect::<Vec<_>>(), Vec::new())
                     });
+                let cpublished: Vec<_> = root
+                    .exports
+                    .iter()
+                    .zip(cleaved)
+                    .map(|(e, col)| {
+                        use timely::dataflow::operators::Probe;
+                        let arranged = crate::backend::corgi::arrange_export(col);
+                        let tap: Option<crate::backend::corgi::ExportTap> = tapped.then(Default::default);
+                        let stream = match &tap {
+                            Some(t) => crate::backend::corgi::tap_export(&arranged, t.clone()),
+                            None => arranged.stream.clone(),
+                        };
+                        stream.probe_with(&probe);
+                        (e.name.clone(), arranged.trace, tap)
+                    })
+                    .collect();
 
                 // The second binding point: probe and publish each export's trace.
                 let published: Vec<(String, ServerTrace)> = root
@@ -560,11 +661,15 @@ impl Server {
                     })
                     .collect();
 
-                (published, inputs)
+                (published, cpublished, inputs)
             });
 
         for (export_name, trace) in published {
             self.traces.insert(export_name, trace);
+        }
+        for (export_name, trace, tap) in cpublished {
+            if let Some(tap) = tap { self.taps.insert(export_name.clone(), tap); }
+            self.ctraces.insert(export_name, trace);
         }
         for t in &import_names {
             *self.importers.entry(t.clone()).or_insert(0) += 1;
@@ -862,7 +967,7 @@ impl Server {
     ) -> Result<(), String> {
         let source = canonical_source_name(trace);
         let target = prog.to_string();
-        if !self.traces.contains_key(&source) {
+        if !self.is_published(&source) {
             return Err(format!("no trace {:?}", source));
         }
         let installed = self
@@ -890,11 +995,11 @@ impl Server {
         let buffer_in = buffer.clone();
         let mut probe = ProbeHandle::new();
         let dataflow_id = worker.next_dataflow_index();
-        let trace_handle = self.traces.get_mut(&source).expect("checked above");
+        let mut trace = self.published(&source).expect("checked above");
         let shutdown = worker.dataflow::<OuterTime, _, _>(|scope| {
-            let (arranged, shutdown) = trace_handle.import_core(scope.clone(), "BindImport");
-            arranged
-                .as_collection(|k, v| (k.clone(), v.clone()))
+            use timely::dataflow::operators::{Inspect, Probe};
+            let (rows, shutdown) = trace.import_rows(scope.clone(), "BindImport");
+            rows
                 .inspect(move |((key, val), _time, diff)| {
                     buffer_in
                         .borrow_mut()
@@ -970,18 +1075,15 @@ impl Server {
 
         let name = canonical_source_name(name);
         let epoch = self.epoch;
-        let mut trace = self
-            .trace(&name)
-            .ok_or_else(|| format!("no trace {:?}", name))?;
+        let mut trace = self.published(&name).ok_or_else(|| format!("no trace {:?}", name))?;
         let acc: Rc<RefCell<HashMap<(Value, Value), Diff>>> = Rc::new(RefCell::new(HashMap::new()));
         let acc_in = acc.clone();
         let mut probe = ProbeHandle::new();
         let id = worker.next_dataflow_index();
         worker.dataflow::<OuterTime, _, _>(|scope| {
-            trace
-                .import(scope.clone())
-                .as_collection(|k, v| (k.clone(), v.clone()))
-                .inner
+            // The dataflow is dropped once drained, which releases the import.
+            let (rows, _shutdown) = trace.import_rows(scope.clone(), "SnapshotImport");
+            rows
                 .exchange(|_| 0u64)
                 .inspect(move |((k, v), t, d)| {
                     if *t < epoch {
@@ -1006,6 +1108,32 @@ impl Server {
             .collect();
         rows.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
         Ok(rows)
+    }
+
+    /// The changes to export `name` that this worker's share of its arrangement has produced
+    /// since the last call, as rows (with [`Server::set_export_taps`]). Each worker drains its own.
+    pub fn take_changes(&mut self, name: &str) -> Vec<((Value, Value), OuterTime, Diff)> {
+        match self.taps.get(name) {
+            Some(tap) => crate::backend::corgi::batch_rows(std::mem::take(&mut *tap.borrow_mut())),
+            None => Vec::new(),
+        }
+    }
+
+    /// Drain this worker's tapped export changes in row batches no larger than
+    /// `rows_per_batch`. Callbacks run in export order; rows are consumed once.
+    /// Unlike `take_changes`, this does not materialize the entire export as rows.
+    /// The limit counts rows, not bytes (nested payloads may be large).
+    pub fn for_each_change_batch(
+        &mut self,
+        name: &str,
+        rows_per_batch: usize,
+        consume: impl FnMut(Vec<((Value, Value), OuterTime, Diff)>),
+    ) {
+        assert!(rows_per_batch > 0, "export row batch size must be positive");
+        if let Some(tap) = self.taps.get(name) {
+            let batches = std::mem::take(&mut *tap.borrow_mut());
+            crate::backend::corgi::for_each_batch_rows(batches, rows_per_batch, consume);
+        }
     }
 
     /// Drop installed program `name`, releasing its dataflow immediately.
@@ -1046,6 +1174,8 @@ impl Server {
         }
         for ex in &installed.exports {
             self.traces.remove(ex);
+            self.ctraces.remove(ex);
+            self.taps.remove(ex);
         }
         let id = installed.dataflow_id;
         // Drop the input handles first (closes the inputs while the operators
@@ -1164,6 +1294,10 @@ impl Server {
         // tick only runs at epoch >= 1.)
         let frontier = Antichain::from_elem(self.epoch.saturating_sub(1));
         for trace in self.traces.values_mut() {
+            trace.set_logical_compaction(frontier.borrow());
+            trace.set_physical_compaction(frontier.borrow());
+        }
+        for trace in self.ctraces.values_mut() {
             trace.set_logical_compaction(frontier.borrow());
             trace.set_physical_compaction(frontier.borrow());
         }
