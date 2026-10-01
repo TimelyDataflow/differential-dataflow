@@ -481,6 +481,36 @@ pub fn export_rows<'s>(
     })
 }
 
+/// Each imported columnar export batch as one [`CorgiContainer`] of `(key, val, time, diff)`
+/// updates, with no rows built: the batch's chunks concatenated and the arrangement's identifier
+/// lane removed. A batch is consolidated, so its container is too; empty batches are skipped.
+pub fn export_containers<'s>(
+    a: Arranged<'s, ExportTrace>,
+) -> timely::dataflow::Stream<'s, u64, Vec<CorgiContainer<u64, Diff>>> {
+    use crate::corgi::chunk::concat_blocks;
+    a.stream.unary(Pipeline, "ExportContainers", |_, _| {
+        |input, output| {
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                for batch in data.iter() {
+                    let Some(payload) = batch.inner.as_ref() else { continue };
+                    let chunks: Vec<_> = payload.chunks.iter().filter(|c| c.len() > 0).collect();
+                    if chunks.is_empty() { continue }
+                    let keys: Vec<CValue> = chunks.iter().map(|c| recover_key(c.keys())).collect();
+                    let vals: Vec<CValue> = chunks.iter().map(|c| c.vals().clone()).collect();
+                    let mut times = crate::corgi::col_times::ColTimes::new();
+                    let mut diffs = Vec::new();
+                    for c in &chunks {
+                        times.push_range(c.times(), 0, c.len());
+                        diffs.extend_from_slice(c.diffs());
+                    }
+                    session.give(CorgiContainer { keys: concat_blocks(&keys), vals: concat_blocks(&vals), times, diffs });
+                }
+            });
+        }
+    })
+}
+
 /// [`render_tree_corgi`] with each export converted back to rows (`FromCorgi`).
 pub fn render_tree_rows<'s>(
     s: &st::Scope,

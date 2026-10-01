@@ -136,6 +136,47 @@ impl Published {
             }
         }
     }
+
+    /// Import a columnar trace into `scope` as a stream of encoded [`CorgiContainer`]s, one per
+    /// imported batch (`ContainerBytes::into_bytes`: the same self-describing columns workers
+    /// exchange between processes), with no rows built. Each worker produces its own share.
+    /// `None` for a row trace, whose rows may hold values (an untyped variant) that have no
+    /// columnar shape until a program pins one.
+    ///
+    /// [`CorgiContainer`]: crate::corgi::container::CorgiContainer
+    #[allow(clippy::type_complexity)]
+    pub fn import_encoded<'s>(
+        &mut self,
+        scope: timely::dataflow::Scope<'s, OuterTime>,
+        name: &str,
+    ) -> Option<(
+        timely::dataflow::Stream<'s, OuterTime, Vec<Vec<u8>>>,
+        ShutdownButton<CapabilitySet<OuterTime>>,
+    )> {
+        use timely::dataflow::channels::pact::Pipeline;
+        use timely::dataflow::channels::ContainerBytes;
+        use timely::dataflow::operators::generic::Operator;
+        let Published::Columnar(trace) = self else { return None };
+        let (arranged, shutdown) = trace.import_core(scope, name);
+        let stream = crate::backend::corgi::export_containers(arranged).unary(Pipeline, "EncodeContainers", |_, _| {
+            |input, output| {
+                input.for_each(|cap, data| {
+                    let mut session = output.session(&cap);
+                    for c in data.iter() {
+                        let mut bytes = Vec::with_capacity(c.length_in_bytes());
+                        c.into_bytes(&mut bytes);
+                        session.give(bytes);
+                    }
+                });
+            }
+        });
+        Some((stream, shutdown))
+    }
+
+    /// Whether this is a columnar trace (see [`Published::import_encoded`]).
+    pub fn is_columnar(&self) -> bool {
+        matches!(self, Published::Columnar(_))
+    }
 }
 
 /// An input handle into an installed program's positional `input N`.
