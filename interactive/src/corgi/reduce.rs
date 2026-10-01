@@ -8,6 +8,11 @@
 //!     chunks' own value columns, and the output columns this backend builds. Within a window, a
 //!     key's equal input values share one id, found by corgi's segmented sort; output values are
 //!     matched to the current output by structural comparison. Nothing hashes values.
+//!   * collisions — a hashed key's identifier may hold several real keys. Chunks sort each
+//!     identifier's rows by real key, so a window finds them with two comparisons per run. Their
+//!     ids are then per real key, input and output alike: a colliding bracket is split by real key
+//!     before it is reduced, its output is matched by key as well as value, and every output id
+//!     records the row holding its key, which is what `emit` reads.
 //!   * the value callback — `reduce_brackets` runs ONE crossing per wave over every `(key, time)`
 //!     bracket, building the output value COLUMNS directly (Count → a `u64` prim, Distinct → a
 //!     `Unit`, Min → the chosen input rows, Collect → a `List`), never through DDIR rows.
@@ -36,7 +41,7 @@ use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
 
 use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::matching_ranges;
-use crate::corgi::chunk::{columns_to_batch, key_ids, key_lane, CorgiChunk};
+use crate::corgi::chunk::{columns_to_batch, key_ids, key_is_hashed, key_lane, CorgiChunk};
 use crate::ir::{Diff, Reducer};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
@@ -145,6 +150,9 @@ pub struct CorgiReduceBackend<T> {
     input: Pool,
     /// The current retire's output values: its output chunks' value columns, then those built here.
     output: Pool,
+    /// For each output id, the row of `key_columns` holding its key. An output id names a key and a
+    /// value together, as two keys may share an identifier and hold equal values.
+    output_keys: Vec<(usize, usize)>,
     /// The current retire's input then output chunks' key columns.
     key_columns: Vec<CValue>,
     /// The output emitted so far: key rows in `key_columns`, value ids, times, and diffs.
@@ -166,8 +174,8 @@ struct Retire {
     input: Matches,
     /// The current window, as a range of `keys`.
     window: Range<usize>,
-    /// A row of `key_columns` holding each key of the window.
-    key_rows: Vec<Option<(usize, usize)>>,
+    /// The window's identifiers that hold more than one real key, ascending.
+    colliding: Vec<u64>,
 }
 
 impl Retire {
@@ -208,6 +216,7 @@ impl<T> CorgiReduceBackend<T> {
             reducer,
             input: Pool::default(),
             output: Pool::default(),
+            output_keys: Vec::new(),
             key_columns: Vec::new(),
             rows: (Vec::new(), Vec::new(), ColTimes::default(), Vec::new()),
             window_size: window_size.max(1),
@@ -235,11 +244,15 @@ fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[u64]) -> Matches 
 /// `((key, id), time)` and consolidated.
 ///
 /// Each key's rows are sorted by value, and each run of equal values gets one id: the next index
-/// of `refs`, where it is recorded as the `(chunk, row)` of one of its rows.
+/// of `refs`, where it is recorded as the `(chunk, row)` of one of its rows. The keys `colliding`
+/// marks (by index; empty when none do) hold several real keys under one identifier: their rows are
+/// first split by real key, so that an id names one real key's value, and the row it is recorded
+/// at holds that key.
 fn present<T: ColTime + Ord>(
     chunks: &[&CorgiChunk<T, Diff>],
     keys: &[u64],
     matches: &Matches,
+    colliding: &[bool],
     refs: &mut Vec<(usize, usize)>,
     bridge: &mut ProxyBridge<T, Diff>,
 ) {
@@ -256,6 +269,12 @@ fn present<T: ColTime + Ord>(
     if rows.is_empty() {
         return;
     }
+    // Each label's key index; the identity unless real keys split some labels.
+    let mut label_keys = None;
+    if colliding.contains(&true) {
+        (labels, rows, label_keys) = split_real_keys(chunks, colliding, labels, rows);
+    }
+    let key_of = |label: u64| label_keys.as_ref().map_or(label as usize, |keys: &Vec<usize>| keys[label as usize]);
     let vals: Vec<CValue> = chunks.iter().map(|chunk| chunk.vals().clone()).collect();
     let (sorted, groups) = sort_blocks(&labels, &gather_refs(&vals, rows.iter().copied()));
     let update = |(chunk, row): (usize, usize)| (chunks[chunk].times().get(row), chunks[chunk].diffs()[row]);
@@ -266,11 +285,67 @@ fn present<T: ColTime + Ord>(
         updates.extend(members.iter().map(|&i| update(rows[i])));
         consolidate(&mut updates);
         if !updates.is_empty() {
-            let (key, id) = (keys[labels[members[0]] as usize], refs.len() as u64);
+            let (key, id) = (keys[key_of(labels[members[0]])], refs.len() as u64);
             refs.push(rows[members[0]]);
             bridge.extend(updates.drain(..).map(|(time, diff)| ((key, id), time, diff)));
         }
     }
+}
+
+/// Relabel the rows of the `colliding` key indices so that each real key gets its own label.
+///
+/// Takes rows labelled by key index, ascending, and returns them reordered so the new labels
+/// ascend, with each new label's key index. Rows of other keys keep one label per key.
+fn split_real_keys<T: ColTime>(
+    chunks: &[&CorgiChunk<T, Diff>],
+    colliding: &[bool],
+    labels: Vec<u64>,
+    rows: Vec<(usize, usize)>,
+) -> (Vec<u64>, Vec<(usize, usize)>, Option<Vec<usize>>) {
+    // Rank the colliding rows' real keys within their key index.
+    let subset: Vec<usize> = (0..rows.len()).filter(|&i| colliding[labels[i] as usize]).collect();
+    let key_columns: Vec<CValue> = chunks.iter().map(|chunk| chunk.keys().clone()).collect();
+    let subset_labels: Vec<u64> = subset.iter().map(|&i| labels[i]).collect();
+    let (perm, ranks) = sort_blocks(&subset_labels, &gather_refs(&key_columns, subset.iter().map(|&i| rows[i])));
+    let mut rank = vec![0; rows.len()];
+    for (&at, &r) in perm.iter().zip(&ranks) { rank[subset[at]] = r; }
+    // Each row's `(key index, rank)`, densely renumbered.
+    let mut pairs: Vec<(u64, u64)> = labels.iter().copied().zip(rank).collect();
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by_key(|&i| pairs[i]);
+    let rows = order.iter().map(|&i| rows[i]).collect();
+    pairs = order.into_iter().map(|i| pairs[i]).collect();
+    let (mut labels, mut label_keys) = (Vec::with_capacity(pairs.len()), Vec::new());
+    for (i, pair) in pairs.iter().enumerate() {
+        if i == 0 || pairs[i - 1] != *pair { label_keys.push(pair.0 as usize); }
+        labels.push(label_keys.len() as u64 - 1);
+    }
+    (labels, rows, Some(label_keys))
+}
+
+/// For each of the window's `keys`, whether the rows held for it, across every `(chunks, matches)`
+/// side, carry more than one real key. Chunks sort each identifier's rows by real key, so a run holds
+/// one key exactly when its first and last rows agree: two comparisons per run, never per row.
+/// Comparing across sides also catches an identifier whose input and output hold different keys.
+fn colliding_keys<T: ColTime>(keys: &[u64], sides: &[(&[&CorgiChunk<T, Diff>], &Matches)]) -> Vec<bool> {
+    let mut colliding = vec![false; keys.len()];
+    if !sides.iter().flat_map(|side| side.0).any(|chunk| key_is_hashed(chunk.keys())) {
+        return colliding;
+    }
+    let mut first: Vec<Option<&CValue>> = vec![None; keys.len()];
+    let mut first_row = vec![0; keys.len()];
+    for (chunks, matches) in sides {
+        for (chunk, found) in chunks.iter().zip(matches.iter()) {
+            let column = chunk.keys();
+            for (index, rows) in found {
+                let reference = *first[*index].get_or_insert_with(|| { first_row[*index] = rows.start; column });
+                let r = first_row[*index];
+                colliding[*index] |= compare_at(column, rows.start, reference, r).is_ne()
+                    || compare_at(column, rows.end - 1, reference, r).is_ne();
+            }
+        }
+    }
+    colliding
 }
 
 fn chunks_of<T>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>>
@@ -455,9 +530,10 @@ where
             let input = search(&in_chunks, &keys);
             let mut held = vec![0; keys.len()];
             for (index, rows) in input.iter().flatten() { held[*index] += rows.len(); }
-            self.retire = Retire { keys, held, input, window: 0..0, key_rows: Vec::new() };
+            self.retire = Retire { keys, held, input, window: 0..0, colliding: Vec::new() };
             self.input.columns = in_chunks.iter().map(|chunk| chunk.vals().clone()).collect();
             self.output = Pool { columns: out_chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs: Vec::new() };
+            self.output_keys.clear();
             self.key_columns = in_chunks.iter().chain(&out_chunks).map(|chunk| chunk.keys().clone()).collect();
         }
 
@@ -470,13 +546,10 @@ where
         let matches = retire.input_matches();
         let keys = &retire.keys[retire.window.clone()];
         let out_matches = search(&out_chunks, keys);
-        // A row holding each key: its first in the input chunks, else its first in the output chunks.
-        retire.key_rows = vec![None; keys.len()];
-        for (base, found) in [(0, &matches), (in_chunks.len(), &out_matches)] {
-            for (chunk, list) in found.iter().enumerate() {
-                for (index, rows) in list { retire.key_rows[*index].get_or_insert((base + chunk, rows.start)); }
-            }
-        }
+        // The identifiers that hold several real keys, across input and output alike.
+        let colliding = colliding_keys(keys, &[(&in_chunks, &matches), (&out_chunks, &out_matches)]);
+        retire.colliding = keys.iter().zip(&colliding).filter(|(_, c)| **c).map(|(key, _)| *key).collect();
+        let colliding = if retire.colliding.is_empty() { &[][..] } else { &colliding[..] };
 
         // The seeds are the novel batches' RAW (key, time) support, recorded here — before the
         // merged presentation below, whose consolidation may net a novel record away entirely.
@@ -493,9 +566,12 @@ where
         // equal values share an id, so an exactly cancelling pair vanishes here, and its time
         // survives in `window.seeds` above. Input ids name rows for this window only.
         self.input.refs.clear();
-        present(&in_chunks, keys, &matches, &mut self.input.refs, &mut window.input);
-        // The output history, same keys. Output ids name rows for the whole retire.
-        present(&out_chunks, keys, &out_matches, &mut self.output.refs, &mut window.output);
+        present(&in_chunks, keys, &matches, colliding, &mut self.input.refs, &mut window.input);
+        // The output history, same keys. Output ids name rows for the whole retire, and the rows
+        // that hold their keys are at the same positions of the output chunks' key columns.
+        let fresh = self.output.refs.len();
+        present(&out_chunks, keys, &out_matches, colliding, &mut self.output.refs, &mut window.output);
+        self.output_keys.extend(self.output.refs[fresh..].iter().map(|&(chunk, row)| (in_chunks.len() + chunk, row)));
 
         *from = retire.keys.get(retire.window.end).map_or(KeyPosition::End, |key| KeyPosition::At(*key));
     }
@@ -504,38 +580,77 @@ where
         // Each key wants its rows of `desired`, once each, and has `(id, diff)`s of output. The
         // correction nets the two by value: a wanted row equal to an output id's value counts
         // toward that id, and one equal to none gets a new id. Keys have a handful of each.
+        //
+        // A colliding identifier's bracket holds several real keys' values. It is split into one
+        // bracket per real key, each reduced on its own, and its rows are matched against output
+        // by key as well as value. Its input ids ascend by real key, so each key's are contiguous.
+        let split = keys.iter().any(|key| self.retire.colliding.binary_search(key).is_ok());
+        let (mut sub_ends, mut sub_input, mut bracket_ends) = (Vec::new(), Vec::new(), Vec::new());
+        if split {
+            let mut start = 0;
+            for (key, &end) in keys.iter().zip(in_ends) {
+                let lo = sub_input.len();
+                sub_input.extend_from_slice(&input[start..end]);
+                if self.retire.colliding.binary_search(key).is_ok() {
+                    sub_input[lo..].sort_by_key(|&(id, _)| id);
+                    for i in lo + 1..sub_input.len() {
+                        let ((c0, r0), (c1, r1)) = (self.input.refs[sub_input[i - 1].0 as usize], self.input.refs[sub_input[i].0 as usize]);
+                        if compare_at(&self.key_columns[c0], r0, &self.key_columns[c1], r1).is_ne() { sub_ends.push(i); }
+                    }
+                }
+                sub_ends.push(sub_input.len());
+                bracket_ends.push(sub_ends.len());
+                start = end;
+            }
+        }
+        let (in_ends, input) = if split { (&sub_ends[..], &sub_input[..]) } else { (in_ends, input) };
         let (desired, desired_ends) = self.reduce_brackets(in_ends, input);
         let fresh = self.output.columns.len();
         if !desired.is_empty() { self.output.columns.push(desired); }
         let Pool { columns, refs } = &mut self.output;
+        let (output_keys, key_columns) = (&mut self.output_keys, &self.key_columns);
         let (mut corr, mut corr_ends) = (Vec::new(), Vec::with_capacity(keys.len()));
-        let (mut ds, mut os) = (0, 0);
-        for (&de, &oe) in desired_ends.iter().zip(out_ends) {
+        let (mut bs, mut os) = (0, 0);
+        for (b, (key, &oe)) in keys.iter().zip(out_ends).enumerate() {
+            let be = if split { bracket_ends[b] } else { b + 1 };
+            let checked = split && self.retire.colliding.binary_search(key).is_ok();
             let mut net: Vec<(u64, Diff)> = output[os..oe].iter().map(|&(id, d)| (id, -d)).collect();
-            for row in ds..de {
-                let equal = |&(id, _): &(u64, Diff)| {
-                    let (column, r) = refs[id as usize];
-                    compare_at(&columns[fresh], row, &columns[column], r).is_eq()
-                };
-                match net.iter().position(equal) {
-                    Some(at) => net[at].1 += 1,
-                    None => { net.push((refs.len() as u64, 1)); refs.push((fresh, row)); }
+            for s in bs..be {
+                let (ds, de) = (if s == 0 { 0 } else { desired_ends[s - 1] }, desired_ends[s]);
+                if ds == de { continue; }
+                // A desired row's key: that of the input it was reduced from, which is non-empty.
+                let first = if s == 0 { 0 } else { in_ends[s - 1] };
+                let (kc, kr) = self.input.refs[input[first].0 as usize];
+                for row in ds..de {
+                    let equal = |&(id, _): &(u64, Diff)| {
+                        let (column, r) = refs[id as usize];
+                        compare_at(&columns[fresh], row, &columns[column], r).is_eq() && (!checked || {
+                            let (oc, or) = output_keys[id as usize];
+                            compare_at(&key_columns[kc], kr, &key_columns[oc], or).is_eq()
+                        })
+                    };
+                    match net.iter().position(equal) {
+                        Some(at) => net[at].1 += 1,
+                        None => {
+                            net.push((refs.len() as u64, 1));
+                            refs.push((fresh, row));
+                            output_keys.push((kc, kr));
+                        }
+                    }
                 }
             }
             corr.extend(net.into_iter().filter(|&(_, d)| d != 0));
             corr_ends.push(corr.len());
-            (ds, os) = (de, oe);
+            (bs, os) = (be, oe);
         }
         (corr, corr_ends)
     }
 
     fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
-        // Every emitted key is in the current window, and was presented there.
-        let keys = &self.retire.keys[self.retire.window.clone()];
+        // An output id names its key's row, as two keys may share an identifier.
         let (key_rows, ids, times, diffs) = &mut self.rows;
-        for ((key, id), time, diff) in records {
-            let index = keys.binary_search(key).expect("emitted keys are in the window");
-            key_rows.push(self.retire.key_rows[index].expect("emitted keys were presented"));
+        for ((_, id), time, diff) in records {
+            key_rows.push(self.output_keys[*id as usize]);
             ids.push(*id);
             times.push(time);
             diffs.push(*diff);
@@ -626,7 +741,7 @@ mod tests {
                 let owned = chunks(&rows, size, key_shape, val_shape);
                 let chunks: Vec<_> = owned.iter().collect();
                 let (mut refs, mut bridge) = (Vec::new(), Vec::new());
-                present(&chunks, &keys, &search(&chunks, &keys), &mut refs, &mut bridge);
+                present(&chunks, &keys, &search(&chunks, &keys), &[], &mut refs, &mut bridge);
                 assert!(bridge.windows(2).all(|w| (w[0].0, &w[0].1) < (w[1].0, &w[1].1)));
                 let pool = Pool { columns: chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs };
                 let values = rows_of(&pool.gather(&bridge.iter().map(|r| r.0.1).collect::<Vec<_>>()));
@@ -646,6 +761,9 @@ mod tests {
     fn corrections_net_by_value() {
         let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count);
         backend.output = Pool { columns: vec![CValue::Prod(vec![CValue::u64(vec![5, 5, 7])])], refs: vec![(0, 0), (0, 1), (0, 2)] };
+        backend.output_keys = vec![(0, 0), (0, 0), (0, 1)];
+        backend.input.refs = vec![(0, 0), (0, 1)];
+        backend.key_columns = vec![CValue::u64(vec![10, 11, 12])];
         // Key 0 counts 5 and has output 5 twice; key 1 counts 3 and has output 7; key 2 counts 0.
         let input = [(0, 2), (1, 3), (0, 3), (0, 1), (1, -1)];
         let output = [(0, 1), (1, 1), (2, 1)];
@@ -734,6 +852,70 @@ mod tests {
             assert!(run(usize::MAX) == (netted(&in_chunks, &retire), support, netted(&chunks_of(&out), &retire)));
             for window_size in [1, 3, 17] {
                 assert!(run(window_size) == run(usize::MAX), "window_size={window_size}");
+            }
+        }
+    }
+
+    /// Real keys sharing an identifier are reduced apart. Over two retires — the second against the
+    /// first's input and output — a forged identifier lane holding three real keys gives what the
+    /// true hash lane gives, for each reducer, at every window size.
+    #[test]
+    fn colliding_keys_reduce_apart() {
+        use timely::progress::{Antichain, Timestamp};
+        use differential_dataflow::operators::int_proxy::reduce::ProxyReduceTactic;
+        use differential_dataflow::operators::reduce::ReduceTactic;
+        use crate::corgi::chunk::recover_key;
+        use crate::corgi::logic::{transcode, untranscode};
+        use crate::ir::Value as V;
+        use corgi::Shape;
+
+        let pair = |a: u64, b: u64| V::Tuple(vec![V::Int(a as i64), V::Int(b as i64)]);
+        let shape = Shape::Prod(vec![Shape::Prim(64), Shape::Prim(64)]);
+        // Two retires' inputs: the first at outer times 0 and 1, the second from 2 on.
+        let early = random_rows(0x51ED_270B_2A4F_3C11, 200, 6);
+        let late: Vec<_> = random_rows(0x0BAD_5EED, 120, 6).into_iter()
+            .map(|(k, v, t, d)| (k, v, Time::new(t.outer + 2, t.inner), d)).collect();
+        let early: Vec<_> = early.into_iter().filter(|r| r.2.outer < 2).collect();
+        let stamp = |outer| Time::new(outer, PointStamp::new(std::iter::empty().collect()));
+
+        for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect] {
+            let out_shape = match reducer {
+                Reducer::Count => Shape::Prod(vec![Shape::Prim(64)]),
+                Reducer::Distinct => Shape::Unit,
+                Reducer::Min => shape.clone(),
+                Reducer::Collect => Shape::List(Box::new(shape.clone())),
+            };
+            // Keys `(a, 7a)`, identified by their hash or by `a % 2`.
+            let run = |forged: bool, window_size: usize| {
+                let batch = |rows: &[(u64, (u64, u64), Time, Diff)]| -> CBatch<Time> {
+                    let keys = transcode(&rows.iter().map(|r| pair(r.0, r.0 * 7)).collect::<Vec<_>>(), &shape);
+                    let keys = if forged { CValue::Prod(vec![CValue::u64(rows.iter().map(|r| r.0 % 2).collect()), keys]) } else { present_key(keys) };
+                    let vals = transcode(&rows.iter().map(|r| pair(r.1.0, r.1.1)).collect::<Vec<_>>(), &shape);
+                    let chunk = CorgiChunk::from_columns(keys, vals, rows.iter().map(|r| r.2.clone()).collect(), rows.iter().map(|r| r.3).collect());
+                    Rc::new(ChunkBatch::new(vec![chunk]))
+                };
+                let mut tactic = ProxyReduceTactic::new(CorgiReduceBackend::<Time>::with_window(reducer.clone(), window_size));
+                let held = Antichain::from_elem(Time::minimum());
+                let (first, _) = tactic.retire(Vec::new(), Vec::new(), vec![batch(&early)], &held, &Antichain::from_elem(stamp(2)), &held);
+                let first = first.and_then(|span| span.inner).into_iter().collect::<Vec<_>>();
+                let (second, _) = tactic.retire(vec![batch(&early)], first.clone(), vec![batch(&late)], &Antichain::from_elem(stamp(2)), &Antichain::new(), &held);
+                let mut netted = BTreeMap::new();
+                for batch in first.iter().chain(second.and_then(|span| span.inner).as_ref()) {
+                    for chunk in batch.chunks.iter() {
+                        let keys = untranscode(recover_key(chunk.keys()), &shape);
+                        let vals = untranscode(chunk.vals().clone(), &out_shape);
+                        for (i, (key, val)) in keys.into_iter().zip(vals).enumerate() {
+                            *netted.entry((key, val, chunk.times().get(i))).or_insert(0) += chunk.diffs()[i];
+                        }
+                    }
+                }
+                netted.retain(|_, diff| *diff != 0);
+                netted
+            };
+            let expected = run(false, usize::MAX);
+            assert!(!expected.is_empty());
+            for window_size in [1, 5, usize::MAX] {
+                assert_eq!(run(true, window_size), expected, "{reducer:?}, window_size={window_size}");
             }
         }
     }
