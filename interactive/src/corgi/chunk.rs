@@ -54,6 +54,10 @@ const INGEST: usize = 1 << 24;
 /// Same payload as [`CorgiContainer`](crate::corgi::container::CorgiContainer), and the two
 /// should eventually be ONE type: both hold times as a `ColTimes`, and they differ only in
 /// invariants (sorted+consolidated+shared here, raw+owned there).
+///
+/// `repr(C)`, and `T` appears only in `ColTimes<T>` (itself `repr(C)`, `T` in `PhantomData`), so
+/// `Inner<T, R>` and `Inner<U, R>` share a layout and drop glue: what [`CorgiChunk::retime`] needs.
+#[repr(C)]
 struct Inner<T, R> {
     /// Key column (corgi), aligned with `vals`/`times`/`diffs`, sorted by `(key, val, time)`.
     keys: CValue,
@@ -95,6 +99,17 @@ impl<T, R> CorgiChunk<T, R> {
     fn from_kv(kv: CValue, times: ColTimes<T>, diffs: Vec<R>) -> Self {
         let (keys, vals) = split_kv(kv);
         Self::from_parts(keys, vals, times, diffs)
+    }
+    /// The same chunk, shared rather than copied, read at time type `U`: a row's `U` time has the
+    /// row's lane coordinates followed by zeros. For a host-time (`u64`) chunk read as a program
+    /// time (`(u64, PointStamp)`), each epoch `e` reads as `(e, [])` — the time it has on entering
+    /// the program's scope — and the order and lattice operations, being lane-wise, agree.
+    pub fn retime<U>(&self) -> CorgiChunk<U, R> {
+        let raw = Rc::into_raw(Rc::clone(&self.0)).cast::<Inner<U, R>>();
+        // SAFETY: `Inner` is `repr(C)` and mentions `T`/`U` only inside the `repr(C)` `ColTimes`,
+        // in a `PhantomData`, so `Inner<T, R>` and `Inner<U, R>` have the same size, alignment,
+        // field offsets, and drop glue; `raw` came from `Rc::into_raw` of the former.
+        CorgiChunk(unsafe { Rc::from_raw(raw) })
     }
     pub fn keys(&self) -> &CValue { &self.0.keys }
     pub fn vals(&self) -> &CValue { &self.0.vals }
@@ -884,6 +899,23 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn retime_reads_host_epochs_as_program_times_without_copying() {
+        use differential_dataflow::dynamic::pointstamp::PointStamp;
+        use timely::order::Product;
+        type Program = Product<u64, PointStamp<u64>>;
+        let host = chunk(&[((1, 10), 0, 1), ((1, 11), 3, -1), ((2, 10), 7, 2)]);
+        let program: CorgiChunk<Program, i64> = host.retime();
+        // The same allocation, read at the program's time: epoch `e` as `(e, [])`.
+        assert!(std::ptr::eq(host.keys(), program.keys()));
+        let expect: Vec<Program> = host.times().to_vec().into_iter().map(|e| Product::new(e, PointStamp::default())).collect();
+        assert_eq!(program.times().to_vec(), expect);
+        assert_eq!(program.diffs(), host.diffs());
+        // Either handle may be the last to drop.
+        drop(host);
+        assert_eq!(program.times().len(), 3);
     }
 
     /// Build a single sorted+consolidated CorgiChunk from u64 (key,val,time,diff) rows.

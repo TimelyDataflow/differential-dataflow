@@ -11,11 +11,15 @@
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
+use timely::progress::Antichain;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use differential_dataflow::operators::join::join_with_tactic;
-use differential_dataflow::operators::reduce::reduce_with_tactic;
+use differential_dataflow::operators::join::{Fresh, JoinTactic, join_with_tactic};
+use differential_dataflow::operators::reduce::{ReduceTactic, reduce_with_tactic};
+use differential_dataflow::trace::Span;
+use differential_dataflow::trace::chunk::ChunkBatch;
+use differential_dataflow::trace::wrappers::enter::{BatchEnter, TraceEnter};
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatcher};
@@ -174,6 +178,92 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
     c
 }
 
+/// A batch of the program's own corgi arrangements (`CTrace`'s batch).
+type NativeBatch = std::rc::Rc<ChunkBatch<CorgiChunk<Time, Diff>>>;
+/// A batch of a published (host-time) corgi export (`ExportTrace`'s batch).
+type HostBatch = std::rc::Rc<ChunkBatch<CorgiChunk<u64, Diff>>>;
+/// A published corgi export entered into a program's scope: the producer's own chunks.
+pub type ImportArr<'scope> = Arranged<'scope, TraceEnter<ExportTrace, Time>>;
+
+/// The corgi backend's arrangement: one it built, or a published export it imported.
+#[derive(Clone)]
+pub enum Arr<'scope> {
+    Local(Arranged<'scope, TraceAgent<CTrace>>),
+    Imported(ImportArr<'scope>),
+}
+
+/// A batch as the corgi tactics read it. An imported batch crosses into the program as its
+/// producer's chunks *retimed*: the same `Rc`s, read with each host epoch `e` as `(e, [])`. The
+/// lanes are identical, so the crossing costs one `Rc` per chunk and copies no data.
+trait Native {
+    fn native(self) -> NativeBatch;
+}
+impl Native for NativeBatch {
+    fn native(self) -> NativeBatch { self }
+}
+impl Native for BatchEnter<HostBatch, Time> {
+    fn native(self) -> NativeBatch {
+        std::rc::Rc::new(ChunkBatch { chunks: self.inner().chunks.iter().map(CorgiChunk::retime).collect() })
+    }
+}
+
+/// A join tactic over native batches, accepting either input imported: the bridge where an
+/// imported batch's times change to the program's.
+struct RetimeJoin<J>(J);
+impl<B0: Native, B1: Native, J: JoinTactic<Time, NativeBatch, NativeBatch, CC>> JoinTactic<Time, B0, B1, CC> for RetimeJoin<J> {
+    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: Time) -> Box<dyn Iterator<Item = CC>> {
+        let input0 = input0.into_iter().map(Native::native).collect();
+        let input1 = input1.into_iter().map(Native::native).collect();
+        self.0.prep(input0, input1, fresh, meet)
+    }
+}
+
+/// A reduce tactic over native batches, accepting an imported input. (Its output is its own.)
+struct RetimeReduce<R>(R);
+impl<B1: Native, R: ReduceTactic<Time, NativeBatch, NativeBatch>> ReduceTactic<Time, B1, NativeBatch> for RetimeReduce<R> {
+    fn retire(
+        &mut self,
+        source_batches: Vec<B1>,
+        output_batches: Vec<NativeBatch>,
+        input_batches: Vec<B1>,
+        lower: &Antichain<Time>,
+        upper: &Antichain<Time>,
+        held: &Antichain<Time>,
+    ) -> (Option<Span<Time, NativeBatch>>, Antichain<Time>) {
+        let source_batches = source_batches.into_iter().map(Native::native).collect();
+        let input_batches = input_batches.into_iter().map(Native::native).collect();
+        self.0.retire(source_batches, output_batches, input_batches, lower, upper, held)
+    }
+}
+
+/// The corgi containers of a stream of batches: each chunk's columns by `Arc` bump, its time lanes
+/// and diffs copied. Imported batches' times are retimed on the way.
+fn chunk_containers<'s, B: Native + Clone + 'static>(stream: timely::dataflow::Stream<'s, Time, Vec<Span<Time, B>>>) -> Collection<'s, Time, CC> {
+    stream
+        .unary(Pipeline, "CorgiAsCollection", |_, _| {
+            |input, output| {
+                input.for_each(|cap, data| {
+                    let mut session = output.session(&cap);
+                    for batch in data.iter() {
+                        let Some(payload) = batch.inner.clone() else { continue };
+                        for ch in payload.native().chunks.iter().filter(|c| c.len() > 0) {
+                            let mut c = CorgiContainer {
+                                // Drop the arrangement's leading identifier lane: edges carry
+                                // the key the program wrote, so `$0` indexes what it always did.
+                                keys: recover_key(ch.keys()),
+                                vals: ch.vals().clone(),
+                                times: ch.times().clone(),
+                                diffs: ch.diffs().to_vec(),
+                            };
+                            session.give_container(&mut c);
+                        }
+                    }
+                });
+            }
+        })
+        .as_collection()
+}
+
 /// The corgi rendering substrate. An uninhabited type used only as a type-level tag: it
 /// carries the [`Backend`] impl (a namespace of rendering functions selected by type) and is
 /// never a value — rendering goes through `render_tree::<CorgiBackend>`. The empty enum (vs a
@@ -182,7 +272,7 @@ pub enum CorgiBackend {}
 
 impl Backend for CorgiBackend {
     type Container = CC;
-    type Arr<'scope> = Arranged<'scope, TraceAgent<CTrace>>;
+    type Arr<'scope> = Arr<'scope>;
 
     fn linear<'s>(c: Collection<'s, Time, CC>, ops: Vec<LinearOp>, level: usize) -> Collection<'s, Time, CC> {
         // Container-level: fold the LinearOp chain over each corgi batch (no inter-op transcode).
@@ -212,12 +302,12 @@ impl Backend for CorgiBackend {
         // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
         // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
         // builder. No columns→rows→columns round-trip at the arrangement boundary.
-        arrange_core::<_, CC, _, CTrace>(
+        Arr::Local(arrange_core::<_, CC, _, CTrace>(
             c.inner,
             CorgiPact,
             "CorgiArrange",
             ChunkBatcher::<CorgiChunker<Time, Diff>, _>::new,
-        )
+        ))
     }
 
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, CC> {
@@ -225,43 +315,32 @@ impl Backend for CorgiBackend {
         // so a chunk becomes a `CorgiContainer` for the price of copying its time lanes and
         // its diffs. One container per chunk — no concatenation, no gather, no
         // columns→rows→columns round-trip.
-        a.stream
-            .unary(Pipeline, "CorgiAsCollection", |_, _| {
-                |input, output| {
-                    input.for_each(|cap, data| {
-                        let mut session = output.session(&cap);
-                        for batch in data.iter() {
-                            let Some(payload) = batch.inner.as_ref() else { continue };
-                            for ch in payload.chunks.iter().filter(|c| c.len() > 0) {
-                                let mut c = CorgiContainer {
-                                    // Drop the arrangement's leading identifier lane: edges carry
-                                    // the key the program wrote, so `$0` indexes what it always did.
-                                    keys: recover_key(ch.keys()),
-                                    vals: ch.vals().clone(),
-                                    times: ch.times().clone(),
-                                    diffs: ch.diffs().to_vec(),
-                                };
-                                session.give_container(&mut c);
-                            }
-                        }
-                    });
-                }
-            })
-            .as_collection()
+        match a {
+            Arr::Local(a) => chunk_containers(a.stream),
+            Arr::Imported(a) => chunk_containers(a.stream),
+        }
     }
 
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, CC> {
         // The proxy-join seam drives the backend blockwise under the driver's fuel; the backend
         // compiles the projection per container (shape-directed, for `Spread`) and emits corgi
         // columns directly as `CorgiContainer`s — column-native, no row round-trip.
-        let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone()));
-        join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic).as_collection()
+        let tactic = || RetimeJoin(ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone())));
+        match (l, r) {
+            (Arr::Local(l), Arr::Local(r)) => join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic()).as_collection(),
+            (Arr::Local(l), Arr::Imported(r)) => join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic()).as_collection(),
+            (Arr::Imported(l), Arr::Local(r)) => join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic()).as_collection(),
+            (Arr::Imported(l), Arr::Imported(r)) => join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic()).as_collection(),
+        }
     }
 
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
-        let tactic = ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone())).with_key_batch_size(256);
-        reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic)
+        let tactic = RetimeReduce(ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone())).with_key_batch_size(256));
+        Arr::Local(match a {
+            Arr::Local(a) => reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic),
+            Arr::Imported(a) => reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic),
+        })
     }
 
     fn inspect<'s>(c: Collection<'s, Time, CC>, label: String) -> Collection<'s, Time, CC> {
@@ -326,6 +405,18 @@ impl Backend for CorgiBackend {
 
         stream.as_collection()
     }
+
+    /// An imported export may: its handles report compaction at the host time (`TraceEnter`
+    /// keeps only the outer coordinate), so no reader can compact it to iteration times.
+    fn shares_into_regions<'s>(a: &Self::Arr<'s>) -> bool {
+        matches!(a, Arr::Imported(_))
+    }
+    fn enter_region<'s, 'r>(a: Self::Arr<'s>, region: Scope<'r, Time>) -> Self::Arr<'r> {
+        match a {
+            Arr::Local(a) => Arr::Local(a.enter_region(region)),
+            Arr::Imported(a) => Arr::Imported(a.enter_region(region)),
+        }
+    }
 }
 
 /// Render `s` with the corgi substrate. See [`crate::backend::render_tree`].
@@ -335,6 +426,7 @@ pub fn render_tree<'s>(
     depth: usize,
     imports: Vec<Collection<'s, Time, CC>>,
 ) -> Vec<Collection<'s, Time, CC>> {
+    let imports = imports.into_iter().map(crate::backend::Rendered::Collection).collect();
     crate::backend::render_tree::<CorgiBackend>(s, scope, depth, imports)
 }
 
@@ -352,34 +444,62 @@ pub fn render_tree_corgi<'s>(
     let corgi_imports: Vec<Collection<'s, Time, CC>> = crate::backend::vec::check_import_shapes(s, imports)
         .into_iter()
         .zip(&s.imports)
-        .map(|(c, import)| {
-            let shape = import.shape.clone();
-            c.inner
-                .unary(Pipeline, "ToCorgi", move |_, _| {
-                    // Ascriptions describe empty lists and inactive sum lanes;
-                    // unannotated imports retain first-row inference.
-                    let mut pinned = shape;
-                    move |input, output| {
-                        input.for_each(|cap, data| {
-                            let rows = std::mem::take(data);
-                            let mut cc = match rows.first() {
-                                None => CorgiContainer::default(),
-                                Some(((k, v), _, _)) => {
-                                    let (ks, vs) = pinned.get_or_insert_with(|| {
-                                        let pin = |r: &Row, what: &str| shape_of_row(r).unwrap_or_else(|e| panic!("input {what}: {e}"));
-                                        (pin(k, "key"), pin(v, "value"))
-                                    });
-                                    CorgiContainer::from_updates(rows, ks, vs)
-                                }
-                            };
-                            output.session(&cap).give_container(&mut cc);
-                        });
-                    }
-                })
-                .as_collection()
-        })
+        .map(|(c, import)| to_corgi(c, import))
         .collect();
     render_tree(s, scope, depth, corgi_imports)
+}
+
+/// Convert an import's rows to corgi containers (`ToCorgi`), pinning its shapes from the
+/// import's ascription if it has one, else from its first row.
+fn to_corgi<'s>(c: crate::backend::vec::Col<'s>, import: &st::Import) -> Collection<'s, Time, CC> {
+    let shape = import.shape.clone();
+    c.inner
+        .unary(Pipeline, "ToCorgi", move |_, _| {
+            // Ascriptions describe empty lists and inactive sum lanes;
+            // unannotated imports retain first-row inference.
+            let mut pinned = shape;
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    let rows = std::mem::take(data);
+                    let mut cc = match rows.first() {
+                        None => CorgiContainer::default(),
+                        Some(((k, v), _, _)) => {
+                            let (ks, vs) = pinned.get_or_insert_with(|| {
+                                let pin = |r: &Row, what: &str| shape_of_row(r).unwrap_or_else(|e| panic!("input {what}: {e}"));
+                                (pin(k, "key"), pin(v, "value"))
+                            });
+                            CorgiContainer::from_updates(rows, ks, vs)
+                        }
+                    };
+                    output.session(&cap).give_container(&mut cc);
+                });
+            }
+        })
+        .as_collection()
+}
+
+/// A root import for [`render_tree_corgi_arranged`]: rows, or a published columnar export.
+#[allow(clippy::large_enum_variant)] // One per import, consumed as the program renders.
+pub enum CorgiImport<'s> {
+    Rows(crate::backend::vec::Col<'s>),
+    Export(ImportArr<'s>),
+}
+
+/// As [`render_tree_corgi`], but a published columnar export arrives as the producer's
+/// arrangement, which the program's `arrange`s, joins, and reduces of it read in place.
+/// (Its shape ascription, if any, is not checked: the chunks carry the producer's shapes.)
+pub fn render_tree_corgi_arranged<'s>(
+    s: &st::Scope,
+    scope: Scope<'s, Time>,
+    depth: usize,
+    imports: Vec<CorgiImport<'s>>,
+) -> Vec<Collection<'s, Time, CC>> {
+    assert_eq!(s.imports.len(), imports.len());
+    let imports = imports.into_iter().zip(&s.imports).map(|(imp, import)| match imp {
+        CorgiImport::Rows(c) => crate::backend::Rendered::Collection(to_corgi(crate::backend::vec::check_shape(c, import), import)),
+        CorgiImport::Export(a) => crate::backend::Rendered::Arrangement(Arr::Imported(a)),
+    }).collect();
+    crate::backend::render_tree::<CorgiBackend>(s, scope, depth, imports)
 }
 
 /// A columnar export: the program's corgi collection, left to the host time and arranged as

@@ -61,7 +61,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker;
 
 use crate::backend::corgi::render_tree_rows;
-use crate::backend::vec::render_tree;
+use crate::backend::vec::render_tree_arranged;
 use crate::ir::{Diff, Value};
 use crate::scope_ir as st;
 
@@ -105,6 +105,16 @@ impl std::str::FromStr for RenderBackend {
 /// A registered, shareable arrangement: the published form of an `export`,
 /// arranged by key at the host time so any later install can `import` it.
 pub type ServerTrace = TraceAgent<ValSpine<Value, Value, OuterTime, Diff>>;
+
+/// A root import at the host time, before it enters a program's scope.
+enum OuterImport<'s> {
+    /// An input, or a published trace read as rows.
+    Rows(VecCollection<'s, OuterTime, (Value, Value), Diff>),
+    /// A published row trace, for a vec program to read in place.
+    Trace(differential_dataflow::operators::arrange::Arranged<'s, ServerTrace>),
+    /// A published columnar export, for a corgi program to read in place.
+    Export(differential_dataflow::operators::arrange::Arranged<'s, crate::backend::corgi::ExportTrace>),
+}
 
 /// A published export as its readers see it: a row trace, or with columnar exports
 /// ([`Server::set_columnar_exports`]) a trace of corgi chunks. Either reads as rows.
@@ -406,6 +416,9 @@ pub struct Server {
     epoch: OuterTime,
     /// Rendering substrate for subsequently installed programs.
     backend: RenderBackend,
+    /// Hand published traces to importing programs as arrangements (vec row traces, corgi
+    /// columnar exports), so an importer shares the producer's trace instead of copying it.
+    arranged_imports: bool,
 }
 
 impl Server {
@@ -427,6 +440,7 @@ impl Server {
             bindings: Vec::new(),
             epoch: 0,
             backend,
+            arranged_imports: true,
         }
     }
 
@@ -445,6 +459,15 @@ impl Server {
     /// they read (`snapshot`, imports, binds). Affects programs installed afterwards.
     pub fn set_columnar_exports(&mut self, on: bool) {
         self.columnar_exports = on;
+    }
+
+    /// Import published traces into programs as arrangements (default on): row traces into vec
+    /// programs, columnar exports into corgi programs with columnar exports. Joins, reduces, and
+    /// `arrange`s of an import then read the producer's trace, at the root and inside iterative
+    /// scopes, rather than each importer rebuilding it. Off, every import arrives as rows.
+    /// Affects programs installed afterwards.
+    pub fn set_arranged_imports(&mut self, on: bool) {
+        self.arranged_imports = on;
     }
 
     /// With columnar exports, also keep each export's new batches for [`Server::take_changes`]
@@ -570,6 +593,7 @@ impl Server {
         let root = &prog.root;
         let traces = &mut self.traces;
         let backend = self.backend;
+        let arranged_imports = self.arranged_imports;
         let columnar = backend == RenderBackend::Corgi && self.columnar_exports;
         let tapped = columnar && self.export_taps;
         let ctraces = &mut self.ctraces;
@@ -582,29 +606,46 @@ impl Server {
             worker.dataflow::<OuterTime, _, _>(|outer| {
                 let mut inputs: Vec<(usize, ServerInput)> = Vec::new();
 
-                // One outer (host-time) collection per root import.
-                let outer_cols: Vec<VecCollection<OuterTime, (Value, Value), Diff>> = root
+                // One outer (host-time) value per root import: rows, or with arranged imports a
+                // published trace itself, as an arrangement the program will read in place: a row
+                // trace for a vec program, a columnar export for a columnar corgi program.
+                let outer_imports: Vec<OuterImport> = root
                     .imports
                     .iter()
                     .map(|imp| match &imp.from {
                         st::Source::Input(n) => {
                             let (handle, col) = outer.new_collection::<(Value, Value), Diff>();
                             inputs.push((*n, handle));
-                            col
+                            OuterImport::Rows(col)
                         }
                         st::Source::Trace(t) => {
                             // The first binding point: resolve a named trace by importing it.
                             let key = canonical_source_name(t);
-                            // A columnar export is read as rows by its importers.
                             if let Some(ctrace) = ctraces.get_mut(&key) {
+                                if arranged_imports && columnar {
+                                    return OuterImport::Export(ctrace.import(outer));
+                                }
+                                // Otherwise a columnar export is read as rows by its importers.
                                 let rows = crate::backend::corgi::export_rows(ctrace.import(outer.clone()));
-                                return differential_dataflow::AsCollection::as_collection(rows);
+                                return OuterImport::Rows(differential_dataflow::AsCollection::as_collection(rows));
                             }
                             let arranged = traces
                                 .get_mut(&key)
                                 .expect("validated above")
                                 .import(outer.clone());
-                            arranged.as_collection(|k, v| (k.clone(), v.clone()))
+                            if arranged_imports && backend == RenderBackend::Vec {
+                                // An ascription is checked against the trace's batches by a side
+                                // operator (no output, no copy); the program reads the trace itself.
+                                if let Some((ks, vs)) = imp.shape.clone() {
+                                    let _ = arranged.clone().flat_map_ref(move |k, v| {
+                                        assert!(k.has_shape(&ks) && v.has_shape(&vs), "input does not match its shape ascription");
+                                        None::<()>
+                                    });
+                                }
+                                OuterImport::Trace(arranged)
+                            } else {
+                                OuterImport::Rows(arranged.as_collection(|k, v| (k.clone(), v.clone())))
+                            }
                         }
                         st::Source::Parent(_) => unreachable!("root import from a parent scope"),
                     })
@@ -614,15 +655,40 @@ impl Server {
                 // every export back out to the host time.
                 let (leaved, cleaved) = outer
                     .iterative::<PointStamp<OuterTime>, _, _>(|inner| {
-                        let entered: Vec<_> =
-                            outer_cols.iter().map(|c| c.clone().enter(inner)).collect();
                         if columnar {
-                            let exports = crate::backend::corgi::render_tree_corgi(root, inner.clone(), 0, entered);
+                            use crate::backend::corgi::CorgiImport;
+                            let imports = outer_imports
+                                .iter()
+                                .map(|imp| match imp {
+                                    OuterImport::Rows(c) => CorgiImport::Rows(c.clone().enter(inner)),
+                                    OuterImport::Export(a) => CorgiImport::Export(a.clone().enter(inner)),
+                                    OuterImport::Trace(_) => unreachable!("row traces are imported as arrangements only by vec programs"),
+                                })
+                                .collect();
+                            let exports = crate::backend::corgi::render_tree_corgi_arranged(root, inner, 0, imports);
                             return (Vec::new(), exports.into_iter().map(|c| c.leave(outer)).collect::<Vec<_>>());
                         }
                         let exports = match backend {
-                            RenderBackend::Vec => render_tree(root, inner.clone(), 0, entered),
+                            RenderBackend::Vec => {
+                                use crate::backend::{Rendered, vec::Arr};
+                                let rendered = outer_imports
+                                    .iter()
+                                    .map(|imp| match imp {
+                                        OuterImport::Rows(c) => Rendered::Collection(c.clone().enter(inner)),
+                                        OuterImport::Trace(a) => Rendered::Arrangement(Arr::Imported(a.clone().enter(inner))),
+                                        OuterImport::Export(_) => unreachable!("columnar exports exist only on the corgi backend"),
+                                    })
+                                    .collect();
+                                render_tree_arranged(root, inner, 0, rendered)
+                            }
                             RenderBackend::Corgi => {
+                                let entered = outer_imports
+                                    .iter()
+                                    .map(|imp| match imp {
+                                        OuterImport::Rows(c) => c.clone().enter(inner),
+                                        _ => unreachable!("a row-exporting corgi program imports rows"),
+                                    })
+                                    .collect();
                                 render_tree_rows(root, inner.clone(), 0, entered)
                             }
                         };
