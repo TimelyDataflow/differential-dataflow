@@ -55,27 +55,46 @@ pub trait Backend {
 }
 
 /// A rendered item's value: a collection, or an arrangement.
-enum Rendered<'s, B: Backend> {
+///
+/// Imports are rendered values too, so a driver can hand a scope an arrangement it already
+/// maintains (a published trace) and the scope's `arrange`s and joins of it reuse it as is.
+pub enum Rendered<'s, B: Backend> {
     Collection(Collection<'s, Time, B::Container>),
     Arrangement(B::Arr<'s>),
+    /// An imported arrangement that the scope also reads as rows: both forms, so the rows
+    /// are flattened out of it once rather than once per use.
+    Both(B::Arr<'s>, Collection<'s, Time, B::Container>),
+}
+
+impl<'s, B: Backend> Clone for Rendered<'s, B> {
+    fn clone(&self) -> Self {
+        match self {
+            Rendered::Collection(c) => Rendered::Collection(c.clone()),
+            Rendered::Arrangement(a) => Rendered::Arrangement(a.clone()),
+            Rendered::Both(a, c) => Rendered::Both(a.clone(), c.clone()),
+        }
+    }
 }
 
 impl<'s, B: Backend> Rendered<'s, B> {
+    /// Bring the value into a child region. An arrangement enters as the same trace, and rows
+    /// already flattened from one enter with it.
     fn enter<'r>(&self, region: Scope<'r, Time>) -> Rendered<'r, B> {
         match self {
             Rendered::Collection(c) => Rendered::Collection(c.clone().enter(region)),
             Rendered::Arrangement(a) => Rendered::Arrangement(B::enter_region(a.clone(), region)),
+            Rendered::Both(a, c) => Rendered::Both(B::enter_region(a.clone(), region), c.clone().enter(region)),
         }
     }
-    fn collection(&self) -> Collection<'s, Time, B::Container> {
+    pub fn collection(&self) -> Collection<'s, Time, B::Container> {
         match self {
-            Rendered::Collection(c) => c.clone(),
+            Rendered::Collection(c) | Rendered::Both(_, c) => c.clone(),
             Rendered::Arrangement(a) => B::as_collection(a.clone()),
         }
     }
     fn arrange(&self) -> B::Arr<'s> {
         match self {
-            Rendered::Arrangement(a) => a.clone(),
+            Rendered::Arrangement(a) | Rendered::Both(a, _) => a.clone(),
             Rendered::Collection(c) => B::arrange(c.clone()),
         }
     }
@@ -96,20 +115,28 @@ fn resolve<'s, B: Backend>(
 ) -> Rendered<'s, B> {
     match r {
         st::Ref::Local(i) => match &items[*i] {
-            RItem::Op(Rendered::Collection(c)) => Rendered::Collection(c.clone()),
-            RItem::Op(Rendered::Arrangement(a)) => Rendered::Arrangement(a.clone()),
+            RItem::Op(rendered) => rendered.clone(),
             RItem::Sub(_) => panic!("Ref::Local points at a child scope"),
         },
-        st::Ref::Import(i) => match &imports[*i] {
-            Rendered::Collection(c) => Rendered::Collection(c.clone()),
-            Rendered::Arrangement(a) => Rendered::Arrangement(a.clone()),
-        },
+        st::Ref::Import(i) => imports[*i].clone(),
         st::Ref::Var(i) => Rendered::Collection(var_cols[*i].clone()),
         st::Ref::ChildExport(i, j) => match &items[*i] {
             RItem::Sub(exports) => Rendered::Collection(exports[*j].clone()),
             RItem::Op(_) => panic!("Ref::ChildExport points at an operator"),
         },
     }
+}
+
+/// Whether scope `s` reads import `k` as rows: as a linear op's, concat's, or inspect's input,
+/// or as a bind or export. A child's import is not a read: the arrangement enters the child.
+fn reads_rows(s: &st::Scope, k: usize) -> bool {
+    let is_k = |r: &st::Ref| matches!(r, st::Ref::Import(i) if *i == k);
+    s.items.iter().any(|item| match item {
+        st::Item::Op(st::Node::Linear { input, .. } | st::Node::Inspect { input, .. }) => is_k(input),
+        st::Item::Op(st::Node::Concat(refs)) => refs.iter().any(is_k),
+        st::Item::Op(st::Node::Arrange(_) | st::Node::Join { .. } | st::Node::Reduce { .. }) => false,
+        st::Item::Sub(_) => false,
+    }) || s.binds.iter().any(|b| is_k(&b.value)) || s.exports.iter().any(|e| is_k(&e.value))
 }
 
 /// Render one scope at `depth` (root = 0): feedback vars first (they're listed,
@@ -121,22 +148,18 @@ pub fn render_tree<'s, B: Backend>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
     depth: usize,
-    imports: Vec<Collection<'s, Time, B::Container>>,
-    shapes: Option<&ScopeShapes>,
-) -> Vec<Collection<'s, Time, B::Container>> {
-    render_scope::<B>(s, scope, depth, imports.into_iter().map(Rendered::Collection).collect(), shapes)
-}
-
-/// [`render_tree`] at any depth. A child's imports are the parent's items as rendered, so an
-/// arrangement crosses into the child as the same trace, not as rows to arrange again.
-fn render_scope<'s, B: Backend>(
-    s: &st::Scope,
-    scope: Scope<'s, Time>,
-    depth: usize,
     imports: Vec<Rendered<'s, B>>,
     shapes: Option<&ScopeShapes>,
 ) -> Vec<Collection<'s, Time, B::Container>> {
     let shape_of = |r: &st::Ref| shapes.and_then(|sh| sh.of(r)).map(|c| (c.key, c.val));
+    // An arranged import that is also read as rows gets its rows flattened once, here.
+    let imports: Vec<Rendered<'s, B>> = imports.into_iter().enumerate().map(|(k, imp)| match imp {
+        Rendered::Arrangement(a) if reads_rows(s, k) => {
+            let rows = B::as_collection(a.clone());
+            Rendered::Both(a, rows)
+        }
+        other => other,
+    }).collect();
     let mut var_handles: Vec<Option<Variable<'s, Time, B::Container>>> = Vec::new();
     let mut var_cols: Vec<Collection<'s, Time, B::Container>> = Vec::new();
     for _ in &s.vars {
@@ -186,9 +209,9 @@ fn render_scope<'s, B: Backend>(
                 // the child renders inside, exports leave it structurally —
                 // and then pop the child's dynamic coordinate.
                 let exported = scope.region_named(&child.name, |region| {
-                    let entered: Vec<_> = child_imports.iter().map(|c| c.enter(region)).collect();
+                    let entered: Vec<_> = child_imports.iter().map(|imp| imp.enter(region)).collect();
                     let child_shapes = shapes.and_then(|sh| match sh.items.get(index) { Some(ItemShapes::Sub(c)) => Some(c), _ => None });
-                    let exports = render_scope::<B>(child, region, depth + 1, entered, child_shapes);
+                    let exports = render_tree::<B>(child, region, depth + 1, entered, child_shapes);
                     exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()
                 });
                 let left: Vec<Collection<'s, Time, B::Container>> = exported.into_iter().map(|c| B::leave_dynamic(c, depth + 1)).collect();

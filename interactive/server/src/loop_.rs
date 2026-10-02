@@ -148,6 +148,9 @@ pub fn run_worker(
 
     let mut server = Server::with_backend(backend);
     server.set_columnar_exports(columnar_exports);
+    // Published traces reach importers as arrangements; DDIR_ARRANGED_IMPORTS=0 sends rows
+    // instead (each importer re-arranges what it joins).
+    server.set_arranged_imports(std::env::var("DDIR_ARRANGED_IMPORTS").map_or(true, |v| v != "0"));
     let mut tails: HashMap<TailKey, Tail> = HashMap::new();
     let mut responses: HashMap<u64, Sender<String>> = HashMap::new();
     let mut next_token = 0u64;
