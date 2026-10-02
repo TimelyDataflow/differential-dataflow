@@ -1,0 +1,7 @@
+-- `n` has two identical consumers; only after they dedup is `n` single-use and fusable,
+-- so this takes two rounds of the outer loop.
+let x = input 0 | key($0[0] ; $0[1]) | arrange;
+let n = x | map($0 ; $1[0] + 1);
+let c1 = n | map($0 ; $1[0] * 2);
+let c2 = n | map($0 ; $1[0] * 2);
+export "e" = c1 + c2 | arrange;

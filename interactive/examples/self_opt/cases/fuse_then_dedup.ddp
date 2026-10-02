@@ -1,0 +1,10 @@
+-- Two identical linear stages, each the sole input of a different linear consumer.
+-- The Rust loop fuses before it dedups, so `a`/`b` vanish into `c`/`d` and are never
+-- shared: the order of the rewrites decides the result.
+let x = input 0 | key($0[0] ; $0[1]);
+let a = x | map($0 ; $1[0] + 1);
+let b = x | map($0 ; $1[0] + 1);
+let c = a | map($0 ; $1[0] * 2);
+let d = b | map($0 ; $1[0] * 3);
+export "c" = c | arrange;
+export "d" = d | arrange;
