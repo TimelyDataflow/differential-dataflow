@@ -14,10 +14,11 @@ use differential_dataflow::{Collection, VecCollection};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::trace::implementations::{ValSpine, ValBuilder};
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use smallvec::SmallVec;
 use smallvec::smallvec as svec;
 
-use crate::backend::Backend;
+use crate::backend::{Backend, Rendered};
 use crate::scope_ir as st;
 use crate::ir::{LinearOp, Diff, Projection, Reducer, Time, Value, eval};
 
@@ -31,19 +32,35 @@ pub type Col<'scope> = VecCollection<'scope, Time, (Row, Row), Diff>;
 /// server on either backend. This is not transactional feed admission or
 /// per-program failure isolation.
 pub(crate) fn check_import_shapes<'s>(s: &st::Scope, imports: Vec<Col<'s>>) -> Vec<Col<'s>> {
+    assert_eq!(s.imports.len(), imports.len());
+    imports.into_iter().zip(&s.imports).map(|(c, import)| check_shape(c, import)).collect()
+}
+
+/// Check one import's rows against its shape ascription, if it has one.
+pub(crate) fn check_shape<'s>(c: Col<'s>, import: &st::Import) -> Col<'s> {
     use differential_dataflow::AsCollection;
     use timely::dataflow::operators::core::Map;
-    assert_eq!(s.imports.len(), imports.len());
-    imports.into_iter().zip(&s.imports).map(|(c, import)| {
-        if let Some((key, val)) = import.shape.clone() {
-            c.inner.map(move |row| {
-                assert!(row.0.0.has_shape(&key) && row.0.1.has_shape(&val), "input does not match its shape ascription");
-                row
-            }).as_collection()
-        } else { c }
-    }).collect()
+    if let Some((key, val)) = import.shape.clone() {
+        c.inner.map(move |row| {
+            assert!(row.0.0.has_shape(&key) && row.0.1.has_shape(&val), "input does not match its shape ascription");
+            row
+        }).as_collection()
+    } else { c }
 }
-type Arr<'scope> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, Time, Diff>>>;
+
+/// An arrangement this program built, at the renderer's time.
+pub type LocalArr<'scope> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, Time, Diff>>>;
+/// A published trace (arranged at the server's host time, `u64`), entered into the program's
+/// scope: the producer's own batches, read with each host time `t` as `(t, [])`.
+pub type ImportArr<'scope> = Arranged<'scope, TraceEnter<TraceAgent<ValSpine<Row, Row, u64, Diff>>, Time>>;
+
+/// The vec backend's arrangement: one it built, or one it imported. Join and reduce accept
+/// either (they read batches through cursors, and an entered batch's cursor lifts its times).
+#[derive(Clone)]
+pub enum Arr<'scope> {
+    Local(LocalArr<'scope>),
+    Imported(ImportArr<'scope>),
+}
 
 /// Append the user-iter coordinate to a value: extend a `Tuple` in place, or
 /// wrap any other value as `(value, iter)`.
@@ -135,10 +152,13 @@ impl Backend for VecBackend {
         render_linear(c, ops, level)
     }
     fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s> {
-        c.arrange_by_key()
+        Arr::Local(c.arrange_by_key())
     }
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container> {
-        a.as_collection(|k, v| (k.clone(), v.clone()))
+        match a {
+            Arr::Local(a) => a.as_collection(|k, v| (k.clone(), v.clone())),
+            Arr::Imported(a) => a.as_collection(|k, v| (k.clone(), v.clone())),
+        }
     }
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, Self::Container> {
         let proj = projection.clone();
@@ -149,7 +169,12 @@ impl Backend for VecBackend {
                 let v = eval(&proj.val, &mut env);
                 svec![(k, v)]
             });
-        l.join_core(r, move |k, v1, v2| f(k, v1, v2))
+        match (l, r) {
+            (Arr::Local(l), Arr::Local(r)) => l.join_core(r, move |k, v1, v2| f(k, v1, v2)),
+            (Arr::Local(l), Arr::Imported(r)) => l.join_core(r, move |k, v1, v2| f(k, v1, v2)),
+            (Arr::Imported(l), Arr::Local(r)) => l.join_core(r, move |k, v1, v2| f(k, v1, v2)),
+            (Arr::Imported(l), Arr::Imported(r)) => l.join_core(r, move |k, v1, v2| f(k, v1, v2)),
+        }
     }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
         let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
@@ -166,11 +191,20 @@ impl Backend for VecBackend {
                 output.push((Value::List(items), 1));
             }),
         };
-        a.reduce_abelian::<_, ValBuilder<_, _, _, _>, ValSpine<_, _, _, _>, _, _>(
-            "Reduce",
-            move |k, v, o| f(k, v, o),
-            |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v, t, r)| ((key.clone(), v), t, r))); },
-        )
+        // The same reduction over either arrangement; its output is always local.
+        macro_rules! reduce {
+            ($a:expr) => {
+                $a.reduce_abelian::<_, ValBuilder<_, _, _, _>, ValSpine<_, _, _, _>, _, _>(
+                    "Reduce",
+                    move |k, v, o| f(k, v, o),
+                    |vec, key, upds| { vec.clear(); vec.extend(upds.drain(..).map(|(v, t, r)| ((key.clone(), v), t, r))); },
+                )
+            };
+        }
+        Arr::Local(match a {
+            Arr::Local(a) => reduce!(a),
+            Arr::Imported(a) => reduce!(a),
+        })
     }
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container> {
         use std::fmt::Write;
@@ -185,6 +219,17 @@ impl Backend for VecBackend {
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container> {
         c.leave_dynamic(depth)
     }
+    /// An imported trace may: its handles report compaction at the host time (`TraceEnter`
+    /// keeps only the outer coordinate), so no reader can compact it to iteration times.
+    fn shares_into_regions<'s>(a: &Self::Arr<'s>) -> bool {
+        matches!(a, Arr::Imported(_))
+    }
+    fn enter_region<'s, 'r>(a: Self::Arr<'s>, region: Scope<'r, Time>) -> Self::Arr<'r> {
+        match a {
+            Arr::Local(a) => Arr::Local(a.enter_region(region)),
+            Arr::Imported(a) => Arr::Imported(a.enter_region(region)),
+        }
+    }
 }
 
 /// Render `s` with the vec substrate. See [`crate::backend::render_tree`].
@@ -194,5 +239,24 @@ pub fn render_tree<'s>(
     depth: usize,
     imports: Vec<Col<'s>>,
 ) -> Vec<Col<'s>> {
-    crate::backend::render_tree::<VecBackend>(s, scope, depth, check_import_shapes(s, imports))
+    let imports = check_import_shapes(s, imports).into_iter().map(Rendered::Collection).collect();
+    crate::backend::render_tree::<VecBackend>(s, scope, depth, imports)
+}
+
+/// As [`render_tree`], but an import may arrive already arranged (a published trace), in
+/// which case the program's `arrange`s and joins of it read the producer's arrangement
+/// instead of building their own. Shape ascriptions are checked here for imports that
+/// arrive as rows; checking an arranged import's ascription is the driver's job.
+pub fn render_tree_arranged<'s>(
+    s: &st::Scope,
+    scope: Scope<'s, Time>,
+    depth: usize,
+    imports: Vec<Rendered<'s, VecBackend>>,
+) -> Vec<Col<'s>> {
+    assert_eq!(s.imports.len(), imports.len());
+    let imports = imports.into_iter().zip(&s.imports).map(|(rendered, import)| match rendered {
+        Rendered::Collection(c) if import.shape.is_some() => Rendered::Collection(check_shape(c, import)),
+        other => other,
+    }).collect();
+    crate::backend::render_tree::<VecBackend>(s, scope, depth, imports)
 }
