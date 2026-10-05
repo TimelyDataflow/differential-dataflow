@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import measure
+from readout import account
 from snapshot import csv_rows
 from snb import data
 import workload
@@ -70,6 +71,26 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(summary['initial/read']['wire_ms']['median_ms'], 5000)
         self.assertEqual(summary['initial/read']['client_ms']['median_ms'], 17000)
         self.assertEqual(measure.total([event, event]), {k: 2*metrics[k] for k in measure.TIMINGS})
+
+    def test_readout_counts_cycles_without_hiding_retirement(self):
+        def event(state, phase, amount, **extra):
+            return dict({m: amount for m in measure.TIMINGS}, state=state, phase=phase,
+                        round=0, warmup=False, **extra)
+        events = [event('setup', 'initial_tick', 100),
+                  event('initial', 'bind', 2), event('initial', 'read:q', 3),
+                  event('initial', 'batch_answers', 5, derived=True),
+                  event('restored', 'restore', 7),
+                  event('restored', 'empty:q', 11, answer_sha256='checked'),
+                  dict(event('initial', 'bind', 50), round=-1, warmup=True),
+                  dict(event('retired', 'retire', 200), warmup=True)]
+        run = dict(queries=['q'], events=events)
+        totals = account(run, 1)
+        self.assertEqual({k: v['wire_ms'] for k, v in totals.items()},
+                         {'setup': 100, 0: 23, 'warmup': 50, 'retirement': 200})
+        with self.assertRaisesRegex(ValueError, 'incomplete measured rounds'):
+            account(run, 2)
+        with self.assertRaisesRegex(ValueError, 'missing checked restored answer'):
+            account(dict(run, events=[e for e in events if e['phase'] != 'empty:q']), 1)
 
 
 if __name__ == '__main__':
