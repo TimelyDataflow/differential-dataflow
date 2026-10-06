@@ -4,7 +4,7 @@
 -- disagreeing by float drift; enumeration is exact).
 -- input 0: (time, distance)
 
-let races = input 0 | key($0[0] ; $0[1]);
+let races = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
 
 cands: {
     let step = c | filter($0[1] + 1 < $0[0]) | map($0[0], $0[1] + 1 ;);

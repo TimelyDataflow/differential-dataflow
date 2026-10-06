@@ -2,7 +2,7 @@
 -- codes: '-'=45 '|'=124 'F'=70 'L'=76 'J'=74 '7'=55 '.'=46 'S'=83
 -- input 0: (row, col, code), 1-indexed
 
-let symbols = input 0 | key($0[0], $0[1] ; $0[2]);
+let symbols = input 0 : ((int, int, int) ; ()) | key($0[0], $0[1] ; $0[2]);
 let pipes = symbols | filter($1[0] != 46 && $1[0] != 83);
 
 let e1 = pipes | map($0[0], $0[1],

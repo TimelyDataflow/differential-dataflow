@@ -1,9 +1,9 @@
 -- BI5: standing request(request_id, tag_name). Tagged messages and their
 -- immediate replies/likes contribute 1/2/10 points to the message's author.
-let request = input 0;
-let tagged = import "tagged";
-let message = import "message";
-let likes = import "likes";
+let request = input 0 : ((int, List(int)) ; ());
+let tagged = import "tagged" : ((int) ; (List(int)));
+let message = import "message" : ((int) ; (int, int, int));
+let likes = import "likes" : ((int) ; (int));
 let selected = request | key($0[1] ; $0[0])
     | join(tagged | key($1[0] ; $0[0]), ($2[0] ; $1[0]))
     | join(message, ($1[0], $0[0], $2[1] ;)) | distinct;

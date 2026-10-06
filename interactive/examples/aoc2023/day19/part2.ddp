@@ -1,9 +1,9 @@
 -- AoC 2023 day 19 part 2: hypercube regions through the workflow tree.
 -- Faithful to the slt: no emptiness clamping, so impossible regions
 -- contribute negative products (their oracle answer is negative too).
--- input 0: rules (1, state, prio, field, cmp, val, next) / parts (0, ...)
+-- input 0: rules (state, prio, field, cmp, val, next)
 
-let rules = input 0 | filter($0[0] == 1) | key($0[1], $0[2] ; $0[3], $0[4], $0[5], $0[6]);
+let rules = input 0 : ((int, int, int, int, int, int) ; ()) | key($0[0], $0[1] ; $0[2], $0[3], $0[4], $0[5]);
 -- (state, prio ; field, cmp, val, next)
 
 flow: {

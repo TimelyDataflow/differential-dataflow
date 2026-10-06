@@ -3,7 +3,7 @@
 -- (g1+j)(g1+j-1) - g1(g1-1). No scalar let: stage via successive maps.
 -- input 0: (id, c1..c5, bid) charcodes
 
-let stage = input 0 | key(;
+let stage = input 0 : ((int, int, int, int, int, int, int) ; ()) | key(;
     $0[0],
     -- doubled non-joker pair count
     2 * ( (($0[1]==$0[2]) && ($0[1]!=74)) + (($0[1]==$0[3]) && ($0[1]!=74)) + (($0[1]==$0[4]) && ($0[1]!=74)) + (($0[1]==$0[5]) && ($0[1]!=74))

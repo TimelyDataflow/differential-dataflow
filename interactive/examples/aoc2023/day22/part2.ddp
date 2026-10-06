@@ -3,7 +3,7 @@
 -- input 0: (r, x1,y1,z1, x2,y2,z2)
 
 -- slt's generate_series drops bricks with ANY reversed axis; mirror that.
-let bricks = input 0 | filter($0[1] <= $0[4] && $0[2] <= $0[5] && $0[3] <= $0[6])
+let bricks = input 0 : ((int, int, int, int, int, int, int) ; ()) | filter($0[1] <= $0[4] && $0[2] <= $0[5] && $0[3] <= $0[6])
     | key($0[0] ; $0[1], $0[2], $0[3], $0[4], $0[5], $0[6]);
 -- (r ; xlo, ylo, zlo, xhi, yhi, zhi)
 

@@ -11,9 +11,8 @@ the compact puzzle text as it appears in the slt oracles); `transcribe.py`
 mechanically regenerates the i64 fact files the programs read (text →
 `(line, pos, charcode)`, grids → `(row, col, cell)`, names → ids) into the
 gitignored `gen/` directory at runtime. All puzzle logic lives in the
-`.ddp` programs. `transcribe.py --pad` additionally writes day05's
-arity-padded fact files for the corgi backend, which crashes on
-mixed-arity inputs.
+`.ddp` programs. Each fact file holds one relation, and each program
+declares the shape of every input it reads.
 
 ## Run
 
@@ -23,11 +22,11 @@ mixed-arity inputs.
 
 `run.sh` first runs `transcribe.py` (python3) to regenerate `gen/`, then
 runs each part as one server session piped into `ddir_server` — `load` the
-program from its file, `feed … from` the fact file into input 0, `tick` — and
+program from its file, `feed … from` each input's fact file (`gen/dayNN/in{k}.txt`
+for input k, or `partP.in{k}.txt` where a part reads its own), `tick` — and
 reads the answer off the `[partN]` inspect line.
 
-Both backends pass all 33 parts. Corgi needs day05's arity-padded inputs
-(`run.sh corgi` transcribes with `--pad`).
+Both backends pass all 33 parts.
 
 ## Verdicts
 

@@ -4,7 +4,7 @@
 -- row 0 remove the no-blocker case; rank counts include self (no defaults).
 -- input 0: (row, col, code) 1-indexed; 'O'=79 '#'=35 '.'=46
 
-let cells = input 0 | key($0[0], $0[1] ; $0[2]);
+let cells = input 0 : ((int, int, int) ; ()) | key($0[0], $0[1] ; $0[2]);
 let os    = cells | filter($1[0] == 79) | map($0 ;);
 let cubes = cells | filter($1[0] == 35) | map($0 ;);
 

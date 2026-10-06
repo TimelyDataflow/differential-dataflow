@@ -1,7 +1,7 @@
 -- AoC 2023 day 18 part 1: lavaduct area via shoelace + perimeter/2 + 1.
 -- input 0: (line, dircode, steps, h1..h6); U=85 D=68 L=76 R=82
 
-let instr = input 0 | key($0[0] ;
+let instr = input 0 : ((int, int, int, int, int, int, int, int, int) ; ()) | key($0[0] ;
     if($0[1] == 85, -1, if($0[1] == 68, 1, 0)),
     if($0[1] == 76, -1, if($0[1] == 82, 1, 0)),
     $0[2]);

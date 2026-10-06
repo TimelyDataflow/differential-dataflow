@@ -38,10 +38,11 @@ sufficed.
    silently corrupts counts when `b` has rows outside `a` (bit day 10;
    latent everywhere). Idiom: `a - (a |> join b)`. Minimal fix: an `except`
    operator.
-8. **One `EDGES_FILE` round-robined across inputs** makes multi-relation
-   programs awkward; the tag+filter workaround (days 5, 19, 22) then runs
-   into corgi's arity-uniformity contract. Minimal fix: `EDGES_FILE_0`,
-   `EDGES_FILE_1`, ...
+8. **One `EDGES_FILE` round-robined across inputs** made multi-relation
+   programs awkward; the tag+filter workaround ran into corgi's
+   arity-uniformity contract. Resolved: the server's `feed … from` loads a
+   file into any input, and days 5 and 19 now read each relation from its
+   own input.
 9. **No extrinsic iteration bound** (SQL's `RETURN AT RECURSION LIMIT`);
    bounds must be encoded in the data. This is ergonomics, not expressive
    power: a one-round stall (`var d = x;` then `x + (d | negate)` fires at

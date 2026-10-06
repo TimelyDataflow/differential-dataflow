@@ -3,7 +3,8 @@
 -- input 0: (r, x1,y1,z1, x2,y2,z2)
 
 -- slt's generate_series drops bricks with ANY reversed axis; mirror that.
-let bricks = input 0 | filter($0[1] <= $0[4] && $0[2] <= $0[5] && $0[3] <= $0[6])
+let lines = input 0 : ((int, int, int, int, int, int, int) ; ());
+let bricks = lines | filter($0[1] <= $0[4] && $0[2] <= $0[5] && $0[3] <= $0[6])
     | key($0[0] ; $0[1], $0[2], $0[3], $0[4], $0[5], $0[6]);
 -- (r ; xlo, ylo, zlo, xhi, yhi, zhi)
 
@@ -34,6 +35,6 @@ let sup = s1 | join(rest, ($1[0], $0[0], $1[1] == $2[0] ;))
 let uniq2 = sup | map($0[1] ;) | count | filter($1[0] == 1) | map($0 ;);
 
 let critical = sup | map($0[1] ; $0[0]) | join(uniq2, ($1[0] ;)) | distinct;
-let total = input 0 | key(;) | count;   -- ALL lines, per the slt
+let total = lines | key(;) | count;   -- ALL lines, per the slt
 export "result" = total | join(critical | key(;) | count, (; $1[0] - $2[0]))
     | arrange | inspect(part1);

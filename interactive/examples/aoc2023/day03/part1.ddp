@@ -2,7 +2,7 @@
 -- input 0: (row, col, charcode); '.' = 46, digits 48..57.
 -- NB: `distinct` erases values, so loop state is packed into keys.
 
-let cells    = input 0 | filter($0[2] != 46) | key($0[0], $0[1] ; $0[2]);
+let cells    = input 0 : ((int, int, int) ; ()) | filter($0[2] != 46) | key($0[0], $0[1] ; $0[2]);
 let numerals = cells | filter($1[0] >= 48 && $1[0] <= 57) | map($0 ; $1[0] - 48);
 let symbols  = cells | filter(not($1[0] >= 48 && $1[0] <= 57));
 

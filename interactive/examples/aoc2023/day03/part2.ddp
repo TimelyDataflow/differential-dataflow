@@ -2,7 +2,7 @@
 -- sum of the two numbers' product per gear.
 -- input 0: (row, col, charcode)
 
-let cells    = input 0 | filter($0[2] != 46) | key($0[0], $0[1] ; $0[2]);
+let cells    = input 0 : ((int, int, int) ; ()) | filter($0[2] != 46) | key($0[0], $0[1] ; $0[2]);
 let numerals = cells | filter($1[0] >= 48 && $1[0] <= 57) | map($0 ; $1[0] - 48);
 let gears    = cells | filter($1[0] == 42);
 
