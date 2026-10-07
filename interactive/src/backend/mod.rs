@@ -24,6 +24,7 @@ use differential_dataflow::collection::containers::{Enter, Leave, ResultsIn};
 
 use crate::ir::{Time, LinearOp, Projection, Reducer};
 use crate::scope_ir as st;
+use crate::shapes::{ItemShapes, ScopeShapes};
 
 /// A rendering substrate: a differential container plus the leaf operators over
 /// it. Collections are the plain container-generic `Collection<'s, Time, C>`;
@@ -39,10 +40,12 @@ pub trait Backend {
     /// The arrangement produced by `arrange`/`reduce` and consumed by `join`.
     type Arr<'scope>: Clone;
 
-    fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize) -> Collection<'s, Time, Self::Container>;
+    /// `shape` is the input's row shape, where it is known before any data arrives.
+    fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize, shape: Option<st::RowShape>) -> Collection<'s, Time, Self::Container>;
     fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s>;
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container>;
-    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, Self::Container>;
+    /// `shapes` are the two inputs' row shapes, where they are known before any data arrives.
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, Self::Container>;
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
@@ -100,13 +103,16 @@ fn resolve<'s, B: Backend>(
 /// Render one scope at `depth` (root = 0): feedback vars first (they're listed,
 /// not scanned for), then items in order, then binds close the loops, then the
 /// exports are surrendered. The returned collections are at this scope's depth;
-/// popping the coordinate (`leave_dynamic`) is the caller's job.
+/// popping the coordinate (`leave_dynamic`) is the caller's job. `shapes`, where
+/// inference ran, gives the operators their inputs' shapes ahead of the data.
 pub fn render_tree<'s, B: Backend>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
     depth: usize,
     imports: Vec<Collection<'s, Time, B::Container>>,
+    shapes: Option<&ScopeShapes>,
 ) -> Vec<Collection<'s, Time, B::Container>> {
+    let shape_of = |r: &st::Ref| shapes.and_then(|sh| sh.of(r)).map(|c| (c.key, c.val));
     let mut var_handles: Vec<Option<Variable<'s, Time, B::Container>>> = Vec::new();
     let mut var_cols: Vec<Collection<'s, Time, B::Container>> = Vec::new();
     for _ in &s.vars {
@@ -117,13 +123,13 @@ pub fn render_tree<'s, B: Backend>(
     }
 
     let mut items: Vec<RItem<'s, B>> = Vec::new();
-    for item in &s.items {
+    for (index, item) in s.items.iter().enumerate() {
         match item {
             st::Item::Op(node) => {
                 let rendered = match node {
                     st::Node::Linear { input, ops } => {
                         let c = resolve(&items, &imports, &var_cols, input).collection();
-                        Rendered::Collection(B::linear(c, ops.clone(), depth))
+                        Rendered::Collection(B::linear(c, ops.clone(), depth, shape_of(input)))
                     },
                     st::Node::Concat(refs) => {
                         let mut c = resolve(&items, &imports, &var_cols, &refs[0]).collection();
@@ -134,7 +140,7 @@ pub fn render_tree<'s, B: Backend>(
                     st::Node::Join { left, right, projection } => {
                         let l = resolve(&items, &imports, &var_cols, left).arrange();
                         let r = resolve(&items, &imports, &var_cols, right).arrange();
-                        Rendered::Collection(B::join(l, r, projection))
+                        Rendered::Collection(B::join(l, r, projection, shape_of(left).zip(shape_of(right))))
                     },
                     st::Node::Reduce { input, reducer } => {
                         let a = resolve(&items, &imports, &var_cols, input).arrange();
@@ -157,7 +163,8 @@ pub fn render_tree<'s, B: Backend>(
                 // and then pop the child's dynamic coordinate.
                 let exported = scope.region_named(&child.name, |region| {
                     let entered: Vec<_> = child_imports.iter().map(|c| c.clone().enter(region)).collect();
-                    let exports = render_tree::<B>(child, region, depth + 1, entered);
+                    let child_shapes = shapes.and_then(|sh| match sh.items.get(index) { Some(ItemShapes::Sub(c)) => Some(c), _ => None });
+                    let exports = render_tree::<B>(child, region, depth + 1, entered, child_shapes);
                     exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()
                 });
                 let left: Vec<Collection<'s, Time, B::Container>> = exported.into_iter().map(|c| B::leave_dynamic(c, depth + 1)).collect();

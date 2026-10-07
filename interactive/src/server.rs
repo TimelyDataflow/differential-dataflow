@@ -583,7 +583,7 @@ impl Server {
                 return Err(format!("export name {:?} is already published; choose another name or drop its producer", e.name));
             }
         }
-        let export_shapes = self.check_shapes(name, prog)?;
+        let (scope_shapes, export_shapes) = self.check_shapes(name, prog)?;
         for key in generated {
             if self.traces.contains_key(&key) {
                 continue; // imported twice
@@ -658,13 +658,13 @@ impl Server {
                         let entered: Vec<_> =
                             outer_cols.iter().map(|c| c.clone().enter(inner)).collect();
                         if columnar {
-                            let exports = crate::backend::corgi::render_tree_corgi(root, inner.clone(), 0, entered);
+                            let exports = crate::backend::corgi::render_tree_corgi(root, inner.clone(), 0, entered, Some(&scope_shapes));
                             return (Vec::new(), exports.into_iter().map(|c| c.leave(outer)).collect::<Vec<_>>());
                         }
                         let exports = match backend {
-                            RenderBackend::Vec => render_tree(root, inner.clone(), 0, entered),
+                            RenderBackend::Vec => render_tree(root, inner.clone(), 0, entered, Some(&scope_shapes)),
                             RenderBackend::Corgi => {
-                                render_tree_rows(root, inner.clone(), 0, entered)
+                                render_tree_rows(root, inner.clone(), 0, entered, Some(&scope_shapes))
                             }
                         };
                         (exports
@@ -747,10 +747,11 @@ impl Server {
     }
 
     /// Infer the shapes of `prog`'s collections, before anything is installed. An imported trace
-    /// takes the shape it is published at; a declared import must match it. Returns the shape
-    /// of each export that has one, or the conflicts that leave the program without meaning.
+    /// takes the shape it is published at; a declared import must match it. Returns the shapes,
+    /// for rendering, and the shape of each export that has one; or the conflicts that leave the
+    /// program without meaning.
     /// Collections whose shape is unknown (an undeclared input upstream) are not an error.
-    fn check_shapes(&self, name: &str, prog: &st::Program) -> Result<Vec<(String, RowShape)>, String> {
+    fn check_shapes(&self, name: &str, prog: &st::Program) -> Result<(crate::shapes::ScopeShapes, Vec<(String, RowShape)>), String> {
         let published = |t: &str| -> Option<RowShape> {
             let key = canonical_source_name(t);
             self.shapes.get(&key).cloned().or_else(|| generated_shape(&key))
@@ -774,9 +775,10 @@ impl Server {
         if !problems.conflicts.is_empty() {
             return Err(format!("program {:?} has conflicting shapes: {}", name, problems.conflicts.join("; ")));
         }
-        Ok(prog.root.exports.iter().zip(&shapes.exports)
+        let exports = prog.root.exports.iter().zip(&shapes.exports)
             .filter_map(|(e, s)| s.as_ref().map(|c| (e.name.clone(), (c.key.clone(), c.val.clone()))))
-            .collect())
+            .collect();
+        Ok((shapes, exports))
     }
 
     /// Install a generated source under its canonical `name`: a one-input

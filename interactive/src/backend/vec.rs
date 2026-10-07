@@ -131,7 +131,7 @@ impl Backend for VecBackend {
     type Container = Vec<((Row, Row), Time, Diff)>;
     type Arr<'scope> = Arr<'scope>;
 
-    fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize) -> Collection<'s, Time, Self::Container> {
+    fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize, _shape: Option<st::RowShape>) -> Collection<'s, Time, Self::Container> {
         render_linear(c, ops, level)
     }
     fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s> {
@@ -140,7 +140,7 @@ impl Backend for VecBackend {
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container> {
         a.as_collection(|k, v| (k.clone(), v.clone()))
     }
-    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, Self::Container> {
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, _shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, Self::Container> {
         let proj = projection.clone();
         let f: Arc<dyn Fn(&Row, &Row, &Row) -> SmallVec<[(Row, Row); 2]> + Send + Sync> =
             Arc::new(move |key, left, right| {
@@ -193,6 +193,7 @@ pub fn render_tree<'s>(
     scope: Scope<'s, Time>,
     depth: usize,
     imports: Vec<Col<'s>>,
+    shapes: Option<&crate::shapes::ScopeShapes>,
 ) -> Vec<Col<'s>> {
-    crate::backend::render_tree::<VecBackend>(s, scope, depth, check_import_shapes(s, imports))
+    crate::backend::render_tree::<VecBackend>(s, scope, depth, check_import_shapes(s, imports), shapes)
 }
