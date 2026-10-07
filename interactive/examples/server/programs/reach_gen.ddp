@@ -2,7 +2,7 @@
 -- The source `random:nodes=8,edges=12` is installed on demand at first import
 -- (no producer to install first). The recipe yields rows (Tuple[a,b] ; ()),
 -- so we re-key to (src ; dst) just as a raw input would be keyed.
--- input 0: roots (node ;)
+-- input 0 : ((int) ; ()): roots (node ;)
 
 let edges = import "random:nodes=8,edges=12" | key($0[0] ; $0[1]);
 let roots = input 0 | key($0[0] ;);

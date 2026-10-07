@@ -17,7 +17,7 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str,
 
 const PRODUCER: &str = r#"
     type Three = A u64 | B u64 | C u64;
-    let pairs = input 0 | key($0[0] ; $0[1]);
+    let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     export "plain" = pairs;
     export "lists" = pairs | collect;
     export "tagged" = pairs | map($0 ; variant(Three, 2, $1[0]));
@@ -29,8 +29,8 @@ const CONSUMER: &str = r#"
 "#;
 
 const COUNTER: &str = r#"
-    let seed = input 0;
-    let feedback = input 1;
+    let seed = input 0 : ((int) ; ());
+    let feedback = input 1 : ((int) ; ());
     let state = seed + feedback;
     export "count" = state;
     export "next" = (state | map($0[0] + 1 ;)) + (seed | negate);

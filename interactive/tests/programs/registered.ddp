@@ -7,7 +7,7 @@
 -- generation layer: a record's children come from a rule, until none has any).
 
 -- Seeds: (n ;).
-let seeds = input 0 | key($0[0] ;);
+let seeds = input 0 : ((int) ; ()) | key($0[0] ;);
 
 -- Refine: each cell's children are `grow(cell)`, until `grow` returns none.
 refine: {

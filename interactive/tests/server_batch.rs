@@ -10,7 +10,7 @@ fn tup(fields: &[i64]) -> Value {
 fn feed_batch_validates_before_staging_one_epoch() {
     timely::execute_directly(|worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(
-            "let rows = input 0; export \"rows\" = rows;",
+            "let rows = input 0 : ((int) ; (int)); export \"rows\" = rows;",
         ));
         program.optimize();
 
@@ -54,7 +54,7 @@ fn delayed_peers_wake_ticks_and_snapshots() {
         let barrier = Arc::new(Barrier::new(3));
         let guards = timely::execute(timely::Config::process(3), move |worker| {
             let mut program = lower::lower_tree(parse::pipe::parse(
-                "let rows = input 0; export \"rows\" = rows;",
+                "let rows = input 0 : ((int) ; ()); export \"rows\" = rows;",
             ));
             program.optimize();
             let mut server = Server::with_backend(backend);

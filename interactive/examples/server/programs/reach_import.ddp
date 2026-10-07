@@ -1,6 +1,6 @@
 -- Reachability over an edge set imported from another installed program.
 -- trace "edges": (src ; dst), published by `producer.ddp`.
--- input 0: roots (node ;)
+-- input 0 : ((int) ; ()): roots (node ;)
 
 let edges = import "edges";
 let roots = input 0 | key($0[0] ;);

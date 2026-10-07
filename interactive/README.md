@@ -13,8 +13,8 @@ This project looks at isolating an interpretable core, which lays the groundwork
 Here's an example that performs graph reachability:
 
 ```
-let edges = input 0 | key($0[0] ; $0[1]);
-let roots = input 1 | key($0[0] ;);
+let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+let roots = input 1 : ((int) ; ()) | key($0[0] ;);
 
 reach: {
     let label = reach | join(edges, ($2 ;));

@@ -5,7 +5,7 @@
 
 type Size = Small u64 | Big u64;
 
-let pairs = input 0 | key($0[0] ; $0[1]);
+let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
 let tagged = pairs | map($0 ; if($1[0] < 15, Small($1[0]), Big($1[0])));
 
 let picked = tagged

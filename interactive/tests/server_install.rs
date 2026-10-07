@@ -15,7 +15,7 @@ fn a_rejected_install_leaves_no_generated_sources() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         let recipe = "random:nodes=8,edges=12";
-        server.install(worker, "first", &program(r#"export "taken" = input 0;"#)).unwrap();
+        server.install(worker, "first", &program(r#"export "taken" = input 0 : ((int) ; ());"#)).unwrap();
 
         // The recipe would be generated, but the export is taken.
         let clash = program(&format!(r#"let e = import "{recipe}"; export "taken" = e;"#));

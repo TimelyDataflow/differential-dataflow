@@ -1,4 +1,4 @@
--- Publishes positional input 0 (edge pairs) as the named trace "edges",
+-- Publishes positional input 0 : ((int, int) ; ()) (edge pairs) as the named trace "edges",
 -- keyed by source. A consumer installed later can `import "edges"`.
 -- input 0: (src, dst ;)
 
