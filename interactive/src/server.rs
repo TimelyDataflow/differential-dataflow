@@ -138,6 +138,9 @@ impl Published {
     }
 }
 
+/// The shape of a collection's rows: its key's and its value's.
+pub type RowShape = (corgi::Shape, corgi::Shape);
+
 /// An input handle into an installed program's positional `input N`.
 type ServerInput = InputSession<OuterTime, (Value, Value), Diff>;
 
@@ -221,6 +224,18 @@ impl Recipe {
         }
     }
 
+    /// The shape of every row the source contains: `arity` integers for `random`, one for
+    /// `iota`, and a unit value for both.
+    fn shape(&self) -> RowShape {
+        use corgi::Shape;
+        let key = match self {
+            Recipe::Random { arity: 0, .. } => Shape::Unit,
+            Recipe::Random { arity, .. } => Shape::Prod(vec![Shape::Prim(64); *arity]),
+            Recipe::Iota { .. } => Shape::Prod(vec![Shape::Prim(64)]),
+        };
+        (key, Shape::Unit)
+    }
+
     /// The generated row at index `e`.
     fn row(&self, e: u64) -> (Value, Value) {
         match self {
@@ -244,6 +259,20 @@ enum Origin {
 /// The single `clock` row for epoch `t`: `(Tuple[t] ; ())`.
 fn clock_row(t: OuterTime) -> Value {
     Value::Tuple(vec![Value::Int(t as i64)])
+}
+
+/// The shape of the `clock` row.
+fn clock_shape() -> RowShape {
+    (corgi::Shape::Prod(vec![corgi::Shape::Prim(64)]), corgi::Shape::Unit)
+}
+
+/// The shape of a generated source's rows, by its canonical name.
+fn generated_shape(name: &str) -> Option<RowShape> {
+    if name == "clock" { Some(clock_shape()) } else { Recipe::parse(name).map(|r| r.shape()) }
+}
+
+fn fmt_shape((k, v): &RowShape) -> String {
+    format!("({k} ; {v})")
 }
 
 /// Map a source name to its canonical form: a recipe canonicalizes, any other
@@ -317,6 +346,8 @@ pub enum Command {
 struct Installed {
     /// Positional input index -> handle.
     inputs: HashMap<usize, ServerInput>,
+    /// Positional input index -> its declared shape, for inputs that declare one.
+    input_shapes: HashMap<usize, RowShape>,
     /// Names of traces this program imports (for the importer refcount).
     imports: Vec<String>,
     /// Names of traces this program publishes (registry entries it owns).
@@ -397,6 +428,9 @@ pub struct Server {
     export_taps: bool,
     /// Installed program name -> its handles and lifecycle bookkeeping.
     programs: HashMap<String, Installed>,
+    /// Published trace name -> the shape of its rows, where it is known: inferred from its
+    /// producer's program, or fixed by its recipe for a generated source.
+    shapes: HashMap<String, RowShape>,
     /// Trace name -> number of installed programs importing it (the drop gate).
     /// Bindings count here too: a bound source cannot be dropped.
     importers: HashMap<String, usize>,
@@ -423,6 +457,7 @@ impl Server {
             columnar_exports: true,
             export_taps: false,
             programs: HashMap::new(),
+            shapes: HashMap::new(),
             importers: HashMap::new(),
             bindings: Vec::new(),
             epoch: 0,
@@ -464,6 +499,11 @@ impl Server {
         let name = canonical_source_name(name);
         self.traces.get(&name).cloned().map(Published::Rows)
             .or_else(|| self.ctraces.get(&name).cloned().map(Published::Columnar))
+    }
+
+    /// The shape of a published trace's rows, where it is known.
+    pub fn trace_shape(&self, name: &str) -> Option<RowShape> {
+        self.shapes.get(&canonical_source_name(name)).cloned()
     }
 
     /// Return registry state without coupling a caller to stdout formatting.
@@ -543,6 +583,7 @@ impl Server {
                 return Err(format!("export name {:?} is already published; choose another name or drop its producer", e.name));
             }
         }
+        let export_shapes = self.check_shapes(name, prog)?;
         for key in generated {
             if self.traces.contains_key(&key) {
                 continue; // imported twice
@@ -664,6 +705,15 @@ impl Server {
                 (published, cpublished, inputs)
             });
 
+        for (export_name, shape) in export_shapes {
+            self.shapes.insert(export_name, shape);
+        }
+        let input_shapes: HashMap<usize, RowShape> = prog.root.imports.iter()
+            .filter_map(|imp| match (&imp.from, &imp.shape) {
+                (st::Source::Input(n), Some(shape)) => Some((*n, shape.clone())),
+                _ => None,
+            })
+            .collect();
         for (export_name, trace) in published {
             self.traces.insert(export_name, trace);
         }
@@ -690,9 +740,43 @@ impl Server {
                 probe,
                 origin: Origin::Program,
                 generators: HashMap::new(),
+                input_shapes,
             },
         );
         Ok(())
+    }
+
+    /// Infer the shapes of `prog`'s collections, before anything is installed. An imported trace
+    /// takes the shape it is published at; a declared import must match it. Returns the shape
+    /// of each export that has one, or the conflicts that leave the program without meaning.
+    /// Collections whose shape is unknown (an undeclared input upstream) are not an error.
+    fn check_shapes(&self, name: &str, prog: &st::Program) -> Result<Vec<(String, RowShape)>, String> {
+        let published = |t: &str| -> Option<RowShape> {
+            let key = canonical_source_name(t);
+            self.shapes.get(&key).cloned().or_else(|| generated_shape(&key))
+        };
+        for imp in &prog.root.imports {
+            if let (st::Source::Trace(t), Some(declared)) = (&imp.from, &imp.shape) {
+                if let Some(shape) = published(t) {
+                    if shape != *declared {
+                        return Err(format!(
+                            "program {:?} declares import {:?} as {} but it is published as {}",
+                            name, t, fmt_shape(declared), fmt_shape(&shape)
+                        ));
+                    }
+                }
+            }
+        }
+        let (shapes, problems) = crate::shapes::infer(prog, &|src| match src {
+            st::Source::Trace(t) => published(t),
+            _ => None,
+        });
+        if !problems.conflicts.is_empty() {
+            return Err(format!("program {:?} has conflicting shapes: {}", name, problems.conflicts.join("; ")));
+        }
+        Ok(prog.root.exports.iter().zip(&shapes.exports)
+            .filter_map(|(e, s)| s.as_ref().map(|c| (e.name.clone(), (c.key.clone(), c.val.clone()))))
+            .collect())
     }
 
     /// Install a generated source under its canonical `name`: a one-input
@@ -722,6 +806,7 @@ impl Server {
         input.flush();
 
         self.traces.insert(name.to_string(), trace);
+        self.shapes.insert(name.to_string(), recipe.shape());
         let mut inputs = HashMap::new();
         inputs.insert(0usize, input);
         self.programs.insert(
@@ -734,6 +819,7 @@ impl Server {
                 probe,
                 origin: Origin::Generated,
                 generators: HashMap::from([(0usize, (recipe, 0u64))]),
+                input_shapes: HashMap::new(),
             },
         );
     }
@@ -760,6 +846,7 @@ impl Server {
         input.flush();
 
         self.traces.insert("clock".to_string(), trace);
+        self.shapes.insert("clock".to_string(), clock_shape());
         let mut inputs = HashMap::new();
         inputs.insert(0usize, input);
         self.programs.insert(
@@ -772,6 +859,7 @@ impl Server {
                 probe,
                 origin: Origin::Clock,
                 generators: HashMap::new(),
+                input_shapes: HashMap::new(),
             },
         );
     }
@@ -851,6 +939,14 @@ impl Server {
         let (index, peers) = (worker.index(), worker.peers());
         let mine = |e: u64| (e as usize) % peers == index;
         let recipe = Recipe::parse(source);
+        if let (Some(recipe), Some(declared)) = (recipe, self.programs.get(&canonical_source_name(prog)).and_then(|p| p.input_shapes.get(&input))) {
+            if recipe.shape() != *declared {
+                return Err(format!(
+                    "program {:?} declares input {} as {} but {:?} generates {}",
+                    prog, input, fmt_shape(declared), source, fmt_shape(&recipe.shape())
+                ));
+            }
+        }
         let (total, rows): (u64, Vec<(Value, Value)>) = match recipe {
             Some(recipe) => (
                 recipe.rows_len(),
@@ -979,6 +1075,14 @@ impl Server {
         }
         if !installed.inputs.contains_key(&input) {
             return Err(format!("program {:?} has no input {}", target, input));
+        }
+        if let (Some(declared), Some(shape)) = (installed.input_shapes.get(&input), self.shapes.get(&source)) {
+            if declared != shape {
+                return Err(format!(
+                    "program {:?} declares input {} as {} but trace {:?} is published as {}",
+                    target, input, fmt_shape(declared), source, fmt_shape(shape)
+                ));
+            }
         }
         if self
             .bindings
@@ -1175,6 +1279,7 @@ impl Server {
         for ex in &installed.exports {
             self.traces.remove(ex);
             self.ctraces.remove(ex);
+            self.shapes.remove(ex);
             self.taps.remove(ex);
         }
         let id = installed.dataflow_id;

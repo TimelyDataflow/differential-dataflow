@@ -88,7 +88,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
     // Feedback variables first: anything in the scope may reference them.
     let var_base = out.vars.len();
     for (vi, v) in orig.vars.iter().enumerate() {
-        out.vars.push(Var { name: v.name.clone() });
+        out.vars.push(Var { name: v.name.clone(), shape: v.shape.clone() });
         visible.push((addr(Site::Var(vi)), Ref::Var(var_base + vi)));
     }
 
@@ -145,6 +145,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
                     child_out.exports.push(Export {
                         name: format!("$host:{}", export_idx),
                         value: Ref::Local(lift_idx),
+                        shape: None,
                     });
                     visible.push((a, Ref::ChildExport(sub_idx, export_idx)));
                 }
@@ -168,6 +169,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
         out.exports.push(Export {
             name: e.name.clone(),
             value: map_ref(&e.value, &locals, &subs, import_map, var_base),
+            shape: e.shape.clone(),
         });
     }
 
@@ -379,7 +381,7 @@ impl Sb {
     }
     fn variable(&mut self, name: &str) -> Ref {
         let v = self.s.vars.len();
-        self.s.vars.push(Var { name: name.into() });
+        self.s.vars.push(Var { name: name.into(), shape: None });
         Ref::Var(v)
     }
     fn bind(&mut self, var: Ref, value: Ref) {
@@ -393,7 +395,7 @@ impl Sb {
     }
     fn export(&mut self, name: String, value: Ref) -> usize {
         let j = self.s.exports.len();
-        self.s.exports.push(Export { name, value });
+        self.s.exports.push(Export { name, value, shape: None });
         j
     }
     fn debug_inspect(&mut self, input: Ref, label: String) {
@@ -728,6 +730,29 @@ pub fn export_shape(p: &Program, source_shapes: &[(usize, usize)]) -> (usize, us
     }
 }
 
+/// The `(k, v)` field counts of each root import: from its declared shape where it has one,
+/// and otherwise `default`. A product counts its fields, a unit none, any other shape one.
+pub fn source_arities(p: &Program, default: (usize, usize)) -> Vec<(usize, usize)> {
+    fn fields(s: &corgi::Shape) -> usize {
+        match s { corgi::Shape::Prod(fs) => fs.len(), corgi::Shape::Unit => 0, _ => 1 }
+    }
+    p.root.imports.iter().map(|imp| imp.shape.as_ref().map_or(default, |(k, v)| (fields(k), fields(v)))).collect()
+}
+
+/// The shape of a query row against `p`'s first export, `(key ; val ++ [q])`, when the
+/// export's shape follows from `p`'s declared sources.
+fn query_shape(p: &Program) -> Option<(corgi::Shape, corgi::Shape)> {
+    use corgi::Shape;
+    let (shapes, _) = crate::shapes::infer(p, &|_| None);
+    let export = shapes.exports.first()?.clone()?;
+    let val = match export.val {
+        Shape::Prod(mut fs) => { fs.push(Shape::Prim(64)); Shape::Prod(fs) }
+        Shape::Unit => Shape::Prod(vec![Shape::Prim(64)]),
+        other => Shape::Prod(vec![other, Shape::Prim(64)]),
+    };
+    Some((export.key, val))
+}
+
 /// The transform. `source_shapes[k]` is the `(k, v)` of the original root's
 /// import `k` (positional inputs and named traces alike). The query arrives
 /// as one extra positional input appended after the original inputs.
@@ -751,6 +776,7 @@ pub fn explain_with(p: &Program, source_shapes: &[(usize, usize)], options: Opti
     root.s.imports = p.root.imports.clone();
     let src_refs: Vec<Ref> = (0..n_sources).map(Ref::Import).collect();
     let query_ref = root.import("query".into(), Source::Input(max_input));
+    if let Ref::Import(q) = query_ref { root.s.imports[q].shape = query_shape(p); }
     let witness: BTreeMap<Addr, Ref> = clone_into(&p.root, &mut root.s, &src_refs).into_iter().collect();
     // The witness clone re-exported the original program's exports; the
     // explain output's exports are the demand sets only.

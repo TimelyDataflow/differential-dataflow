@@ -33,7 +33,9 @@
 //!
 //! Statements: `let x = …;`, `var x = …;` (a feedback variable, for
 //! recursion), `name: { … }` (a nested scope), `export "name" = …;` (a
-//! program output, root scope only). `type Name = V0 shape? | V1 shape? …;`
+//! program output, root scope only). A `var` or `export` may declare its
+//! shape, `var x : (key_shape ; val_shape) = …;`, which installation checks
+//! against the shape inferred for its value. `type Name = V0 shape? | V1 shape? …;`
 //! declares a sum type (see below); it is parse-time only and emits no IR.
 //!
 //! # Scalar language (`Term`)
@@ -367,17 +369,18 @@ impl Parser {
     fn parse_stmt(&mut self) -> Stmt {
         match self.peek().clone() {
             Token::Let => { self.next(); let n = self.parse_ident(); self.expect(&Token::Eq); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Let(n, e) },
-            Token::Var => { self.next(); let n = self.parse_ident(); self.expect(&Token::Eq); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Var(n, e) },
+            Token::Var => { self.next(); let n = self.parse_ident(); let s = self.declared_shape(); self.expect(&Token::Eq); let e = self.parse_pipe_expr(); self.expect(&Token::Semi); Stmt::Var(n, s, e) },
             Token::Export => {
                 self.next();
                 let name = match self.next() {
                     Token::Str(s) => s,
                     o => panic!("Expected string literal after `export`, got {:?}", o),
                 };
+                let shape = self.declared_shape();
                 self.expect(&Token::Eq);
                 let e = self.parse_pipe_expr();
                 self.expect(&Token::Semi);
-                Stmt::Export(name, e)
+                Stmt::Export(name, shape, e)
             },
             Token::Ident(_) => {
                 let n = self.parse_ident(); self.expect(&Token::Colon);
@@ -428,14 +431,22 @@ impl Parser {
     }
 
     fn source_shape(&mut self, source: Expr) -> Expr {
-        if *self.peek() != Token::Colon { return source; }
+        match self.declared_shape() {
+            Some((key, val)) => Expr::TypedSource(Box::new(source), key, val),
+            None => source,
+        }
+    }
+
+    /// An optional `: (key ; val)` shape declaration.
+    fn declared_shape(&mut self) -> Option<crate::scope_ir::RowShape> {
+        if *self.peek() != Token::Colon { return None; }
         self.next();
         self.expect(&Token::LParen);
         let key = self.parse_shape();
         self.expect(&Token::Semi);
         let val = self.parse_shape();
         self.expect(&Token::RParen);
-        Expr::TypedSource(Box::new(source), key, val)
+        Some((key, val))
     }
 
     fn parse_pipe_op(&mut self, lhs: Expr) -> Expr {
