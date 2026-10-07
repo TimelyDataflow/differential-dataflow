@@ -8,7 +8,7 @@
 #   cargo run -p ddir-server < interactive/server/demo/claims.txt
 
 load world begin
-let claims = input 0;
+let claims = input 0 : ((int, int) ; (int, int));
 export "owner" = claims | map($0 ; $1[1], $1[0]) | min | map($0 ; $1[1]);
 world end-load
 

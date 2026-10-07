@@ -5,7 +5,7 @@
 -- uncommitted (⊥) lanes to typecheck (DDIR #817); now it is an ordinary program.
 type Kind = Rare u64 | Common u64;
 
-let pairs = input 0 | key($0[0] ; $0[1]);
+let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
 
 let onlyRare   = pairs | map( $0[0] ; Rare($1[0]) );
 let onlyCommon = pairs | map( $0[0] ; Common($1[0]) );

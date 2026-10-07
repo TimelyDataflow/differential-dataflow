@@ -6,8 +6,8 @@
 #   cargo run -p ddir-server < interactive/server/demo/counter.txt
 
 load counter begin
-let seed = input 0;
-let feedback = input 1;
+let seed = input 0 : ((int) ; ());
+let feedback = input 1 : ((int) ; ());
 let state = seed + feedback;
 export "count" = state;
 export "next" = (state | map($0[0] + 1 ;)) + (seed | negate);

@@ -17,7 +17,7 @@
 #   ./target/release/ddir_server < interactive/server/demo/txn.txt
 
 load bank begin
-let intents = input 0;
+let intents = input 0 : ((int, int, int) ; (int));
 
 -- ((rid, k) ; expected) and ((wid, k) ; v)
 let reads  = intents | filter($0[1] == 1) | map($0[0], $0[2] ; $1[0]);

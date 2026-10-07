@@ -3,8 +3,8 @@
 -- shapes, so such terms need no separate path. The gate is agreement with the vec backend.
 type L = L u64;
 
-let left = input 0 | key($0[0] ; $0[1]);
-let right = input 1 | key($0[0] ; $0[1]);
+let left = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+let right = input 1 : ((int, int) ; ()) | key($0[0] ; $0[1]);
 let out = left | join(right, ($0 ; case L($1[0] + $2[0]) { L(s) => s }, $2[0]));
 
 export "result" = out | arrange | inspect(total);

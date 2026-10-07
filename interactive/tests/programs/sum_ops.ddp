@@ -3,7 +3,7 @@
 -- sum (MapSum + Unwrap, incl. a tag no row carries), and `istag` on a non-sum (constant 0).
 type Three = A u64 | B u64 | C u64;
 
-let pairs = input 0 | key($0[0] ; $0[1]);
+let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
 let tagged = pairs
     | map($0 ; variant(Three, 2, $1[0]), istag(2, variant(Three, 2, $1[0])), istag(1, variant(Three, 2, $1[0])), istag(0, $1));
 

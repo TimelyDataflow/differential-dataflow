@@ -4,7 +4,7 @@
 -- Values include negatives, zeros of both signs, infinities and NaN.
 
 -- (key ; x, y) with x = a / 4 and y = b / 2.
-let xs = input 0 | key($0[0] ; fdiv(float($0[1]), float(4)), fdiv(float($0[2]), float(2)));
+let xs = input 0 : ((int, int, int) ; ()) | key($0[0] ; fdiv(float($0[1]), float(4)), fdiv(float($0[2]), float(2)));
 
 let unary = xs
     | map($0 ; fabs($1[0]), fsqrt($1[0]), fexp($1[1]), fln($1[0]), ffloor($1[0]), fceil($1[0]),
@@ -35,7 +35,7 @@ let big = xs | filter(fgt(fexp($1[0]), float(2)));
 let spread = xs | flatmap(list(fsqrt(fabs($1[0])), fexp($1[1])));
 
 -- A join whose projection runs a row at a time.
-let scale = input 1 | key($0[0] ; $0[1]);
+let scale = input 1 : ((int, int) ; ()) | key($0[0] ; $0[1]);
 let scaled = xs | join(scale, ($0 ; fpowi($1[0], $2[0]), fint(fpow(fabs($1[1]), float($2[0])))));
 
 export "unary"    = unary | arrange | inspect(total);

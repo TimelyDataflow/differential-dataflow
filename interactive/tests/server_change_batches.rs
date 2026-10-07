@@ -8,7 +8,7 @@ fn bounded_exports_match_full_drain_and_are_consumed_once() {
     timely::execute_directly(|worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(r#"
             type Three = A u64 | B u64 | C u64;
-            let pairs = input 0 | key($0[0] ; $0[1]);
+            let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
             export "plain" = pairs;
             export "lists" = pairs | collect;
             export "tagged" = pairs | map($0 ; variant(Three, 2, $1[0]));

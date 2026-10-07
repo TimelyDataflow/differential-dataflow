@@ -21,8 +21,9 @@ BIN = os.path.join(HERE, "..", "..", "..", "target", "release", "ddir_server")
 PORT = 7981
 
 WORLD = """load world begin
-let claims = input 0;
+let claims = input 0 : ((int, int) ; (int, int));
 export "owner" = claims | map($0 ; $1[1], $1[0]) | min | map($0 ; $1[1]);
+export "claims" = claims;
 world end-load
 """
 
@@ -112,10 +113,10 @@ def main():
         )
 
         # Sessions are trusted: B may bind into (and later drop) A's program.
-        b.send("b1 bind owner world 0")
+        b.send("b1 bind claims world 0")
         status, body, _ = b.expect("b1")
         check("B binds into A's world (trusted sessions)", status == "ok", body)
-        b.send("b2 unbind owner world 0")
+        b.send("b2 unbind claims world 0")
         status, body, _ = b.expect("b2")
         check("B unbinds it again", status == "ok", body)
 

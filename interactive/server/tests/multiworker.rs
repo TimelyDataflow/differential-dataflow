@@ -151,7 +151,7 @@ fn assert_backend(backend: &str) {
         &mut writer,
         &mut reader,
         "r0",
-        "r0 load world begin\nlet rows = input 0;\nexport \"rows\" = rows;\nexport \"minimum\" = rows | min;\nr0 end-load\n",
+        "r0 load world begin\nlet rows = input 0 : ((int) ; (int));\nexport \"rows\" = rows;\nexport \"minimum\" = rows | min;\nr0 end-load\n",
     );
     request(
         &mut writer,
@@ -211,7 +211,7 @@ fn assert_backend(backend: &str) {
         &mut writer,
         &mut reader,
         "r10",
-        "r10 load counted begin\nlet rows = input 0;\nexport \"counted\" = rows;\nr10 end-load\n",
+        "r10 load counted begin\nlet rows = input 0 : ((int) ; ());\nexport \"counted\" = rows;\nr10 end-load\n",
     );
     request(&mut writer, &mut reader, "r11", "r11 feed counted 0 from iota:5\n");
     request(&mut writer, &mut reader, "r12", "r12 tick\n");
@@ -277,7 +277,7 @@ fn assert_shared_import_requests(backend: &str, workers: usize) {
         &mut writer,
         &mut reader,
         "g",
-        "g load graph begin\nlet e = input 0;\nexport \"edges\" = e | arrange;\ng end-load\n",
+        "g load graph begin\nlet e = input 0 : ((int) ; (int));\nexport \"edges\" = e | arrange;\ng end-load\n",
     );
     for name in ["a", "b"] {
         request(
@@ -285,7 +285,7 @@ fn assert_shared_import_requests(backend: &str, workers: usize) {
             &mut reader,
             name,
             &format!(
-                "{name} load {name} begin\nlet q = input 0;\nlet e = import \"edges\";\nexport \"{name}.answer\" = (q | key($0[1] ; $0[0])) | join(e, ($1[0] ; $2[0]));\n{name} end-load\n"
+                "{name} load {name} begin\nlet q = input 0 : ((int, int) ; ());\nlet e = import \"edges\";\nexport \"{name}.answer\" = (q | key($0[1] ; $0[0])) | join(e, ($1[0] ; $2[0]));\n{name} end-load\n"
             ),
         );
     }

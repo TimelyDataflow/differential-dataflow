@@ -23,7 +23,7 @@ use interactive::{explain, lower, parse};
 /// edges are queryable. Mirrors `examples/programs/scc.ddp` minus the final
 /// `map(;)` aggregation.
 const SCC_ROW: &str = r#"
-    let edges = input 0 | key($0[0] ; $0[1]);
+    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     let trans = edges | key($1 ; $0);
     outer: {
         let scc = edges + trim;
@@ -55,7 +55,7 @@ const SCC_SHAPES: &[(usize, usize)] = &[(2, 0)];
 
 /// Transitive closure, with the closure's pairs as the result.
 const TC_ROW: &str = r#"
-    let edges = input 0 | key($0[0] ; $0[1]);
+    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     outer: {
         let tc = edges + more
             | key($0[0], $1[0] ;)
@@ -71,8 +71,8 @@ const TC_SHAPES: &[(usize, usize)] = &[(2, 0)];
 
 /// Reachability from roots (two inputs), the reached set as the result.
 const REACH_ROW: &str = r#"
-    let edges = input 0 | key($0[0] ; $0[1]);
-    let roots = input 1 | key($0[0] ;);
+    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+    let roots = input 1 : ((int) ; ()) | key($0[0] ;);
     reach: {
         let proposals = reach | join(edges, ($2 ;));
         var reach = roots + proposals | distinct;
@@ -371,7 +371,7 @@ fn report_demand_excess() {
 /// inputs the keyed all-rows demand happens to be exactly what the count
 /// needs.
 const INDEG_ROW: &str = r#"
-    let edges = input 0 | key($0[0] ; $0[1]);
+    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     export "result" = edges | key($1 ;) | count;
 "#;
 const INDEG_SHAPES: &[(usize, usize)] = &[(2, 0)];
@@ -451,7 +451,7 @@ fn fuzz_explanations_sufficient() {
 /// demanded exploded output back to the input edge that carried it. This is the
 /// op that used to `panic!` in explain.
 const FLATMAP_ROW: &str = r#"
-    let rows = input 0 | key($0[0] ; list($0[0], $0[1]));
+    let rows = input 0 : ((int, int) ; ()) | key($0[0] ; list($0[0], $0[1]));
     export "result" = rows | flatmap($1[0]);
 "#;
 const FLATMAP_SHAPES: &[(usize, usize)] = &[(2, 0)];
@@ -467,7 +467,7 @@ fn flatmap_explanations_sufficient_small() {
 /// lookup ("demand all same-key inputs"), so no new rule is needed; this
 /// confirms the existing path handles a `List`-valued reducer output.
 const COLLECT_ROW: &str = r#"
-    let rows = input 0 | key($0[0] ; $0[1]);
+    let rows = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     export "result" = rows | collect;
 "#;
 const COLLECT_SHAPES: &[(usize, usize)] = &[(2, 0)];
@@ -566,8 +566,8 @@ fn corgi_agrees_on_collect_explanation() {
 
 /// `enter_at` through the rewrite, at depth 1 so the negation trigger is absent.
 const REACH_ENTER_AT: &str = r#"
-    let edges = input 0 | key($0[0] ; $0[1]);
-    let roots = input 1 | key($0[0] ;);
+    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+    let roots = input 1 : ((int) ; ()) | key($0[0] ;);
     reach: {
         let seeds = roots | enter_at($0[0]);
         let proposals = reach | join(edges, ($2 ;));
@@ -585,7 +585,7 @@ fn corgi_agrees_on_enter_at_explanation() {
 
 /// A `min` reducer in an iterative loop, at depth 1.
 const MIN_LOOP: &str = r#"
-    let edges = input 0 | key($0[0] ; $0[1]);
+    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     outer: {
         let nodes = edges | key($1 ; $1);
         let labels = proposals + nodes | min;
@@ -604,7 +604,7 @@ fn corgi_agrees_on_min_loop_explanation() {
 /// SCC's shape — depth-2 nesting, `min`, three joins, a filtered feedback — with
 /// the feedback NOT negated. Agrees; the twin below differs only in that line.
 const SCC_ONE_SCOPE: &str = r#"
-    let edges = input 0 | key($0[0] ; $0[1]);
+    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     outer: {
         let scc = edges + trim;
         fwd: {
@@ -625,7 +625,7 @@ const SCC_ONE_SCOPE: &str = r#"
 /// The same program with `var trim = trim_fwd - edges` — the one-line minimal
 /// reproducer for the demand divergence.
 const SCC_ONE_SCOPE_NEGATED: &str = r#"
-    let edges = input 0 | key($0[0] ; $0[1]);
+    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     outer: {
         let scc = edges + trim;
         fwd: {
@@ -679,17 +679,17 @@ fn corgi_agrees_on_two_query_explanation() {
 /// rewritten program installs with every shape known: the demand matches the undeclared run.
 #[test]
 fn declared_sources_shape_the_rewrite() {
-    let declared = REACH_ROW
-        .replace("input 0 |", "input 0 : ((int, int) ; ()) |")
-        .replace("input 1 |", "input 1 : ((int) ; ()) |");
-    let tree = lowered(&declared);
+    let undeclared = REACH_ROW
+        .replace("input 0 : ((int, int) ; ()) |", "input 0 |")
+        .replace("input 1 : ((int) ; ()) |", "input 1 |");
+    let tree = lowered(REACH_ROW);
     assert_eq!(explain::source_arities(&tree, (9, 9)), REACH_SHAPES);
     let ex = explain::explain(&tree, REACH_SHAPES);
     let query = ex.root.imports.iter().find(|imp| imp.name == "query").unwrap();
     let int = corgi::Shape::Prim(64);
     assert_eq!(query.shape, Some((corgi::Shape::Prod(vec![int.clone()]), corgi::Shape::Prod(vec![int]))));
     // So does a rewrite through nested iterative scopes.
-    for ex in [ex, explain::explain(&lowered(&SCC_ROW.replace("input 0 |", "input 0 : ((int, int) ; ()) |")), SCC_SHAPES)] {
+    for ex in [ex, explain::explain(&lowered(SCC_ROW), SCC_SHAPES)] {
         let (_, problems) = interactive::shapes::infer(&ex, &|_| None);
         assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
     }
@@ -697,8 +697,8 @@ fn declared_sources_shape_the_rewrite() {
     let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
     for (k, v) in export_rows(&optimized(REACH_ROW), &inputs, "result") {
         assert_eq!(
-            demand_for(&declared, REACH_SHAPES, &inputs, &k, &v),
             demand_for(REACH_ROW, REACH_SHAPES, &inputs, &k, &v),
+            demand_for(&undeclared, REACH_SHAPES, &inputs, &k, &v),
         );
     }
 }

@@ -25,7 +25,7 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<Value>)
 
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(
-            "let rows = input 0; export \"rows\" = rows;",
+            "let rows = input 0 : ((int) ; ()); export \"rows\" = rows;",
         ));
         program.optimize();
         let mut server = Server::new();
@@ -60,9 +60,9 @@ fn a_malformed_line_fails_the_load_on_every_worker_and_feeds_nothing() {
 
 #[test]
 fn a_well_formed_file_is_fed_exactly_once_across_workers() {
-    let (outcomes, rows) = load_on(3, "1\n\n2 20\n3\n4\n");
+    let (outcomes, rows) = load_on(3, "1\n\n2\n3\n4\n");
     assert!(outcomes.iter().all(|o| *o == Ok(4)), "{outcomes:?}");
-    let want: BTreeSet<Value> = [tup(&[1]), tup(&[2, 20]), tup(&[3]), tup(&[4])].into_iter().collect();
+    let want: BTreeSet<Value> = [tup(&[1]), tup(&[2]), tup(&[3]), tup(&[4])].into_iter().collect();
     assert_eq!(rows.iter().cloned().collect::<BTreeSet<_>>(), want);
     assert_eq!(rows.len(), 4, "each row once: {rows:?}");
 }
