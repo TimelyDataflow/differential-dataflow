@@ -63,14 +63,14 @@ fn collect_body_free_names<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>) {
     let mut local: BTreeSet<&'a str> = BTreeSet::new();
     for stmt in body {
         match stmt {
-            Stmt::Let(n, _) | Stmt::Var(n, _) | Stmt::Scope(n, _) => { local.insert(n.as_str()); },
-            Stmt::Export(_, _) => {},
+            Stmt::Let(n, _) | Stmt::Var(n, _, _) | Stmt::Scope(n, _) => { local.insert(n.as_str()); },
+            Stmt::Export(_, _, _) => {},
         }
     }
     let mut inner: BTreeSet<&'a str> = BTreeSet::new();
     for stmt in body {
         match stmt {
-            Stmt::Let(_, e) | Stmt::Var(_, e) | Stmt::Export(_, e) => expr_free_names(e, &mut inner),
+            Stmt::Let(_, e) | Stmt::Var(_, _, e) | Stmt::Export(_, _, e) => expr_free_names(e, &mut inner),
             Stmt::Scope(_, b) => collect_body_free_names(b, &mut inner),
         }
     }
@@ -212,25 +212,25 @@ fn lower_scope_tree(
 
     // Bucket statements.
     let mut lets: HashMap<String, &Expr> = HashMap::new();
-    let mut var_list: Vec<(&str, &Expr)> = Vec::new();
+    let mut var_list: Vec<(&str, &Option<st::RowShape>, &Expr)> = Vec::new();
     let mut child_bodies: HashMap<String, &[Stmt]> = HashMap::new();
-    let mut export_stmts: Vec<(&str, &Expr)> = Vec::new();
+    let mut export_stmts: Vec<(&str, &Option<st::RowShape>, &Expr)> = Vec::new();
     let mut order: Vec<(ItemKind, String)> = Vec::new();
     for stmt in body {
         match stmt {
             Stmt::Let(n, e)  => { lets.insert(n.clone(), e); order.push((ItemKind::Let, n.clone())); },
-            Stmt::Var(n, e)  => { var_list.push((n.as_str(), e)); },
+            Stmt::Var(n, s, e)  => { var_list.push((n.as_str(), s, e)); },
             Stmt::Scope(n, b)=> { child_bodies.insert(n.clone(), b.as_slice()); order.push((ItemKind::Scope, n.clone())); },
-            Stmt::Export(n, e) => { export_stmts.push((n.as_str(), e)); },
+            Stmt::Export(n, s, e) => { export_stmts.push((n.as_str(), s, e)); },
         }
     }
 
     // Pre-declare feedback variables so anything in the scope can refer to them.
     let mut vars: Vec<st::Var> = Vec::new();
     let mut var_id: HashMap<&str, usize> = HashMap::new();
-    for (name, _) in &var_list {
+    for (name, shape, _) in &var_list {
         let idx = vars.len();
-        vars.push(st::Var { name: (*name).to_string() });
+        vars.push(st::Var { name: (*name).to_string(), shape: (*shape).clone() });
         s.env.insert((*name).to_string(), st::Ref::Var(idx));
         var_id.insert(*name, idx);
     }
@@ -272,7 +272,7 @@ fn lower_scope_tree(
 
     // Lower var bodies and emit binds.
     let mut binds: Vec<st::Bind> = Vec::new();
-    for (name, e) in &var_list {
+    for (name, _, e) in &var_list {
         let r = s.lower_expr(e);
         binds.push(st::Bind { var: var_id[*name], value: r });
     }
@@ -281,15 +281,15 @@ fn lower_scope_tree(
     // fields its parent asked for.
     let mut exports: Vec<st::Export> = Vec::new();
     if is_root {
-        for (name, e) in &export_stmts {
+        for (name, shape, e) in &export_stmts {
             let r = s.lower_expr(e);
-            exports.push(st::Export { name: (*name).to_string(), value: r });
+            exports.push(st::Export { name: (*name).to_string(), value: r, shape: (*shape).clone() });
         }
     } else {
         for field in exports_wanted {
             let r = s.env.get(field).cloned()
                 .unwrap_or_else(|| panic!("scope export `{}` is not a local name", field));
-            exports.push(st::Export { name: field.clone(), value: r });
+            exports.push(st::Export { name: field.clone(), value: r, shape: None });
         }
     }
 
@@ -301,7 +301,7 @@ fn qualified_fields(body: &[Stmt], scope: &str) -> Vec<String> {
     let mut out = Vec::new();
     for stmt in body {
         match stmt {
-            Stmt::Let(_, e) | Stmt::Var(_, e) | Stmt::Export(_, e) => collect_qualified(e, scope, &mut out),
+            Stmt::Let(_, e) | Stmt::Var(_, _, e) | Stmt::Export(_, _, e) => collect_qualified(e, scope, &mut out),
             Stmt::Scope(_, _) => {} // a child's `scope::field`s reference *its* children, not ours
         }
     }

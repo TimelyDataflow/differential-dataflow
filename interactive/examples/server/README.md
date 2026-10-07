@@ -83,7 +83,8 @@ whitespace-separated integers, each becoming `(Tuple[ints] ; ())`; the
 serves the small inputs (roots, queries).
 
 `load … explain=<arity>` applies the explanation rewrite before
-optimization, treating every source as `arity` key fields with no value; the
+optimization, treating every source without a declared shape as `arity` key
+fields with no value; the
 rewritten program has one extra input after its own — the query input, fed as
 `(key ; val ++ q)` — and exports one `demand:inputN` trace per source, which
 you `peek`. `,debug` taps every demand collection with an inspect.

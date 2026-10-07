@@ -674,3 +674,31 @@ fn corgi_agrees_on_two_query_explanation() {
     assert_eq!(qs.len(), 2, "expected at least two scc edges to query");
     assert_explained_backends_agree(SCC_ROW, SCC_SHAPES, &inputs, &qs);
 }
+
+/// Declared sources give the rewrite its field counts and the query input its shape, and the
+/// rewritten program installs with every shape known: the demand matches the undeclared run.
+#[test]
+fn declared_sources_shape_the_rewrite() {
+    let declared = REACH_ROW
+        .replace("input 0 |", "input 0 : ((int, int) ; ()) |")
+        .replace("input 1 |", "input 1 : ((int) ; ()) |");
+    let tree = lowered(&declared);
+    assert_eq!(explain::source_arities(&tree, (9, 9)), REACH_SHAPES);
+    let ex = explain::explain(&tree, REACH_SHAPES);
+    let query = ex.root.imports.iter().find(|imp| imp.name == "query").unwrap();
+    let int = corgi::Shape::Prim(64);
+    assert_eq!(query.shape, Some((corgi::Shape::Prod(vec![int.clone()]), corgi::Shape::Prod(vec![int]))));
+    // So does a rewrite through nested iterative scopes.
+    for ex in [ex, explain::explain(&lowered(&SCC_ROW.replace("input 0 |", "input 0 : ((int, int) ; ()) |")), SCC_SHAPES)] {
+        let (_, problems) = interactive::shapes::infer(&ex, &|_| None);
+        assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
+    }
+
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
+    for (k, v) in export_rows(&optimized(REACH_ROW), &inputs, "result") {
+        assert_eq!(
+            demand_for(&declared, REACH_SHAPES, &inputs, &k, &v),
+            demand_for(REACH_ROW, REACH_SHAPES, &inputs, &k, &v),
+        );
+    }
+}

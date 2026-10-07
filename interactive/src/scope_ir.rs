@@ -67,6 +67,9 @@ pub enum Source {
     Trace(String),
 }
 
+/// The shape of a collection's rows: its key's and its value's.
+pub type RowShape = (corgi::Shape, corgi::Shape);
+
 /// A value brought into a scope — `enter_region` (+ `enter_dynamic` if iterating).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Import {
@@ -75,7 +78,7 @@ pub struct Import {
     /// Optional external encoding contract; unlike derived intermediate shapes,
     /// this can describe empty lists and sum lanes absent from the input rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shape: Option<(corgi::Shape, corgi::Shape)>,
+    pub shape: Option<RowShape>,
 }
 
 /// A value surrendered up — `leave_region` (+ `leave_dynamic` if iterating).
@@ -83,14 +86,20 @@ pub struct Import {
 pub struct Export {
     pub name: String,
     pub value: Ref,
+    /// A declared shape, checked against the shape inferred for `value` (see `shapes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<RowShape>,
 }
 
 /// A feedback variable, identified by its index in `Scope::vars`. Carries its
-/// source name (readability, cross-scope name visibility). Its shape is not
-/// stored; shapes are derived from the data where needed.
+/// source name (readability, cross-scope name visibility). Its shape may be
+/// declared; otherwise `shapes` infers it from what is bound to it.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Var {
     pub name: String,
+    /// A declared shape, checked against the shape of what is bound to it (see `shapes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<RowShape>,
 }
 
 /// Closes a feedback loop: `var <- value`.
@@ -413,7 +422,7 @@ mod tests {
                 Import { name: "edges".into(), from: Source::Parent(Ref::Import(0)), shape: None },
                 Import { name: "roots".into(), from: Source::Parent(Ref::Import(1)), shape: None },
             ],
-            vars: vec![Var { name: "reach".into() }],
+            vars: vec![Var { name: "reach".into(), shape: None }],
             items: vec![
                 // proposals = reach JOIN edges  — references Var + Import
                 Item::Op(Node::Join { left: Ref::Var(0), right: Ref::Import(0), projection: noproj.clone() }),
@@ -421,7 +430,7 @@ mod tests {
                 Item::Op(Node::Concat(vec![Ref::Import(1), Ref::Local(0)])),
             ],
             binds: vec![Bind { var: 0, value: Ref::Local(1) }], // reach <- body
-            exports: vec![Export { name: "reach".into(), value: Ref::Var(0) }],
+            exports: vec![Export { name: "reach".into(), value: Ref::Var(0), shape: None }],
         };
         let root = Scope {
             name: "root".into(),
@@ -430,7 +439,7 @@ mod tests {
                 Import { name: "in1".into(), from: Source::Input(1), shape: None },
             ],
             items: vec![Item::Sub(inner)], // item 0 = the reach sub-scope
-            exports: vec![Export { name: "result".into(), value: Ref::ChildExport(0, 0) }],
+            exports: vec![Export { name: "result".into(), value: Ref::ChildExport(0, 0), shape: None }],
             ..Scope::default()
         };
         let prog = Program { root };

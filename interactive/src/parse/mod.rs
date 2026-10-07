@@ -50,11 +50,12 @@ pub enum Expr {
 #[derive(Debug)]
 pub enum Stmt {
     Let(String, Expr),
-    Var(String, Expr),
+    /// `var name = expr;`, or `var name : (k ; v) = expr;` with a declared shape.
+    Var(String, Option<crate::scope_ir::RowShape>, Expr),
     Scope(String, Vec<Stmt>),
-    /// `export "name" = expr;` — registers a named output in the program.
-    /// Only valid at the root scope.
-    Export(String, Expr),
+    /// `export "name" = expr;` — registers a named output in the program, with
+    /// an optional declared shape as for `var`. Only valid at the root scope.
+    Export(String, Option<crate::scope_ir::RowShape>, Expr),
 }
 
 /// Build a scalar builtin call from its (already-parsed) argument terms.

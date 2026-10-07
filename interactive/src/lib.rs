@@ -6,6 +6,7 @@ pub mod scope_ir;
 pub mod backend;
 pub mod explain;
 pub mod server;
+pub mod shapes;
 // `folded` (the flat `[i64]` per-coordinate time-filter algebra) is retired:
 // the Value reverse model implements `time_le`/`strip` directly over the nested
 // chain tuple, so explain no longer needs it.

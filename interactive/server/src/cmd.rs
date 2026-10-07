@@ -39,8 +39,9 @@ pub enum Cmd {
     /// `program` — DDIR text, inline (`load … begin` … `end-load`) or read
     /// from a file (`load <name> from <path>`).
     /// `explain` — `explain=<arity>[,debug]`: apply the explanation rewrite,
-    /// every source taken to have `arity` key fields and no value; the query
-    /// input is the one after the program's own, the demand sets its exports.
+    /// every source without a declared shape taken to have `arity` key fields
+    /// and no value; the query input is the one after the program's own, the
+    /// demand sets its exports.
     Load {
         id_hint: String,
         bindings: BTreeMap<String, String>,
@@ -132,7 +133,8 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
             apply_bindings(&mut program, &bindings)?;
             // The rewrite precedes optimization (its rules assume single-op Linears).
             if let Some((arity, debug)) = explain {
-                let shapes: Vec<(usize, usize)> = program.root.imports.iter().map(|_| (arity, 0)).collect();
+                // A source's declared shape gives its field counts; `arity` covers the rest.
+                let shapes = interactive::explain::source_arities(&program, (arity, 0));
                 let options = interactive::explain::Options { debug_inspects: debug };
                 program = catch_unwind(AssertUnwindSafe(|| interactive::explain::explain_with(&program, &shapes, options)))
                     .map_err(panic_message)?;
@@ -504,8 +506,8 @@ enum ParseOutcome {
     },
 }
 
-/// `explain=<arity>[,debug]`: the sources' key arity, and whether to tap every
-/// demand collection with an inspect.
+/// `explain=<arity>[,debug]`: the key arity of sources without a declared shape,
+/// and whether to tap every demand collection with an inspect.
 fn parse_explain(spec: &str) -> Result<(usize, bool), String> {
     let (arity, debug) = match spec.split_once(',') {
         Some((arity, "debug")) => (arity, true),
