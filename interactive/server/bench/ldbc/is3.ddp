@@ -1,7 +1,7 @@
 -- IS3: request(request_id, person_id). Full friend list, newest friendship first.
-let request = input 0;
-let edge = import "edge";
-let person = import "person";
+let request = input 0 : ((int, int) ; ());
+let edge = import "edge" : ((int) ; (int, int));
+let person = import "person" : ((int) ; (List(int), List(int), int));
 let friends = request | key($0[1] ; $0[0])
     | join(edge, ($2[0] ; $1[0], $2[1]))
     | join(person, ($1[0] ; -$1[1], $0[0], $2[0], $2[1]));

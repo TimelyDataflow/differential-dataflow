@@ -1,8 +1,9 @@
 -- AoC 2023 day 5 part 1: chain each seed through 7 remapping stages; min.
--- input 0: tagged rows -- (0, seed) | (1, stage, dst, src, len)
+-- input 0: seeds (seed)
+-- input 1: map entries (stage, dst, src, len)
 
-let seeds   = input 0 | filter($0[0] == 0) | key(0, $0[1] ;);
-let entries = input 0 | filter($0[0] == 1) | key($0[1] ; $0[2], $0[3], $0[4]);
+let seeds   = input 0 : ((int) ; ()) | key(0, $0[0] ;);
+let entries = input 1 : ((int, int, int, int) ; ()) | key($0[0] ; $0[1], $0[2], $0[3]);
 -- (stage ; dst, src, len)
 
 chain: {

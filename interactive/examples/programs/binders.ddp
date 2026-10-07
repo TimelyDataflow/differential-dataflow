@@ -3,7 +3,7 @@
 -- a wrong index would hit the fold's Int element and panic on Proj.
 type Node = Node List(u64);
 
-let rows = input 0 | key($0[0] ; Node(list($0[0], $0[1])));
+let rows = input 0 : ((int, int) ; ()) | key($0[0] ; Node(list($0[0], $0[1])));
 
 let summed = rows
     | map( $0[0] ;

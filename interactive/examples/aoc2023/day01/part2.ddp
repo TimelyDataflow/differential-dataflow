@@ -3,7 +3,7 @@
 -- from k successive self-joins (no substring primitive, no string literals).
 -- input 0: (line, pos, charcode)
 
-let chars = input 0 | key($0[0], $0[1] ; $0[2]);
+let chars = input 0 : ((int, int, int) ; ()) | key($0[0], $0[1] ; $0[2]);
 -- (line, pos ; code)
 
 let s2 = chars | map($0[0], $0[1] + 1 ; $0[1], $1[0])

@@ -3,7 +3,7 @@
 -- collected list values (structural ==). Sum 100*(a-1) + (c-1).
 -- input 0: (block, row, col, code), 1-indexed
 
-let cells = input 0 | key($0[0], $0[1], $0[2] ; $0[3]);
+let cells = input 0 : ((int, int, int, int) ; ()) | key($0[0], $0[1], $0[2] ; $0[3]);
 
 let rlines = cells | map($0[0], $0[1] ; $0[2], $1[0]) | collect;
 -- (b, r ; [(c, code)...])

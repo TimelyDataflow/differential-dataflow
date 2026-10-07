@@ -3,7 +3,7 @@
 -- monotone accumulation, k capped at 141. Rolls are closed-form.
 -- input 0: (row, col, code) 1-indexed; 'O'=79 '#'=35 '.'=46
 
-let cells = input 0 | key($0[0], $0[1] ; $0[2]);
+let cells = input 0 : ((int, int, int) ; ()) | key($0[0], $0[1] ; $0[2]);
 let rocks0 = cells | filter($1[0] == 79) | map(0, $0[0], $0[1] ;);
 let cubes  = cells | filter($1[0] == 35) | map($0 ;);
 

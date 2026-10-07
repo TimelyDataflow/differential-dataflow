@@ -3,13 +3,13 @@
 -- 2 message(id, kind, creator, parent), where post=0, comment=1, no parent=-1;
 -- 3 tag(id, name); 4 message_tag(message, tag); 5 likes(person, message);
 -- 6 place(id, name, parent). Strings are UTF-8 List(int).
-let person = input 0;
-let knows = input 1;
-let message = input 2;
-let tag = input 3;
-let message_tag = input 4;
-let likes = input 5;
-let place = input 6;
+let person = input 0 : ((int, List(int), List(int), int) ; ());
+let knows = input 1 : ((int, int, int) ; ());
+let message = input 2 : ((int, int, int, int) ; ());
+let tag = input 3 : ((int, List(int)) ; ());
+let message_tag = input 4 : ((int, int) ; ());
+let likes = input 5 : ((int, int) ; ());
+let place = input 6 : ((int, List(int), int) ; ());
 
 export "person" = person | key($0[0] ; $0[1], $0[2], $0[3]) | arrange;
 -- The input contains each undirected friendship once.

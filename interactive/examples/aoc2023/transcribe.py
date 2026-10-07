@@ -7,9 +7,11 @@ run.sh invokes this before running the suite.
 Per-day modes: grids become "row col charcode" (or digit) cell facts, 0- or
 1-indexed to mirror each day's SQL; text lines become charcode or parsed
 numeric facts; numeric rows pass through; day05 and day15 split one dense
-input into the two per-part fact files. Passing --pad additionally writes
-day05's zero-padded uniform-arity copies (input1p.txt / input2p.txt) for
-the corgi backend, which crashes on mixed-arity inputs.
+input into per-part fact files.
+
+A program's input k reads gen/dayNN/partP.in{k}.txt for part P if that
+file exists, and gen/dayNN/in{k}.txt otherwise. Each file holds one
+relation, so every row in it has the same shape.
 """
 import os, re, sys
 
@@ -21,7 +23,7 @@ def dense(day):
         return f.read().rstrip('\n')
 
 
-def emit(day, rows, name='input.txt'):
+def emit(day, rows, name='in0.txt'):
     path = os.path.join(HERE, 'gen', day)
     os.makedirs(path, exist_ok=True)
     with open(os.path.join(path, name), 'w') as f:
@@ -59,26 +61,17 @@ def day04(text):
     return rows
 
 
-def day05(pad):
-    """Seeds + 7 maps -> input1: '0 seed' / '1 stage dst src len';
-    input2: seeds read as (start, len) pairs, same map entries."""
+def day05():
+    """Seeds + 7 maps -> in1: map entries (stage, dst, src, len);
+    part1.in0: seeds (seed); part2.in0: seeds read as (start, len) pairs."""
     blocks = dense('day05').split('\n\n')
     seeds = [int(x) for x in blocks[0].split(':')[1].split()]
-    entries = [(1, stage, *line.split())
-               for stage, b in enumerate(blocks[1:])
-               for line in b.strip().split('\n')
-               if line.strip() and not line.endswith('map:')]
-    parts = {
-        'input1.txt': [(0, s) for s in seeds] + entries,
-        'input2.txt': [(0, seeds[i], seeds[i + 1])
-                       for i in range(0, len(seeds), 2)] + entries,
-    }
-    for name, rows in parts.items():
-        emit('day05', rows, name)
-        if pad:
-            arity = max(len(r) for r in rows)
-            emit('day05', [r + (0,) * (arity - len(r)) for r in rows],
-                 name.replace('.txt', 'p.txt'))
+    emit('day05', [(s,) for s in seeds], 'part1.in0.txt')
+    emit('day05', [(seeds[i], seeds[i + 1]) for i in range(0, len(seeds), 2)], 'part2.in0.txt')
+    emit('day05', [(stage, *line.split())
+                   for stage, b in enumerate(blocks[1:])
+                   for line in b.strip().split('\n')
+                   if line.strip() and not line.endswith('map:')], 'in1.txt')
 
 
 def day07(text):
@@ -99,7 +92,7 @@ def day15():
     input2: (cmd, l1, l2, opchar, digitcode_or_0)."""
     cmds = dense('day15').split(',')
     emit('day15', [(r, i, ord(ch)) for r, cmd in enumerate(cmds, 1)
-                   for i, ch in enumerate(cmd, 1)], 'input1.txt')
+                   for i, ch in enumerate(cmd, 1)], 'part1.in0.txt')
     rows = []
     for r, cmd in enumerate(cmds, 1):
         if cmd.endswith('-'):
@@ -107,7 +100,7 @@ def day15():
         else:
             lab, foc = cmd.split('=')
             rows.append((r, ord(lab[0]), ord(lab[1]), ord('='), ord(foc)))
-    emit('day15', rows, 'input2.txt')
+    emit('day15', rows, 'part2.in0.txt')
 
 
 def day18(text):
@@ -121,26 +114,25 @@ def day18(text):
 
 def day19(text):
     """Workflows + parts. State names -> ids (in=0, A=-1, R=-2, rest 3+);
-    rules: (1, state, prio, field, cmp, val, next); parts: (0, x, m, a, s, 0, 0)."""
+    in0: rules (state, prio, field, cmp, val, next); in1: parts (x, m, a, s)."""
     wf_txt, parts_txt = text.split('\n\n')
     ids = {'in': 0, 'A': -1, 'R': -2}
     sid = lambda name: ids.setdefault(name, len(ids))
-    rows = []
+    rules = []
     for line in wf_txt.strip().split('\n'):
         m = re.match(r"(\w+)\{(.*)\}", line)
         st = sid(m.group(1))
         for prio, rule in enumerate(m.group(2).split(','), 1):
             mm = re.match(r"([xmas])([<>])(\d+):(\w+)", rule)
             if mm:
-                rows.append((1, st, prio, 'xmas'.index(mm.group(1)),
-                             0 if mm.group(2) == '<' else 1,
-                             int(mm.group(3)), sid(mm.group(4))))
+                rules.append((st, prio, 'xmas'.index(mm.group(1)),
+                              0 if mm.group(2) == '<' else 1,
+                              int(mm.group(3)), sid(mm.group(4))))
             else:
-                rows.append((1, st, prio, 0, 1, 0, sid(rule)))  # always: x > 0
-    for line in parts_txt.strip().split('\n'):
-        x, m_, a, s = map(int, re.findall(r"=(\d+)", line))
-        rows.append((0, x, m_, a, s, 0, 0))
-    return rows
+                rules.append((st, prio, 0, 1, 0, sid(rule)))  # always: x > 0
+    emit('day19', rules, 'in0.txt')
+    emit('day19', [tuple(map(int, re.findall(r"=(\d+)", line)))
+                   for line in parts_txt.strip().split('\n')], 'in1.txt')
 
 
 def day22(text):
@@ -163,16 +155,17 @@ MODES = {
     'day16': lambda t: cells(t, 1),
     'day17': lambda t: cells(t, 1, cell=int),           # digit grid
     'day18': day18,
-    'day19': day19,
     'day22': day22,
 }
 
 if __name__ == '__main__':
     days = [a for a in sys.argv[1:] if not a.startswith('--')]
-    for day in days or sorted(MODES) + ['day05', 'day15']:
+    for day in days or sorted(MODES) + ['day05', 'day15', 'day19']:
         if day == 'day05':
-            day05('--pad' in sys.argv[1:])
+            day05()
         elif day == 'day15':
             day15()
+        elif day == 'day19':
+            day19(dense('day19'))
         else:
             emit(day, MODES[day](dense(day)))

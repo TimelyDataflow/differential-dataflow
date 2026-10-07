@@ -2,7 +2,7 @@
 -- dirs: r=0 l=1 u=2 d=3; '.'=46 '-'=45 '|'=124 '/'=47 '\'=92
 -- input 0: (row, col, code) 1-indexed
 
-let cells = input 0 | key($0[0], $0[1] ; $0[2]);
+let cells = input 0 : ((int, int, int) ; ()) | key($0[0], $0[1] ; $0[2]);
 
 let shift = cells | key(;) | distinct | flatmap(list(
     tuple(0,46,0,1,0),  tuple(0,45,0,1,0),  tuple(0,124,1,0,3), tuple(0,124,-1,0,2),

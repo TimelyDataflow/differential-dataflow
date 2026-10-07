@@ -1,7 +1,7 @@
 -- Stable Matching (Gale-Shapley) — pipe syntax
 -- input 0: edges (l_node, l_pref, r_node, r_pref ;)
 
-let edges = input 0 | key($0[0] ; $0[1], $0[2], $0[3]);
+let edges = input 0 : ((int, int, int, int) ; ()) | key($0[0] ; $0[1], $0[2], $0[3]);
 
 matching: {
     let active = edges + removals;

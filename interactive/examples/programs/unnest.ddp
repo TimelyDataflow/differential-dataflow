@@ -2,7 +2,7 @@
 -- row per element (with position), then collect it back. A list round-trip
 -- through the relational layer. The harness feeds (a, b ;).
 
-let rows = input 0 | key($0[0] ; list($0[0], $0[1], $0[0] + $0[1]));
+let rows = input 0 : ((int, int) ; ()) | key($0[0] ; list($0[0], $0[1], $0[0] + $0[1]));
 -- rows: (a ; [a, b, a+b])
 
 let exploded = rows | flatmap($1[0]);

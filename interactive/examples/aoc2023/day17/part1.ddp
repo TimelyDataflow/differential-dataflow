@@ -2,7 +2,7 @@
 -- straight while steps<3, turns reset steps. min-reducer fixpoint.
 -- input 0: (row, col, cost) 1-indexed
 
-let cells = input 0 | key($0[0], $0[1] ; $0[2]);
+let cells = input 0 : ((int, int, int) ; ()) | key($0[0], $0[1] ; $0[2]);
 let seeds = (cells | filter($0[0] == 1 && $0[1] == 1) | map(1, 1, 1, 0, 0 ; 0))
           + (cells | filter($0[0] == 1 && $0[1] == 1) | map(1, 1, 0, 1, 0 ; 0));
 

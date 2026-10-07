@@ -1,7 +1,7 @@
 -- AoC 2023 day 1 part 1: per line, first digit * 10 + last digit; sum.
 -- input 0: (line, pos, charcode)
 
-let digits = input 0
+let digits = input 0 : ((int, int, int) ; ())
     | filter($0[2] >= 48 && $0[2] <= 57)
     | key($0[0] ; $0[1], $0[2] - 48);
 -- (line ; pos, digit)

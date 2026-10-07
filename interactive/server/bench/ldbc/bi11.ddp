@@ -1,8 +1,8 @@
 -- BI11: standing request(request_id, country_name, start, end), inclusive dates.
 -- Count each unordered friendship triangle once; a missing triangle count is 0.
-let request = input 0;
-let resident = import "resident";
-let edge = import "edge";
+let request = input 0 : ((int, List(int), int, int) ; ());
+let resident = import "resident" : ((List(int)) ; (int));
+let edge = import "edge" : ((int) ; (int, int));
 let people = request | key($0[1] ; $0[0], $0[2], $0[3])
     | join(resident, ($2[0] ; $1[0], $1[1], $1[2]));
 let candidates = people | join(edge, ($1[0], $0[0], $2[0], $2[1], $1[1], $1[2] ;))

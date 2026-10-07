@@ -5,7 +5,7 @@
 type Dir = Fwd u64   -- src < dst
          | Bwd u64;  -- otherwise
 
-let edges = input 0 | key($0[0] ; $0[1]);
+let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
 
 let tagged = edges
     | map( if($0[0] < $1[0], 0, 1)

@@ -2,9 +2,10 @@
 -- max via min of (BIG - x), avoiding negatives.
 -- input 0: (game, set, green, red, blue)
 
-let maxg = input 0 | key($0[0] ; 1000000 - $0[2]) | min | map($0 ; 1000000 - $1[0]);
-let maxr = input 0 | key($0[0] ; 1000000 - $0[3]) | min | map($0 ; 1000000 - $1[0]);
-let maxb = input 0 | key($0[0] ; 1000000 - $0[4]) | min | map($0 ; 1000000 - $1[0]);
+let sets = input 0 : ((int, int, int, int, int) ; ());
+let maxg = sets | key($0[0] ; 1000000 - $0[2]) | min | map($0 ; 1000000 - $1[0]);
+let maxr = sets | key($0[0] ; 1000000 - $0[3]) | min | map($0 ; 1000000 - $1[0]);
+let maxb = sets | key($0[0] ; 1000000 - $0[4]) | min | map($0 ; 1000000 - $1[0]);
 
 let power = maxg
     | join(maxr, ($0 ; $1[0] * $2[0]))

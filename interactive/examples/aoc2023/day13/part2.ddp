@@ -2,7 +2,7 @@
 -- pair. Sum 100*(a-1) for rows + (c-1) for cols.
 -- input 0: (block, row, col, code), 1-indexed
 
-let cells = input 0 | key($0[0], $0[1], $0[2] ; $0[3]);
+let cells = input 0 : ((int, int, int, int) ; ()) | key($0[0], $0[1], $0[2] ; $0[3]);
 let cb = cells | map($0[0] ; $0[1], $0[2], $1[0]);      -- (b ; r, c, s)
 
 -- row axes
