@@ -39,7 +39,7 @@ use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 use corgi::arrange::{compare_at, gather_lanes, leaf_slice};
 use crate::corgi::search::matching_ranges;
-use corgi::{shape_of_value, Value as CValue};
+use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key_ref, CorgiChunk};
 use crate::corgi::col_times::ColTime;
@@ -63,13 +63,34 @@ pub struct CorgiJoinBackend<T: ColTime> {
     /// this and the immediately following `cross` reads it before the next `advance`; only matches
     /// under these astronomically rare tokens need a real-key comparison.
     colliding: Vec<u64>,
+    /// The projection, compiled once at the shapes of the key and both values it reads.
+    compiled: Option<([Shape; 3], Graph<NumOp>)>,
     _t: PhantomData<T>,
 }
 
 impl<T: ColTime> CorgiJoinBackend<T> {
-    pub fn new(key: Term, val: Term) -> Self {
-        CorgiJoinBackend { key, val, colliding: Vec::new(), _t: PhantomData }
+    /// `shapes`, the key's and both values' shapes when inference knows them, compile the
+    /// projection now; otherwise it compiles at the shapes of its first output.
+    pub fn new(key: Term, val: Term, shapes: Option<(Shape, Shape, Shape)>) -> Self {
+        let mut backend = CorgiJoinBackend { key, val, colliding: Vec::new(), compiled: None, _t: PhantomData };
+        if let Some((k, v0, v1)) = shapes {
+            projection(&mut backend.compiled, &backend.key, &backend.val, [k, v0, v1]);
+        }
+        backend
     }
+}
+
+/// The projection graph for inputs of these shapes, compiling on first use. Shapes are static
+/// per collection, so a later block of other shapes is the invariant violation.
+fn projection<'a>(compiled: &'a mut Option<([Shape; 3], Graph<NumOp>)>, key: &Term, val: &Term, shapes: [Shape; 3]) -> &'a Graph<NumOp> {
+    if compiled.is_none() {
+        let g = compile_join_projection(key, val, &shapes[0], &shapes[1], &shapes[2])
+            .unwrap_or_else(|e| panic!("join projection: type error: {e}"));
+        *compiled = Some((shapes.clone(), g));
+    }
+    let (pinned, g) = compiled.as_ref().unwrap();
+    assert!(*pinned == shapes, "join projection: inputs of shapes {shapes:?} reached a projection pinned at {pinned:?}");
+    g
 }
 
 impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> {
@@ -199,9 +220,9 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             let v1 = if primitive1 {
                 from_ids(chunks1[0].vals(), ids.iter().map(|x| x.1.1).collect())
             } else { gather_lanes(&vals1, &tag1, &off1) };
-            let proj = compile_join_projection(&self.key, &self.val, &shape_of_value(&kc), &shape_of_value(&v0), &shape_of_value(&v1))
-                .unwrap_or_else(|e| panic!("join projection: type error: {e}"));
-            let projected = corgi::eval_graph(&proj, CValue::Prod(vec![kc, v0, v1]));
+            let shapes = [shape_of_value(&kc), shape_of_value(&v0), shape_of_value(&v1)];
+            let proj = projection(&mut self.compiled, &self.key, &self.val, shapes);
+            let projected = corgi::eval_graph(proj, CValue::Prod(vec![kc, v0, v1]));
             let mut cols = projected.into_prod("corgi join projection").unwrap();
             let nv = cols.pop().unwrap();
             let nk = cols.pop().unwrap();
@@ -819,6 +840,7 @@ mod tests {
         CorgiJoinBackend::new(
             Term::Var(0),
             Term::Tuple(vec![Term::Var(1), Term::Var(2)]),
+            None,
         )
     }
 

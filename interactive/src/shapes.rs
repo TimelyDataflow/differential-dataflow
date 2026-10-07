@@ -150,40 +150,49 @@ fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at:
     }
 }
 
+/// The shapes a linear chain sees: before each op, then after the last.
+pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape) -> Result<Vec<(Shape, Shape)>, String> {
+    let (mut k, mut v) = (key, val);
+    let mut steps = Vec::with_capacity(ops.len() + 1);
+    for op in ops {
+        steps.push((k.clone(), v.clone()));
+        let env = [k.clone(), v.clone()];
+        match op {
+            LinearOp::Project(p) => {
+                let nk = shape_of_term(&p.key, &env, None).map_err(|e| format!("map key: {e}"))?;
+                let nv = shape_of_term(&p.val, &env, None).map_err(|e| format!("map val: {e}"))?;
+                (k, v) = (nk, nv);
+            }
+            LinearOp::Filter(t) | LinearOp::EnterAt(t) => match shape_of_term(t, &env, None)? {
+                Shape::Prim(64) => {}
+                s => return Err(format!("predicate or delay of shape {s}, not an integer")),
+            },
+            LinearOp::Negate => {}
+            LinearOp::FlatMap(t) => match shape_of_term(t, &env, None)? {
+                Shape::List(e) => v = Shape::Prod(vec![Shape::Prim(64), *e]),
+                s => return Err(format!("flatmap of shape {s}, not a list")),
+            },
+            // As `backend::vec::append_iter`: extend a tuple, or pair any other value.
+            LinearOp::LiftIter => v = match v {
+                Shape::Prod(mut fs) => { fs.push(Shape::Prim(64)); Shape::Prod(fs) }
+                Shape::Unit => Shape::Prod(vec![Shape::Prim(64)]),
+                other => Shape::Prod(vec![other, Shape::Prim(64)]),
+            },
+        }
+    }
+    steps.push((k, v));
+    Ok(steps)
+}
+
 fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, problems: &mut Problems) -> Option<CollShape> {
     let mut fail = |e: String| { problems.conflicts.push(format!("{at}: {e}")); None };
     match node {
         st::Node::Linear { input, ops } => {
             let c = shapes.of(input)?;
-            let (mut k, mut v) = (c.key, c.val);
-            for op in ops {
-                let env = [k.clone(), v.clone()];
-                match op {
-                    LinearOp::Project(p) => {
-                        let nk = match shape_of_term(&p.key, &env, None) { Ok(s) => s, Err(e) => return fail(format!("map key: {e}")) };
-                        let nv = match shape_of_term(&p.val, &env, None) { Ok(s) => s, Err(e) => return fail(format!("map val: {e}")) };
-                        (k, v) = (nk, nv);
-                    }
-                    LinearOp::Filter(t) | LinearOp::EnterAt(t) => match shape_of_term(t, &env, None) {
-                        Ok(Shape::Prim(64)) => {}
-                        Ok(s) => return fail(format!("predicate or delay of shape {s}, not an integer")),
-                        Err(e) => return fail(e),
-                    },
-                    LinearOp::Negate => {}
-                    LinearOp::FlatMap(t) => match shape_of_term(t, &env, None) {
-                        Ok(Shape::List(e)) => v = Shape::Prod(vec![Shape::Prim(64), *e]),
-                        Ok(s) => return fail(format!("flatmap of shape {s}, not a list")),
-                        Err(e) => return fail(e),
-                    },
-                    // As `backend::vec::append_iter`: extend a tuple, or pair any other value.
-                    LinearOp::LiftIter => v = match v {
-                        Shape::Prod(mut fs) => { fs.push(Shape::Prim(64)); Shape::Prod(fs) }
-                        Shape::Unit => Shape::Prod(vec![Shape::Prim(64)]),
-                        other => Shape::Prod(vec![other, Shape::Prim(64)]),
-                    },
-                }
+            match linear_shapes(ops, c.key, c.val) {
+                Ok(mut steps) => { let (k, v) = steps.pop().unwrap(); Some(CollShape::new(k, v, depth)) }
+                Err(e) => fail(e),
             }
-            Some(CollShape::new(k, v, depth))
         }
         st::Node::Concat(refs) => {
             let known: Vec<CollShape> = refs.iter().filter_map(|r| shapes.of(r)).collect();

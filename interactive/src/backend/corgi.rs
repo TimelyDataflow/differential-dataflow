@@ -42,20 +42,35 @@ type CC = CorgiContainer<Time, Diff>;
 type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, Diff>>;
 
 /// The compiled form of one `LinearOp`, pinned to the shapes it was compiled against. Shapes are
-/// static per collection, so a chain compiles ONCE, on the first non-empty batch, and every later
-/// batch reuses the graph; a batch of a different shape is the invariant violation, not a
-/// recompile.
+/// static per collection, so a chain compiles ONCE: when the operator is built, if its input's
+/// shape was inferred at install, and otherwise on the first non-empty batch. Every later batch
+/// reuses the graph; a batch of a different shape is the invariant violation, not a recompile.
 #[derive(Default)]
 pub struct Plan {
     compiled: Option<(Shape, Shape, Graph<NumOp>)>,
 }
 
 impl Plan {
-    /// The graph for a container of these shapes, compiling on first use. A type error is a
-    /// panic with corgi's message: a program that typechecks never reaches it.
-    fn graph(&mut self, what: &str, kshape: Shape, vshape: Shape, compile: impl FnOnce(&Shape, &Shape) -> Result<Graph<NumOp>, String>) -> &Graph<NumOp> {
+    /// The graph of `op` for a container of these shapes, compiling on first use. A type error
+    /// is a panic with corgi's message: a program that typechecks never reaches it.
+    fn graph(&mut self, op: &LinearOp, kshape: Shape, vshape: Shape) -> &Graph<NumOp> {
+        let what = match op {
+            LinearOp::Project(_) => "map",
+            LinearOp::Filter(_) => "filter",
+            LinearOp::EnterAt(_) => "enter_at",
+            LinearOp::FlatMap(_) => "flatmap",
+            LinearOp::Negate | LinearOp::LiftIter => unreachable!("{op:?} compiles no graph"),
+        };
         if self.compiled.is_none() {
-            let g = compile(&kshape, &vshape).unwrap_or_else(|e| panic!("{what}: type error at shapes ({kshape}, {vshape}): {e}"));
+            let (k, v) = (&kshape, &vshape);
+            let g = match op {
+                LinearOp::Project(p) => compile_projection(&p.key, &p.val, k, v),
+                LinearOp::Filter(cond) => compile_predicate(cond, k, v),
+                LinearOp::EnterAt(field) => compile_scalar(field, k, v),
+                LinearOp::FlatMap(list) => compile_flatmap(list, k, v),
+                LinearOp::Negate | LinearOp::LiftIter => unreachable!(),
+            };
+            let g = g.unwrap_or_else(|e| panic!("{what}: type error at shapes ({kshape}, {vshape}): {e}"));
             self.compiled = Some((kshape.clone(), vshape.clone(), g));
         }
         let (k, v, g) = self.compiled.as_ref().unwrap();
@@ -85,15 +100,15 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
         }
         let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
         c = match op {
-            LinearOp::Project(p) => {
-                let g = plan.graph("map", kshape, vshape, |k, v| compile_projection(&p.key, &p.val, k, v));
+            LinearOp::Project(_) => {
+                let g = plan.graph(op, kshape, vshape);
                 let mut cols = corgi::eval_graph(g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project").unwrap();
                 let vals = cols.pop().unwrap();
                 let keys = cols.pop().unwrap();
                 CorgiContainer { keys, vals, times: c.times, diffs: c.diffs }
             }
-            LinearOp::Filter(cond) => {
-                let g = plan.graph("filter", kshape, vshape, |k, v| compile_predicate(cond, k, v));
+            LinearOp::Filter(_) => {
+                let g = plan.graph(op, kshape, vshape);
                 let mask = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask").unwrap();
                 let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
                 let keys = gather(&c.keys, &keep);
@@ -108,8 +123,8 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 }
                 c
             }
-            LinearOp::EnterAt(field) => {
-                let g = plan.graph("enter_at", kshape, vshape, |k, v| compile_scalar(field, k, v));
+            LinearOp::EnterAt(_) => {
+                let g = plan.graph(op, kshape, vshape);
                 // The key and val columns are IDENTITY here — only times change. Evaluate the
                 // delay field to a `U64` column and join it into each time in place. Joining
                 // `Product(0, PointStamp([0,..,0, delay]))` is, coordinate-wise, `max` at index
@@ -143,8 +158,8 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 };
                 CorgiContainer { keys: c.keys, vals, times: c.times, diffs: c.diffs }
             }
-            LinearOp::FlatMap(list_term) => {
-                let g = plan.graph("flatmap", kshape, vshape, |k, v| compile_flatmap(list_term, k, v));
+            LinearOp::FlatMap(_) => {
+                let g = plan.graph(op, kshape, vshape);
                 // Structural explode: the evaluated list column's FLAT element storage already
                 // IS the new value column, so the elements never move. Each row's span in the
                 // bounds gives both the within-row position (DDIR's `$1[0]`) and a repeat map
@@ -184,12 +199,18 @@ impl Backend for CorgiBackend {
     type Container = CC;
     type Arr<'scope> = Arranged<'scope, TraceAgent<CTrace>>;
 
-    fn linear<'s>(c: Collection<'s, Time, CC>, ops: Vec<LinearOp>, level: usize) -> Collection<'s, Time, CC> {
+    fn linear<'s>(c: Collection<'s, Time, CC>, ops: Vec<LinearOp>, level: usize, shape: Option<st::RowShape>) -> Collection<'s, Time, CC> {
         // Container-level: fold the LinearOp chain over each corgi batch (no inter-op transcode).
         // `level` is the scope depth (locates the iteration coordinate for LiftIter/EnterAt).
+        // With the input's shape known, every op compiles now, at the shape it will see.
+        let mut plans: Vec<Plan> = ops.iter().map(|_| Plan::default()).collect();
+        if let Some(Ok(steps)) = shape.map(|(k, v)| crate::shapes::linear_shapes(&ops, k, v)) {
+            for ((op, plan), (k, v)) in ops.iter().zip(plans.iter_mut()).zip(steps) {
+                if !matches!(op, LinearOp::Negate | LinearOp::LiftIter) { plan.graph(op, k, v); }
+            }
+        }
         c.inner
             .unary(Pipeline, "CorgiLinear", move |_, _| {
-                let mut plans: Vec<Plan> = ops.iter().map(|_| Plan::default()).collect();
                 move |input, output| {
                     input.for_each(|cap, data| {
                         let mut out = apply_ops(std::mem::take(data), &ops, level, &mut plans);
@@ -250,11 +271,13 @@ impl Backend for CorgiBackend {
             .as_collection()
     }
 
-    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection) -> Collection<'s, Time, CC> {
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, CC> {
         // The proxy-join seam drives the backend blockwise under the driver's fuel; the backend
-        // compiles the projection per container (shape-directed, for `Spread`) and emits corgi
-        // columns directly as `CorgiContainer`s — column-native, no row round-trip.
-        let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone()));
+        // compiles the projection once (shape-directed, for `Spread`), now if both inputs' shapes
+        // are known and otherwise on its first output, and emits corgi columns directly as
+        // `CorgiContainer`s — column-native, no row round-trip.
+        let shapes = shapes.map(|((k, v0), (_, v1))| (k, v0, v1));
+        let tactic = ProxyJoinTactic::new(CorgiJoinBackend::new(projection.key.clone(), projection.val.clone(), shapes));
         join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic).as_collection()
     }
 
@@ -334,8 +357,9 @@ pub fn render_tree<'s>(
     scope: Scope<'s, Time>,
     depth: usize,
     imports: Vec<Collection<'s, Time, CC>>,
+    shapes: Option<&crate::shapes::ScopeShapes>,
 ) -> Vec<Collection<'s, Time, CC>> {
-    crate::backend::render_tree::<CorgiBackend>(s, scope, depth, imports)
+    crate::backend::render_tree::<CorgiBackend>(s, scope, depth, imports, shapes)
 }
 
 /// Render `s` with the corgi substrate over ROW collections: each import converts to corgi
@@ -348,16 +372,20 @@ pub fn render_tree_corgi<'s>(
     scope: Scope<'s, Time>,
     depth: usize,
     imports: Vec<crate::backend::vec::Col<'s>>,
+    shapes: Option<&crate::shapes::ScopeShapes>,
 ) -> Vec<Collection<'s, Time, CC>> {
     let corgi_imports: Vec<Collection<'s, Time, CC>> = crate::backend::vec::check_import_shapes(s, imports)
         .into_iter()
         .zip(&s.imports)
-        .map(|(c, import)| {
-            let shape = import.shape.clone();
+        .enumerate()
+        .map(|(k, (c, import))| {
+            // The declared shape, or the one inferred at install (an imported trace's).
+            let shape = import.shape.clone()
+                .or_else(|| shapes.and_then(|sh| sh.imports[k].clone()).map(|c| (c.key, c.val)));
             c.inner
                 .unary(Pipeline, "ToCorgi", move |_, _| {
-                    // Ascriptions describe empty lists and inactive sum lanes;
-                    // unannotated imports retain first-row inference.
+                    // Known shapes describe empty lists and inactive sum lanes;
+                    // imports without one retain first-row inference.
                     let mut pinned = shape;
                     move |input, output| {
                         input.for_each(|cap, data| {
@@ -379,7 +407,7 @@ pub fn render_tree_corgi<'s>(
                 .as_collection()
         })
         .collect();
-    render_tree(s, scope, depth, corgi_imports)
+    render_tree(s, scope, depth, corgi_imports, shapes)
 }
 
 /// A columnar export: the program's corgi collection, left to the host time and arranged as
@@ -487,8 +515,9 @@ pub fn render_tree_rows<'s>(
     scope: Scope<'s, Time>,
     depth: usize,
     imports: Vec<crate::backend::vec::Col<'s>>,
+    shapes: Option<&crate::shapes::ScopeShapes>,
 ) -> Vec<crate::backend::vec::Col<'s>> {
-    render_tree_corgi(s, scope, depth, imports)
+    render_tree_corgi(s, scope, depth, imports, shapes)
         .into_iter()
         .map(|c| {
             c.inner
