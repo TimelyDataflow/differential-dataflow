@@ -10,7 +10,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::parse::*;
-use crate::ir::LinearOp;
+use crate::ir::{BinOp, LinearOp, Term, UnOp};
 
 
 #[derive(Clone, Copy)]
@@ -154,9 +154,16 @@ impl ScopeLower {
             Expr::Map(e, p)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Project(p.clone())] }) },
             Expr::Filter(e, c)  => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Filter(c.clone())] }) },
             Expr::Negate(e)     => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Negate] }) },
-            Expr::EnterAt(e, f) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::EnterAt(f.clone())] }) },
+            // A delay of `256 * bitlen(f)` in this scope's iteration coordinate; entering the
+            // scope is its import. The root has no iteration coordinate to delay.
+            Expr::EnterAt(e, f) => {
+                assert!(!self.is_root, "`enter_at` belongs inside a scope; the root has no iteration coordinate");
+                let r = self.lower_expr(e);
+                let delay = Term::Binary(BinOp::Mul, Box::new(Term::Int(256)), Box::new(Term::Unary(UnOp::BitLen, Box::new(f.clone()))));
+                self.push(st::Node::Linear { input: r, ops: vec![LinearOp::Delay(delay)] })
+            },
             Expr::FlatMap(e, t) => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::FlatMap(t.clone())] }) },
-            Expr::LiftIter(e)   => { let r = self.lower_expr(e); self.push(st::Node::Linear { input: r, ops: vec![LinearOp::LiftIter] }) },
+            Expr::LiftIter(e)   => { let r = self.lower_expr(e); self.push(st::Node::Lift(r)) },
             Expr::Arrange(e)    => { let r = self.lower_expr(e); self.push(st::Node::Arrange(r)) },
             // Join/Reduce consume arrangements; arrange their inputs explicitly
             // so identical arrangements are visible to `optimize`'s within-scope
@@ -331,6 +338,23 @@ mod tree_tests {
     }
     fn reads_a_child_export(s: &st::Scope) -> bool {
         s.items.iter().any(|i| matches!(i, st::Item::Op(st::Node::Linear { input: Ref::ChildExport(..), .. })))
+    }
+
+    #[test]
+    #[should_panic(expected = "the root has no iteration coordinate")]
+    fn enter_at_at_the_root_is_rejected() {
+        lower_tree(parse(r#"export "x" = input 0 | enter_at($0[0]);"#));
+    }
+
+    #[test]
+    fn lift_iter_is_its_own_node() {
+        let mut p = lower_tree(parse(r#"let e = input 0; s: { let y = e | map($0 ; $1) | lift_iter | map($0 ; $1); } export "x" = s::y;"#));
+        p.optimize();
+        let s = subs(&p.root)[0];
+        // The maps on either side stay two Linear nodes: neither fuses through the lift.
+        let lifts = s.items.iter().filter(|i| matches!(i, st::Item::Op(st::Node::Lift(_)))).count();
+        let linears = s.items.iter().filter(|i| matches!(i, st::Item::Op(st::Node::Linear { .. }))).count();
+        assert_eq!((lifts, linears), (1, 2));
     }
 
     #[test]

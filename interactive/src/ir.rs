@@ -157,6 +157,8 @@ pub enum UnOp {
     /// F64 -> Int, truncating toward zero and saturating, exactly Rust's `x as i64`:
     /// NaN is 0, and values beyond the `i64` range clamp to `i64::MIN`/`i64::MAX`.
     F64ToInt,
+    /// The number of bits needed to write an Int read as unsigned: 0 for 0, 64 for a negative Int.
+    BitLen,
 }
 
 /// The one-argument F64 -> F64 functions. Each is the Rust `f64` method of the same name, so a
@@ -241,12 +243,9 @@ pub enum LinearOp {
     Filter(Term),
     /// Negate the diff.
     Negate,
-    /// Shift the timestamp based on an `Int`-valued `Term`.
-    EnterAt(Term),
-    /// Append the current user-iter coord (at the row's scope depth) to
-    /// the value. Time itself is unchanged. See `Expr::LiftIter` for the
-    /// discipline restriction.
-    LiftIter,
+    /// Advance the time: join it with the `Int`-valued `Term`, read as unsigned, in the
+    /// iteration coordinate of the row's own scope. Other coordinates are unchanged.
+    Delay(Term),
     /// UNNEST: explode a `List`-valued `Term` into one row per element, value
     /// `tuple(pos, element)`. See `parse::Expr::FlatMap`.
     FlatMap(Term),
@@ -434,6 +433,7 @@ fn eval_unary(op: UnOp, v: Value) -> Value {
         UnOp::F64Neg => Value::f64_value(-v.as_f64()),
         UnOp::F64Fn(f) => Value::f64_value(f.apply(v.as_f64())),
         UnOp::F64ToInt => Value::Int(v.as_f64() as i64),
+        UnOp::BitLen => Value::Int(64 - (v.as_int() as u64).leading_zeros() as i64),
         UnOp::Not => Value::Int((!v.truthy()) as i64),
         UnOp::IsTag(t) => Value::Int(matches!(&v, Value::Variant(tag, _) if *tag == t) as i64),
         UnOp::Len => match v {

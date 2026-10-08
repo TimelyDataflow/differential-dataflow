@@ -78,6 +78,7 @@ fn clone_node(node: &Node, m: impl Fn(&Ref) -> Ref) -> Node {
         Node::Join { left, right, projection } => Node::Join { left: m(left), right: m(right), projection: projection.clone() },
         Node::Reduce { input, reducer } => Node::Reduce { input: m(input), reducer: reducer.clone() },
         Node::Inspect { input, label } => Node::Inspect { input: m(input), label: label.clone() },
+        Node::Lift(r) => Node::Lift(m(r)),
     }
 }
 
@@ -140,11 +141,19 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
                 let sub_idx = out.items.len();
                 for (a, vref) in child_visible {
                     let lift_idx = child_out.items.len();
-                    child_out.items.push(Item::Op(Node::Linear { input: vref, ops: vec![LinearOp::LiftIter] }));
+                    child_out.items.push(Item::Op(Node::Lift(vref)));
+                    // `lift` pairs the value with the coordinate; splice the pair flat, so the
+                    // coordinates follow the value's own fields.
+                    let flat_idx = child_out.items.len();
+                    let flatten = Projection {
+                        key: Term::Var(0),
+                        val: Term::Tuple(vec![Term::Spread(Box::new(Term::Proj(Box::new(Term::Var(1)), 0))), Term::Proj(Box::new(Term::Var(1)), 1)]),
+                    };
+                    child_out.items.push(Item::Op(Node::Linear { input: Ref::Local(lift_idx), ops: vec![LinearOp::Project(flatten)] }));
                     let export_idx = child_out.exports.len();
                     child_out.exports.push(Export {
                         name: format!("$host:{}", export_idx),
-                        value: Ref::Local(lift_idx),
+                        value: Ref::Local(flat_idx),
                         shape: None,
                     });
                     visible.push((a, Ref::ChildExport(sub_idx, export_idx)));
@@ -258,8 +267,7 @@ fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, 
     for op in ops {
         match op {
             LinearOp::Project(p) => { let rows = [k, v]; k = proj_arity(&p.key, &rows); v = proj_arity(&p.val, &rows); }
-            LinearOp::Filter(_) | LinearOp::Negate | LinearOp::EnterAt(_) => {}
-            LinearOp::LiftIter => v += 1,
+            LinearOp::Filter(_) | LinearOp::Negate | LinearOp::Delay(_) => {}
             LinearOp::FlatMap(_) => v = 2, // value becomes tuple(pos, element)
         }
     }
@@ -317,6 +325,7 @@ fn walk_shapes(
                     Node::Linear { input, ops } => of(input).map(|s| apply_ops_arity(s, ops)),
                     Node::Concat(refs) => refs.iter().find_map(|r| of(r)),
                     Node::Arrange(r) | Node::Inspect { input: r, .. } => of(r),
+                    Node::Lift(r) => of(r).map(|(k, _)| (k, 2)),
                     Node::Join { left, right, projection } => match (of(left), of(right)) {
                         (Some((kl, vl)), Some((_, vr))) => {
                             let rows = [kl, vl, vr];
@@ -1006,13 +1015,12 @@ impl<'a> Reverse<'a> {
                         let contrib = ex.filter(dep_this, cond.clone());
                         self.push(ex, path, input, contrib, out_user_len);
                     }
-                    LinearOp::Negate | LinearOp::EnterAt(_) => {
-                        // Negate: pure pass-through. EnterAt: sound but
+                    LinearOp::Negate | LinearOp::Delay(_) => {
+                        // Negate: pure pass-through. Delay: sound but
                         // over-broad pass-through; the routing adapter handles
                         // any depth difference.
                         self.push(ex, path, input, dep_this, out_user_len);
                     }
-                    LinearOp::LiftIter => panic!("explain: LiftIter in user program"),
                     LinearOp::FlatMap(list_term) => {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);
@@ -1032,6 +1040,7 @@ impl<'a> Reverse<'a> {
             Node::Arrange(input) | Node::Inspect { input, .. } => {
                 self.push(ex, path, input, dep_this, out_user_len);
             }
+            Node::Lift(_) => panic!("explain: lift in user program"),
             Node::Reduce { input, reducer } => {
                 let target = resolve(self.orig, path, input);
                 let side = self.side(&target);
@@ -1085,16 +1094,16 @@ mod tests {
         let mut out = Scope { imports: p.root.imports.clone(), ..Scope::default() };
         let import_map: Vec<Ref> = (0..out.imports.len()).map(Ref::Import).collect();
         clone_into(&p.root, &mut out, &import_map);
-        // outer's clone: every $host: export is a LiftIter Linear; and the
+        // outer's clone: every $host: export is a lift, flattened; and the
         // ones re-exporting fwd/bwd internals chain TWO lifts (one per level):
         // the value behind the lift is itself a ChildExport of a lift.
         let Item::Sub(outer) = out.items.iter().find(|i| matches!(i, Item::Sub(_))).unwrap() else { unreachable!() };
         let mut depth2_chains = 0;
         for e in outer.exports.iter().filter(|e| e.name.starts_with("$host:")) {
-            let Ref::Local(li) = &e.value else { panic!("$host export should be a fresh lift") };
-            let Item::Op(Node::Linear { input, ops }) = &outer.items[*li] else { panic!("expected a lift") };
-            assert_eq!(ops.as_slice().len(), 1);
-            assert!(matches!(ops[0], LinearOp::LiftIter));
+            let Ref::Local(fi) = &e.value else { panic!("$host export should be a fresh lift") };
+            let Item::Op(Node::Linear { input: Ref::Local(li), ops }) = &outer.items[*fi] else { panic!("expected a flatten") };
+            assert!(matches!(ops.as_slice(), [LinearOp::Project(_)]));
+            let Item::Op(Node::Lift(input)) = &outer.items[*li] else { panic!("expected a lift") };
             if matches!(input, Ref::ChildExport(..)) { depth2_chains += 1; }
         }
         assert!(depth2_chains > 0, "fwd/bwd internals re-lift at outer's exit");

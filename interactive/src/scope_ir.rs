@@ -119,6 +119,10 @@ pub enum Node {
     Join { left: Ref, right: Ref, projection: Projection },
     Reduce { input: Ref, reducer: Reducer },
     Inspect { input: Ref, label: String },
+    /// Pair each row's value with the iteration coordinate of its scope, as `(val, iter)`.
+    /// It reads a time into data, so it is its own node rather than a `Linear` op: nothing
+    /// fuses with it.
+    Lift(Ref),
 }
 
 /// An item in a scope's body: a pure operator or a nested child scope. The
@@ -205,7 +209,7 @@ impl Scope {
         for item in self.items.iter_mut() {
             match item {
                 Item::Op(node) => match node {
-                    Node::Linear { input, .. } | Node::Arrange(input)
+                    Node::Linear { input, .. } | Node::Arrange(input) | Node::Lift(input)
                     | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
                     Node::Join { left, right, .. } => { f(left); f(right); },
                     Node::Concat(refs) => for r in refs { f(r); },
@@ -236,7 +240,7 @@ impl Scope {
             if dead[i] { continue; }
             match item {
                 Item::Op(node) => match node {
-                    Node::Linear { input, .. } | Node::Arrange(input)
+                    Node::Linear { input, .. } | Node::Arrange(input) | Node::Lift(input)
                     | Node::Reduce { input, .. } | Node::Inspect { input, .. } => tally(input),
                     Node::Join { left, right, .. } => { tally(left); tally(right); },
                     Node::Concat(refs) => for r in refs { tally(r); },
@@ -378,8 +382,8 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Linear { input, ops } => {
                         let ops: Vec<&str> = ops.iter().map(|op| match op {
                             LinearOp::Project(_) => "project", LinearOp::Filter(_) => "filter",
-                            LinearOp::Negate => "negate", LinearOp::EnterAt(_) => "enter_at",
-                            LinearOp::LiftIter => "lift_iter", LinearOp::FlatMap(_) => "flatmap",
+                            LinearOp::Negate => "negate", LinearOp::Delay(_) => "delay",
+                            LinearOp::FlatMap(_) => "flatmap",
                         }).collect();
                         format!("{} | {}", fmt_ref(input), ops.join(" | "))
                     }
@@ -388,6 +392,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
                     Node::Reduce { input, reducer } => format!("{} | {:?}", fmt_ref(input), reducer),
                     Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
+                    Node::Lift(r) => format!("{} | lift", fmt_ref(r)),
                 };
                 println!("{}n{} = {};", pad2, i, desc);
             }

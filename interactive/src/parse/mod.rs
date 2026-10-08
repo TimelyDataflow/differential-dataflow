@@ -29,14 +29,8 @@ pub enum Expr {
     Filter(Box<Expr>, Term),
     Negate(Box<Expr>),
     EnterAt(Box<Expr>, Term),
-    /// Append the current user-iter coord (at the operator's scope depth)
-    /// to each row's value. Time itself is unchanged.
-    ///
-    /// Discipline (post-lowering check, see `lower::validate_lift_iter`):
-    /// the result of `LiftIter` must not be referenced inside the same
-    /// scope it appears in — only from an enclosing scope, after the
-    /// implicit leave. This preserves the "loop body is a time-invariant
-    /// function" property; in-scope use risks defeating the fixpoint.
+    /// Pair each row's value with the current user-iter coord (at the
+    /// operator's scope depth), as `(val, iter)`. Time itself is unchanged.
     LiftIter(Box<Expr>),
     /// UNNEST: explode a `List`-valued `Term` into one row per element, keyed
     /// as the input, with value `tuple(pos, element)` (position innermost-first
@@ -80,6 +74,7 @@ pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
             Term::Unary(if name == "float" { UnOp::ToF64 } else { UnOp::F64Neg }, Box::new(args.remove(0)))
         }
         "fint" => { assert_eq!(args.len(), 1, "fint(value)"); Term::Unary(UnOp::F64ToInt, Box::new(args.remove(0))) }
+        "bitlen" => { assert_eq!(args.len(), 1, "bitlen(value)"); Term::Unary(UnOp::BitLen, Box::new(args.remove(0))) }
         name if F64Fn::ALL.iter().any(|(n, _)| *n == name) => {
             assert_eq!(args.len(), 1, "{name}(value)");
             let f = F64Fn::ALL.iter().find(|(n, _)| *n == name).unwrap().1;

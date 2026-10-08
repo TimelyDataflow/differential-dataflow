@@ -619,6 +619,10 @@ pub fn compile(
                     let x = float_leaf(b, id);
                     b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::ToInt)), vec![x])
                 }
+                UnOp::BitLen => {
+                    if shape != Shape::Prim(64) { return Err("bitlen expects an Int".into()); }
+                    b.add(NumOp::Host(bitlen_kernel::op()), vec![id])
+                }
                 // `truthy` is "nonzero Int": scalars compare against zero; non-`Int` values
                 // are never truthy, so their `not` folds to the constant 1 (the cross-shape
                 // `Eq` fold's precedent).
@@ -846,6 +850,28 @@ pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape
     Ok(lower(&[key, val], &[kshape.clone(), vshape.clone()])?.0)
 }
 
+/// `bitlen` as a host kernel: corgi has no count-leading-zeros op.
+mod bitlen_kernel {
+    use std::sync::{Arc, OnceLock};
+    use corgi::{HostKernel, HostOp, Shape, Value};
+
+    struct Kernel { shape: Shape }
+    impl HostKernel for Kernel {
+        fn name(&self) -> &str { "bitlen" }
+        fn input(&self) -> &Shape { &self.shape }
+        fn output(&self) -> &Shape { &self.shape }
+        fn eval(&self, input: Value) -> Result<Value, String> {
+            Ok(Value::u64(input.as_u64("bitlen")?.iter().map(|&x| 64 - x.leading_zeros() as u64).collect()))
+        }
+    }
+
+    /// The host op: one `Arc` for the life of the process, so CSE merges equal calls.
+    pub fn op() -> HostOp {
+        static KERNEL: OnceLock<Arc<dyn HostKernel>> = OnceLock::new();
+        HostOp(Arc::clone(KERNEL.get_or_init(|| Arc::new(Kernel { shape: Shape::Prim(64) }))))
+    }
+}
+
 /// The F64 functions without a composition of corgi ops, as host kernels over the float leaf
 /// (corgi's total-order key): decode each key, apply the function as `ir::eval` does, encode.
 /// One kernel per function, shared by every call site, so CSE merges equal calls.
@@ -938,7 +964,7 @@ mod tests {
             "fadd(float($0), float($1))", "fsub(float($0), float($1))",
             "fmul(float($0), float($1))", "fdiv(float($0), float($1))",
             "float($0) < float($1)", "float($0) >= float($1)",
-            "append(list($0), list($1, $0))"] {
+            "append(list($0), list($1, $0))", "bitlen($0)", "256 * bitlen($1)"] {
             let term = crate::parse::pipe::parse_term(source);
             agrees_with_rows(&term, &[u64s(), u64s()], &rows);
         }
