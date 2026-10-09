@@ -1,0 +1,110 @@
+-- DDIR's scope-IR optimizer (`Scope::optimize` in src/scope_ir.rs), written in DDIR.
+--
+-- The Rust pass repeats three rewrites until nothing changes:
+--   collapse  an `Arrange` whose input is an `Arrange` or `Reduce` redirects to that input;
+--   fuse      a `Linear` absorbs its `Linear` input when it is that input's only consumer;
+--   dedup     a structurally identical operator redirects to the earliest one.
+-- Here the program graph is the loop variable, and one round of the outer scope is one
+-- iteration of the Rust loop: collapse (to a fixed point along arrange chains), then fuse
+-- (to a fixed point along linear chains), then a single dedup step. The outer scope
+-- converges exactly when the Rust loop would stop.
+--
+-- input 0: nodes  key = (id)          val = (scope, kind, pid, ops)
+-- input 1: edges  key = (holder, pos) val = (tag, a, b)
+--
+-- kind: 0 Linear, 1 Concat, 2 Arrange, 3 Join, 4 Reduce, 5 Inspect, 9 holder
+--   (holders are the non-operator owners of references: binds, exports, child-scope
+--   imports; they count as uses and get redirected, but are never rewritten).
+-- pid:  interned payload (join projection, reducer, inspect label; unique per holder).
+-- ops:  a Linear's op ids, in order (empty for other kinds).
+-- ref:  (0, id, 0) Local · (1, k, 0) Import · (2, v, 0) Var · (3, item, j) ChildExport.
+-- ids preserve item order within a scope, so "earliest" is `min`.
+
+let nodes = input 0 | key($0[0] ; $1[0], $1[1], $1[2], $1[3]);
+let edges = input 1 | key($0[0], $0[1] ; $1[0], $1[1], $1[2]);
+
+opt: {
+    -- The loop variables start empty; feed the inputs in at round 0 only (var stall).
+    var n_stall = nodes;
+    var e_stall = edges;
+
+    -- ---- collapse ------------------------------------------------------------------
+    let eh = ge | key($0[0] ; $0[1], $1[0], $1[1], $1[2]);                  -- holder ; pos, tag, a, b
+    let in0 = eh | filter(($1[0] == 0) && ($1[1] == 0)) | key($0[0] ; $1[2]); -- holder ; local input
+    let arrs = gn | filter($1[1] == 2) | key($0[0] ;);
+    let arranged = gn | filter(or($1[1] == 2, $1[1] == 4)) | key($0[0] ;);
+    let col = arrs | join(in0, ($0 ; $2)) | key($1 ; $0) | join(arranged, ($1 ; $0)); -- a ; j
+
+    collapse: {
+        -- inputs precede consumers, so the end of an arrange chain is its least id
+        let hop = col | key($1 ; $0) | join(down, ($1 ; $2));
+        var down = col + hop | min;
+    }
+    let r1 = collapse::down;                                                -- a ; target
+    let dead1 = r1 | key($0 ;);
+
+    let n1 = gn - (gn | join(dead1, ($0 ; $1)));
+    let e1a = ge - (eh | join(dead1, ($0, $1[0] ; $1[1], $1[2], $1[3])));
+    let t1 = e1a | filter($1[0] == 0) | key($1[1] ; $0[0], $0[1]);           -- target ; holder, pos
+    let e1 = e1a
+           - (t1 | join(r1, ($1[0], $1[1] ; 0, $0[0], 0)))
+           + (t1 | join(r1, ($1[0], $1[1] ; 0, $2[0], 0)));
+
+    -- ---- fuse ----------------------------------------------------------------------
+    let e1h = e1 | key($0[0] ; $0[1], $1[0], $1[1], $1[2]);
+    let uses = e1 | filter($1[0] == 0) | key($1[1] ;) | count;               -- target ; (n)
+    let single = uses | filter($1[0] == 1) | key($0 ;);
+    let lin = n1 | filter($1[1] == 0);
+    let lin_ids = lin | key($0 ;);
+    let lin_in = lin | join(e1h, ($0 ; $1[3], $2[1], $2[2], $2[3]));         -- i ; ops, tag, a, b
+    let fz = lin_in | filter($1[1] == 0) | key($1[2] ; $0[0])
+           | join(single, ($0 ; $1)) | join(lin_ids, ($0 ; $1));             -- j ; i  (i absorbs j)
+    let absorbers = fz | key($1 ;);
+    let absorbed = fz | key($0 ;);
+    let base = lin_in - (lin_in | join(absorbers, ($0 ; $1)));
+
+    fuse: {
+        -- a chain member's fused form: its absorbed input's fused form, then its own ops
+        let ext = fz | join(acc, ($1 ; $2[0], $2[1], $2[2], $2[3]))
+                     | join(lin_in, ($0 ; append($1[0], $2[0]), $1[1], $1[2], $1[3]));
+        var acc = base + ext;
+    }
+    let fused = fuse::acc | join(absorbers, ($0 ; $1));
+    let fused_surv = fused - (fused | join(absorbed, ($0 ; $1)));          -- i ; ops, tag, a, b
+    let surv_ids = fused_surv | key($0 ;);
+
+    let n2 = n1
+           - (n1 | join(absorbed, ($0 ; $1)))
+           - (n1 | join(surv_ids, ($0 ; $1)))
+           + (n1 | join(fused_surv, ($0 ; $1[0], $1[1], $1[2], $2[0])));
+    let e2 = e1
+           - (e1h | join(absorbed, ($0, $1[0] ; $1[1], $1[2], $1[3])))
+           - (e1h | join(surv_ids, ($0, $1[0] ; $1[1], $1[2], $1[3])))
+           + (fused_surv | key($0, 0 ; $1[1], $1[2], $1[3]));
+
+    -- ---- dedup (one step) ----------------------------------------------------------
+    let e2h = e2 | key($0[0] ; $0[1], $1[0], $1[1], $1[2]);
+    let kids = e2h | collect;                                                -- holder ; [(pos, tag, a, b)]
+    let sig = n2 | filter($1[1] != 9)
+                 | join(kids, ($1[0], $1[1], $1[2], $1[3], $2 ; $0[0]));     -- signature ; id
+    let rep = sig | min;
+    let dmap = sig | join(rep, ($1[0] ; $2[0])) | filter($0[0] != $1[0]);    -- id ; representative
+    let dead3 = dmap | key($0 ;);
+
+    let n3 = n2 - (n2 | join(dead3, ($0 ; $1)));
+    let e3a = e2 - (e2h | join(dead3, ($0, $1[0] ; $1[1], $1[2], $1[3])));
+    let t3 = e3a | filter($1[0] == 0) | key($1[1] ; $0[0], $0[1]);
+    let e3 = e3a
+           - (t3 | join(dmap, ($1[0], $1[1] ; 0, $0[0], 0)))
+           + (t3 | join(dmap, ($1[0], $1[1] ; 0, $2[0], 0)));
+
+    -- ---- the graph, one Rust-loop iteration per round ------------------------------
+    -- `arrange` consolidates each round: much of the path from `gn`/`ge` back to themselves is
+    -- linear, and a round that rewrites nothing would otherwise feed its cancelling updates
+    -- around again rather than letting the loop quiesce.
+    var gn = nodes - n_stall + n3 | arrange;
+    var ge = edges - e_stall + e3 | arrange;
+}
+
+export "nodes" = opt::gn;
+export "edges" = opt::ge;

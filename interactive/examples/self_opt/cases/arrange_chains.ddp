@@ -1,0 +1,7 @@
+-- Arrangement chains collapse to their base, through arranges and reduces.
+let x = input 0 | key($0[0] ; $0[1]);
+let y = x | arrange | arrange | arrange;
+let z = x | min | arrange | arrange;
+let w = (x | arrange) + (x | arrange) | arrange | arrange;
+export "y" = y | join(z, ($0 ; $1, $2)) | arrange;
+export "w" = w | arrange;

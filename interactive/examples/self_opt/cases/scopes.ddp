@@ -1,0 +1,16 @@
+-- Duplicates inside and across nested scopes: merged within a scope, never across.
+let edges = input 0 | key($0[0] ; $0[1]);
+let roots = input 1 | key($0[0] ;);
+let e2 = input 0 | key($0[0] ; $0[1]);
+outer: {
+    let r = reach + roots | distinct;
+    inner: {
+        let step = r | join(edges, ($2 ;)) | arrange | arrange;
+        let step2 = r | join(edges, ($2 ;)) | arrange;
+        var acc = step + step2 | distinct;
+    }
+    let again = inner::acc | map($0 ;) | map($0 ;);
+    var reach = again + (inner::acc | map($0 ;) | map($0 ;)) | distinct;
+}
+export "r" = outer::reach | arrange;
+export "e" = e2 | arrange;
