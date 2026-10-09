@@ -20,8 +20,9 @@
 //!     `CorgiChunk` batch column-natively.
 //!
 //! Min/Collect values use a segmented structural sort over an order-only columnar view: signed
-//! integer leaves are swizzled, and lists become lexicographic ranks. The winning rows are still
-//! gathered from the original columns.
+//! integer leaves are swizzled, and lists keep their structure, as Corgi orders them
+//! lexicographically just as DDIR does. The winning rows are still gathered from the original
+//! columns.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
@@ -46,7 +47,7 @@ use crate::ir::{Diff, Reducer};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 
-/// Build a sortable view matching DDIR's signed leaves and lexicographic lists.
+/// Build a sortable view matching DDIR's signed leaves.
 ///
 /// DDIR's leaf scalar is `Int`, transcoded into a Corgi primitive as its raw
 /// bits. Corgi's radix sort is unsigned, so XORing each payload leaf's sign bit
@@ -63,57 +64,12 @@ fn signed_order_view(value: CValue) -> CValue {
             // the lane assignment is untouched — only the payload lanes are swizzled.
             CValue::Sum(tags, variants.into_iter().map(signed_order_view).collect())
         }
-        CValue::List(bounds, values) => lexicographic_list_ranks(bounds, signed_order_view(*values)),
+        // Corgi orders lists lexicographically, as DDIR does, so only their elements are swizzled.
+        CValue::List(bounds, values) => CValue::List(bounds, Box::new(signed_order_view(*values))),
         CValue::Unit(len) => CValue::Unit(len),
         // References order as the rows they name.
         CValue::Ref(arena, rows) => signed_order_view(corgi::arrange::gather(&arena, &rows)),
     }
-}
-
-/// An order-only integer rank for each list, using DDIR's lexicographic order.
-/// Corgi's general structural order is intentionally length-first. Preserve
-/// that contract and adapt here: rank the element columns, then refine tied
-/// list prefixes in column batches, with end-of-list preceding every element.
-/// No DDIR rows or per-comparison interpreter calls are materialized.
-///
-/// This is a correctness adapter, not a performance-neutral view: it eagerly
-/// ranks all elements, including unused tails, and each prefix round scans all
-/// lists and allocates fresh scratch even when most prefixes are resolved.
-/// Cost therefore grows with total element count and unresolved prefix depth.
-/// Only list-valued subcolumns pay this ranking cost (including strings encoded
-/// as lists); physical arrangement-key ordering is unchanged.
-fn lexicographic_list_ranks(bounds: Bounds, ordered_elements: CValue) -> CValue {
-    let ends = bounds.to_vec();
-    let rows = ends.len();
-    let (element_perm, element_labels) = sort_blocks(&vec![0; ordered_elements.len()], &ordered_elements);
-    let mut element_ranks = vec![0; element_perm.len()];
-    for (i, &row) in element_perm.iter().enumerate() { element_ranks[row] = element_labels[i]; }
-    let starts: Vec<_> = std::iter::once(0).chain(ends.iter().copied()).take(rows).collect();
-    let mut perm: Vec<_> = (0..rows).collect();
-    let mut labels = vec![0; rows];
-    let mut position = 0;
-    loop {
-        let mut present = vec![0; rows];
-        let mut keys = vec![0; rows];
-        let mut active = false;
-        for i in 0..rows {
-            let tied = (i > 0 && labels[i] == labels[i-1]) || (i+1 < rows && labels[i] == labels[i+1]);
-            let row = perm[i];
-            if tied && position < ends[row]-starts[row] {
-                present[i] = 1;
-                keys[i] = element_ranks[starts[row]+position];
-                active = true;
-            }
-        }
-        if !active { break; }
-        let (order, refined) = sort_blocks(&labels, &CValue::Prod(vec![CValue::u64(present), CValue::u64(keys)]));
-        perm = order.into_iter().map(|i| perm[i]).collect();
-        labels = refined;
-        position += 1;
-    }
-    let mut ranks = vec![0; rows];
-    for (i, &row) in perm.iter().enumerate() { ranks[row] = labels[i]; }
-    CValue::u64(ranks)
 }
 
 /// Values named by id: id `i` is row `refs[i].1` of `columns[refs[i].0]`.
