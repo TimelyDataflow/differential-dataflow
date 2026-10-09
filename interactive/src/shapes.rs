@@ -163,7 +163,7 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape) -> Result<Vec<(Sh
                 let nv = shape_of_term(&p.val, &env, None).map_err(|e| format!("map val: {e}"))?;
                 (k, v) = (nk, nv);
             }
-            LinearOp::Filter(t) | LinearOp::EnterAt(t) => match shape_of_term(t, &env, None)? {
+            LinearOp::Filter(t) | LinearOp::Delay(t) => match shape_of_term(t, &env, None)? {
                 Shape::Prim(64) => {}
                 s => return Err(format!("predicate or delay of shape {s}, not an integer")),
             },
@@ -171,12 +171,6 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape) -> Result<Vec<(Sh
             LinearOp::FlatMap(t) => match shape_of_term(t, &env, None)? {
                 Shape::List(e) => v = Shape::Prod(vec![Shape::Prim(64), *e]),
                 s => return Err(format!("flatmap of shape {s}, not a list")),
-            },
-            // As `backend::vec::append_iter`: extend a tuple, or pair any other value.
-            LinearOp::LiftIter => v = match v {
-                Shape::Prod(mut fs) => { fs.push(Shape::Prim(64)); Shape::Prod(fs) }
-                Shape::Unit => Shape::Prod(vec![Shape::Prim(64)]),
-                other => Shape::Prod(vec![other, Shape::Prim(64)]),
             },
         }
     }
@@ -203,6 +197,7 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
             Some(first)
         }
         st::Node::Arrange(r) | st::Node::Inspect { input: r, .. } => shapes.of(r),
+        st::Node::Lift(r) => shapes.of(r).map(|c| CollShape::new(c.key, Shape::Prod(vec![c.val, Shape::Prim(64)]), depth)),
         st::Node::Join { left, right, projection } => {
             let (l, r) = (shapes.of(left)?, shapes.of(right)?);
             if l.key != r.key { return fail(format!("join keys {} and {}", l.key, r.key)); }

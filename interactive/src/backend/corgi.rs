@@ -57,18 +57,18 @@ impl Plan {
         let what = match op {
             LinearOp::Project(_) => "map",
             LinearOp::Filter(_) => "filter",
-            LinearOp::EnterAt(_) => "enter_at",
+            LinearOp::Delay(_) => "delay",
             LinearOp::FlatMap(_) => "flatmap",
-            LinearOp::Negate | LinearOp::LiftIter => unreachable!("{op:?} compiles no graph"),
+            LinearOp::Negate => unreachable!("{op:?} compiles no graph"),
         };
         if self.compiled.is_none() {
             let (k, v) = (&kshape, &vshape);
             let g = match op {
                 LinearOp::Project(p) => compile_projection(&p.key, &p.val, k, v),
                 LinearOp::Filter(cond) => compile_predicate(cond, k, v),
-                LinearOp::EnterAt(field) => compile_scalar(field, k, v),
+                LinearOp::Delay(field) => compile_scalar(field, k, v),
                 LinearOp::FlatMap(list) => compile_flatmap(list, k, v),
-                LinearOp::Negate | LinearOp::LiftIter => unreachable!(),
+                LinearOp::Negate => unreachable!(),
             };
             let g = g.unwrap_or_else(|e| panic!("{what}: type error at shapes ({kshape}, {vshape}): {e}"));
             self.compiled = Some((kshape.clone(), vshape.clone(), g));
@@ -84,9 +84,8 @@ impl Plan {
 /// column + a structural explode; Negate = Rust. Every term is columnar — there is no row-wise
 /// path inside the dataflow — and each op's graph is compiled once (`plans`). An empty batch
 /// passes through untouched: it carries no shape to compile against and no rows to compute.
-/// The two data<->time ops are columnar and total: EnterAt reads its delay field as a column and
-/// joins it into `times` in place; LiftIter reads the iteration coordinate out of `times` and
-/// appends it to `vals`. `level` is the scope depth (it locates that coordinate).
+/// Delay is columnar and total: it reads its delay field as a column and joins it into `times`
+/// in place. `level` is the scope depth (it locates that coordinate).
 fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> CC {
     // A container with no rows has no SHAPE either, and the ops below are shape-directed: an
     // empty batch passes through untouched (every `LinearOp` maps zero rows to zero rows), and
@@ -123,7 +122,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 }
                 c
             }
-            LinearOp::EnterAt(_) => {
+            LinearOp::Delay(_) => {
                 let g = plan.graph(op, kshape, vshape);
                 // The key and val columns are IDENTITY here — only times change. Evaluate the
                 // delay field to a `U64` column and join it into each time in place. Joining
@@ -131,32 +130,11 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 // `level-1` and identity everywhere else (u64's minimum is 0), so the delta
                 // never has to be built. The epoch is lane 0, so PointStamp index `level-1` is
                 // lane `level`, and the join is one lane-wise max.
-                let raw = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
-                    .into_u64("enter_at delay")
+                let delays = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
+                    .into_u64("delay")
                     .unwrap();
-                let delays: Vec<u64> = raw.iter().map(|r| 256 * (64 - r.leading_zeros() as u64)).collect();
                 c.times.lane_max(level.saturating_sub(1) + 1, &delays);
                 c
-            }
-            // The inverse of `EnterAt`: a value read OUT of each row's time. Vals gain one
-            // integer field; keys, times and diffs are untouched, and no term is compiled.
-            //
-            // It mirrors [`append_iter`] shape for shape, and the empty product is where the two
-            // representations part company: DDIR unit IS `Tuple([])`, which `append_iter` extends
-            // to `Tuple([iter])`, but columnar it arrives as `CValue::Unit`, not an empty `Prod`.
-            // So `Unit` must become `Prod([iter])` — `Prod([Unit, iter])` would be a silent
-            // one-field-too-many divergence from `backend::vec`.
-            LinearOp::LiftIter => {
-                // PointStamp index `level-1` is lane `level`; at the root there is no iteration
-                // coordinate and the value is zero.
-                let iters: Vec<u64> = if level == 0 { vec![0; c.times.len()] } else { c.times.lane(level) };
-                let lane = CValue::u64(iters);
-                let vals = match c.vals {
-                    CValue::Prod(mut fields) => { fields.push(lane); CValue::Prod(fields) }
-                    CValue::Unit(_) => CValue::Prod(vec![lane]),
-                    other => CValue::Prod(vec![other, lane]),
-                };
-                CorgiContainer { keys: c.keys, vals, times: c.times, diffs: c.diffs }
             }
             LinearOp::FlatMap(_) => {
                 let g = plan.graph(op, kshape, vshape);
@@ -201,12 +179,12 @@ impl Backend for CorgiBackend {
 
     fn linear<'s>(c: Collection<'s, Time, CC>, ops: Vec<LinearOp>, level: usize, shape: Option<st::RowShape>) -> Collection<'s, Time, CC> {
         // Container-level: fold the LinearOp chain over each corgi batch (no inter-op transcode).
-        // `level` is the scope depth (locates the iteration coordinate for LiftIter/EnterAt).
+        // `level` is the scope depth (locates the iteration coordinate for Delay).
         // With the input's shape known, every op compiles now, at the shape it will see.
         let mut plans: Vec<Plan> = ops.iter().map(|_| Plan::default()).collect();
         if let Some(Ok(steps)) = shape.map(|(k, v)| crate::shapes::linear_shapes(&ops, k, v)) {
             for ((op, plan), (k, v)) in ops.iter().zip(plans.iter_mut()).zip(steps) {
-                if !matches!(op, LinearOp::Negate | LinearOp::LiftIter) { plan.graph(op, k, v); }
+                if !matches!(op, LinearOp::Negate) { plan.graph(op, k, v); }
             }
         }
         c.inner
@@ -303,6 +281,27 @@ impl Backend for CorgiBackend {
                             eprint!("{line}");
                         }
                         output.session(&cap).give_container(&mut cont);
+                    });
+                }
+            })
+            .as_collection()
+    }
+
+    // A value read OUT of each row's time: vals become `(vals, iter)`; keys, times and diffs are
+    // untouched, and no term is compiled. An empty batch has no rows to pair.
+    fn lift<'s>(c: Collection<'s, Time, CC>, level: usize) -> Collection<'s, Time, CC> {
+        c.inner
+            .unary(Pipeline, "CorgiLift", move |_, _| {
+                move |input, output| {
+                    input.for_each(|cap, data| {
+                        let mut c = std::mem::take(data);
+                        if !c.times.is_empty() {
+                            // PointStamp index `level-1` is lane `level`; at the root there is no
+                            // iteration coordinate and the value is zero.
+                            let iters: Vec<u64> = if level == 0 { vec![0; c.times.len()] } else { c.times.lane(level) };
+                            c.vals = CValue::Prod(vec![std::mem::replace(&mut c.vals, CValue::Unit(0)), CValue::u64(iters)]);
+                        }
+                        output.session(&cap).give_container(&mut c);
                     });
                 }
             })

@@ -45,28 +45,14 @@ pub(crate) fn check_import_shapes<'s>(s: &st::Scope, imports: Vec<Col<'s>>) -> V
 }
 type Arr<'scope> = Arranged<'scope, TraceAgent<ValSpine<Row, Row, Time, Diff>>>;
 
-/// Append the user-iter coordinate to a value: extend a `Tuple` in place, or
-/// wrap any other value as `(value, iter)`.
-fn append_iter(val: Row, iter: i64) -> Row {
-    match val {
-        Value::Tuple(mut xs) => { xs.push(Value::Int(iter)); Value::Tuple(xs) }
-        other => Value::Tuple(vec![other, Value::Int(iter)]),
-    }
-}
-
 /// Render a Linear chain: one flat_map applying the ops in sequence. `level` is
-/// the op's scope depth — it locates the iteration coord for LiftIter and the
-/// coordinate position EnterAt's delay lands in.
+/// the op's scope depth — it locates the coordinate a Delay lands in.
 fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Col<'scope> {
     use differential_dataflow::AsCollection;
     use differential_dataflow::lattice::Lattice;
     use timely::dataflow::operators::core::Map;
     c.inner.flat_map(move |((key, val), t_in, d_in)| {
         use timely::progress::Timestamp;
-        let iter_at_level: i64 = level
-            .checked_sub(1)
-            .and_then(|idx| t_in.inner.get(idx).copied())
-            .unwrap_or(0) as i64;
         let mut results: smallvec::SmallVec<[((Row, Row), Time, Diff); 2]> = svec![((key, val), Time::minimum(), 1)];
         for op in &ops {
             let mut next = smallvec::SmallVec::new();
@@ -88,19 +74,12 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
                     LinearOp::Negate => {
                         next.push(((k, v), t, -d));
                     },
-                    LinearOp::EnterAt(field) => {
-                        let delay = {
-                            let mut env = vec![k.clone(), v.clone()];
-                            let raw = eval(field, &mut env).as_int() as u64;
-                            256 * (64 - raw.leading_zeros() as u64)
-                        };
+                    LinearOp::Delay(field) => {
+                        let delay = eval(field, &mut vec![k.clone(), v.clone()]).as_int() as u64;
                         let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
                         for _ in 0..level.saturating_sub(1) { coords.push(0); }
                         coords.push(delay);
                         next.push(((k, v), Product::new(0u64, PointStamp::new(coords)), d));
-                    },
-                    LinearOp::LiftIter => {
-                        next.push(((k, append_iter(v, iter_at_level)), t, d));
                     },
                     LinearOp::FlatMap(list_term) => {
                         let elems = {
@@ -184,6 +163,14 @@ impl Backend for VecBackend {
     }
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container> {
         c.leave_dynamic(depth)
+    }
+    fn lift<'s>(c: Collection<'s, Time, Self::Container>, level: usize) -> Collection<'s, Time, Self::Container> {
+        use differential_dataflow::AsCollection;
+        use timely::dataflow::operators::core::Map;
+        c.inner.map(move |((k, v), t, d)| {
+            let iter = level.checked_sub(1).and_then(|idx| t.inner.get(idx).copied()).unwrap_or(0) as i64;
+            ((k, Value::Tuple(vec![v, Value::Int(iter)])), t, d)
+        }).as_collection()
     }
 }
 

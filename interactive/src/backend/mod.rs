@@ -48,6 +48,8 @@ pub trait Backend {
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, Self::Container>;
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
+    /// Pair each value with the iteration coordinate at scope depth `level` (zero at the root).
+    fn lift<'s>(c: Collection<'s, Time, Self::Container>, level: usize) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
 }
 
@@ -149,6 +151,10 @@ pub fn render_tree<'s, B: Backend>(
                     st::Node::Inspect { input, label } => {
                         let c = resolve(&items, &imports, &var_cols, input).collection();
                         Rendered::Collection(B::inspect(c, label.clone()))
+                    },
+                    st::Node::Lift(r) => {
+                        let c = resolve(&items, &imports, &var_cols, r).collection();
+                        Rendered::Collection(B::lift(c, depth))
                     },
                 };
                 items.push(RItem::Op(rendered));
