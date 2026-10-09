@@ -97,6 +97,11 @@ pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
             let lane_vals = payloads.into_iter().zip(lanes).map(|(p, lshape)| transcode_owned(p, lshape)).collect();
             CValue::sum(tags, lane_vals)
         }
+        // A reference names rows of a shared list: build the list, and refer to each of its rows.
+        Shape::Ref(list) => {
+            let named: Vec<usize> = (0..rows.len()).collect();
+            CValue::Ref(std::sync::Arc::new(transcode_owned(rows, list)), std::sync::Arc::new(named))
+        }
     }
 }
 
@@ -153,6 +158,11 @@ pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
                 })
                 .collect()
         }
+        // A row of references reads as the rows it names.
+        Shape::Ref(list) => match col {
+            CValue::Ref(arena, rows) => untranscode(corgi::arrange::gather(&arena, &rows), list),
+            other => untranscode(other, list),
+        },
     }
 }
 
@@ -298,14 +308,14 @@ pub fn compile(
             }
         }
         Term::Spread(_) => Err("`$n...` spread is only meaningful inside a tuple".into()),
-        // Projection: a tuple field, or a list element (`Get`, faulting out of range as `eval` does).
+        // Projection: a tuple field, or a list element (`Gather`, which reads the zero of the element's shape out of range).
         Term::Proj(t, i) => {
             let id = compile(t, b, env, env_shapes, anchor, None)?;
             match shape_of_term(t, env_shapes, None)? {
                 Shape::List(_) => {
                     let idx = b.add(Op::Lit(CValue::u64(vec![*i as u64])), vec![anchor]);
                     let pair = b.tuple(vec![idx, id]);
-                    Ok(b.add(Op::Get, vec![pair]))
+                    Ok(b.add(Op::Gather, vec![pair]))
                 }
                 _ => Ok(b.add(Op::Field(*i), vec![id])),
             }
@@ -642,7 +652,7 @@ pub fn compile(
                             let mut bb = Builder::<NumOp>::default();
                             let inp = bb.input();
                             let acc = bb.add(Op::Field(0), vec![inp]);
-                            let out = bb.add(ArithOp::AddU64(1), vec![acc]);
+                            let out = bb.add(ArithOp::BinImm(CBinOp::Add, Kind::U, 64, 1), vec![acc]);
                             bb.finish(out)
                         };
                         b.add(Op::Fold(Box::new(body)), vec![seed])
@@ -689,7 +699,16 @@ pub fn compile(
                 lanes.push(b.add(Op::Enlist, vec![e]));
             }
             let count = b.add(Op::Lit(CValue::u64(vec![fields.len() as u64])), vec![anchor]);
-            let mut weave_in = vec![b.add(Op::Iota, vec![count])];
+            // Weave reads its tags as bytes; `iota` counts in `U64`, so each tag is narrowed.
+            let positions = b.add(Op::Iota, vec![count]);
+            let narrow = {
+                let mut bb = Builder::<NumOp>::default();
+                let inp = bb.input();
+                let out = bb.add(Op::Cast(8), vec![inp]);
+                bb.finish(out)
+            };
+            let tags = b.add(Op::MapList(Box::new(narrow)), vec![positions]);
+            let mut weave_in = vec![tags];
             weave_in.extend(lanes);
             let woven_in = b.tuple(weave_in);
             let woven = b.add(Op::Weave, vec![woven_in]);
@@ -751,7 +770,7 @@ fn float_abs(b: &mut Builder<NumOp>, x: usize) -> usize {
 /// A 0/1 mask: is the float leaf NaN? The NaNs are exactly the keys whose magnitude exceeds +inf.
 fn is_nan(b: &mut Builder<NumOp>, x: usize) -> usize {
     let abs = float_abs(b, x);
-    b.add(CmpOp::Gt(float_key(f64::INFINITY)), vec![abs])
+    b.add(CmpOp::RelImm(Pred::Gt, 64, float_key(f64::INFINITY)), vec![abs])
 }
 
 /// Replace `-0.0` by `0.0` in a float leaf. Their keys are adjacent, so this adds the mask.
