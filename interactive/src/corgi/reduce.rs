@@ -65,6 +65,8 @@ fn signed_order_view(value: CValue) -> CValue {
         }
         CValue::List(bounds, values) => lexicographic_list_ranks(bounds, signed_order_view(*values)),
         CValue::Unit(len) => CValue::Unit(len),
+        // References order as the rows they name.
+        CValue::Ref(arena, rows) => signed_order_view(corgi::arrange::gather(&arena, &rows)),
     }
 }
 
