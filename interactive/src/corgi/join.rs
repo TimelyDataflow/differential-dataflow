@@ -8,7 +8,7 @@
 //!
 //! # Tokens
 //!
-//! *   The **group token** is the arrangement's leading `u64` identifier: the key itself for
+//! *   The **group token** is the arrangement's leading `i64` identifier: the key itself for
 //!     primitive integer keys, or the carried content hash for structured keys. Chunk order is
 //!     identifier order, which makes `from` seekable and every key shape resumably blockable.
 //!     A hash collision remains under that token through proxy matching; only then does `cross`

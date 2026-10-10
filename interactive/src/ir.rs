@@ -9,7 +9,7 @@ pub type Time = timely::order::Product<u64, differential_dataflow::dynamic::poin
 
 /// A runtime value: the data model of the interpreter.
 ///
-/// An algebraic data type over a single scalar (`Int`). `Tuple`/`Variant`/
+/// An algebraic data type over two scalars, `Int` and `Float`. `Tuple`/`Variant`/
 /// `List` are the product/sum/sequence constructors; together they cover
 /// JSON-shaped data and program ASTs. A collection element is a `(key, val)`
 /// pair of `Value`s (typically `Tuple`s). The row backend uses the derived
@@ -19,6 +19,7 @@ pub type Time = timely::order::Product<u64, differential_dataflow::dynamic::poin
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Int(i64),
+    Float(F64),
     Tuple(Vec<Value>),
     Variant(u32, Box<Value>),
     List(Vec<Value>),
@@ -30,6 +31,7 @@ impl Value {
         use corgi::Shape;
         match (self, shape) {
             (Self::Int(_), Shape::Int) => true,
+            (Self::Float(_), Shape::Float) => true,
             (Self::Tuple(xs), Shape::Unit) => xs.is_empty(),
             (Self::Tuple(xs), Shape::Prod(fs)) => xs.len() == fs.len() && xs.iter().zip(fs).all(|(x, f)| x.has_shape(f)),
             (Self::List(xs), Shape::List(f)) => xs.iter().all(|x| x.has_shape(f)),
@@ -37,27 +39,37 @@ impl Value {
             _ => false,
         }
     }
-    /// F64 is an explicit one-variant newtype, not an implicit second meaning
-    /// for Int arithmetic. Its payload is the signed-order form of Corgi's
-    /// total-order float encoding, so existing structural hash/Ord and the
-    /// columnar SUM representation apply without row/column type erasure.
-    /// Like other DDIR sum types, the nominal type name is erased at runtime.
-    pub fn f64_value(value: f64) -> Self {
-        let bits = value.to_bits();
-        let ordered = if bits >> 63 == 1 { !bits } else { bits ^ (1 << 63) };
-        Self::Variant(0, Box::new(Self::Int((ordered ^ (1 << 63)) as i64)))
-    }
-    pub fn as_f64(&self) -> f64 {
-        let Self::Variant(0, payload) = self else { panic!("expected F64 newtype, got {self:?}") };
-        let ordered = payload.as_int() as u64 ^ (1 << 63);
-        f64::from_bits(if ordered >> 63 == 1 { ordered ^ (1 << 63) } else { !ordered })
-    }
+    /// A `Float`.
+    pub fn f64_value(value: f64) -> Self { Self::Float(F64(value)) }
+    /// Unwrap a `Float`, panicking otherwise (interpreter is dynamically typed).
+    pub fn as_f64(&self) -> f64 { match self { Value::Float(x) => x.0, other => panic!("expected Float, got {other:?}") } }
     /// The empty tuple — the conventional "unit"/empty value.
     pub fn unit() -> Value { Value::Tuple(Vec::new()) }
     /// Truthiness: a nonzero `Int` is true; everything else is false.
     pub fn truthy(&self) -> bool { matches!(self, Value::Int(n) if *n != 0) }
     /// Unwrap an `Int`, panicking otherwise (interpreter is dynamically typed).
     pub fn as_int(&self) -> i64 { match self { Value::Int(n) => *n, other => panic!("expected Int, got {:?}", other) } }
+}
+
+/// An `f64` that compares, orders, and hashes by its total order (`f64::total_cmp`), as a corgi
+/// `Float` does: `-0.0` and `0.0` differ, and a NaN equals itself.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct F64(pub f64);
+
+impl PartialEq for F64 { fn eq(&self, other: &Self) -> bool { self.0.total_cmp(&other.0).is_eq() } }
+impl Eq for F64 {}
+impl PartialOrd for F64 { fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) } }
+impl Ord for F64 { fn cmp(&self, other: &Self) -> std::cmp::Ordering { self.0.total_cmp(&other.0) } }
+impl std::hash::Hash for F64 { fn hash<H: std::hash::Hasher>(&self, state: &mut H) { self.0.to_bits().hash(state) } }
+impl std::fmt::Debug for F64 { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.0.fmt(f) } }
+
+impl F64 {
+    /// The order-preserving key of the total order: negatives flip every bit, the rest flip the
+    /// sign bit. Corgi hashes a `Float` by this key.
+    pub fn key(self) -> u64 {
+        let bits = self.0.to_bits();
+        if bits >> 63 == 1 { !bits } else { bits ^ (1 << 63) }
+    }
 }
 
 /// Scalar expression over [`Value`]. For the concrete surface
@@ -148,7 +160,7 @@ pub enum UnOp {
     IsTag(u32),
     /// Number of elements in a `Tuple` or `List`, as an `Int`.
     Len,
-    /// Explicit signed Int -> F64 newtype conversion (see Value::f64_value).
+    /// Int -> Float, the nearest `f64`.
     ToF64,
     /// Floating-point negation; does not reinterpret integer arithmetic.
     F64Neg,
@@ -259,7 +271,7 @@ pub enum LinearOp {
 // `corgi::logic` pin it.
 //
 // The values are DDIR's; the shapes they transcode to are corgi's, and the fold follows those:
-// `Int` is a `Prim` leaf, the empty `Tuple` is `Unit` (NOT a fieldless `Prod`), a `Tuple` is a
+// `Int` and `Float` are leaves, the empty `Tuple` is `Unit` (NOT a fieldless `Prod`), a `Tuple` is a
 // `Prod`, a `List` folds its length then its elements, and a `Variant` folds its tag then its
 // payload. The salts and multipliers are corgi's constants; changing one re-ids everything.
 //
@@ -287,6 +299,7 @@ fn hash_combine(acc: u64, x: u64) -> u64 {
 pub fn structural_hash(v: &Value) -> u64 {
     match v {
         Value::Int(x) => mix64(*x as u64),
+        Value::Float(x) => mix64(x.key()),
         Value::Tuple(fs) if fs.is_empty() => HASH_UNIT,
         Value::Tuple(fs) => fs.iter().fold(HASH_PROD, |a, f| hash_combine(a, structural_hash(f))),
         Value::List(xs) => xs

@@ -14,7 +14,7 @@
 //!     before it is reduced, its output is matched by key as well as value, and every output id
 //!     records the row holding its key, which is what `emit` reads.
 //!   * the value callback — `reduce_brackets` runs ONE crossing per wave over every `(key, time)`
-//!     bracket, building the output value COLUMNS directly (Count → a `u64` prim, Distinct → a
+//!     bracket, building the output value COLUMNS directly (Count → an `Int` column, Distinct → a
 //!     `Unit`, Min → the chosen input rows, Collect → a `List`), never through DDIR rows.
 //!   * materialize — gather the emitted keys and values from the pools' columns and seal a
 //!     `CorgiChunk` batch column-natively.

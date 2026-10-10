@@ -28,6 +28,7 @@ type Res<T> = Result<T, String>;
 pub fn shape_of_row(row: &DValue) -> Res<Shape> {
     match row {
         DValue::Int(_) => Ok(Shape::Int),
+        DValue::Float(_) => Ok(Shape::Float),
         DValue::Tuple(xs) if xs.is_empty() => Ok(Shape::Unit),
         DValue::Tuple(xs) => Ok(Shape::Prod(xs.iter().map(shape_of_row).collect::<Res<_>>()?)),
         DValue::List(xs) => match xs.first() {
@@ -49,7 +50,7 @@ pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
 pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
     match shape {
         Shape::Int => CValue::i64(rows.iter().map(DValue::as_int).collect()),
-        Shape::Float => panic!("transcode: DDIR has no Float values"),
+        Shape::Float => CValue::f64(rows.iter().map(DValue::as_f64).collect()),
         Shape::Unit => CValue::Unit(rows.len()),
         Shape::Prod(fs) => {
             // Transpose by moving: one Vec per field, filled by draining each tuple.
@@ -112,7 +113,7 @@ pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
 pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
     match shape {
         Shape::Int => col.into_i64("untranscode").unwrap().into_iter().map(DValue::Int).collect(),
-        Shape::Float => panic!("untranscode: DDIR has no Float values"),
+        Shape::Float => col.as_f64("untranscode").unwrap().into_iter().map(DValue::f64_value).collect(),
         Shape::Unit => vec![DValue::unit(); col.len()],
         Shape::Prod(fs) => {
             let cols = col.into_prod("untranscode").unwrap();
@@ -334,22 +335,18 @@ pub fn compile(
                 BinOp::Div => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Div), vec![p]) }
                 BinOp::Append => { let p = pair(b, lid, rid); b.add(Op::Append, vec![p]) }
                 BinOp::F64Add | BinOp::F64Sub | BinOp::F64Mul | BinOp::F64Div => {
-                    let f64_shape = Shape::Sum(vec![Shape::Int]);
-                    if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != f64_shape {
-                        return Err("floating arithmetic expects two F64 newtypes; use float(int)".into());
+                    if shape_of_term(l, env_shapes, None)? != Shape::Float || shape_of_term(r, env_shapes, None)? != Shape::Float {
+                        return Err("floating arithmetic expects two Floats; use float(int)".into());
                     }
-                    let (x, y) = (float_leaf(b, lid), float_leaf(b, rid));
-                    let p = pair(b, x, y);
+                    let p = pair(b, lid, rid);
                     let op = match op { BinOp::F64Add => CBinOp::Add, BinOp::F64Sub => CBinOp::Sub, BinOp::F64Mul => CBinOp::Mul, _ => CBinOp::Div };
-                    let f = b.add(ArithOp::Bin(op), vec![p]);
-                    float_newtype(b, f)
+                    b.add(ArithOp::Bin(op), vec![p])
                 }
                 BinOp::F64Min | BinOp::F64Max | BinOp::F64Eq | BinOp::F64Ne | BinOp::F64Lt | BinOp::F64Le | BinOp::F64Gt | BinOp::F64Ge => {
-                    let f64_shape = Shape::Sum(vec![Shape::Int]);
-                    if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != f64_shape {
-                        return Err(format!("{op:?} expects two F64 newtypes; use float(int)"));
+                    if shape_of_term(l, env_shapes, None)? != Shape::Float || shape_of_term(r, env_shapes, None)? != Shape::Float {
+                        return Err(format!("{op:?} expects two Floats; use float(int)"));
                     }
-                    let (x, y) = (float_leaf(b, lid), float_leaf(b, rid));
+                    let (x, y) = (lid, rid);
                     match op {
                         BinOp::F64Min | BinOp::F64Max => {
                             // The total-order pick, then a NaN operand yields the other operand
@@ -362,8 +359,7 @@ pub fn compile(
                             let unless_y = b.add(Op::Select, vec![choices]);
                             let x_nan = is_nan(b, x);
                             let choices_x = b.tuple(vec![x_nan, y, unless_y]);
-                            let f = b.add(Op::Select, vec![choices_x]);
-                            float_newtype(b, f)
+                            b.add(Op::Select, vec![choices_x])
                         }
                         _ => {
                             // IEEE: the total order once `-0.0` is folded onto `0.0`, and false
@@ -392,20 +388,13 @@ pub fn compile(
                     }
                 }
                 BinOp::F64Pow | BinOp::F64PowI => {
-                    let f64_shape = Shape::Sum(vec![Shape::Int]);
-                    let exponent = if matches!(op, BinOp::F64Pow) { f64_shape.clone() } else { Shape::Int };
-                    if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != exponent {
-                        return Err(format!("{op:?} expects an F64 newtype and an {}", if matches!(op, BinOp::F64Pow) { "F64" } else { "Int" }));
+                    let exponent = if matches!(op, BinOp::F64Pow) { Shape::Float } else { Shape::Int };
+                    if shape_of_term(l, env_shapes, None)? != Shape::Float || shape_of_term(r, env_shapes, None)? != exponent {
+                        return Err(format!("{op:?} expects a Float and an {}", if matches!(op, BinOp::F64Pow) { "Float" } else { "Int" }));
                     }
-                    let x = float_leaf(b, lid);
-                    let (kind, y) = if matches!(op, BinOp::F64Pow) {
-                        (float_kernels::FloatOp::Pow, float_leaf(b, rid))
-                    } else {
-                        (float_kernels::FloatOp::PowI, rid)
-                    };
-                    let args = b.tuple(vec![x, y]);
-                    let z = b.add(NumOp::Host(float_kernels::op(kind)), vec![args]);
-                    float_newtype(b, z)
+                    let kind = if matches!(op, BinOp::F64Pow) { float_kernels::FloatOp::Pow } else { float_kernels::FloatOp::PowI };
+                    let args = b.tuple(vec![lid, rid]);
+                    b.add(NumOp::Host(float_kernels::op(kind)), vec![args])
                 }
                 BinOp::Eq | BinOp::Ne => {
                     // Cross-shape structural compare folds to a constant (Eq→0, Ne→1) over `anchor`;
@@ -419,7 +408,7 @@ pub fn compile(
                     }
                 }
                 // Ordered compares are corgi's structural order, which is `ir::eval`'s: integers
-                // by signed value, and an F64 newtype by its payload, the total order.
+                // by signed value, and floats by the total order.
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                     let p = if matches!(op, BinOp::Gt | BinOp::Ge) { pair(b, rid, lid) } else { pair(b, lid, rid) };
                     b.add(CmpOp::Rel(if matches!(op, BinOp::Le | BinOp::Ge) { Pred::Le } else { Pred::Lt }), vec![p])
@@ -573,35 +562,27 @@ pub fn compile(
                 UnOp::Neg => b.add(ArithOp::Neg, vec![id]),
                 UnOp::ToF64 => {
                     if shape != Shape::Int { return Err("float expects an Int".into()); }
-                    let f = b.add(ArithOp::ToFloat, vec![id]);
-                    float_newtype(b, f)
+                    b.add(ArithOp::ToFloat, vec![id])
                 }
                 UnOp::F64Neg => {
-                    if shape != Shape::Sum(vec![Shape::Int]) { return Err("fneg expects an F64 newtype".into()); }
-                    let f = float_leaf(b, id);
-                    let negative = b.add(ArithOp::Neg, vec![f]);
-                    float_newtype(b, negative)
+                    if shape != Shape::Float { return Err("fneg expects a Float".into()); }
+                    b.add(ArithOp::Neg, vec![id])
                 }
                 // |x| is the larger of x and -x in the total order: that clears the sign bit,
                 // NaN included, exactly as `f64::abs`.
                 UnOp::F64Fn(F64Fn::Abs) => {
-                    if shape != Shape::Sum(vec![Shape::Int]) { return Err("fabs expects an F64 newtype".into()); }
-                    let f = float_leaf(b, id);
-                    let abs = float_abs(b, f);
-                    float_newtype(b, abs)
+                    if shape != Shape::Float { return Err("fabs expects a Float".into()); }
+                    float_abs(b, id)
                 }
                 // The rest (sqrt, exp, ln, rounding, trig) and `fint` are host kernels over the
-                // float leaf.
+                // float column.
                 UnOp::F64Fn(f) => {
-                    if shape != Shape::Sum(vec![Shape::Int]) { return Err(format!("{op:?} expects an F64 newtype")); }
-                    let x = float_leaf(b, id);
-                    let y = b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::Fn(*f))), vec![x]);
-                    float_newtype(b, y)
+                    if shape != Shape::Float { return Err(format!("{op:?} expects a Float")); }
+                    b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::Fn(*f))), vec![id])
                 }
                 UnOp::F64ToInt => {
-                    if shape != Shape::Sum(vec![Shape::Int]) { return Err("fint expects an F64 newtype".into()); }
-                    let x = float_leaf(b, id);
-                    b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::ToInt)), vec![x])
+                    if shape != Shape::Float { return Err("fint expects a Float".into()); }
+                    b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::ToInt)), vec![id])
                 }
                 // `truthy` is "nonzero Int": scalars compare against zero; non-`Int` values
                 // are never truthy, so their `not` folds to the constant 1 (the cross-shape
@@ -721,22 +702,7 @@ fn truth(b: &mut Builder<NumOp>, term: &Term, id: usize, env_shapes: &[Shape], a
 }
 
 /// The total-order key of an `f64`, as corgi's `Scalar::Float` holds a float constant.
-fn float_key(f: f64) -> u64 {
-    let bits = f.to_bits();
-    if bits >> 63 == 1 { !bits } else { bits ^ (1 << 63) }
-}
-
-/// An F64 newtype column -> a corgi `Float` leaf.
-fn float_leaf(b: &mut Builder<NumOp>, newtype: usize) -> usize {
-    let payload = b.add(Op::Unwrap, vec![newtype]);
-    b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::FromPayload)), vec![payload])
-}
-
-/// A corgi `Float` leaf -> an F64 newtype column.
-fn float_newtype(b: &mut Builder<NumOp>, float: usize) -> usize {
-    let payload = b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::ToPayload)), vec![float]);
-    b.add(Op::Inject(0, vec![Shape::Int]), vec![payload])
-}
+fn float_key(f: f64) -> u64 { crate::ir::F64(f).key() }
 
 /// `|x|` on a float leaf: the larger of `x` and `-x` in the total order.
 fn float_abs(b: &mut Builder<NumOp>, x: usize) -> usize {
@@ -843,17 +809,16 @@ pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape
     Ok(lower(&[key, val], &[kshape.clone(), vshape.clone()])?.0)
 }
 
-/// The F64 functions without a composition of corgi ops, as host kernels over the float leaf:
-/// apply the function as `ir::eval` does. `FromPayload` and `ToPayload` convert between an F64
-/// newtype's `Int` payload ([`DValue::f64_value`]) and a float leaf. One kernel per function,
-/// shared by every call site, so CSE merges equal calls.
+/// The Float functions without a composition of corgi ops, as host kernels over the float
+/// column: apply the function as `ir::eval` does. One kernel per function, shared by every call
+/// site, so CSE merges equal calls.
 mod float_kernels {
     use std::sync::{Arc, OnceLock};
     use corgi::{HostKernel, HostOp, Shape, Value};
-    use crate::ir::{F64Fn, Value as DValue};
+    use crate::ir::F64Fn;
 
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-    pub enum FloatOp { Fn(F64Fn), ToInt, Pow, PowI, FromPayload, ToPayload }
+    pub enum FloatOp { Fn(F64Fn), ToInt, Pow, PowI }
 
     struct Kernel { name: String, op: FloatOp, input: Shape, output: Shape }
     impl HostKernel for Kernel {
@@ -861,7 +826,6 @@ mod float_kernels {
         fn input(&self) -> &Shape { &self.input }
         fn output(&self) -> &Shape { &self.output }
         fn eval(&self, input: Value) -> Result<Value, String> {
-            let payload = |x: f64| match DValue::f64_value(x) { DValue::Variant(_, p) => p.as_int(), _ => unreachable!() };
             Ok(match self.op {
                 FloatOp::Fn(f) => Value::f64(input.as_f64(&self.name)?.into_iter().map(|x| f.apply(x)).collect()),
                 FloatOp::ToInt => Value::i64(input.as_f64(&self.name)?.into_iter().map(|x| x as i64).collect()),
@@ -876,10 +840,6 @@ mod float_kernels {
                         }).collect()
                     })
                 }
-                FloatOp::FromPayload => Value::f64(input.as_i64(&self.name)?.iter().map(|&p| {
-                    DValue::Variant(0, Box::new(DValue::Int(p))).as_f64()
-                }).collect()),
-                FloatOp::ToPayload => Value::i64(input.as_f64(&self.name)?.into_iter().map(payload).collect()),
             })
         }
     }
@@ -895,8 +855,6 @@ mod float_kernels {
                 FloatOp::ToInt => ("fint".into(), f, i),
                 FloatOp::Pow => ("fpow".into(), Shape::Prod(vec![f.clone(), f.clone()]), f),
                 FloatOp::PowI => ("fpowi".into(), Shape::Prod(vec![f.clone(), i]), f),
-                FloatOp::FromPayload => ("from_payload".into(), i, f),
-                FloatOp::ToPayload => ("to_payload".into(), f, i),
             };
             Arc::new(Kernel { name: format!("f64:{name}"), op, input, output })
         });
@@ -956,7 +914,7 @@ mod tests {
     /// and the ones that are host kernels (`float_kernels`), alone and inside larger terms.
     #[test]
     fn columnar_float_math_agrees() {
-        let f = sum(vec![ints()]);
+        let f = Shape::Float;
         for source in ["fabs($0)", "fmin($0, $1)", "fmax($0, $1)", "feq($0, $1)", "fne($0, $1)",
             "flt($0, $1)", "fle($0, $1)", "fgt($0, $1)", "fge($0, $1)",
             "fsqrt($0)", "fexp($0)", "fln($0)", "ffloor($0)", "fceil($0)", "fround($0)",
@@ -970,7 +928,7 @@ mod tests {
         let finite: Vec<_> = float_pairs().into_iter().filter(|r| r.iter().all(|v| !v.as_f64().is_nan())).collect();
         let term = crate::parse::pipe::parse_term("tuple(fadd(fexp($0), $1), flt(fln($0), $1), fpowi(fsqrt($0), fint($1)))");
         agrees_with_rows(&term, &[f.clone(), f.clone()], &finite);
-        // The kernels are typed: their operands must be F64 newtypes (and `fpowi`'s exponent an Int).
+        // The kernels are typed: their operands must be Floats (and `fpowi`'s exponent an Int).
         for bad in ["fsqrt($0)", "fint($0)", "fpow($0, $0)"] {
             assert!(lower(&[&crate::parse::pipe::parse_term(bad)], &[ints()]).is_err(), "{bad}");
         }

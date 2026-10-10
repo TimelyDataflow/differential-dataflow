@@ -167,7 +167,7 @@ fn register_test_functions() {
     use corgi::Shape;
     use interactive::ir::{register, Function};
     let int = || Shape::Int;
-    let float = || Shape::Sum(vec![Shape::Int]);
+    let float = || Shape::Float;
     // A cell's children: two, while the cell is small and positive; none after.
     register(Function {
         name: "grow".into(),

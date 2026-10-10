@@ -35,6 +35,9 @@ def decode(lines):
                 if type(tag) is int and tag >= 0:
                     return dict(tag=tag, payload=payload)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords and len(node.args) == 1:
+                if node.func.id == 'Float':
+                    # Rust's shortest round-trip form, which `float` reads exactly (`NaN` and `inf` too).
+                    return float(ast.unparse(node.args[0]))
                 arg = parse(node.args[0])
                 if node.func.id == 'Int' and type(arg) is int:
                     return arg
