@@ -639,7 +639,7 @@ pub fn compile(
             }
             // Weave reads its tags as bytes, so they are one byte literal, `[0, 1, .., k-1]` per row.
             let k = fields.len();
-            let positions = CValue::List(corgi::Bounds::Stride(k, 1), Box::new(CValue::u8((0..k as u8).collect())));
+            let positions = CValue::List(corgi::Bounds::Stride(k, 1), Box::new(CValue::u8((0..k).map(|t| t as u8).collect())));
             let tags = b.add(Op::Lit(positions), vec![anchor]);
             let mut weave_in = vec![tags];
             weave_in.extend(lanes);
@@ -954,6 +954,15 @@ mod tests {
         assert_eq!(ev("fln($0)", 0.0, 0.0), f(f64::NEG_INFINITY));
         assert_eq!(ev("fpow($0, $1)", 4.0, 0.5), f(2.0));
         assert!(ev("fpow($0, $1)", -8.0, 0.5).as_f64().is_nan());
+    }
+
+    /// List literals up to Weave's 256 lanes, whose tags are bytes.
+    #[test]
+    fn list_literals_up_to_256_elements_agree() {
+        for k in [1, 255, 256] {
+            let term = Term::List((0..k).map(|i| Term::Binary(BinOp::Add, Box::new(Term::Var(0)), Box::new(Term::Int(i)))).collect());
+            agrees_with_rows(&term, &[ints()], &[vec![V::Int(-3)], vec![V::Int(7)]]);
+        }
     }
 
     #[test]
