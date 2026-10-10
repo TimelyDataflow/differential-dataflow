@@ -3,7 +3,7 @@
 -- binder), a `case` inside a filter whose arms are both predicates, and the built-in
 -- `Option`: `Some`/`None` in the two branches of an `if` (the `if` fixes `None`'s type).
 
-type Size = Small u64 | Big u64;
+type Size = Small int | Big int;
 
 let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
 let tagged = pairs | map($0 ; if($1[0] < 15, Small($1[0]), Big($1[0])));

@@ -73,9 +73,9 @@
 //!   shape for an otherwise ambiguous empty `list()`.
 //!   Corgi's shape inference does not propagate between `append` arguments:
 //!   `append(list(), xs)` is rejected even when `xs` has a known element shape.
-//! - Sums: every sum is a declared type, `type Size = Small u64 | Big (u64, u64)
+//! - Sums: every sum is a declared type, `type Size = Small int | Big (int, int)
 //!   | Empty;` — tags are positions, scoped to the type; a payload shape is
-//!   `u64`/`int`, `float`, `()` (the default when omitted), `(a, b, …)`, `List(a)`,
+//!   `int`, `float`, `()` (the default when omitted), `(a, b, …)`, `List(a)`,
 //!   `Option(a)`, `Result(a, b)`, or an earlier type's name. A constructor call
 //!   `Small(x)` / `Big(a, b)` / `Empty` builds the sum (`Type::Ctor` when two
 //!   types share a name); `variant(Type, tag, payload)` takes a data-driven tag
@@ -260,7 +260,7 @@ impl Parser {
         (name, shape)
     }
 
-    /// A payload shape: `u64`/`int`, `float`, `()`, `(a, b, ..)`, `List(a)`, `Option(a)`, `Result(a, b)`,
+    /// A payload shape: `int`, `float`, `()`, `(a, b, ..)`, `List(a)`, `Option(a)`, `Result(a, b)`,
     /// or an earlier `type`'s name (so sums nest; never recursively).
     fn parse_shape(&mut self) -> corgi::Shape {
         use corgi::Shape;
@@ -279,7 +279,8 @@ impl Parser {
                 Shape::Prod(fields)
             }
             Token::Ident(k) => match k.as_str() {
-                "u64" | "int" => Shape::Int,
+                "int" => Shape::Int,
+                "u64" => panic!("`u64` is retired: an integer is `int`, which is signed"),
                 "float" => Shape::Float,
                 "List" => {
                     self.expect(&Token::LParen);

@@ -16,7 +16,7 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str,
 }
 
 const PRODUCER: &str = r#"
-    type Three = A u64 | B u64 | C u64;
+    type Three = A int | B int | C int;
     let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     export "plain" = pairs;
     export "lists" = pairs | collect;
