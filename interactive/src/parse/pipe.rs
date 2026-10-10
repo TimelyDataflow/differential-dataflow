@@ -51,16 +51,14 @@
 //!   zero divisor, and wraps `i64::MIN / -1` to `i64::MIN`.
 //! - Explicit floating point: `float(int)`, `fneg(x)`, and
 //!   `fadd(a, b)` / `fsub(a, b)` / `fmul(a, b)` / `fdiv(a, b)` use IEEE f64.
-//!   Values are a one-variant SUM carrying an order-encoded integer payload,
-//!   not ordinary integers or an implicit numeric coercion. Generic ordering
-//!   is IEEE total order (including distinct signed zeros and NaN payloads).
-//!   Nominal type names are erased: `fneg` and binary floating operators also
-//!   accept a user's single-variant integer newtype, treating its payload as
-//!   encoded f64 bits.
+//!   Values are `Float`s, a scalar of their own (the type `float`): an `Int`
+//!   is never read as one, and `float(int)` is the one conversion. Generic
+//!   ordering is IEEE total order (including distinct signed zeros and NaN
+//!   payloads).
 //! - Floating-point math, each the Rust `f64` method of the same name:
 //!   `fabs`, `fsqrt`, `fexp`, `fln`, `ffloor`, `fceil`, `fround`, `fsin`,
-//!   `fcos`, `ftan` (F64 -> F64); `fpow(x, y)` (`powf`), `fpowi(x, n)` (`powi`,
-//!   Int exponent). `fint(x)` is F64 -> Int as Rust's `x as i64`: truncate
+//!   `fcos`, `ftan` (Float -> Float); `fpow(x, y)` (`powf`), `fpowi(x, n)` (`powi`,
+//!   Int exponent). `fint(x)` is Float -> Int as Rust's `x as i64`: truncate
 //!   toward zero, NaN is 0, out of range saturates. `fmin`/`fmax` skip a NaN
 //!   operand and otherwise follow the total order (`fmin(-0.0, 0.0)` is
 //!   `-0.0`). `feq fne flt fle fgt fge` are IEEE comparisons returning Int 0/1:
@@ -75,9 +73,9 @@
 //!   shape for an otherwise ambiguous empty `list()`.
 //!   Corgi's shape inference does not propagate between `append` arguments:
 //!   `append(list(), xs)` is rejected even when `xs` has a known element shape.
-//! - Sums: every sum is a declared type, `type Size = Small u64 | Big (u64, u64)
+//! - Sums: every sum is a declared type, `type Size = Small int | Big (int, int)
 //!   | Empty;` — tags are positions, scoped to the type; a payload shape is
-//!   `u64`/`int`, `()` (the default when omitted), `(a, b, …)`, `List(a)`,
+//!   `int`, `float`, `()` (the default when omitted), `(a, b, …)`, `List(a)`,
 //!   `Option(a)`, `Result(a, b)`, or an earlier type's name. A constructor call
 //!   `Small(x)` / `Big(a, b)` / `Empty` builds the sum (`Type::Ctor` when two
 //!   types share a name); `variant(Type, tag, payload)` takes a data-driven tag
@@ -262,7 +260,7 @@ impl Parser {
         (name, shape)
     }
 
-    /// A payload shape: `u64`/`int`, `()`, `(a, b, ..)`, `List(a)`, `Option(a)`, `Result(a, b)`,
+    /// A payload shape: `int`, `float`, `()`, `(a, b, ..)`, `List(a)`, `Option(a)`, `Result(a, b)`,
     /// or an earlier `type`'s name (so sums nest; never recursively).
     fn parse_shape(&mut self) -> corgi::Shape {
         use corgi::Shape;
@@ -281,7 +279,9 @@ impl Parser {
                 Shape::Prod(fields)
             }
             Token::Ident(k) => match k.as_str() {
-                "u64" | "int" => Shape::Prim(64),
+                "int" => Shape::Int,
+                "u64" => panic!("`u64` is retired: an integer is `int`, which is signed"),
+                "float" => Shape::Float,
                 "List" => {
                     self.expect(&Token::LParen);
                     let inner = self.parse_shape();

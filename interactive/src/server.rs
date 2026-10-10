@@ -230,8 +230,8 @@ impl Recipe {
         use corgi::Shape;
         let key = match self {
             Recipe::Random { arity: 0, .. } => Shape::Unit,
-            Recipe::Random { arity, .. } => Shape::Prod(vec![Shape::Prim(64); *arity]),
-            Recipe::Iota { .. } => Shape::Prod(vec![Shape::Prim(64)]),
+            Recipe::Random { arity, .. } => Shape::Prod(vec![Shape::Int; *arity]),
+            Recipe::Iota { .. } => Shape::Prod(vec![Shape::Int]),
         };
         (key, Shape::Unit)
     }
@@ -263,7 +263,7 @@ fn clock_row(t: OuterTime) -> Value {
 
 /// The shape of the `clock` row.
 fn clock_shape() -> RowShape {
-    (corgi::Shape::Prod(vec![corgi::Shape::Prim(64)]), corgi::Shape::Unit)
+    (corgi::Shape::Prod(vec![corgi::Shape::Int]), corgi::Shape::Unit)
 }
 
 /// The shape of a generated source's rows, by its canonical name.

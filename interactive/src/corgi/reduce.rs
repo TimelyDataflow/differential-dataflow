@@ -14,15 +14,13 @@
 //!     before it is reduced, its output is matched by key as well as value, and every output id
 //!     records the row holding its key, which is what `emit` reads.
 //!   * the value callback — `reduce_brackets` runs ONE crossing per wave over every `(key, time)`
-//!     bracket, building the output value COLUMNS directly (Count → a `u64` prim, Distinct → a
+//!     bracket, building the output value COLUMNS directly (Count → an `Int` column, Distinct → a
 //!     `Unit`, Min → the chosen input rows, Collect → a `List`), never through DDIR rows.
 //!   * materialize — gather the emitted keys and values from the pools' columns and seal a
 //!     `CorgiChunk` batch column-natively.
 //!
-//! Min/Collect values use a segmented structural sort over an order-only columnar view: signed
-//! integer leaves are swizzled, and lists keep their structure, as Corgi orders them
-//! lexicographically just as DDIR does. The winning rows are still gathered from the original
-//! columns.
+//! Min/Collect values use a segmented structural sort over the candidate columns: Corgi orders
+//! integers as signed values and lists lexicographically, just as DDIR does.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
@@ -38,39 +36,14 @@ use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 use corgi::arrange::{compare_at, gather_lanes, sort_blocks};
-use corgi::{ArithOp, Bounds, NumOp, OpLike, Value as CValue};
+use corgi::{Bounds, Value as CValue};
 
 use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::matching_ranges;
-use crate::corgi::chunk::{columns_to_batch, key_ids, key_is_hashed, key_lane, CorgiChunk};
+use crate::corgi::chunk::{columns_to_batch, ident, key_ids, key_is_hashed, CorgiChunk};
 use crate::ir::{Diff, Reducer};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
-
-/// Build a sortable view matching DDIR's signed leaves.
-///
-/// DDIR's leaf scalar is `Int`, transcoded into a Corgi primitive as its raw
-/// bits. Corgi's radix sort is unsigned, so XORing each payload leaf's sign bit
-/// turns signed order into unsigned order. Sum discriminants remain untouched;
-/// only their payload lanes recurse. This consumes freshly gathered candidate
-/// columns, allowing Corgi to swizzle their buffers in place when unshared.
-fn signed_order_view(value: CValue) -> CValue {
-    match value {
-        value @ CValue::Prim(_) => NumOp::from(ArithOp::ToSigned).eval(value).expect("ToSigned on a leaf"),
-        CValue::Prod(fields) => {
-            CValue::Prod(fields.into_iter().map(signed_order_view).collect())
-        }
-        CValue::Sum(tags, variants) => {
-            // the lane assignment is untouched — only the payload lanes are swizzled.
-            CValue::Sum(tags, variants.into_iter().map(signed_order_view).collect())
-        }
-        // Corgi orders lists lexicographically, as DDIR does, so only their elements are swizzled.
-        CValue::List(bounds, values) => CValue::List(bounds, Box::new(signed_order_view(*values))),
-        CValue::Unit(len) => CValue::Unit(len),
-        // References order as the rows they name.
-        CValue::Ref(arena, rows) => signed_order_view(corgi::arrange::gather(&arena, &rows)),
-    }
-}
 
 /// Values named by id: id `i` is row `refs[i].1` of `columns[refs[i].0]`.
 #[derive(Default)]
@@ -125,7 +98,7 @@ pub struct CorgiReduceBackend<T> {
 #[derive(Default)]
 struct Retire {
     /// The retire's keys, ascending.
-    keys: Vec<u64>,
+    keys: Vec<i64>,
     /// The input records each key holds, novel and prior.
     held: Vec<usize>,
     /// Where the input chunks, prior then novel, hold the keys.
@@ -133,7 +106,7 @@ struct Retire {
     /// The current window, as a range of `keys`.
     window: Range<usize>,
     /// The window's identifiers that hold more than one real key, ascending.
-    colliding: Vec<u64>,
+    colliding: Vec<i64>,
 }
 
 impl Retire {
@@ -187,13 +160,12 @@ impl<T> CorgiReduceBackend<T> {
 ///
 /// Both the keys and stored identifier lane are sorted; [`matching_ranges`] chooses between
 /// merging them and searching the keys in lockstep.
-fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[u64]) -> Matches {
+fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[i64]) -> Matches {
     let mut scratch = Vec::new();
     chunks.iter().map(|chunk| {
         let mut found = Vec::new();
         if chunk.diffs().is_empty() { return found; }
-        let lane = corgi::arrange::leaf_slice(key_lane(chunk.keys())).expect("the identifier lane is a u64 leaf");
-        matching_ranges(keys, lane, &mut scratch, &mut found);
+        matching_ranges(keys, ident(chunk.keys()), &mut scratch, &mut found);
         found
     }).collect()
 }
@@ -208,11 +180,11 @@ fn search<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], keys: &[u64]) -> Matches 
 /// at holds that key.
 fn present<T: ColTime + Ord>(
     chunks: &[&CorgiChunk<T, Diff>],
-    keys: &[u64],
+    keys: &[i64],
     matches: &Matches,
     colliding: &[bool],
     refs: &mut Vec<(usize, usize)>,
-    bridge: &mut ProxyBridge<T, Diff>,
+    bridge: &mut ProxyBridge<T, Diff, i64>,
 ) {
     // The matched `(chunk, row)`s, key by key, and each one's key index.
     let mut runs: Vec<_> = matches.iter().enumerate()
@@ -285,7 +257,7 @@ fn split_real_keys<T: ColTime>(
 /// side, carry more than one real key. Chunks sort each identifier's rows by real key, so a run holds
 /// one key exactly when its first and last rows agree: two comparisons per run, never per row.
 /// Comparing across sides also catches an identifier whose input and output hold different keys.
-fn colliding_keys<T: ColTime>(keys: &[u64], sides: &[(&[&CorgiChunk<T, Diff>], &Matches)]) -> Vec<bool> {
+fn colliding_keys<T: ColTime>(keys: &[i64], sides: &[(&[&CorgiChunk<T, Diff>], &Matches)]) -> Vec<bool> {
     let mut colliding = vec![false; keys.len()];
     if !sides.iter().flat_map(|side| side.0).any(|chunk| key_is_hashed(chunk.keys())) {
         return colliding;
@@ -315,8 +287,8 @@ where
 
 /// A retire's keys, ascending: those the novel batches touch, and the `changed` set the harness
 /// supplies.
-fn retire_keys<T: ColTime>(novel_chunks: &[&CorgiChunk<T, Diff>], changed: &[u64]) -> Vec<u64> {
-    let mut keys: Vec<u64> = novel_chunks.iter().flat_map(|chunk| key_ids(chunk.keys())).chain(changed.iter().copied()).collect();
+fn retire_keys<T: ColTime>(novel_chunks: &[&CorgiChunk<T, Diff>], changed: &[i64]) -> Vec<i64> {
+    let mut keys: Vec<i64> = novel_chunks.iter().flat_map(|chunk| key_ids(chunk.keys())).chain(changed.iter().copied()).collect();
     keys.sort_unstable();
     keys.dedup();
     keys
@@ -333,18 +305,18 @@ where
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
         match self.reducer {
             Reducer::Count => {
-                // Per-bracket sum of diffs; survivors become a `Tuple([Int(sum)])` = corgi `Prod([u64])`.
-                let mut sums: Vec<u64> = Vec::new();
+                // Per-bracket sum of diffs; survivors become a `Tuple([Int(sum)])` = corgi `Prod([Int])`.
+                let mut sums: Vec<i64> = Vec::new();
                 let mut start = 0;
                 for &end in ends {
                     let c: Diff = input[start..end].iter().map(|&(_, d)| d).sum();
                     if c > 0 {
-                        sums.push(c as u64);
+                        sums.push(c);
                     }
                     out_ends.push(sums.len());
                     start = end;
                 }
-                (CValue::Prod(vec![CValue::u64(sums)]), out_ends)
+                (CValue::Prod(vec![CValue::i64(sums)]), out_ends)
             }
             Reducer::Distinct => {
                 // Present iff any value has NON-ZERO net -- the sign does not matter. DD's `reduce`
@@ -393,14 +365,14 @@ where
                     return (CValue::Unit(0), out_ends);
                 }
                 let candidates = self.input.gather(&cand_reps);
-                // Integer values need no sort: scan each block for its least as signed.
+                // Integer values need no sort: scan each block for its least.
                 let min_reps: Vec<u64> = if let Some(values) = corgi::arrange::leaf_slice(&candidates) {
                     let block_ends = block_starts.iter().skip(1).copied().chain([cand_reps.len()]);
                     block_starts.iter().zip(block_ends).map(|(&lo, hi)| {
-                        cand_reps[(lo..hi).min_by_key(|&k| values[k] as i64).expect("blocks are non-empty")]
+                        cand_reps[(lo..hi).min_by_key(|&k| values[k]).expect("blocks are non-empty")]
                     }).collect()
                 } else {
-                    let (perm, _) = sort_blocks(&labels, &signed_order_view(candidates));
+                    let (perm, _) = sort_blocks(&labels, &candidates);
                     block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect()
                 };
                 (self.input.gather(&min_reps), out_ends)
@@ -434,7 +406,7 @@ where
                 if blocks.is_empty() {
                     return (CValue::Unit(0), out_ends);
                 }
-                let perm = sort_blocks(&labels, &signed_order_view(self.input.gather(&entry_reps))).0;
+                let perm = sort_blocks(&labels, &self.input.gather(&entry_reps)).0;
                 // Expand each bracket's sorted entries by their diff (max(0, ·) copies).
                 let mut elem_reps: Vec<u64> = Vec::new();
                 let mut bracket_ends: Vec<usize> = Vec::with_capacity(ends.len());
@@ -461,7 +433,7 @@ impl<T> ProxyReduceBackend<T, CBatch<T>, CBatch<T>> for CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
 {
-    type Key = u64;
+    type Key = i64;
     type VIn = u64;
     type VOut = u64;
     type RIn = Diff;
@@ -471,7 +443,7 @@ where
         self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
-    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[u64], from: &mut KeyPosition<u64>, window: &mut ReduceWindow<T, Diff, Diff>) {
+    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[i64], from: &mut KeyPosition<i64>, window: &mut ReduceWindow<T, Diff, Diff, i64>) {
         if *from == KeyPosition::End {
             return;
         }
@@ -534,7 +506,7 @@ where
         *from = retire.keys.get(retire.window.end).map_or(KeyPosition::End, |key| KeyPosition::At(*key));
     }
 
-    fn reduce_corrections(&mut self, keys: &[u64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
+    fn reduce_corrections(&mut self, keys: &[i64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
         // Each key wants its rows of `desired`, once each, and has `(id, diff)`s of output. The
         // correction nets the two by value: a wanted row equal to an output id's value counts
         // toward that id, and one equal to none gets a new id. Keys have a handful of each.
@@ -604,7 +576,7 @@ where
         (corr, corr_ends)
     }
 
-    fn emit(&mut self, records: &[((u64, u64), T, Diff)]) {
+    fn emit(&mut self, records: &[((i64, u64), T, Diff)]) {
         // An output id names its key's row, as two keys may share an identifier.
         let (key_rows, ids, times, diffs) = &mut self.rows;
         for ((_, id), time, diff) in records {
@@ -631,15 +603,18 @@ mod tests {
     use crate::corgi::chunk::present_key;
     use crate::ir::Time;
 
-    /// The rows of a column of `u64` leaves, products of them, or units, as vectors.
+    /// The rows of a column of `Int` leaves, products of them, or units, as vectors.
     fn rows_of(col: &CValue) -> Vec<Vec<u64>> {
-        let fields: Vec<&[u64]> = match col {
+        let fields: Vec<Vec<i64>> = match col {
             CValue::Unit(_) => Vec::new(),
-            CValue::Prod(fields) => fields.iter().map(|field| corgi::arrange::leaf_slice(field).unwrap()).collect(),
-            leaf => vec![corgi::arrange::leaf_slice(leaf).unwrap()],
+            CValue::Prod(fields) => fields.iter().map(|field| field.as_i64("rows_of").unwrap().into_owned()).collect(),
+            leaf => vec![leaf.as_i64("rows_of").unwrap().into_owned()],
         };
-        (0..col.len()).map(|i| fields.iter().map(|field| field[i]).collect()).collect()
+        (0..col.len()).map(|i| fields.iter().map(|field| field[i] as u64).collect()).collect()
     }
+
+    /// An integer column of these values.
+    fn ints(xs: Vec<u64>) -> CValue { CValue::i64(xs.into_iter().map(|x| x as i64).collect()) }
 
     /// Random `(key, value, time, diff)` rows over few keys and values, so that they collide.
     fn random_rows(seed: u64, count: usize, keys: u64) -> Vec<(u64, (u64, u64), Time, Diff)> {
@@ -654,12 +629,12 @@ mod tests {
     }
 
     const KEY_SHAPES: [fn(&[u64]) -> CValue; 2] = [
-        |k| CValue::u64(k.to_vec()),
-        |k| present_key(CValue::Prod(vec![CValue::u64(k.to_vec()), CValue::u64(k.iter().map(|k| k * 7).collect())])),
+        |k| ints(k.to_vec()),
+        |k| present_key(CValue::Prod(vec![ints(k.to_vec()), ints(k.iter().map(|k| k * 7).collect())])),
     ];
     const VAL_SHAPES: [fn(&[(u64, u64)]) -> CValue; 3] = [
-        |v| CValue::u64(v.iter().map(|v| v.0).collect()),
-        |v| CValue::Prod(vec![CValue::u64(v.iter().map(|v| v.0).collect()), CValue::u64(v.iter().map(|v| v.1).collect())]),
+        |v| ints(v.iter().map(|v| v.0).collect()),
+        |v| CValue::Prod(vec![ints(v.iter().map(|v| v.0).collect()), ints(v.iter().map(|v| v.1).collect())]),
         |v| CValue::Unit(v.len()),
     ];
 
@@ -674,7 +649,7 @@ mod tests {
     }
 
     /// The netted records of `keys` in `chunks`, by key id and value.
-    fn netted(chunks: &[&CorgiChunk<Time, Diff>], keys: &BTreeSet<u64>) -> BTreeMap<(u64, Vec<u64>, Time), Diff> {
+    fn netted(chunks: &[&CorgiChunk<Time, Diff>], keys: &BTreeSet<i64>) -> BTreeMap<(i64, Vec<u64>, Time), Diff> {
         let mut netted = BTreeMap::new();
         for chunk in chunks {
             for (i, (key, value)) in key_ids(chunk.keys()).into_iter().zip(rows_of(chunk.vals())).enumerate() {
@@ -718,10 +693,10 @@ mod tests {
     #[test]
     fn corrections_net_by_value() {
         let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count);
-        backend.output = Pool { columns: vec![CValue::Prod(vec![CValue::u64(vec![5, 5, 7])])], refs: vec![(0, 0), (0, 1), (0, 2)] };
+        backend.output = Pool { columns: vec![CValue::Prod(vec![ints(vec![5, 5, 7])])], refs: vec![(0, 0), (0, 1), (0, 2)] };
         backend.output_keys = vec![(0, 0), (0, 0), (0, 1)];
         backend.input.refs = vec![(0, 0), (0, 1)];
-        backend.key_columns = vec![CValue::u64(vec![10, 11, 12])];
+        backend.key_columns = vec![ints(vec![10, 11, 12])];
         // Key 0 counts 5 and has output 5 twice; key 1 counts 3 and has output 7; key 2 counts 0.
         let input = [(0, 2), (1, 3), (0, 3), (0, 1), (1, -1)];
         let output = [(0, 1), (1, 1), (2, 1)];
@@ -731,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn order_view_matches_ddir_for_ragged_lists_and_signed_products() {
+    fn corgi_order_matches_ddir_for_ragged_lists_and_signed_products() {
         use crate::ir::Value as V;
         use crate::corgi::logic::{transcode, shape_of_row};
         let mut rows = Vec::new();
@@ -745,7 +720,7 @@ mod tests {
         // data for every nested-list position once the schema is declared.
         let shape = shape_of_row(&rows[0]).unwrap();
         let columns = transcode(&rows, &shape);
-        let (perm, _) = sort_blocks(&vec![0; rows.len()], &signed_order_view(columns));
+        let (perm, _) = sort_blocks(&vec![0; rows.len()], &columns);
         let actual: Vec<_> = perm.into_iter().map(|i| rows[i].clone()).collect();
         rows.sort();
         assert_eq!(actual, rows);
@@ -772,7 +747,7 @@ mod tests {
             // Changed keys, two of them held by no batch, and the input records each retire key holds.
             let mut changed = key_ids(&key_shape(&[3, 17, 41, 45]));
             changed.sort();
-            let retire: BTreeSet<u64> = chunks_of(&input).iter().flat_map(|chunk| key_ids(chunk.keys())).chain(changed.iter().copied()).collect();
+            let retire: BTreeSet<i64> = chunks_of(&input).iter().flat_map(|chunk| key_ids(chunk.keys())).chain(changed.iter().copied()).collect();
             let mut held = BTreeMap::new();
             for id in in_chunks.iter().flat_map(|chunk| key_ids(chunk.keys())).filter(|id| retire.contains(id)) {
                 *held.entry(id).or_insert(0) += 1;
@@ -787,7 +762,7 @@ mod tests {
                     window.clear();
                     backend.next_window(&instance, &changed, &mut from, &mut window);
                     assert!(from > before);
-                    let within = |key: u64| before <= KeyPosition::At(key) && KeyPosition::At(key) < from;
+                    let within = |key: i64| before <= KeyPosition::At(key) && KeyPosition::At(key) < from;
                     let counts: Vec<usize> = held.iter().filter(|(key, _)| within(**key)).map(|(_, count)| *count).collect();
                     assert!(counts.iter().rev().skip(1).sum::<usize>() < window_size, "a window stops once it holds the budget");
                     assert!(from == KeyPosition::End || counts.iter().sum::<usize>() >= window_size, "a window holds the budget");
@@ -828,7 +803,7 @@ mod tests {
         use corgi::Shape;
 
         let pair = |a: u64, b: u64| V::Tuple(vec![V::Int(a as i64), V::Int(b as i64)]);
-        let shape = Shape::Prod(vec![Shape::Prim(64), Shape::Prim(64)]);
+        let shape = Shape::Prod(vec![Shape::Int, Shape::Int]);
         // Two retires' inputs: the first at outer times 0 and 1, the second from 2 on.
         let early = random_rows(0x51ED_270B_2A4F_3C11, 200, 6);
         let late: Vec<_> = random_rows(0x0BAD_5EED, 120, 6).into_iter()
@@ -838,7 +813,7 @@ mod tests {
 
         for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect] {
             let out_shape = match reducer {
-                Reducer::Count => Shape::Prod(vec![Shape::Prim(64)]),
+                Reducer::Count => Shape::Prod(vec![Shape::Int]),
                 Reducer::Distinct => Shape::Unit,
                 Reducer::Min => shape.clone(),
                 Reducer::Collect => Shape::List(Box::new(shape.clone())),
@@ -847,7 +822,7 @@ mod tests {
             let run = |forged: bool, window_size: usize| {
                 let batch = |rows: &[(u64, (u64, u64), Time, Diff)]| -> CBatch<Time> {
                     let keys = transcode(&rows.iter().map(|r| pair(r.0, r.0 * 7)).collect::<Vec<_>>(), &shape);
-                    let keys = if forged { CValue::Prod(vec![CValue::u64(rows.iter().map(|r| r.0 % 2).collect()), keys]) } else { present_key(keys) };
+                    let keys = if forged { CValue::Prod(vec![ints(rows.iter().map(|r| r.0 % 2).collect()), keys]) } else { present_key(keys) };
                     let vals = transcode(&rows.iter().map(|r| pair(r.1.0, r.1.1)).collect::<Vec<_>>(), &shape);
                     let chunk = CorgiChunk::from_columns(keys, vals, rows.iter().map(|r| r.2.clone()).collect(), rows.iter().map(|r| r.3).collect());
                     Rc::new(ChunkBatch::new(vec![chunk]))

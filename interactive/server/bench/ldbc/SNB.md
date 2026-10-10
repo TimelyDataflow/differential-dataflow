@@ -181,9 +181,8 @@ independent semantic oracle here. The older four-query panel
 retains independent traversal/counting oracles. Official conformance validation
 is still separate work.
 
-Floating results use explicit IEEE f64 newtypes with total ordering, not the
-specification's Float32 API representation. They are preserved as tagged values
-in reports. Shortest-path maintenance uses a hop-indexed bound of `|V|-1` so
+Floating results are DDIR Floats (IEEE f64, totally ordered), not the
+specification's Float32 API representation. Shortest-path maintenance uses a hop-indexed bound of `|V|-1` so
 deletions terminate; this can be expensive on large connected graphs. General
 aggregates currently use `collect`/`fold`; nested and ranked outputs are fully
 materialized. These are deliberate visible baseline costs, not tuned plans.

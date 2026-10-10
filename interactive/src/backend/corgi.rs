@@ -109,7 +109,8 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
             }
             LinearOp::Filter(_) => {
                 let g = plan.graph(op, kshape, vshape);
-                let mask = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()])).into_u64("filter mask").unwrap();
+                let mask = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]));
+                let mask = mask.as_i64("filter mask").unwrap();
                 let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
                 let keys = gather(&c.keys, &keep);
                 let vals = gather(&c.vals, &keep);
@@ -126,15 +127,15 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
             LinearOp::EnterAt(_) => {
                 let g = plan.graph(op, kshape, vshape);
                 // The key and val columns are IDENTITY here — only times change. Evaluate the
-                // delay field to a `U64` column and join it into each time in place. Joining
+                // delay field to an `Int` column and join it into each time in place. Joining
                 // `Product(0, PointStamp([0,..,0, delay]))` is, coordinate-wise, `max` at index
                 // `level-1` and identity everywhere else (u64's minimum is 0), so the delta
                 // never has to be built. The epoch is lane 0, so PointStamp index `level-1` is
                 // lane `level`, and the join is one lane-wise max.
                 let raw = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]))
-                    .into_u64("enter_at delay")
+                    .into_i64("enter_at delay")
                     .unwrap();
-                let delays: Vec<u64> = raw.iter().map(|r| 256 * (64 - r.leading_zeros() as u64)).collect();
+                let delays: Vec<u64> = raw.iter().map(|&r| 256 * (64 - (r as u64).leading_zeros() as u64)).collect();
                 c.times.lane_max(level.saturating_sub(1) + 1, &delays);
                 c
             }
@@ -150,7 +151,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 // PointStamp index `level-1` is lane `level`; at the root there is no iteration
                 // coordinate and the value is zero.
                 let iters: Vec<u64> = if level == 0 { vec![0; c.times.len()] } else { c.times.lane(level) };
-                let lane = CValue::u64(iters);
+                let lane = CValue::i64(iters.into_iter().map(|i| i as i64).collect());
                 let vals = match c.vals {
                     CValue::Prod(mut fields) => { fields.push(lane); CValue::Prod(fields) }
                     CValue::Unit(_) => CValue::Prod(vec![lane]),
@@ -173,13 +174,13 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 for (row, end) in ends.into_iter().enumerate() {
                     for p in 0..(end - start) {
                         reps.push(row);
-                        pos.push(p as u64);
+                        pos.push(p as i64);
                     }
                     start = end;
                 }
                 CorgiContainer {
                     keys: gather(&c.keys, &reps),
-                    vals: CValue::Prod(vec![CValue::u64(pos), elems]),
+                    vals: CValue::Prod(vec![CValue::i64(pos), elems]),
                     times: c.times.gather(&reps),
                     diffs: reps.iter().map(|&r| c.diffs[r]).collect(),
                 }

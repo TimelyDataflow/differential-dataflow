@@ -2,7 +2,6 @@
 from collections import Counter
 from datetime import datetime, timezone
 import itertools
-import struct
 
 from .data import millis
 from .rel import evaluate
@@ -68,11 +67,6 @@ def parameters(graph, query=None):
 
 
 def json_value(value):
-    if isinstance(value,float):
-        bits=struct.unpack('>Q',struct.pack('>d',value))[0]
-        ordered=(~bits & ((1<<64)-1)) if bits>>63 else bits^(1<<63)
-        payload=ordered^(1<<63)
-        return dict(tag=0,payload=payload if payload < 1<<63 else payload-(1<<64))
     if isinstance(value,tuple): return [json_value(v) for v in value]
     if isinstance(value,bool): return int(value)
     return value

@@ -7,7 +7,7 @@ use interactive::{lower, parse};
 fn bounded_exports_match_full_drain_and_are_consumed_once() {
     timely::execute_directly(|worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(r#"
-            type Three = A u64 | B u64 | C u64;
+            type Three = A int | B int | C int;
             let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
             export "plain" = pairs;
             export "lists" = pairs | collect;

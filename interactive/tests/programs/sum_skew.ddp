@@ -3,7 +3,7 @@
 -- (the arm a side never builds is an empty lane of its declared shape), so the two batches
 -- have one shape and merge without reconciliation. This program used to need corgi's
 -- uncommitted (⊥) lanes to typecheck (DDIR #817); now it is an ordinary program.
-type Kind = Rare u64 | Common u64;
+type Kind = Rare int | Common int;
 
 let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
 

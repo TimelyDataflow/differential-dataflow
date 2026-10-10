@@ -1,17 +1,10 @@
 """Read-suite witnesses, hand-checked answers, and both engine backends."""
-import struct
 import unittest
 
 from snb.queries import Context,QUERIES
 from snb.rel import R,Compiler
 from snb.parameters import parameters,reference
 from snb import witness
-
-
-def decode_float(encoded):
-    ordered=(encoded['payload'] & ((1<<64)-1))^(1<<63)
-    bits=ordered^(1<<63) if ordered>>63 else ~ordered & ((1<<64)-1)
-    return struct.unpack('>d',struct.pack('>Q',bits))[0]
 
 
 class SuiteTests(unittest.TestCase):
@@ -39,11 +32,11 @@ class SuiteTests(unittest.TestCase):
         self.assertEqual(self.rows('ic13'),[[2]])
         self.assertEqual(self.rows('ic13',p2=1),[[0]])
         self.assertEqual(self.rows('ic14'),[[[1,2,5],78]])
-        self.assertEqual(decode_float(self.rows('bi15')[0][0]),1.0)
+        self.assertEqual(self.rows('bi15')[0][0],1.0)
         changed=witness.changed(self.graph)
         self.assertEqual(self.rows('ic13',changed),[[3]])
         self.assertEqual(self.rows('ic14',changed),[])
-        self.assertAlmostEqual(decode_float(self.rows('bi15',changed)[0][0]),8/3)
+        self.assertAlmostEqual(self.rows('bi15',changed)[0][0],8/3)
 
     def test_hand_checked_ranking_and_optional_matches(self):
         self.assertEqual([r[3] for r in self.rows('ic2')],list(range(10100,10120)))
@@ -75,9 +68,9 @@ class SuiteTests(unittest.TestCase):
     def test_hand_checked_floating_aggregates(self):
         rows=self.rows('bi1')
         self.assertEqual([(r[0],r[1],r[2],r[3],r[5]) for r in rows],[(2012,0,0,31,120),(2012,1,0,4,16)])
-        self.assertAlmostEqual(decode_float(rows[0][4]),120/31)
-        self.assertAlmostEqual(decode_float(rows[0][6]),3100/35)
-        self.assertEqual([(r[0],r[1],r[2],decode_float(r[3])) for r in self.rows('bi13')],[(7,1,1,1.0),(2,0,1,0.0),(5,0,0,0.0)])
+        self.assertAlmostEqual(rows[0][4],120/31)
+        self.assertAlmostEqual(rows[0][6],3100/35)
+        self.assertEqual([(r[0],r[1],r[2],r[3]) for r in self.rows('bi13')],[(7,1,1,1.0),(2,0,1,0.0),(5,0,0,0.0)])
 
 
 

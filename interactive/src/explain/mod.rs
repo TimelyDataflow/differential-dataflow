@@ -746,9 +746,9 @@ fn query_shape(p: &Program) -> Option<(corgi::Shape, corgi::Shape)> {
     let (shapes, _) = crate::shapes::infer(p, &|_| None);
     let export = shapes.exports.first()?.clone()?;
     let val = match export.val {
-        Shape::Prod(mut fs) => { fs.push(Shape::Prim(64)); Shape::Prod(fs) }
-        Shape::Unit => Shape::Prod(vec![Shape::Prim(64)]),
-        other => Shape::Prod(vec![other, Shape::Prim(64)]),
+        Shape::Prod(mut fs) => { fs.push(Shape::Int); Shape::Prod(fs) }
+        Shape::Unit => Shape::Prod(vec![Shape::Int]),
+        other => Shape::Prod(vec![other, Shape::Int]),
     };
     Some((export.key, val))
 }
