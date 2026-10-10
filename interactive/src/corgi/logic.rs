@@ -637,10 +637,8 @@ pub fn compile(
                 let e = compile(f, b, env, env_shapes, anchor, None)?;
                 lanes.push(b.add(Op::Enlist, vec![e]));
             }
-            // Weave reads its tags as bytes, so they are one byte literal, `[0, 1, .., k-1]` per row.
-            let k = fields.len();
-            let positions = CValue::List(corgi::Bounds::Stride(k, 1), Box::new(CValue::u8((0..k).map(|t| t as u8).collect())));
-            let tags = b.add(Op::Lit(positions), vec![anchor]);
+            let count = int_lit(b, anchor, fields.len() as i64);
+            let tags = b.add(Op::Iota, vec![count]);
             let mut weave_in = vec![tags];
             weave_in.extend(lanes);
             let woven_in = b.tuple(weave_in);
