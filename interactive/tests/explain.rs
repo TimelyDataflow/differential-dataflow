@@ -686,7 +686,7 @@ fn declared_sources_shape_the_rewrite() {
     assert_eq!(explain::source_arities(&tree, (9, 9)), REACH_SHAPES);
     let ex = explain::explain(&tree, REACH_SHAPES);
     let query = ex.root.imports.iter().find(|imp| imp.name == "query").unwrap();
-    let int = corgi::Shape::Prim(64);
+    let int = corgi::Shape::Int;
     assert_eq!(query.shape, Some((corgi::Shape::Prod(vec![int.clone()]), corgi::Shape::Prod(vec![int]))));
     // So does a rewrite through nested iterative scopes.
     for ex in [ex, explain::explain(&lowered(SCC_ROW), SCC_SHAPES)] {

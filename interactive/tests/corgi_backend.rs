@@ -166,8 +166,8 @@ fn serializing(n: usize) -> timely::Config {
 fn register_test_functions() {
     use corgi::Shape;
     use interactive::ir::{register, Function};
-    let int = || Shape::Prim(64);
-    let float = || Shape::Sum(vec![Shape::Prim(64)]);
+    let int = || Shape::Int;
+    let float = || Shape::Sum(vec![Shape::Int]);
     // A cell's children: two, while the cell is small and positive; none after.
     register(Function {
         name: "grow".into(),
@@ -222,8 +222,8 @@ fn register_test_functions() {
         fn output(&self) -> &Shape { &self.1 }
         fn eval(&self, input: corgi::Value) -> Result<corgi::Value, String> {
             let args = input.into_prod("double")?;
-            let xs = args[0].as_u64("double")?;
-            Ok(corgi::Value::u64(xs.iter().map(|&x| (2 * x as i64) as u64).collect()))
+            let xs = args[0].as_i64("double")?;
+            Ok(corgi::Value::i64(xs.iter().map(|&x| 2 * x).collect()))
         }
     }
     interactive::ir::register_kernel("double", std::sync::Arc::new(Double(Shape::Prod(vec![int()]), int())));
@@ -265,7 +265,7 @@ fn call_argument_shapes_are_checked_by_both_backends() {
 fn reregistering_a_function_drops_its_old_kernel() {
     use corgi::Shape;
     use interactive::ir::{kernel_of, register, register_kernel, Function};
-    let one = |k: i64| Function { name: "reregistered".into(), args: vec![Shape::Prim(64)], result: Shape::Prim(64), body: Box::new(move |_| Value::Int(k)) };
+    let one = |k: i64| Function { name: "reregistered".into(), args: vec![Shape::Int], result: Shape::Int, body: Box::new(move |_| Value::Int(k)) };
     register(one(1));
     let first = kernel_of("reregistered").unwrap();
     assert!(std::sync::Arc::ptr_eq(&first, &kernel_of("reregistered").unwrap()), "one kernel per registration");
@@ -276,5 +276,5 @@ fn reregistering_a_function_drops_its_old_kernel() {
     register(one(3));
     assert!(!std::sync::Arc::ptr_eq(&second, &kernel_of("reregistered").unwrap()));
     // A keyword can never be called, so it cannot be registered.
-    assert!(std::panic::catch_unwind(|| register(Function { name: "min".into(), args: vec![], result: Shape::Prim(64), body: Box::new(|_| Value::Int(0)) })).is_err());
+    assert!(std::panic::catch_unwind(|| register(Function { name: "min".into(), args: vec![], result: Shape::Int, body: Box::new(|_| Value::Int(0)) })).is_err());
 }

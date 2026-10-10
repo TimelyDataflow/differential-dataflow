@@ -29,7 +29,7 @@ impl Value {
     pub fn has_shape(&self, shape: &corgi::Shape) -> bool {
         use corgi::Shape;
         match (self, shape) {
-            (Self::Int(_), Shape::Prim(64)) => true,
+            (Self::Int(_), Shape::Int) => true,
             (Self::Tuple(xs), Shape::Unit) => xs.is_empty(),
             (Self::Tuple(xs), Shape::Prod(fs)) => xs.len() == fs.len() && xs.iter().zip(fs).all(|(x, f)| x.has_shape(f)),
             (Self::List(xs), Shape::List(f)) => xs.iter().all(|x| x.has_shape(f)),

@@ -6,8 +6,8 @@ use interactive::corgi::chunk::CorgiChunk;
 
 fn chunk(times: &[u64]) -> CorgiChunk<u64, i64> {
     CorgiChunk::from_columns(
-        Value::u64(vec![7; times.len()]),
-        Value::u64(vec![8; times.len()]),
+        Value::i64(vec![7; times.len()]),
+        Value::i64(vec![8; times.len()]),
         times.iter().copied().collect(),
         vec![1; times.len()],
     )

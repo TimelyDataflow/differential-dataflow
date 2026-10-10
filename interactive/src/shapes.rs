@@ -34,7 +34,7 @@ pub struct CollShape {
 
 impl CollShape {
     fn new(key: Shape, val: Shape, depth: usize) -> Self {
-        CollShape { key, val, time: depth + 1, diff: Shape::Prim(64) }
+        CollShape { key, val, time: depth + 1, diff: Shape::Int }
     }
 }
 
@@ -164,19 +164,19 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape) -> Result<Vec<(Sh
                 (k, v) = (nk, nv);
             }
             LinearOp::Filter(t) | LinearOp::EnterAt(t) => match shape_of_term(t, &env, None)? {
-                Shape::Prim(64) => {}
+                Shape::Int => {}
                 s => return Err(format!("predicate or delay of shape {s}, not an integer")),
             },
             LinearOp::Negate => {}
             LinearOp::FlatMap(t) => match shape_of_term(t, &env, None)? {
-                Shape::List(e) => v = Shape::Prod(vec![Shape::Prim(64), *e]),
+                Shape::List(e) => v = Shape::Prod(vec![Shape::Int, *e]),
                 s => return Err(format!("flatmap of shape {s}, not a list")),
             },
             // As `backend::vec::append_iter`: extend a tuple, or pair any other value.
             LinearOp::LiftIter => v = match v {
-                Shape::Prod(mut fs) => { fs.push(Shape::Prim(64)); Shape::Prod(fs) }
-                Shape::Unit => Shape::Prod(vec![Shape::Prim(64)]),
-                other => Shape::Prod(vec![other, Shape::Prim(64)]),
+                Shape::Prod(mut fs) => { fs.push(Shape::Int); Shape::Prod(fs) }
+                Shape::Unit => Shape::Prod(vec![Shape::Int]),
+                other => Shape::Prod(vec![other, Shape::Int]),
             },
         }
     }
@@ -216,7 +216,7 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
             let v = match reducer {
                 Reducer::Min => c.val,
                 Reducer::Distinct => Shape::Unit,
-                Reducer::Count => Shape::Prod(vec![Shape::Prim(64)]),
+                Reducer::Count => Shape::Prod(vec![Shape::Int]),
                 Reducer::Collect => Shape::List(Box::new(c.val)),
             };
             Some(CollShape::new(c.key, v, depth))
@@ -251,7 +251,7 @@ mod tests {
         assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
         let ItemShapes::Sub(reach) = &shapes.items.iter().find(|i| matches!(i, ItemShapes::Sub(_))).unwrap() else { unreachable!() };
         let var = reach.vars[0].clone().unwrap();
-        assert_eq!((var.key, var.val, var.time), (Shape::Prod(vec![Shape::Prim(64)]), Shape::Unit, 2));
+        assert_eq!((var.key, var.val, var.time), (Shape::Prod(vec![Shape::Int]), Shape::Unit, 2));
     }
 
     #[test]
@@ -281,6 +281,6 @@ mod tests {
         let (shapes, problems) = shapes_of(r#"export "out" : ((int) ; ()) = input 0;"#);
         assert!(problems.conflicts.is_empty(), "{problems:?}");
         let out = shapes.exports[0].clone().unwrap();
-        assert_eq!((out.key, out.val), (Shape::Prod(vec![Shape::Prim(64)]), Shape::Unit));
+        assert_eq!((out.key, out.val), (Shape::Prod(vec![Shape::Int]), Shape::Unit));
     }
 }

@@ -281,7 +281,7 @@ impl Parser {
                 Shape::Prod(fields)
             }
             Token::Ident(k) => match k.as_str() {
-                "u64" | "int" => Shape::Prim(64),
+                "u64" | "int" => Shape::Int,
                 "List" => {
                     self.expect(&Token::LParen);
                     let inner = self.parse_shape();

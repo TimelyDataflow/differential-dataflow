@@ -455,11 +455,14 @@ where
     /// One sorted+consolidated chunk from columns already in corgi form (the column-native arrange
     /// ingest — no transcode).
     pub fn from_columns(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> Self {
+        // An integer value is held as `i64`s, as an integer key is, so that readers may borrow it
+        // whichever chunk of the arrangement it is in.
+        let vals = hold_wide(vals);
         let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
         debug_assert!({
-            let lane = corgi::arrange::leaf_slice(key_lane(&keys));
+            let lane = int_lane(key_lane(&keys));
             lane.is_some_and(|ids| ids.windows(2).all(|pair| pair[0] <= pair[1]))
-        }, "arrangement key must lead with a sorted u64 identifier lane");
+        }, "arrangement key must lead with a sorted i64 identifier lane");
         Self::from_parts(keys, vals, times, diffs)
     }
 
@@ -517,7 +520,7 @@ impl<T, R> Default for CorgiChunker<T, R> {
 /// An arrangement's key column, in the form every consumer of a `CorgiChunk` can rely on:
 /// **it leads with an integer, and the chunk is sorted by that integer.**
 ///
-/// A key that is already a primitive integer (a bare 64-bit `Prim`, or the 1-field `Prod` that
+/// A key that is already an integer (an `Int` leaf, or the 1-field `Prod` that
 /// [`corgi::arrange::leaf_slice`] also reads through) is used as it stands — the value IS the
 /// identifier, injectively, and a hash lane would cost 8 bytes a row to say the same thing.
 /// Any other key shape — multi-field `Prod`, `List`, `Sum`, `Unit` — is hashed and the hash is
@@ -530,31 +533,67 @@ impl<T, R> Default for CorgiChunker<T, R> {
 /// (`leaf_slice` succeeds on exactly the un-prepended one) because no compound key reaches an
 /// arrangement un-prepended.
 ///
+/// The identifier lane is held as `i64`s, so readers borrow it ([`ident`]). Corgi chooses how to
+/// hold an integer column (a mask or a sum tag may be held as bytes); a key held narrower is
+/// widened here, once.
+///
 /// The hash is computed ONCE here, at ingest, and thereafter moves as data: `merge`, `advance`
 /// and `settle` permute key columns with `gather_lanes`, so no transducer recomputes it.
 pub fn present_key(keys: CValue) -> CValue {
-    if corgi::arrange::leaf_slice(&keys).is_some() {
-        return keys;
+    match corgi::arrange::leaf_slice(&keys) {
+        Some(_) => hold_wide(keys),
+        None => {
+            let hashes = corgi::hash(&keys).into_iter().map(|h| h as i64).collect();
+            CValue::Prod(vec![CValue::i64(hashes), keys])
+        }
     }
-    let hashes = corgi::hash(&keys);
-    CValue::Prod(vec![CValue::u64(hashes), keys])
+}
+
+/// An integer column (an `Int` leaf, or a 1-field `Prod` of one) held as `i64`s; any other
+/// column as it is. Corgi chooses how to hold an integer column, and may hold one narrower.
+pub fn hold_wide(col: CValue) -> CValue {
+    match corgi::arrange::leaf_slice(&col) {
+        Some(std::borrow::Cow::Owned(ids)) => rewrap(&col, ids),
+        _ => col,
+    }
+}
+
+/// An integer column's values held as `i64`s, wrapped in `template`'s single-field products.
+pub fn rewrap(template: &CValue, ids: Vec<i64>) -> CValue {
+    match template {
+        CValue::Prod(fields) => CValue::Prod(vec![rewrap(&fields[0], ids)]),
+        _ => CValue::i64(ids),
+    }
+}
+
+/// An integer column's values, borrowed: `Some` exactly when the column is an `Int` leaf (or a
+/// 1-field `Prod` of one) held as `i64`s. An integer column held narrower is `None`, and a
+/// reader that can take one falls back to its structural path.
+pub fn int_lane(col: &CValue) -> Option<&[i64]> {
+    match corgi::arrange::leaf_slice(col)? {
+        std::borrow::Cow::Borrowed(ids) => Some(ids),
+        std::borrow::Cow::Owned(_) => None,
+    }
+}
+
+/// The identifier lane of a [`present_key`] column, borrowed: the key's own values when it is an
+/// integer, and the prepended hash lane otherwise. `present_key` holds it as `i64`s.
+pub fn ident(keys: &CValue) -> &[i64] {
+    int_lane(key_lane(keys)).expect("an arrangement's identifier lane is held as i64s")
 }
 
 /// The integer identifier of each row of a [`present_key`] column: the key's own values when it is
-/// a primitive integer, and the prepended hash lane otherwise. Never re-hashes.
-pub fn key_ids(keys: &CValue) -> Vec<u64> {
-    if let Some(sl) = corgi::arrange::leaf_slice(keys) {
-        return sl.to_vec();
-    }
-    corgi::arrange::leaf_slice(key_lane(keys)).expect("a prepended hash lane is a u64 leaf").to_vec()
+/// an integer, and the prepended hash lane otherwise. Never re-hashes.
+pub fn key_ids(keys: &CValue) -> Vec<i64> {
+    ident(keys).to_vec()
 }
 
-/// The single column an arrangement is sorted by, for seeking: the key itself when it is a
-/// primitive integer, else the prepended hash lane. Always a bare `u64` leaf, so `find_ranges`
-/// over it takes corgi's `u64` fast path whatever the underlying key shape.
+/// The single column an arrangement is sorted by, for seeking: the key itself when it is an
+/// integer, else the prepended hash lane. Always an `i64` leaf, so `find_ranges` over it takes
+/// corgi's integer fast path whatever the underlying key shape.
 ///
 /// One rule covers both forms, because [`present_key`] leaves exactly three possibilities: a bare
-/// `Prim`, the 1-field `Prod` that also counts as primitive, or a prepended `Prod([hash, key])`.
+/// `Int`, the 1-field `Prod` that also counts as an integer, or a prepended `Prod([hash, key])`.
 /// The leading field is the identifier in all three.
 pub fn key_lane(keys: &CValue) -> &CValue {
     match keys {
@@ -677,6 +716,12 @@ mod test {
 
     fn xorshift(s: &mut u64) -> u64 { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; *s }
 
+    /// An integer column of these values.
+    fn ints(xs: Vec<u64>) -> CValue { CValue::i64(xs.into_iter().map(|x| x as i64).collect()) }
+
+    /// An integer column's values.
+    fn lane(col: &CValue) -> Vec<u64> { col.as_i64("lane").unwrap().iter().map(|&x| x as u64).collect() }
+
     #[test]
     fn ingest_nested_payload_matches_scalar_consolidation() {
         use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -686,14 +731,14 @@ mod test {
         let ends: Vec<usize> = (0..32).scan(0, |end, i| { *end += i % 5; Some(*end) }).collect();
         let elements = *ends.last().unwrap();
         let values = CValue::List(ends.into(), Box::new(CValue::Prod(vec![
-            CValue::u64((0..elements).map(|i| (i % 7) as u64).collect()),
-            CValue::u64((0..elements).map(|i| (i % 3) as u64).collect()),
+            ints((0..elements).map(|i| (i % 7) as u64).collect()),
+            ints((0..elements).map(|i| (i % 3) as u64).collect()),
         ])));
         for n in [0, 1, 64, 1024] {
             for cancel_all in [false, true] {
                 let mut seed = 719;
                 let rows: Vec<_> = (0..n).map(|_| xorshift(&mut seed) as usize % 32).collect();
-                let keys = CValue::u64(rows.iter().map(|&r| (r % 4) as u64).collect());
+                let keys = ints(rows.iter().map(|&r| (r % 4) as u64).collect());
                 let vals = gather(&values, &rows);
                 let kv = CValue::Prod(vec![keys.clone(), vals.clone()]);
                 let times: ColTimes<T> = rows.iter().map(|&r| T::new((r % 2) as u64,
@@ -755,7 +800,7 @@ mod test {
                     source.diffs.push(diff);
                     *expected.entry((key, time)).or_insert(0i64) += diff;
                 }
-                source.keys = CValue::u64(keys);
+                source.keys = ints(keys);
                 source.vals = CValue::Unit(64);
                 let donated = source.diffs.as_ptr();
                 builder.push_into(&mut source);
@@ -764,7 +809,7 @@ mod test {
             }
             expected.retain(|_, diff| *diff != 0);
             let result = builder.finish().unwrap();
-            let keys = corgi::arrange::leaf_slice(result.keys()).unwrap();
+            let keys = lane(result.keys());
             let actual: BTreeMap<_, _> = (0..result.len_()).map(|i|
                 ((keys[i], result.times().get(i)), result.diffs()[i])).collect();
             assert_eq!(actual.len(), result.len_(), "duplicate output triples");
@@ -773,12 +818,31 @@ mod test {
         }
     }
 
+    /// A key corgi holds as bytes (here a comparison mask) is an integer key like any other: it is
+    /// its own identifier, held as `i64`s, and not hashed.
+    #[test]
+    fn byte_held_integer_keys_are_presented_as_i64() {
+        let xs = CValue::i64(vec![-3, 0, 5, 9]);
+        let mask = corgi::eval_graph(&{
+            let mut b = corgi::Builder::<corgi::NumOp>::default();
+            let input = b.input();
+            let out = b.add(corgi::CmpOp::RelImm(corgi::Pred::Gt, corgi::Scalar::Int(0)), vec![input]);
+            b.finish(out)
+        }, xs);
+        assert_eq!(int_lane(&mask), None, "corgi holds a mask as bytes");
+        for keys in [mask.clone(), CValue::Prod(vec![mask])] {
+            let presented = present_key(keys);
+            assert!(!key_is_hashed(&presented));
+            assert_eq!(ident(&presented), &[0, 0, 1, 1]);
+        }
+    }
+
     #[test]
     fn cancelled_merge_does_not_retain_input_sized_diff_storage() {
         let mut retained_capacity = None;
         for rows in [16, 256, 4096] {
             let make = |diffs| CorgiChunk::from_columns(
-                CValue::u64((0..rows).collect()), CValue::Unit(rows as usize),
+                ints((0..rows).collect()), CValue::Unit(rows as usize),
                 (0..rows).map(|_| 0u64).collect(), diffs,
             );
             let mut retractions = vec![-1i64; rows as usize];
@@ -790,7 +854,7 @@ mod test {
             assert!(left.is_empty() && right.is_empty());
             assert_eq!(output.len(), 1);
             assert_eq!(output[0].diffs(), &[-1]);
-            assert_eq!(corgi::arrange::leaf_slice(output[0].keys()).unwrap(), &[rows - 1]);
+            assert_eq!(lane(output[0].keys()), &[rows - 1]);
             let capacity = output[0].0.diffs.capacity();
             assert_eq!(*retained_capacity.get_or_insert(capacity), capacity,
                 "one surviving row should not retain storage proportional to cancelled input");
@@ -820,8 +884,8 @@ mod test {
             for size in [1, 3, rows.len()] {
                 for shared in [false, true] {
                     let chunks: Vec<_> = rows.chunks(size).map(|rows| CorgiChunk::from_columns(
-                        CValue::u64(rows.iter().map(|r| r.0.0).collect()),
-                        CValue::u64(rows.iter().map(|r| r.0.1).collect()),
+                        ints(rows.iter().map(|r| r.0.0).collect()),
+                        ints(rows.iter().map(|r| r.0.1).collect()),
                         rows.iter().map(|r| r.1.clone()).collect(), rows.iter().map(|r| r.2).collect(),
                     )).collect();
                     let retained = if shared { chunks.clone() } else { Vec::new() };
@@ -835,8 +899,8 @@ mod test {
                     let mut actual = BTreeMap::new();
                     let mut previous = None;
                     for chunk in output {
-                        let keys = corgi::arrange::leaf_slice(chunk.keys()).unwrap();
-                        let vals = corgi::arrange::leaf_slice(chunk.vals()).unwrap();
+                        let keys = lane(chunk.keys());
+                        let vals = lane(chunk.vals());
                         for i in 0..chunk.len_() {
                             let key = ((keys[i], vals[i]), chunk.times().get(i));
                             assert!(previous.as_ref().is_none_or(|p| p < &key));
@@ -865,7 +929,7 @@ mod test {
         for frontier in &frontiers {
             for size in [1, 2, times.len()] {
                 let chunks: Vec<_> = (0..times.len()).collect::<Vec<_>>().chunks(size).map(|rows| CorgiChunk::from_columns(
-                    CValue::u64(rows.iter().map(|&r| r as u64).collect()), CValue::u64(vec![0; rows.len()]),
+                    ints(rows.iter().map(|&r| r as u64).collect()), ints(vec![0; rows.len()]),
                     rows.iter().map(|&r| times[r].clone()).collect(), vec![1i64; rows.len()],
                 )).collect();
                 let mut residual = Antichain::from_elem(time(5, &[5]));
@@ -892,8 +956,8 @@ mod test {
         let mut m: BTreeMap<((u64, u64), u64), i64> = BTreeMap::new();
         for &(kv, t, d) in rows { *m.entry((kv, t)).or_insert(0) += d; }
         m.retain(|_, d| *d != 0);
-        let keys = CValue::u64(m.keys().map(|((k, _), _)| *k).collect());
-        let vals = CValue::u64(m.keys().map(|((_, v), _)| *v).collect());
+        let keys = ints(m.keys().map(|((k, _), _)| *k).collect());
+        let vals = ints(m.keys().map(|((_, v), _)| *v).collect());
         let times: ColTimes<u64> = m.keys().map(|(_, t)| *t).collect();
         let diffs = m.values().copied().collect();
         CorgiChunk::from_parts(keys, vals, times, diffs)
@@ -902,8 +966,8 @@ mod test {
     fn read_batch(b: &ChunkBatch<CorgiChunk<u64, i64>>) -> BTreeMap<((u64, u64), u64), i64> {
         let mut m = BTreeMap::new();
         for ch in &b.chunks {
-            let ks = ch.keys().clone().into_u64("k").unwrap();
-            let vs = ch.vals().clone().into_u64("v").unwrap();
+            let ks = lane(ch.keys());
+            let vs = lane(ch.vals());
             for i in 0..ch.len_() { *m.entry(((ks[i], vs[i]), ch.times().get(i))).or_insert(0) += ch.diffs()[i]; }
         }
         m.retain(|_, d| *d != 0);

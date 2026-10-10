@@ -11,12 +11,13 @@
 //! `corgi::shape_of` (its evaluator on zero rows) for the result shape, so every shape rule —
 //! which lanes a `case` sees, what an `if` may blend, whether two operands compare — is the one
 //! the kernels enforce, and a program that lowers is a program that runs. `Err` is a type error,
-//! reported with corgi's message. Ordered compares are signed-correct (`ToSigned`); `hash` is corgi's structural
-//! `Op::Hash`, the same function `ir::eval` folds row-wise.
+//! reported with corgi's message. DDIR's `Int` is corgi's `Int`, so arithmetic and ordered
+//! compares are corgi's own; `hash` is corgi's structural `Op::Hash`, the same function
+//! `ir::eval` folds row-wise.
 
 use crate::ir::{BinOp, F64Fn, SumTy, Term, UnOp, Value as DValue};
 
-use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, Kind, NumOp, Op, Pred, Shape, Value as CValue};
+use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Scalar, Shape, ShiftOp, Value as CValue};
 
 type Res<T> = Result<T, String>;
 
@@ -26,7 +27,7 @@ type Res<T> = Result<T, String>;
 /// input's schema declared.
 pub fn shape_of_row(row: &DValue) -> Res<Shape> {
     match row {
-        DValue::Int(_) => Ok(Shape::Prim(64)),
+        DValue::Int(_) => Ok(Shape::Int),
         DValue::Tuple(xs) if xs.is_empty() => Ok(Shape::Unit),
         DValue::Tuple(xs) => Ok(Shape::Prod(xs.iter().map(shape_of_row).collect::<Res<_>>()?)),
         DValue::List(xs) => match xs.first() {
@@ -47,7 +48,8 @@ pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
 /// As [`transcode`], consuming the rows: each field moves into its column, nothing is cloned.
 pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
     match shape {
-        Shape::Prim(_) => CValue::u64(rows.iter().map(|r| r.as_int() as u64).collect()),
+        Shape::Int => CValue::i64(rows.iter().map(DValue::as_int).collect()),
+        Shape::Float => panic!("transcode: DDIR has no Float values"),
         Shape::Unit => CValue::Unit(rows.len()),
         Shape::Prod(fs) => {
             // Transpose by moving: one Vec per field, filled by draining each tuple.
@@ -109,7 +111,8 @@ pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
 /// moves into its row; nothing is cloned.
 pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
     match shape {
-        Shape::Prim(_) => col.into_u64("untranscode").unwrap().into_iter().map(|x| DValue::Int(x as i64)).collect(),
+        Shape::Int => col.into_i64("untranscode").unwrap().into_iter().map(DValue::Int).collect(),
+        Shape::Float => panic!("untranscode: DDIR has no Float values"),
         Shape::Unit => vec![DValue::unit(); col.len()],
         Shape::Prod(fs) => {
             let cols = col.into_prod("untranscode").unwrap();
@@ -278,7 +281,7 @@ pub fn compile(
         Term::Bound(k) => {
             env.len().checked_sub(1 + *k).map(|i| env[i]).ok_or_else(|| format!("binder `^{k}` is not in scope here"))
         }
-        Term::Int(n) => Ok(b.add(Op::Lit(CValue::u64(vec![*n as u64])), vec![anchor])),
+        Term::Int(n) => Ok(int_lit(b, anchor, *n)),
         Term::Tuple(fields) => {
             // A `Spread(t)` child splices `t`'s `Prod` fields in place; any other value is one field.
             let mut ids: Vec<usize> = Vec::new();
@@ -313,7 +316,7 @@ pub fn compile(
             let id = compile(t, b, env, env_shapes, anchor, None)?;
             match shape_of_term(t, env_shapes, None)? {
                 Shape::List(_) => {
-                    let idx = b.add(Op::Lit(CValue::u64(vec![*i as u64])), vec![anchor]);
+                    let idx = int_lit(b, anchor, *i as i64);
                     let pair = b.tuple(vec![idx, id]);
                     Ok(b.add(Op::Gather, vec![pair]))
                 }
@@ -325,34 +328,24 @@ pub fn compile(
             let rid = compile(r, b, env, env_shapes, anchor, None)?;
             let pair = |b: &mut Builder<NumOp>, x, y| b.tuple(vec![x, y]);
             Ok(match op {
-                BinOp::Add => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Add, Kind::U, 64), vec![p]) }
-                BinOp::Sub => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Sub, Kind::U, 64), vec![p]) }
-                BinOp::Mul => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Mul, Kind::U, 64), vec![p]) }
-                BinOp::Div => {
-                    let l = b.add(ArithOp::ToSigned, vec![lid]);
-                    let r = b.add(ArithOp::ToSigned, vec![rid]);
-                    let p = pair(b, l, r);
-                    let q = b.add(ArithOp::Bin(CBinOp::Div, Kind::I, 64), vec![p]);
-                    b.add(ArithOp::ToSigned, vec![q])
-                }
+                BinOp::Add => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Add), vec![p]) }
+                BinOp::Sub => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Sub), vec![p]) }
+                BinOp::Mul => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Mul), vec![p]) }
+                BinOp::Div => { let p = pair(b, lid, rid); b.add(ArithOp::Bin(CBinOp::Div), vec![p]) }
                 BinOp::Append => { let p = pair(b, lid, rid); b.add(Op::Append, vec![p]) }
                 BinOp::F64Add | BinOp::F64Sub | BinOp::F64Mul | BinOp::F64Div => {
-                    let f64_shape = Shape::Sum(vec![Shape::Prim(64)]);
+                    let f64_shape = Shape::Sum(vec![Shape::Int]);
                     if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != f64_shape {
                         return Err("floating arithmetic expects two F64 newtypes; use float(int)".into());
                     }
-                    let l = b.add(Op::Unwrap, vec![lid]);
-                    let r = b.add(Op::Unwrap, vec![rid]);
-                    let l = b.add(ArithOp::ToSigned, vec![l]);
-                    let r = b.add(ArithOp::ToSigned, vec![r]);
-                    let p = pair(b, l, r);
+                    let (x, y) = (float_leaf(b, lid), float_leaf(b, rid));
+                    let p = pair(b, x, y);
                     let op = match op { BinOp::F64Add => CBinOp::Add, BinOp::F64Sub => CBinOp::Sub, BinOp::F64Mul => CBinOp::Mul, _ => CBinOp::Div };
-                    let f = b.add(ArithOp::Bin(op, Kind::F, 64), vec![p]);
-                    let payload = b.add(ArithOp::ToSigned, vec![f]);
-                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                    let f = b.add(ArithOp::Bin(op), vec![p]);
+                    float_newtype(b, f)
                 }
                 BinOp::F64Min | BinOp::F64Max | BinOp::F64Eq | BinOp::F64Ne | BinOp::F64Lt | BinOp::F64Le | BinOp::F64Gt | BinOp::F64Ge => {
-                    let f64_shape = Shape::Sum(vec![Shape::Prim(64)]);
+                    let f64_shape = Shape::Sum(vec![Shape::Int]);
                     if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != f64_shape {
                         return Err(format!("{op:?} expects two F64 newtypes; use float(int)"));
                     }
@@ -370,8 +363,7 @@ pub fn compile(
                             let x_nan = is_nan(b, x);
                             let choices_x = b.tuple(vec![x_nan, y, unless_y]);
                             let f = b.add(Op::Select, vec![choices_x]);
-                            let payload = b.add(ArithOp::ToSigned, vec![f]);
-                            b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                            float_newtype(b, f)
                         }
                         _ => {
                             // IEEE: the total order once `-0.0` is folded onto `0.0`, and false
@@ -388,14 +380,11 @@ pub fn compile(
                             let (x_nan, y_nan) = (is_nan(b, x), is_nan(b, y));
                             let nans = pair(b, x_nan, y_nan);
                             let any_nan = b.add(CmpOp::Max, vec![nans]);
-                            let zero = b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]);
-                            let no_nan = pair(b, any_nan, zero);
-                            let ordered = b.add(CmpOp::Rel(Pred::Eq), vec![no_nan]);
+                            let ordered = b.add(CmpOp::RelImm(Pred::Eq, Scalar::Int(0)), vec![any_nan]);
                             let both = pair(b, rel, ordered);
                             let holds = b.add(CmpOp::Min, vec![both]);
                             if matches!(op, BinOp::F64Ne) {
-                                let negate = pair(b, holds, zero);
-                                b.add(CmpOp::Rel(Pred::Eq), vec![negate])
+                                b.add(CmpOp::RelImm(Pred::Eq, Scalar::Int(0)), vec![holds])
                             } else {
                                 holds
                             }
@@ -403,8 +392,8 @@ pub fn compile(
                     }
                 }
                 BinOp::F64Pow | BinOp::F64PowI => {
-                    let f64_shape = Shape::Sum(vec![Shape::Prim(64)]);
-                    let exponent = if matches!(op, BinOp::F64Pow) { f64_shape.clone() } else { Shape::Prim(64) };
+                    let f64_shape = Shape::Sum(vec![Shape::Int]);
+                    let exponent = if matches!(op, BinOp::F64Pow) { f64_shape.clone() } else { Shape::Int };
                     if shape_of_term(l, env_shapes, None)? != f64_shape || shape_of_term(r, env_shapes, None)? != exponent {
                         return Err(format!("{op:?} expects an F64 newtype and an {}", if matches!(op, BinOp::F64Pow) { "F64" } else { "Int" }));
                     }
@@ -416,36 +405,33 @@ pub fn compile(
                     };
                     let args = b.tuple(vec![x, y]);
                     let z = b.add(NumOp::Host(float_kernels::op(kind)), vec![args]);
-                    let payload = b.add(ArithOp::ToSigned, vec![z]);
-                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                    float_newtype(b, z)
                 }
                 BinOp::Eq | BinOp::Ne => {
                     // Cross-shape structural compare folds to a constant (Eq→0, Ne→1) over `anchor`;
                     // same-shape emits a real corgi `Rel`.
                     if shape_of_term(l, env_shapes, None)? != shape_of_term(r, env_shapes, None)? {
-                        let v = if matches!(op, BinOp::Ne) { 1u64 } else { 0u64 };
-                        b.add(Op::Lit(CValue::u64(vec![v])), vec![anchor])
+                        int_lit(b, anchor, matches!(op, BinOp::Ne) as i64)
                     } else {
                         let pred = if matches!(op, BinOp::Eq) { Pred::Eq } else { Pred::Ne };
                         let p = pair(b, lid, rid);
                         b.add(CmpOp::Rel(pred), vec![p])
                     }
                 }
-                // Ordered compares go through `ToSigned` (XOR the sign bit: the order-preserving
-                // signed encoding), so they agree with `ir::eval`'s signed semantics for negative
-                // ints too. `Eq`/`Ne` are bit-equality — sign-safe as raw bits.
+                // Ordered compares are corgi's structural order, which is `ir::eval`'s: integers
+                // by signed value, and an F64 newtype by its payload, the total order.
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                    let float_shape = Shape::Sum(vec![Shape::Prim(64)]);
-                    let (lid, rid) = if shape_of_term(l, env_shapes, None)? == float_shape && shape_of_term(r, env_shapes, None)? == float_shape {
-                        (b.add(Op::Unwrap, vec![lid]), b.add(Op::Unwrap, vec![rid]))
-                    } else { (lid, rid) };
-                    let ls = b.add(ArithOp::ToSigned, vec![lid]);
-                    let rs = b.add(ArithOp::ToSigned, vec![rid]);
-                    let p = if matches!(op, BinOp::Gt | BinOp::Ge) { pair(b, rs, ls) } else { pair(b, ls, rs) };
+                    let p = if matches!(op, BinOp::Gt | BinOp::Ge) { pair(b, rid, lid) } else { pair(b, lid, rid) };
                     b.add(CmpOp::Rel(if matches!(op, BinOp::Le | BinOp::Ge) { Pred::Le } else { Pred::Lt }), vec![p])
                 }
-                BinOp::And => { let p = pair(b, lid, rid); b.add(CmpOp::Min, vec![p]) }
-                BinOp::Or => { let p = pair(b, lid, rid); b.add(CmpOp::Max, vec![p]) }
+                // `min`/`max` are AND/OR only on 0/1 masks, so each operand is first read as one:
+                // nonzero `Int` is true, and anything else is false (as `ir::eval`'s `truthy`).
+                BinOp::And | BinOp::Or => {
+                    let lm = truth(b, l, lid, env_shapes, anchor)?;
+                    let rm = truth(b, r, rid, env_shapes, anchor)?;
+                    let p = pair(b, lm, rm);
+                    b.add(if matches!(op, BinOp::And) { CmpOp::Min } else { CmpOp::Max }, vec![p])
+                }
             })
         }
         Term::If { cond, then, els } => {
@@ -583,49 +569,37 @@ pub fn compile(
             let id = compile(inner, b, env, env_shapes, anchor, None)?;
             let shape = shape_of_term(inner, env_shapes, None)?;
             Ok(match op {
-                // Wrapping negate on the raw two's-complement bits — exactly `-as_int()`.
-                UnOp::Neg => b.add(ArithOp::Neg(Kind::U, 64), vec![id]),
+                // Wrapping negate, exactly `-as_int()`.
+                UnOp::Neg => b.add(ArithOp::Neg, vec![id]),
                 UnOp::ToF64 => {
-                    if shape != Shape::Prim(64) { return Err("float expects an Int".into()); }
-                    let sign = b.add(ArithOp::Shr(63), vec![id]);
-                    let negative = b.add(ArithOp::Neg(Kind::U, 64), vec![id]);
-                    let choices = b.tuple(vec![sign, negative, id]);
-                    let magnitude = b.add(Op::Select, vec![choices]);
-                    let positive = b.add(ArithOp::ToFloat(64), vec![magnitude]);
-                    let negative = b.add(ArithOp::Neg(Kind::F, 64), vec![positive]);
-                    let choices = b.tuple(vec![sign, negative, positive]);
-                    let f = b.add(Op::Select, vec![choices]);
-                    let payload = b.add(ArithOp::ToSigned, vec![f]);
-                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                    if shape != Shape::Int { return Err("float expects an Int".into()); }
+                    let f = b.add(ArithOp::ToFloat, vec![id]);
+                    float_newtype(b, f)
                 }
                 UnOp::F64Neg => {
-                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err("fneg expects an F64 newtype".into()); }
-                    let payload = b.add(Op::Unwrap, vec![id]);
-                    let f = b.add(ArithOp::ToSigned, vec![payload]);
-                    let negative = b.add(ArithOp::Neg(Kind::F, 64), vec![f]);
-                    let payload = b.add(ArithOp::ToSigned, vec![negative]);
-                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                    if shape != Shape::Sum(vec![Shape::Int]) { return Err("fneg expects an F64 newtype".into()); }
+                    let f = float_leaf(b, id);
+                    let negative = b.add(ArithOp::Neg, vec![f]);
+                    float_newtype(b, negative)
                 }
                 // |x| is the larger of x and -x in the total order: that clears the sign bit,
                 // NaN included, exactly as `f64::abs`.
                 UnOp::F64Fn(F64Fn::Abs) => {
-                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err("fabs expects an F64 newtype".into()); }
+                    if shape != Shape::Sum(vec![Shape::Int]) { return Err("fabs expects an F64 newtype".into()); }
                     let f = float_leaf(b, id);
                     let abs = float_abs(b, f);
-                    let payload = b.add(ArithOp::ToSigned, vec![abs]);
-                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                    float_newtype(b, abs)
                 }
                 // The rest (sqrt, exp, ln, rounding, trig) and `fint` are host kernels over the
-                // float leaf: decode each key, apply the function, encode the result.
+                // float leaf.
                 UnOp::F64Fn(f) => {
-                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err(format!("{op:?} expects an F64 newtype")); }
+                    if shape != Shape::Sum(vec![Shape::Int]) { return Err(format!("{op:?} expects an F64 newtype")); }
                     let x = float_leaf(b, id);
                     let y = b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::Fn(*f))), vec![x]);
-                    let payload = b.add(ArithOp::ToSigned, vec![y]);
-                    b.add(Op::Inject(0, vec![Shape::Prim(64)]), vec![payload])
+                    float_newtype(b, y)
                 }
                 UnOp::F64ToInt => {
-                    if shape != Shape::Sum(vec![Shape::Prim(64)]) { return Err("fint expects an F64 newtype".into()); }
+                    if shape != Shape::Sum(vec![Shape::Int]) { return Err("fint expects an F64 newtype".into()); }
                     let x = float_leaf(b, id);
                     b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::ToInt)), vec![x])
                 }
@@ -633,34 +607,19 @@ pub fn compile(
                 // are never truthy, so their `not` folds to the constant 1 (the cross-shape
                 // `Eq` fold's precedent).
                 UnOp::Not => match shape {
-                    Shape::Prim(_) => {
-                        let zero = b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]);
-                        let p = b.tuple(vec![id, zero]);
-                        b.add(CmpOp::Rel(Pred::Eq), vec![p])
-                    }
-                    _ => b.add(Op::Lit(CValue::u64(vec![1])), vec![anchor]),
+                    Shape::Int => b.add(CmpOp::RelImm(Pred::Eq, Scalar::Int(0)), vec![id]),
+                    _ => int_lit(b, anchor, 1),
                 },
-                // Tuple arity is static (a shape fact); list length folds `acc + 1` along
-                // each row's list; anything else is the program error `eval` reports.
+                // Tuple arity is static (a shape fact); a list's length is read off its bounds;
+                // anything else is the program error `eval` reports.
                 UnOp::Len => match shape {
-                    Shape::Prod(fs) => b.add(Op::Lit(CValue::u64(vec![fs.len() as u64])), vec![anchor]),
-                    Shape::Unit => b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]),
-                    Shape::List(_) => {
-                        let zero = b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]);
-                        let seed = b.tuple(vec![zero, id]);
-                        let body = {
-                            let mut bb = Builder::<NumOp>::default();
-                            let inp = bb.input();
-                            let acc = bb.add(Op::Field(0), vec![inp]);
-                            let out = bb.add(ArithOp::BinImm(CBinOp::Add, Kind::U, 64, 1), vec![acc]);
-                            bb.finish(out)
-                        };
-                        b.add(Op::Fold(Box::new(body)), vec![seed])
-                    }
+                    Shape::Prod(fs) => int_lit(b, anchor, fs.len() as i64),
+                    Shape::Unit => int_lit(b, anchor, 0),
+                    Shape::List(_) => b.add(Op::Len, vec![id]),
                     other => return Err(format!("len of a {other}")),
                 },
                 // On a sum, every lane maps to its constant answer and the result unwraps
-                // (lanes are homogeneous `U64`); on any other shape, `istag` is constantly 0
+                // (lanes are homogeneous `Int`); on any other shape, `istag` is constantly 0
                 // (matching `eval`'s "non-Variant is never the tag").
                 UnOp::IsTag(t) => match shape {
                     Shape::Sum(lanes) => {
@@ -668,15 +627,14 @@ pub fn compile(
                             .map(|i| {
                                 let mut bb = Builder::<NumOp>::default();
                                 let inp = bb.input();
-                                let v = (i as u32 == *t) as u64;
-                                let out = bb.add(Op::Lit(CValue::u64(vec![v])), vec![inp]);
+                                let out = int_lit(&mut bb, inp, (i as u32 == *t) as i64);
                                 (i, bb.finish(out))
                             })
                             .collect();
                         let mapped = b.add(Op::MapSum(arms), vec![id]);
                         b.add(Op::Unwrap, vec![mapped])
                     }
-                    _ => b.add(Op::Lit(CValue::u64(vec![0])), vec![anchor]),
+                    _ => int_lit(b, anchor, 0),
                 },
             })
         }
@@ -698,16 +656,10 @@ pub fn compile(
                 let e = compile(f, b, env, env_shapes, anchor, None)?;
                 lanes.push(b.add(Op::Enlist, vec![e]));
             }
-            let count = b.add(Op::Lit(CValue::u64(vec![fields.len() as u64])), vec![anchor]);
-            // Weave reads its tags as bytes; `iota` counts in `U64`, so each tag is narrowed.
-            let positions = b.add(Op::Iota, vec![count]);
-            let narrow = {
-                let mut bb = Builder::<NumOp>::default();
-                let inp = bb.input();
-                let out = bb.add(Op::Cast(8), vec![inp]);
-                bb.finish(out)
-            };
-            let tags = b.add(Op::MapList(Box::new(narrow)), vec![positions]);
+            // Weave reads its tags as bytes, so they are one byte literal, `[0, 1, .., k-1]` per row.
+            let k = fields.len();
+            let positions = CValue::List(corgi::Bounds::Stride(k, 1), Box::new(CValue::u8((0..k as u8).collect())));
+            let tags = b.add(Op::Lit(positions), vec![anchor]);
             let mut weave_in = vec![tags];
             weave_in.extend(lanes);
             let woven_in = b.tuple(weave_in);
@@ -723,10 +675,8 @@ pub fn compile(
         // DDIR's `hash` IS corgi's `Op::Hash` (`ir::structural_hash` is the row-wise twin): hash
         // the arguments as one tuple, shift out the sign bit, reduce by the bound.
         //
-        // The bound guard is pure arithmetic — no `Select`. `Rem`'s total `x % 0 = x` gives
-        // `bound == 0` the identity, and a NEGATIVE bound reads as a `u64` at or above 2^63,
-        // which is larger than the shifted hash, so it reduces to the identity too. Both are
-        // exactly what `ir::eval`'s `if bound > 0` produces.
+        // `ir::eval` reduces only by a positive bound. A bound that is not positive is replaced by
+        // zero, and `Rem`'s total `x % 0 = x` then gives the identity.
         Term::Hash(args) => {
             let (bound, rest) = args.split_first().ok_or("hash needs a bound")?;
             let bid = compile(bound, b, env, env_shapes, anchor, None)?;
@@ -740,46 +690,74 @@ pub fn compile(
                 b.tuple(ids)
             };
             let h = b.add(Op::Hash, vec![payload]);
-            let shifted = b.add(ArithOp::Shr(1), vec![h]);
-            let pair = b.tuple(vec![shifted, bid]);
-            Ok(b.add(ArithOp::Bin(CBinOp::Rem, Kind::U, 64), vec![pair]))
+            let shifted = b.add(ArithOp::Shift(ShiftOp::ShrB64, 1), vec![h]);
+            let positive = b.add(CmpOp::RelImm(Pred::Gt, Scalar::Int(0)), vec![bid]);
+            let zero = int_lit(b, anchor, 0);
+            let choices = b.tuple(vec![positive, bid, zero]);
+            let bound = b.add(Op::Select, vec![choices]);
+            let pair = b.tuple(vec![shifted, bound]);
+            Ok(b.add(ArithOp::Bin(CBinOp::Rem), vec![pair]))
         }
     }
 }
 
-/// Corgi's float encoding of an F64 constant: the total-order key, as a `U64` leaf holds it.
+/// An `Int` literal, one row per row of `anchor`.
+fn int_lit(b: &mut Builder<NumOp>, anchor: usize, n: i64) -> usize {
+    b.add(Op::Lit(CValue::i64(vec![n])), vec![anchor])
+}
+
+/// `term` (compiled at `id`) as a 0/1 mask, as `ir::eval`'s `truthy` reads it: a nonzero `Int` is
+/// true and any other value is false. A comparison or logical term is a mask already.
+fn truth(b: &mut Builder<NumOp>, term: &Term, id: usize, env_shapes: &[Shape], anchor: usize) -> Res<usize> {
+    let mask = matches!(term,
+        Term::Unary(UnOp::Not | UnOp::IsTag(_), _)
+        | Term::Binary(BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::And | BinOp::Or, _, _)
+        | Term::Binary(BinOp::F64Eq | BinOp::F64Ne | BinOp::F64Lt | BinOp::F64Le | BinOp::F64Gt | BinOp::F64Ge, _, _));
+    Ok(match shape_of_term(term, env_shapes, None)? {
+        Shape::Int if mask => id,
+        Shape::Int => b.add(CmpOp::RelImm(Pred::Ne, Scalar::Int(0)), vec![id]),
+        _ => int_lit(b, anchor, 0),
+    })
+}
+
+/// The total-order key of an `f64`, as corgi's `Scalar::Float` holds a float constant.
 fn float_key(f: f64) -> u64 {
     let bits = f.to_bits();
     if bits >> 63 == 1 { !bits } else { bits ^ (1 << 63) }
 }
 
-/// An F64 newtype column -> its corgi float leaf (total-order key). The DDIR payload is the
-/// signed form of that key, and `ToSigned` is the involution between the two.
+/// An F64 newtype column -> a corgi `Float` leaf.
 fn float_leaf(b: &mut Builder<NumOp>, newtype: usize) -> usize {
     let payload = b.add(Op::Unwrap, vec![newtype]);
-    b.add(ArithOp::ToSigned, vec![payload])
+    b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::FromPayload)), vec![payload])
+}
+
+/// A corgi `Float` leaf -> an F64 newtype column.
+fn float_newtype(b: &mut Builder<NumOp>, float: usize) -> usize {
+    let payload = b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::ToPayload)), vec![float]);
+    b.add(Op::Inject(0, vec![Shape::Int]), vec![payload])
 }
 
 /// `|x|` on a float leaf: the larger of `x` and `-x` in the total order.
 fn float_abs(b: &mut Builder<NumOp>, x: usize) -> usize {
-    let negated = b.add(ArithOp::Neg(Kind::F, 64), vec![x]);
+    let negated = b.add(ArithOp::Neg, vec![x]);
     let p = b.tuple(vec![x, negated]);
     b.add(CmpOp::Max, vec![p])
 }
 
-/// A 0/1 mask: is the float leaf NaN? The NaNs are exactly the keys whose magnitude exceeds +inf.
+/// A 0/1 mask: is the float leaf NaN? The NaNs are exactly the values whose magnitude exceeds
+/// +inf in the total order.
 fn is_nan(b: &mut Builder<NumOp>, x: usize) -> usize {
     let abs = float_abs(b, x);
-    b.add(CmpOp::RelImm(Pred::Gt, 64, float_key(f64::INFINITY)), vec![abs])
+    b.add(CmpOp::RelImm(Pred::Gt, Scalar::Float(float_key(f64::INFINITY))), vec![abs])
 }
 
-/// Replace `-0.0` by `0.0` in a float leaf. Their keys are adjacent, so this adds the mask.
+/// Replace `-0.0` by `0.0` in a float leaf.
 fn fold_negative_zero(b: &mut Builder<NumOp>, x: usize, anchor: usize) -> usize {
-    let negative_zero = b.add(Op::Lit(CValue::u64(vec![float_key(-0.0)])), vec![anchor]);
-    let probe = b.tuple(vec![x, negative_zero]);
-    let is_negative_zero = b.add(CmpOp::Rel(Pred::Eq), vec![probe]);
-    let sum = b.tuple(vec![x, is_negative_zero]);
-    b.add(ArithOp::Bin(CBinOp::Add, Kind::U, 64), vec![sum])
+    let is_negative_zero = b.add(CmpOp::RelImm(Pred::Eq, Scalar::Float(float_key(-0.0))), vec![x]);
+    let zero = b.add(Op::Lit(CValue::f64(vec![0.0])), vec![anchor]);
+    let choices = b.tuple(vec![is_negative_zero, zero, x]);
+    b.add(Op::Select, vec![choices])
 }
 
 /// Compile a `Fold` step into a closed corgi sub-graph. Without capture the body's input is
@@ -835,11 +813,11 @@ pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Res<
     }
 }
 
-/// Compile a scalar term (`EnterAt`'s delay field) → a `U64` column; a non-integer term is the
+/// Compile a scalar term (`EnterAt`'s delay field) → an `Int` column; a non-integer term is the
 /// type error (the delay is read as one integer per row).
 pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match lower(&[term], &[kshape.clone(), vshape.clone()])? {
-        (k, Shape::Prim(_)) => Ok(k),
+        (k, Shape::Int) => Ok(k),
         (_, other) => Err(format!("enter_at delay is not an integer: {other}")),
     }
 }
@@ -848,7 +826,7 @@ pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<
 /// `Int`; any other shape is a type error, as it is in the row backend.
 pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match lower(&[cond], &[kshape.clone(), vshape.clone()])? {
-        (k, Shape::Prim(_)) => Ok(k),
+        (k, Shape::Int) => Ok(k),
         (_, other) => Err(format!("a filter predicate must be an Int, got {other}")),
     }
 }
@@ -865,21 +843,17 @@ pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape
     Ok(lower(&[key, val], &[kshape.clone(), vshape.clone()])?.0)
 }
 
-/// The F64 functions without a composition of corgi ops, as host kernels over the float leaf
-/// (corgi's total-order key): decode each key, apply the function as `ir::eval` does, encode.
-/// One kernel per function, shared by every call site, so CSE merges equal calls.
+/// The F64 functions without a composition of corgi ops, as host kernels over the float leaf:
+/// apply the function as `ir::eval` does. `FromPayload` and `ToPayload` convert between an F64
+/// newtype's `Int` payload ([`DValue::f64_value`]) and a float leaf. One kernel per function,
+/// shared by every call site, so CSE merges equal calls.
 mod float_kernels {
     use std::sync::{Arc, OnceLock};
     use corgi::{HostKernel, HostOp, Shape, Value};
-    use crate::ir::F64Fn;
+    use crate::ir::{F64Fn, Value as DValue};
 
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-    pub enum FloatOp { Fn(F64Fn), ToInt, Pow, PowI }
-
-    fn decode(key: u64) -> f64 {
-        f64::from_bits(if key >> 63 == 1 { key ^ (1 << 63) } else { !key })
-    }
-    fn encode(x: f64) -> u64 { super::float_key(x) }
+    pub enum FloatOp { Fn(F64Fn), ToInt, Pow, PowI, FromPayload, ToPayload }
 
     struct Kernel { name: String, op: FloatOp, input: Shape, output: Shape }
     impl HostKernel for Kernel {
@@ -887,23 +861,26 @@ mod float_kernels {
         fn input(&self) -> &Shape { &self.input }
         fn output(&self) -> &Shape { &self.output }
         fn eval(&self, input: Value) -> Result<Value, String> {
-            let out: Vec<u64> = match self.op {
-                FloatOp::Fn(f) => input.as_u64(&self.name)?.iter().map(|&k| encode(f.apply(decode(k)))).collect(),
-                FloatOp::ToInt => input.as_u64(&self.name)?.iter().map(|&k| decode(k) as i64 as u64).collect(),
+            let payload = |x: f64| match DValue::f64_value(x) { DValue::Variant(_, p) => p.as_int(), _ => unreachable!() };
+            Ok(match self.op {
+                FloatOp::Fn(f) => Value::f64(input.as_f64(&self.name)?.into_iter().map(|x| f.apply(x)).collect()),
+                FloatOp::ToInt => Value::i64(input.as_f64(&self.name)?.into_iter().map(|x| x as i64).collect()),
                 FloatOp::Pow | FloatOp::PowI => {
                     let args = input.into_prod(&self.name)?;
-                    let (x, y) = (args[0].as_u64(&self.name)?, args[1].as_u64(&self.name)?);
-                    x.iter().zip(y).map(|(&a, &b)| {
-                        let a = decode(a);
-                        encode(if self.op == FloatOp::Pow {
-                            a.powf(decode(b))
-                        } else {
-                            a.powi((b as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32)
-                        })
-                    }).collect()
+                    let x = args[0].as_f64(&self.name)?;
+                    Value::f64(if self.op == FloatOp::Pow {
+                        x.into_iter().zip(args[1].as_f64(&self.name)?).map(|(a, b)| a.powf(b)).collect()
+                    } else {
+                        x.into_iter().zip(args[1].as_i64(&self.name)?.iter()).map(|(a, &b)| {
+                            a.powi(b.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+                        }).collect()
+                    })
                 }
-            };
-            Ok(Value::u64(out))
+                FloatOp::FromPayload => Value::f64(input.as_i64(&self.name)?.iter().map(|&p| {
+                    DValue::Variant(0, Box::new(DValue::Int(p))).as_f64()
+                }).collect()),
+                FloatOp::ToPayload => Value::i64(input.as_f64(&self.name)?.into_iter().map(payload).collect()),
+            })
         }
     }
 
@@ -912,14 +889,16 @@ mod float_kernels {
         static KERNELS: OnceLock<std::sync::Mutex<std::collections::HashMap<FloatOp, Arc<dyn HostKernel>>>> = OnceLock::new();
         let mut map = KERNELS.get_or_init(Default::default).lock().unwrap();
         let k = map.entry(op).or_insert_with(|| {
-            let (p, pair) = (Shape::Prim(64), Shape::Prod(vec![Shape::Prim(64), Shape::Prim(64)]));
-            let (name, input) = match op {
-                FloatOp::Fn(f) => (format!("{f:?}").to_lowercase(), p.clone()),
-                FloatOp::ToInt => ("fint".into(), p.clone()),
-                FloatOp::Pow => ("fpow".into(), pair.clone()),
-                FloatOp::PowI => ("fpowi".into(), pair),
+            let (f, i) = (Shape::Float, Shape::Int);
+            let (name, input, output) = match op {
+                FloatOp::Fn(g) => (format!("{g:?}").to_lowercase(), f.clone(), f),
+                FloatOp::ToInt => ("fint".into(), f, i),
+                FloatOp::Pow => ("fpow".into(), Shape::Prod(vec![f.clone(), f.clone()]), f),
+                FloatOp::PowI => ("fpowi".into(), Shape::Prod(vec![f.clone(), i]), f),
+                FloatOp::FromPayload => ("from_payload".into(), i, f),
+                FloatOp::ToPayload => ("to_payload".into(), f, i),
             };
-            Arc::new(Kernel { name: format!("f64:{name}"), op, input, output: p })
+            Arc::new(Kernel { name: format!("f64:{name}"), op, input, output })
         });
         HostOp(Arc::clone(k))
     }
@@ -930,7 +909,7 @@ mod tests {
     use super::*;
     use crate::ir::Value as V;
 
-    fn u64s() -> Shape { Shape::Prim(64) }
+    fn ints() -> Shape { Shape::Int }
     fn sum(lanes: Vec<Shape>) -> Shape { Shape::Sum(lanes) }
 
     fn agrees_with_rows(term: &Term, shapes: &[Shape], rows: &[Vec<V>]) {
@@ -957,9 +936,13 @@ mod tests {
             "fadd(float($0), float($1))", "fsub(float($0), float($1))",
             "fmul(float($0), float($1))", "fdiv(float($0), float($1))",
             "float($0) < float($1)", "float($0) >= float($1)",
-            "append(list($0), list($1, $0))"] {
+            "append(list($0), list($1, $0))",
+            // Truthiness is "nonzero", so a negative operand is true and the result is 0/1.
+            "$0 && $1", "or($0, $1)", "not($0)", "or($0 < $1, $1)", "if($0, $1, 3)",
+            // `hash` reduces by a positive bound only.
+            "hash($1, $0)", "hash($0, $1, tuple($0, $1))"] {
             let term = crate::parse::pipe::parse_term(source);
-            agrees_with_rows(&term, &[u64s(), u64s()], &rows);
+            agrees_with_rows(&term, &[ints(), ints()], &rows);
         }
     }
 
@@ -973,7 +956,7 @@ mod tests {
     /// and the ones that are host kernels (`float_kernels`), alone and inside larger terms.
     #[test]
     fn columnar_float_math_agrees() {
-        let f = sum(vec![u64s()]);
+        let f = sum(vec![ints()]);
         for source in ["fabs($0)", "fmin($0, $1)", "fmax($0, $1)", "feq($0, $1)", "fne($0, $1)",
             "flt($0, $1)", "fle($0, $1)", "fgt($0, $1)", "fge($0, $1)",
             "fsqrt($0)", "fexp($0)", "fln($0)", "ffloor($0)", "fceil($0)", "fround($0)",
@@ -989,7 +972,7 @@ mod tests {
         agrees_with_rows(&term, &[f.clone(), f.clone()], &finite);
         // The kernels are typed: their operands must be F64 newtypes (and `fpowi`'s exponent an Int).
         for bad in ["fsqrt($0)", "fint($0)", "fpow($0, $0)"] {
-            assert!(lower(&[&crate::parse::pipe::parse_term(bad)], &[u64s()]).is_err(), "{bad}");
+            assert!(lower(&[&crate::parse::pipe::parse_term(bad)], &[ints()]).is_err(), "{bad}");
         }
         assert!(lower(&[&crate::parse::pipe::parse_term("fpowi($0, $0)")], &[f.clone()]).is_err());
     }
@@ -1019,9 +1002,9 @@ mod tests {
     fn declared_constructor_types_an_empty_list() {
         let term = Term::Inject {
             tag: Box::new(Term::Int(0)), payload: Box::new(Term::List(vec![])),
-            sum: SumTy::Declared(vec![Shape::List(Box::new(Shape::List(Box::new(u64s()))))]),
+            sum: SumTy::Declared(vec![Shape::List(Box::new(Shape::List(Box::new(ints()))))]),
         };
-        agrees_with_rows(&term, &[u64s()], &[vec![V::Int(0)], vec![V::Int(1)]]);
+        agrees_with_rows(&term, &[ints()], &[vec![V::Int(0)], vec![V::Int(1)]]);
     }
 
     /// The pin on DDIR's `hash`: `ir::structural_hash` is a row-at-a-time transcription of
@@ -1037,7 +1020,7 @@ mod tests {
 
     #[test]
     fn hash_matches_corgi_on_scalars() {
-        hash_agrees(vec![V::Int(0), V::Int(1), V::Int(-1), V::Int(i64::MIN), V::Int(i64::MAX)], u64s());
+        hash_agrees(vec![V::Int(0), V::Int(1), V::Int(-1), V::Int(i64::MIN), V::Int(i64::MAX)], ints());
     }
 
     #[test]
@@ -1057,7 +1040,7 @@ mod tests {
     fn hash_matches_corgi_on_lists() {
         hash_agrees(
             vec![V::List(vec![V::Int(1), V::Int(2), V::Int(3)]), V::List(vec![]), V::List(vec![V::Int(3), V::Int(2), V::Int(1)])],
-            Shape::List(Box::new(u64s())),
+            Shape::List(Box::new(ints())),
         );
     }
 
@@ -1065,19 +1048,19 @@ mod tests {
     fn hash_matches_corgi_on_variants() {
         hash_agrees(
             vec![V::Variant(0, Box::new(V::Int(5))), V::Variant(1, Box::new(V::Int(5))), V::Variant(0, Box::new(V::Int(6)))],
-            sum(vec![u64s(), u64s()]),
+            sum(vec![ints(), ints()]),
         );
     }
 
     #[test]
     fn hash_matches_corgi_on_nesting() {
-        let pair = Shape::Prod(vec![u64s(), u64s()]);
+        let pair = Shape::Prod(vec![ints(), ints()]);
         hash_agrees(
             vec![
                 V::Tuple(vec![V::List(vec![V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(3)])))]),
                 V::Tuple(vec![V::List(vec![V::Int(1), V::Int(1)]), V::Variant(0, Box::new(V::Tuple(vec![V::Int(2), V::Int(4)])))]),
             ],
-            Shape::Prod(vec![Shape::List(Box::new(u64s())), sum(vec![pair, Shape::Unit])]),
+            Shape::Prod(vec![Shape::List(Box::new(ints())), sum(vec![pair, Shape::Unit])]),
         );
     }
 
@@ -1098,7 +1081,7 @@ mod tests {
                 V::Variant(0, Box::new(V::List(vec![V::Int(3)]))),
                 V::Variant(0, Box::new(V::List(vec![]))),
             ],
-            sum(vec![Shape::List(Box::new(u64s()))]),
+            sum(vec![Shape::List(Box::new(ints()))]),
         );
     }
 
@@ -1113,7 +1096,7 @@ mod tests {
                 V::Variant(1, Box::new(V::Tuple(vec![V::Int(3), V::Int(4)]))),
                 V::Variant(0, Box::new(V::Int(30))),
             ],
-            sum(vec![u64s(), Shape::Prod(vec![u64s(), u64s()])]),
+            sum(vec![ints(), Shape::Prod(vec![ints(), ints()])]),
         );
     }
 
@@ -1122,7 +1105,7 @@ mod tests {
         // tags {0, 2} present, arm 1 absent: its lane is an empty column of the declared shape.
         roundtrip(
             vec![V::Variant(0, Box::new(V::Int(1))), V::Variant(2, Box::new(V::Int(2))), V::Variant(0, Box::new(V::Int(3)))],
-            sum(vec![u64s(), Shape::List(Box::new(u64s())), u64s()]),
+            sum(vec![ints(), Shape::List(Box::new(ints())), ints()]),
         );
     }
 
@@ -1133,13 +1116,13 @@ mod tests {
                 V::Tuple(vec![V::Int(1), V::Variant(0, Box::new(V::Int(7)))]),
                 V::Tuple(vec![V::Int(2), V::Variant(1, Box::new(V::unit()))]),
             ],
-            Shape::Prod(vec![u64s(), sum(vec![u64s(), Shape::Unit])]),
+            Shape::Prod(vec![ints(), sum(vec![ints(), Shape::Unit])]),
         );
     }
 
     #[test]
     fn shape_of_row_pins_what_a_row_can_say() {
-        assert_eq!(shape_of_row(&V::Tuple(vec![V::Int(1), V::List(vec![V::Int(2)])])).unwrap(), Shape::Prod(vec![u64s(), Shape::List(Box::new(u64s()))]));
+        assert_eq!(shape_of_row(&V::Tuple(vec![V::Int(1), V::List(vec![V::Int(2)])])).unwrap(), Shape::Prod(vec![ints(), Shape::List(Box::new(ints()))]));
         assert!(shape_of_row(&V::List(vec![])).is_err());
         assert!(shape_of_row(&V::Variant(0, Box::new(V::Int(1)))).is_err());
     }

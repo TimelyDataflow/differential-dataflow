@@ -12,7 +12,7 @@ fn program(src: &str) -> Program {
     program
 }
 
-fn ints(n: usize) -> Shape { Shape::Prod(vec![Shape::Prim(64); n]) }
+fn ints(n: usize) -> Shape { Shape::Prod(vec![Shape::Int; n]) }
 
 const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);"#;
 

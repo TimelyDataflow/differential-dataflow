@@ -6,14 +6,14 @@ use std::ops::Range;
 /// needle set. Both positions advance monotonically; galloping skips long gaps
 /// while adjacent keys take constant work. Absent keys produce no item.
 pub(crate) struct MatchingRanges<'a> {
-    needles: &'a [u64],
-    haystack: &'a [u64],
+    needles: &'a [i64],
+    haystack: &'a [i64],
     needle: usize,
     row: usize,
 }
 
 impl<'a> MatchingRanges<'a> {
-    pub(crate) fn new(needles: &'a [u64], haystack: &'a [u64]) -> Self {
+    pub(crate) fn new(needles: &'a [i64], haystack: &'a [i64]) -> Self {
         debug_assert!(needles.windows(2).all(|w| w[0] < w[1]));
         debug_assert!(haystack.windows(2).all(|w| w[0] <= w[1]));
         Self {
@@ -60,8 +60,8 @@ impl Iterator for MatchingRanges<'_> {
 /// previous match makes each search depend on the last and serializes the misses. Otherwise the
 /// two sorted lists are merged by [`MatchingRanges`]. `scratch` holds the search positions.
 pub(crate) fn matching_ranges(
-    needles: &[u64],
-    haystack: &[u64],
+    needles: &[i64],
+    haystack: &[i64],
     scratch: &mut Vec<usize>,
     out: &mut Vec<(usize, Range<usize>)>,
 ) {
@@ -103,7 +103,7 @@ pub(crate) fn matching_ranges(
 }
 
 /// First index at or after `start` outside a predicate's prefix.
-fn gallop(xs: &[u64], start: usize, predicate: impl Fn(&u64) -> bool) -> usize {
+fn gallop(xs: &[i64], start: usize, predicate: impl Fn(&i64) -> bool) -> usize {
     let mut pos = start;
     if pos < xs.len() && predicate(&xs[pos]) {
         let mut step = 1;
@@ -137,11 +137,11 @@ mod tests {
             seed
         };
         for trial in 0..200 {
-            let mut needles: Vec<_> = (0..trial % 40).map(|_| random() % 97).collect();
-            let mut haystack: Vec<_> = (0..trial).map(|_| random() % 97).collect();
+            let mut needles: Vec<_> = (0..trial % 40).map(|_| (random() % 97) as i64 - 48).collect();
+            let mut haystack: Vec<_> = (0..trial).map(|_| (random() % 97) as i64 - 48).collect();
             if trial % 3 == 0 {
-                needles.push(u64::MAX);
-                haystack.push(u64::MAX);
+                needles.push(i64::MAX);
+                haystack.push(i64::MAX);
             }
             needles.sort_unstable();
             needles.dedup();

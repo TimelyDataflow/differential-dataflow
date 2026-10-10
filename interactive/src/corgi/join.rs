@@ -37,11 +37,11 @@ use differential_dataflow::operators::int_proxy::{KeyPosition, JoinInstance, Pro
 use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_at, gather_lanes, leaf_slice};
+use corgi::arrange::{compare_at, gather_lanes};
 use crate::corgi::search::matching_ranges;
 use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
 
-use crate::corgi::chunk::{key_is_hashed, key_lane, recover_key_ref, CorgiChunk};
+use crate::corgi::chunk::{int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_join_projection;
@@ -62,7 +62,7 @@ pub struct CorgiJoinBackend<T: ColTime> {
     /// Identifier tokens in the current block that cover more than one real key. `advance` writes
     /// this and the immediately following `cross` reads it before the next `advance`; only matches
     /// under these astronomically rare tokens need a real-key comparison.
-    colliding: Vec<u64>,
+    colliding: Vec<i64>,
     /// The projection, compiled once at the shapes of the key and both values it reads.
     compiled: Option<([Shape; 3], Graph<NumOp>)>,
     _t: PhantomData<T>,
@@ -94,7 +94,7 @@ fn projection<'a>(compiled: &'a mut Option<([Shape; 3], Graph<NumOp>)>, key: &Te
 }
 
 impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> {
-    type Key = u64;
+    type Key = i64;
     type V0 = u64;
     type V1 = u64;
     type R0 = Diff;
@@ -105,12 +105,12 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
     fn advance(
         &mut self,
         instance: &JoinInstance<T, CBatch<T>, CBatch<T>>,
-        from: &mut KeyPosition<u64>,
-        bridge0: &mut ProxyBridge<T, Diff>,
-        bridge1: &mut ProxyBridge<T, Diff>,
+        from: &mut KeyPosition<i64>,
+        bridge0: &mut ProxyBridge<T, Diff, i64>,
+        bridge1: &mut ProxyBridge<T, Diff, i64>,
     ) {
         let mut next = match *from {
-            KeyPosition::Start => Some(0),
+            KeyPosition::Start => Some(i64::MIN),
             KeyPosition::At(key) => Some(key),
             KeyPosition::End => return,
         };
@@ -150,7 +150,7 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
     fn cross(
         &mut self,
         instance: &JoinInstance<T, CBatch<T>, CBatch<T>>,
-        matches: &mut JoinMatches<T, Diff>,
+        matches: &mut JoinMatches<T, Diff, i64>,
         output: &mut Vec<CorgiContainer<T, Diff>>,
     ) {
         let chunks0 = side_chunks(&instance.batches0);
@@ -212,13 +212,13 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
             // the identifier for the projected key.
             let ids = &matches.ids[start..end];
             let kc = if primitive_keys {
-                from_ids(chunks0[0].keys(), ids.iter().map(|x| x.0).collect())
+                rewrap(chunks0[0].keys(), ids.iter().map(|x| x.0).collect())
             } else { gather_lanes(&keys0, &tag0, &off0) };
             let v0 = if primitive0 {
-                from_ids(chunks0[0].vals(), ids.iter().map(|x| x.1.0).collect())
+                rewrap(chunks0[0].vals(), ids.iter().map(|x| x.1.0 as i64).collect())
             } else { gather_lanes(&vals0, &tag0, &off0) };
             let v1 = if primitive1 {
-                from_ids(chunks1[0].vals(), ids.iter().map(|x| x.1.1).collect())
+                rewrap(chunks1[0].vals(), ids.iter().map(|x| x.1.1 as i64).collect())
             } else { gather_lanes(&vals1, &tag1, &off1) };
             let shapes = [shape_of_value(&kc), shape_of_value(&v0), shape_of_value(&v1)];
             let proj = projection(&mut self.compiled, &self.key, &self.val, shapes);
@@ -245,15 +245,7 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
 
 /// Coordinates remain necessary for structured keys, including collision validation.
 fn primitive_values<T: ColTime>(chunk: &CorgiChunk<T, Diff>) -> bool {
-    !key_is_hashed(chunk.keys()) && leaf_slice(chunk.vals()).is_some()
-}
-
-/// Rebuild a primitive column with its original singleton-product wrappers.
-fn from_ids(template: &CValue, ids: Vec<u64>) -> CValue {
-    match template {
-        CValue::Prod(fields) => CValue::Prod(vec![from_ids(&fields[0], ids)]),
-        _ => CValue::u64(ids),
-    }
+    !key_is_hashed(chunk.keys()) && int_lane(chunk.vals()).is_some()
 }
 
 /// The instance's chunks on one side, in the deterministic order coordinates index
@@ -270,14 +262,14 @@ fn side_chunks<T: ColTime>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>> {
     chunks
 }
 
-/// The column flattened to `u64` leaf lanes: `Some(lanes)` when it is a (possibly nested)
-/// product of 64-bit leaves — the shape DDIR tuples transcode to — so row order is the
-/// lexicographic order of the lane tuples. `Sum`/`List`/narrow leaves give `None`
-/// (structural compares).
-fn leaf_lanes(col: &CValue) -> Option<Vec<&[u64]>> {
-    fn walk<'a>(col: &'a CValue, out: &mut Vec<&'a [u64]>) -> bool {
+/// The column flattened to `i64` leaf lanes: `Some(lanes)` when it is a (possibly nested)
+/// product of integer leaves held as `i64`s — the shape DDIR tuples transcode to — so row order
+/// is the lexicographic order of the lane tuples. `Sum`/`List`/float leaves, and integers held
+/// narrower, give `None` (structural compares).
+fn leaf_lanes(col: &CValue) -> Option<Vec<&[i64]>> {
+    fn walk<'a>(col: &'a CValue, out: &mut Vec<&'a [i64]>) -> bool {
         match col {
-            CValue::Prim(_) => match leaf_slice(col) { Some(lane) => { out.push(lane); true }, None => false },
+            CValue::Prim(_) => match int_lane(col) { Some(lane) => { out.push(lane); true }, None => false },
             CValue::Prod(fields) => fields.iter().all(|f| walk(f, out)),
             CValue::Unit(_) => true,
             _ => false,
@@ -301,7 +293,7 @@ struct RunRef<'a, T: ColTime> {
     cid: usize,
     s: usize,
     e: usize,
-    vals: Option<&'a [&'a [u64]]>,
+    vals: Option<&'a [&'a [i64]]>,
 }
 
 impl<'a, T: ColTime> RunRef<'a, T> {
@@ -353,9 +345,9 @@ impl<T: ColTime> SideScratch<T> {
         self.entries.clear();
         if runs.first().is_some_and(|run| primitive_values(run.chunk)) {
             for run in runs {
-                let ids = leaf_slice(run.chunk.vals()).unwrap();
+                let ids = int_lane(run.chunk.vals()).unwrap();
                 self.entries.extend((run.s..run.e).map(|row| {
-                    (ids[row], run.chunk.times().get(row).join(lower), run.chunk.diffs()[row])
+                    (ids[row] as u64, run.chunk.times().get(row).join(lower), run.chunk.diffs()[row])
                 }));
             }
             differential_dataflow::consolidation::consolidate_updates(&mut self.entries);
@@ -421,18 +413,18 @@ impl<T: ColTime> SideScratch<T> {
     }
 
     /// Move the staged entries into `bridge` under group token `k`.
-    fn emit(&mut self, k: u64, bridge: &mut ProxyBridge<T, Diff>) -> usize {
+    fn emit(&mut self, k: i64, bridge: &mut ProxyBridge<T, Diff, i64>) -> usize {
         let n = self.entries.len();
         bridge.extend(self.entries.drain(..).map(|(coord, t, d)| ((k, coord), t, d)));
         n
     }
 }
 
-/// The identifier column of a chunk's keys, as a sorted `u64` slice. Every arrangement key
+/// The identifier column of a chunk's keys, as a sorted `i64` slice. Every arrangement key
 /// leads with its identifier ([`present_key`](crate::corgi::chunk::present_key)), so this is
 /// always available and always ordered — no gather, no copy.
-fn ident<'a, T: ColTime>(chunk: &'a CorgiChunk<T, Diff>) -> &'a [u64] {
-    corgi::arrange::leaf_slice(key_lane(chunk.keys())).expect("the identifier lane is a u64 leaf")
+fn ident<'a, T: ColTime>(chunk: &'a CorgiChunk<T, Diff>) -> &'a [i64] {
+    crate::corgi::chunk::ident(chunk.keys())
 }
 
 /// The block's exclusive identifier bound: for each chunk with more than `budget` rows left,
@@ -447,8 +439,8 @@ fn ident<'a, T: ColTime>(chunk: &'a CorgiChunk<T, Diff>) -> &'a [u64] {
 /// read a fixed number of rows, then discover how far the block can reach — leaves whatever
 /// was read past the bound to be discarded and read again next block, and the further apart
 /// the chunks' key densities are, the more that is.
-fn block_horizon<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], starts: &[usize], budget: usize) -> Option<u64> {
-    let mut horizon: Option<u64> = None;
+fn block_horizon<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], starts: &[usize], budget: usize) -> Option<i64> {
+    let mut horizon: Option<i64> = None;
     for (c, &s) in chunks.iter().zip(starts) {
         let lane = ident(c);
         if lane.len() - s <= budget {
@@ -457,13 +449,13 @@ fn block_horizon<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], starts: &[usize], 
         // Past the whole run of the identifier at the budget, so the block ends at a key
         // boundary. `None` on overflow means nothing can exceed it: run to the end.
         let Some(bound) = lane[s + budget].checked_add(1) else { continue };
-        horizon = Some(horizon.map_or(bound, |h: u64| h.min(bound)));
+        horizon = Some(horizon.map_or(bound, |h: i64| h.min(bound)));
     }
     horizon
 }
 
 /// Where each chunk's block ends: the first row at or past `horizon`, or its end.
-fn block_ends<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], horizon: Option<u64>) -> Vec<usize> {
+fn block_ends<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>], horizon: Option<i64>) -> Vec<usize> {
     chunks.iter().map(|c| match horizon {
         Some(h) => ident(c).partition_point(|&x| x < h),
         None => c.len(),
@@ -478,9 +470,9 @@ struct LeafView<'a, T: ColTime> {
     cid: usize,
     /// Absolute row of `keys[0]`.
     base: usize,
-    keys: &'a [u64],
+    keys: &'a [i64],
     /// The chunk's full borrowed value lanes; `None` when vals are structured.
-    vals: Option<Vec<&'a [u64]>>,
+    vals: Option<Vec<&'a [i64]>>,
     /// Cursor within `keys`.
     cur: usize,
 }
@@ -494,11 +486,11 @@ impl<'a, T: ColTime> LeafView<'a, T> {
         LeafView { chunk, cid, base: start, keys: &ident(chunk)[start..end], vals, cur: 0 }
     }
     /// The key under the cursor, if any remains in this block.
-    fn cur_key(&self) -> Option<u64> {
+    fn cur_key(&self) -> Option<i64> {
         self.keys.get(self.cur).copied()
     }
     /// Take the run of `k` at the cursor, if that is the cursor's key: absolute `(start, end)`.
-    fn take_run(&mut self, k: u64) -> Option<(usize, usize)> {
+    fn take_run(&mut self, k: i64) -> Option<(usize, usize)> {
         if self.cur_key() != Some(k) { return None; }
         let s = self.cur;
         let e = s + self.keys[s..].partition_point(|&x| x == k);
@@ -525,12 +517,12 @@ struct Probe<'a, T: ColTime> {
     cid: usize,
     lo: Vec<usize>,
     hi: Vec<usize>,
-    vals: Option<Vec<&'a [u64]>>,
+    vals: Option<Vec<&'a [i64]>>,
 }
 
 impl<'a, T: ColTime> Probe<'a, T> {
-    fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &[u64], leaf_vals: bool) -> Self {
-        let keys = corgi::arrange::leaf_slice(key_lane(chunk.keys())).expect("identifier lane is a u64 leaf");
+    fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, needles: &[i64], leaf_vals: bool) -> Self {
+        let keys = ident(chunk);
         let (mut lo, mut hi) = (vec![0; needles.len()], vec![0; needles.len()]);
         let mut found = Vec::new();
         matching_ranges(needles, keys, &mut Vec::new(), &mut found);
@@ -578,8 +570,8 @@ fn one_key<T: ColTime>(a: &[RunRef<'_, T>], b: &[RunRef<'_, T>]) -> bool {
 fn stage_collision<T: ColTime>(
     runs: &[RunRef<'_, T>],
     lower: &T,
-    token: u64,
-    bridge: &mut ProxyBridge<T, Diff>,
+    token: i64,
+    bridge: &mut ProxyBridge<T, Diff, i64>,
 ) {
     let mut positions: Vec<usize> = runs.iter().map(|run| run.s).collect();
     let mut scratch = SideScratch::new();
@@ -634,15 +626,15 @@ fn advance_leaf<T: ColTime>(
     chunks0: &[&CorgiChunk<T, Diff>],
     chunks1: &[&CorgiChunk<T, Diff>],
     lower: &T,
-    from: &mut Option<u64>,
-    bridge0: &mut ProxyBridge<T, Diff>,
-    bridge1: &mut ProxyBridge<T, Diff>,
-    colliding: &mut Vec<u64>,
+    from: &mut Option<i64>,
+    bridge0: &mut ProxyBridge<T, Diff, i64>,
+    bridge1: &mut ProxyBridge<T, Diff, i64>,
+    colliding: &mut Vec<i64>,
 ) {
     let start = from.expect("advance called on an exhausted unit");
     let hashed = key_is_hashed(chunks0[0].keys());
     // Resume: the first row of each chunk at or past `start`, by binary search on its identifier
-    // lane. The lane is a sorted `u64` slice, so this is a slice operation, not a column probe.
+    // lane. The lane is a sorted `i64` slice, so this is a slice operation, not a column probe.
     let seek = |chunks: &[&CorgiChunk<T, Diff>]| -> Vec<usize> {
         chunks.iter().map(|c| ident(c).partition_point(|&x| x < start)).collect()
     };
@@ -684,16 +676,16 @@ fn leaf_probe<'a, T: ColTime>(
     mut dviews: Vec<LeafView<'a, T>>,
     pchunks: &[&CorgiChunk<T, Diff>],
     lower: &T,
-    h: Option<u64>,
-    from: &mut Option<u64>,
-    bridge_d: &mut ProxyBridge<T, Diff>,
-    bridge_p: &mut ProxyBridge<T, Diff>,
+    h: Option<i64>,
+    from: &mut Option<i64>,
+    bridge_d: &mut ProxyBridge<T, Diff, i64>,
+    bridge_p: &mut ProxyBridge<T, Diff, i64>,
     hashed: bool,
-    colliding: &mut Vec<u64>,
+    colliding: &mut Vec<i64>,
 ) {
     // Merge the driver block's keys (strictly below the horizon) into the distinct key
     // list and each key's runs.
-    let mut keyset: Vec<u64> = Vec::new();
+    let mut keyset: Vec<i64> = Vec::new();
     let mut druns: Vec<(usize, usize, usize, usize)> = Vec::new(); // (key idx, view idx, s, e)
     loop {
         let k = dviews.iter().filter_map(LeafView::cur_key).min();
@@ -763,18 +755,18 @@ fn leaf_probe<'a, T: ColTime>(
     *from = h;
 }
 
-/// Comparable-sides regime: both sides pulled and merged symmetrically on the `u64`
+/// Comparable-sides regime: both sides pulled and merged symmetrically on the `i64`
 /// buffers.
 fn leaf_merge<'a, T: ColTime>(
     mut views0: Vec<LeafView<'a, T>>,
     mut views1: Vec<LeafView<'a, T>>,
     lower: &T,
-    h: Option<u64>,
-    from: &mut Option<u64>,
-    bridge0: &mut ProxyBridge<T, Diff>,
-    bridge1: &mut ProxyBridge<T, Diff>,
+    h: Option<i64>,
+    from: &mut Option<i64>,
+    bridge0: &mut ProxyBridge<T, Diff, i64>,
+    bridge1: &mut ProxyBridge<T, Diff, i64>,
     hashed: bool,
-    colliding: &mut Vec<u64>,
+    colliding: &mut Vec<i64>,
 ) {
     let (mut s0, mut s1) = (SideScratch::new(), SideScratch::new());
     let (mut refs0, mut refs1): (Vec<(usize, usize, usize)>, Vec<(usize, usize, usize)>) = (Vec::new(), Vec::new());
@@ -821,17 +813,20 @@ fn leaf_merge<'a, T: ColTime>(
 mod tests {
     use super::*;
 
+    /// An integer column of these values.
+    fn ints(xs: Vec<u64>) -> CValue { CValue::i64(xs.into_iter().map(|x| x as i64).collect()) }
+
     fn batch(rows: &[(u64, u64, u64)]) -> CBatch<u64> {
         let keys = CValue::Prod(vec![
-            CValue::u64(rows.iter().map(|row| row.0).collect()),
+            ints(rows.iter().map(|row| row.0).collect()),
             CValue::Prod(vec![
-                CValue::u64(rows.iter().map(|row| row.1).collect()),
-                CValue::u64(rows.iter().map(|row| row.2).collect()),
+                ints(rows.iter().map(|row| row.1).collect()),
+                ints(rows.iter().map(|row| row.2).collect()),
             ]),
         ]);
         // Deliberately equal across different real keys: collision staging must not consolidate
         // these together before `cross` has a chance to compare their keys.
-        let vals = CValue::u64(vec![0; rows.len()]);
+        let vals = ints(vec![0; rows.len()]);
         let chunk = CorgiChunk::from_columns(keys, vals, (0..rows.len()).map(|_| 0).collect(), vec![1; rows.len()]);
         Rc::new(ChunkBatch::new(vec![chunk]))
     }
@@ -847,8 +842,8 @@ mod tests {
     fn cross_bridges(
         backend: &mut CorgiJoinBackend<u64>,
         instance: &JoinInstance<u64, CBatch<u64>, CBatch<u64>>,
-        left: &ProxyBridge<u64, Diff>,
-        right: &ProxyBridge<u64, Diff>,
+        left: &ProxyBridge<u64, Diff, i64>,
+        right: &ProxyBridge<u64, Diff, i64>,
     ) -> usize {
         let mut matches = JoinMatches::default();
         for a in left {
@@ -876,13 +871,13 @@ mod tests {
                     };
                     let values = |ids: Vec<u64>, compound| {
                         let n = ids.len();
-                        let col = wrap(CValue::u64(ids));
-                        if compound { CValue::Prod(vec![col, CValue::u64(vec![9; n])]) } else { col }
+                        let col = wrap(ints(ids));
+                        if compound { CValue::Prod(vec![col, ints(vec![9; n])]) } else { col }
                     };
                     let make = |compound, ids: Vec<u64>, diffs: Vec<Diff>, time| {
                         let n = ids.len();
                         Rc::new(ChunkBatch::new(vec![CorgiChunk::from_columns(
-                            wrap(CValue::u64(vec![7; n])), values(ids, compound),
+                            wrap(ints(vec![7; n])), values(ids, compound),
                             (0..n).map(|_| time).collect(), diffs,
                         )]))
                     };
@@ -893,7 +888,7 @@ mod tests {
                     let mut instance = JoinInstance { batches0: side(compound0), batches1: side(compound1), lower: 5 };
                     if let Some(right) = padded_side {
                         let extra = CorgiChunk::from_columns(
-                            wrap(CValue::u64(vec![8; 20])), values(vec![0; 20], if right { compound1 } else { compound0 }),
+                            wrap(ints(vec![8; 20])), values(vec![0; 20], if right { compound1 } else { compound0 }),
                             (0..20).collect(), vec![1; 20],
                         );
                         if right { &mut instance.batches1 } else { &mut instance.batches0 }
@@ -910,7 +905,7 @@ mod tests {
                     let mut output = Vec::new();
                     backend.cross(&instance, &mut matches, &mut output);
                     assert_eq!(output.len(), 1);
-                    assert_eq!(output[0].keys, wrap(CValue::u64(vec![7])));
+                    assert_eq!(output[0].keys, wrap(ints(vec![7])));
                     assert_eq!(output[0].vals, CValue::Prod(vec![values(vec![u64::MAX], compound0), values(vec![u64::MAX], compound1)]));
                     assert_eq!(output[0].diffs, vec![4]);
                     assert_eq!(output[0].times.get(0), 5);
@@ -923,15 +918,31 @@ mod tests {
         }
     }
 
+    /// Keys are ordered as signed integers, so a walk from the start reaches the negative ones.
+    #[test]
+    fn negative_keys_join() {
+        let make = |keys: Vec<i64>| Rc::new(ChunkBatch::new(vec![CorgiChunk::from_columns(
+            CValue::i64(keys.clone()), CValue::i64(keys.clone()), keys.iter().map(|_| 0u64).collect(), vec![1; keys.len()],
+        )]));
+        let instance = JoinInstance { batches0: vec![make(vec![i64::MIN, -5, 3])], batches1: vec![make(vec![-5, -1, 3])], lower: 0 };
+        let mut backend = backend();
+        let (mut from, mut left, mut right) = (KeyPosition::Start, Vec::new(), Vec::new());
+        while from != KeyPosition::End {
+            backend.advance(&instance, &mut from, &mut left, &mut right);
+        }
+        let keys = |bridge: &ProxyBridge<u64, Diff, i64>| bridge.iter().map(|r| r.0.0).collect::<Vec<_>>();
+        assert_eq!((keys(&left), keys(&right)), (vec![-5, 3], vec![-5, 3]));
+    }
+
     #[test]
     fn borrowed_comparisons_match_structural_rows_after_skips() {
         let make = |keys: Vec<u64>, salt: u64| {
             let n = keys.len();
             CorgiChunk::from_columns(
-                CValue::u64(keys),
+                ints(keys),
                 CValue::Prod(vec![
-                    CValue::u64((0..n).map(|i| (i as u64 ^ salt) % 3).collect()),
-                    CValue::Prod(vec![CValue::Unit(n), CValue::u64((0..n).map(|i| u64::MAX - i as u64).collect())]),
+                    ints((0..n).map(|i| (i as u64 ^ salt) % 3).collect()),
+                    CValue::Prod(vec![CValue::Unit(n), ints((0..n).map(|i| u64::MAX - i as u64).collect())]),
                 ]),
                 (0..n).map(|_| 0u64).collect(), vec![1; n],
             )
@@ -965,7 +976,7 @@ mod tests {
     fn primitive_tokens_consolidate_after_product_time_reordering() {
         use timely::order::Product;
         let chunk = CorgiChunk::from_columns(
-            CValue::u64(vec![7; 3]), CValue::u64(vec![11; 3]),
+            ints(vec![7; 3]), ints(vec![11; 3]),
             [Product::new(0, 2), Product::new(1, 0), Product::new(1, 2)].into_iter().collect(),
             vec![1, 1, -1],
         );
@@ -981,8 +992,8 @@ mod tests {
     fn compound_tokens_consolidate_after_product_time_reordering() {
         use timely::order::Product;
         let chunk = CorgiChunk::from_columns(
-            CValue::u64(vec![7; 3]),
-            CValue::Prod(vec![CValue::u64(vec![11; 3]), CValue::u64(vec![12; 3])]),
+            ints(vec![7; 3]),
+            CValue::Prod(vec![ints(vec![11; 3]), ints(vec![12; 3])]),
             [Product::new(0, 2), Product::new(1, 0), Product::new(1, 2)].into_iter().collect(),
             vec![1, 1, -1],
         );
@@ -1015,7 +1026,7 @@ mod tests {
         left.clear();
         right.clear();
         backend.advance(&instance, &mut from, &mut left, &mut right);
-        assert_eq!(backend.colliding, vec![collision]);
+        assert_eq!(backend.colliding, vec![collision as i64]);
         assert_eq!(cross_bridges(&mut backend, &instance, &left, &right), 2);
     }
 
@@ -1035,7 +1046,7 @@ mod tests {
         let (mut left, mut right) = (Vec::new(), Vec::new());
 
         backend.advance(&instance, &mut from, &mut left, &mut right);
-        assert_eq!(backend.colliding, vec![collision]);
+        assert_eq!(backend.colliding, vec![collision as i64]);
         assert_eq!(cross_bridges(&mut backend, &instance, &left, &right), 2);
     }
 }

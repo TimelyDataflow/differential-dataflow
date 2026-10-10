@@ -197,8 +197,8 @@ mod test {
     /// The declared shapes of each family — what a program's schema would pin (a variant carries
     /// only its tag, so a family with sums cannot be pinned from a row).
     fn shapes_of(name: &str) -> (corgi::Shape, corgi::Shape) {
-        use corgi::Shape::{List, Prim, Prod, Sum};
-        let u = || Prim(64);
+        use corgi::Shape::{Int, List, Prod, Sum};
+        let u = || Int;
         let pair = || Prod(vec![u(), u()]);
         match name {
             "scalars" => (u(), u()),
