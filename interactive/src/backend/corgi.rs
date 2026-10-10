@@ -25,6 +25,7 @@ use corgi::Value as CValue;
 
 use crate::backend::Backend;
 use crate::corgi::chunk::{recover_key, CorgiChunk, CorgiChunker};
+use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::exchange::CorgiPact;
 use crate::corgi::join::CorgiJoinBackend;
@@ -243,33 +244,7 @@ impl Backend for CorgiBackend {
     }
 
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, CC> {
-        // Each chunk already IS a columnar container: its key/val columns clone by Arc bump,
-        // so a chunk becomes a `CorgiContainer` for the price of copying its time lanes and
-        // its diffs. One container per chunk — no concatenation, no gather, no
-        // columns→rows→columns round-trip.
-        a.stream
-            .unary(Pipeline, "CorgiAsCollection", |_, _| {
-                |input, output| {
-                    input.for_each(|cap, data| {
-                        let mut session = output.session(&cap);
-                        for batch in data.iter() {
-                            let Some(payload) = batch.inner.as_ref() else { continue };
-                            for ch in payload.chunks.iter().filter(|c| c.len() > 0) {
-                                let mut c = CorgiContainer {
-                                    // Drop the arrangement's leading identifier lane: edges carry
-                                    // the key the program wrote, so `$0` indexes what it always did.
-                                    keys: recover_key(ch.keys()),
-                                    vals: ch.vals().clone(),
-                                    times: ch.times().clone(),
-                                    diffs: ch.diffs().to_vec(),
-                                };
-                                session.give_container(&mut c);
-                            }
-                        }
-                    });
-                }
-            })
-            .as_collection()
+        chunk_containers(a, "CorgiAsCollection")
     }
 
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, CC> {
@@ -352,6 +327,91 @@ impl Backend for CorgiBackend {
     }
 }
 
+/// The updates of a columnar arrangement as a collection of corgi containers.
+///
+/// Each chunk already IS a columnar container: its key/val columns clone by Arc bump,
+/// so a chunk becomes a `CorgiContainer` for the price of copying its time lanes and
+/// its diffs. One container per chunk — no concatenation, no gather, no
+/// columns→rows→columns round-trip.
+fn chunk_containers<'s, T: ColTime>(
+    a: Arranged<'s, TraceAgent<differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<T, Diff>>>>,
+    name: &str,
+) -> Collection<'s, T, CorgiContainer<T, Diff>> {
+    a.stream
+        .unary(Pipeline, name, |_, _| {
+            |input, output| {
+                input.for_each(|cap, data| {
+                    let mut session = output.session(&cap);
+                    for batch in data.iter() {
+                        let Some(payload) = batch.inner.as_ref() else { continue };
+                        for ch in payload.chunks.iter().filter(|c| c.len() > 0) {
+                            let mut c = CorgiContainer {
+                                // Drop the arrangement's leading identifier lane: edges carry
+                                // the key the program wrote, so `$0` indexes what it always did.
+                                keys: recover_key(ch.keys()),
+                                vals: ch.vals().clone(),
+                                times: ch.times().clone(),
+                                diffs: ch.diffs().to_vec(),
+                            };
+                            session.give_container(&mut c);
+                        }
+                    }
+                });
+            }
+        })
+        .as_collection()
+}
+
+/// Convert a collection of rows to corgi containers, at `shape` if it is known and otherwise at
+/// the shape of the first row seen. Known shapes describe empty lists and inactive sum lanes.
+pub fn rows_to_corgi<'s, T: ColTime>(
+    c: differential_dataflow::VecCollection<'s, T, (Row, Row), Diff>,
+    shape: Option<st::RowShape>,
+) -> Collection<'s, T, CorgiContainer<T, Diff>> {
+    c.inner
+        .unary(Pipeline, "ToCorgi", move |_, _| {
+            let mut pinned = shape;
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    let rows = std::mem::take(data);
+                    let mut cc = match rows.first() {
+                        None => CorgiContainer::default(),
+                        Some(((k, v), _, _)) => {
+                            let (ks, vs) = pinned.get_or_insert_with(|| {
+                                let pin = |r: &Row, what: &str| shape_of_row(r).unwrap_or_else(|e| panic!("input {what}: {e}"));
+                                (pin(k, "key"), pin(v, "value"))
+                            });
+                            CorgiContainer::from_updates(rows, ks, vs)
+                        }
+                    };
+                    output.session(&cap).give_container(&mut cc);
+                });
+            }
+        })
+        .as_collection()
+}
+
+/// Assert that every container of `c` has `shape`: an import's shape ascription, checked as data
+/// arrives when the shape of the trace it reads was not known at install.
+pub fn assert_shape<'s, T: ColTime>(
+    c: Collection<'s, T, CorgiContainer<T, Diff>>,
+    shape: st::RowShape,
+) -> Collection<'s, T, CorgiContainer<T, Diff>> {
+    c.inner
+        .unary(Pipeline, "AssertShape", move |_, _| {
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    if !data.times.is_empty() {
+                        let (k, v) = (corgi::shape_of_value(&data.keys), corgi::shape_of_value(&data.vals));
+                        assert!(k == shape.0 && v == shape.1, "input does not match its shape ascription");
+                    }
+                    output.session(&cap).give_container(data);
+                });
+            }
+        })
+        .as_collection()
+}
+
 /// Render `s` with the corgi substrate. See [`crate::backend::render_tree`].
 pub fn render_tree<'s>(
     s: &st::Scope,
@@ -383,29 +443,7 @@ pub fn render_tree_corgi<'s>(
             // The declared shape, or the one inferred at install (an imported trace's).
             let shape = import.shape.clone()
                 .or_else(|| shapes.and_then(|sh| sh.imports[k].clone()).map(|c| (c.key, c.val)));
-            c.inner
-                .unary(Pipeline, "ToCorgi", move |_, _| {
-                    // Known shapes describe empty lists and inactive sum lanes;
-                    // imports without one retain first-row inference.
-                    let mut pinned = shape;
-                    move |input, output| {
-                        input.for_each(|cap, data| {
-                            let rows = std::mem::take(data);
-                            let mut cc = match rows.first() {
-                                None => CorgiContainer::default(),
-                                Some(((k, v), _, _)) => {
-                                    let (ks, vs) = pinned.get_or_insert_with(|| {
-                                        let pin = |r: &Row, what: &str| shape_of_row(r).unwrap_or_else(|e| panic!("input {what}: {e}"));
-                                        (pin(k, "key"), pin(v, "value"))
-                                    });
-                                    CorgiContainer::from_updates(rows, ks, vs)
-                                }
-                            };
-                            output.session(&cap).give_container(&mut cc);
-                        });
-                    }
-                })
-                .as_collection()
+            rows_to_corgi(c, shape)
         })
         .collect();
     render_tree(s, scope, depth, corgi_imports, shapes)
@@ -483,6 +521,11 @@ pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::
             });
         }
     })
+}
+
+/// The updates of an imported columnar export, as corgi containers.
+pub fn export_containers<'s>(a: Arranged<'s, ExportTrace>) -> Collection<'s, u64, CorgiContainer<u64, Diff>> {
+    chunk_containers(a, "ExportContainers")
 }
 
 /// The rows of an imported columnar export, as `((key, val), time, diff)` updates.
