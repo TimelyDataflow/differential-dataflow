@@ -470,6 +470,32 @@ fn whole_row_explanations_sufficient_small() {
     assert_eq!(sizes.len(), 10, "expected 5 reached nodes, each in two positions");
 }
 
+/// Slots written as corgi lambdas, which read their rows whole: reach, with
+/// the always-true filter and the flatmap of `WHOLE_ROW` as lambdas.
+const LAMBDAS: &str = r#"
+    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst))) | filter((_, (d)) -> (d, d) eq);
+    let roots = input 1 : ((int) ; ()) | key(((n), ()) -> ((n), ()));
+    reach: {
+        let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
+        var reach = roots + proposals | distinct;
+    }
+    export "result" = reach::reach | key((k, _) -> (k, k)) | flatmap(((a), (b)) -> (a enlist, b enlist) append);
+"#;
+
+#[test]
+fn lambda_explanations_sufficient_small() {
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
+    let sizes = assert_all_rows_sufficient(LAMBDAS, &inputs);
+    assert_eq!(sizes.len(), 10, "expected 5 reached nodes, each in two positions");
+}
+
+#[test]
+fn corgi_agrees_on_lambda_explanation() {
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
+    let q = first_output_row(LAMBDAS, &inputs);
+    assert_explained_backends_agree(LAMBDAS, &inputs, &[q]);
+}
+
 /// Keys and values that are neither products nor units: a source of scalar
 /// keys and values, a scalar value at the root (`value`), a list at the root
 /// (`collect`) read by a flatmap, and scalar keys inside an iterative scope
