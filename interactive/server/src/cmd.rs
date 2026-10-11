@@ -38,15 +38,14 @@ pub enum Cmd {
     /// registered trace name or a builtin call (`random(...)`).
     /// `program` — DDIR text, inline (`load … begin` … `end-load`) or read
     /// from a file (`load <name> from <path>`).
-    /// `explain` — `explain=<arity>[,debug]`: apply the explanation rewrite,
-    /// every source without a declared shape taken to have `arity` key fields
-    /// and no value; the query input is the one after the program's own, the
-    /// demand sets its exports.
+    /// `explain` — `explain` or `explain=debug`: apply the explanation rewrite,
+    /// with `debug` tapping every demand collection with an inspect; the query
+    /// input is the one after the program's own, the demand sets its exports.
     Load {
         id_hint: String,
         bindings: BTreeMap<String, String>,
         program: String,
-        explain: Option<(usize, bool)>,
+        explain: Option<bool>,
     },
     /// Drop the named dataflow. Fails if any export of this dataflow is
     /// still imported by another live dataflow or held by a reader.
@@ -132,11 +131,9 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
             .map_err(panic_message)?;
             apply_bindings(&mut program, &bindings)?;
             // The rewrite precedes optimization (its rules assume single-op Linears).
-            if let Some((arity, debug)) = explain {
-                // A source's declared shape gives its field counts; `arity` covers the rest.
-                let shapes = interactive::explain::source_arities(&program, (arity, 0));
+            if let Some(debug) = explain {
                 let options = interactive::explain::Options { debug_inspects: debug };
-                program = catch_unwind(AssertUnwindSafe(|| interactive::explain::explain_with(&program, &shapes, options)))
+                program = catch_unwind(AssertUnwindSafe(|| interactive::explain::explain_with(&program, options)))
                     .map_err(panic_message)?;
             }
             program.optimize();
@@ -297,7 +294,7 @@ struct PendingLoad {
     reqid: ReqId,
     id_hint: String,
     bindings: BTreeMap<String, String>,
-    explain: Option<(usize, bool)>,
+    explain: Option<bool>,
     body: String,
     /// Set once the body exceeds the size gate; the rest of the body is
     /// swallowed (not stored) and `end-load` reports this error, so an
@@ -498,7 +495,7 @@ enum ParseOutcome {
     BeginLoad {
         id_hint: String,
         bindings: BTreeMap<String, String>,
-        explain: Option<(usize, bool)>,
+        explain: Option<bool>,
     },
     BeginFeed {
         prog: String,
@@ -506,19 +503,6 @@ enum ParseOutcome {
     },
 }
 
-/// `explain=<arity>[,debug]`: the key arity of sources without a declared shape,
-/// and whether to tap every demand collection with an inspect.
-fn parse_explain(spec: &str) -> Result<(usize, bool), String> {
-    let (arity, debug) = match spec.split_once(',') {
-        Some((arity, "debug")) => (arity, true),
-        Some(_) => return Err(format!("load: explain=<arity>[,debug], got {spec:?}")),
-        None => (spec, false),
-    };
-    let arity = arity
-        .parse()
-        .map_err(|_| format!("load: explain= arity must be a number, got {arity:?}"))?;
-    Ok((arity, debug))
-}
 
 /// A `<value>` for `feed`: a comma-separated integer row → `Tuple`, `_` or
 /// empty → unit, else a closed scalar term (one whitespace-free token, e.g.
@@ -588,7 +572,7 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
             // file, read here on the session thread. `load <name> [options] begin`
             // switches the parser into
             // body-collection mode; subsequent lines are program text terminated by
-            // `<reqid> end-load`. Options: `explain=<arity>[,debug]`, `name=binding`.
+            // `<reqid> end-load`. Options: `explain`, `explain=debug`, `name=binding`.
             const USAGE: &str = "load: expected `<name> from <path> [options]` or `<name> [options] begin`";
             let Some((id_hint, rest)) = args.split_first() else {
                 return ParseOutcome::Err(USAGE.into());
@@ -601,21 +585,14 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
             let mut bindings = BTreeMap::new();
             let mut explain = None;
             for tok in options {
-                if let Some(spec) = tok.strip_prefix("explain=") {
-                    explain = match parse_explain(spec) {
-                        Ok(explain) => Some(explain),
-                        Err(error) => return ParseOutcome::Err(error),
-                    };
-                    continue;
-                }
-                if *tok == "--explain" {
-                    return ParseOutcome::Err(
-                        "load: `--explain` needs the sources' arity: `explain=<arity>[,debug]`".into(),
-                    );
+                match *tok {
+                    "explain" => { explain = Some(false); continue; }
+                    "explain=debug" => { explain = Some(true); continue; }
+                    _ => {}
                 }
                 let Some((k, v)) = tok.split_once('=') else {
                     return ParseOutcome::Err(format!(
-                        "load: argument {:?} must be `explain=<arity>[,debug]` or `name=binding`",
+                        "load: argument {:?} must be `explain`, `explain=debug`, or `name=binding`",
                         tok
                     ));
                 };
@@ -901,23 +878,25 @@ mod tests {
         std::fs::write(&ddp2, "export \"s\" = input 0;\n").unwrap();
         let mut p = LineParser::default();
         let got = feed_all(&mut p, &[
-            &format!("r1 load p from {} explain=2,debug e=random(seed=1,arity=2,range=8,count=12)\n", ddp.display()),
+            &format!("r1 load p from {} explain=debug e=random(seed=1,arity=2,range=8,count=12)\n", ddp.display()),
             &format!("r2 load q from {}\n", ddp2.display()),
             "r3 load p from /nonexistent/p.ddp\n",
             "r4 load p --explain begin\n",
+            &format!("r5 load p from {} explain\n", ddp.display()),
         ]);
         match &got[0].1 {
             Ok(Cmd::Load { id_hint, bindings, program, explain }) => {
                 assert_eq!(id_hint, "p");
                 assert_eq!(program, "export \"r\" = input 0;\n");
-                assert_eq!(*explain, Some((2, true)));
+                assert_eq!(*explain, Some(true));
                 assert_eq!(bindings.get("e").map(String::as_str), Some("random(seed=1,arity=2,range=8,count=12)"));
             }
             other => panic!("unexpected {other:?}"),
         }
         assert!(matches!(&got[1].1, Ok(Cmd::Load { explain: None, .. })));
         assert!(matches!(&got[2].1, Err(e) if e.starts_with("load: cannot read")));
-        assert!(matches!(&got[3].1, Err(e) if e.contains("explain=<arity>")));
+        assert!(matches!(&got[3].1, Err(e) if e.contains("`explain`")));
+        assert!(matches!(&got[4].1, Ok(Cmd::Load { explain: Some(false), .. })));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
