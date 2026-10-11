@@ -92,6 +92,14 @@
 //! - Binders: `^k` refers to the k-th enclosing `case`/`fold` binder (de
 //!   Bruijn, innermost = 0); `case` patterns also bind payload fields by name.
 //! - Conditional: `if(cond, then, els)`.
+//!
+//! # Corgi lambdas
+//!
+//! Any slot may instead be a corgi lambda, `pat -> body`, in corgi's ML syntax: it runs
+//! `let pat = input in body` with `input` the tuple of the slot's rows, `(key, val)` for a linear
+//! op and `(key, left val, right val)` for a join. In `key`, `map`, and `join` the body gives the
+//! pair `(key, val)`; in `value`, `filter`, `flatmap`, and `enter_at` it gives the one value. For
+//! example, `key(((src, dst), ()) -> ((src), (dst)))` is `key($0[0] ; $0[1])`.
 
 use super::*;
 use crate::ir::{BinOp, Projection, Reducer, SumTy, Term, UnOp};
@@ -101,21 +109,83 @@ enum Token {
     Let, Var, Export, Type, Case, Fold,
     Input, Import, Key, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, EnterAt, LiftIter, FlatMap, Inspect,
     Ident(String), Int(i64), Str(String),
+    /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
+    Lambda { pat: String, body: String },
     Dollar, Caret, LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Semi, Colon, ColonColon, Eq, EqEq, NotEq, Lt, LtEq, Gt, GtEq, AndAnd, FatArrow,
     Pipe, Plus, Minus, Star, Eof,
 }
 
+/// The source as a stream of chars, with the byte offset of the next one.
+#[derive(Clone)]
+struct Chars<'a> { src: &'a str, at: usize, peeked: Option<char> }
+
+impl Chars<'_> {
+    fn peek(&mut self) -> Option<&char> { self.peeked = self.src[self.at..].chars().next(); self.peeked.as_ref() }
+}
+
+impl Iterator for Chars<'_> {
+    type Item = char;
+    fn next(&mut self) -> Option<char> { let c = self.src[self.at..].chars().next()?; self.at += c.len_utf8(); Some(c) }
+}
+
+/// A corgi lambda that ends the parenthesized group starting at byte `from` of `src` (just after
+/// its `(`): the group holds a `->` outside any nested bracket. Returns the lambda's start (after
+/// the group's last comma before the arrow, or `from`), the arrow, and the group's `)`.
+///
+/// Corgi's text is not DDIR's (it has `.2`, float literals, `#` comments), so the lexer takes the
+/// lambda whole rather than lexing it. A pattern holds no comma outside parentheses, so the last
+/// comma before the arrow separates the lambda from the arguments before it, as in `join`.
+fn lambda_in(src: &str, from: usize) -> Option<(usize, usize, usize)> {
+    let bytes = src.as_bytes();
+    let (mut depth, mut start, mut arrow) = (0usize, from, None);
+    let mut i = from;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' { if bytes[i] == b'\\' { i += 1; } i += 1; }
+            }
+            b'#' => { while i < bytes.len() && bytes[i] != b'\n' { i += 1; } }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => { while i < bytes.len() && bytes[i] != b'\n' { i += 1; } }
+            b'-' if bytes.get(i + 1) == Some(&b'>') && depth == 0 && arrow.is_none() => { arrow = Some(i); i += 1; }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' if depth == 0 => return arrow.map(|a| (start, a, i)),
+            b')' | b']' | b'}' => depth -= 1,
+            b',' if depth == 0 && arrow.is_none() => start = i + 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
 fn tokenize(input: &str) -> Vec<Token> {
+    let mut tokens = lex(input);
+    tokens.push(Token::Eof);
+    tokens
+}
+
+fn lex(input: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
-    let mut chars = input.chars().peekable();
+    let mut chars = Chars { src: input, at: 0, peeked: None };
     while let Some(&ch) = chars.peek() {
         match ch {
             ' ' | '\t' | '\n' | '\r' => { chars.next(); },
             '-' if chars.clone().nth(1).map_or(false, |c| c == '-') => {
                 while let Some(&c) = chars.peek() { chars.next(); if c == '\n' { break; } }
             },
-            '(' => { chars.next(); tokens.push(Token::LParen); },
+            '(' => {
+                chars.next();
+                tokens.push(Token::LParen);
+                if let Some((start, arrow, close)) = lambda_in(input, chars.at) {
+                    tokens.extend(lex(&input[chars.at..start]));
+                    let (pat, body) = (input[start..arrow].trim().to_string(), input[arrow + 2..close].trim().to_string());
+                    tokens.push(Token::Lambda { pat, body });
+                    tokens.push(Token::RParen);
+                    chars.at = close + 1;
+                }
+            },
             ')' => { chars.next(); tokens.push(Token::RParen); },
             '{' => { chars.next(); tokens.push(Token::LBrace); },
             '}' => { chars.next(); tokens.push(Token::RBrace); },
@@ -161,7 +231,6 @@ fn tokenize(input: &str) -> Vec<Token> {
             other => panic!("Unexpected character: {:?}", other),
         }
     }
-    tokens.push(Token::Eof);
     tokens
 }
 
@@ -455,19 +524,19 @@ impl Parser {
             Token::Map => { self.next(); let p = self.parse_projection(); Expr::Map(Box::new(lhs), p) },
             Token::Ident(name) if name == "value" => {
                 self.next(); self.expect(&Token::LParen);
-                let val = self.parse_term(); self.expect(&Token::RParen);
+                let val = self.parse_slot_term(); self.expect(&Token::RParen);
                 Expr::Map(Box::new(lhs), Projection { key: Term::Var(0), val })
             },
-            Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_join_arg(); self.expect(&Token::Comma); let p = self.parse_projection(); self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
+            Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_join_arg(); self.expect(&Token::Comma); let p = match self.lambda(3) { Some(l) => Self::split(l), None => self.parse_projection() }; self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
             Token::Min => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Min) },
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
             Token::Count => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Count) },
             Token::Collect => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Collect) },
-            Token::FlatMap => { self.next(); self.expect(&Token::LParen); let l = self.parse_term(); self.expect(&Token::RParen); Expr::FlatMap(Box::new(lhs), l) },
+            Token::FlatMap => { self.next(); self.expect(&Token::LParen); let l = self.parse_slot_term(); self.expect(&Token::RParen); Expr::FlatMap(Box::new(lhs), l) },
             Token::Arrange => { self.next(); Expr::Arrange(Box::new(lhs)) },
             Token::Negate => { self.next(); Expr::Negate(Box::new(lhs)) },
-            Token::Filter => { self.next(); self.expect(&Token::LParen); let c = self.parse_term(); self.expect(&Token::RParen); Expr::Filter(Box::new(lhs), c) },
-            Token::EnterAt => { self.next(); self.expect(&Token::LParen); let f = self.parse_term(); self.expect(&Token::RParen); Expr::EnterAt(Box::new(lhs), f) },
+            Token::Filter => { self.next(); self.expect(&Token::LParen); let c = self.parse_slot_term(); self.expect(&Token::RParen); Expr::Filter(Box::new(lhs), c) },
+            Token::EnterAt => { self.next(); self.expect(&Token::LParen); let f = self.parse_slot_term(); self.expect(&Token::RParen); Expr::EnterAt(Box::new(lhs), f) },
             Token::LiftIter => { self.next(); Expr::LiftIter(Box::new(lhs)) },
             Token::Inspect => { self.next(); self.expect(&Token::LParen); let l = self.parse_ident(); self.expect(&Token::RParen); Expr::Inspect(Box::new(lhs), l) },
             other => panic!("Expected pipe operator, got {:?}", other),
@@ -476,7 +545,29 @@ impl Parser {
 
     fn parse_projection(&mut self) -> Projection {
         self.expect(&Token::LParen);
+        if let Some(l) = self.lambda(2) {
+            self.expect(&Token::RParen);
+            return Self::split(l);
+        }
         self.parse_projection_inner()
+    }
+
+    /// A slot written as a corgi lambda, over the slot's `arity` input rows (two for a linear
+    /// op, three for a join): a term running `let pat = input in body` on the tuple of them.
+    fn lambda(&mut self, arity: usize) -> Option<Term> {
+        let Token::Lambda { pat, body } = self.peek().clone() else { return None };
+        self.next();
+        Some(Term::Corgi(format!("let {pat} = input in {body}"), (0..arity).map(Term::Var).collect()))
+    }
+
+    /// The projection a lambda's `(key, val)` result gives.
+    fn split(lambda: Term) -> Projection {
+        Projection { key: Term::Proj(Box::new(lambda.clone()), 0), val: Term::Proj(Box::new(lambda), 1) }
+    }
+
+    /// A linear op's term slot: a corgi lambda, or a term.
+    fn parse_slot_term(&mut self) -> Term {
+        self.lambda(2).unwrap_or_else(|| self.parse_term())
     }
 
     // A projection `(k1, k2 ; v1, v2)` builds `key = tuple(k1, k2)` and

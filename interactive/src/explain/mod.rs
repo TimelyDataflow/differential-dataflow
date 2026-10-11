@@ -264,6 +264,7 @@ fn with_rows(t: &Term, rows: &[Term]) -> Term {
         Term::List(ts) => Term::List(ts.iter().map(go).collect()),
         Term::Hash(ts) => Term::Hash(ts.iter().map(go).collect()),
         Term::Call(name, ts) => Term::Call(name.clone(), ts.iter().map(go).collect()),
+        Term::Corgi(src, ts) => Term::Corgi(src.clone(), ts.iter().map(go).collect()),
         Term::Spread(t) => Term::Spread(bx(t)),
         Term::Proj(t, i) => Term::Proj(bx(t), *i),
         Term::Unary(op, t) => Term::Unary(*op, bx(t)),

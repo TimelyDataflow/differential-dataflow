@@ -188,7 +188,7 @@ fn mentions_env(t: &Term, depth: usize) -> bool {
         Term::Var(_) => true,
         Term::Bound(k) => *k >= depth,
         Term::Int(_) => false,
-        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) | Term::Call(_, fs) => fs.iter().any(|f| mentions_env(f, depth)),
+        Term::Tuple(fs) | Term::List(fs) | Term::Hash(fs) | Term::Call(_, fs) | Term::Corgi(_, fs) => fs.iter().any(|f| mentions_env(f, depth)),
         Term::Spread(inner) | Term::Proj(inner, _) | Term::Unary(_, inner) => mentions_env(inner, depth),
         Term::Inject { tag, payload, .. } => mentions_env(tag, depth) || mentions_env(payload, depth),
         Term::Case { scrutinee, arms, default } => {
@@ -277,6 +277,17 @@ pub fn compile(
                 b.tuple(fields)
             };
             Ok(b.add(NumOp::Host(corgi::HostOp(kernel)), vec![input]))
+        }
+        Term::Corgi(src, args) => {
+            // The program's input is the tuple of its arguments, a `Unit` over the anchor for none.
+            let input = if args.is_empty() {
+                b.add(Op::Unit, vec![anchor])
+            } else {
+                let fields = args.iter().map(|a| compile(a, b, env, env_shapes, anchor, None)).collect::<Res<Vec<_>>>()?;
+                b.tuple(fields)
+            };
+            let program = parsed(src)?;
+            Ok(b.graft(&program, input))
         }
         Term::Var(i) => env.get(*i).copied().ok_or_else(|| format!("`${i}` is not in scope here")),
         Term::Bound(k) => {
@@ -763,7 +774,8 @@ fn lower(terms: &[&Term], shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
     let env: Vec<usize> = (0..shapes.len()).map(|i| b.add(Op::Field(i), vec![input])).collect();
     let outs = terms.iter().map(|t| compile(t, &mut b, &env, shapes, input, None)).collect::<Res<Vec<_>>>()?;
     let out = if let [one] = outs[..] { one } else { b.tuple(outs) };
-    let g = b.finish(out);
+    // CSE, so a term compiled twice runs once: a lambda's key and val are two fields of one program.
+    let g = corgi::cse(&b.finish(out));
     let output = corgi::shape_of(&g, &Shape::Prod(shapes.to_vec()))?;
     Ok((g, output))
 }
@@ -805,6 +817,31 @@ pub fn compile_join_projection(key: &Term, val: &Term, kshape: &Shape, v0shape: 
 /// Input `Prod([key, val])`; output `Prod([newkey, newval])`.
 pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     Ok(lower(&[key, val], &[kshape.clone(), vshape.clone()])?.0)
+}
+
+/// Evaluate the corgi program `src` on one row, as `ir::eval` does for `Term::Corgi`. The row's
+/// shape is its own, so a row whose shape it cannot tell alone (an empty list, a variant) panics.
+pub fn eval_corgi_row(src: &str, input: DValue) -> DValue {
+    let shape = shape_of_row(&input).unwrap_or_else(|e| panic!("corgi program `{src}`: {e}"));
+    let graph = parsed(src).unwrap_or_else(|e| panic!("corgi program `{src}`: {e}"));
+    let out = corgi::eval_graph(&graph, transcode_owned(vec![input], &shape));
+    let out_shape = corgi::shape_of_value(&out);
+    untranscode(out, &out_shape).pop().expect("one row in, one row out")
+}
+
+/// The graph of the corgi program `src` (`Term::Corgi`), parsed once for the life of the process.
+/// `Err` is a parse error.
+fn parsed(src: &str) -> Res<std::sync::Arc<Graph<NumOp>>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static GRAPHS: OnceLock<Mutex<HashMap<String, Arc<Graph<NumOp>>>>> = OnceLock::new();
+    let mut map = GRAPHS.get_or_init(Default::default).lock().unwrap();
+    if let Some(g) = map.get(src) {
+        return Ok(Arc::clone(g));
+    }
+    let g = Arc::new(corgi::parse_ml(src)?);
+    map.insert(src.to_string(), Arc::clone(&g));
+    Ok(g)
 }
 
 /// The Float functions without a composition of corgi ops, as host kernels over the float

@@ -131,6 +131,9 @@ pub enum Term {
     /// columnar kernel if one is registered (`register_kernel`), otherwise its
     /// row body over just the call's arguments.
     Call(String, Vec<Term>),
+    /// A corgi ML program, run with the tuple of the arguments as its `input`. A slot written
+    /// `pat -> body` is `let pat = input in body` over the slot's input rows.
+    Corgi(String, Vec<Term>),
 }
 
 /// The sum type an `Inject` builds into. `Declared` carries the full lane shapes of a `type`
@@ -326,6 +329,10 @@ pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
                 assert!(v.has_shape(s), "`{name}`: argument {i} is {v:?}, not of the declared shape {s}");
             }
             (f.body)(&vals)
+        }
+        Term::Corgi(src, args) => {
+            let input = Value::Tuple(args.iter().map(|a| eval(a, env)).collect());
+            crate::corgi::logic::eval_corgi_row(src, input)
         }
         Term::Var(i) => env[*i].clone(),
         Term::Bound(k) => env[env.len() - 1 - *k].clone(),
