@@ -11,7 +11,8 @@
 //! program's scopes into an output scope under construction; every nested
 //! scope additionally `lift_iter`s and exports each internal collection, so
 //! every value-producing site in the subtree has a "host-visible" form — its
-//! user-iter coordinates folded into the value, innermost first — at the
+//! value as `(V, chain…)`, the user's value whole and then its user-iter
+//! coordinates, innermost first — at the
 //! embedding level.
 //!
 //! A scope exports its lifted internals, and the cascade through enclosing
@@ -136,9 +137,19 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
                 // Lift each subtree site at this scope's exit and export it:
                 // the lift folds this scope's iteration coordinate into the
                 // value (innermost coordinates were folded by deeper exits),
-                // and the export is the host-visible edge upward.
+                // and the export is the host-visible edge upward. A site of
+                // this scope first has its value wrapped as `(V)`, so the
+                // lifts extend it to `(V, chain…)` with `V` whole.
                 let sub_idx = out.items.len();
                 for (a, vref) in child_visible {
+                    let vref = if a.path == child_path {
+                        let wrap_idx = child_out.items.len();
+                        let wrap = Projection { key: Term::Var(0), val: Term::Tuple(vec![Term::Var(1)]) };
+                        child_out.items.push(Item::Op(Node::Linear { input: vref, ops: vec![LinearOp::Project(wrap)] }));
+                        Ref::Local(wrap_idx)
+                    } else {
+                        vref
+                    };
                     let lift_idx = child_out.items.len();
                     child_out.items.push(Item::Op(Node::Linear { input: vref, ops: vec![LinearOp::LiftIter] }));
                     let export_idx = child_out.exports.len();
@@ -235,111 +246,53 @@ fn resolve(root: &Scope, path: &[usize], r: &Ref) -> Target {
     }
 }
 
-// ===== Term-arity: how a projection reshapes a flat `(k, v)` row =====
+// ===== User terms over explain's rows =====
 //
-// The demand envelope is a flat value tuple `[V (v) | chain | q]`, so explain
-// needs each site's `v` to know where the chain starts. A projection side is a
-// `Term::Tuple` of fields; a bare-row `Spread($r)` field splices row r's `v`
-// fields, every other field is one value. (Explain targets flat relational
-// programs — tuples of scalar fields.)
-fn field_width(t: &Term, rows: &[usize]) -> usize {
+// Explain reuses the user's terms (a filter's predicate, a projection, a
+// flatmap's list) over its own rows, whose values carry the chain (and `q`)
+// after the user's value. A term must see the user's row, not that one, so
+// each `$r` is replaced by the user's row as it sits in explain's.
+
+/// `t` with each input row `$r` replaced by `rows[r]`.
+fn with_rows(t: &Term, rows: &[Term]) -> Term {
+    let go = |t: &Term| with_rows(t, rows);
+    let bx = |t: &Term| Box::new(with_rows(t, rows));
     match t {
-        Term::Spread(inner) => match &**inner {
-            Term::Var(r) => rows.get(*r).copied().unwrap_or(0),
-            _ => 1,
+        Term::Var(r) => rows[*r].clone(),
+        Term::Bound(_) | Term::Int(_) => t.clone(),
+        Term::Tuple(ts) => Term::Tuple(ts.iter().map(go).collect()),
+        Term::List(ts) => Term::List(ts.iter().map(go).collect()),
+        Term::Hash(ts) => Term::Hash(ts.iter().map(go).collect()),
+        Term::Call(name, ts) => Term::Call(name.clone(), ts.iter().map(go).collect()),
+        Term::Spread(t) => Term::Spread(bx(t)),
+        Term::Proj(t, i) => Term::Proj(bx(t), *i),
+        Term::Unary(op, t) => Term::Unary(*op, bx(t)),
+        Term::Binary(op, a, b) => Term::Binary(*op, bx(a), bx(b)),
+        Term::Inject { tag, payload, sum } => Term::Inject { tag: bx(tag), payload: bx(payload), sum: sum.clone() },
+        Term::Case { scrutinee, arms, default } => Term::Case {
+            scrutinee: bx(scrutinee),
+            arms: arms.iter().map(go).collect(),
+            default: default.as_deref().map(bx),
         },
-        _ => 1,
-    }
-}
-fn proj_arity(t: &Term, rows: &[usize]) -> usize {
-    match t { Term::Tuple(fields) => fields.iter().map(|f| field_width(f, rows)).sum(), _ => 1 }
-}
-fn apply_ops_arity((mut k, mut v): (usize, usize), ops: &[LinearOp]) -> (usize, usize) {
-    for op in ops {
-        match op {
-            LinearOp::Project(p) => { let rows = [k, v]; k = proj_arity(&p.key, &rows); v = proj_arity(&p.val, &rows); }
-            LinearOp::Filter(_) | LinearOp::Negate | LinearOp::EnterAt(_) => {}
-            LinearOp::LiftIter => v += 1,
-            LinearOp::FlatMap(_) => v = 2, // value becomes tuple(pos, element)
-        }
-    }
-    (k, v)
-}
-
-/// `(k, v)` per site, forward-propagated from source arities to a fixed point.
-fn site_shapes(
-    p: &Program,
-    source_shapes: &[(usize, usize)],
-) -> BTreeMap<Addr, (usize, usize)> {
-    let mut shapes: BTreeMap<Addr, (usize, usize)> = BTreeMap::new();
-    loop {
-        let before = shapes.len();
-        walk_shapes(&p.root, &p.root, &[], source_shapes, &mut shapes);
-        if shapes.len() == before { break; }
-    }
-    shapes
-}
-
-fn shape_of_ref(
-    root: &Scope,
-    path: &[usize],
-    r: &Ref,
-    source_shapes: &[(usize, usize)],
-    shapes: &BTreeMap<Addr, (usize, usize)>,
-) -> Option<(usize, usize)> {
-    match resolve(root, path, r) {
-        Target::Source(k) => Some(source_shapes[k]),
-        Target::Site(a) => shapes.get(&a).copied(),
+        Term::Fold { list, init, step } => Term::Fold { list: bx(list), init: bx(init), step: bx(step) },
+        Term::If { cond, then, els } => Term::If { cond: bx(cond), then: bx(then), els: bx(els) },
     }
 }
 
-fn walk_shapes(
-    root: &Scope,
-    s: &Scope,
-    path: &[usize],
-    source_shapes: &[(usize, usize)],
-    shapes: &mut BTreeMap<Addr, (usize, usize)>,
-) {
-    let addr = |site: Site| Addr { path: path.to_vec(), site };
-    for b in &s.binds {
-        if !shapes.contains_key(&addr(Site::Var(b.var))) {
-            if let Some(sh) = shape_of_ref(root, path, &b.value, source_shapes, shapes) {
-                shapes.insert(addr(Site::Var(b.var)), sh);
-            }
-        }
-    }
-    for (i, item) in s.items.iter().enumerate() {
-        match item {
-            Item::Op(node) => {
-                if shapes.contains_key(&addr(Site::Op(i))) { continue; }
-                let of = |r: &Ref| shape_of_ref(root, path, r, source_shapes, shapes);
-                let sh = match node {
-                    Node::Linear { input, ops } => of(input).map(|s| apply_ops_arity(s, ops)),
-                    Node::Concat(refs) => refs.iter().find_map(|r| of(r)),
-                    Node::Arrange(r) | Node::Inspect { input: r, .. } => of(r),
-                    Node::Join { left, right, projection } => match (of(left), of(right)) {
-                        (Some((kl, vl)), Some((_, vr))) => {
-                            let rows = [kl, vl, vr];
-                            Some((proj_arity(&projection.key, &rows), proj_arity(&projection.val, &rows)))
-                        }
-                        _ => None,
-                    },
-                    Node::Reduce { input, reducer } => of(input).map(|(k, v)| match reducer {
-                        Reducer::Distinct => (k, 0),
-                        Reducer::Min => (k, v),
-                        Reducer::Count => (k, 1),
-                        Reducer::Collect => (k, 1),
-                    }),
-                };
-                if let Some(sh) = sh { shapes.insert(addr(Site::Op(i)), sh); }
-            }
-            Item::Sub(child) => {
-                let mut cp = path.to_vec();
-                cp.push(i);
-                walk_shapes(root, child, &cp, source_shapes, shapes);
-            }
-        }
-    }
+/// `p` over rows whose input rows are `rows` (see [`with_rows`]).
+fn proj_with_rows(p: &Projection, rows: &[Term]) -> Projection {
+    Projection { key: with_rows(&p.key, rows), val: with_rows(&p.val, rows) }
+}
+
+/// The user's rows in an explain row whose slots after the key are envelope
+/// values: the key whole, and each value the envelope's first field.
+fn user_rows(slots: usize) -> Vec<Term> {
+    std::iter::once(var(0)).chain((1..slots).map(|s| f(s, 0))).collect()
+}
+
+/// A user row `(K ; V)` as an envelope row `(K ; (V))`, with an empty chain.
+fn envelope() -> Projection {
+    Projection { key: var(0), val: tup(vec![var(1)]) }
 }
 
 /// Options for the explanation rewrite.
@@ -403,32 +356,25 @@ impl Sb {
             self.op(Node::Inspect { input, label });
         }
     }
-    /// Semijoin `left (K; V)` with `right (K; V)` by `(K)`, keep left's rows.
-    fn semijoin_data(&mut self, left: Ref, right: Ref, k_arity: usize, v_arity: usize) -> Ref {
-        self.join(left, right, <Val as RowModel>::project_kv(k_arity, v_arity))
+    /// Semijoin `left (K ; V)` with `right` by `K`, keeping left's rows.
+    fn semijoin(&mut self, left: Ref, right: Ref) -> Ref {
+        self.join(left, right, Projection { key: var(0), val: var(1) })
     }
-    /// Set-level distinct on whole `(K ; V ++ chain ++ q)` rows. `v_arity` is
-    /// the *full* value width (V + chain + q), so `pack` moves the entire row
-    /// into the join key and `distinct_unpack` restores it — dedup on identical
-    /// demand rows, not on `(K, V)`.
-    fn distinct_full(&mut self, input: Ref, k_arity: usize, v_arity: usize) -> Ref {
-        let packed = self.project(input, <Val as RowModel>::pack(k_arity, v_arity, 0, false));
+    /// Set-level distinct on whole rows: move the row into the key, distinct,
+    /// and move it back.
+    fn distinct_full(&mut self, input: Ref) -> Ref {
+        let packed = self.project(input, Projection { key: tup(vec![var(0), var(1)]), val: tup(Vec::new()) });
         let dist = self.reduce(packed, Reducer::Distinct);
-        self.project(dist, <Val as RowModel>::distinct_unpack(k_arity, v_arity))
+        self.project(dist, Projection { key: f(0, 0), val: f(0, 1) })
     }
 }
 
 /// One upstream edge into a backward rule: the target's host-side `(data,
-/// user)` collections from both clones, its shape, and its user-chain length.
+/// user)` collections from both clones, and its user-chain length.
 struct Side {
     witness: Ref,
     forward: Ref,
-    shape: (usize, usize),
     user_len: usize,
-}
-
-fn strip_user_and_q(k_arity: usize, v_arity: usize) -> Projection {
-    <Val as RowModel>::project_kv(k_arity, v_arity)
 }
 
 impl Side {
@@ -437,7 +383,6 @@ impl Side {
         decouple::SideInfo {
             witness: self.witness.clone(),
             forward: self.forward.clone(),
-            shape: self.shape,
             user_len: self.user_len,
         }
     }
@@ -453,21 +398,19 @@ impl Sb {
     }
 
     /// Keyed lookup (Reduce-style), with Min's value-narrowing.
-    fn emit_lookup_keyed(&mut self, dep_y: Ref, side: &Side, output_shape: (usize, usize), out_user_len: usize, reducer: &Reducer) -> Ref {
+    fn emit_lookup_keyed(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, reducer: &Reducer) -> Ref {
         let min = matches!(reducer, Reducer::Min);
-        decouple::keyed_lookup::<Val, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, min)
+        decouple::keyed_lookup::<Val, Sb>(self, &dep_y, &side.info(), out_user_len, min)
     }
 
     /// Lossy lookup (Linear[Project]), through the pair table.
-    fn emit_lookup_lossy(&mut self, dep_y: Ref, side: &Side, output_shape: (usize, usize), out_user_len: usize, proj: &Projection) -> Ref {
-        decouple::lossy_lookup::<Val, Sb>(self, &dep_y, &side.info(), output_shape, out_user_len, proj)
+    fn emit_lookup_lossy(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, proj: &Projection) -> Ref {
+        decouple::lossy_lookup::<Val, Sb>(self, &dep_y, &side.info(), out_user_len, proj)
     }
 
     /// Join's backward rule: two contribs (left, right).
-    fn emit_lookup_join(&mut self, dep_y: Ref, left: &Side, right: &Side, output_shape: (usize, usize), out_user_len: usize, projection: &Projection) -> (Ref, Ref) {
-        decouple::join_lookup::<Val, Sb>(
-            self, &dep_y, &left.info(), &right.info(), output_shape, out_user_len, projection,
-        )
+    fn emit_lookup_join(&mut self, dep_y: Ref, left: &Side, right: &Side, out_user_len: usize, projection: &Projection) -> (Ref, Ref) {
+        decouple::join_lookup::<Val, Sb>(self, &dep_y, &left.info(), &right.info(), out_user_len, projection)
     }
 
     /// FlatMap's (UNNEST's) backward rule — the universal backstop instantiated
@@ -480,42 +423,40 @@ impl Sb {
     /// The one wrinkle is that a plain flatmap drops the source row and the key
     /// isn't unique, so we **re-key the input by itself** before exploding (the
     /// source then rides through in the join key) and re-project to the packed
-    /// output afterwards. `output_shape.1 == 2` (the `tuple(pos, elem)` value).
-    fn emit_lookup_flatmap(&mut self, dep_y: Ref, side: &Side, output_shape: (usize, usize), out_user_len: usize, list_term: &Term) -> Ref {
-        let (_, v_in) = side.shape;
-        let v_out = output_shape.1;          // 2: pos, elem
+    /// output afterwards. `list_term` reads the re-keyed rows: the input's key
+    /// is the key's first field, and its value is the row's value.
+    fn emit_lookup_flatmap(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, list_term: &Term) -> Ref {
         let d = out_user_len;                // same depth for input and output
         // Pair table: re-key the input by the whole input row, explode (the
-        // source survives in the key), then re-key to (k, pos, elem) carrying
+        // source survives in the key), then re-key to (k, (pos, elem)) carrying
         // the source as the value.
         let src = self.concat(vec![side.witness.clone(), side.forward.clone()]);
-        let rekeyed = self.project(src, Projection { key: tup(vec![var(0), var(1)]), val: var(1) });
+        let rekeyed = self.project(src, Projection { key: tup(vec![var(0), var(1)]), val: f(1, 0) });
         let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list_term.clone())]);
-        let pair = self.project(exploded, Projection { key: tup(vec![f(0, 0), f(1, 0), f(1, 1)]), val: var(0) });
-        // Re-key the demand by the same packed output; keep its chain ++ q.
-        let dep_keyed = self.project(dep_y, Projection { key: tup(vec![var(0), f(1, 0), f(1, 1)]), val: tup(fidx(1, v_out, v_out + d + 1)) });
+        let pair = self.project(exploded, Projection { key: tup(vec![f(0, 0), var(1)]), val: var(0) });
+        // Re-key the demand by the same output (k, (pos, elem)); keep its chain ++ q.
+        let dep_keyed = self.project(dep_y, Projection { key: tup(vec![var(0), f(1, 0)]), val: tup(fidx(1, 1, d + 2)) });
         // Join into a wide row [V_in | chain_in | chain_out | q]. Source is `$2`
-        // = (k, host_val); host_val = [V_in | chain_in]. Dep' is `$1` = [chain_out | q].
-        let mut wide = (0..v_in).map(|c| fld(f(2, 1), c)).collect::<Vec<_>>();   // V_in
-        wide.extend((0..d).map(|c| fld(f(2, 1), v_in + c)));                     // chain_in
-        wide.extend(fidx(1, 0, d));                                             // chain_out
-        wide.push(f(1, d));                                                     // q
+        // = (k, host_val); host_val = (V_in, chain_in). Dep' is `$1` = [chain_out | q].
+        let mut wide = vec![fld(f(2, 1), 0)];                                     // V_in
+        wide.extend((0..d).map(|c| fld(f(2, 1), 1 + c)));                         // chain_in
+        wide.extend(fidx(1, 0, d));                                               // chain_out
+        wide.push(f(1, d));                                                       // q
         let joined = self.join(dep_keyed, pair, Projection { key: f(2, 0), val: tup(wide) });
         // Soundness: chain_in ≤ chain_out (same depth, so coordinate-aligned).
-        let cond = and_all((0..d).map(|c| le(f(1, v_in + c), f(1, v_in + d + c))).collect());
+        let cond = and_all((0..d).map(|c| le(f(1, 1 + c), f(1, 1 + d + c))).collect());
         let filtered = match cond { Some(c) => self.filter(joined, c), None => joined };
-        // Reform the demanded input (k ; V_in ++ chain_out ++ q).
-        let mut val = fidx(1, 0, v_in);
-        val.extend(fidx(1, v_in + d, v_in + 2 * d));
-        val.push(f(1, v_in + 2 * d));
+        // Reform the demanded input (k ; V_in, chain_out, q).
+        let mut val = vec![f(1, 0)];
+        val.extend(fidx(1, 1 + d, 2 + 2 * d));
         self.project(filtered, Projection { key: var(0), val: tup(val) })
     }
 }
 
-/// The `Value` data model for explain: a demand row is `(K ; Tuple([V…, chain…,
-/// q]))` — a flat value tuple of `V`'s fields, then the loop-iteration chain
+/// The `Value` data model for explain: a demand row is `(K ; (V, chain…, q))`
+/// — the user's key and value whole, then the loop-iteration chain
 /// (innermost-first), then the trailing query id, matching the host lift's
-/// `append_iter`. Every builder works in field-index ranges.
+/// `append_iter` on `(V)`. Every builder works in field positions of that tuple.
 pub(crate) struct Val;
 
 impl Dataflow for Sb {
@@ -528,10 +469,8 @@ impl Dataflow for Sb {
     fn concat(&mut self, cs: Vec<Ref>) -> Ref { Sb::concat(self, cs) }
 }
 
-// Term-building helpers for the Value reverse rules. The demand envelope is a
-// flat value tuple `[V (v fields) | chain (innermost-first) | q]`, matching the
-// host lift's `append_iter`. Each projection side is built as a `Term::Tuple`
-// of fields; `f(s, c)` selects field c of slot s, `fidx(s, lo, hi)` a range.
+// Term-building helpers for the Value reverse rules. `f(s, c)` selects field c
+// of slot s, `fidx(s, lo, hi)` a range.
 fn var(s: usize) -> Term { Term::Var(s) }
 fn fld(t: Term, i: usize) -> Term { Term::Proj(Box::new(t), i) }
 fn f(s: usize, i: usize) -> Term { fld(var(s), i) }
@@ -545,226 +484,149 @@ fn and_all(conds: Vec<Term>) -> Option<Term> {
     conds.into_iter().reduce(|a, b| Term::Binary(BinOp::And, Box::new(a), Box::new(b)))
 }
 
-/// Expand a user projection side over slots whose value-columns have the given
-/// `arities`. A bare-row `Spread($r)` field splices only row r's value columns
-/// (`arities[r]`), excluding any trailing chain; every other field passes
-/// through unchanged (an indexed `$r[c]` reads a value column directly, as the
-/// chain sits after the value).
-fn expand_value_fields(side: &Term, arities: &[usize]) -> Vec<Term> {
-    let fields = match side { Term::Tuple(fs) => fs.as_slice(), other => std::slice::from_ref(other) };
-    let mut out = Vec::new();
-    for field in fields {
-        match field {
-            Term::Spread(inner) => match &**inner {
-                Term::Var(r) => out.extend(fidx(*r, 0, arities.get(*r).copied().unwrap_or(0))),
-                _ => out.push(field.clone()),
-            },
-            other => out.push(other.clone()),
-        }
-    }
-    out
-}
-
 impl RowModel for Val {
     type Proj = Projection;
     type Pred = Term;
 
-    fn pack(k: usize, v: usize, chain_len: usize, has_q: bool) -> Projection {
-        let mut key = fidx(0, 0, k); key.extend(fidx(1, 0, v));
+    fn pack(chain_len: usize, has_q: bool) -> Projection {
         let tail = chain_len + has_q as usize;
-        Projection { key: tup(key), val: tup(fidx(1, v, v + tail)) }
+        Projection { key: tup(vec![var(0), f(1, 0)]), val: tup(fidx(1, 1, 1 + tail)) }
     }
-    fn project_kv(k: usize, v: usize) -> Projection {
-        Projection { key: tup(fidx(0, 0, k)), val: tup(fidx(1, 0, v)) }
+    fn strip_all() -> Projection {
+        Projection { key: var(0), val: f(1, 0) }
     }
-    fn sp_reassemble(k: usize, v: usize, user_len: usize, out_depth: usize) -> Projection {
-        let key = fidx(0, 0, k);
-        let mut val = fidx(0, k, k + v);              // V (from packed key)
-        val.extend(fidx(2, 0, user_len));             // chain_in (pair)
-        val.extend(fidx(1, 0, out_depth));            // chain_out (dep)
-        val.push(f(1, out_depth));                    // q
-        Projection { key: tup(key), val: tup(val) }
-    }
-
-    fn ky_join(k: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize, min: bool) -> Projection {
-        let mut val = fidx(2, 0, v_in);               // V_in
-        if min { val.extend(fidx(1, 0, v_out)); }     // V_out (for narrowing)
-        val.extend(fidx(2, v_in, v_in + in_len));     // chain_in
-        val.extend(fidx(1, v_out, v_out + out_len));  // chain_out
-        val.push(f(1, v_out + out_len));              // q
-        Projection { key: tup(fidx(0, 0, k)), val: tup(val) }
-    }
-    fn ky_data_eq(v_in: usize) -> Option<Term> {
-        and_all((0..v_in).map(|i| eq(f(1, i), f(1, v_in + i))).collect())
-    }
-    fn ky_drop_vout(k: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize) -> Projection {
-        let after_vout = v_in + v_out;
-        let mut val = fidx(1, 0, v_in);
-        val.extend(fidx(1, after_vout, after_vout + in_len));
-        val.extend(fidx(1, after_vout + in_len, after_vout + in_len + out_len));
-        val.push(f(1, after_vout + in_len + out_len));
-        Projection { key: tup(fidx(0, 0, k)), val: tup(val) }
+    fn sp_reassemble(in_len: usize, out_len: usize) -> Projection {
+        let mut val = vec![f(0, 1)];                  // V (from packed key)
+        val.extend(fidx(2, 0, in_len));               // chain_in (pair)
+        val.extend(fidx(1, 0, out_len));              // chain_out (dep)
+        val.push(f(1, out_len));                      // q
+        Projection { key: f(0, 0), val: tup(val) }
     }
 
-    // Bounds Spread, so the pair table serves every projection.
-    fn lossy_pair(proj: &Projection, k_in: usize, v_in: usize, in_len: usize) -> Projection {
-        let mut val = fidx(0, 0, k_in);
-        val.extend(fidx(1, 0, v_in + in_len));
-        Projection { key: tup(expand_value_fields(&proj.key, &[k_in, v_in])), val: tup(val) }
+    fn ky_join(in_len: usize, out_len: usize, min: bool) -> Projection {
+        let mut val = vec![f(2, 0)];                  // V_in
+        if min { val.push(f(1, 0)); }                 // V_out (for narrowing)
+        val.extend(fidx(2, 1, 1 + in_len));           // chain_in
+        val.extend(fidx(1, 1, 1 + out_len));          // chain_out
+        val.push(f(1, 1 + out_len));                  // q
+        Projection { key: var(0), val: tup(val) }
     }
-    fn lossy_reassemble(k_in: usize, v_in: usize, v_out: usize, in_len: usize, out_len: usize) -> Projection {
-        let key = fidx(2, 0, k_in);
-        let mut val = fidx(2, k_in, k_in + v_in);
-        val.extend(fidx(2, k_in + v_in, k_in + v_in + in_len));
-        val.extend(fidx(1, v_out, v_out + out_len));
-        val.push(f(1, v_out + out_len));
-        Projection { key: tup(key), val: tup(val) }
+    fn ky_data_eq() -> Option<Term> {
+        Some(eq(f(1, 0), f(1, 1)))
+    }
+    fn ky_drop_vout(in_len: usize, out_len: usize) -> Projection {
+        let mut val = vec![f(1, 0)];
+        val.extend(fidx(1, 2, 3 + in_len + out_len)); // chain_in, chain_out, q
+        Projection { key: var(0), val: tup(val) }
     }
 
-    fn join_forward(proj: &Projection, k: usize, v_l: usize, v_r: usize, l_len: usize, r_len: usize) -> Projection {
-        let key = expand_value_fields(&proj.key, &[k, v_l, v_r]);
-        let mut val = fidx(0, 0, k);             // K
-        val.extend(fidx(1, 0, v_l));             // V_L
-        val.extend(fidx(2, 0, v_r));             // V_R
-        val.extend(fidx(1, v_l, v_l + l_len));   // chain_L
-        val.extend(fidx(2, v_r, v_r + r_len));   // chain_R
-        val.extend(expand_value_fields(&proj.val, &[k, v_l, v_r])); // V_out (pair-produced)
-        Projection { key: tup(key), val: tup(val) }
+    fn lossy_pair(proj: &Projection, in_len: usize) -> Projection {
+        let mut val = vec![var(0), f(1, 0)];          // K_in, V_in
+        val.extend(fidx(1, 1, 1 + in_len));           // chain_in
+        Projection { key: proj.key.clone(), val: tup(val) }
     }
-    fn join_combined(k: usize, v_l: usize, v_r: usize, v_out: usize, l_len: usize, r_len: usize, out_len: usize) -> Projection {
-        let vl_s = k;
-        let vr_s = vl_s + v_l;
-        let ul_s = vr_s + v_r;
+    fn lossy_reassemble(in_len: usize, out_len: usize) -> Projection {
+        let mut val = vec![f(2, 1)];                  // V_in
+        val.extend(fidx(2, 2, 2 + in_len));           // chain_in
+        val.extend(fidx(1, 1, 1 + out_len));          // chain_out
+        val.push(f(1, 1 + out_len));                  // q
+        Projection { key: f(2, 0), val: tup(val) }
+    }
+
+    fn join_forward(proj: &Projection, l_len: usize, r_len: usize) -> Projection {
+        let mut val = vec![var(0), f(1, 0), f(2, 0)]; // K, V_L, V_R
+        val.extend(fidx(1, 1, 1 + l_len));            // chain_L
+        val.extend(fidx(2, 1, 1 + r_len));            // chain_R
+        val.push(proj.val.clone());                   // V_out (pair-produced)
+        Projection { key: proj.key.clone(), val: tup(val) }
+    }
+    fn join_combined(l_len: usize, r_len: usize, out_len: usize) -> Projection {
+        let ul_s = 3;
         let ur_s = ul_s + l_len;
         let vout_s = ur_s + r_len;
-        let key = fidx(2, 0, k);
-        let mut val = fidx(2, vl_s, vl_s + v_l);          // V_L
-        val.extend(fidx(2, vr_s, vr_s + v_r));            // V_R
-        val.extend(fidx(2, ul_s, ul_s + l_len));          // chain_L
-        val.extend(fidx(2, ur_s, ur_s + r_len));          // chain_R
-        val.extend(fidx(1, v_out, v_out + out_len));      // chain_out
-        val.push(f(1, v_out + out_len));                  // q
-        val.extend(fidx(1, 0, v_out));                    // V_out_dep
-        val.extend(fidx(2, vout_s, vout_s + v_out));      // V_out_pair
-        Projection { key: tup(key), val: tup(val) }
+        let mut val = vec![f(2, 1), f(2, 2)];         // V_L, V_R
+        val.extend(fidx(2, ul_s, ul_s + l_len));      // chain_L
+        val.extend(fidx(2, ur_s, ur_s + r_len));      // chain_R
+        val.extend(fidx(1, 1, 1 + out_len));          // chain_out
+        val.push(f(1, 1 + out_len));                  // q
+        val.push(f(1, 0));                            // V_out_dep
+        val.push(f(2, vout_s));                       // V_out_pair
+        Projection { key: f(2, 0), val: tup(val) }
     }
-    fn join_filter(v_l: usize, v_r: usize, v_out: usize, l_len: usize, r_len: usize, out_len: usize) -> Option<Term> {
-        let ul_j = v_l + v_r;
+    fn join_filter(l_len: usize, r_len: usize, out_len: usize) -> Option<Term> {
+        let ul_j = 2;
         let ur_j = ul_j + l_len;
         let uo_j = ur_j + r_len;
         let q_j = uo_j + out_len;
-        let vdep_j = q_j + 1;
-        let vpair_j = vdep_j + v_out;
         let time_cond = |off: usize, in_len: usize| -> Option<Term> {
             let n = in_len.min(out_len);
             let in_skip = in_len - n;
             let out_skip = out_len - n;
             and_all((0..n).map(|i| le(f(1, off + in_skip + i), f(1, uo_j + out_skip + i))).collect())
         };
-        let value_cond = and_all((0..v_out).map(|i| eq(f(1, vdep_j + i), f(1, vpair_j + i))).collect());
+        let value_cond = Some(eq(f(1, q_j + 1), f(1, q_j + 2)));
         [time_cond(ul_j, l_len), time_cond(ur_j, r_len), value_cond]
             .into_iter().flatten().reduce(|a, b| Term::Binary(BinOp::And, Box::new(a), Box::new(b)))
     }
-    fn join_split(left: bool, k: usize, v_l: usize, v_r: usize, l_len: usize, r_len: usize, out_len: usize) -> Projection {
-        let ul_j = v_l + v_r;
+    fn join_split(left: bool, l_len: usize, r_len: usize, out_len: usize) -> Projection {
+        let ul_j = 2;
         let ur_j = ul_j + l_len;
-        let uo_j = ur_j + r_len;
-        let q_j = uo_j + out_len;
-        let key = fidx(0, 0, k);
-        let val = if left {
-            let mut v = fidx(1, 0, v_l);                 // V_L
-            v.extend(fidx(1, ul_j, ul_j + l_len));       // chain_L
-            v.push(f(1, q_j));                           // q
-            v
+        let q_j = ur_j + r_len + out_len;
+        let mut val = if left { vec![f(1, 0)] } else { vec![f(1, 1)] };   // V_L or V_R
+        if left {
+            val.extend(fidx(1, ul_j, ul_j + l_len));     // chain_L
         } else {
-            let mut v = fidx(1, v_l, v_l + v_r);         // V_R
-            v.extend(fidx(1, ur_j, ur_j + r_len));       // chain_R
-            v.push(f(1, q_j));                           // q
-            v
-        };
-        Projection { key: tup(key), val: tup(val) }
+            val.extend(fidx(1, ur_j, ur_j + r_len));     // chain_R
+        }
+        val.push(f(1, q_j));                             // q
+        Projection { key: var(0), val: tup(val) }
     }
 
-    fn time_le(v: usize, in_len: usize, out_len: usize) -> Option<Term> {
-        // Joined row value: [V_pre(v) | user_in(in_len) | user_out(out_len) | q],
-        // each chain innermost-first; compare outer-aligned (last min(in,out)).
+    fn time_le(in_len: usize, out_len: usize) -> Option<Term> {
+        // Joined row value: (V, user_in(in_len), user_out(out_len), q), each
+        // chain innermost-first; compare outer-aligned (last min(in,out)).
         let n = in_len.min(out_len);
         let in_off = in_len - n;
         let out_off = out_len - n;
-        and_all((0..n).map(|i| le(f(1, v + in_off + i), f(1, v + in_len + out_off + i))).collect())
+        and_all((0..n).map(|i| le(f(1, 1 + in_off + i), f(1, 1 + in_len + out_off + i))).collect())
     }
-    fn strip(k: usize, v: usize, in_len: usize, out_len: usize, keep: usize) -> Projection {
-        let key = fidx(0, 0, k);
-        let mut val = fidx(1, 0, v);                  // V_pre
+    fn strip(in_len: usize, out_len: usize, keep: usize) -> Projection {
+        let mut val = vec![f(1, 0)];                  // V
         let drop_in = in_len - keep;
-        for i in 0..keep { val.push(f(1, v + drop_in + i)); }   // outer kept user_in coords
-        val.push(f(1, v + in_len + out_len));         // q
-        Projection { key: tup(key), val: tup(val) }
+        for i in 0..keep { val.push(f(1, 1 + drop_in + i)); }   // outer kept user_in coords
+        val.push(f(1, 1 + in_len + out_len));         // q
+        Projection { key: var(0), val: tup(val) }
     }
 
-    fn bind_filter(v: usize) -> Option<Term> {
-        Some(gt(f(1, v), Term::Int(0)))
+    fn bind_filter() -> Option<Term> {
+        Some(gt(f(1, 1), Term::Int(0)))
     }
-    fn bind_decrement(k: usize, v: usize, user_len: usize) -> Projection {
-        let mut val = fidx(1, 0, v);
-        val.push(sub(f(1, v), Term::Int(1)));         // innermost chain coord - 1
-        val.extend(fidx(1, v + 1, v + user_len));
-        val.push(f(1, v + user_len));                 // q
-        Projection { key: tup(fidx(0, 0, k)), val: tup(val) }
-    }
-    fn distinct_unpack(k: usize, v: usize) -> Projection {
-        Projection { key: tup(fidx(0, 0, k)), val: tup(fidx(0, k, k + v)) }
+    fn bind_decrement(user_len: usize) -> Projection {
+        let mut val = vec![f(1, 0)];
+        val.push(sub(f(1, 1), Term::Int(1)));         // innermost chain coord - 1
+        val.extend(fidx(1, 2, 2 + user_len));         // the rest of the chain, then q
+        Projection { key: var(0), val: tup(val) }
     }
 }
 
-/// The `(k, v)` shape of the program's first export — what a query against it
-/// must match. A query row is `(key[k]; val[v] ++ [q])`; a shape-mismatched
-/// query addresses nothing and yields junk demand, so harnesses should check
-/// loudly at seeding time.
-pub fn export_shape(p: &Program, source_shapes: &[(usize, usize)]) -> (usize, usize) {
-    let shapes = site_shapes(p, source_shapes);
-    let first = p.root.exports.first().expect("export_shape: program has no export").value.clone();
-    match resolve(&p.root, &[], &first) {
-        Target::Site(a) => shapes[&a],
-        Target::Source(k) => source_shapes[k],
-    }
-}
-
-/// The `(k, v)` field counts of each root import: from its declared shape where it has one,
-/// and otherwise `default`. A product counts its fields, a unit none, any other shape one.
-pub fn source_arities(p: &Program, default: (usize, usize)) -> Vec<(usize, usize)> {
-    fn fields(s: &corgi::Shape) -> usize {
-        match s { corgi::Shape::Prod(fs) => fs.len(), corgi::Shape::Unit => 0, _ => 1 }
-    }
-    p.root.imports.iter().map(|imp| imp.shape.as_ref().map_or(default, |(k, v)| (fields(k), fields(v)))).collect()
-}
-
-/// The shape of a query row against `p`'s first export, `(key ; val ++ [q])`, when the
-/// export's shape follows from `p`'s declared sources.
+/// The shape of a query row against `p`'s first export, `(key ; (val, q))`,
+/// when the export's shape follows from `p`'s declared sources.
 fn query_shape(p: &Program) -> Option<(corgi::Shape, corgi::Shape)> {
-    use corgi::Shape;
     let (shapes, _) = crate::shapes::infer(p, &|_| None);
     let export = shapes.exports.first()?.clone()?;
-    let val = match export.val {
-        Shape::Prod(mut fs) => { fs.push(Shape::Int); Shape::Prod(fs) }
-        Shape::Unit => Shape::Prod(vec![Shape::Int]),
-        other => Shape::Prod(vec![other, Shape::Int]),
-    };
-    Some((export.key, val))
+    Some((export.key, corgi::Shape::Prod(vec![export.val, corgi::Shape::Int])))
 }
 
-/// The transform. `source_shapes[k]` is the `(k, v)` of the original root's
-/// import `k` (positional inputs and named traces alike). The query arrives
-/// as one extra positional input appended after the original inputs.
-pub fn explain(p: &Program, source_shapes: &[(usize, usize)]) -> Program {
-    explain_with(p, source_shapes, Options::default())
+/// The transform. The query arrives as one extra positional input appended
+/// after the original inputs, its rows `(key ; (val, q))`: a row of the first
+/// export, and a query id.
+pub fn explain(p: &Program) -> Program {
+    explain_with(p, Options::default())
 }
 
 /// [`explain`], with [`Options`].
-pub fn explain_with(p: &Program, source_shapes: &[(usize, usize)], options: Options) -> Program {
+pub fn explain_with(p: &Program, options: Options) -> Program {
     let n_sources = p.root.imports.len();
-    assert_eq!(source_shapes.len(), n_sources, "one shape per root import");
-    let shapes = site_shapes(p, source_shapes);
     // The largest positional-input index, for placing the query input after.
     let max_input = p.root.imports.iter().filter_map(|imp| match &imp.from {
         Source::Input(i) => Some(*i + 1),
@@ -783,24 +645,31 @@ pub fn explain_with(p: &Program, source_shapes: &[(usize, usize)], options: Opti
     root.s.exports.clear();
 
     // ---- explain scope ----
+    // Root-level host forms and the sources are the user's rows, which enter
+    // the envelope here; a nested host form was lifted into it on export.
     let mut ex = Sb::new("explain");
     ex.debug = options.debug_inspects;
     let ex_src: Vec<Ref> = (0..n_sources)
         .map(|k| ex.import(format!("$src:{}", k), Source::Parent(src_refs[k].clone())))
         .collect();
+    let src_env: Vec<Ref> = ex_src.iter().map(|r| ex.project(r.clone(), envelope())).collect();
     let ex_query = ex.import("$query".into(), Source::Parent(query_ref));
     let wit: BTreeMap<Addr, Ref> = witness.iter()
-        .map(|(a, r)| (a.clone(), ex.import(format!("$wit:{:?}:{:?}", a.path, a.site), Source::Parent(r.clone()))))
+        .map(|(a, r)| {
+            let imported = ex.import(format!("$wit:{:?}:{:?}", a.path, a.site), Source::Parent(r.clone()));
+            let host = if a.path.is_empty() { ex.project(imported, envelope()) } else { imported };
+            (a.clone(), host)
+        })
         .collect();
 
-    // Demand-set variables, one per source; forward inputs are the actual
-    // sources restricted to the demand-sets.
+    // Demand-set variables, one per source, of the user's rows; forward inputs
+    // are the actual sources restricted to the demand-sets.
     let dsets: Vec<Ref> = (0..n_sources).map(|k| ex.variable(&format!("demand_set_{}", k))).collect();
-    let fwd_inputs: Vec<Ref> = (0..n_sources).map(|k| {
-        let (ka, va) = source_shapes[k];
-        ex.semijoin_data(dsets[k].clone(), ex_src[k].clone(), ka, va)
-    }).collect();
-    let forward: BTreeMap<Addr, Ref> = clone_into(&p.root, &mut ex.s, &fwd_inputs).into_iter().collect();
+    let fwd_inputs: Vec<Ref> = (0..n_sources).map(|k| ex.semijoin(dsets[k].clone(), ex_src[k].clone())).collect();
+    let fwd_env: Vec<Ref> = fwd_inputs.iter().map(|r| ex.project(r.clone(), envelope())).collect();
+    let forward: BTreeMap<Addr, Ref> = clone_into(&p.root, &mut ex.s, &fwd_inputs).into_iter()
+        .map(|(a, r)| { let host = if a.path.is_empty() { ex.project(r, envelope()) } else { r }; (a, host) })
+        .collect();
     ex.s.exports.clear();
 
     // Pre-allocated demand variables for the original feedback vars (forward
@@ -816,12 +685,10 @@ pub fn explain_with(p: &Program, source_shapes: &[(usize, usize)], options: Opti
     // The reverse walk.
     let mut rev = Reverse {
         orig: &p.root,
-        shapes: &shapes,
-        source_shapes,
         wit: &wit,
         fwd: &forward,
-        ex_src: &ex_src,
-        fwd_inputs: &fwd_inputs,
+        src_env: &src_env,
+        fwd_env: &fwd_env,
         demand,
         contribs: BTreeMap::new(),
     };
@@ -836,17 +703,16 @@ pub fn explain_with(p: &Program, source_shapes: &[(usize, usize)], options: Opti
     // accumulate, and export.
     let mut demand_exports: Vec<(String, usize)> = Vec::new();
     for k in 0..n_sources {
-        let (ka, va) = source_shapes[k];
         let cs = rev.contribs.remove(&Target::Source(k)).unwrap_or_default();
         let combined = if cs.is_empty() {
             dsets[k].clone() // no demand: the set stays empty (self-bind below)
         } else {
             let merged = ex.concat(cs);
-            let stripped = ex.project(merged, strip_user_and_q(ka, va));
-            let semi = ex.semijoin_data(stripped, ex_src[k].clone(), ka, va);
+            let stripped = ex.project(merged, <Val as RowModel>::strip_all());
+            let semi = ex.semijoin(stripped, ex_src[k].clone());
             ex.concat(vec![dsets[k].clone(), semi])
         };
-        let dist = ex.distinct_full(combined, ka, va);
+        let dist = ex.distinct_full(combined);
         ex.debug_inspect(dist.clone(), format!("demand_set:{}", k));
         ex.bind(dsets[k].clone(), dist.clone());
         let name = match &p.root.imports[k].from {
@@ -884,12 +750,10 @@ fn collect_var_addrs(s: &Scope, path: &[usize], out: &mut Vec<Addr>) {
 /// State for the reverse walk: demand refs per site, contributions per target.
 struct Reverse<'a> {
     orig: &'a Scope,
-    shapes: &'a BTreeMap<Addr, (usize, usize)>,
-    source_shapes: &'a [(usize, usize)],
     wit: &'a BTreeMap<Addr, Ref>,
     fwd: &'a BTreeMap<Addr, Ref>,
-    ex_src: &'a [Ref],
-    fwd_inputs: &'a [Ref],
+    src_env: &'a [Ref],
+    fwd_env: &'a [Ref],
     demand: BTreeMap<Addr, Ref>,
     contribs: BTreeMap<Target, Vec<Ref>>,
 }
@@ -900,13 +764,11 @@ impl<'a> Reverse<'a> {
             Target::Site(a) => Side {
                 witness: self.wit[a].clone(),
                 forward: self.fwd[a].clone(),
-                shape: self.shapes[a],
                 user_len: a.path.len(),
             },
             Target::Source(k) => Side {
-                witness: self.ex_src[*k].clone(),
-                forward: self.fwd_inputs[*k].clone(),
-                shape: self.source_shapes[*k],
+                witness: self.src_env[*k].clone(),
+                forward: self.fwd_env[*k].clone(),
                 user_len: 0,
             },
         }
@@ -938,13 +800,12 @@ impl<'a> Reverse<'a> {
         for b in &s.binds {
             let var_addr = Addr { path: path.to_vec(), site: Site::Var(b.var) };
             let dv = self.demand[&var_addr].clone();
-            let (kx, vx) = self.shapes[&var_addr];
             let var_user_len = path.len();
-            let filtered = match <Val as RowModel>::bind_filter(vx) {
+            let filtered = match <Val as RowModel>::bind_filter() {
                 Some(c) => ex.filter(dv, c),
                 None => dv,
             };
-            let contrib = ex.project(filtered, <Val as RowModel>::bind_decrement(kx, vx, var_user_len));
+            let contrib = ex.project(filtered, <Val as RowModel>::bind_decrement(var_user_len));
             self.push(ex, path, &b.value, contrib, var_user_len);
         }
         // Items in reverse: consumers have contributed by the time we arrive.
@@ -969,8 +830,7 @@ impl<'a> Reverse<'a> {
                 continue;
             }
             let combined = ex.concat(cs);
-            let (k, vx) = self.shapes[&addr];
-            let dist = ex.distinct_full(combined, k, vx + path.len() + 1);
+            let dist = ex.distinct_full(combined);
             ex.debug_inspect(dist.clone(), format!("demand_{:?}:{:?}", path, Site::Var(v)));
             ex.bind(dv, dist);
         }
@@ -981,12 +841,10 @@ impl<'a> Reverse<'a> {
         let cs = self.contribs.remove(&Target::Site(addr.clone())).unwrap_or_default();
         if cs.is_empty() { return; }
         let combined = ex.concat(cs);
-        let (k, v) = self.shapes[&addr];
         let out_user_len = path.len();
-        let dist = ex.distinct_full(combined, k, v + out_user_len + 1);
+        let dist = ex.distinct_full(combined);
         ex.debug_inspect(dist.clone(), format!("demand_{:?}:{:?}", path, Site::Op(i)));
         self.demand.insert(addr.clone(), dist.clone());
-        let out_shape = (k, v);
         let dep_this = dist;
 
         match node {
@@ -999,11 +857,12 @@ impl<'a> Reverse<'a> {
                     LinearOp::Project(proj) => {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);
-                        let contrib = ex.emit_lookup_lossy(dep_this, &side, out_shape, out_user_len, proj);
+                        let proj = proj_with_rows(proj, &user_rows(2));
+                        let contrib = ex.emit_lookup_lossy(dep_this, &side, out_user_len, &proj);
                         self.contribs.entry(target).or_default().push(contrib);
                     }
                     LinearOp::Filter(cond) => {
-                        let contrib = ex.filter(dep_this, cond.clone());
+                        let contrib = ex.filter(dep_this, with_rows(cond, &user_rows(2)));
                         self.push(ex, path, input, contrib, out_user_len);
                     }
                     LinearOp::Negate | LinearOp::EnterAt(_) => {
@@ -1016,7 +875,8 @@ impl<'a> Reverse<'a> {
                     LinearOp::FlatMap(list_term) => {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);
-                        let contrib = ex.emit_lookup_flatmap(dep_this, &side, out_shape, out_user_len, list_term);
+                        let list_term = with_rows(list_term, &[f(0, 0), var(1)]);
+                        let contrib = ex.emit_lookup_flatmap(dep_this, &side, out_user_len, &list_term);
                         self.contribs.entry(target).or_default().push(contrib);
                     }
                 }
@@ -1035,7 +895,7 @@ impl<'a> Reverse<'a> {
             Node::Reduce { input, reducer } => {
                 let target = resolve(self.orig, path, input);
                 let side = self.side(&target);
-                let contrib = ex.emit_lookup_keyed(dep_this, &side, out_shape, out_user_len, reducer);
+                let contrib = ex.emit_lookup_keyed(dep_this, &side, out_user_len, reducer);
                 self.contribs.entry(target).or_default().push(contrib);
             }
             Node::Join { left, right, projection } => {
@@ -1043,7 +903,8 @@ impl<'a> Reverse<'a> {
                 let rt = resolve(self.orig, path, right);
                 let ls = self.side(&lt);
                 let rs = self.side(&rt);
-                let (lc, rc) = ex.emit_lookup_join(dep_this, &ls, &rs, out_shape, out_user_len, projection);
+                let projection = proj_with_rows(projection, &user_rows(3));
+                let (lc, rc) = ex.emit_lookup_join(dep_this, &ls, &rs, out_user_len, &projection);
                 self.contribs.entry(lt).or_default().push(lc);
                 self.contribs.entry(rt).or_default().push(rc);
             }

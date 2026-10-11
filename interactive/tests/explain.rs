@@ -51,7 +51,6 @@ const SCC_ROW: &str = r#"
     }
     export "result" = outer::scc;
 "#;
-const SCC_SHAPES: &[(usize, usize)] = &[(2, 0)];
 
 /// Transitive closure, with the closure's pairs as the result.
 const TC_ROW: &str = r#"
@@ -67,7 +66,6 @@ const TC_ROW: &str = r#"
     }
     export "result" = outer::tc;
 "#;
-const TC_SHAPES: &[(usize, usize)] = &[(2, 0)];
 
 /// Reachability from roots (two inputs), the reached set as the result.
 const REACH_ROW: &str = r#"
@@ -79,7 +77,6 @@ const REACH_ROW: &str = r#"
     }
     export "result" = reach::reach;
 "#;
-const REACH_SHAPES: &[(usize, usize)] = &[(2, 0), (1, 0)];
 
 fn lowered(src: &str) -> Program {
     lower::lower_tree(parse::pipe::parse(src))
@@ -128,18 +125,13 @@ fn optimized(src: &str) -> Program {
     p
 }
 
-/// The query input's rows: each query is the flat demand envelope
-/// `(K ; Tuple([V…, chain…, q]))` — V's fields, then the chain (empty, since the
-/// first export is at depth 0), then the query id.
+/// The query input's rows: each query is a demand row `(K ; (V, q))` — the
+/// queried row, and its query id.
 fn query_rows(queries: &[(Row, Row)]) -> Vec<(Row, Row)> {
     queries
         .iter()
         .enumerate()
-        .map(|(q, (k, v))| {
-            let mut fields = match v { Value::Tuple(xs) => xs.clone(), other => vec![other.clone()] };
-            fields.push(Value::Int(q as i64));
-            (k.clone(), Value::Tuple(fields))
-        })
+        .map(|(q, (k, v))| (k.clone(), Value::Tuple(vec![v.clone(), Value::Int(q as i64)])))
         .collect()
 }
 
@@ -147,12 +139,11 @@ fn query_rows(queries: &[(Row, Row)]) -> Vec<(Row, Row)> {
 /// order) against `src`'s first export, with `src` run on `inputs`.
 fn demand_for_queries(
     src: &str,
-    shapes: &[(usize, usize)],
     inputs: &[Vec<(Row, Row)>],
     queries: &[(Row, Row)],
 ) -> Vec<Vec<(Row, Row)>> {
     let tree = lowered(src);
-    let mut ex = explain::explain(&tree, shapes);
+    let mut ex = explain::explain(&tree);
     ex.optimize();
     let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
     ex_inputs.push(query_rows(queries));
@@ -176,12 +167,11 @@ fn demand_for_queries(
 /// Single-query convenience over [`demand_for_queries`].
 fn demand_for(
     src: &str,
-    shapes: &[(usize, usize)],
     inputs: &[Vec<(Row, Row)>],
     q_key: &Row,
     q_val: &Row,
 ) -> Vec<Vec<(Row, Row)>> {
-    demand_for_queries(src, shapes, inputs, &[(q_key.clone(), q_val.clone())])
+    demand_for_queries(src, inputs, &[(q_key.clone(), q_val.clone())])
 }
 
 fn demand_total(demand: &[Vec<(Row, Row)>]) -> usize {
@@ -208,14 +198,13 @@ fn restrict(inputs: &[Vec<(Row, Row)>], demand: &[Vec<(Row, Row)>]) -> Vec<Vec<(
 /// per query.
 fn assert_all_rows_sufficient(
     src: &str,
-    shapes: &[(usize, usize)],
     inputs: &[Vec<(Row, Row)>],
 ) -> Vec<((Row, Row), usize)> {
     let p = optimized(src);
     let result = export_rows(&p, inputs, "result");
     let mut sizes = Vec::new();
     for (k, v) in &result {
-        let demand = demand_for(src, shapes, inputs, k, v);
+        let demand = demand_for(src, inputs, k, v);
         let replay = export_rows(&p, &restrict(inputs, &demand), "result");
         assert!(
             replay.contains(&(k.clone(), v.clone())),
@@ -244,7 +233,7 @@ fn clone_identity_preserves_scc_output() {
 /// plus one self-loop) is explained by a demand-set that regenerates it.
 #[test]
 fn scc_row_explanations_sufficient_small() {
-    let sizes = assert_all_rows_sufficient(SCC_ROW, SCC_SHAPES, &[gen_edges(50, 55)]);
+    let sizes = assert_all_rows_sufficient(SCC_ROW, &[gen_edges(50, 55)]);
     assert_eq!(sizes.len(), 12, "expected 12 scc edges at 50/55");
 }
 
@@ -252,7 +241,7 @@ fn scc_row_explanations_sufficient_small() {
 /// demand-set that regenerates it.
 #[test]
 fn tc_row_explanations_sufficient_small() {
-    let sizes = assert_all_rows_sufficient(TC_ROW, TC_SHAPES, &[gen_edges(20, 22)]);
+    let sizes = assert_all_rows_sufficient(TC_ROW, &[gen_edges(20, 22)]);
     assert_eq!(sizes.len(), 34, "expected 34 tc pairs at 20/22");
 }
 
@@ -261,7 +250,7 @@ fn tc_row_explanations_sufficient_small() {
 #[test]
 fn reach_row_explanations_sufficient_small() {
     let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
-    let sizes = assert_all_rows_sufficient(REACH_ROW, REACH_SHAPES, &inputs);
+    let sizes = assert_all_rows_sufficient(REACH_ROW, &inputs);
     assert_eq!(sizes.len(), 5, "expected 5 reached nodes at 50/55 from root 0");
 }
 
@@ -273,7 +262,7 @@ fn demand_is_a_subset_of_the_input() {
     let result = export_rows(&p, &[edges.clone()], "result");
     let edge_set: BTreeSet<(Row, Row)> = edges.iter().cloned().collect();
     let (k, v) = result.iter().next().unwrap();
-    for set in demand_for(SCC_ROW, SCC_SHAPES, &[edges.clone()], k, v) {
+    for set in demand_for(SCC_ROW, &[edges.clone()], k, v) {
         for row in set {
             assert!(edge_set.contains(&row), "demanded row {:?} is not an input row", row);
         }
@@ -284,7 +273,7 @@ fn demand_is_a_subset_of_the_input() {
 #[test]
 #[ignore = "heavier sweep; run with --release -- --ignored"]
 fn scc_row_explanations_sufficient_100() {
-    let sizes = assert_all_rows_sufficient(SCC_ROW, SCC_SHAPES, &[gen_edges(100, 110)]);
+    let sizes = assert_all_rows_sufficient(SCC_ROW, &[gen_edges(100, 110)]);
     assert_eq!(sizes.len(), 22, "expected 22 scc edges at 100/110");
 }
 
@@ -300,7 +289,7 @@ fn scc_row_explanations_sufficient_100() {
 fn scc_join_partner_time_regression() {
     let edges = gen_edges(1000, 1100);
     let p = optimized(SCC_ROW);
-    let demand = demand_for(SCC_ROW, SCC_SHAPES, &[edges.clone()], &row(&[773]), &row(&[466]));
+    let demand = demand_for(SCC_ROW, &[edges.clone()], &row(&[773]), &row(&[466]));
     let replay = export_rows(&p, &restrict(&[edges], &demand), "result");
     assert!(
         replay.contains(&(row(&[773]), row(&[466]))),
@@ -341,19 +330,19 @@ fn greedy_shrink(
 #[test]
 #[ignore = "metric report; run with --release -- --ignored --nocapture"]
 fn report_demand_excess() {
-    let cases: Vec<(&str, &str, &[(usize, usize)], Vec<Vec<(Row, Row)>>)> = vec![
-        ("scc 50/55", SCC_ROW, SCC_SHAPES, vec![gen_edges(50, 55)]),
-        ("scc 100/110", SCC_ROW, SCC_SHAPES, vec![gen_edges(100, 110)]),
-        ("tc 20/22", TC_ROW, TC_SHAPES, vec![gen_edges(20, 22)]),
-        ("tc 50/55", TC_ROW, TC_SHAPES, vec![gen_edges(50, 55)]),
-        ("reach 50/55", REACH_ROW, REACH_SHAPES, vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]]),
+    let cases: Vec<(&str, &str, Vec<Vec<(Row, Row)>>)> = vec![
+        ("scc 50/55", SCC_ROW, vec![gen_edges(50, 55)]),
+        ("scc 100/110", SCC_ROW, vec![gen_edges(100, 110)]),
+        ("tc 20/22", TC_ROW, vec![gen_edges(20, 22)]),
+        ("tc 50/55", TC_ROW, vec![gen_edges(50, 55)]),
+        ("reach 50/55", REACH_ROW, vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]]),
     ];
-    for (name, src, shapes, inputs) in cases {
+    for (name, src, inputs) in cases {
         let p = optimized(src);
         let result = export_rows(&p, &inputs, "result");
         let (mut tot_d, mut tot_m, mut worst): (usize, usize, f64) = (0, 0, 1.0);
         for (k, v) in &result {
-            let demand = demand_for(src, shapes, &inputs, k, v);
+            let demand = demand_for(src, &inputs, k, v);
             let min = greedy_shrink(&p, &inputs, &demand, &(k.clone(), v.clone()));
             let (d, m) = (demand_total(&demand), demand_total(&min));
             tot_d += d;
@@ -374,14 +363,13 @@ const INDEG_ROW: &str = r#"
     let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     export "result" = edges | key($1 ;) | count;
 "#;
-const INDEG_SHAPES: &[(usize, usize)] = &[(2, 0)];
 
 /// Count outputs over duplicate-free inputs: sufficient today, because the
 /// keyed lookup demands every input row at the key, which is precisely the
 /// count's multiset.
 #[test]
 fn count_explanations_sufficient_small() {
-    let sizes = assert_all_rows_sufficient(INDEG_ROW, INDEG_SHAPES, &[gen_edges(20, 22)]);
+    let sizes = assert_all_rows_sufficient(INDEG_ROW, &[gen_edges(20, 22)]);
     assert!(!sizes.is_empty());
 }
 
@@ -402,7 +390,7 @@ fn count_duplicate_inputs_sufficient() {
     let p = optimized(INDEG_ROW);
     let result = export_rows(&p, &[edges.clone()], "result");
     assert!(result.contains(&(row(&[5]), row(&[3]))), "expected indeg(5) = 3 in {:?}", result);
-    let demand = demand_for(INDEG_ROW, INDEG_SHAPES, &[edges.clone()], &row(&[5]), &row(&[3]));
+    let demand = demand_for(INDEG_ROW, &[edges.clone()], &row(&[5]), &row(&[3]));
     let replay = export_rows(&p, &restrict(&[edges], &demand), "result");
     assert!(
         replay.contains(&(row(&[5]), row(&[3]))),
@@ -423,7 +411,7 @@ fn two_simultaneous_queries_sufficient() {
     let q0 = (row(&[7]), row(&[44]));
     let q1 = (row(&[16]), row(&[19]));
     assert!(result.contains(&q0) && result.contains(&q1));
-    let demand = demand_for_queries(SCC_ROW, SCC_SHAPES, &[edges.clone()], &[q0.clone(), q1.clone()]);
+    let demand = demand_for_queries(SCC_ROW, &[edges.clone()], &[q0.clone(), q1.clone()]);
     let replay = export_rows(&p, &restrict(&[edges], &demand), "result");
     assert!(replay.contains(&q0), "union demand fails first query: {:?}", replay);
     assert!(replay.contains(&q1), "union demand fails second query: {:?}", replay);
@@ -437,11 +425,11 @@ fn two_simultaneous_queries_sufficient() {
 fn fuzz_explanations_sufficient() {
     let mut queries = 0;
     for seed in 0..10u64 {
-        queries += assert_all_rows_sufficient(SCC_ROW, SCC_SHAPES, &[gen_edges_seeded(seed, 80, 88)]).len();
-        queries += assert_all_rows_sufficient(TC_ROW, TC_SHAPES, &[gen_edges_seeded(seed, 25, 27)]).len();
+        queries += assert_all_rows_sufficient(SCC_ROW, &[gen_edges_seeded(seed, 80, 88)]).len();
+        queries += assert_all_rows_sufficient(TC_ROW, &[gen_edges_seeded(seed, 25, 27)]).len();
         let root = (seed % 60) as i64;
         let inputs = vec![gen_edges_seeded(seed, 60, 66), vec![(row(&[root]), Value::unit())]];
-        queries += assert_all_rows_sufficient(REACH_ROW, REACH_SHAPES, &inputs).len();
+        queries += assert_all_rows_sufficient(REACH_ROW, &inputs).len();
     }
     assert!(queries >= 100, "fuzz swept only {} queries — instances too sparse to mean much", queries);
 }
@@ -454,12 +442,64 @@ const FLATMAP_ROW: &str = r#"
     let rows = input 0 : ((int, int) ; ()) | key($0[0] ; list($0[0], $0[1]));
     export "result" = rows | flatmap($1[0]);
 "#;
-const FLATMAP_SHAPES: &[(usize, usize)] = &[(2, 0)];
 
 #[test]
 fn flatmap_explanations_sufficient_small() {
-    let sizes = assert_all_rows_sufficient(FLATMAP_ROW, FLATMAP_SHAPES, &[gen_edges(20, 22)]);
+    let sizes = assert_all_rows_sufficient(FLATMAP_ROW, &[gen_edges(20, 22)]);
     assert!(!sizes.is_empty(), "expected some exploded outputs to explain");
+}
+
+/// User terms that read a whole row, `$1` or `$0` rather than one of its
+/// fields, see the user's row: not explain's, whose value carries more after
+/// the user's fields. The filter is always true, and the flatmap's list reads
+/// the key.
+const WHOLE_ROW: &str = r#"
+    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]) | filter($1 == tuple($1[0]));
+    let roots = input 1 : ((int) ; ()) | key($0[0] ;);
+    reach: {
+        let proposals = reach | join(edges, ($2 ;));
+        var reach = roots + proposals | distinct;
+    }
+    export "result" = reach::reach | key($0 ; $0) | flatmap(list($0[0], $1[0])) | filter($1 == tuple($1[0], $1[1]));
+"#;
+
+#[test]
+fn whole_row_explanations_sufficient_small() {
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
+    let sizes = assert_all_rows_sufficient(WHOLE_ROW, &inputs);
+    assert_eq!(sizes.len(), 10, "expected 5 reached nodes, each in two positions");
+}
+
+/// Keys and values that are neither products nor units: a source of scalar
+/// keys and values, a scalar value at the root (`value`), a list at the root
+/// (`collect`) read by a flatmap, and scalar keys inside an iterative scope
+/// (lifted host forms) read whole by a filter.
+const SCALARS: &str = r#"
+    let pairs = input 0 : (int ; int);
+    let counted = pairs | filter($1 > 3) | count;
+    let lists = pairs | value($1 * 2) | collect;
+    let flat = lists | flatmap($1) | value($1[1]);
+    inner: {
+        var low = (flat | filter($1 < 15)) + (low | filter($0 == $0)) | min;
+    }
+    export "result" = inner::low | join(counted, ($0 ; $1, $2));
+"#;
+
+fn scalar_pairs() -> Vec<(Row, Row)> {
+    (0..30).map(|i| (Value::Int(i % 7), Value::Int((i * 5) % 11))).collect()
+}
+
+#[test]
+fn scalar_explanations_sufficient_small() {
+    let sizes = assert_all_rows_sufficient(SCALARS, &[scalar_pairs()]);
+    assert!(!sizes.is_empty(), "expected some rows to explain");
+}
+
+#[test]
+fn corgi_agrees_on_scalar_explanation() {
+    let inputs = vec![scalar_pairs()];
+    let q = first_output_row(SCALARS, &inputs);
+    assert_explained_backends_agree(SCALARS, &inputs, &[q]);
 }
 
 /// Collect (NEST): `(a ; b)` rows group to `(a ; [b…])`. Reversing a demanded
@@ -470,11 +510,10 @@ const COLLECT_ROW: &str = r#"
     let rows = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     export "result" = rows | collect;
 "#;
-const COLLECT_SHAPES: &[(usize, usize)] = &[(2, 0)];
 
 #[test]
 fn collect_explanations_sufficient_small() {
-    let sizes = assert_all_rows_sufficient(COLLECT_ROW, COLLECT_SHAPES, &[gen_edges(20, 22)]);
+    let sizes = assert_all_rows_sufficient(COLLECT_ROW, &[gen_edges(20, 22)]);
     assert!(!sizes.is_empty(), "expected some collected lists to explain");
 }
 
@@ -503,12 +542,11 @@ fn collect_explanations_sufficient_small() {
 /// and require identical exports.
 fn assert_explained_backends_agree(
     src: &str,
-    shapes: &[(usize, usize)],
     inputs: &[Vec<(Row, Row)>],
     queries: &[(Row, Row)],
 ) {
     let tree = lowered(src);
-    let mut ex = explain::explain(&tree, shapes);
+    let mut ex = explain::explain(&tree);
     ex.optimize();
     let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
     ex_inputs.push(query_rows(queries));
@@ -537,7 +575,7 @@ fn first_output_row(src: &str, inputs: &[Vec<(Row, Row)>]) -> (Row, Row) {
 fn corgi_agrees_on_reach_explanation() {
     let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
     let q = first_output_row(REACH_ROW, &inputs);
-    assert_explained_backends_agree(REACH_ROW, REACH_SHAPES, &inputs, &[q]);
+    assert_explained_backends_agree(REACH_ROW, &inputs, &[q]);
 }
 
 /// Transitive closure: iteration with `distinct` rather than `min`.
@@ -545,7 +583,7 @@ fn corgi_agrees_on_reach_explanation() {
 fn corgi_agrees_on_tc_explanation() {
     let inputs = vec![gen_edges(20, 22)];
     let q = first_output_row(TC_ROW, &inputs);
-    assert_explained_backends_agree(TC_ROW, TC_SHAPES, &inputs, &[q]);
+    assert_explained_backends_agree(TC_ROW, &inputs, &[q]);
 }
 
 /// The list ops through the rewrite: `flatmap`'s reverse rule (intro + explode)
@@ -554,14 +592,14 @@ fn corgi_agrees_on_tc_explanation() {
 fn corgi_agrees_on_flatmap_explanation() {
     let inputs = vec![gen_edges(20, 22)];
     let q = first_output_row(FLATMAP_ROW, &inputs);
-    assert_explained_backends_agree(FLATMAP_ROW, FLATMAP_SHAPES, &inputs, &[q]);
+    assert_explained_backends_agree(FLATMAP_ROW, &inputs, &[q]);
 }
 
 #[test]
 fn corgi_agrees_on_collect_explanation() {
     let inputs = vec![gen_edges(20, 22)];
     let q = first_output_row(COLLECT_ROW, &inputs);
-    assert_explained_backends_agree(COLLECT_ROW, COLLECT_SHAPES, &inputs, &[q]);
+    assert_explained_backends_agree(COLLECT_ROW, &inputs, &[q]);
 }
 
 /// `enter_at` through the rewrite, at depth 1 so the negation trigger is absent.
@@ -580,7 +618,7 @@ const REACH_ENTER_AT: &str = r#"
 fn corgi_agrees_on_enter_at_explanation() {
     let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
     let q = first_output_row(REACH_ENTER_AT, &inputs);
-    assert_explained_backends_agree(REACH_ENTER_AT, REACH_SHAPES, &inputs, &[q]);
+    assert_explained_backends_agree(REACH_ENTER_AT, &inputs, &[q]);
 }
 
 /// A `min` reducer in an iterative loop, at depth 1.
@@ -598,7 +636,7 @@ const MIN_LOOP: &str = r#"
 fn corgi_agrees_on_min_loop_explanation() {
     let inputs = vec![gen_edges(50, 55)];
     let q = first_output_row(MIN_LOOP, &inputs);
-    assert_explained_backends_agree(MIN_LOOP, SCC_SHAPES, &inputs, &[q]);
+    assert_explained_backends_agree(MIN_LOOP, &inputs, &[q]);
 }
 
 /// SCC's shape — depth-2 nesting, `min`, three joins, a filtered feedback — with
@@ -647,14 +685,14 @@ const SCC_ONE_SCOPE_NEGATED: &str = r#"
 fn corgi_agrees_on_explained_scc_one_scope() {
     let inputs = vec![gen_edges(50, 55)];
     let q = first_output_row(SCC_ONE_SCOPE, &inputs);
-    assert_explained_backends_agree(SCC_ONE_SCOPE, SCC_SHAPES, &inputs, &[q]);
+    assert_explained_backends_agree(SCC_ONE_SCOPE, &inputs, &[q]);
 }
 
 #[test]
 fn explained_scc_one_scope_negated() {
     let inputs = vec![gen_edges(50, 55)];
     let q = first_output_row(SCC_ONE_SCOPE_NEGATED, &inputs);
-    assert_explained_backends_agree(SCC_ONE_SCOPE_NEGATED, SCC_SHAPES, &inputs, &[q]);
+    assert_explained_backends_agree(SCC_ONE_SCOPE_NEGATED, &inputs, &[q]);
 }
 
 /// Iterative + `enter_at` + negated feedback: the real SCC.
@@ -662,7 +700,7 @@ fn explained_scc_one_scope_negated() {
 fn corgi_agrees_on_scc_explanation() {
     let inputs = vec![gen_edges(50, 55)];
     let q = first_output_row(SCC_ROW, &inputs);
-    assert_explained_backends_agree(SCC_ROW, SCC_SHAPES, &inputs, &[q]);
+    assert_explained_backends_agree(SCC_ROW, &inputs, &[q]);
 }
 
 /// Two queries at once, so the query input carries more than one envelope.
@@ -672,24 +710,23 @@ fn corgi_agrees_on_two_query_explanation() {
     let p = optimized(SCC_ROW);
     let qs: Vec<(Row, Row)> = export_rows(&p, &inputs, "result").into_iter().take(2).collect();
     assert_eq!(qs.len(), 2, "expected at least two scc edges to query");
-    assert_explained_backends_agree(SCC_ROW, SCC_SHAPES, &inputs, &qs);
+    assert_explained_backends_agree(SCC_ROW, &inputs, &qs);
 }
 
-/// Declared sources give the rewrite its field counts and the query input its shape, and the
-/// rewritten program installs with every shape known: the demand matches the undeclared run.
+/// Declared sources give the query input its shape, and the rewritten program
+/// installs with every shape known. The rewrite itself needs no shapes: the
+/// demand matches the undeclared run.
 #[test]
 fn declared_sources_shape_the_rewrite() {
+    use corgi::Shape;
     let undeclared = REACH_ROW
         .replace("input 0 : ((int, int) ; ()) |", "input 0 |")
         .replace("input 1 : ((int) ; ()) |", "input 1 |");
-    let tree = lowered(REACH_ROW);
-    assert_eq!(explain::source_arities(&tree, (9, 9)), REACH_SHAPES);
-    let ex = explain::explain(&tree, REACH_SHAPES);
+    let ex = explain::explain(&lowered(REACH_ROW));
     let query = ex.root.imports.iter().find(|imp| imp.name == "query").unwrap();
-    let int = corgi::Shape::Int;
-    assert_eq!(query.shape, Some((corgi::Shape::Prod(vec![int.clone()]), corgi::Shape::Prod(vec![int]))));
+    assert_eq!(query.shape, Some((Shape::Prod(vec![Shape::Int]), Shape::Prod(vec![Shape::Unit, Shape::Int]))));
     // So does a rewrite through nested iterative scopes.
-    for ex in [ex, explain::explain(&lowered(SCC_ROW), SCC_SHAPES)] {
+    for ex in [ex, explain::explain(&lowered(SCC_ROW))] {
         let (_, problems) = interactive::shapes::infer(&ex, &|_| None);
         assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
     }
@@ -697,8 +734,8 @@ fn declared_sources_shape_the_rewrite() {
     let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
     for (k, v) in export_rows(&optimized(REACH_ROW), &inputs, "result") {
         assert_eq!(
-            demand_for(REACH_ROW, REACH_SHAPES, &inputs, &k, &v),
-            demand_for(&undeclared, REACH_SHAPES, &inputs, &k, &v),
+            demand_for(REACH_ROW, &inputs, &k, &v),
+            demand_for(&undeclared, &inputs, &k, &v),
         );
     }
 }
