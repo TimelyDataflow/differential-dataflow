@@ -43,6 +43,9 @@ pub trait Backend {
     /// `shape` is the input's row shape, where it is known before any data arrives.
     fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize, shape: Option<st::RowShape>) -> Collection<'s, Time, Self::Container>;
     fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s>;
+    /// Bring an arrangement into a child region. Regions share the timestamp, so this shares
+    /// the trace rather than rebuilding it.
+    fn enter_region<'s, 'r>(a: Self::Arr<'s>, region: Scope<'r, Time>) -> Self::Arr<'r>;
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container>;
     /// `shapes` are the two inputs' row shapes, where they are known before any data arrives.
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, Self::Container>;
@@ -58,6 +61,12 @@ enum Rendered<'s, B: Backend> {
 }
 
 impl<'s, B: Backend> Rendered<'s, B> {
+    fn enter<'r>(&self, region: Scope<'r, Time>) -> Rendered<'r, B> {
+        match self {
+            Rendered::Collection(c) => Rendered::Collection(c.clone().enter(region)),
+            Rendered::Arrangement(a) => Rendered::Arrangement(B::enter_region(a.clone(), region)),
+        }
+    }
     fn collection(&self) -> Collection<'s, Time, B::Container> {
         match self {
             Rendered::Collection(c) => c.clone(),
@@ -81,7 +90,7 @@ enum RItem<'s, B: Backend> {
 
 fn resolve<'s, B: Backend>(
     items: &[RItem<'s, B>],
-    imports: &[Collection<'s, Time, B::Container>],
+    imports: &[Rendered<'s, B>],
     var_cols: &[Collection<'s, Time, B::Container>],
     r: &st::Ref,
 ) -> Rendered<'s, B> {
@@ -91,7 +100,10 @@ fn resolve<'s, B: Backend>(
             RItem::Op(Rendered::Arrangement(a)) => Rendered::Arrangement(a.clone()),
             RItem::Sub(_) => panic!("Ref::Local points at a child scope"),
         },
-        st::Ref::Import(i) => Rendered::Collection(imports[*i].clone()),
+        st::Ref::Import(i) => match &imports[*i] {
+            Rendered::Collection(c) => Rendered::Collection(c.clone()),
+            Rendered::Arrangement(a) => Rendered::Arrangement(a.clone()),
+        },
         st::Ref::Var(i) => Rendered::Collection(var_cols[*i].clone()),
         st::Ref::ChildExport(i, j) => match &items[*i] {
             RItem::Sub(exports) => Rendered::Collection(exports[*j].clone()),
@@ -110,6 +122,18 @@ pub fn render_tree<'s, B: Backend>(
     scope: Scope<'s, Time>,
     depth: usize,
     imports: Vec<Collection<'s, Time, B::Container>>,
+    shapes: Option<&ScopeShapes>,
+) -> Vec<Collection<'s, Time, B::Container>> {
+    render_scope::<B>(s, scope, depth, imports.into_iter().map(Rendered::Collection).collect(), shapes)
+}
+
+/// [`render_tree`] at any depth. A child's imports are the parent's items as rendered, so an
+/// arrangement crosses into the child as the same trace, not as rows to arrange again.
+fn render_scope<'s, B: Backend>(
+    s: &st::Scope,
+    scope: Scope<'s, Time>,
+    depth: usize,
+    imports: Vec<Rendered<'s, B>>,
     shapes: Option<&ScopeShapes>,
 ) -> Vec<Collection<'s, Time, B::Container>> {
     let shape_of = |r: &st::Ref| shapes.and_then(|sh| sh.of(r)).map(|c| (c.key, c.val));
@@ -154,17 +178,17 @@ pub fn render_tree<'s, B: Backend>(
                 items.push(RItem::Op(rendered));
             },
             st::Item::Sub(child) => {
-                let child_imports: Vec<Collection<'s, Time, B::Container>> = child.imports.iter().map(|imp| match &imp.from {
-                    st::Source::Parent(r) => resolve(&items, &imports, &var_cols, r).collection(),
+                let child_imports: Vec<Rendered<'s, B>> = child.imports.iter().map(|imp| match &imp.from {
+                    st::Source::Parent(r) => resolve(&items, &imports, &var_cols, r),
                     other => panic!("non-root scope with external source {:?}", other),
                 }).collect();
                 // Each `{}` scope is a real timely region: imports enter it,
                 // the child renders inside, exports leave it structurally —
                 // and then pop the child's dynamic coordinate.
                 let exported = scope.region_named(&child.name, |region| {
-                    let entered: Vec<_> = child_imports.iter().map(|c| c.clone().enter(region)).collect();
+                    let entered: Vec<_> = child_imports.iter().map(|c| c.enter(region)).collect();
                     let child_shapes = shapes.and_then(|sh| match sh.items.get(index) { Some(ItemShapes::Sub(c)) => Some(c), _ => None });
-                    let exports = render_tree::<B>(child, region, depth + 1, entered, child_shapes);
+                    let exports = render_scope::<B>(child, region, depth + 1, entered, child_shapes);
                     exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()
                 });
                 let left: Vec<Collection<'s, Time, B::Container>> = exported.into_iter().map(|c| B::leave_dynamic(c, depth + 1)).collect();
