@@ -77,6 +77,10 @@ impl<B: LaneSummary> LaneSummary for Product<u64, B> {
 }
 
 /// A column of times as lanes: `lanes[j][i]` is coordinate `j` of row `i`.
+///
+/// `repr(C)` with `T` only in `PhantomData`, so every `ColTimes<T>` has one layout: a chunk's times
+/// can be read at another time type with the same lanes (see [`CorgiChunk::retime`](crate::corgi::chunk::CorgiChunk::retime)).
+#[repr(C)]
 pub struct ColTimes<T> {
     lanes: Vec<Vec<u64>>,
     len: usize,
