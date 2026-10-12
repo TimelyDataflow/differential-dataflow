@@ -33,11 +33,12 @@ pub fn gen_row(edge_index: u64, nodes: u64, arity: usize) -> (ir::Value, ir::Val
 /// As [`gen_row`], but mixes a `seed` so distinct seeds give distinct graphs.
 /// `seed == 0` reproduces [`gen_row`] exactly.
 pub fn gen_row_seeded(seed: u64, edge_index: u64, nodes: u64, arity: usize) -> (ir::Value, ir::Value) {
-    let mut fields = Vec::with_capacity(arity);
-    let base = edge_index.wrapping_mul(31).wrapping_add(seed.wrapping_mul(0x9e3779b97f4a7c15));
-    for col in 0..arity {
-        let h = hash_u64(base.wrapping_add(col as u64));
-        fields.push(ir::Value::Int((h % nodes) as i64));
-    }
+    let fields = (0..arity).map(|col| ir::Value::Int(gen_field_seeded(seed, edge_index, nodes, col))).collect();
     (ir::Value::Tuple(fields), ir::Value::unit())
+}
+
+/// Field `col` of the row [`gen_row_seeded`] generates.
+pub fn gen_field_seeded(seed: u64, edge_index: u64, nodes: u64, col: usize) -> i64 {
+    let base = edge_index.wrapping_mul(31).wrapping_add(seed.wrapping_mul(0x9e3779b97f4a7c15));
+    (hash_u64(base.wrapping_add(col as u64)) % nodes) as i64
 }

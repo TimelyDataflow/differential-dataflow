@@ -149,6 +149,14 @@ where
 }
 
 
+/// Entering the program's iterative scope: each time gains iteration coordinates, all zero.
+impl<R: 'static> Enter<u64, crate::ir::Time> for CorgiContainer<u64, R> {
+    type InnerContainer = CorgiContainer<crate::ir::Time, R>;
+    fn enter(self) -> CorgiContainer<crate::ir::Time, R> {
+        CorgiContainer { keys: self.keys, vals: self.vals, times: self.times.retime(), diffs: self.diffs }
+    }
+}
+
 /// Leaving the program's iterative scope: each time keeps its outer coordinate (lane 0).
 impl<R: Clone + 'static> differential_dataflow::collection::containers::Leave<crate::ir::Time, u64>
     for CorgiContainer<crate::ir::Time, R>

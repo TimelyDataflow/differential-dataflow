@@ -315,6 +315,12 @@ impl<T> ColTimes<T> {
         assert!(lanes.iter().all(|lane| lane.len() == len), "every lane must hold {len} rows");
         ColTimes { lanes, len, _t: PhantomData }
     }
+
+    /// The same lanes, read as times of type `U`. Coordinates `U` has beyond the lanes read as zero,
+    /// so this enters a scope: an outer time is the inner time whose added coordinates are zero.
+    pub fn retime<U>(self) -> ColTimes<U> {
+        ColTimes { lanes: self.lanes, len: self.len, _t: PhantomData }
+    }
 }
 
 impl<T: Lanes> FromIterator<T> for ColTimes<T> {
