@@ -137,6 +137,10 @@ impl Backend for VecBackend {
     fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s> {
         c.arrange_by_key()
     }
+    fn enter_region<'s, 'r>(a: Self::Arr<'s>, region: timely::dataflow::Scope<'r, Time>) -> Self::Arr<'r> {
+        a.enter_region(region)
+    }
+
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container> {
         a.as_collection(|k, v| (k.clone(), v.clone()))
     }

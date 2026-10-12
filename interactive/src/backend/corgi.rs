@@ -242,6 +242,10 @@ impl Backend for CorgiBackend {
         )
     }
 
+    fn enter_region<'s, 'r>(a: Self::Arr<'s>, region: timely::dataflow::Scope<'r, Time>) -> Self::Arr<'r> {
+        a.enter_region(region)
+    }
+
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, CC> {
         // Each chunk already IS a columnar container: its key/val columns clone by Arc bump,
         // so a chunk becomes a `CorgiContainer` for the price of copying its time lanes and
