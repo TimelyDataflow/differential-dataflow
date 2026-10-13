@@ -39,6 +39,8 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         // scalar_ops: (key, a, b) triples; a values straddle the `> 2` and `= -5` tests.
         "scalar_ops" => vec![rows(&[&[1, 1, 9], &[1, 4, 8], &[2, 3, 7], &[3, -5, 6], &[3, 2, 5]])],
         "sum_ops" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21]])],
+        // reduce_term: keys with one value, several, and a repeated one.
+        "reduce_term" => vec![rows(&[&[1, 10], &[2, 20], &[2, -21], &[2, 20], &[3, 30], &[3, 5]])],
         // empty_batch: only key 1 has the two values the filter keeps, so at several workers at
         // least one gets a batch that arrives non-empty and leaves empty.
         "empty_batch" => vec![rows(&[
@@ -144,6 +146,7 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn signed_min() { assert_backends_agree("signed_min"); }
 #[test] fn spread_values() { assert_backends_agree("spread_values"); }
 #[test] fn f64_math() { assert_backends_agree("f64_math"); }
+#[test] fn reduce_term() { assert_backends_agree("reduce_term"); }
 #[test] fn registered() {
     assert_backends_agree("registered");
     // And the program does what it says: the refinement from 1 and 3 reaches every

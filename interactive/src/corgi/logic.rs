@@ -789,6 +789,16 @@ pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Res<
     }
 }
 
+/// Compile a `reduce(term)` term over `Var(0)=key` (`kshape`) and `Var(1)` = a list of
+/// `(val, diff)` (`vshape` the values') → a corgi `List` column of `(val, diff)`, one list per key.
+pub fn compile_reduce(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+    let list = Shape::List(Box::new(Shape::Prod(vec![vshape.clone(), Shape::Int])));
+    match lower(&[term], &[kshape.clone(), list])? {
+        (g, Shape::List(e)) if matches!(&*e, Shape::Prod(fs) if fs.len() == 2 && fs[1] == Shape::Int) => Ok(g),
+        (_, other) => Err(format!("reduce output is not a list of (val, diff): {other}")),
+    }
+}
+
 /// Compile a scalar term (`EnterAt`'s delay field) → an `Int` column; a non-integer term is the
 /// type error (the delay is read as one integer per row).
 pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {

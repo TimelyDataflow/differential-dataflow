@@ -190,6 +190,24 @@ impl Backend for VecBackend {
                 for (v, d) in vals { for _ in 0..(*d).max(0) { items.push((*v).clone()); } }
                 output.push((Value::List(items), 1));
             }),
+            // The term reads the key and its values with their diffs, in value order (DD hands
+            // them sorted, and only those with non-zero diffs), and lists the output with diffs.
+            Reducer::Expr(term) => {
+                let term = term.clone();
+                Arc::new(move |key, vals, output| {
+                    let vals = vals.iter().map(|(v, d)| Value::Tuple(vec![(*v).clone(), Value::Int(*d)])).collect();
+                    match eval(&term, &mut vec![key.clone(), Value::List(vals)]) {
+                        Value::List(outs) => output.extend(outs.into_iter().map(|out| match out {
+                            Value::Tuple(mut pair) if pair.len() == 2 && matches!(pair[1], Value::Int(_)) => {
+                                let diff = pair.pop().unwrap().as_int();
+                                (pair.pop().unwrap(), diff)
+                            }
+                            other => panic!("reduce: expected an output (val, diff), got {other:?}"),
+                        })),
+                        other => panic!("reduce: expected a List, got {other:?}"),
+                    }
+                })
+            }
         };
         // The same reduction over either arrangement; its output is always local.
         macro_rules! reduce {

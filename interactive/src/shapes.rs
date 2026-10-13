@@ -19,7 +19,7 @@
 use corgi::Shape;
 
 use crate::corgi::logic::shape_of_term;
-use crate::ir::{LinearOp, Reducer};
+use crate::ir::{LinearOp, Reducer, Term};
 use crate::scope_ir as st;
 
 /// The shape of a collection's updates.
@@ -184,6 +184,19 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape) -> Result<Vec<(Sh
     Ok(steps)
 }
 
+/// The output value shape of `reduce(term)` over a key of shape `key` with values of shape `val`:
+/// the term reads the key and a `List` of `(val, diff)`, and must give a `List` of `(val, diff)`.
+fn reduce_shape(term: &Term, key: &Shape, val: &Shape) -> Result<Shape, String> {
+    let env = [key.clone(), Shape::List(Box::new(Shape::Prod(vec![val.clone(), Shape::Int])))];
+    match shape_of_term(term, &env, None).map_err(|e| format!("reduce: {e}"))? {
+        Shape::List(e) => match *e {
+            Shape::Prod(mut fs) if fs.len() == 2 && fs[1] == Shape::Int => Ok(fs.swap_remove(0)),
+            other => Err(format!("reduce: output elements of shape {other}, not (val, diff)")),
+        },
+        other => Err(format!("reduce: output of shape {other}, not a list of (val, diff)")),
+    }
+}
+
 fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, problems: &mut Problems) -> Option<CollShape> {
     let mut fail = |e: String| { problems.conflicts.push(format!("{at}: {e}")); None };
     match node {
@@ -218,6 +231,10 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
                 Reducer::Distinct => Shape::Unit,
                 Reducer::Count => Shape::Prod(vec![Shape::Int]),
                 Reducer::Collect => Shape::List(Box::new(c.val)),
+                Reducer::Expr(t) => match reduce_shape(t, &c.key, &c.val) {
+                    Ok(v) => v,
+                    Err(e) => return fail(e),
+                },
             };
             Some(CollShape::new(c.key, v, depth))
         }

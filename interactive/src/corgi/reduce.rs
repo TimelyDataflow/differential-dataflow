@@ -15,7 +15,8 @@
 //!     records the row holding its key, which is what `emit` reads.
 //!   * the value callback — `reduce_brackets` runs ONE crossing per wave over every `(key, time)`
 //!     bracket, building the output value COLUMNS directly (Count → an `Int` column, Distinct → a
-//!     `Unit`, Min → the chosen input rows, Collect → a `List`), never through DDIR rows.
+//!     `Unit`, Min → the chosen input rows, Collect → a `List`, a term → its graph's output over
+//!     every bracket's key and `(val, diff)` list), never through DDIR rows.
 //!   * materialize — gather the emitted keys and values from the pools' columns and seal a
 //!     `CorgiChunk` batch column-natively.
 //!
@@ -36,11 +37,12 @@ use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
 use corgi::arrange::{compare_at, gather_lanes, sort_blocks};
-use corgi::{Bounds, Value as CValue};
+use corgi::{Bounds, Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::matching_ranges;
-use crate::corgi::chunk::{columns_to_batch, ident, key_ids, key_is_hashed, CorgiChunk};
+use crate::corgi::chunk::{columns_to_batch, ident, key_ids, key_is_hashed, recover_key, CorgiChunk};
+use crate::corgi::logic::compile_reduce;
 use crate::ir::{Diff, Reducer};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
@@ -77,6 +79,8 @@ type Matches = Vec<Vec<(usize, Range<usize>)>>;
 /// differs from what it has, and `emit` records the difference; finally `finish` builds the batch.
 pub struct CorgiReduceBackend<T> {
     reducer: Reducer,
+    /// A `Reducer::Expr`'s graph, compiled on first use at the key and value shapes it reads.
+    graph: Option<(Shape, Shape, Graph<NumOp>)>,
     /// The current window's input values: its chunks' value columns.
     input: Pool,
     /// The current retire's output values: its output chunks' value columns, then those built here.
@@ -145,6 +149,7 @@ impl<T> CorgiReduceBackend<T> {
     pub fn with_window(reducer: Reducer, window_size: usize) -> Self {
         CorgiReduceBackend {
             reducer,
+            graph: None,
             input: Pool::default(),
             output: Pool::default(),
             output_keys: Vec::new(),
@@ -377,6 +382,7 @@ where
                 };
                 (self.input.gather(&min_reps), out_ends)
             }
+            Reducer::Expr(_) => unreachable!("a term's brackets are `reduce_term`'s"),
             Reducer::Collect => {
                 // One row per bracket: the values sorted in DDIR observable order,
                 // each repeated by its diff, as a `List`. One `sort_blocks` orders every bracket's
@@ -426,6 +432,64 @@ where
                 (CValue::List(Bounds::offsets(bracket_ends), Box::new(elems)), out_ends)
             }
         }
+    }
+
+    /// As [`Self::reduce_brackets`] for `Reducer::Expr`, whose output rows carry diffs: every
+    /// bracket's key and its values with non-zero diffs, as a list of `(val, diff)` in value order,
+    /// through the term's graph at once. Returns the output values, their diffs, and each bracket's
+    /// end among them. A bracket with no such values has no input, and no output.
+    fn reduce_term(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<Diff>, Vec<usize>) {
+        let (mut entry_reps, mut entry_diffs, mut labels) = (Vec::new(), Vec::new(), Vec::new());
+        // Per bracket with input: its index, the end of its entries, and the row holding its key.
+        let (mut blocks, mut key_refs) = (Vec::new(), Vec::new());
+        let mut start = 0;
+        for (bi, &end) in ends.iter().enumerate() {
+            let lo = entry_reps.len();
+            for &(id, diff) in &input[start..end] {
+                if diff != 0 {
+                    entry_reps.push(id);
+                    entry_diffs.push(diff);
+                    labels.push(bi as u64);
+                }
+            }
+            if entry_reps.len() > lo {
+                blocks.push((bi, entry_reps.len()));
+                key_refs.push(self.input.refs[input[start].0 as usize]);
+            }
+            start = end;
+        }
+        if blocks.is_empty() {
+            return (CValue::Unit(0), Vec::new(), vec![0; ends.len()]);
+        }
+        // One `sort_blocks` puts every bracket's entries in value order, in place.
+        let perm = sort_blocks(&labels, &self.input.gather(&entry_reps)).0;
+        let vals = self.input.gather(&perm.iter().map(|&e| entry_reps[e]).collect::<Vec<_>>());
+        let diffs = CValue::i64(perm.iter().map(|&e| entry_diffs[e]).collect());
+        let keys = recover_key(&gather_refs(&self.key_columns, key_refs.into_iter()));
+        let (kshape, vshape) = (corgi::shape_of_value(&keys), corgi::shape_of_value(&vals));
+        let lists = CValue::List(Bounds::offsets(blocks.iter().map(|b| b.1).collect()), Box::new(CValue::Prod(vec![vals, diffs])));
+
+        if self.graph.is_none() {
+            let Reducer::Expr(term) = &self.reducer else { unreachable!("only a term compiles a graph") };
+            let g = compile_reduce(term, &kshape, &vshape)
+                .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
+            self.graph = Some((kshape.clone(), vshape.clone(), g));
+        }
+        let (k, v, graph) = self.graph.as_ref().unwrap();
+        assert!(*k == kshape && *v == vshape, "reduce: input of shape ({kshape}, {vshape}) reached an operator pinned at ({k}, {v})");
+        let (bounds, elems) = corgi::eval_graph(graph, CValue::Prod(vec![keys, lists])).into_list("reduce output").unwrap();
+        let mut fields = elems.into_prod("reduce output").unwrap();
+        let out_diffs = fields.pop().unwrap().into_i64("reduce output diffs").unwrap().to_vec();
+        let out_vals = fields.pop().unwrap();
+
+        // Each bracket's end among the output rows; brackets without input add none.
+        let list_ends = bounds.to_vec();
+        let (mut out_ends, mut blocks, mut emitted) = (Vec::with_capacity(ends.len()), blocks.iter().zip(list_ends).peekable(), 0);
+        for bi in 0..ends.len() {
+            if let Some((_, end)) = blocks.next_if(|((b, _), _)| *b == bi) { emitted = end; }
+            out_ends.push(emitted);
+        }
+        (out_vals, out_diffs, out_ends)
     }
 }
 
@@ -507,7 +571,8 @@ where
     }
 
     fn reduce_corrections(&mut self, keys: &[i64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
-        // Each key wants its rows of `desired`, once each, and has `(id, diff)`s of output. The
+        // Each key wants its rows of `desired`, each with its diff (once each, but for a term's), and
+        // has `(id, diff)`s of output. The
         // correction nets the two by value: a wanted row equal to an output id's value counts
         // toward that id, and one equal to none gets a new id. Keys have a handful of each.
         //
@@ -534,7 +599,11 @@ where
             }
         }
         let (in_ends, input) = if split { (&sub_ends[..], &sub_input[..]) } else { (in_ends, input) };
-        let (desired, desired_ends) = self.reduce_brackets(in_ends, input);
+        // The desired rows, and each one's diff where it is not one copy.
+        let (desired, desired_diffs, desired_ends) = match self.reducer {
+            Reducer::Expr(_) => { let (d, diffs, e) = self.reduce_term(in_ends, input); (d, Some(diffs), e) }
+            _ => { let (d, e) = self.reduce_brackets(in_ends, input); (d, None, e) }
+        };
         let fresh = self.output.columns.len();
         if !desired.is_empty() { self.output.columns.push(desired); }
         let Pool { columns, refs } = &mut self.output;
@@ -552,6 +621,7 @@ where
                 let first = if s == 0 { 0 } else { in_ends[s - 1] };
                 let (kc, kr) = self.input.refs[input[first].0 as usize];
                 for row in ds..de {
+                    let diff = desired_diffs.as_ref().map_or(1, |diffs| diffs[row]);
                     let equal = |&(id, _): &(u64, Diff)| {
                         let (column, r) = refs[id as usize];
                         compare_at(&columns[fresh], row, &columns[column], r).is_eq() && (!checked || {
@@ -560,9 +630,9 @@ where
                         })
                     };
                     match net.iter().position(equal) {
-                        Some(at) => net[at].1 += 1,
+                        Some(at) => net[at].1 += diff,
                         None => {
-                            net.push((refs.len() as u64, 1));
+                            net.push((refs.len() as u64, diff));
                             refs.push((fresh, row));
                             output_keys.push((kc, kr));
                         }
@@ -811,12 +881,24 @@ mod tests {
         let early: Vec<_> = early.into_iter().filter(|r| r.2.outer < 2).collect();
         let stamp = |outer| Time::new(outer, PointStamp::new(std::iter::empty().collect()));
 
-        for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect] {
+        // A term: the weighted sum of the values' first fields, once, and how many values, twice negated.
+        let term = {
+            use crate::ir::{BinOp, Term as Tm, UnOp};
+            let b = Box::new;
+            let weighted = Tm::Binary(BinOp::Mul, b(Tm::Proj(b(Tm::Proj(b(Tm::Bound(0)), 0)), 0)), b(Tm::Proj(b(Tm::Bound(0)), 1)));
+            let sum = Tm::Fold { list: b(Tm::Var(1)), init: b(Tm::Int(0)), step: b(Tm::Binary(BinOp::Add, b(Tm::Bound(1)), b(weighted))) };
+            Tm::List(vec![
+                Tm::Tuple(vec![Tm::Tuple(vec![sum]), Tm::Int(1)]),
+                Tm::Tuple(vec![Tm::Tuple(vec![Tm::Unary(UnOp::Len, b(Tm::Var(1)))]), Tm::Int(-2)]),
+            ])
+        };
+        for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect, Reducer::Expr(term)] {
             let out_shape = match reducer {
                 Reducer::Count => Shape::Prod(vec![Shape::Int]),
                 Reducer::Distinct => Shape::Unit,
                 Reducer::Min => shape.clone(),
                 Reducer::Collect => Shape::List(Box::new(shape.clone())),
+                Reducer::Expr(_) => Shape::Prod(vec![Shape::Int]),
             };
             // Keys `(a, 7a)`, identified by their hash or by `a % 2`.
             let run = |forged: bool, window_size: usize| {
