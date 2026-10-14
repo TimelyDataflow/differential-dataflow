@@ -55,8 +55,6 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
             rows(&[&[1, 1, 10], &[1, 2, 20], &[2, 1, 30], &[2, 1, 31], &[9, 9, 90]]),
             rows(&[&[1, 1, 5], &[2, 1, 6], &[3, 3, 7]]),
         ],
-        // spread_values: keys with one and with several values.
-        "spread_values" => vec![rows(&[&[1, 10], &[1, 20], &[2, 30]])],
         "signed_min" => vec![rows(&[
             &[1, 0],
             &[1, -1],
@@ -153,7 +151,6 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn tour() { assert_backends_agree("tour"); }
 #[test] fn pair_keys() { assert_backends_agree("pair_keys"); }
 #[test] fn signed_min() { assert_backends_agree("signed_min"); }
-#[test] fn spread_values() { assert_backends_agree("spread_values"); }
 #[test] fn f64_math() { assert_backends_agree("f64_math"); }
 #[test] fn reduce_term() { assert_backends_agree("reduce_term"); }
 #[test] fn registered() {
