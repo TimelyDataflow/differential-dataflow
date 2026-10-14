@@ -278,7 +278,7 @@ pub fn compile(
             };
             Ok(b.add(NumOp::Host(corgi::HostOp(kernel)), vec![input]))
         }
-        Term::Corgi(src, args) => {
+        Term::Corgi(lambda, args) => {
             // The program's input is the tuple of its arguments, a `Unit` over the anchor for none.
             let input = if args.is_empty() {
                 b.add(Op::Unit, vec![anchor])
@@ -286,8 +286,7 @@ pub fn compile(
                 let fields = args.iter().map(|a| compile(a, b, env, env_shapes, anchor, None)).collect::<Res<Vec<_>>>()?;
                 b.tuple(fields)
             };
-            let program = parsed(src)?;
-            Ok(b.graft(&program, input))
+            Ok(b.graft(lambda.graph()?, input))
         }
         Term::Var(i) => env.get(*i).copied().ok_or_else(|| format!("`${i}` is not in scope here")),
         Term::Bound(k) => {
@@ -829,29 +828,67 @@ pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape
     Ok(lower(&[key, val], &[kshape.clone(), vshape.clone()])?.0)
 }
 
-/// Evaluate the corgi program `src` on one row, as `ir::eval` does for `Term::Corgi`. The row's
-/// shape is its own, so a row whose shape it cannot tell alone (an empty list, a variant) panics.
-pub fn eval_corgi_row(src: &str, input: DValue) -> DValue {
-    let shape = shape_of_row(&input).unwrap_or_else(|e| panic!("corgi program `{src}`: {e}"));
-    let graph = parsed(src).unwrap_or_else(|e| panic!("corgi program `{src}`: {e}"));
-    let out = corgi::eval_graph(&graph, transcode_owned(vec![input], &shape));
+/// Evaluate a corgi program on one row, as `ir::eval` does for `Term::Corgi`. The row's shape is
+/// its own, so a row whose shape it cannot tell alone (an empty list, a variant) panics.
+pub fn eval_corgi_row(lambda: &crate::ir::Lambda, input: DValue) -> DValue {
+    let shape = shape_of_row(&input).unwrap_or_else(|e| panic!("corgi program `{}`: {e}", lambda.src));
+    let graph = lambda.graph().unwrap_or_else(|e| panic!("{e}"));
+    let out = corgi::eval_graph(graph, transcode_owned(vec![input], &shape));
     let out_shape = corgi::shape_of_value(&out);
     untranscode(out, &out_shape).pop().expect("one row in, one row out")
 }
 
-/// The graph of the corgi program `src` (`Term::Corgi`), parsed once for the life of the process.
-/// `Err` is a parse error.
-fn parsed(src: &str) -> Res<std::sync::Arc<Graph<NumOp>>> {
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex, OnceLock};
-    static GRAPHS: OnceLock<Mutex<HashMap<String, Arc<Graph<NumOp>>>>> = OnceLock::new();
-    let mut map = GRAPHS.get_or_init(Default::default).lock().unwrap();
-    if let Some(g) = map.get(src) {
-        return Ok(Arc::clone(g));
-    }
-    let g = Arc::new(corgi::parse_ml(src)?);
-    map.insert(src.to_string(), Arc::clone(&g));
-    Ok(g)
+/// The scope every DDIR program's lambdas start from: the Float functions as words, and the
+/// built-in sums `Option` and `Result`. A word's input is its argument, or the tuple of its
+/// arguments when it takes several, so `x call fsqrt` and `(x, y) call fpow`. The sums declare no
+/// payload shapes, as they have none of their own: `branch`, `map_variant` and `match` read only
+/// their tags.
+pub fn base_scope() -> corgi::Scope {
+    static BASE: std::sync::OnceLock<corgi::Scope> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| {
+        use BinOp as B;
+        let mut scope = corgi::Scope::default();
+        let (f, i) = (Shape::Float, Shape::Int);
+        let x = || Box::new(Term::Var(0));
+        let pair = |op| Term::Binary(op, Box::new(Term::Proj(x(), 0)), Box::new(Term::Proj(x(), 1)));
+        let mut words: Vec<(String, Term, Shape)> = F64Fn::ALL.iter()
+            .map(|&(name, g)| (name.to_string(), Term::Unary(UnOp::F64Fn(g), x()), f.clone()))
+            .collect();
+        words.push(("fint".into(), Term::Unary(UnOp::F64ToInt, x()), f.clone()));
+        words.push(("fpowi".into(), pair(B::F64PowI), Shape::Prod(vec![f.clone(), i])));
+        for (name, op) in [("fpow", B::F64Pow), ("fmin", B::F64Min), ("fmax", B::F64Max), ("feq", B::F64Eq), ("fne", B::F64Ne),
+                           ("flt", B::F64Lt), ("fle", B::F64Le), ("fgt", B::F64Gt), ("fge", B::F64Ge)] {
+            words.push((name.into(), pair(op), Shape::Prod(vec![f.clone(), f.clone()])));
+        }
+        for (name, term, arg) in words {
+            let g = term_word(&term, &arg).unwrap_or_else(|e| panic!("word `{name}`: {e}"));
+            scope.word(&name, g).unwrap();
+        }
+        scope.declare("enum Option = None () | Some").unwrap();
+        scope.declare("enum Result = Ok | Err").unwrap();
+        scope
+    }).clone()
+}
+
+/// A DDIR term over `Var(0)` of shape `arg`, as a word whose input is that argument.
+fn term_word(term: &Term, arg: &Shape) -> Res<Graph<NumOp>> {
+    let (inner, _) = lower(&[term], &[arg.clone()])?;
+    let mut b = Builder::<NumOp>::default();
+    let x = b.input();
+    let row = b.tuple(vec![x]);
+    let out = b.graft(&inner, row);
+    Ok(b.finish(out))
+}
+
+/// The registered function `f` as a word: one host-kernel node over the call's input, which is its
+/// argument when it takes one, and the tuple of its arguments (or `()`) otherwise.
+pub fn function_word(f: &crate::ir::Function) -> Graph<NumOp> {
+    let kernel = crate::ir::kernel_of(&f.name).expect("a registered function has a kernel");
+    let mut b = Builder::<NumOp>::default();
+    let x = b.input();
+    let input = if f.args.len() == 1 { b.tuple(vec![x]) } else { x };
+    let out = b.add(NumOp::Host(corgi::HostOp(kernel)), vec![input]);
+    b.finish(out)
 }
 
 /// The Float functions without a composition of corgi ops, as host kernels over the float

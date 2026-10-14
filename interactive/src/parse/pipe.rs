@@ -104,6 +104,17 @@
 //! pair `(key, val)`; in `value`, `filter`, `flatmap`, and `enter_at` it gives the one value; in
 //! `reduce` its input is `(key, vals)` and it gives the output list. For
 //! example, `key(((src, dst), ()) -> ((src), (dst)))` is `key($0[0] ; $0[1])`.
+//!
+//! A lambda is parsed in its program's scope, which names what the program has not defined:
+//!
+//! - Registered functions and the Float functions are words reached by `call`. A word's input is
+//!   its argument, or the tuple of its arguments when it takes several: `x call fsqrt`,
+//!   `(x, y) call fpow`, `() call f` for a function of none.
+//! - The program's `type` declarations, written before the lambda, are corgi enums of the same
+//!   names and variants. A variant two types share is written `Type::Variant`.
+//! - `Option` (`None`, `Some`) and `Result` (`Ok`, `Err`) are enums that declare no payload shapes:
+//!   `branch`, `map_variant` and `match` use them, as in
+//!   `(x, c) branch Option map_variant None (_ -> ())` for `if(c, Some(x), None)`.
 
 use super::*;
 use crate::ir::{BinOp, Projection, Reducer, SumTy, Term, UnOp};
@@ -274,11 +285,32 @@ struct Parser {
     binders: Vec<(String, usize, Option<usize>)>,
     /// Number of `case`/`fold` binders currently in scope.
     depth: usize,
+    /// The declared types, in declaration order (a type's payload may name an earlier one).
+    type_order: Vec<String>,
+    /// The corgi scope lambdas are parsed in, built at the first lambda and then kept current
+    /// with each `type` declaration.
+    scope: Option<corgi::Scope>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, types: Default::default(), ctors: Default::default(), binders: Vec::new(), depth: 0 }
+        Parser { tokens, pos: 0, types: Default::default(), ctors: Default::default(), binders: Vec::new(), depth: 0, type_order: Vec::new(), scope: None }
+    }
+
+    /// The corgi scope of this program's lambdas: the registered functions and the Float functions
+    /// as words, the built-in `Option` and `Result`, and the types declared so far as enums.
+    fn lambda_scope(&mut self) -> &corgi::Scope {
+        if self.scope.is_none() {
+            let mut scope = crate::corgi::logic::base_scope();
+            for f in crate::ir::registered() {
+                scope.word(&f.name, crate::corgi::logic::function_word(&f)).unwrap_or_else(|e| panic!("{e}"));
+            }
+            for name in &self.type_order {
+                declare_enum(&mut scope, name, &self.types[name], &self.types);
+            }
+            self.scope = Some(scope);
+        }
+        self.scope.as_ref().unwrap()
     }
     fn peek(&self) -> &Token { &self.tokens[self.pos] }
     fn next(&mut self) -> Token { let t = self.tokens[self.pos].clone(); self.pos += 1; t }
@@ -304,6 +336,10 @@ impl Parser {
                     assert!(!variants[..tag].iter().any(|(w, _)| w == v), "type `{name}` declares `{v}` twice");
                     self.ctors.entry(v.clone()).or_default().push((name.clone(), tag));
                 }
+                if let Some(scope) = self.scope.as_mut() {
+                    declare_enum(scope, &name, &variants, &self.types);
+                }
+                self.type_order.push(name.clone());
                 self.types.insert(name, variants);
                 continue;
             }
@@ -566,7 +602,8 @@ impl Parser {
     fn lambda(&mut self, arity: usize) -> Option<Term> {
         let Token::Lambda { pat, body } = self.peek().clone() else { return None };
         self.next();
-        Some(Term::Corgi(format!("let {pat} = input in {body}"), (0..arity).map(Term::Var).collect()))
+        let lambda = crate::ir::Lambda::new(format!("let {pat} = input in {body}"), self.lambda_scope());
+        Some(Term::Corgi(lambda, (0..arity).map(Term::Var).collect()))
     }
 
     /// The projection a lambda's `(key, val)` result gives.
@@ -844,6 +881,38 @@ impl Parser {
         let mut args = self.parse_args();
         super::build_builtin(name, &mut args)
     }
+}
+
+/// Declare the DDIR type `name` in a lambda scope, as the corgi enum of the same name and variants.
+/// A payload that is itself a sum is written as the name of a declared type with those lanes, or
+/// else as a fresh enum declared for it, with names no program writes.
+fn declare_enum(scope: &mut corgi::Scope, name: &str, variants: &[(String, corgi::Shape)], types: &std::collections::HashMap<String, Vec<(String, corgi::Shape)>>) {
+    fn render(s: &corgi::Shape, scope: &mut corgi::Scope, types: &std::collections::HashMap<String, Vec<(String, corgi::Shape)>>) -> String {
+        use corgi::Shape;
+        match s {
+            Shape::Int => "int".into(),
+            Shape::Float => "float".into(),
+            Shape::Unit => "()".into(),
+            Shape::Prod(fs) => format!("({})", fs.iter().map(|f| render(f, scope, types)).collect::<Vec<_>>().join(", ")),
+            Shape::List(e) => format!("List({})", render(e, scope, types)),
+            Shape::Sum(lanes) => {
+                let named = types.iter()
+                    .filter(|(n, vs)| vs.iter().map(|(_, s)| s).eq(lanes.iter()) && scope.variants(n).is_some())
+                    .map(|(n, _)| n)
+                    .min();
+                if let Some(n) = named { return n.clone(); }
+                let mut k = 0;
+                while scope.variants(&format!("__sum{k}")).is_some() { k += 1; }
+                let fresh = format!("__sum{k}");
+                let body: Vec<String> = lanes.iter().enumerate().map(|(i, l)| format!("{fresh}_{i} {}", render(l, scope, types))).collect();
+                scope.declare(&format!("enum {fresh} = {}", body.join(" | "))).unwrap_or_else(|e| panic!("{e}"));
+                fresh
+            }
+            Shape::Ref(_) => panic!("a type cannot hold a reference"),
+        }
+    }
+    let body: Vec<String> = variants.iter().map(|(v, s)| format!("{v} {}", render(s, scope, types))).collect();
+    scope.declare(&format!("enum {name} = {}", body.join(" | "))).unwrap_or_else(|e| panic!("type `{name}`: {e}"));
 }
 
 pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.parse_program() }
