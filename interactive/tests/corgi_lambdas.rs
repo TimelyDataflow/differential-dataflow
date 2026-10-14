@@ -144,3 +144,101 @@ fn mismatched_lambdas_are_refused_at_install() {
         }
     });
 }
+
+/// Words a lambda `call`s: registered functions, whose input is their argument or the tuple of
+/// their arguments, and the Float functions.
+#[test]
+fn calls() {
+    use corgi::Shape;
+    use interactive::ir::{register, Function};
+    register(Function { name: "triple".into(), args: vec![Shape::Int], result: Shape::Int, body: Box::new(|a| Value::Int(3 * a[0].as_int())) });
+    register(Function { name: "plus".into(), args: vec![Shape::Int, Shape::Int], result: Shape::Int, body: Box::new(|a| Value::Int(a[0].as_int() + a[1].as_int())) });
+    register(Function { name: "eleven".into(), args: vec![], result: Shape::Int, body: Box::new(|_| Value::Int(11)) });
+    let terms = r#"
+        let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+        export "one" = pairs | value(triple($1[0]));
+        export "two" = pairs | value(plus($0[0], $1[0]));
+        export "none" = pairs | value(eleven() + $0[0]);
+        export "floats" = pairs | value(tuple(fint(fsqrt(float($1[0]))), fint(fpowi(float($0[0]), 3)), flt(float($0[0]), float($1[0]))));
+    "#;
+    let lambdas = r#"
+        let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+        export "one" = pairs | value((_, (b)) -> b call triple);
+        export "two" = pairs | value(((a), (b)) -> (a, b) call plus);
+        export "none" = pairs | value(((a), _) -> (() call eleven, a) add);
+        export "floats" = pairs | value(((a), (b)) -> (b to_float call fsqrt call fint, (a to_float, 3) call fpowi call fint, (a to_float, b to_float) call flt));
+    "#;
+    assert_same(terms, lambdas, &[edges()]);
+}
+
+/// A program's `type`s, and the built-in `Option`, are enums its lambdas name. A lambda builds a
+/// value a term takes apart, and a term builds one a lambda takes apart.
+#[test]
+fn types() {
+    let terms = r#"
+        type Size = Small int | Big (int, int);
+        let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+        let sized = pairs | value(if($1[0] > 3, Big($1[0], $0[0]), Small($1[0])));
+        export "built" = sized | value(case $1 { Small(x) => x, Big(a, b) => a + b });
+        let maybe = pairs | value(if($1[0] > 3, Some($1[0]), None));
+        export "option" = maybe | value(case $1 { Some(x) => x, None => 0 });
+    "#;
+    let lambdas = r#"
+        type Size = Small int | Big (int, int);
+        let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+        let built = pairs | value(((a), (b)) -> ((b, 3) gt, (b, a) inject Big, b inject Small) select);
+        export "built" = built | value(case $1 { Small(x) => x, Big(a, b) => a + b });
+        let maybe = pairs | value((_, (b)) -> (b, (b, 3) gt) branch Option map_variant None (_ -> ()));
+        export "option" = maybe | value(case $1 { Some(x) => x, None => 0 });
+    "#;
+    assert_same(terms, lambdas, &[edges()]);
+}
+
+/// A lambda takes apart a value of a declared type. Only the corgi backend runs it: the vec backend
+/// types a lambda's input from the row alone, and a variant does not say which type it is.
+#[test]
+fn types_matched() {
+    let tree = |src: &str| {
+        let mut tree = lower::lower_tree(parse::pipe::parse(src));
+        tree.optimize();
+        tree
+    };
+    let terms = tree(r#"
+        type Size = Small int | Big (int, int);
+        let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+        let sized = pairs | value(if($1[0] > 3, Big($1[0], $0[0]), Small($1[0])));
+        export "matched" = sized | value(case $1 { Small(x) => x, Big(a, b) => a * b });
+    "#);
+    let lambdas = tree(r#"
+        type Size = Small int | Big (int, int);
+        let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+        let sized = pairs | value(if($1[0] > 3, Big($1[0], $0[0]), Small($1[0])));
+        export "matched" = sized | value((_, s) -> s match (Small (x -> x), Big ((a, b) -> (a, b) mul)));
+    "#);
+    let want = evaluate(RenderBackend::Vec, timely::Config::process(1), &terms, &[edges()]);
+    assert!(!want["matched"].is_empty());
+    for workers in [1, 3] {
+        assert_eq!(evaluate(RenderBackend::Corgi, timely::Config::process(workers), &lambdas, &[edges()]), want, "{workers} workers");
+    }
+}
+
+/// A type whose payloads are other sums: a declared type, and an `Option`, which has no name of its
+/// own in a lambda's scope.
+#[test]
+fn nested_types() {
+    let terms = r#"
+        type Inner = A int | B;
+        type Outer = Wrap Inner | Opt Option(int) | Nums List(int);
+        let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+        let outer = pairs | value(Wrap(A($1[0])));
+        export "outer" = outer | value(case $1 { Wrap(i) => case i { A(x) => x, _ => 0 }, _ => 0 - 1 });
+    "#;
+    let lambdas = r#"
+        type Inner = A int | B;
+        type Outer = Wrap Inner | Opt Option(int) | Nums List(int);
+        let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+        let outer = pairs | value((_, (b)) -> b inject A inject Wrap);
+        export "outer" = outer | value(case $1 { Wrap(i) => case i { A(x) => x, _ => 0 }, _ => 0 - 1 });
+    "#;
+    assert_same(terms, lambdas, &[edges()]);
+}

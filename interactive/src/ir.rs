@@ -133,7 +133,44 @@ pub enum Term {
     Call(String, Vec<Term>),
     /// A corgi ML program, run with the tuple of the arguments as its `input`. A slot written
     /// `pat -> body` is `let pat = input in body` over the slot's input rows.
-    Corgi(String, Vec<Term>),
+    Corgi(Lambda, Vec<Term>),
+}
+
+/// A corgi program as written, and its graph. The parser binds it where it is written, in the
+/// scope of its DDIR program: the registered functions and the Float functions as words `call`
+/// reaches, and the program's `type` declarations as enums. A parse error is kept, and reported
+/// where the program is compiled or run. It serializes as its source, which deserializes in the
+/// empty scope.
+#[derive(Clone)]
+pub struct Lambda {
+    pub src: String,
+    pub graph: Result<std::sync::Arc<corgi::Graph<corgi::NumOp>>, String>,
+}
+
+impl Lambda {
+    /// `src` parsed in `scope`.
+    pub fn new(src: String, scope: &corgi::Scope) -> Self {
+        let graph = corgi::parse_ml_in(&src, scope).map(std::sync::Arc::new);
+        Lambda { src, graph }
+    }
+    /// The graph, or the parse error naming the program.
+    pub fn graph(&self) -> Result<&std::sync::Arc<corgi::Graph<corgi::NumOp>>, String> {
+        self.graph.as_ref().map_err(|e| format!("corgi program `{}`: {e}", self.src))
+    }
+}
+
+impl std::fmt::Debug for Lambda {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.src.fmt(f) }
+}
+
+impl serde::Serialize for Lambda {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> { self.src.serialize(s) }
+}
+
+impl<'de> serde::Deserialize<'de> for Lambda {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Lambda::new(String::deserialize(d)?, &corgi::Scope::default()))
+    }
 }
 
 /// The sum type an `Inject` builds into. `Declared` carries the full lane shapes of a `type`
@@ -337,9 +374,9 @@ pub fn eval(term: &Term, env: &mut Vec<Value>) -> Value {
             }
             (f.body)(&vals)
         }
-        Term::Corgi(src, args) => {
+        Term::Corgi(lambda, args) => {
             let input = Value::Tuple(args.iter().map(|a| eval(a, env)).collect());
-            crate::corgi::logic::eval_corgi_row(src, input)
+            crate::corgi::logic::eval_corgi_row(lambda, input)
         }
         Term::Var(i) => env[*i].clone(),
         Term::Bound(k) => env[env.len() - 1 - *k].clone(),
@@ -588,6 +625,11 @@ impl corgi::HostKernel for RowKernel {
         }).collect();
         Ok(crate::corgi::logic::transcode_owned(out, &self.f.result))
     }
+}
+
+/// Every registered function.
+pub fn registered() -> Vec<std::sync::Arc<Function>> {
+    functions().read().unwrap().values().cloned().collect()
 }
 
 /// The registered function called `name`, if any.

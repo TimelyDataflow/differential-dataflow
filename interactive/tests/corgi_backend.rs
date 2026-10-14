@@ -241,7 +241,7 @@ fn filter_requires_an_int_predicate() {
     let inputs = vec![rows(&[&[1, 10], &[0, 20]])];
     for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
         let (tree, inputs) = (tree.clone(), inputs.clone());
-        let result = std::panic::catch_unwind(move || evaluate(backend, timely::Config::process(1), &tree, &inputs));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(backend, timely::Config::process(1), &tree, &inputs)));
         assert!(result.is_err(), "{backend:?} accepted a tuple filter predicate");
     }
 }
@@ -257,7 +257,7 @@ fn call_argument_shapes_are_checked_by_both_backends() {
     let inputs = vec![rows(&[&[1], &[2]])];
     for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
         let (tree, inputs) = (tree.clone(), inputs.clone());
-        let result = std::panic::catch_unwind(move || evaluate(backend, timely::Config::process(1), &tree, &inputs));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(backend, timely::Config::process(1), &tree, &inputs)));
         assert!(result.is_err(), "{backend:?} ran a call with a mis-shaped argument");
     }
 }
