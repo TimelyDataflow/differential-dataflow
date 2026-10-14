@@ -165,7 +165,7 @@ fn serializing(n: usize) -> timely::Config {
     let src = interactive::load_program(&format!("{}/tests/programs/registered.ddp", env!("CARGO_MANIFEST_DIR")));
     let tree = lower::lower_tree(parse::pipe::parse(&src));
     let out = evaluate(RenderBackend::Corgi, timely::Config::process(2), &tree, &inputs_for("registered"));
-    let mut cells: Vec<i64> = out["cells"].iter().map(|((k, _), _)| match k { Value::Tuple(f) => f[0].as_int(), _ => panic!() }).collect();
+    let mut cells: Vec<i64> = out["cells"].iter().map(|((k, _), _)| k.as_int()).collect();
     cells.sort();
     let mut want: Vec<i64> = (1..40).collect();
     want.insert(0, -4);

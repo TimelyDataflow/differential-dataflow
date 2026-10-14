@@ -18,11 +18,11 @@ let edges = ((knows | map(((src, dst, created), ()) -> ((src, dst, created), ())
 export "edge" = edges | key(((src, dst, created), ()) -> ((src), (dst, created))) | arrange;
 export "message" = message | key(((id, kind, creator, parent), ()) -> ((id), (kind, creator, parent))) | arrange;
 export "likes" = likes | key(((person, message), ()) -> ((message), (person))) | arrange;
-let tags = tag | key(((id, name), ()) -> ((id), (name)));
-export "tagged" = message_tag | key(((message, tag), ()) -> ((tag), (message)))
-    | join(tags, (_, message, name) -> (message, name)) | arrange;
-let places = place | key(((id, name, parent), ()) -> ((id), (name, parent)));
+let tags = tag | key(((id, name), ()) -> (id, name));
+export "tagged" = message_tag | key(((message, tag), ()) -> (tag, message))
+    | join(tags, (_, message, name) -> ((message), (name))) | arrange;
+let places = place | key(((id, name, parent), ()) -> (id, (name, parent)));
 -- City -> country is one parent step in SNB.
-export "resident" = person | key(((id, _, _, city), ()) -> ((city), (id)))
-    | join(places, (_, person, (_, parent)) -> ((parent), person))
-    | join(places, (_, person, (name, _)) -> ((name), person)) | arrange;
+export "resident" = person | key(((id, _, _, city), ()) -> (city, id))
+    | join(places, (_, person, (_, parent)) -> (parent, person))
+    | join(places, (_, person, (name, _)) -> ((name), (person))) | arrange;

@@ -3,10 +3,10 @@
 -- a wrong index would hit the fold's Int element and panic on Proj.
 type Node = Node List(int);
 
-let rows = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), ((a enlist, b enlist) append inject Node)));
+let rows = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, (a enlist, b enlist) append inject Node));
 
 -- the fold step: xs[0] + element, with xs captured into the step by `cap_list`
 let summed = rows
-    | key(((a), (n)) -> ((a), (n match (Node (xs -> (100, (xs, xs) cap_list) fold ((_, (ys, x)) -> ((0, ys) get, x) add))))));
+    | key((a, n) -> (a, n match (Node (xs -> (100, (xs, xs) cap_list) fold ((_, (ys, x)) -> ((0, ys) get, x) add)))));
 
 export "result" = summed | arrange | inspect(deep);

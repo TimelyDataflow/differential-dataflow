@@ -44,6 +44,6 @@ export "result" = flow::reg | filter(((st, _, _, _, _, _, _, _, _, _), _) -> (st
         let wm = ((1, mh) add, ml) sub in
         let wa = ((1, ah) add, al) sub in
         let ws = ((1, sh) add, sl) sub in
-        ((), ((((wx, wm) mul, wa) mul, ws) mul)))
-    | collect | map((_, vs) -> ((), (vs map (v -> v.0) fold_add)))
+        ((), (((wx, wm) mul, wa) mul, ws) mul))
+    | collect | map((_, vs) -> ((), vs fold_add))
     | arrange | inspect(part2);

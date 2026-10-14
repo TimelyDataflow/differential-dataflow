@@ -3,13 +3,13 @@
 -- input 0: rules (state, prio, field, cmp, val, next)
 -- input 1: parts (x, m, a, s)
 
-let rulesbys = input 0 : ((int, int, int, int, int, int) ; ()) | key(((st, prio, f, cmp, v, nx), ()) -> ((st), (prio, f, cmp, v, nx)));
+let rulesbys = input 0 : ((int, int, int, int, int, int) ; ()) | key(((st, prio, f, cmp, v, nx), ()) -> (st, (prio, f, cmp, v, nx)));
 -- (state ; prio, field, cmp, val, next)
 let parts = input 1 : ((int, int, int, int) ; ()) | key(((x, m, a, s), ()) -> ((0, x, m, a, s), ()));
 
 move: {
-    let mtch = mv | map(((st, x, m, a, s), ()) -> ((st), (x, m, a, s)))
-        | join(rulesbys, ((st), (x, m, a, s), (prio, f, cmp, v, nx)) ->
+    let mtch = mv | map(((st, x, m, a, s), ()) -> (st, (x, m, a, s)))
+        | join(rulesbys, (st, (x, m, a, s), (prio, f, cmp, v, nx)) ->
             let sel = ((f, 0) eq, x, ((f, 1) eq, m, ((f, 2) eq, a, s) select) select) select in
             ((st, x, m, a, s), (((cmp, 0) eq, (sel, v) lt, (sel, v) gt) select, prio, nx)))
         | filter((_, (hit, _, _)) -> (hit, 1) eq) | map((k, (_, prio, nx)) -> (k, (prio, nx)))
@@ -20,6 +20,6 @@ move: {
 }
 
 export "result" = move::mv | filter(((st, _, _, _, _), _) -> (st, -1) eq)
-    | key(((_, x, m, a, s), _) -> ((), ((((x, m) add, a) add, s) add)))
-    | collect | map((_, vs) -> ((), (vs map (v -> v.0) fold_add)))
+    | key(((_, x, m, a, s), _) -> ((), (((x, m) add, a) add, s) add))
+    | collect | map((_, vs) -> ((), vs fold_add))
     | arrange | inspect(part1);

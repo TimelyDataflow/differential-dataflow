@@ -2,38 +2,38 @@
 -- '='; slot = rank of first-op-after-last-delete among box mates.
 -- input 0: (r, l1, l2, opchar, digitcode|0); '='=61
 let ops = input 0 : ((int, int, int, int, int) ; ())
-    | key(((r, l1, l2, op, d), ()) -> ((r), (l1, l2, ((op, 61) eq, (d, 48) sub, 0) select)));
+    | key(((r, l1, l2, op, d), ()) -> (r, (l1, l2, ((op, 61) eq, (d, 48) sub, 0) select)));
 
 let ktab = ops | key(_ -> ((), ())) | distinct
     | flatmap(_ -> (0, 34) range)
-    | key((_, (_, k)) -> ((), (k)));
+    | key((_, (_, k)) -> ((), k));
 
-let opsk = ops | map(((r), (l1, l2, f)) -> ((l1, l2), (r, f)));   -- (l1,l2 ; r, op)
-let dels = opsk | filter((_, (_, f)) -> (f, 0) eq) | map((l, (r, _)) -> (l, ((1000000, r) sub))) | min
-    | map((l, (v)) -> (l, ((1000000, v) sub)));
+let opsk = ops | map((r, (l1, l2, f)) -> ((l1, l2), (r, f)));   -- (l1,l2 ; r, op)
+let dels = opsk | filter((_, (_, f)) -> (f, 0) eq) | map((l, (r, _)) -> (l, (1000000, r) sub)) | min
+    | map((l, v) -> (l, (1000000, v) sub));
 -- (l1,l2 ; last delete r)
 
-let after = opsk | join(dels, (l, (r, f), (d)) -> (l, (r, f, d))) | filter((_, (r, _, d)) -> (r, d) gt)
+let after = opsk | join(dels, (l, (r, f), d) -> (l, (r, f, d))) | filter((_, (r, _, d)) -> (r, d) gt)
     | map((l, (r, f, _)) -> (l, (r, f)));
-let nodel = opsk - (opsk | join(dels, (l, (r, f), _) -> (l, (r, f))));
+let nodel = opsk - (opsk | join(dels, (l, rf, _) -> (l, rf)));
 let finals = after + nodel;                          -- (l1,l2 ; r, op)
 
-let last  = finals | map((l, (r, f)) -> (l, ((1000000, r) sub, f))) | min | map((l, (_, f)) -> (l, (f)));
-let first = finals | map((l, (r, _)) -> (l, (r))) | min;          -- (l1,l2 ; minr)
-let present = last | filter((_, (f)) -> (f, 0) gt);              -- (l1,l2 ; focal)
+let last  = finals | map((l, (r, f)) -> (l, ((1000000, r) sub, f))) | min | map((l, (_, f)) -> (l, f));
+let first = finals | map((l, (r, _)) -> (l, r)) | min;          -- (l1,l2 ; minr)
+let present = last | filter((_, f) -> (f, 0) gt);              -- (l1,l2 ; focal)
 
 -- box = HASH(label): two rounds of *17 mod 256 (relational modulo)
-let t1 = present | key(((l1, l2), (f)) -> ((), (l1, l2, f)));       -- (; l1,l2,focal)
-let h1 = t1 | join(ktab, (_, (l1, l2, f), (k)) -> ((l1, l2), (f, ((l1, 17) mul, (256, k) mul) sub)))
+let t1 = present | key(((l1, l2), f) -> ((), (l1, l2, f)));       -- (; l1,l2,focal)
+let h1 = t1 | join(ktab, (_, (l1, l2, f), k) -> ((l1, l2), (f, ((l1, 17) mul, (256, k) mul) sub)))
     | filter((_, (_, h)) -> ((h, 0) ge, (h, 256) lt) all);             -- (l1,l2 ; focal, h1)
 let t2 = h1 | key(((l1, l2), (f, h)) -> ((), (l1, l2, f, ((h, l2) add, 17) mul)));
-let hh = t2 | join(ktab, (_, (l1, l2, f, t), (k)) -> ((l1, l2), (f, (t, (256, k) mul) sub)))
+let hh = t2 | join(ktab, (_, (l1, l2, f, t), k) -> ((l1, l2), (f, (t, (256, k) mul) sub)))
     | filter((_, (_, h)) -> ((h, 0) ge, (h, 256) lt) all);             -- (l1,l2 ; focal, box)
 
-let boxed = hh | join(first, (_, (f, bx), (m)) -> ((bx), (m, f)));  -- (box ; minr, focal)
-let rank = boxed | join(boxed, ((bx), (m, f), (m2, _)) -> ((bx, m, f), (m2)))
-    | filter(((_, m, _), (m2)) -> (m2, m) le) | map((x, _) -> (x, ())) | count;      -- (box, minr, focal ; slot)
+let boxed = hh | join(first, (_, (f, bx), m) -> (bx, (m, f)));  -- (box ; minr, focal)
+let rank = boxed | join(boxed, (bx, (m, f), (m2, _)) -> ((bx, m, f), m2))
+    | filter(((_, m, _), m2) -> (m2, m) le) | map((x, _) -> (x, ())) | count;      -- (box, minr, focal ; slot)
 
-export "result" = rank | key(((bx, _, f), (n)) -> ((), ((((1, bx) add, n) mul, f) mul)))
-    | collect | map((_, ps) -> ((), (ps map (p -> p.0) fold_add)))
+export "result" = rank | key(((bx, _, f), (n)) -> ((), (((1, bx) add, n) mul, f) mul))
+    | collect | map((_, ps) -> ((), ps fold_add))
     | arrange | inspect(part2);

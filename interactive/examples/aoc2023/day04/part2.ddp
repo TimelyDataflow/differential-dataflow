@@ -5,22 +5,22 @@
 let numbers = input 0 : ((int, int, int, int) ; ());
 let winners = numbers | filter(((_, side, _, _), _) -> (side, 0) eq) | key(((card, _, _, value), _) -> ((card, value), ()));
 let ours    = numbers | filter(((_, side, _, _), _) -> (side, 1) eq) | key(((card, _, _, value), _) -> ((card, value), ()));
-let matches = ours | join(winners, (k, _, _) -> (k, ())) | map(((card, _), _) -> ((card), ())) | count;
+let matches = ours | join(winners, (k, _, _) -> (k, ())) | map(((card, _), _) -> (card, ())) | count;
 -- (card ; m): number of matching (ours, winners) pairs
 
-let cards = numbers | key(((card, _, _, _), _) -> ((card), ())) | distinct;
+let cards = numbers | key(((card, _, _, _), _) -> (card, ())) | distinct;
 
 -- prize targets: key (card, target) for target in card+1 .. card+m
 wt: {
-    let step = t | map(((card, target), _) -> ((card), (target))) | join(matches, ((card), (target), (m)) -> ((card, (target, 1) add, m), ()))
+    let step = t | map(((card, target), _) -> (card, target)) | join(matches, (card, target, (m)) -> ((card, (target, 1) add, m), ()))
                  | filter(((card, target, m), _) -> (target, (card, m) add) le) | map(((card, target, _), _) -> ((card, target), ()));
-    var t = (matches | filter((_, (m)) -> (m, 1) ge) | map(((card), _) -> ((card, (card, 1) add), ()))) + step | distinct;
+    var t = (matches | filter((_, (m)) -> (m, 1) ge) | map((card, _) -> ((card, (card, 1) add), ()))) + step | distinct;
 }
-let wtflat = wt::t | map(((card, target), _) -> ((card), (target)));
+let wtflat = wt::t | map(((card, target), _) -> (card, target));
 
 -- instances: multiplicity of (card ;) = copies of that card
 insts: {
-    let spawned = inst | join(wtflat, (_, _, (target)) -> ((target), ()));
+    let spawned = inst | join(wtflat, (_, _, target) -> (target, ()));
     var inst = cards + spawned | arrange;
 }
 

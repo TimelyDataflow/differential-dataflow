@@ -25,15 +25,15 @@ let less = hands | join(hands, (_, (_, l1, l2, l3, l4, l5, l6, _), (rid, r1, r2,
     rid), ()));
 -- key (left_is_less, right_id)
 
-let ranks = less | filter(((m, _), ()) -> (m, 1) eq) | map(((_, id), ()) -> ((id), ())) | count;
+let ranks = less | filter(((m, _), ()) -> (m, 1) eq) | map(((_, id), ()) -> (id, ())) | count;
 -- (id ; #smaller)
 
-let bids = hands | map((_, (id, _, _, _, _, _, _, bid)) -> ((id), (bid)));
+let bids = hands | map((_, (id, _, _, _, _, _, _, bid)) -> (id, bid));
 
 -- ranks misses the weakest hand (zero smaller); add every bid once instead.
-let above = ranks | join(bids, (id, (n), (bid)) -> (id, ((n, bid) mul)));
+let above = ranks | join(bids, (id, (n), bid) -> (id, (n, bid) mul));
 
 export "result" = above + bids
-    | key((_, (x)) -> ((), (x))) | collect
-    | map((_, xs) -> ((), (xs map (x -> x.0) fold_add)))
+    | key((_, x) -> ((), x)) | collect
+    | map((_, xs) -> ((), xs fold_add))
     | arrange | inspect(part1);

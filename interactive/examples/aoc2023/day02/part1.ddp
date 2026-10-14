@@ -2,13 +2,13 @@
 -- input 0: (game, set, green, red, blue)
 
 let sets = input 0 : ((int, int, int, int, int) ; ());
-let games = sets | key(((game, _, _, _, _), _) -> ((game), ())) | distinct;
+let games = sets | key(((game, _, _, _, _), _) -> (game, ())) | distinct;
 let bad   = sets
     | filter(((_, _, g, r, b), _) -> (((g, 13) le, (r, 12) le, (b, 14) le) all, 0) eq)
-    | key(((game, _, _, _, _), _) -> ((game), ())) | distinct;
+    | key(((game, _, _, _, _), _) -> (game, ())) | distinct;
 let good = games - bad;
 
 export "result" = good
-    | key(((game), _) -> ((), (game))) | collect
-    | value((_, gs) -> (gs map (g -> g.0) fold_add))
+    | key((game, _) -> ((), game)) | collect
+    | value((_, gs) -> gs fold_add)
     | arrange | inspect(part1);

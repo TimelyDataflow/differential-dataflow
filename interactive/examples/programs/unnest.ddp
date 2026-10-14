@@ -2,10 +2,10 @@
 -- row per element (with position), then collect it back. A list round-trip
 -- through the relational layer. The harness feeds (a, b ;).
 
-let rows = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (((a enlist, b enlist) append, (a, b) add enlist) append)));
+let rows = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, ((a enlist, b enlist) append, (a, b) add enlist) append));
 -- rows: (a ; [a, b, a+b])
 
-let exploded = rows | flatmap((_, (l)) -> l);
+let exploded = rows | flatmap((_, l) -> l);
 -- one row per element: (a ; (pos, elem))
 
 let regrouped = exploded | collect;

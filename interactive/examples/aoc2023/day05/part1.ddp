@@ -3,13 +3,13 @@
 -- input 1: map entries (stage, dst, src, len)
 
 let seeds   = input 0 : ((int) ; ()) | key(((seed), _) -> ((0, seed), ()));
-let entries = input 1 : ((int, int, int, int) ; ()) | key(((stage, dst, src, len), _) -> ((stage), (dst, src, len)));
+let entries = input 1 : ((int, int, int, int) ; ()) | key(((stage, dst, src, len), _) -> (stage, (dst, src, len)));
 -- (stage ; dst, src, len)
 
 chain: {
     let cur = active | filter(((stage, _), _) -> (stage, 6) le);
-    let cands = cur | map(((stage, idx), _) -> ((stage), (idx)))
-        | join(entries, ((stage), (idx), (dst, src, len)) -> ((stage, idx, dst, src, len), ()))
+    let cands = cur | map(((stage, idx), _) -> (stage, idx))
+        | join(entries, (stage, idx, (dst, src, len)) -> ((stage, idx, dst, src, len), ()))
         | filter(((_, idx, _, src, len), _) -> ((src, idx) le, (idx, (src, len) add) lt) all);
     -- key (stage, idx, dst, src, len)
     let mapped  = cands | map(((stage, idx, dst, src, _), _) -> (((stage, 1) add, ((idx, dst) add, src) sub), ()));
@@ -19,4 +19,4 @@ chain: {
 }
 
 export "result" = chain::active | filter(((stage, _), _) -> (stage, 7) eq)
-    | key(((_, idx), _) -> ((), (idx))) | min | arrange | inspect(part1);
+    | key(((_, idx), _) -> ((), idx)) | min | arrange | inspect(part1);

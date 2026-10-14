@@ -1,35 +1,35 @@
 -- Strongly Connected Components — pipe syntax
 -- input 0: edges (src, dst ;)
 
-let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
+let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> (src, dst));
 let trans = edges | key((src, dst) -> (dst, src));
 
 outer: {
     let scc = edges + trim;
 
     fwd: {
-        let nodes = edges | key((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
+        let nodes = edges | key((_, dst) -> (dst, dst)) | enter_at((_, n) -> n);
         let labels = proposals + nodes | min;
         var proposals = labels | join(scc, (_, label, dst) -> (dst, label));
     }
 
     let trim_fwd = edges
-        | join(fwd::labels, ((src), (dst), (label)) -> ((dst), (src, label)))
-        | join(fwd::labels, (dst, (src, label), (other)) -> (dst, (src, label, other)))
+        | join(fwd::labels, (src, dst, label) -> (dst, (src, label)))
+        | join(fwd::labels, (dst, (src, label), other) -> (dst, (src, label, other)))
         | filter((_, (_, a, b)) -> (a, b) eq)
-        | key((dst, (src, _, _)) -> (dst, (src)));
+        | key((dst, (src, _, _)) -> (dst, src));
 
     bwd: {
-        let nodes = trans | key((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
+        let nodes = trans | key((_, dst) -> (dst, dst)) | enter_at((_, n) -> n);
         let labels = proposals + nodes | min;
         var proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label));
     }
 
     let trim_bwd = trans
-        | join(bwd::labels, ((src), (dst), (label)) -> ((dst), (src, label)))
-        | join(bwd::labels, (dst, (src, label), (other)) -> (dst, (src, label, other)))
+        | join(bwd::labels, (src, dst, label) -> (dst, (src, label)))
+        | join(bwd::labels, (dst, (src, label), other) -> (dst, (src, label, other)))
         | filter((_, (_, a, b)) -> (a, b) eq)
-        | key((dst, (src, _, _)) -> (dst, (src)));
+        | key((dst, (src, _, _)) -> (dst, src));
 
     var trim = trim_bwd - edges;
 }

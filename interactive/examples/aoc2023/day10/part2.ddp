@@ -3,18 +3,18 @@
 -- (The slt resolves S to '???', which never toggles; we mirror that.)
 -- input 0: (row, col, code), 1-indexed
 
-let symbols = input 0 : ((int, int, int) ; ()) | key(((r, c, s), ()) -> ((r, c), (s)));
-let pipes = symbols | filter((_, (s)) -> ((s, 46) ne, (s, 83) ne) all);
+let symbols = input 0 : ((int, int, int) ; ()) | key(((r, c, s), ()) -> ((r, c), s));
+let pipes = symbols | filter((_, s) -> ((s, 46) ne, (s, 83) ne) all);
 
-let e1 = pipes | map(((r, c), (s)) -> ((r, c,
+let e1 = pipes | map(((r, c), s) -> ((r, c,
     ((s, 124) eq, (r, 1) sub, ((s, 70) eq, (r, 1) add, ((s, 76) eq, (r, 1) sub, r) select) select) select,
     ((s, 45) eq, (c, 1) sub, ((s, 74) eq, (c, 1) sub, ((s, 55) eq, (c, 1) sub, c) select) select) select), ()));
-let e2 = pipes | map(((r, c), (s)) -> ((r, c,
+let e2 = pipes | map(((r, c), s) -> ((r, c,
     ((s, 124) eq, (r, 1) add, ((s, 74) eq, (r, 1) sub, ((s, 55) eq, (r, 1) add, r) select) select) select,
     ((s, 45) eq, (c, 1) add, ((s, 70) eq, (c, 1) add, ((s, 76) eq, (c, 1) add, c) select) select) select), ()));
 let r1 = e1 | map(((r, c, r2, c2), ()) -> ((r2, c2, r, c), ()));
 let r2 = e2 | map(((r, c, r2, c2), ()) -> ((r2, c2, r, c), ()));
-let scell = symbols | filter((_, (s)) -> (s, 83) eq);
+let scell = symbols | filter((_, s) -> (s, 83) eq);
 let s4 = (scell | map(((r, c), _) -> ((r, c, (r, 1) add, c), ())))
        + (scell | map(((r, c), _) -> ((r, c, r, (c, 1) add), ())))
        + (scell | map(((r, c), _) -> ((r, c, (r, 1) sub, c), ())))
@@ -24,23 +24,23 @@ let symm = e1 + e2 + r1 + r2 + s4 | count | filter((_, (n)) -> (n, 2) eq)
     | map(((r, c, r2, c2), _) -> ((r, c), (r2, c2)));
 
 reach: {
-    let next = r | join(symm, (_, (), (r2, c2)) -> ((r2, c2), ()));
+    let next = r | join(symm, (_, (), rc) -> (rc, ()));
     var r = (scell | map(((r, c), _) -> ((r, c), ()))) + next | distinct;
 }
 let loop = reach::r;
 -- key (r, c) of loop cells (incl. S)
 
 -- loop cells whose ORIGINAL symbol toggles parity (S resolves to '???': never)
-let toggles = loop | join(symbols, (rc, _, (s)) -> (rc, (s)))
-    | filter((_, (s)) -> ((s, 74) eq, (s, 45) eq, (s, 124) eq, (s, 70) eq) any)
+let toggles = loop | join(symbols, (rc, _, s) -> (rc, s))
+    | filter((_, s) -> ((s, 74) eq, (s, 45) eq, (s, 124) eq, (s, 70) eq) any)
     | map((rc, _) -> (rc, ()));
 
 status: {
-    let cur = st | map(((r, c, e), _) -> ((r, c), (e))) | join(symbols, (rc, (e), _) -> (rc, (e)));
+    let cur = st | map(((r, c, e), _) -> ((r, c), e)) | join(symbols, (rc, e, _) -> (rc, e));
     -- in-grid status cells (r, c ; e)
-    let tog = cur | join(toggles, ((r, c), (e), _) -> (((r, 1) add, (c, 1) add, (1, e) sub), ()));
-    let matched = cur | join(toggles, (rc, (e), _) -> (rc, (e)));
-    let nontog = (cur - matched) | map(((r, c), (e)) -> (((r, 1) add, (c, 1) add, e), ()));
+    let tog = cur | join(toggles, ((r, c), e, _) -> (((r, 1) add, (c, 1) add, (1, e) sub), ()));
+    let matched = cur | join(toggles, (rc, e, _) -> (rc, e));
+    let nontog = (cur - matched) | map(((r, c), e) -> (((r, 1) add, (c, 1) add, e), ()));
     var st = (symbols | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) any) | map(((r, c), _) -> ((r, c, 0), ()))) + tog + nontog | distinct;
 }
 

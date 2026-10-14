@@ -2,34 +2,34 @@
 -- expansion (factor 1). '#' = 35.
 -- input 0: (row, col, code), 1-indexed
 
-let cells = input 0 : ((int, int, int) ; ()) | key(((r, c, s), ()) -> ((r, c), (s)));
-let g = cells | filter((_, (s)) -> (s, 35) eq) | map((rc, _) -> (rc, ()));
+let cells = input 0 : ((int, int, int) ; ()) | key(((r, c, s), ()) -> ((r, c), s));
+let g = cells | filter((_, s) -> (s, 35) eq) | map((rc, _) -> (rc, ()));
 
-let all_rows = cells | map(((r, _), _) -> ((r), ())) | distinct;
-let rows_with = g | map(((r, _), _) -> ((r), ())) | distinct;
+let all_rows = cells | map(((r, _), _) -> (r, ())) | distinct;
+let rows_with = g | map(((r, _), _) -> (r, ())) | distinct;
 let row_gaps = all_rows - rows_with;
-let all_cols = cells | map(((_, c), _) -> ((c), ())) | distinct;
-let cols_with = g | map(((_, c), _) -> ((c), ())) | distinct;
+let all_cols = cells | map(((_, c), _) -> (c, ())) | distinct;
+let cols_with = g | map(((_, c), _) -> (c, ())) | distinct;
 let col_gaps = all_cols - cols_with;
 
 let gk = g | key(((r, c), _) -> ((), (r, c)));
-let rgk = row_gaps | key(((r), _) -> ((), (r)));
-let cgk = col_gaps | key(((c), _) -> ((), (c)));
+let rgk = row_gaps | key((r, _) -> ((), r));
+let cgk = col_gaps | key((c, _) -> ((), c));
 
-let rcnt = gk | join(rgk, (_, (r, c), (gr)) -> ((r, c), (gr))) | filter(((r, _), (gr)) -> (gr, r) lt) | map((rc, _) -> (rc, ())) | count;
-let radj = (rcnt | map((rc, (n)) -> (rc, ((1, n) mul)))) + ((g - (g | join(rcnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, (0))));
-let ccnt = gk | join(cgk, (_, (r, c), (gc)) -> ((r, c), (gc))) | filter(((_, c), (gc)) -> (gc, c) lt) | map((rc, _) -> (rc, ())) | count;
-let cadj = (ccnt | map((rc, (n)) -> (rc, ((1, n) mul)))) + ((g - (g | join(ccnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, (0))));
+let rcnt = gk | join(rgk, (_, (r, c), gr) -> ((r, c), gr)) | filter(((r, _), gr) -> (gr, r) lt) | map((rc, _) -> (rc, ())) | count;
+let radj = (rcnt | map((rc, (n)) -> (rc, (1, n) mul))) + ((g - (g | join(rcnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
+let ccnt = gk | join(cgk, (_, (r, c), gc) -> ((r, c), gc)) | filter(((_, c), gc) -> (gc, c) lt) | map((rc, _) -> (rc, ())) | count;
+let cadj = (ccnt | map((rc, (n)) -> (rc, (1, n) mul))) + ((g - (g | join(ccnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
 
-let gal = radj | join(cadj, ((r, c), (dr), (dc)) -> (((r, dr) add, (c, dc) add), ()));
+let gal = radj | join(cadj, ((r, c), dr, dc) -> (((r, dr) add, (c, dc) add), ()));
 let gs = gal | key(((r, c), _) -> ((), (r, c)));
 
-let contrib = gs | join(gs, (_, (r1, c1), (r2, c2)) -> ((), (
+let contrib = gs | join(gs, (_, (r1, c1), (r2, c2)) -> ((),
     (((r1, r2) lt, ((r1, r2) eq, (c1, c2) lt) all) any,
        (((r1, r2) lt, (r2, r1) sub, (r1, r2) sub) select,
         ((c1, c2) lt, (c2, c1) sub, (c1, c2) sub) select) add,
-       0) select)));
+       0) select));
 
 export "result" = contrib
-    | collect | map((_, ds) -> ((), (ds map (d -> d.0) fold_add)))
+    | collect | map((_, ds) -> ((), ds fold_add))
     | arrange | inspect(part1);

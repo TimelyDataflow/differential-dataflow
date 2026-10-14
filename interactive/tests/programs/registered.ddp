@@ -7,26 +7,26 @@
 -- generation layer: a record's children come from a rule, until none has any).
 
 -- Seeds: (n ;).
-let seeds = input 0 : ((int) ; ()) | key(((n), ()) -> ((n), ()));
+let seeds = input 0 : ((int) ; ()) | key(((n), ()) -> (n, ()));
 
 -- Refine: each cell's children are `cell call grow`, until `grow` returns none.
 refine: {
-    let kids = cells | flatmap(((n), ()) -> n call grow) | key((_, (_, (kid, _))) -> ((kid), ()));
+    let kids = cells | flatmap((n, ()) -> n call grow) | key((_, (_, (kid, _))) -> (kid, ()));
     var cells = seeds + kids | distinct;
 }
 let cells = refine::cells;
 
 -- A float from a pair, a nested shape, and a filter on a registered result.
-let blended = cells | key(((n), ()) -> ((n), ((n, (n, 1) add) call blend)));
-let described = cells | key(((n), ()) -> ((n), (n call describe)));
-let big = described | filter((_, (((m), _))) -> (m, 40) gt);
+let blended = cells | key((n, ()) -> (n, (n, (n, 1) add) call blend));
+let described = cells | key((n, ()) -> (n, n call describe));
+let big = described | filter((_, ((m), _)) -> (m, 40) gt);
 
 -- A call with no arguments, and one with a columnar kernel.
-let sevens = cells | key(((n), ()) -> ((n), ((() call seven, n) add)));
-let doubled = cells | key(((n), ()) -> ((n), (n call double)));
+let sevens = cells | key((n, ()) -> (n, (() call seven, n) add));
+let doubled = cells | key((n, ()) -> (n, n call double));
 
 -- A join whose projection calls a registered function on both sides.
-let joined = cells | join(described, ((n), (), (((m), _))) -> ((n), ((n, m) call blend)));
+let joined = cells | join(described, (n, (), ((m), _)) -> (n, (n, m) call blend));
 
 export "cells" = cells | arrange | inspect(total);
 export "blended" = blended | arrange | inspect(total);

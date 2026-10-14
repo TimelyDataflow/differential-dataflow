@@ -14,31 +14,31 @@
 
 type Dir = Fwd int | Bwd int;
 
-let rows = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+let rows = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
 
 -- eight derived values per row
 let lists = rows
-    | key(((a), (b)) -> ((a), (
+    | key((a, b) -> (a,
           ( ( (a enlist, b enlist) append
             , ((a, b) add enlist, (a, b) mul enlist) append
             ) append
           , ( (((a, b) sub, 32768) add enlist, (b, b) mul enlist) append
             , ((a, a) mul enlist, (a, (b, b) mul) add enlist) append
             ) append
-          ) append)));
+          ) append));
 
 -- one row per element, carrying its position
-let exploded = lists | flatmap((_, (l)) -> l);
+let exploded = lists | flatmap((_, l) -> l);
 
 -- bucket by (position, magnitude); payload folds a four-element list, wrapped in a variant
 -- and matched straight back out (the tag is the point, not the payload).
 let tagged = exploded
-    | key(((a), (pos, x)) ->
+    | key((a, (pos, x)) ->
            let sum = (0, ( (a enlist, x enlist) append
                          , ((a, x) mul enlist, (x, x) mul enlist) append
                          ) append) fold ((acc, y) -> (acc, y) add) in
-           ( ((pos, (8, ((x, 500000) lt, 0, 1) select) mul) add)
-           , (((x, 250000) lt, sum inject Fwd, sum inject Bwd) select match (Fwd (s -> s), Bwd (s -> s)))
+           ( (pos, (8, ((x, 500000) lt, 0, 1) select) mul) add
+           , ((x, 250000) lt, sum inject Fwd, sum inject Bwd) select match (Fwd (s -> s), Bwd (s -> s))
            ));
 
 let buckets = tagged | min;

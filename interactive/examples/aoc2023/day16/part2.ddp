@@ -2,7 +2,7 @@
 -- Mirrors the slt exactly, including its 'u' seeds sitting at row=MAX(c).
 -- input 0: (row, col, code) 1-indexed
 
-let cells = input 0 : ((int, int, int) ; ()) | key(((r, c, code), ()) -> ((r, c), (code)));
+let cells = input 0 : ((int, int, int) ; ()) | key(((r, c, code), ()) -> ((r, c), code));
 
 let shift = cells | key(_ -> ((), ())) | distinct | flatmap(_ ->
     let l = (0, 46, 0, 1, 0) enlist in
@@ -31,22 +31,22 @@ let shift = cells | key(_ -> ((), ())) | distinct | flatmap(_ ->
     (l, (3, 92, 0, 1, 0) enlist) append)
     | key((_, (_, (d, s, dr, dc, nd))) -> ((d, s), (dr, dc, nd)));
 
-let rows = cells | map(((r, _), _) -> ((r), ())) | distinct;
-let cols = cells | map(((_, c), _) -> ((c), ())) | distinct;
-let minc = cells | key(((_, c), _) -> ((), (c))) | min;
-let maxc = cells | key(((_, c), _) -> ((), ((1000000, c) sub))) | min
-    | map((_, (v)) -> ((), ((1000000, v) sub)));
-let minr = cells | key(((r, _), _) -> ((), (r))) | min;
+let rows = cells | map(((r, _), _) -> (r, ())) | distinct;
+let cols = cells | map(((_, c), _) -> (c, ())) | distinct;
+let minc = cells | key(((_, c), _) -> ((), c)) | min;
+let maxc = cells | key(((_, c), _) -> ((), (1000000, c) sub)) | min
+    | map((_, v) -> ((), (1000000, v) sub));
+let minr = cells | key(((r, _), _) -> ((), r)) | min;
 
-let seeds = (rows | key(((r), _) -> ((), (r))) | join(minc, (_, (r), (m)) -> ((r, m, 0, 0, r), ())))
-          + (rows | key(((r), _) -> ((), (r))) | join(maxc, (_, (r), (m)) -> ((r, m, 1, 1, r), ())))
-          + (cols | key(((c), _) -> ((), (c))) | join(minr, (_, (c), (m)) -> ((m, c, 3, 3, c), ())))
-          + (cols | key(((c), _) -> ((), (c))) | join(maxc, (_, (c), (m)) -> ((m, c, 2, 2, c), ())));
+let seeds = (rows | key((r, _) -> ((), r)) | join(minc, (_, r, m) -> ((r, m, 0, 0, r), ())))
+          + (rows | key((r, _) -> ((), r)) | join(maxc, (_, r, m) -> ((r, m, 1, 1, r), ())))
+          + (cols | key((c, _) -> ((), c)) | join(minr, (_, c, m) -> ((m, c, 3, 3, c), ())))
+          + (cols | key((c, _) -> ((), c)) | join(maxc, (_, c, m) -> ((m, c, 2, 2, c), ())));
 -- key (r, c, dir, sd, si)
 
 beam: {
     let onsym = l | map(((r, c, d, sd, si), _) -> ((r, c), (d, sd, si)))
-        | join(cells, ((r, c), (d, sd, si), (s)) -> ((d, s), (r, c, sd, si)));
+        | join(cells, ((r, c), (d, sd, si), s) -> ((d, s), (r, c, sd, si)));
     -- (dir, sym ; r, c, sd, si)
     let next = onsym | join(shift, (_, (r, c, sd, si), (dr, dc, nd)) -> (((r, dr) add, (c, dc) add, nd, sd, si), ()));
     var l = seeds + next | distinct;
@@ -57,6 +57,6 @@ let energized = beam::l | map(((r, c, _, sd, si), _) -> ((r, c), (sd, si)))
     | map(((_, _, sd, si), _) -> ((sd, si), ())) | count;
 -- (sd, si ; n)
 
-export "result" = energized | key((_, (n)) -> ((), ((1000000, n) sub))) | min
-    | map((_, (v)) -> ((), ((1000000, v) sub)))
+export "result" = energized | key((_, (n)) -> ((), (1000000, n) sub)) | min
+    | map((_, v) -> ((), (1000000, v) sub))
     | arrange | inspect(part2);

@@ -5,14 +5,14 @@
 type Dir = Fwd int   -- src < dst
          | Bwd int;  -- otherwise
 
-let edges = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+let edges = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
 
 let tagged = edges
-    | key(((a), (b)) ->
+    | key((a, b) ->
            let fwd = (a, b) lt in
            let sum = (0, (a enlist, b enlist) append) fold ((acc, x) -> (acc, x) add) in
-           ( ((fwd, 0, 1) select)
-           , ((fwd, sum inject Fwd, sum inject Bwd) select match (Fwd (s -> s), Bwd (s -> s)))
+           ( (fwd, 0, 1) select
+           , (fwd, sum inject Fwd, sum inject Bwd) select match (Fwd (s -> s), Bwd (s -> s))
            ));
 
 let buckets = tagged | count;

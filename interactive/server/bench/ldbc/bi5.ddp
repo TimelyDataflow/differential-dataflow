@@ -4,19 +4,19 @@ let request = input 0 : ((int, List(int)) ; ());
 let tagged = import "tagged" : ((int) ; (List(int)));
 let message = import "message" : ((int) ; (int, int, int));
 let likes = import "likes" : ((int) ; (int));
-let selected = request | key(((rid, name), ()) -> ((name), (rid)))
-    | join(tagged | key((m, name) -> (name, m)), (_, rid, m) -> (m, rid))
-    | join(message, ((m), (rid), (_, creator, _)) -> ((rid, m, creator), ())) | distinct;
+let selected = request | key(((rid, name), ()) -> (name, rid))
+    | join(tagged | key((m, (name)) -> (name, m)), (_, rid, m) -> (m, rid))
+    | join(message, ((m), rid, (_, creator, _)) -> ((rid, m, creator), ())) | distinct;
 -- Contributions are (messages, replies, likes). Collect+fold expresses a
 -- sum without introducing a new reducer or optimizer in this benchmark.
 let own = selected | map(((rid, _, creator), ()) -> ((rid, creator), (1, 0, 0)));
 let liked = selected | key(((rid, m, creator), ()) -> ((m), (rid, creator)))
     | join(likes, (_, (rid, creator), _) -> ((rid, creator), (0, 0, 1)));
-let comments = message | filter((_, (kind, _, _)) -> (kind, 1) eq) | key(((id), (_, _, parent)) -> ((parent), (id)));
-let replied = selected | key(((rid, m, creator), ()) -> ((m), (rid, creator)))
+let comments = message | filter((_, (kind, _, _)) -> (kind, 1) eq) | key(((id), (_, _, parent)) -> (parent, id));
+let replied = selected | key(((rid, m, creator), ()) -> (m, (rid, creator)))
     | join(comments, (_, (rid, creator), _) -> ((rid, creator), (0, 1, 0)));
 let totals = (own + liked + replied) | collect
-    | map((k, vs) -> (k, (((0, 0, 0), vs) fold (((a0, a1, a2), (x0, x1, x2)) -> ((a0, x0) add, (a1, x1) add, (a2, x2) add)))));
-let scores = totals | map(((rid, creator), (t)) -> let (m, r, l) = t in ((rid), (((m, (2, r) mul) add, (10, l) mul) add neg, creator, t)));
+    | map((k, vs) -> (k, ((0, 0, 0), vs) fold (((a0, a1, a2), (x0, x1, x2)) -> ((a0, x0) add, (a1, x1) add, (a2, x2) add))));
+let scores = totals | map(((rid, creator), t) -> let (m, r, l) = t in (rid, (((m, (2, r) mul) add, (10, l) mul) add neg, creator, t)));
 export "bi5.answer" = scores | collect | flatmap((_, vs) -> vs) | filter((_, (pos, _)) -> (pos, 100) lt)
-    | map(((rid), (pos, (score, creator, (m, r, l)))) -> ((rid, pos), (creator, r, l, m, score neg)));
+    | map((rid, (pos, (score, creator, (m, r, l)))) -> ((rid, pos), (creator, r, l, m, score neg)));

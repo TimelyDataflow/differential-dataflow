@@ -4,7 +4,7 @@
 -- Values include negatives, zeros of both signs, infinities and NaN.
 
 -- (key ; x, y) with x = a / 4 and y = b / 2.
-let xs = input 0 : ((int, int, int) ; ()) | key(((k, a, b), ()) -> ((k), ((a to_float, 4.0) div, (b to_float, 2.0) div)));
+let xs = input 0 : ((int, int, int) ; ()) | key(((k, a, b), ()) -> (k, ((a to_float, 4.0) div, (b to_float, 2.0) div)));
 
 let unary = xs
     | key((k, (x, y)) -> (k, (x call fabs, x call fsqrt, y call fexp, x call fln, x call ffloor, x call fceil,
@@ -35,8 +35,8 @@ let big = xs | filter((_, (x, _)) -> (x call fexp, 2.0) call fgt);
 let spread = xs | flatmap((_, (x, y)) -> (x call fabs call fsqrt enlist, y call fexp enlist) append);
 
 -- A join whose projection runs a row at a time.
-let scale = input 1 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
-let scaled = xs | join(scale, (k, (x, y), (n)) -> (k, ((x, n) call fpowi, (y call fabs, n to_float) call fpow call fint)));
+let scale = input 1 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
+let scaled = xs | join(scale, (k, (x, y), n) -> (k, ((x, n) call fpowi, (y call fabs, n to_float) call fpow call fint)));
 
 export "unary"    = unary | arrange | inspect(total);
 export "binary"   = binary | arrange | inspect(total);
