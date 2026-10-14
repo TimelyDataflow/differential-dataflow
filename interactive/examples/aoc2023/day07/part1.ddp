@@ -31,7 +31,7 @@ let ranks = less | filter(((m, _), ()) -> (m, 1) eq) | map(((_, id), ()) -> (id,
 let bids = hands | map((_, (id, _, _, _, _, _, _, bid)) -> (id, bid));
 
 -- ranks misses the weakest hand (zero smaller); add every bid once instead.
-let above = ranks | join(bids, (id, (n), bid) -> (id, (n, bid) mul));
+let above = ranks | join(bids, (id, n, bid) -> (id, (n, bid) mul));
 
 export "result" = above + bids
     | key((_, x) -> ((), x)) | collect

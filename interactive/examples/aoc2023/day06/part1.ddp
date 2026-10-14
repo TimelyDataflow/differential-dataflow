@@ -19,6 +19,6 @@ let wins = cands::c
 -- (time ; n_wins)
 
 export "result" = wins
-    | key((_, (n)) -> ((), n)) | collect
+    | key((_, n) -> ((), n)) | collect
     | map((_, ns) -> ((), ((1, ns) fold ((acc, n) -> (acc, n) mul))))
     | arrange | inspect(part1);

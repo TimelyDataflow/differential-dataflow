@@ -277,7 +277,7 @@ pub struct Projection { pub key: Term, pub val: Term }
 pub enum Reducer {
     Min,
     Distinct,
-    /// The sum of a key's diffs, as `(count)`, when it is not zero. It may be negative, as DD's
+    /// The sum of a key's diffs, as an `Int`, when it is not zero. It may be negative, as DD's
     /// `count` is: a negative count is how a program finds a negative accumulation.
     Count,
     /// NEST: collect a key's values into a `Value::List`, in the values' own

@@ -38,7 +38,7 @@ spin: {
     let segn = bn | map(((k, r, c), b) -> ((k, c, b), r));   -- (k, c, b ; r)
     let osn = segn | join(segn, ((k, c, b), r, r2) -> ((k, c, b, r), r2))
         | filter(((_, _, _, r), r2) -> (r2, r) le) | map((x, _) -> (x, ())) | count
-        | map(((k, c, b, _), (n)) -> ((k, (b, n) add, c), ()));
+        | map(((k, c, b, _), n) -> ((k, (b, n) add, c), ()));
     -- (k, r', c)
 
     -- roll west
@@ -51,7 +51,7 @@ spin: {
     let segw = bw | map(((k, r, c), b) -> ((k, r, b), c));   -- (k, r, b ; c)
     let osw = segw | join(segw, ((k, r, b), c, c2) -> ((k, r, b, c), c2))
         | filter(((_, _, _, c), c2) -> (c2, c) le) | map((x, _) -> (x, ())) | count
-        | map(((k, r, b, _), (n)) -> ((k, r, (b, n) add), ()));
+        | map(((k, r, b, _), n) -> ((k, r, (b, n) add), ()));
     -- (k, r, c')
 
     -- roll south: blocker = nearest cube below; rank counts peers >= r
@@ -63,7 +63,7 @@ spin: {
     let segs = bs | map(((k, r, c), b) -> ((k, c, b), r));   -- (k, c, b ; r)
     let oss = segs | join(segs, ((k, c, b), r, r2) -> ((k, c, b, r), r2))
         | filter(((_, _, _, r), r2) -> (r2, r) ge) | map((x, _) -> (x, ())) | count
-        | map(((k, c, b, _), (n)) -> ((k, (b, n) sub, c), ()));
+        | map(((k, c, b, _), n) -> ((k, (b, n) sub, c), ()));
 
     -- roll east
     let be = oss | map(((k, r, c), _) -> (r, (k, c)))
@@ -74,7 +74,7 @@ spin: {
     let sege = be | map(((k, r, c), b) -> ((k, r, b), c));   -- (k, r, b ; c)
     let ose = sege | join(sege, ((k, r, b), c, c2) -> ((k, r, b, c), c2))
         | filter(((_, _, _, c), c2) -> (c2, c) ge) | map((x, _) -> (x, ())) | count
-        | map(((k, r, b, _), (n)) -> (((k, 1) add, r, (b, n) sub), ()));
+        | map(((k, r, b, _), n) -> (((k, 1) add, r, (b, n) sub), ()));
     -- (k+1, r, c'): next round
 
     var os = rocks0 + ose | distinct;

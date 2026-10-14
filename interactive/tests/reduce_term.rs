@@ -9,7 +9,7 @@ use interactive::{lower, parse};
 const PROGRAM: &str = r#"
     let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     export "count" = pairs | count;
-    export "count_term" = pairs | reduce(list(tuple(tuple(fold($1, 0, ^1 + ^0[1])), 1)));
+    export "count_term" = pairs | reduce(list(tuple(fold($1, 0, ^1 + ^0[1]), 1)));
     export "distinct" = pairs | distinct;
     export "distinct_term" = pairs | reduce(list(tuple(tuple(), 1)));
     export "min" = pairs | min;

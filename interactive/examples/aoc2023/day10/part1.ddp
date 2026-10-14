@@ -19,7 +19,7 @@ let s4 = (scell | map(((r, c), _) -> ((r, c, (r, 1) add, c), ())))
        + (scell | map(((r, c), _) -> ((r, c, (r, 1) sub, c), ())))
        + (scell | map(((r, c), _) -> ((r, c, r, (c, 1) sub), ())));
 
-let symm = e1 + e2 + r1 + r2 + s4 | count | filter((_, (n)) -> (n, 2) eq)
+let symm = e1 + e2 + r1 + r2 + s4 | count | filter((_, n) -> (n, 2) eq)
     | map(((r, c, r2, c2), _) -> ((r, c), (r2, c2)));
 -- (r1, c1 ; r2, c2), mutual links only
 

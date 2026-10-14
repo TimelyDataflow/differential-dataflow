@@ -13,7 +13,7 @@ peel: {
     -- deg: (node ; count)
 
     -- Nodes with degree >= 2 survive.
-    let alive = deg | filter((_, (c)) -> (c, 2) ge);
+    let alive = deg | filter((_, c) -> (c, 2) ge);
     let alive_set = alive | key((n, _) -> (n, ()));
 
     -- Edges whose source is not alive get removed.

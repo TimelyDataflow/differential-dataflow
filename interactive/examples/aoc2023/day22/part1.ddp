@@ -33,9 +33,9 @@ let sup = s1 | join(rest, (up, (lo, req), mz) -> ((lo, up, (req, mz) eq), ()))
     | filter(((_, _, hit), _) -> (hit, 1) eq) | map(((lo, up, _), _) -> ((lo, up), ()));
 -- (lower, upper)
 
-let uniq2 = sup | map(((_, up), _) -> (up, ())) | count | filter((_, (n)) -> (n, 1) eq) | map((k, _) -> (k, ()));
+let uniq2 = sup | map(((_, up), _) -> (up, ())) | count | filter((_, n) -> (n, 1) eq) | map((k, _) -> (k, ()));
 
 let critical = sup | map(((lo, up), _) -> (up, lo)) | join(uniq2, (_, lo, ()) -> (lo, ())) | distinct;
 let total = lines | key(_ -> ((), ())) | count;   -- ALL lines, per the slt
-export "result" = total | join(critical | key(_ -> ((), ())) | count, (_, (a), (b)) -> ((), (a, b) sub))
+export "result" = total | join(critical | key(_ -> ((), ())) | count, (_, a, b) -> ((), (a, b) sub))
     | arrange | inspect(part1);

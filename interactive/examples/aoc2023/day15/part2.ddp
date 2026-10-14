@@ -34,6 +34,6 @@ let boxed = hh | join(first, (_, (f, bx), m) -> (bx, (m, f)));  -- (box ; minr, 
 let rank = boxed | join(boxed, (bx, (m, f), (m2, _)) -> ((bx, m, f), m2))
     | filter(((_, m, _), m2) -> (m2, m) le) | map((x, _) -> (x, ())) | count;      -- (box, minr, focal ; slot)
 
-export "result" = rank | key(((bx, _, f), (n)) -> ((), (((1, bx) add, n) mul, f) mul))
+export "result" = rank | key(((bx, _, f), n) -> ((), (((1, bx) add, n) mul, f) mul))
     | collect | map((_, ps) -> ((), ps fold_add))
     | arrange | inspect(part2);

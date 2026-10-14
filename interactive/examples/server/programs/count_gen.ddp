@@ -3,4 +3,4 @@
 -- `map(_ -> ((), ()))` keys every row to unit; `count` then totals them.
 
 let edges = import "random:nodes=8,edges=12";
-export "edge_count" = edges | map(_ -> ((), ())) | count;
+export "edge_count" = edges | map(_ -> ((), ())) | count | value((_, n) -> (n));

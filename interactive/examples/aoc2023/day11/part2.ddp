@@ -17,9 +17,9 @@ let rgk = row_gaps | key((r, _) -> ((), r));
 let cgk = col_gaps | key((c, _) -> ((), c));
 
 let rcnt = gk | join(rgk, (_, (r, c), gr) -> ((r, c), gr)) | filter(((r, _), gr) -> (gr, r) lt) | map((rc, _) -> (rc, ())) | count;
-let radj = (rcnt | map((rc, (n)) -> (rc, (999999, n) mul))) + ((g - (g | join(rcnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
+let radj = (rcnt | map((rc, n) -> (rc, (999999, n) mul))) + ((g - (g | join(rcnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
 let ccnt = gk | join(cgk, (_, (r, c), gc) -> ((r, c), gc)) | filter(((_, c), gc) -> (gc, c) lt) | map((rc, _) -> (rc, ())) | count;
-let cadj = (ccnt | map((rc, (n)) -> (rc, (999999, n) mul))) + ((g - (g | join(ccnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
+let cadj = (ccnt | map((rc, n) -> (rc, (999999, n) mul))) + ((g - (g | join(ccnt, (rc, _, _) -> (rc, ())))) | map((rc, _) -> (rc, 0)));
 
 let gal = radj | join(cadj, ((r, c), dr, dc) -> (((r, dr) add, (c, dc) add), ()));
 let gs = gal | key(((r, c), _) -> ((), (r, c)));

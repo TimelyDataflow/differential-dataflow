@@ -57,6 +57,6 @@ let energized = beam::l | map(((r, c, _, sd, si), _) -> ((r, c), (sd, si)))
     | map(((_, _, sd, si), _) -> ((sd, si), ())) | count;
 -- (sd, si ; n)
 
-export "result" = energized | key((_, (n)) -> ((), (1000000, n) sub)) | min
+export "result" = energized | key((_, n) -> ((), (1000000, n) sub)) | min
     | map((_, v) -> ((), (1000000, v) sub))
     | arrange | inspect(part2);

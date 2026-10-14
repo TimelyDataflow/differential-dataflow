@@ -2,7 +2,7 @@
 -- time across all 35 slots; points = 2^(k-1); sum.
 -- input 0: (card, side, idx, value)
 
-let dups = input 0 : ((int, int, int, int) ; ()) | key(((card, _, _, value), _) -> ((card, value), ())) | count | filter((_, (n)) -> (n, 1) gt);
+let dups = input 0 : ((int, int, int, int) ; ()) | key(((card, _, _, value), _) -> ((card, value), ())) | count | filter((_, n) -> (n, 1) gt);
 let points = dups
     | map(((card, value), _) -> (card, value)) | collect
     | map((card, values) -> (card, (0, values) fold ((acc, _) -> ((acc, 0) eq, 1, (acc, 2) mul) select)));

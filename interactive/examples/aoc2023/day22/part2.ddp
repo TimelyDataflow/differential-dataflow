@@ -32,7 +32,7 @@ let sup = s1 | join(rest, (up, (lo, req), mz) -> ((lo, up, (req, mz) eq), ()))
     | filter(((_, _, hit), _) -> (hit, 1) eq) | map(((lo, up, _), _) -> ((lo, up), ()));
 -- (lower, upper)
 
-let uniq2 = sup | map(((_, up), _) -> (up, ())) | count | filter((_, (n)) -> (n, 1) eq) | map((k, _) -> (k, ()));
+let uniq2 = sup | map(((_, up), _) -> (up, ())) | count | filter((_, n) -> (n, 1) eq) | map((k, _) -> (k, ()));
 
 let supL = sup | map(((lo, up), _) -> (lo, up));      -- (lower ; upper)
 let supcnt = sup | map(((_, up), _) -> (up, ())) | count;  -- (b ; #supporters)
@@ -43,8 +43,8 @@ trans: {
     let fell = st | map(((a, b), _) -> (b, a)) | join(supL, (_, a, c) -> ((a, c), ()))
         | map((k, _) -> (k, ())) | count;
     -- (a, b ; #supporters of b falling with a)
-    let full = fell | map(((a, b), (n)) -> (b, (a, n)))
-        | join(supcnt, (b, (a, n), (m)) -> ((a, b, (n, m) eq), ()))
+    let full = fell | map(((a, b), n) -> (b, (a, n)))
+        | join(supcnt, (b, (a, n), m) -> ((a, b, (n, m) eq), ()))
         | filter(((_, _, hit), _) -> (hit, 1) eq) | map(((a, b, _), _) -> ((a, b), ()));
     var st = seed + full | distinct;
 }

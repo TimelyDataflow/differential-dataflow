@@ -18,6 +18,6 @@ let selected = candidates | join(tagged, ((m), (rid, tag), (name)) -> ((rid, m, 
 let counts = selected | key(((rid, m, tag), ()) -> ((m), (rid, tag)))
     | join(tagged, (_, (rid, tag), (name)) -> ((rid, name, tag), ()))
     | filter(((_, name, tag), ()) -> (name, tag) ne) | map(((rid, name, _), ()) -> ((rid, name), ())) | count;
-export "ic6.answer" = counts | key(((rid, name), (n)) -> (rid, (n neg, name)))
+export "ic6.answer" = counts | key(((rid, name), n) -> (rid, (n neg, name)))
     | collect | flatmap((_, vs) -> vs) | filter((_, (pos, _)) -> (pos, 10) lt)
     | map((rid, (pos, (negn, name))) -> ((rid, pos), (name, negn neg)));

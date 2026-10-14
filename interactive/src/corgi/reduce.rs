@@ -310,8 +310,8 @@ where
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
         match self.reducer {
             Reducer::Count => {
-                // Per-bracket sum of diffs, of either sign, as DD's `count`; a non-zero sum becomes a
-                // `Tuple([Int(sum)])` = corgi `Prod([Int])`.
+                // Per-bracket sum of diffs, of either sign, as DD's `count`; a non-zero sum becomes an
+                // `Int`.
                 let mut sums: Vec<i64> = Vec::new();
                 let mut start = 0;
                 for &end in ends {
@@ -322,7 +322,7 @@ where
                     out_ends.push(sums.len());
                     start = end;
                 }
-                (CValue::Prod(vec![CValue::i64(sums)]), out_ends)
+                (CValue::i64(sums), out_ends)
             }
             Reducer::Distinct => {
                 // Present iff any value has NON-ZERO net -- the sign does not matter. DD's `reduce`
@@ -767,7 +767,7 @@ mod tests {
     #[test]
     fn corrections_net_by_value() {
         let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count);
-        backend.output = Pool { columns: vec![CValue::Prod(vec![ints(vec![5, 5, 7])])], refs: vec![(0, 0), (0, 1), (0, 2)] };
+        backend.output = Pool { columns: vec![ints(vec![5, 5, 7])], refs: vec![(0, 0), (0, 1), (0, 2)] };
         backend.output_keys = vec![(0, 0), (0, 0), (0, 1)];
         backend.input.refs = vec![(0, 0), (0, 1)];
         backend.key_columns = vec![ints(vec![10, 11, 12])];
@@ -898,7 +898,7 @@ mod tests {
         };
         for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect, Reducer::Expr(term)] {
             let out_shape = match reducer {
-                Reducer::Count => Shape::Prod(vec![Shape::Int]),
+                Reducer::Count => Shape::Int,
                 Reducer::Distinct => Shape::Unit,
                 Reducer::Min => shape.clone(),
                 Reducer::Collect => Shape::List(Box::new(shape.clone())),

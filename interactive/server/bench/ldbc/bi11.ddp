@@ -13,6 +13,6 @@ let pairs = candidates | key(((rid, p, q, _, _, _), ()) -> ((rid, q), p))
 let paths = pairs | key(((rid, p, q), ()) -> ((rid, q), p))
     | join(pairs | key(((rid, p, q), ()) -> ((rid, p), q)), ((rid, x), a, b) -> ((rid, a, b), x));
 let counts = paths | join(pairs, ((rid, _, _), _, _) -> (rid, ())) | count;
-let zero = request | map(((rid, _, _, _), ()) -> (rid, (0)));
-let missing = zero - (zero | join(counts, (rid, _, _) -> (rid, (0))));
-export "bi11.answer" = (counts + missing) | map((rid, n) -> ((rid, 0), n));
+let zero = request | map(((rid, _, _, _), ()) -> (rid, 0));
+let missing = zero - (zero | join(counts, (rid, _, _) -> (rid, 0)));
+export "bi11.answer" = (counts + missing) | map((rid, n) -> ((rid, 0), (n)));
