@@ -399,6 +399,18 @@ fn count_duplicate_inputs_sufficient() {
     );
 }
 
+/// A reduction by a term: the sum of each node's in-neighbors. As for `count`, the keyed lookup
+/// demands every input row at the key, which is what the term reads.
+#[test]
+fn reduce_term_explanations_sufficient_small() {
+    const SUM_ROW: &str = r#"
+        let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+        export "result" = edges | key($1 ; $0) | reduce(list(tuple(tuple(fold($1, 0, ^1 + ^0[0][0] * ^0[1])), 1)));
+    "#;
+    let sizes = assert_all_rows_sufficient(SUM_ROW, &[gen_edges(20, 22)]);
+    assert!(!sizes.is_empty());
+}
+
 /// Two queries seeded together (distinct q ids): the union demand-set must
 /// regenerate both queried rows. Exercises the q-id plumbing through every
 /// reverse rule — a mismatched q in a lookup would silently drop demand.

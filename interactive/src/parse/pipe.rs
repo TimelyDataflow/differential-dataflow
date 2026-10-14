@@ -24,6 +24,9 @@
 //! - `| join(other, (k… ; v…))` — equijoin on the key.
 //! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `collect` is
 //!   NEST (gather a key's values into a `List`).
+//! - `| reduce(term)` — reduce by a term: `$0` is the key and `$1` the key's
+//!   values with their non-zero diffs, a `List` of `tuple(val, diff)` in value
+//!   order; the term gives the key's output, a `List` of `tuple(val, diff)`.
 //! - `| filter(term)` — keep rows where `term` is truthy (a nonzero `Int`).
 //! - `| flatmap(term)` — UNNEST: explode a `List`-valued `term` into one row
 //!   per element, value `tuple(pos, element)`.
@@ -98,7 +101,8 @@
 //! Any slot may instead be a corgi lambda, `pat -> body`, in corgi's ML syntax: it runs
 //! `let pat = input in body` with `input` the tuple of the slot's rows, `(key, val)` for a linear
 //! op and `(key, left val, right val)` for a join. In `key`, `map`, and `join` the body gives the
-//! pair `(key, val)`; in `value`, `filter`, `flatmap`, and `enter_at` it gives the one value. For
+//! pair `(key, val)`; in `value`, `filter`, `flatmap`, and `enter_at` it gives the one value; in
+//! `reduce` its input is `(key, vals)` and it gives the output list. For
 //! example, `key(((src, dst), ()) -> ((src), (dst)))` is `key($0[0] ; $0[1])`.
 
 use super::*;
@@ -532,6 +536,11 @@ impl Parser {
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
             Token::Count => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Count) },
             Token::Collect => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Collect) },
+            Token::Ident(name) if name == "reduce" => {
+                self.next(); self.expect(&Token::LParen);
+                let term = self.parse_slot_term(); self.expect(&Token::RParen);
+                Expr::Reduce(Box::new(lhs), Reducer::Expr(term))
+            },
             Token::FlatMap => { self.next(); self.expect(&Token::LParen); let l = self.parse_slot_term(); self.expect(&Token::RParen); Expr::FlatMap(Box::new(lhs), l) },
             Token::Arrange => { self.next(); Expr::Arrange(Box::new(lhs)) },
             Token::Negate => { self.next(); Expr::Negate(Box::new(lhs)) },

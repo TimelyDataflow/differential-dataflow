@@ -245,6 +245,11 @@ pub enum Reducer {
     /// (`Value: Ord`) order — so deterministic, and position-ordered when the
     /// values are `tuple(pos, …)` as `flatmap` emits. The inverse of `FlatMap`.
     Collect,
+    /// A key's output as a term: `Var(0)` = key, `Var(1)` = the key's values with
+    /// non-zero accumulated diffs, as a `List` of `tuple(val, diff)` in the values'
+    /// (`Value: Ord`) order. The term gives a `List` of `tuple(val, diff)`: the key's
+    /// output values and their diffs. A key with no such values has no output.
+    Expr(Term),
 }
 
 /// An individual step within a Linear node.
