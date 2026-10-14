@@ -310,12 +310,13 @@ where
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
         match self.reducer {
             Reducer::Count => {
-                // Per-bracket sum of diffs; survivors become a `Tuple([Int(sum)])` = corgi `Prod([Int])`.
+                // Per-bracket sum of diffs, of either sign, as DD's `count`; a non-zero sum becomes a
+                // `Tuple([Int(sum)])` = corgi `Prod([Int])`.
                 let mut sums: Vec<i64> = Vec::new();
                 let mut start = 0;
                 for &end in ends {
                     let c: Diff = input[start..end].iter().map(|&(_, d)| d).sum();
-                    if c > 0 {
+                    if c != 0 {
                         sums.push(c);
                     }
                     out_ends.push(sums.len());
