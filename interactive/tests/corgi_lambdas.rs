@@ -242,3 +242,20 @@ fn nested_types() {
     "#;
     assert_same(terms, lambdas, &[edges()]);
 }
+
+/// A DDIR `--` comment may sit inside a lambda written over several lines.
+#[test]
+fn comments_in_lambdas() {
+    let terms = r#"
+        let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+        export "sum" = pairs | value($0[0] + $1[0]);
+    "#;
+    let lambdas = r#"
+        let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+        export "sum" = pairs | value(((a), (b)) ->
+            -- the key and the value, added
+            (a, b) add  -- one Int
+        );
+    "#;
+    assert_same(terms, lambdas, &[edges()]);
+}
