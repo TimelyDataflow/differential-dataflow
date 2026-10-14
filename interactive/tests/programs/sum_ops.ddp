@@ -1,10 +1,10 @@
--- Sum intro and tag tests on the corgi compiled path, checked against vec: a data-driven
--- `variant(Type, tag, payload)` (Op::Branch over a homogeneous declared type), `istag` on a
--- sum (MapSum + Unwrap, incl. a tag no row carries), and `istag` on a non-sum (constant 0).
+-- Sum intro and tag tests on the corgi compiled path, checked against vec: a data-driven tag,
+-- `(payload, tag) branch Three` (Op::Branch over a homogeneous declared type), and tag tests by
+-- `match` on a sum (MapSum + Unwrap, incl. a tag no row carries).
 type Three = A int | B int | C int;
 
-let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
 let tagged = pairs
-    | map($0 ; variant(Three, 2, $1[0]), istag(2, variant(Three, 2, $1[0])), istag(1, variant(Three, 2, $1[0])), istag(0, $1));
+    | key((k, (b)) -> (k, (let s = (b, 2) branch Three in (s, s match (A (_ -> 0), B (_ -> 0), C (_ -> 1)), s match (A (_ -> 0), B (_ -> 1), C (_ -> 0))))));
 
 export "result" = tagged | arrange | inspect(total);

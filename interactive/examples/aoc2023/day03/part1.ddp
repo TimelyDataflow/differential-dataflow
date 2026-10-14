@@ -2,46 +2,44 @@
 -- input 0: (row, col, charcode); '.' = 46, digits 48..57.
 -- NB: `distinct` erases values, so loop state is packed into keys.
 
-let cells    = input 0 : ((int, int, int) ; ()) | filter($0[2] != 46) | key($0[0], $0[1] ; $0[2]);
-let numerals = cells | filter($1[0] >= 48 && $1[0] <= 57) | map($0 ; $1[0] - 48);
-let symbols  = cells | filter(not($1[0] >= 48 && $1[0] <= 57));
+let cells    = input 0 : ((int, int, int) ; ()) | filter(((_, _, c), _) -> (c, 46) ne) | key(((r, col, c), _) -> ((r, col), (c)));
+let numerals = cells | filter((_, (c)) -> ((c, 48) ge, (c, 57) le) all) | map((cell, (c)) -> (cell, ((c, 48) sub)));
+let symbols  = cells | filter((_, (c)) -> (((c, 48) ge, (c, 57) le) all, 0) eq);
 
 -- run starts: digit cells with no digit to the left
-let has_left = numerals | map($0[0], $0[1] + 1 ; $1[0]) | join(numerals, ($0 ; $2[0]));
+let has_left = numerals | map(((r, col), (d)) -> ((r, (col, 1) add), (d))) | join(numerals, (cell, _, (d)) -> (cell, (d)));
 let starts = numerals - has_left;
 
 -- grow runs rightward: key (row, start, end_exclusive, value)
 runs: {
-    let grow = run | map($0[0], $0[2] ; $0[1], $0[3])
-                   | join(numerals, ($0[0], $1[0], $0[1] + 1, $1[1] * 10 + $2[0] ;));
-    var run = (starts | map($0[0], $0[1], $0[1] + 1, $1[0] ;)) + grow | distinct;
+    let grow = run | map(((r, s, e, v), _) -> ((r, e), (s, v)))
+                   | join(numerals, ((r, e), (s, v), (d)) -> ((r, s, (e, 1) add, ((v, 10) mul, d) add), ()));
+    var run = (starts | map(((r, col), (d)) -> ((r, col, (col, 1) add, d), ()))) + grow | distinct;
 }
-let extendable = runs::run | map($0[0], $0[2] ; $0[1], $0[3])
-                           | join(numerals, ($0[0], $1[0], $0[1], $1[1] ;));
+let extendable = runs::run | map(((r, s, e, v), _) -> ((r, e), (s, v)))
+                           | join(numerals, ((r, e), (s, v), _) -> ((r, s, e, v), ()));
 let maximal = runs::run - extendable;
 -- key (row, start, end, value)
 
 -- label each digit cell with its run start: key (row, col, start)
 labels: {
-    let ext = label | map($0[0], $0[1] + 1 ; $0[2]) | join(numerals, ($0[0], $0[1], $1[0] ;));
-    var label = (starts | map($0[0], $0[1], $0[1] ;)) + ext | distinct;
+    let ext = label | map(((r, col, s), _) -> ((r, (col, 1) add), (s))) | join(numerals, ((r, col), (s), _) -> ((r, col, s), ()));
+    var label = (starts | map(((r, col), _) -> ((r, col, col), ()))) + ext | distinct;
 }
 
 -- digit cells adjacent to a symbol
 let symnbrs = symbols
-    | flatmap(list(tuple(-1,-1), tuple(-1,0), tuple(-1,1),
-                   tuple(0,-1),  tuple(0,0),  tuple(0,1),
-                   tuple(1,-1),  tuple(1,0),  tuple(1,1)))
-    | map($0[0] + $1[1][0], $0[1] + $1[1][1] ;) | distinct;
+    | flatmap(_ -> let (_, offsets) = (-1, 2) range map (dr -> (dr, (-1, 2) range) cap_list) flatten in offsets)
+    | map(((r, col), (_, (dr, dc))) -> (((r, dr) add, (col, dc) add), ())) | distinct;
 
 let active_runs = labels::label
-    | map($0[0], $0[1] ; $0[2]) | join(symnbrs, ($0[0], $1[0] ;)) | distinct;
+    | map(((r, col, s), _) -> ((r, col), (s))) | join(symnbrs, ((r, _), (s), _) -> ((r, s), ())) | distinct;
 -- key (row, start) of runs adjacent to a symbol
 
-let part_numbers = maximal | map($0[0], $0[1] ; $0[3]) | join(active_runs, ($0 ; $1[0]));
+let part_numbers = maximal | map(((r, s, _, v), _) -> ((r, s), (v))) | join(active_runs, (run, (v), _) -> (run, (v)));
 -- (row, start ; value)
 
 export "result" = part_numbers
-    | key(; $1[0]) | collect
-    | map(; fold($1, 0, ^1 + ^0[0]))
+    | key((_, (v)) -> ((), (v))) | collect
+    | value((_, vs) -> (vs map (v -> v.0) fold_add))
     | arrange | inspect(part1);

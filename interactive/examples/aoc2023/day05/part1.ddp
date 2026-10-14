@@ -2,21 +2,21 @@
 -- input 0: seeds (seed)
 -- input 1: map entries (stage, dst, src, len)
 
-let seeds   = input 0 : ((int) ; ()) | key(0, $0[0] ;);
-let entries = input 1 : ((int, int, int, int) ; ()) | key($0[0] ; $0[1], $0[2], $0[3]);
+let seeds   = input 0 : ((int) ; ()) | key(((seed), _) -> ((0, seed), ()));
+let entries = input 1 : ((int, int, int, int) ; ()) | key(((stage, dst, src, len), _) -> ((stage), (dst, src, len)));
 -- (stage ; dst, src, len)
 
 chain: {
-    let cur = active | filter($0[0] <= 6);
-    let cands = cur | map($0[0] ; $0[1])
-        | join(entries, ($0[0], $1[0], $2[0], $2[1], $2[2] ;))
-        | filter($0[3] <= $0[1] && $0[1] < $0[3] + $0[4]);
+    let cur = active | filter(((stage, _), _) -> (stage, 6) le);
+    let cands = cur | map(((stage, idx), _) -> ((stage), (idx)))
+        | join(entries, ((stage), (idx), (dst, src, len)) -> ((stage, idx, dst, src, len), ()))
+        | filter(((_, idx, _, src, len), _) -> ((src, idx) le, (idx, (src, len) add) lt) all);
     -- key (stage, idx, dst, src, len)
-    let mapped  = cands | map($0[0] + 1, $0[1] + $0[2] - $0[3] ;);
-    let covered = cands | map($0[0], $0[1] ;) | distinct;
-    let unmapped = (cur - covered) | map($0[0] + 1, $0[1] ;);
+    let mapped  = cands | map(((stage, idx, dst, src, _), _) -> (((stage, 1) add, ((idx, dst) add, src) sub), ()));
+    let covered = cands | map(((stage, idx, _, _, _), _) -> ((stage, idx), ())) | distinct;
+    let unmapped = (cur - covered) | map(((stage, idx), _) -> (((stage, 1) add, idx), ()));
     var active = seeds + mapped + unmapped | distinct;
 }
 
-export "result" = chain::active | filter($0[0] == 7)
-    | key(; $0[1]) | min | arrange | inspect(part1);
+export "result" = chain::active | filter(((stage, _), _) -> (stage, 7) eq)
+    | key(((_, idx), _) -> ((), (idx))) | min | arrange | inspect(part1);

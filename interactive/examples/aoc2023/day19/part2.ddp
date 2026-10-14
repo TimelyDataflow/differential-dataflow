@@ -3,34 +3,47 @@
 -- contribute negative products (their oracle answer is negative too).
 -- input 0: rules (state, prio, field, cmp, val, next)
 
-let rules = input 0 : ((int, int, int, int, int, int) ; ()) | key($0[0], $0[1] ; $0[2], $0[3], $0[4], $0[5]);
+let rules = input 0 : ((int, int, int, int, int, int) ; ()) | key(((st, prio, f, cmp, v, nx), ()) -> ((st, prio), (f, cmp, v, nx)));
 -- (state, prio ; field, cmp, val, next)
 
 flow: {
-    let cur = reg | map($0[0], $0[1] ; $0[2], $0[3], $0[4], $0[5], $0[6], $0[7], $0[8], $0[9]);
-    let b1 = cur | join(rules, ($2[3], 1,
-          if(($2[0] == 0) && ($2[1] == 1), if($2[2] + 1 > $1[0], $2[2] + 1, $1[0]), $1[0]),
-          if(($2[0] == 0) && ($2[1] == 0), if($2[2] - 1 < $1[1], $2[2] - 1, $1[1]), $1[1]),
-          if(($2[0] == 1) && ($2[1] == 1), if($2[2] + 1 > $1[2], $2[2] + 1, $1[2]), $1[2]),
-          if(($2[0] == 1) && ($2[1] == 0), if($2[2] - 1 < $1[3], $2[2] - 1, $1[3]), $1[3]),
-          if(($2[0] == 2) && ($2[1] == 1), if($2[2] + 1 > $1[4], $2[2] + 1, $1[4]), $1[4]),
-          if(($2[0] == 2) && ($2[1] == 0), if($2[2] - 1 < $1[5], $2[2] - 1, $1[5]), $1[5]),
-          if(($2[0] == 3) && ($2[1] == 1), if($2[2] + 1 > $1[6], $2[2] + 1, $1[6]), $1[6]),
-          if(($2[0] == 3) && ($2[1] == 0), if($2[2] - 1 < $1[7], $2[2] - 1, $1[7]), $1[7]) ;));
-    let b2 = cur | join(rules, ($0[0], $0[1] + 1,
-          if(($2[0] == 0) && ($2[1] == 0), if($2[2] > $1[0], $2[2], $1[0]), $1[0]),
-          if(($2[0] == 0) && ($2[1] == 1), if($2[2] < $1[1], $2[2], $1[1]), $1[1]),
-          if(($2[0] == 1) && ($2[1] == 0), if($2[2] > $1[2], $2[2], $1[2]), $1[2]),
-          if(($2[0] == 1) && ($2[1] == 1), if($2[2] < $1[3], $2[2], $1[3]), $1[3]),
-          if(($2[0] == 2) && ($2[1] == 0), if($2[2] > $1[4], $2[2], $1[4]), $1[4]),
-          if(($2[0] == 2) && ($2[1] == 1), if($2[2] < $1[5], $2[2], $1[5]), $1[5]),
-          if(($2[0] == 3) && ($2[1] == 0), if($2[2] > $1[6], $2[2], $1[6]), $1[6]),
-          if(($2[0] == 3) && ($2[1] == 1), if($2[2] < $1[7], $2[2], $1[7]), $1[7]) ;));
-    var reg = (rules | key(;) | distinct | map(0, 1, 1, 4000, 1, 4000, 1, 4000, 1, 4000 ;))
+    let cur = reg | map(((st, prio, xl, xh, ml, mh, al, ah, sl, sh), ()) -> ((st, prio), (xl, xh, ml, mh, al, ah, sl, sh)));
+    let b1 = cur | join(rules, (_, (xl, xh, ml, mh, al, ah, sl, sh), (f, cmp, v, nx)) ->
+          let isgt = (cmp, 1) eq in
+          let islt = (cmp, 0) eq in
+          let up = (v, 1) add in
+          let dn = (v, 1) sub in
+          ((nx, 1,
+            (((f, 0) eq, isgt) all, (up, xl) max, xl) select,
+            (((f, 0) eq, islt) all, (dn, xh) min, xh) select,
+            (((f, 1) eq, isgt) all, (up, ml) max, ml) select,
+            (((f, 1) eq, islt) all, (dn, mh) min, mh) select,
+            (((f, 2) eq, isgt) all, (up, al) max, al) select,
+            (((f, 2) eq, islt) all, (dn, ah) min, ah) select,
+            (((f, 3) eq, isgt) all, (up, sl) max, sl) select,
+            (((f, 3) eq, islt) all, (dn, sh) min, sh) select), ()));
+    let b2 = cur | join(rules, ((st, prio), (xl, xh, ml, mh, al, ah, sl, sh), (f, cmp, v, _)) ->
+          let isgt = (cmp, 1) eq in
+          let islt = (cmp, 0) eq in
+          ((st, (prio, 1) add,
+            (((f, 0) eq, islt) all, (v, xl) max, xl) select,
+            (((f, 0) eq, isgt) all, (v, xh) min, xh) select,
+            (((f, 1) eq, islt) all, (v, ml) max, ml) select,
+            (((f, 1) eq, isgt) all, (v, mh) min, mh) select,
+            (((f, 2) eq, islt) all, (v, al) max, al) select,
+            (((f, 2) eq, isgt) all, (v, ah) min, ah) select,
+            (((f, 3) eq, islt) all, (v, sl) max, sl) select,
+            (((f, 3) eq, isgt) all, (v, sh) min, sh) select), ()));
+    var reg = (rules | key(_ -> ((), ())) | distinct | map(_ -> ((0, 1, 1, 4000, 1, 4000, 1, 4000, 1, 4000), ())))
         + b1 + b2 | arrange;
 }
 
-export "result" = flow::reg | filter($0[0] == -1)
-    | key(; (1 + $0[3] - $0[2]) * (1 + $0[5] - $0[4]) * (1 + $0[7] - $0[6]) * (1 + $0[9] - $0[8]))
-    | collect | map(; fold($1, 0, ^1 + ^0[0]))
+export "result" = flow::reg | filter(((st, _, _, _, _, _, _, _, _, _), _) -> (st, -1) eq)
+    | key(((_, _, xl, xh, ml, mh, al, ah, sl, sh), _) ->
+        let wx = ((1, xh) add, xl) sub in
+        let wm = ((1, mh) add, ml) sub in
+        let wa = ((1, ah) add, al) sub in
+        let ws = ((1, sh) add, sl) sub in
+        ((), ((((wx, wm) mul, wa) mul, ws) mul)))
+    | collect | map((_, vs) -> ((), (vs map (v -> v.0) fold_add)))
     | arrange | inspect(part2);

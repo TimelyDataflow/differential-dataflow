@@ -3,41 +3,41 @@
 -- from k successive self-joins (no substring primitive, no string literals).
 -- input 0: (line, pos, charcode)
 
-let chars = input 0 : ((int, int, int) ; ()) | key($0[0], $0[1] ; $0[2]);
+let chars = input 0 : ((int, int, int) ; ()) | key(((line, pos, c), _) -> ((line, pos), (c)));
 -- (line, pos ; code)
 
-let s2 = chars | map($0[0], $0[1] + 1 ; $0[1], $1[0])
-               | join(chars, ($0[0], $1[0] ; $1[1], $2[0]));
-let s3 = s2    | map($0[0], $0[1] + 2 ; $0[1], $1[0], $1[1])
-               | join(chars, ($0[0], $1[0] ; $1[1], $1[2], $2[0]));
-let s4 = s3    | map($0[0], $0[1] + 3 ; $0[1], $1[0], $1[1], $1[2])
-               | join(chars, ($0[0], $1[0] ; $1[1], $1[2], $1[3], $2[0]));
-let s5 = s4    | map($0[0], $0[1] + 4 ; $0[1], $1[0], $1[1], $1[2], $1[3])
-               | join(chars, ($0[0], $1[0] ; $1[1], $1[2], $1[3], $1[4], $2[0]));
+let s2 = chars | map(((line, p), (c0)) -> ((line, (p, 1) add), (p, c0)))
+               | join(chars, ((line, _), (p, c0), (c1)) -> ((line, p), (c0, c1)));
+let s3 = s2    | map(((line, p), (c0, c1)) -> ((line, (p, 2) add), (p, c0, c1)))
+               | join(chars, ((line, _), (p, c0, c1), (c2)) -> ((line, p), (c0, c1, c2)));
+let s4 = s3    | map(((line, p), (c0, c1, c2)) -> ((line, (p, 3) add), (p, c0, c1, c2)))
+               | join(chars, ((line, _), (p, c0, c1, c2), (c3)) -> ((line, p), (c0, c1, c2, c3)));
+let s5 = s4    | map(((line, p), (c0, c1, c2, c3)) -> ((line, (p, 4) add), (p, c0, c1, c2, c3)))
+               | join(chars, ((line, _), (p, c0, c1, c2, c3), (c4)) -> ((line, p), (c0, c1, c2, c3, c4)));
 -- sk: (line, pos ; c0..c{k-1})
 
-let digits = chars | filter($1[0] >= 48 && $1[0] <= 57)
-                   | map($0[0] ; $0[1], $1[0] - 48);
+let digits = chars | filter((_, (c)) -> ((c, 48) ge, (c, 57) le) all)
+                   | map(((line, pos), (c)) -> ((line), (pos, (c, 48) sub)));
 
-let w_zero  = s4 | filter($1[0]==122 && $1[1]==101 && $1[2]==114 && $1[3]==111) | map($0[0] ; $0[1], 0);
-let w_one   = s3 | filter($1[0]==111 && $1[1]==110 && $1[2]==101)               | map($0[0] ; $0[1], 1);
-let w_two   = s3 | filter($1[0]==116 && $1[1]==119 && $1[2]==111)               | map($0[0] ; $0[1], 2);
-let w_three = s5 | filter($1[0]==116 && $1[1]==104 && $1[2]==114 && $1[3]==101 && $1[4]==101) | map($0[0] ; $0[1], 3);
-let w_four  = s4 | filter($1[0]==102 && $1[1]==111 && $1[2]==117 && $1[3]==114) | map($0[0] ; $0[1], 4);
-let w_five  = s4 | filter($1[0]==102 && $1[1]==105 && $1[2]==118 && $1[3]==101) | map($0[0] ; $0[1], 5);
-let w_six   = s3 | filter($1[0]==115 && $1[1]==105 && $1[2]==120)               | map($0[0] ; $0[1], 6);
-let w_seven = s5 | filter($1[0]==115 && $1[1]==101 && $1[2]==118 && $1[3]==101 && $1[4]==110) | map($0[0] ; $0[1], 7);
-let w_eight = s5 | filter($1[0]==101 && $1[1]==105 && $1[2]==103 && $1[3]==104 && $1[4]==116) | map($0[0] ; $0[1], 8);
-let w_nine  = s4 | filter($1[0]==110 && $1[1]==105 && $1[2]==110 && $1[3]==101) | map($0[0] ; $0[1], 9);
+let w_zero  = s4 | filter((_, w) -> (w, (122, 101, 114, 111)) eq)      | map(((line, pos), _) -> ((line), (pos, 0)));
+let w_one   = s3 | filter((_, w) -> (w, (111, 110, 101)) eq)           | map(((line, pos), _) -> ((line), (pos, 1)));
+let w_two   = s3 | filter((_, w) -> (w, (116, 119, 111)) eq)           | map(((line, pos), _) -> ((line), (pos, 2)));
+let w_three = s5 | filter((_, w) -> (w, (116, 104, 114, 101, 101)) eq) | map(((line, pos), _) -> ((line), (pos, 3)));
+let w_four  = s4 | filter((_, w) -> (w, (102, 111, 117, 114)) eq)      | map(((line, pos), _) -> ((line), (pos, 4)));
+let w_five  = s4 | filter((_, w) -> (w, (102, 105, 118, 101)) eq)      | map(((line, pos), _) -> ((line), (pos, 5)));
+let w_six   = s3 | filter((_, w) -> (w, (115, 105, 120)) eq)           | map(((line, pos), _) -> ((line), (pos, 6)));
+let w_seven = s5 | filter((_, w) -> (w, (115, 101, 118, 101, 110)) eq) | map(((line, pos), _) -> ((line), (pos, 7)));
+let w_eight = s5 | filter((_, w) -> (w, (101, 105, 103, 104, 116)) eq) | map(((line, pos), _) -> ((line), (pos, 8)));
+let w_nine  = s4 | filter((_, w) -> (w, (110, 105, 110, 101)) eq)      | map(((line, pos), _) -> ((line), (pos, 9)));
 
 let findings = digits + w_zero + w_one + w_two + w_three + w_four + w_five + w_six + w_seven + w_eight + w_nine;
 -- (line ; pos, digit)
 
-let first = findings | min | map($0 ; $1[1]);
-let last  = findings | map($0 ; 0 - $1[0], $1[1]) | min | map($0 ; $1[1]);
-let calib = first | join(last, ($0 ; $1[0] * 10 + $2[0]));
+let first = findings | min | map((line, (_, d)) -> (line, (d)));
+let last  = findings | map((line, (pos, d)) -> (line, (pos neg, d))) | min | map((line, (_, d)) -> (line, (d)));
+let calib = first | join(last, (line, (f), (l)) -> (line, (((f, 10) mul, l) add)));
 
 export "result" = calib
-    | key(; $1[0]) | collect
-    | map(; fold($1, 0, ^1 + ^0[0]))
+    | key((_, (v)) -> ((), (v))) | collect
+    | value((_, vs) -> (vs map (v -> v.0) fold_add))
     | arrange | inspect(part2);

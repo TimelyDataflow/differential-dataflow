@@ -4,11 +4,11 @@
 -- so we re-key to (src ; dst) just as a raw input would be keyed.
 -- input 0 : ((int) ; ()): roots (node ;)
 
-let edges = import "random:nodes=8,edges=12" | key($0[0] ; $0[1]);
-let roots = input 0 | key($0[0] ;);
+let edges = import "random:nodes=8,edges=12" | key(((src, dst), ()) -> ((src), (dst)));
+let roots = input 0 | key(((n), ()) -> ((n), ()));
 
 reach: {
-    let proposals = reach | join(edges, ($2 ;));
+    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
     var reach = roots + proposals | distinct;
 }
 

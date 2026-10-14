@@ -16,38 +16,38 @@
 -- RULE  arrange(x) ≡ x   when x's class is already arranged.
 -- output trace "classes": (node-id ; class-leader).
 
-let node  = input 0 : ((int) ; (int, List(int))) | key($0[0] ; $1[0], $1[1]);    -- id ; op, [children]
-let elems = node | map($0 ; $0);                     -- id ; id   (seed each to itself)
+let node  = input 0 : ((int) ; (int, List(int))) | key(((id), (op, cs)) -> ((id), (op, cs)));    -- id ; op, [children]
+let elems = node | map((id, _) -> (id, id));                     -- id ; id   (seed each to itself)
 
 -- explode each node's children (UNNEST via flatmap) so they can be
 -- canonicalized through the current class map, then regrouped into a signature
 let pc = node
-    | map($0, $1[0] ; $1[1])
-    | flatmap($1[0])
-    | map($1[1] ; $0[0], $0[1], $1[0]);              -- child ; (id, op, pos)
+    | map(((id), (op, cs)) -> ((id, op), (cs)))
+    | flatmap((_, (cs)) -> cs)
+    | map(((id, op), (pos, child)) -> ((child), (id, op, pos)));              -- child ; (id, op, pos)
 
 -- nodes that produce an arrangement (op 1 = Arrange, op 2 = Reduce)
-let producing = (node | filter($1[0] == 1) | map($0 ;))
-              + (node | filter($1[0] == 2) | map($0 ;));        -- id ;
+let producing = (node | filter((_, (op, _)) -> (op, 1) eq) | map((id, _) -> (id, ())))
+              + (node | filter((_, (op, _)) -> (op, 2) eq) | map((id, _) -> (id, ())));        -- id ;
 
 -- arrange nodes paired with their single child
-let arr = node | filter($1[0] == 1) | map($0 ; $1[1][0]);      -- arrange_id ; child
+let arr = node | filter((_, (op, _)) -> (op, 1) eq) | map((id, (_, cs)) -> (id, ((0, cs) get)));      -- arrange_id ; child
 
 eqsat: {
     -- congruence closure: group nodes by (op ++ canonicalized children)
-    let canon = pc | join(eq, ($1[0], $1[1] ; $1[2], $2[0]));   -- (id,op) ; (pos,class)
-    let bsig  = canon | collect | map($0[1], $1 ; $0[0]);       -- signature ; id
+    let canon = pc | join(eq, (_, (id, op, pos), (cls)) -> ((id, op), (pos, cls)));   -- (id,op) ; (pos,class)
+    let bsig  = canon | collect | map(((id, op), cs) -> ((op, cs), (id)));       -- signature ; id
     let reps  = bsig | min;                                     -- signature ; min id
-    let cong  = bsig | join(reps, ($1[0] ; $2[0]));             -- id ; representative
+    let cong  = bsig | join(reps, (_, id, rep) -> (id, rep));             -- id ; representative
 
     -- arrange-idempotence rule:
-    let arranged = producing | join(eq, ($2 ;)) | distinct;     -- arranged class ;
-    let arr_cls  = arr | key($1 ; $0) | join(eq, ($1 ; $2));    -- arrange_id ; child class
-    let rule     = arr_cls | key($1 ; $0) | join(arranged, ($1 ; $0));  -- arrange_id ; child class
+    let arranged = producing | join(eq, (_, _, cls) -> (cls, ())) | distinct;     -- arranged class ;
+    let arr_cls  = arr | key((a, c) -> (c, a)) | join(eq, (_, a, cls) -> (a, cls));    -- arrange_id ; child class
+    let rule     = arr_cls | key((a, cls) -> (cls, a)) | join(arranged, (cls, a, _) -> (a, cls));  -- arrange_id ; child class
 
     -- congruence edges + rule edges, symmetrized, then one min-label hop
-    let edges = cong + (cong | key($1 ; $0)) + rule + (rule | key($1 ; $0));
-    let prop  = eq | join(edges, ($2 ; $1));
+    let edges = cong + (cong | key((a, b) -> (b, a))) + rule + (rule | key((a, b) -> (b, a)));
+    let prop  = eq | join(edges, (_, l, n) -> (n, l));
     var eq = elems + prop | min;
 }
 

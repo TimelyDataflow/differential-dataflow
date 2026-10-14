@@ -2,12 +2,12 @@
 -- time across all 35 slots; points = 2^(k-1); sum.
 -- input 0: (card, side, idx, value)
 
-let dups = input 0 : ((int, int, int, int) ; ()) | key($0[0], $0[3] ;) | count | filter($1[0] > 1);
+let dups = input 0 : ((int, int, int, int) ; ()) | key(((card, _, _, value), _) -> ((card, value), ())) | count | filter((_, (n)) -> (n, 1) gt);
 let points = dups
-    | map($0[0] ; $0[1]) | collect
-    | map($0 ; fold($1, 0, if(^1 == 0, 1, ^1 * 2)));
+    | map(((card, value), _) -> ((card), (value))) | collect
+    | map((card, values) -> (card, ((0, values) fold ((acc, _) -> ((acc, 0) eq, 1, (acc, 2) mul) select))));
 
 export "result" = points
-    | key(; $1[0]) | collect
-    | map(; fold($1, 0, ^1 + ^0[0]))
+    | key((_, (p)) -> ((), (p))) | collect
+    | value((_, ps) -> (ps map (p -> p.0) fold_add))
     | arrange | inspect(part1);

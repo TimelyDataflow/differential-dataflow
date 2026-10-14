@@ -4,21 +4,21 @@
 -- disagreeing by float drift; enumeration is exact).
 -- input 0: (time, distance)
 
-let races = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+let races = input 0 : ((int, int) ; ()) | key(((t, d), ()) -> ((t), (d)));
 
 cands: {
-    let step = c | filter($0[1] + 1 < $0[0]) | map($0[0], $0[1] + 1 ;);
-    var c = (races | map($0[0], 1 ;)) + step | distinct;
+    let step = c | filter(((t, h), ()) -> ((h, 1) add, t) lt) | map(((t, h), ()) -> ((t, (h, 1) add), ()));
+    var c = (races | map(((t), _) -> ((t, 1), ()))) + step | distinct;
 }
 
 let wins = cands::c
-    | map($0[0] ; $0[1])
-    | join(races, ($0[0], $1[0], $2[0] ;))
-    | filter($0[1] * ($0[0] - $0[1]) > $0[2])
-    | map($0[0] ;) | count;
+    | map(((t, h), ()) -> ((t), (h)))
+    | join(races, ((t), (h), (d)) -> ((t, h, d), ()))
+    | filter(((t, h, d), ()) -> ((h, (t, h) sub) mul, d) gt)
+    | map(((t, _, _), ()) -> ((t), ())) | count;
 -- (time ; n_wins)
 
 export "result" = wins
-    | key(; $1[0]) | collect
-    | map(; fold($1, 1, ^1 * ^0[0]))
+    | key((_, (n)) -> ((), (n))) | collect
+    | map((_, ns) -> ((), ((1, ns) fold ((acc, (n)) -> (acc, n) mul))))
     | arrange | inspect(part1);

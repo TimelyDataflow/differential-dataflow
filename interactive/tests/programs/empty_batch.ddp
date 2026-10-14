@@ -18,9 +18,9 @@
 --
 -- This is the shape of AoC 2023 day 3 part 2's export, which is where it was found.
 
-let vals    = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+let vals    = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
 let grouped = vals | collect;
-let two     = grouped | filter(len($1) == 2);
-let prod    = two | map(; $1[0][0] * $1[1][0]);
+let two     = grouped | filter((_, l) -> (l len, 2) eq);
+let prod    = two | key((_, l) -> ((), (((0, l) get .0, (1, l) get .0) mul)));
 
-export "result" = prod | map($0 ; $1[0] * 2) | arrange | inspect(total);
+export "result" = prod | key((k, (p)) -> (k, ((p, 2) mul))) | arrange | inspect(total);

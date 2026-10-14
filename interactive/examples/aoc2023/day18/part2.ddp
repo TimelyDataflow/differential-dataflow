@@ -2,37 +2,44 @@
 -- last hex digit: 0=R 1=D 2=L 3=U; first five = steps.
 -- input 0: (line, dircode, steps, h1..h6)
 
-let instr = input 0 : ((int, int, int, int, int, int, int, int, int) ; ()) | key($0[0] ;
-    if($0[8] == 51, -1, if($0[8] == 49, 1, 0)),
-    if($0[8] == 50, -1, if($0[8] == 48, 1, 0)),
-    ((((if($0[3] <= 57, $0[3] - 48, $0[3] - 87)) * 16 + if($0[4] <= 57, $0[4] - 48, $0[4] - 87)) * 16 + if($0[5] <= 57, $0[5] - 48, $0[5] - 87)) * 16 + if($0[6] <= 57, $0[6] - 48, $0[6] - 87)) * 16 + if($0[7] <= 57, $0[7] - 48, $0[7] - 87));
+let instr = input 0 : ((int, int, int, int, int, int, int, int, int) ; ()) | key(((line, _, _, h1, h2, h3, h4, h5, h6), ()) ->
+    let d1 = ((h1, 57) le, (h1, 48) sub, (h1, 87) sub) select in
+    let d2 = ((h2, 57) le, (h2, 48) sub, (h2, 87) sub) select in
+    let d3 = ((h3, 57) le, (h3, 48) sub, (h3, 87) sub) select in
+    let d4 = ((h4, 57) le, (h4, 48) sub, (h4, 87) sub) select in
+    let d5 = ((h5, 57) le, (h5, 48) sub, (h5, 87) sub) select in
+    ((line), (
+        ((h6, 51) eq, -1, ((h6, 49) eq, 1, 0) select) select,
+        ((h6, 50) eq, -1, ((h6, 48) eq, 1, 0) select) select,
+        ((((((((d1, 16) mul, d2) add, 16) mul, d3) add, 16) mul, d4) add, 16) mul, d5) add)));
 
 path: {
-    let step = p | map($0[0] ; $0[1], $0[2])
-        | join(instr, ($0[0] + 1, $1[0] + $2[0] * $2[2], $1[1] + $2[1] * $2[2] ;));
-    var p = (instr | filter($0[0] == 1) | map(1, 0, 0 ;)) + step | distinct;
+    let step = p | map(((i, r, c), ()) -> ((i), (r, c)))
+        | join(instr, ((i), (r, c), (dr, dc, n)) -> (((i, 1) add, (r, (dr, n) mul) add, (c, (dc, n) mul) add), ()));
+    var p = (instr | filter(((line), _) -> (line, 1) eq) | map(_ -> ((1, 0, 0), ()))) + step | distinct;
 }
 
-let terms = path::p | map($0[0] + 1 ; $0[1], $0[2])
-    | join(path::p | map($0[0] ; $0[1], $0[2]),
-           (; ($1[0] + $2[0]) * ($1[1] - $2[1])));
-let s = terms | collect | map(; fold($1, 0, ^1 + ^0[0])) | map(; if($1[0] < 0, 0 - $1[0], $1[0]));
-let perim = instr | key(; $1[2]) | collect | map(; fold($1, 0, ^1 + ^0[0]));
-let n = s | join(perim, (; $1[0] + $2[0]));
+let terms = path::p | map(((i, r, c), ()) -> (((i, 1) add), (r, c)))
+    | join(path::p | map(((i, r, c), ()) -> ((i), (r, c))),
+           (_, (r1, c1), (r2, c2)) -> ((), (((r1, r2) add, (c1, c2) sub) mul)));
+let s = terms | collect | map((_, vs) -> ((), (vs map (v -> v.0) fold_add))) | map((_, (x)) -> ((), (((x, 0) lt, x neg, x) select)));
+let perim = instr | key((_, (_, _, n)) -> ((), (n))) | collect | map((_, vs) -> ((), (vs map (v -> v.0) fold_add)));
+let n = s | join(perim, (_, (a), (b)) -> ((), ((a, b) add)));
 -- (; |S| + P), even; halve by binary decomposition (no division)
 
-let powtab = instr | key(;) | distinct
-    | flatmap(list(549755813888, 274877906944, 137438953472, 68719476736, 34359738368, 17179869184, 8589934592, 4294967296, 2147483648, 1073741824, 536870912, 268435456, 134217728, 67108864, 33554432, 16777216, 8388608, 4194304, 2097152, 1048576, 524288, 262144, 131072, 65536, 32768, 16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1))
-    | key($1[0] ; $1[1]);
+let powtab = instr | key(_ -> ((), ())) | distinct
+    | flatmap(_ -> (1099511627776, (0, 40) range) scan ((a, _) -> (a, 2) div))
+    | key((_, (i, p)) -> ((i), (p)));
 -- (i ; 2^(39-i))
 
 halve: {
-    let next = st | map($0[0] ; $0[1], $0[2])
-        | join(powtab, ($0[0] + 1,
-            if($1[0] >= 2 * $2[0], $1[0] - 2 * $2[0], $1[0]),
-            if($1[0] >= 2 * $2[0], $1[1] + $2[0], $1[1]) ;));
-    var st = (n | map(0, $1[0], 0 ;)) + next | distinct;
+    let next = st | map(((i, r, q), ()) -> ((i), (r, q)))
+        | join(powtab, ((i), (r, q), (p)) ->
+            let t = (2, p) mul in
+            let ge = (r, t) ge in
+            (((i, 1) add, (ge, (r, t) sub, r) select, (ge, (q, p) add, q) select), ()));
+    var st = (n | map((_, (x)) -> ((0, x, 0), ()))) + next | distinct;
 }
 
-export "result" = halve::st | filter($0[0] == 40) | key(; $0[2] + 1)
+export "result" = halve::st | filter(((i, _, _), _) -> (i, 40) eq) | key(((_, _, q), _) -> ((), ((q, 1) add)))
     | arrange | inspect(part2);

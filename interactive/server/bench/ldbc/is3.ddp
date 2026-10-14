@@ -2,8 +2,8 @@
 let request = input 0 : ((int, int) ; ());
 let edge = import "edge" : ((int) ; (int, int));
 let person = import "person" : ((int) ; (List(int), List(int), int));
-let friends = request | key($0[1] ; $0[0])
-    | join(edge, ($2[0] ; $1[0], $2[1]))
-    | join(person, ($1[0] ; -$1[1], $0[0], $2[0], $2[1]));
-export "is3.answer" = friends | collect | flatmap($1)
-    | map($0[0], $1[0] ; $1[1][1], $1[1][2], $1[1][3], -$1[1][0]);
+let friends = request | key(((rid, pid), ()) -> ((pid), (rid)))
+    | join(edge, (_, (rid), (q, created)) -> ((q), (rid, created)))
+    | join(person, ((q), (rid, created), (first, last, _)) -> ((rid), (created neg, q, first, last)));
+export "is3.answer" = friends | collect | flatmap((_, vs) -> vs)
+    | map(((rid), (pos, (negc, q, first, last))) -> ((rid, pos), (q, first, last, negc neg)));

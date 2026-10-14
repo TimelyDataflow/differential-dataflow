@@ -5,9 +5,9 @@
 -- uncommitted (⊥) lanes to typecheck (DDIR #817); now it is an ordinary program.
 type Kind = Rare int | Common int;
 
-let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
 
-let onlyRare   = pairs | map( $0[0] ; Rare($1[0]) );
-let onlyCommon = pairs | map( $0[0] ; Common($1[0]) );
+let onlyRare   = pairs | key(((a), (b)) -> ((a), (b inject Rare)));
+let onlyCommon = pairs | key(((a), (b)) -> ((a), (b inject Common)));
 
 export "result" = (onlyRare + onlyCommon) | arrange | inspect(total);

@@ -1,14 +1,14 @@
 -- A random graph DERIVED from a generated `iota` source via `hash` — the
 -- composable, in-language form of `random:...`, materialized once (static; no
--- per-tick churn). `hash(bound, keys...)` is a deterministic draw in [0, bound).
--- Each iota row `(i)` becomes an edge (hash(8,i,0) ; hash(8,i,1)).
+-- per-tick churn). `(keys hash shr_b64 1, bound) rem` is a deterministic draw in [0, bound).
+-- Each iota row `(i)` becomes an edge from the draw for `(i, 0)` to the draw for `(i, 1)`, with bound 8.
 -- input 0 : ((int) ; ()): roots (node ;)
 
-let edges = import "iota:12" | map( hash(8,$0[0],0) ; hash(8,$0[0],1) );
-let roots = input 0 | key($0[0] ;);
+let edges = import "iota:12" | map(((i), _) -> ((((i, 0) hash shr_b64 1, 8) rem), (((i, 1) hash shr_b64 1, 8) rem)));
+let roots = input 0 | key(((n), ()) -> ((n), ()));
 
 reach: {
-    let proposals = reach | join(edges, ($2 ;));
+    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
     var reach = roots + proposals | distinct;
 }
 

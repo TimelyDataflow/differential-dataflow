@@ -2,28 +2,28 @@
 -- pair. Sum 100*(a-1) for rows + (c-1) for cols.
 -- input 0: (block, row, col, code), 1-indexed
 
-let cells = input 0 : ((int, int, int, int) ; ()) | key($0[0], $0[1], $0[2] ; $0[3]);
-let cb = cells | map($0[0] ; $0[1], $0[2], $1[0]);      -- (b ; r, c, s)
+let cells = input 0 : ((int, int, int, int) ; ()) | key(((b, r, c, s), ()) -> ((b, r, c), (s)));
+let cb = cells | map(((b, r, c), (s)) -> ((b), (r, c, s)));      -- (b ; r, c, s)
 
 -- row axes
-let rcand = cells | map($0[0], $0[1] ;) | distinct;
-let u1 = rcand | map($0[0] ; $0[1])
-    | join(cb, ($0[0], 2 * $1[0] - 1 - $2[0], $2[1] ; $1[0], $2[0], $2[2]));
+let rcand = cells | map(((b, r, _), _) -> ((b, r), ())) | distinct;
+let u1 = rcand | map(((b, a), _) -> ((b), (a)))
+    | join(cb, ((b), (a), (x, c, s)) -> ((b, (((2, a) mul, 1) sub, x) sub, c), (a, x, s)));
 -- (b, y, c ; a, x, s)
-let rmis = u1 | join(cells, ($0[0], $1[0] ; ($1[1] < $0[1]) && not($1[2] == $2[0])))
-    | filter($1[0] == 1) | map($0 ;) | count | filter($1[0] == 1);
+let rmis = u1 | join(cells, ((b, y, _), (a, x, s), (s2)) -> ((b, a), (((x, y) lt, ((s, s2) eq, 0) eq) all)))
+    | filter((_, (m)) -> (m, 1) eq) | map((k, _) -> (k, ())) | count | filter((_, (n)) -> (n, 1) eq);
 -- (b, a ; 1): exactly one smudge
-let rscore = rmis | key(; 100 * ($0[1] - 1));
+let rscore = rmis | key(((_, a), _) -> ((), ((100, (a, 1) sub) mul)));
 
 -- column axes
-let ccand = cells | map($0[0], $0[2] ;) | distinct;
-let v1 = ccand | map($0[0] ; $0[1])
-    | join(cb, ($0[0], $2[0], 2 * $1[0] - 1 - $2[1] ; $1[0], $2[1], $2[2]));
+let ccand = cells | map(((b, _, c), _) -> ((b, c), ())) | distinct;
+let v1 = ccand | map(((b, a), _) -> ((b), (a)))
+    | join(cb, ((b), (a), (r, x, s)) -> ((b, r, (((2, a) mul, 1) sub, x) sub), (a, x, s)));
 -- (b, r, y ; a, x, s)
-let cmis = v1 | join(cells, ($0[0], $1[0] ; ($1[1] < $0[2]) && not($1[2] == $2[0])))
-    | filter($1[0] == 1) | map($0 ;) | count | filter($1[0] == 1);
-let cscore = cmis | key(; $0[1] - 1);
+let cmis = v1 | join(cells, ((b, _, y), (a, x, s), (s2)) -> ((b, a), (((x, y) lt, ((s, s2) eq, 0) eq) all)))
+    | filter((_, (m)) -> (m, 1) eq) | map((k, _) -> (k, ())) | count | filter((_, (n)) -> (n, 1) eq);
+let cscore = cmis | key(((_, a), _) -> ((), ((a, 1) sub)));
 
 export "result" = rscore + cscore
-    | collect | map(; fold($1, 0, ^1 + ^0[0]))
+    | collect | map((_, xs) -> ((), (xs map (x -> x.0) fold_add)))
     | arrange | inspect(part2);

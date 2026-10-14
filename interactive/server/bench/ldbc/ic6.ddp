@@ -5,19 +5,19 @@ let edge = import "edge" : ((int) ; (int, int));
 let message = import "message" : ((int) ; (int, int, int));
 let tagged = import "tagged" : ((int) ; (List(int)));
 -- Reachable rows: (request_id, origin, author, tag_name), deduplicated across paths.
-let one = request | key($0[1] ; $0[0], $0[2])
-    | join(edge, ($1[0], $0[0], $2[0], $1[1] ;));
-let two = one | key($0[2] ; $0[0], $0[1], $0[3])
-    | join(edge, ($1[0], $1[1], $2[0], $1[2] ;));
-let authors = (one + two) | filter($0[1] != $0[2]) | distinct;
-let posts = message | filter($1[0] == 0) | key($1[1] ; $0[0]);
-let candidates = authors | key($0[2] ; $0[0], $0[3])
-    | join(posts, ($2[0] ; $1[0], $1[1]));
-let selected = candidates | join(tagged, ($1[0], $0[0], $1[1], $2[0] ;))
-    | filter($0[2] == $0[3]) | map($0[0], $0[1], $0[2] ;) | distinct;
-let counts = selected | key($0[1] ; $0[0], $0[2])
-    | join(tagged, ($1[0], $2[0], $1[1] ;))
-    | filter($0[1] != $0[2]) | map($0[0], $0[1] ;) | count;
-export "ic6.answer" = counts | key($0[0] ; -$1[0], $0[1])
-    | collect | flatmap($1) | filter($1[0] < 10)
-    | map($0[0], $1[0] ; $1[1][1], -$1[1][0]);
+let one = request | key(((rid, pid, tag), ()) -> ((pid), (rid, tag)))
+    | join(edge, ((pid), (rid, tag), (q, _)) -> ((rid, pid, q, tag), ()));
+let two = one | key(((rid, origin, author, tag), ()) -> ((author), (rid, origin, tag)))
+    | join(edge, (_, (rid, origin, tag), (q, _)) -> ((rid, origin, q, tag), ()));
+let authors = (one + two) | filter(((_, origin, author, _), ()) -> (origin, author) ne) | distinct;
+let posts = message | filter((_, (kind, _, _)) -> (kind, 0) eq) | key(((id), (_, creator, _)) -> ((creator), (id)));
+let candidates = authors | key(((rid, _, author, tag), ()) -> ((author), (rid, tag)))
+    | join(posts, (_, req, m) -> (m, req));
+let selected = candidates | join(tagged, ((m), (rid, tag), (name)) -> ((rid, m, tag, name), ()))
+    | filter(((_, _, tag, name), ()) -> (tag, name) eq) | map(((rid, m, tag, _), ()) -> ((rid, m, tag), ())) | distinct;
+let counts = selected | key(((rid, m, tag), ()) -> ((m), (rid, tag)))
+    | join(tagged, (_, (rid, tag), (name)) -> ((rid, name, tag), ()))
+    | filter(((_, name, tag), ()) -> (name, tag) ne) | map(((rid, name, _), ()) -> ((rid, name), ())) | count;
+export "ic6.answer" = counts | key(((rid, name), (n)) -> ((rid), (n neg, name)))
+    | collect | flatmap((_, vs) -> vs) | filter((_, (pos, _)) -> (pos, 10) lt)
+    | map(((rid), (pos, (negn, name))) -> ((rid, pos), (name, negn neg)));

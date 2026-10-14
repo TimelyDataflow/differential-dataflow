@@ -5,29 +5,29 @@
 
 type Dir = Fwd int | Bwd int;
 
-let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
-let roots = input 1 : ((int) ; ()) | key($0[0] ;);
+let edges = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+let roots = input 1 : ((int) ; ()) | key(((n), ()) -> ((n), ()));
 
--- Scalars: arithmetic, (signed) compares, unaries, `hash`, `if`.
+-- Scalars: arithmetic, (signed) compares, unaries, `hash`, `select`.
 let scored = edges
-    | map($0 ; $1[0] * 2, -$1[0], if($1[0] > 2, 1, 0), hash(97, $0[0]))
-    | filter(not($1[1] == 0 - 99));
+    | key(((a), (b)) -> ((a), ((b, 2) mul, b neg, ((b, 2) gt, 1, 0) select, ((a) hash shr_b64 1, 97) rem)))
+    | filter((_, (_, n, _, _)) -> ((n, -99) eq, 0) eq);
 
--- Floats: explicit `float`, IEEE arithmetic and math, IEEE compares, `fint` (truncating) back.
+-- Floats: explicit `to_float`, IEEE arithmetic and math, IEEE compares, `fint` (truncating) back.
 let floated = edges
-    | map($0 ; fmul(fdiv(float(2786), float(10)), fpow(float($1[0]), fdiv(float(1), float(4)))))
-    | map($0 ; $1[0], fint($1[0]), fgt(fsqrt($1[0]), float(18)));
+    | key(((a), (b)) -> ((a), (((2786.0, 10.0) div, (b to_float, (1.0, 4.0) div) call fpow) mul)))
+    | key((k, (f)) -> (k, (f, f call fint, (f call fsqrt, 18.0) call fgt)));
 
--- Sums: tagged intro, `case` with binder + captured var + default, `istag`.
+-- Sums: tagged intro, `match` with binder + captured var (`cap_sum`), and a tag test.
 let tagged = edges
-    | map($0 ; if($0[0] < $1[0], Fwd($1[0]), Bwd($1[0])))
-    | map($0 ; case $1[0] { Fwd(x) => x + $0[0], _ => 0 - 1 }, istag(1, $1[0]));
+    | key(((a), (b)) -> ((a), (((a, b) lt, b inject Fwd, b inject Bwd) select)))
+    | key(((a), (s)) -> ((a), ((a, s) cap_sum match (Fwd ((a, x) -> (x, a) add), Bwd (_ -> -1)), s match (Fwd (_ -> 0), Bwd (_ -> 1)))));
 
--- Lists: intro, `fold` (binders ^0/^1), `len`; `flatmap`/`collect` round trip.
+-- Lists: intro (`enlist`, `append`), `fold`, `len`; `flatmap`/`collect` round trip.
 let folded = edges
-    | map($0 ; list($0[0], $1[0], 7))
-    | map($0 ; fold($1[0], 0, ^0 + ^1), len($1[0]));
-let nested = edges | flatmap(list($1[0], $0[0])) | collect;
+    | key(((a), (b)) -> ((a), (((a enlist, b enlist) append, 7 enlist) append)))
+    | key((k, (l)) -> (k, ((0, l) fold ((acc, x) -> (acc, x) add), l len)));
+let nested = edges | flatmap(((a), (b)) -> (b enlist, a enlist) append) | collect;
 
 -- Reducers.
 let counted = edges | count;
@@ -36,7 +36,7 @@ let uniq    = edges | distinct;
 
 -- Iteration: reach, with concat (+) and distinct.
 reach: {
-    let proposals = reach | join(edges, ($2 ;));
+    let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
     var reach = roots + proposals | distinct;
 }
 
@@ -48,4 +48,4 @@ export "nested" = nested | arrange | inspect(nest);
 export "counts" = counted | arrange | inspect(total);
 export "least"  = least | arrange | inspect(total);
 export "uniq"   = uniq | arrange | inspect(total);
-export "reach"  = reach::reach | key(;) | arrange | inspect(total);
+export "reach"  = reach::reach | key(_ -> ((), ())) | arrange | inspect(total);

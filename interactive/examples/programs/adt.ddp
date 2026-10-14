@@ -1,21 +1,19 @@
--- Named constructors + pattern `case`. Each edge is tagged by orientation,
+-- Named constructors (`inject`) + `match`. Each edge is tagged by orientation,
 -- carrying the field-sum as payload, then matched back out to a (bucket; sum)
 -- and counted per bucket. (Contrived — exercises sum intro/outro + fold.)
 
 type Dir = Fwd int   -- src < dst
          | Bwd int;  -- otherwise
 
-let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+let edges = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
 
 let tagged = edges
-    | map( if($0[0] < $1[0], 0, 1)
-         ; case if($0[0] < $1[0],
-                   Fwd(fold(list($0[0], $1[0]), 0, ^0 + ^1)),
-                   Bwd(fold(list($0[0], $1[0]), 0, ^0 + ^1)))
-           {
-             Fwd(s) => s,
-             Bwd(s) => s,
-           } );
+    | key(((a), (b)) ->
+           let fwd = (a, b) lt in
+           let sum = (0, (a enlist, b enlist) append) fold ((acc, x) -> (acc, x) add) in
+           ( ((fwd, 0, 1) select)
+           , ((fwd, sum inject Fwd, sum inject Bwd) select match (Fwd (s -> s), Bwd (s -> s)))
+           ));
 
 let buckets = tagged | count;
 
