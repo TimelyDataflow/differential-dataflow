@@ -435,25 +435,20 @@ where
     }
 
     /// As [`Self::reduce_brackets`] for `Reducer::Expr`, whose output rows carry diffs: every
-    /// bracket's key and its values with non-zero diffs, as a list of `(val, diff)` in value order,
-    /// through the term's graph at once. Returns the output values, their diffs, and each bracket's
-    /// end among them. A bracket with no such values has no input, and no output.
+    /// bracket's key and its values, as a list of `(val, diff)`, through the term's graph at once.
+    /// Returns the output values, their diffs, and each bracket's end among them.
+    ///
+    /// The harness presents each bracket consolidated, so its diffs are non-zero and its value ids
+    /// ascend, which is value order: `present` numbers each key's values in sorted order. The
+    /// brackets are presented as they are. One with no input has no output, and the term does not
+    /// see it.
     fn reduce_term(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<Diff>, Vec<usize>) {
-        let (mut entry_reps, mut entry_diffs, mut labels) = (Vec::new(), Vec::new(), Vec::new());
-        // Per bracket with input: its index, the end of its entries, and the row holding its key.
+        // Per bracket with input: its index, its end in `input`, and the row holding its key.
         let (mut blocks, mut key_refs) = (Vec::new(), Vec::new());
         let mut start = 0;
         for (bi, &end) in ends.iter().enumerate() {
-            let lo = entry_reps.len();
-            for &(id, diff) in &input[start..end] {
-                if diff != 0 {
-                    entry_reps.push(id);
-                    entry_diffs.push(diff);
-                    labels.push(bi as u64);
-                }
-            }
-            if entry_reps.len() > lo {
-                blocks.push((bi, entry_reps.len()));
+            if end > start {
+                blocks.push((bi, end));
                 key_refs.push(self.input.refs[input[start].0 as usize]);
             }
             start = end;
@@ -461,10 +456,18 @@ where
         if blocks.is_empty() {
             return (CValue::Unit(0), Vec::new(), vec![0; ends.len()]);
         }
-        // One `sort_blocks` puts every bracket's entries in value order, in place.
-        let perm = sort_blocks(&labels, &self.input.gather(&entry_reps)).0;
-        let vals = self.input.gather(&perm.iter().map(|&e| entry_reps[e]).collect::<Vec<_>>());
-        let diffs = CValue::i64(perm.iter().map(|&e| entry_diffs[e]).collect());
+        let vals = self.input.gather(&input.iter().map(|&(id, _)| id).collect::<Vec<_>>());
+        let diffs = CValue::i64(input.iter().map(|&(_, diff)| diff).collect());
+        if cfg!(debug_assertions) {
+            let mut start = 0;
+            for &(_, end) in &blocks {
+                for i in start + 1..end {
+                    assert!(compare_at(&vals, i - 1, &vals, i).is_lt(), "reduce: a bracket's values are not strictly ascending");
+                }
+                start = end;
+            }
+            assert!(input.iter().all(|&(_, diff)| diff != 0), "reduce: a bracket holds a zero diff");
+        }
         let keys = recover_key(&gather_refs(&self.key_columns, key_refs.into_iter()));
         let (kshape, vshape) = (corgi::shape_of_value(&keys), corgi::shape_of_value(&vals));
         let lists = CValue::List(Bounds::offsets(blocks.iter().map(|b| b.1).collect()), Box::new(CValue::Prod(vec![vals, diffs])));
