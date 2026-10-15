@@ -150,8 +150,13 @@ fn infer_scope(s: &st::Scope, imports: Vec<Option<CollShape>>, depth: usize, at:
     }
 }
 
-/// The shapes a linear chain sees: before each op, then after the last.
-pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape) -> Result<Vec<(Shape, Shape)>, String> {
+/// The shape of a time at scope depth `depth` as data: the epoch and one coordinate per scope.
+pub fn time_shape(depth: usize) -> Shape {
+    Shape::Prod(vec![Shape::Int; depth + 1])
+}
+
+/// The shapes a linear chain at scope depth `depth` sees: before each op, then after the last.
+pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, depth: usize) -> Result<Vec<(Shape, Shape)>, String> {
     let (mut k, mut v) = (key, val);
     let mut steps = Vec::with_capacity(ops.len() + 1);
     for op in ops {
@@ -178,6 +183,8 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape) -> Result<Vec<(Sh
                 Shape::Unit => Shape::Prod(vec![Shape::Int]),
                 other => Shape::Prod(vec![other, Shape::Int]),
             },
+            LinearOp::Lift => v = Shape::Prod(vec![v, time_shape(depth)]),
+            LinearOp::JoinFunction(t) => (k, v) = join_function_shape(t, &env, depth)?,
         }
     }
     steps.push((k, v));
@@ -197,12 +204,27 @@ fn reduce_shape(term: &Term, key: &Shape, val: &Shape) -> Result<Shape, String> 
     }
 }
 
+/// The `(key, val)` shapes of a `join_function` term's output rows. The term gives a list of
+/// `((key, val), time, diff)`, with `time` the shape of a time at this depth.
+fn join_function_shape(term: &Term, env: &[Shape], depth: usize) -> Result<(Shape, Shape), String> {
+    let wrong = |s: &Shape| format!("join_function: output of shape {s}, not a list of ((key, val), {}, Int)", time_shape(depth));
+    let shape = shape_of_term(term, env, None).map_err(|e| format!("join_function: {e}"))?;
+    let Shape::List(elem) = &shape else { return Err(wrong(&shape)) };
+    match &**elem {
+        Shape::Prod(fs) if fs.len() == 3 && fs[1] == time_shape(depth) && fs[2] == Shape::Int => match &fs[0] {
+            Shape::Prod(kv) if kv.len() == 2 => Ok((kv[0].clone(), kv[1].clone())),
+            _ => Err(wrong(&shape)),
+        },
+        _ => Err(wrong(&shape)),
+    }
+}
+
 fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, problems: &mut Problems) -> Option<CollShape> {
     let mut fail = |e: String| { problems.conflicts.push(format!("{at}: {e}")); None };
     match node {
         st::Node::Linear { input, ops } => {
             let c = shapes.of(input)?;
-            match linear_shapes(ops, c.key, c.val) {
+            match linear_shapes(ops, c.key, c.val, depth) {
                 Ok(mut steps) => { let (k, v) = steps.pop().unwrap(); Some(CollShape::new(k, v, depth)) }
                 Err(e) => fail(e),
             }

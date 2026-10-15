@@ -35,7 +35,7 @@ use crate::corgi::exchange::CorgiPact;
 use crate::corgi::join::CorgiJoinBackend;
 use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
-use crate::corgi::logic::{compile_flatmap, compile_predicate, compile_projection, compile_scalar, shape_of_row};
+use crate::corgi::logic::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar, shape_of_row};
 use corgi::{Graph, NumOp, Shape};
 use crate::ir::{Diff, LinearOp, Projection, Reducer, Time, Value as DValue};
 use crate::scope_ir as st;
@@ -57,14 +57,16 @@ pub struct Plan {
 
 impl Plan {
     /// The graph of `op` for a container of these shapes, compiling on first use. A type error
-    /// is a panic with corgi's message: a program that typechecks never reaches it.
-    fn graph(&mut self, op: &LinearOp, kshape: Shape, vshape: Shape) -> &Graph<NumOp> {
+    /// is a panic with corgi's message: a program that typechecks never reaches it. `level` is
+    /// the op's scope depth, which fixes the width of a time as data.
+    fn graph(&mut self, op: &LinearOp, kshape: Shape, vshape: Shape, level: usize) -> &Graph<NumOp> {
         let what = match op {
             LinearOp::Project(_) => "map",
             LinearOp::Filter(_) => "filter",
             LinearOp::EnterAt(_) => "enter_at",
             LinearOp::FlatMap(_) => "flatmap",
-            LinearOp::Negate | LinearOp::LiftIter => unreachable!("{op:?} compiles no graph"),
+            LinearOp::JoinFunction(_) => "join_function",
+            LinearOp::Negate | LinearOp::LiftIter | LinearOp::Lift => unreachable!("{op:?} compiles no graph"),
         };
         if self.compiled.is_none() {
             let (k, v) = (&kshape, &vshape);
@@ -73,7 +75,8 @@ impl Plan {
                 LinearOp::Filter(cond) => compile_predicate(cond, k, v),
                 LinearOp::EnterAt(field) => compile_scalar(field, k, v),
                 LinearOp::FlatMap(list) => compile_flatmap(list, k, v),
-                LinearOp::Negate | LinearOp::LiftIter => unreachable!(),
+                LinearOp::JoinFunction(term) => compile_join_function(term, k, v, level + 1),
+                LinearOp::Negate | LinearOp::LiftIter | LinearOp::Lift => unreachable!(),
             };
             let g = g.unwrap_or_else(|e| panic!("{what}: type error at shapes ({kshape}, {vshape}): {e}"));
             self.compiled = Some((kshape.clone(), vshape.clone(), g));
@@ -89,9 +92,11 @@ impl Plan {
 /// column + a structural explode; Negate = Rust. Every term is columnar — there is no row-wise
 /// path inside the dataflow — and each op's graph is compiled once (`plans`). An empty batch
 /// passes through untouched: it carries no shape to compile against and no rows to compute.
-/// The two data<->time ops are columnar and total: EnterAt reads its delay field as a column and
+/// The data<->time ops are columnar and total: EnterAt reads its delay field as a column and
 /// joins it into `times` in place; LiftIter reads the iteration coordinate out of `times` and
-/// appends it to `vals`. `level` is the scope depth (it locates that coordinate).
+/// appends it to `vals`; Lift reads every lane of `times` into `vals`; JoinFunction explodes
+/// its list column as FlatMap does and joins each element's time lanes into `times`. `level`
+/// is the scope depth (it locates that coordinate, and fixes the number of lanes as data).
 fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> CC {
     // A container with no rows has no SHAPE either, and the ops below are shape-directed: an
     // empty batch passes through untouched (every `LinearOp` maps zero rows to zero rows), and
@@ -106,14 +111,14 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
         let (kshape, vshape) = (corgi::shape_of_value(&c.keys), corgi::shape_of_value(&c.vals));
         c = match op {
             LinearOp::Project(_) => {
-                let g = plan.graph(op, kshape, vshape);
+                let g = plan.graph(op, kshape, vshape, level);
                 let mut cols = corgi::eval_graph(g, CValue::Prod(vec![c.keys, c.vals])).into_prod("linear project").unwrap();
                 let vals = cols.pop().unwrap();
                 let keys = cols.pop().unwrap();
                 CorgiContainer { keys, vals, times: c.times, diffs: c.diffs }
             }
             LinearOp::Filter(_) => {
-                let g = plan.graph(op, kshape, vshape);
+                let g = plan.graph(op, kshape, vshape, level);
                 let mask = corgi::eval_graph(g, CValue::Prod(vec![c.keys.clone(), c.vals.clone()]));
                 let mask = mask.as_i64("filter mask").unwrap();
                 let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i] != 0).collect();
@@ -130,7 +135,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 c
             }
             LinearOp::EnterAt(_) => {
-                let g = plan.graph(op, kshape, vshape);
+                let g = plan.graph(op, kshape, vshape, level);
                 // The key and val columns are IDENTITY here — only times change. Evaluate the
                 // delay field to an `Int` column and join it into each time in place. Joining
                 // `Product(0, PointStamp([0,..,0, delay]))` is, coordinate-wise, `max` at index
@@ -164,8 +169,43 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
                 };
                 CorgiContainer { keys: c.keys, vals, times: c.times, diffs: c.diffs }
             }
+            // A time as data is every lane, the epoch and one per scope: `level + 1` lanes, zero
+            // where the column is narrower. Keys, times and diffs are untouched.
+            LinearOp::Lift => {
+                let lanes = (0..=level).map(|j| CValue::i64(c.times.lane(j).into_iter().map(|x| x as i64).collect())).collect();
+                let vals = CValue::Prod(vec![c.vals, CValue::Prod(lanes)]);
+                CorgiContainer { keys: c.keys, vals, times: c.times, diffs: c.diffs }
+            }
+            LinearOp::JoinFunction(_) => {
+                let g = plan.graph(op, kshape, vshape, level);
+                // The explode is FlatMap's: the list's flat element storage holds the new key,
+                // val, time and diff columns, and each row's span in the bounds is a repeat map
+                // carrying its time and diff across. Each time lane then joins in by `lane_max`,
+                // a negative coordinate clamping to zero, the minimum, which the max leaves alone.
+                let (bounds, elems) =
+                    corgi::eval_graph(g, CValue::Prod(vec![c.keys, c.vals])).into_list("join_function list").unwrap();
+                let mut elem = elems.into_prod("join_function element").unwrap();
+                let d2 = elem.pop().unwrap().into_i64("join_function diff").unwrap();
+                let lanes = elem.pop().unwrap().into_prod("join_function time").unwrap();
+                let mut row = elem.pop().unwrap().into_prod("join_function row").unwrap();
+                let vals = row.pop().unwrap();
+                let keys = row.pop().unwrap();
+                let mut reps = Vec::with_capacity(d2.len());
+                let mut start = 0usize;
+                for (r, &end) in bounds.to_vec().iter().enumerate() {
+                    reps.extend(std::iter::repeat_n(r, end - start));
+                    start = end;
+                }
+                let mut times = c.times.gather(&reps);
+                for (j, lane) in lanes.into_iter().enumerate() {
+                    let lane: Vec<u64> = lane.into_i64("join_function time lane").unwrap().into_iter().map(|x| x.max(0) as u64).collect();
+                    times.lane_max(j, &lane);
+                }
+                let diffs = reps.iter().zip(d2).map(|(&r, d)| c.diffs[r] * d).collect();
+                CorgiContainer { keys, vals, times, diffs }
+            }
             LinearOp::FlatMap(_) => {
-                let g = plan.graph(op, kshape, vshape);
+                let g = plan.graph(op, kshape, vshape, level);
                 // Structural explode: the evaluated list column's FLAT element storage already
                 // IS the new value column, so the elements never move. Each row's span in the
                 // bounds gives both the within-row position (DDIR's `$1[0]`) and a repeat map
@@ -305,9 +345,9 @@ impl Backend for CorgiBackend {
         // `level` is the scope depth (locates the iteration coordinate for LiftIter/EnterAt).
         // With the input's shape known, every op compiles now, at the shape it will see.
         let mut plans: Vec<Plan> = ops.iter().map(|_| Plan::default()).collect();
-        if let Some(Ok(steps)) = shape.map(|(k, v)| crate::shapes::linear_shapes(&ops, k, v)) {
+        if let Some(Ok(steps)) = shape.map(|(k, v)| crate::shapes::linear_shapes(&ops, k, v, level)) {
             for ((op, plan), (k, v)) in ops.iter().zip(plans.iter_mut()).zip(steps) {
-                if !matches!(op, LinearOp::Negate | LinearOp::LiftIter) { plan.graph(op, k, v); }
+                if !matches!(op, LinearOp::Negate | LinearOp::LiftIter | LinearOp::Lift) { plan.graph(op, k, v, level); }
             }
         }
         c.inner

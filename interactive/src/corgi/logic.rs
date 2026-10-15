@@ -798,6 +798,22 @@ pub fn compile_reduce(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<
     }
 }
 
+/// Compile a `JoinFunction`'s term → a `List` column of `((key, val), time, diff)`, one list per
+/// input row, with `time` a tuple of `width` `Int`s. Any other shape is the type error: the backend
+/// explodes the column structurally and joins the time lanes into the rows' times.
+pub fn compile_join_function(term: &Term, kshape: &Shape, vshape: &Shape, width: usize) -> Res<Graph<NumOp>> {
+    let (g, out) = lower(&[term], &[kshape.clone(), vshape.clone()])?;
+    if let Shape::List(elem) = &out {
+        if let Shape::Prod(fs) = &**elem {
+            let time = Shape::Prod(vec![Shape::Int; width]);
+            if fs.len() == 3 && matches!(&fs[0], Shape::Prod(kv) if kv.len() == 2) && fs[1] == time && fs[2] == Shape::Int {
+                return Ok(g);
+            }
+        }
+    }
+    Err(format!("join_function output is not a list of ((key, val), time, diff) with {width} time coordinates: {out}"))
+}
+
 /// Compile a scalar term (`EnterAt`'s delay field) → an `Int` column; a non-integer term is the
 /// type error (the delay is read as one integer per row).
 pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {

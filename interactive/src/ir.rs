@@ -309,6 +309,16 @@ pub enum LinearOp {
     /// UNNEST: explode a `List`-valued `Term` into one row per element, value
     /// `tuple(pos, element)`. See `parse::Expr::FlatMap`.
     FlatMap(Term),
+    /// Pair each value with its whole time: `(key ; val)` becomes `(key ; (val, time))`.
+    /// The time is a tuple of `Int`s, the epoch and then every scope coordinate, so its
+    /// width is one more than the op's scope depth. Time itself is unchanged.
+    Lift,
+    /// Each row becomes the rows of a `Term` giving a list of `((key, val), time, diff)`.
+    /// The time is a tuple of `Int`s as `Lift` gives it; the output row's time is the
+    /// join of the input's time with it, coordinate-wise max, and its diff is the
+    /// product of the two diffs. A negative coordinate is below every time, so it
+    /// leaves that coordinate unchanged. `delay(t)` is `[((key, val), t, 1)]`.
+    JoinFunction(Term),
 }
 
 // DDIR's `hash` IS corgi's structural hash, evaluated a row at a time here and a column at a

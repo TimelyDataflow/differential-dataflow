@@ -380,6 +380,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                             LinearOp::Project(_) => "project", LinearOp::Filter(_) => "filter",
                             LinearOp::Negate => "negate", LinearOp::EnterAt(_) => "enter_at",
                             LinearOp::LiftIter => "lift_iter", LinearOp::FlatMap(_) => "flatmap",
+                            LinearOp::Lift => "lift", LinearOp::JoinFunction(_) => "join_function",
                         }).collect();
                         format!("{} | {}", fmt_ref(input), ops.join(" | "))
                     }
