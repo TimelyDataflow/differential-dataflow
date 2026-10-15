@@ -27,7 +27,7 @@ labels: {
 let labelcells = labels::label | map(((r, col, s), _) -> ((r, col), s));
 
 let gearnbrs = gears
-    | flatmap(_ -> let (_, offsets) = (-1, 2) range map (dr -> (dr, (-1, 2) range) cap_list) flatten in offsets)
+    | flatmap(_ -> [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)])
     | map(((r, col), (_, (dr, dc))) -> (((r, dr) add, (col, dc) add), (r, col)));
 -- (nbr_cell ; gear)
 

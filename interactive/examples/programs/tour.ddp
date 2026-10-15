@@ -25,7 +25,7 @@ let tagged = edges
 
 -- Lists: intro (`enlist`, `append`), `fold`, `len`; `flatmap`/`collect` round trip.
 let folded = edges
-    | key((a, b) -> (a, ((a enlist, b enlist) append, 7 enlist) append))
+    | key((a, b) -> (a, (a enlist, b enlist, 7 enlist) append))
     | key((k, l) -> (k, ((0, l) fold ((acc, x) -> (acc, x) add), l len)));
 let nested = edges | flatmap((a, b) -> (b enlist, a enlist) append) | collect;
 
