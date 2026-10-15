@@ -133,7 +133,7 @@ fn term_slots() {
 fn mismatched_lambdas_are_refused_at_install() {
     timely::execute_directly(|worker| {
         for (src, says) in [
-            (r#"export "a" = input 0 : ((int, int) ; ()) | key(((s), ()) -> ((s), ()));"#, "takes apart a product of 1 field"),
+            (r#"export "a" = input 0 : ((int, int) ; ()) | key(((s), ()) -> ((s), ()));"#, "wants a product of 1 field"),
             (r#"export "a" = input 0 : ((int, int) ; ()) | filter(((s, d), ()) -> (s, d));"#, "not an integer"),
             (r#"export "a" = input 0 : ((int, int) ; ()) | key(((s, d), ()) -> (s, d, ) add);"#, "expected an expression"),
         ] {

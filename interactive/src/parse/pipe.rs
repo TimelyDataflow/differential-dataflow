@@ -112,9 +112,10 @@
 //!   `(x, y) call fpow`, `() call f` for a function of none.
 //! - The program's `type` declarations, written before the lambda, are corgi enums of the same
 //!   names and variants. A variant two types share is written `Type::Variant`.
-//! - `Option` (`None`, `Some`) and `Result` (`Ok`, `Err`) are enums that declare no payload shapes:
-//!   `branch`, `map_variant` and `match` use them, as in
-//!   `(x, c) branch Option map_variant None (_ -> ())` for `if(c, Some(x), None)`.
+//! - `Option` (`None`, `Some`) and `Result` (`Ok`, `Err`) are enums whose payload lanes are open,
+//!   `None` aside: `x inject Some` takes its lane's shape from `x`, and `branch`, `map_variant` and
+//!   `match` read only their tags, as in `(x, c) branch Option map_variant None (_ -> ())` for
+//!   `if(c, Some(x), None)`.
 
 use super::*;
 use crate::ir::{BinOp, Projection, Reducer, SumTy, Term, UnOp};
