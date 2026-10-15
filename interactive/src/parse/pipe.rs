@@ -32,6 +32,12 @@
 //!   per element, value `tuple(pos, element)`.
 //! - `| negate` · `| arrange` · `| inspect(label)` · `| enter_at(term)` ·
 //!   `| lift_iter`.
+//! - `| lift` — pair each value with its whole time, `(key ; (val, time))`, the time a tuple
+//!   of the epoch and every scope coordinate.
+//! - `| join_function(term)` — replace each row by the `term`'s list of
+//!   `((key, val), time, diff)`, at the row's time joined with `time`, diffs multiplied.
+//! - `| delay(term)` — `join_function` with the list `[((key, val), term, 1)]`: advance each
+//!   row to at least the time `term`.
 //! - `a + b` (concat), `a - b` (concat with `b` negated).
 //!
 //! Statements: `let x = …;`, `var x = …;` (a feedback variable, for
@@ -101,8 +107,8 @@
 //! Any slot may instead be a corgi lambda, `pat -> body`, in corgi's ML syntax: it runs
 //! `let pat = input in body` with `input` the tuple of the slot's rows, `(key, val)` for a linear
 //! op and `(key, left val, right val)` for a join. In `key`, `map`, and `join` the body gives the
-//! pair `(key, val)`; in `value`, `filter`, `flatmap`, and `enter_at` it gives the one value; in
-//! `reduce` its input is `(key, vals)` and it gives the output list. For
+//! pair `(key, val)`; in `value`, `filter`, `flatmap`, `enter_at`, `join_function`, and `delay` it
+//! gives the one value; in `reduce` its input is `(key, vals)` and it gives the output list. For
 //! example, `key(((src, dst), ()) -> ((src), (dst)))` is `key($0[0] ; $0[1])`.
 //!
 //! A lambda is parsed in its program's scope, which names what the program has not defined:
@@ -614,6 +620,18 @@ impl Parser {
             Token::Filter => { self.next(); self.expect(&Token::LParen); let c = self.parse_slot_term(); self.expect(&Token::RParen); Expr::Filter(Box::new(lhs), c) },
             Token::EnterAt => { self.next(); self.expect(&Token::LParen); let f = self.parse_slot_term(); self.expect(&Token::RParen); Expr::EnterAt(Box::new(lhs), f) },
             Token::LiftIter => { self.next(); Expr::LiftIter(Box::new(lhs)) },
+            Token::Ident(name) if name == "lift" => { self.next(); Expr::Lift(Box::new(lhs)) },
+            Token::Ident(name) if name == "join_function" => {
+                self.next(); self.expect(&Token::LParen);
+                let t = self.parse_slot_term(); self.expect(&Token::RParen);
+                Expr::JoinFunction(Box::new(lhs), t)
+            },
+            Token::Ident(name) if name == "delay" => {
+                self.next(); self.expect(&Token::LParen);
+                let time = self.parse_slot_term(); self.expect(&Token::RParen);
+                let list = crate::ir::Lambda::new("let (k, v, t) = input in ((k, v), t, 1) enlist".into(), self.lambda_scope());
+                Expr::JoinFunction(Box::new(lhs), Term::Corgi(list, vec![Term::Var(0), Term::Var(1), time]))
+            },
             Token::Inspect => { self.next(); self.expect(&Token::LParen); let l = self.parse_ident(); self.expect(&Token::RParen); Expr::Inspect(Box::new(lhs), l) },
             other => panic!("Expected pipe operator, got {:?}", other),
         }

@@ -873,6 +873,21 @@ impl<'a> Reverse<'a> {
                         self.push(ex, path, input, dep_this, out_user_len);
                     }
                     LinearOp::LiftIter => panic!("explain: LiftIter in user program"),
+                    // Both read or write the whole time, whose width is the scope depth, and the
+                    // forward clone runs one scope deeper than the program it clones.
+                    //
+                    // Lift's backward rule is trivial, demand `(k, v)` for `(k, (v, t))`; only its
+                    // forward clone is the problem, and it would read different times there.
+                    //
+                    // JoinFunction can follow FlatMap's rule: a pair table that re-keys each input
+                    // row by itself and evaluates the term as data, not as a delay, so each output
+                    // `(key, val)` sits beside its source row, chain, and the term's time `t`. The
+                    // time width is then just data and the clone's depth does not matter. The time
+                    // filter can be exact, `chain_in ∨ t ≤ chain_out`, compared on the chain's
+                    // coordinates only; the epoch and coordinates outside the chain are dropped,
+                    // which is over-broad and so still sound.
+                    LinearOp::Lift => panic!("explain: lift is not supported"),
+                    LinearOp::JoinFunction(_) => panic!("explain: join_function is not supported"),
                     LinearOp::FlatMap(list_term) => {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);

@@ -71,20 +71,32 @@ fn append_iter(val: Row, iter: i64) -> Row {
     }
 }
 
-/// Render a Linear chain: one flat_map applying the ops in sequence. `level` is
-/// the op's scope depth — it locates the iteration coord for LiftIter and the
-/// coordinate position EnterAt's delay lands in.
+/// A time as data: the epoch, then each of the `level` scope coordinates, zero where the
+/// `PointStamp` has dropped it.
+fn time_value(t: &Time, level: usize) -> Row {
+    let coords = (0..level).map(|i| t.inner.get(i).copied().unwrap_or(0));
+    Value::Tuple(std::iter::once(t.outer).chain(coords).map(|x| Value::Int(x as i64)).collect())
+}
+
+/// The time a tuple of `Int`s names, read as `time_value` writes it. A negative coordinate is
+/// below every time, so it is zero, the minimum.
+fn value_time(v: &Row) -> Time {
+    let Value::Tuple(xs) = v else { panic!("join_function: expected a time tuple, got {v:?}") };
+    let mut coords = xs.iter().map(|x| x.as_int().max(0) as u64);
+    let outer = coords.next().unwrap_or(0);
+    Product::new(outer, PointStamp::new(coords.collect()))
+}
+
+/// Render a Linear chain: one flat_map applying the ops in sequence. Each row carries its
+/// time through the chain, so an op that reads the time sees the delays before it. `level` is
+/// the op's scope depth — it locates the iteration coord for LiftIter, the
+/// coordinate position EnterAt's delay lands in, and the width of a time as data.
 fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Col<'scope> {
     use differential_dataflow::AsCollection;
     use differential_dataflow::lattice::Lattice;
     use timely::dataflow::operators::core::Map;
     c.inner.flat_map(move |((key, val), t_in, d_in)| {
-        use timely::progress::Timestamp;
-        let iter_at_level: i64 = level
-            .checked_sub(1)
-            .and_then(|idx| t_in.inner.get(idx).copied())
-            .unwrap_or(0) as i64;
-        let mut results: smallvec::SmallVec<[((Row, Row), Time, Diff); 2]> = svec![((key, val), Time::minimum(), 1)];
+        let mut results: smallvec::SmallVec<[((Row, Row), Time, Diff); 2]> = svec![((key, val), t_in, d_in)];
         for op in &ops {
             let mut next = smallvec::SmallVec::new();
             for ((k, v), t, d) in results {
@@ -114,10 +126,29 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
                         let mut coords = smallvec::SmallVec::<[u64; 1]>::new();
                         for _ in 0..level.saturating_sub(1) { coords.push(0); }
                         coords.push(delay);
-                        next.push(((k, v), Product::new(0u64, PointStamp::new(coords)), d));
+                        next.push(((k, v), t.join(&Product::new(0u64, PointStamp::new(coords))), d));
                     },
                     LinearOp::LiftIter => {
-                        next.push(((k, append_iter(v, iter_at_level)), t, d));
+                        let iter = level.checked_sub(1).and_then(|idx| t.inner.get(idx).copied()).unwrap_or(0) as i64;
+                        next.push(((k, append_iter(v, iter)), t, d));
+                    },
+                    LinearOp::Lift => {
+                        let time = time_value(&t, level);
+                        next.push(((k, Value::Tuple(vec![v, time])), t, d));
+                    },
+                    LinearOp::JoinFunction(term) => {
+                        let elems = match eval(term, &mut vec![k, v]) {
+                            Value::List(xs) => xs,
+                            other => panic!("join_function: expected a List, got {other:?}"),
+                        };
+                        for elem in elems {
+                            let Value::Tuple(fs) = elem else { panic!("join_function: expected ((key, val), time, diff)") };
+                            let Ok::<[Value; 3], _>([Value::Tuple(row), time, Value::Int(d2)]) = fs.try_into()
+                            else { panic!("join_function: expected ((key, val), time, diff)") };
+                            let Ok::<[Value; 2], _>([k2, v2]) = row.try_into()
+                            else { panic!("join_function: expected a (key, val) pair") };
+                            next.push(((k2, v2), t.join(&value_time(&time)), d * d2));
+                        }
                     },
                     LinearOp::FlatMap(list_term) => {
                         let elems = {
@@ -137,7 +168,7 @@ fn render_linear<'scope>(c: Col<'scope>, ops: Vec<LinearOp>, level: usize) -> Co
             }
             results = next;
         }
-        results.into_iter().map(move |((k, v), t_delta, d)| ((k, v), t_in.join(&t_delta), d_in * d))
+        results
     }).as_collection()
 }
 

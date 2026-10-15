@@ -42,6 +42,10 @@ pub enum Expr {
     /// as the input, with value `tuple(pos, element)` (position innermost-first
     /// so `Collect` can restore order). The cross-join of a row with its list.
     FlatMap(Box<Expr>, Term),
+    /// Pair each row's value with its whole time. See `LinearOp::Lift`.
+    Lift(Box<Expr>),
+    /// Replace each row by a list of `((key, val), time, diff)`. See `LinearOp::JoinFunction`.
+    JoinFunction(Box<Expr>, Term),
     Inspect(Box<Expr>, String),
     Concat(Vec<Expr>),
     Arrange(Box<Expr>),
