@@ -1,37 +1,37 @@
 -- Strongly Connected Components — pipe syntax
 -- input 0: edges (src, dst ;)
 
-let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
-let trans = edges | key($1 ; $0);
+let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> (src, dst));
+let trans = edges | key((src, dst) -> (dst, src));
 
 outer: {
     let scc = edges + trim;
 
     fwd: {
-        let nodes = edges | key($1 ; $1) | enter_at($1[0]);
+        let nodes = edges | key((_, dst) -> (dst, dst)) | enter_at((_, n) -> n);
         let labels = proposals + nodes | min;
-        var proposals = labels | join(scc, ($2 ; $1));
+        var proposals = labels | join(scc, (_, label, dst) -> (dst, label));
     }
 
     let trim_fwd = edges
-        | join(fwd::labels, ($1 ; $0, $2))
-        | join(fwd::labels, ($0 ; $1, $2))
-        | filter($1[1] == $1[2])
-        | key($0 ; $1[0]);
+        | join(fwd::labels, (src, dst, label) -> (dst, (src, label)))
+        | join(fwd::labels, (dst, (src, label), other) -> (dst, (src, label, other)))
+        | filter((_, (_, a, b)) -> (a, b) eq)
+        | key((dst, (src, _, _)) -> (dst, src));
 
     bwd: {
-        let nodes = trans | key($1 ; $1) | enter_at($1[0]);
+        let nodes = trans | key((_, dst) -> (dst, dst)) | enter_at((_, n) -> n);
         let labels = proposals + nodes | min;
-        var proposals = labels | join(trim_fwd, ($2 ; $1));
+        var proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label));
     }
 
     let trim_bwd = trans
-        | join(bwd::labels, ($1 ; $0, $2))
-        | join(bwd::labels, ($0 ; $1, $2))
-        | filter($1[1] == $1[2])
-        | key($0 ; $1[0]);
+        | join(bwd::labels, (src, dst, label) -> (dst, (src, label)))
+        | join(bwd::labels, (dst, (src, label), other) -> (dst, (src, label, other)))
+        | filter((_, (_, a, b)) -> (a, b) eq)
+        | key((dst, (src, _, _)) -> (dst, src));
 
     var trim = trim_bwd - edges;
 }
 
-export "result" = outer::scc | map(;) | arrange | inspect(total);
+export "result" = outer::scc | key(_ -> ((), ())) | arrange | inspect(total);

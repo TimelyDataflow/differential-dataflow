@@ -2,51 +2,49 @@
 -- sum of the two numbers' product per gear.
 -- input 0: (row, col, charcode)
 
-let cells    = input 0 : ((int, int, int) ; ()) | filter($0[2] != 46) | key($0[0], $0[1] ; $0[2]);
-let numerals = cells | filter($1[0] >= 48 && $1[0] <= 57) | map($0 ; $1[0] - 48);
-let gears    = cells | filter($1[0] == 42);
+let cells    = input 0 : ((int, int, int) ; ()) | filter(((_, _, c), _) -> (c, 46) ne) | key(((r, col, c), _) -> ((r, col), c));
+let numerals = cells | filter((_, c) -> ((c, 48) ge, (c, 57) le) all) | map((cell, c) -> (cell, (c, 48) sub));
+let gears    = cells | filter((_, c) -> (c, 42) eq);
 
-let has_left = numerals | map($0[0], $0[1] + 1 ; $1[0]) | join(numerals, ($0 ; $2[0]));
+let has_left = numerals | map(((r, col), d) -> ((r, (col, 1) add), d)) | join(numerals, (cell, _, d) -> (cell, d));
 let starts = numerals - has_left;
 
 runs: {
-    let grow = run | map($0[0], $0[2] ; $0[1], $0[3])
-                   | join(numerals, ($0[0], $1[0], $0[1] + 1, $1[1] * 10 + $2[0] ;));
-    var run = (starts | map($0[0], $0[1], $0[1] + 1, $1[0] ;)) + grow | distinct;
+    let grow = run | map(((r, s, e, v), _) -> ((r, e), (s, v)))
+                   | join(numerals, ((r, e), (s, v), d) -> ((r, s, (e, 1) add, ((v, 10) mul, d) add), ()));
+    var run = (starts | map(((r, col), d) -> ((r, col, (col, 1) add, d), ()))) + grow | distinct;
 }
-let extendable = runs::run | map($0[0], $0[2] ; $0[1], $0[3])
-                           | join(numerals, ($0[0], $1[0], $0[1], $1[1] ;));
+let extendable = runs::run | map(((r, s, e, v), _) -> ((r, e), (s, v)))
+                           | join(numerals, ((r, e), (s, v), _) -> ((r, s, e, v), ()));
 let maximal = runs::run - extendable;
-let partvals = maximal | map($0[0], $0[1] ; $0[3]);
+let partvals = maximal | map(((r, s, _, v), _) -> ((r, s), v));
 -- (row, start ; value)
 
 labels: {
-    let ext = label | map($0[0], $0[1] + 1 ; $0[2]) | join(numerals, ($0[0], $0[1], $1[0] ;));
-    var label = (starts | map($0[0], $0[1], $0[1] ;)) + ext | distinct;
+    let ext = label | map(((r, col, s), _) -> ((r, (col, 1) add), s)) | join(numerals, ((r, col), s, _) -> ((r, col, s), ()));
+    var label = (starts | map(((r, col), _) -> ((r, col, col), ()))) + ext | distinct;
 }
-let labelcells = labels::label | map($0[0], $0[1] ; $0[2]);
+let labelcells = labels::label | map(((r, col, s), _) -> ((r, col), s));
 
 let gearnbrs = gears
-    | flatmap(list(tuple(-1,-1), tuple(-1,0), tuple(-1,1),
-                   tuple(0,-1),  tuple(0,0),  tuple(0,1),
-                   tuple(1,-1),  tuple(1,0),  tuple(1,1)))
-    | map($0[0] + $1[1][0], $0[1] + $1[1][1] ; $0[0], $0[1]);
+    | flatmap(_ -> [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)])
+    | map(((r, col), (_, (dr, dc))) -> (((r, dr) add, (col, dc) add), (r, col)));
 -- (nbr_cell ; gear)
 
 let pairs = gearnbrs
-    | join(labelcells, ($1[0], $1[1], $0[0], $2[0] ;))
+    | join(labelcells, ((pr, _), (gr, gc), ps) -> ((gr, gc, pr, ps), ()))
     | distinct;
 -- key (gear_r, gear_c, part_row, part_start)
 
 let gearvals = pairs
-    | map($0[2], $0[3] ; $0[0], $0[1])
-    | join(partvals, ($1[0], $1[1] ; $2[0]));
+    | map(((gr, gc, pr, ps), _) -> ((pr, ps), (gr, gc)))
+    | join(partvals, (_, gear, v) -> (gear, v));
 -- (gear ; part value)
 
 export "result" = gearvals
     | collect
-    | filter(len($1) == 2)
-    | map(; $1[0][0] * $1[1][0])
-    | key(; $1[0]) | collect
-    | map(; fold($1, 0, ^1 + ^0[0]))
+    | filter((_, vs) -> (vs len, 2) eq)
+    | map((_, vs) -> ((), ((0, vs) get, (1, vs) get) mul))
+    | key((_, p) -> ((), p)) | collect
+    | value((_, ps) -> ps fold_add)
     | arrange | inspect(part2);

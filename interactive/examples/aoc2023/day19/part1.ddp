@@ -3,25 +3,23 @@
 -- input 0: rules (state, prio, field, cmp, val, next)
 -- input 1: parts (x, m, a, s)
 
-let rulesbys = input 0 : ((int, int, int, int, int, int) ; ()) | key($0[0] ; $0[1], $0[2], $0[3], $0[4], $0[5]);
+let rulesbys = input 0 : ((int, int, int, int, int, int) ; ()) | key(((st, prio, f, cmp, v, nx), ()) -> (st, (prio, f, cmp, v, nx)));
 -- (state ; prio, field, cmp, val, next)
-let parts = input 1 : ((int, int, int, int) ; ()) | key(0, $0[0], $0[1], $0[2], $0[3] ;);
+let parts = input 1 : ((int, int, int, int) ; ()) | key(((x, m, a, s), ()) -> ((0, x, m, a, s), ()));
 
 move: {
-    let mtch = mv | map($0[0] ; $0[1], $0[2], $0[3], $0[4])
-        | join(rulesbys, ($0[0], $1[0], $1[1], $1[2], $1[3] ;
-            if($2[2] == 0,
-               if($2[1] == 0, $1[0], if($2[1] == 1, $1[1], if($2[1] == 2, $1[2], $1[3]))) < $2[3],
-               if($2[1] == 0, $1[0], if($2[1] == 1, $1[1], if($2[1] == 2, $1[2], $1[3]))) > $2[3]),
-            $2[0], $2[4]))
-        | filter($1[0] == 1) | map($0 ; $1[1], $1[2])
+    let mtch = mv | map(((st, x, m, a, s), ()) -> (st, (x, m, a, s)))
+        | join(rulesbys, (st, (x, m, a, s), (prio, f, cmp, v, nx)) ->
+            let sel = ((f, 0) eq, x, ((f, 1) eq, m, ((f, 2) eq, a, s) select) select) select in
+            ((st, x, m, a, s), (((cmp, 0) eq, (sel, v) lt, (sel, v) gt) select, prio, nx)))
+        | filter((_, (hit, _, _)) -> (hit, 1) eq) | map((k, (_, prio, nx)) -> (k, (prio, nx)))
         | min;
     -- (state,x,m,a,s ; first prio, next)
-    let moved = mtch | map($1[1], $0[1], $0[2], $0[3], $0[4] ;);
+    let moved = mtch | map(((_, x, m, a, s), (_, nx)) -> ((nx, x, m, a, s), ()));
     var mv = parts + moved | distinct;
 }
 
-export "result" = move::mv | filter($0[0] == -1)
-    | key(; $0[1] + $0[2] + $0[3] + $0[4])
-    | collect | map(; fold($1, 0, ^1 + ^0[0]))
+export "result" = move::mv | filter(((st, _, _, _, _), _) -> (st, -1) eq)
+    | key(((_, x, m, a, s), _) -> ((), (((x, m) add, a) add, s) add))
+    | collect | map((_, vs) -> ((), vs fold_add))
     | arrange | inspect(part1);

@@ -229,7 +229,7 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
             let v = match reducer {
                 Reducer::Min => c.val,
                 Reducer::Distinct => Shape::Unit,
-                Reducer::Count => Shape::Prod(vec![Shape::Int]),
+                Reducer::Count => Shape::Int,
                 Reducer::Collect => Shape::List(Box::new(c.val)),
                 Reducer::Expr(t) => match reduce_shape(t, &c.key, &c.val) {
                     Ok(v) => v,

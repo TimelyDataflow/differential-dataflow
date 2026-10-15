@@ -133,7 +133,7 @@ fn term_slots() {
 fn mismatched_lambdas_are_refused_at_install() {
     timely::execute_directly(|worker| {
         for (src, says) in [
-            (r#"export "a" = input 0 : ((int, int) ; ()) | key(((s), ()) -> ((s), ()));"#, "takes apart a product of 1 field"),
+            (r#"export "a" = input 0 : ((int, int) ; ()) | key(((s), ()) -> ((s), ()));"#, "wants a product of 1 field"),
             (r#"export "a" = input 0 : ((int, int) ; ()) | filter(((s, d), ()) -> (s, d));"#, "not an integer"),
             (r#"export "a" = input 0 : ((int, int) ; ()) | key(((s, d), ()) -> (s, d, ) add);"#, "expected an expression"),
         ] {
@@ -239,6 +239,23 @@ fn nested_types() {
         let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
         let outer = pairs | value((_, (b)) -> b inject A inject Wrap);
         export "outer" = outer | value(case $1 { Wrap(i) => case i { A(x) => x, _ => 0 }, _ => 0 - 1 });
+    "#;
+    assert_same(terms, lambdas, &[edges()]);
+}
+
+/// A DDIR `--` comment may sit inside a lambda written over several lines.
+#[test]
+fn comments_in_lambdas() {
+    let terms = r#"
+        let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+        export "sum" = pairs | value($0[0] + $1[0]);
+    "#;
+    let lambdas = r#"
+        let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+        export "sum" = pairs | value(((a), (b)) ->
+            -- the key and the value, added
+            (a, b) add  -- one Int
+        );
     "#;
     assert_same(terms, lambdas, &[edges()]);
 }

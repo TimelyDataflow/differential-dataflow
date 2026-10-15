@@ -1,5 +1,5 @@
 -- Registered functions: an embedding program supplies Rust functions by name
--- (`ir::register`), and a program calls them like builtins. The test harness
+-- (`ir::register`), and a program calls them with `call`. The test harness
 -- registers `grow`, `blend`, `describe`, `seven` (no arguments) and `double`
 -- (with a columnar kernel; see `corgi_backend.rs`). The corgi backend runs calls
 -- as host kernels; the results must match the vec backend's in a map, a filter,
@@ -7,26 +7,26 @@
 -- generation layer: a record's children come from a rule, until none has any).
 
 -- Seeds: (n ;).
-let seeds = input 0 : ((int) ; ()) | key($0[0] ;);
+let seeds = input 0 : ((int) ; ()) | key(((n), ()) -> (n, ()));
 
--- Refine: each cell's children are `grow(cell)`, until `grow` returns none.
+-- Refine: each cell's children are `cell call grow`, until `grow` returns none.
 refine: {
-    let kids = cells | flatmap(grow($0[0])) | map($1[1][0] ;);
+    let kids = cells | flatmap((n, ()) -> n call grow) | key((_, (_, (kid, _))) -> (kid, ()));
     var cells = seeds + kids | distinct;
 }
 let cells = refine::cells;
 
 -- A float from a pair, a nested shape, and a filter on a registered result.
-let blended = cells | map($0 ; blend(tuple($0[0], $0[0] + 1)));
-let described = cells | map($0 ; describe($0[0]));
-let big = described | filter($1[0][0][0] > 40);
+let blended = cells | key((n, ()) -> (n, (n, (n, 1) add) call blend));
+let described = cells | key((n, ()) -> (n, n call describe));
+let big = described | filter((_, ((m), _)) -> (m, 40) gt);
 
 -- A call with no arguments, and one with a columnar kernel.
-let sevens = cells | map($0 ; seven() + $0[0]);
-let doubled = cells | map($0 ; double($0[0]));
+let sevens = cells | key((n, ()) -> (n, (() call seven, n) add));
+let doubled = cells | key((n, ()) -> (n, n call double));
 
 -- A join whose projection calls a registered function on both sides.
-let joined = cells | join(described, ($0 ; blend(tuple($0[0], $2[0][0][0]))));
+let joined = cells | join(described, (n, (), ((m), _)) -> (n, (n, m) call blend));
 
 export "cells" = cells | arrange | inspect(total);
 export "blended" = blended | arrange | inspect(total);

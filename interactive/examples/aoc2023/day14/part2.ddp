@@ -3,80 +3,85 @@
 -- monotone accumulation, k capped at 141. Rolls are closed-form.
 -- input 0: (row, col, code) 1-indexed; 'O'=79 '#'=35 '.'=46
 
-let cells = input 0 : ((int, int, int) ; ()) | key($0[0], $0[1] ; $0[2]);
-let rocks0 = cells | filter($1[0] == 79) | map(0, $0[0], $0[1] ;);
-let cubes  = cells | filter($1[0] == 35) | map($0 ;);
+let cells = input 0 : ((int, int, int) ; ()) | key(((r, c, code), ()) -> ((r, c), code));
+let rocks0 = cells | filter((_, code) -> (code, 79) eq) | map(((r, c), _) -> ((0, r, c), ()));
+let cubes  = cells | filter((_, code) -> (code, 35) eq) | map((rc, _) -> (rc, ()));
 
-let allcols = cells | map($0[1] ;) | distinct;
-let allrows = cells | map($0[0] ;) | distinct;
-let maxr = cells | key(; 1000000 - $0[0]) | min | map(; 1000000 - $1[0]);
-let maxc = cells | key(; 1000000 - $0[1]) | min | map(; 1000000 - $1[0]);
+let allcols = cells | map(((_, c), _) -> (c, ())) | distinct;
+let allrows = cells | map(((r, _), _) -> (r, ())) | distinct;
+let maxr = cells | key(((r, _), _) -> ((), (1000000, r) sub)) | min
+    | map((_, v) -> ((), (1000000, v) sub));
+let maxc = cells | key(((_, c), _) -> ((), (1000000, c) sub)) | min
+    | map((_, v) -> ((), (1000000, v) sub));
 
 -- sentinel cubes on all four borders
 let cubesX = cubes
-    + (allcols | map(0, $0[0] ;))
-    + (allcols | key(; $0[0]) | join(maxr, ($2[0] + 1, $1[0] ;)))
-    + (allrows | map($0[0], 0 ;))
-    + (allrows | key(; $0[0]) | join(maxc, ($1[0], $2[0] + 1 ;)));
+    + (allcols | map((c, _) -> ((0, c), ())))
+    + (allcols | key((c, _) -> ((), c)) | join(maxr, (_, c, m) -> (((m, 1) add, c), ())))
+    + (allrows | map((r, _) -> ((r, 0), ())))
+    + (allrows | key((r, _) -> ((), r)) | join(maxc, (_, r, m) -> ((r, (m, 1) add), ())));
 
-let cubcol = cubesX | map($0[1] ; $0[0]);   -- (c ; rc)
-let cubrow = cubesX | map($0[0] ; $0[1]);   -- (r ; cc)
+let cubcol = cubesX | map(((r, c), _) -> (c, r));   -- (c ; rc)
+let cubrow = cubesX | map(((r, c), _) -> (r, c));   -- (r ; cc)
 
 spin: {
-    let cur = os | filter($0[0] <= 140);
+    let cur = os | filter(((k, _, _), _) -> (k, 140) le);
     -- (k, r, c)
 
     -- roll north: blocker = nearest cube above; rank among segment peers
-    let bn = cur | map($0[2] ; $0[0], $0[1])
-        | join(cubcol, ($0[0], $1[0], $1[1] ; $2[0]))
-        | filter($1[0] < $0[2])
-        | map($0[1], $0[2], $0[0] ; 1000000 - $1[0]) | min | map($0 ; 1000000 - $1[0]);
+    let bn = cur | map(((k, r, c), _) -> (c, (k, r)))
+        | join(cubcol, (c, (k, r), rc) -> ((c, k, r), rc))
+        | filter(((_, _, r), rc) -> (rc, r) lt)
+        | map(((c, k, r), rc) -> ((k, r, c), (1000000, rc) sub)) | min
+        | map((x, v) -> (x, (1000000, v) sub));
     -- (k, r, c ; b)
-    let segn = bn | map($0[0], $0[2], $1[0] ; $0[1]);   -- (k, c, b ; r)
-    let osn = segn | join(segn, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
-        | filter($1[0] <= $0[3]) | map($0 ;) | count
-        | map($0[0], $0[2] + $1[0], $0[1] ;);
+    let segn = bn | map(((k, r, c), b) -> ((k, c, b), r));   -- (k, c, b ; r)
+    let osn = segn | join(segn, ((k, c, b), r, r2) -> ((k, c, b, r), r2))
+        | filter(((_, _, _, r), r2) -> (r2, r) le) | map((x, _) -> (x, ())) | count
+        | map(((k, c, b, _), n) -> ((k, (b, n) add, c), ()));
     -- (k, r', c)
 
     -- roll west
-    let bw = osn | map($0[1] ; $0[0], $0[2])
-        | join(cubrow, ($0[0], $1[0], $1[1] ; $2[0]))
-        | filter($1[0] < $0[2])
-        | map($0[1], $0[0], $0[2] ; 1000000 - $1[0]) | min | map($0 ; 1000000 - $1[0]);
+    let bw = osn | map(((k, r, c), _) -> (r, (k, c)))
+        | join(cubrow, (r, (k, c), cc) -> ((r, k, c), cc))
+        | filter(((_, _, c), cc) -> (cc, c) lt)
+        | map(((r, k, c), cc) -> ((k, r, c), (1000000, cc) sub)) | min
+        | map((x, v) -> (x, (1000000, v) sub));
     -- (k, r, c ; b)
-    let segw = bw | map($0[0], $0[1], $1[0] ; $0[2]);   -- (k, r, b ; c)
-    let osw = segw | join(segw, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
-        | filter($1[0] <= $0[3]) | map($0 ;) | count
-        | map($0[0], $0[1], $0[2] + $1[0] ;);
+    let segw = bw | map(((k, r, c), b) -> ((k, r, b), c));   -- (k, r, b ; c)
+    let osw = segw | join(segw, ((k, r, b), c, c2) -> ((k, r, b, c), c2))
+        | filter(((_, _, _, c), c2) -> (c2, c) le) | map((x, _) -> (x, ())) | count
+        | map(((k, r, b, _), n) -> ((k, r, (b, n) add), ()));
     -- (k, r, c')
 
     -- roll south: blocker = nearest cube below; rank counts peers >= r
-    let bs = osw | map($0[2] ; $0[0], $0[1])
-        | join(cubcol, ($0[0], $1[0], $1[1] ; $2[0]))
-        | filter($1[0] > $0[2])
-        | map($0[1], $0[2], $0[0] ; $1[0]) | min;
+    let bs = osw | map(((k, r, c), _) -> (c, (k, r)))
+        | join(cubcol, (c, (k, r), rc) -> ((c, k, r), rc))
+        | filter(((_, _, r), rc) -> (rc, r) gt)
+        | map(((c, k, r), rc) -> ((k, r, c), rc)) | min;
     -- (k, r, c ; b)
-    let segs = bs | map($0[0], $0[2], $1[0] ; $0[1]);   -- (k, c, b ; r)
-    let oss = segs | join(segs, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
-        | filter($1[0] >= $0[3]) | map($0 ;) | count
-        | map($0[0], $0[2] - $1[0], $0[1] ;);
+    let segs = bs | map(((k, r, c), b) -> ((k, c, b), r));   -- (k, c, b ; r)
+    let oss = segs | join(segs, ((k, c, b), r, r2) -> ((k, c, b, r), r2))
+        | filter(((_, _, _, r), r2) -> (r2, r) ge) | map((x, _) -> (x, ())) | count
+        | map(((k, c, b, _), n) -> ((k, (b, n) sub, c), ()));
 
     -- roll east
-    let be = oss | map($0[1] ; $0[0], $0[2])
-        | join(cubrow, ($0[0], $1[0], $1[1] ; $2[0]))
-        | filter($1[0] > $0[2])
-        | map($0[1], $0[0], $0[2] ; $1[0]) | min;
+    let be = oss | map(((k, r, c), _) -> (r, (k, c)))
+        | join(cubrow, (r, (k, c), cc) -> ((r, k, c), cc))
+        | filter(((_, _, c), cc) -> (cc, c) gt)
+        | map(((r, k, c), cc) -> ((k, r, c), cc)) | min;
     -- (k, r, c ; b)
-    let sege = be | map($0[0], $0[1], $1[0] ; $0[2]);   -- (k, r, b ; c)
-    let ose = sege | join(sege, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
-        | filter($1[0] >= $0[3]) | map($0 ;) | count
-        | map($0[0] + 1, $0[1], $0[2] - $1[0] ;);
+    let sege = be | map(((k, r, c), b) -> ((k, r, b), c));   -- (k, r, b ; c)
+    let ose = sege | join(sege, ((k, r, b), c, c2) -> ((k, r, b, c), c2))
+        | filter(((_, _, _, c), c2) -> (c2, c) ge) | map((x, _) -> (x, ())) | count
+        | map(((k, r, b, _), n) -> (((k, 1) add, r, (b, n) sub), ()));
     -- (k+1, r, c'): next round
 
     var os = rocks0 + ose | distinct;
 }
 
-let final = spin::os | filter($0[0] == 141);
-export "result" = final | map(; $0[1]) | join(maxr, (; 1 + $2[0] - $1[0]))
-    | collect | map(; fold($1, 0, ^1 + ^0[0]))
+let final = spin::os | filter(((k, _, _), _) -> (k, 141) eq);
+export "result" = final | map(((_, r, _), _) -> ((), r))
+    | join(maxr, (_, r, m) -> ((), ((1, m) add, r) sub))
+    | collect | map((_, ps) -> ((), ps fold_add))
     | arrange | inspect(part2);

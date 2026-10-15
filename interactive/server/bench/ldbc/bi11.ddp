@@ -3,16 +3,16 @@
 let request = input 0 : ((int, List(int), int, int) ; ());
 let resident = import "resident" : ((List(int)) ; (int));
 let edge = import "edge" : ((int) ; (int, int));
-let people = request | key($0[1] ; $0[0], $0[2], $0[3])
-    | join(resident, ($2[0] ; $1[0], $1[1], $1[2]));
-let candidates = people | join(edge, ($1[0], $0[0], $2[0], $2[1], $1[1], $1[2] ;))
-    | filter($0[1] < $0[2] && $0[3] >= $0[4] && $0[3] <= $0[5]);
-let membership = people | map($1[0], $0[0] ;) | distinct;
-let pairs = candidates | key($0[0], $0[2] ; $0[1])
-    | join(membership, ($0[0], $1[0], $0[1] ;)) | distinct;
-let paths = pairs | key($0[0], $0[2] ; $0[1])
-    | join(pairs | key($0[0], $0[1] ; $0[2]), ($0[0], $1[0], $2[0] ; $0[1]));
-let counts = paths | join(pairs, ($0[0] ;)) | count;
-let zero = request | map($0[0] ; 0);
-let missing = zero - (zero | join(counts, ($0 ; 0)));
-export "bi11.answer" = (counts + missing) | map($0[0], 0 ; $1[0]);
+let people = request | key(((rid, country, start, end), ()) -> ((country), (rid, start, end)))
+    | join(resident, (_, request, person) -> (person, request));
+let candidates = people | join(edge, ((p), (rid, start, end), (q, created)) -> ((rid, p, q, created, start, end), ()))
+    | filter(((_, p, q, created, start, end), ()) -> ((p, q) lt, (created, start) ge, (created, end) le) all);
+let membership = people | map(((p), (rid, _, _)) -> ((rid, p), ())) | distinct;
+let pairs = candidates | key(((rid, p, q, _, _, _), ()) -> ((rid, q), p))
+    | join(membership, ((rid, q), p, ()) -> ((rid, p, q), ())) | distinct;
+let paths = pairs | key(((rid, p, q), ()) -> ((rid, q), p))
+    | join(pairs | key(((rid, p, q), ()) -> ((rid, p), q)), ((rid, x), a, b) -> ((rid, a, b), x));
+let counts = paths | join(pairs, ((rid, _, _), _, _) -> (rid, ())) | count;
+let zero = request | map(((rid, _, _, _), ()) -> (rid, 0));
+let missing = zero - (zero | join(counts, (rid, _, _) -> (rid, 0)));
+export "bi11.answer" = (counts + missing) | map((rid, n) -> ((rid, 0), (n)));

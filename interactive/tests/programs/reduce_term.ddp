@@ -1,11 +1,11 @@
--- Reductions written as terms, checked against vec: the term reads the key and a list of
--- `(val, diff)`, and lists the output with diffs. Weighted sums and maxima fold the list; `$1`
+-- Reductions written as lambdas, checked against vec: the lambda reads the key and a list of
+-- `(val, diff)`, and lists the output with diffs. Weighted sums and maxima fold the list; `vals`
 -- alone is the identity; an output diff need not be one, and may be negative.
-let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
 
-export "sum" = pairs | reduce(list(tuple(tuple(fold($1, 0, ^1 + ^0[0][0] * ^0[1])), 1)));
-export "max" = pairs | reduce(list(tuple(tuple(fold($1, 0 - 1000000, if(^0[0][0] > ^1, ^0[0][0], ^1))), 1)));
-export "same" = pairs | reduce($1);
-export "weights" = pairs | reduce(list(tuple(tuple(len($1)), 0 - 2), tuple(tuple(fold($1, 0, ^1 + ^0[1])), 3)));
+export "sum" = pairs | reduce((_, vals) -> ((0, vals) fold ((acc, (v, d)) -> (acc, (v, d) mul) add), 1) enlist);
+export "max" = pairs | reduce((_, vals) -> ((-1000000, vals) fold ((acc, (v, _)) -> ((v, acc) gt, v, acc) select), 1) enlist);
+export "same" = pairs | reduce((_, vals) -> vals);
+export "weights" = pairs | reduce((_, vals) -> ((vals len, -2) enlist, ((0, vals) fold ((acc, (_, d)) -> (acc, d) add), 3) enlist) append);
 -- A two-field key, which the arrangement identifies by its hash.
-export "pair_keys" = pairs | key($0, 7 ; $1) | reduce(list(tuple(tuple(fold($1, 0, ^1 + ^0[1])), 1)));
+export "pair_keys" = pairs | key((k, v) -> ((k, 7), v)) | reduce((_, vals) -> ((0, vals) fold ((acc, (_, d)) -> (acc, d) add), 1) enlist);

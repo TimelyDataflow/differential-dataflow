@@ -389,11 +389,11 @@ fn count_duplicate_inputs_sufficient() {
     ];
     let p = optimized(INDEG_ROW);
     let result = export_rows(&p, &[edges.clone()], "result");
-    assert!(result.contains(&(row(&[5]), row(&[3]))), "expected indeg(5) = 3 in {:?}", result);
-    let demand = demand_for(INDEG_ROW, &[edges.clone()], &row(&[5]), &row(&[3]));
+    assert!(result.contains(&(row(&[5]), Value::Int(3))), "expected indeg(5) = 3 in {:?}", result);
+    let demand = demand_for(INDEG_ROW, &[edges.clone()], &row(&[5]), &Value::Int(3));
     let replay = export_rows(&p, &restrict(&[edges], &demand), "result");
     assert!(
-        replay.contains(&(row(&[5]), row(&[3]))),
+        replay.contains(&(row(&[5]), Value::Int(3))),
         "insufficient explanation for indeg(5) = 3: demanded {:?} regenerates only {:?}",
         demand, replay,
     );

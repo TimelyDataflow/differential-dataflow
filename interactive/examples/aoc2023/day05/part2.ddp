@@ -3,46 +3,46 @@
 -- input 0: seed ranges (start, len)
 -- input 1: map entries (stage, dst, src, len)
 
-let seeds   = input 0 : ((int, int) ; ()) | key(0, $0[0], $0[0] + $0[1] ;);
-let entries = input 1 : ((int, int, int, int) ; ()) | key($0[0] ; $0[1], $0[2], $0[3]);
+let seeds   = input 0 : ((int, int) ; ()) | key(((start, len), _) -> ((0, start, (start, len) add), ()));
+let entries = input 1 : ((int, int, int, int) ; ()) | key(((stage, dst, src, len), _) -> (stage, (dst, src, len)));
 
 ranges: {
-    let cur = active | filter($0[0] <= 6);
+    let cur = active | filter(((stage, _, _), _) -> (stage, 6) le);
     -- key (stage, s, e)
 
-    let isect = cur | map($0[0] ; $0[1], $0[2])
-        | join(entries, ($0[0], $1[0], $1[1], $2[0], $2[1], $2[2] ;))
-        | map($0[0], $0[1], $0[2],
-              if($0[1] > $0[4], $0[1], $0[4]),
-              if($0[2] < $0[4] + $0[5], $0[2], $0[4] + $0[5]),
-              $0[3], $0[4] ;)
-        | filter($0[3] < $0[4]);
+    let isect = cur | map(((stage, s, e), _) -> (stage, (s, e)))
+        | join(entries, (stage, (s, e), (dst, src, len)) -> ((stage, s, e, dst, src, len), ()))
+        | map(((stage, s, e, dst, src, len), _) -> ((stage, s, e,
+              ((s, src) gt, s, src) select,
+              ((e, (src, len) add) lt, e, (src, len) add) select,
+              dst, src), ()))
+        | filter(((_, _, _, cs, ce, _, _), _) -> (cs, ce) lt);
     -- key (stage, s, e, cs, ce, dst, src)
 
-    let mapped = isect | map($0[0] + 1, $0[3] + $0[5] - $0[6], $0[4] + $0[5] - $0[6] ;);
+    let mapped = isect | map(((stage, _, _, cs, ce, dst, src), _) -> (((stage, 1) add, ((cs, dst) add, src) sub, ((ce, dst) add, src) sub), ()));
 
     -- candidate hole starts per interval I=(stage,s,e): s and every ce
-    let cand = (cur | map($0[0], $0[1], $0[2], $0[1] ;))
-             + (isect | map($0[0], $0[1], $0[2], $0[4] ;)) | distinct;
+    let cand = (cur | map(((stage, s, e), _) -> ((stage, s, e, s), ())))
+             + (isect | map(((stage, s, e, _, ce, _, _), _) -> ((stage, s, e, ce), ()))) | distinct;
     -- key (stage, s, e, h)
 
-    let csets = isect | map($0[0], $0[1], $0[2] ; $0[3]);
+    let csets = isect | map(((stage, s, e, cs, _, _, _), _) -> ((stage, s, e), cs));
     -- (I ; cs)
 
-    let pairs = cand | map($0[0], $0[1], $0[2] ; $0[3])
-        | join(csets, ($0[0], $0[1], $0[2], $1[0] ; $2[0]))
-        | filter($1[0] >= $0[3]);
+    let pairs = cand | map(((stage, s, e, h), _) -> ((stage, s, e), h))
+        | join(csets, ((stage, s, e), h, cs) -> ((stage, s, e, h), cs))
+        | filter(((_, _, _, h), cs) -> (cs, h) ge);
     -- (I, h ; cs) for cs >= h
 
     let hend = pairs | min;
-    let holes_bounded = hend | filter($0[3] < $1[0]) | map($0[0] + 1, $0[3], $1[0] ;);
+    let holes_bounded = hend | filter(((_, _, _, h), cs) -> (h, cs) lt) | map(((stage, _, _, h), cs) -> (((stage, 1) add, h, cs), ()));
 
-    let withcs = pairs | map($0 ;) | distinct;
+    let withcs = pairs | map((k, _) -> (k, ())) | distinct;
     let nocs = cand - withcs;
-    let holes_tail = nocs | filter($0[3] < $0[2]) | map($0[0] + 1, $0[3], $0[2] ;);
+    let holes_tail = nocs | filter(((_, _, e, h), _) -> (h, e) lt) | map(((stage, _, e, h), _) -> (((stage, 1) add, h, e), ()));
 
     var active = seeds + mapped + holes_bounded + holes_tail | distinct;
 }
 
-export "result" = ranges::active | filter($0[0] == 7)
-    | key(; $0[1]) | min | arrange | inspect(part2);
+export "result" = ranges::active | filter(((stage, _, _), _) -> (stage, 7) eq)
+    | key(((_, s, _), _) -> ((), s)) | min | arrange | inspect(part2);

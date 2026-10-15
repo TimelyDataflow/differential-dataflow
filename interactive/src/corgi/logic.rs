@@ -494,7 +494,7 @@ pub fn compile(
                 Term::Int(t) => {
                     let t = usize::try_from(*t).map_err(|_| format!("constructor tag {t} is negative"))?;
                     let lanes = lanes_of(sum, t, &pshape, expected)?;
-                    Ok(b.add(Op::Inject(t, lanes), vec![pid]))
+                    Ok(b.add(Op::Inject(t, lanes.into_iter().map(Some).collect()), vec![pid]))
                 }
                 _ => {
                     let SumTy::Declared(lanes) = sum else {
@@ -840,9 +840,9 @@ pub fn eval_corgi_row(lambda: &crate::ir::Lambda, input: DValue) -> DValue {
 
 /// The scope every DDIR program's lambdas start from: the Float functions as words, and the
 /// built-in sums `Option` and `Result`. A word's input is its argument, or the tuple of its
-/// arguments when it takes several, so `x call fsqrt` and `(x, y) call fpow`. The sums declare no
-/// payload shapes, as they have none of their own: `branch`, `map_variant` and `match` read only
-/// their tags.
+/// arguments when it takes several, so `x call fsqrt` and `(x, y) call fpow`. The sums leave their
+/// payload lanes open, as they have no shapes of their own: `inject` fills an open lane with its
+/// payload's shape, and `branch`, `map_variant` and `match` read only their tags.
 pub fn base_scope() -> corgi::Scope {
     static BASE: std::sync::OnceLock<corgi::Scope> = std::sync::OnceLock::new();
     BASE.get_or_init(|| {

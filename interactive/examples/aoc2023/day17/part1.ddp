@@ -2,28 +2,30 @@
 -- straight while steps<3, turns reset steps. min-reducer fixpoint.
 -- input 0: (row, col, cost) 1-indexed
 
-let cells = input 0 : ((int, int, int) ; ()) | key($0[0], $0[1] ; $0[2]);
-let seeds = (cells | filter($0[0] == 1 && $0[1] == 1) | map(1, 1, 1, 0, 0 ; 0))
-          + (cells | filter($0[0] == 1 && $0[1] == 1) | map(1, 1, 0, 1, 0 ; 0));
+let cells = input 0 : ((int, int, int) ; ()) | key(((r, c, w), ()) -> ((r, c), w));
+let seeds = (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 1, 0, 0), 0)))
+          + (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 0, 1, 0), 0)));
 
 dijk: {
-    let straight = mc | filter($0[4] < 3)
-        | map($0[0] + $0[2], $0[1] + $0[3] ; $0[2], $0[3], $0[4], $1[0])
-        | join(cells, ($0[0], $0[1], $1[0], $1[1], $1[2] + 1 ; $1[3] + $2[0]));
+    let straight = mc | filter(((_, _, _, _, s), _) -> (s, 3) lt)
+        | map(((r, c, dr, dc, s), h) -> (((r, dr) add, (c, dc) add), (dr, dc, s, h)))
+        | join(cells, ((r, c), (dr, dc, s, h), w) -> ((r, c, dr, dc, (s, 1) add), (h, w) add));
     let turna = mc
-        | map($0[0] + $0[3], $0[1] + $0[2] ; $0[3], $0[2], $1[0])
-        | join(cells, ($0[0], $0[1], $1[0], $1[1], 1 ; $1[2] + $2[0]));
+        | map(((r, c, dr, dc, _), h) -> (((r, dc) add, (c, dr) add), (dc, dr, h)))
+        | join(cells, ((r, c), (dr, dc, h), w) -> ((r, c, dr, dc, 1), (h, w) add));
     let turnb = mc
-        | map($0[0] - $0[3], $0[1] - $0[2] ; 0 - $0[3], 0 - $0[2], $1[0])
-        | join(cells, ($0[0], $0[1], $1[0], $1[1], 1 ; $1[2] + $2[0]));
+        | map(((r, c, dr, dc, _), h) -> (((r, dc) sub, (c, dr) sub), ((0, dc) sub, (0, dr) sub, h)))
+        | join(cells, ((r, c), (dr, dc, h), w) -> ((r, c, dr, dc, 1), (h, w) add));
     var mc = seeds + straight + turna + turnb | min;
 }
 
-let maxr = cells | key(; 1000000 - $0[0]) | min | map(; 1000000 - $1[0]);
-let maxc = cells | key(; 1000000 - $0[1]) | min | map(; 1000000 - $1[0]);
-let corner = maxr | join(maxc, (; $1[0], $2[0]));
+let maxr = cells | key(((r, _), _) -> ((), (1000000, r) sub)) | min
+    | map((_, v) -> ((), (1000000, v) sub));
+let maxc = cells | key(((_, c), _) -> ((), (1000000, c) sub)) | min
+    | map((_, v) -> ((), (1000000, v) sub));
+let corner = maxr | join(maxc, (_, a, b) -> ((), (a, b)));
 
-export "result" = dijk::mc | key(; $0[0], $0[1], $1[0])
-    | join(corner, (; $1[0] == $2[0], $1[1] == $2[1], $1[2]))
-    | filter($1[0] && $1[1]) | key(; $1[2]) | min
+export "result" = dijk::mc | key(((r, c, _, _, _), h) -> ((), (r, c, h)))
+    | join(corner, (_, (r, c, h), (mr, mc)) -> ((), ((r, mr) eq, (c, mc) eq, h)))
+    | filter((_, (a, b, _)) -> (a, b) all) | key((_, (_, _, h)) -> ((), h)) | min
     | arrange | inspect(part1);

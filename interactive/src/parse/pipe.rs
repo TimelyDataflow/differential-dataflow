@@ -112,9 +112,10 @@
 //!   `(x, y) call fpow`, `() call f` for a function of none.
 //! - The program's `type` declarations, written before the lambda, are corgi enums of the same
 //!   names and variants. A variant two types share is written `Type::Variant`.
-//! - `Option` (`None`, `Some`) and `Result` (`Ok`, `Err`) are enums that declare no payload shapes:
-//!   `branch`, `map_variant` and `match` use them, as in
-//!   `(x, c) branch Option map_variant None (_ -> ())` for `if(c, Some(x), None)`.
+//! - `Option` (`None`, `Some`) and `Result` (`Ok`, `Err`) are enums whose payload lanes are open,
+//!   `None` aside: `x inject Some` takes its lane's shape from `x`, and `branch`, `map_variant` and
+//!   `match` read only their tags, as in `(x, c) branch Option map_variant None (_ -> ())` for
+//!   `if(c, Some(x), None)`.
 
 use super::*;
 use crate::ir::{BinOp, Projection, Reducer, SumTy, Term, UnOp};
@@ -175,6 +176,36 @@ fn lambda_in(src: &str, from: usize) -> Option<(usize, usize, usize)> {
     None
 }
 
+/// Lambda text as corgi reads it: a DDIR `--` comment becomes corgi's `#` comment.
+fn corgi_comments(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                let from = i;
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' { if bytes[i] == b'\\' { i += 1; } i += 1; }
+                i = (i + 1).min(bytes.len());
+                out.push_str(&text[from..i]);
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                let from = i + 2;
+                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+                out.push('#');
+                out.push_str(&text[from..i]);
+            }
+            _ => {
+                let c = text[i..].chars().next().unwrap();
+                out.push(c);
+                i += c.len_utf8();
+            }
+        }
+    }
+    out
+}
+
 fn tokenize(input: &str) -> Vec<Token> {
     let mut tokens = lex(input);
     tokens.push(Token::Eof);
@@ -195,7 +226,7 @@ fn lex(input: &str) -> Vec<Token> {
                 tokens.push(Token::LParen);
                 if let Some((start, arrow, close)) = lambda_in(input, chars.at) {
                     tokens.extend(lex(&input[chars.at..start]));
-                    let (pat, body) = (input[start..arrow].trim().to_string(), input[arrow + 2..close].trim().to_string());
+                    let (pat, body) = (corgi_comments(input[start..arrow].trim()), corgi_comments(input[arrow + 2..close].trim()));
                     tokens.push(Token::Lambda { pat, body });
                     tokens.push(Token::RParen);
                     chars.at = close + 1;
