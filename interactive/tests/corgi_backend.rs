@@ -28,7 +28,7 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
         "stable" => vec![rows(&[&[1, 1, 10, 1], &[1, 2, 11, 1], &[2, 1, 10, 2], &[2, 2, 11, 2]])],
         "unnest" => vec![rows(&[&[1, 2], &[3, 4]])],
         "adt" => vec![edges.clone()],
-        // ast: pairs; small and non-negative, per the program's stated input contract.
+        // ast: any pairs.
         "ast" => vec![edges],
         "binders" => vec![rows(&[&[1, 2], &[3, 4]])],
         // join_fallback: two keyed relations with overlapping keys (incl. a key with fanout).

@@ -3,14 +3,10 @@
 -- and no recursion -- this is a compute program, where the columnar backend's scalar logic
 -- is the whole cost and the differential machinery is not.
 --
--- Every lowering it needs landed together: `list` intro, columnar `flatmap`, `case` over an
--- `if`-selected constructor, and `fold`. A `list(..)` subterm anywhere makes the WHOLE
--- projection fall back to rows, so a regression in any one of them shows up here as the
--- others going row-wise too.
+-- It exercises, in one program, a list built from computed values (one `append` of
+-- enlisted columns), columnar `flatmap`, `match` over a `select`-chosen constructor, and `fold`.
 --
--- Contract on the inputs: fields must be non-negative and small enough that
--- `a - b + 32768` stays non-negative -- corgi's structural order is unsigned at the
--- integer leaf, so signed values are out of contract for `min`.
+-- Inputs may be any integers: corgi orders integers by their signed values, as DDIR does.
 
 type Dir = Fwd int | Bwd int;
 
