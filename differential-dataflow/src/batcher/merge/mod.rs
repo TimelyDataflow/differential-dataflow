@@ -1,12 +1,15 @@
 //! A `Batcher` implementation based on merge sort.
 //!
 //! The `MergeBatcher` requires a "merger" that implements the [`Merger`] trait, which provides
-//! hooks for manipulating sorted "chains" of chunks as needed by the merge batcher: merging
-//! chunks and also splitting them apart based on time.
+//! hooks for manipulating sorted "chains" of chunks: merging chunks, and through [`Extractor`]
+//! also splitting them apart based on time.
 //!
 //! Raw input containers are fed to the batcher via [`Batcher::insert`], which chunks them with
 //! its `Chu` before merging: forming sorted, consolidated chunks is the first stage of the
 //! batcher's own work rather than something a caller arranges.
+//!
+//! The geometric ladder of chains is a [`MergeLadder`], which holds no opinion about how
+//! updates leave it, and can serve other batchers.
 
 pub mod chunker;
 
@@ -20,36 +23,22 @@ use crate::batcher::Batcher;
 /// Creates batches from chunks of sorted, consolidated tuples.
 ///
 /// Chunking input is `Chu`'s business, merging chunks is `M`'s, and sealing the extracted chain
-/// into a batch is `S`'s; the batcher's own work is the geometric ladder of chains and the
-/// carve-by-frontier.
-pub struct MergeBatcher<Chu, M: Merger, S> {
+/// into a batch is `S`'s; the batcher's own work is the carve-by-frontier over its
+/// [`MergeLadder`].
+pub struct MergeBatcher<Chu, M: Extractor, S> {
     /// Melds input containers into sorted, consolidated chunks.
     chunker: Chu,
-    /// Sorted, consolidated chains, each paired with its cached summed update count.
-    ///
-    /// The cached count is the chain's *merge weight*: the geometric ladder weighs
-    /// chains by updates, not chunk counts, since regrading decouples the two. A
-    /// chain is immutable until merged, so the weight is computed once at push.
-    ///
-    /// Do not push/pop directly but use the corresponding functions ([`Self::chain_push`]/[`Self::chain_pop`]).
-    chains: Vec<(usize, Vec<M::Chunk>)>,
-    /// Stash of empty chunks, recycled through the merging process.
-    stash: Vec<M::Chunk>,
-    /// Merges consolidated chunks, and extracts the subset of an update chain that lies in an interval of time.
-    merger: M,
+    /// Sorted, consolidated chains.
+    ladder: MergeLadder<M>,
     /// The lower-bound frontier of the data, after the last call to extract.
     frontier: Antichain<M::Time>,
-    /// Logger for size accounting.
-    logger: Option<Logger>,
-    /// Timely operator ID.
-    operator_id: usize,
     /// Seals each extracted chain into a batch.
     sealer: std::marker::PhantomData<S>,
 }
 
 impl<C, Chu, M, S> Batcher<C> for MergeBatcher<Chu, M, S>
 where
-    M: Merger<Time: Timestamp>,
+    M: Extractor<Time: Timestamp>,
     Chu: ContainerBuilder<Container = M::Chunk> + for<'a> PushInto<&'a mut C>,
     S: Sealer<M::Chunk>,
 {
@@ -59,7 +48,7 @@ where
     fn insert(&mut self, container: &mut C) {
         self.chunker.push_into(container);
         while let Some(chunk) = self.chunker.extract().map(std::mem::take) {
-            self.insert_chain(vec![chunk]);
+            self.ladder.insert_chain(vec![chunk]);
         }
     }
 
@@ -71,58 +60,86 @@ where
         // Flush whatever the chunker is still accumulating: a partial final chunk would
         // otherwise never reach the merge ladder.
         while let Some(chunk) = self.chunker.finish().map(std::mem::take) {
-            self.insert_chain(vec![chunk]);
+            self.ladder.insert_chain(vec![chunk]);
         }
 
         // Merge all remaining chains into a single chain.
-        while self.chains.len() > 1 {
-            let list1 = self.chain_pop().unwrap();
-            let list2 = self.chain_pop().unwrap();
-            let merged = self.merge_by(list1, list2);
-            self.chain_push(merged);
-        }
-        let merged = self.chain_pop().unwrap_or_default();
+        let merged = self.ladder.merge_all();
 
         // Extract readied data.
         let mut kept = Vec::new();
         let mut readied = Vec::new();
         self.frontier.clear();
 
-        self.merger.extract(merged, upper, &mut self.frontier, &mut readied, &mut kept, &mut self.stash);
+        let ladder = &mut self.ladder;
+        ladder.merger.extract(merged, upper, &mut self.frontier, &mut readied, &mut kept, &mut ladder.stash);
 
         if !kept.is_empty() {
-            self.chain_push(kept);
+            ladder.chain_push(kept);
         }
 
-        self.stash.clear();
+        ladder.stash.clear();
 
         (S::seal(&mut readied), self.frontier.borrow())
     }
 }
 
-impl<Chu: Default, M: Merger, S> MergeBatcher<Chu, M, S> {
+impl<Chu: Default, M: Extractor, S> MergeBatcher<Chu, M, S> {
     /// Allocates a new empty batcher.
     ///
     /// The logger and operator identifier are used to report the batcher's memory footprint,
     /// attributed to the operator that owns it.
     pub fn new(logger: Option<Logger>, operator_id: usize) -> Self {
         Self {
-            logger,
-            operator_id,
-            merger: M::default(),
             chunker: Chu::default(),
-            chains: Vec::new(),
-            stash: Vec::new(),
+            ladder: MergeLadder::new(logger, operator_id),
             frontier: Antichain::new(),
             sealer: std::marker::PhantomData,
         }
     }
 }
 
-impl<Chu, M: Merger, S> MergeBatcher<Chu, M, S> {
+/// A geometric ladder of sorted, consolidated chains, merged as they arrive.
+///
+/// Chains are kept in order of decreasing update count, each at least twice the next, so that
+/// there are logarithmically many and each update is merged logarithmically often.
+pub struct MergeLadder<M: Merger> {
+    /// Sorted, consolidated chains, each paired with its cached summed update count.
+    ///
+    /// The cached count is the chain's *merge weight*: the geometric ladder weighs
+    /// chains by updates, not chunk counts, since regrading decouples the two. A
+    /// chain is immutable until merged, so the weight is computed once at push.
+    ///
+    /// Do not push/pop directly but use the corresponding functions ([`Self::chain_push`]/[`Self::chain_pop`]).
+    chains: Vec<(usize, Vec<M::Chunk>)>,
+    /// Stash of empty chunks, recycled through the merging process.
+    stash: Vec<M::Chunk>,
+    /// Merges consolidated chunks.
+    merger: M,
+    /// Logger for size accounting.
+    logger: Option<Logger>,
+    /// Timely operator ID.
+    operator_id: usize,
+}
+
+impl<M: Merger> MergeLadder<M> {
+    /// Allocates a new empty ladder.
+    ///
+    /// The logger and operator identifier are used to report the ladder's memory footprint,
+    /// attributed to the operator that owns it.
+    pub fn new(logger: Option<Logger>, operator_id: usize) -> Self {
+        Self {
+            chains: Vec::new(),
+            stash: Vec::new(),
+            merger: M::default(),
+            logger,
+            operator_id,
+        }
+    }
+
     /// Insert a chain and maintain chain properties: Chains are geometrically sized
     /// (by summed updates) and ordered by decreasing update weight.
-    fn insert_chain(&mut self, chain: Vec<M::Chunk>) {
+    pub fn insert_chain(&mut self, chain: Vec<M::Chunk>) {
         if !chain.is_empty() {
             self.chain_push(chain);
             while self.chains.len() > 1 && (self.chains[self.chains.len() - 1].0 >= self.chains[self.chains.len() - 2].0 / 2) {
@@ -132,6 +149,38 @@ impl<Chu, M: Merger, S> MergeBatcher<Chu, M, S> {
                 self.chain_push(merged);
             }
         }
+    }
+
+    /// Merge all chains into a single chain, and remove it from the ladder.
+    pub fn merge_all(&mut self) -> Vec<M::Chunk> {
+        while self.chains.len() > 1 {
+            let list1 = self.chain_pop().unwrap();
+            let list2 = self.chain_pop().unwrap();
+            let merged = self.merge_by(list1, list2);
+            self.chain_push(merged);
+        }
+        self.chain_pop().unwrap_or_default()
+    }
+
+    /// The chains, largest first.
+    pub fn chains(&self) -> impl Iterator<Item = &[M::Chunk]> {
+        self.chains.iter().map(|(_, chain)| &chain[..])
+    }
+
+    /// Lets `logic` remove updates from each chain, largest first, for batchers that release
+    /// updates from the fronts of chains rather than by merging them all.
+    ///
+    /// A chain keeps the weight it was pushed with, so the ladder merges as though no updates had
+    /// left it, and stays logarithmic in the updates inserted. Chains left empty are removed.
+    pub fn retain_chains(&mut self, mut logic: impl FnMut(&mut Vec<M::Chunk>)) {
+        let mut chains = std::mem::take(&mut self.chains);
+        for (_weight, chain) in chains.iter_mut() {
+            self.account(chain.iter().map(Self::record), -1);
+            logic(chain);
+            self.account(chain.iter().map(Self::record), 1);
+        }
+        chains.retain(|(_weight, chain)| !chain.is_empty());
+        self.chains = chains;
     }
 
     // merges two sorted input lists into one sorted output list.
@@ -194,31 +243,19 @@ impl<Chu, M: Merger, S> MergeBatcher<Chu, M, S> {
     }
 }
 
-impl<Chu, M: Merger, S> Drop for MergeBatcher<Chu, M, S> {
+impl<M: Merger> Drop for MergeLadder<M> {
     fn drop(&mut self) {
         // Cleanup chain to retract accounting information.
         while self.chain_pop().is_some() {}
     }
 }
 
-/// A trait to describe interesting moments in a merge batcher.
+/// A trait to describe interesting moments in a merge ladder.
 pub trait Merger: Default {
     /// The internal representation of chunks of data.
     type Chunk: Default;
-    /// The type of time in frontiers to extract updates.
-    type Time;
     /// Merge chains into an output chain.
     fn merge(&mut self, list1: Vec<Self::Chunk>, list2: Vec<Self::Chunk>, output: &mut Vec<Self::Chunk>, stash: &mut Vec<Self::Chunk>);
-    /// Extract ready updates based on the `upper` frontier.
-    fn extract(
-        &mut self,
-        merged: Vec<Self::Chunk>,
-        upper: AntichainRef<Self::Time>,
-        frontier: &mut Antichain<Self::Time>,
-        readied: &mut Vec<Self::Chunk>,
-        kept: &mut Vec<Self::Chunk>,
-        stash: &mut Vec<Self::Chunk>,
-    );
 
     /// The number of updates in a chunk.
     ///
@@ -233,6 +270,22 @@ pub trait Merger: Default {
     /// Defaults to zero — most chunk types do not track this. Override to report
     /// real figures (e.g. Materialize's memory accounting).
     fn allocation(_chunk: &Self::Chunk) -> (usize, usize, usize) { (0, 0, 0) }
+}
+
+/// A [`Merger`] that can also split a chain apart by time, as the merge batcher extracts.
+pub trait Extractor: Merger {
+    /// The type of time in frontiers to extract updates.
+    type Time;
+    /// Extract ready updates based on the `upper` frontier.
+    fn extract(
+        &mut self,
+        merged: Vec<Self::Chunk>,
+        upper: AntichainRef<Self::Time>,
+        frontier: &mut Antichain<Self::Time>,
+        readied: &mut Vec<Self::Chunk>,
+        kept: &mut Vec<Self::Chunk>,
+        stash: &mut Vec<Self::Chunk>,
+    );
 }
 
 /// Forms a batch from a whole chain of updates at once.
@@ -261,7 +314,7 @@ pub mod vec {
     use timely::container::SizableContainer;
     use timely::progress::frontier::{Antichain, AntichainRef};
     use timely::PartialOrder;
-    use crate::batcher::merge::Merger;
+    use crate::batcher::merge::{Extractor, Merger};
 
     /// A `Merger` implementation for `Vec<(D, T, R)>` that drains owned inputs.
     pub struct VecMerger<D, T, R> {
@@ -316,7 +369,6 @@ pub mod vec {
         R: crate::difference::Semigroup + 'static,
     {
         type Chunk = Vec<(D, T, R)>;
-        type Time = T;
 
         fn merge(
             &mut self,
@@ -373,6 +425,17 @@ pub mod vec {
             output.extend(iter2);
         }
 
+        fn len(chunk: &Vec<(D, T, R)>) -> usize { chunk.len() }
+    }
+
+    impl<D, T, R> Extractor for VecMerger<D, T, R>
+    where
+        D: Ord + Clone + 'static,
+        T: Ord + Clone + PartialOrder + 'static,
+        R: crate::difference::Semigroup + 'static,
+    {
+        type Time = T;
+
         fn extract(
             &mut self,
             merged: Vec<Vec<(D, T, R)>>,
@@ -411,8 +474,6 @@ pub mod vec {
             if !keep.is_empty() { kept.push(keep); }
             if !ready.is_empty() { ship.push(ready); }
         }
-
-        fn len(chunk: &Vec<(D, T, R)>) -> usize { chunk.len() }
     }
 }
 
@@ -445,8 +506,8 @@ mod test {
     #[test]
     fn frontier_is_post_consolidation() {
         let mut b = Bt::new(None, 0);
-        b.chain_push(vec![vec![((100u64, ()), 5u64, 1i64), ((200u64, ()), 7u64, 1i64)]]);
-        b.chain_push(vec![vec![((100u64, ()), 5u64, -1i64)]]);
+        b.ladder.chain_push(vec![vec![((100u64, ()), 5u64, 1i64), ((200u64, ()), 7u64, 1i64)]]);
+        b.ladder.chain_push(vec![vec![((100u64, ()), 5u64, -1i64)]]);
         let (_, retained) = Batcher::<In>::extract(&mut b, Antichain::from_elem(3).borrow());
         let got: Vec<u64> = retained.iter().cloned().collect();
         assert_eq!(got, vec![7u64],
@@ -457,8 +518,8 @@ mod test {
     #[test]
     fn frontier_survivor_minimum() {
         let mut b = Bt::new(None, 0);
-        b.chain_push(vec![vec![((100u64, ()), 5u64, 1i64)]]);
-        b.chain_push(vec![vec![((200u64, ()), 7u64, 1i64)]]);
+        b.ladder.chain_push(vec![vec![((100u64, ()), 5u64, 1i64)]]);
+        b.ladder.chain_push(vec![vec![((200u64, ()), 7u64, 1i64)]]);
         let (_, retained) = Batcher::<In>::extract(&mut b, Antichain::from_elem(3).borrow());
         let got: Vec<u64> = retained.iter().cloned().collect();
         assert_eq!(got, vec![5u64]);
