@@ -141,7 +141,7 @@ where
     storage1: C1::Storage,
     cursor2: C2,
     storage2: C2::Storage,
-    /// The capability's time, at which this unit's output ships; the lower envelope for consolidation.
+    /// The meet of the stamp's times, a lower bound on this unit's output times; the lower envelope for consolidation.
     meet: T,
     /// Whether to advance each side's history by `meet` before consolidation.
     advance1: bool,
