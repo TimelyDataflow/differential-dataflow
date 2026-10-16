@@ -247,7 +247,6 @@ where
     C::Time: Clone + timely::PartialOrder + 'static,
 {
     type Chunk = C;
-    type Time = C::Time;
 
     fn merge(
         &mut self,
@@ -272,6 +271,16 @@ where
         C::settle(&mut staged, true, &mut settled);
         output.extend(settled);
     }
+
+    fn len(chunk: &C) -> usize { chunk.len() }
+}
+
+impl<C> crate::batcher::merge::Extractor for ChunkMerger<C>
+where
+    C: Chunk + Default + 'static,
+    C::Time: Clone + timely::PartialOrder + 'static,
+{
+    type Time = C::Time;
 
     fn extract(
         &mut self,
@@ -301,8 +310,6 @@ where
         kept.extend(kept_q);
         ship.extend(shipped_q);
     }
-
-    fn len(chunk: &C) -> usize { chunk.len() }
 }
 
 /// The resumable [`SpineBatch::Merger`] for [`ChunkBatch`]: merges two updates and advances
