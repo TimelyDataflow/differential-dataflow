@@ -672,33 +672,34 @@ impl<B: SpineBatch> Spine<B> {
                 self.merging[index] = MergeState::Single(batch);
             }
             MergeState::Single(old) => {
-                let length1 = old.as_ref().map(span_len).unwrap_or(0);
-                let length2 = batch.as_ref().map(span_len).unwrap_or(0);
-                let both_present = old.is_some() && batch.is_some();
-                // Log the initiation of a merge.
-                self.logger.as_ref().map(|l| l.log(
-                    crate::logging::MergeEvent {
+                // Log the initiation of a merge, retaining the lengths to log its completion.
+                let lengths = self.logger.as_ref().map(|l| {
+                    let length1 = old.as_ref().map(span_len).unwrap_or(0);
+                    let length2 = batch.as_ref().map(span_len).unwrap_or(0);
+                    l.log(crate::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
                         length1,
                         length2,
                         complete: None,
-                    }
-                ));
+                    });
+                    (length1, length2)
+                });
+                let both_present = old.is_some() && batch.is_some();
                 let compaction_frontier = self.logical_frontier.borrow();
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
                 // Two present spans merge without work when at least one carries no batch. Such a
                 // merge is complete at once, and `complete_at` will not log it, so we do so here.
-                if both_present && matches!(self.merging[index], MergeState::Double(MergeVariant::Complete(_))) {
-                    self.logger.as_ref().map(|l| l.log(
-                        crate::logging::MergeEvent {
+                if let (Some(l), Some((length1, length2))) = (&self.logger, lengths) {
+                    if both_present && matches!(self.merging[index], MergeState::Double(MergeVariant::Complete(_))) {
+                        l.log(crate::logging::MergeEvent {
                             operator: self.operator.global_id,
                             scale: index,
                             length1,
                             length2,
                             complete: Some(length1 + length2),
-                        }
-                    ));
+                        });
+                    }
                 }
             }
             MergeState::Double(_) => {
