@@ -672,35 +672,33 @@ impl<B: SpineBatch> Spine<B> {
                 self.merging[index] = MergeState::Single(batch);
             }
             MergeState::Single(old) => {
-                // Log the initiation of a merge, retaining the lengths to log its completion.
-                let lengths = self.logger.as_ref().map(|l| {
-                    let length1 = old.as_ref().map(span_len).unwrap_or(0);
-                    let length2 = batch.as_ref().map(span_len).unwrap_or(0);
-                    l.log(crate::logging::MergeEvent {
+                // Log the initiation of a merge.
+                self.logger.as_ref().map(|l| l.log(
+                    crate::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
-                        length1,
-                        length2,
+                        length1: old.as_ref().map(span_len).unwrap_or(0),
+                        length2: batch.as_ref().map(span_len).unwrap_or(0),
                         complete: None,
-                    });
-                    (length1, length2)
-                });
-                let both_present = old.is_some() && batch.is_some();
-                let compaction_frontier = self.logical_frontier.borrow();
-                self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
+                    }
+                ));
                 // Two present spans merge without work when at least one carries no batch. Such a
                 // merge is complete at once, and `complete_at` will not log it, so we do so here.
-                if let (Some(l), Some((length1, length2))) = (&self.logger, lengths) {
-                    if both_present && matches!(self.merging[index], MergeState::Double(MergeVariant::Complete(_))) {
-                        l.log(crate::logging::MergeEvent {
-                            operator: self.operator.global_id,
-                            scale: index,
-                            length1,
-                            length2,
-                            complete: Some(length1 + length2),
-                        });
+                if let (Some(old), Some(batch)) = (&old, &batch) {
+                    if old.inner.is_none() || batch.inner.is_none() {
+                        self.logger.as_ref().map(|l| l.log(
+                            crate::logging::MergeEvent {
+                                operator: self.operator.global_id,
+                                scale: index,
+                                length1: span_len(old),
+                                length2: span_len(batch),
+                                complete: Some(span_len(old) + span_len(batch)),
+                            }
+                        ));
                     }
                 }
+                let compaction_frontier = self.logical_frontier.borrow();
+                self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
             MergeState::Double(_) => {
                 panic!("Attempted to insert batch into incomplete merge!")
