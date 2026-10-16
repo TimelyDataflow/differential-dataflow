@@ -612,7 +612,7 @@ pub mod val_batch {
         /// Allocates a builder with capacity for the specified keys, values, and updates.
         ///
         /// They represent respectively the number of distinct `key`, `(key, val)`, and total updates.
-        fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
+        pub fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
             Self {
                 result: OrdValStorage {
                     keys: L::KeyContainer::with_capacity(keys),
@@ -1006,7 +1006,7 @@ pub mod key_batch {
         /// Allocates a builder with capacity for the specified keys and updates.
         ///
         /// They represent respectively the number of distinct `key` and total updates.
-        fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
+        pub fn with_capacity(keys: usize, _vals: usize, upds: usize) -> Self {
             Self {
                 result: OrdKeyStorage {
                     keys: L::KeyContainer::with_capacity(keys),

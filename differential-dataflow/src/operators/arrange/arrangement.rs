@@ -49,6 +49,9 @@ pub struct Arranged<'scope, Tr: TraceReader> {
     /// This stream contains the same batches of updates the trace itself accepts, so there should
     /// be no additional overhead to receiving these records. The batches can be navigated just as
     /// the batches in the trace, by key and by value.
+    ///
+    /// Unchecked assumption: each update in a batch has a time greater or equal to some time in the
+    /// stamp of the message carrying it. In particular, a message with an empty stamp carries no updates.
     pub stream: Stream<'scope, Tr::Time, Vec<SpanOf<Tr>>>,
     /// A shared trace, updated by the `Arrange` operator and readable by others.
     pub trace: Tr,
@@ -375,10 +378,8 @@ where
                 batcher.insert(data);
             });
 
-            // The frontier may have advanced by multiple elements, which is an issue because
-            // timely dataflow currently only allows one capability per message. This means we
-            // must pretend to process the frontier advances one element at a time, batching
-            // and sending smaller bites than we might have otherwise done.
+            // The frontier may have advanced by multiple elements. We extract one batch for the
+            // whole advance, and send it stamped with every held capability it retires.
 
             // Assert that the frontier never regresses.
             assert!(PartialOrder::less_equal(&prev_frontier.borrow(), &frontier.frontier()));

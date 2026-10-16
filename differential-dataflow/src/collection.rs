@@ -20,6 +20,10 @@ use crate::difference::Abelian;
 /// The containers purport to reperesent changes to a collection, and they must implement various traits
 /// in order to expose some of this functionality (e.g. negation, timestamp manipulation). Other actions
 /// on the containers, and streams of containers, are left to the container implementor to describe.
+///
+/// Unchecked assumption: each update in a container has a time greater or equal to some time in the
+/// container's stamp. In particular, a container with an empty stamp holds no updates. Differential
+/// operators rely on this to retire updates as frontiers advance, and may behave unexpectedly if it fails.
 #[derive(Clone)]
 pub struct Collection<'scope, T: Timestamp, C: 'static> {
     /// The underlying timely dataflow stream.
@@ -27,8 +31,8 @@ pub struct Collection<'scope, T: Timestamp, C: 'static> {
     /// This field is exposed to support direct timely dataflow manipulation when required, but it is
     /// not intended to be the idiomatic way to work with the collection.
     ///
-    /// The timestamp in the data is required to always be at least the timestamp _of_ the data, in
-    /// the timely-dataflow sense. If this invariant is not upheld, differential operators may behave
+    /// Each update's time is required to be greater or equal to some time in its container's stamp,
+    /// as documented on [Collection]. If this invariant is not upheld, differential operators may behave
     /// unexpectedly.
     pub inner: Stream<'scope, T, C>,
 }

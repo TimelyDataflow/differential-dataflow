@@ -371,7 +371,7 @@ impl<B: SpineBatch> Drop for Spine<B> {
 
 
 impl<B: SpineBatch> Spine<B> {
-    /// Drops and logs batches. Used in `set_logical_compaction` and drop.
+    /// Drops and logs batches. Used in drop.
     fn drop_batches(&mut self) {
         if let Some(logger) = &self.logger {
             for batch in self.merging.drain(..) {
@@ -682,6 +682,21 @@ impl<B: SpineBatch> Spine<B> {
                         complete: None,
                     }
                 ));
+                // Two present spans merge without work when at least one carries no batch. Such a
+                // merge is complete at once, and `complete_at` will not log it, so we do so here.
+                if let (Some(old), Some(batch)) = (&old, &batch) {
+                    if old.inner.is_none() || batch.inner.is_none() {
+                        self.logger.as_ref().map(|l| l.log(
+                            crate::logging::MergeEvent {
+                                operator: self.operator.global_id,
+                                scale: index,
+                                length1: span_len(old),
+                                length2: span_len(batch),
+                                complete: Some(span_len(old) + span_len(batch)),
+                            }
+                        ));
+                    }
+                }
                 let compaction_frontier = self.logical_frontier.borrow();
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
