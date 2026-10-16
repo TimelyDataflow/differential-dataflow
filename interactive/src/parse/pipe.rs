@@ -36,6 +36,10 @@
 //!   of the epoch and every scope coordinate.
 //! - `| join_function(term)` — replace each row by the `term`'s list of
 //!   `((key, val), time, diff)`, at the row's time joined with `time`, diffs multiplied.
+//! - `| half_join(other, strict, (k, v, v1) -> (k', v'))` — each update of a lifted stream,
+//!   `(k ; (v, time))`, meets `other`'s rows at its key whose times precede the update's own in the
+//!   total order on times (strictly when `strict` is 1, or also equal when 0), giving
+//!   `(k' ; (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
 //! - `| delay(term)` — `join_function` with the list `[((key, val), term, 1)]`: advance each
 //!   row to at least the time `term`.
 //! - `a + b` (concat), `a - b` (concat with `b` negated).
@@ -621,6 +625,19 @@ impl Parser {
             Token::EnterAt => { self.next(); self.expect(&Token::LParen); let f = self.parse_slot_term(); self.expect(&Token::RParen); Expr::EnterAt(Box::new(lhs), f) },
             Token::LiftIter => { self.next(); Expr::LiftIter(Box::new(lhs)) },
             Token::Ident(name) if name == "lift" => { self.next(); Expr::Lift(Box::new(lhs)) },
+            Token::Ident(name) if name == "half_join" => {
+                self.next(); self.expect(&Token::LParen);
+                let r = self.parse_join_arg(); self.expect(&Token::Comma);
+                let strict = match self.next() {
+                    Token::Int(0) => false,
+                    Token::Int(1) => true,
+                    other => panic!("half_join: strict is 0 or 1, not {other:?}"),
+                };
+                self.expect(&Token::Comma);
+                let p = match self.lambda(3) { Some(l) => Self::split(l), None => self.parse_projection() };
+                self.expect(&Token::RParen);
+                Expr::HalfJoin(Box::new(lhs), Box::new(r), strict, p)
+            },
             Token::Ident(name) if name == "join_function" => {
                 self.next(); self.expect(&Token::LParen);
                 let t = self.parse_slot_term(); self.expect(&Token::RParen);

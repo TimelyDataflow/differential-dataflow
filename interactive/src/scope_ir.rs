@@ -117,6 +117,13 @@ pub enum Node {
     Concat(Vec<Ref>),
     Arrange(Ref),
     Join { left: Ref, right: Ref, projection: Projection },
+    /// Each update of `stream`, `(key ; (val, time))` with `time` a time as data (as `lift` writes
+    /// it), meets the rows of `arrangement` at its key whose times are less than the update's own
+    /// in the total order on times, or less or equal unless `strict`. Each pair gives
+    /// `(key' ; (val', time ∨ t2))`: `projection` over `(key, val, arranged val)`, and the update's
+    /// data time joined with the arranged row's. The output keeps the update's own time, and its
+    /// diff is the product of the two. The arrangement's changes produce no output.
+    HalfJoin { stream: Ref, arrangement: Ref, strict: bool, projection: Projection },
     Reduce { input: Ref, reducer: Reducer },
     Inspect { input: Ref, label: String },
 }
@@ -208,6 +215,7 @@ impl Scope {
                     Node::Linear { input, .. } | Node::Arrange(input)
                     | Node::Reduce { input, .. } | Node::Inspect { input, .. } => f(input),
                     Node::Join { left, right, .. } => { f(left); f(right); },
+                    Node::HalfJoin { stream, arrangement, .. } => { f(stream); f(arrangement); },
                     Node::Concat(refs) => for r in refs { f(r); },
                 },
                 Item::Sub(child) => for imp in child.imports.iter_mut() {
@@ -239,6 +247,7 @@ impl Scope {
                     Node::Linear { input, .. } | Node::Arrange(input)
                     | Node::Reduce { input, .. } | Node::Inspect { input, .. } => tally(input),
                     Node::Join { left, right, .. } => { tally(left); tally(right); },
+                    Node::HalfJoin { stream, arrangement, .. } => { tally(stream); tally(arrangement); },
                     Node::Concat(refs) => for r in refs { tally(r); },
                 },
                 Item::Sub(child) => for imp in &child.imports {
@@ -387,6 +396,7 @@ fn dump_scope_body(s: &Scope, indent: usize) {
                     Node::Concat(refs) => refs.iter().map(fmt_ref).collect::<Vec<_>>().join(" + "),
                     Node::Arrange(r) => format!("{} | arrange", fmt_ref(r)),
                     Node::Join { left, right, .. } => format!("join({}, {})", fmt_ref(left), fmt_ref(right)),
+                    Node::HalfJoin { stream, arrangement, strict, .. } => format!("{} | half_join({}, {})", fmt_ref(stream), fmt_ref(arrangement), *strict as u8),
                     Node::Reduce { input, reducer } => format!("{} | {:?}", fmt_ref(input), reducer),
                     Node::Inspect { input, label } => format!("{} | inspect({})", fmt_ref(input), label),
                 };

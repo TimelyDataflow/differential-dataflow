@@ -25,6 +25,8 @@ pub enum Expr {
     Qualified(String, String),
     Map(Box<Expr>, Projection),
     Join(Box<Expr>, Box<Expr>, Projection),
+    /// `stream | half_join(arrangement, strict, projection)`: see `scope_ir::Node::HalfJoin`.
+    HalfJoin(Box<Expr>, Box<Expr>, bool, Projection),
     Reduce(Box<Expr>, Reducer),
     Filter(Box<Expr>, Term),
     Negate(Box<Expr>),
@@ -32,8 +34,7 @@ pub enum Expr {
     /// Append the current user-iter coord (at the operator's scope depth)
     /// to each row's value. Time itself is unchanged.
     ///
-    /// Discipline (post-lowering check, see `lower::validate_lift_iter`):
-    /// the result of `LiftIter` must not be referenced inside the same
+    /// Discipline, which nothing checks: the result of `LiftIter` should not be referenced inside the same
     /// scope it appears in — only from an enclosing scope, after the
     /// implicit leave. This preserves the "loop body is a time-invariant
     /// function" property; in-scope use risks defeating the fixpoint.

@@ -49,6 +49,9 @@ pub trait Backend {
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container>;
     /// `shapes` are the two inputs' row shapes, where they are known before any data arrives.
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, Self::Container>;
+    /// See `scope_ir::Node::HalfJoin`. `level` is the scope depth, which fixes the width of a time
+    /// as data; `shapes` are the stream's and the arrangement's row shapes, where known.
+    fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Projection, level: usize, shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, Self::Container>;
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
@@ -133,6 +136,7 @@ fn reads_rows(s: &st::Scope, k: usize) -> bool {
     let is_k = |r: &st::Ref| matches!(r, st::Ref::Import(i) if *i == k);
     s.items.iter().any(|item| match item {
         st::Item::Op(st::Node::Linear { input, .. } | st::Node::Inspect { input, .. }) => is_k(input),
+        st::Item::Op(st::Node::HalfJoin { stream, .. }) => is_k(stream),
         st::Item::Op(st::Node::Concat(refs)) => refs.iter().any(is_k),
         st::Item::Op(st::Node::Arrange(_) | st::Node::Join { .. } | st::Node::Reduce { .. }) => false,
         st::Item::Sub(_) => false,
@@ -188,6 +192,11 @@ pub fn render_tree<'s, B: Backend>(
                         let l = resolve(&items, &imports, &var_cols, left).arrange();
                         let r = resolve(&items, &imports, &var_cols, right).arrange();
                         Rendered::Collection(B::join(l, r, projection, shape_of(left).zip(shape_of(right))))
+                    },
+                    st::Node::HalfJoin { stream, arrangement, strict, projection } => {
+                        let c = resolve(&items, &imports, &var_cols, stream).collection();
+                        let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
+                        Rendered::Collection(B::half_join(c, a, *strict, projection, depth, shape_of(stream).zip(shape_of(arrangement))))
                     },
                     st::Node::Reduce { input, reducer } => {
                         let a = resolve(&items, &imports, &var_cols, input).arrange();
