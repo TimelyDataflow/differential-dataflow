@@ -41,7 +41,7 @@ use corgi::{Bounds, Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::matching_ranges;
-use crate::corgi::chunk::{columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
+use crate::corgi::chunk::{colliding_keys, columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
 use crate::corgi::logic::compile_reduce;
 use crate::ir::{Diff, Reducer};
 
@@ -256,40 +256,6 @@ fn split_real_keys<T: ColTime>(
         labels.push(label_keys.len() as u64 - 1);
     }
     (labels, rows, Some(label_keys))
-}
-
-/// For each of the window's `keys`, whether the rows held for it, across every `(chunks, matches)`
-/// side, carry more than one real key. Chunks sort each identifier's rows by real key, so a run holds
-/// one key exactly when its first and last rows agree: two comparisons per run, never per row.
-/// Comparing across sides also catches an identifier whose input and output hold different keys.
-fn colliding_keys<T: ColTime>(keys: &[i64], sides: &[(&[&CorgiChunk<T, Diff>], &Matches)]) -> Vec<bool> {
-    let mut colliding = vec![false; keys.len()];
-    if !sides.iter().flat_map(|side| side.0).any(|chunk| key_is_hashed(chunk.keys())) {
-        return colliding;
-    }
-    let columns: Vec<_> = sides.iter().flat_map(|(chunks, _)| chunks.iter().map(|chunk| recover_key_ref(chunk.keys()))).collect();
-    let mut first = vec![None; keys.len()];
-    let (mut pairs, mut owners) = (Vec::new(), Vec::new());
-    let mut column = 0;
-    for (chunks, matches) in sides {
-        for (_, found) in chunks.iter().zip(matches.iter()) {
-            for (index, rows) in found {
-                let reference = *first[*index].get_or_insert((column, rows.start));
-                for row in std::iter::once(rows.start).chain((rows.len() > 1).then_some(rows.end - 1)) {
-                    if (column, row) != reference {
-                        pairs.push(((column, row), reference));
-                        owners.push(*index);
-                    }
-                }
-            }
-            column += 1;
-        }
-    }
-    // One crossing for all endpoints in the window; only coordinates are regrouped, never keys.
-    for (owner, equal) in owners.into_iter().zip(equal_pairs(&columns, &pairs)) {
-        colliding[owner] |= !equal;
-    }
-    colliding
 }
 
 fn chunks_of<T>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>>
@@ -516,7 +482,13 @@ where
         let keys = &retire.keys[retire.window.clone()];
         let out_matches = search(&out_chunks, keys);
         // The identifiers that hold several real keys, across input and output alike.
-        let colliding = colliding_keys(keys, &[(&in_chunks, &matches), (&out_chunks, &out_matches)]);
+        let colliding = if in_chunks.iter().chain(&out_chunks).any(|chunk| key_is_hashed(chunk.keys())) {
+            let columns: Vec<_> = in_chunks.iter().chain(&out_chunks).map(|chunk| recover_key_ref(chunk.keys())).collect();
+            let runs = matches.iter().chain(&out_matches).enumerate().flat_map(|(column, found)| {
+                found.iter().map(move |(key, rows)| (*key, column, rows.start, rows.end))
+            });
+            colliding_keys(keys.len(), &columns, runs)
+        } else { vec![false; keys.len()] };
         retire.colliding = keys.iter().zip(&colliding).filter(|(_, c)| **c).map(|(key, _)| *key).collect();
         let colliding = if retire.colliding.is_empty() { &[][..] } else { &colliding[..] };
 
