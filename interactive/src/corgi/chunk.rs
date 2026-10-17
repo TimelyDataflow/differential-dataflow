@@ -28,7 +28,7 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 
-use corgi::arrange::{gather, gather_lanes, group_bounds, sort_blocks, survey_groups, GroupRun};
+use corgi::arrange::{equal_pairs, gather, gather_lanes, group_bounds, sort_blocks, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
 use crate::corgi::col_times::{ColTime, ColTimes};
@@ -67,6 +67,8 @@ struct Inner<T, R> {
     times: ColTimes<T>,
     /// Per-update diffs.
     diffs: Vec<R>,
+    /// Maximal equal-(key, value) groups, shared by readers of this immutable chunk.
+    groups: Option<corgi::Bounds>,
 }
 
 /// A sorted, consolidated run of `((key, val), time, diff)` with corgi-columnar key/val, shared via `Rc`.
@@ -78,7 +80,7 @@ impl<T, R> Clone for CorgiChunk<T, R> {
 
 impl<T, R> Default for CorgiChunk<T, R> {
     fn default() -> Self {
-        CorgiChunk(Rc::new(Inner { keys: CValue::Unit(0), vals: CValue::Unit(0), times: ColTimes::default(), diffs: Vec::new() }))
+        CorgiChunk(Rc::new(Inner { keys: CValue::Unit(0), vals: CValue::Unit(0), times: ColTimes::default(), diffs: Vec::new(), groups: None }))
     }
 }
 
@@ -92,7 +94,7 @@ fn split_kv(kv: CValue) -> (CValue, CValue) {
 
 impl<T, R> CorgiChunk<T, R> {
     fn from_parts(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> Self {
-        CorgiChunk(Rc::new(Inner { keys, vals, times, diffs }))
+        CorgiChunk(Rc::new(Inner { keys, vals, times, diffs, groups: None }))
     }
     /// The `(key, val)` sort payload as one corgi `Prod` column (cheap `Arc` bumps).
     fn kv(&self) -> CValue { CValue::Prod(vec![self.0.keys.clone(), self.0.vals.clone()]) }
@@ -115,6 +117,16 @@ impl<T, R> CorgiChunk<T, R> {
     pub fn vals(&self) -> &CValue { &self.0.vals }
     pub fn times(&self) -> &ColTimes<T> { &self.0.times }
     pub fn diffs(&self) -> &[R] { &self.0.diffs }
+
+    /// An already-known equal-(key, value) group's end. Unknown metadata never causes a
+    /// whole-chunk payload scan: a sparse reader can retain its selected-range fallback.
+    pub(super) fn value_group_end(&self, row: usize) -> Option<usize> {
+        self.0.groups.as_ref().map(|groups| match groups {
+            corgi::Bounds::Stride(width, _) => (row / width + 1) * width,
+            corgi::Bounds::Offsets(ends) => ends[ends.partition_point(|&end| end <= row)],
+        })
+    }
+
 }
 
 impl<T, R> CorgiChunk<T, R>
@@ -148,6 +160,28 @@ where
             t.push_range(&times, s, e);
             out.push_back(Self::from_kv(kv, t, diffs[s..e].to_vec()));
             s = e;
+        }
+    }
+
+    /// Advancement already has canonical group offsets. Retain them while emitting, rather
+    /// than making a later reader rediscover groups by reopening the output payload.
+    fn emit_advanced(
+        srcs: &[Option<&CValue>], tags: &[usize], offs: &[usize], times: ColTimes<T>,
+        diffs: Vec<R>, out: &mut VecDeque<Self>,
+    ) {
+        let before = out.len();
+        Self::emit(srcs, tags, offs, times, diffs, out);
+        let mut start = 0;
+        for chunk in out.iter_mut().skip(before) {
+            let end = start + chunk.len_();
+            if leaf_lanes(chunk.vals()).is_none() {
+                let mut at = start;
+                let groups: Vec<_> = offs[start..end].chunk_by(|a, b| a == b).map(|run| {
+                    at += run.len(); at - start
+                }).collect();
+                Rc::get_mut(&mut chunk.0).unwrap().groups = Some(groups.into());
+            }
+            start = end;
         }
     }
 
@@ -283,12 +317,26 @@ where
         keep: &mut VecDeque<Self>,
         ship: &mut VecDeque<Self>,
     ) {
-        // One input chunk per call: partition into keep (`>= frontier`) and ship pieces via `gather`.
+        // Move whole chunks; only a split needs to gather its two payload pieces.
         let Some(chunk) = input.pop_front() else { return };
+        let times = chunk.times();
+        if times.is_empty() { return; }
+        let beyond = times.beyond(frontier);
+        if beyond.iter().all(|b| !b) {
+            ship.push_back(chunk);
+            return;
+        }
+        if beyond.iter().all(|b| *b) {
+            let covered = times.beyond(residual.borrow());
+            let fresh: Vec<usize> = (0..times.len()).filter(|&i| !covered[i]).collect();
+            for i in times.minimal(&fresh) { residual.insert(times.get(i)); }
+            keep.push_back(chunk);
+            return;
+        }
         let kv = chunk.kv();
-        let (times, diffs) = (chunk.times(), chunk.diffs());
+        let diffs = chunk.diffs();
         let (mut ki, mut si) = (Vec::new(), Vec::new());
-        for (i, beyond) in times.beyond(frontier).into_iter().enumerate() {
+        for (i, beyond) in beyond.into_iter().enumerate() {
             if beyond { ki.push(i); } else { si.push(i); }
         }
         if !ki.is_empty() {
@@ -315,26 +363,33 @@ where
         // Concatenate the pushed-back carry with the newly-arrived chunks, then advance/consolidate
         // each *complete* `(key, val)` group; withhold the last group as the carry unless `done`.
         if input.is_empty() { return; }
-        let (ckv, mut ctimes, cdiffs) = if input.len() == 1 {
+        let (ckv, mut ctimes, cdiffs, known_groups) = if input.len() == 1 {
             // Merge output normally arrives uniquely owned. Move its columns
             // into advancement instead of copying the whole chunk first.
             let chunk = input.pop_front().unwrap();
             match Rc::try_unwrap(chunk.0) {
-                Ok(inner) => (CValue::Prod(vec![inner.keys, inner.vals]), inner.times, inner.diffs),
-                Err(inner) => Self::concat(&[Self(inner)]),
+                Ok(inner) => (CValue::Prod(vec![inner.keys, inner.vals]), inner.times, inner.diffs, inner.groups),
+                Err(inner) => {
+                    let groups = inner.groups.clone();
+                    let (kv, times, diffs) = Self::concat(&[Self(inner)]);
+                    (kv, times, diffs, groups)
+                }
             }
         } else {
-            Self::concat(&input.drain(..).collect::<Vec<_>>())
+            let (kv, times, diffs) = Self::concat(&input.drain(..).collect::<Vec<_>>());
+            (kv, times, diffs, None)
         };
         let n = ctimes.len();
         if n == 0 { return; }
 
-        // Group boundaries in ONE pass (corgi `group_bounds`) instead of a per-row `compare_at` scan.
-        let bounds = group_bounds(&ckv); // exclusive group ends, ascending, `bounds.last() == n`
+        // Reuse exact boundaries from a single source; unknown or combined sources need discovery.
+        let bounds = known_groups.as_ref().map_or_else(|| group_bounds(&ckv), corgi::Bounds::to_vec);
 
         // Giant-key case: a single group spanning the whole buffer → no group provably complete.
         if !done && bounds.len() == 1 {
-            input.push_front(Self::from_kv(ckv, ctimes, cdiffs));
+            let mut carry = Self::from_kv(ckv, ctimes, cdiffs);
+            Rc::get_mut(&mut carry.0).unwrap().groups = known_groups;
+            input.push_front(carry);
             return;
         }
 
@@ -374,14 +429,14 @@ where
                 if !d.is_zero() {
                     tags.push(0); offs.push(i); rows.push(rep); odiffs.push(d);
                     if rows.len() >= TARGET {
-                        Self::emit(&srcs, &tags, &offs, ctimes.gather(&rows), std::mem::take(&mut odiffs), out);
+                        Self::emit_advanced(&srcs, &tags, &offs, ctimes.gather(&rows), std::mem::take(&mut odiffs), out);
                         tags.clear(); offs.clear(); rows.clear();
                     }
                 }
             }
             i = g_end;
         }
-        if !rows.is_empty() { Self::emit(&srcs, &tags, &offs, ctimes.gather(&rows), odiffs, out); }
+        if !rows.is_empty() { Self::emit_advanced(&srcs, &tags, &offs, ctimes.gather(&rows), odiffs, out); }
     }
 
     /// Maximal packing via the harness [`pack`]: coalesce by concatenating columns (`gather_lanes`),
@@ -418,20 +473,21 @@ where
 /// Multi-record: one columnar `sort_blocks` (discrimination sort) orders by `(key, val)` and
 /// identifies equal runs. Only the small per-run *time* tiebreak is a Rust sort (time is not a
 /// corgi type). Gather the payload once, after consolidation, from the surviving source rows.
-fn sort_consolidate<T, R>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> (CValue, CValue, ColTimes<T>, Vec<R>)
+fn sort_consolidate<T, R, const RETAIN: bool>(keys: CValue, vals: CValue, times: ColTimes<T>, diffs: Vec<R>) -> (CValue, CValue, ColTimes<T>, Vec<R>, Option<corgi::Bounds>)
 where
     T: ColTime,
     R: Semigroup + Clone,
 {
     let n = times.len();
     if n == 0 {
-        return (keys, vals, times, diffs);
+        return (keys, vals, times, diffs, RETAIN.then_some(corgi::Bounds::Stride(1, 0)));
     }
     let kv = CValue::Prod(vec![keys, vals]);
     // Order the payload; retain time/diff source coordinates until final consolidation.
     let (perm, labels) = sort_blocks(&[], &kv);
     // Walk maximal equal-`(key,val)` runs; within each, order by time and consolidate equal times.
     let (mut time_rows, mut od) = (Vec::new(), Vec::new());
+    let mut groups = Vec::new();
     let mut run = Vec::new();
     let mut i = 0;
     while i < n {
@@ -439,6 +495,7 @@ where
         while j < n && labels[j] == labels[i] {
             j += 1;
         }
+        let before = od.len();
         run.clear();
         run.extend_from_slice(&perm[i..j]);
         run.sort_by(|&a, &b| times.cmp(a, b));
@@ -456,10 +513,11 @@ where
                 od.push(d);
             }
         }
+        if RETAIN && od.len() > before { groups.push(od.len()); }
         i = j;
     }
     let (keys, vals) = split_kv(gather(&kv, &time_rows));
-    (keys, vals, times.gather(&time_rows), od)
+    (keys, vals, times.gather(&time_rows), od, RETAIN.then(|| groups.into()))
 }
 
 impl<T, R> CorgiChunk<T, R>
@@ -473,12 +531,18 @@ where
         // An integer value is held as `i64`s, as an integer key is, so that readers may borrow it
         // whichever chunk of the arrangement it is in.
         let vals = hold_wide(vals);
-        let (keys, vals, times, diffs) = sort_consolidate(keys, vals, times, diffs);
+        let (keys, vals, times, diffs, groups) = if leaf_lanes(&vals).is_some() {
+            sort_consolidate::<_, _, false>(keys, vals, times, diffs)
+        } else {
+            sort_consolidate::<_, _, true>(keys, vals, times, diffs)
+        };
         debug_assert!({
             let lane = int_lane(key_lane(&keys));
             lane.is_some_and(|ids| ids.windows(2).all(|pair| pair[0] <= pair[1]))
         }, "arrangement key must lead with a sorted i64 identifier lane");
-        Self::from_parts(keys, vals, times, diffs)
+        let mut chunk = Self::from_parts(keys, vals, times, diffs);
+        Rc::get_mut(&mut chunk.0).unwrap().groups = groups;
+        chunk
     }
 
 }
@@ -591,6 +655,14 @@ pub fn int_lane(col: &CValue) -> Option<&[i64]> {
     }
 }
 
+/// The column flattened to `i64` leaf lanes: `Some(lanes)` when it is a (possibly nested)
+/// product of integer leaves held as `i64`s — the shape DDIR tuples transcode to — so row order
+/// is the lexicographic order of the lane tuples. `Sum`/`List`/float leaves, and integers held
+/// narrower, give `None` (structural compares).
+pub(super) fn leaf_lanes(col: &CValue) -> Option<Vec<&[i64]>> {
+    corgi::arrange::borrowed_int_lanes(col)
+}
+
 /// The identifier lane of a [`present_key`] column, borrowed: the key's own values when it is an
 /// integer, and the prepended hash lane otherwise. `present_key` holds it as `i64`s.
 pub fn ident(keys: &CValue) -> &[i64] {
@@ -637,6 +709,33 @@ pub fn recover_key_ref(keys: &CValue) -> &CValue {
         CValue::Prod(cols) if corgi::arrange::leaf_slice(keys).is_none() => &cols[1],
         _ => keys,
     }
+}
+
+/// Validate the matched identifier runs for a block in one crossing. Runs are sub-sorted by real
+/// key, so matching each run's endpoints to a representative checks every row without visiting it.
+/// Each `(key, column, start, end)` names a non-empty identifier run, with `end` exclusive.
+/// Coordinates name borrowed real-key columns; self checks and duplicate singleton endpoints vanish.
+pub(super) fn colliding_keys(
+    keys: usize,
+    columns: &[&CValue],
+    runs: impl Iterator<Item = (usize, usize, usize, usize)>,
+) -> Vec<bool> {
+    let mut first = vec![None; keys];
+    let (mut pairs, mut owners) = (Vec::new(), Vec::new());
+    for (key, column, start, end) in runs {
+        let reference = *first[key].get_or_insert((column, start));
+        for row in std::iter::once(start).chain((end - start > 1).then_some(end - 1)) {
+            if (column, row) != reference {
+                pairs.push(((column, row), reference));
+                owners.push(key);
+            }
+        }
+    }
+    let mut colliding = vec![false; keys];
+    for (owner, equal) in owners.into_iter().zip(equal_pairs(columns, &pairs)) {
+        colliding[owner] |= !equal;
+    }
+    colliding
 }
 
 /// Concatenate column blocks into one column (multi-source `gather_lanes`, no sort).
@@ -723,6 +822,51 @@ where
 
 #[cfg(test)]
 mod test {
+
+    #[test]
+    fn advanced_group_bounds_are_local_after_target_split() {
+        let list = || CValue::List(corgi::Bounds::Stride(1, 1), Box::new(CValue::i64(vec![7])));
+        let prefix = CorgiChunk::from_columns(CValue::i64(vec![0]), list(),
+            vec![0u64].into_iter().collect(), vec![1i64]);
+        let original = prefix.clone();
+        let mut output = VecDeque::from([prefix]);
+        let kv = CValue::Prod(vec![CValue::i64(vec![9]), list()]);
+        let rows = TARGET + 1;
+        CorgiChunk::<u64, i64>::emit_advanced(&[Some(&kv)], &vec![0; rows], &vec![0; rows],
+            vec![0u64; rows].into_iter().collect(), vec![1; rows], &mut output);
+        assert_eq!(output.len(), 3);
+        assert!(Rc::ptr_eq(&original.0, &output[0].0));
+        assert_eq!(output[0].value_group_end(0), Some(1));
+        assert_eq!(output[1].len_(), TARGET);
+        assert_eq!(output[1].value_group_end(0), Some(TARGET));
+        assert_eq!(output[1].value_group_end(TARGET - 1), Some(TARGET));
+        assert_eq!(output[2].len_(), 1);
+        assert_eq!(output[2].value_group_end(0), Some(1));
+        assert_eq!(output.iter().map(|c| c.diffs().iter().sum::<i64>()).sum::<i64>(), rows as i64 + 1);
+    }
+
+    #[test]
+    fn retained_value_groups_follow_consolidation_advancement_and_unknown_metadata() {
+        use super::*;
+        let values = CValue::List(corgi::Bounds::Stride(1, 6), Box::new(CValue::i64(vec![7, 5, 5, 7, 8, 9])));
+        let chunk = CorgiChunk::from_columns(CValue::i64(vec![1, 0, 0, 1, 1, 2]), values,
+            vec![0u64, 0, 1, 1, 0, 0].into_iter().collect(), vec![1i64, 1, -1, 2, 1, 0]);
+        assert!(chunk.0.groups.is_some());
+        let expected = vec![2, 2, 4, 4, 5];
+        assert_eq!((0..5).map(|row| chunk.value_group_end(row).unwrap()).collect::<Vec<_>>(), expected);
+        let unknown = CorgiChunk::from_parts(chunk.keys().clone(), chunk.vals().clone(), chunk.times().clone(), chunk.diffs().to_vec());
+        assert!(unknown.0.groups.is_none());
+        assert_eq!(unknown.value_group_end(0), None);
+        assert!(unknown.0.groups.is_none());
+        let mut input = VecDeque::from([unknown]);
+        let mut output = VecDeque::new();
+        CorgiChunk::advance(&mut input, AntichainRef::new(&[0u64]), true, &mut output);
+        let advanced = output.pop_front().unwrap();
+        assert_eq!((0..5).map(|row| advanced.value_group_end(row).unwrap()).collect::<Vec<_>>(), expected);
+        let retimed: CorgiChunk<timely::order::Product<u64, u64>, i64> = chunk.retime();
+        assert_eq!((0..5).map(|row| retimed.value_group_end(row).unwrap()).collect::<Vec<_>>(), expected);
+    }
+
     use super::*;
     use corgi::arrange::compare_at;
     use differential_dataflow::trace::chunk::{ChunkBatchMerger, is_graded};
@@ -897,10 +1041,13 @@ mod test {
             }
             expected.retain(|_, d| *d != 0);
             for size in [1, 3, rows.len()] {
-                for shared in [false, true] {
+                for (shared, structured) in [(false, false), (true, false), (false, true), (true, true)] {
                     let chunks: Vec<_> = rows.chunks(size).map(|rows| CorgiChunk::from_columns(
                         ints(rows.iter().map(|r| r.0.0).collect()),
-                        ints(rows.iter().map(|r| r.0.1).collect()),
+                        if structured {
+                            CValue::List(corgi::Bounds::Stride(1, rows.len()),
+                                Box::new(ints(rows.iter().map(|r| r.0.1).collect())))
+                        } else { ints(rows.iter().map(|r| r.0.1).collect()) },
                         rows.iter().map(|r| r.1.clone()).collect(), rows.iter().map(|r| r.2).collect(),
                     )).collect();
                     let retained = if shared { chunks.clone() } else { Vec::new() };
@@ -915,7 +1062,10 @@ mod test {
                     let mut previous = None;
                     for chunk in output {
                         let keys = lane(chunk.keys());
-                        let vals = lane(chunk.vals());
+                        let vals = lane(match chunk.vals() {
+                            CValue::List(_, values) => values,
+                            values => values,
+                        });
                         for i in 0..chunk.len_() {
                             let key = ((keys[i], vals[i]), chunk.times().get(i));
                             assert!(previous.as_ref().is_none_or(|p| p < &key));
@@ -923,11 +1073,89 @@ mod test {
                             assert!(actual.insert(key, chunk.diffs()[i]).is_none());
                         }
                     }
-                    assert_eq!(actual, expected, "size={size}, shared={shared}, frontier={frontier:?}");
+                    assert_eq!(actual, expected, "size={size}, shared={shared}, structured={structured}, frontier={frontier:?}");
                     drop(retained);
                 }
             }
         }
+    }
+
+    #[test]
+    fn advance_preserves_known_unfinished_group_until_cancellation() {
+        for known in [false, true] {
+            for shared in [false, true] {
+                let mut chunk = CorgiChunk::from_columns(ints(vec![0, 0]),
+                    CValue::List(corgi::Bounds::Stride(1, 2), Box::new(ints(vec![7, 7]))),
+                    vec![0u64, 1].into_iter().collect(), vec![1i64, -1]);
+                if !known {
+                    chunk = CorgiChunk::from_parts(chunk.keys().clone(), chunk.vals().clone(),
+                        chunk.times().clone(), chunk.diffs().to_vec());
+                }
+                let retained = shared.then(|| chunk.clone());
+                let mut input = VecDeque::from([chunk]);
+                let mut output = VecDeque::new();
+                for _ in 0..2 {
+                    CorgiChunk::advance(&mut input, AntichainRef::new(&[4]), false, &mut output);
+                    assert!(output.is_empty());
+                    assert_eq!(input.len(), 1);
+                    assert_eq!(input[0].times().to_vec(), vec![0, 1]);
+                    assert_eq!(input[0].0.groups.is_some(), known);
+                }
+                CorgiChunk::advance(&mut input, AntichainRef::new(&[4]), true, &mut output);
+                assert!(input.is_empty() && output.is_empty());
+                drop(retained);
+            }
+        }
+    }
+
+    #[test]
+    fn extract_moves_whole_structured_chunks_with_their_value_groups() {
+        let source = CorgiChunk::from_columns(ints(vec![0, 0, 1, 1]),
+            CValue::List(corgi::Bounds::Stride(1, 4), Box::new(ints(vec![7, 7, 8, 8]))),
+            vec![0u64, 1, 2, 3].into_iter().collect(), vec![1i64, -1, 2, -3]);
+        assert!(source.0.groups.is_some());
+        for frontier in [0, 2, 4] {
+            for initial in [0, 5] {
+                let mut input = VecDeque::from([source.clone()]);
+                let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
+                let mut residual = Antichain::from_elem(initial);
+                let mut expected = residual.clone();
+                for row in 0..source.len_() {
+                    if source.times().get(row) >= frontier { expected.insert(source.times().get(row)); }
+                }
+                CorgiChunk::extract(&mut input, AntichainRef::new(&[frontier]),
+                    &mut residual, &mut keep, &mut ship);
+                assert!(input.is_empty());
+                assert_eq!(residual, expected);
+                for (output, kept) in [(&keep, true), (&ship, false)] {
+                    let selected: Vec<_> = (0..source.len_())
+                        .filter(|&row| (source.times().get(row) >= frontier) == kept).collect();
+                    assert_eq!(output.len(), usize::from(!selected.is_empty()));
+                    if let Some(chunk) = output.front() {
+                        assert_eq!(chunk.len_(), selected.len());
+                        for (row, &original) in selected.iter().enumerate() {
+                            assert_eq!(compare_at(&chunk.kv(), row, &source.kv(), original), Ordering::Equal);
+                            assert_eq!(chunk.times().get(row), source.times().get(original));
+                            assert_eq!(chunk.diffs()[row], source.diffs()[original]);
+                        }
+                        if selected.len() == source.len_() {
+                            assert!(Rc::ptr_eq(&source.0, &chunk.0));
+                            assert_eq!(chunk.value_group_end(0), Some(2));
+                            assert_eq!(chunk.value_group_end(3), Some(4));
+                        } else {
+                            assert!(!Rc::ptr_eq(&source.0, &chunk.0));
+                            assert!(chunk.0.groups.is_none());
+                        }
+                    }
+                }
+            }
+        }
+        let mut input = VecDeque::from([CorgiChunk::<u64, i64>::default()]);
+        let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
+        let mut residual = Antichain::from_elem(5);
+        CorgiChunk::extract(&mut input, AntichainRef::new(&[0]), &mut residual, &mut keep, &mut ship);
+        assert!(input.is_empty() && keep.is_empty() && ship.is_empty());
+        assert_eq!(residual, Antichain::from_elem(5));
     }
 
     /// `extract` must split rows at the frontier and extend the residual with exactly the kept
