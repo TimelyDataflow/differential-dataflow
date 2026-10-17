@@ -41,7 +41,7 @@ use corgi::arrange::{compare_at, equal_pairs, gather_lanes};
 use crate::corgi::search::matching_ranges;
 use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
 
-use crate::corgi::chunk::{colliding_keys, int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
+use crate::corgi::chunk::{colliding_keys, int_lane, leaf_lanes, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_join_projection;
@@ -272,23 +272,6 @@ fn side_chunks<T: ColTime>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>> {
     chunks
 }
 
-/// The column flattened to `i64` leaf lanes: `Some(lanes)` when it is a (possibly nested)
-/// product of integer leaves held as `i64`s — the shape DDIR tuples transcode to — so row order
-/// is the lexicographic order of the lane tuples. `Sum`/`List`/float leaves, and integers held
-/// narrower, give `None` (structural compares).
-fn leaf_lanes(col: &CValue) -> Option<Vec<&[i64]>> {
-    fn walk<'a>(col: &'a CValue, out: &mut Vec<&'a [i64]>) -> bool {
-        match col {
-            CValue::Prim(_) => match int_lane(col) { Some(lane) => { out.push(lane); true }, None => false },
-            CValue::Prod(fields) => fields.iter().all(|f| walk(f, out)),
-            CValue::Unit(_) => true,
-            _ => false,
-        }
-    }
-    let mut out = Vec::new();
-    if walk(col, &mut out) { Some(out) } else { None }
-}
-
 /// Whether to borrow comparison lanes. Primitive tokens read their source lane directly.
 fn leaf_valued<T: ColTime>(chunks: &[&CorgiChunk<T, Diff>]) -> bool {
     !primitive_values(chunks[0])
@@ -304,6 +287,8 @@ struct RunRef<'a, T: ColTime> {
     s: usize,
     e: usize,
     vals: Option<&'a [&'a [i64]]>,
+    /// Whether the prepared first lane can serve directly as the value token.
+    primitive: bool,
 }
 
 impl<'a, T: ColTime> RunRef<'a, T> {
@@ -321,6 +306,9 @@ impl<'a, T: ColTime> RunRef<'a, T> {
     }
     /// One past the end of the value run starting at `row`.
     fn val_run_end(&self, row: usize) -> usize {
+        if self.vals.is_none() {
+            if let Some(end) = self.chunk.value_group_end(row) { return end.min(self.e); }
+        }
         let mut r = row + 1;
         while r < self.e && self.val_eq(r, self, row) { r += 1; }
         r
@@ -355,9 +343,9 @@ impl<T: ColTime> SideScratch<T> {
     /// Entries end sorted by `(token, time)`.
     fn stage_runs(&mut self, runs: &[RunRef<'_, T>], lower: &T) {
         self.entries.clear();
-        if runs.first().is_some_and(|run| primitive_values(run.chunk)) {
+        if runs.first().is_some_and(|run| run.primitive) {
             for run in runs {
-                let ids = int_lane(run.chunk.vals()).unwrap();
+                let ids = run.vals.unwrap()[0];
                 self.entries.extend((run.s..run.e).map(|row| {
                     (ids[row] as u64, run.chunk.times().get(row).join(lower), run.chunk.diffs()[row])
                 }));
@@ -370,12 +358,23 @@ impl<T: ColTime> SideScratch<T> {
             // runs ascend. Joining product times need not preserve their total order,
             // so adjacent consolidation suffices only if advanced times stay ordered.
             let coord_hi = (run.cid as u64) << COORD_BITS;
-            let mut v_start = run.s;
-            for row in run.s..run.e {
-                if row > v_start && !run.val_eq(row, run, v_start) {
-                    v_start = row;
+            if run.vals.is_none() && run.chunk.value_group_end(run.s).is_some() {
+                let mut start = run.s;
+                while start < run.e {
+                    let end = run.val_run_end(start);
+                    for row in start..end {
+                        self.push(coord_hi | start as u64, run.chunk.times().get(row).join(lower), run.chunk.diffs()[row]);
+                    }
+                    start = end;
                 }
-                self.push(coord_hi | v_start as u64, run.chunk.times().get(row).join(lower), run.chunk.diffs()[row]);
+            } else {
+                let mut v_start = run.s;
+                for row in run.s..run.e {
+                    if row > v_start && !run.val_eq(row, run, v_start) {
+                        v_start = row;
+                    }
+                    self.push(coord_hi | v_start as u64, run.chunk.times().get(row).join(lower), run.chunk.diffs()[row]);
+                }
             }
             if self.entries.windows(2).any(|w| w[0].0 == w[1].0 && w[0].1 > w[1].1) {
                 differential_dataflow::consolidation::consolidate_updates(&mut self.entries);
@@ -505,6 +504,7 @@ struct LeafView<'a, T: ColTime> {
     keys: &'a [i64],
     /// The chunk's full borrowed value lanes; `None` when vals are structured.
     vals: Option<Vec<&'a [i64]>>,
+    primitive: bool,
     /// Cursor within `keys`.
     cur: usize,
 }
@@ -514,8 +514,9 @@ const PULL: usize = 1 << 14;
 
 impl<'a, T: ColTime> LeafView<'a, T> {
     fn new(chunk: &'a CorgiChunk<T, Diff>, cid: usize, start: usize, end: usize, leaf_vals: bool) -> Self {
-        let vals = (leaf_vals && end > start).then(|| leaf_lanes(chunk.vals()).unwrap());
-        LeafView { chunk, cid, base: start, keys: &ident(chunk)[start..end], vals, cur: 0 }
+        let primitive = primitive_values(chunk);
+        let vals = ((leaf_vals || primitive) && end > start).then(|| leaf_lanes(chunk.vals()).unwrap());
+        LeafView { chunk, cid, base: start, keys: &ident(chunk)[start..end], vals, primitive, cur: 0 }
     }
     /// The key under the cursor, if any remains in this block.
     fn cur_key(&self) -> Option<i64> {
@@ -537,6 +538,7 @@ impl<'a, T: ColTime> LeafView<'a, T> {
             s,
             e,
             vals: self.vals.as_deref(),
+            primitive: self.primitive,
         }
     }
 }
@@ -550,6 +552,7 @@ struct Probe<'a, T: ColTime> {
     lo: Vec<usize>,
     hi: Vec<usize>,
     vals: Option<Vec<&'a [i64]>>,
+    primitive: bool,
 }
 
 impl<'a, T: ColTime> Probe<'a, T> {
@@ -562,8 +565,9 @@ impl<'a, T: ColTime> Probe<'a, T> {
             lo[j] = range.start;
             hi[j] = range.end;
         }
-        let vals = leaf_vals.then(|| leaf_lanes(chunk.vals()).unwrap());
-        Probe { chunk, cid, lo, hi, vals }
+        let primitive = primitive_values(chunk);
+        let vals = (leaf_vals || primitive).then(|| leaf_lanes(chunk.vals()).unwrap());
+        Probe { chunk, cid, lo, hi, vals, primitive }
     }
     /// The run of driver key `j` in this chunk, if any.
     fn run_ref(&self, j: usize) -> Option<RunRef<'_, T>> {
@@ -575,6 +579,7 @@ impl<'a, T: ColTime> Probe<'a, T> {
             s,
             e,
             vals: self.vals.as_deref(),
+            primitive: self.primitive,
         })
     }
 }
@@ -619,7 +624,7 @@ fn stage_collision<T: ColTime>(
                     })
                     .unwrap_or(run.e - start);
             let vals = run.vals;
-            equal_runs.push(RunRef { chunk: run.chunk, cid: run.cid, s: start, e: end, vals });
+            equal_runs.push(RunRef { chunk: run.chunk, cid: run.cid, s: start, e: end, vals, primitive: run.primitive });
             positions[index] = end;
         }
         scratch.stage_runs(&equal_runs, lower);
@@ -878,6 +883,44 @@ fn leaf_merge_primitive<'a, T: ColTime>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn retained_value_groups_follow_selected_ranges_and_real_keys() {
+        let lists = |values: Vec<i64>| CValue::List(
+            corgi::Bounds::from((1..=values.len()).collect::<Vec<_>>()),
+            Box::new(CValue::i64(values)),
+        );
+        let chunk = CorgiChunk::from_columns(
+            CValue::i64(vec![0, 0, 1, 1, 1, 2, 3, 3, 4, 4]),
+            lists(vec![5, 5, 7, 7, 8, 9, 5, 5, 5, 5]),
+            (0..10u64).collect(), vec![1, -1, 1, 1, 1, 1, 1, 1, 1, 1],
+        );
+        let view = LeafView::new(&chunk, 0, 2, 10, false);
+        assert_eq!(view.run_ref(2, 5).val_run_end(2), 4);
+        assert_eq!(view.run_ref(2, 5).val_run_end(4), 5);
+        let probe = Probe::new(&chunk, 0, &[0, 1, 3, 4, 99], false);
+        let mut scratch = SideScratch::new();
+        let expected = [vec![], vec![(2, 10, 2), (4, 10, 1)], vec![(6, 10, 2)], vec![(8, 10, 2)]];
+        for (i, want) in expected.into_iter().enumerate() {
+            scratch.stage_runs(&[probe.run_ref(i).unwrap()], &10);
+            assert_eq!(scratch.entries, want);
+        }
+        assert!(probe.run_ref(4).is_none());
+        // A subrange must stop before a cached end outside it.
+        scratch.stage_runs(&[view.run_ref(6, 7)], &10);
+        assert_eq!(scratch.entries, vec![(6, 10, 1)]);
+
+        // Equal values in distinct real keys sharing a hash must remain separate.
+        let collision = CorgiChunk::from_columns(
+            CValue::Prod(vec![CValue::i64(vec![7; 4]), CValue::i64(vec![1, 1, 2, 2])]),
+            lists(vec![5; 4]), (0..4u64).collect(), vec![1, 1, -1, -1],
+        );
+        let collision_view = LeafView::new(&collision, 0, 0, 4, false);
+        assert_eq!(collision_view.run_ref(0, 4).val_run_end(0), 2);
+        let mut bridge = Vec::new();
+        stage_collision(&[collision_view.run_ref(0, 4)], &10, 7, &mut bridge);
+        assert_eq!(bridge, vec![((7, 0), 10, 2), ((7, 2), 10, -2)]);
+    }
+
     /// An integer column of these values.
     fn ints(xs: Vec<u64>) -> CValue { CValue::i64(xs.into_iter().map(|x| x as i64).collect()) }
 
@@ -1074,7 +1117,7 @@ mod tests {
         );
         let mut scratch = SideScratch::new();
         scratch.stage_runs(
-            &[RunRef { chunk: &chunk, cid: 0, s: 0, e: 3, vals: None }],
+            &[LeafView::new(&chunk, 0, 0, 3, false).run_ref(0, 3)],
             &Product::new(1u64, 0u64),
         );
         assert_eq!(scratch.entries, vec![(11, Product::new(1, 0), 1)]);
@@ -1091,7 +1134,7 @@ mod tests {
         );
         let mut scratch = SideScratch::new();
         scratch.stage_runs(
-            &[RunRef { chunk: &chunk, cid: 0, s: 0, e: 3, vals: None }],
+            &[LeafView::new(&chunk, 0, 0, 3, false).run_ref(0, 3)],
             &Product::new(1u64, 0u64),
         );
         assert_eq!(scratch.entries, vec![(0, Product::new(1, 0), 1)]);
