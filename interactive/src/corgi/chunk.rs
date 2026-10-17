@@ -317,12 +317,26 @@ where
         keep: &mut VecDeque<Self>,
         ship: &mut VecDeque<Self>,
     ) {
-        // One input chunk per call: partition into keep (`>= frontier`) and ship pieces via `gather`.
+        // Move whole chunks; only a split needs to gather its two payload pieces.
         let Some(chunk) = input.pop_front() else { return };
+        let times = chunk.times();
+        if times.is_empty() { return; }
+        let beyond = times.beyond(frontier);
+        if beyond.iter().all(|b| !b) {
+            ship.push_back(chunk);
+            return;
+        }
+        if beyond.iter().all(|b| *b) {
+            let covered = times.beyond(residual.borrow());
+            let fresh: Vec<usize> = (0..times.len()).filter(|&i| !covered[i]).collect();
+            for i in times.minimal(&fresh) { residual.insert(times.get(i)); }
+            keep.push_back(chunk);
+            return;
+        }
         let kv = chunk.kv();
-        let (times, diffs) = (chunk.times(), chunk.diffs());
+        let diffs = chunk.diffs();
         let (mut ki, mut si) = (Vec::new(), Vec::new());
-        for (i, beyond) in times.beyond(frontier).into_iter().enumerate() {
+        for (i, beyond) in beyond.into_iter().enumerate() {
             if beyond { ki.push(i); } else { si.push(i); }
         }
         if !ki.is_empty() {
@@ -1051,6 +1065,56 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn extract_moves_whole_structured_chunks_with_their_value_groups() {
+        let source = CorgiChunk::from_columns(ints(vec![0, 0, 1, 1]),
+            CValue::List(corgi::Bounds::Stride(1, 4), Box::new(ints(vec![7, 7, 8, 8]))),
+            vec![0u64, 1, 2, 3].into_iter().collect(), vec![1i64, -1, 2, -3]);
+        assert!(source.0.groups.is_some());
+        for frontier in [0, 2, 4] {
+            for initial in [0, 5] {
+                let mut input = VecDeque::from([source.clone()]);
+                let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
+                let mut residual = Antichain::from_elem(initial);
+                let mut expected = residual.clone();
+                for row in 0..source.len_() {
+                    if source.times().get(row) >= frontier { expected.insert(source.times().get(row)); }
+                }
+                CorgiChunk::extract(&mut input, AntichainRef::new(&[frontier]),
+                    &mut residual, &mut keep, &mut ship);
+                assert!(input.is_empty());
+                assert_eq!(residual, expected);
+                for (output, kept) in [(&keep, true), (&ship, false)] {
+                    let selected: Vec<_> = (0..source.len_())
+                        .filter(|&row| (source.times().get(row) >= frontier) == kept).collect();
+                    assert_eq!(output.len(), usize::from(!selected.is_empty()));
+                    if let Some(chunk) = output.front() {
+                        assert_eq!(chunk.len_(), selected.len());
+                        for (row, &original) in selected.iter().enumerate() {
+                            assert_eq!(compare_at(&chunk.kv(), row, &source.kv(), original), Ordering::Equal);
+                            assert_eq!(chunk.times().get(row), source.times().get(original));
+                            assert_eq!(chunk.diffs()[row], source.diffs()[original]);
+                        }
+                        if selected.len() == source.len_() {
+                            assert!(Rc::ptr_eq(&source.0, &chunk.0));
+                            assert_eq!(chunk.value_group_end(0), Some(2));
+                            assert_eq!(chunk.value_group_end(3), Some(4));
+                        } else {
+                            assert!(!Rc::ptr_eq(&source.0, &chunk.0));
+                            assert!(chunk.0.groups.is_none());
+                        }
+                    }
+                }
+            }
+        }
+        let mut input = VecDeque::from([CorgiChunk::<u64, i64>::default()]);
+        let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
+        let mut residual = Antichain::from_elem(5);
+        CorgiChunk::extract(&mut input, AntichainRef::new(&[0]), &mut residual, &mut keep, &mut ship);
+        assert!(input.is_empty() && keep.is_empty() && ship.is_empty());
+        assert_eq!(residual, Antichain::from_elem(5));
     }
 
     /// `extract` must split rows at the frontier and extend the residual with exactly the kept
