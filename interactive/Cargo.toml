@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 columnar = { workspace = true }
 # The columnar kernels for the interpreted backend, pinned by git rev.
-corgi = { git = "https://github.com/frankmcsherry/WIP", rev = "41e873124a850772a9c4f7df88be94e3163512ef", features = ["serde"] }
+corgi = { git = "https://github.com/frankmcsherry/WIP", rev = "91e89f4c52f3f48f80d81815b0113264b8cb607d", features = ["serde"] }
 differential-dataflow = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 smallvec = "1.15.1"

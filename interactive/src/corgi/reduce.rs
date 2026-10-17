@@ -36,12 +36,12 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{compare_at, gather_lanes, sort_blocks};
+use corgi::arrange::{compare_at, equal_pairs, gather_lanes, sort_blocks};
 use corgi::{Bounds, Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::matching_ranges;
-use crate::corgi::chunk::{columns_to_batch, ident, key_ids, key_is_hashed, recover_key, CorgiChunk};
+use crate::corgi::chunk::{columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
 use crate::corgi::logic::compile_reduce;
 use crate::ir::{Diff, Reducer};
 
@@ -267,18 +267,27 @@ fn colliding_keys<T: ColTime>(keys: &[i64], sides: &[(&[&CorgiChunk<T, Diff>], &
     if !sides.iter().flat_map(|side| side.0).any(|chunk| key_is_hashed(chunk.keys())) {
         return colliding;
     }
-    let mut first: Vec<Option<&CValue>> = vec![None; keys.len()];
-    let mut first_row = vec![0; keys.len()];
+    let columns: Vec<_> = sides.iter().flat_map(|(chunks, _)| chunks.iter().map(|chunk| recover_key_ref(chunk.keys()))).collect();
+    let mut first = vec![None; keys.len()];
+    let (mut pairs, mut owners) = (Vec::new(), Vec::new());
+    let mut column = 0;
     for (chunks, matches) in sides {
-        for (chunk, found) in chunks.iter().zip(matches.iter()) {
-            let column = chunk.keys();
+        for (_, found) in chunks.iter().zip(matches.iter()) {
             for (index, rows) in found {
-                let reference = *first[*index].get_or_insert_with(|| { first_row[*index] = rows.start; column });
-                let r = first_row[*index];
-                colliding[*index] |= compare_at(column, rows.start, reference, r).is_ne()
-                    || compare_at(column, rows.end - 1, reference, r).is_ne();
+                let reference = *first[*index].get_or_insert((column, rows.start));
+                for row in std::iter::once(rows.start).chain((rows.len() > 1).then_some(rows.end - 1)) {
+                    if (column, row) != reference {
+                        pairs.push(((column, row), reference));
+                        owners.push(*index);
+                    }
+                }
             }
+            column += 1;
         }
+    }
+    // One crossing for all endpoints in the window; only coordinates are regrouped, never keys.
+    for (owner, equal) in owners.into_iter().zip(equal_pairs(&columns, &pairs)) {
+        colliding[owner] |= !equal;
     }
     colliding
 }
@@ -572,6 +581,36 @@ where
         };
         let fresh = self.output.columns.len();
         if !desired.is_empty() { self.output.columns.push(desired); }
+        // The usual reducers (including single-result terms) reconcile one desired value with
+        // at most one old value per real key. Compare all those pairs at once, by coordinates into
+        // the existing columns. Keys with multiple outputs retain the general reconciliation path;
+        // batching their Cartesian candidate sets would add work that an early match avoids.
+        let mut singleton_matches = Vec::new();
+        if !output.is_empty() {
+            singleton_matches.resize(keys.len(), None);
+            let capacity = keys.len().min(output.len());
+            let (mut pairs, mut owners) = (Vec::with_capacity(capacity), Vec::with_capacity(capacity));
+            let (mut bs, mut os) = (0, 0);
+            for (b, (key, &oe)) in keys.iter().zip(out_ends).enumerate() {
+                let be = if split { bracket_ends[b] } else { b + 1 };
+                let ds = if bs == 0 { 0 } else { desired_ends[bs - 1] };
+                let de = desired_ends[be - 1];
+                if self.retire.colliding.binary_search(key).is_err() && de - ds <= 1 && oe - os <= 1 {
+                    singleton_matches[b] = Some(false);
+                    if de > ds && oe > os {
+                        pairs.push(((fresh, ds), self.output.refs[output[os].0 as usize]));
+                        owners.push(b);
+                    }
+                }
+                (bs, os) = (be, oe);
+            }
+            if !pairs.is_empty() {
+                let columns: Vec<_> = self.output.columns.iter().collect();
+                for (owner, equal) in owners.into_iter().zip(equal_pairs(&columns, &pairs)) {
+                    singleton_matches[owner] = Some(equal);
+                }
+            }
+        }
         let Pool { columns, refs } = &mut self.output;
         let (output_keys, key_columns) = (&mut self.output_keys, &self.key_columns);
         let (mut corr, mut corr_ends) = (Vec::new(), Vec::with_capacity(keys.len()));
@@ -598,7 +637,12 @@ where
                             compare_at(&key_columns[kc], kr, &key_columns[oc], or).is_eq()
                         })
                     };
-                    match corr[net_start..].iter().position(equal) {
+                    let found = match singleton_matches.get(b).copied().flatten() {
+                        Some(true) => Some(0),
+                        Some(false) => None,
+                        None => corr[net_start..].iter().position(equal),
+                    };
+                    match found {
                         Some(at) => corr[net_start + at].1 += diff,
                         None => {
                             corr.push((refs.len() as u64, diff));
