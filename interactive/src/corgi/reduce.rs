@@ -20,8 +20,8 @@
 //!   * materialize — gather the emitted keys and values from the pools' columns and seal a
 //!     `CorgiChunk` batch column-natively.
 //!
-//! Min/Collect values use a segmented structural sort over the candidate columns: Corgi orders
-//! integers as signed values and lists lexicographically, just as DDIR does.
+//! Presentation assigns value ids in structural order (signed integers, lexicographic lists).
+//! Min/Collect reuse that order rather than sorting the candidate columns a second time.
 //!
 //! The changed-key restriction is honored by presenting only the changed keys: novel batches are
 //! read whole (delta-sized), the accumulated history is scanned and filtered to the changed hashes
@@ -306,6 +306,7 @@ where
     /// The one value crossing for a wave: every `(key, time)` bracket at once. Builds a column of the
     /// desired output values, one row each, and returns it with each bracket's end among its rows.
     /// `input[k] = (value_id, accumulated diff)`; bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
+    /// As with `reduce_term`, the harness consolidates each bracket in ascending value-id order.
     fn reduce_brackets(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<usize>) {
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
         match self.reducer {
@@ -345,85 +346,46 @@ where
                 // The structural minimum over values with NON-ZERO net. The sign does not select
                 // candidates: DD presents every non-zero accumulation. Filtering to `> 0` here both
                 // drops all-negative keys and can pick a different minimum when a bracket mixes signs.
-                // Gather all candidates across brackets into one column, segment by
-                // bracket, and one corgi `sort_blocks` gives every bracket's argmin at once
-                // (`perm[block_start]`). The winning ROW is taken columnar.
-                let mut cand_reps: Vec<u64> = Vec::new(); // input value ID per candidate
-                let mut labels: Vec<u64> = Vec::new(); // dense segment id per candidate
-                let mut block_starts: Vec<usize> = Vec::new(); // per emitted bracket: start offset in cand_reps
+                // Presentation has already ordered each real key's values. Its first non-zero
+                // value id is the minimum; gather just the winners, across all brackets at once.
+                let mut min_reps = Vec::with_capacity(ends.len());
                 let mut start = 0;
                 for &end in ends {
-                    let lo = cand_reps.len();
-                    let seg = block_starts.len() as u64;
-                    for k in start..end {
-                        if input[k].1 != 0 {
-                            cand_reps.push(input[k].0);
-                            labels.push(seg);
-                        }
+                    if let Some(&(id, _)) = input[start..end].iter().find(|&&(_, diff)| diff != 0) {
+                        min_reps.push(id);
                     }
-                    if cand_reps.len() > lo {
-                        block_starts.push(lo);
-                    }
-                    out_ends.push(block_starts.len());
+                    out_ends.push(min_reps.len());
                     start = end;
                 }
-                if cand_reps.is_empty() {
+                if min_reps.is_empty() {
                     return (CValue::Unit(0), out_ends);
                 }
-                let candidates = self.input.gather(&cand_reps);
-                // Integer values need no sort: scan each block for its least.
-                let min_reps: Vec<u64> = if let Some(values) = corgi::arrange::leaf_slice(&candidates) {
-                    let block_ends = block_starts.iter().skip(1).copied().chain([cand_reps.len()]);
-                    block_starts.iter().zip(block_ends).map(|(&lo, hi)| {
-                        cand_reps[(lo..hi).min_by_key(|&k| values[k]).expect("blocks are non-empty")]
-                    }).collect()
-                } else {
-                    let (perm, _) = sort_blocks(&labels, &candidates);
-                    block_starts.iter().map(|&lo| cand_reps[perm[lo]]).collect()
-                };
                 (self.input.gather(&min_reps), out_ends)
             }
             Reducer::Expr(_) => unreachable!("a term's brackets are `reduce_term`'s"),
             Reducer::Collect => {
                 // One row per bracket: the values sorted in DDIR observable order,
-                // each repeated by its diff, as a `List`. One `sort_blocks` orders every bracket's
-                // entries at once; element rows are then taken columnar. A bracket emits iff some
+                // each repeated by its diff, as a `List`. Ascending ids already give that order;
+                // element rows are taken columnar. A bracket emits iff some
                 // value has NON-ZERO net (as Distinct/Min: DD invokes the reducer only for a key
                 // with input, and the row reducer then lists the positive copies — an empty list
                 // when every net is negative). A bracket whose values all cancelled is a key with
                 // no input: it must emit nothing, or a retracted key keeps a stale (empty) list.
-                let mut entry_reps: Vec<u64> = Vec::new();
-                let mut entry_diffs: Vec<Diff> = Vec::new();
-                let mut labels: Vec<u64> = Vec::new();
-                let mut blocks: Vec<(usize, usize)> = Vec::with_capacity(ends.len());
+                let mut elem_reps = Vec::new();
+                let mut bracket_ends = Vec::with_capacity(ends.len());
                 let mut start = 0;
-                for (bi, &end) in ends.iter().enumerate() {
+                for &end in ends {
                     if input[start..end].iter().any(|&(_, d)| d != 0) {
-                        let lo = entry_reps.len();
-                        for k in start..end {
-                            entry_reps.push(input[k].0);
-                            entry_diffs.push(input[k].1);
-                            labels.push(bi as u64);
+                        for &(id, diff) in &input[start..end] {
+                            elem_reps.extend(std::iter::repeat_n(id, diff.max(0) as usize));
                         }
-                        blocks.push((lo, entry_reps.len()));
+                        bracket_ends.push(elem_reps.len());
                     }
-                    out_ends.push(blocks.len());
+                    out_ends.push(bracket_ends.len());
                     start = end;
                 }
-                if blocks.is_empty() {
+                if bracket_ends.is_empty() {
                     return (CValue::Unit(0), out_ends);
-                }
-                let perm = sort_blocks(&labels, &self.input.gather(&entry_reps)).0;
-                // Expand each bracket's sorted entries by their diff (max(0, ·) copies).
-                let mut elem_reps: Vec<u64> = Vec::new();
-                let mut bracket_ends: Vec<usize> = Vec::with_capacity(ends.len());
-                for (lo, hi) in blocks {
-                    for &e in &perm[lo..hi] {
-                        for _ in 0..entry_diffs[e].max(0) {
-                            elem_reps.push(entry_reps[e]);
-                        }
-                    }
-                    bracket_ends.push(elem_reps.len());
                 }
                 // A window whose lists are all empty still has an element SHAPE — the input
                 // values' — and the column must carry it, or this batch's `List<()>` meets the
@@ -617,7 +579,10 @@ where
         for (b, (key, &oe)) in keys.iter().zip(out_ends).enumerate() {
             let be = if split { bracket_ends[b] } else { b + 1 };
             let checked = split && self.retire.colliding.binary_search(key).is_ok();
-            let mut net: Vec<(u64, Diff)> = output[os..oe].iter().map(|&(id, d)| (id, -d)).collect();
+            // Reconcile directly in this key's tail of the batched corrections. A separate Vec
+            // here used to allocate once for every key, even for an initial singleton result.
+            let net_start = corr.len();
+            corr.extend(output[os..oe].iter().map(|&(id, d)| (id, -d)));
             for s in bs..be {
                 let (ds, de) = (if s == 0 { 0 } else { desired_ends[s - 1] }, desired_ends[s]);
                 if ds == de { continue; }
@@ -633,17 +598,24 @@ where
                             compare_at(&key_columns[kc], kr, &key_columns[oc], or).is_eq()
                         })
                     };
-                    match net.iter().position(equal) {
-                        Some(at) => net[at].1 += diff,
+                    match corr[net_start..].iter().position(equal) {
+                        Some(at) => corr[net_start + at].1 += diff,
                         None => {
-                            net.push((refs.len() as u64, diff));
+                            corr.push((refs.len() as u64, diff));
                             refs.push((fresh, row));
                             output_keys.push((kc, kr));
                         }
                     }
                 }
             }
-            corr.extend(net.into_iter().filter(|&(_, d)| d != 0));
+            let mut keep = net_start;
+            for read in net_start..corr.len() {
+                if corr[read].1 != 0 {
+                    corr[keep] = corr[read];
+                    keep += 1;
+                }
+            }
+            corr.truncate(keep);
             corr_ends.push(corr.len());
             (bs, os) = (be, oe);
         }
