@@ -147,13 +147,14 @@ impl Work {
         }
         let (mut needles, mut groups) = (Vec::new(), Vec::new());
         let (mut scratch, mut found) = (Vec::new(), Vec::new());
+        let (mut validation_pairs, mut pending) = (Vec::new(), Vec::new());
         for (r, run) in self.runs.iter().enumerate() {
-            let (lo, hi) = (self.starts[r], ends[r]);
-            if lo == hi { continue; }
+            let (start, end) = (self.starts[r], ends[r]);
+            if start == end { continue; }
             let ids = ident(run.keys());
             needles.clear();
             groups.clear();
-            for u in lo..hi {
+            for u in start..end {
                 if needles.last() != Some(&ids[u]) {
                     needles.push(ids[u]);
                     groups.push(u..u);
@@ -166,25 +167,72 @@ impl Work {
                 let hay = &ident(chunk.keys())[base..];
                 if hay.first().is_none_or(|&x| x > run_last) || hay.last().is_some_and(|&x| x < first) { continue; }
                 matching_ranges(&needles, hay, &mut scratch, &mut found);
-                for (needle, range) in found.iter() {
+                // Singleton ranges already have no output fanout: retain the pooled cross-chunk
+                // comparison path, rather than opening one foreign batch per arranged chunk.
+                if !hashed || found.iter().all(|(_, range)| range.len() == 1) {
+                    for (needle, range) in &found {
+                        for u in groups[*needle].clone() {
+                            for j in range.start + base..range.end + base {
+                                if precedes(chunk, j, run, u, self.strict) {
+                                    if hashed {
+                                        key_pairs.push(((r, u), (self.runs.len() + cid, j)));
+                                        if key_pairs.len() == BLOCK {
+                                            keep_equal(&columns, &mut key_pairs, self.runs.len(), &mut matches);
+                                        }
+                                    } else {
+                                        push_match(&mut matches, r, u, cid, j);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                validation_pairs.clear();
+                pending.clear();
+                for (needle, range) in &found {
+                    let lo = range.start + base;
+                    let hi = range.end + base;
+                    // Defer payload reads until at least one arranged row passes the time test.
+                    // Updates need not be in real-key order, even though chunks are.
+                    let mut endpoints = None;
                     for u in groups[*needle].clone() {
-                        for j in range.start + base..range.end + base {
-                            let precedes = match chunk.times().cmp_cross(j, run.times(), u) {
-                                Ordering::Less => true,
-                                Ordering::Equal => !self.strict,
-                                Ordering::Greater => false,
-                            };
-                            if !precedes { continue; }
-                            if hashed {
+                        let Some(first_eligible) = (lo..hi).find(|&j| precedes(chunk, j, run, u, self.strict)) else { continue };
+                        let endpoints = *endpoints.get_or_insert_with(|| {
+                            if hi - lo > 1 {
+                                let at = validation_pairs.len();
+                                validation_pairs.push(((self.runs.len() + cid, lo), (self.runs.len() + cid, hi - 1)));
+                                Some(at)
+                            } else { None }
+                        });
+                        let representative = validation_pairs.len();
+                        validation_pairs.push(((r, u), (self.runs.len() + cid, lo)));
+                        pending.push((u, first_eligible, hi, endpoints, representative));
+                    }
+                }
+                if pending.is_empty() { continue; }
+                let equality = equal_flags(&columns, &validation_pairs);
+                for &(u, first_eligible, hi, endpoints, representative) in &pending {
+                    if endpoints.is_none_or(|p| equality[p]) {
+                        // Chunks are in (identifier, real key, value, time) order. Equal endpoints
+                        // certify the whole identifier range, so one update/representative check
+                        // replaces one foreign key read for every output candidate.
+                        if !equality[representative] { continue; }
+                        push_match(&mut matches, r, u, cid, first_eligible);
+                        for j in first_eligible + 1..hi {
+                            if precedes(chunk, j, run, u, self.strict) {
+                                push_match(&mut matches, r, u, cid, j);
+                            }
+                        }
+                    } else {
+                        // A genuine hash collision retains the bounded, time-filtered fallback.
+                        for j in first_eligible..hi {
+                            if j == first_eligible || precedes(chunk, j, run, u, self.strict) {
                                 key_pairs.push(((r, u), (self.runs.len() + cid, j)));
                                 if key_pairs.len() == BLOCK {
                                     keep_equal(&columns, &mut key_pairs, self.runs.len(), &mut matches);
                                 }
-                            } else {
-                                matches.0.push(r);
-                                matches.1.push(u);
-                                matches.2.push(cid);
-                                matches.3.push(j);
                             }
                         }
                     }
@@ -259,6 +307,24 @@ impl Work {
     }
 }
 
+/// Whether the arranged row precedes the update in the half join's total time order.
+#[inline]
+fn precedes(chunk: &CorgiChunk<Time, Diff>, j: usize, run: &Run, u: usize, strict: bool) -> bool {
+    match chunk.times().cmp_cross(j, run.times(), u) {
+        Ordering::Less => true,
+        Ordering::Equal => !strict,
+        Ordering::Greater => false,
+    }
+}
+
+#[inline]
+fn push_match(matches: &mut (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>), r: usize, u: usize, c: usize, j: usize) {
+    matches.0.push(r);
+    matches.1.push(u);
+    matches.2.push(c);
+    matches.3.push(j);
+}
+
 /// Check only time-eligible pairs, in bounded batches over borrowed key columns. Even a forged
 /// hash collision cannot accumulate an unbounded set of candidates awaiting key validation.
 fn keep_equal(
@@ -267,6 +333,16 @@ fn keep_equal(
     runs: usize,
     matches: &mut (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>),
 ) {
+    let equality = equal_flags(columns, pairs);
+    for (((r, u), (c, j)), equal) in pairs.drain(..).zip(equality) {
+        if equal {
+            push_match(matches, r, u, c - runs, j);
+        }
+    }
+}
+
+/// Compare indexed pairs together by source columns, preserving their original result order.
+fn equal_flags(columns: &[&CValue], pairs: &[((usize, usize), (usize, usize))]) -> Vec<bool> {
     let mut order: Vec<_> = (0..pairs.len()).collect();
     let sources = |i: usize| (pairs[i].0.0, pairs[i].1.0);
     if order.windows(2).any(|w| sources(w[0]) > sources(w[1])) {
@@ -282,14 +358,7 @@ fn keep_equal(
         let signs = equal_idx(columns[a], columns[b], &left, &right);
         for (&i, sign) in group.iter().zip(signs) { equality[i] = sign == 0; }
     }
-    for (((r, u), (c, j)), equal) in pairs.drain(..).zip(equality) {
-        if equal {
-            matches.0.push(r);
-            matches.1.push(u);
-            matches.2.push(c - runs);
-            matches.3.push(j);
-        }
-    }
+    equality
 }
 
 #[cfg(test)]
@@ -396,6 +465,43 @@ mod tests {
             .map(|(((r, u), c), j)| (r, u, c, j)).collect();
         assert_eq!(actual, expected);
         assert!(pairs.is_empty());
+    }
+
+    /// A uniform arranged range is certified once; updates with the same identifier may still
+    /// hold interleaved real keys and must each meet the representative. Future-only ranges do
+    /// not read update keys, and strictness still excludes equal-time arranged rows.
+    #[test]
+    fn uniform_ranges_check_each_update_and_preserve_time_filtering() {
+        let keys = |ks: &[i64]| CValue::Prod(vec![
+            ints(&vec![42; ks.len()]),
+            CValue::Prod(vec![ints(ks), ints(&ks.iter().map(|k| k * 7).collect::<Vec<_>>())]),
+        ]);
+        let arranged = Rc::new(differential_dataflow::trace::chunk::ChunkBatch::new(vec![CorgiChunk::from_columns(
+            keys(&[3, 3, 3]), ints(&[10, 20, 30]),
+            [t(0, 0), t(1, 0), t(2, 0)].into_iter().collect(), vec![1, -1, 2],
+        )]));
+        let updates = Run {
+            keys: keys(&[9, 3, 9, 3]),
+            vals: CValue::Prod(vec![ints(&[1, 2, 3, 4]), lifted(&[(3, 0); 4])]),
+            times: [t(3, 0), t(2, 0), t(0, 0), t(1, 0)].into_iter().collect(),
+            diffs: vec![1, 2, 3, -1],
+        };
+        for strict in [false, true] {
+            let mut tactic = CorgiHalfJoin::new(Term::Var(0), Term::Tuple(vec![Term::Var(1), Term::Var(2)]), strict, 2);
+            let got: Vec<_> = tactic.prep(vec![updates.clone()], vec![Rc::clone(&arranged)], Antichain::from_elem(t(0, 0)))
+                .flat_map(|(c, _)| c.into_updates()).collect();
+            let mut expected = Vec::new();
+            for (val, time, diff) in [(2, 2, 2), (4, 1, -1)] {
+                for (epoch, arranged_val, arranged_diff) in [(0, 10, 1), (1, 20, -1), (2, 30, 2)] {
+                    if epoch < time || (!strict && epoch == time) {
+                        expected.push(((tup(vec![V::Int(3), V::Int(21)]),
+                            tup(vec![tup(vec![V::Int(val), V::Int(arranged_val)]), tup(vec![V::Int(3), V::Int(0)])])),
+                            t(time, 0), diff * arranged_diff));
+                    }
+                }
+            }
+            assert_eq!(consolidated(got), consolidated(expected), "strict {strict}");
+        }
     }
 
     /// Against the definition, over several arranged chunks and released updates in several runs
