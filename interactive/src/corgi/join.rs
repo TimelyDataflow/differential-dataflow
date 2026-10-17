@@ -828,9 +828,12 @@ fn leaf_merge<'a, T: ColTime>(
     });
     let collisions = colliding_keys(matched.len(), &columns, runs0.chain(runs1));
     let (mut s0, mut s1) = (SideScratch::new(), SideScratch::new());
+    let (mut r0, mut r1): (smallvec::SmallVec<[RunRef<T>; 4]>, smallvec::SmallVec<[RunRef<T>; 4]>) = (smallvec::SmallVec::new(), smallvec::SmallVec::new());
     for (j, (k, range0, range1)) in matched.into_iter().enumerate() {
-        let r0: smallvec::SmallVec<[RunRef<T>; 4]> = refs0[range0].iter().map(|&(vi, s, e)| views0[vi].run_ref(s, e)).collect();
-        let r1: smallvec::SmallVec<[RunRef<T>; 4]> = refs1[range1].iter().map(|&(vi, s, e)| views1[vi].run_ref(s, e)).collect();
+        r0.clear();
+        r0.extend(refs0[range0].iter().map(|&(vi, s, e)| views0[vi].run_ref(s, e)));
+        r1.clear();
+        r1.extend(refs1[range1].iter().map(|&(vi, s, e)| views1[vi].run_ref(s, e)));
         if collisions[j] {
             colliding.push(k);
             let (mut staged0, mut staged1) = (Vec::new(), Vec::new());
@@ -1003,13 +1006,19 @@ mod tests {
 
     #[test]
     fn many_chunk_compound_runs_cancel_and_reuse_staging_across_keys() {
-        // More runs than the inline capacity, and several keys per block: exercise spilling
-        // the run descriptions and reloading the value-merge heads after a cancelled key.
+        check_many_chunk_runs(false);
+        check_many_chunk_runs(true);
+    }
+
+    fn check_many_chunk_runs(hashed: bool) {
+        // Spill past four runs, cancel the first key, then reuse fewer runs for the last key.
         let batches: Vec<_> = (0..7).map(|chunk| {
             let rows: Vec<_> = (0..6).flat_map(|key| (0..3).map(move |val| (key, val)))
-                .filter(|&(key, _)| key != 0 || chunk != 0).collect();
+                .filter(|&(key, _)| (key != 0 || chunk != 0) && (key != 5 || chunk < 3)).collect();
+            let keys = CValue::i64(rows.iter().map(|r| r.0).collect());
+            let keys = if hashed { CValue::Prod(vec![keys.clone(), keys]) } else { keys };
             Rc::new(ChunkBatch::new(vec![CorgiChunk::from_columns(
-                CValue::i64(rows.iter().map(|r| r.0).collect()),
+                keys,
                 CValue::Prod(vec![
                     CValue::i64(rows.iter().map(|r| r.1).collect()),
                     CValue::i64(rows.iter().map(|r| r.1 * 7).collect()),
@@ -1022,7 +1031,7 @@ mod tests {
         let mut backend = backend();
         let (mut left, mut right) = (Vec::new(), Vec::new());
         backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
-        let expected: Vec<_> = (1..6).flat_map(|key| std::iter::repeat_n((key, 5, 1), 3)).collect();
+        let expected: Vec<_> = (1..6).flat_map(|key| std::iter::repeat_n((key, 5, if key == 5 { 3 } else { 1 }), 3)).collect();
         assert_eq!(left.iter().map(|r| (r.0.0, r.1, r.2)).collect::<Vec<_>>(), expected);
         assert_eq!(left, right);
         assert_eq!(cross_bridges(&mut backend, &instance, &left, &right), 5 * 3 * 3);
