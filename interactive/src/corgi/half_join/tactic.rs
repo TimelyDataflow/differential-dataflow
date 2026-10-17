@@ -230,6 +230,15 @@ impl Work {
             diffs: rs.iter().zip(&us).zip(cs.iter().zip(&js)).map(|((&r, &u), (&c, &j))| self.runs[r].diffs()[u] * self.arranged[c].diffs()[j]).collect(),
         };
 
+        // With one capability all rows ship together: move the projected block instead of
+        // gathering every key, value, time and diff back into an identical second block.
+        if self.lower.len() == 1 {
+            assert!((0..met.times.len()).all(|row| self.lower_times.less_equal_cross(0, &met.times, row)),
+                "half_join: no capability covers a released update");
+            self.ready.push_back((met, self.lower[0].clone()));
+            return;
+        }
+
         // Each row ships at the first capability at or before its own time, as the driver requires.
         let mut by_cap: Vec<Vec<usize>> = vec![Vec::new(); self.lower.len()];
         for row in 0..met.times.len() {
