@@ -246,6 +246,18 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
             let v = match shape_of_term(&projection.val, &env, None) { Ok(s) => s, Err(e) => return fail(format!("join val: {e}")) };
             Some(CollShape::new(k, v, depth))
         }
+        st::Node::HalfJoin { stream, arrangement, projection, .. } => {
+            let (s, a) = (shapes.of(stream)?, shapes.of(arrangement)?);
+            if s.key != a.key { return fail(format!("half_join keys {} and {}", s.key, a.key)); }
+            let v = match s.val {
+                Shape::Prod(fs) if fs.len() == 2 && fs[1] == time_shape(depth) => fs[0].clone(),
+                other => return fail(format!("half_join: a stream value of shape {other}, not (val, {}) as `lift` makes it", time_shape(depth))),
+            };
+            let env = [s.key, v, a.val];
+            let k = match shape_of_term(&projection.key, &env, None) { Ok(s) => s, Err(e) => return fail(format!("half_join key: {e}")) };
+            let v = match shape_of_term(&projection.val, &env, None) { Ok(s) => s, Err(e) => return fail(format!("half_join val: {e}")) };
+            Some(CollShape::new(k, Shape::Prod(vec![v, time_shape(depth)]), depth))
+        }
         st::Node::Reduce { input, reducer } => {
             let c = shapes.of(input)?;
             let v = match reducer {

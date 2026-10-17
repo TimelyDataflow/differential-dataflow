@@ -209,6 +209,11 @@ impl<T> ColTimes<T> {
         Ordering::Equal
     }
 
+    /// Whether this column's row `i` is less than or equal to `other`'s row `j` in the partial order.
+    pub fn less_equal_cross(&self, i: usize, other: &ColTimes<T>, j: usize) -> bool {
+        (0..self.lanes.len().max(other.lanes.len())).all(|k| self.at(k, i) <= other.at(k, j))
+    }
+
     /// Whether row `i` is less than or equal to row `j` in the partial order.
     fn less_equal(&self, i: usize, j: usize) -> bool {
         self.lanes.iter().all(|lane| lane[i] <= lane[j])

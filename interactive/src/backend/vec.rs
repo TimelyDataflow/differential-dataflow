@@ -207,6 +207,9 @@ impl Backend for VecBackend {
             (Arr::Imported(l), Arr::Imported(r)) => l.join_core(r, move |k, v1, v2| f(k, v1, v2)),
         }
     }
+    fn half_join<'s>(_stream: Collection<'s, Time, Self::Container>, _arrangement: Self::Arr<'s>, _strict: bool, _projection: &Projection, _level: usize, _shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, Self::Container> {
+        panic!("half_join runs on the corgi backend only")
+    }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
         let f: Arc<dyn Fn(&Row, &[(&Row, Diff)], &mut Vec<(Row, Diff)>) + Send + Sync> = match reducer {
             Reducer::Min => Arc::new(|_key, vals, output| { if let Some(min) = vals.iter().map(|(v, _)| (*v).clone()).min() { output.push((min, 1)); } }),
