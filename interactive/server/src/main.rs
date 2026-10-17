@@ -38,7 +38,7 @@ use std::sync::mpsc::{channel, sync_channel, SendError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cmd::{prepare, ConnectionId, LineParser, Request};
+use cmd::{prepare, ConnectionId, LineParser, Out, Request};
 use interactive::server::RenderBackend;
 use timely::scheduling::activate::SyncActivations;
 
@@ -80,7 +80,7 @@ enum Dispatch {
 fn dispatch(
     parsed: (cmd::ReqId, Result<cmd::Cmd, String>),
     control: &ControlHandle,
-    resp_tx: &Sender<String>,
+    resp_tx: &Sender<Out>,
     connection_id: ConnectionId,
 ) -> Dispatch {
     let (reqid, kind) = parsed;
@@ -266,11 +266,11 @@ fn run_session<R: BufRead, W: Write + Send + 'static>(
     connection_id: ConnectionId,
     on_exit: impl FnOnce() + Send + 'static,
 ) -> std::io::Result<()> {
-    let (resp_tx, resp_rx) = channel::<String>();
+    let (resp_tx, resp_rx) = channel::<Out>();
     let writer_thread = std::thread::spawn(move || {
         let mut out = output;
-        while let Ok(line) = resp_rx.recv() {
-            if out.write_all(line.as_bytes()).is_err() {
+        while let Ok(message) = resp_rx.recv() {
+            if out.write_all(&message.into_wire()).is_err() {
                 break;
             }
             let _ = out.flush();
@@ -338,6 +338,16 @@ fn run_tcp_session(stream: TcpStream, control: ControlHandle) -> std::io::Result
     )
 }
 
+/// One outbound message as a WebSocket message: a line as text (without its
+/// trailing newline, by convention), a frame as one binary message holding its
+/// header line and payload.
+fn ws_message(message: Out) -> tungstenite::Message {
+    match message {
+        Out::Line(line) => tungstenite::Message::Text(line.trim_end_matches('\n').to_string().into()),
+        frame => tungstenite::Message::Binary(frame.into_wire().into()),
+    }
+}
+
 /// Run one WebSocket session. Single thread per connection: a short
 /// read timeout on the underlying TCP socket lets us interleave reads
 /// and writes (draining the per-connection outbound channel between
@@ -374,17 +384,14 @@ fn run_ws_session(stream: TcpStream, control: ControlHandle) -> Result<(), tungs
         peer, connection_id
     );
 
-    let (resp_tx, resp_rx) = channel::<String>();
+    let (resp_tx, resp_rx) = channel::<Out>();
     let mut parser = LineParser::new();
     let mut should_exit = false;
 
     loop {
         // Drain any pending outbound first.
-        while let Ok(line) = resp_rx.try_recv() {
-            // WS frames don't carry a trailing newline by convention;
-            // strip the one our handlers append.
-            let payload = line.trim_end_matches('\n').to_string();
-            ws.send(tungstenite::Message::Text(payload.into()))?;
+        while let Ok(message) = resp_rx.try_recv() {
+            ws.send(ws_message(message))?;
         }
 
         match ws.read() {
@@ -431,9 +438,8 @@ fn run_ws_session(stream: TcpStream, control: ControlHandle) -> Result<(), tungs
     }
 
     // Final outbound drain before close.
-    while let Ok(line) = resp_rx.try_recv() {
-        let payload = line.trim_end_matches('\n').to_string();
-        let _ = ws.send(tungstenite::Message::Text(payload.into()));
+    while let Ok(message) = resp_rx.try_recv() {
+        let _ = ws.send(ws_message(message));
     }
     let _ = ws.close(None);
     eprintln!(
