@@ -363,26 +363,33 @@ where
         // Concatenate the pushed-back carry with the newly-arrived chunks, then advance/consolidate
         // each *complete* `(key, val)` group; withhold the last group as the carry unless `done`.
         if input.is_empty() { return; }
-        let (ckv, mut ctimes, cdiffs) = if input.len() == 1 {
+        let (ckv, mut ctimes, cdiffs, known_groups) = if input.len() == 1 {
             // Merge output normally arrives uniquely owned. Move its columns
             // into advancement instead of copying the whole chunk first.
             let chunk = input.pop_front().unwrap();
             match Rc::try_unwrap(chunk.0) {
-                Ok(inner) => (CValue::Prod(vec![inner.keys, inner.vals]), inner.times, inner.diffs),
-                Err(inner) => Self::concat(&[Self(inner)]),
+                Ok(inner) => (CValue::Prod(vec![inner.keys, inner.vals]), inner.times, inner.diffs, inner.groups),
+                Err(inner) => {
+                    let groups = inner.groups.clone();
+                    let (kv, times, diffs) = Self::concat(&[Self(inner)]);
+                    (kv, times, diffs, groups)
+                }
             }
         } else {
-            Self::concat(&input.drain(..).collect::<Vec<_>>())
+            let (kv, times, diffs) = Self::concat(&input.drain(..).collect::<Vec<_>>());
+            (kv, times, diffs, None)
         };
         let n = ctimes.len();
         if n == 0 { return; }
 
-        // Group boundaries in ONE pass (corgi `group_bounds`) instead of a per-row `compare_at` scan.
-        let bounds = group_bounds(&ckv); // exclusive group ends, ascending, `bounds.last() == n`
+        // Reuse exact boundaries from a single source; unknown or combined sources need discovery.
+        let bounds = known_groups.as_ref().map_or_else(|| group_bounds(&ckv), corgi::Bounds::to_vec);
 
         // Giant-key case: a single group spanning the whole buffer → no group provably complete.
         if !done && bounds.len() == 1 {
-            input.push_front(Self::from_kv(ckv, ctimes, cdiffs));
+            let mut carry = Self::from_kv(ckv, ctimes, cdiffs);
+            Rc::get_mut(&mut carry.0).unwrap().groups = known_groups;
+            input.push_front(carry);
             return;
         }
 
@@ -1034,10 +1041,13 @@ mod test {
             }
             expected.retain(|_, d| *d != 0);
             for size in [1, 3, rows.len()] {
-                for shared in [false, true] {
+                for (shared, structured) in [(false, false), (true, false), (false, true), (true, true)] {
                     let chunks: Vec<_> = rows.chunks(size).map(|rows| CorgiChunk::from_columns(
                         ints(rows.iter().map(|r| r.0.0).collect()),
-                        ints(rows.iter().map(|r| r.0.1).collect()),
+                        if structured {
+                            CValue::List(corgi::Bounds::Stride(1, rows.len()),
+                                Box::new(ints(rows.iter().map(|r| r.0.1).collect())))
+                        } else { ints(rows.iter().map(|r| r.0.1).collect()) },
                         rows.iter().map(|r| r.1.clone()).collect(), rows.iter().map(|r| r.2).collect(),
                     )).collect();
                     let retained = if shared { chunks.clone() } else { Vec::new() };
@@ -1052,7 +1062,10 @@ mod test {
                     let mut previous = None;
                     for chunk in output {
                         let keys = lane(chunk.keys());
-                        let vals = lane(chunk.vals());
+                        let vals = lane(match chunk.vals() {
+                            CValue::List(_, values) => values,
+                            values => values,
+                        });
                         for i in 0..chunk.len_() {
                             let key = ((keys[i], vals[i]), chunk.times().get(i));
                             assert!(previous.as_ref().is_none_or(|p| p < &key));
@@ -1060,9 +1073,37 @@ mod test {
                             assert!(actual.insert(key, chunk.diffs()[i]).is_none());
                         }
                     }
-                    assert_eq!(actual, expected, "size={size}, shared={shared}, frontier={frontier:?}");
+                    assert_eq!(actual, expected, "size={size}, shared={shared}, structured={structured}, frontier={frontier:?}");
                     drop(retained);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn advance_preserves_known_unfinished_group_until_cancellation() {
+        for known in [false, true] {
+            for shared in [false, true] {
+                let mut chunk = CorgiChunk::from_columns(ints(vec![0, 0]),
+                    CValue::List(corgi::Bounds::Stride(1, 2), Box::new(ints(vec![7, 7]))),
+                    vec![0u64, 1].into_iter().collect(), vec![1i64, -1]);
+                if !known {
+                    chunk = CorgiChunk::from_parts(chunk.keys().clone(), chunk.vals().clone(),
+                        chunk.times().clone(), chunk.diffs().to_vec());
+                }
+                let retained = shared.then(|| chunk.clone());
+                let mut input = VecDeque::from([chunk]);
+                let mut output = VecDeque::new();
+                for _ in 0..2 {
+                    CorgiChunk::advance(&mut input, AntichainRef::new(&[4]), false, &mut output);
+                    assert!(output.is_empty());
+                    assert_eq!(input.len(), 1);
+                    assert_eq!(input[0].times().to_vec(), vec![0, 1]);
+                    assert_eq!(input[0].0.groups.is_some(), known);
+                }
+                CorgiChunk::advance(&mut input, AntichainRef::new(&[4]), true, &mut output);
+                assert!(input.is_empty() && output.is_empty());
+                drop(retained);
             }
         }
     }
