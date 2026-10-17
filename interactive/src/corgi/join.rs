@@ -41,7 +41,7 @@ use corgi::arrange::{compare_at, equal_pairs, gather_lanes};
 use crate::corgi::search::matching_ranges;
 use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
 
-use crate::corgi::chunk::{int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
+use crate::corgi::chunk::{colliding_keys, int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_join_projection;
@@ -577,32 +577,6 @@ impl<'a, T: ColTime> Probe<'a, T> {
             vals: self.vals.as_deref(),
         })
     }
-}
-
-/// Validate the matched identifier runs for a block in one crossing. Runs are sub-sorted by real
-/// key, so matching each run's endpoints to a representative checks every row without visiting it.
-/// Coordinates name borrowed real-key columns; self checks and duplicate singleton endpoints vanish.
-fn colliding_keys(
-    keys: usize,
-    columns: &[&CValue],
-    runs: impl Iterator<Item = (usize, usize, usize, usize)>,
-) -> Vec<bool> {
-    let mut first = vec![None; keys];
-    let (mut pairs, mut owners) = (Vec::new(), Vec::new());
-    for (key, column, start, end) in runs {
-        let reference = *first[key].get_or_insert((column, start));
-        for row in std::iter::once(start).chain((end - start > 1).then_some(end - 1)) {
-            if (column, row) != reference {
-                pairs.push(((column, row), reference));
-                owners.push(key);
-            }
-        }
-    }
-    let mut colliding = vec![false; keys];
-    for (owner, equal) in owners.into_iter().zip(equal_pairs(columns, &pairs)) {
-        colliding[owner] |= !equal;
-    }
-    colliding
 }
 
 /// Stage a colliding identifier without allowing equal values from different real keys to
