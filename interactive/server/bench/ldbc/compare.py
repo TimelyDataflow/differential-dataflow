@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare matching, successful workload runs. Ratios above 1 mean faster."""
 import argparse
+import gzip
 import json
 from pathlib import Path
 
@@ -14,7 +15,10 @@ def main():
     parser.add_argument('--metric', choices=TIMINGS, default='wire_ms',
                         help='wire_ms is client-observed request/response time, not server CPU time')
     args = parser.parse_args()
-    before, after = [json.loads(path.read_text()) for path in (args.baseline, args.candidate)]
+    def load(path):
+        raw = path.read_bytes()
+        return json.loads(gzip.decompress(raw) if path.suffix == '.gz' else raw)
+    before, after = [load(path) for path in (args.baseline, args.candidate)]
     suite = before['format_version'] == 'snb-suite-2'
     for report in (before, after):
         if report['status'] != 'passed' or report['format_version'] != ('snb-suite-2' if suite else 2):

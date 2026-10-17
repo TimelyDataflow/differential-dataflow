@@ -5,6 +5,11 @@ and BI1–20, with readable named-field definitions, generated DDP, shared serve
 inputs, varying interactive bindings, and maintained BI results. Start there
 for full query coverage. It requires no downloaded data for its CI fixture.
 
+See [CURRENT.md](CURRENT.md) for evidence freshness and the replaceable readout,
+[REFRESH.md](REFRESH.md) for versioned recipes and how anyone can supersede a
+result, [GAPS.md](GAPS.md) for follow-up investigations, and
+[DATA.md](DATA.md) for the pinned generated-data snapshot.
+
 The four-query `run.py` panel documented below remains a smaller control with
 independent graph oracles and hand-written physical plans. Its measurements
 are not directly interchangeable with the full suite's wider schema/plans.
