@@ -323,11 +323,13 @@ struct SideScratch<T> {
     entries: Vec<(u64, T, Diff)>,
     /// `(time, diff)` scratch for one value's cross-chunk merge.
     tds: Vec<(T, Diff)>,
+    /// Cross-chunk value-merge heads, reused across keys.
+    heads: Vec<(usize, usize)>,
 }
 
 impl<T: ColTime> SideScratch<T> {
     fn new() -> Self {
-        SideScratch { entries: Vec::new(), tds: Vec::new() }
+        SideScratch { entries: Vec::new(), tds: Vec::new(), heads: Vec::new() }
     }
 
     fn push(&mut self, coord: u64, time: T, diff: Diff) {
@@ -372,7 +374,10 @@ impl<T: ColTime> SideScratch<T> {
             // Cross-chunk merge by value content: heads are (run index, row); each step takes
             // the least value among heads, drains every chunk's sub-run of it into `tds`,
             // and consolidates. The canonical coordinate is the least contributing (chunk, row).
-            let mut heads: Vec<(usize, usize)> = runs.iter().enumerate().map(|(i, r)| (i, r.s)).collect();
+            // Move the scratch out while `push` borrows `self`, then return its capacity.
+            let mut heads = std::mem::take(&mut self.heads);
+            heads.clear();
+            heads.extend(runs.iter().enumerate().map(|(i, r)| (i, r.s)));
             while !heads.is_empty() {
                 let mut min = 0usize;
                 for h in 1..heads.len() {
@@ -406,6 +411,7 @@ impl<T: ColTime> SideScratch<T> {
                 self.tds = tds;
                 self.tds.clear();
             }
+            self.heads = heads;
             // Canonical coordinates interleave chunks; restore bridge order.
             self.entries.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
         }
@@ -783,8 +789,10 @@ fn leaf_merge<'a, T: ColTime>(
         if refs0.is_empty() || refs1.is_empty() {
             continue;
         }
-        let r0: Vec<RunRef<T>> = refs0.iter().map(|&(vi, s, e)| views0[vi].run_ref(s, e)).collect();
-        let r1: Vec<RunRef<T>> = refs1.iter().map(|&(vi, s, e)| views1[vi].run_ref(s, e)).collect();
+        // Most keys span only a few chunks. Keep their borrowed run descriptions inline;
+        // allocating two Vecs here charged every matching key even in the one-chunk case.
+        let r0: smallvec::SmallVec<[RunRef<T>; 4]> = refs0.iter().map(|&(vi, s, e)| views0[vi].run_ref(s, e)).collect();
+        let r1: smallvec::SmallVec<[RunRef<T>; 4]> = refs1.iter().map(|&(vi, s, e)| views1[vi].run_ref(s, e)).collect();
         let collision = hashed && !one_key(&r0, &r1);
         if collision {
             colliding.push(k);
@@ -932,6 +940,33 @@ mod tests {
         }
         let keys = |bridge: &ProxyBridge<u64, Diff, i64>| bridge.iter().map(|r| r.0.0).collect::<Vec<_>>();
         assert_eq!((keys(&left), keys(&right)), (vec![-5, 3], vec![-5, 3]));
+    }
+
+    #[test]
+    fn many_chunk_compound_runs_cancel_and_reuse_staging_across_keys() {
+        // More runs than the inline capacity, and several keys per block: exercise spilling
+        // the run descriptions and reloading the value-merge heads after a cancelled key.
+        let batches: Vec<_> = (0..7).map(|chunk| {
+            let rows: Vec<_> = (0..6).flat_map(|key| (0..3).map(move |val| (key, val)))
+                .filter(|&(key, _)| key != 0 || chunk != 0).collect();
+            Rc::new(ChunkBatch::new(vec![CorgiChunk::from_columns(
+                CValue::i64(rows.iter().map(|r| r.0).collect()),
+                CValue::Prod(vec![
+                    CValue::i64(rows.iter().map(|r| r.1).collect()),
+                    CValue::i64(rows.iter().map(|r| r.1 * 7).collect()),
+                ]),
+                std::iter::repeat_n(0, rows.len()).collect(),
+                vec![if chunk < 4 { 1 } else { -1 }; rows.len()],
+            )]))
+        }).collect();
+        let instance = JoinInstance { batches0: batches.clone(), batches1: batches, lower: 5 };
+        let mut backend = backend();
+        let (mut left, mut right) = (Vec::new(), Vec::new());
+        backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
+        let expected: Vec<_> = (1..6).flat_map(|key| std::iter::repeat_n((key, 5, 1), 3)).collect();
+        assert_eq!(left.iter().map(|r| (r.0.0, r.1, r.2)).collect::<Vec<_>>(), expected);
+        assert_eq!(left, right);
+        assert_eq!(cross_bridges(&mut backend, &instance, &left, &right), 5 * 3 * 3);
     }
 
     #[test]
