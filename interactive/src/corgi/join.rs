@@ -818,23 +818,20 @@ fn leaf_merge<'a, T: ColTime>(
         }
         matched.push((k, start0..refs0.len(), start1..refs1.len()));
     }
-    let collisions = if hashed {
-        let columns: Vec<_> = views0.iter().chain(&views1).map(|v| recover_key_ref(v.chunk.keys())).collect();
-        let runs0 = matched.iter().enumerate().flat_map(|(j, (_, range, _))| {
-            refs0[range.clone()].iter().map(move |&(vi, s, e)| (j, vi, s, e))
-        });
-        let offset = views0.len();
-        let runs1 = matched.iter().enumerate().flat_map(|(j, (_, _, range))| {
-            refs1[range.clone()].iter().map(move |&(vi, s, e)| (j, offset + vi, s, e))
-        });
-        colliding_keys(matched.len(), &columns, runs0.chain(runs1))
-    } else { Vec::new() };
+    let columns: Vec<_> = views0.iter().chain(&views1).map(|v| recover_key_ref(v.chunk.keys())).collect();
+    let runs0 = matched.iter().enumerate().flat_map(|(j, (_, range, _))| {
+        refs0[range.clone()].iter().map(move |&(vi, s, e)| (j, vi, s, e))
+    });
+    let offset = views0.len();
+    let runs1 = matched.iter().enumerate().flat_map(|(j, (_, _, range))| {
+        refs1[range.clone()].iter().map(move |&(vi, s, e)| (j, offset + vi, s, e))
+    });
+    let collisions = colliding_keys(matched.len(), &columns, runs0.chain(runs1));
     let (mut s0, mut s1) = (SideScratch::new(), SideScratch::new());
     for (j, (k, range0, range1)) in matched.into_iter().enumerate() {
         let r0: smallvec::SmallVec<[RunRef<T>; 4]> = refs0[range0].iter().map(|&(vi, s, e)| views0[vi].run_ref(s, e)).collect();
         let r1: smallvec::SmallVec<[RunRef<T>; 4]> = refs1[range1].iter().map(|&(vi, s, e)| views1[vi].run_ref(s, e)).collect();
-        let collision = hashed && collisions[j];
-        if collision {
+        if collisions[j] {
             colliding.push(k);
             let (mut staged0, mut staged1) = (Vec::new(), Vec::new());
             stage_collision(&r0, lower, k, &mut staged0);
