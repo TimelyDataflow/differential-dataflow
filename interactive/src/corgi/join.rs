@@ -37,7 +37,7 @@ use differential_dataflow::operators::int_proxy::{KeyPosition, JoinInstance, Pro
 use differential_dataflow::operators::int_proxy::join::JoinMatches;
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
-use corgi::arrange::{compare_at, equal_pairs, gather_lanes};
+use corgi::arrange::{compare_at, equal_idx, gather_lanes};
 use crate::corgi::search::matching_ranges;
 use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
 
@@ -186,17 +186,22 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
                 }
                 None
             } else {
-                let (mut pairs, mut owners) = (Vec::new(), Vec::new());
+                let mut pairs = Vec::new();
                 for (index, (token, (c0, c1))) in matches.ids[start..end].iter().enumerate() {
                     if self.colliding.binary_search(token).is_ok() {
-                        pairs.push((((c0 >> COORD_BITS) as usize, (c0 & ((1 << COORD_BITS) - 1)) as usize),
-                                    (chunks0.len() + (c1 >> COORD_BITS) as usize, (c1 & ((1 << COORD_BITS) - 1)) as usize)));
-                        owners.push(index);
+                        pairs.push(((c0 >> COORD_BITS) as usize, chunks0.len() + (c1 >> COORD_BITS) as usize,
+                                    (c0 & ((1 << COORD_BITS) - 1)) as usize, (c1 & ((1 << COORD_BITS) - 1)) as usize, index));
                     }
                 }
                 let mut keep = vec![true; end - start];
-                for (owner, equal) in owners.into_iter().zip(equal_pairs(&collision_columns, &pairs)) {
-                    keep[owner] = equal;
+                pairs.sort_unstable_by_key(|p| (p.0, p.1, p.4));
+                let (mut left, mut right) = (Vec::new(), Vec::new());
+                for group in pairs.chunk_by(|a, b| (a.0, a.1) == (b.0, b.1)) {
+                    left.clear(); right.clear();
+                    left.extend(group.iter().map(|p| p.2));
+                    right.extend(group.iter().map(|p| p.3));
+                    let signs = equal_idx(collision_columns[group[0].0], collision_columns[group[0].1], &left, &right);
+                    for (pair, sign) in group.iter().zip(signs) { keep[pair.4] = sign == 0; }
                 }
                 let mut kept = Vec::with_capacity(end - start);
                 for (index, (_, (c0, c1))) in matches.ids[start..end].iter().enumerate() {
