@@ -36,7 +36,7 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{compare_at, equal_pairs, gather_lanes, sort_blocks};
+use corgi::arrange::{compare_at, equal_idx, gather_lanes, sort_blocks};
 use corgi::{Bounds, Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::col_times::{ColTime, ColTimes};
@@ -561,7 +561,7 @@ where
         if !output.is_empty() {
             singleton_matches.resize(keys.len(), None);
             let capacity = keys.len().min(output.len());
-            let (mut pairs, mut owners) = (Vec::with_capacity(capacity), Vec::with_capacity(capacity));
+            let mut pairs = Vec::with_capacity(capacity);
             let (mut bs, mut os) = (0, 0);
             for (b, (key, &oe)) in keys.iter().zip(out_ends).enumerate() {
                 let be = if split { bracket_ends[b] } else { b + 1 };
@@ -570,17 +570,20 @@ where
                 if self.retire.colliding.binary_search(key).is_err() && de - ds <= 1 && oe - os <= 1 {
                     singleton_matches[b] = Some(false);
                     if de > ds && oe > os {
-                        pairs.push(((fresh, ds), self.output.refs[output[os].0 as usize]));
-                        owners.push(b);
+                        let (column, row) = self.output.refs[output[os].0 as usize];
+                        pairs.push((column, ds, row, b));
                     }
                 }
                 (bs, os) = (be, oe);
             }
-            if !pairs.is_empty() {
-                let columns: Vec<_> = self.output.columns.iter().collect();
-                for (owner, equal) in owners.into_iter().zip(equal_pairs(&columns, &pairs)) {
-                    singleton_matches[owner] = Some(equal);
-                }
+            pairs.sort_unstable_by_key(|p| (p.0, p.1));
+            let (mut left, mut right) = (Vec::new(), Vec::new());
+            for group in pairs.chunk_by(|a, b| a.0 == b.0) {
+                left.clear(); right.clear();
+                left.extend(group.iter().map(|p| p.1));
+                right.extend(group.iter().map(|p| p.2));
+                let signs = equal_idx(&self.output.columns[fresh], &self.output.columns[group[0].0], &left, &right);
+                for (pair, sign) in group.iter().zip(signs) { singleton_matches[pair.3] = Some(sign == 0); }
             }
         }
         let Pool { columns, refs } = &mut self.output;
