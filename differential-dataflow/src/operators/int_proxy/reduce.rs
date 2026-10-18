@@ -116,6 +116,7 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     /// Multiple keys are provided concurrently, for each an accumulated input and tentative output.
     /// The backend should provide for each key the necessary output updates to bring the output in
     /// with its desires. The `usize` integers upper bound the range for the corresponding key.
+    /// Each input and output bracket is sorted and consolidated by its value proxy.
     fn reduce_corrections(
         &mut self,
         keys: &[Self::Key],
