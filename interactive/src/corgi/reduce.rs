@@ -552,6 +552,7 @@ where
             _ => { let (d, e) = self.reduce_brackets(in_ends, input); (d, None, e) }
         };
         let fresh = self.output.columns.len();
+        let prior_refs = self.output.refs.len();
         if !desired.is_empty() { self.output.columns.push(desired); }
         // The usual reducers (including single-result terms) reconcile one desired value with
         // at most one old value per real key. Compare all those pairs at once, by coordinates into
@@ -638,6 +639,9 @@ where
             corr_ends.push(corr.len());
             (bs, os) = (be, oe);
         }
+        // Desired rows equal to existing ids need no retained payload. Keep this column
+        // only if a newly allocated id names it; later waves can reuse the vacant slot.
+        if refs.len() == prior_refs { columns.truncate(fresh); }
         (corr, corr_ends)
     }
 
@@ -768,6 +772,28 @@ mod tests {
         let (corr, ends) = backend.reduce_corrections(&[10, 11, 12], &[2, 3, 5], &input, &[2, 3, 3], &output);
         assert_eq!((corr.clone(), ends), (vec![(1, -1), (2, -1), (3, 1)], vec![1, 3, 3]));
         assert_eq!(rows_of(&backend.output.gather(&[3])), vec![vec![3]]);
+    }
+
+    /// Unchanged waves borrow old ids and must not accumulate unused desired columns.
+    /// A changed wave's column stays alive when a later unchanged wave reuses its id.
+    #[test]
+    fn corrections_retain_only_named_output_columns() {
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count);
+        backend.input.refs = vec![(0, 0)];
+        backend.key_columns = vec![ints(vec![10])];
+        backend.output = Pool { columns: vec![ints(vec![5])], refs: vec![(0, 0)] };
+        backend.output_keys = vec![(0, 0)];
+        for _ in 0..64 {
+            assert_eq!(backend.reduce_corrections(&[10], &[1], &[(0, 5)], &[1], &[(0, 1)]), (vec![], vec![0]));
+            assert_eq!((backend.output.columns.len(), backend.output.refs.len()), (1, 1));
+        }
+        assert_eq!(backend.reduce_corrections(&[10], &[1], &[(0, 3)], &[1], &[(0, 1)]), (vec![(0, -1), (1, 1)], vec![2]));
+        assert_eq!((backend.output.columns.len(), backend.output.refs.len()), (2, 2));
+        for _ in 0..64 {
+            assert_eq!(backend.reduce_corrections(&[10], &[1], &[(0, 3)], &[1], &[(1, 1)]), (vec![], vec![0]));
+            assert_eq!((backend.output.columns.len(), backend.output.refs.len()), (2, 2));
+        }
+        assert_eq!(rows_of(&backend.output.gather(&[0, 1])), vec![vec![5], vec![3]]);
     }
 
     #[test]
