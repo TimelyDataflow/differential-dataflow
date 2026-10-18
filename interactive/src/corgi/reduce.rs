@@ -36,12 +36,12 @@ use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::operators::int_proxy::{KeyPosition, ProxyBridge};
 use differential_dataflow::operators::int_proxy::reduce::{ProxyReduceBackend, ReduceInstance, ReduceWindow};
 
-use corgi::arrange::{compare_at, gather_lanes, sort_blocks};
+use corgi::arrange::{compare_at, equal_idx, gather_lanes, sort_blocks};
 use corgi::{Bounds, Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::search::matching_ranges;
-use crate::corgi::chunk::{columns_to_batch, ident, key_ids, key_is_hashed, recover_key, CorgiChunk};
+use crate::corgi::chunk::{colliding_keys, columns_to_batch, ident, key_ids, key_is_hashed, recover_key, recover_key_ref, CorgiChunk};
 use crate::corgi::logic::compile_reduce;
 use crate::ir::{Diff, Reducer};
 
@@ -256,31 +256,6 @@ fn split_real_keys<T: ColTime>(
         labels.push(label_keys.len() as u64 - 1);
     }
     (labels, rows, Some(label_keys))
-}
-
-/// For each of the window's `keys`, whether the rows held for it, across every `(chunks, matches)`
-/// side, carry more than one real key. Chunks sort each identifier's rows by real key, so a run holds
-/// one key exactly when its first and last rows agree: two comparisons per run, never per row.
-/// Comparing across sides also catches an identifier whose input and output hold different keys.
-fn colliding_keys<T: ColTime>(keys: &[i64], sides: &[(&[&CorgiChunk<T, Diff>], &Matches)]) -> Vec<bool> {
-    let mut colliding = vec![false; keys.len()];
-    if !sides.iter().flat_map(|side| side.0).any(|chunk| key_is_hashed(chunk.keys())) {
-        return colliding;
-    }
-    let mut first: Vec<Option<&CValue>> = vec![None; keys.len()];
-    let mut first_row = vec![0; keys.len()];
-    for (chunks, matches) in sides {
-        for (chunk, found) in chunks.iter().zip(matches.iter()) {
-            let column = chunk.keys();
-            for (index, rows) in found {
-                let reference = *first[*index].get_or_insert_with(|| { first_row[*index] = rows.start; column });
-                let r = first_row[*index];
-                colliding[*index] |= compare_at(column, rows.start, reference, r).is_ne()
-                    || compare_at(column, rows.end - 1, reference, r).is_ne();
-            }
-        }
-    }
-    colliding
 }
 
 fn chunks_of<T>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>>
@@ -507,7 +482,13 @@ where
         let keys = &retire.keys[retire.window.clone()];
         let out_matches = search(&out_chunks, keys);
         // The identifiers that hold several real keys, across input and output alike.
-        let colliding = colliding_keys(keys, &[(&in_chunks, &matches), (&out_chunks, &out_matches)]);
+        let colliding = if in_chunks.iter().chain(&out_chunks).any(|chunk| key_is_hashed(chunk.keys())) {
+            let columns: Vec<_> = in_chunks.iter().chain(&out_chunks).map(|chunk| recover_key_ref(chunk.keys())).collect();
+            let runs = matches.iter().chain(&out_matches).enumerate().flat_map(|(column, found)| {
+                found.iter().map(move |(key, rows)| (*key, column, rows.start, rows.end))
+            });
+            colliding_keys(keys.len(), &columns, runs)
+        } else { vec![false; keys.len()] };
         retire.colliding = keys.iter().zip(&colliding).filter(|(_, c)| **c).map(|(key, _)| *key).collect();
         let colliding = if retire.colliding.is_empty() { &[][..] } else { &colliding[..] };
 
@@ -572,6 +553,39 @@ where
         };
         let fresh = self.output.columns.len();
         if !desired.is_empty() { self.output.columns.push(desired); }
+        // The usual reducers (including single-result terms) reconcile one desired value with
+        // at most one old value per real key. Compare all those pairs at once, by coordinates into
+        // the existing columns. Keys with multiple outputs retain the general reconciliation path;
+        // batching their Cartesian candidate sets would add work that an early match avoids.
+        let mut singleton_matches = Vec::new();
+        if !output.is_empty() {
+            singleton_matches.resize(keys.len(), None);
+            let capacity = keys.len().min(output.len());
+            let mut pairs = Vec::with_capacity(capacity);
+            let (mut bs, mut os) = (0, 0);
+            for (b, (key, &oe)) in keys.iter().zip(out_ends).enumerate() {
+                let be = if split { bracket_ends[b] } else { b + 1 };
+                let ds = if bs == 0 { 0 } else { desired_ends[bs - 1] };
+                let de = desired_ends[be - 1];
+                if self.retire.colliding.binary_search(key).is_err() && de - ds <= 1 && oe - os <= 1 {
+                    singleton_matches[b] = Some(false);
+                    if de > ds && oe > os {
+                        let (column, row) = self.output.refs[output[os].0 as usize];
+                        pairs.push((column, ds, row, b));
+                    }
+                }
+                (bs, os) = (be, oe);
+            }
+            pairs.sort_unstable_by_key(|p| (p.0, p.1));
+            let (mut left, mut right) = (Vec::new(), Vec::new());
+            for group in pairs.chunk_by(|a, b| a.0 == b.0) {
+                left.clear(); right.clear();
+                left.extend(group.iter().map(|p| p.1));
+                right.extend(group.iter().map(|p| p.2));
+                let signs = equal_idx(&self.output.columns[fresh], &self.output.columns[group[0].0], &left, &right);
+                for (pair, sign) in group.iter().zip(signs) { singleton_matches[pair.3] = Some(sign == 0); }
+            }
+        }
         let Pool { columns, refs } = &mut self.output;
         let (output_keys, key_columns) = (&mut self.output_keys, &self.key_columns);
         let (mut corr, mut corr_ends) = (Vec::new(), Vec::with_capacity(keys.len()));
@@ -598,7 +612,12 @@ where
                             compare_at(&key_columns[kc], kr, &key_columns[oc], or).is_eq()
                         })
                     };
-                    match corr[net_start..].iter().position(equal) {
+                    let found = match singleton_matches.get(b).copied().flatten() {
+                        Some(true) => Some(0),
+                        Some(false) => None,
+                        None => corr[net_start..].iter().position(equal),
+                    };
+                    match found {
                         Some(at) => corr[net_start + at].1 += diff,
                         None => {
                             corr.push((refs.len() as u64, diff));

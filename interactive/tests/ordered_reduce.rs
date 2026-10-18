@@ -78,3 +78,35 @@ fn ordered_min_collect_and_batched_reconciliation_match_row_backend() {
         }
     });
 }
+
+#[test]
+fn batched_equality_spans_windows_and_retracts_compound_keys() {
+    timely::execute_directly(|worker| {
+        let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(r#"
+            let x = input 0 : ((int, List(int)); ())
+                | key(((k, xs), ()) -> ((k, (k, 7) mul), xs));
+            export "minimum" = x | min;
+            export "collected" = x | collect;
+            export "counted" = x | count;
+        "#));
+        program.optimize();
+        let mut row = Server::with_backend(RenderBackend::Vec);
+        let mut col = Server::with_backend(RenderBackend::Corgi);
+        row.install(worker, "row", &program).unwrap();
+        col.install(worker, "col", &program).unwrap();
+        for diff in [1, 1, -2] {
+            let updates: Vec<_> = (-2500..2500).map(|k| InputUpdate {
+                key: V::Tuple(vec![V::Int(k), V::List(vec![V::Int(k), V::Int(-k), V::Int(k + 1)])]),
+                val: V::unit(), diff,
+            }).collect();
+            row.feed_batch("row", 0, updates.clone()).unwrap();
+            col.feed_batch("col", 0, updates).unwrap();
+            row.tick(worker);
+            col.tick(worker);
+            for name in ["minimum", "collected", "counted"] {
+                assert_eq!(col.snapshot(worker, name).unwrap(), row.snapshot(worker, name).unwrap(), "{name}, diff={diff}");
+            }
+        }
+        for name in ["minimum", "collected", "counted"] { assert!(col.snapshot(worker, name).unwrap().is_empty()); }
+    });
+}

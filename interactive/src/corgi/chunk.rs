@@ -28,7 +28,7 @@ use timely::progress::frontier::AntichainRef;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::chunk::{pack, Chunk, ChunkBatch};
 
-use corgi::arrange::{gather, gather_lanes, group_bounds, sort_blocks, survey_groups, GroupRun};
+use corgi::arrange::{equal_idx, gather, gather_lanes, group_bounds, sort_blocks, survey_groups, GroupRun};
 use corgi::Value as CValue;
 
 use crate::corgi::col_times::{ColTime, ColTimes};
@@ -637,6 +637,38 @@ pub fn recover_key_ref(keys: &CValue) -> &CValue {
         CValue::Prod(cols) if corgi::arrange::leaf_slice(keys).is_none() => &cols[1],
         _ => keys,
     }
+}
+
+/// Validate the matched identifier runs for a block, batching by column pair. Runs are sub-sorted by real
+/// key, so matching each run's endpoints to a representative checks every row without visiting it.
+/// Each `(key, column, start, end)` names a non-empty identifier run, with `end` exclusive.
+/// Coordinates name borrowed real-key columns; self checks and duplicate singleton endpoints vanish.
+pub(super) fn colliding_keys(
+    keys: usize,
+    columns: &[&CValue],
+    runs: impl Iterator<Item = (usize, usize, usize, usize)>,
+) -> Vec<bool> {
+    let mut first = vec![None; keys];
+    let mut pairs = Vec::new();
+    for (key, column, start, end) in runs {
+        let reference = *first[key].get_or_insert((column, start));
+        for row in std::iter::once(start).chain((end - start > 1).then_some(end - 1)) {
+            if (column, row) != reference {
+                pairs.push((column, reference.0, row, reference.1, key));
+            }
+        }
+    }
+    let mut colliding = vec![false; keys];
+    pairs.sort_unstable_by_key(|p| (p.0, p.1, p.2));
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    for group in pairs.chunk_by(|a, b| (a.0, a.1) == (b.0, b.1)) {
+        left.clear(); right.clear();
+        left.extend(group.iter().map(|p| p.2));
+        right.extend(group.iter().map(|p| p.3));
+        let signs = equal_idx(columns[group[0].0], columns[group[0].1], &left, &right);
+        for (pair, sign) in group.iter().zip(signs) { colliding[pair.4] |= sign != 0; }
+    }
+    colliding
 }
 
 /// Concatenate column blocks into one column (multi-source `gather_lanes`, no sort).
