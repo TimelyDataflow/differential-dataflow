@@ -15,7 +15,6 @@
 
 use corgi::{Shape, Value as CValue};
 
-use crate::corgi::logic::int_leaf;
 use crate::ir::Diff;
 
 /// A feed's updates as columns: update `i` is row `i` of `keys` and `vals`, with `diffs[i]`.
@@ -210,7 +209,7 @@ impl Col {
 
     fn finish(self) -> CValue {
         match self {
-            Col::Int(xs) => int_leaf(xs),
+            Col::Int(xs) => CValue::int(xs),
             Col::Float(xs) => CValue::f64(xs),
             Col::Unit(n) => CValue::Unit(n),
             Col::Prod(fields) => CValue::Prod(fields.into_iter().map(Col::finish).collect()),
