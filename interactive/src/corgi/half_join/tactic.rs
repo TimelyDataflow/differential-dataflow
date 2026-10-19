@@ -12,7 +12,7 @@ use timely::progress::Antichain;
 use differential_dataflow::trace::chunk::Chunk;
 use differential_dogs3::operators::half_join::HalfJoinTactic;
 
-use corgi::arrange::{compare_at, gather_lanes};
+use corgi::arrange::{equal_idx, gather_lanes};
 use corgi::{Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::chunk::{ident, key_is_hashed, recover_key_ref, CorgiChunk};
@@ -138,7 +138,13 @@ impl Work {
         let keys: Vec<&CValue> = self.runs.iter().map(|run| recover_key_ref(run.keys())).collect();
 
         // The pairs that meet: (run, update row, arranged chunk, arranged row).
-        let (mut rs, mut us, mut cs, mut js) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut matches = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut key_pairs = Vec::new();
+        let mut columns = Vec::new();
+        if hashed {
+            columns.extend(keys.iter().copied());
+            columns.extend(self.arranged.iter().map(|chunk| recover_key_ref(chunk.keys())));
+        }
         let (mut needles, mut groups) = (Vec::new(), Vec::new());
         let (mut scratch, mut found) = (Vec::new(), Vec::new());
         for (r, run) in self.runs.iter().enumerate() {
@@ -160,21 +166,25 @@ impl Work {
                 let hay = &ident(chunk.keys())[base..];
                 if hay.first().is_none_or(|&x| x > run_last) || hay.last().is_some_and(|&x| x < first) { continue; }
                 matching_ranges(&needles, hay, &mut scratch, &mut found);
-                let chunk_key = recover_key_ref(chunk.keys());
                 for (needle, range) in found.iter() {
                     for u in groups[*needle].clone() {
                         for j in range.start + base..range.end + base {
-                            if hashed && compare_at(keys[r], u, chunk_key, j).is_ne() { continue; }
                             let precedes = match chunk.times().cmp_cross(j, run.times(), u) {
                                 Ordering::Less => true,
                                 Ordering::Equal => !self.strict,
                                 Ordering::Greater => false,
                             };
-                            if precedes {
-                                rs.push(r);
-                                us.push(u);
-                                cs.push(cid);
-                                js.push(j);
+                            if !precedes { continue; }
+                            if hashed {
+                                key_pairs.push(((r, u), (self.runs.len() + cid, j)));
+                                if key_pairs.len() == BLOCK {
+                                    keep_equal(&columns, &mut key_pairs, self.runs.len(), &mut matches);
+                                }
+                            } else {
+                                matches.0.push(r);
+                                matches.1.push(u);
+                                matches.2.push(cid);
+                                matches.3.push(j);
                             }
                         }
                     }
@@ -185,6 +195,10 @@ impl Work {
         for (cid, chunk) in self.arranged.iter().enumerate() {
             self.seek[cid] += ident(chunk.keys())[self.seek[cid]..].partition_point(|&x| x < last);
         }
+        if !key_pairs.is_empty() {
+            keep_equal(&columns, &mut key_pairs, self.runs.len(), &mut matches);
+        }
+        let (rs, us, cs, js) = matches;
         if us.is_empty() { return; }
 
         // The projection over (key, val, arranged val).
@@ -245,6 +259,39 @@ impl Work {
     }
 }
 
+/// Check only time-eligible pairs, in bounded batches over borrowed key columns. Even a forged
+/// hash collision cannot accumulate an unbounded set of candidates awaiting key validation.
+fn keep_equal(
+    columns: &[&CValue],
+    pairs: &mut Vec<((usize, usize), (usize, usize))>,
+    runs: usize,
+    matches: &mut (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>),
+) {
+    let mut order: Vec<_> = (0..pairs.len()).collect();
+    let sources = |i: usize| (pairs[i].0.0, pairs[i].1.0);
+    if order.windows(2).any(|w| sources(w[0]) > sources(w[1])) {
+        order.sort_unstable_by_key(|&i| (sources(i), i));
+    }
+    let mut equality = vec![false; pairs.len()];
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    for group in order.chunk_by(|&a, &b| sources(a) == sources(b)) {
+        let (a, b) = sources(group[0]);
+        left.clear(); right.clear();
+        left.extend(group.iter().map(|&i| pairs[i].0.1));
+        right.extend(group.iter().map(|&i| pairs[i].1.1));
+        let signs = equal_idx(columns[a], columns[b], &left, &right);
+        for (&i, sign) in group.iter().zip(signs) { equality[i] = sign == 0; }
+    }
+    for (((r, u), (c, j)), equal) in pairs.drain(..).zip(equality) {
+        if equal {
+            matches.0.push(r);
+            matches.1.push(u);
+            matches.2.push(c - runs);
+            matches.3.push(j);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +338,64 @@ mod tests {
         loose.push(row(t(1, 0), 7, 200, (1, 0), t(1, 0), 2));
         loose.sort();
         assert_eq!(rows(false), loose);
+    }
+
+    /// A shared hash does not make distinct real keys equal. Time filtering precedes the bounded
+    /// key checks; strictness, signed diffs and candidate order survive several comparison batches.
+    #[test]
+    fn colliding_keys_are_checked_in_batches_after_time_filtering() {
+        let keys = |ks: &[i64]| CValue::Prod(vec![
+            ints(&vec![42; ks.len()]),
+            CValue::Prod(vec![ints(ks), ints(&ks.iter().map(|k| k * 7).collect::<Vec<_>>())]),
+        ]);
+        let arranged_keys: Vec<i64> = (0..4).flat_map(|k| [k; 3]).collect();
+        let arranged_vals: Vec<i64> = (0..12).collect();
+        let arranged = Rc::new(differential_dataflow::trace::chunk::ChunkBatch::new(vec![CorgiChunk::from_columns(
+            keys(&arranged_keys), ints(&arranged_vals),
+            (0..4).flat_map(|_| [t(0, 0), t(1, 0), t(2, 0)]).collect(),
+            (0..4).flat_map(|_| [1, -1, 2]).collect(),
+        )]));
+        let update_keys: Vec<i64> = (0..6).collect();
+        let updates = Run {
+            keys: keys(&update_keys),
+            vals: CValue::Prod(vec![ints(&update_keys), lifted(&[(1, 0); 6])]),
+            times: (0..6).map(|_| t(1, 0)).collect(),
+            diffs: vec![2, -1, 2, -1, 2, -1],
+        };
+        for strict in [false, true] {
+            let mut tactic = CorgiHalfJoin::new(Term::Var(0), Term::Tuple(vec![Term::Var(1), Term::Var(2)]), strict, 2);
+            let got: Vec<_> = tactic.prep(vec![updates.clone()], vec![Rc::clone(&arranged)], Antichain::from_elem(t(1, 0)))
+                .flat_map(|(c, _)| c.into_updates()).collect();
+            let mut expected = Vec::new();
+            for k in 0..4 {
+                for epoch in 0..if strict { 1 } else { 2 } {
+                    expected.push((
+                        (tup(vec![V::Int(k), V::Int(k * 7)]),
+                         tup(vec![tup(vec![V::Int(k), V::Int(k * 3 + epoch)]), tup(vec![V::Int(1), V::Int(0)])])),
+                        t(1, 0), if k % 2 == 0 { 2 } else { -1 } * if epoch == 0 { 1 } else { -1 },
+                    ));
+                }
+            }
+            assert_eq!(consolidated(got), consolidated(expected), "strict {strict}");
+        }
+    }
+
+    #[test]
+    fn grouped_key_checks_preserve_interleaved_candidate_order() {
+        let values: Vec<Vec<i64>> = (0..4).map(|c| (0..32).map(|r| (r + c * 3) % 17).collect()).collect();
+        let columns: Vec<_> = values.iter().enumerate().map(|(c, v)| if c % 2 == 0 {
+            CValue::u8(v.iter().map(|&x| x as u8).collect())
+        } else { ints(v) }).collect();
+        let mut pairs: Vec<_> = (0..257).map(|i| ((i % 2, i % 32), (2 + (i / 3) % 2, (i / 2) % 32))).collect();
+        let expected: Vec<_> = pairs.iter().filter(|&&((a, i), (b, j))| values[a][i] == values[b][j])
+            .map(|&((r, u), (c, j))| (r, u, c - 2, j)).collect();
+        assert!(!expected.is_empty());
+        let mut matches = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        keep_equal(&columns.iter().collect::<Vec<_>>(), &mut pairs, 2, &mut matches);
+        let actual: Vec<_> = matches.0.into_iter().zip(matches.1).zip(matches.2).zip(matches.3)
+            .map(|(((r, u), c), j)| (r, u, c, j)).collect();
+        assert_eq!(actual, expected);
+        assert!(pairs.is_empty());
     }
 
     /// Against the definition, over several arranged chunks and released updates in several runs
