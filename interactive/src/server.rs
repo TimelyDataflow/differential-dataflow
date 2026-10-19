@@ -745,7 +745,7 @@ impl Server {
                                 OuterImport::Export(a) => CorgiImport::Export(a.clone().enter(inner)),
                             })
                             .collect();
-                        crate::backend::corgi::render_tree_corgi_arranged(root, inner.clone(), 0, imports, Some(&scope_shapes))
+                        crate::backend::corgi::render_tree_corgi_arranged(root, inner.clone(), 0, imports, &scope_shapes)
                             .into_iter()
                             .map(|c| c.leave(outer))
                             .collect::<Vec<_>>()

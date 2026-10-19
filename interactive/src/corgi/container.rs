@@ -59,7 +59,7 @@ impl<T: 'static, R: 'static> Accountable for CorgiContainer<T, R> {
 }
 
 impl<T: Lanes + 'static, R: Clone + 'static> CorgiContainer<T, R> {
-    /// Build a container from DDIR row updates at the collection's PINNED shapes — the **ingest
+    /// Build a container from DDIR row updates at the collection's shapes — the **ingest
     /// boundary** transcode (once per batch). The only rows→columns conversion in the corgi
     /// backend: inside the dataflow every operator is columnar.
     pub fn from_updates(updates: Vec<((Row, Row), T, R)>, kshape: &corgi::Shape, vshape: &corgi::Shape) -> Self {
@@ -75,8 +75,7 @@ impl<T: Lanes + 'static, R: Clone + 'static> CorgiContainer<T, R> {
         CorgiContainer { keys: transcode_owned(keys_rows, kshape), vals: transcode_owned(vals_rows, vshape), times, diffs }
     }
 
-    /// Test convenience: build a container from row updates, pinning the shapes from the first
-    /// row (what the ingest operator does with the first batch it sees).
+    /// Test convenience: build a container from row updates, at the shapes of the first row.
     #[cfg(test)]
     pub(crate) fn from_updates_pinned(updates: Vec<((Row, Row), T, R)>) -> Self {
         use crate::corgi::logic::shape_of_row;

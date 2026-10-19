@@ -54,43 +54,26 @@ const TARGET_OUT: usize = 1 << 18;
 /// Coordinate packing: chunk index in the high bits, row in the low `COORD_BITS`.
 const COORD_BITS: u32 = 48;
 
-/// The corgi [`ProxyJoinBackend`]: holds the projection `Term`s (`Var(0)=key`, `Var(1)=val0`,
-/// `Var(2)=val1`), compiled per container against the matched columns' shapes.
+/// The corgi [`ProxyJoinBackend`]: holds the projection of the `Term`s (`Var(0)=key`,
+/// `Var(1)=val0`, `Var(2)=val1`), compiled at the shapes of the columns it meets.
 pub struct CorgiJoinBackend<T: ColTime> {
-    key: Term,
-    val: Term,
     /// Identifier tokens in the current block that cover more than one real key. `advance` writes
     /// this and the immediately following `cross` reads it before the next `advance`; only matches
     /// under these astronomically rare tokens need a real-key comparison.
     colliding: Vec<i64>,
-    /// The projection, compiled once at the shapes of the key and both values it reads.
-    compiled: Option<([Shape; 3], Graph<NumOp>)>,
+    /// The projection, compiled at the shapes of the key and both values it reads.
+    projection: ([Shape; 3], Graph<NumOp>),
     _t: PhantomData<T>,
 }
 
 impl<T: ColTime> CorgiJoinBackend<T> {
-    /// `shapes`, the key's and both values' shapes when inference knows them, compile the
-    /// projection now; otherwise it compiles at the shapes of its first output.
-    pub fn new(key: Term, val: Term, shapes: Option<(Shape, Shape, Shape)>) -> Self {
-        let mut backend = CorgiJoinBackend { key, val, colliding: Vec::new(), compiled: None, _t: PhantomData };
-        if let Some((k, v0, v1)) = shapes {
-            projection(&mut backend.compiled, &backend.key, &backend.val, [k, v0, v1]);
-        }
-        backend
+    /// The projection `key ; val` over inputs of the key's and both values' shapes. A type error
+    /// is a panic with corgi's message: install type-checked the program, so it is not reached.
+    pub fn new(key: &Term, val: &Term, [k, v0, v1]: [Shape; 3]) -> Self {
+        let g = compile_join_projection(key, val, &k, &v0, &v1)
+            .unwrap_or_else(|e| panic!("join projection: type error at shapes ({k}, {v0}, {v1}): {e}"));
+        CorgiJoinBackend { colliding: Vec::new(), projection: ([k, v0, v1], g), _t: PhantomData }
     }
-}
-
-/// The projection graph for inputs of these shapes, compiling on first use. Shapes are static
-/// per collection, so a later block of other shapes is the invariant violation.
-fn projection<'a>(compiled: &'a mut Option<([Shape; 3], Graph<NumOp>)>, key: &Term, val: &Term, shapes: [Shape; 3]) -> &'a Graph<NumOp> {
-    if compiled.is_none() {
-        let g = compile_join_projection(key, val, &shapes[0], &shapes[1], &shapes[2])
-            .unwrap_or_else(|e| panic!("join projection: type error: {e}"));
-        *compiled = Some((shapes.clone(), g));
-    }
-    let (pinned, g) = compiled.as_ref().unwrap();
-    assert!(*pinned == shapes, "join projection: inputs of shapes {shapes:?} reached a projection pinned at {pinned:?}");
-    g
 }
 
 impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<T> {
@@ -236,7 +219,8 @@ impl<T: ColTime> ProxyJoinBackend<T, CBatch<T>, CBatch<T>> for CorgiJoinBackend<
                 rewrap(chunks1[0].vals(), ids.iter().map(|x| x.1.1 as i64).collect())
             } else { gather_lanes(&vals1, &tag1, &off1) };
             let shapes = [shape_of_value(&kc), shape_of_value(&v0), shape_of_value(&v1)];
-            let proj = projection(&mut self.compiled, &self.key, &self.val, shapes);
+            let (pinned, proj) = &self.projection;
+            assert!(*pinned == shapes, "join projection: inputs of shapes {shapes:?} reached a projection compiled at {pinned:?}");
             let projected = corgi::eval_graph(proj, CValue::Prod(vec![kc, v0, v1]));
             let mut cols = projected.into_prod("corgi join projection").unwrap();
             let nv = cols.pop().unwrap();
@@ -901,13 +885,12 @@ mod tests {
         Rc::new(ChunkBatch::new(vec![chunk]))
     }
 
-    fn backend() -> CorgiJoinBackend<u64> {
-        CorgiJoinBackend::new(
-            Term::Var(0),
-            Term::Tuple(vec![Term::Var(1), Term::Var(2)]),
-            None,
-        )
+    /// A backend projecting `(key ; (val0, val1))` from inputs of these key and value shapes.
+    fn backend(shapes: [Shape; 3]) -> CorgiJoinBackend<u64> {
+        CorgiJoinBackend::new(&Term::Var(0), &Term::Tuple(vec![Term::Var(1), Term::Var(2)]), shapes)
     }
+
+    fn pair() -> Shape { Shape::Prod(vec![Shape::Int, Shape::Int]) }
 
     fn cross_bridges(
         backend: &mut CorgiJoinBackend<u64>,
@@ -964,7 +947,8 @@ mod tests {
                         if right { &mut instance.batches1 } else { &mut instance.batches0 }
                             .push(Rc::new(ChunkBatch::new(vec![extra])));
                     }
-                    let mut backend = backend();
+                    let shape = |v: &CValue| corgi::shape_of_value(v);
+                    let mut backend = backend([shape(&wrap(ints(vec![7]))), shape(&values(vec![0], compound0)), shape(&values(vec![0], compound1))]);
                     let (mut left, mut right) = (Vec::new(), Vec::new());
                     backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
                     assert_eq!((left.len(), right.len()), (1, 1));
@@ -995,7 +979,7 @@ mod tests {
             CValue::i64(keys.clone()), CValue::i64(keys.clone()), keys.iter().map(|_| 0u64).collect(), vec![1; keys.len()],
         )]));
         let instance = JoinInstance { batches0: vec![make(vec![i64::MIN, -5, 3])], batches1: vec![make(vec![-5, -1, 3])], lower: 0 };
-        let mut backend = backend();
+        let mut backend = backend([Shape::Int, Shape::Int, Shape::Int]);
         let (mut from, mut left, mut right) = (KeyPosition::Start, Vec::new(), Vec::new());
         while from != KeyPosition::End {
             backend.advance(&instance, &mut from, &mut left, &mut right);
@@ -1028,7 +1012,7 @@ mod tests {
             )]))
         }).collect();
         let instance = JoinInstance { batches0: batches.clone(), batches1: batches, lower: 5 };
-        let mut backend = backend();
+        let mut backend = backend([Shape::Int, pair(), pair()]);
         let (mut left, mut right) = (Vec::new(), Vec::new());
         backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
         let expected: Vec<_> = (1..6).flat_map(|key| std::iter::repeat_n((key, 5, if key == 5 { 3 } else { 1 }), 3)).collect();
@@ -1118,7 +1102,7 @@ mod tests {
             batches1: vec![batch(&rows)],
             lower: 0,
         };
-        let mut backend = backend();
+        let mut backend = backend([pair(), Shape::Int, Shape::Int]);
         let mut from = KeyPosition::Start;
         let (mut left, mut right) = (Vec::new(), Vec::new());
 
@@ -1147,7 +1131,7 @@ mod tests {
                 let padding: Vec<_> = (100..150).map(|id| (id, id, 0)).collect();
                 if right { &mut instance.batches1 } else { &mut instance.batches0 }.push(batch(&padding));
             }
-            let mut backend = backend();
+            let mut backend = backend([pair(), Shape::Int, Shape::Int]);
             let (mut left, mut right) = (Vec::new(), Vec::new());
             backend.advance(&instance, &mut KeyPosition::Start, &mut left, &mut right);
             assert_eq!(backend.colliding, vec![4, 6]);
@@ -1166,7 +1150,7 @@ mod tests {
             batches1: vec![batch(&right_rows)],
             lower: 0,
         };
-        let mut backend = backend();
+        let mut backend = backend([pair(), Shape::Int, Shape::Int]);
         let mut from = KeyPosition::Start;
         let (mut left, mut right) = (Vec::new(), Vec::new());
 

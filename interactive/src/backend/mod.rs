@@ -40,19 +40,20 @@ pub trait Backend {
     /// The arrangement produced by `arrange`/`reduce` and consumed by `join`.
     type Arr<'scope>: Clone;
 
-    /// `shape` is the input's row shape, where it is known before any data arrives.
-    fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize, shape: Option<st::RowShape>) -> Collection<'s, Time, Self::Container>;
+    /// `shape` is the input's row shape, as install inferred it.
+    fn linear<'s>(c: Collection<'s, Time, Self::Container>, ops: Vec<LinearOp>, level: usize, shape: st::RowShape) -> Collection<'s, Time, Self::Container>;
     fn arrange<'s>(c: Collection<'s, Time, Self::Container>) -> Self::Arr<'s>;
     /// Bring an arrangement into a child region. Regions share the timestamp, so this shares
     /// the trace rather than rebuilding it.
     fn enter_region<'s, 'r>(a: Self::Arr<'s>, region: Scope<'r, Time>) -> Self::Arr<'r>;
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container>;
-    /// `shapes` are the two inputs' row shapes, where they are known before any data arrives.
-    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, Self::Container>;
+    /// `shapes` are the two inputs' row shapes.
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
     /// See `scope_ir::Node::HalfJoin`. `level` is the scope depth, which fixes the width of a time
-    /// as data; `shapes` are the stream's and the arrangement's row shapes, where known.
-    fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Projection, level: usize, shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, Self::Container>;
-    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s>;
+    /// as data; `shapes` are the stream's and the arrangement's row shapes.
+    fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Projection, level: usize, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
+    /// `shape` is the input's row shape.
+    fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
 }
@@ -146,16 +147,20 @@ fn reads_rows(s: &st::Scope, k: usize) -> bool {
 /// Render one scope at `depth` (root = 0): feedback vars first (they're listed,
 /// not scanned for), then items in order, then binds close the loops, then the
 /// exports are surrendered. The returned collections are at this scope's depth;
-/// popping the coordinate (`leave_dynamic`) is the caller's job. `shapes`, where
-/// inference ran, gives the operators their inputs' shapes ahead of the data.
+/// popping the coordinate (`leave_dynamic`) is the caller's job. `shapes` are the
+/// scope's collections' shapes, which install inferred, all of them known: the
+/// operators compile against them before any data arrives.
 pub fn render_tree<'s, B: Backend>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
     depth: usize,
     imports: Vec<Rendered<'s, B>>,
-    shapes: Option<&ScopeShapes>,
+    shapes: &ScopeShapes,
 ) -> Vec<Collection<'s, Time, B::Container>> {
-    let shape_of = |r: &st::Ref| shapes.and_then(|sh| sh.of(r)).map(|c| (c.key, c.val));
+    let shape_of = |r: &st::Ref| {
+        let c = shapes.of(r).expect("install refuses a program with a collection of unknown shape");
+        (c.key, c.val)
+    };
     // An arranged import that is also read as rows gets its rows flattened once, here.
     let imports: Vec<Rendered<'s, B>> = imports.into_iter().enumerate().map(|(k, imp)| match imp {
         Rendered::Arrangement(a) if reads_rows(s, k) => {
@@ -191,16 +196,16 @@ pub fn render_tree<'s, B: Backend>(
                     st::Node::Join { left, right, projection } => {
                         let l = resolve(&items, &imports, &var_cols, left).arrange();
                         let r = resolve(&items, &imports, &var_cols, right).arrange();
-                        Rendered::Collection(B::join(l, r, projection, shape_of(left).zip(shape_of(right))))
+                        Rendered::Collection(B::join(l, r, projection, (shape_of(left), shape_of(right))))
                     },
                     st::Node::HalfJoin { stream, arrangement, strict, projection } => {
                         let c = resolve(&items, &imports, &var_cols, stream).collection();
                         let a = resolve(&items, &imports, &var_cols, arrangement).arrange();
-                        Rendered::Collection(B::half_join(c, a, *strict, projection, depth, shape_of(stream).zip(shape_of(arrangement))))
+                        Rendered::Collection(B::half_join(c, a, *strict, projection, depth, (shape_of(stream), shape_of(arrangement))))
                     },
                     st::Node::Reduce { input, reducer } => {
                         let a = resolve(&items, &imports, &var_cols, input).arrange();
-                        Rendered::Arrangement(B::reduce(a, reducer))
+                        Rendered::Arrangement(B::reduce(a, reducer, shape_of(input)))
                     },
                     st::Node::Inspect { input, label } => {
                         let c = resolve(&items, &imports, &var_cols, input).collection();
@@ -219,7 +224,7 @@ pub fn render_tree<'s, B: Backend>(
                 // and then pop the child's dynamic coordinate.
                 let exported = scope.region_named(&child.name, |region| {
                     let entered: Vec<_> = child_imports.iter().map(|imp| imp.enter(region)).collect();
-                    let child_shapes = shapes.and_then(|sh| match sh.items.get(index) { Some(ItemShapes::Sub(c)) => Some(c), _ => None });
+                    let ItemShapes::Sub(child_shapes) = &shapes.items[index] else { panic!("a child scope's shapes are a scope's") };
                     let exports = render_tree::<B>(child, region, depth + 1, entered, child_shapes);
                     exports.into_iter().map(|c| c.leave(scope)).collect::<Vec<_>>()
                 });
