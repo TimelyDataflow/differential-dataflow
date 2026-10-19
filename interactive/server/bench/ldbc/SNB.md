@@ -182,8 +182,9 @@ retains independent traversal/counting oracles. Official conformance validation
 is still separate work.
 
 Floating results are DDIR Floats (IEEE f64, totally ordered), not the
-specification's Float32 API representation. Shortest-path maintenance uses a hop-indexed bound of `|V|-1` so
-deletions terminate; this can be expensive on large connected graphs. General
+specification's Float32 API representation. Shortest paths keep the least cost per
+node, with no hop count: each epoch's iteration restarts from the seeds, so deletions
+terminate. General
 aggregates currently use `collect`/`fold`; nested and ranked outputs are fully
 materialized. These are deliberate visible baseline costs, not tuned plans.
 
@@ -200,8 +201,8 @@ python3 interactive/server/bench/ldbc/suite.py --server target/debug/ddir_server
   --mode maintained --workers 4 --rounds 1 --warmup 0
 ```
 
-Start scaling with selected queries. Neither the Python snapshot evaluator nor
-the hop-indexed path plans are intended to make all-query SF1 runs cheap. The
+Start scaling with selected queries. The Python snapshot evaluator is not
+intended to make all-query SF1 runs cheap. The
 default 120-second command deadline and sampled 6-GiB server RSS ceiling exclude
 Python and are not a hard OS memory limit. Small debug runs establish correctness,
 not competitive performance; use release builds and a quiet machine for timing.
