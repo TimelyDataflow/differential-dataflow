@@ -14,10 +14,12 @@
 use std::any::{type_name_of_val, Any};
 use std::collections::{BTreeMap, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex};
 
+use interactive::corgi::feed::{FeedColumns, FeedDecoder};
 use interactive::ir::{eval, Diff, Value};
 use interactive::scope_ir::{Program, Source};
-use interactive::server::{Command as ServerCommand, InputUpdate, OuterTime};
+use interactive::server::{Command as ServerCommand, OuterTime, RowShape};
 
 pub type ReqId = String;
 
@@ -58,24 +60,24 @@ pub enum Cmd {
     Tail { name: String },
     /// Cancel a previous `tail` (matched by its reqid).
     Stop { tail_reqid: ReqId },
-    /// Update positional `input` of `prog`: add `(key, val)` with `diff` at
-    /// `time` (default the current epoch). Identity and ordering of writes
-    /// are convention, not enforcement: cooperating clients include their
-    /// session name and an ordering id in the data, and programs resolve
-    /// contention over those facts (see demo/claims.txt, demo/txn.txt).
+    /// Update positional `input` of `prog` with one row, read into columns at
+    /// the input's declared shapes, at `time` (default the current epoch).
+    /// Identity and ordering of writes are convention, not enforcement:
+    /// cooperating clients include their session name and an ordering id in
+    /// the data, and programs resolve contention over those facts (see
+    /// demo/claims.txt, demo/txn.txt).
     Feed {
         prog: String,
         input: usize,
-        key: Value,
-        val: Value,
+        columns: FeedColumns,
         time: Option<OuterTime>,
-        diff: Diff,
     },
-    /// Atomically stage many rows into one program input at the current epoch.
-    FeedBatch {
+    /// Atomically stage many rows, read into columns at the input's declared
+    /// shapes, into one program input at the current epoch.
+    FeedColumns {
         prog: String,
         input: usize,
-        updates: Vec<InputUpdate>,
+        columns: FeedColumns,
     },
     /// Fill one program input from a source the server reads itself — a recipe
     /// (`random:…`, `iota:N`) or a file of integer rows — each worker taking its
@@ -114,10 +116,36 @@ pub enum PreparedCommand {
     Stop { tail_reqid: ReqId },
 }
 
+/// The declared shapes of loaded programs' inputs, by program name, shared by every session so
+/// that a feed is read into columns before it reaches the workers. A `load` records its program's
+/// shapes as it is prepared, replacing any earlier program's of that name; nothing is forgotten,
+/// as a feed to a program that is not installed is refused by the workers, which check the
+/// shapes again.
+#[derive(Clone, Default)]
+pub struct Catalog(Arc<Mutex<HashMap<String, HashMap<usize, RowShape>>>>);
+
+impl Catalog {
+    fn record(&self, name: &str, program: &Program) {
+        let inputs = program.root.imports.iter().filter_map(|import| match (&import.from, &import.shape) {
+            (Source::Input(n), Some(shape)) => Some((*n, shape.clone())),
+            _ => None,
+        });
+        self.0.lock().unwrap().insert(name.to_string(), inputs.collect());
+    }
+
+    /// A reader of rows for `prog`'s `input`, at its declared shapes.
+    fn decoder(&self, prog: &str, input: usize) -> Result<FeedDecoder, String> {
+        let programs = self.0.lock().unwrap();
+        let inputs = programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
+        let (key, val) = inputs.get(&input).ok_or_else(|| format!("program {prog:?} has no input {input}"))?;
+        Ok(FeedDecoder::new(key, val))
+    }
+}
+
 /// Parse and lower the expensive parts of a protocol command on its session
 /// thread. Every worker receives the same typed program, and malformed DDIR
-/// never reaches a Timely worker.
-pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
+/// never reaches a Timely worker. A load's input shapes go into `catalog`.
+pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, String> {
     let command = match command {
         Cmd::Load {
             id_hint,
@@ -137,6 +165,7 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
                     .map_err(panic_message)?;
             }
             program.optimize();
+            catalog.record(&id_hint, &program);
             ServerCommand::Install {
                 name: id_hint,
                 program,
@@ -147,30 +176,8 @@ pub fn prepare(command: Cmd) -> Result<PreparedCommand, String> {
         Cmd::Peek { name, key } => ServerCommand::Peek { trace: name, key },
         Cmd::Tail { name } => return Ok(PreparedCommand::Tail { name }),
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
-        Cmd::Feed {
-            prog,
-            input,
-            key,
-            val,
-            time,
-            diff,
-        } => ServerCommand::Feed {
-            prog,
-            input,
-            key,
-            val,
-            time,
-            diff,
-        },
-        Cmd::FeedBatch {
-            prog,
-            input,
-            updates,
-        } => ServerCommand::FeedBatch {
-            prog,
-            input,
-            updates,
-        },
+        Cmd::Feed { prog, input, columns, time } => ServerCommand::Feed { prog, input, columns, time },
+        Cmd::FeedColumns { prog, input, columns } => ServerCommand::FeedColumns { prog, input, columns },
         Cmd::Source { prog, input, source } => ServerCommand::Load { prog, input, source },
         Cmd::Bind { trace, prog, input } => ServerCommand::Bind { trace, prog, input },
         Cmd::Unbind { trace, prog, input } => ServerCommand::Unbind { trace, prog, input },
@@ -256,6 +263,8 @@ pub struct Request {
 /// command (or parse error), or `None` when more lines are required.
 #[derive(Default)]
 pub struct LineParser {
+    /// The input shapes feeds are read at.
+    catalog: Catalog,
     pending_load: Option<PendingLoad>,
     pending_feed: Option<PendingFeed>,
     auto_reqid_counter: u64,
@@ -306,7 +315,8 @@ struct PendingFeed {
     reqid: ReqId,
     prog: String,
     input: usize,
-    updates: Vec<InputUpdate>,
+    /// The rows so far, read at the input's declared shapes; `None` for an input with none.
+    rows: Option<FeedDecoder>,
     bytes: usize,
     /// Malformed and oversized bodies are swallowed through `end-feed`, then
     /// reported once; no partial command reaches the worker group.
@@ -314,8 +324,9 @@ struct PendingFeed {
 }
 
 impl LineParser {
-    pub fn new() -> Self {
+    pub fn new(catalog: Catalog) -> Self {
         LineParser {
+            catalog,
             max_load_bytes: max_program_bytes(),
             max_feed_bytes: max_feed_bytes(),
             ..Self::default()
@@ -356,14 +367,9 @@ impl LineParser {
                 if let Some(err) = done.poisoned {
                     return Some((done.reqid, Err(err)));
                 }
-                return Some((
-                    done.reqid,
-                    Ok(Cmd::FeedBatch {
-                        prog: done.prog,
-                        input: done.input,
-                        updates: done.updates,
-                    }),
-                ));
+                let columns = done.rows.expect("an unpoisoned feed has its input's shapes").finish();
+                let (prog, input) = (done.prog, done.input);
+                return Some((done.reqid, Ok(Cmd::FeedColumns { prog, input, columns })));
             }
 
             pending.bytes = pending.bytes.saturating_add(line.len() + 1);
@@ -372,17 +378,16 @@ impl LineParser {
                     "feed: body exceeds {} bytes (DDIR_MAX_FEED_BYTES)",
                     self.max_feed_bytes
                 ));
-                pending.updates.clear();
+                pending.rows = None;
             }
             if pending.poisoned.is_some() || trimmed.is_empty() || trimmed.starts_with('#') {
                 return None;
             }
-            match parse_input_update(trimmed) {
-                Ok(update) => pending.updates.push(update),
-                Err(error) => {
-                    pending.poisoned = Some(format!("feed row: {error}"));
-                    pending.updates.clear();
-                }
+            let rows = pending.rows.as_mut().expect("an unpoisoned feed has its input's shapes");
+            let row = rows.len() + 1;
+            if let Err(error) = split_input_update(trimmed).and_then(|(key, val, diff)| rows.push(key, val, diff)) {
+                pending.poisoned = Some(format!("feed row {row}: {error}"));
+                pending.rows = None;
             }
             return None;
         }
@@ -450,7 +455,7 @@ impl LineParser {
             (first.to_string(), cmd)
         };
         let rest: Vec<&str> = toks.collect();
-        match parse_cmd(cmd, &rest) {
+        match parse_cmd(cmd, &rest, &self.catalog) {
             ParseOutcome::Cmd(c) => Some((reqid, Ok(c))),
             ParseOutcome::Err(e) => Some((reqid, Err(e))),
             ParseOutcome::BeginLoad {
@@ -469,14 +474,12 @@ impl LineParser {
                 None
             }
             ParseOutcome::BeginFeed { prog, input } => {
-                self.pending_feed = Some(PendingFeed {
-                    reqid,
-                    prog,
-                    input,
-                    updates: Vec::new(),
-                    bytes: 0,
-                    poisoned: None,
-                });
+                // A feed to an input with no declared shapes is read through to its end, then refused.
+                let (rows, poisoned) = match self.catalog.decoder(&prog, input) {
+                    Ok(rows) => (Some(rows), None),
+                    Err(error) => (None, Some(format!("feed: {error}"))),
+                };
+                self.pending_feed = Some(PendingFeed { reqid, prog, input, rows, bytes: 0, poisoned });
                 None
             }
         }
@@ -504,8 +507,8 @@ enum ParseOutcome {
 }
 
 
-/// A `<value>` for `feed`: a comma-separated integer row → `Tuple`, `_` or
-/// empty → unit, else a closed scalar term (one whitespace-free token, e.g.
+/// A key for `peek`: a comma-separated integer row → `Tuple`, `_` or empty →
+/// unit, else a closed scalar term (one whitespace-free token, e.g.
 /// `inject(2,tuple(3,4))`) evaluated to a constant. Term-parser panics are
 /// caught here on the session thread and become clean errors — malformed
 /// input never reaches the worker.
@@ -539,19 +542,18 @@ fn parse_value(s: &str) -> Result<Value, String> {
     })
 }
 
-/// Parse one row in a framed feed. Its target and timestamp belong to the
-/// enclosing command, which keeps large requests compact and atomic.
-fn parse_input_update(line: &str) -> Result<InputUpdate, String> {
+/// Split one row of a framed feed into its key and value text and its diff. Its target and
+/// timestamp belong to the enclosing command, which keeps large requests compact and atomic.
+fn split_input_update(line: &str) -> Result<(&str, Option<&str>, Diff), String> {
     let mut args = line.split_whitespace();
     let Some(key) = args.next() else {
         return Err("expected `<key> [val=<v>] [diff=<d>]`".into());
     };
-    let key = parse_value(key).map_err(|error| format!("key: {error}"))?;
-    let mut val = Value::unit();
+    let mut val = None;
     let mut diff: Diff = 1;
     for tok in args {
         if let Some(value) = tok.strip_prefix("val=") {
-            val = parse_value(value).map_err(|error| format!("val: {error}"))?;
+            val = Some(value);
         } else if let Some(value) = tok.strip_prefix("diff=") {
             diff = value
                 .parse()
@@ -562,10 +564,10 @@ fn parse_input_update(line: &str) -> Result<InputUpdate, String> {
             return Err(format!("unrecognized argument {tok:?}"));
         }
     }
-    Ok(InputUpdate { key, val, diff })
+    Ok((key, val, diff))
 }
 
-fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
+fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
     match cmd {
         "load" => {
             // Two forms. `load <name> from <path> [options]` installs a program
@@ -647,9 +649,8 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                 };
             }
             // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
-            // A `<v>`/`<key>` is a comma-separated integer row (`1,2` → tuple;
-            // `_`/empty → unit) or a closed scalar term written without
-            // spaces (`inject(2,tuple(3,4))`).
+            // A `<v>`/`<key>` is a value of the input's declared shape, written
+            // without spaces (see `interactive::corgi::feed`).
             if args.len() < 3 {
                 return ParseOutcome::Err(
                     "feed: expected `<prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`".into(),
@@ -665,19 +666,13 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                     ))
                 }
             };
-            let key = match parse_value(args[2]) {
-                Ok(v) => v,
-                Err(e) => return ParseOutcome::Err(format!("feed key: {}", e)),
-            };
-            let mut val = Value::unit();
+            let key = args[2];
+            let mut val = None;
             let mut time = None;
             let mut diff: Diff = 1;
             for tok in &args[3..] {
                 if let Some(v) = tok.strip_prefix("val=") {
-                    val = match parse_value(v) {
-                        Ok(v) => v,
-                        Err(e) => return ParseOutcome::Err(format!("feed val: {}", e)),
-                    };
+                    val = Some(v);
                 } else if let Some(t) = tok.strip_prefix("time=") {
                     time = match t.parse() {
                         Ok(t) => Some(t),
@@ -702,14 +697,14 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
                     return ParseOutcome::Err(format!("feed: unrecognized argument {:?}", tok));
                 }
             }
-            ParseOutcome::Cmd(Cmd::Feed {
-                prog,
-                input,
-                key,
-                val,
-                time,
-                diff,
-            })
+            let mut row = match catalog.decoder(&prog, input) {
+                Ok(row) => row,
+                Err(e) => return ParseOutcome::Err(format!("feed: {e}")),
+            };
+            if let Err(e) = row.push(key, val, diff) {
+                return ParseOutcome::Err(format!("feed: {e}"));
+            }
+            ParseOutcome::Cmd(Cmd::Feed { prog, input, columns: row.finish(), time })
         }
         "bind" | "unbind" => match args {
             [trace, prog, input] => match input.parse::<usize>() {
@@ -778,6 +773,21 @@ fn parse_cmd(cmd: &str, args: &[&str]) -> ParseOutcome {
 mod tests {
     use super::*;
 
+    /// A parser that has prepared a load of `world`, whose inputs are fed below.
+    fn world() -> LineParser {
+        let program = r#"
+            type T = A int | B int | C (int, int);
+            export "pairs" = input 0 : ((int, int) ; ());
+            export "both" = input 1 : ((int, int) ; (int, int));
+            export "tagged" = input 2 : (() ; T);
+            export "ones" = input 3 : ((int) ; (int));
+        "#;
+        let catalog = Catalog::default();
+        let load = Cmd::Load { id_hint: "world".into(), bindings: BTreeMap::new(), program: program.into(), explain: None };
+        prepare(load, &catalog).expect("the program lowers");
+        LineParser::new(catalog)
+    }
+
     fn feed_all(p: &mut LineParser, lines: &[&str]) -> Vec<(ReqId, Result<Cmd, String>)> {
         let mut out = Vec::new();
         for l in lines {
@@ -790,7 +800,7 @@ mod tests {
 
     #[test]
     fn feed_from_sources_rows_server_side() {
-        let mut p = LineParser::default();
+        let mut p = LineParser::new(Catalog::default());
         let out = feed_all(&mut p, &["r1 feed world 0 from iota:3\n"]);
         match &out[..] {
             [(reqid, Ok(Cmd::Source { prog, input, source }))] => {
@@ -805,7 +815,7 @@ mod tests {
 
     #[test]
     fn simple_commands() {
-        let mut p = LineParser::new();
+        let mut p = LineParser::new(Catalog::default());
         let got = feed_all(
             &mut p,
             &["r0 list", "r1 tick 5", "r2 drop 3", "r3 peek foo"],
@@ -819,7 +829,7 @@ mod tests {
 
     #[test]
     fn multiline_load() {
-        let mut p = LineParser::new();
+        let mut p = LineParser::new(Catalog::default());
         let got = feed_all(
             &mut p,
             &[
@@ -852,12 +862,12 @@ mod tests {
 
     #[test]
     fn load_is_lowered_before_worker_admission() {
-        let mut p = LineParser::new();
+        let mut p = LineParser::new(Catalog::default());
         assert!(p.feed("r0 load world begin").is_none());
         assert!(p.feed("let rows = input 0;").is_none());
         assert!(p.feed("export \"rows\" = rows;").is_none());
         let (_, parsed) = p.feed("r0 end-load").expect("load is complete");
-        let prepared = prepare(parsed.expect("protocol parse succeeds"))
+        let prepared = prepare(parsed.expect("protocol parse succeeds"), &Catalog::default())
             .expect("DDIR parsing and lowering succeed");
         match prepared {
             PreparedCommand::Server(ServerCommand::Install { name, program }) => {
@@ -876,7 +886,7 @@ mod tests {
         std::fs::write(&ddp, "export \"r\" = input 0;\n").unwrap();
         let ddp2 = dir.join("q.ddp");
         std::fs::write(&ddp2, "export \"s\" = input 0;\n").unwrap();
-        let mut p = LineParser::default();
+        let mut p = LineParser::new(Catalog::default());
         let got = feed_all(&mut p, &[
             &format!("r1 load p from {} explain=debug e=random(seed=1,arity=2,range=8,count=12)\n", ddp.display()),
             &format!("r2 load q from {}\n", ddp2.display()),
@@ -902,7 +912,7 @@ mod tests {
 
     #[test]
     fn peek_takes_an_optional_key() {
-        let mut p = LineParser::default();
+        let mut p = LineParser::new(Catalog::default());
         let got = feed_all(&mut p, &["r1 peek t 2,3\n", "r2 peek t\n", "r3 peek t oops(\n"]);
         assert!(matches!(&got[0].1, Ok(Cmd::Peek { key: Some(_), .. })));
         assert!(matches!(&got[1].1, Ok(Cmd::Peek { key: None, .. })));
@@ -911,7 +921,7 @@ mod tests {
 
     #[test]
     fn auto_reqid_for_bare_command() {
-        let mut p = LineParser::new();
+        let mut p = LineParser::new(Catalog::default());
         let got = feed_all(&mut p, &["list", "tick 3", "rA peek foo", "exit"]);
         assert_eq!(got.len(), 4);
         // Bare commands get auto-minted reqids; mixed-in explicit reqids
@@ -928,47 +938,51 @@ mod tests {
 
     #[test]
     fn feed_cmd() {
-        let mut p = LineParser::new();
+        let mut p = world();
         let got = feed_all(
             &mut p,
             &[
                 "r0 feed world 0 1,2",
-                "r1 feed world 0 3,4 val=7,8 time=5 diff=-1",
-                "r2 feed world 0 _ val=inject(2,tuple(3,4))",
+                "r1 feed world 1 3,4 val=7,8 time=5 diff=-1",
+                "r2 feed world 2 _ val=inject(2,tuple(3,4))",
                 "r3 feed world zero 1,2",     // bad input index
                 "r4 feed world 0 1,2 wat=7",  // unknown argument
-                "r5 feed world 0 tuple(1,",   // malformed term -> caught, not a panic
+                "r5 feed world 0 tuple(1,",   // malformed value
+                "r6 feed world 0 1,2 val=3",  // a value where the input has unit
+                "r7 feed world 9 1,2",        // an input the program does not have
+                "r8 feed nowhere 0 1,2",      // a program never loaded
+                "r9 feed world 0 tuple(1,2)",
             ],
         );
-        assert_eq!(got.len(), 6);
+        assert_eq!(got.len(), 10);
+        let Ok(Cmd::Feed { columns: wrapped, .. }) = &got[9].1 else { panic!("expected Feed, got {:?}", got[9].1) };
         match &got[0].1 {
-            Ok(Cmd::Feed { prog, input, key, val, time, diff }) => {
-                assert_eq!(prog, "world");
-                assert_eq!(*input, 0);
-                assert_eq!(*key, Value::Tuple(vec![Value::Int(1), Value::Int(2)]));
-                assert_eq!(*val, Value::unit());
-                assert_eq!(*time, None);
-                assert_eq!(*diff, 1);
+            Ok(Cmd::Feed { prog, input, columns, time }) => {
+                assert_eq!((prog.as_str(), *input, *time), ("world", 0, None));
+                assert_eq!((&columns.keys, &columns.diffs), (&wrapped.keys, &vec![1]));
             }
             other => panic!("expected Feed, got {:?}", other),
         }
         match &got[1].1 {
-            Ok(Cmd::Feed { time, diff, .. }) => {
+            Ok(Cmd::Feed { time, columns, .. }) => {
                 assert_eq!(*time, Some(5));
-                assert_eq!(*diff, -1);
+                assert_eq!(columns.diffs, vec![-1]);
             }
             other => panic!("expected Feed, got {:?}", other),
         }
-        assert!(matches!(&got[2].1, Ok(Cmd::Feed { key, .. }) if *key == Value::unit()));
+        assert!(matches!(&got[2].1, Ok(Cmd::Feed { columns, .. }) if columns.len() == 1));
         assert!(got[3].1.is_err());
         assert!(got[4].1.is_err());
-        assert!(got[5].1.is_err());
+        assert!(got[5].1.as_ref().is_err_and(|e| e.starts_with("feed: key \"tuple(1,\"")));
+        assert!(got[6].1.as_ref().is_err_and(|e| e.starts_with("feed: val \"3\"")));
+        assert_eq!(got[7].1.as_ref().unwrap_err(), r#"feed: program "world" has no input 9"#);
+        assert_eq!(got[8].1.as_ref().unwrap_err(), r#"feed: no program "nowhere""#);
     }
 
     #[test]
     fn framed_feed_becomes_one_typed_command() {
-        let mut p = LineParser::new();
-        assert!(p.feed("r0 feed world 2 begin").is_none());
+        let mut p = world();
+        assert!(p.feed("r0 feed world 3 begin").is_none());
         assert!(p.awaiting_body());
         assert!(p.feed("# rows use the enclosing command's epoch").is_none());
         assert!(p.feed("1 val=10").is_none());
@@ -977,28 +991,38 @@ mod tests {
         assert_eq!(reqid, "r0");
         assert!(!p.awaiting_body());
 
-        let prepared = prepare(parsed.expect("protocol parse succeeds")).unwrap();
-        let PreparedCommand::Server(ServerCommand::FeedBatch {
+        let prepared = prepare(parsed.expect("protocol parse succeeds"), &Catalog::default()).unwrap();
+        let PreparedCommand::Server(ServerCommand::FeedColumns {
             prog,
             input,
-            updates,
+            columns,
         }) = prepared
         else {
-            panic!("expected prepared feed batch, got {prepared:?}");
+            panic!("expected prepared columnar feed, got {prepared:?}");
         };
-        assert_eq!(prog, "world");
-        assert_eq!(input, 2);
-        assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].key, Value::Tuple(vec![Value::Int(1)]));
-        assert_eq!(updates[0].val, Value::Tuple(vec![Value::Int(10)]));
-        assert_eq!(updates[0].diff, 1);
-        assert_eq!(updates[1].diff, -1);
+        assert_eq!((prog.as_str(), input), ("world", 3));
+        assert_eq!(columns.diffs, vec![1, -1]);
+        // The same rows, written out in full.
+        let wrapped = feed_all(&mut p, &["r1 feed world 3 begin", "tuple(1) val=tuple(10)", "tuple(2) val=tuple(-20) diff=-1", "end-feed"]);
+        let [(_, Ok(Cmd::FeedColumns { columns: wrapped, .. }))] = &wrapped[..] else { panic!("expected a feed, got {wrapped:?}") };
+        assert_eq!((&columns.keys, &columns.vals), (&wrapped.keys, &wrapped.vals));
+    }
+
+    /// A row that is not of the input's shapes refuses the whole feed, naming the row.
+    #[test]
+    fn framed_feed_refuses_a_misfit_row() {
+        let mut p = world();
+        let got = feed_all(&mut p, &["r0 feed world 3 begin", "1 val=10", "2 val=inject(0,3)", "3 val=30", "r0 end-feed"]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1.as_ref().unwrap_err(), r#"feed row 2: val "inject(0,3)": expected `tuple(` at byte 0, found `inject(0,3)`"#);
+        let elsewhere = feed_all(&mut p, &["r1 feed elsewhere 0 begin", "1 val=10", "end-feed"]);
+        assert_eq!(elsewhere[0].1.as_ref().unwrap_err(), r#"feed: no program "elsewhere""#);
     }
 
     #[test]
     fn malformed_framed_feed_is_rejected_atomically() {
-        let mut p = LineParser::new();
-        assert!(p.feed("r0 feed world 0 begin").is_none());
+        let mut p = world();
+        assert!(p.feed("r0 feed world 3 begin").is_none());
         assert!(p.feed("1 val=10").is_none());
         assert!(p.feed("2 time=3").is_none());
         // Once poisoned, otherwise command-looking lines are body and cannot
@@ -1014,8 +1038,8 @@ mod tests {
 
     #[test]
     fn oversized_framed_feed_is_rejected_cleanly() {
-        let mut p = LineParser::with_cap(32);
-        assert!(p.feed("r0 feed world 0 begin").is_none());
+        let mut p = LineParser { max_feed_bytes: 32, ..world() };
+        assert!(p.feed("r0 feed world 3 begin").is_none());
         for key in 0..16 {
             assert!(p.feed(&format!("{key} val={key}")).is_none());
         }
@@ -1029,7 +1053,7 @@ mod tests {
 
     #[test]
     fn bind_cmd() {
-        let mut p = LineParser::new();
+        let mut p = LineParser::new(Catalog::default());
         let got = feed_all(
             &mut p,
             &["r0 bind next counter 1", "r1 unbind next counter 1", "r2 bind next counter one"],
@@ -1061,7 +1085,7 @@ mod tests {
 
     #[test]
     fn drop_by_id_or_name() {
-        let mut p = LineParser::new();
+        let mut p = LineParser::new(Catalog::default());
         let got = feed_all(
             &mut p,
             &[

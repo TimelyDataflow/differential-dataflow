@@ -38,7 +38,7 @@ use std::sync::mpsc::{channel, sync_channel, SendError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cmd::{prepare, ConnectionId, LineParser, Request};
+use cmd::{prepare, Catalog, ConnectionId, LineParser, Request};
 use timely::scheduling::activate::SyncActivations;
 
 enum ControlEvent {
@@ -51,6 +51,8 @@ enum ControlEvent {
 struct ControlHandle {
     events: Sender<ControlEvent>,
     activations: SyncActivations,
+    /// The input shapes every session reads feeds at.
+    catalog: Catalog,
 }
 
 impl ControlHandle {
@@ -84,7 +86,7 @@ fn dispatch(
 ) -> Dispatch {
     let (reqid, kind) = parsed;
     let is_exit = matches!(kind, Ok(cmd::Cmd::Exit));
-    let kind = kind.and_then(prepare);
+    let kind = kind.and_then(|command| prepare(command, &control.catalog));
     let req = Request {
         reqid,
         kind,
@@ -155,6 +157,7 @@ fn main() {
         activations: activation_rx
             .recv()
             .expect("worker exited before publishing its activator"),
+        catalog: Catalog::default(),
     };
 
     // TCP listener: each accepted connection spawns its own reader and
@@ -270,7 +273,7 @@ fn run_session<R: BufRead, W: Write + Send + 'static>(
         on_exit();
     });
 
-    let mut parser = LineParser::new();
+    let mut parser = LineParser::new(control.catalog.clone());
     for line in input.lines() {
         let Ok(line) = line else {
             break;
@@ -367,7 +370,7 @@ fn run_ws_session(stream: TcpStream, control: ControlHandle) -> Result<(), tungs
     );
 
     let (resp_tx, resp_rx) = channel::<String>();
-    let mut parser = LineParser::new();
+    let mut parser = LineParser::new(control.catalog.clone());
     let mut should_exit = false;
 
     loop {
