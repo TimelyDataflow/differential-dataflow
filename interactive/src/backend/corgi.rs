@@ -280,7 +280,7 @@ impl<B0: Native, B1: Native, J: JoinTactic<Time, NativeBatch, NativeBatch, CC>> 
 /// A half-join tactic over native batches, accepting an imported arrangement.
 struct RetimeHalfJoin<J>(J);
 impl<B: Native, M, J: HalfJoinTactic<Time, NativeBatch, M, CC>> HalfJoinTactic<Time, B, M, CC> for RetimeHalfJoin<J> {
-    fn prep(&mut self, chunks: Vec<M>, batches: Vec<B>, lower: Antichain<Time>) -> Box<dyn Iterator<Item = (CC, Time)>> {
+    fn prep(&mut self, chunks: Vec<M>, batches: Vec<B>, lower: Antichain<Time>) -> Box<dyn Iterator<Item = CC>> {
         self.0.prep(chunks, batches.into_iter().map(Native::native).collect(), lower)
     }
 }

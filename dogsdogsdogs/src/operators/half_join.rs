@@ -25,7 +25,6 @@ use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilderSession;
-use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 
@@ -45,11 +44,13 @@ use timely::dataflow::operators::CapabilitySet;
 ///
 /// The implementor can half-join streams of `C0` with batches `B`, producing output streams of `C1`.
 pub trait HalfJoinTactic<T, B, C0, C1> {
-    /// Converts a list of chunks and a list of batch payloads to a list of outputs, each with a time suitable as a capability.
+    /// Converts a list of chunks and a list of batch payloads to a list of outputs.
     ///
     /// The `lower` argument lower bounds the times in `chunks`, and may be used to load `batches`
-    /// compacted, or to bound the arrangement times the join must consider.
-    fn prep(&mut self, chunks: Vec<C0>, batches: Vec<B>, lower: Antichain<T>) -> Box<dyn Iterator<Item = (C1, T)>>;
+    /// compacted, or to bound the arrangement times the join must consider. Each output's updates
+    /// must lie at or beyond some element of `lower`: the driver ships every output stamped with
+    /// capabilities for all of `lower`, so the tactic need not sort its output by capability.
+    fn prep(&mut self, chunks: Vec<C0>, batches: Vec<B>, lower: Antichain<T>) -> Box<dyn Iterator<Item = C1>>;
 }
 
 /// A `half_join` driven by a [`Batcher`] and a [`HalfJoinTactic`].
@@ -99,9 +100,8 @@ where
         let mut caps = CapabilitySet::new();
 
         // Deferred work, as `(capabilities, iterator)` pairs. Each iterator, prepared by the
-        // tactic, yields output containers and the time at which each may be shipped; the paired
-        // capability set covers those times.
-        let mut todo: VecDeque<(CapabilitySet<Tr::Time>, Box<dyn Iterator<Item = (C, Tr::Time)>>)> = VecDeque::new();
+        // tactic, yields output containers, shipped stamped with all of the paired capabilities.
+        let mut todo: VecDeque<(CapabilitySet<Tr::Time>, Box<dyn Iterator<Item = C>>)> = VecDeque::new();
 
         move |(input1, frontier1), (input2, frontier2), output| {
 
@@ -134,17 +134,17 @@ where
                 caps.downgrade(retained.iter());
             }
 
-            // Perform some amount of outstanding work, shipping each container at a capability
-            // covering the time the tactic reports for it. Work is measured in output records.
+            // Perform some amount of outstanding work, shipping each container stamped with the
+            // unit's capabilities, which cover every update it released. Work is measured in output
+            // records.
             let timer = std::time::Instant::now();
             let mut work = 0;
             while !yield_function(timer, work) {
                 let Some((caps, iter)) = todo.front_mut() else { break };
                 match iter.next() {
-                    Some((mut container, time)) => {
+                    Some(mut container) => {
                         work += container.record_count() as usize;
-                        let cap = caps.iter().find(|c| c.time().less_equal(&time)).expect("no capability covers a produced container");
-                        output.session_with_builder(cap).give_container(&mut container);
+                        output.session_with_builder(&*caps).give_container(&mut container);
                     }
                     None => { todo.pop_front(); }
                 }
@@ -328,14 +328,12 @@ pub mod cursors {
         L: for<'a> FnMut(&mut CB, &K, &V, <BCursor<B> as Cursor>::Val<'a>, &BTime<B>, &R, &mut Vec<(BTime<B>, <BCursor<B> as Cursor>::Diff)>) + 'static,
         CB: ContainerBuilder,
     {
-        fn prep(&mut self, chunks: Vec<Vec<((K, V, BTime<B>), BTime<B>, R)>>, batches: Vec<B>, lower: Antichain<BTime<B>>) -> Box<dyn Iterator<Item = (CB::Container, BTime<B>)>> {
+        fn prep(&mut self, chunks: Vec<Vec<((K, V, BTime<B>), BTime<B>, R)>>, batches: Vec<B>, _lower: Antichain<BTime<B>>) -> Box<dyn Iterator<Item = CB::Container>> {
             // The batcher releases updates in time order, but the cursor is walked in data order.
             let mut updates: Vec<_> = chunks.into_iter().flatten().collect();
             updates.sort_by(|(d1, t1, _), (d2, t2, _)| (d1, t1).cmp(&(d2, t2)));
 
             let (cursor, storage) = cursor_list(batches);
-            let lower = lower.elements().to_vec();
-            let builders = (0 .. lower.len()).map(|_| CB::default()).collect::<Vec<_>>();
 
             Box::new(DeferredIter {
                 updates,
@@ -344,8 +342,7 @@ pub mod cursors {
                 storage,
                 key_con: BatchContainer::with_capacity(1),
                 time_con: BatchContainer::with_capacity(1),
-                lower,
-                builders,
+                builder: CB::default(),
                 ready: VecDeque::new(),
                 output_buffer: Vec::new(),
                 logic: Rc::clone(&self.logic),
@@ -355,7 +352,7 @@ pub mod cursors {
         }
     }
 
-    /// Deferred half-join computation, as an iterator of output containers and the times they ship at.
+    /// Deferred half-join computation, as an iterator of output containers.
     ///
     /// Each `next` walks the released updates forward until a builder yields a container, or the
     /// updates run dry. The driver stops pulling once it has done enough work, and resumes the same
@@ -369,12 +366,9 @@ pub mod cursors {
         storage: C::Storage,
         key_con: C::KeyContainer,
         time_con: C::TimeContainer,
-        /// The times output ships at, one per builder. An update is assigned the first that is
-        /// less or equal to its initial time, mirroring the capability the driver will find.
-        lower: Vec<C::Time>,
-        builders: Vec<CB>,
+        builder: CB,
         /// Completed containers awaiting a `next` call.
-        ready: VecDeque<(CB::Container, C::Time)>,
+        ready: VecDeque<CB::Container>,
         /// Stash for (time, diff) accumulation.
         output_buffer: Vec<(C::Time, C::Diff)>,
         /// The output closure, shared across all outstanding units.
@@ -391,7 +385,7 @@ pub mod cursors {
         CB: ContainerBuilder,
         L: for<'a> FnMut(&mut CB, &K, &V, C::Val<'a>, &C::Time, &R, &mut Vec<(C::Time, C::Diff)>),
     {
-        type Item = (CB::Container, C::Time);
+        type Item = CB::Container;
 
         fn next(&mut self) -> Option<Self::Item> {
 
@@ -405,8 +399,7 @@ pub mod cursors {
                 let storage = &self.storage;
                 let key_con = &mut self.key_con;
                 let time_con = &mut self.time_con;
-                let lower = &self.lower;
-                let builders = &mut self.builders;
+                let builder = &mut self.builder;
                 let ready = &mut self.ready;
                 let output_buffer = &mut self.output_buffer;
                 let strict = self.strict;
@@ -417,10 +410,6 @@ pub mod cursors {
 
                     let ((key, val1, time), initial, diff1) = &updates[self.index];
                     self.index += 1;
-
-                    // Each capability has its own builder, so that output shipped at one is not
-                    // mixed with output that requires another.
-                    let builder_idx = lower.iter().position(|t| t.less_equal(initial)).expect("no capability covers a released update");
 
                     key_con.clear();
                     key_con.push_own(key);
@@ -442,15 +431,15 @@ pub mod cursors {
                                 }
                             });
                             consolidate(output_buffer);
-                            logic(&mut builders[builder_idx], key, val1, val2, initial, diff1, output_buffer);
+                            logic(builder, key, val1, val2, initial, diff1, output_buffer);
                             output_buffer.clear();
                             cursor.step_val(storage);
                         }
                         cursor.rewind_vals(storage);
                     }
 
-                    while let Some(container) = builders[builder_idx].extract() {
-                        ready.push_back((std::mem::take(container), lower[builder_idx].clone()));
+                    while let Some(container) = builder.extract() {
+                        ready.push_back(std::mem::take(container));
                     }
                 }
             }
@@ -458,10 +447,8 @@ pub mod cursors {
             // Flush the final partial containers once the updates are exhausted.
             if self.index == self.updates.len() {
                 self.done = true;
-                for builder_idx in 0 .. self.builders.len() {
-                    while let Some(container) = self.builders[builder_idx].finish() {
-                        self.ready.push_back((std::mem::take(container), self.lower[builder_idx].clone()));
-                    }
+                while let Some(container) = self.builder.finish() {
+                    self.ready.push_back(std::mem::take(container));
                 }
             }
 

@@ -22,7 +22,7 @@ use crate::corgi::logic::compile_join_projection;
 use crate::corgi::search::matching_ranges;
 use crate::ir::{Diff, Term, Time};
 
-use super::{gather_rows, NativeBatch, Run, CC};
+use super::{NativeBatch, Run, CC};
 
 /// Released updates are met with the arrangement this many at a time, so that the driver can yield
 /// between blocks. Small under test, so that tests span many blocks.
@@ -46,17 +46,14 @@ impl CorgiHalfJoin {
 }
 
 impl HalfJoinTactic<Time, NativeBatch, Run, CC> for CorgiHalfJoin {
-    fn prep(&mut self, runs: Vec<Run>, batches: Vec<NativeBatch>, lower: Antichain<Time>) -> Box<dyn Iterator<Item = (CC, Time)>> {
+    fn prep(&mut self, runs: Vec<Run>, batches: Vec<NativeBatch>, _lower: Antichain<Time>) -> Box<dyn Iterator<Item = CC>> {
         let arranged: Vec<CorgiChunk<Time, Diff>> = batches.iter().flat_map(|b| b.chunks.iter().filter(|c| c.len() > 0).cloned()).collect();
-        let lower: Vec<Time> = lower.elements().to_vec();
         debug_assert!(runs.iter().all(|r| ident(r.keys()).windows(2).all(|w| w[0] <= w[1])), "half_join: a run out of identifier order");
         Box::new(Work {
             starts: vec![0; runs.len()],
             runs,
             seek: vec![0; arranged.len()],
             arranged,
-            lower_times: lower.iter().cloned().collect(),
-            lower,
             key: self.key.clone(),
             val: self.val.clone(),
             strict: self.strict,
@@ -80,22 +77,19 @@ struct Work {
     arranged: Vec<CorgiChunk<Time, Diff>>,
     /// For each arranged chunk, the first row later blocks could meet.
     seek: Vec<usize>,
-    /// The capabilities output may ship at, and the same as a column.
-    lower: Vec<Time>,
-    lower_times: ColTimes<Time>,
     key: Term,
     val: Term,
     strict: bool,
     width: usize,
     compiled: Rc<RefCell<Option<([Shape; 3], Graph<NumOp>)>>>,
     /// Output met but not yet handed over.
-    ready: VecDeque<(CC, Time)>,
+    ready: VecDeque<CC>,
 }
 
 impl Iterator for Work {
-    type Item = (CC, Time);
+    type Item = CC;
 
-    fn next(&mut self) -> Option<(CC, Time)> {
+    fn next(&mut self) -> Option<CC> {
         while self.ready.is_empty() {
             let live = self.runs.iter().zip(&self.starts).filter(|(r, &s)| s < r.len()).count();
             if live == 0 { return None; }
@@ -126,8 +120,7 @@ impl Work {
         }).collect()
     }
 
-    /// Meet each run's rows from its start to `ends` with the arrangement, queueing the output by
-    /// capability.
+    /// Meet each run's rows from its start to `ends` with the arrangement, queueing the output.
     fn meet(&mut self, ends: &[usize]) {
         // Each run's rows from its start to `ends` are already in identifier order, so each run is
         // met on its own, with its distinct identifiers as the needles; the block is never sorted.
@@ -231,25 +224,14 @@ impl Work {
         }).collect();
         let mut times = ColTimes::new();
         for (&r, &u) in rs.iter().zip(&us) { times.push_ref(self.runs[r].times(), u); }
-        let met = CorgiContainer {
+        // Each row keeps its update's own time, which the unit's capabilities cover: the driver
+        // ships the block stamped with all of them.
+        self.ready.push_back(CorgiContainer {
             keys: out_key,
             vals: CValue::Prod(vec![out_val, CValue::Prod(joined)]),
             times,
             diffs: rs.iter().zip(&us).zip(cs.iter().zip(&js)).map(|((&r, &u), (&c, &j))| self.runs[r].diffs()[u] * self.arranged[c].diffs()[j]).collect(),
-        };
-
-        // Each row ships at the first capability at or before its own time, as the driver requires.
-        let mut by_cap: Vec<Vec<usize>> = vec![Vec::new(); self.lower.len()];
-        for row in 0..met.times.len() {
-            let cap = (0..self.lower.len()).find(|&c| self.lower_times.less_equal_cross(c, &met.times, row))
-                .expect("half_join: no capability covers a released update");
-            by_cap[cap].push(row);
-        }
-        for (cap, rows) in by_cap.into_iter().enumerate() {
-            if !rows.is_empty() {
-                self.ready.push_back((gather_rows(&met, &rows), self.lower[cap].clone()));
-            }
-        }
+        });
     }
 }
 
@@ -282,7 +264,7 @@ mod tests {
 
     /// An update meets the arranged rows before it in the total order on times, strictly or not:
     /// never a later one, even one beyond it in a later coordinate alone. Its data time joins the
-    /// arranged row's, coordinate by coordinate, and each output ships at the capability covering it.
+    /// arranged row's, coordinate by coordinate, and every output row is covered by `lower`.
     #[test]
     fn meets_what_precedes_in_the_total_order() {
         let arranged = Rc::new(columns_to_batch(
@@ -296,27 +278,28 @@ mod tests {
         let updates = Run::new(updates.keys, updates.vals, updates.times, updates.diffs);
         let lower: Antichain<Time> = [t(0, 3), t(1, 0)].into_iter().collect();
         let projection = (Term::Var(0), Term::Tuple(vec![Term::Var(1), Term::Var(2)]));
-        let rows = |strict: bool| -> Vec<(Time, ((V, V), Time, Diff))> {
+        let rows = |strict: bool| -> Vec<((V, V), Time, Diff)> {
             let mut tactic = CorgiHalfJoin::new(projection.0.clone(), projection.1.clone(), strict, 2);
             let mut rows: Vec<_> = tactic.prep(vec![updates.clone()], vec![Rc::clone(&arranged)], lower.clone())
-                .flat_map(|(c, cap)| c.into_updates().into_iter().map(move |u| (cap.clone(), u)))
+                .flat_map(|c| c.into_updates())
                 .collect();
+            assert!(rows.iter().all(|row| lower.less_equal(&row.1)), "every output row is covered by lower");
             rows.sort();
             rows
         };
-        let row = |cap: Time, x: i64, y: i64, data: (i64, i64), time: Time, diff: Diff| {
-            (cap, ((V::Int(1), tup(vec![tup(vec![V::Int(x), V::Int(y)]), tup(vec![V::Int(data.0), V::Int(data.1)])])), time, diff))
+        let row = |x: i64, y: i64, data: (i64, i64), time: Time, diff: Diff| {
+            ((V::Int(1), tup(vec![tup(vec![V::Int(x), V::Int(y)]), tup(vec![V::Int(data.0), V::Int(data.1)])])), time, diff)
         };
         let mut strict = vec![
-            row(t(1, 0), 7, 50, (1, 1), t(1, 0), 2),
-            row(t(1, 0), 7, 100, (1, 5), t(1, 0), 2),
-            row(t(0, 3), 8, 50, (0, 3), t(0, 3), 1),
+            row(7, 50, (1, 1), t(1, 0), 2),
+            row(7, 100, (1, 5), t(1, 0), 2),
+            row(8, 50, (0, 3), t(0, 3), 1),
         ];
         strict.sort();
         assert_eq!(rows(true), strict);
         // Not strict, the update at (1, [0]) also meets the arranged row at (1, [0]).
         let mut loose = strict.clone();
-        loose.push(row(t(1, 0), 7, 200, (1, 0), t(1, 0), 2));
+        loose.push(row(7, 200, (1, 0), t(1, 0), 2));
         loose.sort();
         assert_eq!(rows(false), loose);
     }
@@ -363,8 +346,7 @@ mod tests {
 
     /// Against the definition, over several arranged chunks and released updates in several runs
     /// spanning many blocks, with keys that are integers and keys that are hashed: each update
-    /// meets exactly the arranged rows of its key that precede it, and ships at a capability at or
-    /// before its time.
+    /// meets exactly the arranged rows of its key that precede it, and is covered by `lower`.
     #[test]
     fn meets_what_the_definition_meets() {
         for hashed in [false, true] {
@@ -409,9 +391,9 @@ mod tests {
                     }
                     let mut tactic = CorgiHalfJoin::new(Term::Var(0), Term::Tuple(vec![Term::Var(1), Term::Var(2)]), strict, 2);
                     let mut got = Vec::new();
-                    for (c, cap) in tactic.prep(runs, batches, lower) {
+                    for c in tactic.prep(runs, batches, lower.clone()) {
                         for row in c.into_updates() {
-                            assert!(timely::PartialOrder::less_equal(&cap, &row.1), "a row ships at a capability at or before its time");
+                            assert!(lower.less_equal(&row.1), "every output row is covered by lower");
                             got.push(row);
                         }
                     }
