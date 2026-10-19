@@ -141,8 +141,11 @@ fn same_answer(got: &str, want: &str) -> bool {
 }
 
 /// A program's output as text, one row per line: the export's name, then the row and its diff.
-fn render(out: &std::collections::BTreeMap<String, Vec<((Value, Value), i64)>>) -> String {
-    out.iter().flat_map(|(name, rows)| rows.iter().map(move |row| format!("{name} {row:?}"))).collect::<Vec<_>>().join("\n")
+fn render(out: &std::collections::BTreeMap<String, interactive::corgi::container::Updates>) -> String {
+    out.iter()
+        .flat_map(|(name, updates)| updates.clone().into_rows().into_iter().map(move |(k, v, d)| format!("{name} {:?}", ((k, v), d))))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `n` worker threads whose exchange channels serialize — the wire format in the loop.
@@ -180,7 +183,7 @@ fn serializing(n: usize) -> timely::Config {
     let src = interactive::load_program(&format!("{}/tests/programs/registered.ddp", env!("CARGO_MANIFEST_DIR")));
     let tree = lower::lower_tree(parse::pipe::parse(&src));
     let out = evaluate(timely::Config::process(2), &tree, &inputs_for("registered"));
-    let mut cells: Vec<i64> = out["cells"].iter().map(|((k, _), _)| k.as_int()).collect();
+    let mut cells: Vec<i64> = out["cells"].clone().into_rows().iter().map(|(k, _, _)| k.as_int()).collect();
     cells.sort();
     let mut want: Vec<i64> = (1..40).collect();
     want.insert(0, -4);

@@ -43,7 +43,7 @@ fn bind_advances_a_counter_without_a_client() {
         // N ticks the snapshot (which reads the closed past) shows N - 1.
         for expected in 0..5 {
             server.tick(worker);
-            let rows = server.snapshot(worker, "count").unwrap();
+            let rows = server.snapshot(worker, "count").unwrap().into_rows();
             assert_eq!(rows, vec![(tup(&[expected]), Value::unit(), 1)]);
         }
 
@@ -54,7 +54,7 @@ fn bind_advances_a_counter_without_a_client() {
             .unwrap();
         server.tick(worker);
         server.tick(worker);
-        let rows = server.snapshot(worker, "count").unwrap();
+        let rows = server.snapshot(worker, "count").unwrap().into_rows();
         assert_eq!(
             rows,
             vec![

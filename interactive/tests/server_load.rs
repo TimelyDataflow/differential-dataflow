@@ -34,7 +34,7 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<Value>)
         server.tick(worker);
         let rows = server
             .snapshot(worker, "rows")
-            .unwrap()
+            .unwrap().into_rows()
             .into_iter()
             .map(|(key, _, _)| key)
             .collect::<Vec<_>>();

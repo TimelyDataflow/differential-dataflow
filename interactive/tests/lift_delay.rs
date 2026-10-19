@@ -45,7 +45,7 @@ fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
             }
             server.tick(worker);
         }
-        NAMES.map(|name| server.snapshot(worker, name).unwrap()).to_vec()
+        NAMES.map(|name| server.snapshot(worker, name).unwrap().into_rows()).to_vec()
     })
     .unwrap();
     guards.join().into_iter().next().unwrap().unwrap()

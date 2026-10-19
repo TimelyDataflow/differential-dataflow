@@ -58,7 +58,7 @@ use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
 use timely::worker::Worker;
 
-use crate::corgi::feed::FeedColumns;
+use crate::corgi::container::Updates;
 use crate::ir::{Diff, Value};
 use crate::scope_ir as st;
 
@@ -170,12 +170,12 @@ impl ServerInput {
     }
 
     /// Add fed `columns` at `time`. Their shapes must be the input's, as its declaration says.
-    fn give_columns(&mut self, columns: FeedColumns, time: OuterTime) -> Result<(), String> {
+    fn give_columns(&mut self, columns: Updates, time: OuterTime) -> Result<(), String> {
         let shape = (corgi::shape_of_value(&columns.keys), corgi::shape_of_value(&columns.vals));
         if shape != self.shape {
             return Err(format!("a feed of shape {} reached an input of shape {}", fmt_shape(&shape), fmt_shape(&self.shape)));
         }
-        let FeedColumns { keys, vals, diffs } = columns;
+        let Updates { keys, vals, diffs } = columns;
         let n = diffs.len();
         let times = crate::corgi::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n);
         self.give(HostContainer { keys, vals, times, diffs });
@@ -387,7 +387,7 @@ pub enum Command {
     Feed {
         prog: String,
         input: usize,
-        columns: FeedColumns,
+        columns: Updates,
         time: Option<OuterTime>,
     },
     /// Stage several rows, read into columns, into one positional input at the
@@ -395,7 +395,7 @@ pub enum Command {
     FeedColumns {
         prog: String,
         input: usize,
-        columns: FeedColumns,
+        columns: Updates,
     },
     /// Fill positional `input` of `prog` from `source` — a recipe name or a
     /// file path — at the current epoch. Collective: every worker feeds its
@@ -410,7 +410,7 @@ pub enum Command {
     /// Drop the named program.
     Drop { name: String },
     /// Snapshot a registered trace, optionally keeping one key. The driver
-    /// reads the rows with [`Server::snapshot`] and renders them.
+    /// reads the columns with [`Server::snapshot`] and renders them.
     Peek { trace: String, key: Option<Value> },
     /// Bind trace `trace`'s changes into input `input` of `prog` at each tick.
     Bind {
@@ -505,11 +505,11 @@ type Captured = Rc<RefCell<Vec<HostContainer>>>;
 
 /// A live registry of installed programs and the traces they publish.
 pub struct Server {
-    /// Published export name -> trace of corgi chunks. Imports and binds read the chunks as
-    /// containers; snapshots and subscriptions see rows, converted as they read.
+    /// Published export name -> trace of corgi chunks. Imports, binds and snapshots read the
+    /// chunks as containers; subscriptions see rows, converted as they read.
     traces: HashMap<String, crate::backend::corgi::ExportTrace>,
-    /// With export taps: each export's new batches on this worker, drained by
-    /// `take_changes` / `for_each_change_batch`: a standing change stream without a snapshot.
+    /// With export taps: each export's new batches on this worker, drained by `take_changes`: a
+    /// standing change stream without a snapshot.
     taps: HashMap<String, crate::backend::corgi::ExportTap>,
     /// `set_export_taps`.
     export_taps: bool,
@@ -564,8 +564,8 @@ impl Server {
         self.arranged_imports = on;
     }
 
-    /// Also keep each export's new batches for [`Server::take_changes`]
-    /// and [`Server::for_each_change_batch`] (default off). Affects programs installed afterwards.
+    /// Also keep each export's new batches for [`Server::take_changes`] (default off). Affects
+    /// programs installed afterwards.
     pub fn set_export_taps(&mut self, on: bool) {
         self.export_taps = on;
     }
@@ -981,7 +981,7 @@ impl Server {
     /// Stage rows already read into columns at `time` (default the current epoch), each with
     /// its own multiplicity. Their shapes must be the input's declared shapes; nothing is staged
     /// otherwise.
-    pub fn feed_columns(&mut self, prog: &str, input: usize, columns: FeedColumns, time: Option<OuterTime>) -> Result<(), String> {
+    pub fn feed_columns(&mut self, prog: &str, input: usize, columns: Updates, time: Option<OuterTime>) -> Result<(), String> {
         let time = time.unwrap_or(self.epoch);
         self.validate_feed(prog, input, time)?;
         self.programs
@@ -1232,39 +1232,43 @@ impl Server {
             .collect()
     }
 
-    /// Return the consolidated closed-past contents of a trace on worker 0.
+    /// Return the consolidated closed-past contents of a trace on worker 0, as columns.
     ///
-    /// Builds a transient dataflow that imports the trace, **exchanges every
-    /// row to worker 0**, and accumulates net multiplicities as of the current
-    /// epoch — so the result is the complete, consolidated contents even when
-    /// the trace is sharded across workers, not each worker's slice. The
-    /// dataflow is dropped as soon as it has drained. Filtering and rendering
-    /// are the caller's: this returns rows, it does not print them.
+    /// Builds a transient dataflow that imports the trace, **sends every
+    /// container whole to worker 0**, and consolidates them as of the current
+    /// epoch — so the result is the complete contents even when the trace is
+    /// sharded across workers, not each worker's slice, in key-then-value order.
+    /// The other workers get no updates. The dataflow is dropped as soon as it
+    /// has drained. Filtering and rendering are the caller's.
     pub fn snapshot(
         &mut self,
         worker: &mut Worker,
         name: &str,
-    ) -> Result<Vec<(Value, Value, Diff)>, String> {
-        use timely::dataflow::operators::{Exchange, Inspect, Probe};
+    ) -> Result<Updates, String> {
+        use timely::dataflow::operators::Probe;
+        use timely::dataflow::operators::generic::Operator;
 
         let name = canonical_source_name(name);
         let epoch = self.epoch;
-        let mut trace = self.published(&name).ok_or_else(|| format!("no trace {:?}", name))?;
-        let acc: Rc<RefCell<HashMap<(Value, Value), Diff>>> = Rc::new(RefCell::new(HashMap::new()));
-        let acc_in = acc.clone();
+        let Published(mut trace) = self.published(&name).ok_or_else(|| format!("no trace {:?}", name))?;
+        let shape = self.shapes[&name].clone();
+        let parts: Rc<RefCell<Vec<Updates>>> = Rc::new(RefCell::new(Vec::new()));
+        let parts_in = parts.clone();
         let mut probe = ProbeHandle::new();
         let id = worker.next_dataflow_index();
         worker.dataflow::<OuterTime, _, _>(|scope| {
             // The dataflow is dropped once drained, which releases the import.
-            let (rows, _shutdown) = trace.import_rows(scope.clone(), "SnapshotImport");
-            rows
-                .exchange(|_| 0u64)
-                .inspect(move |((k, v), t, d)| {
-                    if *t < epoch {
-                        *acc_in
-                            .borrow_mut()
-                            .entry((k.clone(), v.clone()))
-                            .or_insert(0) += *d;
+            let (arranged, _shutdown) = trace.import_core(scope.clone(), "SnapshotImport");
+            crate::backend::corgi::export_containers(arranged)
+                .inner
+                .unary::<timely::container::CapacityContainerBuilder<HostContainer>, _, _, _>(crate::corgi::exchange::GatherPact, "Snapshot", move |_, _| {
+                    move |input, _output| {
+                        input.for_each(|_cap, data| {
+                            let HostContainer { keys, vals, times, diffs } = std::mem::take(data);
+                            let part = Updates { keys, vals, diffs };
+                            let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i) < epoch).collect();
+                            parts_in.borrow_mut().push(if before.len() == part.len() { part } else { part.select(&before) });
+                        });
                     }
                 })
                 .probe_with(&mut probe);
@@ -1274,39 +1278,17 @@ impl Server {
             worker.step_or_park(None);
         }
         worker.drop_dataflow(id);
-        let mut rows: Vec<_> = acc
-            .borrow()
-            .iter()
-            .filter(|(_, d)| **d != 0)
-            .map(|((k, v), d)| (k.clone(), v.clone(), *d))
-            .collect();
-        rows.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-        Ok(rows)
+        let parts = std::mem::take(&mut *parts.borrow_mut());
+        Ok(Updates::consolidate(parts, &shape))
     }
 
     /// The changes to export `name` that this worker's share of its arrangement has produced
-    /// since the last call, as rows (with [`Server::set_export_taps`]). Each worker drains its own.
-    pub fn take_changes(&mut self, name: &str) -> Vec<((Value, Value), OuterTime, Diff)> {
+    /// since the last call, one container per chunk (with [`Server::set_export_taps`]). Each worker
+    /// drains its own.
+    pub fn take_changes(&mut self, name: &str) -> Vec<HostContainer> {
         match self.taps.get(name) {
-            Some(tap) => crate::backend::corgi::batch_rows(std::mem::take(&mut *tap.borrow_mut())),
+            Some(tap) => crate::backend::corgi::batch_containers(std::mem::take(&mut *tap.borrow_mut())),
             None => Vec::new(),
-        }
-    }
-
-    /// Drain this worker's tapped export changes in row batches no larger than
-    /// `rows_per_batch`. Callbacks run in export order; rows are consumed once.
-    /// Unlike `take_changes`, this does not materialize the entire export as rows.
-    /// The limit counts rows, not bytes (nested payloads may be large).
-    pub fn for_each_change_batch(
-        &mut self,
-        name: &str,
-        rows_per_batch: usize,
-        consume: impl FnMut(Vec<((Value, Value), OuterTime, Diff)>),
-    ) {
-        assert!(rows_per_batch > 0, "export row batch size must be positive");
-        if let Some(tap) = self.taps.get(name) {
-            let batches = std::mem::take(&mut *tap.borrow_mut());
-            crate::backend::corgi::for_each_batch_rows(batches, rows_per_batch, consume);
         }
     }
 
@@ -1489,7 +1471,7 @@ pub fn evaluate(
     config: timely::Config,
     program: &st::Program,
     inputs: &[Vec<(Value, Value)>],
-) -> std::collections::BTreeMap<String, Vec<((Value, Value), Diff)>> {
+) -> std::collections::BTreeMap<String, Updates> {
     let program = program.clone();
     let inputs = inputs.to_vec();
     let guards = timely::execute(config, move |worker| {
@@ -1511,10 +1493,7 @@ pub fn evaluate(
             .root
             .exports
             .iter()
-            .map(|e| {
-                let rows = server.snapshot(worker, &e.name).expect("evaluate: snapshot");
-                (e.name.clone(), rows.into_iter().map(|(k, v, d)| ((k, v), d)).collect())
-            })
+            .map(|e| (e.name.clone(), server.snapshot(worker, &e.name).expect("evaluate: snapshot")))
             .collect()
     })
     .expect("evaluate: worker startup");

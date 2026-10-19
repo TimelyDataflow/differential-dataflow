@@ -15,53 +15,8 @@
 
 use corgi::{Shape, Value as CValue};
 
+use crate::corgi::container::Updates;
 use crate::ir::Diff;
-
-/// A feed's updates as columns: update `i` is row `i` of `keys` and `vals`, with `diffs[i]`.
-#[derive(Clone, Debug)]
-pub struct FeedColumns {
-    pub keys: CValue,
-    pub vals: CValue,
-    pub diffs: Vec<Diff>,
-}
-
-impl FeedColumns {
-    pub fn len(&self) -> usize {
-        self.diffs.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.diffs.is_empty()
-    }
-
-    /// The updates at `rows`, in that order.
-    pub fn select(&self, rows: &[usize]) -> Self {
-        FeedColumns {
-            keys: corgi::arrange::gather(&self.keys, rows),
-            vals: corgi::arrange::gather(&self.vals, rows),
-            diffs: rows.iter().map(|&r| self.diffs[r]).collect(),
-        }
-    }
-}
-
-// Commands cross Timely as serde records; the columns travel in corgi's byte encoding.
-impl serde::Serialize for FeedColumns {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let encode = |v: &CValue| {
-            let mut bytes = Vec::with_capacity(corgi::bytes::length_in_bytes(v));
-            corgi::bytes::write_to(v, &mut bytes).map(|()| bytes).map_err(serde::ser::Error::custom)
-        };
-        serde::Serialize::serialize(&(encode(&self.keys)?, encode(&self.vals)?, &self.diffs), serializer)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for FeedColumns {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (keys, vals, diffs): (Vec<u8>, Vec<u8>, Vec<Diff>) = serde::Deserialize::deserialize(deserializer)?;
-        let decode = |bytes: &[u8]| corgi::bytes::read_from(bytes).map(|(v, _)| v).map_err(serde::de::Error::custom);
-        Ok(FeedColumns { keys: decode(&keys)?, vals: decode(&vals)?, diffs })
-    }
-}
 
 /// Rows of an input's key and value shapes, read from text into columns.
 pub struct FeedDecoder {
@@ -93,8 +48,8 @@ impl FeedDecoder {
         self.diffs.is_empty()
     }
 
-    pub fn finish(self) -> FeedColumns {
-        FeedColumns { keys: self.keys.finish(), vals: self.vals.finish(), diffs: self.diffs }
+    pub fn finish(self) -> Updates {
+        Updates { keys: self.keys.finish(), vals: self.vals.finish(), diffs: self.diffs }
     }
 }
 

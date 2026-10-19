@@ -377,9 +377,9 @@ fn dispatch(
                 Ok(format!("t={}", server.epoch()))
             }
             ServerCommand::Peek { trace, key } => match server.snapshot(worker, &trace) {
-                Ok(rows) => {
+                Ok(updates) => {
                     if let Some(response) = response.as_ref() {
-                        for (row_key, val, diff) in rows {
+                        for (row_key, val, diff) in updates.into_rows() {
                             if key.as_ref().map_or(true, |key| key == &row_key) {
                                 send(
                                     response,

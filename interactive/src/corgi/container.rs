@@ -104,6 +104,98 @@ impl<T: Lanes + 'static, R: Clone + 'static> CorgiContainer<T, R> {
     }
 }
 
+/// A collection's updates as columns, without times: update `i` is row `i` of `keys` and `vals`,
+/// with multiplicity `diffs[i]`. What a feed brings in, and what a snapshot gives back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Updates {
+    pub keys: corgi::Value,
+    pub vals: corgi::Value,
+    pub diffs: Vec<crate::ir::Diff>,
+}
+
+impl Updates {
+    /// No updates, at these shapes.
+    pub fn empty((k, v): &(corgi::Shape, corgi::Shape)) -> Self {
+        Updates { keys: corgi::Value::empty(k), vals: corgi::Value::empty(v), diffs: Vec::new() }
+    }
+
+    pub fn len(&self) -> usize {
+        self.diffs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.diffs.is_empty()
+    }
+
+    /// The updates at `rows`, in that order.
+    pub fn select(&self, rows: &[usize]) -> Self {
+        Updates {
+            keys: corgi::arrange::gather(&self.keys, rows),
+            vals: corgi::arrange::gather(&self.vals, rows),
+            diffs: rows.iter().map(|&r| self.diffs[r]).collect(),
+        }
+    }
+
+    /// `parts`, all of the shapes `shape`, as one: the updates of equal key and value summed, those
+    /// summing to zero dropped, and the rest in key-then-value order.
+    pub fn consolidate(parts: Vec<Updates>, shape: &(corgi::Shape, corgi::Shape)) -> Updates {
+        let parts: Vec<Updates> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+        if parts.is_empty() {
+            return Updates::empty(shape);
+        }
+        // The parts end to end, as one key-and-value column, then sorted.
+        let (tags, offs): (Vec<usize>, Vec<usize>) = parts.iter().enumerate().flat_map(|(p, part)| (0..part.len()).map(move |i| (p, i))).unzip();
+        let rows: Vec<corgi::Value> = parts.iter().map(|p| corgi::Value::Prod(vec![p.keys.clone(), p.vals.clone()])).collect();
+        let rows = corgi::arrange::gather_lanes(&rows.iter().map(Some).collect::<Vec<_>>(), &tags, &offs);
+        let diffs: Vec<crate::ir::Diff> = parts.iter().flat_map(|p| p.diffs.iter().copied()).collect();
+        let order = corgi::arrange::sort_perm(&rows);
+        // Runs of equal rows, one sum each.
+        let equal = corgi::arrange::equal_idx(&rows, &rows, &order[..order.len() - 1], &order[1..]);
+        let (mut keep, mut sums) = (Vec::new(), Vec::new());
+        let mut sum = diffs[order[0]];
+        for (i, &sign) in equal.iter().enumerate() {
+            if sign == 0 {
+                sum += diffs[order[i + 1]];
+            } else {
+                if sum != 0 { keep.push(order[i]); sums.push(sum); }
+                sum = diffs[order[i + 1]];
+            }
+        }
+        if sum != 0 { keep.push(order[order.len() - 1]); sums.push(sum); }
+        let mut fields = corgi::arrange::gather(&rows, &keep).into_prod("consolidated rows").unwrap();
+        let vals = fields.pop().unwrap();
+        let keys = fields.pop().unwrap();
+        Updates { keys, vals, diffs: sums }
+    }
+
+    /// The updates as rows, for what still reads rows: the text a server prints, and tests.
+    pub fn into_rows(self) -> Vec<(Row, Row, crate::ir::Diff)> {
+        let (kshape, vshape) = (corgi::shape_of_value(&self.keys), corgi::shape_of_value(&self.vals));
+        let keys = untranscode(self.keys, &kshape);
+        let vals = untranscode(self.vals, &vshape);
+        keys.into_iter().zip(vals).zip(self.diffs).map(|((k, v), d)| (k, v, d)).collect()
+    }
+}
+
+// Commands cross Timely as serde records; the columns travel in corgi's byte encoding.
+impl serde::Serialize for Updates {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let encode = |v: &corgi::Value| {
+            let mut bytes = Vec::with_capacity(corgi::bytes::length_in_bytes(v));
+            corgi::bytes::write_to(v, &mut bytes).map(|()| bytes).map_err(serde::ser::Error::custom)
+        };
+        serde::Serialize::serialize(&(encode(&self.keys)?, encode(&self.vals)?, &self.diffs), serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Updates {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (keys, vals, diffs): (Vec<u8>, Vec<u8>, Vec<crate::ir::Diff>) = serde::Deserialize::deserialize(deserializer)?;
+        let decode = |bytes: &[u8]| corgi::bytes::read_from(bytes).map(|(v, _)| v).map_err(serde::de::Error::custom);
+        Ok(Updates { keys: decode(&keys)?, vals: decode(&vals)?, diffs })
+    }
+}
+
 // --- Container traits required by the `Backend` bound + iterative scopes ---
 // Diffs live in Rust and times in lanes, so these are plain passes; the corgi key/val columns only
 // move (`gather`) when `ResultsIn` drops rows. `Enter`/`Leave` are identity for DDIR's same-Time

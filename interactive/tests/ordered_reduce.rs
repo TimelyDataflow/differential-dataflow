@@ -92,9 +92,9 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
                 col.feed_batch("col", 0, chunk.to_vec()).unwrap();
             }
             col.tick(worker);
-            let keyed = col.snapshot(worker, "keyed").unwrap();
+            let keyed = col.snapshot(worker, "keyed").unwrap().into_rows();
             for name in ["minimum", "collected", "counted", "distinct"] {
-                assert_eq!(sorted(col.snapshot(worker, name).unwrap()), reference(name, &keyed), "{name}");
+                assert_eq!(sorted(col.snapshot(worker, name).unwrap().into_rows()), reference(name, &keyed), "{name}");
             }
         }
         for name in ["minimum", "collected", "counted", "distinct"] {
@@ -124,9 +124,9 @@ fn batched_equality_spans_windows_and_retracts_compound_keys() {
             }).collect();
             col.feed_batch("col", 0, updates).unwrap();
             col.tick(worker);
-            let keyed = col.snapshot(worker, "keyed").unwrap();
+            let keyed = col.snapshot(worker, "keyed").unwrap().into_rows();
             for name in ["minimum", "collected", "counted"] {
-                assert_eq!(sorted(col.snapshot(worker, name).unwrap()), reference(name, &keyed), "{name}, diff={diff}");
+                assert_eq!(sorted(col.snapshot(worker, name).unwrap().into_rows()), reference(name, &keyed), "{name}, diff={diff}");
             }
         }
         for name in ["minimum", "collected", "counted"] { assert!(col.snapshot(worker, name).unwrap().is_empty()); }
