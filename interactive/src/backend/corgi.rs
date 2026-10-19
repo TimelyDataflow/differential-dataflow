@@ -32,7 +32,9 @@ use crate::corgi::chunk::{recover_key, CorgiChunk, CorgiChunker};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::exchange::CorgiPact;
+use crate::corgi::half_join::{CorgiHalfJoin, HalfJoinBatcher};
 use crate::corgi::join::CorgiJoinBackend;
+use differential_dogs3::operators::half_join::{half_join_with_tactic, HalfJoinTactic};
 use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
 use crate::corgi::logic::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar, shape_of_row};
@@ -275,6 +277,23 @@ impl<B0: Native, B1: Native, J: JoinTactic<Time, NativeBatch, NativeBatch, CC>> 
     }
 }
 
+/// A half-join tactic over native batches, accepting an imported arrangement.
+struct RetimeHalfJoin<J>(J);
+impl<B: Native, M, J: HalfJoinTactic<Time, NativeBatch, M, CC>> HalfJoinTactic<Time, B, M, CC> for RetimeHalfJoin<J> {
+    fn prep(&mut self, chunks: Vec<M>, batches: Vec<B>, lower: Antichain<Time>) -> Box<dyn Iterator<Item = (CC, Time)>> {
+        self.0.prep(chunks, batches.into_iter().map(Native::native).collect(), lower)
+    }
+}
+
+/// The time each coordinate of `t` less one, at least zero: the half join's compaction of its
+/// arrangement. Every later stream time is at or beyond some such frontier element, and advancing
+/// arranged times to it keeps their order against those stream times, strict and not.
+fn step_back(t: &Time, out: &mut Antichain<Time>) {
+    use differential_dataflow::dynamic::pointstamp::PointStamp;
+    let inner = PointStamp::new(t.inner.iter().map(|x| x.saturating_sub(1)).collect());
+    out.insert(timely::order::Product::new(t.outer.saturating_sub(1), inner));
+}
+
 /// A reduce tactic over native batches, accepting an imported input. (Its output is its own.)
 struct RetimeReduce<R>(R);
 impl<B1: Native, R: ReduceTactic<Time, NativeBatch, NativeBatch>> ReduceTactic<Time, B1, NativeBatch> for RetimeReduce<R> {
@@ -404,6 +423,17 @@ impl Backend for CorgiBackend {
         }
     }
 
+    fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Projection, level: usize, _shapes: Option<(st::RowShape, st::RowShape)>) -> Collection<'s, Time, CC> {
+        // dogs3's driver owns progress and yielding; corgi supplies when an update is unblocked
+        // (`HalfJoinBatcher`) and how released updates meet the arrangement (`CorgiHalfJoin`).
+        // `CorgiPact` places each update on the worker holding its key, as `arrange` placed the rows.
+        let tactic = || RetimeHalfJoin(CorgiHalfJoin::new(projection.key.clone(), projection.val.clone(), strict, level + 1));
+        let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
+        match arrangement {
+            Arr::Local(a) => half_join_with_tactic(stream.inner, a, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), tactic()).as_collection(),
+            Arr::Imported(a) => half_join_with_tactic(stream.inner, a, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), tactic()).as_collection(),
+        }
+    }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
         let tactic = RetimeReduce(ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone())).with_key_batch_size(256));

@@ -686,7 +686,7 @@ pub(super) fn colliding_keys(
 }
 
 /// Concatenate column blocks into one column (multi-source `gather_lanes`, no sort).
-fn concat_blocks(blocks: &[CValue]) -> CValue {
+pub(crate) fn concat_blocks(blocks: &[CValue]) -> CValue {
     if blocks.len() == 1 {
         return blocks[0].clone();
     }

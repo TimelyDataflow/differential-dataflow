@@ -77,6 +77,7 @@ fn clone_node(node: &Node, m: impl Fn(&Ref) -> Ref) -> Node {
         Node::Concat(refs) => Node::Concat(refs.iter().map(&m).collect()),
         Node::Arrange(r) => Node::Arrange(m(r)),
         Node::Join { left, right, projection } => Node::Join { left: m(left), right: m(right), projection: projection.clone() },
+        Node::HalfJoin { stream, arrangement, strict, projection } => Node::HalfJoin { stream: m(stream), arrangement: m(arrangement), strict: *strict, projection: projection.clone() },
         Node::Reduce { input, reducer } => Node::Reduce { input: m(input), reducer: reducer.clone() },
         Node::Inspect { input, label } => Node::Inspect { input: m(input), label: label.clone() },
     }
@@ -914,6 +915,8 @@ impl<'a> Reverse<'a> {
                 let contrib = ex.emit_lookup_keyed(dep_this, &side, out_user_len, reducer);
                 self.contribs.entry(target).or_default().push(contrib);
             }
+            // It reads its stream's whole times, as `lift` does.
+            Node::HalfJoin { .. } => panic!("explain: half_join is not supported"),
             Node::Join { left, right, projection } => {
                 let lt = resolve(self.orig, path, left);
                 let rt = resolve(self.orig, path, right);
