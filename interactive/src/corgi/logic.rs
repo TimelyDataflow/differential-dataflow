@@ -1,11 +1,10 @@
 //! corgi as DDIR's columnar scalar logic: compile a `Term` to a corgi `Graph<NumOp>`, and
 //! transcode DDIR rows (`ir::Value`) to/from corgi columnar `Value` at the I/O boundaries.
 //!
-//! Shapes are STATIC. A collection's shape is fixed when it is first seen — pinned from its first
-//! row at ingest ([`shape_of_row`]), or computed from its operator's term — and never re-derived
-//! from data. Sums are the case where a row cannot tell: a `Variant` carries a tag, not its type,
-//! so every sum a program builds is one it declared (`Term::Inject` carries the whole sum's lane
-//! shapes), and a sum arriving on input needs a declared schema.
+//! Shapes are STATIC. Every input declares its shape, every other collection's follows from its
+//! operator's terms (`crate::shapes`), and all are fixed at install, never re-derived from data.
+//! A `Variant` carries a tag, not its type, so every sum a program builds is one it declared
+//! (`Term::Inject` carries the whole sum's lane shapes).
 //!
 //! The typer is corgi's. [`shape_of_term`] compiles a term into a scratch graph and asks
 //! `corgi::shape_of` (its evaluator on zero rows) for the result shape, so every shape rule —
@@ -21,10 +20,9 @@ use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Sc
 
 type Res<T> = Result<T, String>;
 
-/// The shape of one input row — what a collection is pinned to when its first row arrives. An
-/// `Int`, a `Tuple`, or a non-empty `List` determines its shape alone; a `Variant` (whose type a
-/// bare tag cannot name) or an empty `List` (whose element shape nothing supplies) needs the
-/// input's schema declared.
+/// The shape of one row, as far as the row alone says: an `Int`, a `Tuple`, or a non-empty `List`
+/// determines its shape; a `Variant` (whose type a bare tag cannot name) or an empty `List` (whose
+/// element shape nothing supplies) does not.
 pub fn shape_of_row(row: &DValue) -> Res<Shape> {
     match row {
         DValue::Int(_) => Ok(Shape::Int),
@@ -40,7 +38,7 @@ pub fn shape_of_row(row: &DValue) -> Res<Shape> {
 }
 
 /// AoS rows -> SoA corgi columns, directed by `shape`. A row that does not fit the shape is a
-/// panic: the shape was pinned from a row of this collection, so a misfit is an ingest error.
+/// panic: an input checks its rows against its declared shape before converting them.
 /// Borrowing form: one clone of the rows, then [`transcode_owned`].
 pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
     transcode_owned(rows.to_vec(), shape)

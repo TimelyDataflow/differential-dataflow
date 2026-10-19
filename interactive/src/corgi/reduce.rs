@@ -79,7 +79,7 @@ type Matches = Vec<Vec<(usize, Range<usize>)>>;
 /// differs from what it has, and `emit` records the difference; finally `finish` builds the batch.
 pub struct CorgiReduceBackend<T> {
     reducer: Reducer,
-    /// A `Reducer::Expr`'s graph, compiled on first use at the key and value shapes it reads.
+    /// A `Reducer::Expr`'s graph, compiled at the key and value shapes it reads.
     graph: Option<(Shape, Shape, Graph<NumOp>)>,
     /// The current window's input values: its chunks' value columns.
     input: Pool,
@@ -142,14 +142,25 @@ impl Retire {
 }
 
 impl<T> CorgiReduceBackend<T> {
-    /// A backend covering the key space in windows of `1 << 12` input records.
-    pub fn new(reducer: Reducer) -> Self { Self::with_window(reducer, 1 << 12) }
+    /// A backend for input of `shape`, covering the key space in windows of `1 << 12` input
+    /// records.
+    pub fn new(reducer: Reducer, shape: (Shape, Shape)) -> Self { Self::with_window(reducer, shape, 1 << 12) }
 
-    /// A backend with an explicit window budget, in presented input records.
-    pub fn with_window(reducer: Reducer, window_size: usize) -> Self {
+    /// A backend with an explicit window budget, in presented input records. A `Reducer::Expr`
+    /// compiles here, at `shape`; a type error is a panic with corgi's message, which install's
+    /// type check keeps from being reached.
+    pub fn with_window(reducer: Reducer, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
+        let graph = match &reducer {
+            Reducer::Expr(term) => {
+                let g = compile_reduce(term, &kshape, &vshape)
+                    .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
+                Some((kshape, vshape, g))
+            }
+            _ => None,
+        };
         CorgiReduceBackend {
             reducer,
-            graph: None,
+            graph,
             input: Pool::default(),
             output: Pool::default(),
             output_keys: Vec::new(),
@@ -379,7 +390,7 @@ where
     /// ascend, which is value order: `present` numbers each key's values in sorted order. The
     /// brackets are presented as they are. One with no input has no output, and the term does not
     /// see it.
-    fn reduce_term(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<Diff>, Vec<usize>) {
+    fn reduce_term(&self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<Diff>, Vec<usize>) {
         // Per bracket with input: its index, its end in `input`, and the row holding its key.
         let (mut blocks, mut key_refs) = (Vec::new(), Vec::new());
         let mut start = 0;
@@ -409,14 +420,8 @@ where
         let (kshape, vshape) = (corgi::shape_of_value(&keys), corgi::shape_of_value(&vals));
         let lists = CValue::List(Bounds::offsets(blocks.iter().map(|b| b.1).collect()), Box::new(CValue::Prod(vec![vals, diffs])));
 
-        if self.graph.is_none() {
-            let Reducer::Expr(term) = &self.reducer else { unreachable!("only a term compiles a graph") };
-            let g = compile_reduce(term, &kshape, &vshape)
-                .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
-            self.graph = Some((kshape.clone(), vshape.clone(), g));
-        }
-        let (k, v, graph) = self.graph.as_ref().unwrap();
-        assert!(*k == kshape && *v == vshape, "reduce: input of shape ({kshape}, {vshape}) reached an operator pinned at ({k}, {v})");
+        let (k, v, graph) = self.graph.as_ref().expect("an expression reducer compiles at construction");
+        assert!(*k == kshape && *v == vshape, "reduce: input of shape ({kshape}, {vshape}) reached an operator compiled at ({k}, {v})");
         let (bounds, elems) = corgi::eval_graph(graph, CValue::Prod(vec![keys, lists])).into_list("reduce output").unwrap();
         let mut fields = elems.into_prod("reduce output").unwrap();
         let out_diffs = fields.pop().unwrap().into_i64("reduce output diffs").unwrap().to_vec();
@@ -760,7 +765,7 @@ mod tests {
     /// one value count together, and a new value gets a new id naming its row.
     #[test]
     fn corrections_net_by_value() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count);
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count, (Shape::Int, Shape::Int));
         backend.output = Pool { columns: vec![ints(vec![5, 5, 7])], refs: vec![(0, 0), (0, 1), (0, 2)] };
         backend.output_keys = vec![(0, 0), (0, 0), (0, 1)];
         backend.input.refs = vec![(0, 0), (0, 1)];
@@ -777,7 +782,7 @@ mod tests {
     /// A changed wave's column stays alive when a later unchanged wave reuses its id.
     #[test]
     fn corrections_retain_only_named_output_columns() {
-        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count);
+        let mut backend = CorgiReduceBackend::<Time>::new(Reducer::Count, (Shape::Int, Shape::Int));
         backend.input.refs = vec![(0, 0)];
         backend.key_columns = vec![ints(vec![10])];
         backend.output = Pool { columns: vec![ints(vec![5])], refs: vec![(0, 0)] };
@@ -843,7 +848,8 @@ mod tests {
                 *held.entry(id).or_insert(0) += 1;
             }
             let run = |window_size| {
-                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Count, window_size);
+                let shape = (corgi::shape_of_value(&recover_key(&key_shape(&[0]))), corgi::shape_of_value(&val_shape(&[(0, 0)])));
+                let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Count, shape, window_size);
                 backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
                 let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
                 let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
@@ -929,7 +935,7 @@ mod tests {
                     let chunk = CorgiChunk::from_columns(keys, vals, rows.iter().map(|r| r.2.clone()).collect(), rows.iter().map(|r| r.3).collect());
                     Rc::new(ChunkBatch::new(vec![chunk]))
                 };
-                let mut tactic = ProxyReduceTactic::new(CorgiReduceBackend::<Time>::with_window(reducer.clone(), window_size));
+                let mut tactic = ProxyReduceTactic::new(CorgiReduceBackend::<Time>::with_window(reducer.clone(), (shape.clone(), shape.clone()), window_size));
                 let held = Antichain::from_elem(Time::minimum());
                 let (first, _) = tactic.retire(Vec::new(), Vec::new(), vec![batch(&early)], &held, &Antichain::from_elem(stamp(2)), &held);
                 let first = first.and_then(|span| span.inner).into_iter().collect::<Vec<_>>();
