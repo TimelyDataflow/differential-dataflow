@@ -329,7 +329,7 @@ mod tests {
         for strict in [false, true] {
             let mut tactic = CorgiHalfJoin::new(Term::Var(0), Term::Tuple(vec![Term::Var(1), Term::Var(2)]), strict, 2);
             let got: Vec<_> = tactic.prep(vec![updates.clone()], vec![Rc::clone(&arranged)], Antichain::from_elem(t(1, 0)))
-                .flat_map(|(c, _)| c.into_updates()).collect();
+                .flat_map(|c| c.into_updates()).collect();
             let mut expected = Vec::new();
             for k in 0..4 {
                 for epoch in 0..if strict { 1 } else { 2 } {
