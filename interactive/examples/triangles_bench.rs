@@ -33,7 +33,7 @@ fn heap() -> String {
     format!("heap {:.1} MiB (peak {:.1} MiB)", LIVE.load(Ordering::Relaxed) as f64 / 1048576.0, PEAK.load(Ordering::Relaxed) as f64 / 1048576.0)
 }
 
-use interactive::server::{RenderBackend, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 const EDGES: &str = r#"
@@ -101,7 +101,7 @@ fn main() {
 
     timely::execute(timely::Config::process(workers), move |worker| {
         let index = worker.index();
-        let mut server = Server::with_backend(RenderBackend::Corgi);
+        let mut server = Server::new();
         let mut program = lower::lower_tree(parse::pipe::parse(&source));
         program.optimize();
         server.install(worker, "p", &program).unwrap();

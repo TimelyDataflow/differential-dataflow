@@ -7,7 +7,6 @@
 //! ```text
 //! cargo run --release --example import_bench -- [edges] [consumers] [churn] [ticks] [nodes]
 //! DDIR_ARRANGED_IMPORTS=0 cargo run --release --example import_bench   # importers re-arrange
-//! DDIR_BACKEND=corgi cargo run --release --example import_bench         # columnar exports
 //! BENCH_QUERY=reach cargo run --release --example import_bench          # joins inside a loop
 //! ```
 
@@ -62,10 +61,9 @@ fn main() {
     let roots = if reach { 1 } else { 100 };
 
     timely::execute_directly(move |worker| {
-        let backend = std::env::var("DDIR_BACKEND").unwrap_or("vec".into()).parse().expect("DDIR_BACKEND");
-        let mut server = Server::with_backend(backend);
+        let mut server = Server::new();
         server.set_arranged_imports(arranged);
-        println!("backend {backend:?}, arranged imports: {arranged}; {edges} edges over {nodes} nodes, {consumers} {} consumers, churn {churn}", if reach { "reach" } else { "two-hop" });
+        println!("arranged imports: {arranged}; {edges} edges over {nodes} nodes, {consumers} {} consumers, churn {churn}", if reach { "reach" } else { "two-hop" });
 
         install(&mut server, worker, "prod", r#"export "edges" = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);"#);
         server.load(worker, "prod", 0, &format!("random:nodes={nodes},edges={edges},churn={churn}")).unwrap();
@@ -121,17 +119,10 @@ fn main() {
         println!("checksum (sum of consumer answers): {answer}");
         {
             use differential_dataflow::trace::TraceReader;
-            use differential_dataflow::trace::implementations::spine_fueled::SpineBatch;
             use differential_dataflow::trace::chunk::Chunk;
             let (mut updates, mut spans) = (0, 0);
-            match server.published("edges") {
-                Some(interactive::server::Published::Rows(trace)) => {
-                    trace.map_spans(|span| { spans += 1; if let Some(b) = &span.inner { updates += b.len(); } });
-                }
-                Some(interactive::server::Published::Columnar(trace)) => {
-                    trace.map_spans(|span| { spans += 1; if let Some(b) = &span.inner { updates += b.chunks.iter().map(Chunk::len).sum::<usize>(); } });
-                }
-                None => {}
+            if let Some(interactive::server::Published(trace)) = server.published("edges") {
+                trace.map_spans(|span| { spans += 1; if let Some(b) = &span.inner { updates += b.chunks.iter().map(Chunk::len).sum::<usize>(); } });
             }
             println!("published edges trace: {updates} updates in {spans} spans");
         }

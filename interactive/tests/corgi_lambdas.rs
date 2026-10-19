@@ -1,8 +1,7 @@
-//! Slots written as corgi lambdas, `pat -> body`, compute what the same slots written as terms do,
-//! on both backends.
+//! Slots written as corgi lambdas, `pat -> body`, compute what the same slots written as terms do.
 
 use interactive::ir::Value;
-use interactive::server::{evaluate, RenderBackend};
+use interactive::server::evaluate;
 use interactive::{lower, parse};
 
 fn tup(fields: &[i64]) -> Value {
@@ -12,7 +11,7 @@ fn rows(rs: &[&[i64]]) -> Vec<(Value, Value)> {
     rs.iter().map(|f| (tup(f), Value::unit())).collect()
 }
 
-/// Evaluate both programs on both backends and assert all four agree, and have output.
+/// Evaluate both programs at one and three workers and assert all four agree, and have output.
 fn assert_same(terms: &str, lambdas: &str, inputs: &[Vec<(Value, Value)>]) {
     let tree = |src: &str| {
         let mut tree = lower::lower_tree(parse::pipe::parse(src));
@@ -20,13 +19,12 @@ fn assert_same(terms: &str, lambdas: &str, inputs: &[Vec<(Value, Value)>]) {
         tree
     };
     let (terms, lambdas) = (tree(terms), tree(lambdas));
-    let want = evaluate(RenderBackend::Vec, timely::Config::process(1), &terms, inputs);
+    let want = evaluate(timely::Config::process(1), &terms, inputs);
     assert!(want.values().all(|rows| !rows.is_empty()), "every export has rows: {want:?}");
-    assert_eq!(evaluate(RenderBackend::Vec, timely::Config::process(1), &lambdas, inputs), want, "vec backend");
     for workers in [1, 3] {
         let config = || timely::Config::process(workers);
-        assert_eq!(evaluate(RenderBackend::Corgi, config(), &terms, inputs), want, "corgi backend, terms, {workers} workers");
-        assert_eq!(evaluate(RenderBackend::Corgi, config(), &lambdas, inputs), want, "corgi backend, lambdas, {workers} workers");
+        assert_eq!(evaluate(config(), &terms, inputs), want, "terms, {workers} workers");
+        assert_eq!(evaluate(config(), &lambdas, inputs), want, "lambdas, {workers} workers");
     }
 }
 
@@ -139,7 +137,7 @@ fn mismatched_lambdas_are_refused_at_install() {
         ] {
             let mut program = lower::lower_tree(parse::pipe::parse(src));
             program.optimize();
-            let error = interactive::server::Server::with_backend(RenderBackend::Corgi).install(worker, "p", &program).unwrap_err();
+            let error = interactive::server::Server::new().install(worker, "p", &program).unwrap_err();
             assert!(error.contains(says), "{src}: {error}");
         }
     });
@@ -194,8 +192,8 @@ fn types() {
     assert_same(terms, lambdas, &[edges()]);
 }
 
-/// A lambda takes apart a value of a declared type. Only the corgi backend runs it: the vec backend
-/// types a lambda's input from the row alone, and a variant does not say which type it is.
+/// A lambda takes apart a value of a declared type, and computes what the same `case` written as
+/// a term does.
 #[test]
 fn types_matched() {
     let tree = |src: &str| {
@@ -215,10 +213,10 @@ fn types_matched() {
         let sized = pairs | value(if($1[0] > 3, Big($1[0], $0[0]), Small($1[0])));
         export "matched" = sized | value((_, s) -> s match (Small (x -> x), Big ((a, b) -> (a, b) mul)));
     "#);
-    let want = evaluate(RenderBackend::Vec, timely::Config::process(1), &terms, &[edges()]);
+    let want = evaluate(timely::Config::process(1), &terms, &[edges()]);
     assert!(!want["matched"].is_empty());
     for workers in [1, 3] {
-        assert_eq!(evaluate(RenderBackend::Corgi, timely::Config::process(workers), &lambdas, &[edges()]), want, "{workers} workers");
+        assert_eq!(evaluate(timely::Config::process(workers), &lambdas, &[edges()]), want, "{workers} workers");
     }
 }
 

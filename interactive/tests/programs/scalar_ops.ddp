@@ -1,4 +1,4 @@
--- Scalar unaries on the corgi compiled path, checked against the vec backend:
+-- Scalar unaries on the corgi compiled path, checked against their recorded answer:
 -- negation, `not` as a comparison with zero, and list `len` (along `collect`ed values).
 
 let pairs = input 0 : ((int, int, int) ; ()) | key(((k, a, b), ()) -> (k, (a, b)));

@@ -1,0 +1,3 @@
+result ((Tuple([Int(1), Int(1)]), Int(15)), 1)
+result ((Tuple([Int(2), Int(1)]), Int(36)), 1)
+result ((Tuple([Int(2), Int(1)]), Int(37)), 1)

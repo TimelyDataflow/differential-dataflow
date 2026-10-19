@@ -60,7 +60,7 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
     standing = names if args.mode == 'maintained' else [n for n in names if n.startswith('bi')]
     dynamic = [n for n in names if n not in standing]
     active = {name: set() for name in names}
-    with Server(args.server, args.output / f'{backend}-{suffix}.log', backend, args.workers,
+    with Server(args.server, args.output / f'{backend}-{suffix}.log', args.workers,
                 args.timeout, args.max_rss_gib) as server:
         context = dict(round=-1, warmup=True, state='setup')
 
@@ -153,7 +153,6 @@ def main():
     parser.add_argument('--server', type=Path, help='existing ddir_server (release for timing)')
     parser.add_argument('--snapshot', type=Path, help='existing BI composite-merged-fk initial_snapshot directory')
     parser.add_argument('--parameters', type=Path, help='JSON object: query name -> list of parameter objects')
-    parser.add_argument('--backend', choices=('vec', 'corgi', 'both'), default='both')
     parser.add_argument('--workers', type=positive, default=1)
     parser.add_argument('--queries', nargs='+', default=['all'], help='all, is, ic, bi, or individual names')
     parser.add_argument('--mode', choices=('mixed', 'maintained'), default='mixed',
@@ -251,9 +250,8 @@ def main():
                       data=dict(rows={n: len(rows) for n, rows in graph.items()}, sha256=fingerprint(graph)),
                       parameter_bank=bank, changed_sha256=fingerprint(changed), changes=delta)
         print(f'{len(names)} queries; {sum(map(len, graph.values()))} projected rows', flush=True)
-        for backend in ('vec', 'corgi') if args.backend == 'both' else (args.backend,):
-            for selected in [[n] for n in names] if args.isolated else [names]:
-                run_server(args, backend, selected, graph, changed, delta, bank, plans, report)
+        for selected in [[n] for n in names] if args.isolated else [names]:
+            run_server(args, 'corgi', selected, graph, changed, delta, bank, plans, report)
         report['status'] = 'passed'
     except BaseException as error:
         report.update(status='failed', error=f'{type(error).__name__}: {error}')

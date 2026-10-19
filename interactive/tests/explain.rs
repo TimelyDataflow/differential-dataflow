@@ -13,10 +13,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use interactive::backend::vec::Row;
 use interactive::ir::Value;
 use interactive::scope_ir::Program;
-use interactive::server::{self, RenderBackend};
+use interactive::server;
 use interactive::{explain, lower, parse};
 
 /// SCC with the scc edge-set itself as the result, so individual output
@@ -98,10 +97,12 @@ fn row(fields: &[i64]) -> Row {
     Value::Tuple(fields.iter().map(|&n| Value::Int(n)).collect())
 }
 
-/// Run `p` on `inputs` through the server on the vec backend: every export's
-/// consolidated rows, by name.
+/// A row: a key or a value.
+type Row = Value;
+
+/// Run `p` on `inputs` through the server: every export's consolidated rows, by name.
 fn evaluate(p: &Program, inputs: &[Vec<(Row, Row)>]) -> BTreeMap<String, Vec<((Row, Row), i64)>> {
-    server::evaluate(RenderBackend::Vec, timely::Config::process(1), p, inputs)
+    server::evaluate(timely::Config::process(1), p, inputs)
 }
 
 /// Run `p` on `inputs` and return one export's rows (asserting positive
@@ -501,13 +502,6 @@ fn lambda_explanations_sufficient_small() {
     assert_eq!(sizes.len(), 10, "expected 5 reached nodes, each in two positions");
 }
 
-#[test]
-fn corgi_agrees_on_lambda_explanation() {
-    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
-    let q = first_output_row(LAMBDAS, &inputs);
-    assert_explained_backends_agree(LAMBDAS, &inputs, &[q]);
-}
-
 /// Keys and values that are neither products nor units: a source of scalar
 /// keys and values, a scalar value at the root (`value`), a list at the root
 /// (`collect`) read by a flatmap, and scalar keys inside an iterative scope
@@ -533,13 +527,6 @@ fn scalar_explanations_sufficient_small() {
     assert!(!sizes.is_empty(), "expected some rows to explain");
 }
 
-#[test]
-fn corgi_agrees_on_scalar_explanation() {
-    let inputs = vec![scalar_pairs()];
-    let q = first_output_row(SCALARS, &inputs);
-    assert_explained_backends_agree(SCALARS, &inputs, &[q]);
-}
-
 /// Collect (NEST): `(a ; b)` rows group to `(a ; [b…])`. Reversing a demanded
 /// list must demand all the members — which is exactly the non-min keyed
 /// lookup ("demand all same-key inputs"), so no new rule is needed; this
@@ -556,91 +543,13 @@ fn collect_explanations_sufficient_small() {
 }
 
 // ---------------------------------------------------------------------------
-// The corgi cross-check.
-//
-// `LinearOp::LiftIter` is SYNTHESIZED by the rewrite — every `$host:` export is
-// a LiftIter Linear, and it panics if it appears in a user program — so an
-// explained program is the only thing that exercises it. The rest of this file
-// runs on `vec` alone, which left the whole explain surface unexercised on the
-// columnar backend. These tests render the SAME rewritten dataflow on both and
-// require every export to agree.
-//
-// Two of them are `#[ignore]`d against a divergence that PREDATES this coverage
-// (reproduced at 78d75b05): on an explained program whose iterative feedback is
-// NEGATED, corgi reports a strict subset of vec's `demand:input0`. The trigger
-// is isolated below to the negation alone — `explained_scc_one_scope_negated`
-// and `corgi_agrees_on_explained_scc_one_scope` differ in exactly that one line,
-// and only the negated one fails. Ruled out along the way: `enter_at` (a depth-1
-// reach with a delay agrees, and forcing the row-wise enter_at path changes
-// nothing), `min` (a depth-1 min/join loop agrees), and depth-2 nesting on its
-// own (the negation-free two-scope program agrees).
+// Explanations of loops: `enter_at`, a `min` in a loop, and SCC's shape at one
+// scope, with its feedback negated and not. `LinearOp::LiftIter` is synthesized
+// by the rewrite (every `$host:` export is one), so explained programs are what
+// exercise it.
 // ---------------------------------------------------------------------------
 
-/// Run `src`'s explanation program on `inputs` + `queries` under both backends
-/// and require identical exports.
-fn assert_explained_backends_agree(
-    src: &str,
-    inputs: &[Vec<(Row, Row)>],
-    queries: &[(Row, Row)],
-) {
-    let tree = lowered(src);
-    let mut ex = explain::explain(&tree);
-    ex.optimize();
-    let mut ex_inputs: Vec<Vec<(Row, Row)>> = inputs.to_vec();
-    ex_inputs.push(query_rows(queries));
-
-    let by_vec = evaluate(&ex, &ex_inputs);
-    let by_corgi = server::evaluate(RenderBackend::Corgi, timely::Config::process(1), &ex, &ex_inputs);
-    assert_eq!(
-        by_vec.keys().collect::<Vec<_>>(),
-        by_corgi.keys().collect::<Vec<_>>(),
-        "backends disagree on the export names"
-    );
-    for (name, rows) in &by_vec {
-        assert_eq!(rows, &by_corgi[name], "export {name:?} differs between backends");
-    }
-}
-
-/// The first output row of `src` on `inputs` — a query that makes the
-/// explanation dataflow do real work.
-fn first_output_row(src: &str, inputs: &[Vec<(Row, Row)>]) -> (Row, Row) {
-    let p = optimized(src);
-    export_rows(&p, inputs, "result").into_iter().next().expect("a row to query")
-}
-
-/// Two inputs (edges and roots), so the rewrite reports two demand exports.
-#[test]
-fn corgi_agrees_on_reach_explanation() {
-    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
-    let q = first_output_row(REACH_ROW, &inputs);
-    assert_explained_backends_agree(REACH_ROW, &inputs, &[q]);
-}
-
-/// Transitive closure: iteration with `distinct` rather than `min`.
-#[test]
-fn corgi_agrees_on_tc_explanation() {
-    let inputs = vec![gen_edges(20, 22)];
-    let q = first_output_row(TC_ROW, &inputs);
-    assert_explained_backends_agree(TC_ROW, &inputs, &[q]);
-}
-
-/// The list ops through the rewrite: `flatmap`'s reverse rule (intro + explode)
-/// and `collect`'s (a List-valued reducer output).
-#[test]
-fn corgi_agrees_on_flatmap_explanation() {
-    let inputs = vec![gen_edges(20, 22)];
-    let q = first_output_row(FLATMAP_ROW, &inputs);
-    assert_explained_backends_agree(FLATMAP_ROW, &inputs, &[q]);
-}
-
-#[test]
-fn corgi_agrees_on_collect_explanation() {
-    let inputs = vec![gen_edges(20, 22)];
-    let q = first_output_row(COLLECT_ROW, &inputs);
-    assert_explained_backends_agree(COLLECT_ROW, &inputs, &[q]);
-}
-
-/// `enter_at` through the rewrite, at depth 1 so the negation trigger is absent.
+/// `enter_at` through the rewrite, at depth 1.
 const REACH_ENTER_AT: &str = r#"
     let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     let roots = input 1 : ((int) ; ()) | key($0[0] ;);
@@ -653,10 +562,9 @@ const REACH_ENTER_AT: &str = r#"
 "#;
 
 #[test]
-fn corgi_agrees_on_enter_at_explanation() {
+fn enter_at_explanations_sufficient() {
     let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
-    let q = first_output_row(REACH_ENTER_AT, &inputs);
-    assert_explained_backends_agree(REACH_ENTER_AT, &inputs, &[q]);
+    assert!(!assert_all_rows_sufficient(REACH_ENTER_AT, &inputs).is_empty());
 }
 
 /// A `min` reducer in an iterative loop, at depth 1.
@@ -671,14 +579,12 @@ const MIN_LOOP: &str = r#"
 "#;
 
 #[test]
-fn corgi_agrees_on_min_loop_explanation() {
-    let inputs = vec![gen_edges(50, 55)];
-    let q = first_output_row(MIN_LOOP, &inputs);
-    assert_explained_backends_agree(MIN_LOOP, &inputs, &[q]);
+fn min_loop_explanations_sufficient() {
+    assert!(!assert_all_rows_sufficient(MIN_LOOP, &[gen_edges(50, 55)]).is_empty());
 }
 
 /// SCC's shape — depth-2 nesting, `min`, three joins, a filtered feedback — with
-/// the feedback NOT negated. Agrees; the twin below differs only in that line.
+/// the feedback not negated; the twin below differs only in that line.
 const SCC_ONE_SCOPE: &str = r#"
     let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     outer: {
@@ -698,8 +604,7 @@ const SCC_ONE_SCOPE: &str = r#"
     export "result" = outer::scc;
 "#;
 
-/// The same program with `var trim = trim_fwd - edges` — the one-line minimal
-/// reproducer for the demand divergence.
+/// The same program with `var trim = trim_fwd - edges`.
 const SCC_ONE_SCOPE_NEGATED: &str = r#"
     let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
     outer: {
@@ -720,35 +625,28 @@ const SCC_ONE_SCOPE_NEGATED: &str = r#"
 "#;
 
 #[test]
-fn corgi_agrees_on_explained_scc_one_scope() {
-    let inputs = vec![gen_edges(50, 55)];
-    let q = first_output_row(SCC_ONE_SCOPE, &inputs);
-    assert_explained_backends_agree(SCC_ONE_SCOPE, &inputs, &[q]);
+fn scc_one_scope_explanations_sufficient() {
+    assert!(!assert_all_rows_sufficient(SCC_ONE_SCOPE, &[gen_edges(50, 55)]).is_empty());
 }
 
 #[test]
-fn explained_scc_one_scope_negated() {
-    let inputs = vec![gen_edges(50, 55)];
-    let q = first_output_row(SCC_ONE_SCOPE_NEGATED, &inputs);
-    assert_explained_backends_agree(SCC_ONE_SCOPE_NEGATED, &inputs, &[q]);
+fn scc_one_scope_negated_explanations_sufficient() {
+    assert!(!assert_all_rows_sufficient(SCC_ONE_SCOPE_NEGATED, &[gen_edges(50, 55)]).is_empty());
 }
 
-/// Iterative + `enter_at` + negated feedback: the real SCC.
+/// Two queries at once, so the query input carries more than one envelope: the joint
+/// explanation regenerates both.
 #[test]
-fn corgi_agrees_on_scc_explanation() {
-    let inputs = vec![gen_edges(50, 55)];
-    let q = first_output_row(SCC_ROW, &inputs);
-    assert_explained_backends_agree(SCC_ROW, &inputs, &[q]);
-}
-
-/// Two queries at once, so the query input carries more than one envelope.
-#[test]
-fn corgi_agrees_on_two_query_explanation() {
+fn two_query_explanation_sufficient() {
     let inputs = vec![gen_edges(50, 55)];
     let p = optimized(SCC_ROW);
     let qs: Vec<(Row, Row)> = export_rows(&p, &inputs, "result").into_iter().take(2).collect();
     assert_eq!(qs.len(), 2, "expected at least two scc edges to query");
-    assert_explained_backends_agree(SCC_ROW, &inputs, &qs);
+    let demand = demand_for_queries(SCC_ROW, &inputs, &qs);
+    let replay = export_rows(&p, &restrict(&inputs, &demand), "result");
+    for q in &qs {
+        assert!(replay.contains(q), "insufficient joint explanation for {q:?}");
+    }
 }
 
 /// Declared sources give the query input its shape, and the rewritten program

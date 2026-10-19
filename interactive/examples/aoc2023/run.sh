@@ -1,10 +1,9 @@
 #!/bin/sh
 # Run every AoC 2023 program through the DDIR server and check the answers.
-# Usage: ./run.sh [vec|corgi] [path/to/ddir_server]
+# Usage: ./run.sh [path/to/ddir_server]
 #   (build with: cargo build --release -p ddir-server)
 cd "$(dirname "$0")" || exit 1
-BACKEND=${1:-vec}
-SERVER=${2:-../../../target/release/ddir_server}
+SERVER=${1:-../../../target/release/ddir_server}
 python3 transcribe.py || exit 1   # dense dayNN/input.txt -> gen/dayNN/ fact files
 fail=0
 while read -r day part expected; do
@@ -25,7 +24,7 @@ feed p $k from $inp"
     k=$((k + 1))
   done
   got=$(printf '%s\ntick\nexit\n' "$cmds" \
-        | DDIR_BACKEND="$BACKEND" "$SERVER" 2>&1 \
+        | "$SERVER" 2>&1 \
         | sed -n "s/.*\\[part$part\\].*Int(\\(-\\{0,1\\}[0-9]*\\)).*/\\1/p")
   if [ "$got" = "$expected" ]; then
     echo "day$day part$part: ok ($got)"

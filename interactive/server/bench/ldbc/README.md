@@ -28,8 +28,8 @@ cargo build --release -p ddir-server
 python3 interactive/server/bench/ldbc/run.py --server target/release/ddir_server
 ```
 
-The default uses the 50-row hand-authored fixture, both backends (separate
-processes), one worker, one warmup round and five measured rounds. It prints
+The default uses the 50-row hand-authored fixture, one worker, one warmup round
+and five measured rounds. It prints
 phase medians and the location of a JSON report and server logs. This fixture
 is for correctness and overhead, not evidence of columnar throughput.
 
@@ -38,7 +38,7 @@ Use an existing SNB BI **CSV composite-merged-fk** initial snapshot for timing:
 ```sh
 python3 interactive/server/bench/ldbc/run.py --server target/release/ddir_server \
   --snapshot /path/to/graphs/csv/bi/composite-merged-fk/initial_snapshot \
-  --backend corgi --workers 4 --rounds 10 --batch-size 8 --changes 32 \
+  --workers 4 --rounds 10 --batch-size 8 --changes 32 \
   --output /tmp/ldbc-baseline
 ```
 
@@ -174,7 +174,7 @@ repeat runs before treating small differences as improvements.
 
 ## CI and follow-ups
 
-CI runs only the fixture, both backends, at one and four workers, with the whole
+CI runs only the fixture, at one and four workers, with the whole
 parameter bank. It asserts answers, not timing thresholds, and uses this runner
 rather than a separate simulation. The equivalent local command is:
 

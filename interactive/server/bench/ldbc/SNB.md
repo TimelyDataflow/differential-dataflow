@@ -17,7 +17,7 @@ cargo build --release -p ddir-server
 python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_server
 ```
 
-The default starts a private real TCP server for each backend, installs all 41
+The default starts a private real TCP server, installs all 41
 queries concurrently, loads the same shared graph, and checks answers throughout
 a bounded update/request cycle. It uses a hand-authored 199-row witness graph
 (8 people, 35 messages), one worker, one warmup round, and three measured rounds.
@@ -57,7 +57,7 @@ To use existing generated data:
 ```sh
 python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_server \
   --snapshot /path/to/graphs/csv/bi/composite-merged-fk/initial_snapshot \
-  --backend corgi --workers 4 --batch-size 3 --rounds 5
+  --workers 4 --batch-size 3 --rounds 5
 ```
 
 The adapter reads all 18 required tables in SNB BI CSV `composite-merged-fk`
@@ -79,7 +79,7 @@ Post and Comment share a tuple with a kind field; they are **not** an enum-layou
 optimization experiment. Source shape ascriptions supply the element encoding
 of empty lists and inactive sum lanes. They are execution-time contracts, not
 transactional validation at `feed` admission. A mismatched row can panic a
-dataflow worker and take down the shared server on either backend, disconnecting
+dataflow worker and take down the shared server, disconnecting
 other clients. There is no per-program failure isolation; use trusted programs
 and shape-correct data. The benchmark starts private server processes.
 
@@ -189,7 +189,7 @@ aggregates currently use `collect`/`fold`; nested and ranked outputs are fully
 materialized. These are deliberate visible baseline costs, not tuned plans.
 
 The complete suite is verified on the 199-row fixture and the generated
-SF0.003 snapshot (35,588 projected rows) on both backends. CI runs only the
+SF0.003 snapshot (35,588 projected rows). CI runs only the
 fixture: mixed at one/four workers and maintained at four workers. It asserts
 answers, not timing thresholds, and does not fetch data. The local equivalent is:
 

@@ -2,12 +2,12 @@
 //!
 //! Each program runs twice: as written, where children arrange their imports themselves, and
 //! with the parent arranging them, so children read the parent's trace. The answers must agree
-//! at every epoch while edges come and go, on both backends and at several workers. The loops
+//! at every epoch while edges come and go, and at several workers. The loops
 //! read the shared traces at iteration times, so this also checks that their compaction
 //! requests are sound for the parent's arrangement.
 use interactive::ir::Value;
 use interactive::scope_ir::{Item, Node, Program, Ref, Scope, Source};
-use interactive::server::{InputUpdate, RenderBackend, Server};
+use interactive::server::{InputUpdate, Server};
 use interactive::{lower, parse};
 
 fn program(src: &str) -> Program {
@@ -51,10 +51,10 @@ fn churn(epochs: usize) -> Vec<Vec<InputUpdate>> {
 }
 
 /// The export `result` after each epoch, read at worker 0.
-fn run(backend: RenderBackend, workers: usize, program: &Program, epochs: &[Vec<InputUpdate>]) -> Vec<Vec<(Value, Value, i64)>> {
+fn run(workers: usize, program: &Program, epochs: &[Vec<InputUpdate>]) -> Vec<Vec<(Value, Value, i64)>> {
     let (program, epochs) = (program.clone(), epochs.to_vec());
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
-        let mut server = Server::with_backend(backend);
+        let mut server = Server::new();
         server.install(worker, "p", &program).unwrap();
         let mut seen = Vec::new();
         for batch in epochs.iter() {
@@ -75,12 +75,10 @@ fn assert_sharing_agrees(written: &str, shared: &str) {
     assert_eq!(arranged_imports(&written.root), 0);
     assert!(arranged_imports(&shared.root) > 0, "the shared variant imports no arrangement");
     let epochs = churn(8);
-    let want = run(RenderBackend::Vec, 1, &written, &epochs);
+    let want = run(1, &written, &epochs);
     assert!(want.iter().any(|rows| !rows.is_empty()));
-    for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
-        for workers in [1, 3] {
-            assert_eq!(run(backend, workers, &shared, &epochs), want, "{backend:?} at {workers} worker(s)");
-        }
+    for workers in [1, 3] {
+        assert_eq!(run(workers, &shared, &epochs), want, "{workers} worker(s)");
     }
 }
 

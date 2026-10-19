@@ -46,7 +46,7 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
     bi = [q for q in args.queries if q.startswith('b')]
     record = dict(backend=backend, workers=args.workers, events=[], requests=[])
     report['runs'].append(record)
-    with Server(args.server, args.output / f'{backend}.log', backend, args.workers,
+    with Server(args.server, args.output / f'{backend}.log', args.workers,
                 args.timeout, args.max_rss_gib) as server:
         context = dict(round=-1, warmup=True, state='setup')
 
@@ -124,7 +124,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--server', type=Path, required=True, help='existing ddir_server binary (release for timing)')
     parser.add_argument('--snapshot', type=Path, help='SNB BI composite-merged-fk initial_snapshot directory; default: tiny fixture')
-    parser.add_argument('--backend', choices=('vec', 'corgi', 'both'), default='both')
     parser.add_argument('--workers', type=positive, default=1)
     parser.add_argument('--queries', nargs='+', choices=QUERIES, default=list(QUERIES))
     parser.add_argument('--rounds', type=positive, default=5)
@@ -195,8 +194,7 @@ def main():
         report['changed_bi_answers'] = {name: answers['initial'][name] != answers['changed'][name]
                                         for name in args.queries if name.startswith('b')}
         print(f'Churn changes displayed BI answers: {report["changed_bi_answers"]}', flush=True)
-        for backend in ('vec', 'corgi') if args.backend == 'both' else (args.backend,):
-            run_server(args, backend, graph, delta, bank, standing, answers, report)
+        run_server(args, 'corgi', graph, delta, bank, standing, answers, report)
         report['status'] = 'passed'
     except BaseException as error:
         report.update(status='failed', error=f'{type(error).__name__}: {error}')

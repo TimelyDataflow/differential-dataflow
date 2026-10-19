@@ -39,7 +39,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cmd::{prepare, ConnectionId, LineParser, Request};
-use interactive::server::RenderBackend;
 use timely::scheduling::activate::SyncActivations;
 
 enum ControlEvent {
@@ -117,13 +116,6 @@ fn main() {
         })
         .unwrap_or(1);
     assert!(workers > 0, "DDIR_WORKERS must be positive");
-    let backend = std::env::var("DDIR_BACKEND")
-        .unwrap_or_else(|_| "vec".to_string())
-        .parse::<RenderBackend>()
-        .unwrap_or_else(|error| panic!("DDIR_BACKEND: {error}"));
-    // Corgi-backend exports stay columnar (less memory; readers see rows); DDIR_COLUMNAR_EXPORTS=0
-    // keeps the row traces instead.
-    let columnar_exports = std::env::var("DDIR_COLUMNAR_EXPORTS").map_or(true, |v| v != "0");
 
     let (event_tx, event_rx) = channel::<ControlEvent>();
     let (activation_tx, activation_rx) = sync_channel(1);
@@ -147,7 +139,7 @@ fn main() {
             } else {
                 None
             };
-            control_loop::run_worker(worker, events, backend, columnar_exports);
+            control_loop::run_worker(worker, events);
 
             // The live server intentionally keeps installed dataflows and
             // diagnostics around. Once every worker observes shutdown, remove

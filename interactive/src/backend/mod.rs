@@ -9,7 +9,7 @@
 //!
 //! The server is a thin driver: it picks a backend and calls [`render_tree`].
 
-pub mod vec;
+
 pub mod corgi;
 
 use timely::Container;

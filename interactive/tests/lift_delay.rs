@@ -1,8 +1,8 @@
-//! `lift`, `join_function`, and `delay`: each pinned to explicit rows, on both backends, across
-//! workers, as inputs are added and retracted over several epochs.
+//! `lift`, `join_function`, and `delay`: each pinned to explicit rows, across workers, as inputs
+//! are added and retracted over several epochs.
 
 use interactive::ir::Value;
-use interactive::server::{RenderBackend, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
@@ -30,9 +30,9 @@ fn feeds(tick: i64) -> Vec<(i64, i64, i64)> {
 }
 
 /// Every export, read after the last tick.
-fn run(backend: RenderBackend, workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
+fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
-        let mut server = Server::with_backend(backend);
+        let mut server = Server::new();
         let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
         program.optimize();
         server.install(worker, "p", &program).unwrap();
@@ -81,10 +81,8 @@ fn expected() -> Vec<Vec<(Value, Value, i64)>> {
 fn rows_are_as_expected() {
     let want = expected();
     for workers in [1, 3] {
-        for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
-            for ((name, got), want) in NAMES.iter().zip(run(backend, workers)).zip(&want) {
-                assert_eq!(&got, want, "{name}: {backend:?}, {workers} workers");
-            }
+        for ((name, got), want) in NAMES.iter().zip(run(workers)).zip(&want) {
+            assert_eq!(&got, want, "{name}: {workers} workers");
         }
     }
 }
@@ -99,12 +97,10 @@ fn ill_shaped_times_are_refused_at_install() {
             (r#"let i = input 0 : ((int, int) ; ()); s: { var a = i | delay((_, _) -> (0)); } export "a" = s::a;"#, "join_function"),
             (r#"export "a" = input 0 : ((int, int) ; ()) | join_function((k, v) -> ((k, v), (0)) enlist);"#, "join_function"),
         ] {
-            for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
-                let mut program = lower::lower_tree(parse::pipe::parse(src));
-                program.optimize();
-                let error = Server::with_backend(backend).install(worker, "p", &program).unwrap_err();
-                assert!(error.contains(says), "{src}: {error}");
-            }
+            let mut program = lower::lower_tree(parse::pipe::parse(src));
+            program.optimize();
+            let error = Server::new().install(worker, "p", &program).unwrap_err();
+            assert!(error.contains(says), "{src}: {error}");
         }
     });
 }

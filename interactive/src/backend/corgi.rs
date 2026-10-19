@@ -1,7 +1,6 @@
 //! The corgi rendering substrate: corgi columns are the native representation on dataflow edges,
 //! arrangements are chains of sorted columnar chunks (`ChunkSpine<CorgiChunk>`, cursor-less), and
-//! scalar logic runs columnar via `eval_graph`. The row-wise `backend::vec` remains useful for
-//! comparison, but its representation choices do not define corgi's physical semantics.
+//! scalar logic runs columnar via `eval_graph`.
 //!
 //! All `Backend` methods are corgi-native: `linear` folds a `LinearOp` chain over each container
 //! ([`apply_ops`]); `arrange` ingests columns without
@@ -37,7 +36,7 @@ use crate::corgi::join::CorgiJoinBackend;
 use differential_dogs3::operators::half_join::{half_join_with_tactic, HalfJoinTactic};
 use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
-use crate::corgi::logic::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar, shape_of_row};
+use crate::corgi::logic::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar};
 use corgi::{Graph, NumOp, Shape};
 use crate::ir::{Diff, LinearOp, Projection, Reducer, Time, Value as DValue};
 use crate::scope_ir as st;
@@ -154,11 +153,10 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &mut [Plan]) -> C
             // The inverse of `EnterAt`: a value read OUT of each row's time. Vals gain one
             // integer field; keys, times and diffs are untouched, and no term is compiled.
             //
-            // It mirrors [`append_iter`] shape for shape, and the empty product is where the two
-            // representations part company: DDIR unit IS `Tuple([])`, which `append_iter` extends
-            // to `Tuple([iter])`, but columnar it arrives as `CValue::Unit`, not an empty `Prod`.
-            // So `Unit` must become `Prod([iter])` — `Prod([Unit, iter])` would be a silent
-            // one-field-too-many divergence from `backend::vec`.
+            // A tuple gains a field, and unit is the empty tuple: columnar it arrives as
+            // `CValue::Unit`, not an empty `Prod`, so `Unit` must become `Prod([iter])`.
+            // `Prod([Unit, iter])` would be a silent one-field-too-many divergence from the
+            // shape `shapes` infers.
             LinearOp::LiftIter => {
                 // PointStamp index `level-1` is lane `level`; at the root there is no iteration
                 // coordinate and the value is zero.
@@ -513,35 +511,6 @@ impl Backend for CorgiBackend {
     }
 }
 
-/// Convert a collection of rows to corgi containers, at `shape` if it is known and otherwise at
-/// the shape of the first row seen. Known shapes describe empty lists and inactive sum lanes.
-pub fn rows_to_corgi<'s, T: ColTime>(
-    c: differential_dataflow::VecCollection<'s, T, (Row, Row), Diff>,
-    shape: Option<st::RowShape>,
-) -> Collection<'s, T, CorgiContainer<T, Diff>> {
-    c.inner
-        .unary(Pipeline, "ToCorgi", move |_, _| {
-            let mut pinned = shape;
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    let rows = std::mem::take(data);
-                    let mut cc = match rows.first() {
-                        None => CorgiContainer::default(),
-                        Some(((k, v), _, _)) => {
-                            let (ks, vs) = pinned.get_or_insert_with(|| {
-                                let pin = |r: &Row, what: &str| shape_of_row(r).unwrap_or_else(|e| panic!("input {what}: {e}"));
-                                (pin(k, "key"), pin(v, "value"))
-                            });
-                            CorgiContainer::from_updates(rows, ks, vs)
-                        }
-                    };
-                    output.session(&cap).give_container(&mut cc);
-                });
-            }
-        })
-        .as_collection()
-}
-
 /// Assert that every container of `c` has `shape`: an import's shape ascription, checked as data
 /// arrives when the shape of the trace it reads was not known at install.
 pub fn assert_shape<'s, T: ColTime>(
@@ -573,32 +542,6 @@ pub fn render_tree<'s>(
 ) -> Vec<Collection<'s, Time, CC>> {
     let imports = imports.into_iter().map(crate::backend::Rendered::Collection).collect();
     crate::backend::render_tree::<CorgiBackend>(s, scope, depth, imports, shapes)
-}
-
-/// Render `s` with the corgi substrate over ROW collections: each import converts to corgi
-/// containers at the boundary (`ToCorgi`), the tree renders columnar, and each export
-/// converts back (`FromCorgi`). Signature-compatible with
-/// [`vec::render_tree`](crate::backend::vec::render_tree) (hence the `vec::Col` alias), so a
-/// row-speaking driver switches backends by switching this one call.
-pub fn render_tree_corgi<'s>(
-    s: &st::Scope,
-    scope: Scope<'s, Time>,
-    depth: usize,
-    imports: Vec<crate::backend::vec::Col<'s>>,
-    shapes: Option<&crate::shapes::ScopeShapes>,
-) -> Vec<Collection<'s, Time, CC>> {
-    let corgi_imports: Vec<Collection<'s, Time, CC>> = crate::backend::vec::check_import_shapes(s, imports)
-        .into_iter()
-        .zip(&s.imports)
-        .enumerate()
-        .map(|(k, (c, import))| rows_to_corgi(c, import_shape(k, import, shapes)))
-        .collect();
-    render_tree(s, scope, depth, corgi_imports, shapes)
-}
-
-/// Import `k`'s declared shape, or the one inferred at install (an imported trace's).
-fn import_shape(k: usize, import: &st::Import, shapes: Option<&crate::shapes::ScopeShapes>) -> Option<st::RowShape> {
-    import.shape.clone().or_else(|| shapes.and_then(|sh| sh.imports[k].clone()).map(|c| (c.key, c.val)))
 }
 
 /// A root import for [`render_tree_corgi_arranged`]: corgi containers, or a published columnar
@@ -747,29 +690,4 @@ pub fn export_rows<'s>(
             });
         }
     })
-}
-
-/// [`render_tree_corgi`] with each export converted back to rows (`FromCorgi`).
-pub fn render_tree_rows<'s>(
-    s: &st::Scope,
-    scope: Scope<'s, Time>,
-    depth: usize,
-    imports: Vec<crate::backend::vec::Col<'s>>,
-    shapes: Option<&crate::shapes::ScopeShapes>,
-) -> Vec<crate::backend::vec::Col<'s>> {
-    render_tree_corgi(s, scope, depth, imports, shapes)
-        .into_iter()
-        .map(|c| {
-            c.inner
-                .unary(Pipeline, "FromCorgi", |_, _| {
-                    |input, output| {
-                        input.for_each(|cap, data| {
-                            let mut rows = std::mem::take(data).into_updates();
-                            output.session(&cap).give_container(&mut rows);
-                        });
-                    }
-                })
-                .as_collection()
-        })
-        .collect()
 }

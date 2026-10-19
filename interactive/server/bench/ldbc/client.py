@@ -55,7 +55,7 @@ def decode(lines):
 
 
 class Server:
-    def __init__(self, binary, log, backend, workers, timeout, max_rss_gib):
+    def __init__(self, binary, log, workers, timeout, max_rss_gib):
         self.timeout, self.counter = timeout, 0
         self.stream = self.reader = None
         self.log = log.open('wb')
@@ -65,7 +65,7 @@ class Server:
             reservation.bind(('127.0.0.1', 0))
             port = reservation.getsockname()[1]
         env = dict(os.environ, DDIR_BIND=f'127.0.0.1:{port}', DDIR_WS_BIND='127.0.0.1:0',
-                   DDIR_DIAGNOSTICS='0', DDIR_WORKERS=str(workers), DDIR_BACKEND=backend)
+                   DDIR_DIAGNOSTICS='0', DDIR_WORKERS=str(workers))
         self.process = subprocess.Popen([str(binary)], stdin=subprocess.PIPE,
                                         stdout=subprocess.DEVNULL, stderr=self.log, env=env)
         self.stop_monitor = threading.Event()

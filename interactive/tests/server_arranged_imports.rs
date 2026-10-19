@@ -1,10 +1,10 @@
 //! Imports that arrive as the producer's arrangement (`Server::set_arranged_imports`) answer
-//! exactly as imports that arrive as rows, on both backends: a join and a reduce of an import
-//! at the root, a join inside an iterative scope, and the import read as rows, through
-//! additions and retractions of the shared trace, including for an importer installed late.
+//! exactly as imports that arrive as containers: a join and a reduce of an import at the root,
+//! a join inside an iterative scope, and the import read as rows, through additions and
+//! retractions of the shared trace, including for an importer installed late.
 
 use interactive::ir::Value;
-use interactive::server::{RenderBackend, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 type Snapshot = Vec<(Value, Value, i64)>;
@@ -54,10 +54,10 @@ fn take(server: &mut Server, worker: &mut timely::worker::Worker, names: &[Strin
 }
 
 /// Run the scenario, snapshotting every consumer export after each tick.
-fn scenario(backend: RenderBackend, arranged: bool) -> Vec<Snapshot> {
+fn scenario(arranged: bool) -> Vec<Snapshot> {
     timely::execute_directly(move |worker| {
         let mut snapshots = Vec::new();
-        let mut server = Server::with_backend(backend);
+        let mut server = Server::new();
         server.set_arranged_imports(arranged);
         install(&mut server, worker, "prod", PRODUCER);
         for (s, d) in [(1, 2), (2, 3), (3, 4), (5, 6), (2, 7)] { edge(&mut server, s, d, 1); }
@@ -97,16 +97,6 @@ fn scenario(backend: RenderBackend, arranged: bool) -> Vec<Snapshot> {
 }
 
 #[test]
-fn arranged_imports_answer_as_rows_do_vec() {
-    assert_eq!(scenario(RenderBackend::Vec, true), scenario(RenderBackend::Vec, false));
-}
-
-#[test]
-fn arranged_imports_answer_as_rows_do_corgi() {
-    assert_eq!(scenario(RenderBackend::Corgi, true), scenario(RenderBackend::Corgi, false));
-}
-
-#[test]
-fn backends_agree_with_arranged_imports() {
-    assert_eq!(scenario(RenderBackend::Vec, true), scenario(RenderBackend::Corgi, true));
+fn arranged_imports_answer_as_unarranged_imports_do() {
+    assert_eq!(scenario(true), scenario(false));
 }

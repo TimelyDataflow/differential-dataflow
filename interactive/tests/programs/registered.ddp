@@ -2,7 +2,7 @@
 -- (`ir::register`), and a program calls them with `call`. The test harness
 -- registers `grow`, `blend`, `describe`, `seven` (no arguments) and `double`
 -- (with a columnar kernel; see `corgi_backend.rs`). The corgi backend runs calls
--- as host kernels; the results must match the vec backend's in a map, a filter,
+-- as host kernels; the results must match the recorded answer in a map, a filter,
 -- a flatmap, a join, and a refinement fixpoint (the shape of a procedural-
 -- generation layer: a record's children come from a rule, until none has any).
 

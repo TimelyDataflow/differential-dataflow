@@ -302,8 +302,7 @@ where
             }
             Reducer::Distinct => {
                 // Present iff any value has NON-ZERO net -- the sign does not matter. DD's `reduce`
-                // presents every value whose accumulation is non-zero, negatives included, and
-                // `backend::vec`'s Distinct then emits `1` without looking at the diffs at all. A
+                // presents every value whose accumulation is non-zero, negatives included. A
                 // `> 0` test here silently drops a key whose values all accumulate negative, which
                 // is exactly what a negated collection produces. Output value is unit (a `Unit` column).
                 let mut present = 0usize;
