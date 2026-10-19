@@ -53,10 +53,12 @@ Every response line starts with the request's id (`_7 ok …`, `_7 data …`,
 | `tail <trace>` / `stop <reqid>` | follow a trace's changes at every tick, until stopped |
 | `list` | show programs, traces (+ importer counts) and bindings |
 
-A `<value>` is a comma-separated integer row (`1,2` → a tuple; `_`/empty → unit)
-or any **closed scalar term, written without spaces** (`inject(2,tuple(3,4))`,
-`list(1,2,3)`) for ADT-shaped data such as ASTs. `feed` defaults to value=unit,
-`time`=the current epoch (use a future `time=` to schedule ahead), `diff`=+1.
+A `<value>` is read at the shape its input declares, **written without spaces**:
+an integer, a decimal number for a float, `tuple(a,b)`, `list(1,2,3)`, and
+`inject(lane,payload)` for a sum, as in ADT-shaped data such as ASTs. A whole
+key or value may drop its wrapper: `1,2` for a tuple of integers, and `_` or
+nothing for unit. `feed` defaults to value=unit, `time`=the current epoch (use a
+future `time=` to schedule ahead), `diff`=+1.
 
 ## Running a program in batch
 

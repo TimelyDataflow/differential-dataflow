@@ -57,32 +57,27 @@ impl Work {
                 token,
                 reqid,
                 command:
-                    Ok(PreparedCommand::Server(ServerCommand::FeedBatch {
+                    Ok(PreparedCommand::Server(ServerCommand::FeedColumns {
                         prog,
                         input,
-                        updates,
+                        columns,
                     })),
                 connection_id,
                 logical_count: _,
             } => {
-                let logical_count = updates.len();
-                let mut shards = (0..peers).map(|_| Vec::new()).collect::<Vec<_>>();
-                for (position, update) in updates.into_iter().enumerate() {
-                    shards[position % peers].push(update);
-                }
-                shards
-                    .into_iter()
-                    .enumerate()
-                    .map(|(target, updates)| {
+                let logical_count = columns.len();
+                (0..peers)
+                    .map(|target| {
+                        let rows: Vec<usize> = (target..logical_count).step_by(peers).collect();
                         (
                             target as u64,
                             Work::Request {
                                 token,
                                 reqid: reqid.clone(),
-                                command: Ok(PreparedCommand::Server(ServerCommand::FeedBatch {
+                                command: Ok(PreparedCommand::Server(ServerCommand::FeedColumns {
                                     prog: prog.clone(),
                                     input,
-                                    updates,
+                                    columns: columns.select(&rows),
                                 })),
                                 connection_id,
                                 logical_count: Some(logical_count),
@@ -307,25 +302,23 @@ fn dispatch(
             ServerCommand::Feed {
                 prog,
                 input,
-                key,
-                val,
+                columns,
                 time,
-                diff,
             } => {
                 // An external row must enter the distributed collection once.
                 // Its dataflow exchanges will place it on the appropriate peer.
                 let result = if worker.index() == 0 {
-                    server.feed(&prog, input, key, val, time, diff)
+                    server.feed_columns(&prog, input, columns, time)
                 } else {
                     Ok(())
                 };
                 result.map(|()| format!("fed {:?} input {} at t={}", prog, input, server.epoch()))
             }
-            ServerCommand::FeedBatch {
+            ServerCommand::FeedColumns {
                 prog,
                 input,
-                updates,
-            } => server.feed_batch(&prog, input, updates).map(|()| {
+                columns,
+            } => server.feed_columns(&prog, input, columns, None).map(|()| {
                 format!(
                     "fed {} rows to {:?} input {} at t={}",
                     logical_count.expect("distributed batch retains its logical row count"),

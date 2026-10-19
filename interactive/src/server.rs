@@ -57,6 +57,7 @@ use timely::dataflow::ProbeHandle;
 use timely::progress::Antichain;
 use timely::worker::Worker;
 
+use crate::corgi::feed::FeedColumns;
 use crate::ir::{Diff, Value};
 use crate::scope_ir as st;
 
@@ -164,6 +165,21 @@ impl ServerInput {
             batch.extend(indices.by_ref().take(COLUMN_BATCH));
             self.give(recipe.container(&batch, time, diff));
         }
+    }
+
+    /// Add fed `columns` at `time`. Their shapes must be the input's, as its declaration says.
+    fn give_columns(&mut self, columns: FeedColumns, time: OuterTime) -> Result<(), String> {
+        let shape = (corgi::shape_of_value(&columns.keys), corgi::shape_of_value(&columns.vals));
+        match &self.shape {
+            Some(declared) if *declared == shape => {}
+            Some(declared) => return Err(format!("a feed of shape {} reached an input of shape {}", fmt_shape(&shape), fmt_shape(declared))),
+            None => return Err("the input declares no shape to read a feed at".into()),
+        }
+        let FeedColumns { keys, vals, diffs } = columns;
+        let n = diffs.len();
+        let times = crate::corgi::col_times::ColTimes::from_raw_lanes(vec![vec![time; n]], n);
+        self.give(HostContainer { keys, vals, times, diffs });
+        Ok(())
     }
 
     /// Add the updates of `container`, each at `time` whatever time it carries.
@@ -368,21 +384,20 @@ fn canonical_source_name(name: &str) -> String {
 pub enum Command {
     /// Install `program` under `name`.
     Install { name: String, program: st::Program },
-    /// Update positional `input` of `prog`: add `(key, val)` with `diff` at
+    /// Update positional `input` of `prog` with one row, read into columns, at
     /// `time` (default the current epoch when `None`).
     Feed {
         prog: String,
         input: usize,
-        key: Value,
-        val: Value,
+        columns: FeedColumns,
         time: Option<OuterTime>,
-        diff: Diff,
     },
-    /// Stage several rows into one positional input at the current epoch.
-    FeedBatch {
+    /// Stage several rows, read into columns, into one positional input at the
+    /// current epoch.
+    FeedColumns {
         prog: String,
         input: usize,
-        updates: Vec<InputUpdate>,
+        columns: FeedColumns,
     },
     /// Fill positional `input` of `prog` from `source` — a recipe name or a
     /// file path — at the current epoch. Collective: every worker feeds its
@@ -975,6 +990,21 @@ impl Server {
             handle.update_at((update.key, update.val), time, update.diff);
         }
         Ok(())
+    }
+
+    /// Stage rows already read into columns at `time` (default the current epoch), each with
+    /// its own multiplicity. Their shapes must be the input's declared shapes; nothing is staged
+    /// otherwise.
+    pub fn feed_columns(&mut self, prog: &str, input: usize, columns: FeedColumns, time: Option<OuterTime>) -> Result<(), String> {
+        let time = time.unwrap_or(self.epoch);
+        self.validate_feed(prog, input, time)?;
+        self.programs
+            .get_mut(&canonical_source_name(prog))
+            .expect("feed target was prevalidated")
+            .inputs
+            .get_mut(&input)
+            .expect("feed input was prevalidated")
+            .give_columns(columns, time)
     }
 
     /// Bulk-load rows into positional `input` of `prog` at the current epoch.

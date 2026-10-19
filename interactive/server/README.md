@@ -77,9 +77,13 @@ state, not elapsed wall-clock time.
 
     feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]
 
-pushes one update into a loaded program's positional input, exactly as in the
-`interactive::server` tests (`1,2` → a tuple; `_` → unit; a closed scalar term such
-as `inject(2,tuple(3,4))` for ADT-shaped rows).
+pushes one update into a loaded program's positional input. The input declares
+its shapes (`input 0 : ((int, int) ; ())`), and each value is read at them:
+an integer, a decimal number for a float, `tuple(a,b)`, `list(a,b)`, and
+`inject(lane,payload)` for a sum. A whole key or value may drop its wrapper:
+`1,2` for a tuple of integers, and `_` or nothing for unit. The session reads
+the text into columns before the workers see it, and refuses text that is not
+of the input's shapes.
 
 For many updates to one target at the current epoch, frame them as one feed:
 
@@ -92,10 +96,9 @@ For many updates to one target at the current epoch, frame them as one feed:
 Each body row is `<key> [val=<v>] [diff=<d>]`; `time=` is intentionally absent
 because the enclosing command supplies one epoch. The complete body is admitted
 atomically, and workers divide its rows by body position before introducing
-them to the dataflow. Partitioning happens before worker transport, avoiding a
-full `Value` batch clone on every worker. Text parsing and the row-to-column
-boundary remain visible optimization opportunities rather than hidden protocol
-behavior.
+them to the dataflow. The body is read into columns at the input's shapes as it
+arrives, so no row is held as a `Value`; one row not of those shapes refuses the
+whole body, naming the row.
 
 The batch's `ok` means that the complete request was admitted to the ordered
 worker stream; it does not wait for every worker to stage its shard. A later

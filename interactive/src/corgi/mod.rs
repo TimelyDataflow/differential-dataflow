@@ -10,6 +10,7 @@ pub mod chunk;
 pub mod col_times;
 pub mod container;
 pub mod exchange;
+pub mod feed;
 pub mod half_join;
 pub mod join;
 pub mod logic;
