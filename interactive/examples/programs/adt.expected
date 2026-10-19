@@ -1,0 +1,2 @@
+result ((Int(0), Int(4)), 1)
+result ((Int(1), Int(1)), 1)

@@ -1,9 +1,9 @@
-//! Generated sources, recipe loads, and fed inputs read the same whether the server keeps them
-//! as rows or, with columnar exports on the corgi backend, as corgi columns: through `snapshot`,
-//! through a program's `import`, and through `bind`, across ticks of churn, and across workers.
+//! Generated sources, recipe loads, and fed inputs, held as corgi columns, read the same at any
+//! number of workers: through `snapshot`, through a program's `import`, and through `bind`, across
+//! ticks of churn.
 
 use interactive::ir::Value;
-use interactive::server::{RenderBackend, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 fn tup(fields: &[i64]) -> Value {
@@ -49,10 +49,9 @@ const MIRROR: &str = r#"
 "#;
 
 /// Everything the server can read back, after the same installs, loads, feeds, and ticks.
-fn run(workers: usize, backend: RenderBackend, columnar: bool) -> Vec<Vec<(Value, Value, i64)>> {
+fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
-        let mut server = Server::with_backend(backend);
-        server.set_columnar_exports(columnar);
+        let mut server = Server::new();
         install(&mut server, worker, "sources", SOURCES);
         install(&mut server, worker, "loaded", LOADED);
         install(&mut server, worker, "undeclared", LOOSE);
@@ -79,11 +78,8 @@ fn run(workers: usize, backend: RenderBackend, columnar: bool) -> Vec<Vec<(Value
 }
 
 #[test]
-fn columnar_sources_read_like_row_sources() {
-    for workers in [1, 3] {
-        let vec = run(workers, RenderBackend::Vec, false);
-        assert!(vec[vec.len() - 9..].iter().all(|s| !s.is_empty()), "every read has rows by the last tick");
-        assert_eq!(vec, run(workers, RenderBackend::Corgi, false), "corgi over rows, {workers} workers");
-        assert_eq!(vec, run(workers, RenderBackend::Corgi, true), "corgi over columns, {workers} workers");
-    }
+fn sources_read_alike_across_workers() {
+    let want = run(1);
+    assert!(want[want.len() - 9..].iter().all(|s| !s.is_empty()), "every read has rows by the last tick");
+    assert_eq!(run(3), want, "3 workers");
 }

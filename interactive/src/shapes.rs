@@ -177,7 +177,7 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, depth: usize) -> 
                 Shape::List(e) => v = Shape::Prod(vec![Shape::Int, *e]),
                 s => return Err(format!("flatmap of shape {s}, not a list")),
             },
-            // As `backend::vec::append_iter`: extend a tuple, or pair any other value.
+            // Extend a tuple, or pair any other value.
             LinearOp::LiftIter => v = match v {
                 Shape::Prod(mut fs) => { fs.push(Shape::Int); Shape::Prod(fs) }
                 Shape::Unit => Shape::Prod(vec![Shape::Int]),

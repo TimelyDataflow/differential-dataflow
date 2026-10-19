@@ -1,4 +1,4 @@
--- F64 math, checked against the vec backend. `fabs`, `fmin`/`fmax` and the IEEE
+-- F64 math, checked against its recorded answer. `fabs`, `fmin`/`fmax` and the IEEE
 -- comparisons have columnar kernels; the libm functions, rounding, `fint`, `fpow`
 -- and `fpowi` run a row at a time, in a map, a filter, a flatmap and a join.
 -- Values include negatives, zeros of both signs, infinities and NaN.

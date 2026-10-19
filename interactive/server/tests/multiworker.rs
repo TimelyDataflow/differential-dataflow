@@ -91,10 +91,9 @@ fn request_observing(
     }
 }
 
-fn start_server(backend: &str, workers: usize) -> (ServerProcess, TcpStream, BufReader<TcpStream>) {
+fn start_server(workers: usize) -> (ServerProcess, TcpStream, BufReader<TcpStream>) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_ddir_server"))
         .env("DDIR_WORKERS", workers.to_string())
-        .env("DDIR_BACKEND", backend)
         // The retired polling/tick knob must not reintroduce wall-clock
         // progress if it remains in an old deployment environment.
         .env("DDIR_TICK_MS", "1")
@@ -144,8 +143,8 @@ fn start_server(backend: &str, workers: usize) -> (ServerProcess, TcpStream, Buf
     (server, writer, reader)
 }
 
-fn assert_backend(backend: &str) {
-    let (server, mut writer, mut reader) = start_server(backend, 4);
+fn assert_commands_replay() {
+    let (server, mut writer, mut reader) = start_server(4);
 
     request(
         &mut writer,
@@ -229,17 +228,12 @@ fn assert_backend(backend: &str) {
 }
 
 #[test]
-fn vec_commands_replay_on_four_workers_without_duplicating_input() {
-    assert_backend("vec");
+fn commands_replay_on_four_workers_without_duplicating_input() {
+    assert_commands_replay();
 }
 
-#[test]
-fn corgi_commands_replay_on_four_workers_without_duplicating_input() {
-    assert_backend("corgi");
-}
-
-fn assert_typed_sources(backend: &str) {
-    let (server, mut writer, mut reader) = start_server(backend, 4);
+fn assert_typed_sources() {
+    let (server, mut writer, mut reader) = start_server(4);
     request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int), Option(List(int))) ; ());\nexport \"typed.rows\" = rows | arrange;\ng end-load\n");
     request(&mut writer, &mut reader, "q", "q load copy begin\nlet rows = import \"typed.rows\" : ((int, List(int), Option(List(int))) ; ());\nexport \"typed.copy\" = rows;\nq end-load\n");
     // Neither a first empty list nor a never-populated sum lane can supply
@@ -260,19 +254,14 @@ fn assert_typed_sources(backend: &str) {
 }
 
 #[test]
-fn vec_typed_empty_sources_and_imports_on_four_workers() {
-    assert_typed_sources("vec");
-}
-
-#[test]
-fn corgi_typed_empty_sources_and_imports_on_four_workers() {
-    assert_typed_sources("corgi");
+fn typed_empty_sources_and_imports_on_four_workers() {
+    assert_typed_sources();
 }
 
 /// Two consumers join request rows against the same named graph through TCP,
 /// while both the requests and graph change.
-fn assert_shared_import_requests(backend: &str, workers: usize) {
-    let (server, mut writer, mut reader) = start_server(backend, workers);
+fn assert_shared_import_requests(workers: usize) {
+    let (server, mut writer, mut reader) = start_server(workers);
     request(
         &mut writer,
         &mut reader,
@@ -380,21 +369,11 @@ fn assert_shared_import_requests(backend: &str, workers: usize) {
 }
 
 #[test]
-fn vec_requests_follow_shared_graph_changes_on_one_worker() {
-    assert_shared_import_requests("vec", 1);
+fn requests_follow_shared_graph_changes_on_one_worker() {
+    assert_shared_import_requests(1);
 }
 
 #[test]
-fn vec_requests_follow_shared_graph_changes_on_four_workers() {
-    assert_shared_import_requests("vec", 4);
-}
-
-#[test]
-fn corgi_requests_follow_shared_graph_changes_on_one_worker() {
-    assert_shared_import_requests("corgi", 1);
-}
-
-#[test]
-fn corgi_requests_follow_shared_graph_changes_on_four_workers() {
-    assert_shared_import_requests("corgi", 4);
+fn requests_follow_shared_graph_changes_on_four_workers() {
+    assert_shared_import_requests(4);
 }

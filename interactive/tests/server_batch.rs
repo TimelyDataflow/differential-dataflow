@@ -46,18 +46,17 @@ fn feed_batch_validates_before_staging_one_epoch() {
 /// Ticks and transient snapshots must wake for delayed remote rows and progress.
 #[test]
 fn delayed_peers_wake_ticks_and_snapshots() {
-    use interactive::server::RenderBackend;
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
-    for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
+    {
         let barrier = Arc::new(Barrier::new(3));
         let guards = timely::execute(timely::Config::process(3), move |worker| {
             let mut program = lower::lower_tree(parse::pipe::parse(
                 "let rows = input 0 : ((int) ; ()); export \"rows\" = rows;",
             ));
             program.optimize();
-            let mut server = Server::with_backend(backend);
+            let mut server = Server::new();
             server.install(worker, "world", &program).unwrap();
             for epoch in 0..6 {
                 barrier.wait();

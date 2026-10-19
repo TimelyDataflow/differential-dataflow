@@ -1,0 +1,2 @@
+result ((Int(1), List([Tuple([Int(0), Int(1)]), Tuple([Int(1), Int(2)]), Tuple([Int(2), Int(3)])])), 1)
+result ((Int(3), List([Tuple([Int(0), Int(3)]), Tuple([Int(1), Int(4)]), Tuple([Int(2), Int(7)])])), 1)

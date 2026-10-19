@@ -89,7 +89,7 @@ feed reach 0 from random:nodes=100,edges=200,churn=10
 feed reach 1 0
 tick 100
 exit
-' | DDIR_BACKEND=corgi DDIR_WORKERS=4 cargo run --release -p ddir-server
+' | DDIR_WORKERS=4 cargo run --release -p ddir-server
 ```
 
 For the full command vocabulary — `load`, `feed`, `tick`, `peek`, `tail`, and the rest — see

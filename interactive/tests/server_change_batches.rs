@@ -1,6 +1,6 @@
 //! Bounded export consumption must preserve inserts/retractions and nested rows.
 use interactive::ir::Value;
-use interactive::server::{InputUpdate, RenderBackend, Server};
+use interactive::server::{InputUpdate, Server};
 use interactive::{lower, parse};
 
 #[test]
@@ -14,10 +14,9 @@ fn bounded_exports_match_full_drain_and_are_consumed_once() {
             export "tagged" = pairs | map($0 ; variant(Three, 2, $1[0]));
         "#));
         program.optimize();
-        let mut full = Server::with_backend(RenderBackend::Corgi);
-        let mut bounded = Server::with_backend(RenderBackend::Corgi);
+        let mut full = Server::new();
+        let mut bounded = Server::new();
         for server in [&mut full, &mut bounded] {
-            server.set_columnar_exports(true);
             server.set_export_taps(true);
         }
         full.install(worker, "full", &program).unwrap();

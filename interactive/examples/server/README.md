@@ -29,8 +29,8 @@ cd interactive
 # Run a session script (paths inside the scripts are relative to here):
 cargo run --release -p ddir-server < examples/server/sessions/shared_trace.txt
 
-# Four workers, the Corgi columnar backend (default: one worker, vec):
-DDIR_WORKERS=4 DDIR_BACKEND=corgi cargo run --release -p ddir-server < examples/server/sessions/shared_trace.txt
+# Four workers (default: one):
+DDIR_WORKERS=4 cargo run --release -p ddir-server < examples/server/sessions/shared_trace.txt
 
 # Or interactively: type commands; `exit` (or end of input) stops the server.
 cargo run --release -p ddir-server

@@ -1,9 +1,8 @@
 //! `reduce(term)`: the four prefab reducers written as terms reduce as the prefabs do, and a term
-//! and the same term as a corgi lambda agree, on both backends, across workers, as inputs are added
-//! and retracted.
+//! and the same term as a corgi lambda agree, across workers, as inputs are added and retracted.
 
 use interactive::ir::Value;
-use interactive::server::{RenderBackend, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
@@ -30,10 +29,10 @@ fn feeds(tick: i64) -> Vec<(i64, i64, i64)> {
 }
 
 /// Every export, read after each tick.
-fn run(backend: RenderBackend, workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
+fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
     let names = ["count", "count_term", "distinct", "distinct_term", "min", "min_term", "sum_term", "sum_lambda"];
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
-        let mut server = Server::with_backend(backend);
+        let mut server = Server::new();
         let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
         program.optimize();
         server.install(worker, "p", &program).unwrap();
@@ -58,7 +57,7 @@ fn run(backend: RenderBackend, workers: usize) -> Vec<Vec<(Value, Value, i64)>> 
 
 #[test]
 fn terms_reduce_as_the_prefabs_do() {
-    let want = run(RenderBackend::Vec, 1);
+    let want = run(1);
     for tick in want.chunks(8) {
         assert!(tick.iter().all(|rows| !rows.is_empty()), "every export has rows: {tick:?}");
         assert_eq!(tick[0], tick[1], "count");
@@ -66,8 +65,5 @@ fn terms_reduce_as_the_prefabs_do() {
         assert_eq!(tick[4], tick[5], "min");
         assert_eq!(tick[6], tick[7], "a term and its lambda");
     }
-    for workers in [1, 3] {
-        assert_eq!(run(RenderBackend::Vec, workers), want, "vec, {workers} workers");
-        assert_eq!(run(RenderBackend::Corgi, workers), want, "corgi, {workers} workers");
-    }
+    assert_eq!(run(3), want, "3 workers");
 }

@@ -10,7 +10,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Instant;
 
 use differential_dataflow::operators::arrange::ShutdownButton;
-use interactive::server::{Command as ServerCommand, OuterTime, RenderBackend, Server};
+use interactive::server::{Command as ServerCommand, OuterTime, Server};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
@@ -101,8 +101,6 @@ impl Work {
 pub fn run_worker(
     worker: &mut Worker,
     events: Option<Receiver<ControlEvent>>,
-    backend: RenderBackend,
-    columnar_exports: bool,
 ) {
     // Logging a park wakes the diagnostics dataflow, whose scheduling logs can
     // in turn wake it again. Keep idle servers genuinely idle unless an
@@ -146,9 +144,8 @@ pub fn run_worker(
     // total order, so a wall-clock sequencer would add machinery, not meaning.
     let mut work_input = (worker.index() == 0).then_some(input);
 
-    let mut server = Server::with_backend(backend);
-    server.set_columnar_exports(columnar_exports);
-    // Published traces reach importers as arrangements; DDIR_ARRANGED_IMPORTS=0 sends rows
+    let mut server = Server::new();
+    // Published traces reach importers as arrangements; DDIR_ARRANGED_IMPORTS=0 sends containers
     // instead (each importer re-arranges what it joins).
     server.set_arranged_imports(std::env::var("DDIR_ARRANGED_IMPORTS").map_or(true, |v| v != "0"));
     let mut tails: HashMap<TailKey, Tail> = HashMap::new();

@@ -1,11 +1,13 @@
-//! The corgi backend's correctness gate: each canonical `.ddp` program must evaluate
-//! identically through the corgi backend and the reference vec backend.
+//! The corgi backend's correctness gate: each canonical `.ddp` program must evaluate to its
+//! recorded answer (`<prog>.expected`, beside it), at every worker count and over serializing
+//! channels. The answers were recorded from the row backend while it lived, or by hand where
+//! that backend could not run the program.
 //!
 //! Every evaluation goes through the server (`server::evaluate`): install, feed, tick,
 //! snapshot — the same path a live install takes.
 
 use interactive::ir::Value;
-use interactive::server::{evaluate, RenderBackend};
+use interactive::server::evaluate;
 use interactive::{lower, parse};
 
 fn tup(fields: &[i64]) -> Value {
@@ -72,8 +74,8 @@ fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
     }
 }
 
-/// Evaluate `prog` through both backends and assert the outputs match.
-fn assert_backends_agree(prog: &str) {
+/// Evaluate `prog` and assert the output is its recorded answer.
+fn assert_matches_expected(prog: &str) {
     // Fixtures pinning individual lowerings live with the gate (tests/programs); the
     // algorithm programs double as examples and stay in examples/programs.
     let fixture = format!("{}/tests/programs/{prog}.ddp", env!("CARGO_MANIFEST_DIR"));
@@ -87,32 +89,55 @@ fn assert_backends_agree(prog: &str) {
     let mut tree = lower::lower_tree(parse::pipe::parse(&src));
     tree.optimize();
     let inputs = inputs_for(prog);
-    // The answer: the program's recorded output where it has one (`<prog>.expected`, for a program
-    // the vec backend cannot run: its lambdas take sums apart), and otherwise the vec backend's.
     let recorded = path.replace(".ddp", ".expected");
-    let want = match std::fs::read_to_string(&recorded) {
-        Ok(text) => text.trim_end().to_string(),
-        Err(_) => render(&evaluate(RenderBackend::Vec, timely::Config::process(1), &tree, &inputs)),
-    };
-    // At every worker count: the exchange places each key on one worker and every operator is
-    // key-local from there, so the answer must not depend on how many workers ran it. 3 is in the
-    // list on purpose — it is not a power of two, so it takes the modulus path rather than the
-    // mask, and it cannot divide these inputs evenly.
-    for workers in [1, 2, 3, 4] {
+    let want = std::fs::read_to_string(&recorded)
+        .unwrap_or_else(|e| panic!("{prog} has no recorded answer at {recorded}: {e}"))
+        .trim_end()
+        .to_string();
+    // The recorded answer, up to the last bits of floats: libm's functions differ there across
+    // platforms, and the answers were recorded on one.
+    let got = render(&evaluate(timely::Config::process(1), &tree, &inputs));
+    assert!(same_answer(&got, &want), "{prog} disagrees with its recorded answer\n got: {got}\nwant: {want}");
+    // At every worker count, exactly: the exchange places each key on one worker and every
+    // operator is key-local from there, so the answer must not depend on how many workers ran it.
+    // 3 is in the list on purpose — it is not a power of two, so it takes the modulus path rather
+    // than the mask, and it cannot divide these inputs evenly.
+    for workers in [2, 3, 4] {
         assert_eq!(
-            render(&evaluate(RenderBackend::Corgi, timely::Config::process(workers), &tree, &inputs)),
-            want,
-            "corgi backend at {workers} worker(s) disagrees with the expected output of {prog}",
+            render(&evaluate(timely::Config::process(workers), &tree, &inputs)),
+            got,
+            "{prog} at {workers} worker(s) disagrees with one worker",
         );
     }
     // The same programs again with serializing channels, so every exchanged container makes the
     // round trip through the wire format. This is the multi-process path: `Config::process` above
     // hands containers between threads as typed values and never encodes a byte.
     assert_eq!(
-        render(&evaluate(RenderBackend::Corgi, serializing(3), &tree, &inputs)),
-        want,
-        "corgi backend over serializing channels disagrees with the expected output of {prog}",
+        render(&evaluate(serializing(3), &tree, &inputs)),
+        got,
+        "{prog} over serializing channels disagrees with one worker",
     );
+}
+
+/// Whether rendered answers agree, each float to within four units in the last place.
+fn same_answer(got: &str, want: &str) -> bool {
+    /// A line's text between floats, and its floats.
+    fn split(line: &str) -> (Vec<&str>, Vec<f64>) {
+        let (mut text, mut floats, mut rest) = (Vec::new(), Vec::new(), line);
+        while let Some(at) = rest.find("Float(") {
+            let end = at + rest[at..].find(')').expect("a closed Float");
+            text.push(&rest[..at]);
+            floats.push(rest[at + "Float(".len()..end].parse::<f64>().expect("a float"));
+            rest = &rest[end + 1..];
+        }
+        text.push(rest);
+        (text, floats)
+    }
+    let close = |a: f64, b: f64| a == b || (a.is_nan() && b.is_nan()) || (a.signum() == b.signum() && (a.to_bits() as i64 - b.to_bits() as i64).abs() <= 4);
+    got.lines().count() == want.lines().count() && got.lines().zip(want.lines()).all(|(g, w)| {
+        let ((gt, gf), (wt, wf)) = (split(g), split(w));
+        gt == wt && gf.len() == wf.len() && gf.iter().zip(&wf).all(|(&a, &b)| close(a, b))
+    })
 }
 
 /// A program's output as text, one row per line: the export's name, then the row and its diff.
@@ -128,33 +153,33 @@ fn serializing(n: usize) -> timely::Config {
     }
 }
 
-#[test] fn reach() { assert_backends_agree("reach"); }
-#[test] fn scc() { assert_backends_agree("scc"); }
-#[test] fn kcore() { assert_backends_agree("kcore"); }
-#[test] fn stable() { assert_backends_agree("stable"); }
-#[test] fn unnest() { assert_backends_agree("unnest"); }
-#[test] fn adt() { assert_backends_agree("adt"); }
-#[test] fn ast() { assert_backends_agree("ast"); }
-#[test] fn binders() { assert_backends_agree("binders"); }
-#[test] fn join_fallback() { assert_backends_agree("join_fallback"); }
-#[test] fn scalar_ops() { assert_backends_agree("scalar_ops"); }
-#[test] fn sum_ops() { assert_backends_agree("sum_ops"); }
-#[test] fn sum_skew() { assert_backends_agree("sum_skew"); }
-#[test] fn case_ops() { assert_backends_agree("case_ops"); }
-#[test] fn tour() { assert_backends_agree("tour"); }
-#[test] fn pair_keys() { assert_backends_agree("pair_keys"); }
-#[test] fn signed_min() { assert_backends_agree("signed_min"); }
-#[test] fn f64_math() { assert_backends_agree("f64_math"); }
-#[test] fn reduce_term() { assert_backends_agree("reduce_term"); }
+#[test] fn reach() { assert_matches_expected("reach"); }
+#[test] fn scc() { assert_matches_expected("scc"); }
+#[test] fn kcore() { assert_matches_expected("kcore"); }
+#[test] fn stable() { assert_matches_expected("stable"); }
+#[test] fn unnest() { assert_matches_expected("unnest"); }
+#[test] fn adt() { assert_matches_expected("adt"); }
+#[test] fn ast() { assert_matches_expected("ast"); }
+#[test] fn binders() { assert_matches_expected("binders"); }
+#[test] fn join_fallback() { assert_matches_expected("join_fallback"); }
+#[test] fn scalar_ops() { assert_matches_expected("scalar_ops"); }
+#[test] fn sum_ops() { assert_matches_expected("sum_ops"); }
+#[test] fn sum_skew() { assert_matches_expected("sum_skew"); }
+#[test] fn case_ops() { assert_matches_expected("case_ops"); }
+#[test] fn tour() { assert_matches_expected("tour"); }
+#[test] fn pair_keys() { assert_matches_expected("pair_keys"); }
+#[test] fn signed_min() { assert_matches_expected("signed_min"); }
+#[test] fn f64_math() { assert_matches_expected("f64_math"); }
+#[test] fn reduce_term() { assert_matches_expected("reduce_term"); }
 #[test] fn registered() {
-    assert_backends_agree("registered");
+    assert_matches_expected("registered");
     // And the program does what it says: the refinement from 1 and 3 reaches every
     // number from 1 to 39 (grow stops at 20, so its last children are 38 and 39), and
     // -4 has no children.
     register_test_functions();
     let src = interactive::load_program(&format!("{}/tests/programs/registered.ddp", env!("CARGO_MANIFEST_DIR")));
     let tree = lower::lower_tree(parse::pipe::parse(&src));
-    let out = evaluate(RenderBackend::Corgi, timely::Config::process(2), &tree, &inputs_for("registered"));
+    let out = evaluate(timely::Config::process(2), &tree, &inputs_for("registered"));
     let mut cells: Vec<i64> = out["cells"].iter().map(|((k, _), _)| k.as_int()).collect();
     cells.sort();
     let mut want: Vec<i64> = (1..40).collect();
@@ -209,8 +234,7 @@ fn register_test_functions() {
         result: int(),
         body: Box::new(|_| Value::Int(7)),
     });
-    // A columnar body: the corgi backend runs `Double` on whole columns, the vec backend the row
-    // body; the gate checks they agree.
+    // A columnar body: `Double` runs on whole columns, and the row body is its reference.
     register(Function {
         name: "double".into(),
         args: vec![int()],
@@ -231,34 +255,26 @@ fn register_test_functions() {
     interactive::ir::register_kernel("double", std::sync::Arc::new(Double(Shape::Prod(vec![int()]), int())));
 }
 
-/// A filter predicate must be an `Int`: both backends reject a tuple rather than one of them
-/// keeping nothing.
+/// A filter predicate must be an `Int`: a tuple is rejected rather than keeping nothing.
 #[test]
 fn filter_requires_an_int_predicate() {
     let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int, int) ; ()) | filter($0);"#));
     tree.optimize();
     let inputs = vec![rows(&[&[1, 10], &[0, 20]])];
-    for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
-        let (tree, inputs) = (tree.clone(), inputs.clone());
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(backend, timely::Config::process(1), &tree, &inputs)));
-        assert!(result.is_err(), "{backend:?} accepted a tuple filter predicate");
-    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(timely::Config::process(1), &tree, &inputs)));
+    assert!(result.is_err(), "accepted a tuple filter predicate");
 }
 
-/// A call whose argument does not have the declared shape is rejected by both backends: corgi
-/// when it types the program, the row backend when it makes the call.
+/// A call whose argument does not have the declared shape is rejected when the program is typed.
 #[test]
-fn call_argument_shapes_are_checked_by_both_backends() {
+fn call_argument_shapes_are_checked() {
     register_test_functions();
     // `blend` takes a pair; pass it an Int.
     let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int) ; ()) | map($0 ; blend($0[0]));"#));
     tree.optimize();
     let inputs = vec![rows(&[&[1], &[2]])];
-    for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
-        let (tree, inputs) = (tree.clone(), inputs.clone());
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(backend, timely::Config::process(1), &tree, &inputs)));
-        assert!(result.is_err(), "{backend:?} ran a call with a mis-shaped argument");
-    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(timely::Config::process(1), &tree, &inputs)));
+    assert!(result.is_err(), "ran a call with a mis-shaped argument");
 }
 
 /// Registering a name again replaces its kernel too: the row adapter for the old body, or a

@@ -2,7 +2,7 @@
 //! join, at the root and inside an iterative scope, as inputs change over several epochs.
 
 use interactive::ir::Value;
-use interactive::server::{RenderBackend, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
@@ -57,7 +57,7 @@ fn feeds(tick: u64) -> Vec<(usize, i64, i64, i64)> {
 /// Every export after each tick, by name.
 fn run(workers: usize) -> Vec<[Vec<(Value, Value, i64)>; 4]> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
-        let mut server = Server::with_backend(RenderBackend::Corgi);
+        let mut server = Server::new();
         let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
         program.optimize();
         server.install(worker, "p", &program).unwrap();

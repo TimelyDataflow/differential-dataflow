@@ -2,7 +2,7 @@
 //! accumulate negatively has a negative count, and one whose values cancel has none.
 
 use interactive::ir::Value;
-use interactive::server::{evaluate, RenderBackend};
+use interactive::server::evaluate;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
@@ -30,10 +30,8 @@ fn counts_carry_their_sign() {
     want.insert("mixed".to_string(), vec![count(1, -2), count(2, -1)]);
     // Each key's values cancel against as many shifted ones.
     want.insert("cancel".to_string(), vec![]);
-    for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
-        for workers in [1, 3] {
-            let got = evaluate(backend, timely::Config::process(workers), &program, &[rows.clone()]);
-            assert_eq!(got, want, "{backend:?}, {workers} workers");
-        }
+    for workers in [1, 3] {
+        let got = evaluate(timely::Config::process(workers), &program, &[rows.clone()]);
+        assert_eq!(got, want, "{workers} workers");
     }
 }

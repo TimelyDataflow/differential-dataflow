@@ -18,7 +18,7 @@
 //! buffer — which is what lets `Stash::try_from_bytes` install the received bytes directly rather
 //! than relocating them.
 //!
-//! The comparison worth keeping in view: the row backend's `Vec<((Row, Row), T, R)>` reaches the
+//! The comparison worth keeping in view: a `Vec<((Row, Row), T, R)>` of rows reaches the
 //! wire through `bincode`, which walks every `Value` of every row and emits varints. This walks
 //! four columns and emits memcpys. That difference is the whole reason a columnar exchange is
 //! worth building.

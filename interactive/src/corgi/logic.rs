@@ -836,7 +836,7 @@ pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<
 }
 
 /// Compile a `Filter` predicate → a mask column (nonzero keeps the row). A predicate must be an
-/// `Int`; any other shape is a type error, as it is in the row backend.
+/// `Int`; any other shape is a type error.
 pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     match lower(&[cond], &[kshape.clone(), vshape.clone()])? {
         (k, Shape::Int) => Ok(k),

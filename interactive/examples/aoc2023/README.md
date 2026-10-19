@@ -17,8 +17,7 @@ declares the shape of every input it reads.
 ## Run
 
     cargo build --release -p ddir-server
-    ./run.sh          # every part on the vec backend vs expected.txt; nonzero exit on any mismatch
-    ./run.sh corgi    # the same through the Corgi columnar backend
+    ./run.sh          # every part vs expected.txt; nonzero exit on any mismatch
 
 `run.sh` first runs `transcribe.py` (python3) to regenerate `gen/`, then
 runs each part as one server session piped into `ddir_server` — `load` the
@@ -26,7 +25,7 @@ program from its file, `feed … from` each input's fact file (`gen/dayNN/in{k}.
 for input k, or `partP.in{k}.txt` where a part reads its own), `tick` — and
 reads the answer off the `[partN]` inspect line.
 
-Both backends pass all 33 parts.
+All 33 parts pass.
 
 ## Verdicts
 

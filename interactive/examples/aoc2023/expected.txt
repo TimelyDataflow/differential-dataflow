@@ -1,4 +1,4 @@
-# day part answer (vec backend; oracle: Materialize sqllogictest advent-of-code/2023)
+# day part answer (oracle: Materialize sqllogictest advent-of-code/2023)
 01 1 278
 01 2 391
 02 1 8
