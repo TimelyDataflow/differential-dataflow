@@ -185,7 +185,7 @@ impl Work {
                         }
                     }
                 }
-                if hashed { keep_equal_keys(keys[r], chunk_key, unchecked, &mut pairs); }
+                if hashed && pairs.1.len() > unchecked { keep_equal_keys(keys[r], chunk_key, unchecked, &mut pairs); }
             }
         }
         // Later blocks hold identifiers beyond `last`, so they need nothing before it.
