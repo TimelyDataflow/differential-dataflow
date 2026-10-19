@@ -49,7 +49,7 @@ pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
 /// As [`transcode`], consuming the rows: each field moves into its column, nothing is cloned.
 pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
     match shape {
-        Shape::Int => CValue::i64(rows.iter().map(DValue::as_int).collect()),
+        Shape::Int => int_leaf(rows.iter().map(DValue::as_int).collect()),
         Shape::Float => CValue::f64(rows.iter().map(DValue::as_f64).collect()),
         Shape::Unit => CValue::Unit(rows.len()),
         Shape::Prod(fs) => {
@@ -105,6 +105,18 @@ pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
             let named: Vec<usize> = (0..rows.len()).collect();
             CValue::Ref(std::sync::Arc::new(transcode_owned(rows, list)), std::sync::Arc::new(named))
         }
+    }
+}
+
+/// An integer column held at the narrowest storage corgi has for its values: bytes when every
+/// value is in `0..=255` (so text, a `List` of byte values, is held a byte per character), else
+/// `i64`s. Width is storage, not type: corgi widens a byte leaf where it meets an `i64` one, and
+/// hashes a non-negative value the same at either width.
+pub fn int_leaf(xs: Vec<i64>) -> CValue {
+    if !xs.is_empty() && xs.iter().all(|x| (0..=255).contains(x)) {
+        CValue::u8(xs.into_iter().map(|x| x as u8).collect())
+    } else {
+        CValue::i64(xs)
     }
 }
 
