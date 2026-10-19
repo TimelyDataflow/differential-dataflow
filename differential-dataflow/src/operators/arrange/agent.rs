@@ -10,11 +10,96 @@ use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
 
-use crate::trace::{Trace, TraceReader, BatchReader};
+use crate::lattice::Lattice;
+use crate::trace::{ExertionLogic, Trace, TraceReader, BatchReader};
 
 use timely::scheduling::Activator;
 
-use super::{TraceWriter, TraceAgentQueueWriter, TraceAgentQueueReader, Arranged};
+use super::{TraceWriter, TraceAgentQueueWriter, Listener, Arranged};
+
+/// The write endpoint an arranging operator feeds.
+///
+/// The operator inserts every batch it produces, in order, seals the upper when its input
+/// frontier advances without data, and calls [`Writer::exert`] on every activation, including
+/// activations with no new data. What happens on drop belongs to the implementation, and the
+/// operators do not depend on it.
+pub trait Writer {
+    /// The timestamp of the batches written.
+    type Time: Timestamp + Lattice;
+    /// The batch type written.
+    type Batch: BatchReader<Time = Self::Time>;
+    /// Appends `batch`, whose lower must equal the previous upper. `hint` is a time at or below
+    /// every update in the batch, suitable as a capability, or `None` for an empty batch.
+    fn insert(&mut self, batch: Self::Batch, hint: Option<Self::Time>);
+    /// Advances the upper to `upper` with an empty batch, if it moves.
+    fn seal(&mut self, upper: Antichain<Self::Time>);
+    /// Exerts merge effort on the trace, even without new batches.
+    fn exert(&mut self);
+}
+
+/// A shared handle to a trace that an arranging operator maintains through [`Agent::Writer`].
+///
+/// The `_with` entry points (`arrange_core_with`, `arrange_from_upsert_with`, `reduce_trace_with`,
+/// `reduce_with_tactic_with`) obtain the agent and its writer from a caller-supplied factory,
+/// called once with an [`ArrangeContext`] when the operator is built. [`TraceAgent`] is the default
+/// implementation, built by [`TraceAgent::factory`].
+///
+/// Reduce and upsert read their own output through their clone of the agent. A batch inserted
+/// through the writer must be visible to that clone's `batches_through` and `cursor_through`
+/// before the operator's next read.
+pub trait Agent: TraceReader + Clone {
+    /// The write endpoint the arranging operator inserts batches through.
+    type Writer: Writer<Time = Self::Time, Batch = Self::Batch> + 'static;
+}
+
+/// What an arranging operator offers the factory that builds its agent and writer.
+pub struct ArrangeContext {
+    /// The arranging operator.
+    pub info: OperatorInfo,
+    /// Schedules the arranging operator.
+    pub activator: Activator,
+    /// The worker's `differential/arrange` logger, if any.
+    pub logger: Option<crate::logging::Logger>,
+    /// The worker's `differential/default_exert_logic`, if set.
+    pub exert_logic: Option<ExertionLogic>,
+}
+
+impl ArrangeContext {
+    /// Collects the context for the operator `info` in `scope`.
+    pub(crate) fn new<T: Timestamp>(scope: &Scope<'_, T>, info: OperatorInfo) -> Self {
+        let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+        let activator = scope.activator_for(Rc::clone(&info.address));
+        let exert_logic = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned();
+        ArrangeContext { info, activator, logger, exert_logic }
+    }
+}
+
+impl<Tr: Trace + 'static> Agent for TraceAgent<Tr> {
+    type Writer = TraceWriter<Tr>;
+}
+
+impl<Tr: Trace> Writer for TraceWriter<Tr> {
+    type Time = Tr::Time;
+    type Batch = Tr::Batch;
+    fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) { TraceWriter::insert(self, batch, hint) }
+    fn seal(&mut self, upper: Antichain<Tr::Time>) { TraceWriter::seal(self, upper) }
+    fn exert(&mut self) { TraceWriter::exert(self) }
+}
+
+impl<Tr: Trace + 'static> TraceAgent<Tr> {
+    /// The factory for the `_with` entry points that builds an empty `Tr` and wraps it in a
+    /// `TraceAgent`, as the entry points without `_with` do.
+    pub fn factory() -> impl FnOnce(ArrangeContext) -> (Self, TraceWriter<Tr>) {
+        |context: ArrangeContext| {
+            let ArrangeContext { info, activator, logger, exert_logic } = context;
+            let mut trace = Tr::new(info.clone(), logger.clone(), Some(activator));
+            if let Some(exert_logic) = exert_logic {
+                trace.set_exert_logic(exert_logic);
+            }
+            TraceAgent::new(trace, info, logger)
+        }
+    }
+}
 use super::TraceReplayInstruction;
 
 use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};
@@ -107,7 +192,7 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
     /// The queue is first populated with existing batches from the trace,
     /// The queue will be immediately populated with existing historical batches from the trace, and until the reference
     /// is dropped the queue will receive new batches as produced by the source `arrange` operator.
-    pub fn new_listener(&mut self, activator: Activator) -> TraceAgentQueueReader<Tr>
+    pub fn new_listener(&mut self, activator: Activator) -> Listener<Tr>
     {
         // create a new queue for progress and batch information.
         let mut new_queue = VecDeque::new();
@@ -269,52 +354,7 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     /// ```
     pub fn import_core<'scope>(&mut self, scope: Scope<'scope, Tr::Time>, name: &str) -> (Arranged<'scope, TraceAgent<Tr>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     {
-        let trace = self.clone();
-
-        let mut shutdown_button = None;
-
-        let stream = {
-
-            let shutdown_button_ref = &mut shutdown_button;
-            source(scope, name, move |capability, info| {
-
-                let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
-
-                let activator = scope.activator_for(Rc::clone(&info.address));
-                let queue = self.new_listener(activator);
-
-                let activator = scope.activator_for(info.address);
-                *shutdown_button_ref = Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
-
-                capabilities.borrow_mut().as_mut().unwrap().insert(capability);
-
-                move |output| {
-
-                    let mut capabilities = capabilities.borrow_mut();
-                    if let Some(ref mut capabilities) = *capabilities {
-
-                        let mut borrow = queue.1.borrow_mut();
-                        for instruction in borrow.drain(..) {
-                            match instruction {
-                                TraceReplayInstruction::Frontier(frontier) => {
-                                    capabilities.downgrade(&frontier.borrow()[..]);
-                                },
-                                TraceReplayInstruction::Batch(batch, hint) => {
-                                    if let Some(time) = hint {
-                                        if !batch.is_empty() {
-                                            let delayed = capabilities.delayed(&time);
-                                            output.session(&delayed).give(batch);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            })
-        };
-
-        (Arranged { stream, trace }, shutdown_button.unwrap())
+        Listen::import_core(self, scope, name)
     }
 
     /// Imports an arrangement into the supplied scope.
@@ -401,6 +441,86 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     where
         Tr: TraceReader,
     {
+        Listen::import_frontier_core(self, scope, name, since, until)
+    }
+}
+
+
+
+/// An agent whose trace can be replayed into other dataflows on the same worker.
+///
+/// The provided imports build a source operator that drains a [`Listener`] obtained from
+/// [`Listen::new_listener`]. [`TraceAgent`]'s imports are instances of them.
+pub trait Listen: TraceReader + Clone + 'static {
+    /// The trace reader whose [`TraceReplayInstruction`]s the listener carries.
+    ///
+    /// Any reader with this agent's time and batch types will do. It exists because
+    /// `TraceReplayInstruction` is parameterized by a reader rather than by time and batch.
+    type Instructions: TraceReader<Time = Self::Time, Batch = Self::Batch>;
+
+    /// Attaches a listener woken through `activator`.
+    ///
+    /// The queue starts with the trace's current batches, each with hint `Some(minimum)`, followed
+    /// by a frontier at their upper. From then on it receives every batch the writer inserts and
+    /// the frontier after it, and the writer activates `activator` after each. The caller owns the
+    /// only strong reference, and the writer stops feeding a listener once it is dropped.
+    fn new_listener(&mut self, activator: Activator) -> Listener<Self::Instructions>;
+
+    /// Imports the trace into `scope`. See [`TraceAgent::import_core`].
+    fn import_core<'scope>(&mut self, scope: Scope<'scope, Self::Time>, name: &str) -> (Arranged<'scope, Self>, ShutdownButton<CapabilitySet<Self::Time>>)
+    {
+        let trace = self.clone();
+
+        let mut shutdown_button = None;
+
+        let stream = {
+
+            let shutdown_button_ref = &mut shutdown_button;
+            source(scope, name, move |capability, info| {
+
+                let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
+
+                let activator = scope.activator_for(Rc::clone(&info.address));
+                let queue = self.new_listener(activator);
+
+                let activator = scope.activator_for(info.address);
+                *shutdown_button_ref = Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
+
+                capabilities.borrow_mut().as_mut().unwrap().insert(capability);
+
+                move |output| {
+
+                    let mut capabilities = capabilities.borrow_mut();
+                    if let Some(ref mut capabilities) = *capabilities {
+
+                        let mut borrow = queue.1.borrow_mut();
+                        for instruction in borrow.drain(..) {
+                            match instruction {
+                                TraceReplayInstruction::Frontier(frontier) => {
+                                    capabilities.downgrade(&frontier.borrow()[..]);
+                                },
+                                TraceReplayInstruction::Batch(batch, hint) => {
+                                    if let Some(time) = hint {
+                                        if !batch.is_empty() {
+                                            let delayed = capabilities.delayed(&time);
+                                            output.session(&delayed).give(batch);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        };
+
+        (Arranged { stream, trace }, shutdown_button.unwrap())
+    }
+
+    /// Imports the trace into `scope`, restricted to `[since, until)`. See
+    /// [`TraceAgent::import_frontier_core`].
+    fn import_frontier_core<'scope>(&mut self, scope: Scope<'scope, Self::Time>, name: &str, since: Antichain<Self::Time>, until: Antichain<Self::Time>) -> (Arranged<'scope, TraceFrontier<Self>>, ShutdownButton<CapabilitySet<Self::Time>>)
+    {
         let trace = self.clone();
         let trace = TraceFrontier::make_from(trace, since.borrow(), until.borrow());
 
@@ -460,7 +580,12 @@ impl<Tr: TraceReader+'static> TraceAgent<Tr> {
     }
 }
 
-
+impl<Tr: TraceReader + 'static> Listen for TraceAgent<Tr> {
+    type Instructions = Tr;
+    fn new_listener(&mut self, activator: Activator) -> Listener<Tr> {
+        TraceAgent::new_listener(self, activator)
+    }
+}
 
 /// Wrapper than can drop shared references.
 pub struct ShutdownButton<T> {
