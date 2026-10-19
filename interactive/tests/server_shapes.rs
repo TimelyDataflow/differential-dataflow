@@ -103,3 +103,46 @@ fn declared_exports_publish_their_shapes() {
         assert!(err.contains("export `w`"), "{err}");
     });
 }
+
+/// A collection whose shape nothing determines rejects the install: here a variable bound only
+/// to itself, which a declared shape would settle.
+#[test]
+fn collections_without_a_shape_reject_the_install() {
+    timely::execute_directly(move |worker| {
+        let mut server = Server::new();
+        let alone = r#"s: { var v = v | distinct; } export "out" = s::v;"#;
+        let err = server.install(worker, "alone", &program(alone)).unwrap_err();
+        assert!(err.contains("variable `v` has no shape"), "{err}");
+        let declared = alone.replace("var v =", "var v : ((int) ; ()) =");
+        server.install(worker, "declared", &program(&declared)).unwrap();
+    });
+}
+
+/// Rows fed or loaded in another shape than their input declares are refused, and none of
+/// their batch is staged.
+#[test]
+fn rows_of_another_shape_are_refused() {
+    use interactive::ir::Value;
+    use interactive::server::InputUpdate;
+    let tup = |xs: &[i64]| Value::Tuple(xs.iter().map(|&x| Value::Int(x)).collect());
+    timely::execute_directly(move |worker| {
+        let mut server = Server::new();
+        server.install(worker, "producer", &program(PRODUCER)).unwrap();
+        let fed = server.feed("producer", 0, tup(&[1]), Value::unit(), None, 1).unwrap_err();
+        assert!(fed.contains("is not of the input's shape"), "{fed}");
+        let batch = |key: Value| vec![InputUpdate { key: tup(&[1, 2]), val: Value::unit(), diff: 1 }, InputUpdate { key, val: Value::unit(), diff: 1 }];
+        assert!(server.feed_batch("producer", 0, batch(tup(&[3]))).is_err());
+        let file = std::env::temp_dir().join(format!("ddir-rows-{}.txt", std::process::id()));
+        std::fs::write(&file, "1 2\n3 4 5\n").unwrap();
+        let loaded = server.load(worker, "producer", 0, file.to_str().unwrap()).unwrap_err();
+        assert!(loaded.contains("line 2"), "{loaded}");
+        server.tick(worker);
+        assert!(server.snapshot(worker, "edges").unwrap().is_empty(), "nothing refused was staged");
+        server.feed_batch("producer", 0, batch(tup(&[3, 4]))).unwrap();
+        std::fs::write(&file, "5 6\n").unwrap();
+        server.load(worker, "producer", 0, file.to_str().unwrap()).unwrap();
+        server.tick(worker);
+        assert_eq!(server.snapshot(worker, "edges").unwrap().len(), 3);
+        std::fs::remove_file(&file).unwrap();
+    });
+}
