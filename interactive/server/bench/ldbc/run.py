@@ -56,7 +56,7 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
             return replies
 
         def read(name, want, phase='read'):
-            lines, = command(f'{phase}:{name}', lambda: [f'peek {name}.answer'])
+            lines, = command(f'{phase}:{name}', lambda: [f'peek {name}.answer as corgi'])
             event = record['events'][-1]
             actual = measure.decode_answer(lines, event)
             # Validation/reference work is deliberately outside all timings.

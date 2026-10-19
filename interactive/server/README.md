@@ -14,10 +14,9 @@ defaults. Diagnostics are disabled by default so an idle server can park;
 threads (default 1).
 
 Installed programs render on the Corgi backend, and their data stays in Corgi
-columns: inputs convert fed rows to columns, exports are kept as traces of Corgi
-chunks, and imports and binds read the chunks as containers. Rows are formed only
-where something reads rows: fed rows on their way in, and `peek` and `tail` on
-their way out.
+columns: fed text is read into columns at each input's declared shape, exports are
+kept as traces of Corgi chunks, and imports, binds, `peek` and `tail` read the
+chunks as containers.
 
 Worker 0 admits one FIFO control stream and routes one ordered record to every
 worker. Small commands are replicated; framed input batches are partitioned by
@@ -49,8 +48,9 @@ sets are `peek`able exports. `feed <prog> <in#> from <source>` fills an input fr
 source the server reads itself — a recipe such as `random:nodes=N,edges=E,churn=C`
 or `iota:N`, or a file of integer rows — with each worker taking its shard, so
 no row crosses the wire; a `churn=C` recipe then replaces `C` rows on every
-`tick`. `peek <trace> [key]` snapshots a trace or one key of it, and `tick [n]`
-reports the epoch reached and the wall-clock time it took. `load` also accepts
+`tick`. `peek <trace> [key]` snapshots a trace or one key of it (the key is read
+at the trace's key shape, as a feed reads one), `tail <trace>` follows its changes,
+and `tick [n]` reports the epoch reached and the wall-clock time it took. `load` also accepts
 an inline pipe-syntax program:
 
     load graph begin
@@ -66,6 +66,34 @@ import named `edges` to the same content-addressed source as the
 `random:...` form. Such a source is deterministic: it begins with a
 fixed-size window into an infinite hash-derived sequence and replaces
 `churn` rows on every tick.
+
+## Reads: text, or binary frames
+
+Without `as corgi`, `peek` answers with one `data` line holding the consolidated
+contents' columns, as Corgi's `Debug` shows them (`keys=… vals=… diffs=[…]`), and
+`tail` sends one `data` line per batch of changes (`times=… diffs=… keys=…
+vals=…`). These are for people: they show each column's storage, which can differ
+between runs and worker counts for the same answer.
+
+With `as corgi` (`peek <trace> [key] as corgi`, `tail <trace> as corgi`), they
+answer with binary frames instead. A frame is a header line
+`<id> frame <kind> <nbytes>` followed by exactly `nbytes` bytes on TCP and stdin;
+on WebSocket it is one binary message holding both. The kinds:
+
+| Kind | When | Payload |
+|---|---|---|
+| `schema` | first | text: `trace=<name> key=<shape> val=<shape>` |
+| `data` | a `peek`'s answer; a `tail`'s batch of changes | updates as columns, below |
+| `progress` | a `tail`'s frontier advances | `u64 upper`: every change before `upper` has been sent |
+
+A `data` payload is `u64 rows | u64 lanes | keys | vals | i64*rows diffs |
+u64*rows*lanes times`, all little-endian. `keys` and `vals` are each one column in
+Corgi's self-describing byte encoding (`corgi::bytes`), so a client reads their
+shapes from the bytes. A `peek` frame has no times (`lanes` is 0); a `tail` frame
+has one lane, each change's epoch. `interactive::corgi::frame` decodes a payload,
+and `bench/ldbc/client.py` has a Python decoder. A `tail` whose client falls more
+than 256 MiB of frames behind gets `err client too slow` and `end`, and stops
+sending.
 
 Only an explicit, ordered `tick [n]` closes epochs. Tails observe progress but
 do not cause it, and an idle server has no deadline to service. A future

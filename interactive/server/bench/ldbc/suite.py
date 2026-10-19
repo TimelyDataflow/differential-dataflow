@@ -76,7 +76,7 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
                 want = reference(plans[name]['plan'], plans[name]['sources'],
                                  {**current, 'request': active[name]}) if active[name] else []
                 phase = 'empty' if not active[name] else 'maintained' if name in standing else 'read'
-                lines, = command(phase + ':' + name, lambda: [f'peek {name}.answer'])
+                lines, = command(phase + ':' + name, lambda: [f'peek {name}.answer as corgi'])
                 event = record['events'][-1]
                 actual = measure.decode_answer(lines, event)
                 checked(actual, want, f'{backend}/{context}/{name}')

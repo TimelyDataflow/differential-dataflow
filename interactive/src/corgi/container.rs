@@ -1,8 +1,8 @@
 //! The corgi-native container: corgi columns for the (key,val) payload, times as a
 //! lane column, diffs a plain Rust Vec (corgi never touches the lattice). This is what flows on
 //! dataflow edges in the corgi backend; operators transform block→block via `eval_graph` with NO
-//! per-op transcode. Conversion to/from DDIR rows happens only at I/O boundaries
-//! (`from_updates`/`into_updates`).
+//! per-op transcode. Rows become columns only where in-process callers feed rows
+//! (`from_updates`); nothing converts columns back to rows outside tests.
 //!
 //! Trait surface: `Accountable + Default + Clone` (= `timely::Container`) for dataflow edges,
 //! `Negate`/`Enter`/`Leave`/`ResultsIn` for iterative scopes, and `ContainerBytes` (in
@@ -84,9 +84,10 @@ impl<T: Lanes + 'static, R: Clone + 'static> CorgiContainer<T, R> {
         Self::from_updates(updates, &ks, &vs)
     }
 
-    /// Read the container back to DDIR row updates — the **egress boundary** transcode (once).
-    /// corgi `Value` is self-describing, so shapes come from `shape_of_value`.
-    pub fn into_updates(self) -> Vec<((Row, Row), T, R)> {
+    /// Test convenience: the container's updates as DDIR rows. corgi `Value` is self-describing,
+    /// so shapes come from `shape_of_value`.
+    #[cfg(test)]
+    pub(crate) fn into_updates(self) -> Vec<((Row, Row), T, R)> {
         if self.times.is_empty() {
             return Vec::new();
         }
@@ -164,7 +165,7 @@ impl Updates {
         Updates { keys, vals, diffs: sums }
     }
 
-    /// The updates as rows, for what still reads rows: the text a server prints, and tests.
+    /// The updates as rows, for tests that compare against rows.
     pub fn into_rows(self) -> Vec<(Row, Row, crate::ir::Diff)> {
         let (kshape, vshape) = (corgi::shape_of_value(&self.keys), corgi::shape_of_value(&self.vals));
         let keys = untranscode(self.keys, &kshape);

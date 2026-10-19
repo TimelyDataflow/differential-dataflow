@@ -14,11 +14,12 @@
 use std::any::{type_name_of_val, Any};
 use std::collections::{BTreeMap, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use interactive::corgi::container::Updates;
 use interactive::corgi::feed::FeedDecoder;
-use interactive::ir::{eval, Diff, Value};
+use interactive::ir::Diff;
 use interactive::scope_ir::{Program, Source};
 use interactive::server::{Command as ServerCommand, OuterTime, RowShape};
 
@@ -27,7 +28,39 @@ pub type ReqId = String;
 /// One client session's outbound stream. Cloned into each `Request` so
 /// dispatch can route responses back to the originating client (and so
 /// long-lived subscriptions like `tail` capture the right sender).
-pub type RespSender = std::sync::mpsc::Sender<String>;
+pub type RespSender = std::sync::mpsc::Sender<Out>;
+
+/// One message to a client: a protocol line, or a binary frame.
+pub enum Out {
+    /// A text line, newline included.
+    Line(String),
+    /// A binary frame: on TCP and stdin the header line `<reqid> frame <kind> <nbytes>\n`
+    /// followed by exactly `nbytes` bytes; on WebSocket one binary message holding the same
+    /// header line and bytes. `pending` counts a subscription's frame bytes not yet written;
+    /// the writer subtracts each frame's bytes once it is on the wire.
+    Frame {
+        header: String,
+        bytes: Vec<u8>,
+        pending: Option<Arc<AtomicUsize>>,
+    },
+}
+
+impl Out {
+    /// The message as it goes on the wire, releasing a frame's pending bytes.
+    pub fn into_wire(self) -> Vec<u8> {
+        match self {
+            Out::Line(line) => line.into_bytes(),
+            Out::Frame { header, bytes, pending } => {
+                if let Some(pending) = pending {
+                    pending.fetch_sub(bytes.len(), Ordering::Relaxed);
+                }
+                let mut wire = header.into_bytes();
+                wire.extend_from_slice(&bytes);
+                wire
+            }
+        }
+    }
+}
 
 /// Per-session identity. Lets the worker tear down long-lived
 /// subscriptions when a connection disappears without an explicit stop.
@@ -55,10 +88,12 @@ pub enum Cmd {
     Drop { name: String },
     /// List held names.
     List,
-    /// One-shot snapshot of a named trace, optionally of one key.
-    Peek { name: String, key: Option<Value> },
-    /// Persistent subscription to a named trace.
-    Tail { name: String },
+    /// One-shot snapshot of a named trace, optionally of one key (text, read at the trace's key
+    /// shape): a text line of its columns, or with `as corgi` binary frames.
+    Peek { name: String, key: Option<String>, columnar: bool },
+    /// Persistent subscription to a named trace: text lines of its changes' columns, or with
+    /// `as corgi` binary frames.
+    Tail { name: String, columnar: bool },
     /// Cancel a previous `tail` (matched by its reqid).
     Stop { tail_reqid: ReqId },
     /// Update positional `input` of `prog` with one row, read into columns at
@@ -113,7 +148,8 @@ pub enum Cmd {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum PreparedCommand {
     Server(ServerCommand),
-    Tail { name: String },
+    Peek { name: String, key: Option<String>, columnar: bool },
+    Tail { name: String, columnar: bool },
     Stop { tail_reqid: ReqId },
 }
 
@@ -174,8 +210,8 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
         }
         Cmd::Drop { name } => ServerCommand::Drop { name },
         Cmd::List => ServerCommand::List,
-        Cmd::Peek { name, key } => ServerCommand::Peek { trace: name, key },
-        Cmd::Tail { name } => return Ok(PreparedCommand::Tail { name }),
+        Cmd::Peek { name, key, columnar } => return Ok(PreparedCommand::Peek { name, key, columnar }),
+        Cmd::Tail { name, columnar } => return Ok(PreparedCommand::Tail { name, columnar }),
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
         Cmd::Feed { prog, input, columns, time } => ServerCommand::Feed { prog, input, columns, time },
         Cmd::FeedColumns { prog, input, columns } => ServerCommand::FeedColumns { prog, input, columns },
@@ -508,41 +544,6 @@ enum ParseOutcome {
 }
 
 
-/// A key for `peek`: a comma-separated integer row → `Tuple`, `_` or empty →
-/// unit, else a closed scalar term (one whitespace-free token, e.g.
-/// `inject(2,tuple(3,4))`) evaluated to a constant. Term-parser panics are
-/// caught here on the session thread and become clean errors — malformed
-/// input never reaches the worker.
-fn parse_value(s: &str) -> Result<Value, String> {
-    let s = s.trim();
-    if s.is_empty() || s == "_" {
-        return Ok(Value::unit());
-    }
-    if s.chars()
-        .all(|c| c.is_ascii_digit() || c == ',' || c == '-')
-    {
-        if let Ok(ints) = s
-            .split(',')
-            .map(|t| t.trim().parse::<i64>())
-            .collect::<Result<Vec<_>, _>>()
-        {
-            return Ok(Value::Tuple(ints.into_iter().map(Value::Int).collect()));
-        }
-    }
-    catch_unwind(AssertUnwindSafe(|| {
-        eval(&interactive::parse::pipe::parse_term(s), &mut Vec::new())
-    }))
-    .map_err(|panic| {
-        if let Some(msg) = panic.downcast_ref::<&str>() {
-            (*msg).to_string()
-        } else if let Some(msg) = panic.downcast_ref::<String>() {
-            msg.clone()
-        } else {
-            format!("malformed value {:?}", s)
-        }
-    })
-}
-
 /// Split one row of a framed feed into its key and value text and its diff. Its target and
 /// timestamp belong to the enclosing command, which keeps large requests compact and atomic.
 fn split_input_update(line: &str) -> Result<(&str, Option<&str>, Diff), String> {
@@ -566,6 +567,14 @@ fn split_input_update(line: &str) -> Result<(&str, Option<&str>, Diff), String> 
         }
     }
     Ok((key, val, diff))
+}
+
+/// `args` without a trailing `as corgi`, and whether it was there.
+fn as_corgi<'a, 'b>(args: &'a [&'b str]) -> (&'a [&'b str], bool) {
+    match args {
+        [rest @ .., "as", "corgi"] => (rest, true),
+        _ => (args, false),
+    }
 }
 
 fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
@@ -731,25 +740,17 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
             [] => ParseOutcome::Cmd(Cmd::List),
             _ => ParseOutcome::Err("list: takes no arguments".into()),
         },
-        "peek" => match args {
-            [name] => ParseOutcome::Cmd(Cmd::Peek {
-                name: (*name).to_string(),
-                key: None,
-            }),
-            [name, key] => match parse_value(key) {
-                Ok(key) => ParseOutcome::Cmd(Cmd::Peek {
-                    name: (*name).to_string(),
-                    key: Some(key),
-                }),
-                Err(error) => ParseOutcome::Err(format!("peek key: {}", error)),
-            },
-            _ => ParseOutcome::Err("peek: expected `<name> [key]`".into()),
-        },
-        "tail" => match args {
-            [name] => ParseOutcome::Cmd(Cmd::Tail {
-                name: (*name).to_string(),
-            }),
-            _ => ParseOutcome::Err("tail: expected `<name>`".into()),
+        "peek" => {
+            let (args, columnar) = as_corgi(args);
+            match args {
+                [name] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: None, columnar }),
+                [name, key] => ParseOutcome::Cmd(Cmd::Peek { name: (*name).to_string(), key: Some((*key).to_string()), columnar }),
+                _ => ParseOutcome::Err("peek: expected `<name> [key] [as corgi]`".into()),
+            }
+        }
+        "tail" => match as_corgi(args) {
+            ([name], columnar) => ParseOutcome::Cmd(Cmd::Tail { name: (*name).to_string(), columnar }),
+            _ => ParseOutcome::Err("tail: expected `<name> [as corgi]`".into()),
         },
         "stop" => match args {
             [rid] => ParseOutcome::Cmd(Cmd::Stop {
@@ -825,7 +826,7 @@ mod tests {
         assert!(matches!(got[0].1, Ok(Cmd::List)));
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 5 })));
         assert!(matches!(got[2].1, Ok(Cmd::Drop { ref name }) if name == "3"));
-        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None }) if name == "foo"));
+        assert!(matches!(got[3].1, Ok(Cmd::Peek { ref name, key: None, columnar: false }) if name == "foo"));
     }
 
     #[test]
@@ -912,12 +913,21 @@ mod tests {
     }
 
     #[test]
-    fn peek_takes_an_optional_key() {
+    fn peek_and_tail_take_a_key_and_as_corgi() {
         let mut p = LineParser::new(Catalog::default());
-        let got = feed_all(&mut p, &["r1 peek t 2,3\n", "r2 peek t\n", "r3 peek t oops(\n"]);
-        assert!(matches!(&got[0].1, Ok(Cmd::Peek { key: Some(_), .. })));
-        assert!(matches!(&got[1].1, Ok(Cmd::Peek { key: None, .. })));
-        assert!(matches!(&got[2].1, Err(_)));
+        let got = feed_all(&mut p, &[
+            "r1 peek t 2,3\n", "r2 peek t\n", "r3 peek t 2,3 as corgi\n", "r4 peek t as corgi\n", "r5 peek t 1 2\n",
+            "r6 tail t\n", "r7 tail t as corgi\n", "r8 tail t as rows\n",
+        ]);
+        let peek = |i: usize| match &got[i].1 { Ok(Cmd::Peek { key, columnar, .. }) => Some((key.clone(), *columnar)), _ => None };
+        assert_eq!(peek(0), Some((Some("2,3".into()), false)));
+        assert_eq!(peek(1), Some((None, false)));
+        assert_eq!(peek(2), Some((Some("2,3".into()), true)));
+        assert_eq!(peek(3), Some((None, true)));
+        assert!(got[4].1.is_err());
+        assert!(matches!(&got[5].1, Ok(Cmd::Tail { columnar: false, .. })));
+        assert!(matches!(&got[6].1, Ok(Cmd::Tail { columnar: true, .. })));
+        assert!(got[7].1.is_err());
     }
 
     #[test]
@@ -932,7 +942,7 @@ mod tests {
         assert_eq!(got[1].0, "_2"); // tick 3
         assert!(matches!(got[1].1, Ok(Cmd::Tick { n: 3 })));
         assert_eq!(got[2].0, "rA"); // explicit reqid preserved
-        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None }) if name == "foo"));
+        assert!(matches!(got[2].1, Ok(Cmd::Peek { ref name, key: None, columnar: false }) if name == "foo"));
         assert_eq!(got[3].0, "_3"); // exit
         assert!(matches!(got[3].1, Ok(Cmd::Exit)));
     }

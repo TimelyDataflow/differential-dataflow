@@ -38,12 +38,11 @@ use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
 use crate::corgi::logic::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar};
 use corgi::{Graph, NumOp, Shape};
-use crate::ir::{Diff, LinearOp, Projection, Reducer, Time, Value as DValue};
+use crate::ir::{Diff, LinearOp, Projection, Reducer, Time};
 use crate::scope_ir as st;
 
-/// A DDIR row, an update, the corgi container on dataflow edges, and the columnar trace —
-/// the shorthands the `Backend` methods below are written in terms of.
-type Row = DValue;
+/// The corgi container on dataflow edges, and the columnar trace — the shorthands the `Backend`
+/// methods below are written in terms of.
 type CC = CorgiContainer<Time, Diff>;
 type CTrace = differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<Time, Diff>>;
 
@@ -441,11 +440,12 @@ impl Backend for CorgiBackend {
                 move |input, output| {
                     input.for_each(|cap, data| {
                         let mut cont = std::mem::take(data);
-                        for ((k, v), t, d) in cont.clone().into_updates() {
-                            // Format before taking stderr's lock: nested Debug output
-                            // otherwise writes many small fragments while holding it.
+                        if !cont.times.is_empty() {
+                            // The batch's columns, as corgi shows them. Formatted before taking
+                            // stderr's lock: nested Debug output otherwise writes many small
+                            // fragments while holding it.
                             line.clear();
-                            writeln!(&mut line, "  [{label}] (({k:?}, {v:?}), {t:?}, {d})").unwrap();
+                            writeln!(&mut line, "  [{label}] keys={:?} vals={:?} times={:?} diffs={:?}", cont.keys, cont.vals, cont.times.to_vec(), cont.diffs).unwrap();
                             eprint!("{line}");
                         }
                         output.session(&cap).give_container(&mut cont);
@@ -531,7 +531,7 @@ pub fn render_tree_corgi_arranged<'s>(
 }
 
 /// A columnar export: the program's corgi collection, left to the host time and arranged as
-/// corgi chunks. Readers convert to rows only when they read ([`export_rows`]).
+/// corgi chunks.
 pub type ExportTrace = TraceAgent<differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<u64, Diff>>>;
 
 /// Arrange an export (already at host time) as a columnar trace.
@@ -573,29 +573,4 @@ pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::
 /// The updates of an imported columnar export, as corgi containers.
 pub fn export_containers<'s>(a: Arranged<'s, ExportTrace>) -> Collection<'s, u64, CorgiContainer<u64, Diff>> {
     chunk_containers(a.stream, "ExportContainers", |batch| batch)
-}
-
-/// The rows of an imported columnar export, as `((key, val), time, diff)` updates.
-pub fn export_rows<'s>(
-    a: Arranged<'s, ExportTrace>,
-) -> timely::dataflow::Stream<'s, u64, Vec<((Row, Row), u64, Diff)>> {
-    a.stream.unary(Pipeline, "ExportRows", |_, _| {
-        |input, output| {
-            input.for_each(|cap, data| {
-                let mut session = output.session(&cap);
-                for batch in data.iter() {
-                    let Some(payload) = batch.inner.as_ref() else { continue };
-                    for ch in payload.chunks.iter().filter(|c| c.len() > 0) {
-                        let c = CorgiContainer {
-                            keys: recover_key(ch.keys()),
-                            vals: ch.vals().clone(),
-                            times: ch.times().clone(),
-                            diffs: ch.diffs().to_vec(),
-                        };
-                        session.give_container(&mut c.into_updates());
-                    }
-                }
-            });
-        }
-    })
 }
