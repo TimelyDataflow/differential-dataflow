@@ -32,12 +32,12 @@ const LOADED: &str = r#"
     export "sums" = triples | map($0[0] + $0[1] + $0[2] ;) | count;
 "#;
 
-/// An undeclared input, so its export's shape is unknown at install.
-const UNDECLARED: &str = r#"
-    export "loose" = input 0;
+/// A fed input, read through another program's import.
+const LOOSE: &str = r#"
+    export "loose" = input 0 : ((int) ; ());
 "#;
 
-/// A declared import of a trace whose shape is unknown at install.
+/// A declared import of that input's export, checked against its shape at install.
 const DECLARING: &str = r#"
     let l = import "loose" : ((int) ; ());
     export "doubled" = l | map($0[0] * 2 ;);
@@ -55,7 +55,7 @@ fn run(workers: usize, backend: RenderBackend, columnar: bool) -> Vec<Vec<(Value
         server.set_columnar_exports(columnar);
         install(&mut server, worker, "sources", SOURCES);
         install(&mut server, worker, "loaded", LOADED);
-        install(&mut server, worker, "undeclared", UNDECLARED);
+        install(&mut server, worker, "undeclared", LOOSE);
         install(&mut server, worker, "declaring", DECLARING);
         install(&mut server, worker, "mirror", MIRROR);
         server.bind(worker, "doubled", "mirror", 0).unwrap();

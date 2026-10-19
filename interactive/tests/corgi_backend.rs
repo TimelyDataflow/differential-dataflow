@@ -235,7 +235,7 @@ fn register_test_functions() {
 /// keeping nothing.
 #[test]
 fn filter_requires_an_int_predicate() {
-    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 | filter($0);"#));
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int, int) ; ()) | filter($0);"#));
     tree.optimize();
     let inputs = vec![rows(&[&[1, 10], &[0, 20]])];
     for backend in [RenderBackend::Vec, RenderBackend::Corgi] {
@@ -251,7 +251,7 @@ fn filter_requires_an_int_predicate() {
 fn call_argument_shapes_are_checked_by_both_backends() {
     register_test_functions();
     // `blend` takes a pair; pass it an Int.
-    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 | map($0 ; blend($0[0]));"#));
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int) ; ()) | map($0 ; blend($0[0]));"#));
     tree.optimize();
     let inputs = vec![rows(&[&[1], &[2]])];
     for backend in [RenderBackend::Vec, RenderBackend::Corgi] {

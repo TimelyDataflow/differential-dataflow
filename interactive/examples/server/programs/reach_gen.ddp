@@ -5,7 +5,7 @@
 -- input 0 : ((int) ; ()): roots (node ;)
 
 let edges = import "random:nodes=8,edges=12" | key(((src, dst), ()) -> ((src), (dst)));
-let roots = input 0 | key((n, ()) -> (n, ()));
+let roots = input 0 : ((int) ; ()) | key((n, ()) -> (n, ()));
 
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));

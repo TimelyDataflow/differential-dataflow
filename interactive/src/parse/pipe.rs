@@ -7,15 +7,15 @@
 //!
 //! # Collection language
 //!
-//! Sources: `input N` (positional input), `import "name"` (named trace),
-//! `name` (a `let`/`var` in scope), `scope::field` (a child scope's export).
-//! External sources may append `: (key_shape ; val_shape)`, using the shape
-//! syntax below. This supplies the column encoding even when the first row
-//! contains empty lists or inactive sum lanes. Ascriptions are asserted during
-//! execution, not checked by the server's feed-admission acknowledgement. On
-//! either backend a mismatched row can panic a dataflow worker and take down
-//! the shared server, disconnecting other clients; there is no per-program
-//! failure isolation. Use these contracts only with trusted, shape-correct data.
+//! Sources: `input N : (key_shape ; val_shape)` (positional input), `import "name"`
+//! (named trace), `name` (a `let`/`var` in scope), `scope::field` (a child scope's
+//! export). An input declares its shape, using the shape syntax below, as a table
+//! declares its columns: the server refuses to install a program with an undeclared
+//! input. The shape is the column encoding, also for empty lists and inactive sum
+//! lanes, which a row cannot reveal. An `import` may declare a shape too, which must
+//! match the shape its trace is published at. A fed row is asserted to have its
+//! input's shape during execution, where a mismatch can panic a dataflow worker and
+//! take down the shared server; there is no per-program failure isolation.
 //! Operators chain with `|`:
 //!
 //! - `| key(k… ; v…)` — reshape to `(key ; val)`; `map` is an alias.

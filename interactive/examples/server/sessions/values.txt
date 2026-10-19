@@ -1,12 +1,12 @@
 # Structured (ADT) values + time-scheduled input.
 load echo from examples/server/programs/echo.ddp
 
-# A Variant payload at the current epoch (0): a tagged tuple, the shape an AST node takes.
-# (values are one token — write terms without spaces)
-feed echo 0 inject(2,tuple(1,2))
-# A List value scheduled for a FUTURE logical time (3) — appears only once the
+# A variant at the current epoch (0): `Pair(1, 2)`, written as its tag and payload,
+# the shape an AST node takes. (values are one token — write terms without spaces)
+feed echo 0 inject(1,tuple(1,2))
+# A value scheduled for a FUTURE logical time (3) — appears only once the
 # input frontier passes 3 (i.e., after the 4th tick).
-feed echo 0 list(7,8,9) time=3
+feed echo 0 inject(0,7) time=3
 
 tick
 tick
