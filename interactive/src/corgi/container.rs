@@ -148,20 +148,16 @@ impl Updates {
         let rows: Vec<corgi::Value> = parts.iter().map(|p| corgi::Value::Prod(vec![p.keys.clone(), p.vals.clone()])).collect();
         let rows = corgi::arrange::gather_lanes(&rows.iter().map(Some).collect::<Vec<_>>(), &tags, &offs);
         let diffs: Vec<crate::ir::Diff> = parts.iter().flat_map(|p| p.diffs.iter().copied()).collect();
-        let order = corgi::arrange::sort_perm(&rows);
-        // Runs of equal rows, one sum each.
-        let equal = corgi::arrange::equal_idx(&rows, &rows, &order[..order.len() - 1], &order[1..]);
+        // The sort labels runs of equal rows as it orders them; one sum per run.
+        let (order, runs) = corgi::arrange::sort_blocks(&[], &rows);
         let (mut keep, mut sums) = (Vec::new(), Vec::new());
-        let mut sum = diffs[order[0]];
-        for (i, &sign) in equal.iter().enumerate() {
-            if sign == 0 {
-                sum += diffs[order[i + 1]];
-            } else {
-                if sum != 0 { keep.push(order[i]); sums.push(sum); }
-                sum = diffs[order[i + 1]];
-            }
+        let mut start = 0;
+        for run in runs.chunk_by(|a, b| a == b) {
+            let members = &order[start..start + run.len()];
+            start += run.len();
+            let sum: crate::ir::Diff = members.iter().map(|&row| diffs[row]).sum();
+            if sum != 0 { keep.push(members[0]); sums.push(sum); }
         }
-        if sum != 0 { keep.push(order[order.len() - 1]); sums.push(sum); }
         let mut fields = corgi::arrange::gather(&rows, &keep).into_prod("consolidated rows").unwrap();
         let vals = fields.pop().unwrap();
         let keys = fields.pop().unwrap();
