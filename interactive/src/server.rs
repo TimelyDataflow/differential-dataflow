@@ -10,12 +10,13 @@
 //! The server executes a [`Command`] — already parsed, lowered, and validated.
 //! Programs are parsed *off the worker threads* (on the intake side) and shipped
 //! here as `scope_ir::Program`s; a malformed program is rejected before it ever
-//! reaches a worker. This does not make execution safe for arbitrary data:
-//! violating an input/import shape ascription panics inside a dataflow operator
-//! and can take down the shared server, disconnecting other
-//! clients. Feed acknowledgements do not check these contracts, and there is
-//! no per-program failure isolation. [`Command`] is serializable so worker 0
-//! can broadcast one ordered command stream to the whole worker group.
+//! reaches a worker. Every input declares its shape, and data is checked at it
+//! before anything is staged: a feed or load of rows of another shape is
+//! refused, as is an import or binding of a trace published at another shape.
+//! There is no per-program failure isolation: a panic inside a dataflow operator
+//! can take down the shared server, disconnecting other clients. [`Command`]
+//! is serializable so worker 0 can broadcast one ordered command stream to the
+//! whole worker group.
 //!
 //! # The two binding points
 //!
@@ -112,14 +113,12 @@ type HostContainer = crate::corgi::container::CorgiContainer<OuterTime, Diff>;
 const COLUMN_BATCH: usize = 1 << 16;
 
 /// An installed program's positional `input N`, or a generated source's: an input of corgi
-/// containers. Rows given one at a time are buffered and converted to columns a batch at a time,
-/// at the input's shape: declared, fixed by a recipe, or else the first row's.
+/// containers at one shape, the input's declared one or its source's. Rows given one at a time are
+/// buffered and converted to columns at that shape a batch at a time.
 struct ServerInput {
     handle: timely::dataflow::operators::core::input::Handle<OuterTime, timely::container::CapacityContainerBuilder<HostContainer>>,
-    /// The shape rows are converted at, once known.
-    shape: Option<RowShape>,
-    /// Whether `shape` was declared, so that each row must have it.
-    declared: bool,
+    /// The shape of every update the input holds.
+    shape: RowShape,
     /// Rows not yet converted to columns.
     rows: Vec<((Value, Value), OuterTime, Diff)>,
 }
@@ -127,18 +126,24 @@ struct ServerInput {
 impl ServerInput {
     fn new(
         handle: timely::dataflow::operators::core::input::Handle<OuterTime, timely::container::CapacityContainerBuilder<HostContainer>>,
-        shape: Option<RowShape>,
-        declared: bool,
+        shape: RowShape,
     ) -> Self {
-        ServerInput { handle, shape, declared, rows: Vec::new() }
+        ServerInput { handle, shape, rows: Vec::new() }
     }
 
+    /// Check that `row` has the input's shape, before staging it.
+    fn check(&self, (key, val): &(Value, Value)) -> Result<(), String> {
+        let (k, v) = &self.shape;
+        if key.has_shape(k) && val.has_shape(v) {
+            Ok(())
+        } else {
+            Err(format!("the row ({key:?} ; {val:?}) is not of the input's shape {}", fmt_shape(&self.shape)))
+        }
+    }
+
+    /// Stage `row`, which has the input's shape ([`ServerInput::check`]).
     fn update_at(&mut self, row: (Value, Value), time: OuterTime, diff: Diff) {
         assert!(*self.handle.time() <= time, "update at {time} precedes the input's time {}", self.handle.time());
-        if self.declared {
-            let (k, v) = self.shape.as_ref().expect("a declared input has a shape");
-            assert!(row.0.has_shape(k) && row.1.has_shape(v), "input does not match its shape ascription");
-        }
         self.rows.push((row, time, diff));
         if self.rows.len() >= COLUMN_BATCH {
             self.send_rows();
@@ -147,11 +152,8 @@ impl ServerInput {
 
     /// Convert the buffered rows to columns and send them.
     fn send_rows(&mut self) {
-        let Some(((k, v), _, _)) = self.rows.first() else { return };
-        let (ks, vs) = self.shape.get_or_insert_with(|| {
-            let pin = |r: &Value, what: &str| crate::corgi::logic::shape_of_row(r).unwrap_or_else(|e| panic!("input {what}: {e}"));
-            (pin(k, "key"), pin(v, "value"))
-        });
+        if self.rows.is_empty() { return }
+        let (ks, vs) = &self.shape;
         let mut container = HostContainer::from_updates(std::mem::take(&mut self.rows), ks, vs);
         self.handle.send_batch(&mut container);
     }
@@ -170,10 +172,8 @@ impl ServerInput {
     /// Add fed `columns` at `time`. Their shapes must be the input's, as its declaration says.
     fn give_columns(&mut self, columns: FeedColumns, time: OuterTime) -> Result<(), String> {
         let shape = (corgi::shape_of_value(&columns.keys), corgi::shape_of_value(&columns.vals));
-        match &self.shape {
-            Some(declared) if *declared == shape => {}
-            Some(declared) => return Err(format!("a feed of shape {} reached an input of shape {}", fmt_shape(&shape), fmt_shape(declared))),
-            None => return Err("the input declares no shape to read a feed at".into()),
+        if shape != self.shape {
+            return Err(format!("a feed of shape {} reached an input of shape {}", fmt_shape(&shape), fmt_shape(&self.shape)));
         }
         let FeedColumns { keys, vals, diffs } = columns;
         let n = diffs.len();
@@ -189,14 +189,12 @@ impl ServerInput {
         self.give(container);
     }
 
-    /// Send a container, after any buffered rows. Its shape must be the input's, if that is
-    /// known, and otherwise becomes it.
+    /// Send a container, after any buffered rows. Its shape must be the input's.
     fn give(&mut self, mut container: HostContainer) {
         self.send_rows();
         if !container.times.is_empty() {
             let shape = (corgi::shape_of_value(&container.keys), corgi::shape_of_value(&container.vals));
-            let pinned = self.shape.get_or_insert(shape.clone());
-            assert!(shape == *pinned, "a container of shape {} reached an input of shape {}", fmt_shape(&shape), fmt_shape(pinned));
+            assert!(shape == self.shape, "a container of shape {} reached an input of shape {}", fmt_shape(&shape), fmt_shape(&self.shape));
             self.handle.send_batch(&mut container);
         }
     }
@@ -437,8 +435,6 @@ pub enum Command {
 struct Installed {
     /// Positional input index -> handle.
     inputs: HashMap<usize, ServerInput>,
-    /// Positional input index -> its declared shape, for inputs that declare one.
-    input_shapes: HashMap<usize, RowShape>,
     /// Names of traces this program imports (for the importer refcount).
     imports: Vec<String>,
     /// Names of traces this program publishes (registry entries it owns).
@@ -519,8 +515,8 @@ pub struct Server {
     export_taps: bool,
     /// Installed program name -> its handles and lifecycle bookkeeping.
     programs: HashMap<String, Installed>,
-    /// Published trace name -> the shape of its rows, where it is known: inferred from its
-    /// producer's program, or fixed by its recipe for a generated source.
+    /// Published trace name -> the shape of its rows: inferred from its producer's program, or
+    /// fixed by its recipe for a generated source.
     shapes: HashMap<String, RowShape>,
     /// Trace name -> number of installed programs importing it (the drop gate).
     /// Bindings count here too: a bound source cannot be dropped.
@@ -579,7 +575,7 @@ impl Server {
         self.traces.get(&canonical_source_name(name)).cloned().map(Published)
     }
 
-    /// The shape of a published trace's rows, where it is known.
+    /// The shape of a published trace's rows.
     pub fn trace_shape(&self, name: &str) -> Option<RowShape> {
         self.shapes.get(&canonical_source_name(name)).cloned()
     }
@@ -694,14 +690,6 @@ impl Server {
             .collect();
         let export_names: Vec<String> = prog.root.exports.iter().map(|e| e.name.clone()).collect();
 
-        // A declared import of a trace whose shape is unknown is checked as its data arrives.
-        let unchecked: Vec<Option<RowShape>> = prog.root.imports.iter()
-            .map(|imp| match &imp.from {
-                st::Source::Trace(t) if !self.shapes.contains_key(&canonical_source_name(t)) => imp.shape.clone(),
-                _ => None,
-            })
-            .collect();
-
         let probe = ProbeHandle::new();
         let root = &prog.root;
         let arranged_imports = self.arranged_imports;
@@ -721,23 +709,16 @@ impl Server {
                 // chunks, or with arranged imports as the producer's arrangement itself.
                 let exports = {
                     use timely::dataflow::operators::core::Input as _;
-                    use crate::backend::corgi::{assert_export_shape, assert_shape, export_containers, CorgiImport};
+                    use crate::backend::corgi::{export_containers, CorgiImport};
                     let outer_imports: Vec<OuterImport> = root
                         .imports
                         .iter()
-                        .enumerate()
-                        .map(|(k, imp)| {
-                            // The declared shape, or the one inferred at install (an imported trace's).
-                            let shape = imp.shape.clone()
-                                .or_else(|| scope_shapes.imports[k].clone().map(|c| (c.key, c.val)));
-                            let checked = |cols| match unchecked[k].clone() {
-                                Some(declared) => assert_shape(cols, declared),
-                                None => cols,
-                            };
+                        .map(|imp| {
                             match &imp.from {
                                 st::Source::Input(n) => {
                                     let (handle, stream) = outer.new_input::<HostContainer>();
-                                    inputs.push((*n, ServerInput::new(handle, shape, imp.shape.is_some())));
+                                    let shape = imp.shape.clone().expect("an input declares its shape (checked above)");
+                                    inputs.push((*n, ServerInput::new(handle, shape)));
                                     OuterImport::Columns(differential_dataflow::AsCollection::as_collection(stream))
                                 }
                                 st::Source::Trace(t) => {
@@ -745,12 +726,9 @@ impl Server {
                                     let key = canonical_source_name(t);
                                     let arranged = traces.get_mut(&key).expect("validated above").import(outer.clone());
                                     if arranged_imports {
-                                        if let Some(declared) = unchecked[k].clone() {
-                                            assert_export_shape(&arranged, declared);
-                                        }
                                         return OuterImport::Export(arranged);
                                     }
-                                    OuterImport::Columns(checked(export_containers(arranged)))
+                                    OuterImport::Columns(export_containers(arranged))
                                 }
                                 st::Source::Parent(_) => unreachable!("root import from a parent scope"),
                             }
@@ -797,12 +775,6 @@ impl Server {
         for (export_name, shape) in export_shapes {
             self.shapes.insert(export_name, shape);
         }
-        let input_shapes: HashMap<usize, RowShape> = prog.root.imports.iter()
-            .filter_map(|imp| match (&imp.from, &imp.shape) {
-                (st::Source::Input(n), Some(shape)) => Some((*n, shape.clone())),
-                _ => None,
-            })
-            .collect();
         for (export_name, trace, tap) in published {
             if let Some(tap) = tap { self.taps.insert(export_name.clone(), tap); }
             self.traces.insert(export_name, trace);
@@ -826,7 +798,6 @@ impl Server {
                 probe,
                 origin: Origin::Program,
                 generators: HashMap::new(),
-                input_shapes,
             },
         );
         Ok(())
@@ -834,9 +805,8 @@ impl Server {
 
     /// Infer the shapes of `prog`'s collections, before anything is installed. An imported trace
     /// takes the shape it is published at; a declared import must match it. Returns the shapes,
-    /// for rendering, and the shape of each export that has one; or the conflicts that leave the
-    /// program without meaning.
-    /// Collections whose shape is unknown (an undeclared input upstream) are not an error.
+    /// for rendering, and the shape of each export; or the conflicts that leave the program
+    /// without meaning, or the collections whose shape nothing determines.
     fn check_shapes(&self, name: &str, prog: &st::Program) -> Result<(crate::shapes::ScopeShapes, Vec<(String, RowShape)>), String> {
         let published = |t: &str| -> Option<RowShape> {
             let key = canonical_source_name(t);
@@ -861,8 +831,14 @@ impl Server {
         if !problems.conflicts.is_empty() {
             return Err(format!("program {:?} has conflicting shapes: {}", name, problems.conflicts.join("; ")));
         }
+        if !problems.unknown.is_empty() {
+            return Err(format!("program {:?} has collections without a shape: {}", name, problems.unknown.join("; ")));
+        }
         let exports = prog.root.exports.iter().zip(&shapes.exports)
-            .filter_map(|(e, s)| s.as_ref().map(|c| (e.name.clone(), (c.key.clone(), c.val.clone()))))
+            .map(|(e, s)| {
+                let c = s.as_ref().expect("every collection has a shape (checked above)");
+                (e.name.clone(), (c.key.clone(), c.val.clone()))
+            })
             .collect();
         Ok((shapes, exports))
     }
@@ -893,7 +869,6 @@ impl Server {
                 probe,
                 origin: Origin::Generated,
                 generators: HashMap::from([(0usize, (recipe, 0u64))]),
-                input_shapes: HashMap::new(),
             },
         );
     }
@@ -923,7 +898,6 @@ impl Server {
                 probe,
                 origin: Origin::Clock,
                 generators: HashMap::new(),
-                input_shapes: HashMap::new(),
             },
         );
     }
@@ -942,7 +916,7 @@ impl Server {
             (handle, arranged.trace)
         });
         self.traces.insert(name.to_string(), trace);
-        let input = ServerInput::new(handle, Some(shape.clone()), false);
+        let input = ServerInput::new(handle, shape.clone());
         self.shapes.insert(name.to_string(), shape);
         (input, dataflow_id, probe)
     }
@@ -963,7 +937,15 @@ impl Server {
     ) -> Result<(), String> {
         let t = time.unwrap_or(self.epoch);
         self.validate_feed(prog, input, t)?;
-        self.apply_feed(prog, input, key, val, t, diff);
+        let handle = self.programs
+            .get_mut(&canonical_source_name(prog))
+            .expect("feed target was prevalidated")
+            .inputs
+            .get_mut(&input)
+            .expect("feed input was prevalidated");
+        let row = (key, val);
+        handle.check(&row)?;
+        handle.update_at(row, t, diff);
         Ok(())
     }
 
@@ -986,8 +968,12 @@ impl Server {
             .inputs
             .get_mut(&input)
             .expect("feed input was prevalidated");
-        for update in updates {
-            handle.update_at((update.key, update.val), time, update.diff);
+        let rows: Vec<_> = updates.into_iter().map(|u| ((u.key, u.val), u.diff)).collect();
+        for (row, _) in &rows {
+            handle.check(row)?;
+        }
+        for (row, diff) in rows {
+            handle.update_at(row, time, diff);
         }
         Ok(())
     }
@@ -1037,11 +1023,12 @@ impl Server {
         let (index, peers) = (worker.index(), worker.peers());
         let mine = |e: u64| (e as usize) % peers == index;
         let recipe = Recipe::parse(source);
-        if let (Some(recipe), Some(declared)) = (recipe, self.programs.get(&canonical_source_name(prog)).and_then(|p| p.input_shapes.get(&input))) {
-            if recipe.shape() != *declared {
+        let target = &self.programs[&canonical_source_name(prog)].inputs[&input];
+        if let Some(recipe) = recipe {
+            if recipe.shape() != target.shape {
                 return Err(format!(
                     "program {:?} declares input {} as {} but {:?} generates {}",
-                    prog, input, fmt_shape(declared), source, fmt_shape(&recipe.shape())
+                    prog, input, fmt_shape(&target.shape), source, fmt_shape(&recipe.shape())
                 ));
             }
         }
@@ -1064,8 +1051,10 @@ impl Server {
                         .map(|t| t.parse::<i64>().map(Value::Int))
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|_| format!("load: line {} of {:?} is not a row of integers: {:?}", e + 1, source, line))?;
+                    let row = (Value::Tuple(fields), Value::unit());
+                    target.check(&row).map_err(|error| format!("load: line {} of {:?}: {error}", e + 1, source))?;
                     if mine(e as u64) {
-                        rows.push((Value::Tuple(fields), Value::unit()));
+                        rows.push(row);
                     }
                 }
                 (total, rows)
@@ -1119,26 +1108,6 @@ impl Server {
         Ok(())
     }
 
-    /// Apply a feed whose target was already validated.
-    fn apply_feed(
-        &mut self,
-        prog: &str,
-        input: usize,
-        key: Value,
-        val: Value,
-        time: OuterTime,
-        diff: Diff,
-    ) {
-        let prog = canonical_source_name(prog);
-        self.programs
-            .get_mut(&prog)
-            .expect("feed target was prevalidated")
-            .inputs
-            .get_mut(&input)
-            .expect("feed input was prevalidated")
-            .update_at((key, val), time, diff);
-    }
-
     /// Bind trace `trace` to positional `input` of program `prog`: from now
     /// on, every tick delivers the trace's *changes* into that input at the
     /// next epoch, so the input mirrors the trace one epoch delayed. The
@@ -1175,13 +1144,13 @@ impl Server {
         if !installed.inputs.contains_key(&input) {
             return Err(format!("program {:?} has no input {}", target, input));
         }
-        if let (Some(declared), Some(shape)) = (installed.input_shapes.get(&input), self.shapes.get(&source)) {
-            if declared != shape {
-                return Err(format!(
-                    "program {:?} declares input {} as {} but trace {:?} is published as {}",
-                    target, input, fmt_shape(declared), source, fmt_shape(shape)
-                ));
-            }
+        let declared = &installed.inputs[&input].shape;
+        let shape = &self.shapes[&source];
+        if declared != shape {
+            return Err(format!(
+                "program {:?} declares input {} as {} but trace {:?} is published as {}",
+                target, input, fmt_shape(declared), source, fmt_shape(shape)
+            ));
         }
         if self
             .bindings

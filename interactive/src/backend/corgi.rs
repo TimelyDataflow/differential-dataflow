@@ -511,27 +511,6 @@ impl Backend for CorgiBackend {
     }
 }
 
-/// Assert that every container of `c` has `shape`: an import's shape ascription, checked as data
-/// arrives when the shape of the trace it reads was not known at install.
-pub fn assert_shape<'s, T: ColTime>(
-    c: Collection<'s, T, CorgiContainer<T, Diff>>,
-    shape: st::RowShape,
-) -> Collection<'s, T, CorgiContainer<T, Diff>> {
-    c.inner
-        .unary(Pipeline, "AssertShape", move |_, _| {
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    if !data.times.is_empty() {
-                        let (k, v) = (corgi::shape_of_value(&data.keys), corgi::shape_of_value(&data.vals));
-                        assert!(k == shape.0 && v == shape.1, "input does not match its shape ascription");
-                    }
-                    output.session(&cap).give_container(data);
-                });
-            }
-        })
-        .as_collection()
-}
-
 /// Render `s` with the corgi substrate. See [`crate::backend::render_tree`].
 pub fn render_tree<'s>(
     s: &st::Scope,
@@ -554,7 +533,7 @@ pub enum CorgiImport<'s> {
 
 /// As [`render_tree`], but a published columnar export arrives as the producer's arrangement,
 /// which the program's `arrange`s, joins, and reduces of it read in place. Shape ascriptions are
-/// the driver's to check ([`assert_shape`], [`assert_export_shape`]).
+/// the driver's to check, before it renders.
 pub fn render_tree_corgi_arranged<'s>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
@@ -647,24 +626,6 @@ pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::
 /// The updates of an imported columnar export, as corgi containers.
 pub fn export_containers<'s>(a: Arranged<'s, ExportTrace>) -> Collection<'s, u64, CorgiContainer<u64, Diff>> {
     chunk_containers(a.stream, "ExportContainers", |batch| batch)
-}
-
-/// Assert that every chunk of an imported export has `shape`, an import's ascription, when the
-/// export's shape was not known at install. A side operator over the batches: the program reads
-/// the arrangement itself, and nothing is copied.
-pub fn assert_export_shape(a: &Arranged<'_, ExportTrace>, shape: st::RowShape) {
-    use timely::dataflow::operators::generic::Operator;
-    a.stream.clone().sink(Pipeline, "AssertShape", move |(input, _frontier)| {
-        input.for_each(|_cap, data| {
-            for batch in data.iter() {
-                let Some(payload) = batch.inner.as_ref() else { continue };
-                for ch in payload.chunks.iter().filter(|c| c.len() > 0) {
-                    let (k, v) = (corgi::shape_of_value(&recover_key(ch.keys())), corgi::shape_of_value(ch.vals()));
-                    assert!(k == shape.0 && v == shape.1, "input does not match its shape ascription");
-                }
-            }
-        });
-    });
 }
 
 /// The rows of an imported columnar export, as `((key, val), time, diff)` updates.
