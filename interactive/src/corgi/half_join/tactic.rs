@@ -12,7 +12,7 @@ use timely::progress::Antichain;
 use differential_dataflow::trace::chunk::Chunk;
 use differential_dogs3::operators::half_join::HalfJoinTactic;
 
-use corgi::arrange::{compare_at, gather_lanes};
+use corgi::arrange::{equal_idx, gather_lanes};
 use corgi::{Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::chunk::{ident, key_is_hashed, recover_key_ref, CorgiChunk};
@@ -138,7 +138,7 @@ impl Work {
         let keys: Vec<&CValue> = self.runs.iter().map(|run| recover_key_ref(run.keys())).collect();
 
         // The pairs that meet: (run, update row, arranged chunk, arranged row).
-        let (mut rs, mut us, mut cs, mut js) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut pairs = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let (mut needles, mut groups) = (Vec::new(), Vec::new());
         let (mut scratch, mut found) = (Vec::new(), Vec::new());
         for (r, run) in self.runs.iter().enumerate() {
@@ -161,30 +161,38 @@ impl Work {
                 if hay.first().is_none_or(|&x| x > run_last) || hay.last().is_some_and(|&x| x < first) { continue; }
                 matching_ranges(&needles, hay, &mut scratch, &mut found);
                 let chunk_key = recover_key_ref(chunk.keys());
+                // A hashed identifier can hold several real keys, so this run's and chunk's
+                // time-eligible pairs have their keys compared, in batches of at most `BLOCK`.
+                let mut unchecked = pairs.1.len();
                 for (needle, range) in found.iter() {
                     for u in groups[*needle].clone() {
                         for j in range.start + base..range.end + base {
-                            if hashed && compare_at(keys[r], u, chunk_key, j).is_ne() { continue; }
                             let precedes = match chunk.times().cmp_cross(j, run.times(), u) {
                                 Ordering::Less => true,
                                 Ordering::Equal => !self.strict,
                                 Ordering::Greater => false,
                             };
                             if precedes {
-                                rs.push(r);
-                                us.push(u);
-                                cs.push(cid);
-                                js.push(j);
+                                pairs.0.push(r);
+                                pairs.1.push(u);
+                                pairs.2.push(cid);
+                                pairs.3.push(j);
+                                if hashed && pairs.1.len() - unchecked == BLOCK {
+                                    keep_equal_keys(keys[r], chunk_key, unchecked, &mut pairs);
+                                    unchecked = pairs.1.len();
+                                }
                             }
                         }
                     }
                 }
+                if hashed && pairs.1.len() > unchecked { keep_equal_keys(keys[r], chunk_key, unchecked, &mut pairs); }
             }
         }
         // Later blocks hold identifiers beyond `last`, so they need nothing before it.
         for (cid, chunk) in self.arranged.iter().enumerate() {
             self.seek[cid] += ident(chunk.keys())[self.seek[cid]..].partition_point(|&x| x < last);
         }
+        let (rs, us, cs, js) = pairs;
         if us.is_empty() { return; }
 
         // The projection over (key, val, arranged val).
@@ -245,6 +253,26 @@ impl Work {
     }
 }
 
+/// Keep the pairs from `start` on whose update key, a row of `key`, equals the arranged key, a row
+/// of `chunk_key`: one batched comparison for the pairs of one run and one arranged chunk.
+fn keep_equal_keys(key: &CValue, chunk_key: &CValue, start: usize, pairs: &mut (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>)) {
+    let equal = equal_idx(key, chunk_key, &pairs.1[start..], &pairs.3[start..]);
+    let mut keep = start;
+    for (row, sign) in (start..pairs.1.len()).zip(equal) {
+        if sign == 0 {
+            pairs.0[keep] = pairs.0[row];
+            pairs.1[keep] = pairs.1[row];
+            pairs.2[keep] = pairs.2[row];
+            pairs.3[keep] = pairs.3[row];
+            keep += 1;
+        }
+    }
+    pairs.0.truncate(keep);
+    pairs.1.truncate(keep);
+    pairs.2.truncate(keep);
+    pairs.3.truncate(keep);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +319,46 @@ mod tests {
         loose.push(row(t(1, 0), 7, 200, (1, 0), t(1, 0), 2));
         loose.sort();
         assert_eq!(rows(false), loose);
+    }
+
+    /// A shared hash does not make distinct real keys equal. Time filtering precedes the bounded
+    /// key checks; strictness, signed diffs and candidate order survive several comparison batches.
+    #[test]
+    fn colliding_keys_are_checked_in_batches_after_time_filtering() {
+        let keys = |ks: &[i64]| CValue::Prod(vec![
+            ints(&vec![42; ks.len()]),
+            CValue::Prod(vec![ints(ks), ints(&ks.iter().map(|k| k * 7).collect::<Vec<_>>())]),
+        ]);
+        let arranged_keys: Vec<i64> = (0..4).flat_map(|k| [k; 3]).collect();
+        let arranged_vals: Vec<i64> = (0..12).collect();
+        let arranged = Rc::new(differential_dataflow::trace::chunk::ChunkBatch::new(vec![CorgiChunk::from_columns(
+            keys(&arranged_keys), ints(&arranged_vals),
+            (0..4).flat_map(|_| [t(0, 0), t(1, 0), t(2, 0)]).collect(),
+            (0..4).flat_map(|_| [1, -1, 2]).collect(),
+        )]));
+        let update_keys: Vec<i64> = (0..6).collect();
+        let updates = Run {
+            keys: keys(&update_keys),
+            vals: CValue::Prod(vec![ints(&update_keys), lifted(&[(1, 0); 6])]),
+            times: (0..6).map(|_| t(1, 0)).collect(),
+            diffs: vec![2, -1, 2, -1, 2, -1],
+        };
+        for strict in [false, true] {
+            let mut tactic = CorgiHalfJoin::new(Term::Var(0), Term::Tuple(vec![Term::Var(1), Term::Var(2)]), strict, 2);
+            let got: Vec<_> = tactic.prep(vec![updates.clone()], vec![Rc::clone(&arranged)], Antichain::from_elem(t(1, 0)))
+                .flat_map(|(c, _)| c.into_updates()).collect();
+            let mut expected = Vec::new();
+            for k in 0..4 {
+                for epoch in 0..if strict { 1 } else { 2 } {
+                    expected.push((
+                        (tup(vec![V::Int(k), V::Int(k * 7)]),
+                         tup(vec![tup(vec![V::Int(k), V::Int(k * 3 + epoch)]), tup(vec![V::Int(1), V::Int(0)])])),
+                        t(1, 0), if k % 2 == 0 { 2 } else { -1 } * if epoch == 0 { 1 } else { -1 },
+                    ));
+                }
+            }
+            assert_eq!(consolidated(got), consolidated(expected), "strict {strict}");
+        }
     }
 
     /// Against the definition, over several arranged chunks and released updates in several runs
