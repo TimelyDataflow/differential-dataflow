@@ -599,9 +599,9 @@ pub fn rewrap(template: &CValue, ids: Vec<i64>) -> CValue {
 /// 1-field `Prod` of one) held as `i64`s. An integer column held narrower is `None`, and a
 /// reader that can take one falls back to its structural path.
 pub fn int_lane(col: &CValue) -> Option<&[i64]> {
-    match corgi::arrange::leaf_slice(col)? {
-        std::borrow::Cow::Borrowed(ids) => Some(ids),
-        std::borrow::Cow::Owned(_) => None,
+    match col {
+        CValue::Prod(fields) if fields.len() == 1 => int_lane(&fields[0]),
+        _ => corgi::arrange::borrowed_i64(col),
     }
 }
 
@@ -876,6 +876,18 @@ mod test {
             assert_eq!(actual.len(), result.len_(), "duplicate output triples");
             assert_eq!(actual, expected);
             assert!(builder.finish().is_none());
+        }
+    }
+
+    #[test]
+    fn int_lane_borrows_through_single_field_products() {
+        let leaf = CValue::i64(vec![-3, 0, 5, 9]);
+        let pointer = int_lane(&leaf).unwrap().as_ptr();
+        for col in [leaf.clone(), CValue::Prod(vec![leaf.clone()]),
+                    CValue::Prod(vec![CValue::Prod(vec![leaf])])] {
+            let lane = int_lane(&col).unwrap();
+            assert_eq!(lane, &[-3, 0, 5, 9]);
+            assert_eq!(lane.as_ptr(), pointer);
         }
     }
 
