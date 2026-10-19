@@ -31,7 +31,10 @@ fn counts_carry_their_sign() {
     // Each key's values cancel against as many shifted ones.
     want.insert("cancel".to_string(), vec![]);
     for workers in [1, 3] {
-        let got = evaluate(timely::Config::process(workers), &program, &[rows.clone()]);
+        let got: std::collections::BTreeMap<_, Vec<_>> = evaluate(timely::Config::process(workers), &program, &[rows.clone()])
+            .into_iter()
+            .map(|(name, updates)| (name, updates.into_rows().into_iter().map(|(k, v, d)| ((k, v), d)).collect()))
+            .collect();
         assert_eq!(got, want, "{workers} workers");
     }
 }

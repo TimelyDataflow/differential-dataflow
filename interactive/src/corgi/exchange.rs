@@ -174,14 +174,74 @@ where
     type Puller = LogPuller<Box<dyn timely::communication::Pull<Message<Time, CorgiContainer<T, R>>>>>;
 
     fn connect(self, worker: &Worker, identifier: usize, address: std::rc::Rc<[usize]>, logging: Option<TimelyLogger>) -> (Self::Pusher, Self::Puller) {
-        let (senders, receiver) = worker.allocate::<Message<Time, CorgiContainer<T, R>>>(identifier, address);
-        let senders = senders
-            .into_iter()
-            .enumerate()
-            .map(|(i, x)| LogPusher::new(x, worker.index(), i, identifier, logging.clone()))
-            .collect::<Vec<_>>();
-        (Exchange::new(senders, CorgiDistributor::default()), LogPuller::new(receiver, worker.index(), identifier, logging))
+        connect(worker, identifier, address, logging, CorgiDistributor::default())
     }
+}
+
+/// Sends every container whole to worker 0: how a snapshot brings an export's contents to the
+/// worker that answers for it.
+pub struct GatherPact;
+
+/// Pushes each non-empty container, as it stands, to the first worker.
+pub struct GatherDistributor;
+
+impl<T: Clone + 'static, R: Clone + 'static> Distributor<CorgiContainer<T, R>> for GatherDistributor {
+    fn partition<Ts: Clone, P: Push<Message<Ts, CorgiContainer<T, R>>>>(
+        &mut self,
+        container: &mut CorgiContainer<T, R>,
+        stamp: &Stamp<Ts>,
+        pushers: &mut [P],
+    ) {
+        if !container.times.is_empty() {
+            Message::push_at(container, stamp.clone(), &mut pushers[0]);
+        }
+    }
+
+    fn flush<Ts: Clone, P: Push<Message<Ts, CorgiContainer<T, R>>>>(&mut self, _stamp: &Stamp<Ts>, _pushers: &mut [P]) {}
+
+    fn relax(&mut self) {}
+}
+
+impl<Time, T, R> ParallelizationContract<Time, CorgiContainer<T, R>> for GatherPact
+where
+    Time: Timestamp,
+    T: Clone + Send + 'static,
+    R: Clone + Send + 'static,
+    CorgiContainer<T, R>: timely::dataflow::channels::ContainerBytes,
+{
+    type Pusher = Exchange<
+        Time,
+        LogPusher<Box<dyn Push<Message<Time, CorgiContainer<T, R>>>>>,
+        GatherDistributor,
+    >;
+    type Puller = LogPuller<Box<dyn timely::communication::Pull<Message<Time, CorgiContainer<T, R>>>>>;
+
+    fn connect(self, worker: &Worker, identifier: usize, address: std::rc::Rc<[usize]>, logging: Option<TimelyLogger>) -> (Self::Pusher, Self::Puller) {
+        connect(worker, identifier, address, logging, GatherDistributor)
+    }
+}
+
+/// A channel of containers between the workers, split by `distributor`.
+#[allow(clippy::type_complexity)]
+fn connect<Time, C, D>(
+    worker: &Worker,
+    identifier: usize,
+    address: std::rc::Rc<[usize]>,
+    logging: Option<TimelyLogger>,
+    distributor: D,
+) -> (Exchange<Time, LogPusher<Box<dyn Push<Message<Time, C>>>>, D>, LogPuller<Box<dyn timely::communication::Pull<Message<Time, C>>>>)
+where
+    Time: Timestamp,
+    C: timely::dataflow::channels::ContainerBytes + Send + 'static,
+    D: Distributor<C>,
+{
+    let (senders, receiver) = worker.allocate::<Message<Time, C>>(identifier, address);
+    let senders = senders
+        .into_iter()
+        .enumerate()
+        .map(|(i, x)| LogPusher::new(x, worker.index(), i, identifier, logging.clone()))
+        .collect::<Vec<_>>();
+    (Exchange::new(senders, distributor), LogPuller::new(receiver, worker.index(), identifier, logging))
 }
 
 #[cfg(test)]

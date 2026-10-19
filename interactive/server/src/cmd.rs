@@ -16,7 +16,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 
-use interactive::corgi::feed::{FeedColumns, FeedDecoder};
+use interactive::corgi::container::Updates;
+use interactive::corgi::feed::FeedDecoder;
 use interactive::ir::{eval, Diff, Value};
 use interactive::scope_ir::{Program, Source};
 use interactive::server::{Command as ServerCommand, OuterTime, RowShape};
@@ -69,7 +70,7 @@ pub enum Cmd {
     Feed {
         prog: String,
         input: usize,
-        columns: FeedColumns,
+        columns: Updates,
         time: Option<OuterTime>,
     },
     /// Atomically stage many rows, read into columns at the input's declared
@@ -77,7 +78,7 @@ pub enum Cmd {
     FeedColumns {
         prog: String,
         input: usize,
-        columns: FeedColumns,
+        columns: Updates,
     },
     /// Fill one program input from a source the server reads itself — a recipe
     /// (`random:…`, `iota:N`) or a file of integer rows — each worker taking its

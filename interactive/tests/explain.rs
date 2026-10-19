@@ -103,6 +103,9 @@ type Row = Value;
 /// Run `p` on `inputs` through the server: every export's consolidated rows, by name.
 fn evaluate(p: &Program, inputs: &[Vec<(Row, Row)>]) -> BTreeMap<String, Vec<((Row, Row), i64)>> {
     server::evaluate(timely::Config::process(1), p, inputs)
+        .into_iter()
+        .map(|(name, updates)| (name, updates.into_rows().into_iter().map(|(k, v, d)| ((k, v), d)).collect()))
+        .collect()
 }
 
 /// Run `p` on `inputs` and return one export's rows (asserting positive

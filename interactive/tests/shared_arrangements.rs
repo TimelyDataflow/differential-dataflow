@@ -61,7 +61,7 @@ fn run(workers: usize, program: &Program, epochs: &[Vec<InputUpdate>]) -> Vec<Ve
             let mine = if worker.index() == 0 { batch.clone() } else { Vec::new() };
             server.feed_batch("p", 0, mine).unwrap();
             server.tick(worker);
-            let mut rows = server.snapshot(worker, "result").unwrap();
+            let mut rows = server.snapshot(worker, "result").unwrap().into_rows();
             rows.sort();
             seen.push(rows);
         }

@@ -47,7 +47,7 @@ fn root(server: &mut Server, name: &str, node: i64) {
 /// Snapshot each named export, each expected to be non-empty.
 fn take(server: &mut Server, worker: &mut timely::worker::Worker, names: &[String], snapshots: &mut Vec<Snapshot>) {
     for name in names {
-        let rows = server.snapshot(worker, name).unwrap();
+        let rows = server.snapshot(worker, name).unwrap().into_rows();
         assert!(!rows.is_empty(), "export {name} is empty");
         snapshots.push(rows);
     }

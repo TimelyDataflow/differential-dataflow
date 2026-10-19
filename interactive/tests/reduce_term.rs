@@ -46,7 +46,7 @@ fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
             }
             server.tick(worker);
             for name in names {
-                seen.push(server.snapshot(worker, name).unwrap());
+                seen.push(server.snapshot(worker, name).unwrap().into_rows());
             }
         }
         seen

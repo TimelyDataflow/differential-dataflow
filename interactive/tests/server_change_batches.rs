@@ -1,10 +1,13 @@
-//! Bounded export consumption must preserve inserts/retractions and nested rows.
+//! Export taps hand over each export's changes as columns, once, each at the epoch it happened:
+//! summed over every tick, they are the export's contents, inserts and retractions of nested rows
+//! alike.
+use interactive::corgi::container::Updates;
 use interactive::ir::Value;
 use interactive::server::{InputUpdate, Server};
 use interactive::{lower, parse};
 
 #[test]
-fn bounded_exports_match_full_drain_and_are_consumed_once() {
+fn tapped_changes_sum_to_the_export_and_are_taken_once() {
     timely::execute_directly(|worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(r#"
             type Three = A int | B int | C int;
@@ -14,38 +17,30 @@ fn bounded_exports_match_full_drain_and_are_consumed_once() {
             export "tagged" = pairs | map($0 ; variant(Three, 2, $1[0]));
         "#));
         program.optimize();
-        let mut full = Server::new();
-        let mut bounded = Server::new();
-        for server in [&mut full, &mut bounded] {
-            server.set_export_taps(true);
-        }
-        full.install(worker, "full", &program).unwrap();
-        bounded.install(worker, "bounded", &program).unwrap();
-        for (epoch, limit) in [1, 7, 128, 4096].into_iter().enumerate() {
-            let diff = if epoch % 2 == 0 { 1 } else { -1 };
-            let input: Vec<_> = (0..257).map(|i| InputUpdate {
-                key: Value::Tuple(vec![Value::Int(i % 11), Value::Int(i - 128)]),
-                val: Value::unit(), diff,
-            }).collect();
-            full.feed_batch("full", 0, input.clone()).unwrap();
-            bounded.feed_batch("bounded", 0, input).unwrap();
-            full.tick(worker);
-            bounded.tick(worker);
-            for name in ["plain", "lists", "tagged"] {
-                let mut expected = full.take_changes(name);
-                let mut actual = Vec::new();
-                bounded.for_each_change_batch(name, limit, |rows| {
-                    assert!(!rows.is_empty() && rows.len() <= limit);
-                    actual.extend(rows);
-                });
-                assert!(!expected.is_empty(), "{name}, epoch {epoch}");
-                expected.sort();
-                actual.sort();
-                assert_eq!(actual, expected, "{name}, epoch {epoch}, limit {limit}");
-                bounded.for_each_change_batch(name, limit, |_| panic!("changes drained twice"));
-                assert!(bounded.take_changes(name).is_empty());
+        let mut server = Server::new();
+        server.set_export_taps(true);
+        server.install(worker, "taps", &program).unwrap();
+        let rows = |shift: i64, diff| (0..257).map(|i| InputUpdate {
+            key: Value::Tuple(vec![Value::Int(i % 11), Value::Int(i - 128 + shift)]),
+            val: Value::unit(), diff,
+        }).collect::<Vec<_>>();
+        let mut taken_by_export: Vec<Vec<Updates>> = vec![Vec::new(); 3];
+        // Two sets of rows, the first retracted and then added again.
+        for (shift, diff) in [(0, 1), (1000, 1), (0, -1), (0, 1)] {
+            let epoch = server.epoch();
+            server.feed_batch("taps", 0, rows(shift, diff)).unwrap();
+            server.tick(worker);
+            for (name, taken) in ["plain", "lists", "tagged"].into_iter().zip(&mut taken_by_export) {
+                let changes = server.take_changes(name);
+                assert!(!changes.is_empty(), "{name}, shift {shift}, diff {diff}");
+                assert!(changes.iter().all(|c| c.times.to_vec().iter().all(|&t| t == epoch)), "{name}: changes at another epoch than {epoch}");
+                taken.extend(changes.into_iter().map(|c| Updates { keys: c.keys, vals: c.vals, diffs: c.diffs }));
+                assert!(server.take_changes(name).is_empty(), "{name}: changes taken twice");
+                let contents = server.snapshot(worker, name).unwrap();
+                let shape = (corgi::shape_of_value(&contents.keys), corgi::shape_of_value(&contents.vals));
+                assert_eq!(Updates::consolidate(taken.clone(), &shape), contents, "{name}, shift {shift}, diff {diff}");
             }
         }
-        bounded.for_each_change_batch("missing", 7, |_| panic!("missing export has changes"));
+        assert!(server.take_changes("missing").is_empty());
     });
 }

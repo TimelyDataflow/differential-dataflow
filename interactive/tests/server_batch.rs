@@ -37,7 +37,7 @@ fn feed_batch_validates_before_staging_one_epoch() {
         assert!(server.snapshot(worker, "rows").unwrap().is_empty());
         server.tick(worker);
         assert_eq!(
-            server.snapshot(worker, "rows").unwrap(),
+            server.snapshot(worker, "rows").unwrap().into_rows(),
             vec![(tup(&[1]), tup(&[10]), 1), (tup(&[2]), tup(&[20]), 1),]
         );
     });
@@ -72,7 +72,7 @@ fn delayed_peers_wake_ticks_and_snapshots() {
                 if worker.index() == (epoch + 1) % 3 {
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                let rows = server.snapshot(worker, "rows").unwrap();
+                let rows = server.snapshot(worker, "rows").unwrap().into_rows();
                 let expected: Vec<_> = if worker.index() == 0 {
                     (0..3).filter(|&i| if epoch < 3 { i <= epoch } else { i > epoch - 3 })
                         .map(|i| (tup(&[i as i64]), Value::unit(), 1)).collect()
@@ -91,7 +91,7 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, src: &str) 
 }
 
 /// Feed text read into columns at `key` and unit values, as the intake reads it.
-fn decoded(key: &corgi::Shape, rows: &[&str]) -> interactive::corgi::feed::FeedColumns {
+fn decoded(key: &corgi::Shape, rows: &[&str]) -> interactive::corgi::container::Updates {
     let mut decoder = interactive::corgi::feed::FeedDecoder::new(key, &corgi::Shape::Unit);
     for row in rows {
         decoder.push(row, None, 1).unwrap();
@@ -119,7 +119,7 @@ fn split_feeds_keep_their_shapes() {
         let mine: Vec<usize> = (worker.index()..columns.len()).step_by(worker.peers()).collect();
         server.feed_columns("world", 0, columns.select(&mine), None).unwrap();
         server.tick(worker);
-        server.snapshot(worker, "rows").unwrap()
+        server.snapshot(worker, "rows").unwrap().into_rows()
     }).unwrap();
     let rows = guards.join().into_iter().next().unwrap().unwrap();
     assert_eq!(rows, vec![(listed(1, &[7]), Value::unit(), 1), (listed(2, &[]), Value::unit(), 1)]);
@@ -136,7 +136,7 @@ fn misshaped_columns_are_refused() {
         assert_eq!(refused, "a feed of shape ((Int, Int) ; ()) reached an input of shape ((Int, List<Int>) ; ())");
         server.feed_columns("world", 0, decoded(&listed_shape(), &["tuple(1,list())"]), None).unwrap();
         server.tick(worker);
-        assert_eq!(server.snapshot(worker, "rows").unwrap(), vec![(listed(1, &[]), Value::unit(), 1)]);
+        assert_eq!(server.snapshot(worker, "rows").unwrap().into_rows(), vec![(listed(1, &[]), Value::unit(), 1)]);
     });
 }
 
@@ -154,11 +154,11 @@ fn fed_sums_arrive_at_their_time() {
         server.feed_columns("world", 0, decoded(&node, &["inject(0,7)"]), Some(2)).unwrap();
         server.tick(worker);
         let pair = Value::Variant(1, Box::new(tup(&[1, 2])));
-        assert_eq!(server.snapshot(worker, "rows").unwrap(), vec![(pair.clone(), Value::unit(), 1)]);
+        assert_eq!(server.snapshot(worker, "rows").unwrap().into_rows(), vec![(pair.clone(), Value::unit(), 1)]);
         server.tick(worker);
         server.tick(worker);
         let leaf = Value::Variant(0, Box::new(Value::Int(7)));
-        let mut rows = server.snapshot(worker, "rows").unwrap();
+        let mut rows = server.snapshot(worker, "rows").unwrap().into_rows();
         rows.sort();
         assert_eq!(rows, vec![(leaf, Value::unit(), 1), (pair, Value::unit(), 1)]);
     });
