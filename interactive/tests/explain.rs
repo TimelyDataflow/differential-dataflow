@@ -752,14 +752,10 @@ fn corgi_agrees_on_two_query_explanation() {
 }
 
 /// Declared sources give the query input its shape, and the rewritten program
-/// installs with every shape known. The rewrite itself needs no shapes: the
-/// demand matches the undeclared run.
+/// installs with every shape known.
 #[test]
 fn declared_sources_shape_the_rewrite() {
     use corgi::Shape;
-    let undeclared = REACH_ROW
-        .replace("input 0 : ((int, int) ; ()) |", "input 0 |")
-        .replace("input 1 : ((int) ; ()) |", "input 1 |");
     let ex = explain::explain(&lowered(REACH_ROW));
     let query = ex.root.imports.iter().find(|imp| imp.name == "query").unwrap();
     assert_eq!(query.shape, Some((Shape::Prod(vec![Shape::Int]), Shape::Prod(vec![Shape::Unit, Shape::Int]))));
@@ -767,13 +763,5 @@ fn declared_sources_shape_the_rewrite() {
     for ex in [ex, explain::explain(&lowered(SCC_ROW))] {
         let (_, problems) = interactive::shapes::infer(&ex, &|_| None);
         assert!(problems.unknown.is_empty() && problems.conflicts.is_empty(), "{problems:?}");
-    }
-
-    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
-    for (k, v) in export_rows(&optimized(REACH_ROW), &inputs, "result") {
-        assert_eq!(
-            demand_for(REACH_ROW, &inputs, &k, &v),
-            demand_for(&undeclared, &inputs, &k, &v),
-        );
     }
 }

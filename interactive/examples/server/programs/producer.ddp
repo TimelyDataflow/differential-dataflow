@@ -2,4 +2,4 @@
 -- keyed by source. A consumer installed later can `import "edges"`.
 -- input 0: (src, dst ;)
 
-export "edges" = input 0 | key(((src, dst), ()) -> ((src), (dst)));
+export "edges" = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));

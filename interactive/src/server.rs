@@ -763,6 +763,15 @@ impl Server {
         if self.programs.contains_key(name) {
             return Err(format!("a program named {:?} is already installed", name));
         }
+        // An input is fed from outside, so it says what it holds, as a table declares its columns.
+        for imp in &prog.root.imports {
+            if let (st::Source::Input(n), None) = (&imp.from, &imp.shape) {
+                return Err(format!(
+                    "program {:?} reads input {n} without declaring its shape; write `input {n} : (key ; val)`",
+                    name
+                ));
+            }
+        }
         // Resolve trace imports against canonical names. A name that is not registered must be a
         // generated source (`clock`, or a recipe such as `random:...`), installed on demand below.
         // Everything is checked before anything is installed, so a rejected program leaves no trace.

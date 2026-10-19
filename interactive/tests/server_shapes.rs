@@ -25,9 +25,9 @@ fn exports_publish_their_shapes() {
         // An undeclared import takes the shape its trace is published at.
         server.install(worker, "consumer", &program(r#"export "flipped" = import "edges" | key($1[0] ; $0[0], 0);"#)).unwrap();
         assert_eq!(server.trace_shape("flipped"), Some((ints(1), ints(2))));
-        // A program whose sources are undeclared still installs; its exports have no shape.
-        server.install(worker, "loose", &program(r#"export "loose" = input 0;"#)).unwrap();
-        assert_eq!(server.trace_shape("loose"), None);
+        // An input must declare its shape.
+        let err = server.install(worker, "loose", &program(r#"export "loose" = input 0;"#)).unwrap_err();
+        assert!(err.contains("without declaring its shape"), "{err}");
         // Dropping a producer forgets its shapes.
         server.drop_program(worker, "consumer").unwrap();
         assert_eq!(server.trace_shape("flipped"), None);
@@ -95,8 +95,8 @@ fn bindings_and_recipe_loads_must_match_declared_inputs() {
 fn declared_exports_publish_their_shapes() {
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
-        // An export may declare the shape its undeclared source leaves unknown.
-        server.install(worker, "declared", &program(r#"export "d" : ((int) ; ()) = input 0;"#)).unwrap();
+        // An export may declare the shape it is inferred to have.
+        server.install(worker, "declared", &program(r#"export "d" : ((int) ; ()) = input 0 : ((int) ; ());"#)).unwrap();
         assert_eq!(server.trace_shape("d"), Some((ints(1), Shape::Unit)));
         // A declaration that disagrees with the inferred shape rejects the install.
         let err = server.install(worker, "wrong", &program(&PRODUCER.replace("export \"edges\" =", "export \"w\" : ((int) ; ()) ="))).unwrap_err();

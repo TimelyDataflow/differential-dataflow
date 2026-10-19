@@ -9,14 +9,14 @@ use interactive::{lower, parse};
 
 type Snapshot = Vec<(Value, Value, i64)>;
 
-const PRODUCER: &str = r#"export "edges" = input 0 | key($0[0] ; $0[1]);"#;
+const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);"#;
 
 /// A consumer of `edges`, its exports suffixed by `tag`.
 fn consumer(tag: &str) -> String {
     format!(
         r#"
         let edges = import "edges";
-        let roots = input 0 | key($0[0] ;);
+        let roots = input 0 : ((int) ; ()) | key($0[0] ;);
         r: {{
             let step = reach | join(edges, ($2 ;));
             var reach = roots + step | distinct;
@@ -109,19 +109,4 @@ fn arranged_imports_answer_as_rows_do_corgi() {
 #[test]
 fn backends_agree_with_arranged_imports() {
     assert_eq!(scenario(RenderBackend::Vec, true), scenario(RenderBackend::Corgi, true));
-}
-
-/// A declared import of an export whose shape was unknown at install is checked as its data
-/// arrives, also when the program reads the export's arrangement in place.
-#[test]
-#[should_panic(expected = "does not match its shape ascription")]
-fn an_arranged_import_is_checked_against_its_declaration() {
-    timely::execute_directly(|worker| {
-        let mut server = Server::with_backend(RenderBackend::Corgi);
-        install(&mut server, worker, "loose", r#"export "loose" = input 0;"#);
-        install(&mut server, worker, "declaring", r#"export "same" = import "loose" : ((int) ; ()) | arrange;"#);
-        let row = Value::Tuple(vec![Value::Int(1), Value::Int(2)]);
-        server.feed("loose", 0, row, Value::unit(), None, 1).unwrap();
-        server.tick(worker);
-    });
 }
