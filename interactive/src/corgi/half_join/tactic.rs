@@ -129,55 +129,61 @@ impl Work {
     /// Meet each run's rows from its start to `ends` with the arrangement, queueing the output by
     /// capability.
     fn meet(&mut self, ends: &[usize]) {
-        // The block's rows as (identifier, run, row), in identifier order; its distinct identifiers,
-        // ascending, and the rows holding each.
-        let mut rows: Vec<(i64, usize, usize)> = Vec::new();
-        for (r, (run, (&lo, &hi))) in self.runs.iter().zip(self.starts.iter().zip(ends)).enumerate() {
-            let ids = ident(run.keys());
-            rows.extend((lo..hi).map(|u| (ids[u], r, u)));
-        }
-        rows.sort_unstable_by_key(|&(id, _, _)| id);
-        let (mut needles, mut groups) = (Vec::new(), Vec::new());
-        for (pos, &(id, _, _)) in rows.iter().enumerate() {
-            if needles.last() != Some(&id) {
-                needles.push(id);
-                groups.push(pos..pos);
-            }
-            groups.last_mut().unwrap().end = pos + 1;
-        }
-        let (Some(&first), Some(&last)) = (needles.first(), needles.last()) else { return };
-        let hashed = key_is_hashed(self.runs[rows[0].1].keys());
+        // Each run's rows from its start to `ends` are already in identifier order, so each run is
+        // met on its own, with its distinct identifiers as the needles; the block is never sorted.
+        let live = || (0..self.runs.len()).filter(|&r| self.starts[r] < ends[r]);
+        let Some(r0) = live().next() else { return };
+        let last = live().map(|r| ident(self.runs[r].keys())[ends[r] - 1]).max().unwrap();
+        let hashed = key_is_hashed(self.runs[r0].keys());
         let keys: Vec<&CValue> = self.runs.iter().map(|run| recover_key_ref(run.keys())).collect();
 
         // The pairs that meet: (run, update row, arranged chunk, arranged row).
         let (mut rs, mut us, mut cs, mut js) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut needles, mut groups) = (Vec::new(), Vec::new());
         let (mut scratch, mut found) = (Vec::new(), Vec::new());
-        for (cid, chunk) in self.arranged.iter().enumerate() {
-            let hay = &ident(chunk.keys())[self.seek[cid]..];
-            let base = self.seek[cid];
-            // Later blocks hold identifiers at least `last`, so they need nothing before it.
-            self.seek[cid] += hay.partition_point(|&x| x < last);
-            if hay.first().is_none_or(|&x| x > last) || hay.last().is_some_and(|&x| x < first) { continue; }
-            matching_ranges(&needles, hay, &mut scratch, &mut found);
-            let chunk_key = recover_key_ref(chunk.keys());
-            for (needle, range) in found.iter() {
-                for &(_, r, u) in &rows[groups[*needle].clone()] {
-                    for j in range.start + base..range.end + base {
-                        if hashed && compare_at(keys[r], u, chunk_key, j).is_ne() { continue; }
-                        let precedes = match chunk.times().cmp_cross(j, self.runs[r].times(), u) {
-                            Ordering::Less => true,
-                            Ordering::Equal => !self.strict,
-                            Ordering::Greater => false,
-                        };
-                        if precedes {
-                            rs.push(r);
-                            us.push(u);
-                            cs.push(cid);
-                            js.push(j);
+        for (r, run) in self.runs.iter().enumerate() {
+            let (lo, hi) = (self.starts[r], ends[r]);
+            if lo == hi { continue; }
+            let ids = ident(run.keys());
+            needles.clear();
+            groups.clear();
+            for u in lo..hi {
+                if needles.last() != Some(&ids[u]) {
+                    needles.push(ids[u]);
+                    groups.push(u..u);
+                }
+                groups.last_mut().unwrap().end = u + 1;
+            }
+            let (first, run_last) = (needles[0], needles[needles.len() - 1]);
+            for (cid, chunk) in self.arranged.iter().enumerate() {
+                let base = self.seek[cid];
+                let hay = &ident(chunk.keys())[base..];
+                if hay.first().is_none_or(|&x| x > run_last) || hay.last().is_some_and(|&x| x < first) { continue; }
+                matching_ranges(&needles, hay, &mut scratch, &mut found);
+                let chunk_key = recover_key_ref(chunk.keys());
+                for (needle, range) in found.iter() {
+                    for u in groups[*needle].clone() {
+                        for j in range.start + base..range.end + base {
+                            if hashed && compare_at(keys[r], u, chunk_key, j).is_ne() { continue; }
+                            let precedes = match chunk.times().cmp_cross(j, run.times(), u) {
+                                Ordering::Less => true,
+                                Ordering::Equal => !self.strict,
+                                Ordering::Greater => false,
+                            };
+                            if precedes {
+                                rs.push(r);
+                                us.push(u);
+                                cs.push(cid);
+                                js.push(j);
+                            }
                         }
                     }
                 }
             }
+        }
+        // Later blocks hold identifiers beyond `last`, so they need nothing before it.
+        for (cid, chunk) in self.arranged.iter().enumerate() {
+            self.seek[cid] += ident(chunk.keys())[self.seek[cid]..].partition_point(|&x| x < last);
         }
         if us.is_empty() { return; }
 
