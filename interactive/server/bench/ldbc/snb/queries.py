@@ -98,18 +98,15 @@ class Context:
         return result.where(c.node!=c.pid).group(('rid','node'),distance=('min',c.distance)).join(q,{'rid':'rid'})
 
     def shortest(self, q, edges, start='p1', path=False, floating=False):
-        # Hop-indexed Bellman-Ford. Bounding by |V|-1 avoids count-to-infinity
-        # when deletions disconnect a cyclic component from the source.
-        bound = self.person.group((),bound=count())
-        seed = q.join(bound).select('rid',node=col(start),hops=0,cost=call('float',0) if floating else 0,bound=c.bound-1,
-                                   **({'path':call('list',col(start))} if path else {}))
-        projection = dict(rid=c.rid,node=c.next_dst,hops=c.hops+1,cost=call('fadd',c.cost,c.next_weight) if floating else c.cost+c.next_weight,bound=c.bound)
+        # Bellman-Ford keeping the least (cost, path) per node. Each epoch's
+        # iteration starts again from the seeds, so a deletion that strands a
+        # cycle terminates without bounding the number of hops.
+        seed = q.select('rid',node=col(start),cost=call('float',0) if floating else 0,
+                        **({'path':call('list',col(start))} if path else {}))
+        projection = dict(rid=c.rid,node=c.next_dst,cost=call('fadd',c.cost,c.next_weight) if floating else c.cost+c.next_weight)
         if path: projection['path'] = call('append',c.path,call('list',c.next_dst))
-        reached = seed.closure(edges,{'node':'src',**({'rid':'rid'} if 'rid' in edges.fields else {})},projection,
-            keys=('rid','node','hops'),best=('cost','bound',*(['path'] if path else [])),condition=c.hops<c.bound)
-        if path:
-            return reached.group(('rid','node'),best=('min',call('tuple',c.cost,c.path))).select('rid','node',cost=c.best.at(0),path=c.best.at(1))
-        return reached.group(('rid','node'),cost=('min',c.cost))
+        return seed.closure(edges,{'node':'src',**({'rid':'rid'} if 'rid' in edges.fields else {})},projection,
+            keys=('rid','node'),best=('cost',*(['path'] if path else [])))
 
 
 @query('is1','pid:int','Profile of a person')
