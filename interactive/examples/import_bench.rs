@@ -66,7 +66,7 @@ fn main() {
         println!("arranged imports: {arranged}; {edges} edges over {nodes} nodes, {consumers} {} consumers, churn {churn}", if reach { "reach" } else { "two-hop" });
 
         install(&mut server, worker, "prod", r#"export "edges" = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> (src, dst));"#);
-        server.load(worker, "prod", 0, &format!("random:nodes={nodes},edges={edges},churn={churn}")).unwrap();
+        server.load(worker, "prod", 0, &format!("random:nodes={nodes},edges={edges},churn={churn}"), 1).unwrap();
         let loaded = Instant::now();
         server.tick(worker);
         println!("producer:    {:>8.1} ms  mem {}", loaded.elapsed().as_secs_f64() * 1e3, mem());
