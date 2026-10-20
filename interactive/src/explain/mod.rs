@@ -422,19 +422,24 @@ impl Sb {
     }
 
     /// FlatMap's (UNNEST's) backward rule — the universal backstop instantiated
-    /// for a cardinality-changing op. FlatMap is *same-depth* (it doesn't touch
-    /// iteration time) and its list rides as one opaque value, so this needs no
-    /// envelope change: build the `(output -> input)` pair table by running the
-    /// op forward on the input side, join the demand on the output, recover the
-    /// whole input (the `None` endpoint — `RESIDUAL` is the input value).
+    /// for a cardinality-changing op. FlatMap doesn't touch iteration time and
+    /// its list rides as one opaque value, so this needs no envelope change:
+    /// build the `(output -> input)` pair table by running the op forward on the
+    /// input side, join the demand on the output, recover the whole input (the
+    /// `None` endpoint — `RESIDUAL` is the input value).
     ///
     /// The one wrinkle is that a plain flatmap drops the source row and the key
     /// isn't unique, so we **re-key the input by itself** before exploding (the
     /// source then rides through in the join key) and re-project to the packed
     /// output afterwards. `list` reads the re-keyed rows: the input's key
     /// is the key's first field, and its value is the row's value.
+    ///
+    /// The input may sit in an enclosing scope (a flatmap of a parent's
+    /// collection inside a loop), so its chain may be shorter than the demand's:
+    /// the time filter and the demanded row follow the other lookups
+    /// (`time_le`, `strip`), at the input's own chain.
     fn emit_lookup_flatmap(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, list: &Lambda) -> Ref {
-        let d = out_user_len;                // same depth for input and output
+        let (in_len, out_len) = (side.user_len, out_user_len);
         // Pair table: re-key the input by the whole input row, explode (the
         // source survives in the key), then re-key to (k, (pos, elem)) carrying
         // the source as the value.
@@ -443,21 +448,18 @@ impl Sb {
         let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list.clone())]);
         let pair = self.project(exploded, projection(tup(vec![f(0, 0), var(1)]), var(0), 2));
         // Re-key the demand by the same output (k, (pos, elem)); keep its chain ++ q.
-        let dep_keyed = self.project(dep_y, projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, d + 2)), 2));
+        let dep_keyed = self.project(dep_y, projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, out_len + 2)), 2));
         // Join into a wide row [V_in | chain_in | chain_out | q]. Source is `$2`
         // = (k, host_val); host_val = (V_in, chain_in). Dep' is `$1` = [chain_out | q].
         let mut wide = vec![fld(f(2, 1), 0)];                                     // V_in
-        wide.extend((0..d).map(|c| fld(f(2, 1), 1 + c)));                         // chain_in
-        wide.extend(fidx(1, 0, d));                                               // chain_out
-        wide.push(f(1, d));                                                       // q
+        wide.extend((0..in_len).map(|c| fld(f(2, 1), 1 + c)));                    // chain_in
+        wide.extend(fidx(1, 0, out_len));                                         // chain_out
+        wide.push(f(1, out_len));                                                 // q
         let joined = self.join(dep_keyed, pair, projection(f(2, 0), tup(wide), 3));
-        // Soundness: chain_in ≤ chain_out (same depth, so coordinate-aligned).
-        let cond = and_all((0..d).map(|c| le(f(1, 1 + c), f(1, 1 + d + c))).collect());
-        let filtered = match cond { Some(c) => self.filter(joined, predicate(c)), None => joined };
-        // Reform the demanded input (k ; V_in, chain_out, q).
-        let mut val = vec![f(1, 0)];
-        val.extend(fidx(1, 1 + d, 2 + 2 * d));
-        self.project(filtered, projection(var(0), tup(val), 2))
+        // Soundness: chain_in ≤ chain_out, on the coordinates they share.
+        let filtered = match <Val as RowModel>::time_le(in_len, out_len) { Some(c) => self.filter(joined, c), None => joined };
+        // Reform the demanded input (k ; V_in, chain_in, q).
+        self.project(filtered, <Val as RowModel>::strip(in_len, out_len, in_len))
     }
 }
 
@@ -867,7 +869,6 @@ impl<'a> Reverse<'a> {
         let cs = self.contribs.remove(&Target::Site(addr.clone())).unwrap_or_default();
         if cs.is_empty() { return; }
         let combined = ex.concat(cs);
-        let out_user_len = path.len();
         let dist = ex.distinct_full(combined);
         ex.debug_inspect(dist.clone(), format!("demand_{:?}:{:?}", path, Site::Op(i)));
         self.demand.insert(addr.clone(), dist.clone());
@@ -919,7 +920,8 @@ impl<'a> Reverse<'a> {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);
                         let list = slot(2, &[(list, tup(vec![f(0, 0), var(1)]))], |out| out[0].clone());
-                        let contrib = ex.emit_lookup_flatmap(dep_this, &side, out_user_len, &list);
+                        let (dep, out_len) = align(ex, dep_this, path, target_path(&target));
+                        let contrib = ex.emit_lookup_flatmap(dep, &side, out_len, &list);
                         self.contribs.entry(target).or_default().push(contrib);
                     }
                 }

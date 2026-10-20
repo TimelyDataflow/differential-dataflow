@@ -438,6 +438,25 @@ fn sibling_scope_explanations_sufficient() {
     assert!(!sizes.is_empty());
 }
 
+/// A flatmap inside a loop over a collection of the enclosing scope: its input's chain is shorter
+/// than the demand's. The lookup assumed one depth for both, and built a join the explained program
+/// could not type. (Found by `difftest`.)
+#[test]
+fn flatmap_of_a_parent_explanations_sufficient() {
+    const PARENT: &str = r#"
+        let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+        let roots = edges | map((src, _) -> (src, ()));
+        reach: {
+            let hops = edges | flatmap((_, (dst)) -> (dst enlist, (dst, 1) add enlist) append) | map((src, (_, dst)) -> (src, (dst)));
+            let step = x | join(hops, (_, (), (dst)) -> ((dst), ()));
+            var x = (roots + step) | distinct;
+        }
+        export "result" = reach::x;
+    "#;
+    let sizes = assert_all_rows_sufficient(PARENT, &[gen_edges(10, 12)]);
+    assert!(!sizes.is_empty());
+}
+
 /// Count outputs over duplicate-free inputs: sufficient today, because the
 /// keyed lookup demands every input row at the key, which is precisely the
 /// count's multiset.
