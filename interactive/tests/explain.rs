@@ -381,6 +381,20 @@ const INDEG_ROW: &str = r#"
     export "result" = edges | map((_, dst) -> (dst, ())) | count;
 "#;
 
+/// A declared input the program never reads: no demand reaches it, so its demand set binds only
+/// to itself, which gives it no shape, and the explained program would not install. The set
+/// takes the input's declared shape, and stays empty. (Found by `difftest`.)
+#[test]
+fn unread_input_explanations_sufficient() {
+    const UNREAD: &str = r#"
+        let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+        let unread = input 1 : ((int, int) ; ());
+        export "result" = edges;
+    "#;
+    let sizes = assert_all_rows_sufficient(UNREAD, &[gen_edges(10, 12), vec![]]);
+    assert!(!sizes.is_empty());
+}
+
 /// Count outputs over duplicate-free inputs: sufficient today, because the
 /// keyed lookup demands every input row at the key, which is precisely the
 /// count's multiset.

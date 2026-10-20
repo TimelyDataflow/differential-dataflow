@@ -640,7 +640,13 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
 
     // Demand-set variables, one per source, of the user's rows; forward inputs
     // are the actual sources restricted to the demand-sets.
-    let dsets: Vec<Ref> = (0..n_sources).map(|k| ex.variable(&format!("demand_set_{}", k))).collect();
+    let dsets: Vec<Ref> = (0..n_sources).map(|k| {
+        let v = ex.variable(&format!("demand_set_{}", k));
+        // A source no demand reaches binds its set to itself, which says nothing of its shape:
+        // the set holds the source's rows, so it takes the source's declared shape.
+        if let Ref::Var(i) = v { ex.s.vars[i].shape = p.root.imports[k].shape.clone(); }
+        v
+    }).collect();
     let fwd_inputs: Vec<Ref> = (0..n_sources).map(|k| ex.semijoin(dsets[k].clone(), ex_src[k].clone())).collect();
     let fwd_env: Vec<Ref> = fwd_inputs.iter().map(|r| ex.project(r.clone(), envelope())).collect();
     let forward: BTreeMap<Addr, Ref> = clone_into(&p.root, &mut ex.s, &fwd_inputs).into_iter()
