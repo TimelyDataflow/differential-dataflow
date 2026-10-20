@@ -2,8 +2,7 @@
 //! summed over every tick, they are the export's contents, inserts and retractions of nested rows
 //! alike.
 use interactive::corgi::container::Updates;
-use interactive::ir::Value;
-use interactive::server::{InputUpdate, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 #[test]
@@ -20,15 +19,12 @@ fn tapped_changes_sum_to_the_export_and_are_taken_once() {
         let mut server = Server::new();
         server.set_export_taps(true);
         server.install(worker, "taps", &program).unwrap();
-        let rows = |shift: i64, diff| (0..257).map(|i| InputUpdate {
-            key: Value::Tuple(vec![Value::Int(i % 11), Value::Int(i - 128 + shift)]),
-            val: Value::unit(), diff,
-        }).collect::<Vec<_>>();
+        let rows = |shift: i64, diff: i64| (0..257).map(|i| format!("{},{} diff={diff}", i % 11, i - 128 + shift)).collect::<Vec<_>>().join("\n");
         let mut taken_by_export: Vec<Vec<Updates>> = vec![Vec::new(); 3];
         // Two sets of rows, the first retracted and then added again.
         for (shift, diff) in [(0, 1), (1000, 1), (0, -1), (0, 1)] {
             let epoch = server.epoch();
-            server.feed_batch("taps", 0, rows(shift, diff)).unwrap();
+            server.feed("taps", 0, &rows(shift, diff), None).unwrap();
             server.tick(worker);
             for (name, taken) in ["plain", "lists", "tagged"].into_iter().zip(&mut taken_by_export) {
                 let changes = server.take_changes(name);

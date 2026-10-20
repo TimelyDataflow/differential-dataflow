@@ -65,7 +65,7 @@ fn run(workers: usize) -> Vec<[Vec<(Value, Value, i64)>; 4]> {
         for tick in 0..TICKS {
             if worker.index() == 0 {
                 for (input, k, v, d) in feeds(tick) {
-                    server.feed("p", input, Value::Tuple(vec![Value::Int(k), Value::Int(v)]), Value::unit(), None, d).unwrap();
+                    server.feed("p", input, &format!("{k},{v} diff={d}"), None).unwrap();
                 }
             }
             server.tick(worker);

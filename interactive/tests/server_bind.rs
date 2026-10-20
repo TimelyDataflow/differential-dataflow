@@ -35,7 +35,7 @@ fn bind_advances_a_counter_without_a_client() {
         let mut server = Server::new();
         install(&mut server, worker, "counter", COUNTER);
         server
-            .feed("counter", 0, tup(&[0]), Value::unit(), None, 1)
+            .feed("counter", 0, "0", None)
             .unwrap();
         server.bind(worker, "next", "counter", 1).unwrap();
 
@@ -50,7 +50,7 @@ fn bind_advances_a_counter_without_a_client() {
         // A later seed change injects as a perturbation: adding a second
         // token forks the counter into two independent tracks.
         server
-            .feed("counter", 0, tup(&[100]), Value::unit(), None, 1)
+            .feed("counter", 0, "100", None)
             .unwrap();
         server.tick(worker);
         server.tick(worker);

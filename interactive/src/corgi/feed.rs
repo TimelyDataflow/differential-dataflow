@@ -40,6 +40,28 @@ impl FeedDecoder {
         Ok(())
     }
 
+    /// Append one row written as a line of a framed feed: `<key> [val=<v>] [diff=<d>]`. The
+    /// enclosing feed supplies its time, so a line names none.
+    pub fn push_line(&mut self, line: &str) -> Result<(), String> {
+        let mut args = line.split_whitespace();
+        let Some(key) = args.next() else {
+            return Err("expected `<key> [val=<v>] [diff=<d>]`".into());
+        };
+        let (mut val, mut diff) = (None, 1);
+        for arg in args {
+            if let Some(value) = arg.strip_prefix("val=") {
+                val = Some(value);
+            } else if let Some(value) = arg.strip_prefix("diff=") {
+                diff = value.parse().map_err(|_| format!("diff= must be an integer, got {value:?}"))?;
+            } else if arg.starts_with("time=") {
+                return Err("time= is not allowed; a feed of several rows takes one time".into());
+            } else {
+                return Err(format!("unrecognized argument {arg:?}"));
+            }
+        }
+        self.push(key, val, diff)
+    }
+
     pub fn len(&self) -> usize {
         self.diffs.len()
     }

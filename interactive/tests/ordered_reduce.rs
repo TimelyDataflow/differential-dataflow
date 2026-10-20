@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use interactive::ir::Value as V;
-use interactive::server::{InputUpdate, Server};
+use interactive::server::Server;
 
 type Rows = Vec<(V, V, i64)>;
 
@@ -49,14 +49,10 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
         program.optimize();
         let mut col = Server::new();
         col.install(worker, "col", &program).unwrap();
-        let update = |k, n, xs: &[i64], diff| InputUpdate {
-            key: V::Tuple(vec![
-                V::Int(k),
-                V::Int(n),
-                V::List(xs.iter().copied().map(V::Int).collect()),
-            ]),
-            val: V::unit(),
-            diff,
+        let update = |k: i64, n: i64, xs: &[i64], diff: i64| (k, n, xs.to_vec(), diff);
+        // An update as a feed line: `tuple(k,n,list(xs)) diff=d`.
+        let line = |(k, n, xs, diff): &(i64, i64, Vec<i64>, i64)| {
+            format!("tuple({k},{n},list({})) diff={diff}", xs.iter().map(i64::to_string).collect::<Vec<_>>().join(","))
         };
         // Multiple batches, negative minima, proper prefixes, negative multiplicities, and an
         // empty-list output all matter: min sees negative net values, collect expands positives.
@@ -72,14 +68,8 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
             update(1, 7, &[4], 1),
             update(2, 0, &[3], -1),
         ];
-        let reverse = |xs: &[InputUpdate]| {
-            xs.iter()
-                .cloned()
-                .map(|mut u| {
-                    u.diff = -u.diff;
-                    u
-                })
-                .collect::<Vec<_>>()
+        let reverse = |xs: &[(i64, i64, Vec<i64>, i64)]| {
+            xs.iter().map(|(k, n, xs, diff)| (*k, *n, xs.clone(), -diff)).collect::<Vec<_>>()
         };
         for updates in [
             first.clone(),
@@ -89,7 +79,7 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
         ] {
             // Separate admissions exercise presentation across more than one input buffer.
             for chunk in updates.chunks(2) {
-                col.feed_batch("col", 0, chunk.to_vec()).unwrap();
+                col.feed("col", 0, &chunk.iter().map(line).collect::<Vec<_>>().join("\n"), None).unwrap();
             }
             col.tick(worker);
             let keyed = col.snapshot(worker, "keyed").unwrap().into_rows();
@@ -118,11 +108,8 @@ fn batched_equality_spans_windows_and_retracts_compound_keys() {
         let mut col = Server::new();
         col.install(worker, "col", &program).unwrap();
         for diff in [1, 1, -2] {
-            let updates: Vec<_> = (-2500..2500).map(|k| InputUpdate {
-                key: V::Tuple(vec![V::Int(k), V::List(vec![V::Int(k), V::Int(-k), V::Int(k + 1)])]),
-                val: V::unit(), diff,
-            }).collect();
-            col.feed_batch("col", 0, updates).unwrap();
+            let updates: Vec<String> = (-2500..2500).map(|k| format!("tuple({k},list({k},{},{})) diff={diff}", -k, k + 1)).collect();
+            col.feed("col", 0, &updates.join("\n"), None).unwrap();
             col.tick(worker);
             let keyed = col.snapshot(worker, "keyed").unwrap().into_rows();
             for name in ["minimum", "collected", "counted"] {

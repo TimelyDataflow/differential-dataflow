@@ -10,15 +10,13 @@ use interactive::ir::Value;
 use interactive::server::evaluate;
 use interactive::{lower, parse};
 
-fn tup(fields: &[i64]) -> Value {
-    Value::Tuple(fields.iter().map(|&n| Value::Int(n)).collect())
-}
-fn rows(rs: &[&[i64]]) -> Vec<(Value, Value)> {
-    rs.iter().map(|f| (tup(f), Value::unit())).collect()
+/// Rows of integer tuples and unit values, as feed lines (`1,2`).
+fn rows(rs: &[&[i64]]) -> Vec<String> {
+    rs.iter().map(|f| f.iter().map(i64::to_string).collect::<Vec<_>>().join(",")).collect()
 }
 
 /// Per-program inputs (arity matches each `.ddp`'s `input N` usage).
-fn inputs_for(prog: &str) -> Vec<Vec<(Value, Value)>> {
+fn inputs_for(prog: &str) -> Vec<Vec<String>> {
     let edges = rows(&[&[1, 2], &[2, 3], &[3, 4], &[5, 6], &[4, 2]]);
     match prog {
         "reach" => vec![edges, rows(&[&[1]])],

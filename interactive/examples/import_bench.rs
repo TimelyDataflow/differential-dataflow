@@ -101,7 +101,7 @@ fn main() {
             install(&mut server, worker, &name, &src);
             for r in 0..roots {
                 let root = (interactive::hash_u64(c * 1000 + r) % nodes) as i64;
-                server.feed(&name, 0, Value::Tuple(vec![Value::Int(root)]), Value::unit(), None, 1).unwrap();
+                server.feed(&name, 0, &root.to_string(), None).unwrap();
             }
             server.tick(worker);
             println!("consumer {c:>2}: {:>8.1} ms  mem {}", installed.elapsed().as_secs_f64() * 1e3, mem());

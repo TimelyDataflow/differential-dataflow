@@ -6,10 +6,6 @@ use interactive::ir::Value;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
-fn tup(fields: &[i64]) -> Value {
-    Value::Tuple(fields.iter().map(|&n| Value::Int(n)).collect())
-}
-
 fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str, src: &str) {
     let mut program = lower::lower_tree(parse::pipe::parse(src));
     program.optimize();
@@ -63,7 +59,7 @@ fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
         for epoch in 1..5i64 {
             if worker.index() == 0 {
                 for i in 0..10 {
-                    server.feed("undeclared", 0, tup(&[i * epoch]), Value::unit(), None, 1).unwrap();
+                    server.feed("undeclared", 0, &(i * epoch).to_string(), None).unwrap();
                 }
             }
             server.tick(worker);

@@ -1,8 +1,7 @@
 //! The corgi-native container: corgi columns for the (key,val) payload, times as a
 //! lane column, diffs a plain Rust Vec (corgi never touches the lattice). This is what flows on
 //! dataflow edges in the corgi backend; operators transform block→block via `eval_graph` with NO
-//! per-op transcode. Rows become columns only where in-process callers feed rows
-//! (`from_updates`); nothing converts columns back to rows outside tests.
+//! per-op transcode. Nothing converts between rows and columns outside tests.
 //!
 //! Trait surface: `Accountable + Default + Clone` (= `timely::Container`) for dataflow edges,
 //! `Negate`/`Enter`/`Leave`/`ResultsIn` for iterative scopes, and `ContainerBytes` (in
@@ -16,7 +15,7 @@ use differential_dataflow::collection::containers::{Enter, Leave, Negate, Result
 use differential_dataflow::difference::Abelian;
 
 use crate::corgi::col_times::{ColTimes, LaneSummary, Lanes};
-use crate::corgi::logic::{transcode_owned, untranscode};
+use crate::corgi::logic::untranscode;
 use crate::ir::Value as DValue;
 
 type Row = DValue;
@@ -59,10 +58,9 @@ impl<T: 'static, R: 'static> Accountable for CorgiContainer<T, R> {
 }
 
 impl<T: Lanes + 'static, R: Clone + 'static> CorgiContainer<T, R> {
-    /// Build a container from DDIR row updates at the collection's shapes — the **ingest
-    /// boundary** transcode (once per batch). The only rows→columns conversion in the corgi
-    /// backend: inside the dataflow every operator is columnar.
-    pub fn from_updates(updates: Vec<((Row, Row), T, R)>, kshape: &corgi::Shape, vshape: &corgi::Shape) -> Self {
+    /// Test convenience: a container from DDIR row updates, at the collection's shapes.
+    #[cfg(test)]
+    pub(crate) fn from_updates(updates: Vec<((Row, Row), T, R)>, kshape: &corgi::Shape, vshape: &corgi::Shape) -> Self {
         let len = updates.len();
         let (mut keys_rows, mut vals_rows) = (Vec::with_capacity(len), Vec::with_capacity(len));
         let (mut times, mut diffs) = (ColTimes::new(), Vec::with_capacity(len));
@@ -72,6 +70,7 @@ impl<T: Lanes + 'static, R: Clone + 'static> CorgiContainer<T, R> {
             times.push(&time);
             diffs.push(diff);
         }
+        use crate::corgi::logic::transcode_owned;
         CorgiContainer { keys: transcode_owned(keys_rows, kshape), vals: transcode_owned(vals_rows, vshape), times, diffs }
     }
 

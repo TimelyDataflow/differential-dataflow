@@ -36,12 +36,11 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str,
 }
 
 fn edge(server: &mut Server, src: i64, dst: i64, diff: i64) {
-    let row = Value::Tuple(vec![Value::Int(src), Value::Int(dst)]);
-    server.feed("prod", 0, row, Value::unit(), None, diff).unwrap();
+    server.feed("prod", 0, &format!("{src},{dst} diff={diff}"), None).unwrap();
 }
 
 fn root(server: &mut Server, name: &str, node: i64) {
-    server.feed(name, 0, Value::Tuple(vec![Value::Int(node)]), Value::unit(), None, 1).unwrap();
+    server.feed(name, 0, &node.to_string(), None).unwrap();
 }
 
 /// Snapshot each named export, each expected to be non-empty.

@@ -422,7 +422,7 @@ impl LineParser {
             }
             let rows = pending.rows.as_mut().expect("an unpoisoned feed has its input's shapes");
             let row = rows.len() + 1;
-            if let Err(error) = split_input_update(trimmed).and_then(|(key, val, diff)| rows.push(key, val, diff)) {
+            if let Err(error) = rows.push_line(trimmed) {
                 pending.poisoned = Some(format!("feed row {row}: {error}"));
                 pending.rows = None;
             }
@@ -543,31 +543,6 @@ enum ParseOutcome {
     },
 }
 
-
-/// Split one row of a framed feed into its key and value text and its diff. Its target and
-/// timestamp belong to the enclosing command, which keeps large requests compact and atomic.
-fn split_input_update(line: &str) -> Result<(&str, Option<&str>, Diff), String> {
-    let mut args = line.split_whitespace();
-    let Some(key) = args.next() else {
-        return Err("expected `<key> [val=<v>] [diff=<d>]`".into());
-    };
-    let mut val = None;
-    let mut diff: Diff = 1;
-    for tok in args {
-        if let Some(value) = tok.strip_prefix("val=") {
-            val = Some(value);
-        } else if let Some(value) = tok.strip_prefix("diff=") {
-            diff = value
-                .parse()
-                .map_err(|_| format!("diff= must be an integer, got {value:?}"))?;
-        } else if tok.starts_with("time=") {
-            return Err("time= is not allowed; a framed feed uses the current epoch".into());
-        } else {
-            return Err(format!("unrecognized argument {tok:?}"));
-        }
-    }
-    Ok((key, val, diff))
-}
 
 /// `args` without a trailing `as corgi`, and whether it was there.
 fn as_corgi<'a, 'b>(args: &'a [&'b str]) -> (&'a [&'b str], bool) {
@@ -1043,7 +1018,7 @@ mod tests {
         assert_eq!(reqid, "r0");
         assert!(result
             .as_ref()
-            .is_err_and(|error| error.contains("uses the current epoch")));
+            .is_err_and(|error| error.contains("time= is not allowed")));
         assert!(matches!(p.feed("r2 list"), Some((_, Ok(Cmd::List)))));
     }
 

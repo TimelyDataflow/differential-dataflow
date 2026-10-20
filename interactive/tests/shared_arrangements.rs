@@ -7,7 +7,7 @@
 //! requests are sound for the parent's arrangement.
 use interactive::ir::Value;
 use interactive::scope_ir::{Item, Node, Program, Ref, Scope, Source};
-use interactive::server::{InputUpdate, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 fn program(src: &str) -> Program {
@@ -29,12 +29,13 @@ fn arranged_imports(s: &Scope) -> usize {
     }).sum()
 }
 
-/// Edge changes per epoch: a few insertions and a few deletions of earlier insertions.
-fn churn(epochs: usize) -> Vec<Vec<InputUpdate>> {
+/// Edge changes per epoch, as feed lines: a few insertions and a few deletions of earlier
+/// insertions.
+fn churn(epochs: usize) -> Vec<String> {
     let mut state = 0x2545F4914F6CDD1Du64;
     let mut next = move |n: u64| { state ^= state << 13; state ^= state >> 7; state ^= state << 17; (state % n) as i64 };
     let mut live: Vec<(i64, i64)> = Vec::new();
-    let edge = |(s, d): (i64, i64), diff| InputUpdate { key: Value::Tuple(vec![Value::Int(s), Value::Int(d)]), val: Value::unit(), diff };
+    let edge = |(s, d): (i64, i64), diff: i64| format!("{s},{d} diff={diff}");
     (0..epochs).map(|epoch| {
         let mut batch = Vec::new();
         for _ in 0..if epoch == 0 { 30 } else { 4 } {
@@ -46,20 +47,20 @@ fn churn(epochs: usize) -> Vec<Vec<InputUpdate>> {
             let e = live.swap_remove(next(live.len() as u64) as usize);
             batch.push(edge(e, -1));
         }
-        batch
+        batch.join("\n")
     }).collect()
 }
 
 /// The export `result` after each epoch, read at worker 0.
-fn run(workers: usize, program: &Program, epochs: &[Vec<InputUpdate>]) -> Vec<Vec<(Value, Value, i64)>> {
+fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(Value, Value, i64)>> {
     let (program, epochs) = (program.clone(), epochs.to_vec());
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
         server.install(worker, "p", &program).unwrap();
         let mut seen = Vec::new();
         for batch in epochs.iter() {
-            let mine = if worker.index() == 0 { batch.clone() } else { Vec::new() };
-            server.feed_batch("p", 0, mine).unwrap();
+            let mine = if worker.index() == 0 { batch.as_str() } else { "" };
+            server.feed("p", 0, mine, None).unwrap();
             server.tick(worker);
             let mut rows = server.snapshot(worker, "result").unwrap().into_rows();
             rows.sort();

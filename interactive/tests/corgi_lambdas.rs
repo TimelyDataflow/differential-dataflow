@@ -4,15 +4,13 @@ use interactive::ir::Value;
 use interactive::server::evaluate;
 use interactive::{lower, parse};
 
-fn tup(fields: &[i64]) -> Value {
-    Value::Tuple(fields.iter().map(|&n| Value::Int(n)).collect())
-}
-fn rows(rs: &[&[i64]]) -> Vec<(Value, Value)> {
-    rs.iter().map(|f| (tup(f), Value::unit())).collect()
+/// Rows of integer tuples and unit values, as feed lines (`1,2`).
+fn rows(rs: &[&[i64]]) -> Vec<String> {
+    rs.iter().map(|f| f.iter().map(i64::to_string).collect::<Vec<_>>().join(",")).collect()
 }
 
 /// Evaluate both programs at one and three workers and assert all four agree, and have output.
-fn assert_same(terms: &str, lambdas: &str, inputs: &[Vec<(Value, Value)>]) {
+fn assert_same(terms: &str, lambdas: &str, inputs: &[Vec<String>]) {
     let tree = |src: &str| {
         let mut tree = lower::lower_tree(parse::pipe::parse(src));
         tree.optimize();
@@ -28,7 +26,7 @@ fn assert_same(terms: &str, lambdas: &str, inputs: &[Vec<(Value, Value)>]) {
     }
 }
 
-fn edges() -> Vec<(Value, Value)> {
+fn edges() -> Vec<String> {
     rows(&[&[1, 2], &[2, 3], &[3, 4], &[5, 6], &[4, 2], &[6, 5]])
 }
 
