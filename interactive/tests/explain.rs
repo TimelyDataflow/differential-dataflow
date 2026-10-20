@@ -395,6 +395,25 @@ fn unread_input_explanations_sufficient() {
     assert!(!sizes.is_empty());
 }
 
+/// A loop the first export does not read: no query's demand reaches its variable, whose demand
+/// then binds only to demand derived from itself, which gives it no shape, and the explained
+/// program would not install. The variable's demand declares its shape. (Found by `difftest`.)
+#[test]
+fn unread_loop_explanations_sufficient() {
+    const UNREAD: &str = r#"
+        let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+        let roots = edges | map((src, _) -> (src, ()));
+        reach: {
+            let step = x | join(edges, (_, (), dst) -> (dst, ()));
+            var x = (roots + step) | distinct;
+        }
+        export "result" = edges;
+        export "reach" = reach::x;
+    "#;
+    let sizes = assert_all_rows_sufficient(UNREAD, &[gen_edges(10, 12)]);
+    assert!(!sizes.is_empty());
+}
+
 /// Count outputs over duplicate-free inputs: sufficient today, because the
 /// keyed lookup demands every input row at the key, which is precisely the
 /// count's multiset.

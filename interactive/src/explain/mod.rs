@@ -659,8 +659,18 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     let mut var_addrs: Vec<Addr> = Vec::new();
     collect_var_addrs(&p.root, &[], &mut var_addrs);
     let mut demand: BTreeMap<Addr, Ref> = BTreeMap::new();
+    // A demand variable no query reaches is bound only to demand derived from itself, which says
+    // nothing of its shape: it declares the shape of the variable's rows as demand,
+    // `(K ; (V, chain…, q))`, with a coordinate per scope enclosing it.
+    let (shapes, _) = crate::shapes::infer(p, &|_| None);
     for a in &var_addrs {
         let dv = ex.variable(&format!("demand_var_{:?}_{:?}", a.path, a.site));
+        if let (Ref::Var(i), Site::Var(v)) = (&dv, &a.site) {
+            if let Some(user) = shapes.at(&a.path).vars[*v].clone() {
+                let fields = std::iter::once(user.val).chain(std::iter::repeat_n(corgi::Shape::Int, a.path.len() + 1)).collect();
+                ex.s.vars[*i].shape = Some((user.key, corgi::Shape::Prod(fields)));
+            }
+        }
         demand.insert(a.clone(), dv);
     }
 
