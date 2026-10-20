@@ -72,6 +72,12 @@ def product(fields):
     return '('+', '.join(fields)+')'
 
 
+def mask(e, code):
+    """Normalize truthiness only when the expression is not already a 0/1 mask."""
+    if e.op in ('==','!=','<','<=','>','>=','&&','or'): return code
+    return product([code,'0'])+' ne'
+
+
 def scalar(e, fields):
     """Print an expression inside a corgi lambda with named input fields."""
     op,args = e.op,e.args
@@ -91,9 +97,9 @@ def scalar(e, fields):
     if op == 'list':
         if not ts: raise ValueError('an empty list needs its element shape')
         return product(t+' enlist' for t in ts)+' append'
-    if op == 'if': return product([product([ts[0],'0'])+' ne',*ts[1:]])+' select'
+    if op == 'if': return product([mask(args[0],ts[0]),*ts[1:]])+' select'
     if op in ('&&','or'):
-        return product(product([t,'0'])+' ne' for t in ts)+(' all' if op=='&&' else ' any')
+        return product(mask(a,t) for a,t in zip(args,ts))+(' all' if op=='&&' else ' any')
     binary = {'+':'add','-':'sub','*':'mul','==':'eq','!=':'ne','<':'lt','<=':'le','>':'gt','>=':'ge',
               'append':'append','idiv':'div','fadd':'add','fsub':'sub','fmul':'mul','fdiv':'div'}
     unary = {'len':'len','float':'to_float','fneg':'neg'}
