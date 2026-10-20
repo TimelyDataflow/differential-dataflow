@@ -3,15 +3,15 @@
 -- input 0: (game, set, green, red, blue)
 
 let sets = input 0 : ((int, int, int, int, int) ; ());
-let maxg = sets | key(((game, _, g, _, _), _) -> (game, (1000000, g) sub)) | min | map((game, x) -> (game, (1000000, x) sub));
-let maxr = sets | key(((game, _, _, r, _), _) -> (game, (1000000, r) sub)) | min | map((game, x) -> (game, (1000000, x) sub));
-let maxb = sets | key(((game, _, _, _, b), _) -> (game, (1000000, b) sub)) | min | map((game, x) -> (game, (1000000, x) sub));
+let maxg = sets | map(((game, _, g, _, _), _) -> (game, (1000000, g) sub)) | min | map((game, x) -> (game, (1000000, x) sub));
+let maxr = sets | map(((game, _, _, r, _), _) -> (game, (1000000, r) sub)) | min | map((game, x) -> (game, (1000000, x) sub));
+let maxb = sets | map(((game, _, _, _, b), _) -> (game, (1000000, b) sub)) | min | map((game, x) -> (game, (1000000, x) sub));
 
 let power = maxg
     | join(maxr, (game, a, b) -> (game, (a, b) mul))
     | join(maxb, (game, a, b) -> (game, (a, b) mul));
 
 export "result" = power
-    | key((_, p) -> ((), p)) | collect
+    | map((_, p) -> ((), p)) | collect
     | value((_, ps) -> ps fold_add)
     | arrange | inspect(part2);

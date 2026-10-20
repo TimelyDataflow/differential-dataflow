@@ -22,7 +22,7 @@ use differential_dataflow::dynamic::pointstamp::PointStampSummary;
 use differential_dataflow::dynamic::feedback_summary;
 use differential_dataflow::collection::containers::{Enter, Leave, ResultsIn};
 
-use crate::ir::{Time, LinearOp, Projection, Reducer};
+use crate::ir::{Time, Lambda, LinearOp, Reducer};
 use crate::scope_ir as st;
 use crate::shapes::{ItemShapes, ScopeShapes};
 
@@ -48,10 +48,10 @@ pub trait Backend {
     fn enter_region<'s, 'r>(a: Self::Arr<'s>, region: Scope<'r, Time>) -> Self::Arr<'r>;
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, Self::Container>;
     /// `shapes` are the two inputs' row shapes.
-    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Lambda, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
     /// See `scope_ir::Node::HalfJoin`. `level` is the scope depth, which fixes the width of a time
     /// as data; `shapes` are the stream's and the arrangement's row shapes.
-    fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Projection, level: usize, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
+    fn half_join<'s>(stream: Collection<'s, Time, Self::Container>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, shapes: (st::RowShape, st::RowShape)) -> Collection<'s, Time, Self::Container>;
     /// `shape` is the input's row shape.
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s>;
     fn inspect<'s>(c: Collection<'s, Time, Self::Container>, label: String) -> Collection<'s, Time, Self::Container>;

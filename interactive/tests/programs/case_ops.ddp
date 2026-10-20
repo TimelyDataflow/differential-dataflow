@@ -5,18 +5,18 @@
 
 type Size = Small int | Big int;
 
-let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
-let tagged = pairs | key((a, b) -> (a, ((b, 15) lt, b inject Small, b inject Big) select));
+let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+let tagged = pairs | map((a, b) -> (a, ((b, 15) lt, b inject Small, b inject Big) select));
 
 let picked = tagged
-    | key((a, s) -> (a, (a, s) cap_sum match (Small ((a, x) -> (x, a) add), Big (_ -> -1))));
+    | map((a, s) -> (a, (a, s) cap_sum match (Small ((a, x) -> (x, a) add), Big (_ -> -1))));
 
 let sieved = tagged
     | filter((_, s) -> s match (Small (x -> (x, 12) lt), Big (x -> (x, 25) gt)));
 
 let maybe = pairs
-    | key((a, b) -> (a, (b, (b, 15) lt) branch Option map_variant None (_ -> ())))
-    | key((a, m) -> (a, m match (None (_ -> 0), Some (x -> (x, 2) mul))));
+    | map((a, b) -> (a, (b, (b, 15) lt) branch Option map_variant None (_ -> ())))
+    | map((a, m) -> (a, m match (None (_ -> 0), Some (x -> (x, 2) mul))));
 
 export "picked" = picked | arrange | inspect(total);
 export "sieved" = sieved | arrange | inspect(adt);

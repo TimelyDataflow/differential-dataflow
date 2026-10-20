@@ -5,7 +5,7 @@
 -- input 0 : ((int) ; ()): roots (node ;)
 
 let edges = import "iota:12" | map(((i), _) -> ((((i, 0) hash shr_b64 1, 8) rem), (((i, 1) hash shr_b64 1, 8) rem)));
-let roots = input 0 : ((int) ; ()) | key((n, ()) -> (n, ()));
+let roots = input 0 : ((int) ; ()) | map((n, ()) -> (n, ()));
 
 reach: {
     let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));

@@ -3,7 +3,7 @@
 -- from k successive self-joins (no substring primitive, no string literals).
 -- input 0: (line, pos, charcode)
 
-let chars = input 0 : ((int, int, int) ; ()) | key(((line, pos, c), _) -> ((line, pos), c));
+let chars = input 0 : ((int, int, int) ; ()) | map(((line, pos, c), _) -> ((line, pos), c));
 -- (line, pos ; code)
 
 let s2 = chars | map(((line, p), c0) -> ((line, (p, 1) add), (p, c0)))
@@ -38,6 +38,6 @@ let last  = findings | map((line, (pos, d)) -> (line, (pos neg, d))) | min | map
 let calib = first | join(last, (line, f, l) -> (line, ((f, 10) mul, l) add));
 
 export "result" = calib
-    | key((_, v) -> ((), v)) | collect
+    | map((_, v) -> ((), v)) | collect
     | value((_, vs) -> vs fold_add)
     | arrange | inspect(part2);

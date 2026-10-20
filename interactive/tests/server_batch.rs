@@ -157,7 +157,7 @@ fn fed_sums_arrive_at_their_time() {
 fn peek_by_key_reads_reference_keys() {
     timely::execute_directly(|worker| {
         let mut server = Server::new();
-        install(&mut server, worker, r#"export "rows" = input 0 : (List(int) ; ()) | key((k, ()) -> (k ref, ()));"#);
+        install(&mut server, worker, r#"export "rows" = input 0 : (List(int) ; ()) | map((k, ()) -> (k ref, ()));"#);
         let list = corgi::Shape::List(Box::new(corgi::Shape::Int));
         server.feed_columns("world", 0, decoded(&list, &["list(1,2)", "list(3)", "list()"]), None).unwrap();
         server.tick(worker);

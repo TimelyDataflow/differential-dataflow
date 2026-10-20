@@ -3,9 +3,9 @@
 -- input 0: rules (state, prio, field, cmp, val, next)
 -- input 1: parts (x, m, a, s)
 
-let rulesbys = input 0 : ((int, int, int, int, int, int) ; ()) | key(((st, prio, f, cmp, v, nx), ()) -> (st, (prio, f, cmp, v, nx)));
+let rulesbys = input 0 : ((int, int, int, int, int, int) ; ()) | map(((st, prio, f, cmp, v, nx), ()) -> (st, (prio, f, cmp, v, nx)));
 -- (state ; prio, field, cmp, val, next)
-let parts = input 1 : ((int, int, int, int) ; ()) | key(((x, m, a, s), ()) -> ((0, x, m, a, s), ()));
+let parts = input 1 : ((int, int, int, int) ; ()) | map(((x, m, a, s), ()) -> ((0, x, m, a, s), ()));
 
 move: {
     let mtch = mv | map(((st, x, m, a, s), ()) -> (st, (x, m, a, s)))
@@ -20,6 +20,6 @@ move: {
 }
 
 export "result" = move::mv | filter(((st, _, _, _, _), _) -> (st, -1) eq)
-    | key(((_, x, m, a, s), _) -> ((), (((x, m) add, a) add, s) add))
+    | map(((_, x, m, a, s), _) -> ((), (((x, m) add, a) add, s) add))
     | collect | map((_, vs) -> ((), vs fold_add))
     | arrange | inspect(part1);

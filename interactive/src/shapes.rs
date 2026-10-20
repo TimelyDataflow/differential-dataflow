@@ -6,20 +6,20 @@
 //! The diff is an integer.
 //!
 //! Shapes start at the program's sources, from their ascriptions or from the caller, and follow
-//! from each operator's rule. Scalar terms are typed by corgi's typer (`corgi::logic::shape_of_term`),
-//! so a shape here is the shape the corgi backend would compile against. Feedback variables take
+//! from each operator's rule. Slots are typed by corgi's typer (`corgi::logic::slot_shape`), so a
+//! shape here is the shape the corgi backend would compile against. Feedback variables take
 //! the shape of what is bound to them, found by iterating to a fixed point, unless they declare
 //! one. A declared variable or export is checked against the shape inferred for its value.
 //!
 //! A collection whose shape cannot be determined is `None`, and the reason is recorded as
-//! *unknown*: some source upstream has no shape. Shapes that are known but disagree (a term
+//! *unknown*: some source upstream has no shape. Shapes that are known but disagree (a slot
 //! that does not type, a join of different keys, a variable bound to another shape than it is
 //! used at) are *conflicts*: the program has no meaning at those shapes.
 
 use corgi::Shape;
 
-use crate::corgi::logic::shape_of_term;
-use crate::ir::{LinearOp, Reducer, Term};
+use crate::corgi::logic::slot_shape;
+use crate::ir::{Lambda, LinearOp, Reducer};
 use crate::scope_ir as st;
 
 /// The shape of a collection's updates.
@@ -163,17 +163,13 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, depth: usize) -> 
         steps.push((k.clone(), v.clone()));
         let env = [k.clone(), v.clone()];
         match op {
-            LinearOp::Project(p) => {
-                let nk = shape_of_term(&p.key, &env, None).map_err(|e| format!("map key: {e}"))?;
-                let nv = shape_of_term(&p.val, &env, None).map_err(|e| format!("map val: {e}"))?;
-                (k, v) = (nk, nv);
-            }
-            LinearOp::Filter(t) | LinearOp::EnterAt(t) => match shape_of_term(t, &env, None)? {
+            LinearOp::Project(p) => (k, v) = pair_shape(p, &env).map_err(|e| format!("map: {e}"))?,
+            LinearOp::Filter(t) | LinearOp::EnterAt(t) => match slot_shape(t, &env)? {
                 Shape::Int => {}
                 s => return Err(format!("predicate or delay of shape {s}, not an integer")),
             },
             LinearOp::Negate => {}
-            LinearOp::FlatMap(t) => match shape_of_term(t, &env, None)? {
+            LinearOp::FlatMap(t) => match slot_shape(t, &env)? {
                 Shape::List(e) => v = Shape::Prod(vec![Shape::Int, *e]),
                 s => return Err(format!("flatmap of shape {s}, not a list")),
             },
@@ -191,11 +187,19 @@ pub fn linear_shapes(ops: &[LinearOp], key: Shape, val: Shape, depth: usize) -> 
     Ok(steps)
 }
 
-/// The output value shape of `reduce(term)` over a key of shape `key` with values of shape `val`:
-/// the term reads the key and a `List` of `(val, diff)`, and must give a `List` of `(val, diff)`.
-fn reduce_shape(term: &Term, key: &Shape, val: &Shape) -> Result<Shape, String> {
+/// The `(key, val)` shapes a projection gives over rows of `rows`.
+fn pair_shape(projection: &Lambda, rows: &[Shape]) -> Result<(Shape, Shape), String> {
+    match slot_shape(projection, rows)? {
+        Shape::Prod(mut fs) if fs.len() == 2 => { let v = fs.pop().unwrap(); Ok((fs.pop().unwrap(), v)) }
+        other => Err(format!("gives {other}, not (key, val)")),
+    }
+}
+
+/// The output value shape of `reduce(lambda)` over a key of shape `key` with values of shape `val`:
+/// the lambda reads the key and a `List` of `(val, diff)`, and must give a `List` of `(val, diff)`.
+fn reduce_shape(lambda: &Lambda, key: &Shape, val: &Shape) -> Result<Shape, String> {
     let env = [key.clone(), Shape::List(Box::new(Shape::Prod(vec![val.clone(), Shape::Int])))];
-    match shape_of_term(term, &env, None).map_err(|e| format!("reduce: {e}"))? {
+    match slot_shape(lambda, &env).map_err(|e| format!("reduce: {e}"))? {
         Shape::List(e) => match *e {
             Shape::Prod(mut fs) if fs.len() == 2 && fs[1] == Shape::Int => Ok(fs.swap_remove(0)),
             other => Err(format!("reduce: output elements of shape {other}, not (val, diff)")),
@@ -204,11 +208,11 @@ fn reduce_shape(term: &Term, key: &Shape, val: &Shape) -> Result<Shape, String> 
     }
 }
 
-/// The `(key, val)` shapes of a `join_function` term's output rows. The term gives a list of
+/// The `(key, val)` shapes of a `join_function` lambda's output rows. The lambda gives a list of
 /// `((key, val), time, diff)`, with `time` the shape of a time at this depth.
-fn join_function_shape(term: &Term, env: &[Shape], depth: usize) -> Result<(Shape, Shape), String> {
+fn join_function_shape(lambda: &Lambda, env: &[Shape], depth: usize) -> Result<(Shape, Shape), String> {
     let wrong = |s: &Shape| format!("join_function: output of shape {s}, not a list of ((key, val), {}, Int)", time_shape(depth));
-    let shape = shape_of_term(term, env, None).map_err(|e| format!("join_function: {e}"))?;
+    let shape = slot_shape(lambda, env).map_err(|e| format!("join_function: {e}"))?;
     let Shape::List(elem) = &shape else { return Err(wrong(&shape)) };
     match &**elem {
         Shape::Prod(fs) if fs.len() == 3 && fs[1] == time_shape(depth) && fs[2] == Shape::Int => match &fs[0] {
@@ -241,10 +245,10 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
         st::Node::Join { left, right, projection } => {
             let (l, r) = (shapes.of(left)?, shapes.of(right)?);
             if l.key != r.key { return fail(format!("join keys {} and {}", l.key, r.key)); }
-            let env = [l.key, l.val, r.val];
-            let k = match shape_of_term(&projection.key, &env, None) { Ok(s) => s, Err(e) => return fail(format!("join key: {e}")) };
-            let v = match shape_of_term(&projection.val, &env, None) { Ok(s) => s, Err(e) => return fail(format!("join val: {e}")) };
-            Some(CollShape::new(k, v, depth))
+            match pair_shape(projection, &[l.key, l.val, r.val]) {
+                Ok((k, v)) => Some(CollShape::new(k, v, depth)),
+                Err(e) => fail(format!("join: {e}")),
+            }
         }
         st::Node::HalfJoin { stream, arrangement, projection, .. } => {
             let (s, a) = (shapes.of(stream)?, shapes.of(arrangement)?);
@@ -253,10 +257,10 @@ fn infer_node(node: &st::Node, shapes: &ScopeShapes, depth: usize, at: &str, pro
                 Shape::Prod(fs) if fs.len() == 2 && fs[1] == time_shape(depth) => fs[0].clone(),
                 other => return fail(format!("half_join: a stream value of shape {other}, not (val, {}) as `lift` makes it", time_shape(depth))),
             };
-            let env = [s.key, v, a.val];
-            let k = match shape_of_term(&projection.key, &env, None) { Ok(s) => s, Err(e) => return fail(format!("half_join key: {e}")) };
-            let v = match shape_of_term(&projection.val, &env, None) { Ok(s) => s, Err(e) => return fail(format!("half_join val: {e}")) };
-            Some(CollShape::new(k, Shape::Prod(vec![v, time_shape(depth)]), depth))
+            match pair_shape(projection, &[s.key, v, a.val]) {
+                Ok((k, v)) => Some(CollShape::new(k, Shape::Prod(vec![v, time_shape(depth)]), depth)),
+                Err(e) => fail(format!("half_join: {e}")),
+            }
         }
         st::Node::Reduce { input, reducer } => {
             let c = shapes.of(input)?;
@@ -287,13 +291,13 @@ mod tests {
     }
 
     const REACH: &str = r#"
-        let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
-        let roots = input 1 : ((int) ; ()) | key(((n), ()) -> ((n), ()));
+        let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+        let roots = input 1 : ((int) ; ()) | map(((n), ()) -> ((n), ()));
         reach: {
             let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
             var reach = roots + proposals | distinct;
         }
-        export "result" = reach::reach | key(_ -> ((), ())) | arrange;
+        export "result" = reach::reach | map(_ -> ((), ())) | arrange;
     "#;
 
     #[test]

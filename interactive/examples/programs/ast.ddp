@@ -10,11 +10,11 @@
 
 type Dir = Fwd int | Bwd int;
 
-let rows = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
+let rows = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
 
 -- eight derived values per row
 let lists = rows
-    | key((a, b) -> (a,
+    | map((a, b) -> (a,
           ( a enlist, b enlist, (a, b) add enlist, (a, b) mul enlist
           , ((a, b) sub, 32768) add enlist, (b, b) mul enlist
           , (a, a) mul enlist, (a, (b, b) mul) add enlist
@@ -26,7 +26,7 @@ let exploded = lists | flatmap((_, l) -> l);
 -- bucket by (position, magnitude); payload folds a four-element list, wrapped in a variant
 -- and matched straight back out (the tag is the point, not the payload).
 let tagged = exploded
-    | key((a, (pos, x)) ->
+    | map((a, (pos, x)) ->
            let sum = (0, (a enlist, x enlist, (a, x) mul enlist, (x, x) mul enlist) append) fold ((acc, y) -> (acc, y) add) in
            ( (pos, (8, ((x, 500000) lt, 0, 1) select) mul) add
            , ((x, 250000) lt, sum inject Fwd, sum inject Bwd) select match (Fwd (s -> s), Bwd (s -> s))

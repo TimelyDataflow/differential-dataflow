@@ -2,7 +2,7 @@
 -- sum of the two numbers' product per gear.
 -- input 0: (row, col, charcode)
 
-let cells    = input 0 : ((int, int, int) ; ()) | filter(((_, _, c), _) -> (c, 46) ne) | key(((r, col, c), _) -> ((r, col), c));
+let cells    = input 0 : ((int, int, int) ; ()) | filter(((_, _, c), _) -> (c, 46) ne) | map(((r, col, c), _) -> ((r, col), c));
 let numerals = cells | filter((_, c) -> ((c, 48) ge, (c, 57) le) all) | map((cell, c) -> (cell, (c, 48) sub));
 let gears    = cells | filter((_, c) -> (c, 42) eq);
 
@@ -45,6 +45,6 @@ export "result" = gearvals
     | collect
     | filter((_, vs) -> (vs len, 2) eq)
     | map((_, vs) -> ((), ((0, vs) get, (1, vs) get) mul))
-    | key((_, p) -> ((), p)) | collect
+    | map((_, p) -> ((), p)) | collect
     | value((_, ps) -> ps fold_add)
     | arrange | inspect(part2);

@@ -38,7 +38,7 @@ use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
 use crate::corgi::logic::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar};
 use corgi::{Graph, NumOp, Shape};
-use crate::ir::{Diff, LinearOp, Projection, Reducer, Time};
+use crate::ir::{Diff, Lambda, LinearOp, Reducer, Time};
 use crate::scope_ir as st;
 
 /// The corgi container on dataflow edges, and the columnar trace — the shorthands the `Backend`
@@ -62,11 +62,11 @@ impl Plan {
     fn new(op: &LinearOp, kshape: Shape, vshape: Shape, level: usize) -> Plan {
         let (k, v) = (&kshape, &vshape);
         let (what, graph) = match op {
-            LinearOp::Project(p) => ("map", Some(compile_projection(&p.key, &p.val, k, v))),
+            LinearOp::Project(p) => ("map", Some(compile_projection(p, &[kshape.clone(), vshape.clone()]))),
             LinearOp::Filter(cond) => ("filter", Some(compile_predicate(cond, k, v))),
             LinearOp::EnterAt(field) => ("enter_at", Some(compile_scalar(field, k, v))),
             LinearOp::FlatMap(list) => ("flatmap", Some(compile_flatmap(list, k, v))),
-            LinearOp::JoinFunction(term) => ("join_function", Some(compile_join_function(term, k, v, level + 1))),
+            LinearOp::JoinFunction(lambda) => ("join_function", Some(compile_join_function(lambda, k, v, level + 1))),
             LinearOp::Negate | LinearOp::LiftIter | LinearOp::Lift => ("", None),
         };
         let graph = graph.map(|g| g.unwrap_or_else(|e| panic!("{what}: type error at shapes ({kshape}, {vshape}): {e}")));
@@ -83,7 +83,7 @@ impl Plan {
 
 /// Apply a `LinearOp` chain to one corgi container (the corgi-native compute per batch).
 /// Project = corgi `eval_graph`; Filter = corgi mask + `gather`; FlatMap = `eval_graph` to a list
-/// column + a structural explode; Negate = Rust. Every term is columnar — there is no row-wise
+/// column + a structural explode; Negate = Rust. Every slot is columnar — there is no row-wise
 /// path inside the dataflow — and each op's graph was compiled when the operator was built
 /// (`plans`). An empty batch passes through untouched: it has no rows to compute.
 /// The data<->time ops are columnar and total: EnterAt reads its delay field as a column and
@@ -144,7 +144,7 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
                 c
             }
             // The inverse of `EnterAt`: a value read OUT of each row's time. Vals gain one
-            // integer field; keys, times and diffs are untouched, and no term is compiled.
+            // integer field; keys, times and diffs are untouched, and no slot is compiled.
             //
             // A tuple gains a field, and unit is the empty tuple: columnar it arrives as
             // `CValue::Unit`, not an empty `Prod`, so `Unit` must become `Prod([iter])`.
@@ -395,11 +395,11 @@ impl Backend for CorgiBackend {
         }
     }
 
-    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Projection, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
+    fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Lambda, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
         // The proxy-join seam drives the backend blockwise under the driver's fuel; the backend
-        // compiles the projection once, now, at both inputs' shapes (shape-directed, for `Spread`),
-        // and emits corgi columns directly as `CorgiContainer`s — column-native, no row round-trip.
-        let backend = CorgiJoinBackend::new(&projection.key, &projection.val, [k, v0, v1]);
+        // compiles the projection once, now, at both inputs' shapes, and emits corgi columns
+        // directly as `CorgiContainer`s — column-native, no row round-trip.
+        let backend = CorgiJoinBackend::new(projection, [k, v0, v1]);
         let tactic = || RetimeJoin(ProxyJoinTactic::new(backend));
         match (l, r) {
             (Arr::Local(l), Arr::Local(r)) => join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic()).as_collection(),
@@ -409,13 +409,13 @@ impl Backend for CorgiBackend {
         }
     }
 
-    fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Projection, level: usize, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
+    fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
         // dogs3's driver owns progress and yielding; corgi supplies when an update is unblocked
         // (`HalfJoinBatcher`) and how released updates meet the arrangement (`CorgiHalfJoin`).
         // `CorgiPact` places each update on the worker holding its key, as `arrange` placed the rows.
         // The stream's value is `(val, time)`, as `lift` makes it; the projection reads the val.
         let Shape::Prod(mut v0) = v0 else { panic!("half_join: a stream value of shape {v0}, not (val, time)") };
-        let half_join = CorgiHalfJoin::new(&projection.key, &projection.val, strict, level + 1, [k, v0.swap_remove(0), v1]);
+        let half_join = CorgiHalfJoin::new(projection, strict, level + 1, [k, v0.swap_remove(0), v1]);
         let tactic = || RetimeHalfJoin(half_join);
         let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
         match arrangement {

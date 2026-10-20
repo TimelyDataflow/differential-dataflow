@@ -15,7 +15,7 @@
 //!     records the row holding its key, which is what `emit` reads.
 //!   * the value callback — `reduce_brackets` runs ONE crossing per wave over every `(key, time)`
 //!     bracket, building the output value COLUMNS directly (Count → an `Int` column, Distinct → a
-//!     `Unit`, Min → the chosen input rows, Collect → a `List`, a term → its graph's output over
+//!     `Unit`, Min → the chosen input rows, Collect → a `List`, a lambda → its graph's output over
 //!     every bracket's key and `(val, diff)` list), never through DDIR rows.
 //!   * materialize — gather the emitted keys and values from the pools' columns and seal a
 //!     `CorgiChunk` batch column-natively.
@@ -151,8 +151,8 @@ impl<T> CorgiReduceBackend<T> {
     /// type check keeps from being reached.
     pub fn with_window(reducer: Reducer, (kshape, vshape): (Shape, Shape), window_size: usize) -> Self {
         let graph = match &reducer {
-            Reducer::Expr(term) => {
-                let g = compile_reduce(term, &kshape, &vshape)
+            Reducer::Expr(lambda) => {
+                let g = compile_reduce(lambda, &kshape, &vshape)
                     .unwrap_or_else(|e| panic!("reduce: type error at shapes ({kshape}, {vshape}): {e}"));
                 Some((kshape, vshape, g))
             }
@@ -292,7 +292,7 @@ where
     /// The one value crossing for a wave: every `(key, time)` bracket at once. Builds a column of the
     /// desired output values, one row each, and returns it with each bracket's end among its rows.
     /// `input[k] = (value_id, accumulated diff)`; bracket `i` is `input[ends[i-1]..ends[i]]`, non-empty.
-    /// As with `reduce_term`, the harness consolidates each bracket in ascending value-id order.
+    /// As with `reduce_lambda`, the harness consolidates each bracket in ascending value-id order.
     fn reduce_brackets(&mut self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<usize>) {
         let mut out_ends: Vec<usize> = Vec::with_capacity(ends.len());
         match self.reducer {
@@ -347,7 +347,7 @@ where
                 }
                 (self.input.gather(&min_reps), out_ends)
             }
-            Reducer::Expr(_) => unreachable!("a term's brackets are `reduce_term`'s"),
+            Reducer::Expr(_) => unreachable!("a lambda's brackets are `reduce_lambda`'s"),
             Reducer::Collect => {
                 // One row per bracket: the values sorted in DDIR observable order,
                 // each repeated by its diff, as a `List`. Ascending ids already give that order;
@@ -383,14 +383,14 @@ where
     }
 
     /// As [`Self::reduce_brackets`] for `Reducer::Expr`, whose output rows carry diffs: every
-    /// bracket's key and its values, as a list of `(val, diff)`, through the term's graph at once.
+    /// bracket's key and its values, as a list of `(val, diff)`, through the lambda's graph at once.
     /// Returns the output values, their diffs, and each bracket's end among them.
     ///
     /// The harness presents each bracket consolidated, so its diffs are non-zero and its value ids
     /// ascend, which is value order: `present` numbers each key's values in sorted order. The
-    /// brackets are presented as they are. One with no input has no output, and the term does not
+    /// brackets are presented as they are. One with no input has no output, and the lambda does not
     /// see it.
-    fn reduce_term(&self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<Diff>, Vec<usize>) {
+    fn reduce_lambda(&self, ends: &[usize], input: &[(u64, Diff)]) -> (CValue, Vec<Diff>, Vec<usize>) {
         // Per bracket with input: its index, its end in `input`, and the row holding its key.
         let (mut blocks, mut key_refs) = (Vec::new(), Vec::new());
         let mut start = 0;
@@ -522,7 +522,7 @@ where
     }
 
     fn reduce_corrections(&mut self, keys: &[i64], in_ends: &[usize], input: &[(u64, Diff)], out_ends: &[usize], output: &[(u64, Diff)]) -> (Vec<(u64, Diff)>, Vec<usize>) {
-        // Each key wants its rows of `desired`, each with its diff (once each, but for a term's), and
+        // Each key wants its rows of `desired`, each with its diff (once each, but for a lambda's), and
         // has `(id, diff)`s of output. The
         // correction nets the two by value: a wanted row equal to an output id's value counts
         // toward that id, and one equal to none gets a new id. Keys have a handful of each.
@@ -552,13 +552,13 @@ where
         let (in_ends, input) = if split { (&sub_ends[..], &sub_input[..]) } else { (in_ends, input) };
         // The desired rows, and each one's diff where it is not one copy.
         let (desired, desired_diffs, desired_ends) = match self.reducer {
-            Reducer::Expr(_) => { let (d, diffs, e) = self.reduce_term(in_ends, input); (d, Some(diffs), e) }
+            Reducer::Expr(_) => { let (d, diffs, e) = self.reduce_lambda(in_ends, input); (d, Some(diffs), e) }
             _ => { let (d, e) = self.reduce_brackets(in_ends, input); (d, None, e) }
         };
         let fresh = self.output.columns.len();
         let prior_refs = self.output.refs.len();
         if !desired.is_empty() { self.output.columns.push(desired); }
-        // The usual reducers (including single-result terms) reconcile one desired value with
+        // The usual reducers (including single-result lambdas) reconcile one desired value with
         // at most one old value per real key. Compare all those pairs at once, by coordinates into
         // the existing columns. Keys with multiple outputs retain the general reconciliation path;
         // batching their Cartesian candidate sets would add work that an early match avoids.
@@ -907,18 +907,10 @@ mod tests {
         let early: Vec<_> = early.into_iter().filter(|r| r.2.outer < 2).collect();
         let stamp = |outer| Time::new(outer, PointStamp::new(std::iter::empty().collect()));
 
-        // A term: the weighted sum of the values' first fields, once, and how many values, twice negated.
-        let term = {
-            use crate::ir::{BinOp, Term as Tm, UnOp};
-            let b = Box::new;
-            let weighted = Tm::Binary(BinOp::Mul, b(Tm::Proj(b(Tm::Proj(b(Tm::Bound(0)), 0)), 0)), b(Tm::Proj(b(Tm::Bound(0)), 1)));
-            let sum = Tm::Fold { list: b(Tm::Var(1)), init: b(Tm::Int(0)), step: b(Tm::Binary(BinOp::Add, b(Tm::Bound(1)), b(weighted))) };
-            Tm::List(vec![
-                Tm::Tuple(vec![Tm::Tuple(vec![sum]), Tm::Int(1)]),
-                Tm::Tuple(vec![Tm::Tuple(vec![Tm::Unary(UnOp::Len, b(Tm::Var(1)))]), Tm::Int(-2)]),
-            ])
-        };
-        for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect, Reducer::Expr(term)] {
+        // A lambda: the weighted sum of the values' first fields, once, and how many values, twice negated.
+        let lambda = crate::ir::Lambda::new("let (_, vals) = input in \
+            ((((0, vals) fold ((acc, ((a, _), d)) -> (acc, (a, d) mul) add)), 1) enlist, ((vals len), -2) enlist) append".into(), &corgi::Scope::default());
+        for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect, Reducer::Expr(lambda)] {
             let out_shape = match reducer {
                 Reducer::Count => Shape::Int,
                 Reducer::Distinct => Shape::Unit,

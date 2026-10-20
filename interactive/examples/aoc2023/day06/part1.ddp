@@ -4,7 +4,7 @@
 -- disagreeing by float drift; enumeration is exact).
 -- input 0: (time, distance)
 
-let races = input 0 : ((int, int) ; ()) | key(((t, d), ()) -> (t, d));
+let races = input 0 : ((int, int) ; ()) | map(((t, d), ()) -> (t, d));
 
 cands: {
     let step = c | filter(((t, h), ()) -> ((h, 1) add, t) lt) | map(((t, h), ()) -> ((t, (h, 1) add), ()));
@@ -19,6 +19,6 @@ let wins = cands::c
 -- (time ; n_wins)
 
 export "result" = wins
-    | key((_, n) -> ((), n)) | collect
+    | map((_, n) -> ((), n)) | collect
     | map((_, ns) -> ((), ((1, ns) fold ((acc, n) -> (acc, n) mul))))
     | arrange | inspect(part1);

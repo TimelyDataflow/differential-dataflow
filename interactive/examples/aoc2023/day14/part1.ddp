@@ -4,7 +4,7 @@
 -- row 0 remove the no-blocker case; rank counts include self (no defaults).
 -- input 0: (row, col, code) 1-indexed; 'O'=79 '#'=35 '.'=46
 
-let cells = input 0 : ((int, int, int) ; ()) | key(((r, c, code), ()) -> ((r, c), code));
+let cells = input 0 : ((int, int, int) ; ()) | map(((r, c, code), ()) -> ((r, c), code));
 let os    = cells | filter((_, code) -> (code, 79) eq) | map((rc, _) -> (rc, ()));
 let cubes = cells | filter((_, code) -> (code, 35) eq) | map((rc, _) -> (rc, ()));
 
@@ -26,7 +26,7 @@ let cnt = seg | join(seg, ((c, b), r, r2) -> ((c, b, r), r2))
 -- (c, b, r ; n): rank incl. self
 let rolled = cnt | map(((c, b, _), n) -> (((b, n) add, c), ()));    -- (newr, c)
 
-let maxr = cells | key(((r, _), _) -> ((), (1000000, r) sub)) | min
+let maxr = cells | map(((r, _), _) -> ((), (1000000, r) sub)) | min
     | map((_, v) -> ((), (1000000, v) sub));
 export "result" = rolled | map(((r, _), _) -> ((), r))
     | join(maxr, (_, r, m) -> ((), ((1, m) add, r) sub))

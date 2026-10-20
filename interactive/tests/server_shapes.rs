@@ -14,7 +14,7 @@ fn program(src: &str) -> Program {
 
 fn ints(n: usize) -> Shape { Shape::Prod(vec![Shape::Int; n]) }
 
-const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));"#;
+const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));"#;
 
 
 #[test]
@@ -24,7 +24,7 @@ fn exports_publish_their_shapes() {
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
         assert_eq!(server.trace_shape("edges"), Some((ints(1), ints(1))));
         // An undeclared import takes the shape its trace is published at.
-        server.install(worker, "consumer", &program(r#"export "flipped" = import "edges" | key(((src), (dst)) -> ((dst), (src, 0)));"#)).unwrap();
+        server.install(worker, "consumer", &program(r#"export "flipped" = import "edges" | map(((src), (dst)) -> ((dst), (src, 0)));"#)).unwrap();
         assert_eq!(server.trace_shape("flipped"), Some((ints(1), ints(2))));
         // An input must declare its shape.
         let err = server.install(worker, "loose", &program(r#"export "loose" = input 0;"#)).unwrap_err();
@@ -57,7 +57,7 @@ fn conflicting_shapes_reject_the_install() {
         assert!(err.contains("join keys"), "{err}");
         // A field of an integer, through an import whose shape is published.
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        let err = server.install(worker, "proj", &program(r#"export "p" = import "edges" | key(((src), _) -> ((src .1), ()));"#
+        let err = server.install(worker, "proj", &program(r#"export "p" = import "edges" | map(((src), _) -> ((src .1), ()));"#
 )).unwrap_err();
         assert!(err.contains("conflicting shapes"), "{err}");
         assert!(server.snapshot(worker, "p").is_err());

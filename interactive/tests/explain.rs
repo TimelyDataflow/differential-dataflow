@@ -22,12 +22,12 @@ use interactive::{explain, lower, parse};
 /// edges are queryable. Mirrors `examples/programs/scc.ddp` minus the final
 /// aggregation, with its nodes as one-field tuples.
 const SCC_ROW: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
-    let trans = edges | key((src, dst) -> (dst, src));
+    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+    let trans = edges | map((src, dst) -> (dst, src));
     outer: {
         let scc = edges + trim;
         fwd: {
-            let nodes = edges | key((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
+            let nodes = edges | map((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
             let labels = proposals + nodes | min;
             var proposals = labels | join(scc, (_, label, dst) -> (dst, label));
         }
@@ -35,9 +35,9 @@ const SCC_ROW: &str = r#"
             | join(fwd::labels, ((src), (dst), (l)) -> ((dst), (src, l)))
             | join(fwd::labels, (dst, (src, l), (m)) -> (dst, (src, l, m)))
             | filter((_, (_, l, m)) -> (l, m) eq)
-            | key((dst, (src, _, _)) -> (dst, (src)));
+            | map((dst, (src, _, _)) -> (dst, (src)));
         bwd: {
-            let nodes = trans | key((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
+            let nodes = trans | map((_, dst) -> (dst, dst)) | enter_at((_, (n)) -> n);
             let labels = proposals + nodes | min;
             var proposals = labels | join(trim_fwd, (_, label, dst) -> (dst, label));
         }
@@ -45,7 +45,7 @@ const SCC_ROW: &str = r#"
             | join(bwd::labels, ((src), (dst), (l)) -> ((dst), (src, l)))
             | join(bwd::labels, (dst, (src, l), (m)) -> (dst, (src, l, m)))
             | filter((_, (_, l, m)) -> (l, m) eq)
-            | key((dst, (src, _, _)) -> (dst, (src)));
+            | map((dst, (src, _, _)) -> (dst, (src)));
         var trim = trim_bwd - edges;
     }
     export "result" = outer::scc;
@@ -53,14 +53,14 @@ const SCC_ROW: &str = r#"
 
 /// Transitive closure, with the closure's pairs as the result.
 const TC_ROW: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
+    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
     outer: {
         let tc = edges + more
-            | key(((a), (b)) -> ((a, b), ()))
+            | map(((a), (b)) -> ((a, b), ()))
             | distinct
-            | key(((a, b), ()) -> ((a), (b)));
+            | map(((a, b), ()) -> ((a), (b)));
         var more = tc
-            | key((a, b) -> (b, a))
+            | map((a, b) -> (b, a))
             | join(edges, (_, a, c) -> (a, c));
     }
     export "result" = outer::tc;
@@ -68,8 +68,8 @@ const TC_ROW: &str = r#"
 
 /// Reachability from roots (two inputs), the reached set as the result.
 const REACH_ROW: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
-    let roots = input 1 : ((int) ; ()) | key(((n), ()) -> ((n), ()));
+    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+    let roots = input 1 : ((int) ; ()) | map(((n), ()) -> ((n), ()));
     reach: {
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
         var reach = roots + proposals | distinct;
@@ -377,8 +377,8 @@ fn report_demand_excess() {
 /// inputs the keyed all-rows demand happens to be exactly what the count
 /// needs.
 const INDEG_ROW: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
-    export "result" = edges | key((_, dst) -> (dst, ())) | count;
+    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+    export "result" = edges | map((_, dst) -> (dst, ())) | count;
 "#;
 
 /// Count outputs over duplicate-free inputs: sufficient today, because the
@@ -421,8 +421,8 @@ fn count_duplicate_inputs_sufficient() {
 #[test]
 fn reduce_lambda_explanations_sufficient_small() {
     const SUM_ROW: &str = r#"
-        let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
-        export "result" = edges | key((src, dst) -> (dst, src))
+        let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+        export "result" = edges | map((src, dst) -> (dst, src))
             | reduce((_, vals) -> (((0, vals) fold ((acc, ((v), d)) -> (acc, (v, d) mul) add)), 1) enlist);
     "#;
     let sizes = assert_all_rows_sufficient(SUM_ROW, &[gen_edges(20, 22)]);
@@ -469,7 +469,7 @@ fn fuzz_explanations_sufficient() {
 /// demanded exploded output back to the input edge that carried it. This is the
 /// op that used to `panic!` in explain.
 const FLATMAP_ROW: &str = r#"
-    let rows = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), ((a enlist, b enlist) append)));
+    let rows = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> ((a), ((a enlist, b enlist) append)));
     export "result" = rows | flatmap((_, (l)) -> l);
 "#;
 
@@ -483,13 +483,13 @@ fn flatmap_explanations_sufficient_small() {
 /// carries more after the user's fields: reach, with an always-true filter on the edges and a
 /// flatmap that reads the key.
 const LAMBDAS: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst))) | filter((_, (d)) -> (d, d) eq);
-    let roots = input 1 : ((int) ; ()) | key(((n), ()) -> ((n), ()));
+    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst))) | filter((_, (d)) -> (d, d) eq);
+    let roots = input 1 : ((int) ; ()) | map(((n), ()) -> ((n), ()));
     reach: {
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
         var reach = roots + proposals | distinct;
     }
-    export "result" = reach::reach | key((k, _) -> (k, k)) | flatmap(((a), (b)) -> (a enlist, b enlist) append);
+    export "result" = reach::reach | map((k, _) -> (k, k)) | flatmap(((a), (b)) -> (a enlist, b enlist) append);
 "#;
 
 #[test]
@@ -529,7 +529,7 @@ fn scalar_explanations_sufficient_small() {
 /// lookup ("demand all same-key inputs"), so no new rule is needed; this
 /// confirms the existing path handles a `List`-valued reducer output.
 const COLLECT_ROW: &str = r#"
-    let rows = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+    let rows = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> ((a), (b)));
     export "result" = rows | collect;
 "#;
 
@@ -548,8 +548,8 @@ fn collect_explanations_sufficient_small() {
 
 /// `enter_at` through the rewrite, at depth 1.
 const REACH_ENTER_AT: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
-    let roots = input 1 : ((int) ; ()) | key(((n), ()) -> ((n), ()));
+    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+    let roots = input 1 : ((int) ; ()) | map(((n), ()) -> ((n), ()));
     reach: {
         let seeds = roots | enter_at(((n), ()) -> n);
         let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
@@ -566,9 +566,9 @@ fn enter_at_explanations_sufficient() {
 
 /// A `min` reducer in an iterative loop, at depth 1.
 const MIN_LOOP: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
+    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
     outer: {
-        let nodes = edges | key((_, dst) -> (dst, dst));
+        let nodes = edges | map((_, dst) -> (dst, dst));
         let labels = proposals + nodes | min;
         var proposals = labels | join(edges, (_, label, dst) -> (dst, label));
     }
@@ -583,11 +583,11 @@ fn min_loop_explanations_sufficient() {
 /// SCC's shape — depth-2 nesting, `min`, three joins, a filtered feedback — with
 /// the feedback not negated; the twin below differs only in that line.
 const SCC_ONE_SCOPE: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
+    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
     outer: {
         let scc = edges + trim;
         fwd: {
-            let nodes = edges | key((_, dst) -> (dst, dst));
+            let nodes = edges | map((_, dst) -> (dst, dst));
             let labels = proposals + nodes | min;
             var proposals = labels | join(scc, (_, label, dst) -> (dst, label));
         }
@@ -595,7 +595,7 @@ const SCC_ONE_SCOPE: &str = r#"
             | join(fwd::labels, ((src), (dst), (l)) -> ((dst), (src, l)))
             | join(fwd::labels, (dst, (src, l), (m)) -> (dst, (src, l, m)))
             | filter((_, (_, l, m)) -> (l, m) eq)
-            | key((dst, (src, _, _)) -> (dst, (src)));
+            | map((dst, (src, _, _)) -> (dst, (src)));
         var trim = trim_fwd | filter(((n), _) -> (n, 1000000) gt);
     }
     export "result" = outer::scc;
@@ -603,11 +603,11 @@ const SCC_ONE_SCOPE: &str = r#"
 
 /// The same program with `var trim = trim_fwd - edges`.
 const SCC_ONE_SCOPE_NEGATED: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
+    let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
     outer: {
         let scc = edges + trim;
         fwd: {
-            let nodes = edges | key((_, dst) -> (dst, dst));
+            let nodes = edges | map((_, dst) -> (dst, dst));
             let labels = proposals + nodes | min;
             var proposals = labels | join(scc, (_, label, dst) -> (dst, label));
         }
@@ -615,7 +615,7 @@ const SCC_ONE_SCOPE_NEGATED: &str = r#"
             | join(fwd::labels, ((src), (dst), (l)) -> ((dst), (src, l)))
             | join(fwd::labels, (dst, (src, l), (m)) -> (dst, (src, l, m)))
             | filter((_, (_, l, m)) -> (l, m) eq)
-            | key((dst, (src, _, _)) -> (dst, (src)));
+            | map((dst, (src, _, _)) -> (dst, (src)));
         var trim = trim_fwd - edges;
     }
     export "result" = outer::scc;

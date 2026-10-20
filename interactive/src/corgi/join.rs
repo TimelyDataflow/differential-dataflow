@@ -44,8 +44,8 @@ use corgi::{shape_of_value, Graph, NumOp, Shape, Value as CValue};
 use crate::corgi::chunk::{colliding_keys, int_lane, key_is_hashed, recover_key_ref, rewrap, CorgiChunk};
 use crate::corgi::col_times::ColTime;
 use crate::corgi::container::CorgiContainer;
-use crate::corgi::logic::compile_join_projection;
-use crate::ir::{Diff, Term};
+use crate::corgi::logic::compile_projection;
+use crate::ir::{Diff, Lambda};
 
 type CBatch<T> = Rc<ChunkBatch<CorgiChunk<T, Diff>>>;
 
@@ -54,8 +54,8 @@ const TARGET_OUT: usize = 1 << 18;
 /// Coordinate packing: chunk index in the high bits, row in the low `COORD_BITS`.
 const COORD_BITS: u32 = 48;
 
-/// The corgi [`ProxyJoinBackend`]: holds the projection of the `Term`s (`Var(0)=key`,
-/// `Var(1)=val0`, `Var(2)=val1`), compiled at the shapes of the columns it meets.
+/// The corgi [`ProxyJoinBackend`]: holds the projection, a lambda over `(key, val0, val1)`,
+/// compiled at the shapes of the columns it meets.
 pub struct CorgiJoinBackend<T: ColTime> {
     /// Identifier tokens in the current block that cover more than one real key. `advance` writes
     /// this and the immediately following `cross` reads it before the next `advance`; only matches
@@ -67,10 +67,10 @@ pub struct CorgiJoinBackend<T: ColTime> {
 }
 
 impl<T: ColTime> CorgiJoinBackend<T> {
-    /// The projection `key ; val` over inputs of the key's and both values' shapes. A type error
-    /// is a panic with corgi's message: install type-checked the program, so it is not reached.
-    pub fn new(key: &Term, val: &Term, [k, v0, v1]: [Shape; 3]) -> Self {
-        let g = compile_join_projection(key, val, &k, &v0, &v1)
+    /// The projection over inputs of the key's and both values' shapes. A type error is a panic
+    /// with corgi's message: install type-checked the program, so it is not reached.
+    pub fn new(projection: &Lambda, [k, v0, v1]: [Shape; 3]) -> Self {
+        let g = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
             .unwrap_or_else(|e| panic!("join projection: type error at shapes ({k}, {v0}, {v1}): {e}"));
         CorgiJoinBackend { colliding: Vec::new(), projection: ([k, v0, v1], g), _t: PhantomData }
     }
@@ -887,7 +887,7 @@ mod tests {
 
     /// A backend projecting `(key ; (val0, val1))` from inputs of these key and value shapes.
     fn backend(shapes: [Shape; 3]) -> CorgiJoinBackend<u64> {
-        CorgiJoinBackend::new(&Term::Var(0), &Term::Tuple(vec![Term::Var(1), Term::Var(2)]), shapes)
+        CorgiJoinBackend::new(&Lambda::new("let (k, v0, v1) = input in (k, (v0, v1))".into(), &corgi::Scope::default()), shapes)
     }
 
     fn pair() -> Shape { Shape::Prod(vec![Shape::Int, Shape::Int]) }

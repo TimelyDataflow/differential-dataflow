@@ -209,39 +209,40 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
 }
 
 /// In-memory [`Dataflow`] over `Vec<(Value, Value)>`, for the contract below:
-/// projections and predicates run through the `Term` interpreter (`ir::eval`),
-/// and `join` is a nested-loop equi-join on the key.
+/// projections and predicates run a row at a time (`eval_corgi_row`), and `join` is a
+/// nested-loop equi-join on the key.
 #[cfg(test)]
 mod mem {
     use super::Dataflow;
-    use crate::ir::{eval, Projection, Term, Value};
+    use crate::corgi::logic::eval_corgi_row;
+    use crate::ir::{Lambda, Value};
 
     pub type Coll = Vec<(Value, Value)>;
     pub struct Mem;
 
+    /// A projection's `(key, val)` on one row of its slot.
+    fn pair(p: &Lambda, rows: Vec<Value>) -> (Value, Value) {
+        let Value::Tuple(mut kv) = eval_corgi_row(p, Value::Tuple(rows)) else { panic!("a projection gives (key, val)") };
+        let v = kv.pop().unwrap();
+        (kv.pop().unwrap(), v)
+    }
+
     impl Dataflow for Mem {
         type Handle = Coll;
-        type Proj = Projection;
-        type Pred = Term;
-        fn project(&mut self, c: &Coll, p: Projection) -> Coll {
-            c.iter().map(|(k, v)| {
-                let mut e = vec![k.clone(), v.clone()];
-                (eval(&p.key, &mut e), eval(&p.val, &mut e))
-            }).collect()
+        type Proj = Lambda;
+        type Pred = Lambda;
+        fn project(&mut self, c: &Coll, p: Lambda) -> Coll {
+            c.iter().map(|(k, v)| pair(&p, vec![k.clone(), v.clone()])).collect()
         }
-        fn filter(&mut self, c: &Coll, p: Term) -> Coll {
-            c.iter().filter(|(k, v)| {
-                let mut e = vec![k.clone(), v.clone()];
-                eval(&p, &mut e).truthy()
-            }).cloned().collect()
+        fn filter(&mut self, c: &Coll, p: Lambda) -> Coll {
+            c.iter().filter(|(k, v)| eval_corgi_row(&p, Value::Tuple(vec![k.clone(), v.clone()])).truthy()).cloned().collect()
         }
-        fn join(&mut self, l: &Coll, r: &Coll, p: Projection) -> Coll {
+        fn join(&mut self, l: &Coll, r: &Coll, p: Lambda) -> Coll {
             let mut out = Vec::new();
             for (lk, lv) in l {
                 for (rk, rv) in r {
                     if lk == rk {
-                        let mut e = vec![lk.clone(), lv.clone(), rv.clone()];
-                        out.push((eval(&p.key, &mut e), eval(&p.val, &mut e)));
+                        out.push(pair(&p, vec![lk.clone(), lv.clone(), rv.clone()]));
                     }
                 }
             }
@@ -260,8 +261,7 @@ mod value_contract {
     use super::*;
     use crate::explain::Val;
     use super::mem::{Coll, Mem};
-    use crate::ir::Value;
-    use crate::ir::{Projection, Term};
+    use crate::ir::{Lambda, Value};
 
     type Row = Value;
 
@@ -277,11 +277,8 @@ mod value_contract {
         SideInfo { witness, forward: vec![], user_len }
     }
     fn sorted(mut c: Coll) -> Coll { c.sort(); c }
-    fn proj(k: Term, v: Term) -> Projection { Projection { key: k, val: v } }
-    /// Slot `n`'s user value: the whole key for `0`, else the envelope's first field.
-    fn user(n: usize) -> Term {
-        if n == 0 { Term::Var(0) } else { Term::Proj(Box::new(Term::Var(n)), 0) }
-    }
+    /// A projection over explain's rows, whose values are envelopes.
+    fn proj(src: &str) -> Lambda { Lambda::new(src.into(), &corgi::Scope::default()) }
 
     #[test]
     fn sp_depth0_keeps_only_value_matching_pair() {
@@ -324,7 +321,7 @@ mod value_contract {
     #[test]
     fn lossy_via_fallback_recovers_input() {
         // proj: K_out = V_in, V_out = K_in.
-        let p = proj(user(1), user(0));
+        let p = proj("let (k, v) = input in (v.0, k)");
         let pair = vec![(one(3), env(8, &[]))];             // (K_in=3 ; V_in=8)
         let dep = vec![(one(8), env(3, &[9]))];             // (K_out=8 ; V_out=3, q=9)
         let out = lossy_lookup::<Val, _>(&mut Mem, &dep, &side(pair, 0), 0, &p);
@@ -334,7 +331,7 @@ mod value_contract {
     #[test]
     fn join_demands_both_inputs() {
         // proj: K_out = K, V_out = V_L.
-        let p = proj(user(0), user(1));
+        let p = proj("let (k, l, r) = input in (k, l.0)");
         let left = side(vec![(one(5), env(7, &[]))], 0);
         let right = side(vec![(one(5), env(9, &[]))], 0);
         let dep = vec![(one(5), env(7, &[1]))];             // (K_out=5 ; V_out=7, q=1)

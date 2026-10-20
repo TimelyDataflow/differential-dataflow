@@ -3,7 +3,7 @@
 -- (g1+j)(g1+j-1) - g1(g1-1). No scalar let: stage via successive maps.
 -- input 0: (id, c1..c5, bid) charcodes
 
-let stage = input 0 : ((int, int, int, int, int, int, int) ; ()) | key(((id, c1, c2, c3, c4, c5, bid), ()) ->
+let stage = input 0 : ((int, int, int, int, int, int, int) ; ()) | map(((id, c1, c2, c3, c4, c5, bid), ()) ->
     # doubled non-joker pair count
     let n1 = (c1, 74) ne in
     let n2 = (c2, 74) ne in
@@ -50,6 +50,6 @@ let bids = hands | map((_, (id, _, _, _, _, _, _, bid)) -> (id, bid));
 let above = ranks | join(bids, (id, n, bid) -> (id, (n, bid) mul));
 
 export "result" = above + bids
-    | key((_, x) -> ((), x)) | collect
+    | map((_, x) -> ((), x)) | collect
     | map((_, xs) -> ((), xs fold_add))
     | arrange | inspect(part2);

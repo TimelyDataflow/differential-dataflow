@@ -295,7 +295,7 @@ fn assert_shared_import_requests(workers: usize) {
             &mut reader,
             name,
             &format!(
-                "{name} load {name} begin\nlet q = input 0 : ((int, int) ; ());\nlet e = import \"edges\";\nexport \"{name}.answer\" = (q | key(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, (rid), (node)) -> ((rid), (node)));
+                "{name} load {name} begin\nlet q = input 0 : ((int, int) ; ());\nlet e = import \"edges\";\nexport \"{name}.answer\" = (q | map(((rid, n), ()) -> ((n), (rid)))) | join(e, (_, (rid), (node)) -> ((rid), (node)));
 \n{name} end-load\n"
             ),
         );

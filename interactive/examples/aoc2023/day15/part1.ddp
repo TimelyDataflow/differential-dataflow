@@ -3,12 +3,12 @@
 -- residue in [0,256)).
 -- input 0: (r, pos, code), 1-indexed
 
-let chars = input 0 : ((int, int, int) ; ()) | key(((r, pos, code), ()) -> ((r, pos), code));
+let chars = input 0 : ((int, int, int) ; ()) | map(((r, pos, code), ()) -> ((r, pos), code));
 let lens = chars | map(((r, _), _) -> (r, ())) | count;   -- (r ; len)
 
-let ktab = chars | key(_ -> ((), ())) | distinct
+let ktab = chars | map(_ -> ((), ())) | distinct
     | flatmap(_ -> (0, 34) range)
-    | key((_, (_, k)) -> ((), k));
+    | map((_, (_, k)) -> ((), k));
 -- (; k)
 
 hash: {
@@ -22,5 +22,5 @@ hash: {
 
 export "result" = hash::st | map(((r, i, h), _) -> (r, (i, h)))
     | join(lens, (r, (i, h), n) -> (r, (i, h, n))) | filter((_, (i, _, n)) -> (i, n) eq)
-    | key((_, (_, h, _)) -> ((), h)) | collect | map((_, ps) -> ((), ps fold_add))
+    | map((_, (_, h, _)) -> ((), h)) | collect | map((_, ps) -> ((), ps fold_add))
     | arrange | inspect(part1);

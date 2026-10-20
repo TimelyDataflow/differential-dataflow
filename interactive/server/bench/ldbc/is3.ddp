@@ -2,7 +2,7 @@
 let request = input 0 : ((int, int) ; ());
 let edge = import "edge" : ((int) ; (int, int));
 let person = import "person" : ((int) ; (List(int), List(int), int));
-let friends = request | key(((rid, pid), ()) -> ((pid), rid))
+let friends = request | map(((rid, pid), ()) -> ((pid), rid))
     | join(edge, (_, rid, (q, created)) -> ((q), (rid, created)))
     | join(person, ((q), (rid, created), (first, last, _)) -> (rid, (created neg, q, first, last)));
 export "is3.answer" = friends | collect | flatmap((_, vs) -> vs)

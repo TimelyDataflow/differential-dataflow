@@ -3,7 +3,7 @@
 -- contribute negative products (their oracle answer is negative too).
 -- input 0: rules (state, prio, field, cmp, val, next)
 
-let rules = input 0 : ((int, int, int, int, int, int) ; ()) | key(((st, prio, f, cmp, v, nx), ()) -> ((st, prio), (f, cmp, v, nx)));
+let rules = input 0 : ((int, int, int, int, int, int) ; ()) | map(((st, prio, f, cmp, v, nx), ()) -> ((st, prio), (f, cmp, v, nx)));
 -- (state, prio ; field, cmp, val, next)
 
 flow: {
@@ -34,12 +34,12 @@ flow: {
             (((f, 2) eq, isgt) all, (v, ah) min, ah) select,
             (((f, 3) eq, islt) all, (v, sl) max, sl) select,
             (((f, 3) eq, isgt) all, (v, sh) min, sh) select), ()));
-    var reg = (rules | key(_ -> ((), ())) | distinct | map(_ -> ((0, 1, 1, 4000, 1, 4000, 1, 4000, 1, 4000), ())))
+    var reg = (rules | map(_ -> ((), ())) | distinct | map(_ -> ((0, 1, 1, 4000, 1, 4000, 1, 4000, 1, 4000), ())))
         + b1 + b2 | arrange;
 }
 
 export "result" = flow::reg | filter(((st, _, _, _, _, _, _, _, _, _), _) -> (st, -1) eq)
-    | key(((_, _, xl, xh, ml, mh, al, ah, sl, sh), _) ->
+    | map(((_, _, xl, xh, ml, mh, al, ah, sl, sh), _) ->
         let wx = ((1, xh) add, xl) sub in
         let wm = ((1, mh) add, ml) sub in
         let wa = ((1, ah) add, al) sub in

@@ -2,16 +2,16 @@
 -- dirs: r=0 l=1 u=2 d=3; '.'=46 '-'=45 '|'=124 '/'=47 '\'=92
 -- input 0: (row, col, code) 1-indexed
 
-let cells = input 0 : ((int, int, int) ; ()) | key(((r, c, code), ()) -> ((r, c), code));
+let cells = input 0 : ((int, int, int) ; ()) | map(((r, c, code), ()) -> ((r, c), code));
 
-let shift = cells | key(_ -> ((), ())) | distinct | flatmap(_ -> [
+let shift = cells | map(_ -> ((), ())) | distinct | flatmap(_ -> [
       (0, 46, 0, 1, 0), (0, 45, 0, 1, 0), (0, 124, 1, 0, 3), (0, 124, -1, 0, 2),
       (0, 47, -1, 0, 2), (0, 92, 1, 0, 3), (1, 46, 0, -1, 1), (1, 45, 0, -1, 1),
       (1, 124, 1, 0, 3), (1, 124, -1, 0, 2), (1, 47, 1, 0, 3), (1, 92, -1, 0, 2),
       (2, 46, -1, 0, 2), (2, 45, 0, 1, 0), (2, 45, 0, -1, 1), (2, 124, -1, 0, 2),
       (2, 47, 0, 1, 0), (2, 92, 0, -1, 1), (3, 46, 1, 0, 3), (3, 45, 0, 1, 0),
       (3, 45, 0, -1, 1), (3, 124, 1, 0, 3), (3, 47, 0, -1, 1), (3, 92, 0, 1, 0) ])
-    | key((_, (_, (d, s, dr, dc, nd))) -> ((d, s), (dr, dc, nd)));
+    | map((_, (_, (d, s, dr, dc, nd))) -> ((d, s), (dr, dc, nd)));
 -- (dir, sym ; dr, dc, newdir)
 
 beam: {
@@ -23,4 +23,4 @@ beam: {
 
 export "result" = beam::l | map(((r, c, _), _) -> ((r, c), ()))
     | join(cells, (rc, _, _) -> (rc, ())) | distinct
-    | key(_ -> ((), ())) | count | arrange | inspect(part1);
+    | map(_ -> ((), ())) | count | arrange | inspect(part1);

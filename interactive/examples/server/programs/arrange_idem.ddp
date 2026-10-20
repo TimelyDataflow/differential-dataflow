@@ -16,7 +16,7 @@
 -- RULE  arrange(x) ≡ x   when x's class is already arranged.
 -- output trace "classes": (node-id ; class-leader).
 
-let node  = input 0 : ((int) ; (int, List(int))) | key(((id), v) -> (id, v));    -- id ; op, [children]
+let node  = input 0 : ((int) ; (int, List(int))) | map(((id), v) -> (id, v));    -- id ; op, [children]
 let elems = node | map((id, _) -> (id, id));                     -- id ; id   (seed each to itself)
 
 -- explode each node's children (UNNEST via flatmap) so they can be
@@ -42,11 +42,11 @@ eqsat: {
 
     -- arrange-idempotence rule:
     let arranged = producing | join(eq, (_, _, cls) -> (cls, ())) | distinct;     -- arranged class ;
-    let arr_cls  = arr | key((a, c) -> (c, a)) | join(eq, (_, a, cls) -> (a, cls));    -- arrange_id ; child class
-    let rule     = arr_cls | key((a, cls) -> (cls, a)) | join(arranged, (cls, a, _) -> (a, cls));  -- arrange_id ; child class
+    let arr_cls  = arr | map((a, c) -> (c, a)) | join(eq, (_, a, cls) -> (a, cls));    -- arrange_id ; child class
+    let rule     = arr_cls | map((a, cls) -> (cls, a)) | join(arranged, (cls, a, _) -> (a, cls));  -- arrange_id ; child class
 
     -- congruence edges + rule edges, symmetrized, then one min-label hop
-    let edges = cong + (cong | key((a, b) -> (b, a))) + rule + (rule | key((a, b) -> (b, a)));
+    let edges = cong + (cong | map((a, b) -> (b, a))) + rule + (rule | map((a, b) -> (b, a)));
     let prop  = eq | join(edges, (_, l, n) -> (n, l));
     var eq = elems + prop | min;
 }

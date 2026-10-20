@@ -1,20 +1,20 @@
 -- K-Core (k=2): maximal subgraph where every node has degree >= 2.
 -- input 0: edges (src, dst ;)
 
-let edges = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
-let back = edges | key((a, b) -> (b, a));
+let edges = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+let back = edges | map((a, b) -> (b, a));
 let symm = edges + back;
 
 peel: {
     let active = symm + removals;
 
     -- Count degree of each node among active edges.
-    let deg = active | key((n, _) -> (n, ())) | count;
+    let deg = active | map((n, _) -> (n, ())) | count;
     -- deg: (node ; count)
 
     -- Nodes with degree >= 2 survive.
     let alive = deg | filter((_, c) -> (c, 2) ge);
-    let alive_set = alive | key((n, _) -> (n, ()));
+    let alive_set = alive | map((n, _) -> (n, ()));
 
     -- Edges whose source is not alive get removed.
     -- semijoin active with alive_set, negate to get removals.
@@ -25,4 +25,4 @@ peel: {
 }
 
 let core_edges = symm + peel::removals;
-export "result" = core_edges | key((n, _) -> (n, ())) | count | inspect(kcore_degrees);
+export "result" = core_edges | map((n, _) -> (n, ())) | count | inspect(kcore_degrees);

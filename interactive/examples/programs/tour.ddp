@@ -5,28 +5,28 @@
 
 type Dir = Fwd int | Bwd int;
 
-let edges = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
-let roots = input 1 : ((int) ; ()) | key(((n), ()) -> (n, ()));
+let edges = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
+let roots = input 1 : ((int) ; ()) | map(((n), ()) -> (n, ()));
 
 -- Scalars: arithmetic, (signed) compares, unaries, `hash`, `select`.
 let scored = edges
-    | key((a, b) -> (a, ((b, 2) mul, b neg, ((b, 2) gt, 1, 0) select, ((a) hash shr_b64 1, 97) rem)))
+    | map((a, b) -> (a, ((b, 2) mul, b neg, ((b, 2) gt, 1, 0) select, ((a) hash shr_b64 1, 97) rem)))
     | filter((_, (_, n, _, _)) -> ((n, -99) eq, 0) eq);
 
 -- Floats: explicit `to_float`, IEEE arithmetic and math, IEEE compares, `fint` (truncating) back.
 let floated = edges
-    | key((a, b) -> (a, ((2786.0, 10.0) div, (b to_float, (1.0, 4.0) div) call fpow) mul))
-    | key((k, f) -> (k, (f, f call fint, (f call fsqrt, 18.0) call fgt)));
+    | map((a, b) -> (a, ((2786.0, 10.0) div, (b to_float, (1.0, 4.0) div) call fpow) mul))
+    | map((k, f) -> (k, (f, f call fint, (f call fsqrt, 18.0) call fgt)));
 
 -- Sums: tagged intro, `match` with binder + captured var (`cap_sum`), and a tag test.
 let tagged = edges
-    | key((a, b) -> (a, ((a, b) lt, b inject Fwd, b inject Bwd) select))
-    | key((a, s) -> (a, ((a, s) cap_sum match (Fwd ((a, x) -> (x, a) add), Bwd (_ -> -1)), s match (Fwd (_ -> 0), Bwd (_ -> 1)))));
+    | map((a, b) -> (a, ((a, b) lt, b inject Fwd, b inject Bwd) select))
+    | map((a, s) -> (a, ((a, s) cap_sum match (Fwd ((a, x) -> (x, a) add), Bwd (_ -> -1)), s match (Fwd (_ -> 0), Bwd (_ -> 1)))));
 
 -- Lists: intro (`enlist`, `append`), `fold`, `len`; `flatmap`/`collect` round trip.
 let folded = edges
-    | key((a, b) -> (a, (a enlist, b enlist, 7 enlist) append))
-    | key((k, l) -> (k, ((0, l) fold ((acc, x) -> (acc, x) add), l len)));
+    | map((a, b) -> (a, (a enlist, b enlist, 7 enlist) append))
+    | map((k, l) -> (k, ((0, l) fold ((acc, x) -> (acc, x) add), l len)));
 let nested = edges | flatmap((a, b) -> (b enlist, a enlist) append) | collect;
 
 -- Reducers.
@@ -48,4 +48,4 @@ export "nested" = nested | arrange | inspect(nest);
 export "counts" = counted | arrange | inspect(total);
 export "least"  = least | arrange | inspect(total);
 export "uniq"   = uniq | arrange | inspect(total);
-export "reach"  = reach::reach | key(_ -> ((), ())) | arrange | inspect(total);
+export "reach"  = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);

@@ -8,9 +8,9 @@ use interactive::{lower, parse};
 fn mismatched_lambdas_are_refused_at_install() {
     timely::execute_directly(|worker| {
         for (src, says) in [
-            (r#"export "a" = input 0 : ((int, int) ; ()) | key(((s), ()) -> ((s), ()));"#, "wants a product of 1 field"),
+            (r#"export "a" = input 0 : ((int, int) ; ()) | map(((s), ()) -> ((s), ()));"#, "wants a product of 1 field"),
             (r#"export "a" = input 0 : ((int, int) ; ()) | filter(((s, d), ()) -> (s, d));"#, "not an integer"),
-            (r#"export "a" = input 0 : ((int, int) ; ()) | key(((s, d), ()) -> (s, d, ) add);"#, "expected an expression"),
+            (r#"export "a" = input 0 : ((int, int) ; ()) | map(((s, d), ()) -> (s, d, ) add);"#, "expected an expression"),
         ] {
             let mut program = lower::lower_tree(parse::pipe::parse(src));
             program.optimize();
