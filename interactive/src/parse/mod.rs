@@ -5,12 +5,11 @@
 //!
 //! This module is syntax only. The *collection* language (`Expr`/`Stmt`)
 //! defined here describes the dataflow graph; its slots are corgi lambdas
-//! ([`Lambda`]). The retiring scalar language, [`Term`], is still read by
-//! [`pipe::parse_term`] for the tests of its compiler.
+//! ([`Lambda`]).
 
 pub mod pipe;
 
-use crate::ir::{BinOp, F64Fn, Lambda, Reducer, SumTy, Term, UnOp};
+use crate::ir::{Lambda, Reducer};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
@@ -63,68 +62,8 @@ pub enum Stmt {
     Export(String, Option<crate::scope_ir::RowShape>, Expr),
 }
 
-/// Build a scalar builtin call from its (already-parsed) argument terms.
-/// Validates arity and pulls out int-literal tags/indices. `args` is
-/// consumed in place.
-pub(crate) fn build_builtin(name: &str, args: &mut Vec<Term>) -> Term {
-    let int_arg = |t: &Term| -> i64 {
-        match t { Term::Int(n) => *n, o => panic!("builtin `{}` expects an int literal here, got {:?}", name, o) }
-    };
-    match name {
-        "tuple" => Term::Tuple(std::mem::take(args)),
-        "list" => Term::List(std::mem::take(args)),
-        "inject" | "variant" => { assert_eq!(args.len(), 2, "{}(tag, payload)", name); let payload = Box::new(args.remove(1)); Term::Inject { tag: Box::new(args.remove(0)), payload, sum: SumTy::Dynamic } }
-        "case" => { assert!(args.len() >= 2, "case(scrutinee, arm0, ...)"); let scrutinee = Box::new(args.remove(0)); Term::Case { scrutinee, arms: std::mem::take(args), default: None } }
-        "fold" => { assert_eq!(args.len(), 3, "fold(list, init, step)"); let step = Box::new(args.remove(2)); let init = Box::new(args.remove(1)); let list = Box::new(args.remove(0)); Term::Fold { list, init, step } }
-        "proj" => { assert_eq!(args.len(), 2, "proj(value, index)"); let i = int_arg(&args[1]) as usize; Term::Proj(Box::new(args.remove(0)), i) }
-        "len" => { assert_eq!(args.len(), 1, "len(value)"); Term::Unary(UnOp::Len, Box::new(args.remove(0))) }
-        "istag" => { assert_eq!(args.len(), 2, "istag(tag, value)"); let tag = int_arg(&args[0]) as u32; Term::Unary(UnOp::IsTag(tag), Box::new(args.remove(1))) }
-        "not" => { assert_eq!(args.len(), 1, "not(value)"); Term::Unary(UnOp::Not, Box::new(args.remove(0))) }
-        "float" | "fneg" => {
-            assert_eq!(args.len(), 1, "{name}(value)");
-            Term::Unary(if name == "float" { UnOp::ToF64 } else { UnOp::F64Neg }, Box::new(args.remove(0)))
-        }
-        "fint" => { assert_eq!(args.len(), 1, "fint(value)"); Term::Unary(UnOp::F64ToInt, Box::new(args.remove(0))) }
-        name if F64Fn::ALL.iter().any(|(n, _)| *n == name) => {
-            assert_eq!(args.len(), 1, "{name}(value)");
-            let f = F64Fn::ALL.iter().find(|(n, _)| *n == name).unwrap().1;
-            Term::Unary(UnOp::F64Fn(f), Box::new(args.remove(0)))
-        }
-        "fpow" | "fpowi" | "fmin" | "fmax" | "feq" | "fne" | "flt" | "fle" | "fgt" | "fge" => {
-            assert_eq!(args.len(), 2, "{name}(a, b)");
-            let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0));
-            let op = match name {
-                "fpow" => BinOp::F64Pow, "fpowi" => BinOp::F64PowI, "fmin" => BinOp::F64Min, "fmax" => BinOp::F64Max,
-                "feq" => BinOp::F64Eq, "fne" => BinOp::F64Ne, "flt" => BinOp::F64Lt, "fle" => BinOp::F64Le,
-                "fgt" => BinOp::F64Gt, _ => BinOp::F64Ge,
-            };
-            Term::Binary(op, a, b)
-        }
-        "fadd" | "fsub" | "fmul" | "fdiv" => {
-            assert_eq!(args.len(), 2, "{name}(a, b)");
-            let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0));
-            Term::Binary(match name { "fadd" => BinOp::F64Add, "fsub" => BinOp::F64Sub, "fmul" => BinOp::F64Mul, _ => BinOp::F64Div }, a, b)
-        }
-        "or" => { assert_eq!(args.len(), 2, "or(a, b)"); let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0)); Term::Binary(BinOp::Or, a, b) }
-        "idiv" | "append" => {
-            assert_eq!(args.len(), 2, "{name}(a, b)");
-            let b = Box::new(args.remove(1)); let a = Box::new(args.remove(0));
-            Term::Binary(if name == "idiv" { BinOp::Div } else { BinOp::Append }, a, b)
-        }
-        "if" => { assert_eq!(args.len(), 3, "if(cond, then, els)"); let els = Box::new(args.remove(2)); let then = Box::new(args.remove(1)); let cond = Box::new(args.remove(0)); Term::If { cond, then, els } }
-        "hash" => { assert!(args.len() >= 2, "hash(bound, key, ...)"); Term::Hash(std::mem::take(args)) }
-        other if crate::ir::lookup(other).is_some() => {
-            let f = crate::ir::lookup(other).unwrap();
-            assert_eq!(args.len(), f.args.len(), "{other} takes {} arguments", f.args.len());
-            Term::Call(other.to_string(), std::mem::take(args))
-        }
-        other => panic!("Unknown scalar builtin (and no function registered by that name): {}", other),
-    }
-}
-
-/// Whether `name` is a builtin of the scalar language (registered functions may not shadow one).
+/// Whether `name` is a word every lambda's scope starts with, or a keyword (registered functions
+/// may not take one).
 pub fn is_builtin(name: &str) -> bool {
-    const NAMES: &[&str] = &["tuple", "list", "inject", "variant", "case", "fold", "proj", "len", "istag", "not", "float", "fneg", "fint",
-        "fpow", "fpowi", "fmin", "fmax", "feq", "fne", "flt", "fle", "fgt", "fge", "fadd", "fsub", "fmul", "fdiv", "or", "idiv", "append", "if", "hash"];
-    NAMES.contains(&name) || F64Fn::ALL.iter().any(|(n, _)| *n == name) || pipe::is_keyword(name)
+    crate::corgi::logic::is_base_word(name) || pipe::is_keyword(name)
 }

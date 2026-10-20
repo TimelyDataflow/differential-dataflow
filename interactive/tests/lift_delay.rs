@@ -86,7 +86,7 @@ fn rows_are_as_expected() {
     }
 }
 
-/// A time of the wrong width, or a `join_function` term not of the form `((key, val), time, diff)`, is
+/// A time of the wrong width, or a `join_function` lambda not giving a list of `((key, val), time, diff)`, is
 /// refused at install.
 #[test]
 fn ill_shaped_times_are_refused_at_install() {

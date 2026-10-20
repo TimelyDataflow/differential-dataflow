@@ -266,25 +266,28 @@ mod tests {
     fn int() -> Shape { Shape::Int }
     fn list(s: Shape) -> Shape { Shape::List(Box::new(s)) }
 
-    /// Rows read here are the rows the term evaluator reads, as columns. (The evaluator has no
-    /// float literal, so the floats are given as numbers.)
+    /// Rows read here are the rows written, as columns.
     #[test]
-    fn decodes_as_the_term_evaluator_does() {
+    fn decodes_the_rows_written() {
         let node = Shape::Sum(vec![int(), Shape::Prod(vec![int(), int()]), Shape::Unit]);
         let key = Shape::Prod(vec![int(), list(int()), node]);
         let val = Shape::Prod(vec![Shape::Float, list(list(int()))]);
-        let rows: &[(&str, &str, f64, &str)] = &[
-            ("tuple(1,list(104,105),inject(0,-7))", "2.5", 2.5, "list(list(1),list())"),
-            ("tuple(2,list(),inject(1,tuple(300,4)))", "-1e3", -1000.0, "list()"),
-            ("tuple(-3,list(255),inject(2,tuple()))", "0", 0.0, "list(list())"),
+        let (i, l, t) = (Value::Int, Value::List, Value::Tuple);
+        let tag = |n: u32, v: Value| Value::Variant(n, Box::new(v));
+        let rows: Vec<(&str, Value, &str, f64, &str, Value)> = vec![
+            ("tuple(1,list(104,105),inject(0,-7))", t(vec![i(1), l(vec![i(104), i(105)]), tag(0, i(-7))]),
+             "2.5", 2.5, "list(list(1),list())", l(vec![l(vec![i(1)]), l(vec![])])),
+            ("tuple(2,list(),inject(1,tuple(300,4)))", t(vec![i(2), l(vec![]), tag(1, t(vec![i(300), i(4)]))]),
+             "-1e3", -1000.0, "list()", l(vec![])),
+            ("tuple(-3,list(255),inject(2,tuple()))", t(vec![i(-3), l(vec![i(255)]), tag(2, Value::unit())]),
+             "0", 0.0, "list(list())", l(vec![l(vec![])])),
         ];
-        let term = |s: &str| crate::ir::eval(&crate::parse::pipe::parse_term(s), &mut Vec::new());
         let mut decoder = FeedDecoder::new(&key, &val);
         let (mut keys, mut vals) = (Vec::new(), Vec::new());
-        for &(k, float, x, lists) in rows {
+        for (k, key_row, float, x, lists, lists_row) in rows {
             decoder.push(k, Some(&format!("tuple({float},{lists})")), 1).unwrap();
-            keys.push(term(k));
-            vals.push(Value::Tuple(vec![Value::f64_value(x), term(lists)]));
+            keys.push(key_row);
+            vals.push(Value::Tuple(vec![Value::f64_value(x), lists_row]));
         }
         let columns = decoder.finish();
         assert_eq!(columns.keys, transcode_owned(keys, &key));
