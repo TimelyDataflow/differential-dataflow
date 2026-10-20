@@ -201,6 +201,40 @@ use crate::ir::{Lambda, Reducer};
 mod decouple;
 use decouple::{Dataflow, RowModel};
 
+/// The scope path of `target`; the root's, for a source.
+fn target_path(target: &Target) -> &[usize] {
+    match target { Target::Site(a) => &a.path, Target::Source(_) => &[] }
+}
+
+/// How many enclosing scopes the scopes at `a` and `b` share.
+fn common_len(a: &[usize], b: &[usize]) -> usize {
+    a.iter().zip(b).take_while(|(x, y)| x == y).count()
+}
+
+/// How many of the chain coordinates of demand in the scope at `from` a target in the scope at
+/// `to` can be compared with. A chain's coordinates are the rounds of the scopes enclosing `from`,
+/// innermost first, and a target outside one of them (in a sibling scope, say) has rounds of its
+/// own that those do not measure: only the coordinates of the scopes the two share count.
+fn shared_len(from: &[usize], to: &[usize]) -> usize {
+    let shared = common_len(from, to);
+    if shared >= from.len().min(to.len()) { from.len() } else { shared }
+}
+
+/// Demand `dep`, in the scope at `from`, keeping only the outermost `keep` chain coordinates.
+fn outer(ex: &mut Sb, dep: Ref, from: &[usize], keep: usize) -> (Ref, usize) {
+    if keep == from.len() { return (dep, keep); }
+    let mut val = vec![f(1, 0)];
+    val.extend(fidx(1, 1 + from.len() - keep, 1 + from.len()));
+    val.push(f(1, 1 + from.len()));
+    (ex.project(dep, projection(var(0), tup(val), 2)), keep)
+}
+
+/// Demand `dep`, in the scope at `from`, for a lookup against a target in the scope at `to`, and
+/// its chain length: see [`shared_len`].
+fn align(ex: &mut Sb, dep: Ref, from: &[usize], to: &[usize]) -> (Ref, usize) {
+    outer(ex, dep, from, shared_len(from, to))
+}
+
 /// What a reference ultimately names: a value-producing site, or one of the
 /// root's external sources.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -388,19 +422,24 @@ impl Sb {
     }
 
     /// FlatMap's (UNNEST's) backward rule — the universal backstop instantiated
-    /// for a cardinality-changing op. FlatMap is *same-depth* (it doesn't touch
-    /// iteration time) and its list rides as one opaque value, so this needs no
-    /// envelope change: build the `(output -> input)` pair table by running the
-    /// op forward on the input side, join the demand on the output, recover the
-    /// whole input (the `None` endpoint — `RESIDUAL` is the input value).
+    /// for a cardinality-changing op. FlatMap doesn't touch iteration time and
+    /// its list rides as one opaque value, so this needs no envelope change:
+    /// build the `(output -> input)` pair table by running the op forward on the
+    /// input side, join the demand on the output, recover the whole input (the
+    /// `None` endpoint — `RESIDUAL` is the input value).
     ///
     /// The one wrinkle is that a plain flatmap drops the source row and the key
     /// isn't unique, so we **re-key the input by itself** before exploding (the
     /// source then rides through in the join key) and re-project to the packed
     /// output afterwards. `list` reads the re-keyed rows: the input's key
     /// is the key's first field, and its value is the row's value.
+    ///
+    /// The input may sit in an enclosing scope (a flatmap of a parent's
+    /// collection inside a loop), so its chain may be shorter than the demand's:
+    /// the time filter and the demanded row follow the other lookups
+    /// (`time_le`, `strip`), at the input's own chain.
     fn emit_lookup_flatmap(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, list: &Lambda) -> Ref {
-        let d = out_user_len;                // same depth for input and output
+        let (in_len, out_len) = (side.user_len, out_user_len);
         // Pair table: re-key the input by the whole input row, explode (the
         // source survives in the key), then re-key to (k, (pos, elem)) carrying
         // the source as the value.
@@ -409,21 +448,18 @@ impl Sb {
         let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list.clone())]);
         let pair = self.project(exploded, projection(tup(vec![f(0, 0), var(1)]), var(0), 2));
         // Re-key the demand by the same output (k, (pos, elem)); keep its chain ++ q.
-        let dep_keyed = self.project(dep_y, projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, d + 2)), 2));
+        let dep_keyed = self.project(dep_y, projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, out_len + 2)), 2));
         // Join into a wide row [V_in | chain_in | chain_out | q]. Source is `$2`
         // = (k, host_val); host_val = (V_in, chain_in). Dep' is `$1` = [chain_out | q].
         let mut wide = vec![fld(f(2, 1), 0)];                                     // V_in
-        wide.extend((0..d).map(|c| fld(f(2, 1), 1 + c)));                         // chain_in
-        wide.extend(fidx(1, 0, d));                                               // chain_out
-        wide.push(f(1, d));                                                       // q
+        wide.extend((0..in_len).map(|c| fld(f(2, 1), 1 + c)));                    // chain_in
+        wide.extend(fidx(1, 0, out_len));                                         // chain_out
+        wide.push(f(1, out_len));                                                 // q
         let joined = self.join(dep_keyed, pair, projection(f(2, 0), tup(wide), 3));
-        // Soundness: chain_in ≤ chain_out (same depth, so coordinate-aligned).
-        let cond = and_all((0..d).map(|c| le(f(1, 1 + c), f(1, 1 + d + c))).collect());
-        let filtered = match cond { Some(c) => self.filter(joined, predicate(c)), None => joined };
-        // Reform the demanded input (k ; V_in, chain_out, q).
-        let mut val = vec![f(1, 0)];
-        val.extend(fidx(1, 1 + d, 2 + 2 * d));
-        self.project(filtered, projection(var(0), tup(val), 2))
+        // Soundness: chain_in ≤ chain_out, on the coordinates they share.
+        let filtered = match <Val as RowModel>::time_le(in_len, out_len) { Some(c) => self.filter(joined, c), None => joined };
+        // Reform the demanded input (k ; V_in, chain_in, q).
+        self.project(filtered, <Val as RowModel>::strip(in_len, out_len, in_len))
     }
 }
 
@@ -640,7 +676,13 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
 
     // Demand-set variables, one per source, of the user's rows; forward inputs
     // are the actual sources restricted to the demand-sets.
-    let dsets: Vec<Ref> = (0..n_sources).map(|k| ex.variable(&format!("demand_set_{}", k))).collect();
+    let dsets: Vec<Ref> = (0..n_sources).map(|k| {
+        let v = ex.variable(&format!("demand_set_{}", k));
+        // A source no demand reaches binds its set to itself, which says nothing of its shape:
+        // the set holds the source's rows, so it takes the source's declared shape.
+        if let Ref::Var(i) = v { ex.s.vars[i].shape = p.root.imports[k].shape.clone(); }
+        v
+    }).collect();
     let fwd_inputs: Vec<Ref> = (0..n_sources).map(|k| ex.semijoin(dsets[k].clone(), ex_src[k].clone())).collect();
     let fwd_env: Vec<Ref> = fwd_inputs.iter().map(|r| ex.project(r.clone(), envelope())).collect();
     let forward: BTreeMap<Addr, Ref> = clone_into(&p.root, &mut ex.s, &fwd_inputs).into_iter()
@@ -653,8 +695,18 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     let mut var_addrs: Vec<Addr> = Vec::new();
     collect_var_addrs(&p.root, &[], &mut var_addrs);
     let mut demand: BTreeMap<Addr, Ref> = BTreeMap::new();
+    // A demand variable no query reaches is bound only to demand derived from itself, which says
+    // nothing of its shape: it declares the shape of the variable's rows as demand,
+    // `(K ; (V, chain…, q))`, with a coordinate per scope enclosing it.
+    let (shapes, _) = crate::shapes::infer(p, &|_| None);
     for a in &var_addrs {
         let dv = ex.variable(&format!("demand_var_{:?}_{:?}", a.path, a.site));
+        if let (Ref::Var(i), Site::Var(v)) = (&dv, &a.site) {
+            if let Some(user) = shapes.at(&a.path).vars[*v].clone() {
+                let fields = std::iter::once(user.val).chain(std::iter::repeat_n(corgi::Shape::Int, a.path.len() + 1)).collect();
+                ex.s.vars[*i].shape = Some((user.key, corgi::Shape::Prod(fields)));
+            }
+        }
         demand.insert(a.clone(), dv);
     }
 
@@ -671,7 +723,7 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     // Seed: the query rows are demand against the first export's target.
     let first = p.root.exports.first().expect("explain: program has no export").value.clone();
     let target = resolve(&p.root, &[], &first);
-    let seeded = rev.route(&mut ex, ex_query, 0, &target);
+    let seeded = rev.route(&mut ex, ex_query, &[], &target);
     rev.contribs.entry(target).or_default().push(seeded);
     rev.walk(&mut ex, &p.root, &[]);
 
@@ -750,22 +802,22 @@ impl<'a> Reverse<'a> {
         }
     }
 
-    /// Adapt `contrib` (chain length `from_len`) to `target`'s depth: equal
-    /// lengths push through; otherwise the shape-preserving lookup against the
-    /// target's host injects or strips the difference.
-    fn route(&mut self, ex: &mut Sb, contrib: Ref, from_len: usize, target: &Target) -> Ref {
-        let to_len = match target { Target::Site(a) => a.path.len(), Target::Source(_) => 0 };
-        if to_len == from_len {
+    /// Adapt `contrib`, demand in the scope at `from`, to `target`'s scope: within one scope it
+    /// pushes through; otherwise the shape-preserving lookup against the target's host injects or
+    /// strips the difference, after [`align`] drops the coordinates the target does not share.
+    fn route(&self, ex: &mut Sb, contrib: Ref, from: &[usize], target: &Target) -> Ref {
+        if target_path(target) == from {
             contrib
         } else {
+            let (contrib, from_len) = align(ex, contrib, from, target_path(target));
             let side = self.side(target);
             ex.emit_lookup_shape_preserving(contrib, &side, from_len)
         }
     }
 
-    fn push(&mut self, ex: &mut Sb, path: &[usize], input: &Ref, contrib: Ref, from_len: usize) {
+    fn push(&mut self, ex: &mut Sb, path: &[usize], input: &Ref, contrib: Ref) {
         let target = resolve(self.orig, path, input);
-        let routed = self.route(ex, contrib, from_len, &target);
+        let routed = self.route(ex, contrib, path, &target);
         self.contribs.entry(target).or_default().push(routed);
     }
 
@@ -782,7 +834,7 @@ impl<'a> Reverse<'a> {
                 None => dv,
             };
             let contrib = ex.project(filtered, <Val as RowModel>::bind_decrement(var_user_len));
-            self.push(ex, path, &b.value, contrib, var_user_len);
+            self.push(ex, path, &b.value, contrib);
         }
         // Items in reverse: consumers have contributed by the time we arrive.
         for (i, item) in s.items.iter().enumerate().rev() {
@@ -817,7 +869,6 @@ impl<'a> Reverse<'a> {
         let cs = self.contribs.remove(&Target::Site(addr.clone())).unwrap_or_default();
         if cs.is_empty() { return; }
         let combined = ex.concat(cs);
-        let out_user_len = path.len();
         let dist = ex.distinct_full(combined);
         ex.debug_inspect(dist.clone(), format!("demand_{:?}:{:?}", path, Site::Op(i)));
         self.demand.insert(addr.clone(), dist.clone());
@@ -834,19 +885,20 @@ impl<'a> Reverse<'a> {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);
                         let proj = slot(2, &[(proj, tup(vec![var(0), f(1, 0)]))], |out| out[0].clone());
-                        let contrib = ex.emit_lookup_lossy(dep_this, &side, out_user_len, &proj);
+                        let (dep, out_len) = align(ex, dep_this, path, target_path(&target));
+                        let contrib = ex.emit_lookup_lossy(dep, &side, out_len, &proj);
                         self.contribs.entry(target).or_default().push(contrib);
                     }
                     LinearOp::Filter(cond) => {
                         let cond = slot(2, &[(cond, tup(vec![var(0), f(1, 0)]))], |out| out[0].clone());
                         let contrib = ex.filter(dep_this, cond);
-                        self.push(ex, path, input, contrib, out_user_len);
+                        self.push(ex, path, input, contrib);
                     }
                     LinearOp::Negate | LinearOp::EnterAt(_) => {
                         // Negate: pure pass-through. EnterAt: sound but
                         // over-broad pass-through; the routing adapter handles
                         // any depth difference.
-                        self.push(ex, path, input, dep_this, out_user_len);
+                        self.push(ex, path, input, dep_this);
                     }
                     LinearOp::LiftIter => panic!("explain: LiftIter in user program"),
                     // Both read or write the whole time, whose width is the scope depth, and the
@@ -868,7 +920,8 @@ impl<'a> Reverse<'a> {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);
                         let list = slot(2, &[(list, tup(vec![f(0, 0), var(1)]))], |out| out[0].clone());
-                        let contrib = ex.emit_lookup_flatmap(dep_this, &side, out_user_len, &list);
+                        let (dep, out_len) = align(ex, dep_this, path, target_path(&target));
+                        let contrib = ex.emit_lookup_flatmap(dep, &side, out_len, &list);
                         self.contribs.entry(target).or_default().push(contrib);
                     }
                 }
@@ -877,17 +930,19 @@ impl<'a> Reverse<'a> {
                 for r in refs {
                     let target = resolve(self.orig, path, r);
                     let side = self.side(&target);
-                    let contrib = ex.emit_lookup_shape_preserving(dep_this.clone(), &side, out_user_len);
+                    let (dep, out_len) = align(ex, dep_this.clone(), path, target_path(&target));
+                    let contrib = ex.emit_lookup_shape_preserving(dep, &side, out_len);
                     self.contribs.entry(target).or_default().push(contrib);
                 }
             }
             Node::Arrange(input) | Node::Inspect { input, .. } => {
-                self.push(ex, path, input, dep_this, out_user_len);
+                self.push(ex, path, input, dep_this);
             }
             Node::Reduce { input, reducer } => {
                 let target = resolve(self.orig, path, input);
                 let side = self.side(&target);
-                let contrib = ex.emit_lookup_keyed(dep_this, &side, out_user_len, reducer);
+                let (dep, out_len) = align(ex, dep_this, path, target_path(&target));
+                let contrib = ex.emit_lookup_keyed(dep, &side, out_len, reducer);
                 self.contribs.entry(target).or_default().push(contrib);
             }
             // It reads its stream's whole times, as `lift` does.
@@ -898,7 +953,11 @@ impl<'a> Reverse<'a> {
                 let ls = self.side(&lt);
                 let rs = self.side(&rt);
                 let projection = slot(3, &[(projection, tup(vec![var(0), f(1, 0), f(2, 0)]))], |out| out[0].clone());
-                let (lc, rc) = ex.emit_lookup_join(dep_this, &ls, &rs, out_user_len, &projection);
+                // Keep the coordinates of the scopes both sides share with this one: dropping more
+                // than one side needs only widens its demand, which is still sound.
+                let shared = shared_len(path, target_path(&lt)).min(shared_len(path, target_path(&rt)));
+                let (dep, out_len) = outer(ex, dep_this, path, shared);
+                let (lc, rc) = ex.emit_lookup_join(dep, &ls, &rs, out_len, &projection);
                 self.contribs.entry(lt).or_default().push(lc);
                 self.contribs.entry(rt).or_default().push(rc);
             }

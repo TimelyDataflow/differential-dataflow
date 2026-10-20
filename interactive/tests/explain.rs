@@ -381,6 +381,82 @@ const INDEG_ROW: &str = r#"
     export "result" = edges | map((_, dst) -> (dst, ())) | count;
 "#;
 
+/// A declared input the program never reads: no demand reaches it, so its demand set binds only
+/// to itself, which gives it no shape, and the explained program would not install. The set
+/// takes the input's declared shape, and stays empty. (Found by `difftest`.)
+#[test]
+fn unread_input_explanations_sufficient() {
+    const UNREAD: &str = r#"
+        let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+        let unread = input 1 : ((int, int) ; ());
+        export "result" = edges;
+    "#;
+    let sizes = assert_all_rows_sufficient(UNREAD, &[gen_edges(10, 12), vec![]]);
+    assert!(!sizes.is_empty());
+}
+
+/// A loop the first export does not read: no query's demand reaches its variable, whose demand
+/// then binds only to demand derived from itself, which gives it no shape, and the explained
+/// program would not install. The variable's demand declares its shape. (Found by `difftest`.)
+#[test]
+fn unread_loop_explanations_sufficient() {
+    const UNREAD: &str = r#"
+        let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+        let roots = edges | map((src, _) -> (src, ()));
+        reach: {
+            let step = x | join(edges, (_, (), dst) -> (dst, ()));
+            var x = (roots + step) | distinct;
+        }
+        export "result" = edges;
+        export "reach" = reach::x;
+    "#;
+    let sizes = assert_all_rows_sufficient(UNREAD, &[gen_edges(10, 12)]);
+    assert!(!sizes.is_empty());
+}
+
+/// A scope that reads another scope's result. Their rounds are their own, so demand crossing from
+/// one to the other keeps only the coordinates of the scopes they share, here none. It used to
+/// carry the reader's round into the other scope as if it were that scope's own round, found no
+/// rows there, and came back empty. (Found by `difftest`.)
+#[test]
+fn sibling_scope_explanations_sufficient() {
+    const SIBLINGS: &str = r#"
+        let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+        let roots = edges | map((src, _) -> (src, ()));
+        reach: {
+            let step = x | join(edges, (_, (), dst) -> (dst, ()));
+            var x = (roots + step) | distinct;
+        }
+        let reached = reach::x;
+        again: {
+            let step = y | join(edges, (_, (), dst) -> (dst, ()));
+            var y = (reached + step) | distinct;
+        }
+        export "result" = again::y;
+    "#;
+    let sizes = assert_all_rows_sufficient(SIBLINGS, &[gen_edges(10, 12)]);
+    assert!(!sizes.is_empty());
+}
+
+/// A flatmap inside a loop over a collection of the enclosing scope: its input's chain is shorter
+/// than the demand's. The lookup assumed one depth for both, and built a join the explained program
+/// could not type. (Found by `difftest`.)
+#[test]
+fn flatmap_of_a_parent_explanations_sufficient() {
+    const PARENT: &str = r#"
+        let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> ((src), (dst)));
+        let roots = edges | map((src, _) -> (src, ()));
+        reach: {
+            let hops = edges | flatmap((_, (dst)) -> (dst enlist, (dst, 1) add enlist) append) | map((src, (_, dst)) -> (src, (dst)));
+            let step = x | join(hops, (_, (), (dst)) -> ((dst), ()));
+            var x = (roots + step) | distinct;
+        }
+        export "result" = reach::x;
+    "#;
+    let sizes = assert_all_rows_sufficient(PARENT, &[gen_edges(10, 12)]);
+    assert!(!sizes.is_empty());
+}
+
 /// Count outputs over duplicate-free inputs: sufficient today, because the
 /// keyed lookup demands every input row at the key, which is precisely the
 /// count's multiset.
