@@ -11,6 +11,9 @@ fn mismatched_lambdas_are_refused_at_install() {
             (r#"export "a" = input 0 : ((int, int) ; ()) | map(((s), ()) -> ((s), ()));"#, "wants a product of 1 field"),
             (r#"export "a" = input 0 : ((int, int) ; ()) | filter(((s, d), ()) -> (s, d));"#, "not an integer"),
             (r#"export "a" = input 0 : ((int, int) ; ()) | map(((s, d), ()) -> (s, d, ) add);"#, "expected an expression"),
+            // Type errors the optimizer would trip on, or drop as unused.
+            (r#"export "a" = input 0 : (int ; ()) | map((k, v) -> ((k, v).2, ()));"#, "Field(2) expects a product with > 2 fields"),
+            (r#"export "a" = input 0 : (int ; ()) | map((k, v) -> let (a, b, c) = (k, v) in (k, v));"#, "wants a product of 3 fields"),
         ] {
             let mut program = lower::lower_tree(parse::pipe::parse(src));
             program.optimize();

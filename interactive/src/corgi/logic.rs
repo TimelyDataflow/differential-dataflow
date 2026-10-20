@@ -813,7 +813,9 @@ pub fn slot_shape(lambda: &Lambda, shapes: &[Shape]) -> Res<Shape> {
 /// kernel runs on every batch of these shapes.
 fn slot_graph(lambda: &Lambda, shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
     let output = slot_shape(lambda, shapes)?;
-    Ok((lambda.graph()?.as_ref().clone(), output))
+    // Optimized only now that it types: among corgi's passes, a field of a tuple the lambda built
+    // becomes the field itself, and common subexpressions merge.
+    Ok((corgi::optimize(lambda.graph()?), output))
 }
 
 /// Compile a `FlatMap`'s lambda → a corgi `List` column, one list per input row. A lambda that is

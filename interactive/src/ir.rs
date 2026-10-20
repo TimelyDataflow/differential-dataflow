@@ -149,10 +149,11 @@ pub struct Lambda {
 }
 
 impl Lambda {
-    /// `src` parsed in `scope`, and optimized: among corgi's passes, a field of a tuple the lambda
-    /// built becomes the field itself, and common subexpressions merge.
+    /// `src` parsed in `scope`. The graph is as written: it is optimized only once it types at the
+    /// shapes of the rows it reads (`logic::slot_graph`), as optimizing first could drop or trip on
+    /// a type error.
     pub fn new(src: String, scope: &corgi::Scope) -> Self {
-        let graph = corgi::parse_ml_in(&src, scope).map(|g| std::sync::Arc::new(corgi::optimize(&g)));
+        let graph = corgi::parse_ml_in(&src, scope).map(std::sync::Arc::new);
         Lambda { src, graph }
     }
     /// The lambda `pattern -> body`, where `body` reads the results of `calls`: each runs a lambda
