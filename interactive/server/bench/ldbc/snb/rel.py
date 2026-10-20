@@ -67,22 +67,39 @@ def value(e, row):
     return funcs[op](*vs)
 
 
-def term(e, fields):
+def product(fields):
+    """A corgi tuple, including unit and one-field tuples."""
+    return '('+', '.join(fields)+')'
+
+
+def scalar(e, fields):
+    """Print an expression inside a corgi lambda with named input fields."""
     op,args = e.op,e.args
     if op == 'column': return fields[args[0]]
     if op == 'literal':
         x = args[0]
         if isinstance(x,str):
-            return 'list('+','.join(str(b) for b in x.encode())+')' if x else term(empty('bytes'),fields)
+            return '['+','.join(str(b) for b in x.encode())+']' if x else scalar(empty('bytes'),fields)
         return str(int(x))
     if op == 'empty':
-        name = {'bytes':'EmptyBytes','strings':'EmptyStrings','triples':'EmptyTriples','ints':'EmptyBytes'}[args[0]]
-        return f'case {name}(list()) {{ {name}(x) => x }}'
-    if op == 'at': return f'({term(args[0],fields)})[{args[1]}]'
-    ts = [term(a,fields) for a in args]
-    if op in ('+','-','*','==','!=','<','<=','>','>=','&&'):
-        return '('+f' {op} '.join(ts)+')'
-    return op+'('+', '.join(ts)+')'
+        shape = {'bytes':'List(int)', 'strings':'List(List(int))',
+                 'triples':'List((List(int), int, List(int)))', 'ints':'List(int)'}[args[0]]
+        return f'[] : {shape}'
+    if op == 'at': return f'{scalar(args[0],fields)} .{args[1]}'
+    ts = [scalar(a,fields) for a in args]
+    if op == 'tuple': return product(ts)
+    if op == 'list':
+        if not ts: raise ValueError('an empty list needs its element shape')
+        return product(t+' enlist' for t in ts)+' append'
+    if op == 'if': return product([product([ts[0],'0'])+' ne',*ts[1:]])+' select'
+    if op in ('&&','or'):
+        return product(product([t,'0'])+' ne' for t in ts)+(' all' if op=='&&' else ' any')
+    binary = {'+':'add','-':'sub','*':'mul','==':'eq','!=':'ne','<':'lt','<=':'le','>':'gt','>=':'ge',
+              'append':'append','idiv':'div','fadd':'add','fsub':'sub','fmul':'mul','fdiv':'div'}
+    unary = {'len':'len','float':'to_float','fneg':'neg'}
+    if op in binary: return product(ts)+' '+binary[op]
+    if op in unary: return ts[0]+' '+unary[op]
+    raise ValueError(f'no corgi spelling for expression {op}')
 
 
 class R:
@@ -199,9 +216,7 @@ def source_shape(schema):
 
 class Compiler:
     def __init__(self, imports=False):
-        self.lines = ['type ByteString = EmptyBytes List(int);',
-                      'type StringSet = EmptyStrings List(List(int));',
-                      'type TripleSet = EmptyTriples List((List(int), int, List(int)));']
+        self.lines = []
         self.names = {}
         self.inputs = []
         self.imports = imports
@@ -211,8 +226,11 @@ class Compiler:
         op,args = r.op,r.args
         name = 'r'+str(len(self.names))
         self.names[id(r)] = name
-        def positions(fields, slot=0): return {n:f'${slot}[{i}]' for i,n in enumerate(fields)}
-        def projection(pairs, refs): return ', '.join(term(expr(e),refs) for e in pairs)
+        def positions(fields, row='row'): return {n:f'{row}.{i}' for i,n in enumerate(fields)}
+        def projection(pairs, refs): return product(scalar(expr(e),refs) for e in pairs)
+        def keyed(source, fields, keys, keep=True):
+            key = projection([col(n) for n in keys],positions(fields))
+            return f'({source} | key((row, ()) -> ({key}, {"row" if keep else "()"})))'
         if op == 'source':
             self.inputs.append((args[0],args[1]))
             if self.imports:
@@ -222,75 +240,76 @@ class Compiler:
             code += f' : ({source_shape(args[1])} ; ())'
         elif op == 'select':
             source,pairs = args
-            code = f'{self.emit(source)} | map({projection(pairs.values(),positions(source.fields))} ;)'
+            code = f'{self.emit(source)} | map((row, ()) -> ({projection(pairs.values(),positions(source.fields))}, ()))'
         elif op == 'where':
             source,pred = args
-            code = f'{self.emit(source)} | filter({term(pred,positions(source.fields))})'
+            code = f'{self.emit(source)} | filter((row, ()) -> {scalar(pred,positions(source.fields))})'
         elif op == 'distinct': code = f'{self.emit(args[0])} | distinct'
         elif op == 'union': code = f'({self.emit(args[0])}) + ({self.emit(args[1])})'
         elif op in ('join','semi','anti'):
             left,right,on = args[:3]
             l,rhs = self.emit(left),self.emit(right)
-            lkey = projection([col(n) for n in on],positions(left.fields))
-            rkey = projection([col(n) for n in on.values()],positions(right.fields))
-            keyed_left = f'({l} | key({lkey} ; $0))'
+            keyed_left = keyed(l,left.fields,on)
             if op == 'join':
-                keyed_right = f'({rhs} | key({rkey} ; $0))'
-                out = [f'$1[{i}]' for i in range(len(left.fields))]+[positions(right.fields,2)[n] for n in args[3]]
+                keyed_right = keyed(rhs,right.fields,on.values())
+                out = product([*positions(left.fields,'left').values(),
+                               *(positions(right.fields,'right')[n] for n in args[3])])
             else:
-                keyed_right = f'({rhs} | key({rkey} ;) | distinct)'
-                out = [f'$1[{i}]' for i in range(len(left.fields))]
-            matched = f'{keyed_left} | join({keyed_right}, ({", ".join(out)} ;))'
+                keyed_right = f'({keyed(rhs,right.fields,on.values(),False)} | distinct)'
+                out = 'left'
+            matched = f'{keyed_left} | join({keyed_right}, (_, left, right) -> ({out}, ()))'
             code = f'{l} - ({matched})' if op=='anti' else matched
         elif op == 'group':
             source,keys,aggs = args
             source_name = self.emit(source)
             refs = positions(source.fields)
+            group_key = projection([col(n) for n in keys],refs)
+            outs = list(positions(keys,'key').values())
             if len(aggs)==1 and next(iter(aggs.values()))[0]=='min':
                 _,e = next(iter(aggs.values()))
-                code = f'{source_name} | key({projection([col(n) for n in keys],refs)} ; {term(expr(e),refs)}) | min | map($0, $1[0] ;)'
+                code = f'{source_name} | key((row, ()) -> ({group_key}, ({scalar(expr(e),refs)}))) | min | map((key, (best)) -> ({product([*outs,"best"])}, ()))'
                 self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {code};')
                 return name
             vals = projection([e for _,e in aggs.values()],refs)
-            outs = [f'$0[{i}]' for i in range(len(keys))]
             for i,(kind,e) in enumerate(aggs.values()):
-                if kind=='count': out = 'len($1)'
-                elif kind=='sum': out = f'fold($1, 0, ^1 + ^0[{i}])'
-                elif kind=='min': out = f'fold($1, $1[0][{i}], if(^0[{i}] < ^1, ^0[{i}], ^1))'
+                # These fold bodies read only their accumulator and item, so they need no capture.
+                if kind=='count': out = 'values len'
+                elif kind=='sum': out = f'(0, values) fold ((acc, item) -> (acc, item.{i}) add)'
+                elif kind=='min': out = f'((0, values) get .{i}, values) fold ((acc, item) -> ((item.{i}, acc) lt, item.{i}, acc) select)'
                 elif kind=='collect':
                     # A dedicated value-only collect avoids lists of singleton
                     # tuples and is useful for nested IC1/IC12 results.
                     assert len(aggs)==1
-                    code = f'{source_name} | key({projection([col(n) for n in keys],refs)} ; {term(expr(e),refs)}) | value($1[0]) | collect | map($0, ($1) ;)'
+                    code = f'{source_name} | key((row, ()) -> ({group_key}, ({scalar(expr(e),refs)}))) | value((_, (item)) -> item) | collect | map((key, values) -> ({product([*outs,"values"])}, ()))'
                     self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {code};')
                     return name
                 else: raise ValueError(kind)
                 outs.append(out)
-            code = f'{source_name} | key({projection([col(n) for n in keys],refs)} ; {vals}) | collect | map({", ".join(outs)} ;)'
+            code = f'{source_name} | key((row, ()) -> ({group_key}, {vals})) | collect | map((key, values) -> ({product(outs)}, ()))'
         elif op == 'rank':
             source,order,limit,keys = args
             src = self.emit(source)
             refs = positions(source.fields)
-            sort = projection(order,refs)
-            packed = 'tuple('+','.join(refs[n] for n in source.fields)+')'
-            code = f'{src} | key({projection([col(n) for n in keys],refs)} ; {sort}, {packed}) | collect | flatmap($1)'
-            if limit is not None: code += f' | filter($1[0] < {limit})'
-            code += ' | map('+', '.join(f'$1[1][{len(order)}][{i}]' for i in range(len(source.fields)))+', $1[0] ;)'
+            sort = product([*(scalar(e,refs) for e in order),'row'])
+            code = f'{src} | key((row, ()) -> ({projection([col(n) for n in keys],refs)}, {sort})) | collect | flatmap((_, values) -> values)'
+            if limit is not None: code += f' | filter((_, (rank, _)) -> (rank, {limit}) lt)'
+            out = product([*(f'item.{len(order)}.{i}' for i in range(len(source.fields))),'rank'])
+            code += f' | map((_, (rank, item)) -> ({out}, ()))'
         elif op == 'closure':
             seed,nextrel,on,select,keys,best,condition = args
             s,n = self.emit(seed),self.emit(nextrel)
-            refs = positions(seed.fields,1)
-            refs.update({'next_'+k:v for k,v in positions(nextrel.fields,2).items()})
+            refs = positions(seed.fields,'left')
+            refs.update({'next_'+k:v for k,v in positions(nextrel.fields,'right').items()})
             fields = positions(seed.fields)
             k = projection([col(x) for x in keys],fields)
             b = projection([col(x) for x in best],fields)
-            restore = {**{n:f'$0[{i}]' for i,n in enumerate(keys)},**{n:f'$1[{i}]' for i,n in enumerate(best)}}
+            restore = {**positions(keys,'key'),**positions(best,'best')}
             # Keep a flat-row recursive variable, with min in its definition.
             # Evaluate the condition on the joined environment before reshaping.
             combined = list(seed.fields)+['next_'+x for x in nextrel.fields]
-            joined = ', '.join(refs[x] for x in combined)
+            joined = product(refs[x] for x in combined)
             step_refs = positions(combined)
-            self.lines.append(f'{name}_loop: {{\n let proposals = state | key({projection([col(x) for x in on],fields)} ; $0) | join(({n} | key({projection([col(x) for x in on.values()],positions(nextrel.fields))} ; $0)), ({joined} ;)) | filter({term(condition,step_refs)}) | map({projection(select.values(),step_refs)} ;);\n var state = ({s} + proposals) | key({k} ; {b}) | min | map({", ".join(restore[x] for x in seed.fields)} ;);\n}}')
+            self.lines.append(f'{name}_loop: {{\n let proposals = {keyed("state",seed.fields,on)} | join({keyed(n,nextrel.fields,on.values())}, (_, left, right) -> ({joined}, ())) | filter((row, ()) -> {scalar(condition,step_refs)}) | map((row, ()) -> ({projection(select.values(),step_refs)}, ()));\n var state = ({s} + proposals) | key((row, ()) -> ({k}, {b})) | min | map((key, best) -> ({product(restore[x] for x in seed.fields)}, ()));\n}}')
             code = f'{name}_loop::state'
         else: raise ValueError(op)
         self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {code};')
@@ -304,7 +323,7 @@ class Compiler:
         for export,root in roots.items():
             if not export.replace('_','').replace('.','').isalnum(): raise ValueError('invalid export name')
             name = self.emit(root)
-            refs = {n:f'$0[{i}]' for i,n in enumerate(root.fields)}
+            refs = {n:f'row.{i}' for i,n in enumerate(root.fields)}
             values = [refs[n] for n in root.fields if n not in ('rid','rank')]
-            exports.append(f'export "{export}" = {name} | map({refs["rid"]}, {refs["rank"]} ; {", ".join(values)}) | arrange;')
+            exports.append(f'export "{export}" = {name} | map((row, ()) -> (({refs["rid"]}, {refs["rank"]}), {product(values)})) | arrange;')
         return '\n\n'.join([*self.lines,*exports])+'\n'
