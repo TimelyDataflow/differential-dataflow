@@ -8,15 +8,19 @@
 //! self-describing encoding ([`corgi::bytes`]), so a decoder reads their shapes from the bytes.
 //! The times are `lanes` columns of `rows` words, one after the other: a `peek`'s frame holds the
 //! consolidated contents and no times, and a `tail`'s frames hold changes, each at its time, one
-//! lane. Every section is a whole number of 64-bit words.
+//! lane; a frame holds no more ([`MAX_LANES`]). Every section is a whole number of 64-bit words.
 
 use crate::corgi::container::Updates;
 use crate::ir::Diff;
+
+/// The most time lanes a frame holds: a server's frames carry host times, one lane, or none.
+pub const MAX_LANES: u64 = 1;
 
 /// `updates`, each at its time in `lanes` (one column per time coordinate; none for no times), as
 /// a frame's payload.
 pub fn encode(updates: &Updates, lanes: &[Vec<u64>]) -> Vec<u8> {
     let rows = updates.len();
+    assert!(lanes.len() as u64 <= MAX_LANES, "a frame holds at most {MAX_LANES} time lanes");
     assert!(lanes.iter().all(|lane| lane.len() == rows), "every time lane has a time per update");
     let length = 16 + corgi::bytes::length_in_bytes(&updates.keys) + corgi::bytes::length_in_bytes(&updates.vals) + 8 * rows * (1 + lanes.len());
     let mut bytes = Vec::with_capacity(length);
@@ -38,14 +42,20 @@ pub fn decode(bytes: &[u8]) -> Result<(Updates, Vec<Vec<u64>>), String> {
     let word = |at: usize| -> Result<u64, String> {
         bytes.get(at..at + 8).map(|w| u64::from_le_bytes(w.try_into().unwrap())).ok_or_else(|| format!("frame: no word at byte {at}"))
     };
-    let (rows, lanes) = (word(0)? as usize, word(8)? as usize);
+    let (rows, lanes) = (word(0)?, word(8)?);
+    if lanes > MAX_LANES {
+        return Err(format!("frame: {lanes} time lanes, more than the {MAX_LANES} a frame holds"));
+    }
     let (keys, key_bytes) = corgi::bytes::read_from(&bytes[16..])?;
     let at = 16 + key_bytes;
     let (vals, val_bytes) = corgi::bytes::read_from(&bytes[at..])?;
     let mut at = at + val_bytes;
-    if keys.len() != rows || vals.len() != rows || bytes.len() != at + 8 * rows * (1 + lanes) {
+    // The diffs and times, as bytes: no more than the frame holds, with no arithmetic that wraps.
+    let tail = rows.checked_mul(8 * (1 + lanes)).and_then(|n| n.checked_add(at as u64));
+    if keys.len() as u64 != rows || vals.len() as u64 != rows || tail != Some(bytes.len() as u64) {
         return Err(format!("frame: {rows} rows and {lanes} time lanes, but {} keys, {} values and {} bytes", keys.len(), vals.len(), bytes.len()));
     }
+    let (rows, lanes) = (rows as usize, lanes as usize);
     let mut column = || -> Result<Vec<u64>, String> {
         let words = (0..rows).map(|i| word(at + 8 * i)).collect();
         at += 8 * rows;
@@ -77,5 +87,22 @@ mod tests {
         let mut short = encode(&updates, &[]);
         short.pop();
         assert!(decode(&short).is_err(), "a frame cut short");
+    }
+
+    /// Counts that do not fit the frame are refused, not overflowed or allocated.
+    #[test]
+    fn impossible_counts_are_errors() {
+        let empty = Updates::empty(&(Shape::Int, Shape::Unit));
+        let with = |rows: u64, lanes: u64| {
+            let mut bytes = encode(&empty, &[]);
+            bytes[..8].copy_from_slice(&rows.to_le_bytes());
+            bytes[8..16].copy_from_slice(&lanes.to_le_bytes());
+            decode(&bytes)
+        };
+        assert!(with(0, 0).is_ok());
+        assert!(with(0, u64::MAX).is_err(), "lanes past the most a frame holds");
+        assert!(with(0, MAX_LANES + 1).is_err());
+        assert!(with(u64::MAX, 1).is_err(), "a row count whose bytes overflow");
+        assert!(with(u64::MAX / 8, 0).is_err());
     }
 }
