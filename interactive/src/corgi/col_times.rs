@@ -207,6 +207,18 @@ impl<T> ColTimes<T> {
         Ordering::Equal
     }
 
+    /// Order this column's row `i` against the time `t`, lane by lane, as [`cmp_cross`](Self::cmp_cross) orders rows.
+    pub fn cmp_time<U: Lanes>(&self, i: usize, t: &U) -> Ordering {
+        let coords: Vec<u64> = t.coordinates().collect();
+        for k in 0..self.lanes.len().max(coords.len()) {
+            match self.at(k, i).cmp(coords.get(k).unwrap_or(&0)) {
+                Ordering::Equal => continue,
+                o => return o,
+            }
+        }
+        Ordering::Equal
+    }
+
     /// Whether this column's row `i` is less than or equal to `other`'s row `j` in the partial order.
     pub fn less_equal_cross(&self, i: usize, other: &ColTimes<T>, j: usize) -> bool {
         (0..self.lanes.len().max(other.lanes.len())).all(|k| self.at(k, i) <= other.at(k, j))

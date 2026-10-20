@@ -20,6 +20,8 @@ use std::rc::Rc;
 
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::trace::wrappers::enter::BatchEnter;
+use differential_dataflow::trace::wrappers::frontier::BatchFrontier;
+use timely::progress::timestamp::Refines;
 
 use corgi::arrange::gather;
 use corgi::Value as CValue;
@@ -39,25 +41,35 @@ type CC = CorgiContainer<Time, Diff>;
 
 /// An arrangement's batch as the half join meets it. dogs3's half join hands its tactic the
 /// arrangement's batches directly, with no backend for DD's backend wrappers to wrap, so this is
-/// the one place where the half join reads an imported batch's times: the program's own
-/// arrangement holds the program's times, and an import entered into the program's scope holds
-/// host epochs, each of which enters as `(e, [])`, with the same lanes. Times are compared and
-/// joined lane by lane, so either reads as the program sees it.
-pub trait ArrangedBatch: 'static {
+/// the one place where the half join reads an imported batch's times. The program's own
+/// arrangement holds the program's times, compared and joined lane by lane as they are stored. An
+/// import holds host epochs, read as of the import's time and entered into the program's scope:
+/// each is read with [`ArrangedBatch::read`].
+pub trait ArrangedBatch: Clone + 'static {
     /// The times the chunks hold.
     type Stored: ColTime;
+    /// Whether every stored time reads as itself, so that times compare and join lane by lane.
+    const AS_STORED: bool;
     /// The batch's chunks.
     fn chunks(&self) -> &[CorgiChunk<Self::Stored, Diff>];
+    /// A stored time as the program reads it, or `None` when the batch hides it.
+    fn read(&self, time: Self::Stored) -> Option<Time>;
 }
 
 impl ArrangedBatch for Rc<ChunkBatch<CorgiChunk<Time, Diff>>> {
     type Stored = Time;
+    const AS_STORED: bool = true;
     fn chunks(&self) -> &[CorgiChunk<Time, Diff>] { &self.chunks }
+    fn read(&self, time: Time) -> Option<Time> { Some(time) }
 }
 
-impl ArrangedBatch for BatchEnter<Rc<ChunkBatch<CorgiChunk<u64, Diff>>>, Time> {
+impl ArrangedBatch for BatchEnter<BatchFrontier<Rc<ChunkBatch<CorgiChunk<u64, Diff>>>, u64>, Time> {
     type Stored = u64;
-    fn chunks(&self) -> &[CorgiChunk<u64, Diff>] { &self.inner().chunks }
+    const AS_STORED: bool = false;
+    fn chunks(&self) -> &[CorgiChunk<u64, Diff>] { &self.inner().inner().chunks }
+    fn read(&self, mut time: u64) -> Option<Time> {
+        self.inner().advance_time(&mut time).then(|| Time::to_inner(time))
+    }
 }
 
 /// A run of released updates, as the batcher hands them to the tactic: in identifier order, as the

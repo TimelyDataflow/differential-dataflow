@@ -15,7 +15,7 @@ use corgi::arrange::{equal_idx, gather_lanes};
 use corgi::{Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::chunk::{ident, key_is_hashed, recover_key_ref, CorgiChunk};
-use crate::corgi::col_times::{ColTime, ColTimes};
+use crate::corgi::col_times::{ColTimes, Lanes};
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_projection;
 use crate::corgi::search::matching_ranges;
@@ -51,12 +51,15 @@ impl CorgiHalfJoin {
 impl<B: ArrangedBatch> HalfJoinTactic<Time, B, Run, CC> for CorgiHalfJoin {
     fn prep(&mut self, runs: Vec<Run>, batches: Vec<B>, _lower: Antichain<Time>) -> Box<dyn Iterator<Item = CC>> {
         let arranged: Vec<CorgiChunk<B::Stored, Diff>> = batches.iter().flat_map(|b| b.chunks().iter().filter(|c| c.len() > 0).cloned()).collect();
+        // The batches are one trace's, read alike: any one reads the stored times.
+        let reader = if B::AS_STORED { None } else { batches.into_iter().next() };
         debug_assert!(runs.iter().all(|r| ident(r.keys()).windows(2).all(|w| w[0] <= w[1])), "half_join: a run out of identifier order");
         Box::new(Work {
             starts: vec![0; runs.len()],
             runs,
             seek: vec![0; arranged.len()],
             arranged,
+            reader,
             strict: self.strict,
             width: self.width,
             projection: Rc::clone(&self.projection),
@@ -71,12 +74,14 @@ impl<B: ArrangedBatch> HalfJoinTactic<Time, B, Run, CC> for CorgiHalfJoin {
 /// below one identifier horizon, so the runs are read front to back, and the blocks meet each
 /// arranged chunk at positions that only move forward: `seek` records where each arranged chunk's
 /// next search starts, and each is walked at most once per unit.
-struct Work<TS: ColTime> {
+struct Work<B: ArrangedBatch> {
     runs: Vec<Run>,
     /// For each run, the first row not yet met.
     starts: Vec<usize>,
-    /// The arrangement's chunks, at the times they hold (see [`ArrangedBatch`]).
-    arranged: Vec<CorgiChunk<TS, Diff>>,
+    /// The arrangement's chunks, at the times they hold.
+    arranged: Vec<CorgiChunk<B::Stored, Diff>>,
+    /// A batch that reads the stored times, unless they read as they are (see [`ArrangedBatch`]).
+    reader: Option<B>,
     /// For each arranged chunk, the first row later blocks could meet.
     seek: Vec<usize>,
     strict: bool,
@@ -86,7 +91,7 @@ struct Work<TS: ColTime> {
     ready: VecDeque<CC>,
 }
 
-impl<TS: ColTime> Iterator for Work<TS> {
+impl<B: ArrangedBatch> Iterator for Work<B> {
     type Item = CC;
 
     fn next(&mut self) -> Option<CC> {
@@ -101,7 +106,7 @@ impl<TS: ColTime> Iterator for Work<TS> {
     }
 }
 
-impl<TS: ColTime> Work<TS> {
+impl<B: ArrangedBatch> Work<B> {
     /// Where each run's next block ends: below the least identifier `budget` rows into a run with
     /// more than that left, past that identifier's whole run of rows, so that no identifier is
     /// split between blocks. Every run with no more than `budget` rows left runs to its end.
@@ -160,10 +165,15 @@ impl<TS: ColTime> Work<TS> {
                 for (needle, range) in found.iter() {
                     for u in groups[*needle].clone() {
                         for j in range.start + base..range.end + base {
-                            let precedes = match chunk.times().cmp_cross(j, run.times(), u) {
-                                Ordering::Less => true,
-                                Ordering::Equal => !self.strict,
-                                Ordering::Greater => false,
+                            // How the arranged time orders against the update's, if it is read.
+                            let order = match &self.reader {
+                                None => Some(chunk.times().cmp_cross(j, run.times(), u)),
+                                Some(reader) => reader.read(chunk.times().get(j)).map(|at| run.times().cmp_time(u, &at).reverse()),
+                            };
+                            let precedes = match order {
+                                Some(Ordering::Less) => true,
+                                Some(Ordering::Equal) => !self.strict,
+                                Some(Ordering::Greater) | None => false,
                             };
                             if precedes {
                                 pairs.0.push(r);
@@ -210,9 +220,16 @@ impl<TS: ColTime> Work<TS> {
             assert_eq!(lanes.len(), self.width, "half_join: a time as data of the wrong width");
             lanes.iter().map(|lane| lane.as_i64("half_join time lane").unwrap()).collect()
         }).collect();
+        // The arranged times as they are read: their lanes, or each read through the batch.
+        let read: Option<Vec<Vec<u64>>> = self.reader.as_ref().map(|reader| cs.iter().zip(&js).map(|(&c, &j)| {
+            reader.read(self.arranged[c].times().get(j)).expect("a met arranged time is read").coordinates().collect()
+        }).collect());
         let joined: Vec<CValue> = (0..self.width).map(|l| {
-            CValue::i64(rs.iter().zip(&us).zip(cs.iter().zip(&js)).map(|((&r, &u), (&c, &j))| {
-                let t2 = self.arranged[c].times().raw_lanes().get(l).map_or(0, |lane| lane[j]) as i64;
+            CValue::i64(rs.iter().zip(&us).zip(cs.iter().zip(&js)).enumerate().map(|(p, ((&r, &u), (&c, &j)))| {
+                let t2 = match &read {
+                    None => self.arranged[c].times().raw_lanes().get(l).map_or(0, |lane| lane[j]),
+                    Some(read) => read[p].get(l).copied().unwrap_or(0),
+                } as i64;
                 data_times[r][l][u].max(t2)
             }).collect())
         }).collect();
@@ -400,6 +417,55 @@ mod tests {
                     }
                     assert_eq!(consolidated(got), consolidated(expect), "seed {seed}, strict {strict}, hashed {hashed}");
                 }
+            }
+        }
+    }
+
+    /// An imported arrangement, stored at host epochs and read entered into the program's scope as
+    /// of a frontier, meets updates exactly as the arrangement rebuilt with its times read so does:
+    /// in the comparison, strict or not, and in the time joined as data. The history hides (1, 50)
+    /// inserted at 1 and retracted at 5, so it is absent as of 5; (1, 60) inserted at 1; and (1, 70)
+    /// at 6, which `until` 6 hides.
+    #[test]
+    fn meets_an_import_as_it_is_read() {
+        use differential_dataflow::trace::wrappers::enter::BatchEnter;
+        use differential_dataflow::trace::wrappers::frontier::BatchFrontier;
+        let history: [(i64, u64, Diff); 4] = [(50, 1, 1), (50, 5, -1), (60, 1, 1), (70, 6, 1)];
+        let batch = |rows: &[(i64, u64, Diff)]| Rc::new(columns_to_batch(
+            present_key(ints(&vec![1; rows.len()])),
+            ints(&rows.iter().map(|r| r.0).collect::<Vec<_>>()),
+            rows.iter().map(|r| r.1).collect(),
+            rows.iter().map(|r| r.2).collect(),
+        ));
+        let program = |rows: &[(i64, Time, Diff)]| -> NativeBatch { Rc::new(columns_to_batch(
+            present_key(ints(&vec![1; rows.len()])),
+            ints(&rows.iter().map(|r| r.0).collect::<Vec<_>>()),
+            rows.iter().map(|r| r.1.clone()).collect(),
+            rows.iter().map(|r| r.2).collect(),
+        )) };
+        // Updates of key 1 at 5, which is `since`, and at 7, each with its own time as data.
+        let updates = container(&[1, 1], &[7, 8], &[(5, 0), (7, 0)], &[t(5, 0), t(7, 0)], &[1, 1]);
+        let updates = Run::new(updates.keys, updates.vals, updates.times, updates.diffs);
+        let lower: Antichain<Time> = Antichain::from_elem(t(5, 0));
+        let met = |tactic: Box<dyn Iterator<Item = CC>>| {
+            let mut rows: Vec<_> = tactic.flat_map(|c| c.into_updates()).collect();
+            differential_dataflow::consolidation::consolidate_updates(&mut rows);
+            rows
+        };
+        for until in [Antichain::new(), Antichain::from_elem(6u64)] {
+            let frontier = BatchFrontier::make_from(batch(&history), Antichain::from_elem(5u64).borrow(), until.borrow());
+            // The history as a cursor through the wrappers reads it: advanced, then entered.
+            let mut read: Vec<(i64, Time, Diff)> = history.iter().filter_map(|&(v, mut at, d)| {
+                if frontier.advance_time(&mut at) { Some((v, Time::new(at, Default::default()), d)) } else { None }
+            }).collect();
+            differential_dataflow::consolidation::consolidate_updates(&mut read);
+            let wrapped = BatchEnter::<_, Time>::make_from(frontier);
+            for strict in [false, true] {
+                let mut tactic = CorgiHalfJoin::new(&pairing(), strict, 2, [Shape::Int, Shape::Int, Shape::Int]);
+                let got = met(tactic.prep(vec![updates.clone()], vec![wrapped.clone()], lower.clone()));
+                let want = met(tactic.prep(vec![updates.clone()], vec![program(&read)], lower.clone()));
+                assert_eq!(got, want, "strict {strict}, until {until:?}");
+                assert!(!got.is_empty(), "strict {strict}, until {until:?}");
             }
         }
     }
