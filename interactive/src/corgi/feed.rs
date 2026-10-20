@@ -4,7 +4,7 @@
 //! declared shape directly into column builders, so a fed string goes from the wire to its column
 //! as bytes, never as a `Value` per byte. The syntax, by shape:
 //!
-//! - `int`: an integer, `-7`.
+//! - `int`: an integer, `-7` or `+7`.
 //! - `float`: a decimal number, `278.6` or `-1e3`.
 //! - a tuple: `tuple(a,b)`, and `tuple()` for unit.
 //! - a list: `list(a,b)`.
@@ -123,7 +123,7 @@ impl Col {
                 *n += 1;
                 return Ok(());
             }
-            Col::Prod(fields) if text.iter().all(|&b| b.is_ascii_digit() || b == b',' || b == b'-') && fields.iter().all(|f| matches!(f, Col::Int(_))) => {
+            Col::Prod(fields) if text.iter().all(|&b| b.is_ascii_digit() || matches!(b, b',' | b'-' | b'+')) && fields.iter().all(|f| matches!(f, Col::Int(_))) => {
                 let parts = text.split(|&b| b == b',');
                 if parts.clone().count() != fields.len() {
                     return Err(format!("expected {} comma-separated integers", fields.len()));
@@ -238,7 +238,7 @@ impl Cursor<'_> {
 
     fn int(&mut self) -> Result<i64, String> {
         let start = self.at;
-        let sign = usize::from(self.text.get(self.at) == Some(&b'-'));
+        let sign = usize::from(matches!(self.text.get(self.at), Some(b'-' | b'+')));
         self.at += sign;
         let digits = self.token(|b| b.is_ascii_digit()).len();
         let parsed = (digits > 0).then(|| std::str::from_utf8(&self.text[start..self.at]).ok()?.parse().ok()).flatten();
@@ -291,6 +291,19 @@ mod tests {
         assert_eq!(columns.vals, transcode_owned(vals, &val));
         assert_eq!(corgi::shape_of_value(&columns.keys), key);
         assert_eq!(corgi::shape_of_value(&columns.vals), val);
+    }
+
+    /// An integer may carry a `+` sign, as Rust's integers read: `+1,-2` is `1,-2`.
+    #[test]
+    fn integers_may_carry_a_plus_sign() {
+        let pair = Shape::Prod(vec![int(), int()]);
+        let read = |row: &str| {
+            let mut decoder = FeedDecoder::new(&pair, &Shape::Unit);
+            decoder.push(row, None, 1).unwrap();
+            decoder.finish().keys
+        };
+        assert_eq!(read("+1,-2"), read("1,-2"));
+        assert_eq!(read("tuple(+1,+0)"), read("1,0"));
     }
 
     /// The compact forms read as their wrapped ones do.

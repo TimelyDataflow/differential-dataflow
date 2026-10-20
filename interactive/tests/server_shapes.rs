@@ -136,10 +136,11 @@ fn rows_of_another_shape_are_refused() {
         server.tick(worker);
         assert!(server.snapshot(worker, "edges").unwrap().is_empty(), "nothing refused was staged");
         server.feed("producer", 0, "1,2\n3,4", None).unwrap();
-        std::fs::write(&file, "5 6\n").unwrap();
+        // Integers read as Rust reads them, a leading `+` included.
+        std::fs::write(&file, "5 6\n+7 -8\n").unwrap();
         server.load(worker, "producer", 0, file.to_str().unwrap()).unwrap();
         server.tick(worker);
-        assert_eq!(server.snapshot(worker, "edges").unwrap().into_rows().len(), 3);
+        assert_eq!(server.snapshot(worker, "edges").unwrap().into_rows().len(), 4);
         std::fs::remove_file(&file).unwrap();
     });
 }

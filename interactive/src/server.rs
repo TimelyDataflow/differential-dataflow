@@ -963,15 +963,23 @@ impl Server {
                 // Every line is read, whichever worker's shard it falls in: a
                 // malformed line must fail the load everywhere, or the other
                 // workers would apply their shards and the client would see
-                // "loaded" over partial data.
-                let mut decoder = crate::corgi::feed::FeedDecoder::new(&target.shape.0, &target.shape.1);
+                // "loaded" over partial data. Only this worker's lines are
+                // kept; the others are read into a scratch decoder, emptied
+                // as it fills, so that holding them does not grow with the file.
+                use crate::corgi::feed::FeedDecoder;
+                let (key, val) = &target.shape;
+                let (mut rows, mut others) = (FeedDecoder::new(key, val), FeedDecoder::new(key, val));
+                let mut total = 0;
                 for (e, line) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
                     let fields = line.split_whitespace().collect::<Vec<_>>().join(",");
+                    let decoder = if mine(e as u64) { &mut rows } else { &mut others };
                     decoder.push(&fields, None, 1).map_err(|error| format!("load: line {} of {:?}: {error}", e + 1, source))?;
+                    if others.len() >= COLUMN_BATCH {
+                        others = FeedDecoder::new(key, val);
+                    }
+                    total += 1;
                 }
-                let rows = decoder.finish();
-                let shard: Vec<usize> = (0..rows.len()).filter(|&e| mine(e as u64)).collect();
-                (rows.len() as u64, Some(rows.select(&shard)))
+                (total, Some(rows.finish()))
             }
         };
         let installed = self
