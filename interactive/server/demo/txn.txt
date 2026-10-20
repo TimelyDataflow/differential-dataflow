@@ -20,43 +20,43 @@ load bank begin
 let intents = input 0 : ((int, int, int) ; (int));
 
 -- ((rid, k) ; expected) and ((wid, k) ; v)
-let reads  = intents | filter($0[1] == 1) | map($0[0], $0[2] ; $1[0]);
-let wr_all = intents | filter($0[1] == 0) | map($0[0], $0[2] ; $1[0]);
+let reads  = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
+let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v)));
 
 res: {
     -- writes of transactions not (currently) rolled back: anti-join on id.
-    let wr_id  = wr_all | map($0[0] ; $0[1], $1[0]);
-    let wr_bad = wr_id | join(rollback, ($0 ; $1[0], $1[1]));
+    let wr_id  = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
+    let wr_bad = wr_id | join(rollback, (wid, kv, ()) -> (wid, kv));
     let writes = wr_id + (wr_bad | negate);
 
     -- each read paired with every surviving prior write to its key ...
-    let wk = writes | map($1[0] ; $0[0], $1[1]);
-    let rk = reads  | map($0[1] ; $0[0], $1[0]);
-    let pairs = rk | join(wk, ($0, $1[0], $1[1] ; $2[0], $2[1]))
-              | filter($1[0] < $0[1]);
+    let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
+    let rk = reads  | map(((rid, k), (e)) -> ((k), (rid, e)));
+    let pairs = rk | join(wk, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)))
+              | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt);
     -- ... and the LATEST prior write wins: min over (-wid, v).
-    let best = pairs | map($0[0], $0[1], $0[2] ; 0 - $1[0], $1[1]) | min;
+    let best = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v))) | min;
 
     -- a read fails if the latest prior value mismatches ...
-    let bad_seen = best | filter($1[1] != $0[2]) | map($0[1] ;);
+    let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
 
     -- ... or if no prior write exists and it did not expect absence (-1).
-    let seen   = best | map($0[1], $0[0] ;);
-    let rkk    = reads | map($0 ;);
+    let seen   = best | map(((k, rid, _), _) -> ((rid, k), ()));
+    let rkk    = reads | map((rk, _) -> (rk, ()));
     let unseen = rkk + (seen | negate);
-    let bad_absent = unseen | join(reads, ($0[0], $2[0] ;))
-                   | filter($0[1] != -1) | map($0[0] ;);
+    let bad_absent = unseen | join(reads, ((rid, _), (), (e)) -> ((rid, e), ()))
+                   | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
 
     var rollback = (bad_seen + bad_absent) | distinct;
 }
 
 let rb = res::rollback;
-let wid  = wr_all | map($0[0] ; $0[1], $1[0]);
-let wbad = wid | join(rb, ($0 ; $1[0], $1[1]));
+let wid  = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
+let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
 let committed = wid + (wbad | negate);
 
 export "rollback" = rb;
-export "state" = committed | map($1[0] ; 0 - $0[0], $1[1]) | min | map($0 ; $1[1]);
+export "state" = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min | map((k, (_, v)) -> (k, (v)));
 export "log" = intents;
 bank end-load
 

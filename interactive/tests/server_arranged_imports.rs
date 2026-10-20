@@ -9,22 +9,23 @@ use interactive::{lower, parse};
 
 type Snapshot = Vec<(Value, Value, i64)>;
 
-const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);"#;
+const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> (src, dst));"#;
 
 /// A consumer of `edges`, its exports suffixed by `tag`.
 fn consumer(tag: &str) -> String {
     format!(
         r#"
         let edges = import "edges";
-        let roots = input 0 : ((int) ; ()) | key($0[0] ;);
+        let roots = input 0 : ((int) ; ()) | key(((n), ()) -> (n, ()));
         r: {{
-            let step = reach | join(edges, ($2 ;));
+            let step = reach | join(edges, (_, _, dst) -> (dst, ()));
             var reach = roots + step | distinct;
         }}
-        export "hop{tag}" = roots | join(edges, ($2 ; $0));
+        export "hop{tag}" = roots | join(edges, (n, _, dst) -> (dst, n));
         export "degree{tag}" = edges | count;
         export "reach{tag}" = r::reach;
-        export "flipped{tag}" = edges | map($1 ; $0);
+        export "flipped{tag}" = edges | map((src, dst) -> (dst, src));
+
         "#
     )
 }

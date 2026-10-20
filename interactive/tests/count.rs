@@ -6,8 +6,9 @@ use interactive::server::evaluate;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
-    let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
-    let shifted = pairs | key($0 ; $1[0] + 1);
+    let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+    let shifted = pairs | key((a, (b)) -> (a, ((b, 1) add)));
+
     export "positive" = pairs | count;
     export "negative" = pairs | negate | count;
     export "mixed" = (pairs + pairs - shifted - shifted - shifted) | count;

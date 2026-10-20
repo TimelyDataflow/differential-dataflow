@@ -26,7 +26,8 @@ const COUNTER: &str = r#"
     let feedback = input 1 : ((int) ; ());
     let state = seed + feedback;
     export "count" = state;
-    export "next" = (state | map($0[0] + 1 ;)) + (seed | negate);
+    export "next" = (state | map(((n), ()) -> (((n, 1) add), ()))) + (seed | negate);
+
 "#;
 
 #[test]

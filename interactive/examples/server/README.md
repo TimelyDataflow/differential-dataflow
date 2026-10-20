@@ -114,13 +114,14 @@ them in:
 - **`iota:N`** — the rows `(0) .. (N-1)`. The minimal index source.
 - **`clock`** — a single row holding the current epoch, advanced by one each
   `tick` (an O(1) change, tagged `[clock]` in `list`).
-- **`hash(bound, keys…)`** — a scalar builtin: a deterministic draw in
-  `[0, bound)` from the key `Int`s (raw non-negative hash if `bound <= 0`).
+- **`hash`** — corgi's structural hash of a value, all 64 bits:
+  `(k hash shr_b64 1, bound) rem` is a deterministic draw in `[0, bound)`.
 
 So `random:…` is really sugar — the composable form is `iota` + `hash`:
 
 ```
-let edges = import "iota:12" | map( hash(8,$0[0],0) ; hash(8,$0[0],1) );
+let edges = import "iota:12" | map(((i), ()) -> (((i, 0) hash shr_b64 1, 8) rem, ((i, 1) hash shr_b64 1, 8) rem));
+
 ```
 
 (A `clock`-driven *changing* generator is possible too, but a naive

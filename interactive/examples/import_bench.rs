@@ -65,7 +65,7 @@ fn main() {
         server.set_arranged_imports(arranged);
         println!("arranged imports: {arranged}; {edges} edges over {nodes} nodes, {consumers} {} consumers, churn {churn}", if reach { "reach" } else { "two-hop" });
 
-        install(&mut server, worker, "prod", r#"export "edges" = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);"#);
+        install(&mut server, worker, "prod", r#"export "edges" = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> (src, dst));"#);
         server.load(worker, "prod", 0, &format!("random:nodes={nodes},edges={edges},churn={churn}")).unwrap();
         let loaded = Instant::now();
         server.tick(worker);
@@ -78,22 +78,23 @@ fn main() {
                 format!(
                     r#"
                     let edges = import "edges";
-                    let roots = input 0 : ((int) ; ()) | key($0[0] ;);
+                    let roots = input 0 : ((int) ; ()) | key(((n), ()) -> (n, ()));
                     r: {{
-                        let step = reach | join(edges, ($2 ;));
+                        let step = reach | join(edges, (_, _, dst) -> (dst, ()));
                         var reach = roots + step | distinct;
                     }}
-                    export "reach{c}" = r::reach | key(;) | count;
+                    export "reach{c}" = r::reach | key(_ -> ((), ())) | count;
                     "#
                 )
             } else {
                 format!(
                     r#"
                     let edges = import "edges";
-                    let roots = input 0 : ((int) ; ()) | key($0[0] ;);
-                    let hop1 = roots | join(edges, ($2 ; $0));
-                    let hop2 = hop1 | join(edges, ($2 ; $1));
-                    export "reach{c}" = hop2 | key($1 ;) | count;
+                    let roots = input 0 : ((int) ; ()) | key(((n), ()) -> (n, ()));
+                    let hop1 = roots | join(edges, (root, _, dst) -> (dst, root));
+                    let hop2 = hop1 | join(edges, (_, root, dst) -> (dst, root));
+                    export "reach{c}" = hop2 | key((_, root) -> (root, ())) | count;
+
                     "#
                 )
             };

@@ -9,7 +9,7 @@
 
 load world begin
 let claims = input 0 : ((int, int) ; (int, int));
-export "owner" = claims | map($0 ; $1[1], $1[0]) | min | map($0 ; $1[1]);
+export "owner" = claims | map((cell, (id, epoch)) -> (cell, (epoch, id))) | min | map((cell, (_, id)) -> (cell, (id)));
 world end-load
 
 # Client 1 and client 2 race for cell (1,1) in epoch 0: lower id wins.

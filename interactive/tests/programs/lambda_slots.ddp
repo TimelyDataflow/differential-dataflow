@@ -1,0 +1,31 @@
+-- The slots that take one lambda: `value` (the value as written, with no tuple around it),
+-- `filter`, `flatmap` (a row per element, valued `(position, element)`) and `enter_at` (a row
+-- enters the loop at the round it names). A `--` comment may sit inside a lambda written over
+-- several lines. Declared types and the built-in `Option` are enums a lambda builds and takes
+-- apart, also when a payload is itself a sum.
+
+type Size = Small int | Big (int, int);
+type Inner = A int | B;
+type Outer = Wrap Inner | Opt Option(int) | Nums List(int);
+
+let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> ((a), (b)));
+
+export "value" = pairs | value(((a), (b)) -> ((b, 10) mul, a) add);
+export "filter" = pairs | filter(((a), (b)) -> (a, b) lt);
+export "flatmap" = pairs | flatmap(((a), (b)) -> (a enlist, b enlist, (a, b) add enlist) append);
+stepped: {
+    let delayed = pairs | enter_at((_, (b)) -> b);
+    var counted = delayed | count;
+}
+export "enter_at" = stepped::counted;
+export "comment" = pairs | value(((a), (b)) ->
+    -- the key and the value, added
+    (a, b) add  -- one Int
+);
+
+let sized = pairs | value(((a), (b)) -> ((b, 3) gt, (b, a) inject Big, b inject Small) select);
+export "sized" = sized | value((_, s) -> s match (Small (x -> x), Big ((x, y) -> (x, y) mul)));
+let maybe = pairs | value((_, (b)) -> (b, (b, 3) gt) branch Option map_variant None (_ -> ()));
+export "option" = maybe | value((_, m) -> m match (None (_ -> 0), Some (x -> x)));
+let outer = pairs | value((_, (b)) -> b inject A inject Wrap);
+export "nested" = outer | value((_, o) -> o match (Wrap (i -> i match (A (x -> x), B (_ -> 0))), Opt (_ -> -1), Nums (_ -> -1)));

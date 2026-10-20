@@ -44,6 +44,8 @@ fn inputs_for(prog: &str) -> Vec<Vec<String>> {
         // sum_skew: any keyed pairs — the skew is in the program, not the data.
         "sum_skew" => vec![rows(&[&[1, 10], &[2, 20], &[2, 21], &[3, 30]])],
         "case_ops" => vec![rows(&[&[1, 10], &[2, 20], &[3, 14], &[3, 30]])],
+        // lambda_slots: values on both sides of the `3` its sums split at, and a cycle.
+        "lambda_slots" => vec![rows(&[&[1, 2], &[2, 3], &[3, 4], &[5, 6], &[4, 2], &[6, 5]])],
         // pair_keys: composite keys with overlap, fanout, and one-sided keys on both sides.
         "pair_keys" => vec![
             rows(&[&[1, 1, 10], &[1, 2, 20], &[2, 1, 30], &[2, 1, 31], &[9, 9, 90]]),
@@ -167,6 +169,8 @@ fn serializing(n: usize) -> timely::Config {
 #[test] fn sum_ops() { assert_matches_expected("sum_ops"); }
 #[test] fn sum_skew() { assert_matches_expected("sum_skew"); }
 #[test] fn case_ops() { assert_matches_expected("case_ops"); }
+#[test] fn lambda_slots() { assert_matches_expected("lambda_slots"); }
+
 #[test] fn tour() { assert_matches_expected("tour"); }
 #[test] fn pair_keys() { assert_matches_expected("pair_keys"); }
 #[test] fn signed_min() { assert_matches_expected("signed_min"); }
@@ -259,7 +263,7 @@ fn register_test_functions() {
 /// A filter predicate must be an `Int`: a tuple is rejected rather than keeping nothing.
 #[test]
 fn filter_requires_an_int_predicate() {
-    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int, int) ; ()) | filter($0);"#));
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int, int) ; ()) | filter((k, ()) -> k);"#));
     tree.optimize();
     let inputs = vec![rows(&[&[1, 10], &[0, 20]])];
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(timely::Config::process(1), &tree, &inputs)));
@@ -271,7 +275,8 @@ fn filter_requires_an_int_predicate() {
 fn call_argument_shapes_are_checked() {
     register_test_functions();
     // `blend` takes a pair; pass it an Int.
-    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int) ; ()) | map($0 ; blend($0[0]));"#));
+    let mut tree = lower::lower_tree(parse::pipe::parse(r#"export "result" = input 0 : ((int) ; ()) | map(((n), ()) -> ((n), (n call blend)));"#
+));
     tree.optimize();
     let inputs = vec![rows(&[&[1], &[2]])];
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || evaluate(timely::Config::process(1), &tree, &inputs)));
