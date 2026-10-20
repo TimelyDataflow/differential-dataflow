@@ -17,6 +17,8 @@ pub mod join;
 pub mod count;
 pub mod threshold;
 
+mod frontier;
+
 use crate::lattice::Lattice;
 use crate::trace::Cursor;
 

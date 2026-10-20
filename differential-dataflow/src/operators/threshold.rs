@@ -5,7 +5,6 @@
 
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
-use timely::dataflow::operators::Operator;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::lattice::Lattice;
@@ -117,7 +116,7 @@ where
 
         let mut trace = self.trace.clone();
 
-        self.stream.unary_frontier(Pipeline, "ThresholdTotal", move |_,_| {
+        crate::operators::frontier::unary_frontier(self.stream, Pipeline, "ThresholdTotal", move |_,_| {
 
             // tracks the lower and upper limit of received batches.
             let mut lower_limit = timely::progress::frontier::Antichain::from_elem(Tr::Time::minimum());

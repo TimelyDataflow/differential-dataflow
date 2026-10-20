@@ -15,7 +15,6 @@ use std::marker::PhantomData;
 
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
-use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
@@ -131,7 +130,7 @@ where
         let mut source_trace = trace.trace;
         let result_trace = &mut result_trace;
         let scope = trace.stream.scope();
-        trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
+        crate::operators::frontier::unary_frontier(trace.stream, Pipeline, name, move |_capability, operator_info| {
 
             // Acquire a logger for arrange events.
             let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);

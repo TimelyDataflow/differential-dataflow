@@ -379,7 +379,7 @@ where
     let reader_ref = &mut reader;
     let scope = stream.scope();
 
-    let stream = stream.unary_frontier(pact, name, move |_capability, info| {
+    let stream = crate::operators::frontier::unary_frontier(stream, pact, name, move |_capability, info| {
 
         // Acquire a logger for arrange events.
         let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);

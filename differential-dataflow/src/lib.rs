@@ -116,13 +116,33 @@ pub struct Config {
     /// cause these operators to reschedule themselves as long as their arrangemnt has not
     /// reached a compact representation, and each scheduling quantum they will perform
     /// compaction work as if `effort` records had been added to the arrangement.
-    pub idle_merge_effort: Option<isize>
+    pub idle_merge_effort: Option<isize>,
+    /// Whether idle operators skip frontier advances.
+    ///
+    /// The default value of `false` schedules the arrange, join, reduce, `count_total`, and
+    /// `threshold_total` operators whenever an input frontier advances. Setting the value to
+    /// `true` has them declare `FrontierInterest::IfCapability`, so that a frontier advance
+    /// schedules them only while they hold a capability, which they do while they have work
+    /// pending. Arriving batches schedule them as before, and their outputs are unchanged.
+    ///
+    /// The cost is that an idle operator does not observe frontier advances. An idle arrange or
+    /// reduce does not seal empty batches, so the upper frontier of its trace lags its input
+    /// frontier until the operator next runs, and anything waiting on that upper frontier waits
+    /// too. In particular, a trace imported into another dataflow does not advance while the
+    /// operator that maintains it is idle. Idle operators also advance the compaction frontiers
+    /// of the traces they read only when they next run.
+    pub skip_idle_frontiers: bool,
 }
 
 impl Config {
     /// Assign an amount of effort to apply to idle arrangement operators.
     pub fn idle_merge_effort(mut self, effort: Option<isize>) -> Self {
         self.idle_merge_effort = effort;
+        self
+    }
+    /// Set whether idle operators skip frontier advances.
+    pub fn skip_idle_frontiers(mut self, skip: bool) -> Self {
+        self.skip_idle_frontiers = skip;
         self
     }
 }
@@ -143,5 +163,8 @@ pub fn configure(config: &mut timely::WorkerConfig, options: &Config) {
                 None
             }),
         );
+    }
+    if options.skip_idle_frontiers {
+        config.set("differential/skip_idle_frontiers".to_string(), true);
     }
 }

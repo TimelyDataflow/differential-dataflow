@@ -11,7 +11,7 @@ use timely::container::NoopBuilder;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::dataflow::Stream;
-use timely::dataflow::operators::generic::{Operator, OutputBuilderSession};
+use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 
@@ -92,7 +92,7 @@ where
     let mut trace2 = arranged2.trace;
 
     let scope = arranged1.stream.scope();
-    arranged1.stream.binary_frontier(arranged2.stream, Pipeline, Pipeline, "Join", move |capability, info| {
+    crate::operators::frontier::binary_frontier(arranged1.stream, arranged2.stream, Pipeline, Pipeline, "Join", move |capability, info| {
 
         // Acquire an activator to reschedule the operator when it has unfinished work.
         use timely::scheduling::Activator;
