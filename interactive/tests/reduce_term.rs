@@ -6,7 +6,7 @@ use interactive::server::Server;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
-    let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
+    let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
     export "count" = pairs | count;
     export "count_lambda" = pairs | reduce((_, vals) -> ((0, vals) fold ((acc, (_, d)) -> (acc, d) add), 1) enlist);
     export "distinct" = pairs | distinct;

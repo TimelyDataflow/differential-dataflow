@@ -9,14 +9,14 @@ use interactive::{lower, parse};
 
 type Snapshot = Vec<(Value, Value, i64)>;
 
-const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> (src, dst));"#;
+const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> (src, dst));"#;
 
 /// A consumer of `edges`, its exports suffixed by `tag`.
 fn consumer(tag: &str) -> String {
     format!(
         r#"
         let edges = import "edges";
-        let roots = input 0 : ((int) ; ()) | key(((n), ()) -> (n, ()));
+        let roots = input 0 : ((int) ; ()) | map(((n), ()) -> (n, ()));
         r: {{
             let step = reach | join(edges, (_, _, dst) -> (dst, ()));
             var reach = roots + step | distinct;

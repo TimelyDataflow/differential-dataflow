@@ -3,15 +3,15 @@
 let request = input 0 : ((int, List(int), int, int) ; ());
 let resident = import "resident" : ((List(int)) ; (int));
 let edge = import "edge" : ((int) ; (int, int));
-let people = request | key(((rid, country, start, end), ()) -> ((country), (rid, start, end)))
+let people = request | map(((rid, country, start, end), ()) -> ((country), (rid, start, end)))
     | join(resident, (_, request, person) -> (person, request));
 let candidates = people | join(edge, ((p), (rid, start, end), (q, created)) -> ((rid, p, q, created, start, end), ()))
     | filter(((_, p, q, created, start, end), ()) -> ((p, q) lt, (created, start) ge, (created, end) le) all);
 let membership = people | map(((p), (rid, _, _)) -> ((rid, p), ())) | distinct;
-let pairs = candidates | key(((rid, p, q, _, _, _), ()) -> ((rid, q), p))
+let pairs = candidates | map(((rid, p, q, _, _, _), ()) -> ((rid, q), p))
     | join(membership, ((rid, q), p, ()) -> ((rid, p, q), ())) | distinct;
-let paths = pairs | key(((rid, p, q), ()) -> ((rid, q), p))
-    | join(pairs | key(((rid, p, q), ()) -> ((rid, p), q)), ((rid, x), a, b) -> ((rid, a, b), x));
+let paths = pairs | map(((rid, p, q), ()) -> ((rid, q), p))
+    | join(pairs | map(((rid, p, q), ()) -> ((rid, p), q)), ((rid, x), a, b) -> ((rid, a, b), x));
 let counts = paths | join(pairs, ((rid, _, _), _, _) -> (rid, ())) | count;
 let zero = request | map(((rid, _, _, _), ()) -> (rid, 0));
 let missing = zero - (zero | join(counts, (rid, _, _) -> (rid, 0)));

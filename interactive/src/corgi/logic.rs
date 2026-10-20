@@ -1,20 +1,17 @@
-//! corgi as DDIR's columnar scalar logic: compile a `Term` to a corgi `Graph<NumOp>`, and
-//! transcode DDIR rows (`ir::Value`) to/from corgi columnar `Value` at the I/O boundaries.
+//! corgi as DDIR's columnar scalar logic: type and compile each operator's slot, a corgi lambda,
+//! at the shapes of the rows it reads; the Float functions as words; and transcode DDIR rows
+//! (`ir::Value`) to and from corgi columns, for registered functions with row bodies.
 //!
 //! Shapes are STATIC. Every input declares its shape, every other collection's follows from its
-//! operator's terms (`crate::shapes`), and all are fixed at install, never re-derived from data.
-//! A `Variant` carries a tag, not its type, so every sum a program builds is one it declared
-//! (`Term::Inject` carries the whole sum's lane shapes).
+//! operator's slot (`crate::shapes`), and all are fixed at install, never re-derived from data.
 //!
-//! The typer is corgi's. [`shape_of_term`] compiles a term into a scratch graph and asks
-//! `corgi::shape_of` (its evaluator on zero rows) for the result shape, so every shape rule —
-//! which lanes a `case` sees, what an `if` may blend, whether two operands compare — is the one
-//! the kernels enforce, and a program that lowers is a program that runs. `Err` is a type error,
-//! reported with corgi's message. DDIR's `Int` is corgi's `Int`, so arithmetic and ordered
-//! compares are corgi's own; `hash` is corgi's structural `Op::Hash`, the same function
-//! `ir::eval` folds row-wise.
+//! The typer is corgi's: [`slot_shape`] asks `corgi::shape_of` (its evaluator on zero rows) for
+//! the shape a slot gives, so every shape rule is the one the kernels enforce, and a program that
+//! types is a program that runs. `Err` is a type error, reported with corgi's message.
+//!
+//! The retiring term compiler ([`compile`], [`shape_of_term`]) remains for its own tests.
 
-use crate::ir::{BinOp, F64Fn, SumTy, Term, UnOp, Value as DValue};
+use crate::ir::{BinOp, F64Fn, Lambda, SumTy, Term, UnOp, Value as DValue};
 
 use corgi::{ArithOp, BinOp as CBinOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Scalar, Shape, ShiftOp, Value as CValue};
 
@@ -323,11 +320,6 @@ pub fn compile(
         // Projection: a tuple field, or a list element (`Gather`, which reads the zero of the element's shape out of range).
         Term::Proj(t, i) => {
             let id = compile(t, b, env, env_shapes, anchor, None)?;
-            // A lambda slot's key and value are fields of its `(key, val)` output; typing the
-            // lambda again to find that out would compile it a second time.
-            if matches!(**t, Term::Corgi(..)) {
-                return Ok(b.add(Op::Field(*i), vec![id]));
-            }
             match shape_of_term(t, env_shapes, None)? {
                 Shape::List(_) => {
                     let idx = int_lit(b, anchor, *i as i64);
@@ -800,42 +792,56 @@ fn compile_fold_body(step: &Term, ctx: Option<&[Shape]>, init_shape: &Shape, ele
 /// `shapes`. The graph's input is `Prod(shapes)`; its output is the one term's column, or `Prod`
 /// of the terms' columns. Typechecked once here, so an `Ok` kernel runs on every batch of these
 /// shapes. Returns the kernel and its output shape.
+#[cfg(test)]
 fn lower(terms: &[&Term], shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
     let mut b = Builder::<NumOp>::default();
     let input = b.input();
     let env: Vec<usize> = (0..shapes.len()).map(|i| b.add(Op::Field(i), vec![input])).collect();
     let outs = terms.iter().map(|t| compile(t, &mut b, &env, shapes, input, None)).collect::<Res<Vec<_>>>()?;
     let out = if let [one] = outs[..] { one } else { b.tuple(outs) };
-    // CSE, so a term compiled twice runs once: a lambda's key and val are two fields of one program.
     let g = corgi::cse(&b.finish(out));
     let output = corgi::shape_of(&g, &Shape::Prod(shapes.to_vec()))?;
     Ok((g, output))
 }
 
-/// Compile a `FlatMap`'s list term → a corgi `List` column, one list per input row. A term that is
+/// The shape a slot gives over rows of `shapes`: corgi's typer, on its graph's input `Prod(shapes)`.
+pub fn slot_shape(lambda: &Lambda, shapes: &[Shape]) -> Res<Shape> {
+    corgi::shape_of(lambda.graph()?, &Shape::Prod(shapes.to_vec()))
+}
+
+/// A slot's graph over rows of `shapes`, and the shape it gives. Typechecked once here, so an `Ok`
+/// kernel runs on every batch of these shapes.
+fn slot_graph(lambda: &Lambda, shapes: &[Shape]) -> Res<(Graph<NumOp>, Shape)> {
+    let output = slot_shape(lambda, shapes)?;
+    // Optimized only now that it types: among corgi's passes, a field of a tuple the lambda built
+    // becomes the field itself, and common subexpressions merge.
+    Ok((corgi::optimize(lambda.graph()?), output))
+}
+
+/// Compile a `FlatMap`'s lambda → a corgi `List` column, one list per input row. A lambda that is
 /// not list-shaped is the type error: the backend explodes the column structurally.
-pub fn compile_flatmap(list_term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    match lower(&[list_term], &[kshape.clone(), vshape.clone()])? {
+pub fn compile_flatmap(list: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+    match slot_graph(list, &[kshape.clone(), vshape.clone()])? {
         (k, Shape::List(_)) => Ok(k),
         (_, other) => Err(format!("flatmap over a non-list: {other}")),
     }
 }
 
-/// Compile a `reduce(term)` term over `Var(0)=key` (`kshape`) and `Var(1)` = a list of
-/// `(val, diff)` (`vshape` the values') → a corgi `List` column of `(val, diff)`, one list per key.
-pub fn compile_reduce(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+/// Compile a `reduce` lambda over `(key, vals)`, `vals` a list of `(val, diff)` (`vshape` the
+/// values') → a corgi `List` column of `(val, diff)`, one list per key.
+pub fn compile_reduce(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
     let list = Shape::List(Box::new(Shape::Prod(vec![vshape.clone(), Shape::Int])));
-    match lower(&[term], &[kshape.clone(), list])? {
+    match slot_graph(lambda, &[kshape.clone(), list])? {
         (g, Shape::List(e)) if matches!(&*e, Shape::Prod(fs) if fs.len() == 2 && fs[1] == Shape::Int) => Ok(g),
         (_, other) => Err(format!("reduce output is not a list of (val, diff): {other}")),
     }
 }
 
-/// Compile a `JoinFunction`'s term → a `List` column of `((key, val), time, diff)`, one list per
+/// Compile a `JoinFunction`'s lambda → a `List` column of `((key, val), time, diff)`, one list per
 /// input row, with `time` a tuple of `width` `Int`s. Any other shape is the type error: the backend
 /// explodes the column structurally and joins the time lanes into the rows' times.
-pub fn compile_join_function(term: &Term, kshape: &Shape, vshape: &Shape, width: usize) -> Res<Graph<NumOp>> {
-    let (g, out) = lower(&[term], &[kshape.clone(), vshape.clone()])?;
+pub fn compile_join_function(lambda: &Lambda, kshape: &Shape, vshape: &Shape, width: usize) -> Res<Graph<NumOp>> {
+    let (g, out) = slot_graph(lambda, &[kshape.clone(), vshape.clone()])?;
     if let Shape::List(elem) = &out {
         if let Shape::Prod(fs) = &**elem {
             let time = Shape::Prod(vec![Shape::Int; width]);
@@ -847,10 +853,10 @@ pub fn compile_join_function(term: &Term, kshape: &Shape, vshape: &Shape, width:
     Err(format!("join_function output is not a list of ((key, val), time, diff) with {width} time coordinates: {out}"))
 }
 
-/// Compile a scalar term (`EnterAt`'s delay field) → an `Int` column; a non-integer term is the
-/// type error (the delay is read as one integer per row).
-pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    match lower(&[term], &[kshape.clone(), vshape.clone()])? {
+/// Compile an `EnterAt`'s lambda → an `Int` column; a non-integer is the type error (the round is
+/// read as one integer per row).
+pub fn compile_scalar(lambda: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+    match slot_graph(lambda, &[kshape.clone(), vshape.clone()])? {
         (k, Shape::Int) => Ok(k),
         (_, other) => Err(format!("enter_at delay is not an integer: {other}")),
     }
@@ -858,23 +864,20 @@ pub fn compile_scalar(term: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<
 
 /// Compile a `Filter` predicate → a mask column (nonzero keeps the row). A predicate must be an
 /// `Int`; any other shape is a type error.
-pub fn compile_predicate(cond: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    match lower(&[cond], &[kshape.clone(), vshape.clone()])? {
+pub fn compile_predicate(cond: &Lambda, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
+    match slot_graph(cond, &[kshape.clone(), vshape.clone()])? {
         (k, Shape::Int) => Ok(k),
         (_, other) => Err(format!("a filter predicate must be an Int, got {other}")),
     }
 }
 
-/// Compile a join projection: key/val Terms over `Var(0)=key`, `Var(1)=val0`, `Var(2)=val1` (with
-/// their shapes). Input `Prod([key, val0, val1])`; output `Prod([newkey, newval])`.
-pub fn compile_join_projection(key: &Term, val: &Term, kshape: &Shape, v0shape: &Shape, v1shape: &Shape) -> Res<Graph<NumOp>> {
-    Ok(lower(&[key, val], &[kshape.clone(), v0shape.clone(), v1shape.clone()])?.0)
-}
-
-/// Compile a DDIR `Projection` over `Var(0)=key` (`kshape`), `Var(1)=val` (`vshape`).
-/// Input `Prod([key, val])`; output `Prod([newkey, newval])`.
-pub fn compile_projection(key: &Term, val: &Term, kshape: &Shape, vshape: &Shape) -> Res<Graph<NumOp>> {
-    Ok(lower(&[key, val], &[kshape.clone(), vshape.clone()])?.0)
+/// Compile a projection over `rows`, the shapes of `(key, val)` or `(key, val0, val1)`: input
+/// `Prod(rows)`, output `Prod([newkey, newval])`.
+pub fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<Graph<NumOp>> {
+    match slot_graph(lambda, rows)? {
+        (g, Shape::Prod(fs)) if fs.len() == 2 => Ok(g),
+        (_, other) => Err(format!("a projection gives (key, val), not {other}")),
+    }
 }
 
 /// Evaluate a corgi program on one row, as `ir::eval` does for `Term::Corgi`. The row's shape is

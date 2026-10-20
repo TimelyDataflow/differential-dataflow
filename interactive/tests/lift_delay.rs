@@ -6,7 +6,7 @@ use interactive::server::Server;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
-    let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
+    let pairs = input 0 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
     export "lift" = pairs | lift;
     export "epoch" = pairs | delay((_, b) -> (b)) | lift;
     export "join_function" = pairs | join_function((a, b) -> (((b, a), (0), 2) enlist, ((a, a), (0), -1) enlist) append);

@@ -197,7 +197,7 @@ fn clone_rec(orig: &Scope, out: &mut Scope, import_map: &[Ref], path: &[usize]) 
 // about boundaries.
 
 use std::collections::BTreeMap;
-use crate::ir::{Lambda, Projection, Reducer, Term};
+use crate::ir::{Lambda, Reducer};
 mod decouple;
 use decouple::{Dataflow, RowModel};
 
@@ -252,60 +252,22 @@ fn resolve(root: &Scope, path: &[usize], r: &Ref) -> Target {
 // its own rows, whose values carry the chain (and `q`) after the user's value. A user lambda must
 // see the user's row, not explain's, so explain calls it on the user's row as it sits in explain's.
 
-/// A slot of `arity` rows, `(k, v)` or `(k, v, r)`, whose body is `body` applied to the user's
-/// slots `terms`, each called on `rows` (explain's spelling of the user's row). Only explain's
-/// adapter is parsed: each user lambda's compiled graph is bound as a private word, which `call`
-/// grafts, so the user's text is never parsed again. The readable source substitutes the user's
-/// text after parsing.
-fn slot(arity: usize, terms: &[&Term], rows: &[String], body: impl FnOnce(Vec<String>) -> String) -> Term {
-    struct Words { scope: corgi::Scope, code: String, src: String, error: Option<String>, next: usize, bound: Vec<(String, String)> }
-    impl Words {
-        fn bind(&mut self, term: &Term, rows: &[String]) -> String {
-            match term {
-                Term::Var(i) => rows[*i].clone(),
-                Term::Proj(t, i) => fld(self.bind(t, rows), *i),
-                Term::Corgi(lambda, args) => {
-                    let args = tup(args.iter().map(|t| self.bind(t, rows)).collect());
-                    // A projection's key and value halves are the same lambda: call it once.
-                    let call = format!("{args} {}", lambda.src);
-                    if let Some((_, name)) = self.bound.iter().find(|(c, _)| *c == call) { return name.clone(); }
-                    let name = format!("_explain{}", self.next);
-                    self.next += 1;
-                    self.bound.push((call, name.clone()));
-                    match lambda.graph() {
-                        Ok(g) => self.scope.word(&name, g.as_ref().clone()).unwrap(),
-                        Err(e) => self.error = Some(e),
-                    }
-                    self.code += &format!("let {name} = {args} call {name} in ");
-                    self.src += &format!("let {name} = let input = {args} in {} in ", lambda.src);
-                    name
-                }
-                _ => panic!("explain: expected a lambda slot"),
-            }
-        }
-    }
-    // The adapter uses only corgi's own ops, so an empty scope serves.
-    let mut words = Words { scope: corgi::Scope::default(), code: String::new(), src: String::new(), error: None, next: 0, bound: Vec::new() };
-    let body = body(terms.iter().map(|t| words.bind(t, rows)).collect());
+/// A slot of `arity` rows, `(k, v)` or `(k, v, r)`, whose body is `body` applied to the results
+/// of the user's lambdas in `calls`, each called on an argument written over those rows (explain's
+/// spelling of the user's row). See [`Lambda::compose`]: the user's text is never parsed again.
+fn slot(arity: usize, calls: &[(&Lambda, String)], body: impl FnOnce(&[String]) -> String) -> Lambda {
     let pattern = if arity == 2 { "(k, v)" } else { "(k, v, r)" };
-    let mut lambda = Lambda::new(format!("let {pattern} = input in {}{body}", words.code), &words.scope);
-    lambda.src = format!("let {pattern} = input in {}{body}", words.src);
-    if let Some(e) = words.error { lambda.graph = Err(e); }
-    Term::Corgi(lambda, (0..arity).map(Term::Var).collect())
-}
-/// A slot giving `(key, val)` as a projection, as the parser splits a lambda.
-fn split(lambda: Term) -> Projection {
-    Projection { key: Term::Proj(Box::new(lambda.clone()), 0), val: Term::Proj(Box::new(lambda), 1) }
+    Lambda::compose(pattern, calls, body)
 }
 /// A projection of explain's own, from the lambda text of its key and value.
-fn projection(key: String, val: String, arity: usize) -> Projection {
-    split(slot(arity, &[], &[], |_| tup(vec![key, val])))
+fn projection(key: String, val: String, arity: usize) -> Lambda {
+    slot(arity, &[], |_| tup(vec![key, val]))
 }
 /// A filter of explain's own, from the lambda text of its 0/1 mask.
-fn predicate(body: String) -> Term { slot(2, &[], &[], |_| body) }
+fn predicate(body: String) -> Lambda { slot(2, &[], |_| body) }
 
 /// A user row `(K ; V)` as an envelope row `(K ; (V))`, with an empty chain.
-fn envelope() -> Projection { projection(var(0), tup(vec![var(1)]), 2) }
+fn envelope() -> Lambda { projection(var(0), tup(vec![var(1)]), 2) }
 
 /// Options for the explanation rewrite.
 #[derive(Clone, Copy, Debug, Default)]
@@ -329,13 +291,13 @@ impl Sb {
         Ref::Local(i)
     }
     fn linear(&mut self, input: Ref, ops: Vec<LinearOp>) -> Ref { self.op(Node::Linear { input, ops }) }
-    fn project(&mut self, input: Ref, p: Projection) -> Ref { self.linear(input, vec![LinearOp::Project(p)]) }
-    fn filter(&mut self, input: Ref, c: Term) -> Ref { self.linear(input, vec![LinearOp::Filter(c)]) }
+    fn project(&mut self, input: Ref, p: Lambda) -> Ref { self.linear(input, vec![LinearOp::Project(p)]) }
+    fn filter(&mut self, input: Ref, c: Lambda) -> Ref { self.linear(input, vec![LinearOp::Filter(c)]) }
     fn concat(&mut self, refs: Vec<Ref>) -> Ref {
         if refs.len() == 1 { return refs.into_iter().next().unwrap(); }
         self.op(Node::Concat(refs))
     }
-    fn join(&mut self, l: Ref, r: Ref, projection: Projection) -> Ref {
+    fn join(&mut self, l: Ref, r: Ref, projection: Lambda) -> Ref {
         let la = self.op(Node::Arrange(l));
         let ra = self.op(Node::Arrange(r));
         self.op(Node::Join { left: la, right: ra, projection })
@@ -416,12 +378,12 @@ impl Sb {
     }
 
     /// Lossy lookup (Linear[Project]), through the pair table.
-    fn emit_lookup_lossy(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, proj: &Projection) -> Ref {
+    fn emit_lookup_lossy(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, proj: &Lambda) -> Ref {
         decouple::lossy_lookup::<Val, Sb>(self, &dep_y, &side.info(), out_user_len, proj)
     }
 
     /// Join's backward rule: two contribs (left, right).
-    fn emit_lookup_join(&mut self, dep_y: Ref, left: &Side, right: &Side, out_user_len: usize, projection: &Projection) -> (Ref, Ref) {
+    fn emit_lookup_join(&mut self, dep_y: Ref, left: &Side, right: &Side, out_user_len: usize, projection: &Lambda) -> (Ref, Ref) {
         decouple::join_lookup::<Val, Sb>(self, &dep_y, &left.info(), &right.info(), out_user_len, projection)
     }
 
@@ -435,16 +397,16 @@ impl Sb {
     /// The one wrinkle is that a plain flatmap drops the source row and the key
     /// isn't unique, so we **re-key the input by itself** before exploding (the
     /// source then rides through in the join key) and re-project to the packed
-    /// output afterwards. `list_term` reads the re-keyed rows: the input's key
+    /// output afterwards. `list` reads the re-keyed rows: the input's key
     /// is the key's first field, and its value is the row's value.
-    fn emit_lookup_flatmap(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, list_term: &Term) -> Ref {
+    fn emit_lookup_flatmap(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, list: &Lambda) -> Ref {
         let d = out_user_len;                // same depth for input and output
         // Pair table: re-key the input by the whole input row, explode (the
         // source survives in the key), then re-key to (k, (pos, elem)) carrying
         // the source as the value.
         let src = self.concat(vec![side.witness.clone(), side.forward.clone()]);
         let rekeyed = self.project(src, projection(tup(vec![var(0), var(1)]), f(1, 0), 2));
-        let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list_term.clone())]);
+        let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list.clone())]);
         let pair = self.project(exploded, projection(tup(vec![f(0, 0), var(1)]), var(0), 2));
         // Re-key the demand by the same output (k, (pos, elem)); keep its chain ++ q.
         let dep_keyed = self.project(dep_y, projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, d + 2)), 2));
@@ -473,11 +435,11 @@ pub(crate) struct Val;
 
 impl Dataflow for Sb {
     type Handle = Ref;
-    type Proj = Projection;
-    type Pred = Term;
-    fn project(&mut self, c: &Ref, p: Projection) -> Ref { Sb::project(self, c.clone(), p) }
-    fn filter(&mut self, c: &Ref, p: Term) -> Ref { Sb::filter(self, c.clone(), p) }
-    fn join(&mut self, l: &Ref, r: &Ref, p: Projection) -> Ref { Sb::join(self, l.clone(), r.clone(), p) }
+    type Proj = Lambda;
+    type Pred = Lambda;
+    fn project(&mut self, c: &Ref, p: Lambda) -> Ref { Sb::project(self, c.clone(), p) }
+    fn filter(&mut self, c: &Ref, p: Lambda) -> Ref { Sb::filter(self, c.clone(), p) }
+    fn join(&mut self, l: &Ref, r: &Ref, p: Lambda) -> Ref { Sb::join(self, l.clone(), r.clone(), p) }
     fn concat(&mut self, cs: Vec<Ref>) -> Ref { Sb::concat(self, cs) }
 }
 
@@ -497,17 +459,17 @@ fn and_all(conds: Vec<String>) -> Option<String> {
 }
 
 impl RowModel for Val {
-    type Proj = Projection;
-    type Pred = Term;
+    type Proj = Lambda;
+    type Pred = Lambda;
 
-    fn pack(chain_len: usize, has_q: bool) -> Projection {
+    fn pack(chain_len: usize, has_q: bool) -> Lambda {
         let tail = chain_len + has_q as usize;
         projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, 1 + tail)), 2)
     }
-    fn strip_all() -> Projection {
+    fn strip_all() -> Lambda {
         projection(var(0), f(1, 0), 2)
     }
-    fn sp_reassemble(in_len: usize, out_len: usize) -> Projection {
+    fn sp_reassemble(in_len: usize, out_len: usize) -> Lambda {
         let mut val = vec![f(0, 1)];                  // V (from packed key)
         val.extend(fidx(2, 0, in_len));               // chain_in (pair)
         val.extend(fidx(1, 0, out_len));              // chain_out (dep)
@@ -515,7 +477,7 @@ impl RowModel for Val {
         projection(f(0, 0), tup(val), 3)
     }
 
-    fn ky_join(in_len: usize, out_len: usize, min: bool) -> Projection {
+    fn ky_join(in_len: usize, out_len: usize, min: bool) -> Lambda {
         let mut val = vec![f(2, 0)];                  // V_in
         if min { val.push(f(1, 0)); }                 // V_out (for narrowing)
         val.extend(fidx(2, 1, 1 + in_len));           // chain_in
@@ -523,21 +485,21 @@ impl RowModel for Val {
         val.push(f(1, 1 + out_len));                  // q
         projection(var(0), tup(val), 3)
     }
-    fn ky_data_eq() -> Option<Term> {
+    fn ky_data_eq() -> Option<Lambda> {
         Some(predicate(eq(f(1, 0), f(1, 1))))
     }
-    fn ky_drop_vout(in_len: usize, out_len: usize) -> Projection {
+    fn ky_drop_vout(in_len: usize, out_len: usize) -> Lambda {
         let mut val = vec![f(1, 0)];
         val.extend(fidx(1, 2, 3 + in_len + out_len)); // chain_in, chain_out, q
         projection(var(0), tup(val), 2)
     }
 
-    fn lossy_pair(proj: &Projection, in_len: usize) -> Projection {
+    fn lossy_pair(proj: &Lambda, in_len: usize) -> Lambda {
         let mut val = vec![var(0), f(1, 0)];          // K_in, V_in
         val.extend(fidx(1, 1, 1 + in_len));           // chain_in
-        split(slot(2, &[&proj.key], &[var(0), var(1)], |key| tup(vec![key[0].clone(), tup(val)])))
+        slot(2, &[(proj, tup(vec![var(0), var(1)]))], |out| tup(vec![fld(out[0].clone(), 0), tup(val)]))
     }
-    fn lossy_reassemble(in_len: usize, out_len: usize) -> Projection {
+    fn lossy_reassemble(in_len: usize, out_len: usize) -> Lambda {
         let mut val = vec![f(2, 1)];                  // V_in
         val.extend(fidx(2, 2, 2 + in_len));           // chain_in
         val.extend(fidx(1, 1, 1 + out_len));          // chain_out
@@ -545,16 +507,16 @@ impl RowModel for Val {
         projection(f(2, 0), tup(val), 3)
     }
 
-    fn join_forward(proj: &Projection, l_len: usize, r_len: usize) -> Projection {
+    fn join_forward(proj: &Lambda, l_len: usize, r_len: usize) -> Lambda {
         let mut val = vec![var(0), f(1, 0), f(2, 0)]; // K, V_L, V_R
         val.extend(fidx(1, 1, 1 + l_len));            // chain_L
         val.extend(fidx(2, 1, 1 + r_len));            // chain_R
-        split(slot(3, &[&proj.key, &proj.val], &[var(0), var(1), var(2)], |out| {
-            val.push(out[1].clone());               // V_out (pair-produced)
-            tup(vec![out[0].clone(), tup(val)])
-        }))
+        slot(3, &[(proj, tup(vec![var(0), var(1), var(2)]))], |out| {
+            val.push(fld(out[0].clone(), 1));       // V_out (pair-produced)
+            tup(vec![fld(out[0].clone(), 0), tup(val)])
+        })
     }
-    fn join_combined(l_len: usize, r_len: usize, out_len: usize) -> Projection {
+    fn join_combined(l_len: usize, r_len: usize, out_len: usize) -> Lambda {
         let ul_s = 3;
         let ur_s = ul_s + l_len;
         let vout_s = ur_s + r_len;
@@ -567,7 +529,7 @@ impl RowModel for Val {
         val.push(f(2, vout_s));                       // V_out_pair
         projection(f(2, 0), tup(val), 3)
     }
-    fn join_filter(l_len: usize, r_len: usize, out_len: usize) -> Option<Term> {
+    fn join_filter(l_len: usize, r_len: usize, out_len: usize) -> Option<Lambda> {
         let ul_j = 2;
         let ur_j = ul_j + l_len;
         let uo_j = ur_j + r_len;
@@ -582,7 +544,7 @@ impl RowModel for Val {
         and_all([time_cond(ul_j, l_len), time_cond(ur_j, r_len), value_cond]
             .into_iter().flatten().collect()).map(predicate)
     }
-    fn join_split(left: bool, l_len: usize, r_len: usize, out_len: usize) -> Projection {
+    fn join_split(left: bool, l_len: usize, r_len: usize, out_len: usize) -> Lambda {
         let ul_j = 2;
         let ur_j = ul_j + l_len;
         let q_j = ur_j + r_len + out_len;
@@ -596,7 +558,7 @@ impl RowModel for Val {
         projection(var(0), tup(val), 2)
     }
 
-    fn time_le(in_len: usize, out_len: usize) -> Option<Term> {
+    fn time_le(in_len: usize, out_len: usize) -> Option<Lambda> {
         // Joined row value: (V, user_in(in_len), user_out(out_len), q), each
         // chain innermost-first; compare outer-aligned (last min(in,out)).
         let n = in_len.min(out_len);
@@ -604,7 +566,7 @@ impl RowModel for Val {
         let out_off = out_len - n;
         and_all((0..n).map(|i| le(f(1, 1 + in_off + i), f(1, 1 + in_len + out_off + i))).collect()).map(predicate)
     }
-    fn strip(in_len: usize, out_len: usize, keep: usize) -> Projection {
+    fn strip(in_len: usize, out_len: usize, keep: usize) -> Lambda {
         let mut val = vec![f(1, 0)];                  // V
         let drop_in = in_len - keep;
         for i in 0..keep { val.push(f(1, 1 + drop_in + i)); }   // outer kept user_in coords
@@ -612,10 +574,10 @@ impl RowModel for Val {
         projection(var(0), tup(val), 2)
     }
 
-    fn bind_filter() -> Option<Term> {
+    fn bind_filter() -> Option<Lambda> {
         Some(predicate(gt(f(1, 1), "0".into())))
     }
-    fn bind_decrement(user_len: usize) -> Projection {
+    fn bind_decrement(user_len: usize) -> Lambda {
         let mut val = vec![f(1, 0)];
         val.push(sub(f(1, 1), "1".into()));           // innermost chain coord - 1
         val.extend(fidx(1, 2, 2 + user_len));         // the rest of the chain, then q
@@ -871,12 +833,12 @@ impl<'a> Reverse<'a> {
                     LinearOp::Project(proj) => {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);
-                        let proj = split(slot(2, &[&proj.key, &proj.val], &[var(0), f(1, 0)], tup));
+                        let proj = slot(2, &[(proj, tup(vec![var(0), f(1, 0)]))], |out| out[0].clone());
                         let contrib = ex.emit_lookup_lossy(dep_this, &side, out_user_len, &proj);
                         self.contribs.entry(target).or_default().push(contrib);
                     }
                     LinearOp::Filter(cond) => {
-                        let cond = slot(2, &[cond], &[var(0), f(1, 0)], |mut ts| ts.remove(0));
+                        let cond = slot(2, &[(cond, tup(vec![var(0), f(1, 0)]))], |out| out[0].clone());
                         let contrib = ex.filter(dep_this, cond);
                         self.push(ex, path, input, contrib, out_user_len);
                     }
@@ -894,19 +856,19 @@ impl<'a> Reverse<'a> {
                     // forward clone is the problem, and it would read different times there.
                     //
                     // JoinFunction can follow FlatMap's rule: a pair table that re-keys each input
-                    // row by itself and evaluates the term as data, not as a delay, so each output
-                    // `(key, val)` sits beside its source row, chain, and the term's time `t`. The
+                    // row by itself and evaluates the lambda as data, not as a delay, so each output
+                    // `(key, val)` sits beside its source row, chain, and the lambda's time `t`. The
                     // time width is then just data and the clone's depth does not matter. The time
                     // filter can be exact, `chain_in ∨ t ≤ chain_out`, compared on the chain's
                     // coordinates only; the epoch and coordinates outside the chain are dropped,
                     // which is over-broad and so still sound.
                     LinearOp::Lift => panic!("explain: lift is not supported"),
                     LinearOp::JoinFunction(_) => panic!("explain: join_function is not supported"),
-                    LinearOp::FlatMap(list_term) => {
+                    LinearOp::FlatMap(list) => {
                         let target = resolve(self.orig, path, input);
                         let side = self.side(&target);
-                        let list_term = slot(2, &[list_term], &[f(0, 0), var(1)], |mut ts| ts.remove(0));
-                        let contrib = ex.emit_lookup_flatmap(dep_this, &side, out_user_len, &list_term);
+                        let list = slot(2, &[(list, tup(vec![f(0, 0), var(1)]))], |out| out[0].clone());
+                        let contrib = ex.emit_lookup_flatmap(dep_this, &side, out_user_len, &list);
                         self.contribs.entry(target).or_default().push(contrib);
                     }
                 }
@@ -935,7 +897,7 @@ impl<'a> Reverse<'a> {
                 let rt = resolve(self.orig, path, right);
                 let ls = self.side(&lt);
                 let rs = self.side(&rt);
-                let projection = split(slot(3, &[&projection.key, &projection.val], &[var(0), f(1, 0), f(2, 0)], tup));
+                let projection = slot(3, &[(projection, tup(vec![var(0), f(1, 0), f(2, 0)]))], |out| out[0].clone());
                 let (lc, rc) = ex.emit_lookup_join(dep_this, &ls, &rs, out_user_len, &projection);
                 self.contribs.entry(lt).or_default().push(lc);
                 self.contribs.entry(rt).or_default().push(rc);

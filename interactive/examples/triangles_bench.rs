@@ -37,16 +37,16 @@ use interactive::server::Server;
 use interactive::{lower, parse};
 
 const EDGES: &str = r#"
-    let e = input 0 : ((int, int) ; ()) | key(((x, y), ()) -> (x, y));
-    let r = e | key((x, y) -> (y, x));
-    let s = e | key((x, y) -> ((x, y), ()));
+    let e = input 0 : ((int, int) ; ()) | map(((x, y), ()) -> (x, y));
+    let r = e | map((x, y) -> (y, x));
+    let s = e | map((x, y) -> ((x, y), ()));
 "#;
 
 /// Each triangle `(a, b, c)` has edges `(a, b)`, `(b, c)`, and `(a, c)`.
 const JOIN: &str = r#"
     let paths = r | join(e, (b, a, c) -> ((a, c), b));
     let tri = paths | join(s, ((a, c), b, ()) -> ((a, b, c), ()));
-    export "count" = tri | key((_, _) -> ((), ())) | count;
+    export "count" = tri | map((_, _) -> ((), ())) | count;
 "#;
 
 /// One path of half joins per edge of the triangle, each meeting the earlier edges' changes at or
@@ -55,8 +55,8 @@ const DELTA: &str = r#"
     let d1 = r | lift | half_join(e, 1, (b, a, c) -> ((a, c), b)) | half_join(s, 1, ((a, c), b, ()) -> ((a, b, c), ()));
     let d2 = e | lift | half_join(r, 0, (b, c, a) -> ((a, c), b)) | half_join(s, 1, ((a, c), b, ()) -> ((a, b, c), ()));
     let d3 = e | lift | half_join(e, 0, (a, c, b) -> ((b, c), a)) | half_join(s, 0, ((b, c), a, ()) -> ((a, b, c), ()));
-    let tri = (d1 + d2 + d3) | delay((_, (_, t)) -> t) | key((abc, (v, _)) -> (abc, v));
-    export "count" = tri | key((_, _) -> ((), ())) | count;
+    let tri = (d1 + d2 + d3) | delay((_, (_, t)) -> t) | map((abc, (v, _)) -> (abc, v));
+    export "count" = tri | map((_, _) -> ((), ())) | count;
 "#;
 
 /// This process's memory in MiB: on macOS its `footprint`, elsewhere its RSS.

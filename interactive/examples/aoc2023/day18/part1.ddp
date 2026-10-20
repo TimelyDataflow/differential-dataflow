@@ -1,7 +1,7 @@
 -- AoC 2023 day 18 part 1: lavaduct area via shoelace + perimeter/2 + 1.
 -- input 0: (line, dircode, steps, h1..h6); U=85 D=68 L=76 R=82
 
-let instr = input 0 : ((int, int, int, int, int, int, int, int, int) ; ()) | key(((line, dir, steps, _, _, _, _, _, _), ()) -> (line, (
+let instr = input 0 : ((int, int, int, int, int, int, int, int, int) ; ()) | map(((line, dir, steps, _, _, _, _, _, _), ()) -> (line, (
     ((dir, 85) eq, -1, ((dir, 68) eq, 1, 0) select) select,
     ((dir, 76) eq, -1, ((dir, 82) eq, 1, 0) select) select,
     steps)));
@@ -17,13 +17,13 @@ let terms = path::p | map(((i, r, c), ()) -> ((i, 1) add, (r, c)))
     | join(path::p | map(((i, r, c), ()) -> (i, (r, c))),
            (_, (r1, c1), (r2, c2)) -> ((), ((r1, r2) add, (c1, c2) sub) mul));
 let s = terms | collect | map((_, vs) -> ((), vs fold_add)) | map((_, x) -> ((), ((x, 0) lt, x neg, x) select));
-let perim = instr | key((_, (_, _, n)) -> ((), n)) | collect | map((_, vs) -> ((), vs fold_add));
+let perim = instr | map((_, (_, _, n)) -> ((), n)) | collect | map((_, vs) -> ((), vs fold_add));
 let n = s | join(perim, (_, a, b) -> ((), (a, b) add));
 -- (; |S| + P), even; halve by binary decomposition (no division)
 
-let powtab = instr | key(_ -> ((), ())) | distinct
+let powtab = instr | map(_ -> ((), ())) | distinct
     | flatmap(_ -> [549755813888, 274877906944, 137438953472, 68719476736, 34359738368, 17179869184, 8589934592, 4294967296, 2147483648, 1073741824, 536870912, 268435456, 134217728, 67108864, 33554432, 16777216, 8388608, 4194304, 2097152, 1048576, 524288, 262144, 131072, 65536, 32768, 16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1])
-    | key((_, (i, p)) -> (i, p));
+    | map((_, (i, p)) -> (i, p));
 -- (i ; 2^(39-i))
 
 halve: {
@@ -35,5 +35,5 @@ halve: {
     var st = (n | map((_, x) -> ((0, x, 0), ()))) + next | distinct;
 }
 
-export "result" = halve::st | filter(((i, _, _), _) -> (i, 40) eq) | key(((_, _, q), _) -> ((), (q, 1) add))
+export "result" = halve::st | filter(((i, _, _), _) -> (i, 40) eq) | map(((_, _, q), _) -> ((), (q, 1) add))
     | arrange | inspect(part1);

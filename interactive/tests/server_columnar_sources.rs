@@ -15,7 +15,7 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str,
 const RANDOM: &str = "random:nodes=20,edges=60,churn=7";
 
 const SOURCES: &str = r#"
-    let edges = import "random:nodes=20,edges=60,churn=7" | key(((src, dst), ()) -> (src, dst));
+    let edges = import "random:nodes=20,edges=60,churn=7" | map(((src, dst), ()) -> (src, dst));
     let iota = import "iota:12";
     let clock = import "clock";
     export "degrees" = edges | count;

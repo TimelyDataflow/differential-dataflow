@@ -236,7 +236,7 @@ class Compiler:
         def projection(pairs, refs): return product(scalar(expr(e),refs) for e in pairs)
         def keyed(source, fields, keys, keep=True):
             key = projection([col(n) for n in keys],positions(fields))
-            return f'({source} | key((row, ()) -> ({key}, {"row" if keep else "()"})))'
+            return f'({source} | map((row, ()) -> ({key}, {"row" if keep else "()"})))'
         if op == 'source':
             self.inputs.append((args[0],args[1]))
             if self.imports:
@@ -273,7 +273,7 @@ class Compiler:
             outs = list(positions(keys,'key').values())
             if len(aggs)==1 and next(iter(aggs.values()))[0]=='min':
                 _,e = next(iter(aggs.values()))
-                code = f'{source_name} | key((row, ()) -> ({group_key}, ({scalar(expr(e),refs)}))) | min | map((key, (best)) -> ({product([*outs,"best"])}, ()))'
+                code = f'{source_name} | map((row, ()) -> ({group_key}, ({scalar(expr(e),refs)}))) | min | map((key, (best)) -> ({product([*outs,"best"])}, ()))'
                 self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {code};')
                 return name
             vals = projection([e for _,e in aggs.values()],refs)
@@ -286,18 +286,18 @@ class Compiler:
                     # A dedicated value-only collect avoids lists of singleton
                     # tuples and is useful for nested IC1/IC12 results.
                     assert len(aggs)==1
-                    code = f'{source_name} | key((row, ()) -> ({group_key}, ({scalar(expr(e),refs)}))) | value((_, (item)) -> item) | collect | map((key, values) -> ({product([*outs,"values"])}, ()))'
+                    code = f'{source_name} | map((row, ()) -> ({group_key}, ({scalar(expr(e),refs)}))) | value((_, (item)) -> item) | collect | map((key, values) -> ({product([*outs,"values"])}, ()))'
                     self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {code};')
                     return name
                 else: raise ValueError(kind)
                 outs.append(out)
-            code = f'{source_name} | key((row, ()) -> ({group_key}, {vals})) | collect | map((key, values) -> ({product(outs)}, ()))'
+            code = f'{source_name} | map((row, ()) -> ({group_key}, {vals})) | collect | map((key, values) -> ({product(outs)}, ()))'
         elif op == 'rank':
             source,order,limit,keys = args
             src = self.emit(source)
             refs = positions(source.fields)
             sort = product([*(scalar(e,refs) for e in order),'row'])
-            code = f'{src} | key((row, ()) -> ({projection([col(n) for n in keys],refs)}, {sort})) | collect | flatmap((_, values) -> values)'
+            code = f'{src} | map((row, ()) -> ({projection([col(n) for n in keys],refs)}, {sort})) | collect | flatmap((_, values) -> values)'
             if limit is not None: code += f' | filter((_, (rank, _)) -> (rank, {limit}) lt)'
             out = product([*(f'item.{len(order)}.{i}' for i in range(len(source.fields))),'rank'])
             code += f' | map((_, (rank, item)) -> ({out}, ()))'
@@ -315,7 +315,7 @@ class Compiler:
             combined = list(seed.fields)+['next_'+x for x in nextrel.fields]
             joined = product(refs[x] for x in combined)
             step_refs = positions(combined)
-            self.lines.append(f'{name}_loop: {{\n let proposals = {keyed("state",seed.fields,on)} | join({keyed(n,nextrel.fields,on.values())}, (_, left, right) -> ({joined}, ())) | filter((row, ()) -> {scalar(condition,step_refs)}) | map((row, ()) -> ({projection(select.values(),step_refs)}, ()));\n var state = ({s} + proposals) | key((row, ()) -> ({k}, {b})) | min | map((key, best) -> ({product(restore[x] for x in seed.fields)}, ()));\n}}')
+            self.lines.append(f'{name}_loop: {{\n let proposals = {keyed("state",seed.fields,on)} | join({keyed(n,nextrel.fields,on.values())}, (_, left, right) -> ({joined}, ())) | filter((row, ()) -> {scalar(condition,step_refs)}) | map((row, ()) -> ({projection(select.values(),step_refs)}, ()));\n var state = ({s} + proposals) | map((row, ()) -> ({k}, {b})) | min | map((key, best) -> ({product(restore[x] for x in seed.fields)}, ()));\n}}')
             code = f'{name}_loop::state'
         else: raise ValueError(op)
         self.lines.append(f'-- {name}: ({", ".join(r.fields)})\nlet {name} = {code};')

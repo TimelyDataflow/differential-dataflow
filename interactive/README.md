@@ -13,15 +13,15 @@ This project looks at isolating an interpretable core, which lays the groundwork
 Here's an example that performs graph reachability:
 
 ```
-let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> (src, dst));
-let roots = input 1 : ((int) ; ()) | key(((n), ()) -> (n, ()));
+let edges = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> (src, dst));
+let roots = input 1 : ((int) ; ()) | map(((n), ()) -> (n, ()));
 
 reach: {
     let label = reach | join(edges, (_, _, dst) -> (dst, ()));
     var reach = roots + label | distinct;
 }
 
-export "result" = reach::reach | key(_ -> ((), ())) | arrange | inspect(total);
+export "result" = reach::reach | map(_ -> ((), ())) | arrange | inspect(total);
 
 ```
 

@@ -1,7 +1,9 @@
-//! Row vocabulary shared by the IR and the renderers: the `Value` data model,
-//! the scalar language (`Term` and its operators) with its interpreter
-//! (`eval`), and the `LinearOp` operator steps. The concrete syntax that
-//! produces a `Term` lives in `parse`; the program structure in `scope_ir`.
+//! Row vocabulary shared by the IR and the renderers: the `Value` data model, the
+//! operators' slots (corgi [`Lambda`]s), and the `LinearOp` operator steps. The program
+//! structure lives in `scope_ir`.
+//!
+//! The retiring scalar language (`Term` and its operators) and its interpreter (`eval`) remain
+//! here only for their own tests; no program holds a `Term`.
 
 pub type Diff = i64;
 pub type Id = usize;
@@ -71,9 +73,8 @@ impl F64 {
     }
 }
 
-/// Scalar expression over [`Value`]. For the concrete surface
-/// syntax (how each of these is written in a `.ddp` program), see the
-/// module-level reference on [`crate::parse::pipe`].
+/// Scalar expression over [`Value`], the retiring scalar language: no program holds one, and
+/// [`crate::parse::pipe::parse_term`] reads it only for the tests of its compiler.
 ///
 /// A `Term` is evaluated against an *environment* — a stack of `Value`s.
 /// The bottom of the stack is the operator's input rows:
@@ -135,11 +136,12 @@ pub enum Term {
     Corgi(Lambda, Vec<Term>),
 }
 
-/// A corgi program as written, and its graph. The parser binds it where it is written, in the
-/// scope of its DDIR program: the registered functions and the Float functions as words `call`
-/// reaches, and the program's `type` declarations as enums. A parse error is kept, and reported
-/// where the program is compiled or run. It serializes as its source, which deserializes in the
-/// empty scope.
+/// A slot of the IR: a corgi program as written, `let pat = input in body`, and its graph, whose
+/// input is the tuple of the slot's rows (`(key, val)` for a linear op, `(key, left val, right
+/// val)` for a join). The parser binds it where it is written, in the scope of its DDIR program:
+/// the registered functions and the Float functions as words `call` reaches, and the program's
+/// `type` declarations as enums. A parse error is kept, and reported where the program is compiled
+/// or run. It serializes as its source, which deserializes in the empty scope.
 #[derive(Clone)]
 pub struct Lambda {
     pub src: String,
@@ -147,10 +149,37 @@ pub struct Lambda {
 }
 
 impl Lambda {
-    /// `src` parsed in `scope`.
+    /// `src` parsed in `scope`. The graph is as written: it is optimized only once it types at the
+    /// shapes of the rows it reads (`logic::slot_graph`), as optimizing first could drop or trip on
+    /// a type error.
     pub fn new(src: String, scope: &corgi::Scope) -> Self {
         let graph = corgi::parse_ml_in(&src, scope).map(std::sync::Arc::new);
         Lambda { src, graph }
+    }
+    /// The lambda `pattern -> body`, where `body` reads the results of `calls`: each runs a lambda
+    /// on an argument written over `pattern`'s names, and is bound to the name `body` is given for
+    /// it. Each lambda's compiled graph is bound as a private word, which `call` grafts, so its text
+    /// is never parsed again and its program's scope is not needed; the readable source writes the
+    /// lambda's own text in its place. Only `pattern`, the arguments and `body` are parsed, in the
+    /// empty scope.
+    pub fn compose(pattern: &str, calls: &[(&Lambda, String)], body: impl FnOnce(&[String]) -> String) -> Self {
+        let mut scope = corgi::Scope::default();
+        let (mut code, mut src, mut names, mut error) = (String::new(), String::new(), Vec::new(), None);
+        for (i, (lambda, arg)) in calls.iter().enumerate() {
+            let name = format!("_call{i}");
+            match lambda.graph() {
+                Ok(g) => scope.word(&name, g.as_ref().clone()).expect("a fresh word"),
+                Err(e) => error = Some(e),
+            }
+            code += &format!("let {name} = {arg} call {name} in ");
+            src += &format!("let {name} = let input = {arg} in {} in ", lambda.src);
+            names.push(name);
+        }
+        let body = body(&names);
+        let mut lambda = Lambda::new(format!("let {pattern} = input in {code}{body}"), &scope);
+        lambda.src = format!("let {pattern} = input in {src}{body}");
+        if let Some(e) = error { lambda.graph = Err(e); }
+        lambda
     }
     /// The graph, or the parse error naming the program.
     pub fn graph(&self) -> Result<&std::sync::Arc<corgi::Graph<corgi::NumOp>>, String> {
@@ -268,10 +297,6 @@ pub enum BinOp {
     And, Or,
 }
 
-/// A `(key, val)` reshaping: each component evaluates to one `Value`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Projection { pub key: Term, pub val: Term }
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Reducer {
     Min,
@@ -283,41 +308,41 @@ pub enum Reducer {
     /// (`Value: Ord`) order — so deterministic, and position-ordered when the
     /// values are `tuple(pos, …)` as `flatmap` emits. The inverse of `FlatMap`.
     Collect,
-    /// A key's output as a term: `Var(0)` = key, `Var(1)` = the key's values with
-    /// non-zero accumulated diffs, as a `List` of `tuple(val, diff)` in the values'
-    /// (`Value: Ord`) order. The term gives a `List` of `tuple(val, diff)`: the key's
-    /// output values and their diffs. A key with no such values has no output.
-    Expr(Term),
+    /// A key's output by a lambda over `(key, vals)`, `vals` the key's values with non-zero
+    /// accumulated diffs, as a `List` of `(val, diff)` in the values' order. The lambda gives a
+    /// `List` of `(val, diff)`: the key's output values and their diffs. A key with no such values
+    /// has no output.
+    Expr(Lambda),
 }
 
 /// An individual step within a Linear node.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum LinearOp {
-    /// Rekey/reval: project to new (key, val).
-    Project(Projection),
-    /// Keep the record when the `Term` evaluates to a truthy `Value`.
-    Filter(Term),
+    /// Rekey/reval: the lambda gives the new `(key, val)`.
+    Project(Lambda),
+    /// Keep the record when the lambda gives a nonzero `Int`.
+    Filter(Lambda),
     /// Negate the diff.
     Negate,
-    /// Shift the timestamp based on an `Int`-valued `Term`.
-    EnterAt(Term),
+    /// Shift the timestamp to the round an `Int`-valued lambda gives.
+    EnterAt(Lambda),
     /// Append the current user-iter coord (at the row's scope depth) to
     /// the value. Time itself is unchanged. See `Expr::LiftIter` for the
     /// discipline restriction.
     LiftIter,
-    /// UNNEST: explode a `List`-valued `Term` into one row per element, value
-    /// `tuple(pos, element)`. See `parse::Expr::FlatMap`.
-    FlatMap(Term),
+    /// UNNEST: explode the `List` a lambda gives into one row per element, value
+    /// `(pos, element)`. See `parse::Expr::FlatMap`.
+    FlatMap(Lambda),
     /// Pair each value with its whole time: `(key ; val)` becomes `(key ; (val, time))`.
     /// The time is a tuple of `Int`s, the epoch and then every scope coordinate, so its
     /// width is one more than the op's scope depth. Time itself is unchanged.
     Lift,
-    /// Each row becomes the rows of a `Term` giving a list of `((key, val), time, diff)`.
+    /// Each row becomes the rows of a lambda giving a list of `((key, val), time, diff)`.
     /// The time is a tuple of `Int`s as `Lift` gives it; the output row's time is the
     /// join of the input's time with it, coordinate-wise max, and its diff is the
     /// product of the two diffs. A negative coordinate is below every time, so it
     /// leaves that coordinate unchanged. `delay(t)` is `[((key, val), t, 1)]`.
-    JoinFunction(Term),
+    JoinFunction(Lambda),
 }
 
 // DDIR's `hash` IS corgi's structural hash, evaluated a row at a time here and a column at a

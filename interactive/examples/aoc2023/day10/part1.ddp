@@ -2,7 +2,7 @@
 -- codes: '-'=45 '|'=124 'F'=70 'L'=76 'J'=74 '7'=55 '.'=46 'S'=83
 -- input 0: (row, col, code), 1-indexed
 
-let symbols = input 0 : ((int, int, int) ; ()) | key(((r, c, s), ()) -> ((r, c), s));
+let symbols = input 0 : ((int, int, int) ; ()) | map(((r, c, s), ()) -> ((r, c), s));
 let pipes = symbols | filter((_, s) -> ((s, 46) ne, (s, 83) ne) all);
 
 let e1 = pipes | map(((r, c), s) -> ((r, c,
@@ -29,6 +29,6 @@ reach: {
 }
 
 export "result" = reach::r
-    | key(_ -> ((), 1)) | collect
+    | map(_ -> ((), 1)) | collect
     | map((_, xs) -> ((), (((0, 0), xs) fold (((a, b), _) -> ((1, a) sub, (b, a) add)) .1)))
     | arrange | inspect(part1);

@@ -1,9 +1,8 @@
 //! Pipe syntax parser for .ddp files — and the surface-language reference.
 //!
 //! A program is a sequence of statements; an expression is a source piped
-//! through operators (`expr | op | op`). Two layers: the *collection* language
-//! (the dataflow graph) and the *scalar* language ([`Term`], per-row value
-//! computation over [`crate::ir::Value`]).
+//! through operators (`expr | op | op`). The *collection* language describes the
+//! dataflow graph; each operator's per-row logic is a *slot*, a corgi lambda.
 //!
 //! # Collection language
 //!
@@ -16,32 +15,31 @@
 //! match the shape its trace is published at. A fed row is asserted to have its
 //! input's shape during execution, where a mismatch can panic a dataflow worker and
 //! take down the shared server; there is no per-program failure isolation.
-//! Operators chain with `|`:
+//! Operators chain with `|`; a slot is written `(pat -> body)`:
 //!
-//! - `| key(k… ; v…)` — reshape to `(key ; val)`; `map` is an alias.
-//! - `| value(term)` — replace the value without wrapping it in a tuple;
-//!   useful for collecting a list of scalars or lists instead of singleton tuples.
-//! - `| join(other, (k… ; v…))` — equijoin on the key.
+//! - `| map((k, v) -> (k', v'))` — reshape each row to the `(key, val)` the lambda gives.
+//! - `| value((k, v) -> v')` — replace the value, keeping the key.
+//! - `| join(other, (k, v, v1) -> (k', v'))` — equijoin on the key.
 //! - `| min` / `| distinct` / `| count` / `| collect` — reduce; `collect` is
 //!   NEST (gather a key's values into a `List`).
-//! - `| reduce(term)` — reduce by a term: `$0` is the key and `$1` the key's
-//!   values with their non-zero diffs, a `List` of `tuple(val, diff)` in value
-//!   order; the term gives the key's output, a `List` of `tuple(val, diff)`.
-//! - `| filter(term)` — keep rows where `term` is truthy (a nonzero `Int`).
-//! - `| flatmap(term)` — UNNEST: explode a `List`-valued `term` into one row
-//!   per element, value `tuple(pos, element)`.
-//! - `| negate` · `| arrange` · `| inspect(label)` · `| enter_at(term)` ·
+//! - `| reduce((k, vals) -> out)` — reduce by a lambda: `vals` is the key's values with their
+//!   non-zero diffs, a `List` of `(val, diff)` in value order, and `out` the key's output, a
+//!   `List` of `(val, diff)`.
+//! - `| filter((k, v) -> mask)` — keep rows where the lambda gives a nonzero `Int`.
+//! - `| flatmap((k, v) -> list)` — UNNEST: explode the `List` the lambda gives into one row per
+//!   element, value `(pos, element)`.
+//! - `| negate` · `| arrange` · `| inspect(label)` · `| enter_at((k, v) -> round)` ·
 //!   `| lift_iter`.
 //! - `| lift` — pair each value with its whole time, `(key ; (val, time))`, the time a tuple
 //!   of the epoch and every scope coordinate.
-//! - `| join_function(term)` — replace each row by the `term`'s list of
+//! - `| join_function((k, v) -> list)` — replace each row by the lambda's list of
 //!   `((key, val), time, diff)`, at the row's time joined with `time`, diffs multiplied.
 //! - `| half_join(other, strict, (k, v, v1) -> (k', v'))` — each update of a lifted stream,
 //!   `(k ; (v, time))`, meets `other`'s rows at its key whose times precede the update's own in the
 //!   total order on times (strictly when `strict` is 1, or also equal when 0), giving
 //!   `(k' ; (v', time ∨ t2))`. The lambda does not see the times. `other`'s changes produce nothing.
-//! - `| delay(term)` — `join_function` with the list `[((key, val), term, 1)]`: advance each
-//!   row to at least the time `term`.
+//! - `| delay((k, v) -> time)` — `join_function` with the list `[((key, val), time, 1)]`: advance
+//!   each row to at least the time the lambda gives.
 //! - `a + b` (concat), `a - b` (concat with `b` negated).
 //!
 //! Statements: `let x = …;`, `var x = …;` (a feedback variable, for
@@ -49,91 +47,51 @@
 //! program output, root scope only). A `var` or `export` may declare its
 //! shape, `var x : (key_shape ; val_shape) = …;`, which installation checks
 //! against the shape inferred for its value. `type Name = V0 shape? | V1 shape? …;`
-//! declares a sum type (see below); it is parse-time only and emits no IR.
+//! declares a sum type, an enum of the program's lambdas (below); it emits no IR.
 //!
-//! # Scalar language (`Term`)
+//! A shape is `int`, `float`, `()`, `(a, b, …)`, `List(a)`, `Option(a)`, `Result(a, b)`, or a
+//! declared type's name. A variant's payload shape is `()` when omitted, and a type's payloads
+//! may name earlier types, never recursively.
 //!
-//! Evaluated against an environment of input rows: linear ops bind `$0` = key,
-//! `$1` = value; a join binds `$0` = key, `$1` = left value, `$2` = right value.
+//! # Lambdas
 //!
-//! - Access: `$n` is a whole row — in a projection it *splices* the row's
-//!   fields; `$n[i]` selects field `i`; chains as `$n[i][j]`.
-//! - Arithmetic / compare / logic: `+ - *`, `== != < <= > >=`, `&&`,
-//!   `or(a, b)`, `not(x)`, unary `-x`.
-//! - Integer division: `idiv(a, b)` truncates toward zero, returns zero for a
-//!   zero divisor, and wraps `i64::MIN / -1` to `i64::MIN`.
-//! - Explicit floating point: `float(int)`, `fneg(x)`, and
-//!   `fadd(a, b)` / `fsub(a, b)` / `fmul(a, b)` / `fdiv(a, b)` use IEEE f64.
-//!   Values are `Float`s, a scalar of their own (the type `float`): an `Int`
-//!   is never read as one, and `float(int)` is the one conversion. Generic
-//!   ordering is IEEE total order (including distinct signed zeros and NaN
-//!   payloads).
-//! - Floating-point math, each the Rust `f64` method of the same name:
-//!   `fabs`, `fsqrt`, `fexp`, `fln`, `ffloor`, `fceil`, `fround`, `fsin`,
-//!   `fcos`, `ftan` (Float -> Float); `fpow(x, y)` (`powf`), `fpowi(x, n)` (`powi`,
-//!   Int exponent). `fint(x)` is Float -> Int as Rust's `x as i64`: truncate
-//!   toward zero, NaN is 0, out of range saturates. `fmin`/`fmax` skip a NaN
-//!   operand and otherwise follow the total order (`fmin(-0.0, 0.0)` is
-//!   `-0.0`). `feq fne flt fle fgt fge` are IEEE comparisons returning Int 0/1:
-//!   NaN compares false (`fne` true) and `-0.0` equals `0.0`, where the generic
-//!   `== < …` use the total order. There are no float literals: write
-//!   `fdiv(float(2786), float(10))` for 278.6. The Corgi backend computes all
-//!   of these in columns: `fabs`, `fmin`/`fmax` and the comparisons from corgi
-//!   ops, the rest as host kernels over the float column.
-//! - Products: `tuple(a, …)`; index with `v[i]` or `proj(v, i)`; `len(v)`.
-//! - Lists: `list(a, …)`, `append(a, b)` (concatenation); eliminated by
-//!   `flatmap` / `collect` / `fold`. A declared constructor supplies the element
-//!   shape for an otherwise ambiguous empty `list()`.
-//!   Corgi's shape inference does not propagate between `append` arguments:
-//!   `append(list(), xs)` is rejected even when `xs` has a known element shape.
-//! - Sums: every sum is a declared type, `type Size = Small int | Big (int, int)
-//!   | Empty;` — tags are positions, scoped to the type; a payload shape is
-//!   `int`, `float`, `()` (the default when omitted), `(a, b, …)`, `List(a)`,
-//!   `Option(a)`, `Result(a, b)`, or an earlier type's name. A constructor call
-//!   `Small(x)` / `Big(a, b)` / `Empty` builds the sum (`Type::Ctor` when two
-//!   types share a name); `variant(Type, tag, payload)` takes a data-driven tag
-//!   (every lane must then share the payload's shape); `istag(tag, v)` tests.
-//!   The built-ins `Some(x)`/`None` and `Ok(x)`/`Err(e)` build `Option`/`Result`;
-//!   a `None`/`Ok`/`Err` learns its other lane from the other branch of an `if`
-//!   or the other arms of a `case`. The untyped `inject(tag, payload)` remains as
-//!   a VALUE literal for closed terms (the server's `feed`): it names no sum, so
-//!   the row interpreter takes it and the columnar lowering rejects it.
-//! - Pattern match: `case scrut { Ctor(a, b) => arm, …, _ => default }` — an arm
-//!   names the payload's tuple fields, or the whole payload with one name.
-//! - Fold: `fold(list, init, step)` — in `step`, `^0` is the element and `^1`
-//!   the accumulator.
-//! - Binders: `^k` refers to the k-th enclosing `case`/`fold` binder (de
-//!   Bruijn, innermost = 0); `case` patterns also bind payload fields by name.
-//! - Conditional: `if(cond, then, els)`.
-//!
-//! # Corgi lambdas
-//!
-//! Any slot may instead be a corgi lambda, `pat -> body`, in corgi's ML syntax: it runs
-//! `let pat = input in body` with `input` the tuple of the slot's rows, `(key, val)` for a linear
-//! op and `(key, left val, right val)` for a join. In `key`, `map`, and `join` the body gives the
-//! pair `(key, val)`; in `value`, `filter`, `flatmap`, `enter_at`, `join_function`, and `delay` it
-//! gives the one value; in `reduce` its input is `(key, vals)` and it gives the output list. For
-//! example, `key(((src, dst), ()) -> ((src), (dst)))` is `key($0[0] ; $0[1])`.
+//! A slot runs `let pat = input in body` in corgi's ML syntax, with `input` the tuple of the
+//! slot's rows: `(key, val)` for a linear op, `(key, left val, right val)` for a join, and
+//! `(key, vals)` for `reduce`. For example, `map(((src, dst), ()) -> (src, dst))` keys each row
+//! of pairs by its first field. Operators are postfix (`(a, b) add`, `xs len`,
+//! `(mask, a, b) select`); `x.N` is a tuple's field, `(e)` a one-field tuple and `()` unit;
+//! `[1, 2]` is a list of constants and `(xs, ys) append` concatenates. A `--` comment may sit
+//! inside a lambda. The language is corgi's (its `frontend/ml.rs` and `NOTES.md`).
 //!
 //! A lambda is parsed in its program's scope, which names what the program has not defined:
 //!
 //! - Registered functions and the Float functions are words reached by `call`. A word's input is
 //!   its argument, or the tuple of its arguments when it takes several: `x call fsqrt`,
 //!   `(x, y) call fpow`, `() call f` for a function of none.
+//! - The Float functions, each the Rust `f64` method of the same name: `fabs`, `fsqrt`, `fexp`,
+//!   `fln`, `ffloor`, `fceil`, `fround`, `fsin`, `fcos`, `ftan` (Float -> Float); `fpow` (`powf`),
+//!   `fpowi` (`powi`, an Int exponent). `fint` is Float -> Int as Rust's `x as i64`: truncate
+//!   toward zero, NaN is 0, out of range saturates. `fmin`/`fmax` skip a NaN operand and
+//!   otherwise follow the total order (`fmin` of `-0.0` and `0.0` is `-0.0`). `feq fne flt fle fgt
+//!   fge` are IEEE comparisons giving Int 0/1: NaN compares false (`fne` true) and `-0.0` equals
+//!   `0.0`, where corgi's own `eq lt …` use the total order.
 //! - The program's `type` declarations, written before the lambda, are corgi enums of the same
 //!   names and variants. A variant two types share is written `Type::Variant`.
 //! - `Option` (`None`, `Some`) and `Result` (`Ok`, `Err`) are enums whose payload lanes are open,
 //!   `None` aside: `x inject Some` takes its lane's shape from `x`, and `branch`, `map_variant` and
 //!   `match` read only their tags, as in `(x, c) branch Option map_variant None (_ -> ())` for
-//!   `if(c, Some(x), None)`.
+//!   "`Some(x)` when `c`, else `None`".
+//!
+//! The retiring scalar language ([`Term`]) is read only by [`parse_term`], for the tests of its
+//! compiler.
 
 use super::*;
-use crate::ir::{BinOp, Projection, Reducer, SumTy, Term, UnOp};
+use crate::ir::{BinOp, Lambda, Reducer, SumTy, Term, UnOp};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Let, Var, Export, Type, Case, Fold,
-    Input, Import, Key, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, EnterAt, LiftIter, FlatMap, Inspect,
+    Input, Import, Map, Join, Min, Distinct, Count, Collect, Arrange, Negate, Filter, EnterAt, LiftIter, FlatMap, Inspect,
     Ident(String), Int(i64), Str(String),
     /// A slot written as a corgi lambda, `pat -> body`, kept as corgi source.
     Lambda { pat: String, body: String },
@@ -296,7 +254,7 @@ fn keyword(ident: &str) -> Option<Token> {
         "let" => Token::Let, "var" => Token::Var, "export" => Token::Export,
         "type" => Token::Type, "case" => Token::Case, "fold" => Token::Fold,
         "input" => Token::Input, "import" => Token::Import,
-        "key" => Token::Key, "map" => Token::Map,
+        "map" => Token::Map,
         "join" => Token::Join, "min" => Token::Min, "distinct" => Token::Distinct,
         "count" => Token::Count, "collect" => Token::Collect,
         "flatmap" => Token::FlatMap,
@@ -601,28 +559,23 @@ impl Parser {
 
     fn parse_pipe_op(&mut self, lhs: Expr) -> Expr {
         match self.peek().clone() {
-            Token::Key => { self.next(); let p = self.parse_projection(); Expr::Map(Box::new(lhs), p) },
-            Token::Map => { self.next(); let p = self.parse_projection(); Expr::Map(Box::new(lhs), p) },
+            Token::Map => { self.next(); Expr::Map(Box::new(lhs), self.slot()) },
             Token::Ident(name) if name == "value" => {
-                self.next(); self.expect(&Token::LParen);
-                let val = self.parse_slot_term(); self.expect(&Token::RParen);
-                Expr::Map(Box::new(lhs), Projection { key: Term::Var(0), val })
+                self.next();
+                let val = self.slot();
+                Expr::Map(Box::new(lhs), Lambda::compose("(k, v)", &[(&val, "(k, v)".into())], |r| format!("(k, {})", r[0])))
             },
-            Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_join_arg(); self.expect(&Token::Comma); let p = match self.lambda(3) { Some(l) => Self::split(l), None => self.parse_projection() }; self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
+            Token::Join => { self.next(); self.expect(&Token::LParen); let r = self.parse_join_arg(); self.expect(&Token::Comma); let p = self.lambda(); self.expect(&Token::RParen); Expr::Join(Box::new(lhs), Box::new(r), p) },
             Token::Min => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Min) },
             Token::Distinct => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Distinct) },
             Token::Count => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Count) },
             Token::Collect => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Collect) },
-            Token::Ident(name) if name == "reduce" => {
-                self.next(); self.expect(&Token::LParen);
-                let term = self.parse_slot_term(); self.expect(&Token::RParen);
-                Expr::Reduce(Box::new(lhs), Reducer::Expr(term))
-            },
-            Token::FlatMap => { self.next(); self.expect(&Token::LParen); let l = self.parse_slot_term(); self.expect(&Token::RParen); Expr::FlatMap(Box::new(lhs), l) },
+            Token::Ident(name) if name == "reduce" => { self.next(); Expr::Reduce(Box::new(lhs), Reducer::Expr(self.slot())) },
+            Token::FlatMap => { self.next(); Expr::FlatMap(Box::new(lhs), self.slot()) },
             Token::Arrange => { self.next(); Expr::Arrange(Box::new(lhs)) },
             Token::Negate => { self.next(); Expr::Negate(Box::new(lhs)) },
-            Token::Filter => { self.next(); self.expect(&Token::LParen); let c = self.parse_slot_term(); self.expect(&Token::RParen); Expr::Filter(Box::new(lhs), c) },
-            Token::EnterAt => { self.next(); self.expect(&Token::LParen); let f = self.parse_slot_term(); self.expect(&Token::RParen); Expr::EnterAt(Box::new(lhs), f) },
+            Token::Filter => { self.next(); Expr::Filter(Box::new(lhs), self.slot()) },
+            Token::EnterAt => { self.next(); Expr::EnterAt(Box::new(lhs), self.slot()) },
             Token::LiftIter => { self.next(); Expr::LiftIter(Box::new(lhs)) },
             Token::Ident(name) if name == "lift" => { self.next(); Expr::Lift(Box::new(lhs)) },
             Token::Ident(name) if name == "half_join" => {
@@ -634,93 +587,38 @@ impl Parser {
                     other => panic!("half_join: strict is 0 or 1, not {other:?}"),
                 };
                 self.expect(&Token::Comma);
-                let p = match self.lambda(3) { Some(l) => Self::split(l), None => self.parse_projection() };
+                let p = self.lambda();
                 self.expect(&Token::RParen);
                 Expr::HalfJoin(Box::new(lhs), Box::new(r), strict, p)
             },
-            Token::Ident(name) if name == "join_function" => {
-                self.next(); self.expect(&Token::LParen);
-                let t = self.parse_slot_term(); self.expect(&Token::RParen);
-                Expr::JoinFunction(Box::new(lhs), t)
-            },
+            Token::Ident(name) if name == "join_function" => { self.next(); Expr::JoinFunction(Box::new(lhs), self.slot()) },
             Token::Ident(name) if name == "delay" => {
-                self.next(); self.expect(&Token::LParen);
-                let time = self.parse_slot_term(); self.expect(&Token::RParen);
-                let list = crate::ir::Lambda::new("let (k, v, t) = input in ((k, v), t, 1) enlist".into(), self.lambda_scope());
-                Expr::JoinFunction(Box::new(lhs), Term::Corgi(list, vec![Term::Var(0), Term::Var(1), time]))
+                self.next();
+                let time = self.slot();
+                Expr::JoinFunction(Box::new(lhs), Lambda::compose("(k, v)", &[(&time, "(k, v)".into())], |r| format!("((k, v), {}, 1) enlist", r[0])))
             },
             Token::Inspect => { self.next(); self.expect(&Token::LParen); let l = self.parse_ident(); self.expect(&Token::RParen); Expr::Inspect(Box::new(lhs), l) },
             other => panic!("Expected pipe operator, got {:?}", other),
         }
     }
 
-    fn parse_projection(&mut self) -> Projection {
+    /// A slot, `(pat -> body)`: a corgi lambda over the tuple of the slot's rows.
+    fn slot(&mut self) -> Lambda {
         self.expect(&Token::LParen);
-        if let Some(l) = self.lambda(2) {
-            self.expect(&Token::RParen);
-            return Self::split(l);
-        }
-        self.parse_projection_inner()
-    }
-
-    /// A slot written as a corgi lambda, over the slot's `arity` input rows (two for a linear
-    /// op, three for a join): a term running `let pat = input in body` on the tuple of them.
-    fn lambda(&mut self, arity: usize) -> Option<Term> {
-        let Token::Lambda { pat, body } = self.peek().clone() else { return None };
-        self.next();
-        let lambda = crate::ir::Lambda::new(format!("let {pat} = input in {body}"), self.lambda_scope());
-        Some(Term::Corgi(lambda, (0..arity).map(Term::Var).collect()))
-    }
-
-    /// The projection a lambda's `(key, val)` result gives.
-    fn split(lambda: Term) -> Projection {
-        Projection { key: Term::Proj(Box::new(lambda.clone()), 0), val: Term::Proj(Box::new(lambda), 1) }
-    }
-
-    /// A linear op's term slot: a corgi lambda, or a term.
-    fn parse_slot_term(&mut self) -> Term {
-        self.lambda(2).unwrap_or_else(|| self.parse_term())
-    }
-
-    // A projection `(k1, k2 ; v1, v2)` builds `key = tuple(k1, k2)` and
-    // `val = tuple(v1, v2)`. A bare `$n` field splices the input row's tuple
-    // fields (`Spread`), or is one field when the row is not a tuple; any other
-    // field is one (possibly nested) element.
-    fn parse_projection_inner(&mut self) -> Projection {
-        let key = self.parse_field_list_until(&[Token::Semi, Token::RParen]);
-        let val = if *self.peek() == Token::Semi {
-            self.next();
-            self.parse_field_list_until(&[Token::RParen])
-        } else {
-            vec![]
-        };
+        let lambda = self.lambda();
         self.expect(&Token::RParen);
-        Projection { key: Term::Tuple(key), val: Term::Tuple(val) }
+        lambda
     }
 
-    /// Parse a comma-separated list of projection fields up to (not consuming)
-    /// any token in `terminators`.
-    fn parse_field_list_until(&mut self, terminators: &[Token]) -> Vec<Term> {
-        if terminators.contains(self.peek()) { return vec![]; }
-        let mut fields = vec![self.parse_proj_field()];
-        while *self.peek() == Token::Comma { self.next(); fields.push(self.parse_proj_field()); }
-        fields
-    }
-
-    /// A single projection field. A bare `$n` (no index) splices.
-    fn parse_proj_field(&mut self) -> Term {
-        if *self.peek() == Token::Dollar
-            && matches!(self.tokens.get(self.pos + 1), Some(Token::Int(_)))
-            && self.tokens.get(self.pos + 2) != Some(&Token::LBracket)
-        {
-            self.next();
-            let n = match self.next() { Token::Int(n) => n as usize, o => panic!("Expected int, got {:?}", o) };
-            return Term::Spread(Box::new(Term::Var(n)));
+    /// A corgi lambda, `pat -> body`: it runs `let pat = input in body`, in the program's scope.
+    fn lambda(&mut self) -> Lambda {
+        match self.next() {
+            Token::Lambda { pat, body } => Lambda::new(format!("let {pat} = input in {body}"), self.lambda_scope()),
+            other => panic!("expected a lambda `pat -> body`, got {other:?}"),
         }
-        self.parse_term()
     }
 
-    // ---- General scalar term grammar. ----
+    // ---- The retiring scalar term grammar, read only by `parse_term`. ----
 
     fn parse_term(&mut self) -> Term { self.parse_logic() }
 
@@ -983,8 +881,7 @@ fn declare_enum(scope: &mut corgi::Scope, name: &str, variants: &[(String, corgi
 
 pub fn parse(input: &str) -> Vec<Stmt> { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.parse_program() }
 
-/// Parse a single scalar [`Term`] from a string — the same expression language
-/// used in `filter`/`map`/`flatmap` arguments. A *closed* term (no `$n` input
-/// references) evaluates to a constant [`crate::ir::Value`], which is how the
-/// server accepts structured (ADT) values on input.
+/// Parse a single [`Term`] of the retiring scalar language, for the tests of its compiler and
+/// interpreter: `$n[i]` reads field `i` of input row `n`, and `tuple`, `list`, `fold`, `case`,
+/// `if` and the arithmetic operators build the rest.
 pub fn parse_term(input: &str) -> Term { let tokens = tokenize(input); let mut p = Parser::new(tokens); p.parse_term() }

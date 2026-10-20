@@ -4,27 +4,27 @@
 -- Values include negatives, zeros of both signs, infinities and NaN.
 
 -- (key ; x, y) with x = a / 4 and y = b / 2.
-let xs = input 0 : ((int, int, int) ; ()) | key(((k, a, b), ()) -> (k, ((a to_float, 4.0) div, (b to_float, 2.0) div)));
+let xs = input 0 : ((int, int, int) ; ()) | map(((k, a, b), ()) -> (k, ((a to_float, 4.0) div, (b to_float, 2.0) div)));
 
 let unary = xs
-    | key((k, (x, y)) -> (k, (x call fabs, x call fsqrt, y call fexp, x call fln, x call ffloor, x call fceil,
+    | map((k, (x, y)) -> (k, (x call fabs, x call fsqrt, y call fexp, x call fln, x call ffloor, x call fceil,
                x call fround, x call fsin, x call fcos, x call ftan, x call fint, (x, 1000.0) mul call fint)));
 
 -- Negative bases with fractional exponents are NaN; `fpowi` is repeated multiplication.
 let binary = xs
-    | key((k, (x, y)) -> (k, ((x, y) call fpow, (x call fabs, (1.0, 4.0) div) call fpow, (x, (1.0, 3.0) div) call fpow,
+    | map((k, (x, y)) -> (k, ((x, y) call fpow, (x call fabs, (1.0, 4.0) div) call fpow, (x, (1.0, 3.0) div) call fpow,
                (x, 3) call fpowi, (x, -2) call fpowi, (x, y) call fmin, (x, y) call fmax)));
 
 -- IEEE compares beside the generic (total-order) ones: they agree on these finite values,
 -- negatives included.
 let compares = xs
-    | key((k, (x, y)) -> (k, ((x, y) call feq, (x, y) call fne, (x, y) call flt, (x, y) call fle,
+    | map((k, (x, y)) -> (k, ((x, y) call feq, (x, y) call fne, (x, y) call flt, (x, y) call fle,
                (x, y) call fgt, (x, y) call fge, (x, y) lt, (x, y) ge)));
 
 -- The special values: -0.0, +inf, NaN (0/0), and a NaN from fln/fsqrt of a negative.
 let specials = xs
-    | key((k, (x, _)) -> (k, (0.0 neg, (1.0, 0.0) div, (0.0, 0.0) div, x)))
-    | key((k, (z, inf, nan, x)) -> (k, ((z, 0.0) call feq, (z, 0.0) eq, (0.0, z) call fle, (0.0, z) le,
+    | map((k, (x, _)) -> (k, (0.0 neg, (1.0, 0.0) div, (0.0, 0.0) div, x)))
+    | map((k, (z, inf, nan, x)) -> (k, ((z, 0.0) call feq, (z, 0.0) eq, (0.0, z) call fle, (0.0, z) le,
                (nan, x) call flt, (nan, x) call fgt, (nan, nan) call fne, (nan, nan) call feq,
                (nan, x) call fmin, (x, nan) call fmax, (z, 0.0) call fmin, (0.0, z) call fmax,
                0.0 call fln, 1.0 neg call fln, 1.0 neg call fsqrt, inf call fexp, inf neg call fexp,
@@ -35,7 +35,7 @@ let big = xs | filter((_, (x, _)) -> (x call fexp, 2.0) call fgt);
 let spread = xs | flatmap((_, (x, y)) -> (x call fabs call fsqrt enlist, y call fexp enlist) append);
 
 -- A join whose projection runs a row at a time.
-let scale = input 1 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
+let scale = input 1 : ((int, int) ; ()) | map(((a, b), ()) -> (a, b));
 let scaled = xs | join(scale, (k, (x, y), n) -> (k, ((x, n) call fpowi, (y call fabs, n to_float) call fpow call fint)));
 
 export "unary"    = unary | arrange | inspect(total);

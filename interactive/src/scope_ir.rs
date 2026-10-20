@@ -35,7 +35,7 @@
 //! imports targeting the same definition are the same entity, so facts
 //! learned at a definition propagate to every importer along its edges.
 
-use crate::ir::{LinearOp, Projection, Reducer};
+use crate::ir::{Lambda, LinearOp, Reducer};
 
 pub type ItemId = usize; // index into `Scope::items`
 pub type ImportId = usize; // index into `Scope::imports`
@@ -116,14 +116,15 @@ pub enum Node {
     Linear { input: Ref, ops: Vec<LinearOp> },
     Concat(Vec<Ref>),
     Arrange(Ref),
-    Join { left: Ref, right: Ref, projection: Projection },
+    /// `projection` is a lambda over `(key, left val, right val)` giving `(key', val')`.
+    Join { left: Ref, right: Ref, projection: Lambda },
     /// Each update of `stream`, `(key ; (val, time))` with `time` a time as data (as `lift` writes
     /// it), meets the rows of `arrangement` at its key whose times are less than the update's own
     /// in the total order on times, or less or equal unless `strict`. Each pair gives
     /// `(key' ; (val', time ∨ t2))`: `projection` over `(key, val, arranged val)`, and the update's
     /// data time joined with the arranged row's. The output keeps the update's own time, and its
     /// diff is the product of the two. The arrangement's changes produce no output.
-    HalfJoin { stream: Ref, arrangement: Ref, strict: bool, projection: Projection },
+    HalfJoin { stream: Ref, arrangement: Ref, strict: bool, projection: Lambda },
     Reduce { input: Ref, reducer: Reducer },
     Inspect { input: Ref, label: String },
 }
@@ -419,14 +420,13 @@ fn dump_scope_body(s: &Scope, indent: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::Term;
 
     // Express a reach-shaped program by hand: it exercises items (Op + Sub),
     // every `Ref` variant, and both relevant `Source` variants — proving the
     // shape can represent a real scoped, iterative program.
     #[test]
     fn expresses_a_scoped_iterative_program() {
-        let noproj = Projection { key: Term::Tuple(vec![]), val: Term::Tuple(vec![]) };
+        let noproj = Lambda::new("let _ = input in ((), ())".into(), &corgi::Scope::default());
         let inner = Scope {
             name: "reach".into(),
             imports: vec![

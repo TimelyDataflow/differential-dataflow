@@ -5,19 +5,19 @@ let edge = import "edge" : ((int) ; (int, int));
 let message = import "message" : ((int) ; (int, int, int));
 let tagged = import "tagged" : ((int) ; (List(int)));
 -- Reachable rows: (request_id, origin, author, tag_name), deduplicated across paths.
-let one = request | key(((rid, pid, tag), ()) -> ((pid), (rid, tag)))
+let one = request | map(((rid, pid, tag), ()) -> ((pid), (rid, tag)))
     | join(edge, ((pid), (rid, tag), (q, _)) -> ((rid, pid, q, tag), ()));
-let two = one | key(((rid, origin, author, tag), ()) -> ((author), (rid, origin, tag)))
+let two = one | map(((rid, origin, author, tag), ()) -> ((author), (rid, origin, tag)))
     | join(edge, (_, (rid, origin, tag), (q, _)) -> ((rid, origin, q, tag), ()));
 let authors = (one + two) | filter(((_, origin, author, _), ()) -> (origin, author) ne) | distinct;
-let posts = message | filter((_, (kind, _, _)) -> (kind, 0) eq) | key((id, (_, creator, _)) -> (creator, id));
-let candidates = authors | key(((rid, _, author, tag), ()) -> (author, (rid, tag)))
+let posts = message | filter((_, (kind, _, _)) -> (kind, 0) eq) | map((id, (_, creator, _)) -> (creator, id));
+let candidates = authors | map(((rid, _, author, tag), ()) -> (author, (rid, tag)))
     | join(posts, (_, req, m) -> (m, req));
 let selected = candidates | join(tagged, ((m), (rid, tag), (name)) -> ((rid, m, tag, name), ()))
     | filter(((_, _, tag, name), ()) -> (tag, name) eq) | map(((rid, m, tag, _), ()) -> ((rid, m, tag), ())) | distinct;
-let counts = selected | key(((rid, m, tag), ()) -> ((m), (rid, tag)))
+let counts = selected | map(((rid, m, tag), ()) -> ((m), (rid, tag)))
     | join(tagged, (_, (rid, tag), (name)) -> ((rid, name, tag), ()))
     | filter(((_, name, tag), ()) -> (name, tag) ne) | map(((rid, name, _), ()) -> ((rid, name), ())) | count;
-export "ic6.answer" = counts | key(((rid, name), n) -> (rid, (n neg, name)))
+export "ic6.answer" = counts | map(((rid, name), n) -> (rid, (n neg, name)))
     | collect | flatmap((_, vs) -> vs) | filter((_, (pos, _)) -> (pos, 10) lt)
     | map((rid, (pos, (negn, name))) -> ((rid, pos), (name, negn neg)));

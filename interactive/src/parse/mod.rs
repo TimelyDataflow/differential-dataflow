@@ -4,13 +4,13 @@
 //! for `.ddp` files.
 //!
 //! This module is syntax only. The *collection* language (`Expr`/`Stmt`)
-//! defined here describes the dataflow graph; the *scalar* language it
-//! embeds — [`Term`] and its operators — is the IR's own vocabulary, defined
-//! in [`crate::ir`].
+//! defined here describes the dataflow graph; its slots are corgi lambdas
+//! ([`Lambda`]). The retiring scalar language, [`Term`], is still read by
+//! [`pipe::parse_term`] for the tests of its compiler.
 
 pub mod pipe;
 
-use crate::ir::{BinOp, F64Fn, Projection, Reducer, SumTy, Term, UnOp};
+use crate::ir::{BinOp, F64Fn, Lambda, Reducer, SumTy, Term, UnOp};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
@@ -23,14 +23,14 @@ pub enum Expr {
     Import(String),
     Name(String),
     Qualified(String, String),
-    Map(Box<Expr>, Projection),
-    Join(Box<Expr>, Box<Expr>, Projection),
+    Map(Box<Expr>, Lambda),
+    Join(Box<Expr>, Box<Expr>, Lambda),
     /// `stream | half_join(arrangement, strict, projection)`: see `scope_ir::Node::HalfJoin`.
-    HalfJoin(Box<Expr>, Box<Expr>, bool, Projection),
+    HalfJoin(Box<Expr>, Box<Expr>, bool, Lambda),
     Reduce(Box<Expr>, Reducer),
-    Filter(Box<Expr>, Term),
+    Filter(Box<Expr>, Lambda),
     Negate(Box<Expr>),
-    EnterAt(Box<Expr>, Term),
+    EnterAt(Box<Expr>, Lambda),
     /// Append the current user-iter coord (at the operator's scope depth)
     /// to each row's value. Time itself is unchanged.
     ///
@@ -39,14 +39,14 @@ pub enum Expr {
     /// implicit leave. This preserves the "loop body is a time-invariant
     /// function" property; in-scope use risks defeating the fixpoint.
     LiftIter(Box<Expr>),
-    /// UNNEST: explode a `List`-valued `Term` into one row per element, keyed
-    /// as the input, with value `tuple(pos, element)` (position innermost-first
+    /// UNNEST: explode the `List` a lambda gives into one row per element, keyed
+    /// as the input, with value `(pos, element)` (position innermost-first
     /// so `Collect` can restore order). The cross-join of a row with its list.
-    FlatMap(Box<Expr>, Term),
+    FlatMap(Box<Expr>, Lambda),
     /// Pair each row's value with its whole time. See `LinearOp::Lift`.
     Lift(Box<Expr>),
     /// Replace each row by a list of `((key, val), time, diff)`. See `LinearOp::JoinFunction`.
-    JoinFunction(Box<Expr>, Term),
+    JoinFunction(Box<Expr>, Lambda),
     Inspect(Box<Expr>, String),
     Concat(Vec<Expr>),
     Arrange(Box<Expr>),

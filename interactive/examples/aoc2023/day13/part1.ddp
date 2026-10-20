@@ -3,7 +3,7 @@
 -- collected list values (structural ==). Sum 100*(a-1) + (c-1).
 -- input 0: (block, row, col, code), 1-indexed
 
-let cells = input 0 : ((int, int, int, int) ; ()) | key(((b, r, c, s), ()) -> ((b, r, c), s));
+let cells = input 0 : ((int, int, int, int) ; ()) | map(((b, r, c, s), ()) -> ((b, r, c), s));
 
 let rlines = cells | map(((b, r, c), s) -> ((b, r), (c, s))) | collect;
 -- (b, r ; [(c, code)...])
@@ -21,7 +21,7 @@ let rviol = t2 | join(rlines, ((b, y), (a, x, lx), ly) -> ((b, a), ((x, y) lt, (
     | filter((_, m) -> (m, 1) eq) | map((k, _) -> (k, ())) | distinct;
 -- (b, a) with a mismatched pair
 let rvalid = rcand - rviol;
-let rscore = rvalid | key(((_, a), _) -> ((), (100, (a, 1) sub) mul));
+let rscore = rvalid | map(((_, a), _) -> ((), (100, (a, 1) sub) mul));
 
 -- column axes ---------------------------------------------------------
 let ccand = cells | map(((b, _, c), _) -> ((b, c), ())) | distinct;
@@ -31,7 +31,7 @@ let s2 = s1 | map(((b, a, x), l) -> ((b, (((2, a) mul, 1) sub, x) sub), (a, x, l
 let cviol = s2 | join(clines, ((b, y), (a, x, lx), ly) -> ((b, a), ((x, y) lt, ((lx, ly) eq, 0) eq) all))
     | filter((_, m) -> (m, 1) eq) | map((k, _) -> (k, ())) | distinct;
 let cvalid = ccand - cviol;
-let cscore = cvalid | key(((_, a), _) -> ((), (a, 1) sub));
+let cscore = cvalid | map(((_, a), _) -> ((), (a, 1) sub));
 
 export "result" = rscore + cscore
     | collect | map((_, xs) -> ((), xs fold_add))

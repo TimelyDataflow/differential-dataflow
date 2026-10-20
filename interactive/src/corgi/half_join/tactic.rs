@@ -17,9 +17,9 @@ use corgi::{Graph, NumOp, Shape, Value as CValue};
 use crate::corgi::chunk::{ident, key_is_hashed, recover_key_ref, CorgiChunk};
 use crate::corgi::col_times::ColTimes;
 use crate::corgi::container::CorgiContainer;
-use crate::corgi::logic::compile_join_projection;
+use crate::corgi::logic::compile_projection;
 use crate::corgi::search::matching_ranges;
-use crate::ir::{Diff, Term, Time};
+use crate::ir::{Diff, Lambda, Time};
 
 use super::{NativeBatch, Run, CC};
 
@@ -38,11 +38,11 @@ pub struct CorgiHalfJoin {
 }
 
 impl CorgiHalfJoin {
-    /// The projection `key ; val` over a key, an update's value, and an arranged value of these
-    /// shapes. A type error is a panic with corgi's message: install type-checked the program, so
-    /// it is not reached.
-    pub fn new(key: &Term, val: &Term, strict: bool, width: usize, [k, v0, v1]: [Shape; 3]) -> Self {
-        let g = compile_join_projection(key, val, &k, &v0, &v1)
+    /// The projection over a key, an update's value, and an arranged value of these shapes. A
+    /// type error is a panic with corgi's message: install type-checked the program, so it is not
+    /// reached.
+    pub fn new(projection: &Lambda, strict: bool, width: usize, [k, v0, v1]: [Shape; 3]) -> Self {
+        let g = compile_projection(projection, &[k.clone(), v0.clone(), v1.clone()])
             .unwrap_or_else(|e| panic!("half_join: type error at shapes ({k}, {v0}, {v1}): {e}"));
         CorgiHalfJoin { strict, width, projection: Rc::new(([k, v0, v1], g)) }
     }
@@ -255,6 +255,9 @@ mod tests {
     use crate::corgi::chunk::{columns_to_batch, present_key};
     use crate::ir::Value as V;
 
+    /// The projection `(k, (v0, v1))`.
+    fn pairing() -> Lambda { Lambda::new("let (k, v0, v1) = input in (k, (v0, v1))".into(), &corgi::Scope::default()) }
+
     /// An update meets the arranged rows before it in the total order on times, strictly or not:
     /// never a later one, even one beyond it in a later coordinate alone. Its data time joins the
     /// arranged row's, coordinate by coordinate, and every output row is covered by `lower`.
@@ -270,9 +273,8 @@ mod tests {
         let updates = container(&[1, 1], &[7, 8], &[(1, 0), (0, 3)], &[t(1, 0), t(0, 3)], &[2, 1]);
         let updates = Run::new(updates.keys, updates.vals, updates.times, updates.diffs);
         let lower: Antichain<Time> = [t(0, 3), t(1, 0)].into_iter().collect();
-        let projection = (Term::Var(0), Term::Tuple(vec![Term::Var(1), Term::Var(2)]));
         let rows = |strict: bool| -> Vec<((V, V), Time, Diff)> {
-            let mut tactic = CorgiHalfJoin::new(&projection.0, &projection.1, strict, 2, [Shape::Int, Shape::Int, Shape::Int]);
+            let mut tactic = CorgiHalfJoin::new(&pairing(), strict, 2, [Shape::Int, Shape::Int, Shape::Int]);
             let mut rows: Vec<_> = tactic.prep(vec![updates.clone()], vec![Rc::clone(&arranged)], lower.clone())
                 .flat_map(|c| c.into_updates())
                 .collect();
@@ -321,7 +323,7 @@ mod tests {
         };
         for strict in [false, true] {
             let pair = Shape::Prod(vec![Shape::Int, Shape::Int]);
-            let mut tactic = CorgiHalfJoin::new(&Term::Var(0), &Term::Tuple(vec![Term::Var(1), Term::Var(2)]), strict, 2, [pair, Shape::Int, Shape::Int]);
+            let mut tactic = CorgiHalfJoin::new(&pairing(), strict, 2, [pair, Shape::Int, Shape::Int]);
             let got: Vec<_> = tactic.prep(vec![updates.clone()], vec![Rc::clone(&arranged)], Antichain::from_elem(t(1, 0)))
                 .flat_map(|c| c.into_updates()).collect();
             let mut expected = Vec::new();
@@ -384,7 +386,7 @@ mod tests {
                         }
                     }
                     let key = if hashed { Shape::Prod(vec![Shape::Int, Shape::Int]) } else { Shape::Int };
-                    let mut tactic = CorgiHalfJoin::new(&Term::Var(0), &Term::Tuple(vec![Term::Var(1), Term::Var(2)]), strict, 2, [key, Shape::Int, Shape::Int]);
+                    let mut tactic = CorgiHalfJoin::new(&pairing(), strict, 2, [key, Shape::Int, Shape::Int]);
                     let mut got = Vec::new();
                     for c in tactic.prep(runs, batches, lower.clone()) {
                         for row in c.into_updates() {

@@ -3,12 +3,12 @@
 -- input 0: (card, side, idx, value)
 
 let numbers = input 0 : ((int, int, int, int) ; ());
-let winners = numbers | filter(((_, side, _, _), _) -> (side, 0) eq) | key(((card, _, _, value), _) -> ((card, value), ()));
-let ours    = numbers | filter(((_, side, _, _), _) -> (side, 1) eq) | key(((card, _, _, value), _) -> ((card, value), ()));
+let winners = numbers | filter(((_, side, _, _), _) -> (side, 0) eq) | map(((card, _, _, value), _) -> ((card, value), ()));
+let ours    = numbers | filter(((_, side, _, _), _) -> (side, 1) eq) | map(((card, _, _, value), _) -> ((card, value), ()));
 let matches = ours | join(winners, (k, _, _) -> (k, ())) | map(((card, _), _) -> (card, ())) | count;
 -- (card ; m): number of matching (ours, winners) pairs
 
-let cards = numbers | key(((card, _, _, _), _) -> (card, ())) | distinct;
+let cards = numbers | map(((card, _, _, _), _) -> (card, ())) | distinct;
 
 -- prize targets: key (card, target) for target in card+1 .. card+m
 wt: {
@@ -24,4 +24,4 @@ insts: {
     var inst = cards + spawned | arrange;
 }
 
-export "result" = insts::inst | key(_ -> ((), ())) | count | arrange | inspect(part2);
+export "result" = insts::inst | map(_ -> ((), ())) | count | arrange | inspect(part2);

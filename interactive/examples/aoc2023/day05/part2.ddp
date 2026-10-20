@@ -3,8 +3,8 @@
 -- input 0: seed ranges (start, len)
 -- input 1: map entries (stage, dst, src, len)
 
-let seeds   = input 0 : ((int, int) ; ()) | key(((start, len), _) -> ((0, start, (start, len) add), ()));
-let entries = input 1 : ((int, int, int, int) ; ()) | key(((stage, dst, src, len), _) -> (stage, (dst, src, len)));
+let seeds   = input 0 : ((int, int) ; ()) | map(((start, len), _) -> ((0, start, (start, len) add), ()));
+let entries = input 1 : ((int, int, int, int) ; ()) | map(((stage, dst, src, len), _) -> (stage, (dst, src, len)));
 
 ranges: {
     let cur = active | filter(((stage, _, _), _) -> (stage, 6) le);
@@ -45,4 +45,4 @@ ranges: {
 }
 
 export "result" = ranges::active | filter(((stage, _, _), _) -> (stage, 7) eq)
-    | key(((_, s, _), _) -> ((), s)) | min | arrange | inspect(part2);
+    | map(((_, s, _), _) -> ((), s)) | min | arrange | inspect(part2);

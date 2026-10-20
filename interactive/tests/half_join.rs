@@ -6,18 +6,18 @@ use interactive::server::Server;
 use interactive::{lower, parse};
 
 const PROGRAM: &str = r#"
-    let a = input 0 : ((int, int) ; ()) | key(((k, x), ()) -> (k, x));
-    let b = input 1 : ((int, int) ; ()) | key(((k, y), ()) -> (k, y));
+    let a = input 0 : ((int, int) ; ()) | map(((k, x), ()) -> (k, x));
+    let b = input 1 : ((int, int) ; ()) | map(((k, y), ()) -> (k, y));
 
     -- Each of `a`'s updates meets `b`'s at or before it, and each of `b`'s meets `a`'s strictly
     -- before it, so every pair meets once, at the later of its two times.
     let ab = a | lift | half_join(b, 0, (k, x, y) -> (k, (x, y)));
     let ba = b | lift | half_join(a, 1, (k, y, x) -> (k, (x, y)));
-    export "delta" = (ab + ba) | delay((_, (_, t)) -> t) | key((k, (xy, _)) -> (k, xy));
+    export "delta" = (ab + ba) | delay((_, (_, t)) -> t) | map((k, (xy, _)) -> (k, xy));
     export "join" = a | join(b, (k, x, y) -> (k, (x, y)));
 
     -- Reachability from `a`'s keys along `b`'s edges, joining by each method.
-    let roots = a | key((k, _) -> (k, ()));
+    let roots = a | map((k, _) -> (k, ()));
     joined: {
         let step = reach | join(b, (_, (), dst) -> (dst, ()));
         var reach = roots + step | distinct;
@@ -25,7 +25,7 @@ const PROGRAM: &str = r#"
     halved: {
         let fwd = reach | lift | half_join(b, 0, (_, (), dst) -> (dst, ()));
         let rev = b | lift | half_join(reach, 1, (_, dst, ()) -> (dst, ()));
-        let step = (fwd + rev) | delay((_, (_, t)) -> t) | key((n, _) -> (n, ()));
+        let step = (fwd + rev) | delay((_, (_, t)) -> t) | map((n, _) -> (n, ()));
         var reach = roots + step | distinct;
     }
     export "reach_join" = joined::reach;

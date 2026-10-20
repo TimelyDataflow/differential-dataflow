@@ -2,7 +2,7 @@
 -- (and the goal) require steps>=4.
 -- input 0: (row, col, cost) 1-indexed
 
-let cells = input 0 : ((int, int, int) ; ()) | key(((r, c, w), ()) -> ((r, c), w));
+let cells = input 0 : ((int, int, int) ; ()) | map(((r, c, w), ()) -> ((r, c), w));
 let seeds = (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 1, 0, 0), 0)))
           + (cells | filter(((r, c), _) -> ((r, 1) eq, (c, 1) eq) all) | map(_ -> ((1, 1, 0, 1, 0), 0)));
 
@@ -19,13 +19,13 @@ dijk: {
     var mc = seeds + straight + turna + turnb | min;
 }
 
-let maxr = cells | key(((r, _), _) -> ((), (1000000, r) sub)) | min
+let maxr = cells | map(((r, _), _) -> ((), (1000000, r) sub)) | min
     | map((_, v) -> ((), (1000000, v) sub));
-let maxc = cells | key(((_, c), _) -> ((), (1000000, c) sub)) | min
+let maxc = cells | map(((_, c), _) -> ((), (1000000, c) sub)) | min
     | map((_, v) -> ((), (1000000, v) sub));
 let corner = maxr | join(maxc, (_, a, b) -> ((), (a, b)));
 
-export "result" = dijk::mc | filter(((_, _, _, _, s), _) -> (s, 4) ge) | key(((r, c, _, _, s), h) -> ((), (r, c, h, s)))
+export "result" = dijk::mc | filter(((_, _, _, _, s), _) -> (s, 4) ge) | map(((r, c, _, _, s), h) -> ((), (r, c, h, s)))
     | join(corner, (_, (r, c, h, s), (mr, mc)) -> ((), ((r, mr) eq, (c, mc) eq, h, s)))
-    | filter((_, (a, b, _, _)) -> (a, b) all) | key((_, (_, _, h, _)) -> ((), h)) | min
+    | filter((_, (a, b, _, _)) -> (a, b) all) | map((_, (_, _, h, _)) -> ((), h)) | min
     | arrange | inspect(part2);

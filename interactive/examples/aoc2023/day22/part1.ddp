@@ -5,10 +5,10 @@
 -- slt's generate_series drops bricks with ANY reversed axis; mirror that.
 let lines = input 0 : ((int, int, int, int, int, int, int) ; ());
 let bricks = lines | filter(((_, x1, y1, z1, x2, y2, z2), _) -> ((x1, x2) le, (y1, y2) le, (z1, z2) le) all)
-    | key(((r, x1, y1, z1, x2, y2, z2), ()) -> (r, (x1, y1, z1, x2, y2, z2)));
+    | map(((r, x1, y1, z1, x2, y2, z2), ()) -> (r, (x1, y1, z1, x2, y2, z2)));
 -- (r ; xlo, ylo, zlo, xhi, yhi, zhi)
 
-let bu = bricks | key((r, (xl, yl, zl, xh, yh, zh)) -> ((), (r, xl, yl, zl, xh, yh, zh)));
+let bu = bricks | map((r, (xl, yl, zl, xh, yh, zh)) -> ((), (r, xl, yl, zl, xh, yh, zh)));
 let ovl = bu | join(bu, (_, (r1, xl1, yl1, zl1, xh1, yh1, zh1), (r2, xl2, yl2, zl2, xh2, yh2, zh2)) ->
         ((r1, r2), (
             (((xl1, xl2) max, (xh1, xh2) min) le,
@@ -36,6 +36,6 @@ let sup = s1 | join(rest, (up, (lo, req), mz) -> ((lo, up, (req, mz) eq), ()))
 let uniq2 = sup | map(((_, up), _) -> (up, ())) | count | filter((_, n) -> (n, 1) eq) | map((k, _) -> (k, ()));
 
 let critical = sup | map(((lo, up), _) -> (up, lo)) | join(uniq2, (_, lo, ()) -> (lo, ())) | distinct;
-let total = lines | key(_ -> ((), ())) | count;   -- ALL lines, per the slt
-export "result" = total | join(critical | key(_ -> ((), ())) | count, (_, a, b) -> ((), (a, b) sub))
+let total = lines | map(_ -> ((), ())) | count;   -- ALL lines, per the slt
+export "result" = total | join(critical | map(_ -> ((), ())) | count, (_, a, b) -> ((), (a, b) sub))
     | arrange | inspect(part1);

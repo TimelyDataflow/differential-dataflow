@@ -38,7 +38,7 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
         let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(
             r#"
             let x = input 0 : ((int, int, List(int)); ())
-                | key(((k, n, xs), ()) -> (k, (n, xs)));
+                | map(((k, n, xs), ()) -> (k, (n, xs)));
             export "keyed" = x;
             export "minimum" = x | min;
             export "collected" = x | collect;
@@ -98,7 +98,7 @@ fn batched_equality_spans_windows_and_retracts_compound_keys() {
     timely::execute_directly(|worker| {
         let mut program = interactive::lower::lower_tree(interactive::parse::pipe::parse(r#"
             let x = input 0 : ((int, List(int)); ())
-                | key(((k, xs), ()) -> ((k, (k, 7) mul), xs));
+                | map(((k, xs), ()) -> ((k, (k, 7) mul), xs));
             export "keyed" = x;
             export "minimum" = x | min;
             export "collected" = x | collect;

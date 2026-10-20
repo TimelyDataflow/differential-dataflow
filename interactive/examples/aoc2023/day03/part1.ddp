@@ -2,7 +2,7 @@
 -- input 0: (row, col, charcode); '.' = 46, digits 48..57.
 -- NB: `distinct` erases values, so loop state is packed into keys.
 
-let cells    = input 0 : ((int, int, int) ; ()) | filter(((_, _, c), _) -> (c, 46) ne) | key(((r, col, c), _) -> ((r, col), c));
+let cells    = input 0 : ((int, int, int) ; ()) | filter(((_, _, c), _) -> (c, 46) ne) | map(((r, col, c), _) -> ((r, col), c));
 let numerals = cells | filter((_, c) -> ((c, 48) ge, (c, 57) le) all) | map((cell, c) -> (cell, (c, 48) sub));
 let symbols  = cells | filter((_, c) -> (((c, 48) ge, (c, 57) le) all, 0) eq);
 
@@ -40,6 +40,6 @@ let part_numbers = maximal | map(((r, s, _, v), _) -> ((r, s), v)) | join(active
 -- (row, start ; value)
 
 export "result" = part_numbers
-    | key((_, v) -> ((), v)) | collect
+    | map((_, v) -> ((), v)) | collect
     | value((_, vs) -> vs fold_add)
     | arrange | inspect(part1);
