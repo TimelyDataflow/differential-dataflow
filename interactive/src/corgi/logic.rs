@@ -323,6 +323,11 @@ pub fn compile(
         // Projection: a tuple field, or a list element (`Gather`, which reads the zero of the element's shape out of range).
         Term::Proj(t, i) => {
             let id = compile(t, b, env, env_shapes, anchor, None)?;
+            // A lambda slot's key and value are fields of its `(key, val)` output; typing the
+            // lambda again to find that out would compile it a second time.
+            if matches!(**t, Term::Corgi(..)) {
+                return Ok(b.add(Op::Field(*i), vec![id]));
+            }
             match shape_of_term(t, env_shapes, None)? {
                 Shape::List(_) => {
                     let idx = int_lit(b, anchor, *i as i64);

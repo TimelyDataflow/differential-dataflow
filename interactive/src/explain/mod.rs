@@ -258,16 +258,20 @@ fn resolve(root: &Scope, path: &[usize], r: &Ref) -> Target {
 /// grafts, so the user's text is never parsed again. The readable source substitutes the user's
 /// text after parsing.
 fn slot(arity: usize, terms: &[&Term], rows: &[String], body: impl FnOnce(Vec<String>) -> String) -> Term {
-    struct Words { scope: corgi::Scope, code: String, src: String, error: Option<String>, next: usize }
+    struct Words { scope: corgi::Scope, code: String, src: String, error: Option<String>, next: usize, bound: Vec<(String, String)> }
     impl Words {
         fn bind(&mut self, term: &Term, rows: &[String]) -> String {
             match term {
                 Term::Var(i) => rows[*i].clone(),
                 Term::Proj(t, i) => fld(self.bind(t, rows), *i),
                 Term::Corgi(lambda, args) => {
+                    let args = tup(args.iter().map(|t| self.bind(t, rows)).collect());
+                    // A projection's key and value halves are the same lambda: call it once.
+                    let call = format!("{args} {}", lambda.src);
+                    if let Some((_, name)) = self.bound.iter().find(|(c, _)| *c == call) { return name.clone(); }
                     let name = format!("_explain{}", self.next);
                     self.next += 1;
-                    let args = tup(args.iter().map(|t| self.bind(t, rows)).collect());
+                    self.bound.push((call, name.clone()));
                     match lambda.graph() {
                         Ok(g) => self.scope.word(&name, g.as_ref().clone()).unwrap(),
                         Err(e) => self.error = Some(e),
@@ -280,7 +284,8 @@ fn slot(arity: usize, terms: &[&Term], rows: &[String], body: impl FnOnce(Vec<St
             }
         }
     }
-    let mut words = Words { scope: crate::corgi::logic::base_scope(), code: String::new(), src: String::new(), error: None, next: 0 };
+    // The adapter uses only corgi's own ops, so an empty scope serves.
+    let mut words = Words { scope: corgi::Scope::default(), code: String::new(), src: String::new(), error: None, next: 0, bound: Vec::new() };
     let body = body(terms.iter().map(|t| words.bind(t, rows)).collect());
     let pattern = if arity == 2 { "(k, v)" } else { "(k, v, r)" };
     let mut lambda = Lambda::new(format!("let {pattern} = input in {}{body}", words.code), &words.scope);
