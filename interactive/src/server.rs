@@ -72,7 +72,7 @@ enum OuterImport<'s> {
     /// An input, or a published trace read as corgi containers.
     Columns(differential_dataflow::Collection<'s, OuterTime, HostContainer>),
     /// A published columnar export, for a columnar program to read in place.
-    Export(differential_dataflow::operators::arrange::Arranged<'s, crate::backend::corgi::ExportTrace>),
+    Export(differential_dataflow::operators::arrange::Arranged<'s, crate::backend::corgi::ImportTrace>),
 }
 
 /// A published export as its readers see it: a trace of corgi chunks.
@@ -80,19 +80,37 @@ enum OuterImport<'s> {
 pub struct Published(pub crate::backend::corgi::ExportTrace);
 
 impl Published {
-    /// Import into `scope` as containers, one per chunk of each batch, with the import's shutdown
-    /// button. Each worker reads its own share.
+    /// Import into `scope` as containers, one per chunk of each batch, as of `as_of` (see
+    /// [`Server::import_as_of`]), with the import's shutdown button. Each worker reads its own
+    /// share.
     pub fn import_containers<'s>(
         &mut self,
         scope: timely::dataflow::Scope<'s, OuterTime>,
         name: &str,
+        as_of: OuterTime,
     ) -> (
         differential_dataflow::Collection<'s, OuterTime, HostContainer>,
         ShutdownButton<CapabilitySet<OuterTime>>,
     ) {
-        let (arranged, shutdown) = self.0.import_core(scope, name);
+        let (arranged, shutdown) = import_as_of(&mut self.0, scope, name, as_of);
         (crate::backend::corgi::export_containers(arranged), shutdown)
     }
+}
+
+/// Import `trace` into `scope` as of `as_of`, as DD's `import_frontier` reads a trace: every
+/// update's time advanced to `as_of`, which must be at or beyond the trace's logical compaction
+/// frontier, the earliest time at which its accumulations are correct.
+fn import_as_of<'s>(
+    trace: &mut crate::backend::corgi::ExportTrace,
+    scope: timely::dataflow::Scope<'s, OuterTime>,
+    name: &str,
+    as_of: OuterTime,
+) -> (
+    differential_dataflow::operators::arrange::Arranged<'s, crate::backend::corgi::ImportTrace>,
+    ShutdownButton<CapabilitySet<OuterTime>>,
+) {
+    debug_assert!(trace.get_logical_compaction().less_equal(&as_of), "an import as of {as_of}, before its trace's compaction frontier");
+    trace.import_frontier_core(scope, name, Antichain::from_elem(as_of), Antichain::new())
 }
 
 /// The shape of a collection's rows: its key's and its value's.
@@ -511,6 +529,16 @@ impl Server {
         self.epoch
     }
 
+    /// The time a program installed now, or a binding, snapshot or tail started now, reads the
+    /// published traces it imports as of: the epoch before the current one. [`Server::tick`]
+    /// compacts every published trace to it, so their accumulations are correct from it on; before
+    /// it a trace's batches can hold counts no time had (a retraction advanced past it beside the
+    /// insertion it retracts), on which an iterative scope need not converge. Every import
+    /// advances its updates' times to it.
+    pub fn import_as_of(&self) -> OuterTime {
+        self.epoch.saturating_sub(1)
+    }
+
     /// Whether `name` (canonical) is published.
     fn is_published(&self, name: &str) -> bool {
         self.traces.contains_key(name)
@@ -654,6 +682,7 @@ impl Server {
         let root = &prog.root;
         let arranged_imports = self.arranged_imports;
         let tapped = self.export_taps;
+        let as_of = self.import_as_of();
         let traces = &mut self.traces;
 
         // The id this dataflow will get; captured so `drop` can remove it.
@@ -682,9 +711,11 @@ impl Server {
                                     OuterImport::Columns(differential_dataflow::AsCollection::as_collection(stream))
                                 }
                                 st::Source::Trace(t) => {
-                                    // The first binding point: resolve a named trace by importing it.
+                                    // The first binding point: resolve a named trace by importing
+                                    // it, as of the program's start.
                                     let key = canonical_source_name(t);
-                                    let arranged = traces.get_mut(&key).expect("validated above").import(outer.clone());
+                                    let trace = traces.get_mut(&key).expect("validated above");
+                                    let (arranged, _shutdown) = import_as_of(trace, outer, "Import", as_of);
                                     if arranged_imports {
                                         return OuterImport::Export(arranged);
                                     }
@@ -1090,11 +1121,12 @@ impl Server {
         // Capture the trace's containers, never forming rows.
         let buffer: Captured = Rc::new(RefCell::new(Vec::new()));
         let buffer_in = buffer.clone();
-        let Published(mut trace) = self.published(&source).expect("checked above");
+        let mut published = self.published(&source).expect("checked above");
+        let as_of = self.import_as_of();
         let shutdown = worker.dataflow::<OuterTime, _, _>(|scope| {
             use timely::dataflow::operators::{Inspect, Probe};
-            let (arranged, shutdown) = trace.import_core(scope.clone(), "BindImport");
-            crate::backend::corgi::export_containers(arranged)
+            let (containers, shutdown) = published.import_containers(scope, "BindImport", as_of);
+            containers
                 .inner
                 .inspect_core(move |event| {
                     if let Ok((_, container)) = event {
@@ -1172,7 +1204,8 @@ impl Server {
 
         let name = canonical_source_name(name);
         let epoch = self.epoch;
-        let Published(mut trace) = self.published(&name).ok_or_else(|| format!("no trace {:?}", name))?;
+        let mut trace = self.published(&name).ok_or_else(|| format!("no trace {:?}", name))?;
+        let as_of = self.import_as_of();
         let shape = self.shapes[&name].clone();
         let parts: Rc<RefCell<Vec<Updates>>> = Rc::new(RefCell::new(Vec::new()));
         let parts_in = parts.clone();
@@ -1180,8 +1213,8 @@ impl Server {
         let id = worker.next_dataflow_index();
         worker.dataflow::<OuterTime, _, _>(|scope| {
             // The dataflow is dropped once drained, which releases the import.
-            let (arranged, _shutdown) = trace.import_core(scope.clone(), "SnapshotImport");
-            crate::backend::corgi::export_containers(arranged)
+            let (containers, _shutdown) = trace.import_containers(scope, "SnapshotImport", as_of);
+            containers
                 .inner
                 .unary::<timely::container::CapacityContainerBuilder<HostContainer>, _, _, _>(crate::corgi::exchange::GatherPact, "Snapshot", move |_, _| {
                     move |input, _output| {
@@ -1377,7 +1410,8 @@ impl Server {
         // `epoch`, sliding it out of peek's window and leaving peek with only the
         // latest epoch's delta. (`saturating_sub` guards `epoch == 0`, though
         // tick only runs at epoch >= 1.)
-        let frontier = Antichain::from_elem(self.epoch.saturating_sub(1));
+        // The same time every import from now on reads as of.
+        let frontier = Antichain::from_elem(self.import_as_of());
         for trace in self.traces.values_mut() {
             trace.set_logical_compaction(frontier.borrow());
             trace.set_physical_compaction(frontier.borrow());

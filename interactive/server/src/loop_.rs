@@ -475,8 +475,9 @@ fn start_tail(
     let dataflow_id = worker.next_dataflow_index();
     let tag = reqid.to_string();
     let mut probe = ProbeHandle::new();
+    let as_of = server.import_as_of();
     let shutdown = worker.dataflow::<OuterTime, _, _>(|scope| {
-        let (containers, shutdown) = trace.import_containers(scope.clone(), "TailImport");
+        let (containers, shutdown) = trace.import_containers(scope, "TailImport", as_of);
         let pending = Arc::new(AtomicUsize::new(0));
         let (mut upper, mut dropped) = (None::<OuterTime>, false);
         containers

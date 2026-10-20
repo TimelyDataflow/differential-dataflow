@@ -19,6 +19,7 @@ use differential_dataflow::operators::reduce::{ReduceTactic, reduce_with_tactic}
 use differential_dataflow::trace::Span;
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::trace::wrappers::enter::{BatchEnter, TraceEnter};
+use differential_dataflow::trace::wrappers::frontier::{BatchFrontier, TraceFrontier};
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatcher};
@@ -232,8 +233,32 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
 type NativeBatch = std::rc::Rc<ChunkBatch<CorgiChunk<Time, Diff>>>;
 /// A batch of a published (host-time) corgi export (`ExportTrace`'s batch).
 type HostBatch = std::rc::Rc<ChunkBatch<CorgiChunk<u64, Diff>>>;
-/// A published corgi export entered into a program's scope: the producer's own chunks.
-pub type ImportArr<'scope> = Arranged<'scope, TraceEnter<ExportTrace, Time>>;
+/// A published corgi export as an importer reads it: as of the time it imports from, every
+/// update's time advanced to it (see `Server::import_as_of`).
+pub type ImportTrace = TraceFrontier<ExportTrace>;
+/// A published corgi export entered into a program's scope: the producer's own chunks, read as of
+/// the import's time.
+pub type ImportArr<'scope> = Arranged<'scope, TraceEnter<ImportTrace, Time>>;
+
+/// The time `batch` is read as of: the one element of its frontier, where a host time before it
+/// advances to, as host times are totally ordered.
+fn as_of(batch: &BatchFrontier<HostBatch, u64>) -> u64 {
+    let mut least = 0;
+    batch.advance_time(&mut least);
+    least
+}
+
+/// An imported batch's chunks, read as of the time it is imported from. A trace compacted to that
+/// time is correct only at it and beyond: before it, its batches can hold a retraction advanced
+/// past it beside the insertion it retracts, a count no time had. Every reader of an import
+/// (collection, join, half join, reduce) reads its batches through here, so none sees that
+/// history. A chunk with no time before the as-of is shared, untouched; another shares its keys
+/// and values, and has its times rewritten (see [`CorgiChunk::as_of`]).
+fn imported(batch: &BatchFrontier<HostBatch, u64>) -> HostBatch {
+    let as_of = as_of(batch);
+    if as_of == 0 { return std::rc::Rc::clone(batch.inner()); }
+    std::rc::Rc::new(ChunkBatch { chunks: batch.inner().chunks.iter().map(|c| c.as_of(as_of)).collect() })
+}
 
 /// The corgi backend's arrangement: one it built, or a published export it imported.
 #[derive(Clone)]
@@ -243,17 +268,18 @@ pub enum Arr<'scope> {
 }
 
 /// A batch as the corgi tactics read it. An imported batch crosses into the program as its
-/// producer's chunks *retimed*: the same `Rc`s, read with each host epoch `e` as `(e, [])`. The
-/// lanes are identical, so the crossing costs one `Rc` per chunk and copies no data.
+/// producer's chunks [`imported`] as of their import's time, then *retimed*: read with each host
+/// epoch `e` as `(e, [])`. The lanes are identical, so retiming costs one `Rc` per chunk and copies
+/// no data.
 trait Native {
     fn native(self) -> NativeBatch;
 }
 impl Native for NativeBatch {
     fn native(self) -> NativeBatch { self }
 }
-impl Native for BatchEnter<HostBatch, Time> {
+impl Native for BatchEnter<BatchFrontier<HostBatch, u64>, Time> {
     fn native(self) -> NativeBatch {
-        std::rc::Rc::new(ChunkBatch { chunks: self.inner().chunks.iter().map(CorgiChunk::retime).collect() })
+        std::rc::Rc::new(ChunkBatch { chunks: imported(self.inner()).chunks.iter().map(CorgiChunk::retime).collect() })
     }
 }
 
@@ -570,7 +596,8 @@ pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::
     })
 }
 
-/// The updates of an imported columnar export, as corgi containers.
-pub fn export_containers<'s>(a: Arranged<'s, ExportTrace>) -> Collection<'s, u64, CorgiContainer<u64, Diff>> {
-    chunk_containers(a.stream, "ExportContainers", |batch| batch)
+/// The updates of an imported columnar export, as corgi containers, as of the time it is
+/// imported from (see [`imported`]).
+pub fn export_containers<'s>(a: Arranged<'s, ImportTrace>) -> Collection<'s, u64, CorgiContainer<u64, Diff>> {
+    chunk_containers(a.stream, "ExportContainers", |batch| imported(&batch))
 }

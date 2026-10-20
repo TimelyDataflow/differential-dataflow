@@ -117,6 +117,25 @@ impl<T, R> CorgiChunk<T, R> {
     pub fn diffs(&self) -> &[R] { &self.0.diffs }
 }
 
+impl<R: Clone> CorgiChunk<u64, R> {
+    /// The host chunk read as of `as_of`: every time before it advanced to it, which presents the
+    /// accumulations at `as_of` rather than the history before it. Itself, shared, when no time is
+    /// before `as_of`; otherwise a chunk sharing its keys and values, with its times rewritten.
+    ///
+    /// Advancing a host time is monotone, so the rows stay in `(key, val, time)` order, but
+    /// updates of one `(key, val)` can come to share a time, unconsolidated. The join, half join
+    /// and reduce tactics consolidate what they read on presentation, and a collection need not be
+    /// consolidated.
+    pub fn as_of(&self, as_of: u64) -> Self {
+        // Host times have one lane, absent when every time is zero.
+        let before = self.0.times.raw_lanes().first().map_or(as_of > 0 && !self.0.times.is_empty(), |lane| lane.iter().any(|&t| t < as_of));
+        if !before { return self.clone(); }
+        let mut times = self.0.times.clone();
+        times.advance_by(AntichainRef::new(&[as_of]), times.len());
+        Self::from_parts(self.0.keys.clone(), self.0.vals.clone(), times, self.0.diffs.clone())
+    }
+}
+
 impl<T, R> CorgiChunk<T, R>
 where
     T: ColTime,
