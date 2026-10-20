@@ -350,59 +350,16 @@ pub fn compile(
                     let op = match op { BinOp::F64Add => CBinOp::Add, BinOp::F64Sub => CBinOp::Sub, BinOp::F64Mul => CBinOp::Mul, _ => CBinOp::Div };
                     b.add(ArithOp::Bin(op), vec![p])
                 }
-                BinOp::F64Min | BinOp::F64Max | BinOp::F64Eq | BinOp::F64Ne | BinOp::F64Lt | BinOp::F64Le | BinOp::F64Gt | BinOp::F64Ge => {
-                    if shape_of_term(l, env_shapes, None)? != Shape::Float || shape_of_term(r, env_shapes, None)? != Shape::Float {
-                        return Err(format!("{op:?} expects two Floats; use float(int)"));
-                    }
-                    let (x, y) = (lid, rid);
-                    match op {
-                        BinOp::F64Min | BinOp::F64Max => {
-                            // The total-order pick, then a NaN operand yields the other operand
-                            // (and two NaNs the second), as `ir::eval` does.
-                            let pick = if matches!(op, BinOp::F64Min) { CmpOp::Min } else { CmpOp::Max };
-                            let p = pair(b, x, y);
-                            let total = b.add(pick, vec![p]);
-                            let y_nan = is_nan(b, y);
-                            let choices = b.tuple(vec![y_nan, x, total]);
-                            let unless_y = b.add(Op::Select, vec![choices]);
-                            let x_nan = is_nan(b, x);
-                            let choices_x = b.tuple(vec![x_nan, y, unless_y]);
-                            b.add(Op::Select, vec![choices_x])
-                        }
-                        _ => {
-                            // IEEE: the total order once `-0.0` is folded onto `0.0`, and false
-                            // whenever an operand is NaN; `fne` is the negation of `feq`.
-                            let (cx, cy) = (fold_negative_zero(b, x, anchor), fold_negative_zero(b, y, anchor));
-                            let (p, pred) = match op {
-                                BinOp::F64Eq | BinOp::F64Ne => (pair(b, cx, cy), Pred::Eq),
-                                BinOp::F64Lt => (pair(b, cx, cy), Pred::Lt),
-                                BinOp::F64Le => (pair(b, cx, cy), Pred::Le),
-                                BinOp::F64Gt => (pair(b, cy, cx), Pred::Lt),
-                                _ => (pair(b, cy, cx), Pred::Le),
-                            };
-                            let rel = b.add(CmpOp::Rel(pred), vec![p]);
-                            let (x_nan, y_nan) = (is_nan(b, x), is_nan(b, y));
-                            let nans = pair(b, x_nan, y_nan);
-                            let any_nan = b.add(CmpOp::Max, vec![nans]);
-                            let ordered = b.add(CmpOp::RelImm(Pred::Eq, Scalar::Int(0)), vec![any_nan]);
-                            let both = pair(b, rel, ordered);
-                            let holds = b.add(CmpOp::Min, vec![both]);
-                            if matches!(op, BinOp::F64Ne) {
-                                b.add(CmpOp::RelImm(Pred::Eq, Scalar::Int(0)), vec![holds])
-                            } else {
-                                holds
-                            }
-                        }
-                    }
-                }
-                BinOp::F64Pow | BinOp::F64PowI => {
-                    let exponent = if matches!(op, BinOp::F64Pow) { Shape::Float } else { Shape::Int };
-                    if shape_of_term(l, env_shapes, None)? != Shape::Float || shape_of_term(r, env_shapes, None)? != exponent {
-                        return Err(format!("{op:?} expects a Float and an {}", if matches!(op, BinOp::F64Pow) { "Float" } else { "Int" }));
-                    }
-                    let kind = if matches!(op, BinOp::F64Pow) { float_kernels::FloatOp::Pow } else { float_kernels::FloatOp::PowI };
-                    let args = b.tuple(vec![lid, rid]);
-                    b.add(NumOp::Host(float_kernels::op(kind)), vec![args])
+                BinOp::F64Min | BinOp::F64Max | BinOp::F64Eq | BinOp::F64Ne | BinOp::F64Lt | BinOp::F64Le | BinOp::F64Gt | BinOp::F64Ge
+                | BinOp::F64Pow | BinOp::F64PowI => {
+                    let name = match op {
+                        BinOp::F64Min => "fmin", BinOp::F64Max => "fmax", BinOp::F64Eq => "feq", BinOp::F64Ne => "fne",
+                        BinOp::F64Lt => "flt", BinOp::F64Le => "fle", BinOp::F64Gt => "fgt", BinOp::F64Ge => "fge",
+                        BinOp::F64Pow => "fpow", _ => "fpowi",
+                    };
+                    let args = Shape::Prod(vec![shape_of_term(l, env_shapes, None)?, shape_of_term(r, env_shapes, None)?]);
+                    let p = pair(b, lid, rid);
+                    float_word(b, name, p, &args)?
                 }
                 BinOp::Eq | BinOp::Ne => {
                     // Cross-shape structural compare folds to a constant (Eq→0, Ne→1) over `anchor`;
@@ -576,22 +533,11 @@ pub fn compile(
                     if shape != Shape::Float { return Err("fneg expects a Float".into()); }
                     b.add(ArithOp::Neg, vec![id])
                 }
-                // |x| is the larger of x and -x in the total order: that clears the sign bit,
-                // NaN included, exactly as `f64::abs`.
-                UnOp::F64Fn(F64Fn::Abs) => {
-                    if shape != Shape::Float { return Err("fabs expects a Float".into()); }
-                    float_abs(b, id)
-                }
-                // The rest (sqrt, exp, ln, rounding, trig) and `fint` are host kernels over the
-                // float column.
                 UnOp::F64Fn(f) => {
-                    if shape != Shape::Float { return Err(format!("{op:?} expects a Float")); }
-                    b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::Fn(*f))), vec![id])
+                    let name = F64Fn::ALL.iter().find(|(_, g)| g == f).expect("every F64Fn is named").0;
+                    float_word(b, name, id, &shape)?
                 }
-                UnOp::F64ToInt => {
-                    if shape != Shape::Float { return Err("fint expects a Float".into()); }
-                    b.add(NumOp::Host(float_kernels::op(float_kernels::FloatOp::ToInt)), vec![id])
-                }
+                UnOp::F64ToInt => float_word(b, "fint", id, &shape)?,
                 // `truthy` is "nonzero Int": scalars compare against zero; non-`Int` values
                 // are never truthy, so their `not` folds to the constant 1 (the cross-shape
                 // `Eq` fold's precedent).
@@ -710,6 +656,91 @@ fn truth(b: &mut Builder<NumOp>, term: &Term, id: usize, env_shapes: &[Shape], a
 /// The total-order key of an `f64`, as corgi's `Scalar::Float` holds a float constant.
 fn float_key(f: f64) -> u64 { crate::ir::F64(f).key() }
 
+/// DDIR's Float functions past corgi's arithmetic, as words over their input: the argument, or the
+/// tuple of the two arguments. `fabs`, `fmin`, `fmax` and the comparisons are compositions of corgi
+/// ops; the rest are host kernels ([`float_kernels`]).
+#[derive(Clone, Copy)]
+enum FloatWord {
+    /// `|x|`: the larger of `x` and `-x` in the total order, which clears the sign bit, NaN
+    /// included, exactly as `f64::abs`.
+    Abs,
+    Kernel(float_kernels::FloatOp),
+    /// The total-order pick, except that a NaN operand yields the other operand (and two NaNs the
+    /// second), as `ir::eval` does.
+    Pick { max: bool },
+    /// IEEE: `pred` in the total order once `-0.0` is folded onto `0.0`, with the operands swapped
+    /// for `>` and `>=`, and false whenever an operand is NaN; `fne` is the negation of `feq`.
+    Compare { pred: Pred, swap: bool, negate: bool },
+}
+
+impl FloatWord {
+    /// Every word, by name.
+    fn all() -> impl Iterator<Item = (&'static str, FloatWord)> {
+        use float_kernels::FloatOp;
+        use FloatWord::{Compare, Kernel, Pick};
+        let functions = F64Fn::ALL.into_iter().map(|(name, f)| (name, if f == F64Fn::Abs { FloatWord::Abs } else { Kernel(FloatOp::Fn(f)) }));
+        functions.chain([
+            ("fint", Kernel(FloatOp::ToInt)), ("fpow", Kernel(FloatOp::Pow)), ("fpowi", Kernel(FloatOp::PowI)),
+            ("fmin", Pick { max: false }), ("fmax", Pick { max: true }),
+            ("feq", Compare { pred: Pred::Eq, swap: false, negate: false }), ("fne", Compare { pred: Pred::Eq, swap: false, negate: true }),
+            ("flt", Compare { pred: Pred::Lt, swap: false, negate: false }), ("fle", Compare { pred: Pred::Le, swap: false, negate: false }),
+            ("fgt", Compare { pred: Pred::Lt, swap: true, negate: false }), ("fge", Compare { pred: Pred::Le, swap: true, negate: false }),
+        ])
+    }
+
+    /// The word's input: a Float, or a pair of them (`fpowi`'s exponent an Int).
+    fn input(self) -> Shape {
+        use float_kernels::FloatOp;
+        let (f, i) = (Shape::Float, Shape::Int);
+        match self {
+            FloatWord::Abs | FloatWord::Kernel(FloatOp::Fn(_) | FloatOp::ToInt) => f,
+            FloatWord::Kernel(FloatOp::PowI) => Shape::Prod(vec![f, i]),
+            _ => Shape::Prod(vec![f.clone(), f]),
+        }
+    }
+
+    /// The word over `input`, built in `b`.
+    fn build(self, b: &mut Builder<NumOp>, input: usize) -> usize {
+        match self {
+            FloatWord::Abs => float_abs(b, input),
+            FloatWord::Kernel(op) => b.add(NumOp::Host(float_kernels::op(op)), vec![input]),
+            FloatWord::Pick { max } => {
+                let (x, y) = (b.add(Op::Field(0), vec![input]), b.add(Op::Field(1), vec![input]));
+                let total = b.add(if max { CmpOp::Max } else { CmpOp::Min }, vec![input]);
+                let y_nan = is_nan(b, y);
+                let choices = b.tuple(vec![y_nan, x, total]);
+                let unless_y = b.add(Op::Select, vec![choices]);
+                let x_nan = is_nan(b, x);
+                let choices_x = b.tuple(vec![x_nan, y, unless_y]);
+                b.add(Op::Select, vec![choices_x])
+            }
+            FloatWord::Compare { pred, swap, negate } => {
+                let (x, y) = (b.add(Op::Field(0), vec![input]), b.add(Op::Field(1), vec![input]));
+                let zero = b.add(Op::Lit(CValue::f64(vec![0.0])), vec![input]);
+                let (cx, cy) = (fold_negative_zero(b, x, zero), fold_negative_zero(b, y, zero));
+                let p = b.tuple(if swap { vec![cy, cx] } else { vec![cx, cy] });
+                let rel = b.add(CmpOp::Rel(pred), vec![p]);
+                let (x_nan, y_nan) = (is_nan(b, x), is_nan(b, y));
+                let nans = b.tuple(vec![x_nan, y_nan]);
+                let any_nan = b.add(CmpOp::Max, vec![nans]);
+                let ordered = b.add(CmpOp::RelImm(Pred::Eq, Scalar::Int(0)), vec![any_nan]);
+                let both = b.tuple(vec![rel, ordered]);
+                let holds = b.add(CmpOp::Min, vec![both]);
+                if negate { b.add(CmpOp::RelImm(Pred::Eq, Scalar::Int(0)), vec![holds]) } else { holds }
+            }
+        }
+    }
+}
+
+/// The Float word `name` over `input`, whose shape is `args`, for the term compiler.
+fn float_word(b: &mut Builder<NumOp>, name: &str, input: usize, args: &Shape) -> Res<usize> {
+    let (_, word) = FloatWord::all().find(|(n, _)| *n == name).expect("a Float word");
+    if *args != word.input() {
+        return Err(format!("{name} expects {}, not {args}; use float(int)", word.input()));
+    }
+    Ok(word.build(b, input))
+}
+
 /// `|x|` on a float leaf: the larger of `x` and `-x` in the total order.
 fn float_abs(b: &mut Builder<NumOp>, x: usize) -> usize {
     let negated = b.add(ArithOp::Neg, vec![x]);
@@ -724,10 +755,9 @@ fn is_nan(b: &mut Builder<NumOp>, x: usize) -> usize {
     b.add(CmpOp::RelImm(Pred::Gt, Scalar::Float(float_key(f64::INFINITY))), vec![abs])
 }
 
-/// Replace `-0.0` by `0.0` in a float leaf.
-fn fold_negative_zero(b: &mut Builder<NumOp>, x: usize, anchor: usize) -> usize {
+/// Replace `-0.0` by `zero`, a column of `0.0`, in a float leaf.
+fn fold_negative_zero(b: &mut Builder<NumOp>, x: usize, zero: usize) -> usize {
     let is_negative_zero = b.add(CmpOp::RelImm(Pred::Eq, Scalar::Float(float_key(-0.0))), vec![x]);
-    let zero = b.add(Op::Lit(CValue::f64(vec![0.0])), vec![anchor]);
     let choices = b.tuple(vec![is_negative_zero, zero, x]);
     b.add(Op::Select, vec![choices])
 }
@@ -860,38 +890,17 @@ pub fn eval_corgi_row(lambda: &crate::ir::Lambda, input: DValue) -> DValue {
 pub fn base_scope() -> corgi::Scope {
     static BASE: std::sync::OnceLock<corgi::Scope> = std::sync::OnceLock::new();
     BASE.get_or_init(|| {
-        use BinOp as B;
         let mut scope = corgi::Scope::default();
-        let (f, i) = (Shape::Float, Shape::Int);
-        let x = || Box::new(Term::Var(0));
-        let pair = |op| Term::Binary(op, Box::new(Term::Proj(x(), 0)), Box::new(Term::Proj(x(), 1)));
-        let mut words: Vec<(String, Term, Shape)> = F64Fn::ALL.iter()
-            .map(|&(name, g)| (name.to_string(), Term::Unary(UnOp::F64Fn(g), x()), f.clone()))
-            .collect();
-        words.push(("fint".into(), Term::Unary(UnOp::F64ToInt, x()), f.clone()));
-        words.push(("fpowi".into(), pair(B::F64PowI), Shape::Prod(vec![f.clone(), i])));
-        for (name, op) in [("fpow", B::F64Pow), ("fmin", B::F64Min), ("fmax", B::F64Max), ("feq", B::F64Eq), ("fne", B::F64Ne),
-                           ("flt", B::F64Lt), ("fle", B::F64Le), ("fgt", B::F64Gt), ("fge", B::F64Ge)] {
-            words.push((name.into(), pair(op), Shape::Prod(vec![f.clone(), f.clone()])));
-        }
-        for (name, term, arg) in words {
-            let g = term_word(&term, &arg).unwrap_or_else(|e| panic!("word `{name}`: {e}"));
-            scope.word(&name, g).unwrap();
+        for (name, word) in FloatWord::all() {
+            let mut b = Builder::<NumOp>::default();
+            let input = b.input();
+            let out = word.build(&mut b, input);
+            scope.word(name, b.finish(out)).unwrap();
         }
         scope.declare("enum Option = None () | Some").unwrap();
         scope.declare("enum Result = Ok | Err").unwrap();
         scope
     }).clone()
-}
-
-/// A DDIR term over `Var(0)` of shape `arg`, as a word whose input is that argument.
-fn term_word(term: &Term, arg: &Shape) -> Res<Graph<NumOp>> {
-    let (inner, _) = lower(&[term], &[arg.clone()])?;
-    let mut b = Builder::<NumOp>::default();
-    let x = b.input();
-    let row = b.tuple(vec![x]);
-    let out = b.graft(&inner, row);
-    Ok(b.finish(out))
 }
 
 /// The registered function `f` as a word: one host-kernel node over the call's input, which is its
