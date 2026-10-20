@@ -6,6 +6,7 @@ snapshot evaluation of the same logical plan. It is not an independent query
 specification oracle; query semantics also need hand-checked witnesses.
 """
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 import operator
 
@@ -48,6 +49,14 @@ class Columns:
 c = Columns()
 
 
+_FUNCTIONS = {'+':operator.add,'-':operator.sub,'*':operator.mul,'==':operator.eq,
+              '!=':operator.ne,'<':operator.lt,'<=':operator.le,'>':operator.gt,'>=':operator.ge,
+              '&&':lambda a,b:int(bool(a) and bool(b)),'or':lambda a,b:int(bool(a) or bool(b)),
+              'len':len,'tuple':lambda *xs:tuple(xs),'list':lambda *xs:tuple(xs),'append':operator.add,
+              'float':float,'fneg':operator.neg,'fadd':operator.add,'fsub':operator.sub,'fmul':operator.mul,'fdiv':operator.truediv,
+              'idiv':lambda a,b: (abs(a)//abs(b))*(-1 if (a<0)!=(b<0) else 1) if b else 0}
+
+
 def value(e, row):
     op,args = e.op,e.args
     if op == 'column': return row[args[0]]
@@ -58,13 +67,7 @@ def value(e, row):
     if op == 'at': return value(args[0],row)[args[1]]
     if op == 'if': return value(args[1] if value(args[0],row) else args[2],row)
     vs = [value(a,row) for a in args]
-    funcs = {'+':operator.add,'-':operator.sub,'*':operator.mul,'==':operator.eq,
-             '!=':operator.ne,'<':operator.lt,'<=':operator.le,'>':operator.gt,'>=':operator.ge,
-             '&&':lambda a,b:int(bool(a) and bool(b)),'or':lambda a,b:int(bool(a) or bool(b)),
-             'len':len,'tuple':lambda *xs:tuple(xs),'list':lambda *xs:tuple(xs),'append':operator.add,
-             'float':float,'fneg':operator.neg,'fadd':operator.add,'fsub':operator.sub,'fmul':operator.mul,'fdiv':operator.truediv,
-             'idiv':lambda a,b: (abs(a)//abs(b))*(-1 if (a<0)!=(b<0) else 1) if b else 0}
-    return funcs[op](*vs)
+    return _FUNCTIONS[op](*vs)
 
 
 def product(fields):
@@ -154,6 +157,35 @@ class R:
         return R('closure',self.fields,self,next_relation,dict(on),{k:expr(v) for k,v in select.items()},tuple(keys),tuple(best),expr(condition))
 
 
+class SourceRows:
+    """Raw snapshot tuples as read-only rows, encoding byte fields only when read.
+
+    A reference lookup need not copy/encode every content string in a million-row
+    source just to inspect its IDs. Ordinary encoded tuple sources still work.
+    """
+    def __init__(self, rows, schema):
+        self.rows = rows
+        self.layout = {name:(i,kind) for i,(name,kind) in enumerate(schema.items())}
+
+    def __iter__(self):
+        return (_SourceRow(self.layout,row) for row in self.rows)
+
+
+class _SourceRow(Mapping):
+    __slots__ = ('layout','row')
+
+    def __init__(self, layout, row):
+        self.layout, self.row = layout, row
+
+    def __iter__(self): return iter(self.layout)
+    def __len__(self): return len(self.layout)
+
+    def __getitem__(self, name):
+        index, kind = self.layout[name]
+        value = self.row[index]
+        return tuple(value.encode()) if kind == 'bytes' else value
+
+
 def evaluate(root, data, cache=None):
     # A caller evaluating several exports against one snapshot can share this
     # cache. It must start a fresh cache when the input snapshot changes.
@@ -162,7 +194,8 @@ def evaluate(root, data, cache=None):
         if id(r) in cache: return cache[id(r)]
         op,args = r.op,r.args
         if op == 'source':
-            rows = [dict(zip(r.fields,row)) for row in data[args[0]]]
+            source = data[args[0]]
+            rows = list(source) if isinstance(source,SourceRows) else [dict(zip(r.fields,row)) for row in source]
         elif op == 'select': rows = [{n:value(e,row) for n,e in args[1].items()} for row in ev(args[0])]
         elif op == 'where': rows = [row for row in ev(args[0]) if value(args[1],row)]
         elif op == 'distinct': rows = [dict(zip(r.fields,row)) for row in set(tuple(row[n] for n in r.fields) for row in ev(args[0]))]
@@ -206,14 +239,22 @@ def evaluate(root, data, cache=None):
                     if key not in state or tuple(row[n] for n in best) < tuple(state[key][n] for n in best):
                         state[key] = row
                         fresh[key] = row
-                pending = [{n:value(e,{**row,**{'next_'+k:v for k,v in other.items()}}) for n,e in projection.items()}
-                           for row in fresh.values() for other in index[tuple(row[n] for n in on)]
-                           if value(condition,{**row,**{'next_'+k:v for k,v in other.items()}})]
+                pending = []
+                for row in fresh.values():
+                    for other in index[tuple(row[n] for n in on)]:
+                        environment = {**row, **{'next_'+k:v for k,v in other.items()}}
+                        if value(condition,environment):
+                            pending.append({n:value(e,environment) for n,e in projection.items()})
             rows = list(state.values())
         else: raise ValueError(op)
         cache[id(r)] = rows
         return rows
-    return ev(root)
+    try:
+        return ev(root)
+    finally:
+        # The recursive function closes over itself and its whole snapshot
+        # cache. Break that cycle before the next reference evaluation.
+        ev = None
 
 
 def source_shape(schema):
