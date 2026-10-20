@@ -18,6 +18,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BIN = os.path.join(HERE, "..", "..", "..", "target", "release", "ddir_server")
+sys.path.insert(0, os.path.join(HERE, "..", "bench", "ldbc"))
+from client import decode  # noqa: E402  (the binary frame decoder)
 PORT = 7981
 
 WORLD = """load world begin
@@ -43,17 +45,28 @@ class Client:
     def send(self, text):
         self.sock.sendall(text.encode() if text.endswith("\n") else (text + "\n").encode())
 
+    def fill(self, until):
+        while not until():
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise RuntimeError("connection closed while waiting")
+            self.buf += chunk
+
     def expect(self, reqid):
-        """Read until the terminal ok/err for `reqid`; return (status, body, data-lines)."""
+        """Read until the terminal ok/err for `reqid`; return (status, body, data), its data
+        lines and its binary frames as `(kind, payload)`."""
         data = []
         while True:
-            while b"\n" not in self.buf:
-                chunk = self.sock.recv(4096)
-                if not chunk:
-                    raise RuntimeError("connection closed while waiting")
-                self.buf += chunk
+            self.fill(lambda: b"\n" in self.buf)
             line, self.buf = self.buf.split(b"\n", 1)
             toks = line.decode().split(" ", 2)
+            if toks[1] == "frame":
+                kind, length = toks[2].split(" ")
+                self.fill(lambda: len(self.buf) >= int(length))
+                payload, self.buf = self.buf[:int(length)], self.buf[int(length):]
+                if toks[0] == reqid:
+                    data.append((kind, payload))
+                continue
             if toks[0] != reqid:
                 continue
             if toks[1] in ("ok", "err"):
@@ -98,17 +111,17 @@ def main():
         b.expect("c3")
         b.send("t1 tick")
         b.expect("t1")
-        a.send("p1 peek owner")
-        _, _, rows = a.expect("p1")
-        owned = {r.split("key=")[1].split(" val=")[0]: r.split("val=")[1] for r in rows}
+        a.send("p1 peek owner as corgi")
+        _, _, frames = a.expect("p1")
+        owned = {tuple(key): val for key, val, _ in decode(frames)}
         check(
             "same-epoch race on (5,5) goes to the lower convention id",
-            owned.get("Tuple([Int(5), Int(5)])") == "Tuple([Int(1)])",
+            owned.get((5, 5)) == [1],
             str(owned),
         )
         check(
             "uncontested (2,2) goes to client 2",
-            owned.get("Tuple([Int(2), Int(2)])") == "Tuple([Int(2)])",
+            owned.get((2, 2)) == [2],
             str(owned),
         )
 

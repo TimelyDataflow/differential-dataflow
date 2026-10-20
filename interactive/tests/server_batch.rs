@@ -163,3 +163,21 @@ fn fed_sums_arrive_at_their_time() {
         assert_eq!(rows, vec![(leaf, Value::unit(), 1), (pair, Value::unit(), 1)]);
     });
 }
+
+/// A peek by key reads the key at its export's key shape, a reference to a list row included, and
+/// a key not of that shape is an error rather than a crash.
+#[test]
+fn peek_by_key_reads_reference_keys() {
+    timely::execute_directly(|worker| {
+        let mut server = Server::new();
+        install(&mut server, worker, r#"export "rows" = input 0 : (List(int) ; ()) | key((k, ()) -> (k ref, ()));"#);
+        let list = corgi::Shape::List(Box::new(corgi::Shape::Int));
+        server.feed_columns("world", 0, decoded(&list, &["list(1,2)", "list(3)", "list()"]), None).unwrap();
+        server.tick(worker);
+        let mut rows = |key: &str| server.peek(worker, "rows", Some(key)).map(|u| u.into_rows());
+        assert_eq!(rows("list(1,2)").unwrap(), vec![(Value::List(vec![Value::Int(1), Value::Int(2)]), Value::unit(), 1)]);
+        assert_eq!(rows("list()").unwrap(), vec![(Value::List(vec![]), Value::unit(), 1)]);
+        assert!(rows("list(9)").unwrap().is_empty());
+        assert!(rows("tuple(1)").is_err());
+    });
+}

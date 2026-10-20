@@ -83,23 +83,23 @@ enum OuterImport<'s> {
     Export(differential_dataflow::operators::arrange::Arranged<'s, crate::backend::corgi::ExportTrace>),
 }
 
-/// A published export as its readers see it: a trace of corgi chunks, which reads as rows.
+/// A published export as its readers see it: a trace of corgi chunks.
 #[derive(Clone)]
 pub struct Published(pub crate::backend::corgi::ExportTrace);
 
 impl Published {
-    /// Import into `scope` as a stream of `((key, val), time, diff)` rows, with the
-    /// import's shutdown button. The chunks convert to rows as they are read.
-    pub fn import_rows<'s>(
+    /// Import into `scope` as containers, one per chunk of each batch, with the import's shutdown
+    /// button. Each worker reads its own share.
+    pub fn import_containers<'s>(
         &mut self,
         scope: timely::dataflow::Scope<'s, OuterTime>,
         name: &str,
     ) -> (
-        timely::dataflow::Stream<'s, OuterTime, Vec<((Value, Value), OuterTime, Diff)>>,
+        differential_dataflow::Collection<'s, OuterTime, HostContainer>,
         ShutdownButton<CapabilitySet<OuterTime>>,
     ) {
         let (arranged, shutdown) = self.0.import_core(scope, name);
-        (crate::backend::corgi::export_rows(arranged), shutdown)
+        (crate::backend::corgi::export_containers(arranged), shutdown)
     }
 }
 
@@ -107,7 +107,7 @@ impl Published {
 pub type RowShape = (corgi::Shape, corgi::Shape);
 
 /// A container of corgi columns at the host time.
-type HostContainer = crate::corgi::container::CorgiContainer<OuterTime, Diff>;
+pub type HostContainer = crate::corgi::container::CorgiContainer<OuterTime, Diff>;
 
 /// The number of rows an input converts to columns at once, and a generator emits at once.
 const COLUMN_BATCH: usize = 1 << 16;
@@ -409,9 +409,6 @@ pub enum Command {
     Tick { n: u64 },
     /// Drop the named program.
     Drop { name: String },
-    /// Snapshot a registered trace, optionally keeping one key. The driver
-    /// reads the columns with [`Server::snapshot`] and renders them.
-    Peek { trace: String, key: Option<Value> },
     /// Bind trace `trace`'s changes into input `input` of `prog` at each tick.
     Bind {
         trace: String,
@@ -505,8 +502,7 @@ type Captured = Rc<RefCell<Vec<HostContainer>>>;
 
 /// A live registry of installed programs and the traces they publish.
 pub struct Server {
-    /// Published export name -> trace of corgi chunks. Imports, binds and snapshots read the
-    /// chunks as containers; subscriptions see rows, converted as they read.
+    /// Published export name -> trace of corgi chunks, which every reader reads as containers.
     traces: HashMap<String, crate::backend::corgi::ExportTrace>,
     /// With export taps: each export's new batches on this worker, drained by `take_changes`: a
     /// standing change stream without a snapshot.
@@ -1280,6 +1276,21 @@ impl Server {
         worker.drop_dataflow(id);
         let parts = std::mem::take(&mut *parts.borrow_mut());
         Ok(Updates::consolidate(parts, &shape))
+    }
+
+    /// [`Server::snapshot`], with only the updates whose key is `key`, if one is given: text read
+    /// at the trace's key shape, as a feed reads a key.
+    pub fn peek(&mut self, worker: &mut Worker, name: &str, key: Option<&str>) -> Result<Updates, String> {
+        let updates = self.snapshot(worker, name)?;
+        let Some(text) = key else { return Ok(updates) };
+        let (kshape, _) = self.shapes[&canonical_source_name(name)].clone();
+        let mut decoder = crate::corgi::feed::FeedDecoder::new(&kshape, &corgi::Shape::Unit);
+        decoder.push(text, None, 1)?;
+        let wanted = decoder.finish().keys;
+        let rows: Vec<usize> = (0..updates.len()).collect();
+        let equal = corgi::arrange::equal_idx(&updates.keys, &wanted, &rows, &vec![0; rows.len()]);
+        let keep: Vec<usize> = rows.into_iter().filter(|&row| equal[row] == 0).collect();
+        Ok(updates.select(&keep))
     }
 
     /// The changes to export `name` that this worker's share of its arrangement has produced

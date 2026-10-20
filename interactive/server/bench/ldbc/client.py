@@ -1,8 +1,7 @@
 """Small, bounded TCP client for a private, real ddir_server process."""
-import ast
 import os
-import re
 import socket
+import struct
 import subprocess
 import threading
 import time
@@ -18,39 +17,88 @@ def term(value):
     raise TypeError(value)
 
 
-def decode(lines):
-    def value(text):
-        def parse(node):
-            if isinstance(node, ast.Constant) and type(node.value) is int:
-                return node.value
-            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-                arg = parse(node.operand)
-                if type(arg) is int:
-                    return -arg
-            if isinstance(node, ast.List):
-                return [parse(v) for v in node.elts]
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                    and node.func.id == 'Variant' and not node.keywords and len(node.args) == 2):
-                tag, payload = map(parse, node.args)
-                if type(tag) is int and tag >= 0:
-                    return dict(tag=tag, payload=payload)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords and len(node.args) == 1:
-                if node.func.id == 'Float':
-                    # Rust's shortest round-trip form, which `float` reads exactly (`NaN` and `inf` too).
-                    return float(ast.unparse(node.args[0]))
-                arg = parse(node.args[0])
-                if node.func.id == 'Int' and type(arg) is int:
-                    return arg
-                if node.func.id in ('Tuple', 'List') and isinstance(arg, list):
-                    return arg
-            raise ValueError('unsupported server value: ' + text[:200])
-        return parse(ast.parse(text, mode='eval').body)
+def _float(key):
+    """The float whose total-order key is `key`: corgi stores a float as that key."""
+    bits = key ^ (1 << 63) if key >> 63 else ~key & 0xFFFF_FFFF_FFFF_FFFF
+    return struct.unpack('<d', struct.pack('<Q', bits))[0]
+
+
+class _Words:
+    """A cursor over a frame's little-endian 64-bit words."""
+    def __init__(self, data):
+        self.data, self.at = data, 0
+
+    def words(self, n, kind='Q'):
+        values = struct.unpack_from(f'<{n}{kind}', self.data, self.at)
+        self.at += 8 * n
+        return values
+
+    def word(self):
+        return self.words(1)[0]
+
+    def leaf(self):
+        """A leaf column, `storage | len | payload`, as a list of its values."""
+        storage, n = self.word(), self.word()
+        if storage == 8:
+            values = list(self.data[self.at:self.at + n])
+            self.at += (n + 7) & ~7
+            return values
+        if storage == 64:
+            return list(self.words(n, 'q'))
+        if storage == 0xF64:
+            return [_float(key) for key in self.words(n)]
+        raise ValueError(f'unsupported leaf storage {storage}')
+
+    def column(self):
+        """One column in corgi's byte encoding, as a function from row number to value: an
+        integer or float, a list for a tuple or a list, `dict(tag, payload)` for a sum."""
+        kind = self.word()
+        if kind == 0:
+            return self.leaf().__getitem__
+        if kind == 1:
+            fields = [self.column() for _ in range(self.word())]
+            return lambda i: [field(i) for field in fields]
+        if kind == 2:
+            if self.word() == 0:
+                tags = self.leaf()
+                offsets = self.words(self.word())
+            else:
+                tag, rows = self.word(), self.word()
+                tags, offsets = [tag] * rows, range(rows)
+            lanes = [self.column() for _ in range(self.word())]
+            return lambda i: dict(tag=tags[i], payload=lanes[tags[i]](offsets[i]))
+        if kind == 3:
+            if self.word() == 0:
+                ends = self.words(self.word())
+            else:
+                stride, rows = self.word(), self.word()
+                ends = [stride * (row + 1) for row in range(rows)]
+            values = self.column()
+            return lambda i: [values(j) for j in range(ends[i - 1] if i else 0, ends[i])]
+        if kind == 4:
+            self.word()
+            return lambda i: []
+        if kind == 5:
+            rows = self.words(self.word())
+            arena = self.column()
+            return lambda i: [] if rows[i] == (1 << 64) - 1 else arena(rows[i])
+        raise ValueError(f'unsupported column kind {kind}')
+
+
+def decode(frames):
+    """The rows of a binary peek's `data` frames: `[key, val, diff]`, by key. A frame is
+    `rows | lanes | keys | vals | diffs | times` (see `interactive::corgi::frame`)."""
     result = []
-    for line in lines:
-        match = re.fullmatch(r'diff=(-?\d+) key=(.+) val=(.+)', line)
-        if not match:
-            raise ValueError(line)
-        result.append([value(match[2]), value(match[3]), int(match[1])])
+    for kind, payload in frames:
+        if kind != 'data':
+            continue
+        words = _Words(payload)
+        rows, lanes = words.word(), words.word()
+        if lanes:
+            raise ValueError('a peek frame has no times')
+        keys, vals = words.column(), words.column()
+        diffs = words.words(rows, 'q')
+        result.extend([keys(i), vals(i), diffs[i]] for i in range(rows))
     return sorted(result, key=lambda r: r[0])
 
 
@@ -133,7 +181,13 @@ class Server:
             if rid not in pending:
                 raise RuntimeError(f'unexpected response: {raw[:200]!r}')
             body = body[0] if body else ''
-            if kind == 'data':
+            if kind == 'frame':
+                # `<rid> frame <kind> <nbytes>`, then exactly that many bytes.
+                frame, length = body.split(' ')
+                payload = self.reader.read(int(length))
+                received += len(payload)
+                replies[rid].append((frame, payload))
+            elif kind == 'data':
                 replies[rid].append(body)
             elif kind == 'ok':
                 pending.remove(rid)

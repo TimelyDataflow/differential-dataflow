@@ -63,6 +63,9 @@ enum Col {
     List(Vec<usize>, Box<Col>),
     /// Each row's lane, and each lane's rows.
     Sum(Vec<usize>, Vec<Col>),
+    /// Rows of a list, written as the list rows they name. Inputs declare none, but a `peek`'s
+    /// key is read at its export's key shape, which may hold one.
+    Ref(Box<Col>),
 }
 
 impl Col {
@@ -74,8 +77,7 @@ impl Col {
             Shape::Prod(fields) => Col::Prod(fields.iter().map(Col::new).collect()),
             Shape::List(elem) => Col::List(Vec::new(), Box::new(Col::new(elem))),
             Shape::Sum(lanes) => Col::Sum(Vec::new(), lanes.iter().map(Col::new).collect()),
-            // A declared input's shape is written in DDIR's types, which have no references.
-            Shape::Ref(_) => unreachable!("an input declares no reference shape"),
+            Shape::Ref(list) => Col::Ref(Box::new(Col::new(list))),
         }
     }
 
@@ -87,6 +89,7 @@ impl Col {
             Col::Prod(fields) => fields.first().map_or(0, Col::rows),
             Col::List(ends, _) => ends.len(),
             Col::Sum(tags, _) => tags.len(),
+            Col::Ref(list) => list.rows(),
         }
     }
 
@@ -158,6 +161,7 @@ impl Col {
                 at.expect(b")")?;
                 tags.push(lane);
             }
+            Col::Ref(list) => list.push(at)?,
         }
         Ok(())
     }
@@ -170,6 +174,11 @@ impl Col {
             Col::Prod(fields) => CValue::Prod(fields.into_iter().map(Col::finish).collect()),
             Col::List(ends, elems) => CValue::List(ends.into(), Box::new(elems.finish())),
             Col::Sum(tags, lanes) => CValue::sum(tags, lanes.into_iter().map(Col::finish).collect()),
+            Col::Ref(list) => {
+                let list = list.finish();
+                let rows = (0..list.len()).collect();
+                CValue::Ref(std::sync::Arc::new(list), std::sync::Arc::new(rows))
+            }
         }
     }
 }

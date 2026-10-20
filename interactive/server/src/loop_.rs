@@ -10,15 +10,18 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Instant;
 
 use differential_dataflow::operators::arrange::ShutdownButton;
-use interactive::server::{Command as ServerCommand, OuterTime, Server};
+use interactive::corgi::container::Updates;
+use interactive::corgi::exchange::GatherPact;
+use interactive::corgi::frame;
+use interactive::server::{Command as ServerCommand, HostContainer, OuterTime, Server};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use timely::dataflow::operators::vec::{Input as VecInput, Map};
-use timely::dataflow::operators::{CapabilitySet, Exchange, Inspect, Probe};
+use timely::dataflow::operators::{CapabilitySet, Exchange, Probe};
 use timely::worker::Worker;
 
-use crate::cmd::{ConnectionId, PreparedCommand, Request};
+use crate::cmd::{ConnectionId, Out, PreparedCommand, Request};
 use crate::ControlEvent;
 
 struct Tail {
@@ -144,7 +147,7 @@ pub fn run_worker(
     // instead (each importer re-arranges what it joins).
     server.set_arranged_imports(std::env::var("DDIR_ARRANGED_IMPORTS").map_or(true, |v| v != "0"));
     let mut tails: HashMap<TailKey, Tail> = HashMap::new();
-    let mut responses: HashMap<u64, Sender<String>> = HashMap::new();
+    let mut responses: HashMap<u64, Sender<Out>> = HashMap::new();
     let mut next_token = 0u64;
     let mut intake_closed = false;
     let mut shutdown = false;
@@ -264,7 +267,7 @@ fn dispatch(
     command: Result<PreparedCommand, String>,
     connection_id: ConnectionId,
     reqid: &str,
-    response: Option<Sender<String>>,
+    response: Option<Sender<Out>>,
     server: &mut Server,
     tails: &mut HashMap<TailKey, Tail>,
     worker: &mut Worker,
@@ -376,24 +379,6 @@ fn dispatch(
                 }
                 Ok(format!("t={}", server.epoch()))
             }
-            ServerCommand::Peek { trace, key } => match server.snapshot(worker, &trace) {
-                Ok(updates) => {
-                    if let Some(response) = response.as_ref() {
-                        for (row_key, val, diff) in updates.into_rows() {
-                            if key.as_ref().map_or(true, |key| key == &row_key) {
-                                send(
-                                    response,
-                                    reqid,
-                                    "data",
-                                    format!("diff={} key={:?} val={:?}", diff, row_key, val),
-                                );
-                            }
-                        }
-                    }
-                    Ok(format!("t={}", server.epoch()))
-                }
-                Err(error) => Err(error),
-            },
             ServerCommand::Tick { n } => {
                 let timer = Instant::now();
                 for _ in 0..n {
@@ -406,10 +391,23 @@ fn dispatch(
                 Ok("bye".into())
             }
         },
-        Ok(PreparedCommand::Tail { name }) => start_tail(
+        Ok(PreparedCommand::Peek { name, key, columnar }) => server.peek(worker, &name, key.as_deref()).map(|updates| {
+            if let Some(response) = response.as_ref() {
+                if columnar {
+                    let (k, v) = server.trace_shape(&name).expect("a peeked trace has a shape");
+                    send_frame(response, reqid, "schema", format!("trace={name} key={k} val={v}").into_bytes(), None);
+                    send_frame(response, reqid, "data", frame::encode(&updates, &[]), None);
+                } else if !updates.is_empty() {
+                    send(response, reqid, "data", format!("keys={:?} vals={:?} diffs={:?}", updates.keys, updates.vals, updates.diffs));
+                }
+            }
+            format!("t={}", server.epoch())
+        }),
+        Ok(PreparedCommand::Tail { name, columnar }) => start_tail(
             connection_id,
             reqid,
             &name,
+            columnar,
             response.clone(),
             server,
             tails,
@@ -439,15 +437,30 @@ fn dispatch(
     }
 }
 
+/// A binary tail's bound on frame bytes queued for its client and not yet written. Past it the
+/// subscription sends `err` and `end` and stops sending, rather than holding back the dataflow or
+/// growing server memory.
+const TAIL_PENDING_BYTES: usize = 256 << 20;
+
+/// Subscribe the session to `name`'s changes. Every worker reads its share of the trace and sends
+/// it whole to worker 0, which writes each batch as a text line of its columns, or with `columnar`
+/// as a `data` frame after one `schema` frame, and then a `progress` frame whenever the
+/// subscription's frontier advances: every change before that time has been sent.
+#[allow(clippy::too_many_arguments)]
 fn start_tail(
     connection: ConnectionId,
     reqid: &str,
     name: &str,
-    response: Option<Sender<String>>,
+    columnar: bool,
+    response: Option<Sender<Out>>,
     server: &Server,
     tails: &mut HashMap<TailKey, Tail>,
     worker: &mut Worker,
 ) -> Result<(), String> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use timely::container::CapacityContainerBuilder;
+
     let key = (connection, reqid.to_string());
     if tails.contains_key(&key) {
         return Err(format!("tail reqid {:?} is already active", reqid));
@@ -455,21 +468,54 @@ fn start_tail(
     let mut trace = server
         .published(name)
         .ok_or_else(|| format!("no trace {:?}", name))?;
+    if let (Some(response), true) = (response.as_ref(), columnar) {
+        let (k, v) = server.trace_shape(name).expect("a published trace has a shape");
+        send_frame(response, reqid, "schema", format!("trace={name} key={k} val={v}").into_bytes(), None);
+    }
     let dataflow_id = worker.next_dataflow_index();
     let tag = reqid.to_string();
     let mut probe = ProbeHandle::new();
     let shutdown = worker.dataflow::<OuterTime, _, _>(|scope| {
-        let (rows, shutdown) = trace.import_rows(scope.clone(), "TailImport");
-        rows
-            .exchange(|_| 0u64)
-            .inspect(move |((key, val), time, diff)| {
-                if let Some(response) = response.as_ref() {
-                    send(
-                        response,
-                        &tag,
-                        "data",
-                        format!("time={} diff={} key={:?} val={:?}", time, diff, key, val),
-                    );
+        let (containers, shutdown) = trace.import_containers(scope.clone(), "TailImport");
+        let pending = Arc::new(AtomicUsize::new(0));
+        let (mut upper, mut dropped) = (None::<OuterTime>, false);
+        containers
+            .inner
+            .unary_frontier::<CapacityContainerBuilder<Vec<()>>, _, _, _>(GatherPact, "Tail", move |capability, _info| {
+                drop(capability);
+                move |(input, frontier), _output| {
+                    let Some(response) = response.as_ref() else {
+                        input.for_each(|_, _| {});
+                        return;
+                    };
+                    let mut out = |kind: &str, bytes: Vec<u8>| {
+                        if dropped { return }
+                        if pending.load(Ordering::Relaxed) > TAIL_PENDING_BYTES {
+                            dropped = true;
+                            send(response, &tag, "err", "client too slow: subscription ended; send stop".into());
+                            send(response, &tag, "end", String::new());
+                            return;
+                        }
+                        pending.fetch_add(bytes.len(), Ordering::Relaxed);
+                        send_frame(response, &tag, kind, bytes, Some(Arc::clone(&pending)));
+                    };
+                    input.for_each(|_time, data| {
+                        let HostContainer { keys, vals, times, diffs } = std::mem::take(data);
+                        let updates = Updates { keys, vals, diffs };
+                        if columnar {
+                            out("data", frame::encode(&updates, times.raw_lanes()));
+                        } else {
+                            send(response, &tag, "data", format!("times={:?} diffs={:?} keys={:?} vals={:?}", times.to_vec(), updates.diffs, updates.keys, updates.vals));
+                        }
+                    });
+                    if columnar {
+                        if let Some(&t) = frontier.frontier().iter().min() {
+                            if upper != Some(t) {
+                                upper = Some(t);
+                                out("progress", t.to_le_bytes().to_vec());
+                            }
+                        }
+                    }
                 }
             })
             .probe_with(&mut probe);
@@ -521,11 +567,17 @@ fn stop_connection(
     }
 }
 
-fn send(sender: &Sender<String>, reqid: &str, kind: &str, body: String) {
+fn send(sender: &Sender<Out>, reqid: &str, kind: &str, body: String) {
     let suffix = if body.is_empty() {
         String::new()
     } else {
         format!(" {}", body)
     };
-    let _ = sender.send(format!("{} {}{}\n", reqid, kind, suffix));
+    let _ = sender.send(Out::Line(format!("{} {}{}\n", reqid, kind, suffix)));
+}
+
+/// A binary frame of `kind`: its header line, then `bytes`.
+fn send_frame(sender: &Sender<Out>, reqid: &str, kind: &str, bytes: Vec<u8>, pending: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>) {
+    let header = format!("{} frame {} {}\n", reqid, kind, bytes.len());
+    let _ = sender.send(Out::Frame { header, bytes, pending });
 }

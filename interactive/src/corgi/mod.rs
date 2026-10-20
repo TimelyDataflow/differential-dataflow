@@ -11,6 +11,7 @@ pub mod col_times;
 pub mod container;
 pub mod exchange;
 pub mod feed;
+pub mod frame;
 pub mod half_join;
 pub mod join;
 pub mod logic;

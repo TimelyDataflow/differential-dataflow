@@ -12,7 +12,7 @@ while read -r day part expected; do
   prog=$dir/part$part.ddp
   # One session per part: load the program, feed each input it reads from
   # its fact file (part-specific if present), close the epoch. The answer is
-  # the `Int` on the `[partN]` inspect line.
+  # the one integer in the `vals` column of the `[partN]` inspect line.
   cmds="load p from $prog"
   k=0
   while :; do
@@ -25,7 +25,7 @@ feed p $k from $inp"
   done
   got=$(printf '%s\ntick\nexit\n' "$cmds" \
         | "$SERVER" 2>&1 \
-        | sed -n "s/.*\\[part$part\\].*Int(\\(-\\{0,1\\}[0-9]*\\)).*/\\1/p")
+        | sed -n "s/.*\\[part$part\\].*vals=[^]]*[UI][0-9]*(\\[\\(-\\{0,1\\}[0-9]*\\)\\].*/\\1/p")
   if [ "$got" = "$expected" ]; then
     echo "day$day part$part: ok ($got)"
   else
