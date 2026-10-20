@@ -344,13 +344,13 @@ mod tree_tests {
     #[test]
     fn lowers_reach_to_tree() {
         let src = "\
-            let edges = input 0 | key($0[0] ; $0[1]);\n\
-            let roots = input 1 | key($0[0] ;);\n\
+            let edges = input 0 | key(((src, dst), ()) -> (src, dst));\n\
+            let roots = input 1 | key(((n), ()) -> (n, ()));\n\
             reach: {\n\
-                let proposals = reach | join(edges, ($2 ;));\n\
+                let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));\n\
                 var reach = roots + proposals | distinct;\n\
             }\n\
-            export \"result\" = reach::reach | key(;) | arrange | inspect(total);";
+            export \"result\" = reach::reach | key(_ -> ((), ())) | arrange | inspect(total);";
         let prog = lower_tree(parse(src));
 
         // root: two Input imports, one child (reach), one export.
@@ -378,7 +378,7 @@ mod tree_tests {
     fn lowers_two_level_nesting_with_transitive_import() {
         // root -> outer -> inner, with `i` (a root input) used only deep in inner.
         let src = "\
-            let i = input 0 | key($0[0] ; $0[1]);\n\
+            let i = input 0 | key(((a, b), ()) -> (a, b));\n\
             outer: {\n\
                 inner: {\n\
                     var x = i | distinct;\n\
@@ -426,7 +426,7 @@ mod optimize_tests {
 
     #[test]
     fn fuses_linear_chains() {
-        let src = "let a = input 0 | key($0[0] ; $0[1]) | filter($0[0] != $1[0]) | negate;\nexport \"result\" = a;";
+        let src = "let a = input 0 | key(((a, b), ()) -> (a, b)) | filter((a, b) -> (a, b) ne) | negate;\nexport \"result\" = a;";
         let mut p = lower_tree(parse(src));
         assert_eq!(p.op_count(), 3); // three single-op Linears
         p.optimize();
@@ -441,10 +441,10 @@ mod optimize_tests {
     fn shares_arrangements_across_joins() {
         // `a` feeds two joins; its two implicit Arranges must dedup to one.
         let src = "\
-            let a = input 0 | key($0[0] ; $0[1]);\n\
-            let b = input 0 | key($0[1] ; $0[0]);\n\
-            let j1 = a | join(b, ($1 ; $2));\n\
-            let j2 = a | join(b, ($2 ; $1));\n\
+            let a = input 0 | key(((a, b), ()) -> (a, b));\n\
+            let b = input 0 | key(((a, b), ()) -> (b, a));\n\
+            let j1 = a | join(b, (_, x, y) -> (x, y));\n\
+            let j2 = a | join(b, (_, x, y) -> (y, x));\n\
             export \"result\" = j1 + j2;";
         let mut p = lower_tree(parse(src));
         p.optimize();
@@ -456,9 +456,9 @@ mod optimize_tests {
     fn collapses_arrange_of_reduce() {
         // distinct produces an arrangement; joining on it must not re-arrange.
         let src = "\
-            let a = input 0 | key($0[0] ; $0[1]) | distinct;\n\
-            let b = input 0 | key($0[0] ; $0[1]);\n\
-            export \"result\" = a | join(b, ($1 ;));";
+            let a = input 0 | key(((a, b), ()) -> (a, b)) | distinct;\n\
+            let b = input 0 | key(((a, b), ()) -> (a, b));\n\
+            export \"result\" = a | join(b, (_, x, _) -> (x, ()));";
         let mut p = lower_tree(parse(src));
         p.optimize();
         // No Arrange may target a Reduce item.
@@ -474,9 +474,9 @@ mod optimize_tests {
     fn optimizes_within_nested_scopes() {
         // The fusible chain sits inside a scope; optimize must recurse.
         let src = "\
-            let e = input 0 | key($0[0] ; $0[1]);\n\
+            let e = input 0 | key(((a, b), ()) -> (a, b));\n\
             s: {\n\
-                var x = e | key($0 ; $1) | filter($0[0] != $1[0]) | distinct;\n\
+                var x = e | key((a, b) -> (a, b)) | filter((a, b) -> (a, b) ne) | distinct;\n\
             }\n\
             export \"result\" = s::x;";
         let mut p = lower_tree(parse(src));

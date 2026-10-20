@@ -84,10 +84,10 @@ fn assert_sharing_agrees(written: &str, shared: &str) {
 }
 
 const REACH: &str = r#"
-    let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]) EDGES;
-    let roots = edges | key($0[0] ;) | distinct | filter($0[0] < 3);
+    let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> (src, dst)) EDGES;
+    let roots = edges | key((src, _) -> (src, ())) | distinct | filter((n, ()) -> (n, 3) lt);
     reach: {
-        let proposals = reach | join(edges, ($2 ;));
+        let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
         var reach = roots + proposals | distinct;
     }
     export "result" = reach::reach;
@@ -101,10 +101,11 @@ fn reach() {
 #[test]
 fn scc() {
     let src = interactive::load_program(&format!("{}/examples/programs/scc.ddp", env!("CARGO_MANIFEST_DIR")));
-    let src = src.replace(r#"export "result" = outer::scc | map(;) | arrange | inspect(total);"#, r#"export "result" = outer::scc;"#);
+    let src = src.replace(r#"export "result" = outer::scc | key(_ -> ((), ())) | arrange | inspect(total);"#, r#"export "result" = outer::scc;"#);
     let shared = src
-        .replace("| key($0[0] ; $0[1]);", "| key($0[0] ; $0[1]) | arrange;")
-        .replace("let trans = edges | key($1 ; $0);", "let trans = edges | key($1 ; $0) | arrange;")
+        .replace("| key(((src, dst), ()) -> (src, dst));", "| key(((src, dst), ()) -> (src, dst)) | arrange;")
+        .replace("let trans = edges | key((src, dst) -> (dst, src));", "let trans = edges | key((src, dst) -> (dst, src)) | arrange;")
+
         .replace("let scc = edges + trim;", "let scc = edges + trim | arrange;");
     assert_ne!(src, shared);
     assert_sharing_agrees(&src, &shared);

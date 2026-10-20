@@ -287,13 +287,13 @@ mod tests {
     }
 
     const REACH: &str = r#"
-        let edges = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
-        let roots = input 1 : ((int) ; ()) | key($0[0] ;);
+        let edges = input 0 : ((int, int) ; ()) | key(((src, dst), ()) -> ((src), (dst)));
+        let roots = input 1 : ((int) ; ()) | key(((n), ()) -> ((n), ()));
         reach: {
-            let proposals = reach | join(edges, ($2 ;));
+            let proposals = reach | join(edges, (_, _, dst) -> (dst, ()));
             var reach = roots + proposals | distinct;
         }
-        export "result" = reach::reach | key(;) | arrange;
+        export "result" = reach::reach | key(_ -> ((), ())) | arrange;
     "#;
 
     #[test]

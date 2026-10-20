@@ -10,10 +10,11 @@ fn tapped_changes_sum_to_the_export_and_are_taken_once() {
     timely::execute_directly(|worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(r#"
             type Three = A int | B int | C int;
-            let pairs = input 0 : ((int, int) ; ()) | key($0[0] ; $0[1]);
+            let pairs = input 0 : ((int, int) ; ()) | key(((a, b), ()) -> (a, b));
             export "plain" = pairs;
             export "lists" = pairs | collect;
-            export "tagged" = pairs | map($0 ; variant(Three, 2, $1[0]));
+            export "tagged" = pairs | map((a, b) -> (a, b inject C));
+
         "#));
         program.optimize();
         let mut server = Server::new();

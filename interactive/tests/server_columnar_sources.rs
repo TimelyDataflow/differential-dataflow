@@ -15,17 +15,17 @@ fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str,
 const RANDOM: &str = "random:nodes=20,edges=60,churn=7";
 
 const SOURCES: &str = r#"
-    let edges = import "random:nodes=20,edges=60,churn=7" | key($0[0] ; $0[1]);
+    let edges = import "random:nodes=20,edges=60,churn=7" | key(((src, dst), ()) -> (src, dst));
     let iota = import "iota:12";
     let clock = import "clock";
     export "degrees" = edges | count;
-    export "small" = iota | filter($0[0] < 5);
+    export "small" = iota | filter(((n), ()) -> (n, 5) lt);
     export "now" = clock;
 "#;
 
 const LOADED: &str = r#"
     let triples = input 0 : ((int, int, int) ; ());
-    export "sums" = triples | map($0[0] + $0[1] + $0[2] ;) | count;
+    export "sums" = triples | map(((a, b, c), ()) -> (((a, b) add, c) add, ())) | count;
 "#;
 
 /// A fed input, read through another program's import.
@@ -36,7 +36,8 @@ const LOOSE: &str = r#"
 /// A declared import of that input's export, checked against its shape at install.
 const DECLARING: &str = r#"
     let l = import "loose" : ((int) ; ());
-    export "doubled" = l | map($0[0] * 2 ;);
+    export "doubled" = l | map(((n), ()) -> (((n, 2) mul), ()));
+
 "#;
 
 /// An input bound to "doubled", so it mirrors it one tick behind.
