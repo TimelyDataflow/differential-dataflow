@@ -1,5 +1,5 @@
 use interactive::ir::Value;
-use interactive::server::{InputUpdate, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 fn tup(fields: &[i64]) -> Value {
@@ -7,7 +7,7 @@ fn tup(fields: &[i64]) -> Value {
 }
 
 #[test]
-fn feed_batch_validates_before_staging_one_epoch() {
+fn feed_validates_before_staging_one_epoch() {
     timely::execute_directly(|worker| {
         let mut program = lower::lower_tree(parse::pipe::parse(
             "let rows = input 0 : ((int) ; (int)); export \"rows\" = rows;",
@@ -16,24 +16,13 @@ fn feed_batch_validates_before_staging_one_epoch() {
 
         let mut server = Server::new();
         server.install(worker, "world", &program).unwrap();
-        let updates = vec![
-            InputUpdate {
-                key: tup(&[1]),
-                val: tup(&[10]),
-                diff: 1,
-            },
-            InputUpdate {
-                key: tup(&[2]),
-                val: tup(&[20]),
-                diff: 1,
-            },
-        ];
+        let rows = "1 val=10\n2 val=20";
 
-        assert!(server.feed_batch("world", 1, updates.clone()).is_err());
+        assert!(server.feed("world", 1, rows, None).is_err());
         server.tick(worker);
         assert!(server.snapshot(worker, "rows").unwrap().is_empty());
 
-        server.feed_batch("world", 0, updates).unwrap();
+        server.feed("world", 0, rows, None).unwrap();
         assert!(server.snapshot(worker, "rows").unwrap().is_empty());
         server.tick(worker);
         assert_eq!(
@@ -63,9 +52,7 @@ fn delayed_peers_wake_ticks_and_snapshots() {
                 if worker.index() == epoch % 3 {
                     std::thread::sleep(Duration::from_millis(20));
                     let diff = if epoch < 3 { 1 } else { -1 };
-                    server.feed_batch("world", 0, vec![InputUpdate {
-                        key: tup(&[(epoch % 3) as i64]), val: Value::unit(), diff,
-                    }]).unwrap();
+                    server.feed("world", 0, &format!("{} diff={diff}", epoch % 3), None).unwrap();
                 }
                 server.tick(worker);
                 barrier.wait();

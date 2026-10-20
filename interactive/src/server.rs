@@ -33,8 +33,9 @@
 //! - **install** builds a dataflow over imported traces + positional inputs,
 //!   publishing its exports. The dataflow's id (`next_dataflow_index`) is kept
 //!   for teardown.
-//! - **feed** stages an input update at a chosen time (default: the current
-//!   epoch) via `update_at`, so inputs can be scheduled into the future.
+//! - **feed** stages updates, as text read at the input's declared shapes or
+//!   as columns, at a chosen time (default: the current epoch), so inputs can
+//!   be scheduled into the future.
 //! - **load** fills an input in bulk from a recipe or a file, each worker
 //!   feeding its own shard; a churning recipe then changes the input on every
 //!   tick, which is how a program is run under standing change.
@@ -59,21 +60,12 @@ use timely::progress::Antichain;
 use timely::worker::Worker;
 
 use crate::corgi::container::Updates;
-use crate::ir::{Diff, Value};
+use crate::ir::Diff;
 use crate::scope_ir as st;
 
 /// The host (outer) timestamp shared across all installed programs.
 pub type OuterTime = u64;
 
-/// One row in the server's compatibility input path. The enclosing command
-/// supplies the program, positional input, and current server epoch once for
-/// the whole batch. Native bulk ingress need not materialize this row form.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct InputUpdate {
-    pub key: Value,
-    pub val: Value,
-    pub diff: Diff,
-}
 
 /// A root import at the host time, before it enters a program's scope.
 enum OuterImport<'s> {
@@ -113,14 +105,11 @@ pub type HostContainer = crate::corgi::container::CorgiContainer<OuterTime, Diff
 const COLUMN_BATCH: usize = 1 << 16;
 
 /// An installed program's positional `input N`, or a generated source's: an input of corgi
-/// containers at one shape, the input's declared one or its source's. Rows given one at a time are
-/// buffered and converted to columns at that shape a batch at a time.
+/// containers at one shape, the input's declared one or its source's.
 struct ServerInput {
     handle: timely::dataflow::operators::core::input::Handle<OuterTime, timely::container::CapacityContainerBuilder<HostContainer>>,
     /// The shape of every update the input holds.
     shape: RowShape,
-    /// Rows not yet converted to columns.
-    rows: Vec<((Value, Value), OuterTime, Diff)>,
 }
 
 impl ServerInput {
@@ -128,34 +117,7 @@ impl ServerInput {
         handle: timely::dataflow::operators::core::input::Handle<OuterTime, timely::container::CapacityContainerBuilder<HostContainer>>,
         shape: RowShape,
     ) -> Self {
-        ServerInput { handle, shape, rows: Vec::new() }
-    }
-
-    /// Check that `row` has the input's shape, before staging it.
-    fn check(&self, (key, val): &(Value, Value)) -> Result<(), String> {
-        let (k, v) = &self.shape;
-        if key.has_shape(k) && val.has_shape(v) {
-            Ok(())
-        } else {
-            Err(format!("the row ({key:?} ; {val:?}) is not of the input's shape {}", fmt_shape(&self.shape)))
-        }
-    }
-
-    /// Stage `row`, which has the input's shape ([`ServerInput::check`]).
-    fn update_at(&mut self, row: (Value, Value), time: OuterTime, diff: Diff) {
-        assert!(*self.handle.time() <= time, "update at {time} precedes the input's time {}", self.handle.time());
-        self.rows.push((row, time, diff));
-        if self.rows.len() >= COLUMN_BATCH {
-            self.send_rows();
-        }
-    }
-
-    /// Convert the buffered rows to columns and send them.
-    fn send_rows(&mut self) {
-        if self.rows.is_empty() { return }
-        let (ks, vs) = &self.shape;
-        let mut container = HostContainer::from_updates(std::mem::take(&mut self.rows), ks, vs);
-        self.handle.send_batch(&mut container);
+        ServerInput { handle, shape }
     }
 
     /// Add `recipe`'s rows at `indices`, each with multiplicity `diff` at `time`, as columns.
@@ -189,9 +151,8 @@ impl ServerInput {
         self.give(container);
     }
 
-    /// Send a container, after any buffered rows. Its shape must be the input's.
+    /// Send a container, which must have the input's shape.
     fn give(&mut self, mut container: HostContainer) {
-        self.send_rows();
         if !container.times.is_empty() {
             let shape = (corgi::shape_of_value(&container.keys), corgi::shape_of_value(&container.vals));
             assert!(shape == self.shape, "a container of shape {} reached an input of shape {}", fmt_shape(&shape), fmt_shape(&self.shape));
@@ -200,12 +161,10 @@ impl ServerInput {
     }
 
     fn advance_to(&mut self, time: OuterTime) {
-        self.send_rows();
         self.handle.advance_to(time);
     }
 
     fn flush(&mut self) {
-        self.send_rows();
         self.handle.flush();
     }
 }
@@ -305,7 +264,8 @@ impl Recipe {
     /// The generated row at index `e`: what [`Recipe::container`] must hold, formed one row at a
     /// time.
     #[cfg(test)]
-    fn row(&self, e: u64) -> (Value, Value) {
+    fn row(&self, e: u64) -> (crate::ir::Value, crate::ir::Value) {
+        use crate::ir::Value;
         match self {
             Recipe::Random {
                 nodes, arity, seed, ..
@@ -346,9 +306,13 @@ enum Origin {
     Clock,
 }
 
-/// The single `clock` row for epoch `t`: `(Tuple[t] ; ())`.
-fn clock_row(t: OuterTime) -> Value {
-    Value::Tuple(vec![Value::Int(t as i64)])
+/// `clock` rows for these epochs, each with its multiplicity: `((t) ; ())`.
+fn clock_rows(rows: &[(OuterTime, Diff)]) -> Updates {
+    Updates {
+        keys: corgi::Value::Prod(vec![corgi::Value::int(rows.iter().map(|&(t, _)| t as i64))]),
+        vals: corgi::Value::Unit(rows.len()),
+        diffs: rows.iter().map(|&(_, diff)| diff).collect(),
+    }
 }
 
 /// The shape of the `clock` row.
@@ -877,7 +841,7 @@ impl Server {
         let (mut input, dataflow_id, probe) = self.install_source(worker, "clock", clock_shape());
 
         if w0 {
-            input.update_at((clock_row(self.epoch), Value::unit()), self.epoch, 1);
+            input.give_columns(clock_rows(&[(self.epoch, 1)]), self.epoch).expect("clock rows have the clock's shape");
         }
         input.advance_to(self.epoch);
         input.flush();
@@ -917,61 +881,22 @@ impl Server {
         (input, dataflow_id, probe)
     }
 
-    /// Stage an update to positional input `input` of installed program `prog`:
-    /// add `(key, val)` with multiplicity `diff` at `time` (default: the current
-    /// epoch). The time must be at or after the current epoch — you cannot
-    /// insert into the closed past. Takes effect once `tick` advances the input
-    /// frontier past `time`.
-    pub fn feed(
-        &mut self,
-        prog: &str,
-        input: usize,
-        key: Value,
-        val: Value,
-        time: Option<OuterTime>,
-        diff: Diff,
-    ) -> Result<(), String> {
-        let t = time.unwrap_or(self.epoch);
-        self.validate_feed(prog, input, t)?;
-        let handle = self.programs
-            .get_mut(&canonical_source_name(prog))
-            .expect("feed target was prevalidated")
-            .inputs
-            .get_mut(&input)
-            .expect("feed input was prevalidated");
-        let row = (key, val);
-        handle.check(&row)?;
-        handle.update_at(row, t, diff);
-        Ok(())
-    }
-
-    /// Atomically stage several rows into one input at the current open epoch.
-    ///
-    /// The target is validated before its handle changes. The batch does not
-    /// advance time; all rows become visible together when a later `tick`
-    /// closes this epoch.
-    pub fn feed_batch(
-        &mut self,
-        prog: &str,
-        input: usize,
-        updates: Vec<InputUpdate>,
-    ) -> Result<(), String> {
-        let time = self.epoch;
-        self.validate_feed(prog, input, time)?;
-        let handle = self.programs
-            .get_mut(&canonical_source_name(prog))
-            .expect("feed target was prevalidated")
-            .inputs
-            .get_mut(&input)
-            .expect("feed input was prevalidated");
-        let rows: Vec<_> = updates.into_iter().map(|u| ((u.key, u.val), u.diff)).collect();
-        for (row, _) in &rows {
-            handle.check(row)?;
+    /// Stage rows written as text into positional input `input` of installed program `prog`, at
+    /// `time` (default the current epoch), which must not be in the closed past. Each line of
+    /// `rows` is one row, `<key> [val=<v>] [diff=<d>]`, its values read at the input's declared
+    /// shapes as a feed reads them ([`crate::corgi::feed`]); blank lines and `#` comments are
+    /// skipped. Nothing is staged if any row is not of those shapes. The rows take effect once a
+    /// `tick` advances the input past `time`.
+    pub fn feed(&mut self, prog: &str, input: usize, rows: &str, time: Option<OuterTime>) -> Result<(), String> {
+        self.validate_feed(prog, input, time.unwrap_or(self.epoch))?;
+        let (key, val) = &self.programs[&canonical_source_name(prog)].inputs[&input].shape;
+        let mut decoder = crate::corgi::feed::FeedDecoder::new(key, val);
+        for (number, line) in rows.lines().map(str::trim).enumerate() {
+            if !line.is_empty() && !line.starts_with('#') {
+                decoder.push_line(line).map_err(|error| format!("row {}: {error}", number + 1))?;
+            }
         }
-        for (row, diff) in rows {
-            handle.update_at(row, time, diff);
-        }
-        Ok(())
+        self.feed_columns(prog, input, decoder.finish(), time)
     }
 
     /// Stage rows already read into columns at `time` (default the current epoch), each with
@@ -993,7 +918,8 @@ impl Server {
     ///
     /// `source` is either a recipe (`random:…`, `iota:N` — the same names an
     /// `import` accepts) or the path of a text file with one row per line of
-    /// whitespace-separated integers (`(Tuple[ints] ; ())`). Collective: every
+    /// whitespace-separated integers, the fields of the input's key (its value is
+    /// unit), read into columns at the input's declared shape. Collective: every
     /// worker must call this, and each feeds only its shard (`row % peers ==
     /// index`) through its own handle, so the union is the source exactly once
     /// and the exchange places each row on its key's owner.
@@ -1028,32 +954,32 @@ impl Server {
                 ));
             }
         }
-        // A recipe's rows are generated into the input below; a file's are parsed here.
-        let (total, rows): (u64, Vec<(Value, Value)>) = match recipe {
-            Some(recipe) => (recipe.rows_len(), Vec::new()),
+        // A recipe's rows are generated into the input below; a file's are read here.
+        let (total, rows) = match recipe {
+            Some(recipe) => (recipe.rows_len(), None),
             None => {
                 let text = std::fs::read_to_string(source)
                     .map_err(|e| format!("load: cannot read {:?}: {}", source, e))?;
-                let mut total = 0;
-                let mut rows = Vec::new();
-                // Every line is parsed, whichever worker's shard it falls in: a
+                // Every line is read, whichever worker's shard it falls in: a
                 // malformed line must fail the load everywhere, or the other
                 // workers would apply their shards and the client would see
-                // "loaded" over partial data.
+                // "loaded" over partial data. Only this worker's lines are
+                // kept; the others are read into a scratch decoder, emptied
+                // as it fills, so that holding them does not grow with the file.
+                use crate::corgi::feed::FeedDecoder;
+                let (key, val) = &target.shape;
+                let (mut rows, mut others) = (FeedDecoder::new(key, val), FeedDecoder::new(key, val));
+                let mut total = 0;
                 for (e, line) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
-                    total += 1;
-                    let fields = line
-                        .split_whitespace()
-                        .map(|t| t.parse::<i64>().map(Value::Int))
-                        .collect::<Result<Vec<_>, _>>()
-                        .map_err(|_| format!("load: line {} of {:?} is not a row of integers: {:?}", e + 1, source, line))?;
-                    let row = (Value::Tuple(fields), Value::unit());
-                    target.check(&row).map_err(|error| format!("load: line {} of {:?}: {error}", e + 1, source))?;
-                    if mine(e as u64) {
-                        rows.push(row);
+                    let fields = line.split_whitespace().collect::<Vec<_>>().join(",");
+                    let decoder = if mine(e as u64) { &mut rows } else { &mut others };
+                    decoder.push(&fields, None, 1).map_err(|error| format!("load: line {} of {:?}: {error}", e + 1, source))?;
+                    if others.len() >= COLUMN_BATCH {
+                        others = FeedDecoder::new(key, val);
                     }
+                    total += 1;
                 }
-                (total, rows)
+                (total, Some(rows.finish()))
             }
         };
         let installed = self
@@ -1067,8 +993,8 @@ impl Server {
         if let Some(recipe) = recipe {
             handle.generate(recipe, (0..recipe.rows_len()).filter(|e| mine(*e)), time, 1);
         }
-        for row in rows {
-            handle.update_at(row, time, 1);
+        if let Some(rows) = rows {
+            handle.give_columns(rows, time)?;
         }
         Ok(total)
     }
@@ -1379,8 +1305,7 @@ impl Server {
             // it): retract the current epoch, add the next — an O(1) change.
             if w0 && installed.origin == Origin::Clock {
                 if let Some(h) = installed.inputs.get_mut(&0) {
-                    h.update_at((clock_row(cur), Value::unit()), next, -1);
-                    h.update_at((clock_row(next), Value::unit()), next, 1);
+                    h.give_columns(clock_rows(&[(cur, -1), (next, 1)]), next).expect("clock rows have the clock's shape");
                 }
             }
             // A random source denotes an infinite deterministic row stream.
@@ -1472,16 +1397,16 @@ impl Default for Server {
 ///
 /// This is the data-in/data-out entry point the test suites build on, and it
 /// takes the same path a live install does — `install`, one `feed` of each
-/// positional input (`inputs[i]` holds input `i`'s rows, each at multiplicity
-/// +1, dealt round-robin across the workers), one `tick`, then a `snapshot` of
-/// each export. `config` picks the worker group: `Config::process(n)` hands
+/// positional input (`inputs[i]` holds input `i`'s rows, one feed line each,
+/// `<key> [val=<v>] [diff=<d>]`, dealt round-robin across the workers), one
+/// `tick`, then a `snapshot` of each export. `config` picks the worker group: `Config::process(n)` hands
 /// exchanged containers between threads as typed values, while
 /// `CommunicationConfig::ProcessBinary(n)` sends every one through the wire
 /// format. The answer must not depend on either choice.
 pub fn evaluate(
     config: timely::Config,
     program: &st::Program,
-    inputs: &[Vec<(Value, Value)>],
+    inputs: &[Vec<String>],
 ) -> std::collections::BTreeMap<String, Updates> {
     let program = program.clone();
     let inputs = inputs.to_vec();
@@ -1490,13 +1415,8 @@ pub fn evaluate(
         server.install(worker, "evaluate", &program).expect("evaluate: install");
         let has_input = |i: usize| program.root.imports.iter().any(|imp| matches!(imp.from, st::Source::Input(n) if n == i));
         for (input, rows) in inputs.iter().enumerate().filter(|(i, _)| has_input(*i)) {
-            let shard = rows
-                .iter()
-                .skip(worker.index())
-                .step_by(worker.peers())
-                .map(|(key, val)| InputUpdate { key: key.clone(), val: val.clone(), diff: 1 })
-                .collect();
-            server.feed_batch("evaluate", input, shard).expect("evaluate: feed");
+            let shard: Vec<&str> = rows.iter().skip(worker.index()).step_by(worker.peers()).map(String::as_str).collect();
+            server.feed("evaluate", input, &shard.join("\n"), None).expect("evaluate: feed");
         }
         server.tick(worker);
         // `snapshot` gathers to worker 0; the other workers' results are empty.

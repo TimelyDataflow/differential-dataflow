@@ -100,9 +100,22 @@ fn row(fields: &[i64]) -> Row {
 /// A row: a key or a value.
 type Row = Value;
 
+/// A value in the feed syntax: integers, `tuple(…)`, `list(…)`, `inject(lane,payload)`.
+fn feed_text(value: &Value) -> String {
+    let all = |xs: &[Value]| xs.iter().map(feed_text).collect::<Vec<_>>().join(",");
+    match value {
+        Value::Int(n) => n.to_string(),
+        Value::Float(x) => format!("{:?}", x.0),
+        Value::Tuple(xs) => format!("tuple({})", all(xs)),
+        Value::List(xs) => format!("list({})", all(xs)),
+        Value::Variant(lane, payload) => format!("inject({lane},{})", feed_text(payload)),
+    }
+}
+
 /// Run `p` on `inputs` through the server: every export's consolidated rows, by name.
 fn evaluate(p: &Program, inputs: &[Vec<(Row, Row)>]) -> BTreeMap<String, Vec<((Row, Row), i64)>> {
-    server::evaluate(timely::Config::process(1), p, inputs)
+    let lines: Vec<Vec<String>> = inputs.iter().map(|rows| rows.iter().map(|(k, v)| format!("{} val={}", feed_text(k), feed_text(v))).collect()).collect();
+    server::evaluate(timely::Config::process(1), p, &lines)
         .into_iter()
         .map(|(name, updates)| (name, updates.into_rows().into_iter().map(|(k, v, d)| ((k, v), d)).collect()))
         .collect()

@@ -21,7 +21,7 @@ fn counts_carry_their_sign() {
     let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
     program.optimize();
     // Key 1 has two values, key 2 one.
-    let rows: Vec<(Value, Value)> = [[1, 10], [1, 20], [2, 30]].iter().map(|r| (ints(r), Value::unit())).collect();
+    let rows: Vec<String> = ["1,10", "1,20", "2,30"].map(String::from).to_vec();
     let count = |k: i64, c: i64| ((ints(&[k]), Value::Int(c)), 1);
     let mut want = std::collections::BTreeMap::new();
     want.insert("positive".to_string(), vec![count(1, 2), count(2, 1)]);

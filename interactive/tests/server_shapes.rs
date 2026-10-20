@@ -122,27 +122,25 @@ fn collections_without_a_shape_reject_the_install() {
 /// their batch is staged.
 #[test]
 fn rows_of_another_shape_are_refused() {
-    use interactive::ir::Value;
-    use interactive::server::InputUpdate;
-    let tup = |xs: &[i64]| Value::Tuple(xs.iter().map(|&x| Value::Int(x)).collect());
     timely::execute_directly(move |worker| {
         let mut server = Server::new();
         server.install(worker, "producer", &program(PRODUCER)).unwrap();
-        let fed = server.feed("producer", 0, tup(&[1]), Value::unit(), None, 1).unwrap_err();
-        assert!(fed.contains("is not of the input's shape"), "{fed}");
-        let batch = |key: Value| vec![InputUpdate { key: tup(&[1, 2]), val: Value::unit(), diff: 1 }, InputUpdate { key, val: Value::unit(), diff: 1 }];
-        assert!(server.feed_batch("producer", 0, batch(tup(&[3]))).is_err());
+        let fed = server.feed("producer", 0, "1", None).unwrap_err();
+        assert!(fed.contains("row 1") && fed.contains("expected 2 comma-separated integers"), "{fed}");
+        let batch = server.feed("producer", 0, "1,2\n3", None).unwrap_err();
+        assert!(batch.contains("row 2"), "{batch}");
         let file = std::env::temp_dir().join(format!("ddir-rows-{}.txt", std::process::id()));
         std::fs::write(&file, "1 2\n3 4 5\n").unwrap();
         let loaded = server.load(worker, "producer", 0, file.to_str().unwrap()).unwrap_err();
         assert!(loaded.contains("line 2"), "{loaded}");
         server.tick(worker);
         assert!(server.snapshot(worker, "edges").unwrap().is_empty(), "nothing refused was staged");
-        server.feed_batch("producer", 0, batch(tup(&[3, 4]))).unwrap();
-        std::fs::write(&file, "5 6\n").unwrap();
+        server.feed("producer", 0, "1,2\n3,4", None).unwrap();
+        // Integers read as Rust reads them, a leading `+` included.
+        std::fs::write(&file, "5 6\n+7 -8\n").unwrap();
         server.load(worker, "producer", 0, file.to_str().unwrap()).unwrap();
         server.tick(worker);
-        assert_eq!(server.snapshot(worker, "edges").unwrap().into_rows().len(), 3);
+        assert_eq!(server.snapshot(worker, "edges").unwrap().into_rows().len(), 4);
         std::fs::remove_file(&file).unwrap();
     });
 }
