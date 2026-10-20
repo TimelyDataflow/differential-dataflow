@@ -247,9 +247,16 @@ fn resolve(root: &Scope, path: &[usize], r: &Ref) -> Target {
 }
 
 // ===== Lambda slots over explain's rows =====
+//
+// Explain reuses the user's lambdas (a filter's predicate, a projection, a flatmap's list) over
+// its own rows, whose values carry the chain (and `q`) after the user's value. A user lambda must
+// see the user's row, not explain's, so explain calls it on the user's row as it sits in explain's.
 
-/// Parse only explain's adapter, binding each compiled user graph as a private word. `call`
-/// grafts that graph; the readable source substitutes its original text only AFTER parsing.
+/// A slot of `arity` rows, `(k, v)` or `(k, v, r)`, whose body is `body` applied to the user's
+/// slots `terms`, each called on `rows` (explain's spelling of the user's row). Only explain's
+/// adapter is parsed: each user lambda's compiled graph is bound as a private word, which `call`
+/// grafts, so the user's text is never parsed again. The readable source substitutes the user's
+/// text after parsing.
 fn slot(arity: usize, terms: &[&Term], rows: &[String], body: impl FnOnce(Vec<String>) -> String) -> Term {
     struct Words { scope: corgi::Scope, code: String, src: String, error: Option<String>, next: usize }
     impl Words {
@@ -281,12 +288,15 @@ fn slot(arity: usize, terms: &[&Term], rows: &[String], body: impl FnOnce(Vec<St
     if let Some(e) = words.error { lambda.graph = Err(e); }
     Term::Corgi(lambda, (0..arity).map(Term::Var).collect())
 }
+/// A slot giving `(key, val)` as a projection, as the parser splits a lambda.
 fn split(lambda: Term) -> Projection {
     Projection { key: Term::Proj(Box::new(lambda.clone()), 0), val: Term::Proj(Box::new(lambda), 1) }
 }
+/// A projection of explain's own, from the lambda text of its key and value.
 fn projection(key: String, val: String, arity: usize) -> Projection {
     split(slot(arity, &[], &[], |_| tup(vec![key, val])))
 }
+/// A filter of explain's own, from the lambda text of its 0/1 mask.
 fn predicate(body: String) -> Term { slot(2, &[], &[], |_| body) }
 
 /// A user row `(K ; V)` as an envelope row `(K ; (V))`, with an empty chain.
