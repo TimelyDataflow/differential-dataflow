@@ -15,13 +15,13 @@ use corgi::arrange::{equal_idx, gather_lanes};
 use corgi::{Graph, NumOp, Shape, Value as CValue};
 
 use crate::corgi::chunk::{ident, key_is_hashed, recover_key_ref, CorgiChunk};
-use crate::corgi::col_times::ColTimes;
+use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::container::CorgiContainer;
 use crate::corgi::logic::compile_projection;
 use crate::corgi::search::matching_ranges;
 use crate::ir::{Diff, Lambda, Time};
 
-use super::{NativeBatch, Run, CC};
+use super::{ArrangedBatch, Run, CC};
 
 /// Released updates are met with the arrangement this many at a time, so that the driver can yield
 /// between blocks. Small under test, so that tests span many blocks.
@@ -48,9 +48,9 @@ impl CorgiHalfJoin {
     }
 }
 
-impl HalfJoinTactic<Time, NativeBatch, Run, CC> for CorgiHalfJoin {
-    fn prep(&mut self, runs: Vec<Run>, batches: Vec<NativeBatch>, _lower: Antichain<Time>) -> Box<dyn Iterator<Item = CC>> {
-        let arranged: Vec<CorgiChunk<Time, Diff>> = batches.iter().flat_map(|b| b.chunks.iter().filter(|c| c.len() > 0).cloned()).collect();
+impl<B: ArrangedBatch> HalfJoinTactic<Time, B, Run, CC> for CorgiHalfJoin {
+    fn prep(&mut self, runs: Vec<Run>, batches: Vec<B>, _lower: Antichain<Time>) -> Box<dyn Iterator<Item = CC>> {
+        let arranged: Vec<CorgiChunk<B::Stored, Diff>> = batches.iter().flat_map(|b| b.chunks().iter().filter(|c| c.len() > 0).cloned()).collect();
         debug_assert!(runs.iter().all(|r| ident(r.keys()).windows(2).all(|w| w[0] <= w[1])), "half_join: a run out of identifier order");
         Box::new(Work {
             starts: vec![0; runs.len()],
@@ -71,11 +71,12 @@ impl HalfJoinTactic<Time, NativeBatch, Run, CC> for CorgiHalfJoin {
 /// below one identifier horizon, so the runs are read front to back, and the blocks meet each
 /// arranged chunk at positions that only move forward: `seek` records where each arranged chunk's
 /// next search starts, and each is walked at most once per unit.
-struct Work {
+struct Work<TS: ColTime> {
     runs: Vec<Run>,
     /// For each run, the first row not yet met.
     starts: Vec<usize>,
-    arranged: Vec<CorgiChunk<Time, Diff>>,
+    /// The arrangement's chunks, at the times they hold (see [`ArrangedBatch`]).
+    arranged: Vec<CorgiChunk<TS, Diff>>,
     /// For each arranged chunk, the first row later blocks could meet.
     seek: Vec<usize>,
     strict: bool,
@@ -85,7 +86,7 @@ struct Work {
     ready: VecDeque<CC>,
 }
 
-impl Iterator for Work {
+impl<TS: ColTime> Iterator for Work<TS> {
     type Item = CC;
 
     fn next(&mut self) -> Option<CC> {
@@ -100,7 +101,7 @@ impl Iterator for Work {
     }
 }
 
-impl Work {
+impl<TS: ColTime> Work<TS> {
     /// Where each run's next block ends: below the least identifier `budget` rows into a run with
     /// more than that left, past that identifier's whole run of rows, so that no identifier is
     /// split between blocks. Every run with no more than `budget` rows left runs to its end.
@@ -254,6 +255,9 @@ mod tests {
     use super::super::test_util::*;
     use crate::corgi::chunk::{columns_to_batch, present_key};
     use crate::ir::Value as V;
+
+    /// A batch of the program's own arrangement.
+    type NativeBatch = Rc<differential_dataflow::trace::chunk::ChunkBatch<CorgiChunk<Time, Diff>>>;
 
     /// The projection `(k, (v0, v1))`.
     fn pairing() -> Lambda { Lambda::new("let (k, v0, v1) = input in (k, (v0, v1))".into(), &corgi::Scope::default()) }

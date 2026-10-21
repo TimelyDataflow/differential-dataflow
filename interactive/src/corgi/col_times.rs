@@ -77,10 +77,6 @@ impl<B: LaneSummary> LaneSummary for Product<u64, B> {
 }
 
 /// A column of times as lanes: `lanes[j][i]` is coordinate `j` of row `i`.
-///
-/// `repr(C)` with `T` only in `PhantomData`, so every `ColTimes<T>` has one layout: a chunk's times
-/// can be read at another time type with the same lanes (see [`CorgiChunk::retime`](crate::corgi::chunk::CorgiChunk::retime)).
-#[repr(C)]
 pub struct ColTimes<T> {
     lanes: Vec<Vec<u64>>,
     len: usize,
@@ -197,9 +193,11 @@ impl<T> ColTimes<T> {
         Ordering::Equal
     }
 
-    /// Order this column's row `i` against `other`'s row `j`.
+    /// Order this column's row `i` against `other`'s row `j`, lane by lane. The two columns' times
+    /// share their lanes: they are one type, or `U` enters `T`'s scope (or `T` enters `U`'s), which
+    /// adds only zero coordinates.
     #[inline]
-    pub fn cmp_cross(&self, i: usize, other: &ColTimes<T>, j: usize) -> Ordering {
+    pub fn cmp_cross<U>(&self, i: usize, other: &ColTimes<U>, j: usize) -> Ordering {
         for k in 0..self.lanes.len().max(other.lanes.len()) {
             match self.at(k, i).cmp(&other.at(k, j)) {
                 Ordering::Equal => continue,

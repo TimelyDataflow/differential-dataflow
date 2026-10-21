@@ -19,12 +19,13 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use differential_dataflow::trace::chunk::ChunkBatch;
+use differential_dataflow::trace::wrappers::enter::BatchEnter;
 
 use corgi::arrange::gather;
 use corgi::Value as CValue;
 
 use crate::corgi::chunk::{ident, present_key, CorgiChunk};
-use crate::corgi::col_times::ColTimes;
+use crate::corgi::col_times::{ColTime, ColTimes};
 use crate::corgi::container::CorgiContainer;
 use crate::ir::{Diff, Time};
 
@@ -35,7 +36,29 @@ pub use batcher::HalfJoinBatcher;
 pub use tactic::CorgiHalfJoin;
 
 type CC = CorgiContainer<Time, Diff>;
-type NativeBatch = Rc<ChunkBatch<CorgiChunk<Time, Diff>>>;
+
+/// An arrangement's batch as the half join meets it. dogs3's half join hands its tactic the
+/// arrangement's batches directly, with no backend for DD's backend wrappers to wrap, so this is
+/// the one place where the half join reads an imported batch's times: the program's own
+/// arrangement holds the program's times, and an import entered into the program's scope holds
+/// host epochs, each of which enters as `(e, [])`, with the same lanes. Times are compared and
+/// joined lane by lane, so either reads as the program sees it.
+pub trait ArrangedBatch: 'static {
+    /// The times the chunks hold.
+    type Stored: ColTime;
+    /// The batch's chunks.
+    fn chunks(&self) -> &[CorgiChunk<Self::Stored, Diff>];
+}
+
+impl ArrangedBatch for Rc<ChunkBatch<CorgiChunk<Time, Diff>>> {
+    type Stored = Time;
+    fn chunks(&self) -> &[CorgiChunk<Time, Diff>] { &self.chunks }
+}
+
+impl ArrangedBatch for BatchEnter<Rc<ChunkBatch<CorgiChunk<u64, Diff>>>, Time> {
+    type Stored = u64;
+    fn chunks(&self) -> &[CorgiChunk<u64, Diff>] { &self.inner().chunks }
+}
 
 /// A run of released updates, as the batcher hands them to the tactic: in identifier order, as the
 /// arrangement's chunks are, with keys as [`present_key`] presents them. One extraction releases

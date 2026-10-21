@@ -438,9 +438,13 @@ where
     }
 }
 
-impl<T> ProxyReduceBackend<T, CBatch<T>, CBatch<T>> for CorgiReduceBackend<T>
+/// The input's chunks are read at the times they hold, `TIn`, and the output is the backend's own,
+/// at the operator's `T`. They differ only behind DD's backend wrappers, which read an imported
+/// input's times as the program sees them (see `BackendEnter`).
+impl<T, TIn> ProxyReduceBackend<T, CBatch<TIn>, CBatch<T>, TIn> for CorgiReduceBackend<T>
 where
     T: ColTime + Ord,
+    TIn: ColTime + Ord,
 {
     type Key = i64;
     type VIn = u64;
@@ -452,7 +456,7 @@ where
         self.rows = (Vec::new(), Vec::new(), ColTimes::default(), Vec::new());
     }
 
-    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<T>, CBatch<T>>, changed: &[i64], from: &mut KeyPosition<i64>, window: &mut ReduceWindow<T, Diff, Diff, i64>) {
+    fn next_window(&mut self, instance: &ReduceInstance<'_, T, CBatch<TIn>, CBatch<T>, TIn>, changed: &[i64], from: &mut KeyPosition<i64>, window: &mut ReduceWindow<T, Diff, Diff, i64, u64, u64, TIn>) {
         if *from == KeyPosition::End {
             return;
         }
@@ -473,7 +477,7 @@ where
             self.input.columns = in_chunks.iter().map(|chunk| chunk.vals().clone()).collect();
             self.output = Pool { columns: out_chunks.iter().map(|chunk| chunk.vals().clone()).collect(), refs: Vec::new() };
             self.output_keys.clear();
-            self.key_columns = in_chunks.iter().chain(&out_chunks).map(|chunk| chunk.keys().clone()).collect();
+            self.key_columns = in_chunks.iter().map(|chunk| chunk.keys().clone()).chain(out_chunks.iter().map(|chunk| chunk.keys().clone())).collect();
         }
 
         // Windows are bounded, as their presentations are all live at once.
@@ -486,8 +490,8 @@ where
         let keys = &retire.keys[retire.window.clone()];
         let out_matches = search(&out_chunks, keys);
         // The identifiers that hold several real keys, across input and output alike.
-        let colliding = if in_chunks.iter().chain(&out_chunks).any(|chunk| key_is_hashed(chunk.keys())) {
-            let columns: Vec<_> = in_chunks.iter().chain(&out_chunks).map(|chunk| recover_key_ref(chunk.keys())).collect();
+        let colliding = if in_chunks.iter().any(|chunk| key_is_hashed(chunk.keys())) || out_chunks.iter().any(|chunk| key_is_hashed(chunk.keys())) {
+            let columns: Vec<_> = in_chunks.iter().map(|chunk| recover_key_ref(chunk.keys())).chain(out_chunks.iter().map(|chunk| recover_key_ref(chunk.keys()))).collect();
             let runs = matches.iter().chain(&out_matches).enumerate().flat_map(|(column, found)| {
                 found.iter().map(move |(key, rows)| (*key, column, rows.start, rows.end))
             });
@@ -773,7 +777,7 @@ mod tests {
         // Key 0 counts 5 and has output 5 twice; key 1 counts 3 and has output 7; key 2 counts 0.
         let input = [(0, 2), (1, 3), (0, 3), (0, 1), (1, -1)];
         let output = [(0, 1), (1, 1), (2, 1)];
-        let (corr, ends) = backend.reduce_corrections(&[10, 11, 12], &[2, 3, 5], &input, &[2, 3, 3], &output);
+        let (corr, ends) = ProxyReduceBackend::<Time, CBatch<Time>, CBatch<Time>, Time>::reduce_corrections(&mut backend, &[10, 11, 12], &[2, 3, 5], &input, &[2, 3, 3], &output);
         assert_eq!((corr.clone(), ends), (vec![(1, -1), (2, -1), (3, 1)], vec![1, 3, 3]));
         assert_eq!(rows_of(&backend.output.gather(&[3])), vec![vec![3]]);
     }
@@ -788,13 +792,13 @@ mod tests {
         backend.output = Pool { columns: vec![ints(vec![5])], refs: vec![(0, 0)] };
         backend.output_keys = vec![(0, 0)];
         for _ in 0..64 {
-            assert_eq!(backend.reduce_corrections(&[10], &[1], &[(0, 5)], &[1], &[(0, 1)]), (vec![], vec![0]));
+            assert_eq!(ProxyReduceBackend::<Time, CBatch<Time>, CBatch<Time>, Time>::reduce_corrections(&mut backend, &[10], &[1], &[(0, 5)], &[1], &[(0, 1)]), (vec![], vec![0]));
             assert_eq!((backend.output.columns.len(), backend.output.refs.len()), (1, 1));
         }
-        assert_eq!(backend.reduce_corrections(&[10], &[1], &[(0, 3)], &[1], &[(0, 1)]), (vec![(0, -1), (1, 1)], vec![2]));
+        assert_eq!(ProxyReduceBackend::<Time, CBatch<Time>, CBatch<Time>, Time>::reduce_corrections(&mut backend, &[10], &[1], &[(0, 3)], &[1], &[(0, 1)]), (vec![(0, -1), (1, 1)], vec![2]));
         assert_eq!((backend.output.columns.len(), backend.output.refs.len()), (2, 2));
         for _ in 0..64 {
-            assert_eq!(backend.reduce_corrections(&[10], &[1], &[(0, 3)], &[1], &[(1, 1)]), (vec![], vec![0]));
+            assert_eq!(ProxyReduceBackend::<Time, CBatch<Time>, CBatch<Time>, Time>::reduce_corrections(&mut backend, &[10], &[1], &[(0, 3)], &[1], &[(1, 1)]), (vec![], vec![0]));
             assert_eq!((backend.output.columns.len(), backend.output.refs.len()), (2, 2));
         }
         assert_eq!(rows_of(&backend.output.gather(&[0, 1])), vec![vec![5], vec![3]]);
@@ -836,7 +840,7 @@ mod tests {
                 chunks(rows, size, key_shape, val_shape).into_iter().map(|chunk| Rc::new(ChunkBatch::new(vec![chunk]))).collect()
             };
             let (source, input, out) = (batches(&prior, 70), batches(&novel, 30), batches(&output, 50));
-            let instance = ReduceInstance { source_batches: &source, input_batches: &input, output_batches: &out, lower: lower.borrow() };
+            let instance = ReduceInstance { source_batches: &source, input_batches: &input, output_batches: &out, lower: lower.borrow(), input_lower: lower.borrow() };
             let mut in_chunks = chunks_of(&source);
             in_chunks.extend(chunks_of(&input));
             // Changed keys, two of them held by no batch, and the input records each retire key holds.
@@ -850,7 +854,7 @@ mod tests {
             let run = |window_size| {
                 let shape = (corgi::shape_of_value(&recover_key(&key_shape(&[0]))), corgi::shape_of_value(&val_shape(&[(0, 0)])));
                 let mut backend = CorgiReduceBackend::<Time>::with_window(Reducer::Count, shape, window_size);
-                backend.begin(Description::new(lower.clone(), Antichain::new(), lower.clone()));
+                ProxyReduceBackend::<Time, CBatch<Time>, CBatch<Time>, Time>::begin(&mut backend, Description::new(lower.clone(), Antichain::new(), lower.clone()));
                 let (mut inputs, mut seeds, mut outputs) = (BTreeMap::new(), BTreeSet::new(), BTreeMap::new());
                 let (mut window, mut from) = (ReduceWindow::default(), KeyPosition::Start);
                 while from != KeyPosition::End {
