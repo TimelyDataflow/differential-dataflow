@@ -82,13 +82,15 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
             for name in selected:
                 # Same logical plan, evaluated from scratch. Outside all timers;
                 # checks lowering/maintenance, not independent spec conformance.
-                want = reference(plans[name]['plan'], plans[name]['sources'],
-                                 {**current, 'request': active[name]}) if active[name] else []
+                want = None if args.skip_check else (
+                    reference(plans[name]['plan'], plans[name]['sources'],
+                              {**current, 'request': active[name]}) if active[name] else [])
                 phase = 'empty' if not active[name] else 'maintained' if name in standing else 'read'
                 lines, = command(phase + ':' + name, lambda: [f'peek {name}.answer as corgi'])
                 event = record['events'][-1]
                 actual = measure.decode_answer(lines, event)
-                checked(actual, want, f'{backend}/{context}/{name}')
+                if want is not None:
+                    checked(actual, want, f'{backend}/{context}/{name}')
                 event['answer_sha256'] = hashlib.sha256(json.dumps(actual).encode()).hexdigest()
 
         def binding(name, cycle):
@@ -146,7 +148,8 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
             context['state'] = 'restored'
             update('restore', reverse=True)
             read(graph)
-            print(f'{backend}/{suffix}: round {cycle-args.warmup+1}/{args.rounds}, {len(names)} queries checked', flush=True)
+            action = 'benchmarked' if args.skip_check else 'checked'
+            print(f'{backend}/{suffix}: round {cycle-args.warmup+1}/{args.rounds}, {len(names)} queries {action}', flush=True)
         context.update(state='retired', warmup=True)
         if standing:
             command('retire', lambda: [Server.feed(n, 0, sorted(active[n]), -1, request_shape[n]) for n in standing] + ['tick'])
@@ -167,6 +170,7 @@ def main():
     parser.add_argument('--mode', choices=('mixed', 'maintained'), default='mixed',
                         help='mixed: standing BI, transient IS/IC; maintained: standing bindings for every read')
     parser.add_argument('--isolated', action='store_true', help='one fresh server per query, for attribution')
+    parser.add_argument('--skip-check', action='store_true', help='benchmark only: skip Python reference checks; record answer hashes')
     parser.add_argument('--feed', choices=('text', 'frames'), default='frames',
                         help='feed rows as text lines, or as binary frames of columns')
     parser.add_argument('--rounds', type=positive, default=3)

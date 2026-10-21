@@ -619,6 +619,22 @@ impl Server {
                 name, var.name, var.name
             ));
         }
+        // Opt-in spike: keep the installed program's external schema, but replace
+        // dead intermediate tuple fields by unit before building its dataflow.
+        let projected = if std::env::var_os("DDIR_PROJECTION").is_some() {
+            let mut candidate = prog.clone();
+            let masked = crate::projection::pushdown(&mut candidate, &|source| match source {
+                st::Source::Trace(name) => self.shapes.get(&canonical_source_name(name)).cloned(),
+                _ => None,
+            })?;
+            if worker.index() == 0 && masked > 0 {
+                eprintln!("projection {name}: {masked} fields masked");
+            }
+            Some(candidate)
+        } else {
+            None
+        };
+        let prog = projected.as_ref().unwrap_or(prog);
         // An input is fed from outside, so it says what it holds, as a table declares its columns.
         for imp in &prog.root.imports {
             if let (st::Source::Input(n), None) = (&imp.from, &imp.shape) {
