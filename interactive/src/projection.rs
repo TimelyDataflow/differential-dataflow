@@ -198,6 +198,29 @@ impl Builder {
         }
     }
 
+    fn key_identity(&mut self, from: &Site, input: &Site) {
+        self.presence(from, input);
+        for (&out, &src) in from.key.iter().zip(&input.key) {
+            self.edge(out, src);
+        }
+    }
+
+    fn lift_iter(&mut self, from: &Site, input: &Site) {
+        self.key_identity(from, input);
+        for (&out, &src) in from.val.iter().zip(&input.val) {
+            self.edge(out, src);
+        }
+    }
+
+    fn lift(&mut self, from: &Site, input: &Site) {
+        self.key_identity(from, input);
+        if let Some(&value) = from.val.first() {
+            for &field in &input.val {
+                self.edge(value, field);
+            }
+        }
+    }
+
     fn opaque(&mut self, from: &Site, inputs: &[&Site]) {
         for id in from.all() {
             for input in inputs {
@@ -483,11 +506,17 @@ fn build_scope(
                                     builder.scalar_lambda(&after, &[&before], lambda);
                                 }
                                 LinearOp::Negate => builder.identity(&after, &before),
-                                LinearOp::LiftIter
-                                | LinearOp::Lift
-                                | LinearOp::FlatMap(_)
-                                | LinearOp::JoinFunction(_) => {
-                                    builder.opaque(&after, &[&before]);
+                                LinearOp::LiftIter => builder.lift_iter(&after, &before),
+                                LinearOp::Lift => builder.lift(&after, &before),
+                                LinearOp::FlatMap(lambda) => {
+                                    builder.key_identity(&after, &before);
+                                    // The list determines output presence and positions,
+                                    // even when no element payload is demanded.
+                                    builder.scalar_lambda(&after, &[&before], lambda);
+                                }
+                                LinearOp::JoinFunction(lambda) => {
+                                    builder.presence(&after, &before);
+                                    builder.scalar_lambda(&after, &[&before], lambda);
                                 }
                             }
                             stages.push(after.clone());
@@ -929,5 +958,23 @@ mod tests {
         let (_, check) = shapes::infer(&program, &|_| None);
         assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
         assert!(check.unknown.is_empty(), "{:?}", check.unknown);
+    }
+
+    #[test]
+    fn flatmap_reads_only_the_list_it_explodes() {
+        let text = "let x = input 0 : (int ; (List(int), List(int)))
+                    | map((k, v) -> (k, v));
+                    export \"out\" = x | flatmap((k, v) -> v.0) | count;";
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 1);
+    }
+
+    #[test]
+    fn lift_does_not_read_an_unused_value() {
+        let text = "let x = input 0 : (int ; (int, int))
+                    | map((k, v) -> (k, v));
+                    export \"out\" = x | lift | map((k, (v, time)) -> (k, time));";
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
     }
 }
