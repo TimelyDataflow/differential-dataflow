@@ -76,47 +76,47 @@ and per-query plan hashes. The 42 primary cases took 1,223.6 seconds in total
 
 | Query | Final active extra | Sampled peak extra | Replay (s) | Lifecycle |
 | --- | ---: | ---: | ---: | --- |
-| BI15 | 2.213 | 3.534 | 32.18 | completed |
-| BI4 | 1.294 | 2.354 | 10.82 | completed |
-| IS7 | 1.277 | 1.277 | 4.21 | completed |
-| IS2 | 1.205 | 1.205 | 5.08 | completed |
-| IC9 | 1.169 | ≥ 3.866 | 35.60 | limit: post-retirement settling |
-| BI16 | 1.126 | 1.126 | 4.57 | completed |
-| BI10 | 1.100 | 3.622 | 10.96 | completed |
-| BI3 | 1.088 | 1.088 | 4.86 | completed |
-| BI9 | 1.067 | 2.287 | 7.16 | completed |
-| BI2 | 1.047 | 1.055 | 3.59 | completed |
-| BI18 | 1.045 | 2.854 | 19.31 | completed |
-| IC7 | 1.026 | 1.026 | 4.55 | completed |
-| BI12 | 0.967 | 2.535 | 5.07 | completed |
-| BI7 | 0.909 | 0.918 | 5.08 | completed |
-| BI5 | 0.815 | 0.815 | 5.24 | completed |
-| IS6 | 0.702 | 0.702 | 4.13 | completed |
-| BI6 | 0.623 | 0.623 | 5.40 | completed |
-| BI14 | 0.597 | 0.597 | 4.71 | completed |
-| IC5 | 0.522 | 2.042 | 4.28 | completed |
-| IC3 | 0.511 | 2.283 | 5.83 | completed |
-| BI8 | 0.457 | 0.458 | 5.84 | completed |
-| BI1 | 0.418 | 0.858 | 3.22 | completed |
-| IC4 | 0.412 | 0.422 | 4.30 | completed |
-| BI13 | 0.400 | 0.434 | 3.75 | completed |
-| IC6 | 0.377 | 2.800 | 3.64 | completed |
-| IS5 | 0.364 | 0.364 | 3.01 | completed |
-| IS4 | 0.358 | 0.358 | 3.00 | completed |
-| BI19 | 0.347 | 0.458 | 8.45 | completed |
-| IC14 | 0.330 | 0.339 | 8.37 | completed |
-| IC2 | 0.178 | 0.522 | 10.54 | completed |
-| IC8 | 0.153 | 0.153 | 3.63 | completed |
-| IC10 | 0.134 | 0.139 | 3.39 | completed |
-| IC12 | 0.131 | 0.159 | 3.75 | completed |
-| BI11 | 0.060 | 0.087 | 3.29 | completed |
-| BI20 | 0.037 | 0.037 | 3.02 | completed |
-| IC1 | 0.036 | 0.041 | 3.44 | completed |
-| IS3 | 0.033 | 0.033 | 2.94 | completed |
-| IC11 | 0.028 | 0.028 | 3.21 | completed |
-| IC13 | 0.018 | 0.020 | 3.14 | completed |
 | IS1 | -0.001 | -0.001 | 2.73 | completed |
+| IS2 | 1.205 | 1.205 | 5.08 | completed |
+| IS3 | 0.033 | 0.033 | 2.94 | completed |
+| IS4 | 0.358 | 0.358 | 3.00 | completed |
+| IS5 | 0.364 | 0.364 | 3.01 | completed |
+| IS6 | 0.702 | 0.702 | 4.13 | completed |
+| IS7 | 1.277 | 1.277 | 4.21 | completed |
+| IC1 | 0.036 | 0.041 | 3.44 | completed |
+| IC2 | 0.178 | 0.522 | 10.54 | completed |
+| IC3 | 0.511 | 2.283 | 5.83 | completed |
+| IC4 | 0.412 | 0.422 | 4.30 | completed |
+| IC5 | 0.522 | 2.042 | 4.28 | completed |
+| IC6 | 0.377 | 2.800 | 3.64 | completed |
+| IC7 | 1.026 | 1.026 | 4.55 | completed |
+| IC8 | 0.153 | 0.153 | 3.63 | completed |
+| IC9 | 1.169 | ≥ 3.866 | 35.60 | limit: post-retirement settling |
+| IC10 | 0.134 | 0.139 | 3.39 | completed |
+| IC11 | 0.028 | 0.028 | 3.21 | completed |
+| IC12 | 0.131 | 0.159 | 3.75 | completed |
+| IC13 | 0.018 | 0.020 | 3.14 | completed |
+| IC14 | 0.330 | 0.339 | 8.37 | completed |
+| BI1 | 0.418 | 0.858 | 3.22 | completed |
+| BI2 | 1.047 | 1.055 | 3.59 | completed |
+| BI3 | 1.088 | 1.088 | 4.86 | completed |
+| BI4 | 1.294 | 2.354 | 10.82 | completed |
+| BI5 | 0.815 | 0.815 | 5.24 | completed |
+| BI6 | 0.623 | 0.623 | 5.40 | completed |
+| BI7 | 0.909 | 0.918 | 5.08 | completed |
+| BI8 | 0.457 | 0.458 | 5.84 | completed |
+| BI9 | 1.067 | 2.287 | 7.16 | completed |
+| BI10 | 1.100 | 3.622 | 10.96 | completed |
+| BI11 | 0.060 | 0.087 | 3.29 | completed |
+| BI12 | 0.967 | 2.535 | 5.07 | completed |
+| BI13 | 0.400 | 0.434 | 3.75 | completed |
+| BI14 | 0.597 | 0.597 | 4.71 | completed |
+| BI15 | 2.213 | 3.534 | 32.18 | completed |
+| BI16 | 1.126 | 1.126 | 4.57 | completed |
 | BI17 | unavailable | ≥ 3.981 | — | limit: bind |
+| BI18 | 1.045 | 2.854 | 19.31 | completed |
+| BI19 | 0.347 | 0.458 | 8.45 | completed |
+| BI20 | 0.037 | 0.037 | 3.02 | completed |
 
 The historical harness captured retirement's empty answer and then exited.
 This profile advances three more ticks. IC9's larger peak under this lifecycle
