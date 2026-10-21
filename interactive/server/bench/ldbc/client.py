@@ -1,6 +1,7 @@
 """Small, bounded TCP client for a private, real ddir_server process."""
 import os
 import socket
+import re
 import struct
 import subprocess
 import threading
@@ -94,6 +95,13 @@ def _encode_column(shape, values, out):
             _encode_column(shape[1], [element for item in items for element in item], out)
     else:
         raise ValueError(f'unsupported shape {shape!r}')
+
+
+def declared_inputs(program):
+    """The declared shapes of a program's unit-valued inputs, by index, as `Server.feed` takes
+    them to send frames: `input N : (shape ; ())` becomes `{N: (parse_shape(shape), 'unit')}`."""
+    return {int(n): (parse_shape(shape), 'unit')
+            for n, shape in re.findall(r'input (\d+) : \((.*) ; \(\)\)', program)}
 
 
 def encode_frame(shape, keys, diffs, vals=None):

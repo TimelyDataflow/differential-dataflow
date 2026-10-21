@@ -162,7 +162,7 @@ def main():
     parser.add_argument('--mode', choices=('mixed', 'maintained'), default='mixed',
                         help='mixed: standing BI, transient IS/IC; maintained: standing bindings for every read')
     parser.add_argument('--isolated', action='store_true', help='one fresh server per query, for attribution')
-    parser.add_argument('--feed', choices=('text', 'frames'), default='text',
+    parser.add_argument('--feed', choices=('text', 'frames'), default='frames',
                         help='feed rows as text lines, or as binary frames of columns')
     parser.add_argument('--rounds', type=positive, default=3)
     parser.add_argument('--warmup', type=int, default=1)

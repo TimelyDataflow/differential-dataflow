@@ -139,7 +139,9 @@ session checks that the keys and values have the input's declared shapes (any
 integer storage will do) and admits the columns as one feed, as above. A frame
 of other shapes, not a whole frame, or larger than `DDIR_MAX_FEED_BYTES` is
 refused, and its bytes are read past. `bench/ldbc/client.py` has an encoder,
-`encode_frame`.
+`encode_frame`. The bench clients (`run.py`, `suite.py`, `update_stream.py`) feed
+frames by default, so a benchmark measures the server rather than the client's
+text; `--feed text` restores text.
 
 The batch's `ok` means that the complete request was admitted to the ordered
 worker stream; it does not wait for every worker to stage its shard. A later

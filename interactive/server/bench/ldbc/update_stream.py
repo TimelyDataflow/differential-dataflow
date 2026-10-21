@@ -21,10 +21,11 @@ import threading
 import time
 import _thread
 
-from client import Server, decode
+from client import Server, decode, parse_shape
 import measure
 from run import checked, digest, positive
 from snb import data, updates
+from snb.rel import source_shape
 from snb.parameters import parameters, reference, requests
 from suite import CATALOGUE, HERE, SPEC, compile_queries, graph_program
 
@@ -293,6 +294,11 @@ def run_query(args, name, plan, manifest, report):
                 capture.update(status='passed',reference_ms=reference_ms)
                 record['last_validated_epoch'] = record['epoch']
 
+            # With `--feed frames` (the default), every feed is one binary frame at its input's
+            # declared shapes, so the harness's own encoding is not what is measured.
+            frames = args.feed == 'frames'
+            graph_shape = [(parse_shape(source_shape(schema)), 'unit') if frames else None for schema in data.SCHEMA.values()]
+            request_shape = (parse_shape(source_shape(plan['parameters'])), 'unit') if frames else None
             for program, text in [('graph', graph_program()), (name, plan['program'])]:
                 command('install', lambda:[f'load {program} begin\n{text}\n{{rid}} end-load','tick'])
             record['snapshot_sort_ms'] = 0
@@ -301,8 +307,8 @@ def run_query(args, name, plan, manifest, report):
                 rows = sorted(graph[table])
                 record['snapshot_sort_ms'] += 1000*(time.perf_counter()-phase_started)
                 for offset in range(0,len(rows),1000):
-                    command('load', lambda:[Server.feed('graph',i,rows[offset:offset+1000],1)])
-            command('bind', lambda:[Server.feed(name,0,sorted(active),1),'tick'])
+                    command('load', lambda:[Server.feed('graph',i,rows[offset:offset+1000],1,graph_shape[i])])
+            command('bind', lambda:[Server.feed(name,0,sorted(active),1,request_shape),'tick'])
             record['initial'] = read('initial')
             print(f'{name}/initial: {record["initial"]["status"]}', flush=True)
             if deferred:
@@ -324,7 +330,7 @@ def run_query(args, name, plan, manifest, report):
                             for side,diff in (('removed',-1),('added',1)):
                                 rows = changes[table][side]
                                 for offset in range(0,len(rows),1000):
-                                    commands.append(Server.feed('graph',i,rows[offset:offset+1000],diff))
+                                    commands.append(Server.feed('graph',i,rows[offset:offset+1000],diff,graph_shape[i]))
                     return [*commands,'tick']
                 command('update', feed)
                 metrics = record['events'][-1]
@@ -343,7 +349,7 @@ def run_query(args, name, plan, manifest, report):
             record['replay'] = replay_stats(record['updates'], replay_started,
                                             1000*(time.perf_counter()-started_query))
             record['replay']['includes_reference'] = not deferred
-            command('retire', lambda:[Server.feed(name,0,sorted(active),-1),'tick'])
+            command('retire', lambda:[Server.feed(name,0,sorted(active),-1,request_shape),'tick'])
             actual, = command('empty', lambda:[f'peek {name}.answer as corgi'])
             compare(decode(actual), [], 'retired')
             record['retirement_checked'] = True
@@ -495,6 +501,8 @@ def main():
                         help='supplied DDP for one selected query; Python checks its usual logical definition')
     parser.add_argument('--parameters',type=Path,help='query-name -> one parameter override object')
     parser.add_argument('--workers',type=positive,default=1)
+    parser.add_argument('--feed',choices=('text','frames'),default='frames',
+                        help='feed rows as text lines, or as binary frames of columns')
     parser.add_argument('--timeout',type=positive,default=120)
     parser.add_argument('--reference-timeout',type=positive,default=120)
     parser.add_argument('--check-mode',choices=('strict','replay'),default='strict',
