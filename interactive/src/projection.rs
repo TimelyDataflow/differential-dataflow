@@ -894,8 +894,32 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                 }
             }
         }
-        remap.push(items.len());
+        // Distinct, min, collect, and user reductions must see their full input.
+        // Mask only the rows they emit, before any downstream consumer sees them.
+        let reduced_output = match (&item, planned) {
+            (Item::Op(Node::Reduce { .. }), PlannedItem::Op { output, .. }) => Some(output),
+            _ => None,
+        };
         items.push(item);
+        if let Some(output) = reduced_output {
+            if let Some(lambda) = mask_lambda(&identity, output, live) {
+                let fields = output
+                    .key
+                    .iter()
+                    .chain(&output.val)
+                    .filter(|&&id| !live[id])
+                    .count();
+                let project = Item::Op(Node::Linear {
+                    input: Ref::Local(items.len() - 1),
+                    ops: vec![LinearOp::Project(lambda)],
+                });
+                remap.push(items.len());
+                items.push(project);
+                masked += fields;
+                continue;
+            }
+        }
+        remap.push(items.len() - 1);
     }
     for bind in &mut scope.binds {
         remap_ref(&mut bind.value, &remap);
@@ -1028,7 +1052,38 @@ mod tests {
         let text = "let x = input 0 : ((int, int) ; ()) | map((k, v) -> (k, v));
                     export \"out\" = x | count | map(((a, _), n) -> ((a), n));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
-        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
+        // Count still groups by both key fields; the second is masked only
+        // after the reduction, where the next map no longer reads it.
+        assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 1);
+    }
+
+    #[test]
+    fn distinct_projects_only_after_deduplicating_full_rows() {
+        use crate::server::Server;
+        let text = "let x = input 0 : ((int, int) ; ())
+                    | map((row, ()) -> (row, ()));
+                    export \"out\" = x | distinct
+                    | map((row, ()) -> (row.0, ())) | count;";
+        let mut original = lower::lower_tree(parse::pipe::parse(text));
+        original.optimize();
+        let mut projected = original.clone();
+        assert!(pushdown(&mut projected, &|_| None).unwrap() >= 1);
+        original.root.exports[0].name = "before.out".into();
+        projected.root.exports[0].name = "after.out".into();
+        timely::execute_directly(move |worker| {
+            let mut server = Server::new();
+            server.install(worker, "before", &original).unwrap();
+            server.install(worker, "after", &projected).unwrap();
+            for name in ["before", "after"] {
+                server.feed(name, 0, "1,10", None).unwrap();
+                server.feed(name, 0, "1,20", None).unwrap();
+            }
+            server.tick(worker);
+            assert_eq!(
+                server.snapshot(worker, "before.out").unwrap().into_rows(),
+                server.snapshot(worker, "after.out").unwrap().into_rows()
+            );
+        });
     }
 
     #[test]
