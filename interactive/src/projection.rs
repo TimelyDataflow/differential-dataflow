@@ -248,6 +248,50 @@ impl Builder {
             }
         }
     }
+
+    fn half_join(&mut self, from: &Site, stream: &Site, arrangement: &Site, lambda: &Lambda) {
+        self.presence(from, stream);
+        self.presence(from, arrangement);
+        // Keys decide matching, and the lifted stream time decides whether a
+        // match is admissible and supplies the output's data time.
+        for id in from.all() {
+            for &key in stream.key.iter().chain(&arrangement.key) {
+                self.edge(id, key);
+            }
+            self.edge(id, stream.val[1]);
+        }
+        let Shape::Prod(stream_parts) = &stream.shape.1 else {
+            unreachable!("half_join stream value is (value, time)")
+        };
+        let shapes = [
+            stream.shape.0.clone(),
+            stream_parts[0].clone(),
+            arrangement.shape.1.clone(),
+        ];
+        for (output_id, path) in from.field_paths() {
+            if path.as_slice() == [1, 1] {
+                continue;
+            }
+            // The half join appends time after the projected value. Its value
+            // is one atomic fact at this top-level field precision.
+            let projected = if path.as_slice() == [1, 0] {
+                vec![1]
+            } else {
+                path
+            };
+            for (slot, field) in graph_fields(lambda, &shapes, &projected) {
+                let source = match slot {
+                    0 => stream.key.get(field),
+                    1 => stream.val.first(),
+                    2 => arrangement.val.get(field),
+                    _ => None,
+                };
+                if let Some(&source) = source {
+                    self.edge(output_id, source);
+                }
+            }
+        }
+    }
 }
 
 fn slot_fields<'a>(inputs: &'a [&Site], slot: usize) -> Option<&'a [usize]> {
@@ -556,9 +600,15 @@ fn build_scope(
                     Node::HalfJoin {
                         stream,
                         arrangement,
+                        projection,
                         ..
                     } => {
-                        builder.opaque(&output, &[plan.at(stream), plan.at(arrangement)]);
+                        builder.half_join(
+                            &output,
+                            plan.at(stream),
+                            plan.at(arrangement),
+                            projection,
+                        );
                     }
                     Node::Reduce { input, reducer } => {
                         let input = plan.at(input);
@@ -714,6 +764,36 @@ fn mask_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda
     Some(masked)
 }
 
+fn mask_half_join(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
+    let value = output.val[0];
+    if output.key.iter().all(|&id| live[id]) && live[value] {
+        return None;
+    }
+    let mut masked = Lambda::compose("arg", &[(original, "arg".into())], |result| {
+        let key = mask_part("k", &output.shape.0, &output.key, live);
+        let val = if live[value] { "v" } else { "()" };
+        format!("let (k, v) = {} in ({key}, {val})", result[0])
+    });
+    if let Ok(graph) = original.graph() {
+        let mut builder = corgi::Builder::<corgi::NumOp>::default();
+        let input = builder.input();
+        let result = builder.graft(graph, input);
+        let key = builder.add(corgi::Op::Field(0), vec![result]);
+        let val = builder.add(corgi::Op::Field(1), vec![result]);
+        let key = mask_graph_part(&mut builder, input, key, &output.shape.0, &output.key, live);
+        let val = if live[value] {
+            val
+        } else {
+            builder.add(corgi::Op::Unit, vec![input])
+        };
+        let result = builder.tuple(vec![key, val]);
+        masked.graph = Ok(std::sync::Arc::new(corgi::optimize(
+            &builder.finish(result),
+        )));
+    }
+    Some(masked)
+}
+
 fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> usize {
     let mut masked = 0;
     let mut remap = Vec::with_capacity(scope.items.len());
@@ -747,6 +827,13 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                         .chain(&output.val)
                         .filter(|&&id| !live[id])
                         .count();
+                    *projection = new;
+                }
+            }
+            (Item::Op(Node::HalfJoin { projection, .. }), PlannedItem::Op { output, .. }) => {
+                if let Some(new) = mask_half_join(projection, output, live) {
+                    masked += output.key.iter().filter(|&&id| !live[id]).count();
+                    masked += usize::from(!live[output.val[0]]);
                     *projection = new;
                 }
             }
@@ -976,5 +1063,51 @@ mod tests {
                     export \"out\" = x | lift | map((k, (v, time)) -> (k, time));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 2);
+    }
+
+    #[test]
+    fn half_join_reads_keys_and_time_without_unused_payloads() {
+        let text = "let a = input 0 : ((int, int) ; ())
+                    | map(((k, x), ()) -> (k, x));
+                    let b = input 1 : ((int, int, int) ; ())
+                    | map(((k, y, z), ()) -> (k, (y, z)));
+                    export \"out\" = a | lift
+                    | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        program.optimize();
+        assert!(pushdown(&mut program, &|_| None).unwrap() >= 4);
+        let (_, check) = shapes::infer(&program, &|_| None);
+        assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
+    }
+
+    #[test]
+    fn masked_half_join_matches_the_original_rows() {
+        use crate::server::Server;
+        let text = "let a = input 0 : ((int, int) ; ())
+                    | map(((k, x), ()) -> (k, x));
+                    let b = input 1 : ((int, int, int) ; ())
+                    | map(((k, y, z), ()) -> (k, (y, z)));
+                    export \"out\" = a | lift
+                    | half_join(b, 0, (k, x, yz) -> (k, x)) | count;";
+        let mut original = lower::lower_tree(parse::pipe::parse(text));
+        original.optimize();
+        let mut projected = original.clone();
+        assert!(pushdown(&mut projected, &|_| None).unwrap() >= 4);
+        original.root.exports[0].name = "before.out".into();
+        projected.root.exports[0].name = "after.out".into();
+        timely::execute_directly(move |worker| {
+            let mut server = Server::new();
+            server.install(worker, "before", &original).unwrap();
+            server.install(worker, "after", &projected).unwrap();
+            for name in ["before", "after"] {
+                server.feed(name, 0, "1,10", None).unwrap();
+                server.feed(name, 1, "1,20,30", None).unwrap();
+            }
+            server.tick(worker);
+            assert_eq!(
+                server.snapshot(worker, "before.out").unwrap().into_rows(),
+                server.snapshot(worker, "after.out").unwrap().into_rows()
+            );
+        });
     }
 }
