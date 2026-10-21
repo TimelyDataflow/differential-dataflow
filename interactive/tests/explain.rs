@@ -457,6 +457,56 @@ fn flatmap_of_a_parent_explanations_sufficient() {
     assert!(!sizes.is_empty());
 }
 
+/// Demand is a set: two paths into one collection must not cancel. `r2` holds a negated row, count
+/// −1, which the join reads directly and through `r3`'s map; the demand arriving by the two paths
+/// came back as +1 and −1 and cancelled, leaving the result row with an empty explanation. (Found
+/// by `difftest`.)
+#[test]
+fn negated_fanout_explanations_sufficient() {
+    const NEGATED: &str = r#"
+        let i0 = input 0 : ((int, int) ; ());
+        let r2 = i0 | negate | map(((a, b), ()) -> (b, b));
+        let r3 = r2 | map((x, y) -> (y, x));
+        export "result" = r3 | join(r2, (k, l, r) -> (k, (l, r)));
+    "#;
+    let sizes = assert_all_rows_sufficient(NEGATED, &[vec![(row(&[3, 0]), row(&[]))]]);
+    assert!(!sizes.is_empty());
+}
+
+/// A `min` whose value decides a later key. Labels are 2→4, 4→1 and 1→1. Explaining label 4's
+/// count demands node 2's rows; in the restricted run node 4 lacks the edge that gave it label 1,
+/// takes label 4 from node 2, and joins label 4's count. The count's lookup demands node 4's row
+/// from the restricted run, and the `min` must then demand the inputs achieving node 4's label in
+/// the reference, not only those achieving its restricted label. (Found by `difftest`.)
+#[test]
+fn min_then_count_explanations_sufficient() {
+    const MIN_COUNT: &str = r#"
+        let i0 = input 0 : (int ; int);
+        s: { let step = x | join(i0, (k, l, e) -> (e, l)); var x = (i0 + step) | min; }
+        export "result" = s::x | map((k, l) -> ((l), ())) | count;
+    "#;
+    let sizes = assert_all_rows_sufficient(MIN_COUNT, &[vec![(Value::Int(2), Value::Int(4)), (Value::Int(4), Value::Int(1))]]);
+    assert!(!sizes.is_empty());
+}
+
+/// An input with several values at one key. The restricted run read the sources restricted to the
+/// demanded rows by key alone, so demanding `(0, 2)` fed it every row at key 0, each once per row
+/// at the key, and counted 3 where the demanded rows alone count 1. Its `min` then agreed with the
+/// reference by accident, and the inputs that make the count as in the reference were never
+/// demanded. (Found by `difftest`.)
+#[test]
+fn restricted_rows_keep_their_counts() {
+    const COUNT_MIN: &str = r#"
+        let i0 = input 0 : (int ; int);
+        let counts = i0 | count;
+        let r = (counts - i0) | min;
+        export "result" = r;
+    "#;
+    let inputs = vec![vec![(Value::Int(0), Value::Int(4)), (Value::Int(0), Value::Int(4)), (Value::Int(0), Value::Int(2))]];
+    let sizes = assert_all_rows_sufficient(COUNT_MIN, &inputs);
+    assert!(!sizes.is_empty());
+}
+
 /// Count outputs over duplicate-free inputs: sufficient today, because the
 /// keyed lookup demands every input row at the key, which is precisely the
 /// count's multiset.

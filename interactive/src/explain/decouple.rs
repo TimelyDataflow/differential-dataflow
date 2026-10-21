@@ -69,8 +69,13 @@ pub trait RowModel {
     /// Output: `(K ; V_in, [V_out,] chain_in, chain_out, q)` — `V_out` is
     /// carried only when `min`, for the narrowing below.
     fn ky_join(in_len: usize, out_len: usize, min: bool) -> Self::Proj;
-    /// Min value-narrowing on the `min` row above: keep rows with `V_in == V_out`.
-    fn ky_data_eq() -> Option<Self::Pred>;
+    /// Min value-narrowing on the `min` row above: keep rows with `V_in <= V_out`. A min's output at
+    /// a key is decided by the inputs at or below it: those achieving it, and any below it, which
+    /// the restricted run can hold where the reference does not. A demanded value the restricted run
+    /// raised (its lower inputs left out) takes the reference's lower achieving inputs this way, and
+    /// a demanded value the restricted run lowered takes the inputs that lowered it, so that the
+    /// key's output is made as in the reference either way.
+    fn ky_data_le() -> Option<Self::Pred>;
     /// Drop the carried `V_out`, restoring the SP-shaped row
     /// `(K ; V_in, chain_in, chain_out, q)`.
     fn ky_drop_vout(in_len: usize, out_len: usize) -> Self::Proj;
@@ -172,7 +177,7 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     let pair = df.concat(vec![side.witness.clone(), side.forward.clone()]);
     let joined = df.join(dep, &pair, M::ky_join(in_len, out_len, min));
     let after = if min {
-        let f = opt_filter(df, joined, M::ky_data_eq());
+        let f = opt_filter(df, joined, M::ky_data_le());
         df.project(&f, M::ky_drop_vout(in_len, out_len))
     } else {
         joined
@@ -303,11 +308,13 @@ mod value_contract {
     }
 
     #[test]
-    fn keyed_min_narrows_to_the_demanded_value() {
-        let pair = vec![(one(5), env(7, &[])), (one(5), env(6, &[]))];
-        let dep = vec![(one(5), env(7, &[9]))];
-        let out = keyed_lookup::<Val, _>(&mut Mem, &dep, &side(pair, 0), 0, true);
-        assert_eq!(out, vec![(one(5), env(7, &[9]))]);
+    fn keyed_min_narrows_to_the_demanded_value_and_below() {
+        let pair = vec![(one(5), env(7, &[])), (one(5), env(6, &[])), (one(5), env(8, &[]))];
+        let lookup = |v| sorted(keyed_lookup::<Val, _>(&mut Mem, &vec![(one(5), env(v, &[9]))], &side(pair.clone(), 0), 0, true));
+        // The least value: the inputs achieving it.
+        assert_eq!(lookup(6), vec![(one(5), env(6, &[9]))]);
+        // A higher value: the inputs below it too, whichever run holds them.
+        assert_eq!(lookup(7), vec![(one(5), env(6, &[9])), (one(5), env(7, &[9]))]);
     }
 
     #[test]
