@@ -142,7 +142,7 @@ where
             let (mut single, mut collides): (Option<&K>, bool) = (None, false);
             let mut last: Option<&(K, V)> = None;
             seed_scratch.clear();
-            for ((data, novel, time), diff) in drawn.drain(..) {
+            for ((data, time, novel), diff) in drawn.drain(..) {
                 if last != Some(data) {
                     match single {
                         None => single = Some(&data.0),
@@ -158,8 +158,9 @@ where
                 if novel {
                     seed_scratch.push(time.clone());
                 }
-                // Novel and prior share the id space and arrive (id, time)-adjacent, so an exactly
-                // cancelling pair meets here and nets away; its time survives in the seeds.
+                // Novel and prior share the id space and arrive sorted by (id, time), prior first at
+                // equal times, so an exactly cancelling pair meets here and nets away; its time
+                // survives in the seeds.
                 if let Some(((k2, i2), t2, d2)) = window.input.last_mut() {
                     if *k2 == key && *i2 == id && *t2 == time {
                         d2.plus_equals(&diff);
@@ -197,7 +198,7 @@ where
             debug_assert_eq!(self.keys_cache.get(index), Some(&key), "the output pass replays the input pass's keys");
             let (mut single, mut collides): (Option<&K>, bool) = (None, false);
             let mut last: Option<&(K, W)> = None;
-            for ((data, _, time), diff) in odrawn.drain(..) {
+            for ((data, time, _), diff) in odrawn.drain(..) {
                 if last != Some(data) {
                     match single {
                         None => single = Some(&data.0),
@@ -333,11 +334,14 @@ where
 
 /// One record drawn by [`MergedWalk::advance`], keyed for consolidation.
 ///
-/// The key is `(data, novel, time)`: grouping by data is what mints one identifier per distinct
+/// The key is `(data, time, novel)`: grouping by data is what mints one identifier per distinct
 /// value, and the `novel` flag separates the two roles *within* a value so that consolidation
-/// never cancels a novel update against a prior one. The data is borrowed from the batch — it is
-/// cloned once per surviving value, when its identifier is minted, and never per record.
-type Drawn<'a, D, T, R> = ((&'a D, bool, T), R);
+/// never cancels a novel update against a prior one. The flag follows the time, so that a value's
+/// records are drawn in time order, as the presentation must be: with partially ordered times, a
+/// prior record advanced to the compaction frontier can come after a novel one. The data is
+/// borrowed from the batch — it is cloned once per surviving value, when its identifier is minted,
+/// and never per record.
+type Drawn<'a, D, T, R> = ((&'a D, T, bool), R);
 
 /// The length of `slice`'s prefix of records whose hash is `key`, which must be non-empty.
 ///
@@ -488,7 +492,7 @@ where
                 // Novel times are the interesting-time seeds the tactic's schedule is stated over,
                 // so they are drawn unadvanced; only the prior history is lifted.
                 if !novel { time.advance_by(self.frontier); }
-                ((&record.0.1, novel, time), record.2.clone())
+                ((&record.0.1, time, novel), record.2.clone())
             }));
             if end < slice.len() {
                 self.pos[b].1 = end;
@@ -501,7 +505,7 @@ where
     /// Draw every record of the next active key, and advance to the one after it.
     ///
     /// Returns the key drawn, or `None` once the key space is spent. `into` is left sorted by
-    /// `(data, novel, time)` and consolidated, so a value whose records all cancel is gone before
+    /// `(data, time, novel)` and consolidated, so a value whose records all cancel is gone before
     /// the caller ever sees it — and so never spends an identifier.
     fn advance(&mut self, into: &mut Vec<Drawn<'a, D, T, R>>) -> Option<u64> {
         let key = self.due?;
