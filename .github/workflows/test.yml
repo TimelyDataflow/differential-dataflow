@@ -39,34 +39,45 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: Cargo doc test
         run: cargo test --doc
+
+  # The server-backed suites and the explanation sweeps, once, against a release build: they
+  # check answers, not timings, and a debug server made them most of the suite's time. The
+  # matrix above keeps the debug build's assertions through `cargo test`.
+  ldbc:
+    name: LDBC and explanation suites (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build the release server
+        run: cargo build --release -p ddir-server
       # One small server-backed workload; no data download or timing thresholds.
       - name: LDBC-derived correctness smoke
-        if: matrix.os == 'ubuntu' && matrix.toolchain == 'stable'
         run: |
-          cargo build -p ddir-server
           for workers in 1 4; do
-            python3 interactive/server/bench/ldbc/run.py --server target/debug/ddir_server \
+            python3 interactive/server/bench/ldbc/run.py --server target/release/ddir_server \
               --workers "$workers" --rounds 1 --warmup 0 --batch-size 9 --changes 1
           done
       - name: Complete SNB read catalogue
-        if: matrix.os == 'ubuntu' && matrix.toolchain == 'stable'
         run: |
           python3 interactive/server/bench/ldbc/test_harness.py
           python3 interactive/server/bench/ldbc/test_snb.py
           python3 interactive/server/bench/ldbc/test_updates.py
           for workers in 1 4; do
-            python3 interactive/server/bench/ldbc/test_frames.py --server target/debug/ddir_server \
+            python3 interactive/server/bench/ldbc/test_frames.py --server target/release/ddir_server \
               --workers "$workers"
-            python3 interactive/server/bench/ldbc/suite.py --server target/debug/ddir_server \
+            python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_server \
               --workers "$workers" --rounds 1 --warmup 0
-            python3 interactive/server/bench/ldbc/test_update_stream.py \
-              --server target/debug/ddir_server --workers "$workers" \
-              --output "/tmp/ldbc-update-stream-$workers"
           done
-          python3 interactive/server/bench/ldbc/suite.py --server target/debug/ddir_server \
+          python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_server \
             --mode maintained --workers 4 --rounds 1 --warmup 0
+      - name: SNB update streams
+        run: |
           python3 interactive/server/bench/ldbc/test_update_stream.py \
-            --server target/debug/ddir_server --workers 4 --check-mode replay \
+            --server target/release/ddir_server --workers 4 \
+            --output /tmp/ldbc-update-stream-4
+          python3 interactive/server/bench/ldbc/test_update_stream.py \
+            --server target/release/ddir_server --workers 4 --check-mode replay \
             --output /tmp/ldbc-update-stream-replay
       # The explanation suite's heavier sweeps (soundness regression, fuzz)
       # are #[ignore]d for local debug runs but must gate merges. The metric
