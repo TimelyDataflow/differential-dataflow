@@ -20,7 +20,12 @@ use super::history::IdHistory;
 ///
 /// The harness repeatedly invokes [`advance`](Self::advance) to draw a block of the proxy collection,
 /// then [`cross`](Self::cross) to turn that block's matches into output containers, until `advance` reports the key space exhausted.
-pub trait ProxyJoinBackend<T, B0, B1> {
+///
+/// The backend draws each input's updates at the times its batches hold, `T0` and `T1`, and
+/// builds its output at the operator's times `T`. They are the same unless the backend sits behind
+/// one of the [`wrappers`](super::wrappers), which read the times a wrapped batch holds as the
+/// operator sees them.
+pub trait ProxyJoinBackend<T, B0, B1, T0 = T, T1 = T> {
     /// Independent groups, common to both inputs.
     type Key: Copy + Ord;
     /// First input value proxies, valid throughout a block.
@@ -45,10 +50,10 @@ pub trait ProxyJoinBackend<T, B0, B1> {
     /// which are greater or equal to the initial `from`, and not greater or equal to its value when returned.
     fn advance(
         &mut self,
-        instance: &JoinInstance<T, B0, B1>,
+        instance: &JoinInstance<T0, B0, B1, T1>,
         from: &mut KeyPosition<Self::Key>,
-        bridge0: &mut ProxyBridge<T, Self::R0, Self::Key, Self::V0>,
-        bridge1: &mut ProxyBridge<T, Self::R1, Self::Key, Self::V1>,
+        bridge0: &mut ProxyBridge<T0, Self::R0, Self::Key, Self::V0>,
+        bridge1: &mut ProxyBridge<T1, Self::R1, Self::Key, Self::V1>,
     );
 
     /// Interpret matches derived from the immediately preceding [`Self::advance`] call and place
@@ -57,22 +62,24 @@ pub trait ProxyJoinBackend<T, B0, B1> {
     /// block produced no matches, in which case the next `advance` may overwrite that state.
     fn cross(
         &mut self,
-        instance: &JoinInstance<T, B0, B1>,
+        instance: &JoinInstance<T0, B0, B1, T1>,
         matches: &mut JoinMatches<T, Self::ROut, Self::Key, Self::V0, Self::V1>,
         output: &mut Vec<Self::Output>,
     );
 }
 
 /// A unit of proxied join work, for presentation to the backend.
-pub struct JoinInstance<T, B0, B1> {
+pub struct JoinInstance<T0, B0, B1, T1 = T0> {
     /// The first input's batches.
     pub batches0: Vec<B0>,
     /// The second input's batches.
     pub batches1: Vec<B1>,
-    /// A lower bound on the meet of pairs of update times.
+    /// A lower bound on the meet of pairs of update times, as a time of the first input.
     ///
-    /// This can be applied when loading updates to consolidate on load.
-    pub lower: T,
+    /// This can be applied when loading the first input's updates to consolidate on load.
+    pub lower0: T0,
+    /// The same bound, as a time of the second input.
+    pub lower1: T1,
 }
 
 /// Presentation of discovered join matches.
@@ -120,7 +127,7 @@ where
     fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, _fresh: Fresh, meet: T) -> Box<dyn Iterator<Item = Bk::Output>> {
         Box::new(ProxyJoinIter {
             backend: Rc::clone(&self.backend),
-            instance: JoinInstance { batches0: input0, batches1: input1, lower: meet },
+            instance: JoinInstance { batches0: input0, batches1: input1, lower0: meet.clone(), lower1: meet },
             from: KeyPosition::Start,
             p0: Vec::new(),
             p1: Vec::new(),

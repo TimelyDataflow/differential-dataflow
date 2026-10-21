@@ -90,13 +90,16 @@ impl<K, V, W, T, R, L> VecReduceBackend<K, V, W, T, R, L> {
     }
 }
 
-impl<K, V, W, T, R, L> ProxyReduceBackend<T, VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>
+/// The input's batches hold times `TIn`, the output's the operator's `T`: the same, unless the
+/// backend sits behind one of the [`wrappers`](super::wrappers).
+impl<K, V, W, T, TIn, R, L> ProxyReduceBackend<T, VBatch<(K, V), TIn, R>, VBatch<(K, W), T, R>, TIn>
     for VecReduceBackend<K, V, W, T, R, L>
 where
     K: Ord + Clone + std::hash::Hash + 'static,
     V: Ord + Clone + 'static,
     W: Ord + Clone + std::hash::Hash + 'static,
     T: Lattice + Timestamp,
+    TIn: Lattice + Timestamp,
     R: Semigroup + Ord + Clone + 'static,
     L: FnMut(&K, &[(V, R)], &mut Vec<(W, R)>, &mut Vec<(W, R)>),
 {
@@ -113,10 +116,10 @@ where
     #[inline(never)]
     fn next_window(
         &mut self,
-        instance: &ReduceInstance<'_, T, VBatch<(K, V), T, R>, VBatch<(K, W), T, R>>,
+        instance: &ReduceInstance<'_, T, VBatch<(K, V), TIn, R>, VBatch<(K, W), T, R>, TIn>,
         changed: &[u64],
         from: &mut KeyPosition<u64>,
-        window: &mut ReduceWindow<T, R, R>,
+        window: &mut ReduceWindow<T, R, R, u64, u64, u64, TIn>,
     ) {
         let start = match *from { KeyPosition::Start => 0, KeyPosition::At(key) => key, KeyPosition::End => return };
 
@@ -130,10 +133,10 @@ where
             instance.source_batches,
             changed,
             start,
-            instance.lower,
+            instance.input_lower,
         );
-        let mut drawn: Vec<Drawn<(K, V), T, R>> = Vec::new();
-        let mut seed_scratch: Vec<T> = Vec::new();
+        let mut drawn: Vec<Drawn<(K, V), TIn, R>> = Vec::new();
+        let mut seed_scratch: Vec<TIn> = Vec::new();
         let mut budget = self.window_size;
         while let Some(key) = walk.advance(&mut drawn) {
             self.keys_cache.push(key);

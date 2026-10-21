@@ -16,7 +16,7 @@ use crate::operators::reduce::{sort_dedup, ReduceTactic};
 use crate::operators::history::ValueHistory;
 
 /// A unit of proxied reduce work, presented to the backend.
-pub struct ReduceInstance<'a, T, B1, B2> {
+pub struct ReduceInstance<'a, T, B1, B2, TIn = T> {
     /// The accumulated input history.
     pub source_batches: &'a [B1],
     /// The freshly arrived input delta.
@@ -25,6 +25,8 @@ pub struct ReduceInstance<'a, T, B1, B2> {
     pub output_batches: &'a [B2],
     /// The compaction frontier for loading (the retire's lower bound).
     pub lower: AntichainRef<'a, T>,
+    /// The same frontier, as times of the input, for loading the input.
+    pub input_lower: AntichainRef<'a, TIn>,
 }
 
 /// One window of the key space: the presentations a bounded, key-contiguous snip needs.
@@ -37,23 +39,27 @@ pub struct ReduceInstance<'a, T, B1, B2> {
 /// interesting time is lost to netting — the invariant that once forced the runs apart.
 ///
 /// Owned by the harness and refilled by [`ProxyReduceBackend::next_window`].
-pub struct ReduceWindow<T, RIn, ROut, K = u64, VIn = u64, VOut = u64> {
+///
+/// The input and its seeds are at the times the input's batches hold, `TIn`, and the output at
+/// the operator's times `T`. They are the same unless the backend sits behind one of the
+/// [`wrappers`](super::wrappers).
+pub struct ReduceWindow<T, RIn, ROut, K = u64, VIn = u64, VOut = u64, TIn = T> {
     /// The key's full input — novel and prior merged, netted — sorted & consolidated by `((key, value_id), time)`.
     /// May be advanced to the compaction frontier.
-    pub input: ProxyBridge<T, RIn, K, VIn>,
+    pub input: ProxyBridge<TIn, RIn, K, VIn>,
     /// The RAW novel time support: `(key, time)` pairs sorted by `(key, time)` and deduplicated.
     /// Record these from the novel batches BEFORE any consolidation or advancement.
     /// A netted-away record's time must still appear here.
-    pub seeds: Vec<(K, T)>,
+    pub seeds: Vec<(K, TIn)>,
     /// Accumulated output preceding the retire's interval, same ordering as `input`.
     pub output: ProxyBridge<T, ROut, K, VOut>,
 }
 
-impl<T, RIn, ROut, K, VIn, VOut> Default for ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
+impl<T, RIn, ROut, K, VIn, VOut, TIn> Default for ReduceWindow<T, RIn, ROut, K, VIn, VOut, TIn> {
     fn default() -> Self { ReduceWindow { input: Vec::new(), seeds: Vec::new(), output: Vec::new() } }
 }
 
-impl<T, RIn, ROut, K, VIn, VOut> ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
+impl<T, RIn, ROut, K, VIn, VOut, TIn> ReduceWindow<T, RIn, ROut, K, VIn, VOut, TIn> {
     /// Clear the presentations, keeping their allocations.
     pub fn clear(&mut self) {
         self.input.clear();
@@ -67,7 +73,12 @@ impl<T, RIn, ROut, K, VIn, VOut> ReduceWindow<T, RIn, ROut, K, VIn, VOut> {
 /// The protocol for each round of invocation is
 /// `begin [ next_window reduce_corrections* emit ]* finish`,
 /// where the window loop runs until `next_window` reports the key space exhausted.
-pub trait ProxyReduceBackend<T, B1, B2> {
+///
+/// The backend draws its input at the times the input's batches hold, `TIn`, and builds its
+/// output at the operator's times `T`. They are the same unless the backend sits behind one of the
+/// [`wrappers`](super::wrappers), which read the times a wrapped batch holds as the operator sees
+/// them.
+pub trait ProxyReduceBackend<T, B1, B2, TIn = T> {
     /// Independent groups, with identities stable across retires.
     type Key: Copy + Ord;
     /// Input value proxies, valid throughout a window.
@@ -105,10 +116,10 @@ pub trait ProxyReduceBackend<T, B1, B2> {
     /// enough that the presentations are affordable, as all are live at once.
     fn next_window(
         &mut self,
-        instance: &ReduceInstance<'_, T, B1, B2>,
+        instance: &ReduceInstance<'_, T, B1, B2, TIn>,
         changed: &[Self::Key],
         from: &mut KeyPosition<Self::Key>,
-        window: &mut ReduceWindow<T, Self::RIn, Self::ROut, Self::Key, Self::VIn, Self::VOut>,
+        window: &mut ReduceWindow<T, Self::RIn, Self::ROut, Self::Key, Self::VIn, Self::VOut, TIn>,
     );
 
     /// A wave of input-output reconciliation, in which the backend supplies necessary edits.
@@ -190,6 +201,7 @@ where
             input_batches: &input_batches,
             output_batches: &output_batches,
             lower: lower.borrow(),
+            input_lower: lower.borrow(),
         };
 
         // Split the carried interesting times against `upper`.

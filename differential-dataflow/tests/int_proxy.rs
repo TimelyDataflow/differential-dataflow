@@ -582,3 +582,170 @@ fn reduce_single_seed_with_incomparable_record() {
         "including the incomparable value at the seed, or skipping the join, is incorrect");
     assert!(pending.is_empty());
 }
+
+// ===== Reading wrapped batches =====
+//
+// The trace wrappers change only times. A batch entered into a nested scope (`BatchEnter`) reads
+// each stored time entered; a batch of a trace read as of a frontier (`BatchFrontier`) reads each
+// advanced by `since`, and none at or beyond `until`. Before `since` such a trace is not correct:
+// compaction can leave a retraction advanced to `since` beside the insertion it retracts. The
+// backend wrappers (`BackendEnter`, `BackendFrontier`) read the times their inner backends draw as
+// the wrappers say. The reference is the same tactic over the batch rebuilt with every time read
+// as a cursor through the wrappers reads it.
+
+use differential_dataflow::operators::int_proxy::join::{JoinInstance, JoinMatches, ProxyJoinBackend, ProxyJoinTactic};
+use differential_dataflow::operators::int_proxy::{BackendEnter, BackendFrontier, KeyPosition, ProxyBridge};
+use differential_dataflow::operators::join::{Fresh, JoinTactic};
+use differential_dataflow::trace::wrappers::enter::BatchEnter;
+use differential_dataflow::trace::wrappers::frontier::BatchFrontier;
+
+/// A time of the nested scope the tests enter: an outer time, and a round.
+type Nested = Product<u64, u64>;
+/// The max-reduce's logic, as a plain function, so that its backends name one type.
+type MaxLogic = fn(&u64, &[(u64, i64)], &mut Vec<(u64, i64)>, &mut Vec<(u64, i64)>);
+/// The max-reduce's backend, producing at times `T`.
+type MaxBackend<T> = VecReduceBackend<u64, u64, u64, T, i64, MaxLogic>;
+
+/// `rows` as a hash-keyed batch read as of `since` (and before `until`), and the same rows with
+/// every time read as a cursor through the frontier reads it.
+fn as_of_pair(rows: Vec<((u64, u64), u64, i64)>, since: u64, until: Option<u64>) -> (BatchFrontier<Span<u64, (u64, u64), u64, i64>, u64>, Vec<((u64, u64), u64, i64)>) {
+    let until = until.map_or_else(Antichain::new, Antichain::from_elem);
+    let wrapped = BatchFrontier::make_from(hbatch(rows.clone(), 0, 0), Antichain::from_elem(since).borrow(), until.borrow());
+    let read = rows.into_iter().filter_map(|(d, mut t, r)| wrapped.advance_time(&mut t).then_some((d, t, r))).collect();
+    (wrapped, read)
+}
+
+/// `rows` with each time entered into the nested scope, at round 0.
+fn entered(rows: Vec<((u64, u64), u64, i64)>) -> Vec<((u64, u64), Nested, i64)> {
+    rows.into_iter().map(|(d, t, r)| (d, Product::new(t, 0), r)).collect()
+}
+
+/// The history the frontier hides: (7, 3) inserted at 1 and retracted at 5, beside (7, 4) at 1;
+/// (8, 1) inserted at 1 and retracted at 5, so key 8 is empty as of 5; and (9, 2) inserted at 1
+/// and retracted at 6. Read as of 5, nothing happens before 5.
+fn history() -> Vec<((u64, u64), u64, i64)> {
+    vec![((7, 3), 1, 1), ((7, 3), 5, -1), ((7, 4), 1, 1), ((8, 1), 1, 1), ((8, 1), 5, -1), ((9, 2), 1, 1), ((9, 2), 6, -1)]
+}
+
+/// One retire of a reduce tactic over `input`, between `lower` and `upper`, its output read.
+fn retire<B1, T: Lattice + Timestamp>(mut tactic: impl ReduceTactic<T, B1, Span<u64, (u64, u64), T, i64>>, input: B1, lower: T, upper: T) -> Vec<((u64, u64), T, i64)> {
+    let (produced, _) = tactic.retire(vec![], vec![], vec![input], &Antichain::from_elem(lower.clone()), &Antichain::from_elem(upper), &Antichain::from_elem(lower));
+    produced.into_iter().filter_map(|b| b.inner).flat_map(|b| hread(&[b])).collect()
+}
+
+/// The max-reduce's backend.
+fn max_backend<T>() -> MaxBackend<T> { VecReduceBackend::new(max_logic as MaxLogic) }
+
+#[test]
+fn reduce_reads_as_of_since() {
+    for until in [None, Some(6)] {
+        let (wrapped, read) = as_of_pair(history(), 5, until);
+        let got = retire(ProxyReduceTactic::new(BackendFrontier::new(max_backend())), wrapped, 0, 10);
+        let want = retire(ProxyReduceTactic::new(max_backend()), hbatch(read, 0, 0), 0, 10);
+        assert_eq!(got, want, "until {until:?}");
+        assert!(got.iter().all(|(_, t, _)| *t >= 5), "nothing before since: {got:?}");
+    }
+}
+
+#[test]
+fn reduce_reads_entered_as_of_since() {
+    let (zero, ten) = (Product::new(0, 0), Product::new(10, 0));
+    for until in [None, Some(6)] {
+        let (wrapped, read) = as_of_pair(history(), 5, until);
+        let backend = BackendEnter::<_, u64>::new(BackendFrontier::new(max_backend::<Nested>()));
+        let got = retire(ProxyReduceTactic::new(backend), BatchEnter::<_, Nested>::make_from(wrapped), zero, ten);
+        let want = retire(ProxyReduceTactic::new(max_backend()), hbatch(entered(read), zero, zero), zero, ten);
+        assert_eq!(got, want, "until {until:?}");
+    }
+    // Entering alone reads the history at its own times, entered.
+    let backend = BackendEnter::<_, u64>::new(max_backend::<Nested>());
+    let only_entered = retire(ProxyReduceTactic::new(backend), BatchEnter::<_, Nested>::make_from(hbatch(history(), 0, 0)), zero, ten);
+    let reference = retire(ProxyReduceTactic::new(max_backend()), hbatch(entered(history()), zero, zero), zero, ten);
+    assert_eq!(only_entered, reference);
+}
+
+/// A join backend over hash-keyed `u64` pairs, which proxy themselves, at any input times: it draws
+/// every update of both inputs in one block, and crosses matches into `((key, (val0, val1)), time,
+/// diff)` rows.
+struct PairJoin;
+type Pairs<T> = Span<u64, (u64, u64), T, i64>;
+type Joined<T> = Vec<((u64, ((u64, u64), (u64, u64))), T, i64)>;
+impl<T, T0, T1> ProxyJoinBackend<T, Pairs<T0>, Pairs<T1>, T0, T1> for PairJoin
+where T: Lattice + Timestamp, T0: Lattice + Timestamp, T1: Lattice + Timestamp,
+{
+    type Key = u64;
+    type V0 = (u64, u64);
+    type V1 = (u64, u64);
+    type R0 = i64;
+    type R1 = i64;
+    type ROut = i64;
+    type Output = Joined<T>;
+    fn advance(&mut self, instance: &JoinInstance<T0, Pairs<T0>, Pairs<T1>, T1>, from: &mut KeyPosition<u64>, bridge0: &mut ProxyBridge<T0, i64, u64, (u64, u64)>, bridge1: &mut ProxyBridge<T1, i64, u64, (u64, u64)>) {
+        fn draw<T: Lattice + Timestamp>(batches: &[Pairs<T>]) -> ProxyBridge<T, i64, u64, (u64, u64)> {
+            let mut rows: Vec<_> = hread(batches).into_iter().map(|(kv, t, r)| ((kv.0.hashed(), kv), t, r)).collect();
+            consolidate_updates(&mut rows);
+            rows
+        }
+        let (b0, b1) = (draw(&instance.batches0), draw(&instance.batches1));
+        bridge0.extend(b0.iter().filter(|r| b1.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        bridge1.extend(b1.iter().filter(|r| b0.iter().any(|s| s.0.0 == r.0.0)).cloned());
+        *from = KeyPosition::End;
+    }
+    fn cross(&mut self, _instance: &JoinInstance<T0, Pairs<T0>, Pairs<T1>, T1>, matches: &mut JoinMatches<T, i64, u64, (u64, u64), (u64, u64)>, output: &mut Vec<Self::Output>) {
+        let rows = matches.ids.iter().zip(&matches.times).zip(&matches.diffs).map(|((id, t), r)| (*id, t.clone(), *r)).collect();
+        output.push(rows);
+    }
+}
+
+/// The join's output, keyed by its two values and consolidated.
+fn joined<T: Ord>(rows: Box<dyn Iterator<Item = Joined<T>>>) -> Vec<(((u64, u64), (u64, u64)), T, i64)> {
+    let mut out: Vec<_> = rows.flatten().map(|((_, (a, b)), t, r)| ((a, b), t, r)).collect();
+    consolidate_updates(&mut out);
+    out
+}
+
+#[test]
+fn join_reads_as_of_since() {
+    // The other input: a row for each key, at 2. Key 8 has nothing to meet as of 5.
+    let other = hbatch::<u64, u64, u64, i64>(vec![((7, 70), 2, 1), ((8, 80), 2, 1), ((9, 90), 2, 1)], 0, 0);
+    for until in [None, Some(6)] {
+        let (wrapped, read) = as_of_pair(history(), 5, until);
+        let got = joined(ProxyJoinTactic::new(BackendFrontier::new(PairJoin)).prep(vec![wrapped.clone()], vec![Rc::clone(&other)], Fresh::Input0, 0));
+        let want = joined(ProxyJoinTactic::new(PairJoin).prep(vec![hbatch(read.clone(), 0, 0)], vec![Rc::clone(&other)], Fresh::Input0, 0));
+        assert_eq!(got, want, "until {until:?}");
+        assert!(got.iter().all(|(_, t, _)| *t >= 5), "nothing before since: {got:?}");
+        // The same on the second input.
+        let got_right = joined(ProxyJoinTactic::new(BackendFrontier::right(PairJoin)).prep(vec![Rc::clone(&other)], vec![wrapped], Fresh::Input0, 0));
+        let want_right = joined(ProxyJoinTactic::new(PairJoin).prep(vec![Rc::clone(&other)], vec![hbatch(read, 0, 0)], Fresh::Input0, 0));
+        assert_eq!(got_right, want_right, "until {until:?}, second input");
+        // Read as it is stored, the history would join at times before since.
+        let raw = joined(ProxyJoinTactic::new(PairJoin).prep(vec![hbatch(history(), 0, 0)], vec![Rc::clone(&other)], Fresh::Input0, 0));
+        assert!(raw.iter().any(|(_, t, _)| *t < 5));
+    }
+}
+
+#[test]
+fn join_reads_entered_as_of_since() {
+    // The other input lives in the nested scope, at round 1.
+    let other = hbatch::<u64, u64, Nested, i64>(vec![((7, 70), Product::new(2, 1), 1), ((8, 80), Product::new(2, 1), 1), ((9, 90), Product::new(2, 1), 1)], Product::new(0, 0), Product::new(0, 0));
+    let meet = Product::new(0, 0);
+    for until in [None, Some(6)] {
+        let (wrapped, read) = as_of_pair(history(), 5, until);
+        let backend = BackendEnter::<_, u64>::new(BackendFrontier::new(PairJoin));
+        let got = joined(ProxyJoinTactic::new(backend).prep(vec![BatchEnter::<_, Nested>::make_from(wrapped)], vec![Rc::clone(&other)], Fresh::Input0, meet));
+        let want = joined(ProxyJoinTactic::new(PairJoin).prep(vec![hbatch(entered(read), meet, meet)], vec![Rc::clone(&other)], Fresh::Input0, meet));
+        assert_eq!(got, want, "until {until:?}");
+    }
+    // Entering alone, on the second input.
+    let entering = BackendEnter::<_, u64, _>::right(PairJoin);
+    let got = joined(ProxyJoinTactic::new(entering).prep(vec![Rc::clone(&other)], vec![BatchEnter::<_, Nested>::make_from(hbatch(history(), 0, 0))], Fresh::Input0, meet));
+    let want = joined(ProxyJoinTactic::new(PairJoin).prep(vec![Rc::clone(&other)], vec![hbatch(entered(history()), meet, meet)], Fresh::Input0, meet));
+    assert_eq!(got, want);
+    // Both inputs entered and read as of a frontier.
+    let (left, left_read) = as_of_pair(history(), 5, None);
+    let (right, right_read) = as_of_pair(vec![((7, 70), 2, 1), ((8, 80), 2, 1), ((9, 90), 6, 1)], 4, None);
+    let both = BackendEnter::<_, u64>::new(BackendEnter::<_, u64, _>::right(BackendFrontier::new(BackendFrontier::right(PairJoin))));
+    let got_both = joined(ProxyJoinTactic::new(both).prep(vec![BatchEnter::<_, Nested>::make_from(left)], vec![BatchEnter::<_, Nested>::make_from(right)], Fresh::Input0, meet));
+    let want_both = joined(ProxyJoinTactic::new(PairJoin).prep(vec![hbatch(entered(left_read), meet, meet)], vec![hbatch(entered(right_read), meet, meet)], Fresh::Input0, meet));
+    assert_eq!(got_both, want_both, "both inputs");
+}
