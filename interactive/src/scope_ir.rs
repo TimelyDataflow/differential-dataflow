@@ -148,6 +148,11 @@ pub struct Scope {
     pub imports: Vec<Import>,
     pub vars: Vec<Var>,
     pub items: Vec<Item>,
+    /// For each item, the name of the statement it was lowered from: the `let`, `var`, or
+    /// `export` whose expression built it, or a child scope's name. Diagnostics only. Empty
+    /// for a scope built without them; a reader uses it only when it has one entry per item.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     pub binds: Vec<Bind>,
     pub exports: Vec<Export>,
 }
@@ -333,6 +338,10 @@ impl Scope {
         for (i, &d) in dead.iter().enumerate() {
             if !d { remap[i] = next; next += 1; }
         }
+        if self.labels.len() == self.items.len() {
+            let mut keep = dead.iter().map(|d| !d);
+            self.labels.retain(|_| keep.next().unwrap());
+        }
         let mut keep = dead.iter().map(|d| !d);
         self.items.retain(|_| keep.next().unwrap());
         self.for_each_ref(|r| match r {
@@ -440,6 +449,7 @@ mod tests {
                 // body = roots + proposals       — references Import + Local
                 Item::Op(Node::Concat(vec![Ref::Import(1), Ref::Local(0)])),
             ],
+            labels: vec![],
             binds: vec![Bind { var: 0, value: Ref::Local(1) }], // reach <- body
             exports: vec![Export { name: "reach".into(), value: Ref::Var(0), shape: None }],
         };

@@ -426,6 +426,8 @@ pub struct ProgramInfo {
     pub imports: Vec<String>,
     pub exports: Vec<String>,
     pub origin: &'static str,
+    /// The timely dataflow index the program runs as.
+    pub dataflow: usize,
 }
 
 /// A live export→input binding: a persistent tap on a published trace whose
@@ -560,6 +562,7 @@ impl Server {
                         Origin::Generated => "generated",
                         Origin::Clock => "clock",
                     },
+                    dataflow: installed.dataflow_id,
                 }
             })
             .collect();

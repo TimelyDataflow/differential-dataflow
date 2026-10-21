@@ -22,6 +22,7 @@
 //!   - per-session writer: drains the response channel onto the wire.
 
 mod cmd;
+mod profile;
 #[path = "loop_.rs"]
 mod control_loop;
 

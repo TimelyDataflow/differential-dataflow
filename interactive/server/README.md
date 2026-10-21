@@ -196,6 +196,25 @@ and bind the export `f(state) + (seed | negate)` to the feedback input; then
 perturbations. A bound source cannot be dropped (it holds an importer), nor
 can the bound target (unbind first).
 
+## Profiling: `profile`
+
+With `DDIR_PROFILE=1` the server records, from Timely's logs, every operator's
+name and address as it is built and the time spent scheduling it, and keeps
+both after the operator's dataflow is dropped. `profile` answers one `data`
+line per operator, largest first:
+
+    ms=121.769 share=25.3% program=res label="best" op=CorgiReduce addr=[3, 8, 18] instances=40
+
+`ms` is the operator's own time (a scope's time less its children's) summed
+over workers, and over every install of the program under that name: a
+program loaded and dropped each epoch adds up. `label` is the program statement
+the operator was rendered from: the `let`, `var`, or `export` whose expression
+built it (an arrangement a join or reduce needs is its statement's), or a
+scope's name. `addr` is the operator's address within its dataflow. `program=(server)` collects the server's own dataflows
+(the control queue, `peek` snapshots, taps). `profile reset` forgets the times.
+The profile takes Timely's logger, as `DDIR_DIAGNOSTICS=1` does, so the two are
+exclusive; with both set, diagnostics win.
+
 ## Intake gates
 
 Multi-line intake is bounded: `DDIR_MAX_PROGRAM_BYTES` (default 65536) caps a

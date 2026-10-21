@@ -104,6 +104,13 @@ pub fn run_worker(
     // in turn wake it again. Keep idle servers genuinely idle unless an
     // operator explicitly requests diagnostics.
     let diagnostics_enabled = std::env::var("DDIR_DIAGNOSTICS").as_deref() == Ok("1");
+    let profile_enabled = crate::profile::enabled() && !diagnostics_enabled;
+    if crate::profile::enabled() && diagnostics_enabled && worker.index() == 0 {
+        eprintln!("ddir_server: DDIR_PROFILE is ignored with DDIR_DIAGNOSTICS=1 (both take timely's logger)");
+    }
+    if profile_enabled {
+        crate::profile::register(worker);
+    }
     let (_diagnostics_traces, _diagnostics_server) = if diagnostics_enabled {
         let diagnostics_port = std::env::var("DDIR_DIAG_PORT")
             .ok()
@@ -178,7 +185,14 @@ pub fn run_worker(
                         worker,
                         &mut shutdown,
                         logical_count,
+                        profile_enabled,
                     );
+                    if profile_enabled {
+                        // Name the dataflows of programs this command installed, while they exist.
+                        for program in server.program_info() {
+                            crate::profile::note_program(worker.index(), program.dataflow, &program.name);
+                        }
+                    }
                 }
                 Work::SessionEnded(connection) => {
                     stop_connection(connection, &mut tails, worker);
@@ -273,6 +287,7 @@ fn dispatch(
     worker: &mut Worker,
     shutdown: &mut bool,
     logical_count: Option<usize>,
+    profile_enabled: bool,
 ) {
     let result = match command {
         Err(error) => Err(error),
@@ -421,6 +436,36 @@ fn dispatch(
             worker,
         )
         .map(|()| format!("tailing {:?} from t={}", name, server.epoch())),
+        Ok(PreparedCommand::Profile { reset }) => {
+            if !profile_enabled {
+                Err("profiling is off; start the server with DDIR_PROFILE=1".to_string())
+            } else if reset {
+                crate::profile::reset();
+                Ok("profile reset".to_string())
+            } else {
+                if let Some(response) = response.as_ref() {
+                    let (rows, total) = crate::profile::report();
+                    for row in rows.iter().filter(|row| !row.own.is_zero()) {
+                        send(
+                            response,
+                            reqid,
+                            "data",
+                            format!(
+                                "ms={:.3} share={:.1}% program={} label={:?} op={} addr={:?} instances={}",
+                                row.own.as_secs_f64() * 1e3,
+                                100.0 * row.own.as_secs_f64() / total.as_secs_f64().max(f64::MIN_POSITIVE),
+                                row.program,
+                                row.label,
+                                row.name,
+                                row.addr,
+                                row.instances
+                            ),
+                        );
+                    }
+                }
+                Ok("profile".to_string())
+            }
+        }
         Ok(PreparedCommand::Stop { tail_reqid }) => {
             let key = (connection_id, tail_reqid.clone());
             match tails.remove(&key) {

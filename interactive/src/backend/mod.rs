@@ -58,6 +58,21 @@ pub trait Backend {
     fn leave_dynamic<'s>(c: Collection<'s, Time, Self::Container>, depth: usize) -> Collection<'s, Time, Self::Container>;
 }
 
+/// Which statement built which operators: every operator whose worker-unique identifier is in
+/// `first .. end` was rendered from a scope item labelled `label` (see `scope_ir::Scope::labels`).
+/// [`render_tree`] logs one per item to the logger registered as `"ddir/labels"`, if any. A child
+/// scope's items log before the scope's own event, so the first label an operator gets is the
+/// most specific.
+#[derive(Clone, Debug)]
+pub struct LabelEvent {
+    pub first: usize,
+    pub end: usize,
+    pub label: String,
+}
+
+/// The container builder of the `"ddir/labels"` logger.
+pub type LabelEventBuilder = timely::container::CapacityContainerBuilder<Vec<(std::time::Duration, LabelEvent)>>;
+
 /// A rendered item's value: a collection, or an arrangement.
 ///
 /// Imports are rendered values too, so a driver can hand a scope an arrangement it already
@@ -178,8 +193,11 @@ pub fn render_tree<'s, B: Backend>(
         var_cols.push(col);
     }
 
+    let labels = (s.labels.len() == s.items.len()).then_some(&s.labels);
+    let label_logger = labels.and_then(|_| scope.worker().logger_for::<LabelEventBuilder>("ddir/labels"));
     let mut items: Vec<RItem<'s, B>> = Vec::new();
     for (index, item) in s.items.iter().enumerate() {
+        let first = scope.worker().peek_identifier();
         match item {
             st::Item::Op(node) => {
                 let rendered = match node {
@@ -232,6 +250,13 @@ pub fn render_tree<'s, B: Backend>(
                 items.push(RItem::Sub(left));
             },
         }
+        if let (Some(logger), Some(labels)) = (&label_logger, labels) {
+            let end = scope.worker().peek_identifier();
+            logger.log(LabelEvent { first, end, label: labels[index].clone() });
+        }
+    }
+    if let Some(logger) = &label_logger {
+        logger.flush();
     }
 
     for bind in &s.binds {
