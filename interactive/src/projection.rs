@@ -498,10 +498,6 @@ fn build_scope(
                         for r in refs {
                             let input = plan.at(r);
                             builder.identity(&output, input);
-                            // A concat needs identical row shapes on every arm.
-                            // Until the rewrite can insert a matching projection
-                            // on arms without a producer lambda, keep them whole.
-                            builder.graph.seeds.extend(input.all());
                         }
                     }
                     Node::Arrange(r) => {
@@ -679,15 +675,26 @@ fn mask_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda
         let key = mask_graph_part(&mut builder, input, key, &output.shape.0, &output.key, live);
         let val = mask_graph_part(&mut builder, input, val, &output.shape.1, &output.val, live);
         let result = builder.tuple(vec![key, val]);
-        masked.graph = Ok(std::sync::Arc::new(builder.finish(result)));
+        // The original was already typed at its original input shape. Remove
+        // dead subgraphs now, before a masked feedback variable changes that
+        // input shape and shape inference visits this lambda again.
+        masked.graph = Ok(std::sync::Arc::new(corgi::optimize(
+            &builder.finish(result),
+        )));
     }
     Some(masked)
 }
 
 fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> usize {
     let mut masked = 0;
-    for (item, planned) in scope.items.iter_mut().zip(&plan.items) {
-        match (item, planned) {
+    let mut remap = Vec::with_capacity(scope.items.len());
+    let mut items = Vec::with_capacity(scope.items.len());
+    let identity = Lambda::new("input".into(), &corgi::Scope::default());
+    for (mut item, planned) in std::mem::take(&mut scope.items)
+        .into_iter()
+        .zip(&plan.items)
+    {
+        match (&mut item, planned) {
             (Item::Op(Node::Linear { ops, .. }), PlannedItem::Op { stages, .. }) => {
                 for (op, site) in ops.iter_mut().zip(stages) {
                     if let LinearOp::Project(lambda) = op {
@@ -719,8 +726,78 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
             }
             _ => {}
         }
+        match &mut item {
+            Item::Op(node) => match node {
+                Node::Linear { input, .. }
+                | Node::Arrange(input)
+                | Node::Reduce { input, .. }
+                | Node::Inspect { input, .. } => remap_ref(input, &remap),
+                Node::Join { left, right, .. } => {
+                    remap_ref(left, &remap);
+                    remap_ref(right, &remap);
+                }
+                Node::HalfJoin {
+                    stream,
+                    arrangement,
+                    ..
+                } => {
+                    remap_ref(stream, &remap);
+                    remap_ref(arrangement, &remap);
+                }
+                Node::Concat(refs) => {
+                    for r in refs.iter_mut() {
+                        remap_ref(r, &remap);
+                    }
+                    let PlannedItem::Op { output, .. } = planned else {
+                        unreachable!("a concat has an operator plan")
+                    };
+                    if let Some(lambda) = mask_lambda(&identity, output, live) {
+                        let fields = output
+                            .key
+                            .iter()
+                            .chain(&output.val)
+                            .filter(|&&id| !live[id])
+                            .count();
+                        for r in refs.iter_mut() {
+                            let project = Item::Op(Node::Linear {
+                                input: r.clone(),
+                                ops: vec![LinearOp::Project(lambda.clone())],
+                            });
+                            *r = Ref::Local(items.len());
+                            items.push(project);
+                            masked += fields;
+                        }
+                    }
+                }
+            },
+            Item::Sub(child) => {
+                for import in &mut child.imports {
+                    if let Source::Parent(r) = &mut import.from {
+                        remap_ref(r, &remap);
+                    }
+                }
+            }
+        }
+        remap.push(items.len());
+        items.push(item);
     }
+    for bind in &mut scope.binds {
+        remap_ref(&mut bind.value, &remap);
+    }
+    for export in &mut scope.exports {
+        remap_ref(&mut export.value, &remap);
+    }
+    scope.items = items;
     masked
+}
+
+fn remap_ref(r: &mut Ref, remap: &[usize]) {
+    match r {
+        Ref::Local(i) | Ref::ChildExport(i, _) => {
+            *i = remap[*i];
+        }
+        Ref::Import(_) | Ref::Var(_) => {}
+    }
 }
 
 /// Build the backward demand graph for a typed program. `source` supplies any
@@ -836,5 +913,21 @@ mod tests {
                     export \"out\" = x | count | map(((a, _), n) -> ((a), n));";
         let mut program = lower::lower_tree(parse::pipe::parse(text));
         assert_eq!(pushdown(&mut program, &|_| None).unwrap(), 0);
+    }
+
+    #[test]
+    fn concat_projects_both_arms_of_a_feedback_loop() {
+        let text = "let source = input 0 : ((int, int) ; ());
+                    let initial = source | map((row, ()) -> ((row.0, row.1), ()));
+                    toy: {
+                        var state = (initial) + (state | filter((row, ()) -> 0));
+                    }
+                    export \"out\" = toy::state | map((row, ()) -> ((row.0), ())) | count;";
+        let mut program = lower::lower_tree(parse::pipe::parse(text));
+        program.optimize();
+        assert!(pushdown(&mut program, &|_| None).unwrap() >= 3);
+        let (_, check) = shapes::infer(&program, &|_| None);
+        assert!(check.conflicts.is_empty(), "{:?}", check.conflicts);
+        assert!(check.unknown.is_empty(), "{:?}", check.unknown);
     }
 }
