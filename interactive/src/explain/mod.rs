@@ -527,8 +527,8 @@ impl RowModel for Val {
         val.push(f(1, 1 + out_len));                  // q
         projection(var(0), tup(val), 3)
     }
-    fn ky_data_eq() -> Option<Lambda> {
-        Some(predicate(eq(f(1, 0), f(1, 1))))
+    fn ky_data_le() -> Option<Lambda> {
+        Some(predicate(le(f(1, 0), f(1, 1))))
     }
     fn ky_drop_vout(in_len: usize, out_len: usize) -> Lambda {
         let mut val = vec![f(1, 0)];

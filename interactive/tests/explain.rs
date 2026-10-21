@@ -473,6 +473,22 @@ fn negated_fanout_explanations_sufficient() {
     assert!(!sizes.is_empty());
 }
 
+/// A `min` whose value decides a later key. Labels are 2→4, 4→1 and 1→1. Explaining label 4's
+/// count demands node 2's rows; in the restricted run node 4 lacks the edge that gave it label 1,
+/// takes label 4 from node 2, and joins label 4's count. The count's lookup demands node 4's row
+/// from the restricted run, and the `min` must then demand the inputs achieving node 4's label in
+/// the reference, not only those achieving its restricted label. (Found by `difftest`.)
+#[test]
+fn min_then_count_explanations_sufficient() {
+    const MIN_COUNT: &str = r#"
+        let i0 = input 0 : (int ; int);
+        s: { let step = x | join(i0, (k, l, e) -> (e, l)); var x = (i0 + step) | min; }
+        export "result" = s::x | map((k, l) -> ((l), ())) | count;
+    "#;
+    let sizes = assert_all_rows_sufficient(MIN_COUNT, &[vec![(Value::Int(2), Value::Int(4)), (Value::Int(4), Value::Int(1))]]);
+    assert!(!sizes.is_empty());
+}
+
 /// Count outputs over duplicate-free inputs: sufficient today, because the
 /// keyed lookup demands every input row at the key, which is precisely the
 /// count's multiset.
