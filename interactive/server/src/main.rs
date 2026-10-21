@@ -226,6 +226,12 @@ where
                 for incoming in listener.incoming() {
                     match incoming {
                         Ok(stream) => {
+                            // Replies are small writes, often several per command; without this,
+                            // Nagle's algorithm holds each until the client acknowledges the last,
+                            // and a delayed acknowledgement (40 ms on Linux) stalls every round trip.
+                            if let Err(e) = stream.set_nodelay(true) {
+                                eprintln!("ddir_server: {} could not disable Nagle's algorithm: {}", label, e);
+                            }
                             let control = control.clone();
                             let session = session.clone();
                             std::thread::spawn(move || {
