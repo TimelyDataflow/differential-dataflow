@@ -111,6 +111,11 @@ where
             // Upper and lower frontiers for the pending input and output batches to process.
             let mut upper_limit = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
             let mut lower_limit = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
+            // The same, but as bounds of source trace batches. The limits above join in the input frontier,
+            // which can put them strictly inside a source batch, where the trace cannot be cut. No update lies
+            // between the two, as the input frontier rules out the times the join adds.
+            let mut source_upper = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
+            let mut source_lower = Antichain::from_elem(<Tr1::Time as Timestamp>::minimum());
 
             move |(input, frontier), output| {
 
@@ -127,6 +132,7 @@ where
                 // Downgrade previous upper limit to be current lower limit.
                 lower_limit.clear();
                 lower_limit.extend(upper_limit.borrow().iter().cloned());
+                source_lower.clone_from(&source_upper);
 
                 // Drain input batches in order, capturing capabilities and the last upper.
                 input.for_each(|capability, batches| {
@@ -134,16 +140,16 @@ where
                         capabilities.insert(capability.clone());
                     }
                     for batch in batches.drain(..) {
-                        upper_limit.clone_from(batch.upper());
+                        source_upper.clone_from(batch.upper());
                         batch_storage.push(batch);
                     }
                 });
 
                 // Pull in any subsequent empty batches we believe to exist.
-                source_trace.advance_upper(&mut upper_limit);
+                source_trace.advance_upper(&mut source_upper);
                 // Incorporate the input frontier guarantees as well.
                 let mut joined = Antichain::new();
-                crate::lattice::antichain_join_into(&upper_limit.borrow()[..], &frontier.frontier()[..], &mut joined);
+                crate::lattice::antichain_join_into(&source_upper.borrow()[..], &frontier.frontier()[..], &mut joined);
                 upper_limit = joined;
 
                 // We plan to retire the interval [lower_limit, upper_limit), which should be non-empty to proceed.
@@ -151,7 +157,7 @@ where
 
                     // Acquire the pre-existing input and output batches preceding the interval. Batch handles
                     // are cheap to clone, so we fetch them whether or not the tactic finds work to do.
-                    let source_batches = source_trace.batches_through(lower_limit.borrow()).expect("failed to acquire source batches");
+                    let source_batches = source_trace.batches_through(source_lower.borrow()).expect("failed to acquire source batches");
                     let output_batches = output_reader.batches_through(lower_limit.borrow()).expect("failed to acquire output batches");
 
                     // The times the operator currently holds capabilities for, as an antichain.
@@ -192,7 +198,7 @@ where
                     output_reader.set_logical_compaction(upper_limit.borrow());
 
                     // We will only slice the data between future batches.
-                    source_trace.set_physical_compaction(upper_limit.borrow());
+                    source_trace.set_physical_compaction(source_upper.borrow());
                     output_reader.set_physical_compaction(upper_limit.borrow());
                 }
 
