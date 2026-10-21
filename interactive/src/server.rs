@@ -361,13 +361,15 @@ pub enum Command {
         input: usize,
         columns: Updates,
     },
-    /// Fill positional `input` of `prog` from `source` — a recipe name or a
-    /// file path — at the current epoch. Collective: every worker feeds its
-    /// own shard of the rows (see [`Server::load`]).
+    /// Fill positional `input` of `prog` from `source` — a recipe name, a
+    /// published trace, or a file path — at the current epoch, each row's
+    /// multiplicity scaled by `diff`. Collective: every worker feeds its own
+    /// shard of the rows (see [`Server::load`]).
     Load {
         prog: String,
         input: usize,
         source: String,
+        diff: Diff,
     },
     /// Close `n` epochs, running to quiescence after each one.
     Tick { n: u64 },
@@ -916,18 +918,27 @@ impl Server {
 
     /// Bulk-load rows into positional `input` of `prog` at the current epoch.
     ///
-    /// `source` is either a recipe (`random:…`, `iota:N` — the same names an
-    /// `import` accepts) or the path of a text file with one row per line of
-    /// whitespace-separated integers, the fields of the input's key (its value is
-    /// unit), read into columns at the input's declared shape. Collective: every
-    /// worker must call this, and each feeds only its shard (`row % peers ==
-    /// index`) through its own handle, so the union is the source exactly once
-    /// and the exchange places each row on its key's owner.
+    /// `source` is a recipe (`random:…`, `iota:N` — the same names an
+    /// `import` accepts), a published trace, or the path of a text file with one
+    /// row per line of whitespace-separated integers, the fields of the input's
+    /// key (its value is unit), read into columns at the input's declared shape.
+    /// Collective: every worker must call this, and each feeds only its shard
+    /// (`row % peers == index`) through its own handle, so the union is the
+    /// source exactly once and the exchange places each row on its key's owner.
+    /// Each row enters with its multiplicity times `diff`.
+    ///
+    /// A trace is read as its consolidated contents before the current epoch,
+    /// each worker reading its own share of the arrangement directly, with no
+    /// dataflow and no exchange (the input's own exchange routes the rows).
+    /// `feed bank 0 from retire diff=-1` is the maintenance idiom: a program
+    /// exports the rows it no longer needs, and the server deletes them from its
+    /// input without a client round trip.
     ///
     /// A `random:` recipe with `churn=C` keeps churning: every later `tick`
     /// retracts the next `C` rows of the window and adds `C` fresh ones, the
     /// standing-change regime a program is benchmarked under. Returns the
-    /// number of rows in the source (across all workers).
+    /// number of rows in the source (across all workers), or for a trace the
+    /// number in this worker's share.
     ///
     /// A file is validated in full on every worker before any of its rows is
     /// applied: a malformed line fails the load on every worker, so a source
@@ -939,9 +950,13 @@ impl Server {
         prog: &str,
         input: usize,
         source: &str,
+        diff: Diff,
     ) -> Result<u64, String> {
         let time = self.epoch;
         self.validate_feed(prog, input, time)?;
+        if self.loads_from_trace(source) {
+            return self.load_trace(prog, input, source, diff);
+        }
         let (index, peers) = (worker.index(), worker.peers());
         let mine = |e: u64| (e as usize) % peers == index;
         let recipe = Recipe::parse(source);
@@ -973,7 +988,7 @@ impl Server {
                 for (e, line) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
                     let fields = line.split_whitespace().collect::<Vec<_>>().join(",");
                     let decoder = if mine(e as u64) { &mut rows } else { &mut others };
-                    decoder.push(&fields, None, 1).map_err(|error| format!("load: line {} of {:?}: {error}", e + 1, source))?;
+                    decoder.push(&fields, None, diff).map_err(|error| format!("load: line {} of {:?}: {error}", e + 1, source))?;
                     if others.len() >= COLUMN_BATCH {
                         others = FeedDecoder::new(key, val);
                     }
@@ -987,16 +1002,77 @@ impl Server {
             .get_mut(&canonical_source_name(prog))
             .expect("load target was prevalidated");
         if let Some(recipe @ Recipe::Random { churn: 1.., .. }) = recipe {
+            if diff != 1 {
+                return Err(format!("load: a churning recipe {:?} must be fed with diff=1", source));
+            }
             installed.generators.insert(input, (recipe, 0));
         }
         let handle = installed.inputs.get_mut(&input).expect("load input was prevalidated");
         if let Some(recipe) = recipe {
-            handle.generate(recipe, (0..recipe.rows_len()).filter(|e| mine(*e)), time, 1);
+            handle.generate(recipe, (0..recipe.rows_len()).filter(|e| mine(*e)), time, diff);
         }
         if let Some(rows) = rows {
             handle.give_columns(rows, time)?;
         }
         Ok(total)
+    }
+
+    /// Whether [`Server::load`] reads `source` as a published trace (and so counts only this
+    /// worker's share of its rows), rather than as a recipe or a file.
+    pub fn loads_from_trace(&self, source: &str) -> bool {
+        Recipe::parse(source).is_none() && self.is_published(&canonical_source_name(source))
+    }
+
+    /// [`Server::load`] from published trace `source`: this worker's share of its contents
+    /// before the current epoch, scaled by `diff`, into its own handle for `prog`'s `input`.
+    fn load_trace(&mut self, prog: &str, input: usize, source: &str, diff: Diff) -> Result<u64, String> {
+        let name = canonical_source_name(source);
+        let declared = &self.programs[&canonical_source_name(prog)].inputs[&input].shape;
+        let shape = self.shapes[&name].clone();
+        if *declared != shape {
+            return Err(format!(
+                "program {:?} declares input {} as {} but trace {:?} is published as {}",
+                prog, input, fmt_shape(declared), name, fmt_shape(&shape)
+            ));
+        }
+        let mut updates = self.snapshot_local(&name)?;
+        // Every check above reads state all workers share, so they agree on it. Only scaling
+        // reads this worker's rows; an overflow there cannot be refused on every worker alike.
+        for d in updates.diffs.iter_mut() {
+            *d = d.checked_mul(diff).unwrap_or_else(|| {
+                panic!("feed from {name:?}: multiplicity {d} overflows when scaled by {diff}")
+            });
+        }
+        let rows = updates.len() as u64;
+        self.programs
+            .get_mut(&canonical_source_name(prog))
+            .expect("load target was prevalidated")
+            .inputs
+            .get_mut(&input)
+            .expect("load input was prevalidated")
+            .give_columns(updates, self.epoch)?;
+        Ok(rows)
+    }
+
+    /// This worker's share of trace `name`, consolidated as of the current epoch, read from its
+    /// batches without a dataflow. Unlike [`Server::snapshot`], nothing moves between workers.
+    pub fn snapshot_local(&mut self, name: &str) -> Result<Updates, String> {
+        use differential_dataflow::trace::TraceReader;
+        let name = canonical_source_name(name);
+        let epoch = self.epoch;
+        let mut trace = self.traces.get(&name).cloned().ok_or_else(|| format!("no trace {:?}", name))?;
+        let batches = trace
+            .batches_through(Antichain::from_elem(epoch).borrow())
+            .ok_or_else(|| format!("trace {:?} has no readable cut at epoch {}", name, epoch))?;
+        let parts = crate::backend::corgi::batch_containers(batches)
+            .into_iter()
+            .map(|HostContainer { keys, vals, times, diffs }| {
+                let part = Updates { keys, vals, diffs };
+                let before: Vec<usize> = (0..times.len()).filter(|&i| times.get(i) < epoch).collect();
+                if before.len() == part.len() { part } else { part.select(&before) }
+            })
+            .collect();
+        Ok(Updates::consolidate(parts, &self.shapes[&name]))
     }
 
     /// Check everything about an input target that can fail without changing

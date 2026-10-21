@@ -121,12 +121,14 @@ pub enum Cmd {
         columns: Updates,
     },
     /// Fill one program input from a source the server reads itself — a recipe
-    /// (`random:…`, `iota:N`) or a file of integer rows — each worker taking its
-    /// shard, so no row crosses the wire. `feed <prog> <in#> from <source>`.
+    /// (`random:…`, `iota:N`), a published trace, or a file of integer rows —
+    /// each worker taking its shard, so no row crosses the wire.
+    /// `feed <prog> <in#> from <source> [diff=<d>]`.
     Source {
         prog: String,
         input: usize,
         source: String,
+        diff: Diff,
     },
     /// Bind a trace's changes into `prog`'s positional `input`, delivered at
     /// each tick one epoch delayed — the write path for installed programs.
@@ -225,7 +227,7 @@ pub fn prepare(command: Cmd, catalog: &Catalog) -> Result<PreparedCommand, Strin
         Cmd::Stop { tail_reqid } => return Ok(PreparedCommand::Stop { tail_reqid }),
         Cmd::Feed { prog, input, columns, time } => ServerCommand::Feed { prog, input, columns, time },
         Cmd::FeedColumns { prog, input, columns } => ServerCommand::FeedColumns { prog, input, columns },
-        Cmd::Source { prog, input, source } => ServerCommand::Load { prog, input, source },
+        Cmd::Source { prog, input, source, diff } => ServerCommand::Load { prog, input, source, diff },
         Cmd::Bind { trace, prog, input } => ServerCommand::Bind { trace, prog, input },
         Cmd::Unbind { trace, prog, input } => ServerCommand::Unbind { trace, prog, input },
         Cmd::Tick { n } => ServerCommand::Tick { n },
@@ -689,15 +691,26 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                 let input = input.parse().map_err(|_| format!("feed: <in#> must be a number, got {input:?}"));
                 return ParseOutcome::BeginFrame { prog: (*prog).to_string(), input, nbytes };
             }
-            // Syntax: `feed <prog> <in#> from <recipe-or-file>` — the server sources the rows.
-            if let [prog, input, "from", source] = args {
-                return match input.parse() {
-                    Ok(input) => ParseOutcome::Cmd(Cmd::Source {
+            // Syntax: `feed <prog> <in#> from <recipe-trace-or-file> [diff=<d>]` — the server
+            // sources the rows.
+            if let [prog, input, "from", source, rest @ ..] = args {
+                let diff = match rest {
+                    [] => Ok(1),
+                    [arg] => arg
+                        .strip_prefix("diff=")
+                        .and_then(|d| d.parse().ok())
+                        .ok_or_else(|| format!("feed: expected diff=<integer>, got {arg:?}")),
+                    _ => Err("feed: expected `<prog> <in#> from <source> [diff=<d>]`".to_string()),
+                };
+                return match (input.parse(), diff) {
+                    (Ok(input), Ok(diff)) => ParseOutcome::Cmd(Cmd::Source {
                         prog: (*prog).to_string(),
                         input,
                         source: (*source).to_string(),
+                        diff,
                     }),
-                    Err(_) => ParseOutcome::Err(format!("feed: <in#> must be a number, got {input:?}")),
+                    (Err(_), _) => ParseOutcome::Err(format!("feed: <in#> must be a number, got {input:?}")),
+                    (_, Err(error)) => ParseOutcome::Err(error),
                 };
             }
             // Syntax: `feed <prog> <in#> <key> [val=<v>] [time=<t>] [diff=<d>]`
@@ -884,12 +897,19 @@ mod tests {
         let mut p = LineParser::new(Catalog::default());
         let out = feed_all(&mut p, &["r1 feed world 0 from iota:3\n"]);
         match &out[..] {
-            [(reqid, Ok(Cmd::Source { prog, input, source }))] => {
+            [(reqid, Ok(Cmd::Source { prog, input, source, diff: 1 }))] => {
                 assert_eq!(reqid.as_str(), "r1");
                 assert_eq!((prog.as_str(), *input, source.as_str()), ("world", 0, "iota:3"));
             }
             other => panic!("unexpected parse: {other:?}"),
         }
+        let out = feed_all(&mut p, &["r3 feed bank 0 from retire diff=-1\n"]);
+        assert!(
+            matches!(&out[..], [(_, Ok(Cmd::Source { source, diff: -1, .. }))] if source == "retire"),
+            "a trace feed carries its scale: {out:?}"
+        );
+        let out = feed_all(&mut p, &["r4 feed bank 0 from retire diff=nope\n"]);
+        assert!(matches!(&out[..], [(_, Err(_))]), "a bad diff must be rejected: {out:?}");
         let out = feed_all(&mut p, &["r2 feed world x from iota:3\n"]);
         assert!(matches!(&out[..], [(_, Err(_))]), "a bad input index must be rejected: {out:?}");
     }

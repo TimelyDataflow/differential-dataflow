@@ -1,0 +1,57 @@
+-- Optimistic transaction resolution in the data plane, as one maintained view
+-- (after frankmcsherry/blog/posts/2025-04-27.md).
+--
+-- Input 0 is the log: key = (txn id, is_read, record key), val = (value).
+-- `is_read = 1` asserts the record held `value` before this transaction; the
+-- sentinel -1 asserts it was absent. `is_read = 0` proposes a write. Ids order
+-- transactions and increase across ticks.
+--
+-- The store is not a separate collection: it is the log's current committed
+-- writes, which keep their transaction ids. So once a tick seals its ids, the
+-- rows the log no longer needs are `log - store`, exported as `retire`, and
+-- `feed bank 0 from retire diff=-1` leaves the log equal to the store.
+
+let intents = input 0 : ((int, int, int) ; (int));
+
+-- ((rid, k) ; expected) and ((wid, k) ; v)
+let reads  = intents | filter(((_, r, _), _) -> (r, 1) eq) | map(((rid, _, k), (e)) -> ((rid, k), (e)));
+let wr_all = intents | filter(((_, r, _), _) -> (r, 0) eq) | map(((wid, _, k), (v)) -> ((wid, k), (v)));
+let wid = wr_all | map(((wid, k), (v)) -> ((wid), (k, v)));
+
+res: {
+    -- writes of transactions not (currently) rolled back: anti-join on id.
+    let wr_bad = wid | join(rollback, (wid, kv, ()) -> (wid, kv));
+    let writes = wid + (wr_bad | negate);
+
+    -- each read paired with every surviving prior write to its key ...
+    let wk = writes | map(((wid), (k, v)) -> ((k), (wid, v)));
+    let rk = reads  | map(((rid, k), (e)) -> ((k), (rid, e)));
+    let pairs = rk | join(wk, ((k), (rid, e), (wid, v)) -> ((k, rid, e), (wid, v)))
+              | filter(((_, rid, _), (wid, _)) -> (wid, rid) lt);
+    -- ... and the LATEST prior write wins: min over (-wid, v).
+    let best = pairs | map((kre, (wid, v)) -> (kre, (wid neg, v))) | min;
+
+    -- a read fails if the latest prior value mismatches ...
+    let bad_seen = best | filter(((_, _, e), (_, v)) -> (v, e) ne) | map(((_, rid, _), _) -> ((rid), ()));
+
+    -- ... or if no prior write exists and it did not expect absence (-1).
+    let seen   = best | map(((k, rid, _), _) -> ((rid, k), ()));
+    let rkk    = reads | map((rk, _) -> (rk, ()));
+    let unseen = rkk + (seen | negate);
+    let bad_absent = unseen | join(reads, ((rid, _), (), (e)) -> ((rid, e), ()))
+                   | filter(((_, e), ()) -> (e, -1) ne) | map(((rid, _), ()) -> ((rid), ()));
+
+    var rollback = (bad_seen + bad_absent) | distinct;
+}
+
+let rb = res::rollback;
+let wbad = wid | join(rb, (wid, kv, ()) -> (wid, kv));
+let committed = wid + (wbad | negate);
+
+-- ((k) ; (-wid, v)): each key's latest committed write.
+let current = committed | map(((wid), (k, v)) -> ((k), (wid neg, v))) | min;
+
+export "rollback" = rb;
+export "state" = current | map((k, (_, v)) -> (k, (v)));
+-- Reads, rejected writes, and superseded writes: everything but the store.
+export "retire" = intents + (current | map(((k), (nw, v)) -> ((nw neg, 0, k), (v))) | negate);

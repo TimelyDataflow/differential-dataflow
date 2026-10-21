@@ -87,9 +87,9 @@ fn bindings_and_recipe_loads_must_match_declared_inputs() {
         server.install(worker, "target", &program(r#"export "t" = input 0 : ((int, int) ; ());"#)).unwrap();
         let err = server.bind(worker, "edges", "target", 0).unwrap_err();
         assert!(err.contains("published as"), "{err}");
-        let err = server.load(worker, "target", 0, "random:nodes=8,edges=12,arity=3").unwrap_err();
+        let err = server.load(worker, "target", 0, "random:nodes=8,edges=12,arity=3", 1).unwrap_err();
         assert!(err.contains("generates"), "{err}");
-        server.load(worker, "target", 0, "random:nodes=8,edges=12").unwrap();
+        server.load(worker, "target", 0, "random:nodes=8,edges=12", 1).unwrap();
     });
 }
 
@@ -133,14 +133,14 @@ fn rows_of_another_shape_are_refused() {
         assert!(batch.contains("row 2"), "{batch}");
         let file = std::env::temp_dir().join(format!("ddir-rows-{}.txt", std::process::id()));
         std::fs::write(&file, "1 2\n3 4 5\n").unwrap();
-        let loaded = server.load(worker, "producer", 0, file.to_str().unwrap()).unwrap_err();
+        let loaded = server.load(worker, "producer", 0, file.to_str().unwrap(), 1).unwrap_err();
         assert!(loaded.contains("line 2"), "{loaded}");
         server.tick(worker);
         assert!(server.snapshot(worker, "edges").unwrap().is_empty(), "nothing refused was staged");
         server.feed("producer", 0, "1,2\n3,4", None).unwrap();
         // Integers read as Rust reads them, a leading `+` included.
         std::fs::write(&file, "5 6\n+7 -8\n").unwrap();
-        server.load(worker, "producer", 0, file.to_str().unwrap()).unwrap();
+        server.load(worker, "producer", 0, file.to_str().unwrap(), 1).unwrap();
         server.tick(worker);
         assert_eq!(server.snapshot(worker, "edges").unwrap().into_rows().len(), 4);
         std::fs::remove_file(&file).unwrap();

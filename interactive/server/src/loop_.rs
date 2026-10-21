@@ -331,9 +331,16 @@ fn dispatch(
                 )
             }),
             // Collective: every worker sources its own shard.
-            ServerCommand::Load { prog, input, source } => server
-                .load(worker, &prog, input, &source)
-                .map(|rows| format!("loaded {rows} rows into {prog:?} input {input}")),
+            ServerCommand::Load { prog, input, source, diff } => {
+                let local = server.loads_from_trace(&source);
+                server.load(worker, &prog, input, &source, diff).map(|rows| {
+                    if local {
+                        format!("fed trace {source:?} with diff={diff} into {prog:?} input {input} ({rows} rows on worker 0)")
+                    } else {
+                        format!("loaded {rows} rows into {prog:?} input {input}")
+                    }
+                })
+            }
             ServerCommand::Bind { trace, prog, input } => server
                 .bind(worker, &trace, &prog, input)
                 .map(|()| format!("bound {:?} -> {:?} input {}", trace, prog, input)),

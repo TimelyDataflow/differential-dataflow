@@ -55,7 +55,7 @@ fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
         install(&mut server, worker, "declaring", DECLARING);
         install(&mut server, worker, "mirror", MIRROR);
         server.bind(worker, "doubled", "mirror", 0).unwrap();
-        server.load(worker, "loaded", 0, "random:nodes=5,edges=40,arity=3,churn=4").unwrap();
+        server.load(worker, "loaded", 0, "random:nodes=5,edges=40,arity=3,churn=4", 1).unwrap();
         let mut seen = Vec::new();
         for epoch in 1..5i64 {
             if worker.index() == 0 {

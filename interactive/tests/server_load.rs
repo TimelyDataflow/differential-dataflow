@@ -30,7 +30,7 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<Value>)
         program.optimize();
         let mut server = Server::new();
         server.install(worker, "world", &program).unwrap();
-        let outcome = server.load(worker, "world", 0, &path);
+        let outcome = server.load(worker, "world", 0, &path, 1);
         server.tick(worker);
         let rows = server
             .snapshot(worker, "rows")
@@ -65,4 +65,49 @@ fn a_well_formed_file_is_fed_exactly_once_across_workers() {
     let want: BTreeSet<Value> = [tup(&[1]), tup(&[2]), tup(&[3]), tup(&[4])].into_iter().collect();
     assert_eq!(rows.iter().cloned().collect::<BTreeSet<_>>(), want);
     assert_eq!(rows.len(), 4, "each row once: {rows:?}");
+}
+
+/// `load` from a published trace on `workers` workers: `world` holds `1..=6`, `gone` holds
+/// `2, 4, 6`, and `world` is fed `gone` scaled by `-1`, then `world` scaled by `2`. Returns
+/// worker 0's snapshot of `world` as (key, multiplicity).
+fn load_trace_on(workers: usize) -> Vec<(Value, i64)> {
+    let guards = timely::execute(timely::Config::process(workers), move |worker| {
+        let install = |server: &mut Server, worker: &mut _, name: &str| {
+            let text = format!("let rows = input 0 : ((int) ; ()); export \"{name}.rows\" = rows;");
+            let mut program = lower::lower_tree(parse::pipe::parse(&text));
+            program.optimize();
+            server.install(worker, name, &program).unwrap();
+        };
+        let mut server = Server::new();
+        install(&mut server, worker, "world");
+        install(&mut server, worker, "gone");
+        if worker.index() == 0 {
+            server.feed("world", 0, "1\n2\n3\n4\n5\n6", None).unwrap();
+            server.feed("gone", 0, "2\n4\n6", None).unwrap();
+        }
+        server.tick(worker);
+        assert!(server.loads_from_trace("gone.rows"));
+        server.load(worker, "world", 0, "gone.rows", -1).unwrap();
+        server.tick(worker);
+        server.load(worker, "world", 0, "world.rows", 2).unwrap();
+        server.tick(worker);
+        server
+            .snapshot(worker, "world.rows")
+            .unwrap()
+            .into_rows()
+            .into_iter()
+            .map(|(key, _, diff)| (key, diff))
+            .collect::<Vec<_>>()
+    })
+    .unwrap();
+    guards.join().into_iter().next().unwrap().unwrap()
+}
+
+#[test]
+fn a_trace_feeds_its_contents_scaled_from_every_workers_share() {
+    for workers in [1, 3] {
+        let rows = load_trace_on(workers);
+        let want = vec![(tup(&[1]), 3), (tup(&[3]), 3), (tup(&[5]), 3)];
+        assert_eq!(rows, want, "at {workers} workers");
+    }
 }

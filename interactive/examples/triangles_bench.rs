@@ -105,7 +105,7 @@ fn main() {
         let mut program = lower::lower_tree(parse::pipe::parse(&source));
         program.optimize();
         server.install(worker, "p", &program).unwrap();
-        server.load(worker, "p", 0, &format!("random:nodes={nodes},edges={edges},churn={churn}")).unwrap();
+        server.load(worker, "p", 0, &format!("random:nodes={nodes},edges={edges},churn={churn}"), 1).unwrap();
         let loaded = Instant::now();
         server.tick(worker);
         let count = |server: &mut Server, worker: &mut timely::worker::Worker| -> i64 {

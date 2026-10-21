@@ -48,7 +48,12 @@ sets are `peek`able exports. `feed <prog> <in#> from <source>` fills an input fr
 source the server reads itself — a recipe such as `random:nodes=N,edges=E,churn=C`
 or `iota:N`, or a file of integer rows — with each worker taking its shard, so
 no row crosses the wire; a `churn=C` recipe then replaces `C` rows on every
-`tick`. `peek <trace> [key]` snapshots a trace or one key of it (the key is read
+`tick`. The source may also be a published trace, read as its contents before
+the current epoch, each worker reading its own share of the arrangement, and
+`diff=<d>` scales every row: `feed bank 0 from retire diff=-1` deletes from an
+input the rows a program exports as no longer needed (see
+[`bench/txn`](bench/txn/README.md)). Unlike `bind`, this is one delivery of the
+trace's contents, not a standing mirror of its changes. `peek <trace> [key]` snapshots a trace or one key of it (the key is read
 at the trace's key shape, as a feed reads one), `tail <trace>` follows its changes,
 and `tick [n]` reports the epoch reached and the wall-clock time it took. `load` also accepts
 an inline pipe-syntax program:
