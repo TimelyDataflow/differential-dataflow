@@ -80,7 +80,7 @@ def check(server, output, workers):
 def check_queries(server, output, workers):
     """Check all three query emitters through every cascade/drain/restore epoch."""
     for query in ('ic2', 'ic5', 'ic9'):
-        for variant in ('flat', 'three'):
+        for variant in (('flat', 'three', 'id') if query=='ic5' else ('flat', 'three')):
             destination = output/f'{query}-{variant}-w{workers}'
             with destination.with_suffix('.log').open('w') as log:
                 subprocess.run([sys.executable,str(Path(__file__).with_name('update_stream.py')),
@@ -104,7 +104,7 @@ def main():
     fixture(args.output/'journal')
     (args.output/'bindings.json').write_text(json.dumps({q:witness.params(q) for q in ('ic2','ic9')}))
     for query in ('ic2', 'ic5', 'ic9'):
-        for variant in ('flat', 'three'):
+        for variant in (('flat', 'three', 'id') if query=='ic5' else ('flat', 'three')):
             (args.output/f'{query}-{variant}.ddp').write_text(query_program(*VARIANTS[variant],query=query))
     for workers in (1, 4):
         check(args.server.resolve(), args.output, workers)

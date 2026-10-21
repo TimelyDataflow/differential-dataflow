@@ -71,6 +71,14 @@ jobs:
           done
           python3 interactive/server/bench/ldbc/suite.py --server target/release/ddir_server \
             --mode maintained --workers 4 --rounds 1 --warmup 0
+      - name: LDBC weighted aggregates, bounded ranking and memory profiler
+        run: |
+          python3 interactive/server/bench/ldbc/test_aggregates.py --server target/release/ddir_server \
+            --output /tmp/ldbc-aggregates
+          python3 interactive/server/bench/ldbc/test_topk.py --server target/release/ddir_server \
+            --output /tmp/ldbc-topk
+          python3 interactive/server/bench/ldbc/test_memory_profile.py --server target/release/ddir_server \
+            --output /tmp/ldbc-memory-profile
       - name: SNB update streams
         run: |
           python3 interactive/server/bench/ldbc/test_update_stream.py \

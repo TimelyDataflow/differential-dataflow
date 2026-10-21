@@ -84,8 +84,8 @@ def profile(args):
     destination.mkdir()
     manifest = json.loads((args.prepared/'manifest.json').read_text())
     record = dict(query=name,status='running',points={},events=[],updates=[],answer_validation={},
-        source_revision=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
-        source_status=subprocess.check_output(['git','status','--porcelain'],text=True),
+        source_revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=Path(__file__).parent,text=True).strip(),
+        source_status=subprocess.check_output(['git','status','--porcelain'],cwd=Path(__file__).parent,text=True),
         binary_sha256=hashlib.sha256(args.server.read_bytes()).hexdigest(),
         initial_sha256=manifest['initial_sha256'],workers=args.workers,host=platform.node(),
         command=sys.argv,scope='Process-memory profile; saved-answer comparison only, no fresh oracle.')
@@ -125,8 +125,8 @@ def profile(args):
                 metrics,replies = server.commands(commands)
                 record['events'].append(dict(phase=label,elapsed_s=time.perf_counter()-tick_started,**metrics))
                 return replies
-            def settle():
-                for _ in range(3): command('settle',['tick'])
+            def settle(label):
+                for _ in range(3): command(label,['tick'])
             def mark(label):
                 value = memory.sample()
                 if value is None: raise RuntimeError(server.failure or 'server exited')
@@ -150,11 +150,11 @@ def profile(args):
             command('settle-inputs',['tick'])
             graph = rows = None
             gc.collect()
-            settle();mark('base_initial')
+            settle('settle-base');mark('base_initial')
             command('install-query',[f'load {name} begin\n{program}\n{{rid}} end-load','tick'] if query else ['tick'])
             mark('query_installed')
             command('bind',[Server.feed(name,0,binding,1,request_shape),'tick'] if query else ['tick'])
-            settle();mark('active_initial')
+            settle('settle-bound');mark('active_initial')
             if query: read('initial')
             replay_started = time.perf_counter()
             count = 0
@@ -171,11 +171,11 @@ def profile(args):
                 command('update',[*commands,'tick'])
                 record['updates'].append(dict(epoch=batch['epoch'],wire_ms=record['events'][-1]['wire_ms']))
             record.update(replay_s=time.perf_counter()-replay_started,epochs=len(manifest['batches']),projected_changes=count)
-            settle();mark('active_final')
+            settle('settle-final');mark('active_final')
             if query: read('final')
             mark('before_retirement')
             command('retire',[Server.feed(name,0,binding,-1,request_shape),'tick'] if query else ['tick'])
-            settle();mark('after_retirement')
+            settle('settle-retired');mark('after_retirement')
             if query:
                 frames, = command('read-empty',[f'peek {name}.answer as corgi'])
                 assert decode(frames)==[], 'request retirement did not empty the answer'
@@ -245,13 +245,15 @@ def main():
         record=json.loads(path.read_text()) if path.exists() else dict(query=name,status='failed',error='job exited without a report')
         if capped:
             record.update(status='failed',failure_kind='job-timeout',wall_time_capped=True)
-            write_json(path,record)
+        write_json(path,record)
         campaign['results'].append(dict(query=name,status=record['status'],returncode=child.returncode,report=str(path)))
         print(name,record['status'],record.get('error',''),flush=True)
         if record.get('failure_kind')=='saved-answer-mismatch' or name=='input-only' and record['status']!='profiled':
             campaign['status']='stopped';break
     else:campaign['status']='complete'
     campaign['current']=None;write_json(args.output/'campaign.json',campaign)
+    from summarize_memory import summarize
+    if (args.output/'input-only/report.json').exists(): summarize(args.output)
     if campaign['status']!='complete' or any(r['status']!='profiled' for r in campaign['results']):
         raise SystemExit(1)
 
