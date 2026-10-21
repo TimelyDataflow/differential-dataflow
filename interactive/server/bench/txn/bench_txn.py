@@ -27,6 +27,7 @@ import re
 import shlex
 import socket
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass
 from typing import Iterable
@@ -34,6 +35,12 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).resolve().parent
+# The LDBC client's frame encoder writes `feed … frame` payloads.
+sys.path.insert(0, str(HERE.parent / "ldbc"))
+from client import encode_frame  # noqa: E402
+
+# The intents input of every program here: `((txn, is_read, key) ; (value))`.
+INTENTS = (("prod", ["int", "int", "int"]), ("prod", ["int"]))
 DEFAULT_BINARY = ROOT / "target/release/ddir_server"
 
 
@@ -76,17 +83,19 @@ class Sample:
 
 
 class Client:
-    def __init__(self, stream: socket.socket):
+    def __init__(self, stream: socket.socket, frames: bool = False):
         self.stream = stream
         self.reader = stream.makefile("rb")
         self.next_id = 0
+        self.frames = frames
+        self.encode_ms = 0.0
 
     def _id(self) -> str:
         self.next_id += 1
         return f"q{self.next_id}"
 
-    def _exchange(self, reqid: str, payload: str) -> list[str]:
-        self.stream.sendall(payload.encode())
+    def _exchange(self, reqid: str, payload) -> list[str]:
+        self.stream.sendall(payload if isinstance(payload, bytes) else payload.encode())
         data: list[str] = []
         while True:
             raw = self.reader.readline()
@@ -118,8 +127,22 @@ class Client:
 
     def feed(self, prog: str, transactions: Iterable[Transaction]) -> float:
         reqid = self._id()
-        body = "\n".join(row for txn in transactions for row in txn.rows())
-        payload = f"{reqid} feed {prog} 0 begin\n{body}\n{reqid} end-feed\n"
+        encode = time.perf_counter()
+        if self.frames:
+            keys, vals = [], []
+            for txn in transactions:
+                for k, e in txn.reads:
+                    keys.append((txn.txn_id, 1, k))
+                    vals.append((e,))
+                for k, v in txn.writes:
+                    keys.append((txn.txn_id, 0, k))
+                    vals.append((v,))
+            frame = encode_frame(INTENTS, keys, [1] * len(keys), vals)
+            payload = f"{reqid} feed {prog} 0 frame {len(frame)}\n".encode() + frame
+        else:
+            body = "\n".join(row for txn in transactions for row in txn.rows())
+            payload = f"{reqid} feed {prog} 0 begin\n{body}\n{reqid} end-feed\n"
+        self.encode_ms += (time.perf_counter() - encode) * 1000.0
         start = time.perf_counter()
         self._exchange(reqid, payload)
         return (time.perf_counter() - start) * 1000.0
@@ -139,7 +162,7 @@ class Client:
 
 
 class ServerProcess:
-    def __init__(self, binary: Path, workers: int, wrap: list[str]):
+    def __init__(self, binary: Path, workers: int, wrap: list[str], frames: bool = False):
         ports = free_ports(3)
         env = os.environ.copy()
         env.update(
@@ -162,7 +185,7 @@ class ServerProcess:
             try:
                 stream = socket.create_connection(("127.0.0.1", ports[0]), timeout=1.0)
                 stream.settimeout(60.0)
-                self.client = Client(stream)
+                self.client = Client(stream, frames)
                 break
             except OSError:
                 if self.process.poll() is not None:
@@ -423,6 +446,12 @@ def main() -> None:
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--feed",
+        choices=["frames", "text"],
+        default="frames",
+        help="send intents as one binary frame of columns, or as framed text rows",
+    )
     parser.add_argument("--json", type=Path)
     args = parser.parse_args()
 
@@ -450,7 +479,7 @@ def main() -> None:
                 next_key = 0
                 samples: list[Sample] = []
                 key_count = batch if args.keys_from_batch else args.keys
-                with ServerProcess(args.binary.resolve(), workers, shlex.split(args.wrap)) as client:
+                with ServerProcess(args.binary.resolve(), workers, shlex.split(args.wrap), args.feed == "frames") as client:
                     if mode == "maintained":
                         client.load("bank", args.maintained_program.resolve())
                     else:
@@ -472,6 +501,7 @@ def main() -> None:
                         if round_index >= args.warmup:
                             samples.append(sample)
 
+                    encode_ms = client.encode_ms / (args.warmup + args.rounds)
                     if mode == "maintained":
                         rollback, _ = client.peek("rollback")
                         if rollback:
@@ -494,6 +524,8 @@ def main() -> None:
                     key_pattern=args.key_pattern,
                     rounds=args.rounds,
                     warmup=args.warmup,
+                    feed=args.feed,
+                    client_encode_ms=encode_ms,
                 )
                 results.append(result)
                 print(
