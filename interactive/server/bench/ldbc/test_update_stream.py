@@ -105,7 +105,7 @@ def injected_checkpoint_failure(args):
     manifest=json.loads((journal/'manifest.json').read_text())
     options=argparse.Namespace(server=args.server.resolve(),workers=args.workers,output=output,prepared=journal,
         parameters={name:witness.params(name)},check_mode='replay',check_every=7,check_first_class=True,
-        check_from=1,timeout=120,reference_timeout=120,max_rss_gib=6,max_total_rss_gib=10)
+        check_from=1,timeout=120,reference_timeout=120,max_rss_gib=6,max_total_rss_gib=10,feed='frames')
     epochs=checkpoint_epochs(manifest['batches'],'replay',7)
     report=dict(journal=manifest,queries=[],selected_queries=[name],workers=args.workers,
                 validation=dict(mode='replay',epochs=[0,*sorted(epochs)]))
@@ -138,7 +138,7 @@ def reused_checkpoint_checks(args, report):
         output=output,prepared=(args.output/'journal').resolve(),parameters={name:witness.params(name)},
         check_mode='replay',check_every=args.check_every,check_first_class=True,check_from=1,
         reference_from=(args.output/'run').resolve(),timeout=120,reference_timeout=120,
-        max_rss_gib=6,max_total_rss_gib=10)
+        max_rss_gib=6,max_total_rss_gib=10,feed='frames')
     target = dict(report,workers=options.workers,queries=[],selected_queries=[name],
                   command='test reuse of validated answers across worker counts')
     with patch('update_stream.timed_reference',side_effect=AssertionError('unexpected oracle recomputation')):

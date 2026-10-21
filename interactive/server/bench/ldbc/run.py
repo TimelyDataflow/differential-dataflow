@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 
-from client import Server
+from client import Server, declared_inputs
 import measure
 from workload import HERE, TABLES, QUERIES, Reference, changes, expected, fingerprint, load, parameters
 
@@ -62,16 +62,20 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
             # Validation/reference work is deliberately outside all timings.
             checked(actual, want, f'{backend}/{context}/{phase}/{name}')
 
+        # With `--feed frames` (the default), every feed is one binary frame at its input's
+        # declared shapes, so the harness's own encoding is not what is measured.
+        shapes = {}
         for name in ('graph', *args.queries):
             program = (HERE / f'{name}.ddp').read_text()
+            shapes[name] = declared_inputs(program) if args.feed == 'frames' else {}
             command(f'install:{name}', lambda: [f'load {name} begin\n{program}\n{{rid}} end-load', 'tick'])
         for index, name in enumerate(TABLES):
             rows = sorted(graph[name])
             for offset in range(0, len(rows), 1000):
                 chunk = rows[offset:offset+1000]
-                command(f'load:{name}', lambda: [Server.feed('graph', index, chunk, 1)])
+                command(f'load:{name}', lambda: [Server.feed('graph', index, chunk, 1, shapes['graph'].get(index))])
         for name in bi:
-            command(f'standing:{name}', lambda: [Server.feed(name, 0, [(0, *standing[name])], 1)])
+            command(f'standing:{name}', lambda: [Server.feed(name, 0, [(0, *standing[name])], 1, shapes[name].get(0))])
         command('initial_tick', lambda: ['tick'])
         for name in bi:
             read(name, answers['initial'][name][standing[name]])
@@ -83,7 +87,7 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
             for state_index, state in enumerate(('initial', 'changed')):
                 context['state'] = state
                 if state == 'changed':
-                    command('update', lambda: [Server.feed('graph', TABLES.index(t), rows, -1)
+                    command('update', lambda: [Server.feed('graph', TABLES.index(t), rows, -1, shapes['graph'].get(TABLES.index(t)))
                                               for t, rows in delta.items() if rows] + ['tick'])
                     for name in bi:
                         read(name, answers[state][name][standing[name]], 'maintained')
@@ -92,7 +96,7 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
                 record['requests'].append(dict(context, bindings=bindings))
                 if interactive:
                     first_event = len(record['events'])
-                    command('bind', lambda: [Server.feed(name, 0, bindings[name], 1) for name in interactive] + ['tick'])
+                    command('bind', lambda: [Server.feed(name, 0, bindings[name], 1, shapes[name].get(0)) for name in interactive] + ['tick'])
                     for name in interactive:
                         want = []
                         for rid, *params in bindings[name]:
@@ -103,11 +107,11 @@ def run_server(args, backend, graph, delta, bank, standing, answers, report):
                     totals = measure.total(record['events'][first_event:])
                     record['events'].append(dict(context, phase='batch_answers', **totals,
                                                  derived=True, requests=len(interactive)*args.batch_size))
-                    command('release', lambda: [Server.feed(name, 0, bindings[name], -1) for name in interactive] + ['tick'])
+                    command('release', lambda: [Server.feed(name, 0, bindings[name], -1, shapes[name].get(0)) for name in interactive] + ['tick'])
                     for name in interactive:
                         read(name, [], 'empty')
             context['state'] = 'restored'
-            command('restore', lambda: [Server.feed('graph', TABLES.index(t), rows, 1)
+            command('restore', lambda: [Server.feed('graph', TABLES.index(t), rows, 1, shapes['graph'].get(TABLES.index(t)))
                                        for t, rows in delta.items() if rows] + ['tick'])
             for name in bi:
                 read(name, answers['initial'][name][standing[name]], 'maintained')
@@ -125,6 +129,8 @@ def main():
     parser.add_argument('--server', type=Path, required=True, help='existing ddir_server binary (release for timing)')
     parser.add_argument('--snapshot', type=Path, help='SNB BI composite-merged-fk initial_snapshot directory; default: tiny fixture')
     parser.add_argument('--workers', type=positive, default=1)
+    parser.add_argument('--feed', choices=('text', 'frames'), default='frames',
+                        help='feed rows as text lines, or as binary frames of columns')
     parser.add_argument('--queries', nargs='+', choices=QUERIES, default=list(QUERIES))
     parser.add_argument('--rounds', type=positive, default=5)
     parser.add_argument('--warmup', type=int, default=1)

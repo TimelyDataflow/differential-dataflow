@@ -1,6 +1,7 @@
 """Small, bounded TCP client for a private, real ddir_server process."""
 import os
 import socket
+import re
 import struct
 import subprocess
 import threading
@@ -21,6 +22,98 @@ def _float(key):
     """The float whose total-order key is `key`: corgi stores a float as that key."""
     bits = key ^ (1 << 63) if key >> 63 else ~key & 0xFFFF_FFFF_FFFF_FFFF
     return struct.unpack('<d', struct.pack('<Q', bits))[0]
+
+
+def _float_key(value):
+    """The total-order key corgi stores the float `value` as: the inverse of `_float`."""
+    bits = struct.unpack('<Q', struct.pack('<d', value))[0]
+    return ~bits & 0xFFFF_FFFF_FFFF_FFFF if bits >> 63 else bits ^ (1 << 63)
+
+
+def parse_shape(text):
+    """A declared DDIR shape as the frame encoder reads it: `int` and `float` as themselves,
+    `()` as `'unit'`, a tuple `(a, b)` (one field: `(a)`) as `('prod', [a, b])`, and `List(a)`
+    as `('list', a)`."""
+    tokens = text.replace('(', ' ( ').replace(')', ' ) ').replace(',', ' , ').split()
+
+    def shape(at):
+        token = tokens[at]
+        if token in ('int', 'float'):
+            return token, at + 1
+        if token == 'List':
+            assert tokens[at + 1] == '(', text
+            element, at = shape(at + 2)
+            assert tokens[at] == ')', text
+            return ('list', element), at + 1
+        if token == '(':
+            if tokens[at + 1] == ')':
+                return 'unit', at + 2
+            fields, at = [], at + 1
+            while True:
+                field, at = shape(at)
+                fields.append(field)
+                if tokens[at] == ')':
+                    return ('prod', fields), at + 1
+                assert tokens[at] == ',', text
+                at += 1
+        raise ValueError(f'unsupported shape {text!r} at {token!r}')
+
+    result, at = shape(0)
+    assert at == len(tokens), text
+    return result
+
+
+def _encode_column(shape, values, out):
+    """Append the column of `values` at `shape` to `out`, in corgi's byte encoding (the inverse
+    of `_Words.column`). Ints that all fit in a byte take one byte each; strings in an int list
+    are their UTF-8 bytes, as `term` writes them."""
+    n = len(values)
+    if shape == 'int':
+        if all(0 <= v < 256 for v in values):
+            out += struct.pack('<3Q', 0, 8, n) + bytes(values) + bytes(-n % 8)
+        else:
+            out += struct.pack(f'<3Q{n}q', 0, 64, n, *values)
+    elif shape == 'float':
+        out += struct.pack(f'<3Q{n}Q', 0, 0xF64, n, *map(_float_key, values))
+    elif shape == 'unit':
+        out += struct.pack('<2Q', 4, n)
+    elif shape[0] == 'prod':
+        out += struct.pack('<2Q', 1, len(shape[1]))
+        for i, field in enumerate(shape[1]):
+            _encode_column(field, [value[i] for value in values], out)
+    elif shape[0] == 'list':
+        items = [value.encode() if isinstance(value, str) else value for value in values]
+        ends, end = [], 0
+        for item in items:
+            end += len(item)
+            ends.append(end)
+        out += struct.pack(f'<3Q{n}Q', 3, 0, n, *ends)
+        if shape[1] == 'int' and all(isinstance(item, bytes) for item in items):
+            flat = b''.join(items)
+            out += struct.pack('<3Q', 0, 8, len(flat)) + flat + bytes(-len(flat) % 8)
+        else:
+            _encode_column(shape[1], [element for item in items for element in item], out)
+    else:
+        raise ValueError(f'unsupported shape {shape!r}')
+
+
+def declared_inputs(program):
+    """The declared shapes of a program's unit-valued inputs, by index, as `Server.feed` takes
+    them to send frames: `input N : (shape ; ())` becomes `{N: (parse_shape(shape), 'unit')}`."""
+    return {int(n): (parse_shape(shape), 'unit')
+            for n, shape in re.findall(r'input (\d+) : \((.*) ; \(\)\)', program)}
+
+
+def encode_frame(shape, keys, diffs, vals=None):
+    """A `data` frame of updates, as `feed … frame` reads it: `rows | 0 | keys | vals | diffs`,
+    with no time lanes (see `interactive::corgi::frame`). `shape` is the input's declared
+    `(key, val)` shapes, parsed; `vals` defaults to units."""
+    key_shape, val_shape = shape
+    out = bytearray(struct.pack('<2Q', len(diffs), 0))
+    _encode_column(key_shape, keys, out)
+    _encode_column(val_shape, vals if vals is not None else [()] * len(keys), out)
+    out += struct.pack(f'<{len(diffs)}q', *diffs)
+    return bytes(out)
 
 
 class _Words:
@@ -159,8 +252,13 @@ class Server:
             self.counter += 1
             rid = f'r{self.counter}'
             ids.append(rid)
-            payload.append(rid + ' ' + command.replace('{rid}', rid) + '\n')
-        wire = ''.join(payload).encode()
+            if isinstance(command, tuple):
+                # A framed feed: its header line, then exactly its bytes.
+                header, frame = command
+                payload.append(f'{rid} {header}\n'.encode() + frame)
+            else:
+                payload.append((rid + ' ' + command.replace('{rid}', rid) + '\n').encode())
+        wire = b''.join(payload)
         replies = {rid: [] for rid in ids}
         pending = set(ids)
         encoded = time.perf_counter()
@@ -198,7 +296,12 @@ class Server:
                     bytes_sent=len(wire), bytes_received=received), [replies[rid] for rid in ids]
 
     @staticmethod
-    def feed(program, index, rows, diff):
+    def feed(program, index, rows, diff, shape=None):
+        """Rows with unit values for `program`'s input `index`, each at `diff`: as text, or as one
+        binary frame when `shape` (the input's declared shapes, parsed) is given."""
+        if shape is not None:
+            frame = encode_frame(shape, list(rows), [diff] * len(rows))
+            return f'feed {program} {index} frame {len(frame)}', frame
         body = '\n'.join(term(row) + f' diff={diff}' for row in rows)
         return f'feed {program} {index} begin\n{body}\n{{rid}} end-feed'
 

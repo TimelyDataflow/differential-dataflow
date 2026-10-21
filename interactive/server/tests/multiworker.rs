@@ -456,3 +456,89 @@ fn tail_frames_sum_to_peeks_on_one_worker() {
 fn tail_frames_sum_to_peeks_on_four_workers() {
     assert_tail_frames_sum_to_peeks(4);
 }
+
+/// Send `header` and then `payload` as one write, and read through the request's `ok` or `err`.
+fn framed(writer: &mut TcpStream, reader: &mut BufReader<TcpStream>, reqid: &str, header: &str, payload: &[u8]) -> Result<(), String> {
+    let mut wire = header.as_bytes().to_vec();
+    wire.extend_from_slice(payload);
+    writer.write_all(&wire).unwrap();
+    writer.flush().unwrap();
+    loop {
+        let mut line = String::new();
+        assert_ne!(reader.read_line(&mut line).unwrap(), 0, "server disconnected");
+        let Some(rest) = line.trim_end().strip_prefix(reqid).and_then(|line| line.strip_prefix(' ')) else { continue };
+        if rest == "ok" || rest.starts_with("ok ") {
+            return Ok(());
+        } else if let Some(error) = rest.strip_prefix("err ") {
+            return Err(error.to_string());
+        }
+    }
+}
+
+/// The shapes an input declares as `declaration`, say `((int) ; ())`.
+fn declared(declaration: &str) -> interactive::server::RowShape {
+    let program = interactive::lower::lower_tree(interactive::parse::pipe::parse(&format!("export \"x\" = input 0 : {declaration};")));
+    program.root.imports[0].shape.clone().expect("a declared input")
+}
+
+/// A feed as a binary frame: the columns of `rows`, read at `shape` (text rows, as `feed … begin`
+/// reads them), in the frame format a peek answers with.
+fn feed_frame(shape: &interactive::server::RowShape, rows: &[(&str, Option<&str>, i64)]) -> Vec<u8> {
+    let mut decoder = interactive::corgi::feed::FeedDecoder::new(&shape.0, &shape.1);
+    for (key, val, diff) in rows {
+        decoder.push(key, *val, *diff).unwrap();
+    }
+    interactive::corgi::frame::encode(&decoder.finish(), &[])
+}
+
+/// `feed … frame` stages columns, each row once however many workers there are; a frame of
+/// another shape, one cut short, and one too large for a feed are refused, and the session reads
+/// on past each.
+fn assert_framed_feeds(workers: usize) {
+    let (server, mut writer, mut reader) = start_server(workers);
+    request(&mut writer, &mut reader, "r0", "r0 load fed begin\nlet rows = input 0 : ((int, List(int)) ; (int));\nexport \"fed\" = rows;\nr0 end-load\n");
+    let shape = declared("((int, List(int)) ; (int))");
+    let rows: Vec<(String, Option<String>, i64)> = (0..10).map(|i| (format!("tuple({i},list({}))", "7,".repeat(i as usize).trim_end_matches(',')), Some(format!("tuple({})", 300 * i - 1000)), i + 1)).collect();
+    let rows: Vec<(&str, Option<&str>, i64)> = rows.iter().map(|(k, v, d)| (k.as_str(), v.as_deref(), *d)).collect();
+    let bytes = feed_frame(&shape, &rows);
+    framed(&mut writer, &mut reader, "r1", &format!("r1 feed fed 0 frame {}\n", bytes.len()), &bytes).unwrap();
+    request(&mut writer, &mut reader, "r2", "r2 tick\n");
+    let fed = request(&mut writer, &mut reader, "r3", "r3 peek fed as corgi\n");
+    // The same rows fed as text, to another program, are the reference.
+    request(&mut writer, &mut reader, "r4", "r4 load text begin\nlet rows = input 0 : ((int, List(int)) ; (int));\nexport \"text\" = rows;\nr4 end-load\n");
+    let body: String = rows.iter().map(|(k, v, d)| format!("{k} val={} diff={d}\n", v.unwrap())).collect();
+    request(&mut writer, &mut reader, "r5", &format!("r5 feed text 0 begin\n{body}r5 end-feed\n"));
+    request(&mut writer, &mut reader, "r6", "r6 tick\n");
+    let text = request(&mut writer, &mut reader, "r7", "r7 peek text as corgi\n");
+    assert_eq!(fed.len(), 10);
+    assert_eq!(fed, text);
+
+    // Another shape: the value is not a one-field tuple.
+    let other = feed_frame(&declared("((int, List(int)) ; int)"), &[("tuple(1,list())", Some("5"), 1)]);
+    let error = framed(&mut writer, &mut reader, "r8", &format!("r8 feed fed 0 frame {}\n", other.len()), &other).unwrap_err();
+    assert!(error.contains("shape"), "{error}");
+    // Cut short: its header counts the bytes sent, but they are not a whole frame.
+    let short = &bytes[..bytes.len() - 8];
+    assert!(framed(&mut writer, &mut reader, "r9", &format!("r9 feed fed 0 frame {}\n", short.len()), short).is_err());
+    // More bytes than a feed may hold, and an input with no declared shape: read past, refused.
+    let too_large = framed(&mut writer, &mut reader, "r10", &format!("r10 feed fed 0 frame {}\n", 17 << 20), &vec![0; 17 << 20]).unwrap_err();
+    assert!(too_large.contains("exceeds"), "{too_large}");
+    assert!(framed(&mut writer, &mut reader, "r11", &format!("r11 feed fed 3 frame {}\n", bytes.len()), &bytes).is_err());
+    // The session reads on: nothing refused reached the program.
+    request(&mut writer, &mut reader, "r12", "r12 tick\n");
+    assert_eq!(request(&mut writer, &mut reader, "r13", "r13 peek fed as corgi\n"), fed);
+
+    drop(reader);
+    drop(writer);
+    server.stop();
+}
+
+#[test]
+fn framed_feeds_on_one_worker() {
+    assert_framed_feeds(1);
+}
+
+#[test]
+fn framed_feeds_on_three_workers() {
+    assert_framed_feeds(3);
+}

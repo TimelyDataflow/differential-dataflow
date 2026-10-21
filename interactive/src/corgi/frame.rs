@@ -10,6 +10,8 @@
 //! consolidated contents and no times, and a `tail`'s frames hold changes, each at its time, one
 //! lane; a frame holds no more ([`MAX_LANES`]). Every section is a whole number of 64-bit words.
 
+use corgi::Shape;
+
 use crate::corgi::container::Updates;
 use crate::ir::Diff;
 
@@ -66,11 +68,31 @@ pub fn decode(bytes: &[u8]) -> Result<(Updates, Vec<Vec<u64>>), String> {
     Ok((Updates { keys, vals, diffs }, times))
 }
 
+/// The updates of a frame fed to an input whose declared shapes are `key` and `val`: a frame with
+/// no time lanes (a feed's rows take the time it is fed at), whose keys and values have exactly
+/// those shapes, whatever their storage. A column can name more rows than its bytes hold (a `Unit`
+/// says how many it has), so a frame naming more than `max_rows` rows anywhere is refused before
+/// any work is done per row.
+pub fn decode_feed(bytes: &[u8], (key, val): &(Shape, Shape), max_rows: u64) -> Result<Updates, String> {
+    let (updates, lanes) = decode(bytes)?;
+    if !lanes.is_empty() {
+        return Err(format!("frame: a feed's rows take the time they are fed at, but this frame has {} time lanes", lanes.len()));
+    }
+    let named = corgi::bytes::declared_rows(&updates.keys).max(corgi::bytes::declared_rows(&updates.vals));
+    if named > max_rows {
+        return Err(format!("frame: a column names {named} rows, more than the {max_rows} a feed may"));
+    }
+    let shapes = (corgi::shape_of_value(&updates.keys), corgi::shape_of_value(&updates.vals));
+    if shapes.0 != *key || shapes.1 != *val {
+        return Err(format!("frame: rows of shape ({} ; {}), but the input's are ({key} ; {val})", shapes.0, shapes.1));
+    }
+    Ok(updates)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::corgi::feed::FeedDecoder;
-    use corgi::Shape;
 
     /// A frame decodes to the updates and times it was made from.
     #[test]
@@ -87,6 +109,24 @@ mod tests {
         let mut short = encode(&updates, &[]);
         short.pop();
         assert!(decode(&short).is_err(), "a frame cut short");
+    }
+
+    /// A feed frame is read only at its input's shapes, with no times, and naming no more rows than
+    /// a feed may.
+    #[test]
+    fn feed_frames_are_checked() {
+        let shape = (Shape::Prod(vec![Shape::Int, Shape::List(Box::new(Shape::Int))]), Shape::Unit);
+        let mut decoder = FeedDecoder::new(&shape.0, &shape.1);
+        decoder.push("tuple(1,list(104,105))", None, 3).unwrap();
+        decoder.push("tuple(-7,list())", None, -1).unwrap();
+        let updates = decoder.finish();
+        assert_eq!(decode_feed(&encode(&updates, &[]), &shape, 1 << 20).unwrap(), updates);
+        assert!(decode_feed(&encode(&updates, &[vec![4, 9]]), &shape, 1 << 20).is_err(), "a frame with times");
+        assert!(decode_feed(&encode(&updates, &[]), &(Shape::Int, Shape::Unit), 1 << 20).is_err(), "another shape");
+        let units = Updates { keys: corgi::Value::Unit(5), vals: corgi::Value::Unit(5), diffs: vec![1; 5] };
+        let unit = (Shape::Unit, Shape::Unit);
+        assert!(decode_feed(&encode(&units, &[]), &unit, 5).is_ok());
+        assert!(decode_feed(&encode(&units, &[]), &unit, 4).is_err(), "more rows than a feed may");
     }
 
     /// Counts that do not fit the frame are refused, not overflowed or allocated.
