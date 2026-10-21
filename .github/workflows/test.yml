@@ -53,12 +53,19 @@ jobs:
         run: |
           python3 interactive/server/bench/ldbc/test_harness.py
           python3 interactive/server/bench/ldbc/test_snb.py
+          python3 interactive/server/bench/ldbc/test_updates.py
           for workers in 1 4; do
             python3 interactive/server/bench/ldbc/suite.py --server target/debug/ddir_server \
               --workers "$workers" --rounds 1 --warmup 0
+            python3 interactive/server/bench/ldbc/test_update_stream.py \
+              --server target/debug/ddir_server --workers "$workers" \
+              --output "/tmp/ldbc-update-stream-$workers"
           done
           python3 interactive/server/bench/ldbc/suite.py --server target/debug/ddir_server \
             --mode maintained --workers 4 --rounds 1 --warmup 0
+          python3 interactive/server/bench/ldbc/test_update_stream.py \
+            --server target/debug/ddir_server --workers 4 --check-mode replay \
+            --output /tmp/ldbc-update-stream-replay
       # The explanation suite's heavier sweeps (soundness regression, fuzz)
       # are #[ignore]d for local debug runs but must gate merges. The metric
       # report is skipped (it prints, it does not assert).

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import itertools
 
 from .data import millis
-from .rel import evaluate
+from .rel import SourceRows, evaluate
 
 
 def parameters(graph, query=None):
@@ -73,8 +73,8 @@ def json_value(value):
 
 
 def reference(plan, schemas, data):
-    encoded={name:[tuple(tuple(v.encode()) if kind=='bytes' else v for v,kind in zip(row,schema.values())) for row in data[name]] for name,schema in schemas}
-    rows=evaluate(plan,encoded)
+    sources={name:SourceRows(data[name],schema) for name,schema in schemas}
+    rows=evaluate(plan,sources)
     values=[n for n in plan.fields if n not in ('rid','rank')]
     return sorted([[[r['rid'],r['rank']],[json_value(r[n]) for n in values],1] for r in rows], key=lambda row: row[0])
 

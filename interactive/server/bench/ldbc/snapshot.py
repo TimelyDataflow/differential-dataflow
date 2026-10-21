@@ -7,7 +7,7 @@ import csv
 import gzip
 
 
-def csv_rows(source):
+def csv_rows(source, entity=None):
     # Normalize Spark's quoted-field escapes to the doubled quotes understood
     # by csv.reader. Setting escapechar='\\' on csv.reader would also consume
     # literal backslashes in UNQUOTED fields, unlike Spark's writer/reader.
@@ -37,6 +37,11 @@ def csv_rows(source):
             yield ''.join(out)
 
     reader = csv.DictReader(normalized(), delimiter='|', strict=True)
+    # The supplied SF1 export uses the generator's names for this edge in
+    # both the snapshot and inserts; SF0.1 uses the composite export names.
+    if entity == 'Person_hasInterest_Tag' and reader.fieldnames:
+        aliases = {'personId': 'PersonId', 'interestId': 'TagId'}
+        reader.fieldnames = [aliases.get(name, name) for name in reader.fieldnames]
     fields = reader.fieldnames
     if not fields or len(set(fields)) != len(fields):
         raise ValueError('missing or duplicate CSV header')
@@ -57,6 +62,6 @@ def read_table(snapshot, category, entity):
         opener = gzip.open if path.suffix == '.gz' else open
         with opener(path, 'rt', newline='', encoding='utf-8') as source:
             try:
-                yield from csv_rows(source)
+                yield from csv_rows(source, entity)
             except (csv.Error, ValueError) as error:
                 raise ValueError(f'{path}: {error}') from error
