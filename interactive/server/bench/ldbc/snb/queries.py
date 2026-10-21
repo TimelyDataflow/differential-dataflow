@@ -77,7 +77,10 @@ class Context:
 
     @cached_property
     def interactions(self):
-        a = self.replies.select(comment=c.id,src=c.creator,dst=c.parent_creator,score2=choose(c.parent_kind==0,2,1)).where(c.src!=c.dst)
+        comments = self.message.where(c.kind==1).select('id','creator','parent')
+        parents = self.message.select('id','creator','kind')
+        a = comments.join(parents,{'parent':'id'},'parent_')
+        a = a.select(comment=c.id,src=c.creator,dst=c.parent_creator,score2=choose(c.parent_kind==0,2,1)).where(c.src!=c.dst)
         return a.union(a.select('comment',src=c.dst,dst=c.src,score2=c.score2))
 
     @cached_property
@@ -172,7 +175,10 @@ def ic1(x,q):
 
 
 def recent(x,q,hops):
-    r=x.friends(q,hops).join(x.message,{'node':'creator'},'m_').where(c.m_created<c.maxdate).join(x.person,{'node':'id'},'p_')
+    messages=x.message.select('id','created','creator','content','image')
+    people=x.person.select('id','first','last')
+    r=x.friends(q,hops).select('rid','node','maxdate').join(messages,{'node':'creator'},'m_')
+    r=r.where(c.m_created<c.maxdate).join(people,{'node':'id'},'p_')
     return finish(r,dict(friend=c.node,first=c.p_first,last=c.p_last,message=c.m_id,
                         content=body(c.m_content,c.m_image),created=c.m_created),[-c.m_created,c.m_id],20)
 
@@ -183,8 +189,11 @@ def ic2(x,q): return recent(x,q,1)
 
 @query('ic3','pid:int countryx:bytes countryy:bytes start:int days:int','Friends visiting given countries')
 def ic3(x,q):
-    r=x.friends(q,2).join(x.residents,{'node':'id'},'p_').where((c.p_country_name!=c.countryx)&(c.p_country_name!=c.countryy))
-    r=r.join(x.message,{'node':'creator'},'m_').join(x.place,{'m_country':'id'},'loc_')
+    residents=x.residents.select('id','first','last','country_name')
+    messages=x.message.select('created','creator','country')
+    countries=x.place.select('id','name')
+    r=x.friends(q,2).join(residents,{'node':'id'},'p_').where((c.p_country_name!=c.countryx)&(c.p_country_name!=c.countryy))
+    r=r.join(messages,{'node':'creator'},'m_').join(countries,{'m_country':'id'},'loc_')
     r=r.where((c.m_created>=c.start)&(c.m_created<c.start+c.days*DAY))
     r=r.group(('rid','node','p_first','p_last'),nx=sumof(choose(c.loc_name==c.countryx,1,0)),ny=sumof(choose(c.loc_name==c.countryy,1,0)))
     r=r.where((c.nx>0)&(c.ny>0))
@@ -229,7 +238,10 @@ def ic7(x,q):
 
 @query('ic8','pid:int','Recent replies')
 def ic8(x,q):
-    r=q.join(x.replies,{'pid':'parent_creator'}).join(x.person,{'creator':'id'},'p_')
+    comments=x.message.where(c.kind==1).select('id','created','creator','content','parent')
+    parents=x.message.select('id','creator')
+    replies=comments.join(parents,{'parent':'id'},'parent_').select('id','created','creator','content','parent_creator')
+    r=q.join(replies,{'pid':'parent_creator'}).join(x.person.select('id','first','last'),{'creator':'id'},'p_')
     return finish(r,dict(author=c.creator,first=c.p_first,last=c.p_last,created=c.created,comment=c.id,content=c.content),[-c.created,c.id],20)
 
 
@@ -260,11 +272,18 @@ def ic11(x,q):
 
 @query('ic12','pid:int classname:bytes','Expert search')
 def ic12(x,q):
-    tags=x.tagged.join(x.ancestry,{'tag_class':'descendant'}).join(x.tagclass,{'ancestor':'id'},'class_')
-    r=x.friends(q,1).join(x.replies.where(c.parent_kind==0),{'node':'creator'},'reply_').join(tags,{'reply_parent':'message'},'t_').where(c.t_class_name==c.classname)
+    comments=x.message.where(c.kind==1).select('id','creator','parent')
+    posts=x.message.where(c.kind==0).select('id')
+    replies=comments.join(posts,{'parent':'id'},'parent_').select('id','creator','parent')
+    classes=q.select('classname').distinct().join(x.tagclass.select('id','name'),{'classname':'name'},'class_')
+    tags=classes.select('classname','class_id').join(x.ancestry,{'class_id':'ancestor'})
+    tags=tags.join(x.tag.select('id','name','class'),{'descendant':'class'},'tag_').select('classname','tag_id','tag_name')
+    tags=tags.join(x.mtag,{'tag_id':'tag'}).select('classname','message','tag_name').distinct()
+    r=x.friends(q,1).select('rid','node','classname').join(replies,{'node':'creator'},'reply_')
+    r=r.join(tags,{'classname':'classname','reply_parent':'message'},'t_')
     counts=r.select('rid','node','reply_id').distinct().group(('rid','node'),n=count())
     tags=r.select('rid','node','t_tag_name').distinct().group(('rid','node'),tags=('collect',c.t_tag_name))
-    r=counts.join(tags,{'rid':'rid','node':'node'}).join(x.person,{'node':'id'},'p_')
+    r=counts.join(tags,{'rid':'rid','node':'node'}).join(x.person.select('id','first','last'),{'node':'id'},'p_')
     return finish(r,dict(person=c.node,first=c.p_first,last=c.p_last,tags=c.tags,count=c.n),[-c.n,c.node],20)
 
 
@@ -282,7 +301,9 @@ def ic14(x,q):
 
 
 def tagged_messages(x,q):
-    return q.join(x.tagged,{'tagname':'tag_name'}).join(x.message,{'message':'id'},'m_')
+    tags=x.tagged.select('message','tag_name')
+    messages=x.message.select('id','created','creator','parent','day')
+    return q.join(tags,{'tagname':'tag_name'}).join(messages,{'message':'id'},'m_')
 
 
 @query('bi2','date:int classname:bytes','Tag evolution')
@@ -303,13 +324,15 @@ def bi3(x,q):
 
 @query('bi4','date:int','Top message creators by country')
 def bi4(x,q):
-    forums=q.join(x.forum).where(c.created>c.date).join(x.member,{'id':'forum'},'member_').join(x.residents,{'member_person':'id'},'p_')
+    forums=q.join(x.forum.select('id','created')).where(c.created>c.date).select('rid','id')
+    forums=forums.join(x.member.select('forum','person'),{'id':'forum'},'member_')
+    forums=forums.join(x.residents.select('id','country_id'),{'member_person':'id'},'p_')
     popularity=forums.group(('rid','id','p_country_id'),n=count()).group(('rid','id'),negative=('min',-c.n))
     top=popularity.rank([c.negative,c.id],100).select('rid',forum=c.id)
-    members=top.join(x.member,{'forum':'forum'}).select('rid','person').distinct()
-    messages=top.join(x.threads,{'forum':'forum'}).join(x.message,{'mid':'id'},'m_')
+    members=top.join(x.member.select('forum','person'),{'forum':'forum'}).select('rid','person').distinct()
+    messages=top.join(x.threads.select('mid','forum'),{'forum':'forum'}).join(x.message.select('id','creator'),{'mid':'id'},'m_')
     counts=messages.group(('rid','m_creator'),n=count()).rename(m_creator='person')
-    r=members.left(counts,{'rid':'rid','person':'person'},dict(n=0)).join(x.person,{'person':'id'},'p_')
+    r=members.left(counts,{'rid':'rid','person':'person'},dict(n=0)).join(x.person.select('id','first','last','created'),{'person':'id'},'p_')
     return finish(r,dict(person=c.person,first=c.p_first,last=c.p_last,created=c.p_created,count=c.n),[-c.n,c.person],100)
 
 
@@ -329,7 +352,7 @@ def bi6(x,q):
     messages=tagged_messages(x,q).select('rid','m_id','m_creator').distinct()
     authors=messages.select('rid','m_creator').distinct()
     pairs=messages.join(x.likes,{'m_id':'message'}).select('rid','m_creator','person').distinct()
-    popularity=x.message.join(x.likes,{'id':'message'},'l_').group(('creator',),popularity=count())
+    popularity=x.message.select('id','creator').join(x.likes.select('message'),{'id':'message'},'l_').group(('creator',),popularity=count())
     scores=pairs.join(popularity,{'person':'creator'}).group(('rid','m_creator'),score=sumof(c.popularity))
     r=authors.left(scores,{'rid':'rid','m_creator':'m_creator'},dict(score=0))
     return finish(r,dict(person=c.m_creator,score=c.score),[-c.score,c.m_creator],100)
@@ -355,11 +378,12 @@ def bi8(x,q):
 
 @query('bi9','start:int end:int','Top thread initiators')
 def bi9(x,q):
-    posts=q.join(x.message.where(c.kind==0)).where((c.created>=c.start)&(c.created<=c.end))
+    posts=q.join(x.message.where(c.kind==0).select('id','creator','created')).where((c.created>=c.start)&(c.created<=c.end))
+    posts=posts.select('rid','start','end','creator','id')
     threads=posts.select('rid','creator','id').group(('rid','creator'),threads=count())
-    messages=posts.join(x.threads,{'id':'root'},'t_').join(x.message,{'t_mid':'id'},'m_').where((c.m_created>=c.start)&(c.m_created<=c.end))
+    messages=posts.join(x.threads.select('mid','root'),{'id':'root'},'t_').join(x.message.select('id','created'),{'t_mid':'id'},'m_').where((c.m_created>=c.start)&(c.m_created<=c.end))
     counts=messages.group(('rid','creator'),messages=count())
-    r=threads.join(counts,{'rid':'rid','creator':'creator'}).join(x.person,{'creator':'id'},'p_')
+    r=threads.join(counts,{'rid':'rid','creator':'creator'}).join(x.person.select('id','first','last'),{'creator':'id'},'p_')
     return finish(r,dict(person=c.creator,first=c.p_first,last=c.p_last,threads=c.threads,messages=c.messages),[-c.messages,c.creator],100)
 
 
@@ -389,8 +413,9 @@ def bi12(x,q):
     # languages with the same rid to represent the specified language set.
     # A disabled row retains request identity for an empty language set.
     request=q.rename(length='threshold',language='wantedlanguage')
-    selected=request.where(c.enabled!=0).join(x.message).where((call('len',c.content)>0)&(c.created>c.start)&(c.length<c.threshold))
-    selected=selected.join(x.threads,{'id':'mid'},'t_').where(c.t_language==c.wantedlanguage).select('rid','creator','id').distinct()
+    messages=x.message.where(call('len',c.content)>0).select('id','creator','created','length')
+    selected=request.where(c.enabled!=0).join(messages).where((c.created>c.start)&(c.length<c.threshold))
+    selected=selected.join(x.threads.select('mid','language'),{'id':'mid'},'t_').where(c.t_language==c.wantedlanguage).select('rid','creator','id').distinct()
     counts=selected.group(('rid','creator'),messages=count()).rename(creator='person')
     persons=q.select('rid').distinct().join(x.person.select(person=c.id))
     r=persons.left(counts,{'rid':'rid','person':'person'},dict(messages=0)).group(('rid','messages'),people=count())
@@ -399,10 +424,12 @@ def bi12(x,q):
 
 @query('bi14','country1:bytes country2:bytes','International dialog')
 def bi14(x,q):
-    pairs=q.join(x.residents,{'country1':'country_name'},'p1_').join(x.edges,{'p1_id':'src'}).join(x.residents,{'dst':'id'},'p2_').where(c.p2_country_name==c.country2)
+    residents=x.residents.select('id','city','city_name','country_name')
+    pairs=q.join(residents,{'country1':'country_name'},'p1_').join(x.edges.select('src','dst'),{'p1_id':'src'}).join(residents,{'dst':'id'},'p2_').where(c.p2_country_name==c.country2)
     pairs=pairs.select('rid',p1=c.p1_id,p2=c.p2_id,city=c.p1_city,cityname=c.p1_city_name)
-    replies=x.replies.select(src=c.creator,dst=c.parent_creator).distinct()
-    likes=x.likes.join(x.message,{'message':'id'},'m_').select(src=c.person,dst=c.m_creator).distinct()
+    comments=x.message.where(c.kind==1).select('creator','parent')
+    replies=comments.join(x.message.select('id','creator'),{'parent':'id'},'parent_').select(src=c.creator,dst=c.parent_creator).distinct()
+    likes=x.likes.select('person','message').join(x.message.select('id','creator'),{'message':'id'},'m_').select(src=c.person,dst=c.m_creator).distinct()
     scores=pairs.select('rid','p1','p2',score=0)
     for relation,on,points in ((replies,{'p1':'src','p2':'dst'},4),(replies,{'p2':'src','p1':'dst'},1),
                                (likes,{'p1':'src','p2':'dst'},10),(likes,{'p2':'src','p1':'dst'},1)):
@@ -431,8 +458,13 @@ def bi17(x,q):
     # Build the later discussion first; count distinct message2 per initiator,
     # not all combinations of messages/memberships that witness propagation.
     discussions=messages.join(messages,{'rid':'rid','mid':'parent'},'reply_').where(c.creator!=c.reply_creator)
-    r=messages.join(discussions,{'rid':'rid'},'d_').where((c.forum!=c.d_forum)&(c.created+c.delta*3600000<c.d_created))
-    r=r.semi(x.member,{'forum':'forum','d_creator':'person'}).semi(x.member,{'forum':'forum','d_reply_creator':'person'}).anti(x.member,{'d_forum':'forum','creator':'person'})
+    discussions=discussions.select('rid','mid','creator','created','forum','reply_creator')
+    members=x.member.select('forum','person').distinct()
+    discussions=discussions.join(members,{'creator':'person'},'member_').where(c.member_forum!=c.forum)
+    discussions=discussions.semi(members,{'member_forum':'forum','reply_creator':'person'})
+    discussions=discussions.select('rid','mid','created','forum','member_forum')
+    r=messages.select('rid','delta','creator','created','forum').join(discussions,{'rid':'rid','forum':'member_forum'},'d_')
+    r=r.where(c.created+c.delta*3600000<c.d_created).anti(members,{'d_forum':'forum','creator':'person'})
     r=r.select('rid','creator','d_mid').distinct().group(('rid','creator'),n=count())
     return finish(r,dict(person=c.creator,count=c.n),[-c.n,c.creator],10)
 
@@ -503,7 +535,8 @@ def bi13(x,q):
 
 @query('bi15','p1:int p2:int start:int end:int','Trusted connection paths through forums')
 def bi15(x,q):
-    interactions=q.join(x.interactions).join(x.threads,{'comment':'mid'},'t_').join(x.forum,{'t_forum':'id'},'f_')
+    relevant=x.interactions.semi(x.edges,{'src':'src','dst':'dst'})
+    interactions=q.select('rid','start','end').join(relevant).join(x.threads.select('mid','forum'),{'comment':'mid'},'t_').join(x.forum.select('id','created'),{'t_forum':'id'},'f_')
     interactions=interactions.where((c.f_created>=c.start)&(c.f_created<=c.end)).group(('rid','src','dst'),score2=sumof(c.score2))
     pairs=q.select('rid').join(x.edges.select('src','dst')).left(interactions,{'rid':'rid','src':'src','dst':'dst'},dict(score2=0))
     edges=pairs.select('rid','src','dst',weight=call('fdiv',call('float',2),call('float',c.score2+2)))
