@@ -368,9 +368,15 @@ impl Sb {
     fn semijoin(&mut self, left: Ref, right: Ref) -> Ref {
         self.join(left, right, projection(var(0), var(1), 3))
     }
-    /// Set-level distinct on whole rows: move the row into the key, distinct,
-    /// and move it back.
-    fn distinct_full(&mut self, input: Ref) -> Ref {
+    /// Each row whose count is not zero, once: a collection read as a set.
+    ///
+    /// Demand is a set. A collection maps data to diffs, and an explanation names the data whose
+    /// diffs must be accurate, so demand's counts mean nothing and must never cancel. Nor may the
+    /// tables demand is looked up in multiply it by a negative count: their host forms hold
+    /// negative counts below a negation or a difference, and inside a loop, whose records hold
+    /// each round's changes. So demand and every host form are read through here. The row moves
+    /// into the key and back; `distinct` keeps a key whose count is not zero, whatever its sign.
+    fn presence(&mut self, input: Ref) -> Ref {
         let packed = self.project(input, projection(tup(vec![var(0), var(1)]), tup(Vec::new()), 2));
         let dist = self.reduce(packed, Reducer::Distinct);
         self.project(dist, projection(f(0, 0), f(0, 1), 2))
@@ -664,13 +670,15 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
     let ex_src: Vec<Ref> = (0..n_sources)
         .map(|k| ex.import(format!("$src:{}", k), Source::Parent(src_refs[k].clone())))
         .collect();
-    let src_env: Vec<Ref> = ex_src.iter().map(|r| ex.project(r.clone(), envelope())).collect();
+    // The sources as sets: the rows demand may name, and their host forms (see `Sb::presence`).
+    let src_rows: Vec<Ref> = ex_src.iter().map(|r| ex.presence(r.clone())).collect();
+    let src_env: Vec<Ref> = src_rows.iter().map(|r| ex.project(r.clone(), envelope())).collect();
     let ex_query = ex.import("$query".into(), Source::Parent(query_ref));
     let wit: BTreeMap<Addr, Ref> = witness.iter()
         .map(|(a, r)| {
             let imported = ex.import(format!("$wit:{:?}:{:?}", a.path, a.site), Source::Parent(r.clone()));
             let host = if a.path.is_empty() { ex.project(imported, envelope()) } else { imported };
-            (a.clone(), host)
+            (a.clone(), ex.presence(host))
         })
         .collect();
 
@@ -684,9 +692,9 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
         v
     }).collect();
     let fwd_inputs: Vec<Ref> = (0..n_sources).map(|k| ex.semijoin(dsets[k].clone(), ex_src[k].clone())).collect();
-    let fwd_env: Vec<Ref> = fwd_inputs.iter().map(|r| ex.project(r.clone(), envelope())).collect();
+    let fwd_env: Vec<Ref> = fwd_inputs.iter().map(|r| { let env = ex.project(r.clone(), envelope()); ex.presence(env) }).collect();
     let forward: BTreeMap<Addr, Ref> = clone_into(&p.root, &mut ex.s, &fwd_inputs).into_iter()
-        .map(|(a, r)| { let host = if a.path.is_empty() { ex.project(r, envelope()) } else { r }; (a, host) })
+        .map(|(a, r)| { let host = if a.path.is_empty() { ex.project(r, envelope()) } else { r }; (a, ex.presence(host)) })
         .collect();
     ex.s.exports.clear();
 
@@ -737,10 +745,10 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
         } else {
             let merged = ex.concat(cs);
             let stripped = ex.project(merged, <Val as RowModel>::strip_all());
-            let semi = ex.semijoin(stripped, ex_src[k].clone());
+            let semi = ex.semijoin(stripped, src_rows[k].clone());
             ex.concat(vec![dsets[k].clone(), semi])
         };
-        let dist = ex.distinct_full(combined);
+        let dist = ex.presence(combined);
         ex.debug_inspect(dist.clone(), format!("demand_set:{}", k));
         ex.bind(dsets[k].clone(), dist.clone());
         let name = match &p.root.imports[k].from {
@@ -858,7 +866,7 @@ impl<'a> Reverse<'a> {
                 continue;
             }
             let combined = ex.concat(cs);
-            let dist = ex.distinct_full(combined);
+            let dist = ex.presence(combined);
             ex.debug_inspect(dist.clone(), format!("demand_{:?}:{:?}", path, Site::Var(v)));
             ex.bind(dv, dist);
         }
@@ -869,7 +877,7 @@ impl<'a> Reverse<'a> {
         let cs = self.contribs.remove(&Target::Site(addr.clone())).unwrap_or_default();
         if cs.is_empty() { return; }
         let combined = ex.concat(cs);
-        let dist = ex.distinct_full(combined);
+        let dist = ex.presence(combined);
         ex.debug_inspect(dist.clone(), format!("demand_{:?}:{:?}", path, Site::Op(i)));
         self.demand.insert(addr.clone(), dist.clone());
         let dep_this = dist;

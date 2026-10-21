@@ -457,6 +457,22 @@ fn flatmap_of_a_parent_explanations_sufficient() {
     assert!(!sizes.is_empty());
 }
 
+/// Demand is a set: two paths into one collection must not cancel. `r2` holds a negated row, count
+/// −1, which the join reads directly and through `r3`'s map; the demand arriving by the two paths
+/// came back as +1 and −1 and cancelled, leaving the result row with an empty explanation. (Found
+/// by `difftest`.)
+#[test]
+fn negated_fanout_explanations_sufficient() {
+    const NEGATED: &str = r#"
+        let i0 = input 0 : ((int, int) ; ());
+        let r2 = i0 | negate | map(((a, b), ()) -> (b, b));
+        let r3 = r2 | map((x, y) -> (y, x));
+        export "result" = r3 | join(r2, (k, l, r) -> (k, (l, r)));
+    "#;
+    let sizes = assert_all_rows_sufficient(NEGATED, &[vec![(row(&[3, 0]), row(&[]))]]);
+    assert!(!sizes.is_empty());
+}
+
 /// Count outputs over duplicate-free inputs: sufficient today, because the
 /// keyed lookup demands every input row at the key, which is precisely the
 /// count's multiset.
