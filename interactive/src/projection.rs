@@ -620,19 +620,68 @@ fn mask_part(name: &str, shape: &Shape, facts: &[usize], live: &[bool]) -> Strin
     }
 }
 
+fn mask_graph_part(
+    builder: &mut corgi::Builder<corgi::NumOp>,
+    input: usize,
+    source: usize,
+    shape: &Shape,
+    facts: &[usize],
+    live: &[bool],
+) -> usize {
+    let unit =
+        |builder: &mut corgi::Builder<corgi::NumOp>| builder.add(corgi::Op::Unit, vec![input]);
+    match shape {
+        Shape::Unit => unit(builder),
+        Shape::Prod(fields) if fields.is_empty() => unit(builder),
+        Shape::Prod(fields) => {
+            let children = fields
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    if live[facts[i]] {
+                        builder.add(corgi::Op::Field(i), vec![source])
+                    } else {
+                        unit(builder)
+                    }
+                })
+                .collect();
+            builder.tuple(children)
+        }
+        _ => {
+            if live[facts[0]] {
+                source
+            } else {
+                unit(builder)
+            }
+        }
+    }
+}
+
 fn mask_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
     if output.key.iter().chain(&output.val).all(|&id| live[id]) {
         return None;
     }
-    Some(Lambda::compose(
-        "arg",
-        &[(original, "arg".into())],
-        |result| {
-            let key = mask_part("k", &output.shape.0, &output.key, live);
-            let val = mask_part("v", &output.shape.1, &output.val, live);
-            format!("let (k, v) = {} in ({key}, {val})", result[0])
-        },
-    ))
+    let mut masked = Lambda::compose("arg", &[(original, "arg".into())], |result| {
+        let key = mask_part("k", &output.shape.0, &output.key, live);
+        let val = mask_part("v", &output.shape.1, &output.val, live);
+        format!("let (k, v) = {} in ({key}, {val})", result[0])
+    });
+    if let Ok(graph) = original.graph() {
+        // Every corgi node preserves top-level row count. Anchor dead fields'
+        // Unit columns to the graph input, so graph DCE can discard the work
+        // that fed them. Parsing the equivalent source alone anchors Unit to
+        // the original result and keeps that dead work reachable.
+        let mut builder = corgi::Builder::<corgi::NumOp>::default();
+        let input = builder.input();
+        let result = builder.graft(graph, input);
+        let key = builder.add(corgi::Op::Field(0), vec![result]);
+        let val = builder.add(corgi::Op::Field(1), vec![result]);
+        let key = mask_graph_part(&mut builder, input, key, &output.shape.0, &output.key, live);
+        let val = mask_graph_part(&mut builder, input, val, &output.shape.1, &output.val, live);
+        let result = builder.tuple(vec![key, val]);
+        masked.graph = Ok(std::sync::Arc::new(builder.finish(result)));
+    }
+    Some(masked)
 }
 
 fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> usize {
@@ -745,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn corgi_currently_retains_work_feeding_a_masked_field() {
+    fn corgi_removes_work_feeding_a_masked_field() {
         let lambda = Lambda::new(
             "let (row, ()) = input in ((row.0, (row.1, 1) add), ())".into(),
             &corgi::Scope::default(),
@@ -758,11 +807,7 @@ mod tests {
         let before = corgi::explain::explain(&corgi::optimize(&lambda.graph().unwrap()));
         let after = corgi::explain::explain(&corgi::optimize(&masked.graph().unwrap()));
         assert!(before.contains("BinImm(Add"));
-        // `Unit` still points to the complete result of the original lambda.
-        // The graph DCE pass therefore keeps the arithmetic, even though it
-        // feeds only a masked field. A corgi graph rewrite needs to redirect
-        // that Unit to the row input (or slice the graph by output paths).
-        assert!(after.contains("BinImm(Add"));
+        assert!(!after.contains("BinImm(Add"));
     }
 
     #[test]
