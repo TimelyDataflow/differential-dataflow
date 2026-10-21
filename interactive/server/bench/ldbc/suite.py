@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 
-from client import Server
+from client import Server, parse_shape
 import measure
 from run import checked, digest, positive
 from snb import data, witness
@@ -58,6 +58,10 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
     record = dict(backend=backend, workers=args.workers, queries=names, events=[], bindings=[])
     report['runs'].append(record)
     standing = names if args.mode == 'maintained' else [n for n in names if n.startswith('bi')]
+    # With `--feed frames`, every feed is one binary frame at its input's declared shapes.
+    frames = args.feed == 'frames'
+    graph_shape = [(parse_shape(source_shape(schema)), 'unit') if frames else None for schema in data.SCHEMA.values()]
+    request_shape = {n: (parse_shape(source_shape(plans[n]['parameters'])), 'unit') if frames else None for n in names}
     dynamic = [n for n in names if n not in standing]
     active = {name: set() for name in names}
     with Server(args.server, args.output / f'{backend}-{suffix}.log', args.workers,
@@ -97,7 +101,7 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
                     if table in delta:
                         for side, diff in ((removed, -1), (added, 1)):
                             if delta[table][side]:
-                                result.append(Server.feed('graph', i, delta[table][side], diff))
+                                result.append(Server.feed('graph', i, delta[table][side], diff, graph_shape[i]))
                 return [*result, 'tick']
             command(phase, commands)
 
@@ -106,10 +110,10 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
         for i, table in enumerate(data.SCHEMA):
             rows = sorted(graph[table])
             for offset in range(0, len(rows), 1000):
-                command('load:' + table, lambda: [Server.feed('graph', i, rows[offset:offset+1000], 1)])
+                command('load:' + table, lambda: [Server.feed('graph', i, rows[offset:offset+1000], 1, graph_shape[i])])
         for name in standing:
             active[name] = requests(name, plans[name]['parameters'], bank[name][0], 0)
-            command('standing:' + name, lambda: [Server.feed(name, 0, sorted(active[name]), 1)])
+            command('standing:' + name, lambda: [Server.feed(name, 0, sorted(active[name]), 1, request_shape[name])])
         command('initial_tick', lambda: ['tick'])
         read(graph)
 
@@ -125,12 +129,12 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
                         active[name] = binding(name, 2*cycle + int(state == 'changed'))
                     record['bindings'].append(dict(context, rows={n: sorted(active[n]) for n in dynamic}))
                     first = len(record['events'])
-                    command('bind', lambda: [Server.feed(n, 0, sorted(active[n]), 1) for n in dynamic] + ['tick'])
+                    command('bind', lambda: [Server.feed(n, 0, sorted(active[n]), 1, request_shape[n]) for n in dynamic] + ['tick'])
                     read(current, dynamic)
                     totals = measure.total(record['events'][first:])
                     record['events'].append(dict(context, phase='batch_answers', **totals,
                                                   derived=True, requests=len(dynamic)*args.batch_size))
-                    command('release', lambda: [Server.feed(n, 0, sorted(active[n]), -1) for n in dynamic] + ['tick'])
+                    command('release', lambda: [Server.feed(n, 0, sorted(active[n]), -1, request_shape[n]) for n in dynamic] + ['tick'])
                     for name in dynamic:
                         active[name] = set()
                     read(current, dynamic)
@@ -140,7 +144,7 @@ def run_server(args, backend, names, graph, changed, delta, bank, plans, report)
             print(f'{backend}/{suffix}: round {cycle-args.warmup+1}/{args.rounds}, {len(names)} queries checked', flush=True)
         context.update(state='retired', warmup=True)
         if standing:
-            command('retire', lambda: [Server.feed(n, 0, sorted(active[n]), -1) for n in standing] + ['tick'])
+            command('retire', lambda: [Server.feed(n, 0, sorted(active[n]), -1, request_shape[n]) for n in standing] + ['tick'])
             for name in standing:
                 active[name] = set()
             read(graph)
@@ -158,6 +162,8 @@ def main():
     parser.add_argument('--mode', choices=('mixed', 'maintained'), default='mixed',
                         help='mixed: standing BI, transient IS/IC; maintained: standing bindings for every read')
     parser.add_argument('--isolated', action='store_true', help='one fresh server per query, for attribution')
+    parser.add_argument('--feed', choices=('text', 'frames'), default='text',
+                        help='feed rows as text lines, or as binary frames of columns')
     parser.add_argument('--rounds', type=positive, default=3)
     parser.add_argument('--warmup', type=int, default=1)
     parser.add_argument('--batch-size', type=positive, default=3)

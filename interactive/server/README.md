@@ -128,6 +128,19 @@ them to the dataflow. The body is read into columns at the input's shapes as it
 arrives, so no row is held as a `Value`; one row not of those shapes refuses the
 whole body, naming the row.
 
+A program that already has the updates as columns can skip the text:
+
+    feed <prog> <in#> frame <nbytes>
+
+is followed by exactly `nbytes` bytes, a `data` frame in the format `peek … as
+corgi` answers with, with no time lanes (`lanes` is 0): `rows | 0 | keys | vals |
+diffs`. On WebSocket the header line and its bytes are one binary message. The
+session checks that the keys and values have the input's declared shapes (any
+integer storage will do) and admits the columns as one feed, as above. A frame
+of other shapes, not a whole frame, or larger than `DDIR_MAX_FEED_BYTES` is
+refused, and its bytes are read past. `bench/ldbc/client.py` has an encoder,
+`encode_frame`.
+
 The batch's `ok` means that the complete request was admitted to the ordered
 worker stream; it does not wait for every worker to stage its shard. A later
 `tick` is the visibility and completion boundary for those rows.

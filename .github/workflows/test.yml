@@ -55,6 +55,8 @@ jobs:
           python3 interactive/server/bench/ldbc/test_snb.py
           python3 interactive/server/bench/ldbc/test_updates.py
           for workers in 1 4; do
+            python3 interactive/server/bench/ldbc/test_frames.py --server target/debug/ddir_server \
+              --workers "$workers"
             python3 interactive/server/bench/ldbc/suite.py --server target/debug/ddir_server \
               --workers "$workers" --rounds 1 --warmup 0
             python3 interactive/server/bench/ldbc/test_update_stream.py \

@@ -10,6 +10,11 @@
 //! Multi-line bodies use two-phase framing: `load ... begin` accepts literal
 //! DDIR through `end-load`, while `feed <prog> <in#> begin` accepts row updates
 //! through `end-feed` and becomes one non-interleavable server command.
+//!
+//! `feed <prog> <in#> frame <nbytes>` is followed by exactly `nbytes` bytes: the
+//! updates as columns, in the binary frame format `peek … as corgi` answers with
+//! (`interactive::corgi::frame`), with no time lanes. On WebSocket the header
+//! line and its bytes are one binary message.
 
 use std::any::{type_name_of_val, Any};
 use std::collections::{BTreeMap, HashMap};
@@ -170,12 +175,17 @@ impl Catalog {
         self.0.lock().unwrap().insert(name.to_string(), inputs.collect());
     }
 
-    /// A reader of rows for `prog`'s `input`, at its declared shapes.
-    fn decoder(&self, prog: &str, input: usize) -> Result<FeedDecoder, String> {
+    /// The declared shapes of `prog`'s `input`.
+    fn shape(&self, prog: &str, input: usize) -> Result<RowShape, String> {
         let programs = self.0.lock().unwrap();
         let inputs = programs.get(prog).ok_or_else(|| format!("no program {prog:?}"))?;
-        let (key, val) = inputs.get(&input).ok_or_else(|| format!("program {prog:?} has no input {input}"))?;
-        Ok(FeedDecoder::new(key, val))
+        inputs.get(&input).cloned().ok_or_else(|| format!("program {prog:?} has no input {input}"))
+    }
+
+    /// A reader of rows for `prog`'s `input`, at its declared shapes.
+    fn decoder(&self, prog: &str, input: usize) -> Result<FeedDecoder, String> {
+        let (key, val) = self.shape(prog, input)?;
+        Ok(FeedDecoder::new(&key, &val))
     }
 }
 
@@ -304,6 +314,7 @@ pub struct LineParser {
     catalog: Catalog,
     pending_load: Option<PendingLoad>,
     pending_feed: Option<PendingFeed>,
+    pending_frame: Option<PendingFrame>,
     auto_reqid_counter: u64,
     max_load_bytes: usize,
     max_feed_bytes: usize,
@@ -358,6 +369,17 @@ struct PendingFeed {
     /// Malformed and oversized bodies are swallowed through `end-feed`, then
     /// reported once; no partial command reaches the worker group.
     poisoned: Option<String>,
+}
+
+/// A `feed … frame <nbytes>` whose bytes are still to come.
+struct PendingFrame {
+    reqid: ReqId,
+    prog: String,
+    input: usize,
+    nbytes: usize,
+    /// The input's declared shapes, or why the frame will be refused: its bytes are read
+    /// past (not kept) and the error reported in its place.
+    shape: Result<RowShape, String>,
 }
 
 impl LineParser {
@@ -519,6 +541,16 @@ impl LineParser {
                 self.pending_feed = Some(PendingFeed { reqid, prog, input, rows, bytes: 0, poisoned });
                 None
             }
+            ParseOutcome::BeginFrame { prog, input, nbytes } => {
+                let shape = if nbytes > self.max_feed_bytes {
+                    Err(format!("feed: a frame of {nbytes} bytes exceeds {} bytes (DDIR_MAX_FEED_BYTES)", self.max_feed_bytes))
+                } else {
+                    input.clone().and_then(|input| self.catalog.shape(&prog, input).map_err(|error| format!("feed: {error}")))
+                };
+                let input = input.unwrap_or_default();
+                self.pending_frame = Some(PendingFrame { reqid, prog, input, nbytes, shape });
+                None
+            }
         }
     }
 
@@ -526,6 +558,27 @@ impl LineParser {
     /// uses this to forward blank-line body content verbatim.
     pub fn awaiting_body(&self) -> bool {
         self.pending_load.is_some() || self.pending_feed.is_some()
+    }
+
+    /// The bytes a `feed … frame` header announced, which must be read next and handed to
+    /// [`frame`](Self::frame), and whether they are wanted: a frame to be refused (too large, or
+    /// for an input with no declared shapes) is read past, not kept.
+    pub fn frame_bytes(&self) -> Option<(usize, bool)> {
+        self.pending_frame.as_ref().map(|frame| (frame.nbytes, frame.shape.is_ok()))
+    }
+
+    /// Complete a pending `feed … frame` with its bytes (none, for one read past): the updates,
+    /// checked against the input's declared shapes, as one command, or why they are refused.
+    pub fn frame(&mut self, payload: &[u8]) -> Option<(ReqId, Result<Cmd, String>)> {
+        let frame = self.pending_frame.take()?;
+        let columns = frame.shape.and_then(|shape| {
+            if payload.len() != frame.nbytes {
+                return Err(format!("feed: a frame of {} bytes, but {} arrived", frame.nbytes, payload.len()));
+            }
+            interactive::corgi::frame::decode_feed(payload, &shape, self.max_feed_bytes as u64).map_err(|error| format!("feed: {error}"))
+        });
+        let (prog, input) = (frame.prog, frame.input);
+        Some((frame.reqid, columns.map(|columns| Cmd::FeedColumns { prog, input, columns })))
     }
 }
 
@@ -540,6 +593,11 @@ enum ParseOutcome {
     BeginFeed {
         prog: String,
         input: usize,
+    },
+    BeginFrame {
+        prog: String,
+        input: Result<usize, String>,
+        nbytes: usize,
     },
 }
 
@@ -621,6 +679,15 @@ fn parse_cmd(cmd: &str, args: &[&str], catalog: &Catalog) -> ParseOutcome {
                     prog: (*prog).to_string(),
                     input,
                 };
+            }
+            // Syntax: `feed <prog> <in#> frame <nbytes>`, then exactly `nbytes` bytes: a binary frame.
+            // A bad `<in#>` still has its bytes read past; a bad `<nbytes>` leaves none to find.
+            if let [prog, input, "frame", nbytes] = args {
+                let Ok(nbytes) = nbytes.parse() else {
+                    return ParseOutcome::Err(format!("feed: <nbytes> must be a number, got {nbytes:?}"));
+                };
+                let input = input.parse().map_err(|_| format!("feed: <in#> must be a number, got {input:?}"));
+                return ParseOutcome::BeginFrame { prog: (*prog).to_string(), input, nbytes };
             }
             // Syntax: `feed <prog> <in#> from <recipe-or-file>` — the server sources the rows.
             if let [prog, input, "from", source] = args {
@@ -773,6 +840,43 @@ mod tests {
             }
         }
         out
+    }
+
+    /// A `feed … frame` header and its bytes are one command: the columns, checked against the
+    /// input's declared shapes. A frame of other shapes, cut short, too large, or for an input with
+    /// no shapes is refused, and the bytes of the last two are read past, not kept.
+    #[test]
+    fn framed_feeds_are_columns_at_the_input_shapes() {
+        let mut p = world();
+        let mut rows = p.catalog.decoder("world", 0).unwrap();
+        rows.push("tuple(1,2)", None, 1).unwrap();
+        rows.push("tuple(3,-4)", None, 2).unwrap();
+        let columns = rows.finish();
+        let bytes = interactive::corgi::frame::encode(&columns, &[]);
+        assert!(p.feed(&format!("r1 feed world 0 frame {}", bytes.len())).is_none());
+        assert_eq!(p.frame_bytes(), Some((bytes.len(), true)));
+        match p.frame(&bytes) {
+            Some((reqid, Ok(Cmd::FeedColumns { prog, input, columns: got }))) => {
+                assert_eq!((reqid.as_str(), prog.as_str(), input), ("r1", "world", 0));
+                assert_eq!(got, columns);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        assert!(p.frame_bytes().is_none(), "the frame is complete");
+        assert!(p.feed(&format!("r2 feed world 1 frame {}", bytes.len())).is_none());
+        assert!(matches!(p.frame(&bytes), Some((_, Err(e))) if e.contains("shape")));
+        assert!(p.feed(&format!("r3 feed world 0 frame {}", bytes.len())).is_none());
+        assert!(matches!(p.frame(&bytes[..bytes.len() - 8]), Some((_, Err(_)))), "cut short");
+        assert!(p.feed("r4 feed world 0 frame 999999999999").is_none());
+        assert_eq!(p.frame_bytes(), Some((999999999999, false)));
+        assert!(matches!(p.frame(&[]), Some((_, Err(e))) if e.contains("exceeds")));
+        assert!(p.feed("r5 feed world 9 frame 64").is_none());
+        assert_eq!(p.frame_bytes(), Some((64, false)));
+        assert!(matches!(p.frame(&[]), Some((_, Err(_)))));
+        assert!(p.feed("r6 feed world x frame 64").is_none(), "a bad input index still reads past its bytes");
+        assert_eq!(p.frame_bytes(), Some((64, false)));
+        assert!(matches!(p.frame(&[]), Some((_, Err(_)))));
+        assert!(matches!(feed_all(&mut p, &["r7 feed world 0 frame x"])[..], [(_, Err(_))]));
     }
 
     #[test]

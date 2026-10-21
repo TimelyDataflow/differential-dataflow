@@ -31,7 +31,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, sync_channel, SendError, Sender};
@@ -274,11 +274,29 @@ fn run_session<R: BufRead, W: Write + Send + 'static>(
     });
 
     let mut parser = LineParser::new(control.catalog.clone());
-    for line in input.lines() {
-        let Ok(line) = line else {
+    let mut input = input;
+    let mut raw = Vec::new();
+    loop {
+        // Lines as `BufRead::lines` reads them, but as bytes: a `feed … frame` header line is
+        // followed by bytes that are not text.
+        raw.clear();
+        match input.read_until(b'\n', &mut raw) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let Ok(line) = std::str::from_utf8(&raw) else {
             break;
         };
-        if let Some(parsed) = parser.feed(&line) {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let mut parsed = parser.feed(line);
+        if let Some((nbytes, wanted)) = parser.frame_bytes() {
+            let Ok(payload) = read_frame(&mut input, nbytes, wanted) else {
+                break;
+            };
+            parsed = parser.frame(&payload);
+        }
+        if let Some(parsed) = parsed {
             // For stdin, `exit` terminates the whole server; for TCP, it
             // terminates only this session. Either way the reader stops.
             match dispatch(parsed, &control, &resp_tx, connection_id) {
@@ -297,6 +315,25 @@ fn run_session<R: BufRead, W: Write + Send + 'static>(
     let _ = control.send(ControlEvent::SessionEnded(connection_id));
     let _ = writer_thread.join();
     Ok(())
+}
+
+/// The `nbytes` bytes of a frame that follow its header: kept when `wanted`, else read past.
+fn read_frame(input: &mut impl Read, nbytes: usize, wanted: bool) -> std::io::Result<Vec<u8>> {
+    if wanted {
+        let mut payload = vec![0; nbytes];
+        input.read_exact(&mut payload)?;
+        return Ok(payload);
+    }
+    let skipped = std::io::copy(&mut input.take(nbytes as u64), &mut std::io::sink())?;
+    if skipped < nbytes as u64 {
+        return Err(std::io::ErrorKind::UnexpectedEof.into());
+    }
+    Ok(Vec::new())
+}
+
+/// Whether `line` is a `feed <prog> <in#> frame <nbytes>` header, with or without a reqid.
+fn is_frame_header(line: &str) -> bool {
+    matches!(line.split_whitespace().collect::<Vec<_>>().as_slice(), [.., "feed", _, _, "frame", _])
 }
 
 fn run_stdin_session(control: ControlHandle) {
@@ -397,7 +434,12 @@ fn run_ws_session(stream: TcpStream, control: ControlHandle) -> Result<(), tungs
                     if line.trim().is_empty() && !parser.awaiting_body() {
                         continue;
                     }
-                    if let Some(parsed) = parser.feed(line) {
+                    let mut parsed = parser.feed(line);
+                    // A frame's bytes must share its header's binary message.
+                    if parser.frame_bytes().is_some() {
+                        parsed = parser.frame(&[]);
+                    }
+                    if let Some(parsed) = parsed {
                         match dispatch(parsed, &control, &resp_tx, connection_id) {
                             Dispatch::Continue => {}
                             Dispatch::Exit => should_exit = true,
@@ -409,8 +451,27 @@ fn run_ws_session(stream: TcpStream, control: ControlHandle) -> Result<(), tungs
                     }
                 }
             }
+            Ok(tungstenite::Message::Binary(data)) => {
+                // One binary message is a `feed … frame` header line and its bytes.
+                let header = data.iter().position(|&b| b == b'\n')
+                    .and_then(|at| std::str::from_utf8(&data[..at]).ok().map(|header| (header, at)));
+                let parsed = match header {
+                    Some((header, at)) if is_frame_header(header) => {
+                        let parsed = parser.feed(header);
+                        if parser.frame_bytes().is_some() { parser.frame(&data[at + 1..]) } else { parsed }
+                    }
+                    _ => Some(("_".to_string(), Err("a binary message is a `feed <prog> <in#> frame <nbytes>` line and its bytes".to_string()))),
+                };
+                if let Some(parsed) = parsed {
+                    match dispatch(parsed, &control, &resp_tx, connection_id) {
+                        Dispatch::Continue => {}
+                        Dispatch::Exit => should_exit = true,
+                        Dispatch::Disconnected => should_exit = true,
+                    }
+                }
+            }
             Ok(tungstenite::Message::Close(_)) => break,
-            Ok(_) => {} // ping/pong/binary/frame — ignore for v0
+            Ok(_) => {} // ping/pong/frame
             Err(tungstenite::Error::Io(e))
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
