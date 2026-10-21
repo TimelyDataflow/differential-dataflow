@@ -46,7 +46,7 @@ def summarize(root):
             report=str(path.relative_to(root))))
     rows.sort(key=lambda q:(q['active_final_extra_gib'] is None,-(q['active_final_extra_gib'] or 0)))
     with (root/'memory.csv').open('w',newline='') as f:
-        writer=csv.DictWriter(f,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+        writer=csv.DictWriter(f,fieldnames=list(rows[0]),lineterminator='\n');writer.writeheader();writer.writerows(rows)
     (root/'memory.json').write_text(json.dumps(dict(scope='Observed process RSS above a separate matched input-only control. Includes allocator retention; not query-owned live bytes. Negative differences are preserved. Resource cutoffs censor peaks. Saved-answer matching is not fresh Python checking.',queries=rows),indent=2)+'\n')
     return rows
 
