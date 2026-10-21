@@ -437,11 +437,15 @@ impl Sb {
     /// input side, join the demand on the output, recover the whole input (the
     /// `None` endpoint — `RESIDUAL` is the input value).
     ///
-    /// The one wrinkle is that a plain flatmap drops the source row and the key
-    /// isn't unique, so we **re-key the input by itself** before exploding (the
-    /// source then rides through in the join key) and re-project to the packed
-    /// output afterwards. `list` reads the re-keyed rows: the input's key
-    /// is the key's first field, and its value is the row's value.
+    /// A plain flatmap drops the source row and the key isn't unique, so each
+    /// exploded element must say which source row it came from. It says so by
+    /// the source's key and a hash of the source's value, not by the source row
+    /// itself: the row holds the whole list, and carrying it with each of its
+    /// elements is quadratic in the list's length. The demanded elements' sources
+    /// are then recovered by joining on that `(key, hash)`. Two source rows with
+    /// equal hashes are both demanded, which only makes an explanation larger;
+    /// no source row can be missed. `list` reads the re-keyed rows: the input's
+    /// key is the key's first field, and its value is the row's value.
     ///
     /// The input may sit in an enclosing scope (a flatmap of a parent's
     /// collection inside a loop), so its chain may be shorter than the demand's:
@@ -449,22 +453,24 @@ impl Sb {
     /// (`time_le`, `strip`), at the input's own chain.
     fn emit_lookup_flatmap(&mut self, dep_y: Ref, side: &Side, out_user_len: usize, list: &Lambda) -> Ref {
         let (in_len, out_len) = (side.user_len, out_user_len);
-        // Pair table: re-key the input by the whole input row, explode (the
-        // source survives in the key), then re-key to (k, (pos, elem)) carrying
-        // the source as the value.
         let src = self.concat(vec![side.witness.clone(), side.forward.clone()]);
-        let rekeyed = self.project(src, projection(tup(vec![var(0), var(1)]), f(1, 0), 2));
+        // Pair table: each source row keyed by (k, hash of its value), exploded, then re-keyed
+        // to the output (k, (pos, elem)) carrying (k, hash).
+        let hashed = || tup(vec![var(0), format!("{} hash", var(1))]);
+        let rekeyed = self.project(src.clone(), projection(hashed(), f(1, 0), 2));
         let exploded = self.linear(rekeyed, vec![LinearOp::FlatMap(list.clone())]);
         let pair = self.project(exploded, projection(tup(vec![f(0, 0), var(1)]), var(0), 2));
         // Re-key the demand by the same output (k, (pos, elem)); keep its chain ++ q.
         let dep_keyed = self.project(dep_y, projection(tup(vec![var(0), f(1, 0)]), tup(fidx(1, 1, out_len + 2)), 2));
-        // Join into a wide row [V_in | chain_in | chain_out | q]. Source is `$2`
-        // = (k, host_val); host_val = (V_in, chain_in). Dep' is `$1` = [chain_out | q].
-        let mut wide = vec![fld(f(2, 1), 0)];                                     // V_in
-        wide.extend((0..in_len).map(|c| fld(f(2, 1), 1 + c)));                    // chain_in
+        // The demanded elements' sources, as (k, hash) ; chain_out ++ q.
+        let sourced = self.join(dep_keyed, pair, projection(tup(vec![f(2, 0), f(2, 1)]), tup(fidx(1, 0, out_len + 1)), 3));
+        // The source rows by (k, hash), then the wide row [V_in | chain_in | chain_out | q].
+        let by_hash = self.project(src, projection(hashed(), var(1), 2));
+        let mut wide = vec![f(2, 0)];                                             // V_in
+        wide.extend((0..in_len).map(|c| f(2, 1 + c)));                            // chain_in
         wide.extend(fidx(1, 0, out_len));                                         // chain_out
         wide.push(f(1, out_len));                                                 // q
-        let joined = self.join(dep_keyed, pair, projection(f(2, 0), tup(wide), 3));
+        let joined = self.join(sourced, by_hash, projection(f(0, 0), tup(wide), 3));
         // Soundness: chain_in ≤ chain_out, on the coordinates they share.
         let filtered = match <Val as RowModel>::time_le(in_len, out_len) { Some(c) => self.filter(joined, c), None => joined };
         // Reform the demanded input (k ; V_in, chain_in, q).
@@ -532,6 +538,11 @@ impl RowModel for Val {
     }
     fn ky_data_le() -> Option<Lambda> {
         Some(predicate(le(f(1, 0), f(1, 1))))
+    }
+    fn blank_v(out_len: usize) -> Lambda {
+        let mut val = vec!["()".to_string()];
+        val.extend(fidx(1, 1, 2 + out_len));          // chain, q
+        projection(var(0), tup(val), 2)
     }
     fn ky_drop_vout(in_len: usize, out_len: usize) -> Lambda {
         let mut val = vec![f(1, 0)];
