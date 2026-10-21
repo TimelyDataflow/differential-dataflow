@@ -12,7 +12,8 @@
 -- input 0: nodes  key = (id)          val = (scope, kind, pid, ops)
 -- input 1: edges  key = (holder, pos) val = (tag, a, b)
 --
--- kind: 0 Linear, 1 Concat, 2 Arrange, 3 Join, 4 Reduce, 5 Inspect, 9 holder
+-- kind: 0 Linear, 1 Concat, 2 Arrange, 3 Join, 4 Reduce, 5 Inspect,
+--       6 HalfJoin, 9 holder
 --   (holders are the non-operator owners of references: binds, exports, child-scope
 --   imports; they count as uses and get redirected, but are never rewritten).
 -- pid:  interned payload (join projection, reducer, inspect label; unique per holder).
@@ -20,8 +21,9 @@
 -- ref:  (0, id, 0) Local · (1, k, 0) Import · (2, v, 0) Var · (3, item, j) ChildExport.
 -- ids preserve item order within a scope, so "earliest" is `min`.
 
-let nodes = input 0 | key($0[0] ; $1[0], $1[1], $1[2], $1[3]);
-let edges = input 1 | key($0[0], $0[1] ; $1[0], $1[1], $1[2]);
+let nodes = input 0 : ((int) ; (int, int, int, List(int)))
+          | map(((id), payload) -> (id, payload));
+let edges = input 1 : ((int, int) ; (int, int, int));
 
 opt: {
     -- The loop variables start empty; feed the inputs in at round 0 only (var stall).
@@ -29,74 +31,88 @@ opt: {
     var e_stall = edges;
 
     -- ---- collapse ------------------------------------------------------------------
-    let eh = ge | key($0[0] ; $0[1], $1[0], $1[1], $1[2]);                  -- holder ; pos, tag, a, b
-    let in0 = eh | filter(($1[0] == 0) && ($1[1] == 0)) | key($0[0] ; $1[2]); -- holder ; local input
-    let arrs = gn | filter($1[1] == 2) | key($0[0] ;);
-    let arranged = gn | filter(or($1[1] == 2, $1[1] == 4)) | key($0[0] ;);
-    let col = arrs | join(in0, ($0 ; $2)) | key($1 ; $0) | join(arranged, ($1 ; $0)); -- a ; j
+    let eh = ge | map(((holder, pos), (tag, a, b)) -> (holder, (pos, tag, a, b)));
+    let in0 = eh | filter((_, (pos, tag, _, _)) -> ((pos, 0) eq, (tag, 0) eq) all)
+                 | map((holder, (_, _, a, _)) -> (holder, a));
+    let arrs = gn | filter((_, (_, kind, _, _)) -> (kind, 2) eq)
+                  | map((id, _) -> (id, ()));
+    let arranged = gn | filter((_, (_, kind, _, _)) -> ((kind, 2) eq, (kind, 4) eq) add)
+                      | map((id, _) -> (id, ()));
+    let col = arrs | join(in0, (i, _, a) -> (i, a))
+                   | map((i, a) -> (a, i))
+                   | join(arranged, (source_id, arrange_id, _) -> (arrange_id, source_id));
 
     collapse: {
         -- inputs precede consumers, so the end of an arrange chain is its least id
-        let hop = col | key($1 ; $0) | join(down, ($1 ; $2));
+        let hop = col | map((a, j) -> (j, a)) | join(down, (_, a, target) -> (a, target));
         var down = col + hop | min;
     }
     let r1 = collapse::down;                                                -- a ; target
-    let dead1 = r1 | key($0 ;);
+    let dead1 = r1 | map((id, _) -> (id, ()));
 
-    let n1 = gn - (gn | join(dead1, ($0 ; $1)));
-    let e1a = ge - (eh | join(dead1, ($0, $1[0] ; $1[1], $1[2], $1[3])));
-    let t1 = e1a | filter($1[0] == 0) | key($1[1] ; $0[0], $0[1]);           -- target ; holder, pos
+    let n1 = gn - (gn | join(dead1, (id, payload, _) -> (id, payload)));
+    let e1a = ge - (eh | join(dead1, (holder, (pos, tag, a, b), _) -> ((holder, pos), (tag, a, b))));
+    let t1 = e1a | filter((_, (tag, _, _)) -> (tag, 0) eq)
+                 | map(((holder, pos), (_, target, _)) -> (target, (holder, pos)));
     let e1 = e1a
-           - (t1 | join(r1, ($1[0], $1[1] ; 0, $0[0], 0)))
-           + (t1 | join(r1, ($1[0], $1[1] ; 0, $2[0], 0)));
+           - (t1 | join(r1, (old, (holder, pos), _) -> ((holder, pos), (0, old, 0))))
+           + (t1 | join(r1, (_, (holder, pos), target) -> ((holder, pos), (0, target, 0))));
 
     -- ---- fuse ----------------------------------------------------------------------
-    let e1h = e1 | key($0[0] ; $0[1], $1[0], $1[1], $1[2]);
-    let uses = e1 | filter($1[0] == 0) | key($1[1] ;) | count;               -- target ; (n)
-    let single = uses | filter($1[0] == 1) | key($0 ;);
-    let lin = n1 | filter($1[1] == 0);
-    let lin_ids = lin | key($0 ;);
-    let lin_in = lin | join(e1h, ($0 ; $1[3], $2[1], $2[2], $2[3]));         -- i ; ops, tag, a, b
-    let fz = lin_in | filter($1[1] == 0) | key($1[2] ; $0[0])
-           | join(single, ($0 ; $1)) | join(lin_ids, ($0 ; $1));             -- j ; i  (i absorbs j)
-    let absorbers = fz | key($1 ;);
-    let absorbed = fz | key($0 ;);
-    let base = lin_in - (lin_in | join(absorbers, ($0 ; $1)));
+    let e1h = e1 | map(((holder, pos), (tag, a, b)) -> (holder, (pos, tag, a, b)));
+    let uses = e1 | filter((_, (tag, _, _)) -> (tag, 0) eq)
+                  | map((_, (_, target, _)) -> (target, ())) | count;
+    let single = uses | filter((_, n) -> (n, 1) eq) | map((id, _) -> (id, ()));
+    let lin = n1 | filter((_, (_, kind, _, _)) -> (kind, 0) eq);
+    let lin_ids = lin | map((id, _) -> (id, ()));
+    let lin_in = lin | join(e1h, (id, (_, _, _, ops), (_, tag, a, b)) -> (id, (ops, tag, a, b)));
+    let fz = lin_in | filter((_, (_, tag, _, _)) -> (tag, 0) eq)
+                    | map((i, (_, _, j, _)) -> (j, i))
+                    | join(single, (j, i, _) -> (j, i))
+                    | join(lin_ids, (j, i, _) -> (j, i));
+    let absorbers = fz | map((_, i) -> (i, ()));
+    let absorbed = fz | map((j, _) -> (j, ()));
+    let base = lin_in - (lin_in | join(absorbers, (i, payload, _) -> (i, payload)));
 
     fuse: {
         -- a chain member's fused form: its absorbed input's fused form, then its own ops
-        let ext = fz | join(acc, ($1 ; $2[0], $2[1], $2[2], $2[3]))
-                     | join(lin_in, ($0 ; append($1[0], $2[0]), $1[1], $1[2], $1[3]));
+        let ext = fz | join(acc, (_, i, payload) -> (i, payload))
+                     | join(lin_in, (i, (inner, tag, a, b), (own, _, _, _))
+                           -> (i, ((inner, own) append, tag, a, b)));
         var acc = base + ext;
     }
-    let fused = fuse::acc | join(absorbers, ($0 ; $1));
-    let fused_surv = fused - (fused | join(absorbed, ($0 ; $1)));          -- i ; ops, tag, a, b
-    let surv_ids = fused_surv | key($0 ;);
+    let fused = fuse::acc | join(absorbers, (i, payload, _) -> (i, payload));
+    let fused_surv = fused - (fused | join(absorbed, (i, payload, _) -> (i, payload)));
+    let surv_ids = fused_surv | map((i, _) -> (i, ()));
 
     let n2 = n1
-           - (n1 | join(absorbed, ($0 ; $1)))
-           - (n1 | join(surv_ids, ($0 ; $1)))
-           + (n1 | join(fused_surv, ($0 ; $1[0], $1[1], $1[2], $2[0])));
+           - (n1 | join(absorbed, (i, payload, _) -> (i, payload)))
+           - (n1 | join(surv_ids, (i, payload, _) -> (i, payload)))
+           + (n1 | join(fused_surv, (i, (scope, kind, pid, _), (ops, _, _, _))
+                        -> (i, (scope, kind, pid, ops))));
     let e2 = e1
-           - (e1h | join(absorbed, ($0, $1[0] ; $1[1], $1[2], $1[3])))
-           - (e1h | join(surv_ids, ($0, $1[0] ; $1[1], $1[2], $1[3])))
-           + (fused_surv | key($0, 0 ; $1[1], $1[2], $1[3]));
+           - (e1h | join(absorbed, (holder, (pos, tag, a, b), _) -> ((holder, pos), (tag, a, b))))
+           - (e1h | join(surv_ids, (holder, (pos, tag, a, b), _) -> ((holder, pos), (tag, a, b))))
+           + (fused_surv | map((i, (_, tag, a, b)) -> ((i, 0), (tag, a, b))));
 
     -- ---- dedup (one step) ----------------------------------------------------------
-    let e2h = e2 | key($0[0] ; $0[1], $1[0], $1[1], $1[2]);
+    let e2h = e2 | map(((holder, pos), (tag, a, b)) -> (holder, (pos, tag, a, b)));
     let kids = e2h | collect;                                                -- holder ; [(pos, tag, a, b)]
-    let sig = n2 | filter($1[1] != 9)
-                 | join(kids, ($1[0], $1[1], $1[2], $1[3], $2 ; $0[0]));     -- signature ; id
+    let sig = n2 | filter((_, (_, kind, _, _)) -> (kind, 9) ne)
+                 | join(kids, (id, (scope, kind, pid, ops), children)
+                       -> ((scope, kind, pid, ops, children), id));
     let rep = sig | min;
-    let dmap = sig | join(rep, ($1[0] ; $2[0])) | filter($0[0] != $1[0]);    -- id ; representative
-    let dead3 = dmap | key($0 ;);
+    let dmap = sig | join(rep, (_, id, first) -> (id, first))
+                   | filter((id, first) -> (id, first) ne);
+    let dead3 = dmap | map((id, _) -> (id, ()));
 
-    let n3 = n2 - (n2 | join(dead3, ($0 ; $1)));
-    let e3a = e2 - (e2h | join(dead3, ($0, $1[0] ; $1[1], $1[2], $1[3])));
-    let t3 = e3a | filter($1[0] == 0) | key($1[1] ; $0[0], $0[1]);
+    let n3 = n2 - (n2 | join(dead3, (id, payload, _) -> (id, payload)));
+    let e3a = e2 - (e2h | join(dead3, (holder, (pos, tag, a, b), _) -> ((holder, pos), (tag, a, b))));
+    let t3 = e3a | filter((_, (tag, _, _)) -> (tag, 0) eq)
+                  | map(((holder, pos), (_, target, _)) -> (target, (holder, pos)));
     let e3 = e3a
-           - (t3 | join(dmap, ($1[0], $1[1] ; 0, $0[0], 0)))
-           + (t3 | join(dmap, ($1[0], $1[1] ; 0, $2[0], 0)));
+           - (t3 | join(dmap, (old, (holder, pos), _) -> ((holder, pos), (0, old, 0))))
+           + (t3 | join(dmap, (_, (holder, pos), target) -> ((holder, pos), (0, target, 0))));
 
     -- ---- the graph, one Rust-loop iteration per round ------------------------------
     -- `arrange` consolidates each round: much of the path from `gn`/`ge` back to themselves is

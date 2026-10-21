@@ -13,8 +13,7 @@
 //! cargo run --release --example self_opt -- $(find examples tests server -name '*.ddp')
 //! ```
 //!
-//! Environment: `DDIR_BACKEND=corgi` renders the optimizer on the columnar backend;
-//! `SELF_OPT_DDP=<file>` substitutes another optimizer program; `SELF_OPT_SHOW` dumps
+//! Environment: `SELF_OPT_DDP=<file>` substitutes another optimizer program; `SELF_OPT_SHOW` dumps
 //! each Rust-optimized program and `SELF_OPT_DUMP` dumps both sides of a disagreement.
 //! `SELF_OPT_SHARED` puts every program's root scope in one dedup domain (root imports
 //! named by source) and reports how much the programs share, instead of comparing.
@@ -22,9 +21,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
-use interactive::ir::{LinearOp, Projection, Reducer, Value};
+use corgi::Shape;
+use interactive::corgi::container::Updates;
+use interactive::corgi::logic::transcode_owned;
+use interactive::ir::{Lambda, LinearOp, Reducer, Value};
 use interactive::scope_ir::{Item, Node, Ref, Scope, Source};
-use interactive::server::{InputUpdate, Server};
+use interactive::server::Server;
 use interactive::{lower, parse};
 
 const SCOPE_STRIDE: i64 = 1 << 20;
@@ -36,6 +38,7 @@ const ARRANGE: i64 = 2;
 const JOIN: i64 = 3;
 const REDUCE: i64 = 4;
 const INSPECT: i64 = 5;
+const HALF_JOIN: i64 = 6;
 const HOLDER: i64 = 9;
 
 /// Payloads, interned by their `Debug` text (which is what the Rust dedup compares).
@@ -43,7 +46,8 @@ const HOLDER: i64 = 9;
 struct Payloads {
     ids: HashMap<String, i64>,
     ops: HashMap<i64, LinearOp>,
-    projections: HashMap<i64, Projection>,
+    projections: HashMap<i64, Lambda>,
+    half_joins: HashMap<i64, (bool, Lambda)>,
     reducers: HashMap<i64, Reducer>,
     labels: HashMap<i64, String>,
 }
@@ -72,8 +76,16 @@ struct Numbering {
 }
 
 impl Numbering {
-    fn scope(&mut self) -> i64 { let s = self.next_scope; self.next_scope += 1; s }
-    fn holder(&mut self) -> i64 { let h = self.next_holder; self.next_holder += 1; h }
+    fn scope(&mut self) -> i64 {
+        let s = self.next_scope;
+        self.next_scope += 1;
+        s
+    }
+    fn holder(&mut self) -> i64 {
+        let h = self.next_holder;
+        self.next_holder += 1;
+        h
+    }
 }
 
 fn enc(r: &Ref, base: i64) -> Edge {
@@ -98,7 +110,13 @@ fn dec((tag, a, b): Edge, base: i64) -> Ref {
 /// `sources`, when present, marks `s` as a root scope in *shared* mode: the root scopes of
 /// all programs form one domain (so dedup can merge across programs), and a root import is
 /// named by its source rather than by its position.
-fn export_scope(s: &Scope, num: &mut Numbering, pay: &mut Payloads, rows: &mut Rows, sources: Option<&[i64]>) {
+fn export_scope(
+    s: &Scope,
+    num: &mut Numbering,
+    pay: &mut Payloads,
+    rows: &mut Rows,
+    sources: Option<&[i64]>,
+) {
     let scope = num.scope();
     let base = scope * SCOPE_STRIDE;
     let domain = if sources.is_some() { -1 } else { scope };
@@ -117,19 +135,36 @@ fn export_scope(s: &Scope, num: &mut Numbering, pay: &mut Payloads, rows: &mut R
             Item::Op(node) => {
                 let (kind, pid, ops, refs): (i64, i64, Vec<i64>, Vec<&Ref>) = match node {
                     Node::Linear { input, ops } => {
-                        let ids = ops.iter().map(|op| {
-                            let op_id = pay.intern(format!("op {:?}", op));
-                            pay.ops.insert(op_id, op.clone());
-                            op_id
-                        }).collect();
+                        let ids = ops
+                            .iter()
+                            .map(|op| {
+                                let op_id = pay.intern(format!("op {:?}", op));
+                                pay.ops.insert(op_id, op.clone());
+                                op_id
+                            })
+                            .collect();
                         (LINEAR, 0, ids, vec![input])
                     }
                     Node::Concat(refs) => (CONCAT, 0, Vec::new(), refs.iter().collect()),
                     Node::Arrange(input) => (ARRANGE, 0, Vec::new(), vec![input]),
-                    Node::Join { left, right, projection } => {
+                    Node::Join {
+                        left,
+                        right,
+                        projection,
+                    } => {
                         let pid = pay.intern(format!("join {:?}", projection));
                         pay.projections.insert(pid, projection.clone());
                         (JOIN, pid, Vec::new(), vec![left, right])
+                    }
+                    Node::HalfJoin {
+                        stream,
+                        arrangement,
+                        strict,
+                        projection,
+                    } => {
+                        let pid = pay.intern(format!("half_join {strict} {:?}", projection));
+                        pay.half_joins.insert(pid, (*strict, projection.clone()));
+                        (HALF_JOIN, pid, Vec::new(), vec![stream, arrangement])
                     }
                     Node::Reduce { input, reducer } => {
                         let pid = pay.intern(format!("reduce {:?}", reducer));
@@ -149,14 +184,20 @@ fn export_scope(s: &Scope, num: &mut Numbering, pay: &mut Payloads, rows: &mut R
             }
             Item::Sub(child) => {
                 for imp in &child.imports {
-                    if let Source::Parent(r) = &imp.from { holder(num, rows, r); }
+                    if let Source::Parent(r) = &imp.from {
+                        holder(num, rows, r);
+                    }
                 }
                 export_scope(child, num, pay, rows, None);
             }
         }
     }
-    for b in &s.binds { holder(num, rows, &b.value); }
-    for e in &s.exports { holder(num, rows, &e.value); }
+    for b in &s.binds {
+        holder(num, rows, &b.value);
+    }
+    for e in &s.exports {
+        holder(num, rows, &e.value);
+    }
 }
 
 /// The optimizer's output, indexed for read-back.
@@ -167,7 +208,10 @@ struct Output {
 
 impl Output {
     fn refs(&self, holder: i64, base: i64) -> Vec<Ref> {
-        self.edges.get(&holder).map(|m| m.values().map(|e| dec(*e, base)).collect()).unwrap_or_default()
+        self.edges
+            .get(&holder)
+            .map(|m| m.values().map(|e| dec(*e, base)).collect())
+            .unwrap_or_default()
     }
     fn one(&self, holder: i64, base: i64) -> Ref {
         let mut refs = self.refs(holder, base);
@@ -196,23 +240,48 @@ fn import_scope(s: &mut Scope, num: &mut Numbering, pay: &Payloads, res: &Output
                         },
                         CONCAT => Node::Concat(refs.collect()),
                         ARRANGE => Node::Arrange(refs.next().unwrap()),
-                        JOIN => Node::Join { left: refs.next().unwrap(), right: refs.next().unwrap(), projection: pay.projections[pid].clone() },
-                        REDUCE => Node::Reduce { input: refs.next().unwrap(), reducer: pay.reducers[pid].clone() },
-                        INSPECT => Node::Inspect { input: refs.next().unwrap(), label: pay.labels[pid].clone() },
+                        JOIN => Node::Join {
+                            left: refs.next().unwrap(),
+                            right: refs.next().unwrap(),
+                            projection: pay.projections[pid].clone(),
+                        },
+                        HALF_JOIN => {
+                            let (strict, projection) = &pay.half_joins[pid];
+                            Node::HalfJoin {
+                                stream: refs.next().unwrap(),
+                                arrangement: refs.next().unwrap(),
+                                strict: *strict,
+                                projection: projection.clone(),
+                            }
+                        }
+                        REDUCE => Node::Reduce {
+                            input: refs.next().unwrap(),
+                            reducer: pay.reducers[pid].clone(),
+                        },
+                        INSPECT => Node::Inspect {
+                            input: refs.next().unwrap(),
+                            label: pay.labels[pid].clone(),
+                        },
                         k => panic!("bad kind {k}"),
                     };
                 }
             },
             Item::Sub(child) => {
                 for imp in child.imports.iter_mut() {
-                    if let Source::Parent(r) = &mut imp.from { *r = res.one(num.holder(), base); }
+                    if let Source::Parent(r) = &mut imp.from {
+                        *r = res.one(num.holder(), base);
+                    }
                 }
                 import_scope(child, num, pay, res);
             }
         }
     }
-    for b in s.binds.iter_mut() { b.value = res.one(num.holder(), base); }
-    for e in s.exports.iter_mut() { e.value = res.one(num.holder(), base); }
+    for b in s.binds.iter_mut() {
+        b.value = res.one(num.holder(), base);
+    }
+    for e in s.exports.iter_mut() {
+        e.value = res.one(num.holder(), base);
+    }
     compact(s, &dead);
 }
 
@@ -221,7 +290,10 @@ fn compact(s: &mut Scope, dead: &[bool]) {
     let mut remap = vec![usize::MAX; s.items.len()];
     let mut next = 0;
     for (i, &d) in dead.iter().enumerate() {
-        if !d { remap[i] = next; next += 1; }
+        if !d {
+            remap[i] = next;
+            next += 1;
+        }
     }
     let mut keep = dead.iter().map(|d| !d);
     s.items.retain(|_| keep.next().unwrap());
@@ -235,45 +307,111 @@ fn compact(s: &mut Scope, dead: &[bool]) {
     for item in s.items.iter_mut() {
         match item {
             Item::Op(node) => match node {
-                Node::Linear { input, .. } | Node::Arrange(input)
-                | Node::Reduce { input, .. } | Node::Inspect { input, .. } => fix(input),
-                Node::Join { left, right, .. } => { fix(left); fix(right); }
+                Node::Linear { input, .. }
+                | Node::Arrange(input)
+                | Node::Reduce { input, .. }
+                | Node::Inspect { input, .. } => fix(input),
+                Node::Join { left, right, .. } => {
+                    fix(left);
+                    fix(right);
+                }
+                Node::HalfJoin {
+                    stream,
+                    arrangement,
+                    ..
+                } => {
+                    fix(stream);
+                    fix(arrangement);
+                }
                 Node::Concat(refs) => refs.iter_mut().for_each(fix),
             },
-            Item::Sub(child) => for imp in child.imports.iter_mut() {
-                if let Source::Parent(r) = &mut imp.from { fix(r); }
-            },
+            Item::Sub(child) => {
+                for imp in child.imports.iter_mut() {
+                    if let Source::Parent(r) = &mut imp.from {
+                        fix(r);
+                    }
+                }
+            }
         }
     }
     s.binds.iter_mut().for_each(|b| fix(&mut b.value));
     s.exports.iter_mut().for_each(|e| fix(&mut e.value));
 }
 
-fn count_kinds(s: &Scope, kinds: &mut [usize; 6]) {
+fn count_kinds(s: &Scope, kinds: &mut [usize; 7]) {
     for item in &s.items {
         match item {
-            Item::Op(node) => kinds[match node {
-                Node::Linear { .. } => 0, Node::Concat(_) => 1, Node::Arrange(_) => 2,
-                Node::Join { .. } => 3, Node::Reduce { .. } => 4, Node::Inspect { .. } => 5,
-            }] += 1,
+            Item::Op(node) => {
+                kinds[match node {
+                    Node::Linear { .. } => 0,
+                    Node::Concat(_) => 1,
+                    Node::Arrange(_) => 2,
+                    Node::Join { .. } => 3,
+                    Node::Reduce { .. } => 4,
+                    Node::Inspect { .. } => 5,
+                    Node::HalfJoin { .. } => 6,
+                }] += 1
+            }
             Item::Sub(child) => count_kinds(child, kinds),
         }
     }
 }
 
-fn int(n: i64) -> Value { Value::Int(n) }
+fn int(n: i64) -> Value {
+    Value::Int(n)
+}
 
-fn updates(rows: &Rows, diff: i64) -> (Vec<InputUpdate>, Vec<InputUpdate>) {
-    let nodes = rows.nodes.iter().map(|(id, (scope, kind, pid, ops))| InputUpdate {
-        key: Value::Tuple(vec![int(*id)]),
-        val: Value::Tuple(vec![int(*scope), int(*kind), int(*pid), Value::List(ops.iter().map(|o| int(*o)).collect())]),
+fn columns(
+    rows: impl IntoIterator<Item = (Value, Value)>,
+    shape: (Shape, Shape),
+    diff: i64,
+) -> Updates {
+    let (keys, vals): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
+    let diffs = vec![diff; keys.len()];
+    Updates {
+        keys: transcode_owned(keys, &shape.0),
+        vals: transcode_owned(vals, &shape.1),
+        diffs,
+    }
+}
+
+fn updates(rows: &Rows, diff: i64) -> (Updates, Updates) {
+    let nodes = columns(
+        rows.nodes.iter().map(|(id, (scope, kind, pid, ops))| {
+            (
+                Value::Tuple(vec![int(*id)]),
+                Value::Tuple(vec![
+                    int(*scope),
+                    int(*kind),
+                    int(*pid),
+                    Value::List(ops.iter().map(|o| int(*o)).collect()),
+                ]),
+            )
+        }),
+        (
+            Shape::Prod(vec![Shape::Int]),
+            Shape::Prod(vec![
+                Shape::Int,
+                Shape::Int,
+                Shape::Int,
+                Shape::List(Box::new(Shape::Int)),
+            ]),
+        ),
         diff,
-    }).collect();
-    let edges = rows.edges.iter().map(|((h, pos), (tag, a, b))| InputUpdate {
-        key: Value::Tuple(vec![int(*h), int(*pos)]),
-        val: Value::Tuple(vec![int(*tag), int(*a), int(*b)]),
+    );
+    let edges = columns(
+        rows.edges.iter().map(|((h, pos), (tag, a, b))| {
+            (
+                Value::Tuple(vec![int(*h), int(*pos)]),
+                Value::Tuple(vec![int(*tag), int(*a), int(*b)]),
+            )
+        }),
+        (
+            Shape::Prod(vec![Shape::Int, Shape::Int]),
+            Shape::Prod(vec![Shape::Int, Shape::Int, Shape::Int]),
+        ),
         diff,
-    }).collect();
+    );
     (nodes, edges)
 }
 
@@ -287,17 +425,20 @@ fn ints(v: &Value) -> Vec<i64> {
 
 fn read_result(server: &mut Server, worker: &mut timely::worker::Worker) -> Output {
     let mut nodes = HashMap::new();
-    for (k, v, d) in server.snapshot(worker, "nodes").unwrap() {
+    for (k, v, d) in server.snapshot(worker, "nodes").unwrap().into_rows() {
         assert_eq!(d, 1, "node row with multiplicity {d}: {k:?} {v:?}");
         let Value::Tuple(f) = v else { panic!() };
         nodes.insert(ints(&k)[0], (f[1].as_int(), f[2].as_int(), ints(&f[3])));
     }
     let mut edges: HashMap<i64, BTreeMap<i64, Edge>> = HashMap::new();
-    for (k, v, d) in server.snapshot(worker, "edges").unwrap() {
+    for (k, v, d) in server.snapshot(worker, "edges").unwrap().into_rows() {
         assert_eq!(d, 1, "edge row with multiplicity {d}: {k:?} {v:?}");
         let k = ints(&k);
         let v = ints(&v);
-        let prev = edges.entry(k[0]).or_default().insert(k[1], (v[0], v[1], v[2]));
+        let prev = edges
+            .entry(k[0])
+            .or_default()
+            .insert(k[1], (v[0], v[1], v[2]));
         assert!(prev.is_none(), "two edges at {k:?}");
     }
     Output { nodes, edges }
@@ -306,9 +447,9 @@ fn read_result(server: &mut Server, worker: &mut timely::worker::Worker) -> Outp
 fn main() {
     let paths: Vec<String> = std::env::args().skip(1).collect();
     timely::execute_directly(move |worker| {
-        let backend = std::env::var("DDIR_BACKEND").unwrap_or("vec".into()).parse().expect("backend");
-        let mut server = Server::with_backend(backend);
-        let opt_path = std::env::var("SELF_OPT_DDP").unwrap_or("examples/self_opt/optimize.ddp".into());
+        let mut server = Server::new();
+        let opt_path =
+            std::env::var("SELF_OPT_DDP").unwrap_or("examples/self_opt/optimize.ddp".into());
         let src = std::fs::read_to_string(&opt_path).expect("run from interactive/");
         let mut optimizer = lower::lower_tree(parse::pipe::parse(&src));
         optimizer.optimize();
@@ -317,16 +458,26 @@ fn main() {
         // Shared mode: one domain for every program's root scope, to measure cross-program
         // sharing. Read-back is per program, so it (and the comparison) is skipped.
         let shared = std::env::var("SELF_OPT_SHARED").is_ok();
-        let mut separate = [0usize; 6];
+        let mut separate = [0usize; 7];
         let mut pay = Payloads::default();
-        let mut num = Numbering { next_scope: 0, next_holder: HOLDER_BASE };
+        let mut num = Numbering {
+            next_scope: 0,
+            next_holder: HOLDER_BASE,
+        };
         let mut loaded: Vec<(String, Rows)> = Vec::new();
         let (mut agree, mut differ) = (0, 0);
-        println!("{:<44} {:>6} {:>6} {:>6} {:>9} {:>9}  verdict", "program", "before", "rust", "ddir", "rust µs", "tick ms");
+        println!(
+            "{:<44} {:>6} {:>6} {:>6} {:>9} {:>9}  verdict",
+            "program", "before", "rust", "ddir", "rust µs", "tick ms"
+        );
         for path in &paths {
-            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
             // Programs that need a function registry or otherwise fail to lower are skipped.
-            let Ok(program) = std::panic::catch_unwind(|| lower::lower_tree(parse::pipe::parse(&text))) else {
+            let Ok(program) =
+                std::panic::catch_unwind(|| lower::lower_tree(parse::pipe::parse(&text)))
+            else {
                 println!("{path:<44} (does not lower; skipped)");
                 continue;
             };
@@ -336,26 +487,52 @@ fn main() {
             rust.optimize();
             let rust_us = optimized.elapsed().as_micros();
 
-            let first = Numbering { next_scope: num.next_scope, next_holder: num.next_holder };
+            let first = Numbering {
+                next_scope: num.next_scope,
+                next_holder: num.next_holder,
+            };
             let mut rows = Rows::default();
-            let sources = shared.then(|| program.root.imports.iter().map(|imp| match &imp.from {
-                Source::Trace(name) => pay.intern(format!("trace {name}")),
-                Source::Input(i) => pay.intern(format!("input {path} {i}")),
-                Source::Parent(_) => unreachable!("a root import names an external source"),
-            }).collect::<Vec<_>>());
-            export_scope(&program.root, &mut num, &mut pay, &mut rows, sources.as_deref());
+            let sources = shared.then(|| {
+                program
+                    .root
+                    .imports
+                    .iter()
+                    .map(|imp| match &imp.from {
+                        Source::Trace(name) => pay.intern(format!("trace {name}")),
+                        Source::Input(i) => pay.intern(format!("input {path} {i}")),
+                        Source::Parent(_) => unreachable!("a root import names an external source"),
+                    })
+                    .collect::<Vec<_>>()
+            });
+            export_scope(
+                &program.root,
+                &mut num,
+                &mut pay,
+                &mut rows,
+                sources.as_deref(),
+            );
             let (n, e) = updates(&rows, 1);
-            server.feed_batch("opt", 0, n).unwrap();
-            server.feed_batch("opt", 1, e).unwrap();
+            server.feed_columns("opt", 0, n, None).unwrap();
+            server.feed_columns("opt", 1, e, None).unwrap();
             let ticked = Instant::now();
             server.tick(worker);
             let tick_ms = ticked.elapsed().as_secs_f64() * 1e3;
 
             if shared {
-                let mut kinds = [0usize; 6];
+                let mut kinds = [0usize; 7];
                 count_kinds(&rust.root, &mut kinds);
-                for (s, k) in separate.iter_mut().zip(kinds) { *s += k; }
-                println!("{:<44} {:>6} {:>6} {:>6} {:>9} {:>9.1}  (shared)", path, program.op_count(), rust.op_count(), "", rust_us, tick_ms);
+                for (s, k) in separate.iter_mut().zip(kinds) {
+                    *s += k;
+                }
+                println!(
+                    "{:<44} {:>6} {:>6} {:>6} {:>9} {:>9.1}  (shared)",
+                    path,
+                    program.op_count(),
+                    rust.op_count(),
+                    "",
+                    rust_us,
+                    tick_ms
+                );
                 loaded.push((path.clone(), rows));
                 continue;
             }
@@ -365,45 +542,84 @@ fn main() {
             import_scope(&mut ddir.root, &mut replay, &pay, &res);
 
             let same = format!("{:?}", rust) == format!("{:?}", ddir);
-            if same { agree += 1 } else { differ += 1 }
+            if same {
+                agree += 1
+            } else {
+                differ += 1
+            }
             println!(
                 "{:<44} {:>6} {:>6} {:>6} {:>9} {:>9.1}  {}",
-                path, program.op_count(), rust.op_count(), ddir.op_count(), rust_us, tick_ms,
+                path,
+                program.op_count(),
+                rust.op_count(),
+                ddir.op_count(),
+                rust_us,
+                tick_ms,
                 if same { "same" } else { "DIFFERENT" },
             );
-            if std::env::var("SELF_OPT_SHOW").is_ok() { rust.dump(); }
+            if std::env::var("SELF_OPT_SHOW").is_ok() {
+                rust.dump();
+            }
             if !same && std::env::var("SELF_OPT_DUMP").is_ok() {
-                println!("--- rust"); rust.dump();
-                println!("--- ddir"); ddir.dump();
+                println!("--- rust");
+                rust.dump();
+                println!("--- ddir");
+                ddir.dump();
             }
             loaded.push((path.clone(), rows));
         }
         if shared {
             let res = read_result(&mut server, worker);
-            let mut joint = [0usize; 6];
-            for (kind, _, _) in res.nodes.values() { if *kind != HOLDER { joint[*kind as usize] += 1; } }
-            let names = ["linear", "concat", "arrange", "join", "reduce", "inspect"];
-            for (i, name) in names.iter().enumerate() {
-                println!("{name:>8}: {:>5} optimized separately, {:>5} optimized jointly", separate[i], joint[i]);
+            let mut joint = [0usize; 7];
+            for (kind, _, _) in res.nodes.values() {
+                if *kind != HOLDER {
+                    joint[*kind as usize] += 1;
+                }
             }
-            println!("   total: {:>5} optimized separately, {:>5} optimized jointly",
-                separate.iter().sum::<usize>(), joint.iter().sum::<usize>());
+            let names = [
+                "linear",
+                "concat",
+                "arrange",
+                "join",
+                "reduce",
+                "inspect",
+                "half_join",
+            ];
+            for (i, name) in names.iter().enumerate() {
+                println!(
+                    "{name:>8}: {:>5} optimized separately, {:>5} optimized jointly",
+                    separate[i], joint[i]
+                );
+            }
+            println!(
+                "   total: {:>5} optimized separately, {:>5} optimized jointly",
+                separate.iter().sum::<usize>(),
+                joint.iter().sum::<usize>()
+            );
         } else {
             println!("{agree} same, {differ} different");
+            assert_eq!(differ, 0, "the DDIR optimizer differs from Scope::optimize");
         }
 
         // Unwind: retract each program; the optimizer's output should empty out.
         let unwound = Instant::now();
         for (_, rows) in &loaded {
             let (n, e) = updates(rows, -1);
-            server.feed_batch("opt", 0, n).unwrap();
-            server.feed_batch("opt", 1, e).unwrap();
+            server.feed_columns("opt", 0, n, None).unwrap();
+            server.feed_columns("opt", 1, e, None).unwrap();
             server.tick(worker);
         }
         let left = read_result(&mut server, worker);
         println!(
             "retracted {} programs in {:.1} ms; {} nodes and {} edges remain",
-            loaded.len(), unwound.elapsed().as_secs_f64() * 1e3, left.nodes.len(), left.edges.len(),
+            loaded.len(),
+            unwound.elapsed().as_secs_f64() * 1e3,
+            left.nodes.len(),
+            left.edges.len(),
+        );
+        assert!(
+            left.nodes.is_empty() && left.edges.is_empty(),
+            "retraction left optimizer state behind"
         );
     });
 }
