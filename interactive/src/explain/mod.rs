@@ -364,9 +364,12 @@ impl Sb {
             self.op(Node::Inspect { input, label });
         }
     }
-    /// Semijoin `left (K ; V)` with `right` by `K`, keeping left's rows.
-    fn semijoin(&mut self, left: Ref, right: Ref) -> Ref {
-        self.join(left, right, projection(var(0), var(1), 3))
+    /// The rows of `rows (K ; V)` that the set `set` holds, matched as whole rows, at `rows`' counts.
+    fn restrict(&mut self, rows: Ref, set: Ref) -> Ref {
+        let rows = self.project(rows, projection(tup(vec![var(0), var(1)]), tup(Vec::new()), 2));
+        let set = self.project(set, projection(tup(vec![var(0), var(1)]), tup(Vec::new()), 2));
+        let held = self.join(rows, set, projection(var(0), tup(Vec::new()), 3));
+        self.project(held, projection(f(0, 0), f(0, 1), 2))
     }
     /// Each row whose count is not zero, once: a collection read as a set.
     ///
@@ -691,7 +694,7 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
         if let Ref::Var(i) = v { ex.s.vars[i].shape = p.root.imports[k].shape.clone(); }
         v
     }).collect();
-    let fwd_inputs: Vec<Ref> = (0..n_sources).map(|k| ex.semijoin(dsets[k].clone(), ex_src[k].clone())).collect();
+    let fwd_inputs: Vec<Ref> = (0..n_sources).map(|k| ex.restrict(ex_src[k].clone(), dsets[k].clone())).collect();
     let fwd_env: Vec<Ref> = fwd_inputs.iter().map(|r| { let env = ex.project(r.clone(), envelope()); ex.presence(env) }).collect();
     let forward: BTreeMap<Addr, Ref> = clone_into(&p.root, &mut ex.s, &fwd_inputs).into_iter()
         .map(|(a, r)| { let host = if a.path.is_empty() { ex.project(r, envelope()) } else { r }; (a, ex.presence(host)) })
@@ -745,7 +748,7 @@ pub fn explain_with(p: &Program, options: Options) -> Program {
         } else {
             let merged = ex.concat(cs);
             let stripped = ex.project(merged, <Val as RowModel>::strip_all());
-            let semi = ex.semijoin(stripped, src_rows[k].clone());
+            let semi = ex.restrict(stripped, src_rows[k].clone());
             ex.concat(vec![dsets[k].clone(), semi])
         };
         let dist = ex.presence(combined);

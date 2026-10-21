@@ -489,6 +489,24 @@ fn min_then_count_explanations_sufficient() {
     assert!(!sizes.is_empty());
 }
 
+/// An input with several values at one key. The restricted run read the sources restricted to the
+/// demanded rows by key alone, so demanding `(0, 2)` fed it every row at key 0, each once per row
+/// at the key, and counted 3 where the demanded rows alone count 1. Its `min` then agreed with the
+/// reference by accident, and the inputs that make the count as in the reference were never
+/// demanded. (Found by `difftest`.)
+#[test]
+fn restricted_rows_keep_their_counts() {
+    const COUNT_MIN: &str = r#"
+        let i0 = input 0 : (int ; int);
+        let counts = i0 | count;
+        let r = (counts - i0) | min;
+        export "result" = r;
+    "#;
+    let inputs = vec![vec![(Value::Int(0), Value::Int(4)), (Value::Int(0), Value::Int(4)), (Value::Int(0), Value::Int(2))]];
+    let sizes = assert_all_rows_sufficient(COUNT_MIN, &inputs);
+    assert!(!sizes.is_empty());
+}
+
 /// Count outputs over duplicate-free inputs: sufficient today, because the
 /// keyed lookup demands every input row at the key, which is precisely the
 /// count's multiset.
