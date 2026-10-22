@@ -716,10 +716,20 @@ fn mask_projection(
     original: &Lambda,
     key_shape: &Shape,
     key_facts: &[usize],
-    value_shape: &Shape,
+    value_shape: Option<&Shape>,
     value_facts: &[usize],
     live: &[bool],
 ) -> Option<Lambda> {
+    // A half join appends time after its projection. Its projected value is
+    // one demand fact even when the value itself is a tuple.
+    if width(key_shape) != key_facts.len()
+        || match value_shape {
+            Some(shape) => width(shape) != value_facts.len(),
+            None => value_facts.len() != 1,
+        }
+    {
+        return None;
+    }
     if key_facts.iter().chain(value_facts).all(|&id| live[id]) {
         return None;
     }
@@ -731,7 +741,11 @@ fn mask_projection(
         &[(original, "arg".into())],
         |result| {
             let key = mask_part(&format!("{}.0", result[0]), key_shape, key_facts, live);
-            let val = mask_part(&format!("{}.1", result[0]), value_shape, value_facts, live);
+            let val = match value_shape {
+                Some(shape) => mask_part(&format!("{}.1", result[0]), shape, value_facts, live),
+                None if live[value_facts[0]] => format!("{}.1", result[0]),
+                None => "()".into(),
+            };
             format!("({key}, {val})")
         },
     ))
@@ -742,7 +756,7 @@ fn mask_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda
         original,
         &output.shape.0,
         &output.key,
-        &output.shape.1,
+        Some(&output.shape.1),
         &output.val,
         live,
     )
@@ -754,14 +768,17 @@ fn mask_half_join(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lam
     let Shape::Prod(parts) = &output.shape.1 else {
         return None;
     };
-    let (Some(value_shape), Some(&value_fact)) = (parts.first(), output.val.first()) else {
+    if parts.len() != 2 {
+        return None;
+    }
+    let Some(&value_fact) = output.val.first() else {
         return None;
     };
     mask_projection(
         original,
         &output.shape.0,
         &output.key,
-        value_shape,
+        None,
         &[value_fact],
         live,
     )
