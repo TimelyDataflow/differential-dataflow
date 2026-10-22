@@ -220,21 +220,26 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     (lc, rc)
 }
 
-/// In-memory [`Dataflow`] over `Vec<(Value, Value)>`, for the contract below:
-/// projections and predicates run a row at a time (`eval_corgi_row`), and `join` is a
-/// nested-loop equi-join on the key.
+/// In-memory [`Dataflow`] over rows, each key and value a one-row corgi column, for the contract
+/// below: projections and predicates run on one row at a time, and `join` is a nested-loop
+/// equi-join on the key.
 #[cfg(test)]
 mod mem {
     use super::Dataflow;
-    use crate::corgi::logic::eval_corgi_row;
-    use crate::ir::{Lambda, Value};
+    use crate::ir::Lambda;
+    use corgi::Value;
 
     pub type Coll = Vec<(Value, Value)>;
     pub struct Mem;
 
+    /// A lambda on one row of its slot.
+    fn eval(p: &Lambda, rows: Vec<Value>) -> Value {
+        corgi::eval_graph(p.graph().unwrap_or_else(|e| panic!("{e}")), Value::Prod(rows))
+    }
+
     /// A projection's `(key, val)` on one row of its slot.
     fn pair(p: &Lambda, rows: Vec<Value>) -> (Value, Value) {
-        let Value::Tuple(mut kv) = eval_corgi_row(p, Value::Tuple(rows)) else { panic!("a projection gives (key, val)") };
+        let mut kv = eval(p, rows).into_prod("a projection").unwrap();
         let v = kv.pop().unwrap();
         (kv.pop().unwrap(), v)
     }
@@ -247,7 +252,7 @@ mod mem {
             c.iter().map(|(k, v)| pair(&p, vec![k.clone(), v.clone()])).collect()
         }
         fn filter(&mut self, c: &Coll, p: Lambda) -> Coll {
-            c.iter().filter(|(k, v)| eval_corgi_row(&p, Value::Tuple(vec![k.clone(), v.clone()])).truthy()).cloned().collect()
+            c.iter().filter(|(k, v)| eval(&p, vec![k.clone(), v.clone()]).as_i64("a predicate").unwrap()[0] != 0).cloned().collect()
         }
         fn join(&mut self, l: &Coll, r: &Coll, p: Lambda) -> Coll {
             let mut out = Vec::new();
@@ -266,29 +271,32 @@ mod mem {
 
 #[cfg(test)]
 mod value_contract {
-    //! Executable contract for the reverse rules: by-example specs on `Value`
-    //! rows in `Val`'s envelope `(K ; V, chain, [q])`, run through the in-memory
-    //! dataflow against `crate::explain::Val`.
+    //! Executable contract for the reverse rules: by-example specs on rows in `Val`'s envelope
+    //! `(K ; V, chain, [q])`, run through the in-memory dataflow against `crate::explain::Val`.
 
     use super::*;
     use crate::explain::Val;
     use super::mem::{Coll, Mem};
-    use crate::ir::{Lambda, Value};
+    use crate::ir::Lambda;
+    use corgi::Value;
 
     type Row = Value;
 
     /// A one-field tuple `(n)`: the keys and values below.
-    fn one(n: i64) -> Row { Value::Tuple(vec![Value::Int(n)]) }
+    fn one(n: i64) -> Row { Value::Prod(vec![Value::int([n])]) }
     /// An envelope value: `V`, then the chain and `q` (or the chain alone).
     fn env(v: i64, rest: &[i64]) -> Row {
         let mut fields = vec![one(v)];
-        fields.extend(rest.iter().map(|&n| Value::Int(n)));
-        Value::Tuple(fields)
+        fields.extend(rest.iter().map(|&n| Value::int([n])));
+        Value::Prod(fields)
     }
     fn side(witness: Coll, user_len: usize) -> SideInfo<Mem> {
         SideInfo { witness, forward: vec![], user_len }
     }
-    fn sorted(mut c: Coll) -> Coll { c.sort(); c }
+    fn sorted(mut c: Coll) -> Coll {
+        c.sort_by_key(|(k, v)| (crate::corgi::feed::print(k, 0), crate::corgi::feed::print(v, 0)));
+        c
+    }
     /// A projection over explain's rows, whose values are envelopes.
     fn proj(src: &str) -> Lambda { Lambda::new(src.into(), &corgi::Scope::default()) }
 

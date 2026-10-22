@@ -130,7 +130,7 @@ Each body row is `<key> [val=<v>] [diff=<d>]`; `time=` is intentionally absent
 because the enclosing command supplies one epoch. The complete body is admitted
 atomically, and workers divide its rows by body position before introducing
 them to the dataflow. The body is read into columns at the input's shapes as it
-arrives, so no row is held as a `Value`; one row not of those shapes refuses the
+arrives, never held row by row; one row not of those shapes refuses the
 whole body, naming the row.
 
 A program that already has the updates as columns can skip the text:
@@ -152,7 +152,7 @@ The batch's `ok` means that the complete request was admitted to the ordered
 worker stream; it does not wait for every worker to stage its shard. A later
 `tick` is the visibility and completion boundary for those rows.
 
-This text-to-`Value` framing is a convenience and compatibility path, not the
+This text framing is a convenience and compatibility path, not the
 intended representation for high-volume ingestion. Large or already-columnar
 payloads should be acquired and partitioned through the data plane, with only a
 small descriptor entering the ordered control stream.

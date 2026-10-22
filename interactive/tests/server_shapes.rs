@@ -142,7 +142,7 @@ fn rows_of_another_shape_are_refused() {
         std::fs::write(&file, "5 6\n+7 -8\n").unwrap();
         server.load(worker, "producer", 0, file.to_str().unwrap(), 1).unwrap();
         server.tick(worker);
-        assert_eq!(server.snapshot(worker, "edges").unwrap().into_rows().len(), 4);
+        assert_eq!(server.snapshot(worker, "edges").unwrap().rows().len(), 4);
         std::fs::remove_file(&file).unwrap();
     });
 }

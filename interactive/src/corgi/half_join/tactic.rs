@@ -253,7 +253,6 @@ mod tests {
     use super::*;
     use super::super::test_util::*;
     use crate::corgi::chunk::{columns_to_batch, present_key};
-    use crate::ir::Value as V;
 
     /// The projection `(k, (v0, v1))`.
     fn pairing() -> Lambda { Lambda::new("let (k, v0, v1) = input in (k, (v0, v1))".into(), &corgi::Scope::default()) }
@@ -273,7 +272,7 @@ mod tests {
         let updates = container(&[1, 1], &[7, 8], &[(1, 0), (0, 3)], &[t(1, 0), t(0, 3)], &[2, 1]);
         let updates = Run::new(updates.keys, updates.vals, updates.times, updates.diffs);
         let lower: Antichain<Time> = [t(0, 3), t(1, 0)].into_iter().collect();
-        let rows = |strict: bool| -> Vec<((V, V), Time, Diff)> {
+        let rows = |strict: bool| -> Vec<((String, String), Time, Diff)> {
             let mut tactic = CorgiHalfJoin::new(&pairing(), strict, 2, [Shape::Int, Shape::Int, Shape::Int]);
             let mut rows: Vec<_> = tactic.prep(vec![updates.clone()], vec![Rc::clone(&arranged)], lower.clone())
                 .flat_map(|c| c.into_updates())
@@ -283,7 +282,7 @@ mod tests {
             rows
         };
         let row = |x: i64, y: i64, data: (i64, i64), time: Time, diff: Diff| {
-            ((V::Int(1), tup(vec![tup(vec![V::Int(x), V::Int(y)]), tup(vec![V::Int(data.0), V::Int(data.1)])])), time, diff)
+            ((int(1), tup(vec![tup(vec![int(x), int(y)]), tup(vec![int(data.0), int(data.1)])])), time, diff)
         };
         let mut strict = vec![
             row(7, 50, (1, 1), t(1, 0), 2),
@@ -330,8 +329,8 @@ mod tests {
             for k in 0..4 {
                 for epoch in 0..if strict { 1 } else { 2 } {
                     expected.push((
-                        (tup(vec![V::Int(k), V::Int(k * 7)]),
-                         tup(vec![tup(vec![V::Int(k), V::Int(k * 3 + epoch)]), tup(vec![V::Int(1), V::Int(0)])])),
+                        (tup(vec![int(k), int(k * 7)]),
+                         tup(vec![tup(vec![int(k), int(k * 3 + epoch)]), tup(vec![int(1), int(0)])])),
                         t(1, 0), if k % 2 == 0 { 2 } else { -1 } * if epoch == 0 { 1 } else { -1 },
                     ));
                 }
@@ -350,7 +349,7 @@ mod tests {
                 for seed in 0..40 {
                     let mut rng = Rng(seed);
                     let key_col = |ks: &[i64]| if hashed { CValue::Prod(vec![ints(ks), ints(&ks.iter().map(|k| k * 7).collect::<Vec<_>>())]) } else { ints(ks) };
-                    let key_val = |k: i64| if hashed { tup(vec![V::Int(k), V::Int(k * 7)]) } else { V::Int(k) };
+                    let key_val = |k: i64| if hashed { tup(vec![int(k), int(k * 7)]) } else { int(k) };
                     let mut arranged_rows = Vec::new();
                     let batches: Vec<NativeBatch> = (0..3).map(|_| {
                         let n = 1 + rng.below(20) as usize;
@@ -381,8 +380,8 @@ mod tests {
                     for i in 0..n {
                         for (k2, v1, t2, d2) in arranged_rows.iter() {
                             if *k2 != ks[i] || !(*t2 < ts[i] || (!strict && *t2 == ts[i])) { continue; }
-                            let s = tup(vec![V::Int(ss[i].0.max(t2.outer as i64)), V::Int(ss[i].1.max(t2.inner.first().copied().unwrap_or(0) as i64))]);
-                            expect.push(((key_val(ks[i]), tup(vec![tup(vec![V::Int(vs[i]), V::Int(*v1)]), s])), ts[i].clone(), ds[i] * d2));
+                            let s = tup(vec![int(ss[i].0.max(t2.outer as i64)), int(ss[i].1.max(t2.inner.first().copied().unwrap_or(0) as i64))]);
+                            expect.push(((key_val(ks[i]), tup(vec![tup(vec![int(vs[i]), int(*v1)]), s])), ts[i].clone(), ds[i] * d2));
                         }
                     }
                     let key = if hashed { Shape::Prod(vec![Shape::Int, Shape::Int]) } else { Shape::Int };

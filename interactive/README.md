@@ -71,7 +71,7 @@ A program moves through these parts:
 1. `parse/` is the concrete syntax: one front-end, the pipe parser for `.ddp` files.
 2. `lower.rs` translates its AST into the scope-tree IR.
 3. `scope_ir.rs` is that IR — scopes, items, exports — and its optimizations; `ir.rs` is the
-   row vocabulary they are written over: the `Value` model, the scalar language, its interpreter.
+   vocabulary they are written over: corgi lambdas, operator steps, and registered functions.
 4. `backend/` renders a program against a substrate — `vec` (the row reference) or `corgi`
    (columnar), whose kernels live in `corgi/`.
 5. `explain/` rewrites a program into one that explains its own outputs.

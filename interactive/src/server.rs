@@ -261,17 +261,15 @@ impl Recipe {
         (key, Shape::Unit)
     }
 
-    /// The generated row at index `e`: what [`Recipe::container`] must hold, formed one row at a
-    /// time.
+    /// The generated row at index `e`, as a feed writes it: what [`Recipe::container`] must hold,
+    /// formed one row at a time.
     #[cfg(test)]
-    fn row(&self, e: u64) -> (crate::ir::Value, crate::ir::Value) {
-        use crate::ir::Value;
-        match self {
-            Recipe::Random {
-                nodes, arity, seed, ..
-            } => crate::gen_row_seeded(*seed, e, *nodes, *arity),
-            Recipe::Iota { .. } => (Value::Tuple(vec![Value::Int(e as i64)]), Value::unit()),
-        }
+    fn row(&self, e: u64) -> (String, String) {
+        let fields: Vec<String> = match self {
+            Recipe::Random { nodes, arity, seed, .. } => (0..*arity).map(|col| crate::gen_field_seeded(*seed, e, *nodes, col).to_string()).collect(),
+            Recipe::Iota { .. } => vec![e.to_string()],
+        };
+        (format!("tuple({})", fields.join(",")), "tuple()".into())
     }
 
     /// The generated rows at `indices`, as columns of [`Recipe::shape`], each with multiplicity

@@ -1,266 +1,266 @@
-big ((Int(14), Tuple([Tuple([Int(42)]), List([Int(1), Int(2)])])), 1)
-big ((Int(15), Tuple([Tuple([Int(45)]), List([Int(1), Int(3)])])), 1)
-big ((Int(16), Tuple([Tuple([Int(48)]), List([Int(1), Int(2), Int(4)])])), 1)
-big ((Int(17), Tuple([Tuple([Int(51)]), List([Int(1)])])), 1)
-big ((Int(18), Tuple([Tuple([Int(54)]), List([Int(1), Int(2), Int(3)])])), 1)
-big ((Int(19), Tuple([Tuple([Int(57)]), List([Int(1)])])), 1)
-big ((Int(20), Tuple([Tuple([Int(60)]), List([Int(1), Int(2), Int(4)])])), 1)
-big ((Int(21), Tuple([Tuple([Int(63)]), List([Int(1), Int(3)])])), 1)
-big ((Int(22), Tuple([Tuple([Int(66)]), List([Int(1), Int(2)])])), 1)
-big ((Int(23), Tuple([Tuple([Int(69)]), List([Int(1)])])), 1)
-big ((Int(24), Tuple([Tuple([Int(72)]), List([Int(1), Int(2), Int(3), Int(4)])])), 1)
-big ((Int(25), Tuple([Tuple([Int(75)]), List([Int(1)])])), 1)
-big ((Int(26), Tuple([Tuple([Int(78)]), List([Int(1), Int(2)])])), 1)
-big ((Int(27), Tuple([Tuple([Int(81)]), List([Int(1), Int(3)])])), 1)
-big ((Int(28), Tuple([Tuple([Int(84)]), List([Int(1), Int(2), Int(4)])])), 1)
-big ((Int(29), Tuple([Tuple([Int(87)]), List([Int(1)])])), 1)
-big ((Int(30), Tuple([Tuple([Int(90)]), List([Int(1), Int(2), Int(3)])])), 1)
-big ((Int(31), Tuple([Tuple([Int(93)]), List([Int(1)])])), 1)
-big ((Int(32), Tuple([Tuple([Int(96)]), List([Int(1), Int(2), Int(4)])])), 1)
-big ((Int(33), Tuple([Tuple([Int(99)]), List([Int(1), Int(3)])])), 1)
-big ((Int(34), Tuple([Tuple([Int(102)]), List([Int(1), Int(2)])])), 1)
-big ((Int(35), Tuple([Tuple([Int(105)]), List([Int(1)])])), 1)
-big ((Int(36), Tuple([Tuple([Int(108)]), List([Int(1), Int(2), Int(3), Int(4)])])), 1)
-big ((Int(37), Tuple([Tuple([Int(111)]), List([Int(1)])])), 1)
-big ((Int(38), Tuple([Tuple([Int(114)]), List([Int(1), Int(2)])])), 1)
-big ((Int(39), Tuple([Tuple([Int(117)]), List([Int(1), Int(3)])])), 1)
-blended ((Int(-4), Float(NaN)), 1)
-blended ((Int(1), Float(0.33333333333333337)), 1)
-blended ((Int(2), Float(0.41421356237309515)), 1)
-blended ((Int(3), Float(0.39871747423554393)), 1)
-blended ((Int(4), Float(0.33333333333333326)), 1)
-blended ((Int(5), Float(0.2360679774997898)), 1)
-blended ((Int(6), Float(0.1161564094498444)), 1)
-blended ((Int(7), Float(-0.020915355602075802)), 1)
-blended ((Int(8), Float(-0.1715728752538097)), 1)
-blended ((Int(9), Float(-0.3333333333333335)), 1)
-blended ((Int(10), Float(-0.504389006498287)), 1)
-blended ((Int(11), Float(-0.6833752096446002)), 1)
-blended ((Int(12), Float(-0.8692317181955787)), 1)
-blended ((Int(13), Float(-1.0611153912026778)), 1)
-blended ((Int(14), Float(-1.2583426132260587)), 1)
-blended ((Int(15), Float(-1.460349987125916)), 1)
-blended ((Int(16), Float(-1.666666666666667)), 1)
-blended ((Int(17), Float(-1.8768943743823394)), 1)
-blended ((Int(18), Float(-2.0906926462140483)), 1)
-blended ((Int(19), Float(-2.307767723125993)), 1)
-blended ((Int(20), Float(-2.5278640450004204)), 1)
-blended ((Int(21), Float(-2.750757638377493)), 1)
-blended ((Int(22), Float(-2.9762509068432372)), 1)
-blended ((Int(23), Float(-3.204168476687281)), 1)
-blended ((Int(24), Float(-3.434353847766978)), 1)
-blended ((Int(25), Float(-3.666666666666666)), 1)
-blended ((Int(26), Float(-3.9009804864072155)), 1)
-blended ((Int(27), Float(-4.137180910626702)), 1)
-blended ((Int(28), Float(-4.375164044537485)), 1)
-blended ((Int(29), Float(-4.614835192865496)), 1)
-blended ((Int(30), Float(-4.856107758281673)), 1)
-blended ((Int(31), Float(-5.098902303836645)), 1)
-blended ((Int(32), Float(-5.343145750507619)), 1)
-blended ((Int(33), Float(-5.588770686795305)), 1)
-blended ((Int(34), Float(-5.835714771821365)), 1)
-blended ((Int(35), Float(-6.083920216900384)), 1)
-blended ((Int(36), Float(-6.333333333333334)), 1)
-blended ((Int(37), Float(-6.583904136368447)), 1)
-blended ((Int(38), Float(-6.835585997031024)), 1)
-blended ((Int(39), Float(-7.088335334934936)), 1)
-cells ((Int(-4), Tuple([])), 1)
-cells ((Int(1), Tuple([])), 1)
-cells ((Int(2), Tuple([])), 1)
-cells ((Int(3), Tuple([])), 1)
-cells ((Int(4), Tuple([])), 1)
-cells ((Int(5), Tuple([])), 1)
-cells ((Int(6), Tuple([])), 1)
-cells ((Int(7), Tuple([])), 1)
-cells ((Int(8), Tuple([])), 1)
-cells ((Int(9), Tuple([])), 1)
-cells ((Int(10), Tuple([])), 1)
-cells ((Int(11), Tuple([])), 1)
-cells ((Int(12), Tuple([])), 1)
-cells ((Int(13), Tuple([])), 1)
-cells ((Int(14), Tuple([])), 1)
-cells ((Int(15), Tuple([])), 1)
-cells ((Int(16), Tuple([])), 1)
-cells ((Int(17), Tuple([])), 1)
-cells ((Int(18), Tuple([])), 1)
-cells ((Int(19), Tuple([])), 1)
-cells ((Int(20), Tuple([])), 1)
-cells ((Int(21), Tuple([])), 1)
-cells ((Int(22), Tuple([])), 1)
-cells ((Int(23), Tuple([])), 1)
-cells ((Int(24), Tuple([])), 1)
-cells ((Int(25), Tuple([])), 1)
-cells ((Int(26), Tuple([])), 1)
-cells ((Int(27), Tuple([])), 1)
-cells ((Int(28), Tuple([])), 1)
-cells ((Int(29), Tuple([])), 1)
-cells ((Int(30), Tuple([])), 1)
-cells ((Int(31), Tuple([])), 1)
-cells ((Int(32), Tuple([])), 1)
-cells ((Int(33), Tuple([])), 1)
-cells ((Int(34), Tuple([])), 1)
-cells ((Int(35), Tuple([])), 1)
-cells ((Int(36), Tuple([])), 1)
-cells ((Int(37), Tuple([])), 1)
-cells ((Int(38), Tuple([])), 1)
-cells ((Int(39), Tuple([])), 1)
-described ((Int(-4), Tuple([Tuple([Int(-12)]), List([Int(1), Int(2), Int(4)])])), 1)
-described ((Int(1), Tuple([Tuple([Int(3)]), List([Int(1)])])), 1)
-described ((Int(2), Tuple([Tuple([Int(6)]), List([Int(1), Int(2)])])), 1)
-described ((Int(3), Tuple([Tuple([Int(9)]), List([Int(1), Int(3)])])), 1)
-described ((Int(4), Tuple([Tuple([Int(12)]), List([Int(1), Int(2), Int(4)])])), 1)
-described ((Int(5), Tuple([Tuple([Int(15)]), List([Int(1)])])), 1)
-described ((Int(6), Tuple([Tuple([Int(18)]), List([Int(1), Int(2), Int(3)])])), 1)
-described ((Int(7), Tuple([Tuple([Int(21)]), List([Int(1)])])), 1)
-described ((Int(8), Tuple([Tuple([Int(24)]), List([Int(1), Int(2), Int(4)])])), 1)
-described ((Int(9), Tuple([Tuple([Int(27)]), List([Int(1), Int(3)])])), 1)
-described ((Int(10), Tuple([Tuple([Int(30)]), List([Int(1), Int(2)])])), 1)
-described ((Int(11), Tuple([Tuple([Int(33)]), List([Int(1)])])), 1)
-described ((Int(12), Tuple([Tuple([Int(36)]), List([Int(1), Int(2), Int(3), Int(4)])])), 1)
-described ((Int(13), Tuple([Tuple([Int(39)]), List([Int(1)])])), 1)
-described ((Int(14), Tuple([Tuple([Int(42)]), List([Int(1), Int(2)])])), 1)
-described ((Int(15), Tuple([Tuple([Int(45)]), List([Int(1), Int(3)])])), 1)
-described ((Int(16), Tuple([Tuple([Int(48)]), List([Int(1), Int(2), Int(4)])])), 1)
-described ((Int(17), Tuple([Tuple([Int(51)]), List([Int(1)])])), 1)
-described ((Int(18), Tuple([Tuple([Int(54)]), List([Int(1), Int(2), Int(3)])])), 1)
-described ((Int(19), Tuple([Tuple([Int(57)]), List([Int(1)])])), 1)
-described ((Int(20), Tuple([Tuple([Int(60)]), List([Int(1), Int(2), Int(4)])])), 1)
-described ((Int(21), Tuple([Tuple([Int(63)]), List([Int(1), Int(3)])])), 1)
-described ((Int(22), Tuple([Tuple([Int(66)]), List([Int(1), Int(2)])])), 1)
-described ((Int(23), Tuple([Tuple([Int(69)]), List([Int(1)])])), 1)
-described ((Int(24), Tuple([Tuple([Int(72)]), List([Int(1), Int(2), Int(3), Int(4)])])), 1)
-described ((Int(25), Tuple([Tuple([Int(75)]), List([Int(1)])])), 1)
-described ((Int(26), Tuple([Tuple([Int(78)]), List([Int(1), Int(2)])])), 1)
-described ((Int(27), Tuple([Tuple([Int(81)]), List([Int(1), Int(3)])])), 1)
-described ((Int(28), Tuple([Tuple([Int(84)]), List([Int(1), Int(2), Int(4)])])), 1)
-described ((Int(29), Tuple([Tuple([Int(87)]), List([Int(1)])])), 1)
-described ((Int(30), Tuple([Tuple([Int(90)]), List([Int(1), Int(2), Int(3)])])), 1)
-described ((Int(31), Tuple([Tuple([Int(93)]), List([Int(1)])])), 1)
-described ((Int(32), Tuple([Tuple([Int(96)]), List([Int(1), Int(2), Int(4)])])), 1)
-described ((Int(33), Tuple([Tuple([Int(99)]), List([Int(1), Int(3)])])), 1)
-described ((Int(34), Tuple([Tuple([Int(102)]), List([Int(1), Int(2)])])), 1)
-described ((Int(35), Tuple([Tuple([Int(105)]), List([Int(1)])])), 1)
-described ((Int(36), Tuple([Tuple([Int(108)]), List([Int(1), Int(2), Int(3), Int(4)])])), 1)
-described ((Int(37), Tuple([Tuple([Int(111)]), List([Int(1)])])), 1)
-described ((Int(38), Tuple([Tuple([Int(114)]), List([Int(1), Int(2)])])), 1)
-described ((Int(39), Tuple([Tuple([Int(117)]), List([Int(1), Int(3)])])), 1)
-doubled ((Int(-4), Int(-8)), 1)
-doubled ((Int(1), Int(2)), 1)
-doubled ((Int(2), Int(4)), 1)
-doubled ((Int(3), Int(6)), 1)
-doubled ((Int(4), Int(8)), 1)
-doubled ((Int(5), Int(10)), 1)
-doubled ((Int(6), Int(12)), 1)
-doubled ((Int(7), Int(14)), 1)
-doubled ((Int(8), Int(16)), 1)
-doubled ((Int(9), Int(18)), 1)
-doubled ((Int(10), Int(20)), 1)
-doubled ((Int(11), Int(22)), 1)
-doubled ((Int(12), Int(24)), 1)
-doubled ((Int(13), Int(26)), 1)
-doubled ((Int(14), Int(28)), 1)
-doubled ((Int(15), Int(30)), 1)
-doubled ((Int(16), Int(32)), 1)
-doubled ((Int(17), Int(34)), 1)
-doubled ((Int(18), Int(36)), 1)
-doubled ((Int(19), Int(38)), 1)
-doubled ((Int(20), Int(40)), 1)
-doubled ((Int(21), Int(42)), 1)
-doubled ((Int(22), Int(44)), 1)
-doubled ((Int(23), Int(46)), 1)
-doubled ((Int(24), Int(48)), 1)
-doubled ((Int(25), Int(50)), 1)
-doubled ((Int(26), Int(52)), 1)
-doubled ((Int(27), Int(54)), 1)
-doubled ((Int(28), Int(56)), 1)
-doubled ((Int(29), Int(58)), 1)
-doubled ((Int(30), Int(60)), 1)
-doubled ((Int(31), Int(62)), 1)
-doubled ((Int(32), Int(64)), 1)
-doubled ((Int(33), Int(66)), 1)
-doubled ((Int(34), Int(68)), 1)
-doubled ((Int(35), Int(70)), 1)
-doubled ((Int(36), Int(72)), 1)
-doubled ((Int(37), Int(74)), 1)
-doubled ((Int(38), Int(76)), 1)
-doubled ((Int(39), Int(78)), 1)
-joined ((Int(-4), Float(NaN)), 1)
-joined ((Int(1), Float(0.0)), 1)
-joined ((Int(2), Float(-0.5857864376269049)), 1)
-joined ((Int(3), Float(-1.2679491924311228)), 1)
-joined ((Int(4), Float(-2.0)), 1)
-joined ((Int(5), Float(-2.76393202250021)), 1)
-joined ((Int(6), Float(-3.550510257216822)), 1)
-joined ((Int(7), Float(-4.354248688935409)), 1)
-joined ((Int(8), Float(-5.17157287525381)), 1)
-joined ((Int(9), Float(-6.0)), 1)
-joined ((Int(10), Float(-6.83772233983162)), 1)
-joined ((Int(11), Float(-7.6833752096446)), 1)
-joined ((Int(12), Float(-8.535898384862247)), 1)
-joined ((Int(13), Float(-9.39444872453601)), 1)
-joined ((Int(14), Float(-10.25834261322606)), 1)
-joined ((Int(15), Float(-11.127016653792584)), 1)
-joined ((Int(16), Float(-12.0)), 1)
-joined ((Int(17), Float(-12.876894374382339)), 1)
-joined ((Int(18), Float(-13.757359312880716)), 1)
-joined ((Int(19), Float(-14.641101056459327)), 1)
-joined ((Int(20), Float(-15.52786404500042)), 1)
-joined ((Int(21), Float(-16.41742430504416)), 1)
-joined ((Int(22), Float(-17.30958424017657)), 1)
-joined ((Int(23), Float(-18.20416847668728)), 1)
-joined ((Int(24), Float(-19.101020514433642)), 1)
-joined ((Int(25), Float(-20.0)), 1)
-joined ((Int(26), Float(-20.900980486407214)), 1)
-joined ((Int(27), Float(-21.803847577293368)), 1)
-joined ((Int(28), Float(-22.70849737787082)), 1)
-joined ((Int(29), Float(-23.614835192865495)), 1)
-joined ((Int(30), Float(-24.522774424948338)), 1)
-joined ((Int(31), Float(-25.432235637169978)), 1)
-joined ((Int(32), Float(-26.34314575050762)), 1)
-joined ((Int(33), Float(-27.25543735346197)), 1)
-joined ((Int(34), Float(-28.1690481051547)), 1)
-joined ((Int(35), Float(-29.083920216900385)), 1)
-joined ((Int(36), Float(-30.0)), 1)
-joined ((Int(37), Float(-30.91723746970178)), 1)
-joined ((Int(38), Float(-31.835585997031025)), 1)
-joined ((Int(39), Float(-32.7550020016016)), 1)
-sevens ((Int(-4), Int(3)), 1)
-sevens ((Int(1), Int(8)), 1)
-sevens ((Int(2), Int(9)), 1)
-sevens ((Int(3), Int(10)), 1)
-sevens ((Int(4), Int(11)), 1)
-sevens ((Int(5), Int(12)), 1)
-sevens ((Int(6), Int(13)), 1)
-sevens ((Int(7), Int(14)), 1)
-sevens ((Int(8), Int(15)), 1)
-sevens ((Int(9), Int(16)), 1)
-sevens ((Int(10), Int(17)), 1)
-sevens ((Int(11), Int(18)), 1)
-sevens ((Int(12), Int(19)), 1)
-sevens ((Int(13), Int(20)), 1)
-sevens ((Int(14), Int(21)), 1)
-sevens ((Int(15), Int(22)), 1)
-sevens ((Int(16), Int(23)), 1)
-sevens ((Int(17), Int(24)), 1)
-sevens ((Int(18), Int(25)), 1)
-sevens ((Int(19), Int(26)), 1)
-sevens ((Int(20), Int(27)), 1)
-sevens ((Int(21), Int(28)), 1)
-sevens ((Int(22), Int(29)), 1)
-sevens ((Int(23), Int(30)), 1)
-sevens ((Int(24), Int(31)), 1)
-sevens ((Int(25), Int(32)), 1)
-sevens ((Int(26), Int(33)), 1)
-sevens ((Int(27), Int(34)), 1)
-sevens ((Int(28), Int(35)), 1)
-sevens ((Int(29), Int(36)), 1)
-sevens ((Int(30), Int(37)), 1)
-sevens ((Int(31), Int(38)), 1)
-sevens ((Int(32), Int(39)), 1)
-sevens ((Int(33), Int(40)), 1)
-sevens ((Int(34), Int(41)), 1)
-sevens ((Int(35), Int(42)), 1)
-sevens ((Int(36), Int(43)), 1)
-sevens ((Int(37), Int(44)), 1)
-sevens ((Int(38), Int(45)), 1)
-sevens ((Int(39), Int(46)), 1)
+big 14 tuple(tuple(42),list(1,2)) 1
+big 15 tuple(tuple(45),list(1,3)) 1
+big 16 tuple(tuple(48),list(1,2,4)) 1
+big 17 tuple(tuple(51),list(1)) 1
+big 18 tuple(tuple(54),list(1,2,3)) 1
+big 19 tuple(tuple(57),list(1)) 1
+big 20 tuple(tuple(60),list(1,2,4)) 1
+big 21 tuple(tuple(63),list(1,3)) 1
+big 22 tuple(tuple(66),list(1,2)) 1
+big 23 tuple(tuple(69),list(1)) 1
+big 24 tuple(tuple(72),list(1,2,3,4)) 1
+big 25 tuple(tuple(75),list(1)) 1
+big 26 tuple(tuple(78),list(1,2)) 1
+big 27 tuple(tuple(81),list(1,3)) 1
+big 28 tuple(tuple(84),list(1,2,4)) 1
+big 29 tuple(tuple(87),list(1)) 1
+big 30 tuple(tuple(90),list(1,2,3)) 1
+big 31 tuple(tuple(93),list(1)) 1
+big 32 tuple(tuple(96),list(1,2,4)) 1
+big 33 tuple(tuple(99),list(1,3)) 1
+big 34 tuple(tuple(102),list(1,2)) 1
+big 35 tuple(tuple(105),list(1)) 1
+big 36 tuple(tuple(108),list(1,2,3,4)) 1
+big 37 tuple(tuple(111),list(1)) 1
+big 38 tuple(tuple(114),list(1,2)) 1
+big 39 tuple(tuple(117),list(1,3)) 1
+blended -4 NaN 1
+blended 1 0.33333333333333337 1
+blended 2 0.41421356237309515 1
+blended 3 0.39871747423554393 1
+blended 4 0.33333333333333326 1
+blended 5 0.2360679774997898 1
+blended 6 0.1161564094498444 1
+blended 7 -0.020915355602075802 1
+blended 8 -0.1715728752538097 1
+blended 9 -0.3333333333333335 1
+blended 10 -0.504389006498287 1
+blended 11 -0.6833752096446002 1
+blended 12 -0.8692317181955787 1
+blended 13 -1.0611153912026778 1
+blended 14 -1.2583426132260587 1
+blended 15 -1.460349987125916 1
+blended 16 -1.666666666666667 1
+blended 17 -1.8768943743823394 1
+blended 18 -2.0906926462140483 1
+blended 19 -2.307767723125993 1
+blended 20 -2.5278640450004204 1
+blended 21 -2.750757638377493 1
+blended 22 -2.9762509068432372 1
+blended 23 -3.204168476687281 1
+blended 24 -3.434353847766978 1
+blended 25 -3.666666666666666 1
+blended 26 -3.9009804864072155 1
+blended 27 -4.137180910626702 1
+blended 28 -4.375164044537485 1
+blended 29 -4.614835192865496 1
+blended 30 -4.856107758281673 1
+blended 31 -5.098902303836645 1
+blended 32 -5.343145750507619 1
+blended 33 -5.588770686795305 1
+blended 34 -5.835714771821365 1
+blended 35 -6.083920216900384 1
+blended 36 -6.333333333333334 1
+blended 37 -6.583904136368447 1
+blended 38 -6.835585997031024 1
+blended 39 -7.088335334934936 1
+cells -4 tuple() 1
+cells 1 tuple() 1
+cells 2 tuple() 1
+cells 3 tuple() 1
+cells 4 tuple() 1
+cells 5 tuple() 1
+cells 6 tuple() 1
+cells 7 tuple() 1
+cells 8 tuple() 1
+cells 9 tuple() 1
+cells 10 tuple() 1
+cells 11 tuple() 1
+cells 12 tuple() 1
+cells 13 tuple() 1
+cells 14 tuple() 1
+cells 15 tuple() 1
+cells 16 tuple() 1
+cells 17 tuple() 1
+cells 18 tuple() 1
+cells 19 tuple() 1
+cells 20 tuple() 1
+cells 21 tuple() 1
+cells 22 tuple() 1
+cells 23 tuple() 1
+cells 24 tuple() 1
+cells 25 tuple() 1
+cells 26 tuple() 1
+cells 27 tuple() 1
+cells 28 tuple() 1
+cells 29 tuple() 1
+cells 30 tuple() 1
+cells 31 tuple() 1
+cells 32 tuple() 1
+cells 33 tuple() 1
+cells 34 tuple() 1
+cells 35 tuple() 1
+cells 36 tuple() 1
+cells 37 tuple() 1
+cells 38 tuple() 1
+cells 39 tuple() 1
+described -4 tuple(tuple(-12),list(1,2,4)) 1
+described 1 tuple(tuple(3),list(1)) 1
+described 2 tuple(tuple(6),list(1,2)) 1
+described 3 tuple(tuple(9),list(1,3)) 1
+described 4 tuple(tuple(12),list(1,2,4)) 1
+described 5 tuple(tuple(15),list(1)) 1
+described 6 tuple(tuple(18),list(1,2,3)) 1
+described 7 tuple(tuple(21),list(1)) 1
+described 8 tuple(tuple(24),list(1,2,4)) 1
+described 9 tuple(tuple(27),list(1,3)) 1
+described 10 tuple(tuple(30),list(1,2)) 1
+described 11 tuple(tuple(33),list(1)) 1
+described 12 tuple(tuple(36),list(1,2,3,4)) 1
+described 13 tuple(tuple(39),list(1)) 1
+described 14 tuple(tuple(42),list(1,2)) 1
+described 15 tuple(tuple(45),list(1,3)) 1
+described 16 tuple(tuple(48),list(1,2,4)) 1
+described 17 tuple(tuple(51),list(1)) 1
+described 18 tuple(tuple(54),list(1,2,3)) 1
+described 19 tuple(tuple(57),list(1)) 1
+described 20 tuple(tuple(60),list(1,2,4)) 1
+described 21 tuple(tuple(63),list(1,3)) 1
+described 22 tuple(tuple(66),list(1,2)) 1
+described 23 tuple(tuple(69),list(1)) 1
+described 24 tuple(tuple(72),list(1,2,3,4)) 1
+described 25 tuple(tuple(75),list(1)) 1
+described 26 tuple(tuple(78),list(1,2)) 1
+described 27 tuple(tuple(81),list(1,3)) 1
+described 28 tuple(tuple(84),list(1,2,4)) 1
+described 29 tuple(tuple(87),list(1)) 1
+described 30 tuple(tuple(90),list(1,2,3)) 1
+described 31 tuple(tuple(93),list(1)) 1
+described 32 tuple(tuple(96),list(1,2,4)) 1
+described 33 tuple(tuple(99),list(1,3)) 1
+described 34 tuple(tuple(102),list(1,2)) 1
+described 35 tuple(tuple(105),list(1)) 1
+described 36 tuple(tuple(108),list(1,2,3,4)) 1
+described 37 tuple(tuple(111),list(1)) 1
+described 38 tuple(tuple(114),list(1,2)) 1
+described 39 tuple(tuple(117),list(1,3)) 1
+doubled -4 -8 1
+doubled 1 2 1
+doubled 2 4 1
+doubled 3 6 1
+doubled 4 8 1
+doubled 5 10 1
+doubled 6 12 1
+doubled 7 14 1
+doubled 8 16 1
+doubled 9 18 1
+doubled 10 20 1
+doubled 11 22 1
+doubled 12 24 1
+doubled 13 26 1
+doubled 14 28 1
+doubled 15 30 1
+doubled 16 32 1
+doubled 17 34 1
+doubled 18 36 1
+doubled 19 38 1
+doubled 20 40 1
+doubled 21 42 1
+doubled 22 44 1
+doubled 23 46 1
+doubled 24 48 1
+doubled 25 50 1
+doubled 26 52 1
+doubled 27 54 1
+doubled 28 56 1
+doubled 29 58 1
+doubled 30 60 1
+doubled 31 62 1
+doubled 32 64 1
+doubled 33 66 1
+doubled 34 68 1
+doubled 35 70 1
+doubled 36 72 1
+doubled 37 74 1
+doubled 38 76 1
+doubled 39 78 1
+joined -4 NaN 1
+joined 1 0.0 1
+joined 2 -0.5857864376269049 1
+joined 3 -1.2679491924311228 1
+joined 4 -2.0 1
+joined 5 -2.76393202250021 1
+joined 6 -3.550510257216822 1
+joined 7 -4.354248688935409 1
+joined 8 -5.17157287525381 1
+joined 9 -6.0 1
+joined 10 -6.83772233983162 1
+joined 11 -7.6833752096446 1
+joined 12 -8.535898384862247 1
+joined 13 -9.39444872453601 1
+joined 14 -10.25834261322606 1
+joined 15 -11.127016653792584 1
+joined 16 -12.0 1
+joined 17 -12.876894374382339 1
+joined 18 -13.757359312880716 1
+joined 19 -14.641101056459327 1
+joined 20 -15.52786404500042 1
+joined 21 -16.41742430504416 1
+joined 22 -17.30958424017657 1
+joined 23 -18.20416847668728 1
+joined 24 -19.101020514433642 1
+joined 25 -20.0 1
+joined 26 -20.900980486407214 1
+joined 27 -21.803847577293368 1
+joined 28 -22.70849737787082 1
+joined 29 -23.614835192865495 1
+joined 30 -24.522774424948338 1
+joined 31 -25.432235637169978 1
+joined 32 -26.34314575050762 1
+joined 33 -27.25543735346197 1
+joined 34 -28.1690481051547 1
+joined 35 -29.083920216900385 1
+joined 36 -30.0 1
+joined 37 -30.91723746970178 1
+joined 38 -31.835585997031025 1
+joined 39 -32.7550020016016 1
+sevens -4 3 1
+sevens 1 8 1
+sevens 2 9 1
+sevens 3 10 1
+sevens 4 11 1
+sevens 5 12 1
+sevens 6 13 1
+sevens 7 14 1
+sevens 8 15 1
+sevens 9 16 1
+sevens 10 17 1
+sevens 11 18 1
+sevens 12 19 1
+sevens 13 20 1
+sevens 14 21 1
+sevens 15 22 1
+sevens 16 23 1
+sevens 17 24 1
+sevens 18 25 1
+sevens 19 26 1
+sevens 20 27 1
+sevens 21 28 1
+sevens 22 29 1
+sevens 23 30 1
+sevens 24 31 1
+sevens 25 32 1
+sevens 26 33 1
+sevens 27 34 1
+sevens 28 35 1
+sevens 29 36 1
+sevens 30 37 1
+sevens 31 38 1
+sevens 32 39 1
+sevens 33 40 1
+sevens 34 41 1
+sevens 35 42 1
+sevens 36 43 1
+sevens 37 44 1
+sevens 38 45 1
+sevens 39 46 1

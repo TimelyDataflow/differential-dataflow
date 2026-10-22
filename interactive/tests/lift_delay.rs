@@ -1,7 +1,6 @@
 //! `lift`, `join_function`, and `delay`: each pinned to explicit rows, across workers, as inputs
 //! are added and retracted over several epochs.
 
-use interactive::ir::Value;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -30,7 +29,7 @@ fn feeds(tick: i64) -> Vec<(i64, i64, i64)> {
 }
 
 /// Every export, read after the last tick.
-fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
+fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
         let mut program = lower::lower_tree(parse::pipe::parse(PROGRAM));
@@ -44,21 +43,21 @@ fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
             }
             server.tick(worker);
         }
-        NAMES.map(|name| server.snapshot(worker, name).unwrap().into_rows()).to_vec()
+        NAMES.map(|name| server.snapshot(worker, name).unwrap().rows()).to_vec()
     })
     .unwrap();
     guards.join().into_iter().next().unwrap().unwrap()
 }
 
-fn int(n: i64) -> Value { Value::Int(n) }
-fn ints(ns: &[i64]) -> Value { Value::Tuple(ns.iter().copied().map(int).collect()) }
+fn int(n: i64) -> String { n.to_string() }
+fn ints(ns: &[i64]) -> String { format!("tuple({})", ns.iter().map(i64::to_string).collect::<Vec<_>>().join(",")) }
 /// `(key ; (val, time))`, as `lift` writes a row of `pairs`.
-fn lifted(k: i64, v: i64, time: &[i64], d: i64) -> (Value, Value, i64) {
-    (int(k), Value::Tuple(vec![int(v), ints(time)]), d)
+fn lifted(k: i64, v: i64, time: &[i64], d: i64) -> (String, String, i64) {
+    (int(k), format!("tuple({v},{})", ints(time)), d)
 }
 
 /// The rows each export holds after the last tick (epoch 2).
-fn expected() -> Vec<Vec<(Value, Value, i64)>> {
+fn expected() -> Vec<Vec<(String, String, i64)>> {
     vec![
         // The retraction of `(1, 2)` at epoch 1 lifts to a row of its own: lifted data does not cancel across times.
         vec![lifted(1, 2, &[0], 1), lifted(1, 2, &[1], -1), lifted(1, 2, &[2], 1), lifted(3, 4, &[0], 1), lifted(5, 1, &[1], 1)],

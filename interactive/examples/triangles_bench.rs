@@ -109,7 +109,7 @@ fn main() {
         let loaded = Instant::now();
         server.tick(worker);
         let count = |server: &mut Server, worker: &mut timely::worker::Worker| -> i64 {
-            server.snapshot(worker, "count").unwrap().into_rows().iter().map(|(_, v, d)| match v { interactive::ir::Value::Int(n) => n * d, _ => 0 }).sum()
+            server.snapshot(worker, "count").unwrap().rows().iter().map(|(_, v, d)| v.parse::<i64>().unwrap_or(0) * d).sum()
         };
         // A snapshot is a dataflow, so every worker takes part; worker 0 receives the rows.
         let elapsed = loaded.elapsed();

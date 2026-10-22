@@ -1,9 +1,9 @@
-use interactive::ir::Value;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
-fn tup(fields: &[i64]) -> Value {
-    Value::Tuple(fields.iter().copied().map(Value::Int).collect())
+/// A tuple of integers, as a feed writes it.
+fn tup(fields: &[i64]) -> String {
+    format!("tuple({})", fields.iter().map(i64::to_string).collect::<Vec<_>>().join(","))
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn feed_validates_before_staging_one_epoch() {
         assert!(server.snapshot(worker, "rows").unwrap().is_empty());
         server.tick(worker);
         assert_eq!(
-            server.snapshot(worker, "rows").unwrap().into_rows(),
+            server.snapshot(worker, "rows").unwrap().rows(),
             vec![(tup(&[1]), tup(&[10]), 1), (tup(&[2]), tup(&[20]), 1),]
         );
     });
@@ -59,10 +59,10 @@ fn delayed_peers_wake_ticks_and_snapshots() {
                 if worker.index() == (epoch + 1) % 3 {
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                let rows = server.snapshot(worker, "rows").unwrap().into_rows();
+                let rows = server.snapshot(worker, "rows").unwrap().rows();
                 let expected: Vec<_> = if worker.index() == 0 {
                     (0..3).filter(|&i| if epoch < 3 { i <= epoch } else { i > epoch - 3 })
-                        .map(|i| (tup(&[i as i64]), Value::unit(), 1)).collect()
+                        .map(|i| (tup(&[i as i64]), "tuple()".to_string(), 1)).collect()
                 } else { Vec::new() };
                 assert_eq!(rows, expected);
             }
@@ -91,8 +91,8 @@ fn listed_shape() -> corgi::Shape {
     corgi::Shape::Prod(vec![corgi::Shape::Int, corgi::Shape::List(Box::new(corgi::Shape::Int))])
 }
 
-fn listed(k: i64, xs: &[i64]) -> Value {
-    Value::Tuple(vec![Value::Int(k), Value::List(xs.iter().copied().map(Value::Int).collect())])
+fn listed(k: i64, xs: &[i64]) -> String {
+    format!("tuple({k},list({}))", xs.iter().map(i64::to_string).collect::<Vec<_>>().join(","))
 }
 
 /// A feed split across workers keeps its shapes: a worker whose share holds only empty lists
@@ -106,10 +106,10 @@ fn split_feeds_keep_their_shapes() {
         let mine: Vec<usize> = (worker.index()..columns.len()).step_by(worker.peers()).collect();
         server.feed_columns("world", 0, columns.select(&mine), None).unwrap();
         server.tick(worker);
-        server.snapshot(worker, "rows").unwrap().into_rows()
+        server.snapshot(worker, "rows").unwrap().rows()
     }).unwrap();
     let rows = guards.join().into_iter().next().unwrap().unwrap();
-    assert_eq!(rows, vec![(listed(1, &[7]), Value::unit(), 1), (listed(2, &[]), Value::unit(), 1)]);
+    assert_eq!(rows, vec![(listed(1, &[7]), "tuple()".to_string(), 1), (listed(2, &[]), "tuple()".to_string(), 1)]);
 }
 
 /// Columns of another shape than the input declares are refused, and staged at none.
@@ -123,7 +123,7 @@ fn misshaped_columns_are_refused() {
         assert_eq!(refused, "a feed of shape ((Int, Int) ; ()) reached an input of shape ((Int, List<Int>) ; ())");
         server.feed_columns("world", 0, decoded(&listed_shape(), &["tuple(1,list())"]), None).unwrap();
         server.tick(worker);
-        assert_eq!(server.snapshot(worker, "rows").unwrap().into_rows(), vec![(listed(1, &[]), Value::unit(), 1)]);
+        assert_eq!(server.snapshot(worker, "rows").unwrap().rows(), vec![(listed(1, &[]), "tuple()".to_string(), 1)]);
     });
 }
 
@@ -140,14 +140,14 @@ fn fed_sums_arrive_at_their_time() {
         server.feed_columns("world", 0, decoded(&node, &["inject(1,tuple(1,2))"]), None).unwrap();
         server.feed_columns("world", 0, decoded(&node, &["inject(0,7)"]), Some(2)).unwrap();
         server.tick(worker);
-        let pair = Value::Variant(1, Box::new(tup(&[1, 2])));
-        assert_eq!(server.snapshot(worker, "rows").unwrap().into_rows(), vec![(pair.clone(), Value::unit(), 1)]);
+        let pair = "inject(1,tuple(1,2))".to_string();
+        assert_eq!(server.snapshot(worker, "rows").unwrap().rows(), vec![(pair.clone(), "tuple()".to_string(), 1)]);
         server.tick(worker);
         server.tick(worker);
-        let leaf = Value::Variant(0, Box::new(Value::Int(7)));
-        let mut rows = server.snapshot(worker, "rows").unwrap().into_rows();
+        let leaf = "inject(0,7)".to_string();
+        let mut rows = server.snapshot(worker, "rows").unwrap().rows();
         rows.sort();
-        assert_eq!(rows, vec![(leaf, Value::unit(), 1), (pair, Value::unit(), 1)]);
+        assert_eq!(rows, vec![(leaf, "tuple()".to_string(), 1), (pair, "tuple()".to_string(), 1)]);
     });
 }
 
@@ -161,9 +161,9 @@ fn peek_by_key_reads_reference_keys() {
         let list = corgi::Shape::List(Box::new(corgi::Shape::Int));
         server.feed_columns("world", 0, decoded(&list, &["list(1,2)", "list(3)", "list()"]), None).unwrap();
         server.tick(worker);
-        let mut rows = |key: &str| server.peek(worker, "rows", Some(key)).map(|u| u.into_rows());
-        assert_eq!(rows("list(1,2)").unwrap(), vec![(Value::List(vec![Value::Int(1), Value::Int(2)]), Value::unit(), 1)]);
-        assert_eq!(rows("list()").unwrap(), vec![(Value::List(vec![]), Value::unit(), 1)]);
+        let mut rows = |key: &str| server.peek(worker, "rows", Some(key)).map(|u| u.rows());
+        assert_eq!(rows("list(1,2)").unwrap(), vec![("list(1,2)".to_string(), "tuple()".to_string(), 1)]);
+        assert_eq!(rows("list()").unwrap(), vec![("list()".to_string(), "tuple()".to_string(), 1)]);
         assert!(rows("list(9)").unwrap().is_empty());
         assert!(rows("tuple(1)").is_err());
     });

@@ -800,21 +800,22 @@ mod tests {
         assert_eq!(rows_of(&backend.output.gather(&[0, 1])), vec![vec![5], vec![3]]);
     }
 
+    /// corgi orders `(Int, List(Int))` rows as Rust orders `(i64, Vec<i64>)`: signed integers, and
+    /// lists lexicographically, a prefix first.
     #[test]
-    fn corgi_order_matches_ddir_for_ragged_lists_and_signed_products() {
-        use crate::ir::Value as V;
-        use crate::corgi::logic::{transcode, shape_of_row};
+    fn corgi_order_matches_rust_for_ragged_lists_and_signed_products() {
         let mut rows = Vec::new();
         for n in [-3, 0, 7] {
-            for bytes in [vec![], vec![0], vec![1], vec![1, -1], vec![1, 0], vec![2], vec![2, -2, 0]] {
-                rows.push(V::Tuple(vec![V::Int(n), V::List(bytes.into_iter().map(V::Int).collect())]));
+            for list in [vec![], vec![0], vec![1], vec![1, -1], vec![1, 0], vec![2], vec![2, -2, 0]] {
+                rows.push((n, list));
             }
         }
         rows.reverse();
-        // Infer from a non-empty representative; the first row need not carry
-        // data for every nested-list position once the schema is declared.
-        let shape = shape_of_row(&rows[0]).unwrap();
-        let columns = transcode(&rows, &shape);
+        let ends: Vec<usize> = rows.iter().scan(0, |end, (_, list)| { *end += list.len(); Some(*end) }).collect();
+        let columns = CValue::Prod(vec![
+            CValue::int(rows.iter().map(|r| r.0)),
+            CValue::List(ends.into(), Box::new(CValue::int(rows.iter().flat_map(|r| r.1.iter().copied())))),
+        ]);
         let (perm, _) = sort_blocks(&vec![0; rows.len()], &columns);
         let actual: Vec<_> = perm.into_iter().map(|i| rows[i].clone()).collect();
         rows.sort();
@@ -894,11 +895,13 @@ mod tests {
         use differential_dataflow::operators::int_proxy::reduce::ProxyReduceTactic;
         use differential_dataflow::operators::reduce::ReduceTactic;
         use crate::corgi::chunk::recover_key;
-        use crate::corgi::logic::{transcode, untranscode};
-        use crate::ir::Value as V;
+        use crate::corgi::feed::print;
         use corgi::Shape;
 
-        let pair = |a: u64, b: u64| V::Tuple(vec![V::Int(a as i64), V::Int(b as i64)]);
+        let pairs = |rows: &[(u64, (u64, u64), Time, Diff)], pair: fn(&(u64, (u64, u64), Time, Diff)) -> (u64, u64)| {
+            let (a, b): (Vec<u64>, Vec<u64>) = rows.iter().map(pair).unzip();
+            CValue::Prod(vec![ints(a), ints(b)])
+        };
         let shape = Shape::Prod(vec![Shape::Int, Shape::Int]);
         // Two retires' inputs: the first at outer times 0 and 1, the second from 2 on.
         let early = random_rows(0x51ED_270B_2A4F_3C11, 200, 6);
@@ -911,19 +914,12 @@ mod tests {
         let lambda = crate::ir::Lambda::new("let (_, vals) = input in \
             ((((0, vals) fold ((acc, ((a, _), d)) -> (acc, (a, d) mul) add)), 1) enlist, ((vals len), -2) enlist) append".into(), &corgi::Scope::default());
         for reducer in [Reducer::Count, Reducer::Distinct, Reducer::Min, Reducer::Collect, Reducer::Expr(lambda)] {
-            let out_shape = match reducer {
-                Reducer::Count => Shape::Int,
-                Reducer::Distinct => Shape::Unit,
-                Reducer::Min => shape.clone(),
-                Reducer::Collect => Shape::List(Box::new(shape.clone())),
-                Reducer::Expr(_) => Shape::Prod(vec![Shape::Int]),
-            };
             // Keys `(a, 7a)`, identified by their hash or by `a % 2`.
             let run = |forged: bool, window_size: usize| {
                 let batch = |rows: &[(u64, (u64, u64), Time, Diff)]| -> CBatch<Time> {
-                    let keys = transcode(&rows.iter().map(|r| pair(r.0, r.0 * 7)).collect::<Vec<_>>(), &shape);
+                    let keys = pairs(rows, |r| (r.0, r.0 * 7));
                     let keys = if forged { CValue::Prod(vec![ints(rows.iter().map(|r| r.0 % 2).collect()), keys]) } else { present_key(keys) };
-                    let vals = transcode(&rows.iter().map(|r| pair(r.1.0, r.1.1)).collect::<Vec<_>>(), &shape);
+                    let vals = pairs(rows, |r| r.1);
                     let chunk = CorgiChunk::from_columns(keys, vals, rows.iter().map(|r| r.2.clone()).collect(), rows.iter().map(|r| r.3).collect());
                     Rc::new(ChunkBatch::new(vec![chunk]))
                 };
@@ -935,10 +931,9 @@ mod tests {
                 let mut netted = BTreeMap::new();
                 for batch in first.iter().chain(second.and_then(|span| span.inner).as_ref()) {
                     for chunk in batch.chunks.iter() {
-                        let keys = untranscode(recover_key(chunk.keys()), &shape);
-                        let vals = untranscode(chunk.vals().clone(), &out_shape);
-                        for (i, (key, val)) in keys.into_iter().zip(vals).enumerate() {
-                            *netted.entry((key, val, chunk.times().get(i))).or_insert(0) += chunk.diffs()[i];
+                        let keys = recover_key(chunk.keys());
+                        for i in 0..chunk.diffs().len() {
+                            *netted.entry((print(&keys, i), print(chunk.vals(), i), chunk.times().get(i))).or_insert(0) += chunk.diffs()[i];
                         }
                     }
                 }

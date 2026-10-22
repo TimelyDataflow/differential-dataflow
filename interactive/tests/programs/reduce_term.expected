@@ -1,18 +1,18 @@
-max ((Int(1), Int(10)), 1)
-max ((Int(2), Int(20)), 1)
-max ((Int(3), Int(30)), 1)
-pair_keys ((Tuple([Int(1), Int(7)]), Int(1)), 1)
-pair_keys ((Tuple([Int(2), Int(7)]), Int(3)), 1)
-pair_keys ((Tuple([Int(3), Int(7)]), Int(2)), 1)
-same ((Int(1), Int(10)), 1)
-same ((Int(2), Int(-21)), 1)
-same ((Int(2), Int(20)), 2)
-same ((Int(3), Int(5)), 1)
-same ((Int(3), Int(30)), 1)
-sum ((Int(1), Int(10)), 1)
-sum ((Int(2), Int(19)), 1)
-sum ((Int(3), Int(35)), 1)
-weights ((Int(1), Int(1)), 1)
-weights ((Int(2), Int(2)), -2)
-weights ((Int(2), Int(3)), 3)
-weights ((Int(3), Int(2)), 1)
+max 1 10 1
+max 2 20 1
+max 3 30 1
+pair_keys tuple(1,7) 1 1
+pair_keys tuple(2,7) 3 1
+pair_keys tuple(3,7) 2 1
+same 1 10 1
+same 2 -21 1
+same 2 20 2
+same 3 5 1
+same 3 30 1
+sum 1 10 1
+sum 2 19 1
+sum 3 35 1
+weights 1 1 1
+weights 2 2 -2
+weights 2 3 3
+weights 3 2 1

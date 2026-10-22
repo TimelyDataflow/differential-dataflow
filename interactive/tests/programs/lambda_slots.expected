@@ -1,58 +1,58 @@
-comment ((Tuple([Int(1)]), Int(3)), 1)
-comment ((Tuple([Int(2)]), Int(5)), 1)
-comment ((Tuple([Int(3)]), Int(7)), 1)
-comment ((Tuple([Int(4)]), Int(6)), 1)
-comment ((Tuple([Int(5)]), Int(11)), 1)
-comment ((Tuple([Int(6)]), Int(11)), 1)
-enter_at ((Tuple([Int(1)]), Int(1)), 1)
-enter_at ((Tuple([Int(2)]), Int(1)), 1)
-enter_at ((Tuple([Int(3)]), Int(1)), 1)
-enter_at ((Tuple([Int(4)]), Int(1)), 1)
-enter_at ((Tuple([Int(5)]), Int(1)), 1)
-enter_at ((Tuple([Int(6)]), Int(1)), 1)
-filter ((Tuple([Int(1)]), Tuple([Int(2)])), 1)
-filter ((Tuple([Int(2)]), Tuple([Int(3)])), 1)
-filter ((Tuple([Int(3)]), Tuple([Int(4)])), 1)
-filter ((Tuple([Int(5)]), Tuple([Int(6)])), 1)
-flatmap ((Tuple([Int(1)]), Tuple([Int(0), Int(1)])), 1)
-flatmap ((Tuple([Int(1)]), Tuple([Int(1), Int(2)])), 1)
-flatmap ((Tuple([Int(1)]), Tuple([Int(2), Int(3)])), 1)
-flatmap ((Tuple([Int(2)]), Tuple([Int(0), Int(2)])), 1)
-flatmap ((Tuple([Int(2)]), Tuple([Int(1), Int(3)])), 1)
-flatmap ((Tuple([Int(2)]), Tuple([Int(2), Int(5)])), 1)
-flatmap ((Tuple([Int(3)]), Tuple([Int(0), Int(3)])), 1)
-flatmap ((Tuple([Int(3)]), Tuple([Int(1), Int(4)])), 1)
-flatmap ((Tuple([Int(3)]), Tuple([Int(2), Int(7)])), 1)
-flatmap ((Tuple([Int(4)]), Tuple([Int(0), Int(4)])), 1)
-flatmap ((Tuple([Int(4)]), Tuple([Int(1), Int(2)])), 1)
-flatmap ((Tuple([Int(4)]), Tuple([Int(2), Int(6)])), 1)
-flatmap ((Tuple([Int(5)]), Tuple([Int(0), Int(5)])), 1)
-flatmap ((Tuple([Int(5)]), Tuple([Int(1), Int(6)])), 1)
-flatmap ((Tuple([Int(5)]), Tuple([Int(2), Int(11)])), 1)
-flatmap ((Tuple([Int(6)]), Tuple([Int(0), Int(6)])), 1)
-flatmap ((Tuple([Int(6)]), Tuple([Int(1), Int(5)])), 1)
-flatmap ((Tuple([Int(6)]), Tuple([Int(2), Int(11)])), 1)
-nested ((Tuple([Int(1)]), Int(2)), 1)
-nested ((Tuple([Int(2)]), Int(3)), 1)
-nested ((Tuple([Int(3)]), Int(4)), 1)
-nested ((Tuple([Int(4)]), Int(2)), 1)
-nested ((Tuple([Int(5)]), Int(6)), 1)
-nested ((Tuple([Int(6)]), Int(5)), 1)
-option ((Tuple([Int(1)]), Int(0)), 1)
-option ((Tuple([Int(2)]), Int(0)), 1)
-option ((Tuple([Int(3)]), Int(4)), 1)
-option ((Tuple([Int(4)]), Int(0)), 1)
-option ((Tuple([Int(5)]), Int(6)), 1)
-option ((Tuple([Int(6)]), Int(5)), 1)
-sized ((Tuple([Int(1)]), Int(2)), 1)
-sized ((Tuple([Int(2)]), Int(3)), 1)
-sized ((Tuple([Int(3)]), Int(12)), 1)
-sized ((Tuple([Int(4)]), Int(2)), 1)
-sized ((Tuple([Int(5)]), Int(30)), 1)
-sized ((Tuple([Int(6)]), Int(30)), 1)
-value ((Tuple([Int(1)]), Int(21)), 1)
-value ((Tuple([Int(2)]), Int(32)), 1)
-value ((Tuple([Int(3)]), Int(43)), 1)
-value ((Tuple([Int(4)]), Int(24)), 1)
-value ((Tuple([Int(5)]), Int(65)), 1)
-value ((Tuple([Int(6)]), Int(56)), 1)
+comment tuple(1) 3 1
+comment tuple(2) 5 1
+comment tuple(3) 7 1
+comment tuple(4) 6 1
+comment tuple(5) 11 1
+comment tuple(6) 11 1
+enter_at tuple(1) 1 1
+enter_at tuple(2) 1 1
+enter_at tuple(3) 1 1
+enter_at tuple(4) 1 1
+enter_at tuple(5) 1 1
+enter_at tuple(6) 1 1
+filter tuple(1) tuple(2) 1
+filter tuple(2) tuple(3) 1
+filter tuple(3) tuple(4) 1
+filter tuple(5) tuple(6) 1
+flatmap tuple(1) tuple(0,1) 1
+flatmap tuple(1) tuple(1,2) 1
+flatmap tuple(1) tuple(2,3) 1
+flatmap tuple(2) tuple(0,2) 1
+flatmap tuple(2) tuple(1,3) 1
+flatmap tuple(2) tuple(2,5) 1
+flatmap tuple(3) tuple(0,3) 1
+flatmap tuple(3) tuple(1,4) 1
+flatmap tuple(3) tuple(2,7) 1
+flatmap tuple(4) tuple(0,4) 1
+flatmap tuple(4) tuple(1,2) 1
+flatmap tuple(4) tuple(2,6) 1
+flatmap tuple(5) tuple(0,5) 1
+flatmap tuple(5) tuple(1,6) 1
+flatmap tuple(5) tuple(2,11) 1
+flatmap tuple(6) tuple(0,6) 1
+flatmap tuple(6) tuple(1,5) 1
+flatmap tuple(6) tuple(2,11) 1
+nested tuple(1) 2 1
+nested tuple(2) 3 1
+nested tuple(3) 4 1
+nested tuple(4) 2 1
+nested tuple(5) 6 1
+nested tuple(6) 5 1
+option tuple(1) 0 1
+option tuple(2) 0 1
+option tuple(3) 4 1
+option tuple(4) 0 1
+option tuple(5) 6 1
+option tuple(6) 5 1
+sized tuple(1) 2 1
+sized tuple(2) 3 1
+sized tuple(3) 12 1
+sized tuple(4) 2 1
+sized tuple(5) 30 1
+sized tuple(6) 30 1
+value tuple(1) 21 1
+value tuple(2) 32 1
+value tuple(3) 43 1
+value tuple(4) 24 1
+value tuple(5) 65 1
+value tuple(6) 56 1

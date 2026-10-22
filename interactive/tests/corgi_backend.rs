@@ -6,7 +6,6 @@
 //! Every evaluation goes through the server (`server::evaluate`): install, feed, tick,
 //! snapshot — the same path a live install takes.
 
-use interactive::ir::Value;
 use interactive::server::evaluate;
 use interactive::{lower, parse};
 
@@ -121,16 +120,18 @@ fn assert_matches_expected(prog: &str) {
 
 /// Whether rendered answers agree, each float to within four units in the last place.
 fn same_answer(got: &str, want: &str) -> bool {
-    /// A line's text between floats, and its floats.
-    fn split(line: &str) -> (Vec<&str>, Vec<f64>) {
-        let (mut text, mut floats, mut rest) = (Vec::new(), Vec::new(), line);
-        while let Some(at) = rest.find("Float(") {
-            let end = at + rest[at..].find(')').expect("a closed Float");
-            text.push(&rest[..at]);
-            floats.push(rest[at + "Float(".len()..end].parse::<f64>().expect("a float"));
-            rest = &rest[end + 1..];
+    /// A line with each float replaced by `#`, and its floats: a word between the syntax's
+    /// punctuation that reads as a float and not as an integer.
+    fn split(line: &str) -> (String, Vec<f64>) {
+        let (mut text, mut floats) = (String::new(), Vec::new());
+        for word in line.split_inclusive(|c: char| "(), ".contains(c)) {
+            let (word, punctuation) = word.split_at(word.trim_end_matches(|c: char| "(), ".contains(c)).len());
+            match word.parse::<f64>() {
+                Ok(x) if word.parse::<i64>().is_err() => { text.push('#'); floats.push(x) }
+                _ => text.push_str(word),
+            }
+            text.push_str(punctuation);
         }
-        text.push(rest);
         (text, floats)
     }
     let close = |a: f64, b: f64| a == b || (a.is_nan() && b.is_nan()) || (a.signum() == b.signum() && (a.to_bits() as i64 - b.to_bits() as i64).abs() <= 4);
@@ -140,10 +141,11 @@ fn same_answer(got: &str, want: &str) -> bool {
     })
 }
 
-/// A program's output as text, one row per line: the export's name, then the row and its diff.
+/// A program's output as text, one row per line: the export's name, then the row's key, value
+/// and diff, as a feed writes them.
 fn render(out: &std::collections::BTreeMap<String, interactive::corgi::container::Updates>) -> String {
     out.iter()
-        .flat_map(|(name, updates)| updates.clone().into_rows().into_iter().map(move |(k, v, d)| format!("{name} {:?}", ((k, v), d))))
+        .flat_map(|(name, updates)| updates.rows().into_iter().map(move |(k, v, d)| format!("{name} {k} {v} {d}")))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -185,7 +187,7 @@ fn serializing(n: usize) -> timely::Config {
     let src = interactive::load_program(&format!("{}/tests/programs/registered.ddp", env!("CARGO_MANIFEST_DIR")));
     let tree = lower::lower_tree(parse::pipe::parse(&src));
     let out = evaluate(timely::Config::process(2), &tree, &inputs_for("registered"));
-    let mut cells: Vec<i64> = out["cells"].clone().into_rows().iter().map(|(k, _, _)| k.as_int()).collect();
+    let mut cells: Vec<i64> = out["cells"].rows().iter().map(|(k, _, _)| k.parse().unwrap()).collect();
     cells.sort();
     let mut want: Vec<i64> = (1..40).collect();
     want.insert(0, -4);
@@ -193,71 +195,59 @@ fn serializing(n: usize) -> timely::Config {
     assert_eq!(out["joined"].len(), 40);
 }
 
-/// The functions `registered.ddp` calls. Registering again replaces (here with the same bodies), so every
-/// test may do it.
+/// A host kernel from its name, shapes and body.
+struct Kernel { name: &'static str, input: corgi::Shape, output: corgi::Shape, body: fn(corgi::Value) -> Result<corgi::Value, String> }
+
+impl corgi::HostKernel for Kernel {
+    fn name(&self) -> &str { self.name }
+    fn input(&self) -> &corgi::Shape { &self.input }
+    fn output(&self) -> &corgi::Shape { &self.output }
+    fn eval(&self, input: corgi::Value) -> Result<corgi::Value, String> { (self.body)(input) }
+}
+
+/// Register the function `name` of arguments `args`: its input is `()`, or the tuple of them.
+fn register(name: &'static str, args: Vec<corgi::Shape>, output: corgi::Shape, body: fn(corgi::Value) -> Result<corgi::Value, String>) -> interactive::ir::Function {
+    let input = if args.is_empty() { corgi::Shape::Unit } else { corgi::Shape::Prod(args) };
+    let f: interactive::ir::Function = std::sync::Arc::new(Kernel { name, input, output, body });
+    interactive::ir::register(std::sync::Arc::clone(&f));
+    f
+}
+
+/// The functions `registered.ddp` calls. Registering again replaces, so every test may do it.
 fn register_test_functions() {
-    use corgi::Shape;
-    use interactive::ir::{register, Function};
-    let int = || Shape::Int;
-    let float = || Shape::Float;
+    use corgi::{Shape, Value};
+    let (int, list) = (|| Shape::Int, |s| Shape::List(Box::new(s)));
+    /// The first argument's integers.
+    fn first(input: Value) -> Result<Vec<i64>, String> { input.into_prod("argument")?.remove(0).into_i64("argument") }
     // A cell's children: two, while the cell is small and positive; none after.
-    register(Function {
-        name: "grow".into(),
-        args: vec![int()],
-        result: Shape::List(Box::new(Shape::Prod(vec![int(), int()]))),
-        body: Box::new(|a| {
-            let n = a[0].as_int();
-            let kids = if (1..20).contains(&n) { vec![2 * n, 2 * n + 1] } else { vec![] };
-            Value::List(kids.into_iter().map(|k| Value::Tuple(vec![Value::Int(k), Value::Int(n)])).collect())
-        }),
+    register("grow", vec![int()], list(Shape::Prod(vec![int(), int()])), |input| {
+        let (mut ends, mut kids, mut parents) = (Vec::new(), Vec::new(), Vec::new());
+        for n in first(input)? {
+            if (1..20).contains(&n) { kids.extend([2 * n, 2 * n + 1]); parents.extend([n, n]) }
+            ends.push(kids.len());
+        }
+        Ok(Value::List(ends.into(), Box::new(Value::Prod(vec![Value::int(kids), Value::int(parents)]))))
     });
     // A float from a pair of ints.
-    register(Function {
-        name: "blend".into(),
-        args: vec![Shape::Prod(vec![int(), int()])],
-        result: float(),
-        body: Box::new(|a| {
-            let Value::Tuple(p) = &a[0] else { panic!("blend expects a pair") };
-            Value::f64_value((p[0].as_int() as f64).sqrt() - p[1].as_int() as f64 / 3.0)
-        }),
+    register("blend", vec![Shape::Prod(vec![int(), int()])], Shape::Float, |input| {
+        let pair = input.into_prod("blend")?.remove(0).into_prod("blend")?;
+        let (a, b) = (pair[0].as_i64("blend")?, pair[1].as_i64("blend")?);
+        Ok(Value::f64(a.iter().zip(b.iter()).map(|(&a, &b)| (a as f64).sqrt() - b as f64 / 3.0).collect()))
     });
     // A nested shape: (n * 3, [divisors of n under 5]).
-    register(Function {
-        name: "describe".into(),
-        args: vec![int()],
-        result: Shape::Prod(vec![Shape::Prod(vec![int()]), Shape::List(Box::new(int()))]),
-        body: Box::new(|a| {
-            let n = a[0].as_int();
-            let divisors = (1..5).filter(|d| n % d == 0).map(Value::Int).collect();
-            Value::Tuple(vec![Value::Tuple(vec![Value::Int(3 * n)]), Value::List(divisors)])
-        }),
+    register("describe", vec![int()], Shape::Prod(vec![Shape::Prod(vec![int()]), list(int())]), |input| {
+        let ns = first(input)?;
+        let (mut ends, mut divisors) = (Vec::new(), Vec::new());
+        for &n in &ns {
+            divisors.extend((1..5).filter(|d| n % d == 0));
+            ends.push(divisors.len());
+        }
+        let tripled = Value::Prod(vec![Value::int(ns.iter().map(|n| 3 * n))]);
+        Ok(Value::Prod(vec![tripled, Value::List(ends.into(), Box::new(Value::int(divisors)))]))
     });
     // No arguments: the call passes a `Unit` column, so it still runs once per row.
-    register(Function {
-        name: "seven".into(),
-        args: vec![],
-        result: int(),
-        body: Box::new(|_| Value::Int(7)),
-    });
-    // A columnar body: `Double` runs on whole columns, and the row body is its reference.
-    register(Function {
-        name: "double".into(),
-        args: vec![int()],
-        result: int(),
-        body: Box::new(|a| Value::Int(2 * a[0].as_int())),
-    });
-    struct Double(Shape, Shape);
-    impl corgi::HostKernel for Double {
-        fn name(&self) -> &str { "double" }
-        fn input(&self) -> &Shape { &self.0 }
-        fn output(&self) -> &Shape { &self.1 }
-        fn eval(&self, input: corgi::Value) -> Result<corgi::Value, String> {
-            let args = input.into_prod("double")?;
-            let xs = args[0].as_i64("double")?;
-            Ok(corgi::Value::i64(xs.iter().map(|&x| 2 * x).collect()))
-        }
-    }
-    interactive::ir::register_kernel("double", std::sync::Arc::new(Double(Shape::Prod(vec![int()]), int())));
+    register("seven", vec![], int(), |input| Ok(Value::int(std::iter::repeat_n(7, input.len()))));
+    register("double", vec![int()], int(), |input| Ok(Value::int(first(input)?.into_iter().map(|x| 2 * x))));
 }
 
 /// A filter predicate must be an `Int`: a tuple is rejected rather than keeping nothing.
@@ -283,22 +273,14 @@ fn call_argument_shapes_are_checked() {
     assert!(result.is_err(), "ran a call with a mis-shaped argument");
 }
 
-/// Registering a name again replaces its kernel too: the row adapter for the old body, or a
-/// columnar kernel registered for it, no longer runs.
+/// Registering a name again replaces the function. A keyword can never be called, so it cannot
+/// be registered.
 #[test]
-fn reregistering_a_function_drops_its_old_kernel() {
-    use corgi::Shape;
-    use interactive::ir::{kernel_of, register, register_kernel, Function};
-    let one = |k: i64| Function { name: "reregistered".into(), args: vec![Shape::Int], result: Shape::Int, body: Box::new(move |_| Value::Int(k)) };
-    register(one(1));
-    let first = kernel_of("reregistered").unwrap();
-    assert!(std::sync::Arc::ptr_eq(&first, &kernel_of("reregistered").unwrap()), "one kernel per registration");
-    register(one(2));
-    let second = kernel_of("reregistered").unwrap();
-    assert!(!std::sync::Arc::ptr_eq(&first, &second), "re-registration kept the old kernel");
-    register_kernel("reregistered", first);
-    register(one(3));
-    assert!(!std::sync::Arc::ptr_eq(&second, &kernel_of("reregistered").unwrap()));
-    // A keyword can never be called, so it cannot be registered.
-    assert!(std::panic::catch_unwind(|| register(Function { name: "min".into(), args: vec![], result: Shape::Int, body: Box::new(|_| Value::Int(0)) })).is_err());
+fn reregistering_a_function_replaces_it() {
+    let one = || register("reregistered", vec![corgi::Shape::Int], corgi::Shape::Int, Ok);
+    let first = one();
+    assert!(std::sync::Arc::ptr_eq(&first, &interactive::ir::lookup("reregistered").unwrap()));
+    let second = one();
+    assert!(std::sync::Arc::ptr_eq(&second, &interactive::ir::lookup("reregistered").unwrap()));
+    assert!(std::panic::catch_unwind(|| register("min", vec![], corgi::Shape::Int, Ok)).is_err());
 }

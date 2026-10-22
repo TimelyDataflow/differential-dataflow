@@ -205,6 +205,51 @@ impl Col {
     }
 }
 
+/// Row `row` of `v` written as a feed writes it, with every wrapper: `tuple(1,list(2,3))`,
+/// `tuple()`, `inject(1,7)`. A float is written as Rust writes it, so `NaN` and `inf` do not read
+/// back.
+pub fn print(v: &CValue, row: usize) -> String {
+    let mut out = String::new();
+    write(v, row, &mut out);
+    out
+}
+
+fn write(v: &CValue, row: usize, out: &mut String) {
+    use std::fmt::Write;
+    match v {
+        CValue::Prim(_) => {
+            let one = corgi::arrange::gather(v, &[row]);
+            match corgi::arrange::leaf_slice(&one) {
+                Some(x) => write!(out, "{}", x[0]).unwrap(),
+                None => write!(out, "{:?}", one.as_f64("print").unwrap()[0]).unwrap(),
+            }
+        }
+        CValue::Unit(_) => out.push_str("tuple()"),
+        CValue::Prod(fields) => wrapped(out, "tuple(", fields.iter().map(|f| (f, row))),
+        CValue::List(bounds, elems) => {
+            let end = |i: usize| match bounds { corgi::Bounds::Offsets(ends) => ends[i], corgi::Bounds::Stride(k, _) => (i + 1) * k };
+            let start = if row == 0 { 0 } else { end(row - 1) };
+            wrapped(out, "list(", (start..end(row)).map(|i| (&**elems, i)))
+        }
+        CValue::Sum(tags, lanes) => {
+            write!(out, "inject({},", tags.tag_at(row)).unwrap();
+            write(&lanes[tags.tag_at(row)], tags.offset_at(row), out);
+            out.push(')');
+        }
+        CValue::Ref(arena, rows) => write(arena, rows[row], out),
+    }
+}
+
+/// `word`, then the rows `parts` names separated by commas, then `)`.
+fn wrapped<'a>(out: &mut String, word: &str, parts: impl Iterator<Item = (&'a CValue, usize)>) {
+    out.push_str(word);
+    for (i, (part, at)) in parts.enumerate() {
+        if i > 0 { out.push(',') }
+        write(part, at, out);
+    }
+    out.push(')');
+}
+
 struct Cursor<'a> {
     text: &'a [u8],
     at: usize,
@@ -260,40 +305,26 @@ impl Cursor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::corgi::logic::transcode_owned;
-    use crate::ir::Value;
 
     fn int() -> Shape { Shape::Int }
     fn list(s: Shape) -> Shape { Shape::List(Box::new(s)) }
 
-    /// Rows read here are the rows written, as columns.
+    /// Each row prints with every wrapper, as text that reads back as the row.
     #[test]
-    fn decodes_the_rows_written() {
+    fn rows_print_as_they_read() {
         let node = Shape::Sum(vec![int(), Shape::Prod(vec![int(), int()]), Shape::Unit]);
         let key = Shape::Prod(vec![int(), list(int()), node]);
         let val = Shape::Prod(vec![Shape::Float, list(list(int()))]);
-        let (i, l, t) = (Value::Int, Value::List, Value::Tuple);
-        let tag = |n: u32, v: Value| Value::Variant(n, Box::new(v));
-        let rows: Vec<(&str, Value, &str, f64, &str, Value)> = vec![
-            ("tuple(1,list(104,105),inject(0,-7))", t(vec![i(1), l(vec![i(104), i(105)]), tag(0, i(-7))]),
-             "2.5", 2.5, "list(list(1),list())", l(vec![l(vec![i(1)]), l(vec![])])),
-            ("tuple(2,list(),inject(1,tuple(300,4)))", t(vec![i(2), l(vec![]), tag(1, t(vec![i(300), i(4)]))]),
-             "-1e3", -1000.0, "list()", l(vec![])),
-            ("tuple(-3,list(255),inject(2,tuple()))", t(vec![i(-3), l(vec![i(255)]), tag(2, Value::unit())]),
-             "0", 0.0, "list(list())", l(vec![l(vec![])])),
+        let rows = [
+            ("tuple(1,list(104,105),inject(0,-7))", "tuple(2.5,list(list(1),list()))"),
+            ("tuple(2,list(),inject(1,tuple(300,4)))", "tuple(-1000.0,list())"),
+            ("tuple(-3,list(255),inject(2,tuple()))", "tuple(0.0,list(list()))"),
         ];
         let mut decoder = FeedDecoder::new(&key, &val);
-        let (mut keys, mut vals) = (Vec::new(), Vec::new());
-        for (k, key_row, float, x, lists, lists_row) in rows {
-            decoder.push(k, Some(&format!("tuple({float},{lists})")), 1).unwrap();
-            keys.push(key_row);
-            vals.push(Value::Tuple(vec![Value::f64_value(x), lists_row]));
-        }
+        for (k, v) in rows { decoder.push(k, Some(v), 1).unwrap() }
         let columns = decoder.finish();
-        assert_eq!(columns.keys, transcode_owned(keys, &key));
-        assert_eq!(columns.vals, transcode_owned(vals, &val));
-        assert_eq!(corgi::shape_of_value(&columns.keys), key);
-        assert_eq!(corgi::shape_of_value(&columns.vals), val);
+        assert_eq!((corgi::shape_of_value(&columns.keys), corgi::shape_of_value(&columns.vals)), (key, val));
+        assert_eq!(columns.rows(), rows.map(|(k, v)| (k.to_string(), v.to_string(), 1)));
     }
 
     /// An integer may carry a `+` sign, as Rust's integers read: `+1,-2` is `1,-2`.

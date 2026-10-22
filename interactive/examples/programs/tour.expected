@@ -1,37 +1,37 @@
-counts ((Int(1), Int(1)), 1)
-counts ((Int(2), Int(1)), 1)
-counts ((Int(3), Int(2)), 1)
-counts ((Int(5), Int(1)), 1)
-floats ((Int(1), Tuple([Float(331.3131022397581), Int(331), Int(1)])), 1)
-floats ((Int(2), Tuple([Float(366.6582200085644), Int(366), Int(1)])), 1)
-floats ((Int(3), Tuple([Float(278.6), Int(278), Int(0)])), 1)
-floats ((Int(3), Tuple([Float(393.9998984771443), Int(393), Int(1)])), 1)
-floats ((Int(5), Tuple([Float(331.3131022397581), Int(331), Int(1)])), 1)
-folded ((Int(1), Tuple([Int(10), Int(3)])), 1)
-folded ((Int(2), Tuple([Int(12), Int(3)])), 1)
-folded ((Int(3), Tuple([Int(11), Int(3)])), 1)
-folded ((Int(3), Tuple([Int(14), Int(3)])), 1)
-folded ((Int(5), Tuple([Int(14), Int(3)])), 1)
-least ((Int(1), Int(2)), 1)
-least ((Int(2), Int(3)), 1)
-least ((Int(3), Int(1)), 1)
-least ((Int(5), Int(2)), 1)
-nested ((Int(1), List([Tuple([Int(0), Int(2)]), Tuple([Int(1), Int(1)])])), 1)
-nested ((Int(2), List([Tuple([Int(0), Int(3)]), Tuple([Int(1), Int(2)])])), 1)
-nested ((Int(3), List([Tuple([Int(0), Int(1)]), Tuple([Int(0), Int(4)]), Tuple([Int(1), Int(3)]), Tuple([Int(1), Int(3)])])), 1)
-nested ((Int(5), List([Tuple([Int(0), Int(2)]), Tuple([Int(1), Int(5)])])), 1)
-reach ((Tuple([]), Tuple([])), 5)
-scored ((Int(1), Tuple([Int(4), Int(-2), Int(0), Int(68)])), 1)
-scored ((Int(2), Tuple([Int(6), Int(-3), Int(1), Int(85)])), 1)
-scored ((Int(3), Tuple([Int(2), Int(-1), Int(0), Int(8)])), 1)
-scored ((Int(3), Tuple([Int(8), Int(-4), Int(1), Int(8)])), 1)
-scored ((Int(5), Tuple([Int(4), Int(-2), Int(0), Int(72)])), 1)
-sums ((Int(1), Tuple([Int(3), Int(0)])), 1)
-sums ((Int(2), Tuple([Int(5), Int(0)])), 1)
-sums ((Int(3), Tuple([Int(-1), Int(1)])), 1)
-sums ((Int(3), Tuple([Int(7), Int(0)])), 1)
-sums ((Int(5), Tuple([Int(-1), Int(1)])), 1)
-uniq ((Int(1), Tuple([])), 1)
-uniq ((Int(2), Tuple([])), 1)
-uniq ((Int(3), Tuple([])), 1)
-uniq ((Int(5), Tuple([])), 1)
+counts 1 1 1
+counts 2 1 1
+counts 3 2 1
+counts 5 1 1
+floats 1 tuple(331.3131022397581,331,1) 1
+floats 2 tuple(366.6582200085644,366,1) 1
+floats 3 tuple(278.6,278,0) 1
+floats 3 tuple(393.9998984771443,393,1) 1
+floats 5 tuple(331.3131022397581,331,1) 1
+folded 1 tuple(10,3) 1
+folded 2 tuple(12,3) 1
+folded 3 tuple(11,3) 1
+folded 3 tuple(14,3) 1
+folded 5 tuple(14,3) 1
+least 1 2 1
+least 2 3 1
+least 3 1 1
+least 5 2 1
+nested 1 list(tuple(0,2),tuple(1,1)) 1
+nested 2 list(tuple(0,3),tuple(1,2)) 1
+nested 3 list(tuple(0,1),tuple(0,4),tuple(1,3),tuple(1,3)) 1
+nested 5 list(tuple(0,2),tuple(1,5)) 1
+reach tuple() tuple() 5
+scored 1 tuple(4,-2,0,68) 1
+scored 2 tuple(6,-3,1,85) 1
+scored 3 tuple(2,-1,0,8) 1
+scored 3 tuple(8,-4,1,8) 1
+scored 5 tuple(4,-2,0,72) 1
+sums 1 tuple(3,0) 1
+sums 2 tuple(5,0) 1
+sums 3 tuple(-1,1) 1
+sums 3 tuple(7,0) 1
+sums 5 tuple(-1,1) 1
+uniq 1 tuple() 1
+uniq 2 tuple() 1
+uniq 3 tuple() 1
+uniq 5 tuple() 1

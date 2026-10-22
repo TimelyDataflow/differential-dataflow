@@ -262,7 +262,7 @@ fn side_chunks<T: ColTime>(batches: &[CBatch<T>]) -> Vec<&CorgiChunk<T, Diff>> {
 }
 
 /// The column flattened to `i64` leaf lanes: `Some(lanes)` when it is a (possibly nested)
-/// product of integer leaves held as `i64`s — the shape DDIR tuples transcode to — so row order
+/// product of integer leaves held as `i64`s, so row order
 /// is the lexicographic order of the lane tuples. `Sum`/`List`/float leaves, and integers held
 /// narrower, give `None` (structural compares).
 fn leaf_lanes(col: &CValue) -> Option<Vec<&[i64]>> {

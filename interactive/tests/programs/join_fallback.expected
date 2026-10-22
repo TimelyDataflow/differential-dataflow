@@ -1,3 +1,3 @@
-result ((Int(1), Tuple([Int(15), Int(5)])), 1)
-result ((Int(2), Tuple([Int(26), Int(6)])), 1)
-result ((Int(2), Tuple([Int(27), Int(6)])), 1)
+result 1 tuple(15,5) 1
+result 2 tuple(26,6) 1
+result 2 tuple(27,6) 1

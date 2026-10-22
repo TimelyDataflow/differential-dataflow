@@ -12,7 +12,6 @@
 
 use std::time::Instant;
 
-use interactive::ir::Value;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -115,7 +114,7 @@ fn main() {
             churned.elapsed().as_secs_f64() * 1e3 / ticks as f64, mem(),
         );
         let answer: i64 = (0..consumers)
-            .map(|c| server.snapshot(worker, &format!("reach{c}")).unwrap().into_rows().iter().map(|(_, v, d)| ints(v) * d).sum::<i64>())
+            .map(|c| server.snapshot(worker, &format!("reach{c}")).unwrap().rows().iter().map(|(_, v, d)| ints(v) * d).sum::<i64>())
             .sum();
         println!("checksum (sum of consumer answers): {answer}");
         {
@@ -130,10 +129,7 @@ fn main() {
     });
 }
 
-fn ints(v: &Value) -> i64 {
-    match v {
-        Value::Tuple(xs) => xs.iter().map(ints).sum(),
-        Value::Int(n) => *n,
-        _ => 0,
-    }
+/// The sum of the integers a value holds, written as a feed writes it.
+fn ints(v: &str) -> i64 {
+    v.split(|c: char| "(),".contains(c)).filter_map(|w| w.parse::<i64>().ok()).sum()
 }

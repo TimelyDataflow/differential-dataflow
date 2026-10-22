@@ -1,6 +1,5 @@
 //! corgi as DDIR's columnar scalar logic: type and compile each operator's slot, a corgi lambda,
-//! at the shapes of the rows it reads; the Float functions as words; and transcode DDIR rows
-//! (`ir::Value`) to and from corgi columns, for registered functions with row bodies.
+//! at the shapes of the rows it reads; and the Float functions and registered functions as words.
 //!
 //! Shapes are STATIC. Every input declares its shape, every other collection's follows from its
 //! operator's slot (`crate::shapes`), and all are fixed at install, never re-derived from data.
@@ -9,162 +8,17 @@
 //! the shape a slot gives, so every shape rule is the one the kernels enforce, and a program that
 //! types is a program that runs. `Err` is a type error, reported with corgi's message.
 
-use crate::ir::{Lambda, Value as DValue};
+use crate::ir::Lambda;
 
 use corgi::{ArithOp, Builder, CmpOp, Graph, NumOp, Op, Pred, Scalar, Shape, Value as CValue};
 
 type Res<T> = Result<T, String>;
 
-/// The shape of one row, as far as the row alone says: an `Int`, a `Tuple`, or a non-empty `List`
-/// determines its shape; a `Variant` (whose type a bare tag cannot name) or an empty `List` (whose
-/// element shape nothing supplies) does not.
-pub fn shape_of_row(row: &DValue) -> Res<Shape> {
-    match row {
-        DValue::Int(_) => Ok(Shape::Int),
-        DValue::Float(_) => Ok(Shape::Float),
-        DValue::Tuple(xs) if xs.is_empty() => Ok(Shape::Unit),
-        DValue::Tuple(xs) => Ok(Shape::Prod(xs.iter().map(shape_of_row).collect::<Res<_>>()?)),
-        DValue::List(xs) => match xs.first() {
-            Some(x) => Ok(Shape::List(Box::new(shape_of_row(x)?))),
-            None => Err("an empty list on input has no element shape; declare the input's schema".into()),
-        },
-        DValue::Variant(..) => Err("a variant on input has no type; declare the input's schema".into()),
-    }
-}
-
-/// AoS rows -> SoA corgi columns, directed by `shape`. A row that does not fit the shape is a
-/// panic: an input checks its rows against its declared shape before converting them.
-/// Borrowing form: one clone of the rows, then [`transcode_owned`].
-pub fn transcode(rows: &[DValue], shape: &Shape) -> CValue {
-    transcode_owned(rows.to_vec(), shape)
-}
-
-/// As [`transcode`], consuming the rows: each field moves into its column, nothing is cloned.
-pub fn transcode_owned(rows: Vec<DValue>, shape: &Shape) -> CValue {
-    match shape {
-        Shape::Int => CValue::int(rows.iter().map(DValue::as_int)),
-        Shape::Float => CValue::f64(rows.iter().map(DValue::as_f64).collect()),
-        Shape::Unit => CValue::Unit(rows.len()),
-        Shape::Prod(fs) => {
-            // Transpose by moving: one Vec per field, filled by draining each tuple.
-            let mut cols: Vec<Vec<DValue>> = fs.iter().map(|_| Vec::with_capacity(rows.len())).collect();
-            for r in rows {
-                match r {
-                    DValue::Tuple(xs) => {
-                        assert!(xs.len() == fs.len(), "transcode: a {}-tuple for a {}-field shape", xs.len(), fs.len());
-                        for (col, x) in cols.iter_mut().zip(xs) { col.push(x) }
-                    }
-                    other => panic!("transcode: expected Tuple, got {other:?}"),
-                }
-            }
-            CValue::Prod(cols.into_iter().zip(fs).map(|(c, fsi)| transcode_owned(c, fsi)).collect())
-        }
-        Shape::List(elem) => {
-            // List column = per-row END offsets + a flattened element column.
-            let mut ends = Vec::with_capacity(rows.len());
-            let mut flat: Vec<DValue> = Vec::new();
-            for r in rows {
-                match r {
-                    DValue::List(xs) => {
-                        flat.extend(xs);
-                        ends.push(flat.len());
-                    }
-                    other => panic!("transcode: expected List, got {other:?}"),
-                }
-            }
-            CValue::List(ends.into(), Box::new(transcode_owned(flat, elem)))
-        }
-        Shape::Sum(lanes) => {
-            // Per-row tag, plus one packed lane per variant (its arm's rows in row order; a
-            // variant no row uses is an empty column of its declared shape).
-            let mut tags: Vec<usize> = Vec::with_capacity(rows.len());
-            let mut payloads: Vec<Vec<DValue>> = lanes.iter().map(|_| Vec::new()).collect();
-            for r in rows {
-                match r {
-                    DValue::Variant(t, p) => {
-                        let t = t as usize;
-                        if t >= lanes.len() { panic!("transcode: tag {t} is outside the declared {}-variant sum", lanes.len()) }
-                        tags.push(t);
-                        payloads[t].push(*p);
-                    }
-                    other => panic!("transcode: expected Variant, got {other:?}"),
-                }
-            }
-            let lane_vals = payloads.into_iter().zip(lanes).map(|(p, lshape)| transcode_owned(p, lshape)).collect();
-            CValue::sum(tags, lane_vals)
-        }
-        // A reference names rows of a shared list: build the list, and refer to each of its rows.
-        Shape::Ref(list) => {
-            let named: Vec<usize> = (0..rows.len()).collect();
-            CValue::Ref(std::sync::Arc::new(transcode_owned(rows, list)), std::sync::Arc::new(named))
-        }
-    }
-}
-
-/// SoA corgi columns -> AoS rows, directed by `shape`. Inverse of [`transcode`]. Each value
-/// moves into its row; nothing is cloned.
-pub fn untranscode(col: CValue, shape: &Shape) -> Vec<DValue> {
-    match shape {
-        Shape::Int => col.into_i64("untranscode").unwrap().into_iter().map(DValue::Int).collect(),
-        Shape::Float => col.as_f64("untranscode").unwrap().into_iter().map(DValue::f64_value).collect(),
-        Shape::Unit => vec![DValue::unit(); col.len()],
-        Shape::Prod(fs) => {
-            let cols = col.into_prod("untranscode").unwrap();
-            let n = if cols.is_empty() { 0 } else { cols[0].len() };
-            let mut per_field: Vec<std::vec::IntoIter<DValue>> =
-                cols.into_iter().zip(fs.iter()).map(|(c, fsi)| untranscode(c, fsi).into_iter()).collect();
-            (0..n).map(|_| DValue::Tuple(per_field.iter_mut().map(|f| f.next().expect("field columns agree in length")).collect())).collect()
-        }
-        Shape::List(elem) => {
-            // Inverse of transcode's List: per-row END offsets + a flattened element column → one
-            // `List` per row, taking each row's span off the front of the untranscoded column.
-            let (bounds, vals) = match col {
-                CValue::List(b, vals) => (b, *vals),
-                other => panic!("untranscode: expected List, got {other:?}"),
-            };
-            let mut flat = untranscode(vals, elem).into_iter();
-            let ends: Vec<usize> = bounds.to_vec();
-            let mut out = Vec::with_capacity(ends.len());
-            let mut start = 0usize;
-            for end in ends {
-                out.push(DValue::List(flat.by_ref().take(end - start).collect()));
-                start = end;
-            }
-            out
-        }
-        Shape::Sum(lanes) => {
-            // Inverse of transcode's Sum: untranscode each lane, then for each row take its payload
-            // from its lane at the recorded within-lane OFFSET (robust to row reordering from a
-            // prior gather/merge — not a sequential cursor). Rows may share a payload, so each is
-            // cloned except at its last use, where it moves.
-            let (tags, variant_vals) = col.into_sum("untranscode").unwrap();
-            let mut lane_rows: Vec<Vec<DValue>> =
-                variant_vals.into_iter().zip(lanes.iter()).map(|(v, ls)| untranscode(v, ls)).collect();
-            let mut uses: Vec<Vec<u32>> = lane_rows.iter().map(|l| vec![0; l.len()]).collect();
-            for r in 0..tags.len() { uses[tags.tag_at(r)][tags.offset_at(r)] += 1 }
-            (0..tags.len())
-                .map(|r| {
-                    let (tag, off) = (tags.tag_at(r), tags.offset_at(r));
-                    uses[tag][off] -= 1;
-                    let payload = if uses[tag][off] == 0 {
-                        std::mem::replace(&mut lane_rows[tag][off], DValue::Int(0))
-                    } else {
-                        lane_rows[tag][off].clone()
-                    };
-                    DValue::Variant(tag as u32, Box::new(payload))
-                })
-                .collect()
-        }
-        // A row of references reads as the rows it names.
-        Shape::Ref(list) => match col {
-            CValue::Ref(arena, rows) => untranscode(corgi::arrange::gather(&arena, &rows), list),
-            other => untranscode(other, list),
-        },
-    }
-}
-
 /// The total-order key of an `f64`, as corgi's `Scalar::Float` holds a float constant.
-fn float_key(f: f64) -> u64 { crate::ir::F64(f).key() }
+fn float_key(f: f64) -> u64 {
+    let bits = f.to_bits();
+    if bits >> 63 == 1 { !bits } else { bits ^ (1 << 63) }
+}
 
 /// DDIR's Float functions past corgi's arithmetic, as words over their input: the argument, or the
 /// tuple of the two arguments. `fabs`, `fmin`, `fmax` and the comparisons are compositions of corgi
@@ -328,16 +182,6 @@ pub fn compile_projection(lambda: &Lambda, rows: &[Shape]) -> Res<Graph<NumOp>> 
     }
 }
 
-/// Evaluate a slot's lambda on one row, for models that run a row at a time. The row's shape is
-/// its own, so a row whose shape it cannot tell alone (an empty list, a variant) panics.
-pub fn eval_corgi_row(lambda: &crate::ir::Lambda, input: DValue) -> DValue {
-    let shape = shape_of_row(&input).unwrap_or_else(|e| panic!("corgi program `{}`: {e}", lambda.src));
-    let graph = lambda.graph().unwrap_or_else(|e| panic!("{e}"));
-    let out = corgi::eval_graph(graph, transcode_owned(vec![input], &shape));
-    let out_shape = corgi::shape_of_value(&out);
-    untranscode(out, &out_shape).pop().expect("one row in, one row out")
-}
-
 /// The scope every DDIR program's lambdas start from: the Float functions as words, and the
 /// built-in sums `Option` and `Result`. A word's input is its argument, or the tuple of its
 /// arguments when it takes several, so `x call fsqrt` and `(x, y) call fpow`. The sums leave their
@@ -366,11 +210,10 @@ pub fn is_base_word(name: &str) -> bool { FloatWord::all().any(|(word, _)| word 
 /// The registered function `f` as a word: one host-kernel node over the call's input, which is its
 /// argument when it takes one, and the tuple of its arguments (or `()`) otherwise.
 pub fn function_word(f: &crate::ir::Function) -> Graph<NumOp> {
-    let kernel = crate::ir::kernel_of(&f.name).expect("a registered function has a kernel");
     let mut b = Builder::<NumOp>::default();
     let x = b.input();
-    let input = if f.args.len() == 1 { b.tuple(vec![x]) } else { x };
-    let out = b.add(NumOp::Host(corgi::HostOp(kernel)), vec![input]);
+    let input = if matches!(f.input(), Shape::Prod(args) if args.len() == 1) { b.tuple(vec![x]) } else { x };
+    let out = b.add(NumOp::Host(corgi::HostOp(std::sync::Arc::clone(f))), vec![input]);
     b.finish(out)
 }
 
@@ -462,19 +305,12 @@ mod float_kernels {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::Value as V;
 
-    fn ints() -> Shape { Shape::Int }
-    fn sum(lanes: Vec<Shape>) -> Shape { Shape::Sum(lanes) }
-
-    /// `body`, a lambda body over the floats `a` and `b` in the base scope, on each pair: the rows
-    /// it gives.
-    fn floats(body: &str, pairs: &[(f64, f64)]) -> Vec<V> {
+    /// `body`, a lambda body over the floats `a` and `b` in the base scope, on each pair.
+    fn floats(body: &str, pairs: &[(f64, f64)]) -> CValue {
         let lambda = Lambda::new(format!("let (a, b) = input in {body}"), &base_scope());
         let (a, b) = pairs.iter().copied().unzip();
-        let out = corgi::eval_graph(lambda.graph().unwrap(), CValue::Prod(vec![CValue::f64(a), CValue::f64(b)]));
-        let shape = corgi::shape_of_value(&out);
-        untranscode(out, &shape)
+        corgi::eval_graph(lambda.graph().unwrap(), CValue::Prod(vec![CValue::f64(a), CValue::f64(b)]))
     }
 
     /// Every pair of these floats: signed zeros, infinities, and both signs of NaN.
@@ -483,46 +319,56 @@ mod tests {
         specials.iter().flat_map(|&a| specials.iter().map(move |&b| (a, b))).collect()
     }
 
+    /// What a Float word gives in Rust, a float or an integer.
+    enum Rust { Float(Box<dyn Fn(f64, f64) -> f64>), Int(Box<dyn Fn(f64, f64) -> i64>) }
+
     /// Every Float word, called as a program calls it, gives Rust's own `f64` answer on every
     /// special pair: the words composed of corgi ops and the host kernels (`float_kernels`), alone
-    /// and inside a larger body.
+    /// and inside a larger body. Floats compare by their total order, so signed zeros and NaNs
+    /// must agree too.
     #[test]
     fn float_words_agree_with_rust() {
-        let f = V::f64_value;
-        let mask = |x: bool| V::Int(x as i64);
         // `fmin`/`fmax`: skip a NaN operand, else the total order; two NaNs give the second.
         let pick = |x: f64, y: f64, min: bool| {
             let pick_x = if x.is_nan() { false } else if y.is_nan() { true }
                 else if min { x.total_cmp(&y).is_le() } else { x.total_cmp(&y).is_ge() };
-            f(if pick_x { x } else { y })
+            if pick_x { x } else { y }
         };
-        let powi = |x: f64, y: f64| f(x.powi((y as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32));
-        let mut cases: Vec<(String, Box<dyn Fn(f64, f64) -> V>)> = vec![
-            ("(a, b) call fmin".into(), Box::new(move |x, y| pick(x, y, true))),
-            ("(a, b) call fmax".into(), Box::new(move |x, y| pick(x, y, false))),
-            ("(a, b) call feq".into(), Box::new(move |x, y| mask(x == y))),
-            ("(a, b) call fne".into(), Box::new(move |x, y| mask(x != y))),
-            ("(a, b) call flt".into(), Box::new(move |x, y| mask(x < y))),
-            ("(a, b) call fle".into(), Box::new(move |x, y| mask(x <= y))),
-            ("(a, b) call fgt".into(), Box::new(move |x, y| mask(x > y))),
-            ("(a, b) call fge".into(), Box::new(move |x, y| mask(x >= y))),
-            ("a call fint".into(), Box::new(|x, _| V::Int(x as i64))),
-            ("(a, b) call fpow".into(), Box::new(move |x, y| f(x.powf(y)))),
-            ("(a, b call fint) call fpowi".into(), Box::new(powi)),
+        let powi = |x: f64, y: f64| x.powi((y as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+        let mask = |test: fn(&f64, &f64) -> bool| Rust::Int(Box::new(move |x, y| test(&x, &y) as i64));
+        let mut cases: Vec<(String, Rust)> = vec![
+            ("(a, b) call fmin".into(), Rust::Float(Box::new(move |x, y| pick(x, y, true)))),
+            ("(a, b) call fmax".into(), Rust::Float(Box::new(move |x, y| pick(x, y, false)))),
+            ("(a, b) call feq".into(), mask(f64::eq)),
+            ("(a, b) call fne".into(), mask(f64::ne)),
+            ("(a, b) call flt".into(), mask(f64::lt)),
+            ("(a, b) call fle".into(), mask(f64::le)),
+            ("(a, b) call fgt".into(), mask(f64::gt)),
+            ("(a, b) call fge".into(), mask(f64::ge)),
+            ("a call fint".into(), Rust::Int(Box::new(|x, _| x as i64))),
+            ("(a, b) call fpow".into(), Rust::Float(Box::new(f64::powf))),
+            ("(a, b call fint) call fpowi".into(), Rust::Float(Box::new(powi))),
         ];
         for (name, g) in F64Fn::ALL {
-            cases.push((format!("a call {name}"), Box::new(move |x, _| f(g.apply(x)))));
+            cases.push((format!("a call {name}"), Rust::Float(Box::new(move |x, _| g.apply(x)))));
         }
         let pairs = float_pairs();
         for (body, rust) in &cases {
-            let expected: Vec<V> = pairs.iter().map(|&(x, y)| rust(x, y)).collect();
+            let expected = match rust {
+                Rust::Float(g) => CValue::f64(pairs.iter().map(|&(x, y)| g(x, y)).collect()),
+                Rust::Int(g) => CValue::int(pairs.iter().map(|&(x, y)| g(x, y))),
+            };
             assert_eq!(floats(body, &pairs), expected, "{body}");
         }
         // Inside a larger body. Over non-NaN pairs only: corgi's float `add` returns the positive
         // quiet NaN where Rust may keep a NaN operand's sign; the words themselves agree on NaNs.
         let finite: Vec<_> = pairs.into_iter().filter(|(x, y)| !x.is_nan() && !y.is_nan()).collect();
         let body = "((a call fexp, b) add, (a call fln, b) call flt, (a call fsqrt, b call fint) call fpowi)";
-        let expected: Vec<V> = finite.iter().map(|&(x, y)| V::Tuple(vec![f(x.exp() + y), mask(x.ln() < y), powi(x.sqrt(), y)])).collect();
+        let expected = CValue::Prod(vec![
+            CValue::f64(finite.iter().map(|&(x, y)| x.exp() + y).collect()),
+            CValue::int(finite.iter().map(|&(x, y)| (x.ln() < y) as i64)),
+            CValue::f64(finite.iter().map(|&(x, y)| powi(x.sqrt(), y)).collect()),
+        ]);
         assert_eq!(floats(body, &finite), expected);
         // The kernels are typed: their operands must be Floats, and `fpowi`'s exponent an Int.
         let int_pair = [Shape::Int, Shape::Int];
@@ -537,84 +383,21 @@ mod tests {
     /// Spot checks of the chosen semantics, as constants.
     #[test]
     fn float_math_semantics() {
-        let f = V::f64_value;
-        let one = |body: &str, a: f64, b: f64| floats(body, &[(a, b)]).pop().unwrap();
-        assert_eq!(one("a call fint", -2.7, 0.0), V::Int(-2));
-        assert_eq!(one("a call fint", f64::NAN, 0.0), V::Int(0));
-        assert_eq!(one("a call fint", 1e300, 0.0), V::Int(i64::MAX));
-        assert_eq!(one("(a, b) call flt", -2.0, -1.0), V::Int(1));
-        assert_eq!(one("(a, b) lt", -2.0, -1.0), V::Int(1));
-        assert_eq!(one("(a, b) call feq", -0.0, 0.0), V::Int(1));
-        assert_eq!(one("(a, b) eq", -0.0, 0.0), V::Int(0));
-        assert_eq!(one("(a, b) call fne", f64::NAN, f64::NAN), V::Int(1));
-        assert_eq!(one("(a, b) call fmax", f64::NAN, 1.0), f(1.0));
-        assert_eq!(one("(a, b) call fmin", 0.0, -0.0).as_f64().to_bits(), (-0.0f64).to_bits());
-        assert!(one("a call fln", -1.0, 0.0).as_f64().is_nan());
-        assert_eq!(one("a call fln", 0.0, 0.0), f(f64::NEG_INFINITY));
-        assert_eq!(one("(a, b) call fpow", 4.0, 0.5), f(2.0));
-        assert!(one("(a, b) call fpow", -8.0, 0.5).as_f64().is_nan());
-    }
-
-    /// Round-trip a column of rows through transcode → untranscode at a given shape.
-    fn roundtrip(rows: Vec<V>, shape: Shape) {
-        let col = transcode(&rows, &shape);
-        assert_eq!(corgi::shape_of_value(&col), shape, "transcode builds the declared shape");
-        let back = untranscode(col, &shape);
-        assert_eq!(back, rows, "roundtrip mismatch (shape {shape:?})");
-    }
-
-    #[test]
-    fn roundtrip_variant_single_arm() {
-        // binders-style: a single constructor wrapping a list.
-        roundtrip(
-            vec![
-                V::Variant(0, Box::new(V::List(vec![V::Int(1), V::Int(2)]))),
-                V::Variant(0, Box::new(V::List(vec![V::Int(3)]))),
-                V::Variant(0, Box::new(V::List(vec![]))),
-            ],
-            sum(vec![Shape::List(Box::new(ints()))]),
-        );
-    }
-
-    #[test]
-    fn roundtrip_variant_multi_arm() {
-        // adt-style: two arms, interleaved; payloads of different shape per arm.
-        roundtrip(
-            vec![
-                V::Variant(0, Box::new(V::Int(10))),
-                V::Variant(1, Box::new(V::Tuple(vec![V::Int(1), V::Int(2)]))),
-                V::Variant(0, Box::new(V::Int(20))),
-                V::Variant(1, Box::new(V::Tuple(vec![V::Int(3), V::Int(4)]))),
-                V::Variant(0, Box::new(V::Int(30))),
-            ],
-            sum(vec![ints(), Shape::Prod(vec![ints(), ints()])]),
-        );
-    }
-
-    #[test]
-    fn roundtrip_variant_absent_arm_is_an_empty_lane() {
-        // tags {0, 2} present, arm 1 absent: its lane is an empty column of the declared shape.
-        roundtrip(
-            vec![V::Variant(0, Box::new(V::Int(1))), V::Variant(2, Box::new(V::Int(2))), V::Variant(0, Box::new(V::Int(3)))],
-            sum(vec![ints(), Shape::List(Box::new(ints())), ints()]),
-        );
-    }
-
-    #[test]
-    fn roundtrip_nested_variant_in_tuple() {
-        roundtrip(
-            vec![
-                V::Tuple(vec![V::Int(1), V::Variant(0, Box::new(V::Int(7)))]),
-                V::Tuple(vec![V::Int(2), V::Variant(1, Box::new(V::unit()))]),
-            ],
-            Shape::Prod(vec![ints(), sum(vec![ints(), Shape::Unit])]),
-        );
-    }
-
-    #[test]
-    fn shape_of_row_pins_what_a_row_can_say() {
-        assert_eq!(shape_of_row(&V::Tuple(vec![V::Int(1), V::List(vec![V::Int(2)])])).unwrap(), Shape::Prod(vec![ints(), Shape::List(Box::new(ints()))]));
-        assert!(shape_of_row(&V::List(vec![])).is_err());
-        assert!(shape_of_row(&V::Variant(0, Box::new(V::Int(1)))).is_err());
+        let one = |body: &str, a: f64, b: f64| floats(body, &[(a, b)]);
+        let (int, float) = (|n: i64| CValue::int([n]), |x: f64| CValue::f64(vec![x]));
+        assert_eq!(one("a call fint", -2.7, 0.0), int(-2));
+        assert_eq!(one("a call fint", f64::NAN, 0.0), int(0));
+        assert_eq!(one("a call fint", 1e300, 0.0), int(i64::MAX));
+        assert_eq!(one("(a, b) call flt", -2.0, -1.0), int(1));
+        assert_eq!(one("(a, b) lt", -2.0, -1.0), int(1));
+        assert_eq!(one("(a, b) call feq", -0.0, 0.0), int(1));
+        assert_eq!(one("(a, b) eq", -0.0, 0.0), int(0));
+        assert_eq!(one("(a, b) call fne", f64::NAN, f64::NAN), int(1));
+        assert_eq!(one("(a, b) call fmax", f64::NAN, 1.0), float(1.0));
+        assert_eq!(one("(a, b) call fmin", 0.0, -0.0), float(-0.0));
+        assert!(one("a call fln", -1.0, 0.0).as_f64("fln").unwrap()[0].is_nan());
+        assert_eq!(one("a call fln", 0.0, 0.0), float(f64::NEG_INFINITY));
+        assert_eq!(one("(a, b) call fpow", 4.0, 0.5), float(2.0));
+        assert!(one("(a, b) call fpow", -8.0, 0.5).as_f64("fpow").unwrap()[0].is_nan());
     }
 }
