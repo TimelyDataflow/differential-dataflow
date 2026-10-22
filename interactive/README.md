@@ -97,6 +97,19 @@ For the full command vocabulary — `load`, `feed`, `tick`, `peek`, `tail`, and 
 [`examples/server/README.md`](examples/server/README.md), and `server/README.md` for the
 protocol and configuration.
 
+## Differential testing
+
+`tests/difftest.rs` generates random lambda programs over random streams of inserts and
+retractions, and checks each against other ways of computing the same answers: more workers,
+evaluation from scratch, the unoptimized program, delta joins, a producer and consumer sharing
+traces, and explanations. It is ignored by default; run a sweep with
+
+```
+DIFFTEST_SEED=0 DIFFTEST_CASES=1000 cargo test --release -p interactive --test difftest -- --ignored --nocapture
+```
+
+Its module documentation lists the oracles, and how to pick them and replay a failure.
+
 ## Status
 
 This is a research project, primarily for personal learning at this point.
