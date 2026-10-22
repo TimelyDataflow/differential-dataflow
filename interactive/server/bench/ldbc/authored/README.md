@@ -103,10 +103,18 @@ Two spelling differences apply throughout:
 - **Ranking** uses `collect`: key the candidates by request, with values that
   start with the sort key, `collect` them, and `flatmap` back out. The rows come
   out as `(rid, (rank, value))` in order, and a `filter` on rank is the limit.
-  The generated plans use a bounded top-k reducer instead (`snb/topk.py`), which
-  keeps only the first k under updates; it is much harder to read. This is the
-  one place where readable and incremental pull apart; a named top-k operator in
-  DDP would serve both.
+  This reads well but is the most expensive way to maintain a ranking: `collect`
+  is a reduce over all of a request's candidates, so a change to any one rebuilds
+  the sorted list and re-ranks everything below it before the limit applies. The
+  generated plans use a bounded reducer (`snb/topk.py`) that reads only the first k
+  and is silent about changes below them, optionally over hierarchical hash buckets
+  for very large groups. When the data are append-only, a ranking can also live in
+  the multiplicity as a semigroup. These plans keep `collect` for readability; which
+  technique fits depends on group sizes and the update pattern. Swapping the bounded
+  reducer into the authored BI4, BI9 and IC5 (same answers) changed their mean SF1
+  update cost from 10.3 to 4.2 ms, 6.7 to 3.6 ms and 17.6 to 6.0 ms. IC5 stays above
+  the generated plan's 2.6 ms because its rewrite also maintains each person's 40
+  smallest forums for every request: faster reads, more work per update.
 - **Only the fields a step needs** are carried, so the plans stay narrow without
   the projection pass.
 
