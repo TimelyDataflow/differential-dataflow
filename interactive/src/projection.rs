@@ -2,11 +2,10 @@
 //! `examples/self_opt/demand.ddp`; this Rust form lets an installed program be
 //! rewritten without starting a second dataflow inside `Server::install`.
 //!
-//! The lambda dependency probe reads `corgi::explain` conservatively. It is a
-//! spike interface, not a stable corgi contract: unknown graph operations read
-//! their entire input. A structured graph dependency API belongs in corgi.
+//! Lambda input demand comes from Corgi's typed demand transform. Unknown or
+//! unsupported lambda shapes conservatively read their entire input.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 use corgi::Shape;
 
@@ -322,92 +321,6 @@ fn slot_fields<'a>(inputs: &'a [&Site], slot: usize) -> Option<&'a [usize]> {
     }
 }
 
-#[derive(Clone, Debug)]
-enum GraphNode {
-    Input,
-    Tuple(Vec<usize>),
-    Field(usize, usize),
-    Pattern(usize),
-    Constant,
-    Op(Vec<usize>),
-}
-
-fn percent_ids(text: &str) -> Vec<usize> {
-    text.split(|c: char| !c.is_ascii_digit() && c != '%')
-        .filter_map(|word| word.strip_prefix('%').and_then(|s| s.parse().ok()))
-        .collect()
-}
-
-fn parse_graph(text: &str) -> Option<(Vec<GraphNode>, usize)> {
-    let mut nodes = Vec::new();
-    let mut output = None;
-    for line in text.lines().filter(|line| line.starts_with('%')) {
-        let (name, rhs) = line.split_once(" = ")?;
-        let id: usize = name.strip_prefix('%')?.parse().ok()?;
-        if id != nodes.len() {
-            return None;
-        }
-        let is_output = rhs.contains("<- out");
-        let rhs = rhs.split("   <- out").next()?.trim();
-        let inputs = percent_ids(rhs);
-        let node = if rhs == "input" {
-            GraphNode::Input
-        } else if rhs.starts_with("(%") || rhs == "()" {
-            GraphNode::Tuple(inputs)
-        } else if let Some(rest) = rhs.strip_prefix("Field(") {
-            let (index, _) = rest.split_once(')')?;
-            GraphNode::Field(index.parse().ok()?, *inputs.first()?)
-        } else if rhs.starts_with("Pattern(") {
-            GraphNode::Pattern(*inputs.first()?)
-        } else if rhs.starts_with("Unit ") || rhs.starts_with("lit ") {
-            GraphNode::Constant
-        } else {
-            GraphNode::Op(inputs)
-        };
-        if is_output {
-            output = Some(id);
-        }
-        nodes.push(node);
-    }
-    Some((nodes, output?))
-}
-
-fn input_paths(nodes: &[GraphNode], output: usize, path: &[usize]) -> Option<Vec<Vec<usize>>> {
-    let mut stack = vec![(output, path.to_vec())];
-    let mut seen = HashSet::new();
-    let mut paths = Vec::new();
-    while let Some((id, path)) = stack.pop() {
-        if !seen.insert((id, path.clone())) {
-            continue;
-        }
-        match nodes.get(id)? {
-            GraphNode::Input => paths.push(path),
-            GraphNode::Tuple(parts) => {
-                if let Some((&first, rest)) = path.split_first() {
-                    stack.push((*parts.get(first)?, rest.to_vec()));
-                } else {
-                    for &part in parts {
-                        stack.push((part, Vec::new()));
-                    }
-                }
-            }
-            GraphNode::Field(field, arg) => {
-                let mut next = vec![*field];
-                next.extend(path);
-                stack.push((*arg, next));
-            }
-            GraphNode::Pattern(arg) => stack.push((*arg, path)),
-            GraphNode::Constant => {}
-            GraphNode::Op(args) => {
-                for &arg in args {
-                    stack.push((arg, Vec::new()));
-                }
-            }
-        }
-    }
-    Some(paths)
-}
-
 fn all_lambda_fields(shapes: &[Shape]) -> Vec<(usize, usize)> {
     shapes
         .iter()
@@ -416,53 +329,76 @@ fn all_lambda_fields(shapes: &[Shape]) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// Input slot and top-level field index for one demanded output path. A missing
-/// graph parse is an all-fields result, never a guessed absence of reads.
+fn output_projection(shape: &Shape, path: &[usize]) -> Option<Shape> {
+    let Some((&field, tail)) = path.split_first() else {
+        return Some(shape.clone());
+    };
+    let Shape::Prod(parts) = shape else {
+        return None;
+    };
+    let chosen = output_projection(parts.get(field)?, tail)?;
+    Some(Shape::Prod(
+        parts
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                if i == field {
+                    chosen.clone()
+                } else {
+                    Shape::Unit
+                }
+            })
+            .collect(),
+    ))
+}
+
+/// Input slot and top-level field index for one demanded output path. If Corgi
+/// cannot prove the demand, every input field is treated as read.
 fn graph_fields(lambda: &Lambda, shapes: &[Shape], output_path: &[usize]) -> Vec<(usize, usize)> {
     let all = || all_lambda_fields(shapes);
     let Ok(graph) = lambda.graph() else {
         return all();
     };
     let input_shape = Shape::Prod(shapes.to_vec());
-    if corgi::shape_of(graph, &input_shape).is_err() {
+    let Ok(output_shape) = corgi::shape_of(graph, &input_shape) else {
+        return all();
+    };
+    let Some(projection) = output_projection(&output_shape, output_path) else {
+        return all();
+    };
+    // demand_transform prunes the unobserved outputs and calls Corgi's
+    // demand_projection on the result.
+    let Ok(transform) = corgi::demand_transform(graph, &input_shape, &projection) else {
+        return all();
+    };
+    let Ok(projected_input) = transform.input_demand.to_shape(&input_shape) else {
+        return all();
+    };
+    let Shape::Prod(slots) = projected_input else {
+        return if projected_input == Shape::Unit {
+            Vec::new()
+        } else {
+            all()
+        };
+    };
+    if slots.len() != shapes.len() {
         return all();
     }
-    let graph = corgi::optimize(graph);
-    let Some((nodes, output)) = parse_graph(&corgi::explain::explain(&graph)) else {
-        return all();
-    };
-    let Some(paths) = input_paths(&nodes, output, output_path) else {
-        return all();
-    };
-    let mut fields = HashSet::new();
-    for path in paths {
-        let Some((&slot, tail)) = path.split_first() else {
-            return all();
-        };
-        let Some(shape) = shapes.get(slot) else {
-            return all();
-        };
-        match shape {
-            Shape::Unit => {}
-            Shape::Prod(parts) => {
-                if let Some(&field) = tail.first() {
-                    if field >= parts.len() {
-                        return all();
-                    }
-                    fields.insert((slot, field));
-                } else {
-                    for field in 0..parts.len() {
-                        fields.insert((slot, field));
-                    }
-                }
+    let mut fields = Vec::new();
+    for (slot, (original, projected_slot)) in shapes.iter().zip(&slots).enumerate() {
+        match (original, projected_slot) {
+            (Shape::Unit, Shape::Unit) | (_, Shape::Unit) => {}
+            (Shape::Prod(parts), Shape::Prod(kept)) if parts.len() == kept.len() => {
+                fields.extend(
+                    kept.iter().enumerate().filter_map(|(field, shape)| {
+                        (shape != &Shape::Unit).then_some((slot, field))
+                    }),
+                );
             }
-            _ => {
-                fields.insert((slot, 0));
-            }
+            (Shape::Prod(_), _) => return all(),
+            _ => fields.push((slot, 0)),
         }
     }
-    let mut fields: Vec<_> = fields.into_iter().collect();
-    fields.sort_unstable();
     fields
 }
 
@@ -712,7 +648,7 @@ fn mask_part(name: &str, shape: &Shape, facts: &[usize], live: &[bool]) -> Strin
     }
 }
 
-fn mask_projection(
+fn mask_lambda(
     original: &Lambda,
     key_shape: &Shape,
     key_facts: &[usize],
@@ -751,8 +687,8 @@ fn mask_projection(
     ))
 }
 
-fn mask_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
-    mask_projection(
+fn mask_site_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
+    mask_lambda(
         original,
         &output.shape.0,
         &output.key,
@@ -774,7 +710,7 @@ fn mask_half_join(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lam
     let Some(&value_fact) = output.val.first() else {
         return None;
     };
-    mask_projection(
+    mask_lambda(
         original,
         &output.shape.0,
         &output.key,
@@ -797,7 +733,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
             (Item::Op(Node::Linear { ops, .. }), PlannedItem::Op { stages, .. }) => {
                 for (op, site) in ops.iter_mut().zip(stages) {
                     if let LinearOp::Project(lambda) = op {
-                        if let Some(new) = mask_lambda(lambda, site, live) {
+                        if let Some(new) = mask_site_lambda(lambda, site, live) {
                             masked += site
                                 .key
                                 .iter()
@@ -810,7 +746,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                 }
             }
             (Item::Op(Node::Join { projection, .. }), PlannedItem::Op { output, .. }) => {
-                if let Some(new) = mask_lambda(projection, output, live) {
+                if let Some(new) = mask_site_lambda(projection, output, live) {
                     masked += output
                         .key
                         .iter()
@@ -855,7 +791,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                         remap_ref(r, &remap);
                     }
                     if let PlannedItem::Op { output, .. } = planned {
-                        if let Some(lambda) = mask_lambda(&identity, output, live) {
+                        if let Some(lambda) = mask_site_lambda(&identity, output, live) {
                             let fields = output
                                 .key
                                 .iter()
@@ -891,7 +827,7 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
         };
         items.push(item);
         if let Some(output) = reduced_output {
-            if let Some(lambda) = mask_lambda(&identity, output, live) {
+            if let Some(lambda) = mask_site_lambda(&identity, output, live) {
                 let fields = output
                     .key
                     .iter()
@@ -1007,7 +943,7 @@ mod tests {
         let output = builder.site(Shape::Prod(vec![Shape::Int, Shape::Int]), Shape::Unit);
         let mut live = vec![false; builder.graph.facts];
         live[output.key[0]] = true;
-        let masked = mask_lambda(&lambda, &output, &live).unwrap();
+        let masked = mask_site_lambda(&lambda, &output, &live).unwrap();
         let before = corgi::explain::explain(&corgi::optimize(&lambda.graph().unwrap()));
         let after = corgi::explain::explain(&corgi::optimize(&masked.graph().unwrap()));
         assert!(before.contains("BinImm(Add"));
