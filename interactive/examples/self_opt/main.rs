@@ -23,8 +23,8 @@ use std::time::Instant;
 
 use corgi::Shape;
 use interactive::corgi::container::Updates;
-use interactive::corgi::logic::transcode_owned;
-use interactive::ir::{Lambda, LinearOp, Reducer, Value};
+use interactive::corgi::feed::FeedDecoder;
+use interactive::ir::{Lambda, LinearOp, Reducer};
 use interactive::scope_ir::{Item, Node, Ref, Scope, Source};
 use interactive::server::Server;
 use interactive::{lower, parse};
@@ -357,35 +357,27 @@ fn count_kinds(s: &Scope, kinds: &mut [usize; 7]) {
     }
 }
 
-fn int(n: i64) -> Value {
-    Value::Int(n)
-}
-
 fn columns(
-    rows: impl IntoIterator<Item = (Value, Value)>,
+    rows: impl IntoIterator<Item = (String, String)>,
     shape: (Shape, Shape),
     diff: i64,
 ) -> Updates {
-    let (keys, vals): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
-    let diffs = vec![diff; keys.len()];
-    Updates {
-        keys: transcode_owned(keys, &shape.0),
-        vals: transcode_owned(vals, &shape.1),
-        diffs,
+    let mut decoder = FeedDecoder::new(&shape.0, &shape.1);
+    for (key, val) in rows {
+        decoder.push(&key, Some(&val), diff).unwrap();
     }
+    decoder.finish()
 }
 
 fn updates(rows: &Rows, diff: i64) -> (Updates, Updates) {
     let nodes = columns(
         rows.nodes.iter().map(|(id, (scope, kind, pid, ops))| {
             (
-                Value::Tuple(vec![int(*id)]),
-                Value::Tuple(vec![
-                    int(*scope),
-                    int(*kind),
-                    int(*pid),
-                    Value::List(ops.iter().map(|o| int(*o)).collect()),
-                ]),
+                format!("tuple({id})"),
+                format!(
+                    "tuple({scope},{kind},{pid},list({}))",
+                    ops.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+                ),
             )
         }),
         (
@@ -402,8 +394,8 @@ fn updates(rows: &Rows, diff: i64) -> (Updates, Updates) {
     let edges = columns(
         rows.edges.iter().map(|((h, pos), (tag, a, b))| {
             (
-                Value::Tuple(vec![int(*h), int(*pos)]),
-                Value::Tuple(vec![int(*tag), int(*a), int(*b)]),
+                format!("tuple({h},{pos})"),
+                format!("tuple({tag},{a},{b})"),
             )
         }),
         (
@@ -415,23 +407,22 @@ fn updates(rows: &Rows, diff: i64) -> (Updates, Updates) {
     (nodes, edges)
 }
 
-fn ints(v: &Value) -> Vec<i64> {
-    match v {
-        Value::Tuple(xs) | Value::List(xs) => xs.iter().map(|x| x.as_int()).collect(),
-        Value::Int(n) => vec![*n],
-        other => panic!("expected ints, got {other:?}"),
-    }
+fn ints(text: &str) -> Vec<i64> {
+    text.split(|c: char| !c.is_ascii_digit() && c != '-')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().unwrap())
+        .collect()
 }
 
 fn read_result(server: &mut Server, worker: &mut timely::worker::Worker) -> Output {
     let mut nodes = HashMap::new();
-    for (k, v, d) in server.snapshot(worker, "nodes").unwrap().into_rows() {
+    for (k, v, d) in server.snapshot(worker, "nodes").unwrap().rows() {
         assert_eq!(d, 1, "node row with multiplicity {d}: {k:?} {v:?}");
-        let Value::Tuple(f) = v else { panic!() };
-        nodes.insert(ints(&k)[0], (f[1].as_int(), f[2].as_int(), ints(&f[3])));
+        let fields = ints(&v);
+        nodes.insert(ints(&k)[0], (fields[1], fields[2], fields[3..].to_vec()));
     }
     let mut edges: HashMap<i64, BTreeMap<i64, Edge>> = HashMap::new();
-    for (k, v, d) in server.snapshot(worker, "edges").unwrap().into_rows() {
+    for (k, v, d) in server.snapshot(worker, "edges").unwrap().rows() {
         assert_eq!(d, 1, "edge row with multiplicity {d}: {k:?} {v:?}");
         let k = ints(&k);
         let v = ints(&v);
