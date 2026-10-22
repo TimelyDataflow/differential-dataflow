@@ -6,17 +6,17 @@
 
 use std::collections::BTreeSet;
 
-use interactive::ir::Value;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
-fn tup(fields: &[i64]) -> Value {
-    Value::Tuple(fields.iter().copied().map(Value::Int).collect())
+/// A tuple of integers, as a feed writes it.
+fn tup(fields: &[i64]) -> String {
+    format!("tuple({})", fields.iter().map(i64::to_string).collect::<Vec<_>>().join(","))
 }
 
 /// Run `load` from a file with `body` on `workers` workers; return each
 /// worker's result and the rows worker 0 snapshots afterwards.
-fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<Value>) {
+fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<String>) {
     let dir = std::env::temp_dir().join(format!("ddir-server-load-{}-{}", std::process::id(), workers));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{}.txt", body.len()));
@@ -34,7 +34,7 @@ fn load_on(workers: usize, body: &str) -> (Vec<Result<u64, String>>, Vec<Value>)
         server.tick(worker);
         let rows = server
             .snapshot(worker, "rows")
-            .unwrap().into_rows()
+            .unwrap().rows()
             .into_iter()
             .map(|(key, _, _)| key)
             .collect::<Vec<_>>();
@@ -62,7 +62,7 @@ fn a_malformed_line_fails_the_load_on_every_worker_and_feeds_nothing() {
 fn a_well_formed_file_is_fed_exactly_once_across_workers() {
     let (outcomes, rows) = load_on(3, "1\n\n2\n3\n4\n");
     assert!(outcomes.iter().all(|o| *o == Ok(4)), "{outcomes:?}");
-    let want: BTreeSet<Value> = [tup(&[1]), tup(&[2]), tup(&[3]), tup(&[4])].into_iter().collect();
+    let want: BTreeSet<String> = [tup(&[1]), tup(&[2]), tup(&[3]), tup(&[4])].into_iter().collect();
     assert_eq!(rows.iter().cloned().collect::<BTreeSet<_>>(), want);
     assert_eq!(rows.len(), 4, "each row once: {rows:?}");
 }
@@ -70,7 +70,7 @@ fn a_well_formed_file_is_fed_exactly_once_across_workers() {
 /// `load` from a published trace on `workers` workers: `world` holds `1..=6`, `gone` holds
 /// `2, 4, 6`, and `world` is fed `gone` scaled by `-1`, then `world` scaled by `2`. Returns
 /// worker 0's snapshot of `world` as (key, multiplicity).
-fn load_trace_on(workers: usize) -> Vec<(Value, i64)> {
+fn load_trace_on(workers: usize) -> Vec<(String, i64)> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let install = |server: &mut Server, worker: &mut _, name: &str| {
             let text = format!("let rows = input 0 : ((int) ; ()); export \"{name}.rows\" = rows;");
@@ -94,7 +94,7 @@ fn load_trace_on(workers: usize) -> Vec<(Value, i64)> {
         server
             .snapshot(worker, "world.rows")
             .unwrap()
-            .into_rows()
+            .rows()
             .into_iter()
             .map(|(key, _, diff)| (key, diff))
             .collect::<Vec<_>>()

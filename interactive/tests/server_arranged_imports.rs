@@ -3,11 +3,10 @@
 //! a join inside an iterative scope, and the import read as rows, through additions and
 //! retractions of the shared trace, including for an importer installed late.
 
-use interactive::ir::Value;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
-type Snapshot = Vec<(Value, Value, i64)>;
+type Snapshot = Vec<(String, String, i64)>;
 
 const PRODUCER: &str = r#"export "edges" = input 0 : ((int, int) ; ()) | map(((src, dst), ()) -> (src, dst));"#;
 
@@ -47,7 +46,7 @@ fn root(server: &mut Server, name: &str, node: i64) {
 /// Snapshot each named export, each expected to be non-empty.
 fn take(server: &mut Server, worker: &mut timely::worker::Worker, names: &[String], snapshots: &mut Vec<Snapshot>) {
     for name in names {
-        let rows = server.snapshot(worker, name).unwrap().into_rows();
+        let rows = server.snapshot(worker, name).unwrap().rows();
         assert!(!rows.is_empty(), "export {name} is empty");
         snapshots.push(rows);
     }

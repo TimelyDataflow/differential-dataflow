@@ -280,7 +280,7 @@ impl Parser {
         if self.scope.is_none() {
             let mut scope = crate::corgi::logic::base_scope();
             for f in crate::ir::registered() {
-                scope.word(&f.name, crate::corgi::logic::function_word(&f)).unwrap_or_else(|e| panic!("{e}"));
+                scope.word(f.name(), crate::corgi::logic::function_word(&f)).unwrap_or_else(|e| panic!("{e}"));
             }
             for name in &self.type_order {
                 declare_enum(&mut scope, name, &self.types[name], &self.types);

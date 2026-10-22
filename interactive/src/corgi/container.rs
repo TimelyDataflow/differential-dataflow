@@ -1,7 +1,7 @@
 //! The corgi-native container: corgi columns for the (key,val) payload, times as a
 //! lane column, diffs a plain Rust Vec (corgi never touches the lattice). This is what flows on
 //! dataflow edges in the corgi backend; operators transform block→block via `eval_graph` with NO
-//! per-op transcode. Nothing converts between rows and columns outside tests.
+//! per-op transcode.
 //!
 //! Trait surface: `Accountable + Default + Clone` (= `timely::Container`) for dataflow edges,
 //! `Negate`/`Enter`/`Leave`/`ResultsIn` for iterative scopes, and `ContainerBytes` (in
@@ -15,10 +15,7 @@ use differential_dataflow::collection::containers::{Enter, Leave, Negate, Result
 use differential_dataflow::difference::Abelian;
 
 use crate::corgi::col_times::{ColTimes, LaneSummary, Lanes};
-use crate::corgi::logic::untranscode;
-use crate::ir::Value as DValue;
-
-type Row = DValue;
+use crate::corgi::feed::print;
 
 /// A batch of `(key, val, time, diff)` updates: payload columnar (corgi), times as lanes, diffs native Rust.
 ///
@@ -58,49 +55,27 @@ impl<T: 'static, R: 'static> Accountable for CorgiContainer<T, R> {
 }
 
 impl<T: Lanes + 'static, R: Clone + 'static> CorgiContainer<T, R> {
-    /// Test convenience: a container from DDIR row updates, at the collection's shapes.
+    /// Test convenience: a container from updates whose keys and values are written as a feed
+    /// writes them, at the collection's shapes.
     #[cfg(test)]
-    pub(crate) fn from_updates(updates: Vec<((Row, Row), T, R)>, kshape: &corgi::Shape, vshape: &corgi::Shape) -> Self {
-        let len = updates.len();
-        let (mut keys_rows, mut vals_rows) = (Vec::with_capacity(len), Vec::with_capacity(len));
-        let (mut times, mut diffs) = (ColTimes::new(), Vec::with_capacity(len));
+    pub(crate) fn from_updates(updates: Vec<((String, String), T, R)>, kshape: &corgi::Shape, vshape: &corgi::Shape) -> Self {
+        let mut decoder = crate::corgi::feed::FeedDecoder::new(kshape, vshape);
+        let (mut times, mut diffs) = (ColTimes::new(), Vec::with_capacity(updates.len()));
         for ((key, val), time, diff) in updates {
-            keys_rows.push(key);
-            vals_rows.push(val);
+            decoder.push(&key, Some(&val), 1).unwrap();
             times.push(&time);
             diffs.push(diff);
         }
-        use crate::corgi::logic::transcode_owned;
-        CorgiContainer { keys: transcode_owned(keys_rows, kshape), vals: transcode_owned(vals_rows, vshape), times, diffs }
+        let Updates { keys, vals, .. } = decoder.finish();
+        CorgiContainer { keys, vals, times, diffs }
     }
 
-    /// Test convenience: build a container from row updates, at the shapes of the first row.
+    /// Test convenience: the container's updates, their keys and values printed as a feed writes
+    /// them.
     #[cfg(test)]
-    pub(crate) fn from_updates_pinned(updates: Vec<((Row, Row), T, R)>) -> Self {
-        use crate::corgi::logic::shape_of_row;
-        let Some(((k, v), _, _)) = updates.first() else { return Self::default() };
-        let (ks, vs) = (shape_of_row(k).unwrap(), shape_of_row(v).unwrap());
-        Self::from_updates(updates, &ks, &vs)
-    }
-
-    /// Test convenience: the container's updates as DDIR rows. corgi `Value` is self-describing,
-    /// so shapes come from `shape_of_value`.
-    #[cfg(test)]
-    pub(crate) fn into_updates(self) -> Vec<((Row, Row), T, R)> {
-        if self.times.is_empty() {
-            return Vec::new();
-        }
-        let kshape = corgi::shape_of_value(&self.keys);
-        let vshape = corgi::shape_of_value(&self.vals);
-        let keys_rows = untranscode(self.keys, &kshape);
-        let vals_rows = untranscode(self.vals, &vshape);
-        keys_rows
-            .into_iter()
-            .zip(vals_rows)
-            .zip(self.times.to_vec())
-            .zip(self.diffs)
-            .map(|(((k, v), t), d)| ((k, v), t, d))
-            .collect()
+    pub(crate) fn into_updates(self) -> Vec<((String, String), T, R)> {
+        let rows = (0..self.diffs.len()).map(|i| (print(&self.keys, i), print(&self.vals, i)));
+        rows.zip(self.times.to_vec()).zip(self.diffs).map(|((row, time), diff)| (row, time, diff)).collect()
     }
 }
 
@@ -164,12 +139,9 @@ impl Updates {
         Updates { keys, vals, diffs: sums }
     }
 
-    /// The updates as rows, for tests that compare against rows.
-    pub fn into_rows(self) -> Vec<(Row, Row, crate::ir::Diff)> {
-        let (kshape, vshape) = (corgi::shape_of_value(&self.keys), corgi::shape_of_value(&self.vals));
-        let keys = untranscode(self.keys, &kshape);
-        let vals = untranscode(self.vals, &vshape);
-        keys.into_iter().zip(vals).zip(self.diffs).map(|((k, v), d)| (k, v, d)).collect()
+    /// The updates as text: each key and value as a feed writes it ([`print`]), and its diff.
+    pub fn rows(&self) -> Vec<(String, String, crate::ir::Diff)> {
+        (0..self.len()).map(|i| (print(&self.keys, i), print(&self.vals, i), self.diffs[i])).collect()
     }
 }
 

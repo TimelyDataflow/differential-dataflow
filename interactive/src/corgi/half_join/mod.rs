@@ -129,7 +129,6 @@ mod test_util {
     use timely::order::Product;
 
     use super::*;
-    use crate::ir::Value as V;
 
     /// The time `(outer, [inner])`, at scope depth one.
     pub(super) fn t(outer: u64, inner: u64) -> Time { Product::new(outer, PointStamp::new(smallvec::smallvec![inner])) }
@@ -138,7 +137,9 @@ mod test_util {
     pub(super) fn container(keys: &[i64], vals: &[i64], s: &[(i64, i64)], times: &[Time], diffs: &[Diff]) -> CC {
         CorgiContainer { keys: ints(keys), vals: CValue::Prod(vec![ints(vals), lifted(s)]), times: times.iter().cloned().collect(), diffs: diffs.to_vec() }
     }
-    pub(super) fn tup(xs: Vec<V>) -> V { V::Tuple(xs) }
+    /// A row's key or value as a feed writes it: an integer, or a tuple of them.
+    pub(super) fn int(n: i64) -> String { n.to_string() }
+    pub(super) fn tup(xs: Vec<String>) -> String { format!("tuple({})", xs.join(",")) }
 
     /// A deterministic source of small numbers.
     pub(super) struct Rng(pub(super) u64);
@@ -150,7 +151,7 @@ mod test_util {
         pub(super) fn diff(&mut self) -> Diff { if self.below(3) == 0 { -1 } else { 1 } }
     }
 
-    pub(super) fn consolidated(mut rows: Vec<((V, V), Time, Diff)>) -> Vec<((V, V), Time, Diff)> {
+    pub(super) fn consolidated(mut rows: Vec<((String, String), Time, Diff)>) -> Vec<((String, String), Time, Diff)> {
         differential_dataflow::consolidation::consolidate_updates(&mut rows);
         rows
     }

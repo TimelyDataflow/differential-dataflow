@@ -307,7 +307,6 @@ mod tests {
     use super::super::test_util::*;
     use crate::corgi::chunk::{ident, recover_key};
     use crate::corgi::container::CorgiContainer;
-    use crate::ir::Value as V;
 
     /// The batcher releases what the frontier's least element unblocks, and bounds what it keeps.
     #[test]
@@ -370,7 +369,7 @@ mod tests {
                     for entry in released {
                         let d = pending.remove(&entry).unwrap();
                         let (time, k, v) = entry;
-                        if d != 0 { expect.push(((V::Int(k), tup(vec![V::Int(v), tup(vec![V::Int(0), V::Int(0)])])), time, d)); }
+                        if d != 0 { expect.push(((int(k), tup(vec![int(v), tup(vec![int(0), int(0)])])), time, d)); }
                     }
                     assert_eq!(consolidated(got), consolidated(expect), "seed {seed}, round {round}, strict {strict}: the released updates");
                     for ((time, _, _), d) in pending.iter() {

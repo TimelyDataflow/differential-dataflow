@@ -250,7 +250,11 @@ mod test {
 
     use super::CorgiDistributor;
     use crate::corgi::container::CorgiContainer;
-    use crate::ir::{Diff, Time, Value as DValue};
+    use crate::ir::{Diff, Time};
+    use corgi::Shape;
+
+    /// An update whose key and value are written as a feed writes them.
+    type Update = ((String, String), Time, Diff);
 
     /// A pusher that keeps what it is given, so a test can inspect the partition directly.
     #[derive(Default)]
@@ -269,9 +273,10 @@ mod test {
         timely::order::Product::new(0, PointStamp::new(Default::default()))
     }
 
-    /// Partition `updates` across `peers` destinations and read each destination back as rows.
-    fn partition(updates: Vec<((DValue, DValue), Time, Diff)>, peers: usize) -> Vec<Vec<((DValue, DValue), Time, Diff)>> {
-        let mut container = CorgiContainer::<Time, Diff>::from_updates_pinned(updates);
+    /// Partition `updates`, of keys of shape `key` and `Int` values, across `peers` destinations
+    /// and read each destination back.
+    fn partition(updates: Vec<Update>, key: &Shape, peers: usize) -> Vec<Vec<Update>> {
+        let mut container = CorgiContainer::<Time, Diff>::from_updates(updates, key, &Shape::Int);
         let mut pushers: Vec<Collect<Time, Diff>> = (0..peers).map(|_| Collect::default()).collect();
         let mut distributor = CorgiDistributor::<Time, Diff>::default();
         distributor.partition(&mut container, &timely::progress::Stamp::from_elem(0u64), &mut pushers);
@@ -281,8 +286,8 @@ mod test {
             .collect()
     }
 
-    fn scalar_updates(n: i64) -> Vec<((DValue, DValue), Time, Diff)> {
-        (0..n).map(|i| ((DValue::Int(i), DValue::Int(i * 10)), time(), i)).collect()
+    fn scalar_updates(n: i64) -> Vec<Update> {
+        (0..n).map(|i| ((i.to_string(), (i * 10).to_string()), time(), i)).collect()
     }
 
     /// Nothing is lost and nothing is duplicated: the partition is a partition.
@@ -290,7 +295,7 @@ mod test {
     fn partition_preserves_every_update() {
         let updates = scalar_updates(200);
         for peers in [2, 3, 4, 8] {
-            let parts = partition(updates.clone(), peers);
+            let parts = partition(updates.clone(), &Shape::Int, peers);
             let mut got: Vec<_> = parts.into_iter().flatten().collect();
             got.sort();
             let mut want = updates.clone();
@@ -306,11 +311,12 @@ mod test {
         // Three updates per key, differing in value and diff, so a key that routed by anything
         // other than its key would scatter.
         let updates: Vec<_> = (0..100i64)
-            .flat_map(|k| (0..3i64).map(move |v| ((DValue::Tuple(vec![DValue::Int(k), DValue::Int(k / 7)]), DValue::Int(v)), time(), v + 1)))
+            .flat_map(|k| (0..3i64).map(move |v| ((format!("tuple({k},{})", k / 7), v.to_string()), time(), v + 1)))
             .collect();
+        let pair = Shape::Prod(vec![Shape::Int, Shape::Int]);
         for peers in [2, 3, 5, 8] {
-            let parts = partition(updates.clone(), peers);
-            let mut seen: std::collections::HashMap<DValue, usize> = Default::default();
+            let parts = partition(updates.clone(), &pair, peers);
+            let mut seen: std::collections::HashMap<String, usize> = Default::default();
             for (p, part) in parts.iter().enumerate() {
                 for ((k, _), _, _) in part {
                     if let Some(&q) = seen.get(k) {
@@ -328,13 +334,14 @@ mod test {
     /// a join correct, since its two inputs are separate streams.
     #[test]
     fn routing_is_independent_of_the_batch() {
-        let keys: Vec<DValue> = (0..64i64).map(|k| DValue::Tuple(vec![DValue::Int(k), DValue::Int(-k)])).collect();
-        let left: Vec<_> = keys.iter().map(|k| ((k.clone(), DValue::Int(1)), time(), 1)).collect();
+        let keys: Vec<String> = (0..64i64).map(|k| format!("tuple({k},{})", -k)).collect();
+        let left: Vec<_> = keys.iter().map(|k| ((k.clone(), "1".to_string()), time(), 1)).collect();
         // The same keys, in a different order, with different values: only the key may matter.
-        let right: Vec<_> = keys.iter().rev().map(|k| ((k.clone(), DValue::Int(2)), time(), 5)).collect();
+        let right: Vec<_> = keys.iter().rev().map(|k| ((k.clone(), "2".to_string()), time(), 5)).collect();
+        let pair = Shape::Prod(vec![Shape::Int, Shape::Int]);
         for peers in [2, 4, 7] {
-            let (lp, rp) = (partition(left.clone(), peers), partition(right.clone(), peers));
-            let dest = |parts: &Vec<Vec<((DValue, DValue), Time, Diff)>>| -> std::collections::HashMap<DValue, usize> {
+            let (lp, rp) = (partition(left.clone(), &pair, peers), partition(right.clone(), &pair, peers));
+            let dest = |parts: &Vec<Vec<Update>>| -> std::collections::HashMap<String, usize> {
                 parts.iter().enumerate().flat_map(|(p, part)| part.iter().map(move |((k, _), _, _)| (k.clone(), p))).collect()
             };
             assert_eq!(dest(&lp), dest(&rp), "peers = {peers}");
@@ -346,8 +353,8 @@ mod test {
     /// would do.
     #[test]
     fn strided_keys_still_spread() {
-        let updates: Vec<_> = (0..400i64).map(|i| ((DValue::Int(i * 8), DValue::Int(i)), time(), 1)).collect();
-        let parts = partition(updates, 8);
+        let updates: Vec<_> = (0..400i64).map(|i| (((i * 8).to_string(), i.to_string()), time(), 1)).collect();
+        let parts = partition(updates, &Shape::Int, 8);
         for (p, part) in parts.iter().enumerate() {
             assert!(!part.is_empty(), "destination {p} got nothing from 400 strided keys");
         }
@@ -357,7 +364,7 @@ mod test {
     /// either way so no row is sent twice.
     #[test]
     fn the_input_is_consumed() {
-        let mut container = CorgiContainer::<Time, Diff>::from_updates_pinned(scalar_updates(50));
+        let mut container = CorgiContainer::<Time, Diff>::from_updates(scalar_updates(50), &Shape::Int, &Shape::Int);
         let mut pushers: Vec<Collect<Time, Diff>> = (0..4).map(|_| Collect::default()).collect();
         let mut distributor = CorgiDistributor::<Time, Diff>::default();
         distributor.partition(&mut container, &timely::progress::Stamp::from_elem(0u64), &mut pushers);

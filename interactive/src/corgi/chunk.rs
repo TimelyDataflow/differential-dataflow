@@ -523,7 +523,7 @@ where
 }
 
 /// A column-native arrange **chunker**: turns input `CorgiContainer`s into sorted+consolidated
-/// `CorgiChunk`s WITHOUT `ContainerChunker`'s drain-to-rows (which untranscodes). Paired with the
+/// `CorgiChunk`s WITHOUT `ContainerChunker`'s drain-to-rows. Paired with the
 /// standard `ChunkBatcher`/`ChunkBuilder`, the arrange ingest stays column-native — no
 /// columns→rows→columns round-trip at the arrangement boundary.
 ///

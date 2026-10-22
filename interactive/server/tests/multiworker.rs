@@ -57,9 +57,9 @@ fn request(
 /// The updates of a binary `data` frame, each as a line: `[time=<t> ]diff=<d> key=<k> val=<v>`.
 fn frame_rows(bytes: &[u8]) -> Vec<String> {
     let (updates, lanes) = interactive::corgi::frame::decode(bytes).unwrap();
-    updates.into_rows().into_iter().enumerate().map(|(i, (key, val, diff))| {
+    updates.rows().into_iter().enumerate().map(|(i, (key, val, diff))| {
         let time = lanes.first().map_or(String::new(), |lane| format!("time={} ", lane[i]));
-        format!("{time}diff={diff} key={key:?} val={val:?}")
+        format!("{time}diff={diff} key={key} val={val}")
     }).collect()
 }
 
@@ -184,8 +184,8 @@ fn assert_commands_replay() {
     assert_eq!(
         rows,
         vec![
-            "diff=1 key=Tuple([Int(7)]) val=Tuple([Int(3)])",
-            "diff=1 key=Tuple([Int(7)]) val=Tuple([Int(9)])",
+            "diff=1 key=tuple(7) val=tuple(3)",
+            "diff=1 key=tuple(7) val=tuple(9)",
         ]
     );
     // The text form is one line of the answer's columns, as corgi shows them.
@@ -194,7 +194,7 @@ fn assert_commands_replay() {
     let minimum = request(&mut writer, &mut reader, "r5", "r5 peek minimum as corgi\n");
     assert_eq!(
         minimum,
-        vec!["diff=1 key=Tuple([Int(7)]) val=Tuple([Int(3)])"]
+        vec!["diff=1 key=tuple(7) val=tuple(3)"]
     );
 
     request(&mut writer, &mut reader, "r6", "r6 tail rows as corgi\n");
@@ -220,7 +220,7 @@ fn assert_commands_replay() {
             tail_update.extend(frame_rows(payload));
         }
     });
-    assert_eq!(tail_update, vec!["time=1 diff=1 key=Tuple([Int(8)]) val=Tuple([Int(10)])"]);
+    assert_eq!(tail_update, vec!["time=1 diff=1 key=tuple(8) val=tuple(10)"]);
 
     // Server-side sourcing: every worker feeds its shard of the recipe, so the
     // union is the source exactly once however many workers there are. Its own
@@ -239,7 +239,7 @@ fn assert_commands_replay() {
     assert_eq!(
         rows,
         (0..5)
-            .map(|n| format!("diff=1 key=Tuple([Int({n})]) val=Tuple([])"))
+            .map(|n| format!("diff=1 key=tuple({n}) val=tuple()"))
             .collect::<Vec<_>>()
     );
 
@@ -263,12 +263,12 @@ fn assert_typed_sources() {
     request(&mut writer, &mut reader, "f", "f feed graph 0 tuple(1,list(),inject(0,tuple()))\n");
     request(&mut writer, &mut reader, "t", "t tick\n");
     assert_eq!(request(&mut writer, &mut reader, "p", "p peek typed.copy as corgi\n"),
-        vec!["diff=1 key=Tuple([Int(1), List([]), Variant(0, Tuple([]))]) val=Tuple([])"]);
+        vec!["diff=1 key=tuple(1,list(),inject(0,tuple())) val=tuple()"]);
     request(&mut writer, &mut reader, "f2", "f2 feed graph 0 tuple(2,list(97),inject(1,list()))\n");
     request(&mut writer, &mut reader, "f3", "f3 feed graph 0 tuple(1,list(),inject(0,tuple())) diff=-1\n");
     request(&mut writer, &mut reader, "t2", "t2 tick\n");
     assert_eq!(request(&mut writer, &mut reader, "p2", "p2 peek typed.copy as corgi\n"),
-        vec!["diff=1 key=Tuple([Int(2), List([Int(97)]), Variant(1, List([]))]) val=Tuple([])"]);
+        vec!["diff=1 key=tuple(2,list(97),inject(1,list())) val=tuple()"]);
     drop(reader);
     drop(writer);
     server.stop();
@@ -326,7 +326,7 @@ fn assert_shared_import_requests(workers: usize) {
     );
     request(&mut writer, &mut reader, "f", "f feed b 0 20,2\n");
     request(&mut writer, &mut reader, "t", "t tick\n");
-    let answer = |rid, node| format!("diff=1 key=Tuple([Int({rid})]) val=Tuple([Int({node})])");
+    let answer = |rid, node| format!("diff=1 key=tuple({rid}) val=tuple({node})");
     assert_eq!(
         request(&mut writer, &mut reader, "p", "p peek a.answer as corgi\n"),
         vec![answer(10, 2), answer(10, 3), answer(11, 2), answer(11, 3)]
@@ -413,7 +413,6 @@ fn keep_frame(frames: &mut Vec<(String, Vec<u8>)>, reqid: &str, line: &str, payl
 /// it has sent. Lists and sums included.
 fn assert_tail_frames_sum_to_peeks(workers: usize) {
     use interactive::corgi::frame;
-    use interactive::ir::Value;
     use std::collections::BTreeMap;
     let (server, mut writer, mut reader) = start_server(workers);
     request(&mut writer, &mut reader, "g", "g load graph begin\nlet rows = input 0 : ((int, List(int)) ; Option(int));\nexport \"rows\" = rows | arrange;\ng end-load\n");
@@ -426,9 +425,9 @@ fn assert_tail_frames_sum_to_peeks(workers: usize) {
     for (round, feed) in feeds.into_iter().enumerate() {
         request(&mut writer, &mut reader, "f", &format!("f feed graph 0 begin\n{feed}\nf end-feed\n"));
         request_observing(&mut writer, &mut reader, "t", "t tick\n", |line, payload| keep_frame(&mut frames, "w", line, payload));
-        let mut changes: BTreeMap<(Value, Value), i64> = BTreeMap::new();
+        let mut changes: BTreeMap<(String, String), i64> = BTreeMap::new();
         for (_, payload) in frames.iter().filter(|f| f.0 == "data") {
-            for (key, val, diff) in frame::decode(payload).unwrap().0.into_rows() {
+            for (key, val, diff) in frame::decode(payload).unwrap().0.rows() {
                 *changes.entry((key, val)).or_insert(0) += diff;
             }
         }
@@ -436,7 +435,7 @@ fn assert_tail_frames_sum_to_peeks(workers: usize) {
         let mut peeked = Vec::new();
         request_observing(&mut writer, &mut reader, "p", "p peek rows as corgi\n", |line, payload| keep_frame(&mut peeked, "p", line, payload));
         let (updates, _) = frame::decode(&peeked.iter().find(|f| f.0 == "data").unwrap().1).unwrap();
-        let answer: BTreeMap<(Value, Value), i64> = updates.into_rows().into_iter().map(|(k, v, d)| ((k, v), d)).collect();
+        let answer: BTreeMap<(String, String), i64> = updates.rows().into_iter().map(|(k, v, d)| ((k, v), d)).collect();
         assert_eq!(changes, answer, "round {round}, {workers} workers");
         let upper = frames.iter().rev().find(|f| f.0 == "progress").map(|f| u64::from_le_bytes(f.1[..8].try_into().unwrap()));
         assert_eq!(upper, Some(round as u64 + 2), "round {round}: every change before the epoch has been sent");

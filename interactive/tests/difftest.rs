@@ -47,7 +47,6 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use interactive::ir::Value;
 use interactive::scope_ir::Program;
 use interactive::server::{self, Server};
 use interactive::{explain, lower, parse};
@@ -850,7 +849,8 @@ fn feeds(rng: &mut Rng, shapes: &[(Sh, Sh)]) -> Vec<BTreeMap<usize, Vec<String>>
 
 // ===== Running =====
 
-type Rows = Vec<(Value, Value, i64)>;
+/// Rows, each key and value as a feed writes it.
+type Rows = Vec<(String, String, i64)>;
 type Exports = BTreeMap<String, Rows>;
 
 /// Parse, lower, and (when `optimize`) optimize `src`. Parse errors are panics in the parser.
@@ -953,17 +953,17 @@ fn run_bound(programs: &[(String, Program, usize)], binds: &[(String, usize)], w
                     taken.extend(server.take_changes(name).into_iter().map(|c| interactive::corgi::container::Updates { keys: c.keys, vals: c.vals, diffs: c.diffs }));
                     let shape = (corgi::shape_of_value(&updates.keys), corgi::shape_of_value(&updates.vals));
                     let summed = interactive::corgi::container::Updates::consolidate(taken.clone(), &shape);
-                    if sorted(summed.clone().into_rows()) != sorted(updates.clone().into_rows()) {
-                        return Err(format!("round trip of {name:?}: taps sum to {:?}, not the contents {:?}", summed.into_rows(), updates.clone().into_rows()));
+                    if sorted(summed.clone().rows()) != sorted(updates.clone().rows()) {
+                        return Err(format!("round trip of {name:?}: taps sum to {:?}, not the contents {:?}", summed.rows(), updates.clone().rows()));
                     }
-                    let rows = updates.clone().into_rows();
+                    let rows = updates.clone().rows();
                     if let Some((key, _, _)) = rows.first().filter(|(k, _, _)| finite(k)) {
-                        let peeked = sorted(server.peek(worker, name, Some(&feed_text(key)))?.into_rows());
+                        let peeked = sorted(server.peek(worker, name, Some(key))?.rows());
                         let want: Rows = sorted(rows.iter().filter(|(k, _, _)| k == key).cloned().collect());
                         if peeked != want { return Err(format!("round trip of {name:?}: peek at {key:?} gave {peeked:?}, not {want:?}")); }
                     }
                 }
-                now.insert(name.clone(), sorted(updates.into_rows()));
+                now.insert(name.clone(), sorted(updates.rows()));
             }
             seen.push(now);
         }
@@ -989,37 +989,30 @@ fn scratch(p: &Program, case: &Case) -> Result<Vec<Exports>, String> {
         let p = p.clone();
         let acc = accumulated.clone();
         let out = quietly(move || server::evaluate(timely::Config::process(1), &p, &acc))?;
-        seen.push(out.into_iter().map(|(name, updates)| (name, sorted(updates.into_rows()))).collect());
+        seen.push(out.into_iter().map(|(name, updates)| (name, sorted(updates.rows()))).collect());
     }
     Ok(seen)
 }
 
 fn sorted(mut rows: Rows) -> Rows { rows.sort(); rows }
 
-/// Whether `v` holds no NaN or infinity, which feed text cannot write.
-fn finite(v: &Value) -> bool {
-    match v {
-        Value::Float(x) => x.0.is_finite(),
-        Value::Tuple(xs) | Value::List(xs) => xs.iter().all(finite),
-        Value::Variant(_, p) => finite(p),
-        Value::Int(_) => true,
-    }
-}
+/// Whether `v` holds no NaN or infinity, which feed text cannot read.
+fn finite(v: &str) -> bool { !v.contains("NaN") && !v.contains("inf") }
 
 /// A snapshot survives a binary frame, and its rows written as feed text read back at its shapes.
 fn round_trips(updates: &interactive::corgi::container::Updates) -> Result<(), String> {
     let lanes = vec![vec![7u64; updates.len()]];
     let (back, times) = interactive::corgi::frame::decode(&interactive::corgi::frame::encode(updates, &lanes))?;
     if back != *updates || times != lanes { return Err(format!("frame: {updates:?} came back as {back:?}")); }
-    let rows = updates.clone().into_rows();
+    let rows = updates.clone().rows();
     // Feed text writes no NaN or infinity.
     if !rows.iter().all(|(k, v, _)| finite(k) && finite(v)) { return Ok(()); }
     let (keys, vals) = (corgi::shape_of_value(&updates.keys), corgi::shape_of_value(&updates.vals));
     let mut decoder = interactive::corgi::feed::FeedDecoder::new(&keys, &vals);
     for (k, v, d) in &rows {
-        decoder.push(&feed_text(k), Some(&feed_text(v)), *d)?;
+        decoder.push(k, Some(v), *d)?;
     }
-    let read = decoder.finish().into_rows();
+    let read = decoder.finish().rows();
     if read != rows { return Err(format!("feed text: {rows:?} read back as {read:?}")); }
     Ok(())
 }
@@ -1082,7 +1075,7 @@ fn bound(case: &Case) -> Option<(String, String, Vec<(String, usize)>, usize)> {
 /// that the other does not, in feed syntax.
 fn differ(a: &[Exports], b: &[Exports]) -> Option<String> {
     let only = |p: &Rows, q: &Rows| -> String {
-        let lines: Vec<String> = p.iter().filter(|r| !q.contains(r)).map(|(k, v, d)| format!("{} val={} diff={d}", feed_text(k), feed_text(v))).collect();
+        let lines: Vec<String> = p.iter().filter(|r| !q.contains(r)).map(|(k, v, d)| format!("{k} val={v} diff={d}")).collect();
         if lines.is_empty() { "nothing".into() } else { lines.join(" | ") }
     };
     for (epoch, (x, y)) in a.iter().zip(b).enumerate() {
@@ -1248,20 +1241,20 @@ fn explain_check(case: &Case, opt: &Program, base: &[Exports]) -> Result<(), Str
     for (q, (k, v, _)) in result.iter().filter(|(k, v, _)| finite(k) && finite(v)).enumerate().take(6) {
         let mut ex_inputs: Vec<Vec<String>> = acc.iter().map(feed_of).collect();
         ex_inputs.resize(query_input, Vec::new());
-        ex_inputs.push(vec![format!("{} val={}", feed_text(k), feed_text(&Value::Tuple(vec![v.clone(), Value::Int(q as i64)])))]);
+        ex_inputs.push(vec![format!("{k} val=tuple({v},{q})")]);
         let ex2 = ex.clone();
         let out = quietly(move || server::evaluate(timely::Config::process(1), &ex2, &ex_inputs)).map_err(|e| format!("explained program panicked: {e}"))?;
         // Restrict each input to its demanded rows, at their multiplicities.
         let mut restricted: Vec<Vec<String>> = Vec::new();
         for (i, rows) in acc.iter().enumerate() {
             if !used.contains(&i) { restricted.push(Vec::new()); continue; }
-            let demand = out.get(&format!("demand:input{i}")).map(|u| u.clone().into_rows()).unwrap_or_default();
+            let demand = out.get(&format!("demand:input{i}")).map(|u| u.clone().rows()).unwrap_or_default();
             let wanted: std::collections::BTreeSet<String> = demand.iter().map(|(dk, dv, _)| row_text(dk, dv, inputs.iter().find(|(n, _, _)| *n == i).expect("a demanded input is declared"))).collect();
             restricted.push(rows.iter().filter(|(r, d)| **d != 0 && wanted.contains(*r)).map(|(r, d)| format!("{r} diff={d}")).collect());
         }
         let p = opt.clone();
         let replay = quietly(move || server::evaluate(timely::Config::process(1), &p, &restricted)).map_err(|e| format!("replay panicked: {e}"))?;
-        let rows = replay["result"].clone().into_rows();
+        let rows = replay["result"].clone().rows();
         if !rows.iter().any(|(k2, v2, d)| k2 == k && v2 == v && *d > 0) {
             return Err(format!("explanation of {k:?} {v:?} does not regenerate it; replay {rows:?}"));
         }
@@ -1269,25 +1262,10 @@ fn explain_check(case: &Case, opt: &Program, base: &[Exports]) -> Result<(), Str
     Ok(())
 }
 
-/// A row as its feed line (without a diff), as `feeds` writes it.
-fn row_text(k: &Value, v: &Value, input: &(usize, Sh, Sh)) -> String {
-    let flat = |x: &Value| match x {
-        Value::Tuple(xs) => xs.iter().map(feed_text).collect::<Vec<_>>().join(","),
-        other => feed_text(other),
-    };
+/// A row as its feed line (without a diff), as `feeds` writes it: a tuple's wrapper left off.
+fn row_text(k: &str, v: &str, input: &(usize, Sh, Sh)) -> String {
+    let flat = |x: &str| x.strip_prefix("tuple(").and_then(|x| x.strip_suffix(')')).map_or(x.to_string(), str::to_string);
     if input.2 == Sh::Unit { flat(k) } else { format!("{} val={}", flat(k), flat(v)) }
-}
-
-/// A value in the feed syntax.
-fn feed_text(value: &Value) -> String {
-    let all = |xs: &[Value]| xs.iter().map(feed_text).collect::<Vec<_>>().join(",");
-    match value {
-        Value::Int(n) => n.to_string(),
-        Value::Float(x) => format!("{:?}", x.0),
-        Value::Tuple(xs) => format!("tuple({})", all(xs)),
-        Value::List(xs) => format!("list({})", all(xs)),
-        Value::Variant(lane, payload) => format!("inject({lane},{})", feed_text(payload)),
-    }
 }
 
 /// A case as [`Case::describe`] writes it: the program, then `-- epoch E, input I: line | line`.

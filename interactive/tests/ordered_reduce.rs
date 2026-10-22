@@ -1,33 +1,46 @@
 //! Ordered proxies must preserve signed, ragged values and retractions through every reducer.
 //!
-//! The reference is computed here from the keyed input's net contents, by the reducers'
-//! definitions: each key's values with non-zero net multiplicity, in value order.
+//! The reference is computed here from the input's net contents, held as Rust values (whose order
+//! is corgi's for these shapes), by the reducers' definitions: each key's values with non-zero net
+//! multiplicity, in value order. Rows compare as a feed writes them.
 use std::collections::BTreeMap;
 
-use interactive::ir::Value as V;
 use interactive::server::Server;
 
-type Rows = Vec<(V, V, i64)>;
+type Rows = Vec<(String, String, i64)>;
 
-/// What reducer `name` makes of a collection whose net contents are `keyed`.
-fn reference(name: &str, keyed: &Rows) -> Rows {
-    let mut groups: BTreeMap<&V, Vec<(&V, i64)>> = BTreeMap::new();
-    for (k, v, d) in keyed {
+fn join<T>(xs: impl IntoIterator<Item = T>, show: impl Fn(T) -> String) -> String {
+    xs.into_iter().map(show).collect::<Vec<_>>().join(",")
+}
+
+/// What reducer `name` makes of a collection whose net contents are `net`, its keys and values
+/// written by `key` and `val`.
+fn reference<K: Ord, V: Ord>(name: &str, net: &BTreeMap<(K, V), i64>, key: impl Fn(&K) -> String, val: impl Fn(&V) -> String) -> Rows {
+    let mut groups: BTreeMap<&K, Vec<(&V, i64)>> = BTreeMap::new();
+    for ((k, v), d) in net {
         if *d != 0 { groups.entry(k).or_default().push((v, *d)); }
     }
-    let mut out: Rows = groups.into_iter().filter_map(|(k, mut vals)| {
-        vals.sort();
-        let val = match name {
-            "minimum" => vals[0].0.clone(),
-            "distinct" => V::unit(),
-            "counted" => match vals.iter().map(|(_, d)| d).sum::<i64>() { 0 => return None, n => V::Int(n) },
-            "collected" => V::List(vals.iter().flat_map(|(v, d)| std::iter::repeat_n((*v).clone(), (*d).max(0) as usize)).collect()),
+    sorted(groups.into_iter().filter_map(|(k, vals)| {
+        let out = match name {
+            "minimum" => val(vals[0].0),
+            "distinct" => "tuple()".to_string(),
+            "counted" => match vals.iter().map(|(_, d)| d).sum::<i64>() { 0 => return None, n => n.to_string() },
+            "collected" => format!("list({})", join(vals.iter().flat_map(|(v, d)| std::iter::repeat_n(*v, (*d).max(0) as usize)), &val)),
             other => panic!("no reference for {other}"),
         };
-        Some((k.clone(), val, 1))
-    }).collect();
-    out.sort();
-    out
+        Some((key(k), out, 1))
+    }).collect())
+}
+
+/// `net` plus `(row, diff)`, keeping only rows of non-zero multiplicity.
+fn apply<R: Ord>(net: &mut BTreeMap<R, i64>, row: R, diff: i64) {
+    *net.entry(row).or_default() += diff;
+    net.retain(|_, d| *d != 0);
+}
+
+/// `net`'s rows, as a snapshot gives them.
+fn rows<K, V>(net: &BTreeMap<(K, V), i64>, key: impl Fn(&K) -> String, val: impl Fn(&V) -> String) -> Rows {
+    sorted(net.iter().map(|((k, v), d)| (key(k), val(v), *d)).collect())
 }
 
 fn sorted(mut rows: Rows) -> Rows { rows.sort(); rows }
@@ -49,6 +62,8 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
         program.optimize();
         let mut col = Server::new();
         col.install(worker, "col", &program).unwrap();
+        let (key, val) = (|k: &i64| k.to_string(), |(n, xs): &(i64, Vec<i64>)| format!("tuple({n},list({}))", join(xs, i64::to_string)));
+        let mut net = BTreeMap::new();
         let update = |k: i64, n: i64, xs: &[i64], diff: i64| (k, n, xs.to_vec(), diff);
         // An update as a feed line: `tuple(k,n,list(xs)) diff=d`.
         let line = |(k, n, xs, diff): &(i64, i64, Vec<i64>, i64)| {
@@ -81,10 +96,11 @@ fn ordered_min_collect_and_batched_reconciliation_match_their_definitions() {
             for chunk in updates.chunks(2) {
                 col.feed("col", 0, &chunk.iter().map(line).collect::<Vec<_>>().join("\n"), None).unwrap();
             }
+            for (k, n, xs, diff) in updates { apply(&mut net, (k, (n, xs)), diff) }
             col.tick(worker);
-            let keyed = col.snapshot(worker, "keyed").unwrap().into_rows();
+            assert_eq!(sorted(col.snapshot(worker, "keyed").unwrap().rows()), rows(&net, key, val));
             for name in ["minimum", "collected", "counted", "distinct"] {
-                assert_eq!(sorted(col.snapshot(worker, name).unwrap().into_rows()), reference(name, &keyed), "{name}");
+                assert_eq!(sorted(col.snapshot(worker, name).unwrap().rows()), reference(name, &net, key, val), "{name}");
             }
         }
         for name in ["minimum", "collected", "counted", "distinct"] {
@@ -107,13 +123,16 @@ fn batched_equality_spans_windows_and_retracts_compound_keys() {
         program.optimize();
         let mut col = Server::new();
         col.install(worker, "col", &program).unwrap();
+        let (key, val) = (|(k, k7): &(i64, i64)| format!("tuple({k},{k7})"), |xs: &Vec<i64>| format!("list({})", join(xs, i64::to_string)));
+        let mut net = BTreeMap::new();
         for diff in [1, 1, -2] {
             let updates: Vec<String> = (-2500..2500).map(|k| format!("tuple({k},list({k},{},{})) diff={diff}", -k, k + 1)).collect();
             col.feed("col", 0, &updates.join("\n"), None).unwrap();
+            for k in -2500..2500 { apply(&mut net, ((k, k * 7), vec![k, -k, k + 1]), diff) }
             col.tick(worker);
-            let keyed = col.snapshot(worker, "keyed").unwrap().into_rows();
+            assert_eq!(sorted(col.snapshot(worker, "keyed").unwrap().rows()), rows(&net, key, val));
             for name in ["minimum", "collected", "counted"] {
-                assert_eq!(sorted(col.snapshot(worker, name).unwrap().into_rows()), reference(name, &keyed), "{name}, diff={diff}");
+                assert_eq!(sorted(col.snapshot(worker, name).unwrap().rows()), reference(name, &net, key, val), "{name}, diff={diff}");
             }
         }
         for name in ["minimum", "collected", "counted"] { assert!(col.snapshot(worker, name).unwrap().is_empty()); }

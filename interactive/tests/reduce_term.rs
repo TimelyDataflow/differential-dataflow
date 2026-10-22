@@ -1,7 +1,6 @@
 //! `reduce(lambda)`: the prefab reducers written as lambdas reduce as the prefabs do, across
 //! workers, as inputs are added and retracted.
 
-use interactive::ir::Value;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -28,7 +27,7 @@ fn feeds(tick: i64) -> Vec<(i64, i64, i64)> {
 }
 
 /// Every export, read after each tick.
-fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
+fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
     let names = ["count", "count_lambda", "distinct", "distinct_lambda", "min", "min_lambda", "sum"];
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
@@ -44,7 +43,7 @@ fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
             }
             server.tick(worker);
             for name in names {
-                seen.push(server.snapshot(worker, name).unwrap().into_rows());
+                seen.push(server.snapshot(worker, name).unwrap().rows());
             }
         }
         seen

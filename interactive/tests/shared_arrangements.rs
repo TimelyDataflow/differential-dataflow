@@ -5,7 +5,6 @@
 //! at every epoch while edges come and go, and at several workers. The loops
 //! read the shared traces at iteration times, so this also checks that their compaction
 //! requests are sound for the parent's arrangement.
-use interactive::ir::Value;
 use interactive::scope_ir::{Item, Node, Program, Ref, Scope, Source};
 use interactive::server::Server;
 use interactive::{lower, parse};
@@ -52,7 +51,7 @@ fn churn(epochs: usize) -> Vec<String> {
 }
 
 /// The export `result` after each epoch, read at worker 0.
-fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(Value, Value, i64)>> {
+fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(String, String, i64)>> {
     let (program, epochs) = (program.clone(), epochs.to_vec());
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
@@ -62,7 +61,7 @@ fn run(workers: usize, program: &Program, epochs: &[String]) -> Vec<Vec<(Value, 
             let mine = if worker.index() == 0 { batch.as_str() } else { "" };
             server.feed("p", 0, mine, None).unwrap();
             server.tick(worker);
-            let mut rows = server.snapshot(worker, "result").unwrap().into_rows();
+            let mut rows = server.snapshot(worker, "result").unwrap().rows();
             rows.sort();
             seen.push(rows);
         }

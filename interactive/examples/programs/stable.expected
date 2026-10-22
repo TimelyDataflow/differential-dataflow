@@ -1,1 +1,1 @@
-result ((Tuple([]), Tuple([])), 2)
+result tuple() tuple() 2

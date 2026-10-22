@@ -141,7 +141,9 @@ mod test {
     use timely::dataflow::channels::ContainerBytes;
 
     use crate::corgi::container::CorgiContainer;
-    use crate::ir::{Diff, Time, Value as DValue};
+    use crate::ir::{Diff, Time};
+
+    type Update = ((String, String), Time, Diff);
 
     /// Serialize through the same two-step timely uses (size, then write) and decode the result,
     /// checking that the promised size is the size delivered.
@@ -165,37 +167,36 @@ mod test {
     /// mixed into a single container: scalars (a bare leaf), tuples (a `Prod`), lists (a `List`,
     /// including an empty row), variants (a `Sum`, with per-arm payload shapes), and the nesting
     /// that puts one inside another.
-    fn shape_families() -> Vec<(&'static str, Vec<((DValue, DValue), Time, Diff)>)> {
-        use DValue::*;
+    fn shape_families() -> Vec<(&'static str, Vec<Update>)> {
+        let rows = |rows: &[(&str, &str, Time, Diff)]| rows.iter().map(|(k, v, t, d)| ((k.to_string(), v.to_string()), t.clone(), *d)).collect();
         vec![
-            ("scalars", vec![
-                ((Int(7), Int(1)), time(0, &[]), 1),
-                ((Int(-3), Int(9)), time(1, &[2]), -4),
-                ((Int(i64::MIN), Int(i64::MAX)), time(0, &[1, 1]), 7),
-            ]),
-            ("tuples", vec![
-                ((Tuple(vec![Int(1), Int(2)]), Tuple(vec![Int(3)])), time(2, &[]), 2),
-                ((Tuple(vec![Int(1), Int(3)]), Tuple(vec![Int(-3)])), time(0, &[0]), -1),
-            ]),
-            ("lists", vec![
-                ((Int(1), List(vec![Int(3), Int(4), Int(5)])), time(0, &[]), 1),
-                ((Int(2), List(vec![])), time(0, &[7]), -2),
-                ((Int(3), List(vec![Int(6)])), time(1, &[]), 3),
-            ]),
-            ("variants", vec![
-                ((Variant(0, Box::new(Int(11))), Int(0)), time(3, &[7, 7]), 5),
-                ((Variant(1, Box::new(Tuple(vec![Int(2), Int(3)]))), Int(1)), time(0, &[]), 1),
-                ((Variant(0, Box::new(Int(12))), Int(2)), time(0, &[]), -1),
-            ]),
-            ("nested", vec![
-                ((Tuple(vec![Int(1), Variant(0, Box::new(Int(5)))]), List(vec![Int(1), Int(2)])), time(0, &[]), 1),
-                ((Tuple(vec![Int(2), Variant(1, Box::new(Tuple(vec![Int(6), Int(7)])))]), List(vec![Int(3)])), time(1, &[1]), -1),
-            ]),
+            ("scalars", rows(&[
+                ("7", "1", time(0, &[]), 1),
+                ("-3", "9", time(1, &[2]), -4),
+                (&i64::MIN.to_string(), &i64::MAX.to_string(), time(0, &[1, 1]), 7),
+            ])),
+            ("tuples", rows(&[
+                ("tuple(1,2)", "tuple(3)", time(2, &[]), 2),
+                ("tuple(1,3)", "tuple(-3)", time(0, &[0]), -1),
+            ])),
+            ("lists", rows(&[
+                ("1", "list(3,4,5)", time(0, &[]), 1),
+                ("2", "list()", time(0, &[7]), -2),
+                ("3", "list(6)", time(1, &[]), 3),
+            ])),
+            ("variants", rows(&[
+                ("inject(0,11)", "0", time(3, &[7, 7]), 5),
+                ("inject(1,tuple(2,3))", "1", time(0, &[]), 1),
+                ("inject(0,12)", "2", time(0, &[]), -1),
+            ])),
+            ("nested", rows(&[
+                ("tuple(1,inject(0,5))", "list(1,2)", time(0, &[]), 1),
+                ("tuple(2,inject(1,tuple(6,7)))", "list(3)", time(1, &[1]), -1),
+            ])),
         ]
     }
 
-    /// The declared shapes of each family — what a program's schema would pin (a variant carries
-    /// only its tag, so a family with sums cannot be pinned from a row).
+    /// The declared shapes of each family: what a program's schema would pin.
     fn shapes_of(name: &str) -> (corgi::Shape, corgi::Shape) {
         use corgi::Shape::{Int, List, Prod, Sum};
         let u = || Int;
@@ -210,7 +211,7 @@ mod test {
         }
     }
 
-    fn container_of(name: &str, updates: Vec<((DValue, DValue), Time, Diff)>) -> CorgiContainer<Time, Diff> {
+    fn container_of(name: &str, updates: Vec<Update>) -> CorgiContainer<Time, Diff> {
         let (k, v) = shapes_of(name);
         CorgiContainer::from_updates(updates, &k, &v)
     }
@@ -253,10 +254,8 @@ mod test {
     /// for. (Times and diffs are genuinely per-row data and are counted separately.)
     #[test]
     fn key_columns_cost_their_payload() {
-        let updates: Vec<_> = (0..1000i64)
-            .map(|i| ((DValue::Int(i), DValue::Int(i * 2)), time(0, &[]), 1))
-            .collect();
-        let c = CorgiContainer::<Time, Diff>::from_updates_pinned(updates);
+        let updates = (0..1000i64).map(|i| ((i.to_string(), (i * 2).to_string()), time(0, &[]), 1)).collect();
+        let c = CorgiContainer::<Time, Diff>::from_updates(updates, &corgi::Shape::Int, &corgi::Shape::Int);
         assert_eq!(corgi::bytes::length_in_bytes(&c.keys), 24 + 8 * 1000);
         assert_eq!(corgi::bytes::length_in_bytes(&c.vals), 24 + 8 * 1000);
     }

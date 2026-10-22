@@ -24,20 +24,8 @@ pub fn hash_u64(index: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// Generate one row: a key `Tuple` of `arity` hash-derived `Int`s (each of
-/// magnitude < nodes) and an empty-tuple value.
-pub fn gen_row(edge_index: u64, nodes: u64, arity: usize) -> (ir::Value, ir::Value) {
-    gen_row_seeded(0, edge_index, nodes, arity)
-}
-
-/// As [`gen_row`], but mixes a `seed` so distinct seeds give distinct graphs.
-/// `seed == 0` reproduces [`gen_row`] exactly.
-pub fn gen_row_seeded(seed: u64, edge_index: u64, nodes: u64, arity: usize) -> (ir::Value, ir::Value) {
-    let fields = (0..arity).map(|col| ir::Value::Int(gen_field_seeded(seed, edge_index, nodes, col))).collect();
-    (ir::Value::Tuple(fields), ir::Value::unit())
-}
-
-/// Field `col` of the row [`gen_row_seeded`] generates.
+/// Field `col` of generated row `edge_index`: a hash-derived `Int` of magnitude below `nodes`.
+/// Distinct seeds give distinct graphs.
 pub fn gen_field_seeded(seed: u64, edge_index: u64, nodes: u64, col: usize) -> i64 {
     let base = edge_index.wrapping_mul(31).wrapping_add(seed.wrapping_mul(0x9e3779b97f4a7c15));
     (hash_u64(base.wrapping_add(col as u64)) % nodes) as i64

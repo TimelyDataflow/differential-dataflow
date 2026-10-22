@@ -1,2 +1,2 @@
-result ((Int(1), List([Tuple([Int(0), Int(1)]), Tuple([Int(1), Int(2)]), Tuple([Int(2), Int(3)])])), 1)
-result ((Int(3), List([Tuple([Int(0), Int(3)]), Tuple([Int(1), Int(4)]), Tuple([Int(2), Int(7)])])), 1)
+result 1 list(tuple(0,1),tuple(1,2),tuple(2,3)) 1
+result 3 list(tuple(0,3),tuple(1,4),tuple(2,7)) 1

@@ -2,7 +2,6 @@
 //! number of workers: through `snapshot`, through a program's `import`, and through `bind`, across
 //! ticks of churn.
 
-use interactive::ir::Value;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
@@ -46,7 +45,7 @@ const MIRROR: &str = r#"
 "#;
 
 /// Everything the server can read back, after the same installs, loads, feeds, and ticks.
-fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
+fn run(workers: usize) -> Vec<Vec<(String, String, i64)>> {
     let guards = timely::execute(timely::Config::process(workers), move |worker| {
         let mut server = Server::new();
         install(&mut server, worker, "sources", SOURCES);
@@ -65,7 +64,7 @@ fn run(workers: usize) -> Vec<Vec<(Value, Value, i64)>> {
             }
             server.tick(worker);
             for name in [RANDOM, "iota:12", "clock", "degrees", "small", "now", "sums", "doubled", "mirror"] {
-                seen.push(server.snapshot(worker, name).unwrap().into_rows());
+                seen.push(server.snapshot(worker, name).unwrap().rows());
             }
         }
         seen

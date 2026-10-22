@@ -6,12 +6,12 @@
 //! because `tick` drains the bound export's changes back into the feedback
 //! input. See the `Binding` docs for the `f(state) + (seed | negate)` idiom.
 
-use interactive::ir::Value;
 use interactive::server::Server;
 use interactive::{lower, parse};
 
-fn tup(fields: &[i64]) -> Value {
-    Value::Tuple(fields.iter().map(|&n| Value::Int(n)).collect())
+/// A tuple of integers, as a feed writes it.
+fn tup(fields: &[i64]) -> String {
+    format!("tuple({})", fields.iter().map(i64::to_string).collect::<Vec<_>>().join(","))
 }
 
 fn install(server: &mut Server, worker: &mut timely::worker::Worker, name: &str, src: &str) {
@@ -44,8 +44,8 @@ fn bind_advances_a_counter_without_a_client() {
         // N ticks the snapshot (which reads the closed past) shows N - 1.
         for expected in 0..5 {
             server.tick(worker);
-            let rows = server.snapshot(worker, "count").unwrap().into_rows();
-            assert_eq!(rows, vec![(tup(&[expected]), Value::unit(), 1)]);
+            let rows = server.snapshot(worker, "count").unwrap().rows();
+            assert_eq!(rows, vec![(tup(&[expected]), "tuple()".to_string(), 1)]);
         }
 
         // A later seed change injects as a perturbation: adding a second
@@ -55,12 +55,12 @@ fn bind_advances_a_counter_without_a_client() {
             .unwrap();
         server.tick(worker);
         server.tick(worker);
-        let rows = server.snapshot(worker, "count").unwrap().into_rows();
+        let rows = server.snapshot(worker, "count").unwrap().rows();
         assert_eq!(
             rows,
             vec![
-                (tup(&[6]), Value::unit(), 1),
-                (tup(&[101]), Value::unit(), 1)
+                (tup(&[6]), "tuple()".to_string(), 1),
+                (tup(&[101]), "tuple()".to_string(), 1)
             ]
         );
     });

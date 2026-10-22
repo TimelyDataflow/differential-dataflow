@@ -13,7 +13,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use interactive::ir::Value;
 use interactive::scope_ir::Program;
 use interactive::server;
 use interactive::{explain, lower, parse};
@@ -82,42 +81,34 @@ fn lowered(src: &str) -> Program {
 }
 
 fn gen_edges(nodes: u64, edges: u64) -> Vec<(Row, Row)> {
-    (0..edges).map(|e| interactive::gen_row(e, nodes, 2)).collect()
+    gen_edges_seeded(0, nodes, edges)
 }
 
 /// A different deterministic graph per seed (offset into the same hash space).
 fn gen_edges_seeded(seed: u64, nodes: u64, edges: u64) -> Vec<(Row, Row)> {
     (0..edges)
-        .map(|e| interactive::gen_row(seed.wrapping_mul(1_000_003).wrapping_add(e), nodes, 2))
+        .map(|e| seed.wrapping_mul(1_000_003).wrapping_add(e))
+        .map(|e| (row(&[0, 1].map(|col| interactive::gen_field_seeded(0, e, nodes, col))), unit()))
         .collect()
 }
 
-/// A row value: a `Tuple` of `Int`s.
+/// A row value: a tuple of integers.
 fn row(fields: &[i64]) -> Row {
-    Value::Tuple(fields.iter().map(|&n| Value::Int(n)).collect())
+    format!("tuple({})", fields.iter().map(i64::to_string).collect::<Vec<_>>().join(","))
 }
 
-/// A row: a key or a value.
-type Row = Value;
+fn int(n: i64) -> Row { n.to_string() }
+fn unit() -> Row { "tuple()".into() }
 
-/// A value in the feed syntax: integers, `tuple(…)`, `list(…)`, `inject(lane,payload)`.
-fn feed_text(value: &Value) -> String {
-    let all = |xs: &[Value]| xs.iter().map(feed_text).collect::<Vec<_>>().join(",");
-    match value {
-        Value::Int(n) => n.to_string(),
-        Value::Float(x) => format!("{:?}", x.0),
-        Value::Tuple(xs) => format!("tuple({})", all(xs)),
-        Value::List(xs) => format!("list({})", all(xs)),
-        Value::Variant(lane, payload) => format!("inject({lane},{})", feed_text(payload)),
-    }
-}
+/// A row: a key or a value, as a feed writes it.
+type Row = String;
 
 /// Run `p` on `inputs` through the server: every export's consolidated rows, by name.
 fn evaluate(p: &Program, inputs: &[Vec<(Row, Row)>]) -> BTreeMap<String, Vec<((Row, Row), i64)>> {
-    let lines: Vec<Vec<String>> = inputs.iter().map(|rows| rows.iter().map(|(k, v)| format!("{} val={}", feed_text(k), feed_text(v))).collect()).collect();
+    let lines: Vec<Vec<String>> = inputs.iter().map(|rows| rows.iter().map(|(k, v)| format!("{k} val={v}")).collect()).collect();
     server::evaluate(timely::Config::process(1), p, &lines)
         .into_iter()
-        .map(|(name, updates)| (name, updates.into_rows().into_iter().map(|(k, v, d)| ((k, v), d)).collect()))
+        .map(|(name, updates)| (name, updates.rows().into_iter().map(|(k, v, d)| ((k, v), d)).collect()))
         .collect()
 }
 
@@ -148,7 +139,7 @@ fn query_rows(queries: &[(Row, Row)]) -> Vec<(Row, Row)> {
     queries
         .iter()
         .enumerate()
-        .map(|(q, (k, v))| (k.clone(), Value::Tuple(vec![v.clone(), Value::Int(q as i64)])))
+        .map(|(q, (k, v))| (k.clone(), format!("tuple({v},{q})")))
         .collect()
 }
 
@@ -266,7 +257,7 @@ fn tc_row_explanations_sufficient_small() {
 /// explained by demand-sets (edges and roots) that regenerate it.
 #[test]
 fn reach_row_explanations_sufficient_small() {
-    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), unit())]];
     let sizes = assert_all_rows_sufficient(REACH_ROW, &inputs);
     assert_eq!(sizes.len(), 5, "expected 5 reached nodes at 50/55 from root 0");
 }
@@ -352,7 +343,7 @@ fn report_demand_excess() {
         ("scc 100/110", SCC_ROW, vec![gen_edges(100, 110)]),
         ("tc 20/22", TC_ROW, vec![gen_edges(20, 22)]),
         ("tc 50/55", TC_ROW, vec![gen_edges(50, 55)]),
-        ("reach 50/55", REACH_ROW, vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]]),
+        ("reach 50/55", REACH_ROW, vec![gen_edges(50, 55), vec![(row(&[0]), unit())]]),
     ];
     for (name, src, inputs) in cases {
         let p = optimized(src);
@@ -485,7 +476,7 @@ fn min_then_count_explanations_sufficient() {
         s: { let step = x | join(i0, (k, l, e) -> (e, l)); var x = (i0 + step) | min; }
         export "result" = s::x | map((k, l) -> ((l), ())) | count;
     "#;
-    let sizes = assert_all_rows_sufficient(MIN_COUNT, &[vec![(Value::Int(2), Value::Int(4)), (Value::Int(4), Value::Int(1))]]);
+    let sizes = assert_all_rows_sufficient(MIN_COUNT, &[vec![(int(2), int(4)), (int(4), int(1))]]);
     assert!(!sizes.is_empty());
 }
 
@@ -502,7 +493,7 @@ fn restricted_rows_keep_their_counts() {
         let r = (counts - i0) | min;
         export "result" = r;
     "#;
-    let inputs = vec![vec![(Value::Int(0), Value::Int(4)), (Value::Int(0), Value::Int(4)), (Value::Int(0), Value::Int(2))]];
+    let inputs = vec![vec![(int(0), int(4)), (int(0), int(4)), (int(0), int(2))]];
     let sizes = assert_all_rows_sufficient(COUNT_MIN, &inputs);
     assert!(!sizes.is_empty());
 }
@@ -526,17 +517,17 @@ fn count_explanations_sufficient_small() {
 #[test]
 fn count_duplicate_inputs_sufficient() {
     let edges = vec![
-        (row(&[1, 5]), Value::unit()),
-        (row(&[1, 5]), Value::unit()),
-        (row(&[2, 5]), Value::unit()),
+        (row(&[1, 5]), unit()),
+        (row(&[1, 5]), unit()),
+        (row(&[2, 5]), unit()),
     ];
     let p = optimized(INDEG_ROW);
     let result = export_rows(&p, &[edges.clone()], "result");
-    assert!(result.contains(&(row(&[5]), Value::Int(3))), "expected indeg(5) = 3 in {:?}", result);
-    let demand = demand_for(INDEG_ROW, &[edges.clone()], &row(&[5]), &Value::Int(3));
+    assert!(result.contains(&(row(&[5]), int(3))), "expected indeg(5) = 3 in {:?}", result);
+    let demand = demand_for(INDEG_ROW, std::slice::from_ref(&edges), &row(&[5]), &int(3));
     let replay = export_rows(&p, &restrict(&[edges], &demand), "result");
     assert!(
-        replay.contains(&(row(&[5]), Value::Int(3))),
+        replay.contains(&(row(&[5]), int(3))),
         "insufficient explanation for indeg(5) = 3: demanded {:?} regenerates only {:?}",
         demand, replay,
     );
@@ -584,7 +575,7 @@ fn fuzz_explanations_sufficient() {
         queries += assert_all_rows_sufficient(SCC_ROW, &[gen_edges_seeded(seed, 80, 88)]).len();
         queries += assert_all_rows_sufficient(TC_ROW, &[gen_edges_seeded(seed, 25, 27)]).len();
         let root = (seed % 60) as i64;
-        let inputs = vec![gen_edges_seeded(seed, 60, 66), vec![(row(&[root]), Value::unit())]];
+        let inputs = vec![gen_edges_seeded(seed, 60, 66), vec![(row(&[root]), unit())]];
         queries += assert_all_rows_sufficient(REACH_ROW, &inputs).len();
     }
     assert!(queries >= 100, "fuzz swept only {} queries — instances too sparse to mean much", queries);
@@ -620,7 +611,7 @@ const LAMBDAS: &str = r#"
 
 #[test]
 fn lambda_explanations_sufficient_small() {
-    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), unit())]];
     let sizes = assert_all_rows_sufficient(LAMBDAS, &inputs);
     assert_eq!(sizes.len(), 10, "expected 5 reached nodes, each in two positions");
 }
@@ -641,7 +632,7 @@ const SCALARS: &str = r#"
 "#;
 
 fn scalar_pairs() -> Vec<(Row, Row)> {
-    (0..30).map(|i| (Value::Int(i % 7), Value::Int((i * 5) % 11))).collect()
+    (0..30).map(|i| (int(i % 7), int((i * 5) % 11))).collect()
 }
 
 #[test]
@@ -686,7 +677,7 @@ const REACH_ENTER_AT: &str = r#"
 
 #[test]
 fn enter_at_explanations_sufficient() {
-    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), Value::unit())]];
+    let inputs = vec![gen_edges(50, 55), vec![(row(&[0]), unit())]];
     assert!(!assert_all_rows_sufficient(REACH_ENTER_AT, &inputs).is_empty());
 }
 
