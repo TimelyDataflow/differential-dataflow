@@ -79,6 +79,10 @@ pub trait RowModel {
     /// Drop the carried `V_out`, restoring the SP-shaped row
     /// `(K ; V_in, chain_in, chain_out, q)`.
     fn ky_drop_vout(in_len: usize, out_len: usize) -> Self::Proj;
+    /// Blank a demand row's value where a lookup reads only its key, chain and `q`:
+    /// `(K ; V, chain, q) -> (K ; (), chain, q)`. A value can be large (a collected list), and a
+    /// join would otherwise carry it to every match.
+    fn blank_v(out_len: usize) -> Self::Proj;
 
     // --- lossy lookup (Linear[Project]) ---
 
@@ -175,7 +179,9 @@ pub fn keyed_lookup<M, D>(df: &mut D, dep: &D::Handle, side: &SideInfo<D>, out_l
 where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     let in_len = side.user_len;
     let pair = df.concat(vec![side.witness.clone(), side.forward.clone()]);
-    let joined = df.join(dep, &pair, M::ky_join(in_len, out_len, min));
+    // Only `min` reads the demanded value.
+    let dep = if min { dep.clone() } else { df.project(dep, M::blank_v(out_len)) };
+    let joined = df.join(&dep, &pair, M::ky_join(in_len, out_len, min));
     let after = if min {
         let f = opt_filter(df, joined, M::ky_data_le());
         df.project(&f, M::ky_drop_vout(in_len, out_len))
@@ -192,7 +198,8 @@ where M: RowModel, D: Dataflow<Proj = M::Proj, Pred = M::Pred> {
     let in_len = side.user_len;
     let pair = df.concat(vec![side.witness.clone(), side.forward.clone()]);
     let pair_keyed = df.project(&pair, M::lossy_pair(proj, in_len));
-    let joined = df.join(dep, &pair_keyed, M::lossy_reassemble(in_len, out_len));
+    let dep = df.project(dep, M::blank_v(out_len));
+    let joined = df.join(&dep, &pair_keyed, M::lossy_reassemble(in_len, out_len));
     let filtered = opt_filter(df, joined, M::time_le(in_len, out_len));
     df.project(&filtered, M::strip(in_len, out_len, in_len))
 }
