@@ -215,15 +215,3 @@ impl<R: 'static> Enter<u64, crate::ir::Time> for CorgiContainer<u64, R> {
         CorgiContainer { keys: self.keys, vals: self.vals, times: self.times.retime(), diffs: self.diffs }
     }
 }
-
-/// Leaving the program's iterative scope: each time keeps its outer coordinate (lane 0).
-impl<R: Clone + 'static> differential_dataflow::collection::containers::Leave<crate::ir::Time, u64>
-    for CorgiContainer<crate::ir::Time, R>
-{
-    type OuterContainer = CorgiContainer<u64, R>;
-    fn leave(self) -> CorgiContainer<u64, R> {
-        let len = self.times.len();
-        let lane = if self.times.width() == 0 { vec![0; len] } else { self.times.lane(0) };
-        CorgiContainer { keys: self.keys, vals: self.vals, times: ColTimes::from_raw_lanes(vec![lane], len), diffs: self.diffs }
-    }
-}

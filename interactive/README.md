@@ -32,12 +32,14 @@ If you are familiar with differential dataflow, they correspond to various of it
 
 ## Syntax and Semantics
 
-Programs in DDIR are structured as a tree of nested "iterative scopes".
-Within each scope one can
+Programs in DDIR are structured as a tree of nested "iterative scopes", below a root that does not iterate.
+Within each named scope one can
 
 1. let-bind names to expressions,
 2. name and bind iteration variables,
 3. create further nested scopes.
+
+The root can do the same except bind iteration variables: a `var` belongs in a named scope, so what a program exports is what it computes at each time, not a round of an iteration.
 
 The expression language is on collections of data, and involves differential's relatively few operators: join, reduce, concat, and a surprisingly general flatmap operator.
 The particular details of the expression language are evolving, and the intent is to let anyone pick their favorite concrete syntax.

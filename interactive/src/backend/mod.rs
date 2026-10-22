@@ -96,7 +96,7 @@ impl<'s, B: Backend> Rendered<'s, B> {
             Rendered::Arrangement(a) => B::as_collection(a.clone()),
         }
     }
-    fn arrange(&self) -> B::Arr<'s> {
+    pub fn arrange(&self) -> B::Arr<'s> {
         match self {
             Rendered::Arrangement(a) | Rendered::Both(a, _) => a.clone(),
             Rendered::Collection(c) => B::arrange(c.clone()),
@@ -157,6 +157,18 @@ pub fn render_tree<'s, B: Backend>(
     imports: Vec<Rendered<'s, B>>,
     shapes: &ScopeShapes,
 ) -> Vec<Collection<'s, Time, B::Container>> {
+    render_scope::<B>(s, scope, depth, imports, shapes).iter().map(Rendered::collection).collect()
+}
+
+/// [`render_tree`], with each export as it was rendered: an exported arrangement stays one, so
+/// a driver can publish it as it is.
+pub fn render_scope<'s, B: Backend>(
+    s: &st::Scope,
+    scope: Scope<'s, Time>,
+    depth: usize,
+    imports: Vec<Rendered<'s, B>>,
+    shapes: &ScopeShapes,
+) -> Vec<Rendered<'s, B>> {
     let shape_of = |r: &st::Ref| {
         let c = shapes.of(r).expect("install refuses a program with a collection of unknown shape");
         (c.key, c.val)
@@ -239,5 +251,5 @@ pub fn render_tree<'s, B: Backend>(
         var_handles[bind.var].take().expect("bind: variable already bound").set(c);
     }
 
-    s.exports.iter().map(|e| resolve(&items, &imports, &var_cols, &e.value).collection()).collect()
+    s.exports.iter().map(|e| resolve(&items, &imports, &var_cols, &e.value)).collect()
 }

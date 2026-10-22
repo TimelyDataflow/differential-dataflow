@@ -14,11 +14,10 @@ use timely::progress::Antichain;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use differential_dataflow::operators::join::{Fresh, JoinTactic, join_with_tactic};
-use differential_dataflow::operators::reduce::{ReduceTactic, reduce_with_tactic};
+use differential_dataflow::operators::join::join_with_tactic;
+use differential_dataflow::operators::reduce::reduce_with_tactic;
 use differential_dataflow::trace::Span;
 use differential_dataflow::trace::chunk::ChunkBatch;
-use differential_dataflow::trace::wrappers::enter::{BatchEnter, TraceEnter};
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatcher};
@@ -33,7 +32,7 @@ use crate::corgi::container::CorgiContainer;
 use crate::corgi::exchange::CorgiPact;
 use crate::corgi::half_join::{CorgiHalfJoin, HalfJoinBatcher};
 use crate::corgi::join::CorgiJoinBackend;
-use differential_dogs3::operators::half_join::{half_join_with_tactic, HalfJoinTactic};
+use differential_dogs3::operators::half_join::half_join_with_tactic;
 use crate::corgi::reduce::CorgiReduceBackend;
 use differential_dataflow::operators::int_proxy::{ProxyJoinTactic, ProxyReduceTactic};
 use crate::corgi::logic::{compile_flatmap, compile_join_function, compile_predicate, compile_projection, compile_scalar};
@@ -228,53 +227,9 @@ fn apply_ops(mut c: CC, ops: &[LinearOp], level: usize, plans: &[Plan]) -> CC {
     c
 }
 
-/// A batch of the program's own corgi arrangements (`CTrace`'s batch).
-type NativeBatch = std::rc::Rc<ChunkBatch<CorgiChunk<Time, Diff>>>;
-/// A batch of a published (host-time) corgi export (`ExportTrace`'s batch).
-type HostBatch = std::rc::Rc<ChunkBatch<CorgiChunk<u64, Diff>>>;
-/// A published corgi export entered into a program's scope: the producer's own chunks.
-pub type ImportArr<'scope> = Arranged<'scope, TraceEnter<ExportTrace, Time>>;
-
-/// The corgi backend's arrangement: one it built, or a published export it imported.
-#[derive(Clone)]
-pub enum Arr<'scope> {
-    Local(Arranged<'scope, TraceAgent<CTrace>>),
-    Imported(ImportArr<'scope>),
-}
-
-/// A batch as the corgi tactics read it. An imported batch crosses into the program as its
-/// producer's chunks *retimed*: the same `Rc`s, read with each host epoch `e` as `(e, [])`. The
-/// lanes are identical, so the crossing costs one `Rc` per chunk and copies no data.
-trait Native {
-    fn native(self) -> NativeBatch;
-}
-impl Native for NativeBatch {
-    fn native(self) -> NativeBatch { self }
-}
-impl Native for BatchEnter<HostBatch, Time> {
-    fn native(self) -> NativeBatch {
-        std::rc::Rc::new(ChunkBatch { chunks: self.inner().chunks.iter().map(CorgiChunk::retime).collect() })
-    }
-}
-
-/// A join tactic over native batches, accepting either input imported: the bridge where an
-/// imported batch's times change to the program's.
-struct RetimeJoin<J>(J);
-impl<B0: Native, B1: Native, J: JoinTactic<Time, NativeBatch, NativeBatch, CC>> JoinTactic<Time, B0, B1, CC> for RetimeJoin<J> {
-    fn prep(&mut self, input0: Vec<B0>, input1: Vec<B1>, fresh: Fresh, meet: Time) -> Box<dyn Iterator<Item = CC>> {
-        let input0 = input0.into_iter().map(Native::native).collect();
-        let input1 = input1.into_iter().map(Native::native).collect();
-        self.0.prep(input0, input1, fresh, meet)
-    }
-}
-
-/// A half-join tactic over native batches, accepting an imported arrangement.
-struct RetimeHalfJoin<J>(J);
-impl<B: Native, M, J: HalfJoinTactic<Time, NativeBatch, M, CC>> HalfJoinTactic<Time, B, M, CC> for RetimeHalfJoin<J> {
-    fn prep(&mut self, chunks: Vec<M>, batches: Vec<B>, lower: Antichain<Time>) -> Box<dyn Iterator<Item = CC>> {
-        self.0.prep(chunks, batches.into_iter().map(Native::native).collect(), lower)
-    }
-}
+/// The corgi backend's arrangement: one a program built, or a published export it imported.
+/// Both are the same trace type at the same time, so every operator reads either in place.
+pub type Arr<'scope> = Arranged<'scope, TraceAgent<CTrace>>;
 
 /// The time each coordinate of `t` less one, at least zero: the half join's compaction of its
 /// arrangement. Every later stream time is at or beyond some such frontier element, and advancing
@@ -285,35 +240,15 @@ fn step_back(t: &Time, out: &mut Antichain<Time>) {
     out.insert(timely::order::Product::new(t.outer.saturating_sub(1), inner));
 }
 
-/// A reduce tactic over native batches, accepting an imported input. (Its output is its own.)
-struct RetimeReduce<R>(R);
-impl<B1: Native, R: ReduceTactic<Time, NativeBatch, NativeBatch>> ReduceTactic<Time, B1, NativeBatch> for RetimeReduce<R> {
-    fn retire(
-        &mut self,
-        source_batches: Vec<B1>,
-        output_batches: Vec<NativeBatch>,
-        input_batches: Vec<B1>,
-        lower: &Antichain<Time>,
-        upper: &Antichain<Time>,
-        held: &Antichain<Time>,
-    ) -> (Option<Span<Time, NativeBatch>>, Antichain<Time>) {
-        let source_batches = source_batches.into_iter().map(Native::native).collect();
-        let input_batches = input_batches.into_iter().map(Native::native).collect();
-        self.0.retire(source_batches, output_batches, input_batches, lower, upper, held)
-    }
-}
-
 /// The updates of a stream of columnar batches, as corgi containers.
 ///
 /// Each chunk already IS a columnar container: its key/val columns clone by Arc bump,
 /// so a chunk becomes a `CorgiContainer` for the price of copying its time lanes and
 /// its diffs. One container per chunk — no concatenation, no gather, no
-/// columns→rows→columns round-trip. `chunks` presents a batch's chunks at the stream's time,
-/// which retimes an imported batch on the way.
-fn chunk_containers<'s, T: ColTime, B: Clone + 'static>(
-    stream: timely::dataflow::Stream<'s, T, Vec<Span<T, B>>>,
+/// columns→rows→columns round-trip.
+fn chunk_containers<'s, T: ColTime>(
+    stream: timely::dataflow::Stream<'s, T, Vec<Span<T, std::rc::Rc<ChunkBatch<CorgiChunk<T, Diff>>>>>>,
     name: &str,
-    chunks: impl Fn(B) -> std::rc::Rc<ChunkBatch<CorgiChunk<T, Diff>>> + 'static,
 ) -> Collection<'s, T, CorgiContainer<T, Diff>> {
     stream
         .unary(Pipeline, name, move |_, _| {
@@ -322,7 +257,7 @@ fn chunk_containers<'s, T: ColTime, B: Clone + 'static>(
                     let mut session = output.session(&cap);
                     for batch in data.iter() {
                         let Some(payload) = batch.inner.clone() else { continue };
-                        for ch in chunks(payload).chunks.iter().filter(|c| c.len() > 0) {
+                        for ch in payload.chunks.iter().filter(|c| c.len() > 0) {
                             let mut c = CorgiContainer {
                                 // Drop the arrangement's leading identifier lane: edges carry
                                 // the key the program wrote, so `$0` indexes what it always did.
@@ -380,19 +315,16 @@ impl Backend for CorgiBackend {
         // Column-native ingest: `CorgiChunker` sort-consolidates each input `CorgiContainer`'s
         // columns straight into a `CorgiChunk` (no drain-to-rows), then the standard chunk batcher +
         // builder. No columns→rows→columns round-trip at the arrangement boundary.
-        Arr::Local(arrange_core::<_, CC, _, CTrace>(
+        arrange_core::<_, CC, _, CTrace>(
             c.inner,
             CorgiPact,
             "CorgiArrange",
             ChunkBatcher::<CorgiChunker<Time, Diff>, _>::new,
-        ))
+        )
     }
 
     fn as_collection<'s>(a: Self::Arr<'s>) -> Collection<'s, Time, CC> {
-        match a {
-            Arr::Local(a) => chunk_containers(a.stream, "CorgiAsCollection", Native::native),
-            Arr::Imported(a) => chunk_containers(a.stream, "CorgiAsCollection", Native::native),
-        }
+        chunk_containers(a.stream, "CorgiAsCollection")
     }
 
     fn join<'s>(l: Self::Arr<'s>, r: Self::Arr<'s>, projection: &Lambda, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
@@ -400,13 +332,7 @@ impl Backend for CorgiBackend {
         // compiles the projection once, now, at both inputs' shapes, and emits corgi columns
         // directly as `CorgiContainer`s — column-native, no row round-trip.
         let backend = CorgiJoinBackend::new(projection, [k, v0, v1]);
-        let tactic = || RetimeJoin(ProxyJoinTactic::new(backend));
-        match (l, r) {
-            (Arr::Local(l), Arr::Local(r)) => join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic()).as_collection(),
-            (Arr::Local(l), Arr::Imported(r)) => join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic()).as_collection(),
-            (Arr::Imported(l), Arr::Local(r)) => join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic()).as_collection(),
-            (Arr::Imported(l), Arr::Imported(r)) => join_with_tactic::<_, _, _, CC>(l, r, "Join", tactic()).as_collection(),
-        }
+        join_with_tactic::<_, _, _, CC>(l, r, "Join", ProxyJoinTactic::new(backend)).as_collection()
     }
 
     fn half_join<'s>(stream: Collection<'s, Time, CC>, arrangement: Self::Arr<'s>, strict: bool, projection: &Lambda, level: usize, ((k, v0), (_, v1)): (st::RowShape, st::RowShape)) -> Collection<'s, Time, CC> {
@@ -416,20 +342,13 @@ impl Backend for CorgiBackend {
         // The stream's value is `(val, time)`, as `lift` makes it; the projection reads the val.
         let Shape::Prod(mut v0) = v0 else { panic!("half_join: a stream value of shape {v0}, not (val, time)") };
         let half_join = CorgiHalfJoin::new(projection, strict, level + 1, [k, v0.swap_remove(0), v1]);
-        let tactic = || RetimeHalfJoin(half_join);
         let yielding = |_timer: std::time::Instant, count: usize| count > 1_000_000;
-        match arrangement {
-            Arr::Local(a) => half_join_with_tactic(stream.inner, a, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), tactic()).as_collection(),
-            Arr::Imported(a) => half_join_with_tactic(stream.inner, a, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), tactic()).as_collection(),
-        }
+        half_join_with_tactic(stream.inner, arrangement, CorgiPact, step_back, yielding, HalfJoinBatcher::new(strict, level + 1), half_join).as_collection()
     }
     fn reduce<'s>(a: Self::Arr<'s>, reducer: &Reducer, shape: st::RowShape) -> Self::Arr<'s> {
         // Amortize columnar corrections while reusing sweep scratch across wide presentations.
-        let tactic = RetimeReduce(ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone(), shape)).with_key_batch_size(256));
-        Arr::Local(match a {
-            Arr::Local(a) => reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic),
-            Arr::Imported(a) => reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic),
-        })
+        let tactic = ProxyReduceTactic::new(CorgiReduceBackend::new(reducer.clone(), shape)).with_key_batch_size(256);
+        reduce_with_tactic::<_, CTrace, _>(a, "CorgiReduce", tactic)
     }
 
     fn inspect<'s>(c: Collection<'s, Time, CC>, label: String) -> Collection<'s, Time, CC> {
@@ -496,52 +415,42 @@ impl Backend for CorgiBackend {
         stream.as_collection()
     }
     fn enter_region<'s, 'r>(a: Self::Arr<'s>, region: Scope<'r, Time>) -> Self::Arr<'r> {
-        match a {
-            Arr::Local(a) => Arr::Local(a.enter_region(region)),
-            Arr::Imported(a) => Arr::Imported(a.enter_region(region)),
-        }
+        a.enter_region(region)
     }
 }
 
-/// A root import for [`render_tree_corgi_arranged`]: corgi containers, or a published columnar
-/// export.
+/// A root import for [`render_program`]: corgi containers, or a published export.
 #[allow(clippy::large_enum_variant)] // One per import, consumed as the program renders.
 pub enum CorgiImport<'s> {
     Columns(Collection<'s, Time, CC>),
-    Export(ImportArr<'s>),
+    Export(Arr<'s>),
 }
 
-/// Render `s` with the corgi substrate ([`crate::backend::render_tree`]) at the `shapes` install
-/// inferred. A published columnar export arrives as the producer's arrangement, which the
-/// program's `arrange`s, joins, and reduces of it read in place. Shape ascriptions are the
+/// Render the root scope `s` with the corgi substrate ([`crate::backend::render_scope`]) at the
+/// `shapes` install inferred, and arrange each export. A published export arrives as its
+/// producer's arrangement, which the program's `arrange`s, joins, and reduces read in place; an
+/// export that is already an arrangement is returned as it is. Shape ascriptions are the
 /// driver's to check, before it renders.
-pub fn render_tree_corgi_arranged<'s>(
+pub fn render_program<'s>(
     s: &st::Scope,
     scope: Scope<'s, Time>,
-    depth: usize,
     imports: Vec<CorgiImport<'s>>,
     shapes: &crate::shapes::ScopeShapes,
-) -> Vec<Collection<'s, Time, CC>> {
+) -> Vec<Arranged<'s, ExportTrace>> {
     assert_eq!(s.imports.len(), imports.len());
     let imports = imports.into_iter().map(|imp| match imp {
         CorgiImport::Columns(c) => crate::backend::Rendered::Collection(c),
-        CorgiImport::Export(a) => crate::backend::Rendered::Arrangement(Arr::Imported(a)),
+        CorgiImport::Export(a) => crate::backend::Rendered::Arrangement(a),
     }).collect();
-    crate::backend::render_tree::<CorgiBackend>(s, scope, depth, imports, shapes)
+    crate::backend::render_scope::<CorgiBackend>(s, scope, 0, imports, shapes).iter().map(|r| r.arrange()).collect()
 }
 
-/// A columnar export: the program's corgi collection, left to the host time and arranged as
-/// corgi chunks.
-pub type ExportTrace = TraceAgent<differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<u64, Diff>>>;
+/// A published export: a trace of corgi chunks at the program time, as the program built it.
+pub type ExportTrace = TraceAgent<CTrace>;
 
-/// Arrange an export (already at host time) as a columnar trace.
-pub fn arrange_export<'s>(c: Collection<'s, u64, CorgiContainer<u64, Diff>>) -> Arranged<'s, ExportTrace> {
-    arrange_core::<_, CorgiContainer<u64, Diff>, _, differential_dataflow::trace::chunk::ChunkSpine<CorgiChunk<u64, Diff>>>(
-        c.inner,
-        CorgiPact,
-        "CorgiExport",
-        ChunkBatcher::<CorgiChunker<u64, Diff>, _>::new,
-    )
+/// Arrange a collection as a published trace.
+pub fn arrange_export<'s>(c: Collection<'s, Time, CC>) -> Arranged<'s, ExportTrace> {
+    CorgiBackend::arrange(c)
 }
 
 /// The batches an export's arrangement has produced on this worker, not yet taken.
@@ -549,7 +458,7 @@ pub type ExportTap = std::rc::Rc<std::cell::RefCell<Vec<<ExportTrace as differen
 
 /// The updates in `batches`, one container per non-empty chunk. A chunk's key and value columns
 /// are shared with the container, not copied.
-pub fn batch_containers(batches: Vec<<ExportTrace as differential_dataflow::trace::TraceReader>::Batch>) -> Vec<CorgiContainer<u64, Diff>> {
+pub fn batch_containers(batches: Vec<<ExportTrace as differential_dataflow::trace::TraceReader>::Batch>) -> Vec<CC> {
     batches.iter().flat_map(|batch| batch.chunks.iter().filter(|c| c.len() > 0)).map(|ch| CorgiContainer {
         keys: recover_key(ch.keys()),
         vals: ch.vals().clone(),
@@ -559,7 +468,7 @@ pub fn batch_containers(batches: Vec<<ExportTrace as differential_dataflow::trac
 }
 
 /// Record each batch the arrangement emits into `tap`, passing the stream through.
-pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::dataflow::Stream<'s, u64, Vec<differential_dataflow::trace::Span<u64, <ExportTrace as differential_dataflow::trace::TraceReader>::Batch>>> {
+pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::dataflow::Stream<'s, Time, Vec<Span<Time, <ExportTrace as differential_dataflow::trace::TraceReader>::Batch>>> {
     a.stream.clone().unary(Pipeline, "ExportTap", move |_, _| {
         move |input, output| {
             input.for_each(|cap, data| {
@@ -571,6 +480,6 @@ pub fn tap_export<'s>(a: &Arranged<'s, ExportTrace>, tap: ExportTap) -> timely::
 }
 
 /// The updates of an imported columnar export, as corgi containers.
-pub fn export_containers<'s>(a: Arranged<'s, ExportTrace>) -> Collection<'s, u64, CorgiContainer<u64, Diff>> {
-    chunk_containers(a.stream, "ExportContainers", |batch| batch)
+pub fn export_containers<'s>(a: Arranged<'s, ExportTrace>) -> Collection<'s, Time, CC> {
+    chunk_containers(a.stream, "ExportContainers")
 }
