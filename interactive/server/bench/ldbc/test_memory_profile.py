@@ -37,7 +37,7 @@ def main():
     subprocess.run([sys.executable,str(Path(__file__).with_name('profile_memory.py')),
         '--prepared',str(args.output/'journal'),'--server',str(args.server.resolve()),
         '--parameters',str(args.output/'parameters.json'),'--expected',str(expected),
-        '--bounded-topk','--queries',*names,'--output',str(args.output/'profiles')],check=True)
+        '--queries',*names,'--output',str(args.output/'profiles')],check=True)
     rows=summarize(args.output/'profiles')
     assert len(rows)==len(names)
     for row in rows:

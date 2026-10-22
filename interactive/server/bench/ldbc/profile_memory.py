@@ -103,11 +103,7 @@ def profile(args):
             parameters = json.loads(args.parameters.read_text())[name]
             binding = sorted(requests(name,plan['parameters'],parameters,0))
             program = plan['program']
-            if args.bounded_topk and name in ('ic2','ic5','ic9'):
-                from bounded_topk import program as topk
-                buckets = [1] if name=='ic2' else [1024,32,1]
-                program = topk(buckets,'identity' if name=='ic5' else 'value',query=name)
-                record['ranking'] = dict(buckets=buckets,hash='identity' if name=='ic5' else 'value')
+            record['ranking'] = plan['ranking']
             (destination/(name+'.ddp')).write_text(program)
             record.update(binding=binding,plan_sha256=hashlib.sha256(program.encode()).hexdigest())
             request_shape = (parse_shape(source_shape(plan['parameters'])),'unit')
@@ -201,7 +197,6 @@ def main():
     p.add_argument('--server',type=Path,required=True)
     p.add_argument('--parameters',type=Path,required=True,help='JSON query -> complete request parameters, as in update_stream.py')
     p.add_argument('--expected',type=Path,help='directory of saved initial/final answers and validation flags')
-    p.add_argument('--bounded-topk',action='store_true',help='bounded IC2; three-layer IC5/IC9 ranking')
     p.add_argument('--queries',nargs='+',default=['all'])
     p.add_argument('--workers',type=int,default=1)
     p.add_argument('--timeout',type=float,default=120)

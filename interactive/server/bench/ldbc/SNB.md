@@ -187,9 +187,11 @@ is still separate work.
 Floating results are DDIR Floats (IEEE f64, totally ordered), not the
 specification's Float32 API representation. Shortest paths keep the least cost per
 node, with no hop count: each epoch's iteration restarts from the seeds, so deletions
-terminate. General
-aggregates currently use `collect`/`fold`; nested and ranked outputs are fully
-materialized. These are deliberate visible baseline costs, not tuned plans.
+terminate. Groups containing only integer sums/counts use differential weights.
+Other general aggregates use `collect`/`fold`, and nested outputs and unbounded rankings are
+fully materialized. Finite rank limits use the bounded Corgi reducer in
+[snb/topk.py](snb/topk.py); IC5/IC9 also use nested hash buckets, as described in
+[UPDATES.md](UPDATES.md#bounded-ranking-plans).
 
 The complete suite is verified on the 199-row fixture and the generated
 SF0.003 snapshot (35,588 projected rows). CI runs only the

@@ -164,27 +164,43 @@ changes checker memory use, without changing generated DDIR.
 
 ## Bounded ranking plans
 
-`bounded_topk.py` emits opt-in IC2/IC5/IC9 plans using a Corgi top-twenty reducer.
-It keeps the complete original sort key and row, caps output multiplicities at
-twenty, and assigns ranks only at the last stage. Inputs remain maintained by DD
-so a deletion can expose a previously unselected candidate. Nested hash buckets
-reduce the candidates seen by later stages; each count must divide its predecessor.
+The ordinary compiler uses the Corgi reducer in [snb/topk.py](snb/topk.py) for
+every finite rank limit. It keeps the complete original sort key and row, caps
+output multiplicities at the limit, and assigns ranks only at the last stage.
+Inputs remain maintained by DD so a deletion can expose a previously unselected
+candidate. Unbounded rankings and nested collection outputs still use `collect`.
+
+IC2 uses a flat top-twenty reduction. IC5 and IC9 use nested 1024/32/1 hash
+buckets; each count divides its predecessor. IC5 hashes its stable forum ID
+(the second sort field), keeping a forum in the same bucket when its score
+changes. IC9 hashes the full sort value. Other finite rankings use one stage.
+The normal suite, update runner and memory profiler all use these defaults:
+
+```sh
+python3 interactive/server/bench/ldbc/update_stream.py \
+  --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
+  --queries ic9 --check-mode replay --check-every 0 --no-check-first-class \
+  --output /tmp/ic9-bounded
+```
+
+`bounded_topk.py` overrides bucket/hash choices for IC2/IC5/IC9 experiments,
+using the same compiler and reducer. For example, try a flat IC9 plan:
 
 ```sh
 python3 interactive/server/bench/ldbc/bounded_topk.py --query ic9 \
-  --buckets 1024 32 1 --hash-key value --output /tmp/ic9-bounded.ddp
+  --buckets 1 --hash-key value --output /tmp/ic9-flat.ddp
 python3 interactive/server/bench/ldbc/update_stream.py \
   --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
-  --queries ic9 --plan /tmp/ic9-bounded.ddp --check-mode replay \
-  --check-every 0 --no-check-first-class --output /tmp/ic9-bounded
+  --queries ic9 --plan /tmp/ic9-flat.ddp --check-mode replay \
+  --check-every 0 --no-check-first-class --output /tmp/ic9-flat
 ```
 
-For IC2 use `--query ic2 --buckets 1`. For IC5 use `--query ic5 --buckets
-1024 32 1 --hash-key identity`; its second sort field is the stable forum ID.
-These options change physical ranking, while the ordinary logical query remains
-the Python reference. `test_topk.py` checks positive/negative diffs, duplicates,
-retractions, ties, empty groups and all 49 update-fixture states at one/four
-workers. `test_aggregates.py` checks native integer aggregation independently.
+These overrides change physical ranking; the ordinary logical query remains the
+Python reference. `test_topk.py` checks positive/negative diffs, duplicates,
+retractions, ties, empty groups, limits 0/1/10/20/100, varying sort-key arities
+and composite groups. It checks both the defaults and experimental IC2/IC5/IC9
+plans through all 49 update-fixture states at one/four workers.
+`test_aggregates.py` checks native integer aggregation independently.
 
 ## Additional process memory
 
@@ -200,7 +216,7 @@ would miss.
 python3 interactive/server/bench/ldbc/profile_memory.py \
   --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
   --parameters interactive/server/bench/ldbc/bindings/sf1-memory.json \
-  --bounded-topk --output /tmp/ldbc-memory
+  --output /tmp/ldbc-memory
 python3 interactive/server/bench/ldbc/summarize_memory.py /tmp/ldbc-memory
 ```
 

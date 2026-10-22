@@ -32,10 +32,15 @@ def compile_queries(names):
     for name in names:
         fn, schema, title = QUERIES[name]
         plan = fn(Context(), R.source('request', schema))
-        compiler = Compiler(imports=True)
+        # IC5's changing count should not move a forum between buckets. IC9
+        # hashes its complete sort value; IC2 and other bounded ranks are flat.
+        buckets, hash_key = {'ic5': ((1024,32,1), 'identity'),
+                             'ic9': ((1024,32,1), 'value')}.get(name, ((1,), 'value'))
+        compiler = Compiler(imports=True, rank_buckets=buckets, rank_hash_key=hash_key)
         program = compiler.compile_many({name + '.answer': plan})
         result[name] = dict(plan=plan, sources=compiler.inputs, program=program,
-                            parameters=schema, title=title)
+                            parameters=schema, title=title,
+                            ranking=dict(buckets=list(buckets),hash=hash_key))
     return result
 
 

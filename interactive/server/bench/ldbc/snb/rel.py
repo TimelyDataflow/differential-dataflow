@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import operator
 
+from .topk import pipeline
+
 
 @dataclass(eq=False)
 class E:
@@ -281,11 +283,13 @@ def source_shape(schema):
 
 
 class Compiler:
-    def __init__(self, imports=False):
+    def __init__(self, imports=False, *, rank_buckets=(1,), rank_hash_key='value'):
         self.lines = []
         self.names = {}
         self.inputs = []
         self.imports = imports
+        self.rank_buckets = tuple(rank_buckets)
+        self.rank_hash_key = rank_hash_key
 
     def emit(self, r):
         if id(r) in self.names: return self.names[id(r)]
@@ -392,10 +396,20 @@ class Compiler:
             src = self.emit(source)
             refs = positions(source.fields)
             sort = product([*(scalar(e,refs) for e in order),'row'])
-            code = f'{src} | map((row, ()) -> ({projection([col(n) for n in keys],refs)}, {sort})) | collect | flatmap((_, values) -> values)'
-            if limit is not None: code += f' | filter((_, (rank, _)) -> (rank, {limit}) lt)'
+            ordered = f'{src} | map((row, ()) -> ({projection([col(n) for n in keys],refs)}, {sort}))'
             out = product([*(f'item.{len(order)}.{i}' for i in range(len(source.fields))),'rank'])
-            code += f' | map((_, (rank, item)) -> ({out}, ()))'
+            if limit is None:
+                code = ordered+' | collect | flatmap((_, values) -> values)'
+                code += f' | map((_, (rank, item)) -> ({out}, ()))'
+            else:
+                # DD retains all candidates; the lambda copies only the best
+                # `limit` rows. Only the last bucket stage assigns ranks.
+                initial = name+'_input'
+                stages, last = pipeline(initial, name+'_top', self.rank_buckets,
+                                        self.rank_hash_key, limit)
+                self.lines.append('\n'.join([f'let {initial} = {ordered};', *stages,
+                    f'let {name} = {last} | map((_, (rank, item)) -> ({out}, ()));']))
+                return name
         elif op == 'closure':
             seed,nextrel,on,select,keys,best,condition = args
             s,n = self.emit(seed),self.emit(nextrel)

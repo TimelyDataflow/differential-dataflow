@@ -41,10 +41,13 @@ were not recomputed during profiling. Initial/final captures were compared
 with saved, previously Python-validated answers where available. Execution,
 answer validation and resource failure remain separate report fields.
 
-IC2 uses a flat bounded top-twenty reduction; IC5 and IC9 use nested
+The measured IC2 plan uses a flat bounded top-twenty reduction; IC5 and IC9 use nested
 1024/32/1 buckets, hashing forum identity for IC5 and the full sort value for
-IC9. Other queries use the ordinary compiler. These choices are part of the
-measurement, not the default compiler configuration.
+IC9. Other queries used the then-current ordinary compiler. Since this scan,
+bounded ranking has become the default for every finite limit. The current
+IC2/IC5/IC9 plans match the measured plans byte for byte; 25 other queries now
+have bounded plans in place of collect-and-truncate and have not been remeasured
+at SF1. The table remains an observation of the recorded source and plan hashes.
 
 ## Observations
 
@@ -61,8 +64,8 @@ endpoints. No new answer mismatch was observed; this does not check every epoch.
 
 For active memory, BI15 is the largest observed case, followed by BI4, IS7
 and IS2. For resource failures, investigate BI17 binding and IC9 retirement.
-IC3 is about 0.511 GiB above the final input-only control while active, but
-2.283 GiB above it after retirement; IC6 and IC5 also grow substantially during
+In this scan, IC3 is about 0.511 GiB above the final input-only control while
+active, but 2.283 GiB above it after retirement; IC6 and IC5 also grow substantially during
 retirement. Those later process footprints need a separate investigation
 from steady query-active storage. Three settling ticks do not establish
 whether the retained RSS is live operator state or reusable allocator memory.
@@ -134,7 +137,7 @@ and adapter hashes before starting. Then run:
 python3 interactive/server/bench/ldbc/profile_memory.py \
   --prepared /tmp/ldbc-prepared/journal --server /tmp/ldbc-target/release/ddir_server \
   --parameters interactive/server/bench/ldbc/bindings/sf1-memory.json \
-  --bounded-topk --output /tmp/ldbc-memory
+  --output /tmp/ldbc-memory
 ```
 
 The committed CSV is a compact observation record; raw phase reports, plans,
@@ -142,12 +145,13 @@ captures, logs, journal and the measured binary are retained as investigation
 artifacts outside Git. `summarize_memory.py DIR` regenerates the CSV/JSON from
 the raw reports, including after copying the artifact directory to another host.
 
-The measured source was clean commit `6801cb3a`; subsequent profiler cleanup
-labels the settling phases separately and adds the summary/CI checks without
-changing query plans or the measured operations. The measured release server
+This command measures the current defaults. To reproduce the recorded plans,
+use clean commit `6801cb3a` and its former `--bounded-topk` profiler flag.
+The current profiler labels the settling phases separately; the lifecycle is
+unchanged. The measured release server
 was built from `854ade89`; the provenance file pins its SHA-256. A new binary,
 request, worker count or lifecycle needs its own observations.
-All 41 final-branch physical plans were checked against the recorded plan hashes.
+The default IC2/IC5/IC9 plans were checked against their recorded plan hashes.
 
 For correctness, CI checks the full small witness catalogue at one/four workers,
 weighted integer aggregates against direct arithmetic, and bounded ranking
