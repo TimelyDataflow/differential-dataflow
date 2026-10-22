@@ -30,7 +30,7 @@ fn tapped_changes_sum_to_the_export_and_are_taken_once() {
             for (name, taken) in ["plain", "lists", "tagged"].into_iter().zip(&mut taken_by_export) {
                 let changes = server.take_changes(name);
                 assert!(!changes.is_empty(), "{name}, shift {shift}, diff {diff}");
-                assert!(changes.iter().all(|c| c.times.to_vec().iter().all(|&t| t == epoch)), "{name}: changes at another epoch than {epoch}");
+                assert!(changes.iter().all(|c| c.times.to_vec().iter().all(|t| t.outer == epoch && t.inner.is_empty())), "{name}: changes at another epoch than {epoch}");
                 taken.extend(changes.into_iter().map(|c| Updates { keys: c.keys, vals: c.vals, diffs: c.diffs }));
                 assert!(server.take_changes(name).is_empty(), "{name}: changes taken twice");
                 let contents = server.snapshot(worker, name).unwrap();

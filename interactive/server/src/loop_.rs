@@ -13,7 +13,7 @@ use differential_dataflow::operators::arrange::ShutdownButton;
 use interactive::corgi::container::Updates;
 use interactive::corgi::exchange::GatherPact;
 use interactive::corgi::frame;
-use interactive::server::{Command as ServerCommand, HostContainer, OuterTime, Server};
+use interactive::server::{host_time, Command as ServerCommand, HostContainer, HostTime, OuterTime, Server};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
@@ -26,9 +26,9 @@ use crate::ControlEvent;
 
 struct Tail {
     dataflow_id: usize,
-    _shutdown: ShutdownButton<CapabilitySet<OuterTime>>,
+    _shutdown: ShutdownButton<CapabilitySet<HostTime>>,
     trace: String,
-    probe: ProbeHandle<OuterTime>,
+    probe: ProbeHandle<HostTime>,
 }
 
 type TailKey = (ConnectionId, String);
@@ -482,7 +482,7 @@ fn start_tail(
     let dataflow_id = worker.next_dataflow_index();
     let tag = reqid.to_string();
     let mut probe = ProbeHandle::new();
-    let shutdown = worker.dataflow::<OuterTime, _, _>(|scope| {
+    let shutdown = interactive::server::host_dataflow(worker, |_, scope| {
         let (containers, shutdown) = trace.import_containers(scope.clone(), "TailImport");
         let pending = Arc::new(AtomicUsize::new(0));
         let (mut upper, mut dropped) = (None::<OuterTime>, false);
@@ -509,14 +509,17 @@ fn start_tail(
                     input.for_each(|_time, data| {
                         let HostContainer { keys, vals, times, diffs } = std::mem::take(data);
                         let updates = Updates { keys, vals, diffs };
+                        // A published trace's times are `(epoch, [])`: its rows go out at their epochs.
+                        let epochs = &times.raw_lanes()[..times.raw_lanes().len().min(1)];
                         if columnar {
-                            out("data", frame::encode(&updates, times.raw_lanes()));
+                            out("data", frame::encode(&updates, epochs));
                         } else {
-                            send(response, &tag, "data", format!("times={:?} diffs={:?} keys={:?} vals={:?}", times.to_vec(), updates.diffs, updates.keys, updates.vals));
+                            let epochs: Vec<OuterTime> = (0..times.len()).map(|i| times.get(i).outer).collect();
+                            send(response, &tag, "data", format!("times={:?} diffs={:?} keys={:?} vals={:?}", epochs, updates.diffs, updates.keys, updates.vals));
                         }
                     });
                     if columnar {
-                        if let Some(&t) = frontier.frontier().iter().min() {
+                        if let Some(t) = frontier.frontier().iter().map(|t| t.outer).min() {
                             if upper != Some(t) {
                                 upper = Some(t);
                                 out("progress", t.to_le_bytes().to_vec());
@@ -534,7 +537,7 @@ fn start_tail(
     // channel is FIFO, so every replayed `data` message precedes dispatch's
     // terminal `ok` and later commands cannot mistake replay for fresh data.
     let epoch = server.epoch();
-    while probe.less_than(&epoch) {
+    while probe.less_than(&host_time(epoch)) {
         worker.step();
     }
     tails.insert(
@@ -552,7 +555,7 @@ fn start_tail(
 fn tick(server: &mut Server, tails: &mut HashMap<TailKey, Tail>, worker: &mut Worker) {
     server.tick(worker);
     let epoch = server.epoch();
-    while tails.values().any(|tail| tail.probe.less_than(&epoch)) {
+    while tails.values().any(|tail| tail.probe.less_than(&host_time(epoch))) {
         worker.step();
     }
 }
