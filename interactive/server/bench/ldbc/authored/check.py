@@ -2,7 +2,7 @@
 """Run hand-authored DDP plans against the plans generated from snb/queries.py.
 
 For each selected query, start a fresh server twice: once with the generated
-plan, once with authored/plans/<query>.ddp. Each server installs the shared
+plan, once with authored/plans/<query>.ddp (two-digit numbers: bi01.ddp). Each server installs the shared
 graph program and the query, loads the same snapshot, settles, and then
 answers every binding (bind, peek, release; warmup plus measured repetitions).
 The two plans' answers must be identical for every binding; the report records
@@ -21,6 +21,7 @@ import argparse
 import gzip
 import json
 import pickle
+import re
 import statistics
 import sys
 import time
@@ -35,6 +36,12 @@ from snb import data, witness  # noqa: E402
 from snb.parameters import alternate, parameters, requests  # noqa: E402
 from snb.rel import source_shape  # noqa: E402
 from suite import CATALOGUE, compile_queries, graph_program  # noqa: E402
+
+
+def padded(name):
+    """File name for a query: bi1 -> bi01, so the plans sort in order."""
+    m = re.fullmatch(r'([a-z]+)(\d+)', name)
+    return f'{m.group(1)}{int(m.group(2)):02}'
 
 
 def norm(v):
@@ -129,7 +136,7 @@ def main():
         bank = [('suite-0', base), ('suite-1', second)]
         bank += [(f'official-{i}', {**base, **b}) for i, b in enumerate(extra.get(name, []))]
         programs = [dict(kind='generated', text=plan['program']),
-                    dict(kind='authored', text=(args.plans / f'{name}.ddp').read_text())]
+                    dict(kind='authored', text=(args.plans / f'{padded(name)}.ddp').read_text())]
         started = time.perf_counter()
         runs = {}
         for program in programs:

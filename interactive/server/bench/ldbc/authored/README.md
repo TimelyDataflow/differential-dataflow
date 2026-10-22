@@ -56,36 +56,36 @@ against the generated plan in [../baselines/METHOD.md](../baselines/METHOD.md).
 
 | Query | What it asks | Strategy |
 | --- | --- | --- |
-| [IS1](plans/is1.ddp) | Profile of a person: name, birthday, IP, browser, city, gender and creation date | Same as the generated plan |
-| [IS2](plans/is2.ddp) | A person's 10 most recent messages, each with the original post of its thread and that post's author | Rank on narrow rows, then fetch text and names |
-| [IS3](plans/is3.ddp) | A person's friends, with the date each friendship was made, newest first | Same as the generated plan |
-| [IS4](plans/is4.ddp) | A message's creation date and content (or image file) | Same as the generated plan |
-| [IS5](plans/is5.ddp) | The author of a message | Same as the generated plan |
-| [IS6](plans/is6.ddp) | The forum that contains a message's thread, and its moderator | Same as the generated plan |
-| [IS7](plans/is7.ddp) | Replies to a message, flagging whether each replier knows the original author | Same as the generated plan. The 'knows' flag is computed as known replies plus the rest, rather than a left join with a default |
-| [IC1](plans/ic1.ddp) | People named X within three friendship hops, with their emails, languages, city, universities and companies; 20 closest, then by last name | Same as the generated plan. Missing email, language, study and work lists are attached as empty lists by subtraction rather than a left join |
-| [IC2](plans/ic2.ddp) | The 20 most recent messages written by a person's friends before a date | Each person's 20 newest messages kept for all requests, with a fallback for friends who posted after the cut-off |
-| [IC3](plans/ic3.ddp) | Friends and friends-of-friends living outside countries X and Y who posted from both X and Y in a time window; top 20 by message count | The two countries' messages in the window first, joined on country id, then the circle |
-| [IC4](plans/ic4.ddp) | Tags that first appear on friends' posts inside a window (never before it); top 10 by post count | Same as the generated plan |
-| [IC5](plans/ic5.ddp) | Forums that friends and friends-of-friends joined after a date, ranked by how many posts those people made there | Per-(person, forum) post counts kept for all requests, and at most 40 zero-count forums per person |
-| [IC6](plans/ic6.ddp) | Tags that co-occur with a given tag on posts by friends and friends-of-friends; top 10 | The tag's posts first, then those by the circle |
-| [IC7](plans/ic7.ddp) | The latest likes on a person's messages: who liked, when, how long after posting, and whether the liker is a friend | Same as the generated plan |
-| [IC8](plans/ic8.ddp) | The 20 most recent replies to a person's messages | Rank on narrow rows, then fetch text and names |
-| [IC9](plans/ic9.ddp) | The 20 most recent messages by friends and friends-of-friends before a date | As IC2, over friends and friends-of-friends |
+| [IS1](plans/is01.ddp) | Profile of a person: name, birthday, IP, browser, city, gender and creation date | Same as the generated plan |
+| [IS2](plans/is02.ddp) | A person's 10 most recent messages, each with the original post of its thread and that post's author | Rank on narrow rows, then fetch text and names |
+| [IS3](plans/is03.ddp) | A person's friends, with the date each friendship was made, newest first | Same as the generated plan |
+| [IS4](plans/is04.ddp) | A message's creation date and content (or image file) | Same as the generated plan |
+| [IS5](plans/is05.ddp) | The author of a message | Same as the generated plan |
+| [IS6](plans/is06.ddp) | The forum that contains a message's thread, and its moderator | Same as the generated plan |
+| [IS7](plans/is07.ddp) | Replies to a message, flagging whether each replier knows the original author | Same as the generated plan. The 'knows' flag is computed as known replies plus the rest, rather than a left join with a default |
+| [IC1](plans/ic01.ddp) | People named X within three friendship hops, with their emails, languages, city, universities and companies; 20 closest, then by last name | Same as the generated plan. Missing email, language, study and work lists are attached as empty lists by subtraction rather than a left join |
+| [IC2](plans/ic02.ddp) | The 20 most recent messages written by a person's friends before a date | Each person's 20 newest messages kept for all requests, with a fallback for friends who posted after the cut-off |
+| [IC3](plans/ic03.ddp) | Friends and friends-of-friends living outside countries X and Y who posted from both X and Y in a time window; top 20 by message count | The two countries' messages in the window first, joined on country id, then the circle |
+| [IC4](plans/ic04.ddp) | Tags that first appear on friends' posts inside a window (never before it); top 10 by post count | Same as the generated plan |
+| [IC5](plans/ic05.ddp) | Forums that friends and friends-of-friends joined after a date, ranked by how many posts those people made there | Per-(person, forum) post counts kept for all requests, and at most 40 zero-count forums per person |
+| [IC6](plans/ic06.ddp) | Tags that co-occur with a given tag on posts by friends and friends-of-friends; top 10 | The tag's posts first, then those by the circle |
+| [IC7](plans/ic07.ddp) | The latest likes on a person's messages: who liked, when, how long after posting, and whether the liker is a friend | Same as the generated plan |
+| [IC8](plans/ic08.ddp) | The 20 most recent replies to a person's messages | Rank on narrow rows, then fetch text and names |
+| [IC9](plans/ic09.ddp) | The 20 most recent messages by friends and friends-of-friends before a date | As IC2, over friends and friends-of-friends |
 | [IC10](plans/ic10.ddp) | Friend recommendation: friends-of-friends born near a given month, scored by how many of their posts match the person's interests | Same as the generated plan. Scores are one sum over +1, -1 and 0 contributions |
 | [IC11](plans/ic11.ddp) | Friends and friends-of-friends who started working at a company in a given country before a year | Same as the generated plan |
 | [IC12](plans/ic12.ddp) | Friends who replied to posts tagged within a tag class (or its subclasses); count of such replies and the tags involved | Same as the generated plan |
 | [IC13](plans/ic13.ddp) | Length of the shortest friendship path between two people (-1 if none) | Bidirectional search |
 | [IC14](plans/ic14.ddp) | The cheapest interaction-weighted path between two people (v2 definition), with ties broken by the lexicographically smallest path | Same as the generated plan |
-| [BI1](plans/bi1.ddp) | Posting summary: messages before a date grouped by year, post/comment and length category, with counts, average length and share | Per-day totals for all requests, plus the cut-off day's own messages |
-| [BI2](plans/bi2.ddp) | Tags in a tag class whose usage changed most between two consecutive 100-day windows | Tagged messages keyed by (class, day) for all requests |
-| [BI3](plans/bi3.ddp) | Forums moderated by people in a country, ranked by messages tagged with a given tag class | Same as the generated plan |
-| [BI4](plans/bi4.ddp) | Top 100 forums (by largest single-country membership) created after a date; their members ranked by messages posted in those forums | Popularity kept per forum, a request filters by date and ranks |
-| [BI5](plans/bi5.ddp) | Most active posters on a tag, scored by messages, replies and likes | Same as the generated plan. Messages, replies and likes are counted in one count keyed by kind, then pivoted, instead of three counts and two left joins |
-| [BI6](plans/bi6.ddp) | Most authoritative users on a tag: authors scored by the popularity of the people who liked their tagged messages | Same as the generated plan. Scores are one sum over the pairs plus a zero per author, instead of a left join |
-| [BI7](plans/bi7.ddp) | Tags on replies to messages with a given tag (replies not themselves carrying the tag) | Same as the generated plan |
-| [BI8](plans/bi8.ddp) | Central people for a tag: interest and recent tagged messages score each person, plus their friends' scores | Same as the generated plan |
-| [BI9](plans/bi9.ddp) | Top thread initiators: people whose posts in a window started threads with the most messages in the window | Thread sizes kept per post, minus messages after the end |
+| [BI1](plans/bi01.ddp) | Posting summary: messages before a date grouped by year, post/comment and length category, with counts, average length and share | Per-day totals for all requests, plus the cut-off day's own messages |
+| [BI2](plans/bi02.ddp) | Tags in a tag class whose usage changed most between two consecutive 100-day windows | Tagged messages keyed by (class, day) for all requests |
+| [BI3](plans/bi03.ddp) | Forums moderated by people in a country, ranked by messages tagged with a given tag class | Same as the generated plan |
+| [BI4](plans/bi04.ddp) | Top 100 forums (by largest single-country membership) created after a date; their members ranked by messages posted in those forums | Popularity kept per forum, a request filters by date and ranks |
+| [BI5](plans/bi05.ddp) | Most active posters on a tag, scored by messages, replies and likes | Same as the generated plan. Messages, replies and likes are counted in one count keyed by kind, then pivoted, instead of three counts and two left joins |
+| [BI6](plans/bi06.ddp) | Most authoritative users on a tag: authors scored by the popularity of the people who liked their tagged messages | Same as the generated plan. Scores are one sum over the pairs plus a zero per author, instead of a left join |
+| [BI7](plans/bi07.ddp) | Tags on replies to messages with a given tag (replies not themselves carrying the tag) | Same as the generated plan |
+| [BI8](plans/bi08.ddp) | Central people for a tag: interest and recent tagged messages score each person, plus their friends' scores | Same as the generated plan |
+| [BI9](plans/bi09.ddp) | Top thread initiators: people whose posts in a window started threads with the most messages in the window | Thread sizes kept per post, minus messages after the end |
 | [BI10](plans/bi10.ddp) | Experts in a social circle: people at 'minimum' to 'maximum' hops in a country, counting tags on their messages that carry a tag class | The search stops at maximum hops, and the class's messages are found first |
 | [BI11](plans/bi11.ddp) | Number of friendship triangles among people in a country, with all three friendships made inside a window | Same as the generated plan. Edges are not degree-oriented (a measured variant that orients them is described in baselines/METHOD.md) |
 | [BI12](plans/bi12.ddp) | Distribution of people by how many short messages they wrote after a date in given languages | Messages keyed by their thread's language for all requests |

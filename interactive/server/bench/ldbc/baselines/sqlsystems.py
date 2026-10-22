@@ -22,8 +22,14 @@ def sql_dir(system):
     return HERE / 'sql' / system
 
 
+def padded(name):
+    """File name for a query: bi1 -> bi01, so the files sort in order."""
+    m = re.fullmatch(r'([a-z]+)(\d+)', name)
+    return f'{m.group(1)}{int(m.group(2)):02}'
+
+
 def queries(system):
-    return {q: (sql_dir(system) / f'{q}.sql').read_text() for q in NAMES}
+    return {q: (sql_dir(system) / f'{padded(q)}.sql').read_text() for q in NAMES}
 
 
 def statements(path):

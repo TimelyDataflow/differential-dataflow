@@ -7,7 +7,7 @@ another system, such as Materialize, and the comparison kept honest.
 
 ## What is compared
 
-- **The queries are the suite's.** Each SQL query in `sql/<system>/<query>.sql` was
+- **The queries are the suite's.** Each SQL query in `sql/<system>/<query>.sql` (two-digit numbers: `bi01.sql`) was
   written from the logical definition in `snb/queries.py`, not from the official LDBC
   SQL, and follows it where the two differ: IC14 is v2's cheapest path, with ties broken
   by the smallest list of people; BI2 lists only tags with a message in its window; BI13
