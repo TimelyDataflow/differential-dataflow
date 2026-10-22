@@ -76,19 +76,20 @@ struct PlannedScope {
 }
 
 impl PlannedScope {
-    fn at(&self, r: &Ref) -> &Site {
+    fn at(&self, r: &Ref) -> Result<&Site, String> {
         match r {
-            Ref::Import(i) => &self.imports[*i],
-            Ref::Var(i) => &self.vars[*i],
-            Ref::Local(i) => match &self.items[*i] {
-                PlannedItem::Op { output, .. } => output,
-                PlannedItem::Sub(_) => panic!("a local reference points at a scope"),
+            Ref::Import(i) => self.imports.get(*i),
+            Ref::Var(i) => self.vars.get(*i),
+            Ref::Local(i) => match self.items.get(*i) {
+                Some(PlannedItem::Op { output, .. }) => Some(output),
+                _ => None,
             },
-            Ref::ChildExport(i, e) => match &self.items[*i] {
-                PlannedItem::Sub(scope) => &scope.exports[*e],
-                PlannedItem::Op { .. } => panic!("a child export points at an operator"),
+            Ref::ChildExport(i, e) => match self.items.get(*i) {
+                Some(PlannedItem::Sub(scope)) => scope.exports.get(*e),
+                _ => None,
             },
         }
+        .ok_or_else(|| format!("projection: invalid reference {r:?}"))
     }
 }
 
@@ -249,7 +250,13 @@ impl Builder {
         }
     }
 
-    fn half_join(&mut self, from: &Site, stream: &Site, arrangement: &Site, lambda: &Lambda) {
+    fn half_join(
+        &mut self,
+        from: &Site,
+        stream: &Site,
+        arrangement: &Site,
+        lambda: &Lambda,
+    ) -> Result<(), String> {
         self.presence(from, stream);
         self.presence(from, arrangement);
         // Keys decide matching, and the lifted stream time decides whether a
@@ -258,14 +265,23 @@ impl Builder {
             for &key in stream.key.iter().chain(&arrangement.key) {
                 self.edge(id, key);
             }
-            self.edge(id, stream.val[1]);
+            self.edge(
+                id,
+                *stream
+                    .val
+                    .get(1)
+                    .ok_or("projection: half_join has no time field")?,
+            );
         }
         let Shape::Prod(stream_parts) = &stream.shape.1 else {
-            unreachable!("half_join stream value is (value, time)")
+            return Err("projection: half_join stream value is not (value, time)".into());
         };
+        let stream_value = stream_parts
+            .first()
+            .ok_or("projection: half_join has no value field")?;
         let shapes = [
             stream.shape.0.clone(),
-            stream_parts[0].clone(),
+            stream_value.clone(),
             arrangement.shape.1.clone(),
         ];
         for (output_id, path) in from.field_paths() {
@@ -291,6 +307,7 @@ impl Builder {
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -502,7 +519,7 @@ fn build_scope(
         if let Source::Parent(r) = &import.from {
             let source = parent
                 .ok_or("projection: a root import names its parent")?
-                .at(r);
+                .at(r)?;
             builder.identity(site, source);
             if import.shape.is_some() {
                 builder.graph.seeds.extend(site.all());
@@ -523,7 +540,7 @@ fn build_scope(
                 let mut stages = Vec::new();
                 match node {
                     Node::Linear { input, ops } => {
-                        let mut before = plan.at(input).clone();
+                        let mut before = plan.at(input)?.clone();
                         let steps = shapes::linear_shapes(
                             ops,
                             before.shape.0.clone(),
@@ -569,12 +586,12 @@ fn build_scope(
                     }
                     Node::Concat(refs) => {
                         for r in refs {
-                            let input = plan.at(r);
+                            let input = plan.at(r)?;
                             builder.identity(&output, input);
                         }
                     }
                     Node::Arrange(r) => {
-                        let input = plan.at(r);
+                        let input = plan.at(r)?;
                         builder.identity(&output, input);
                         for id in output.all() {
                             for &key in &input.key {
@@ -587,7 +604,7 @@ fn build_scope(
                         right,
                         projection,
                     } => {
-                        let (left, right) = (plan.at(left), plan.at(right));
+                        let (left, right) = (plan.at(left)?, plan.at(right)?);
                         builder.presence(&output, left);
                         builder.presence(&output, right);
                         for id in output.all() {
@@ -605,13 +622,13 @@ fn build_scope(
                     } => {
                         builder.half_join(
                             &output,
-                            plan.at(stream),
-                            plan.at(arrangement),
+                            plan.at(stream)?,
+                            plan.at(arrangement)?,
                             projection,
-                        );
+                        )?;
                     }
                     Node::Reduce { input, reducer } => {
-                        let input = plan.at(input);
+                        let input = plan.at(input)?;
                         match reducer {
                             Reducer::Count => {
                                 builder.presence(&output, input);
@@ -633,7 +650,7 @@ fn build_scope(
                         // Inspection is observable even if its collection has
                         // no downstream consumer.
                         builder.graph.seeds.extend(output.all());
-                        builder.opaque(&output, &[plan.at(input)]);
+                        builder.opaque(&output, &[plan.at(input)?]);
                     }
                 }
                 plan.items.push(PlannedItem::Op { output, stages });
@@ -652,13 +669,13 @@ fn build_scope(
 
     for bind in &scope.binds {
         let var = plan.vars[bind.var].clone();
-        let source = plan.at(&bind.value).clone();
+        let source = plan.at(&bind.value)?.clone();
         builder.identity(&var, &source);
     }
     for (i, export) in scope.exports.iter().enumerate() {
         let shape = known(&shapes.exports[i], &format!("export {i}"))?;
         let site = builder.shape_site(&shape);
-        let source = plan.at(&export.value).clone();
+        let source = plan.at(&export.value)?.clone();
         builder.identity(&site, &source);
         if export.shape.is_some() {
             builder.graph.seeds.extend(site.all());
@@ -695,103 +712,59 @@ fn mask_part(name: &str, shape: &Shape, facts: &[usize], live: &[bool]) -> Strin
     }
 }
 
-fn mask_graph_part(
-    builder: &mut corgi::Builder<corgi::NumOp>,
-    input: usize,
-    source: usize,
-    shape: &Shape,
-    facts: &[usize],
+fn mask_projection(
+    original: &Lambda,
+    key_shape: &Shape,
+    key_facts: &[usize],
+    value_shape: &Shape,
+    value_facts: &[usize],
     live: &[bool],
-) -> usize {
-    let unit =
-        |builder: &mut corgi::Builder<corgi::NumOp>| builder.add(corgi::Op::Unit, vec![input]);
-    match shape {
-        Shape::Unit => unit(builder),
-        Shape::Prod(fields) if fields.is_empty() => unit(builder),
-        Shape::Prod(fields) => {
-            let children = fields
-                .iter()
-                .enumerate()
-                .map(|(i, _)| {
-                    if live[facts[i]] {
-                        builder.add(corgi::Op::Field(i), vec![source])
-                    } else {
-                        unit(builder)
-                    }
-                })
-                .collect();
-            builder.tuple(children)
-        }
-        _ => {
-            if live[facts[0]] {
-                source
-            } else {
-                unit(builder)
-            }
-        }
+) -> Option<Lambda> {
+    if key_facts.iter().chain(value_facts).all(|&id| live[id]) {
+        return None;
     }
+    // Select live fields directly from the call result. Corgi can fold those
+    // field selections through the tuple and eliminate dead work. The parsed
+    // source and the running graph then take the same optimization path.
+    Some(Lambda::compose(
+        "arg",
+        &[(original, "arg".into())],
+        |result| {
+            let key = mask_part(&format!("{}.0", result[0]), key_shape, key_facts, live);
+            let val = mask_part(&format!("{}.1", result[0]), value_shape, value_facts, live);
+            format!("({key}, {val})")
+        },
+    ))
 }
 
 fn mask_lambda(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
-    if output.key.iter().chain(&output.val).all(|&id| live[id]) {
-        return None;
-    }
-    let mut masked = Lambda::compose("arg", &[(original, "arg".into())], |result| {
-        let key = mask_part("k", &output.shape.0, &output.key, live);
-        let val = mask_part("v", &output.shape.1, &output.val, live);
-        format!("let (k, v) = {} in ({key}, {val})", result[0])
-    });
-    if let Ok(graph) = original.graph() {
-        // Every corgi node preserves top-level row count. Anchor dead fields'
-        // Unit columns to the graph input, so graph DCE can discard the work
-        // that fed them. Parsing the equivalent source alone anchors Unit to
-        // the original result and keeps that dead work reachable.
-        let mut builder = corgi::Builder::<corgi::NumOp>::default();
-        let input = builder.input();
-        let result = builder.graft(graph, input);
-        let key = builder.add(corgi::Op::Field(0), vec![result]);
-        let val = builder.add(corgi::Op::Field(1), vec![result]);
-        let key = mask_graph_part(&mut builder, input, key, &output.shape.0, &output.key, live);
-        let val = mask_graph_part(&mut builder, input, val, &output.shape.1, &output.val, live);
-        let result = builder.tuple(vec![key, val]);
-        // The original was already typed at its original input shape. Remove
-        // dead subgraphs now, before a masked feedback variable changes that
-        // input shape and shape inference visits this lambda again.
-        masked.graph = Ok(std::sync::Arc::new(corgi::optimize(
-            &builder.finish(result),
-        )));
-    }
-    Some(masked)
+    mask_projection(
+        original,
+        &output.shape.0,
+        &output.key,
+        &output.shape.1,
+        &output.val,
+        live,
+    )
 }
 
 fn mask_half_join(original: &Lambda, output: &Site, live: &[bool]) -> Option<Lambda> {
-    let value = output.val[0];
-    if output.key.iter().all(|&id| live[id]) && live[value] {
+    // The half-join operator appends time after this lambda has produced
+    // (key, value), so only the first output value fact belongs to the lambda.
+    let Shape::Prod(parts) = &output.shape.1 else {
         return None;
-    }
-    let mut masked = Lambda::compose("arg", &[(original, "arg".into())], |result| {
-        let key = mask_part("k", &output.shape.0, &output.key, live);
-        let val = if live[value] { "v" } else { "()" };
-        format!("let (k, v) = {} in ({key}, {val})", result[0])
-    });
-    if let Ok(graph) = original.graph() {
-        let mut builder = corgi::Builder::<corgi::NumOp>::default();
-        let input = builder.input();
-        let result = builder.graft(graph, input);
-        let key = builder.add(corgi::Op::Field(0), vec![result]);
-        let val = builder.add(corgi::Op::Field(1), vec![result]);
-        let key = mask_graph_part(&mut builder, input, key, &output.shape.0, &output.key, live);
-        let val = if live[value] {
-            val
-        } else {
-            builder.add(corgi::Op::Unit, vec![input])
-        };
-        let result = builder.tuple(vec![key, val]);
-        masked.graph = Ok(std::sync::Arc::new(corgi::optimize(
-            &builder.finish(result),
-        )));
-    }
-    Some(masked)
+    };
+    let (Some(value_shape), Some(&value_fact)) = (parts.first(), output.val.first()) else {
+        return None;
+    };
+    mask_projection(
+        original,
+        &output.shape.0,
+        &output.key,
+        value_shape,
+        &[value_fact],
+        live,
+    )
 }
 
 fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> usize {
@@ -864,24 +837,23 @@ fn rewrite_scope(scope: &mut st::Scope, plan: &PlannedScope, live: &[bool]) -> u
                     for r in refs.iter_mut() {
                         remap_ref(r, &remap);
                     }
-                    let PlannedItem::Op { output, .. } = planned else {
-                        unreachable!("a concat has an operator plan")
-                    };
-                    if let Some(lambda) = mask_lambda(&identity, output, live) {
-                        let fields = output
-                            .key
-                            .iter()
-                            .chain(&output.val)
-                            .filter(|&&id| !live[id])
-                            .count();
-                        for r in refs.iter_mut() {
-                            let project = Item::Op(Node::Linear {
-                                input: r.clone(),
-                                ops: vec![LinearOp::Project(lambda.clone())],
-                            });
-                            *r = Ref::Local(items.len());
-                            items.push(project);
-                            masked += fields;
+                    if let PlannedItem::Op { output, .. } = planned {
+                        if let Some(lambda) = mask_lambda(&identity, output, live) {
+                            let fields = output
+                                .key
+                                .iter()
+                                .chain(&output.val)
+                                .filter(|&&id| !live[id])
+                                .count();
+                            for r in refs.iter_mut() {
+                                let project = Item::Op(Node::Linear {
+                                    input: r.clone(),
+                                    ops: vec![LinearOp::Project(lambda.clone())],
+                                });
+                                *r = Ref::Local(items.len());
+                                items.push(project);
+                                masked += fields;
+                            }
                         }
                     }
                 }
@@ -969,14 +941,13 @@ pub fn pushdown(
 ) -> Result<usize, String> {
     let original = program.clone();
     let (shapes, problems) = shapes::infer(program, source);
-    if !problems.conflicts.is_empty() {
-        return Err(problems.conflicts.join("; "));
-    }
-    if !problems.unknown.is_empty() {
-        return Err(problems.unknown.join("; "));
+    if !problems.conflicts.is_empty() || !problems.unknown.is_empty() {
+        return Ok(0);
     }
     let mut builder = Builder::default();
-    let plan = build_scope(&mut builder, &program.root, &shapes, None, 0)?;
+    let Ok(plan) = build_scope(&mut builder, &program.root, &shapes, None, 0) else {
+        return Ok(0);
+    };
     for export in &plan.exports {
         builder.graph.seeds.extend(export.all());
     }
@@ -985,9 +956,8 @@ pub fn pushdown(
     let (_, check) = shapes::infer(program, source);
     if !check.conflicts.is_empty() || !check.unknown.is_empty() {
         *program = original;
-        // Some otherwise valid consumers require the producer's original
-        // shape, including explanation plans synthesized after installation.
-        // The pass is optional, so keep the original program in that case.
+        // A rewritten intermediate shape disagrees with a consumer. The pass
+        // is optional, so keep the original program in that case.
         return Ok(0);
     }
     Ok(masked)
@@ -1025,6 +995,11 @@ mod tests {
         let after = corgi::explain::explain(&corgi::optimize(&masked.graph().unwrap()));
         assert!(before.contains("BinImm(Add"));
         assert!(!after.contains("BinImm(Add"));
+        // Reparse the serializable text, then check that its graph loses
+        // exactly the same dead computation as the graph used immediately.
+        let reparsed = Lambda::new(masked.src.clone(), &corgi::Scope::default());
+        let reparsed_after = corgi::explain::explain(&corgi::optimize(reparsed.graph().unwrap()));
+        assert!(!reparsed_after.contains("BinImm(Add"));
     }
 
     #[test]

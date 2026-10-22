@@ -626,11 +626,8 @@ impl Server {
             let masked = crate::projection::pushdown(&mut candidate, &|source| match source {
                 st::Source::Trace(name) => self.shapes.get(&canonical_source_name(name)).cloned(),
                 _ => None,
-            })?;
-            if worker.index() == 0 && masked > 0 {
-                eprintln!("projection {name}: {masked} fields masked");
-            }
-            Some(candidate)
+            }).unwrap_or(0);
+            (masked > 0).then_some(candidate)
         } else {
             None
         };
